@@ -3,14 +3,13 @@ DESCRIPTION = "${SUMMARY}"
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COREBASE}/meta/COPYING.MIT;md5=3da9cfbcb788c80a0384361b4de20420"
 
-inherit systemd
+inherit systemd pkgconfig
 
-# Keep the recipe's source boundary explicit.  The core workspace and public
-# Rust SDK are staged with the same relative layout they have in the monorepo;
-# OS-owned rootfs files are staged separately from application source.
+# Stage the monorepo core workspace and OS-owned rootfs files for the guest
+# image. The public Rust SDK lives in its own Cargo workspace and is not needed
+# to build guest-agent / dstack-util.
 DSTACK_MONOREPO_ROOT ?= "${@os.path.realpath(os.path.join(d.getVar('THISDIR'), '../../../../../..'))}"
 DSTACK_CORE_SRC ?= "${DSTACK_MONOREPO_ROOT}/dstack"
-DSTACK_RUST_SDK_SRC ?= "${DSTACK_MONOREPO_ROOT}/sdk/rust"
 DSTACK_ROOTFS_SRC ?= "${DSTACK_MONOREPO_ROOT}/os/common/rootfs"
 
 S = "${UNPACKDIR}/repo/dstack"
@@ -18,7 +17,13 @@ DSTACK_ROOTFS_FILES = "${UNPACKDIR}/repo/os/common/rootfs"
 
 RDEPENDS:${PN} += "bash"
 
-DEPENDS += "rsync-native"
+DEPENDS += "rsync-native tpm2-tss"
+DEPENDS += "cmake-native"
+
+# aws-lc-sys cannot detect Yocto cross builds when the build and target share
+# the same Rust target triple, and its cc builder then tries to execute a
+# target binary on the build host. Use its supported CMake builder instead.
+export AWS_LC_SYS_CMAKE_BUILDER = "1"
 
 # Ensure rsync-native is built before unpack runs
 do_unpack[depends] += "rsync-native:do_populate_sysroot"
@@ -32,11 +37,9 @@ EXTRA_CARGO_FLAGS = "-p dstack-guest-agent -p dstack-util"
 inherit cargo_bin
 
 do_unpack() {
-    install -d "${S}" "${UNPACKDIR}/repo/sdk/rust" "${DSTACK_ROOTFS_FILES}"
+    install -d "${S}" "${DSTACK_ROOTFS_FILES}"
     rsync -a --exclude=".git" --exclude=".worktrees" --exclude="target" \
         "${DSTACK_CORE_SRC}/" "${S}/"
-    rsync -a --exclude=".git" --exclude="target" \
-        "${DSTACK_RUST_SDK_SRC}/" "${UNPACKDIR}/repo/sdk/rust/"
     rsync -a "${DSTACK_ROOTFS_SRC}/" "${DSTACK_ROOTFS_FILES}/"
 }
 
@@ -46,7 +49,7 @@ do_unpack[cleandirs] = "${UNPACKDIR}/repo"
 do_unpack[nostamp] = "1"
 
 # Add source directory to configure task dependencies
-do_unpack[vardeps] += "DSTACK_CORE_SRC DSTACK_RUST_SDK_SRC DSTACK_ROOTFS_SRC"
+do_unpack[vardeps] += "DSTACK_CORE_SRC DSTACK_ROOTFS_SRC"
 
 do_configure() {
     cargo_bin_do_configure

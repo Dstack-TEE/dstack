@@ -4,7 +4,7 @@
   ],
   "kms": {
     "mrAggregated": [
-      "0x<kms-mr-aggregated>"
+      "0x<kms-early-mr-aggregated-boot-mr-done>"
     ],
     "devices": [],
     "allowAnyDevice": true

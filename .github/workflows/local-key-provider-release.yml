@@ -1,0 +1,109 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Local Key Provider Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without the local-key-provider-v prefix
+        required: true
+        type: string
+  push:
+    tags:
+      - 'local-key-provider-v*'
+
+permissions:
+  attestations: write
+  id-token: write
+  contents: write
+  packages: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Parse version from tag
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/local-key-provider-v* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/local-key-provider-v}
+          else
+            VERSION=$DISPATCH_VERSION
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Parsed version: $VERSION"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@v7
+        with:
+          context: dstack
+          file: dstack/local-key-provider/build/Dockerfile.key-provider
+          push: true
+          tags: ${{ vars.DOCKERHUB_ORG }}/local-key-provider:${{ env.VERSION }}
+          platforms: linux/amd64
+          provenance: false
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: "docker.io/${{ vars.DOCKERHUB_ORG }}/local-key-provider"
+          subject-digest: ${{ steps.build-and-push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Export enclave measurements
+        env:
+          IMAGE_DIGEST: ${{ steps.build-and-push.outputs.digest }}
+          IMAGE_NAME: ${{ vars.DOCKERHUB_ORG }}/local-key-provider
+        run: |
+          docker pull "${IMAGE_NAME}@${IMAGE_DIGEST}"
+          docker run --rm \
+            --entrypoint gramine-sgx-sigstruct-view \
+            "${IMAGE_NAME}@${IMAGE_DIGEST}" \
+            --output-format json \
+            /dstack/local-key-provider/build/local-key-provider.sig \
+            | tee local-key-provider.sig.json
+
+          MRENCLAVE=$(jq -er .mr_enclave local-key-provider.sig.json)
+          MRSIGNER=$(jq -er .mr_signer local-key-provider.sig.json)
+          echo "MRENCLAVE=$MRENCLAVE" >> "$GITHUB_ENV"
+          echo "MRSIGNER=$MRSIGNER" >> "$GITHUB_ENV"
+
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: "Local Key Provider Release v${{ env.VERSION }}"
+          tag_name: local-key-provider-v${{ env.VERSION }}
+          files: local-key-provider.sig.json
+          body: |
+            ## Docker Image Information
+
+            **Image**: `docker.io/${{ vars.DOCKERHUB_ORG }}/local-key-provider:${{ env.VERSION }}`
+
+            **Digest (SHA256)**: `${{ steps.build-and-push.outputs.digest }}`
+
+            **MRENCLAVE**: `${{ env.MRENCLAVE }}`
+
+            **MRSIGNER**: `${{ env.MRSIGNER }}`
+
+            **Verification**: [Verify on Sigstore](https://search.sigstore.dev/?hash=${{ steps.build-and-push.outputs.digest }})
+
+            The enclave signing key is generated for each build. Pin the
+            release's image digest and MRENCLAVE rather than expecting MRSIGNER
+            to remain stable across releases.

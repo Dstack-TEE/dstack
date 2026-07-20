@@ -40,7 +40,7 @@ Running KMS inside a CVM provides significant security benefits:
 Before starting, ensure you have:
 
 - Completed [KMS Build & Configuration](/tutorial/kms-build-configuration)
-- Completed [Gramine Key Provider](/tutorial/gramine-key-provider) - Required for CVM boot
+- Completed [Local Key Provider](/tutorial/gramine-key-provider) - Required for CVM boot
 - Completed [Local Docker Registry](/tutorial/local-docker-registry) - With KMS image cached
 - Completed [TDX & SGX Verification](/tutorial/tdx-sgx-verification) - SGX must be working for attestation
 - KMS image pushed to local registry (`registry.yourdomain.com/dstack-kms:fixed`)
@@ -101,13 +101,13 @@ Expected output shows the `:fixed` tag:
 
 If missing, complete the [Local Docker Registry](/tutorial/local-docker-registry) tutorial first.
 
-#### Verify Gramine Key Provider is running
+#### Verify Local Key Provider is running
 
 ```bash
-docker ps | grep gramine-sealing-key-provider
+docker ps | grep local-key-provider
 ```
 
-Should show the container running. If not, complete the [Gramine Key Provider](/tutorial/gramine-key-provider) tutorial.
+Should show the container running. If not, complete the [Local Key Provider](/tutorial/gramine-key-provider) tutorial.
 
 #### Verify VMM is running
 
@@ -277,7 +277,7 @@ export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 ```
 
 **Key flags explained:**
-- `--local-key-provider`: Enables Gramine key provider for CVM boot
+- `--local-key-provider`: Enables SGX-backed local key provisioning for CVM boot
 - `--image dstack-0.5.7`: Guest image from VMM images directory
 - `--port tcp:0.0.0.0:9100:9100`: Maps host port 9100 to CVM port 9100 on all interfaces
 

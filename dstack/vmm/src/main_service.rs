@@ -10,19 +10,22 @@ use dstack_types::AppCompose;
 use dstack_vmm_rpc as rpc;
 use dstack_vmm_rpc::vmm_server::{VmmRpc, VmmServer};
 use dstack_vmm_rpc::{
-    AppId, ComposeHash as RpcComposeHash, DhcpLeaseRequest, GatewaySettings, GetInfoResponse,
-    GetMetaResponse, Id, ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings,
-    ListGpusResponse, PublicKeyResponse, PullRegistryImageRequest, RegistryImageInfo,
-    RegistryImageListResponse, ReloadVmsResponse, ResizeVmRequest, ResourcesSettings,
-    StatusRequest, StatusResponse, SvListResponse, SvProcessInfo, UpdateVmRequest, VersionResponse,
-    VmConfiguration,
+    AppId, ComposeHash as RpcComposeHash, GatewaySettings, GetInfoResponse, GetMetaResponse, Id,
+    ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings, ListGpusResponse, PublicKeyResponse,
+    PullRegistryImageRequest, RegistryImageInfo, RegistryImageListResponse, ReloadVmsResponse,
+    ResizeVmRequest, ResourcesSettings, StatusRequest, StatusResponse, SvListResponse,
+    SvProcessInfo, UpdateVmRequest, VersionResponse, VmConfiguration,
 };
 use fs_err as fs;
 use or_panic::ResultOrPanic;
 use ra_rpc::{CallContext, RpcCall};
 use tracing::{info, warn};
 
-use crate::app::{App, AttachMode, GpuConfig, GpuSpec, Manifest, PortMapping, VmWorkDir};
+use crate::app::{
+    resolve_networking, validate_resolved_network, validate_resolved_networks, App, AttachMode,
+    GpuConfig, GpuSpec, Manifest, PortMapping, VmWorkDir,
+};
+use crate::config::{CvmConfig, Networking, NetworkingMode};
 
 fn hex_sha256(data: &str) -> String {
     use sha2::Digest;
@@ -196,34 +199,82 @@ pub fn create_manifest_from_vm_config(
         kms_urls: request.kms_urls.clone(),
         gateway_urls: request.gateway_urls.clone(),
         no_tee: request.no_tee,
-        networking: request.networking.as_ref().and_then(networking_from_proto),
+        networks: networks_from_vm_config(&request, cvm_config)?,
     })
 }
 
-fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Option<crate::config::Networking> {
-    use crate::config::NetworkingMode;
+fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Result<Option<Networking>> {
+    let bridge = proto.bridge_name.trim().to_string();
     let mode = match proto.mode.as_str() {
         "bridge" => NetworkingMode::Bridge,
-
         "user" => NetworkingMode::User,
-        "custom" => NetworkingMode::Custom,
-        "" => return None, // not set, use global default
-        other => {
-            tracing::warn!("unsupported per-VM networking mode '{other}', using global default");
-            return None;
-        }
+        "" if bridge.is_empty() => return Ok(None),
+        "" => bail!("networking mode is required when bridge is set"),
+        "custom" => bail!("custom networking mode is manifest-only"),
+        other => bail!("unsupported networking mode '{other}'"),
     };
-    // Only set mode; other fields will be merged from global config at runtime
-    Some(crate::config::Networking {
+    if mode != NetworkingMode::Bridge && !bridge.is_empty() {
+        bail!("bridge_name is only valid for bridge networking mode");
+    }
+    Ok(Some(Networking {
         mode,
-        bridge: String::new(),
+        bridge,
         mac_prefix: String::new(),
         net: String::new(),
         dhcp_start: String::new(),
         restrict: false,
         netdev: String::new(),
-        forward_service_enabled: false,
-    })
+    }))
+}
+
+fn network_from_required_proto(proto: &rpc::NetworkingConfig) -> Result<Networking> {
+    networking_from_proto(proto)?.context("networking mode is required")
+}
+
+fn networks_from_proto(networks: &[rpc::NetworkingConfig]) -> Result<Vec<Networking>> {
+    networks.iter().map(network_from_required_proto).collect()
+}
+
+fn validate_default_network(cvm_config: &CvmConfig) -> Result<()> {
+    validate_resolved_network(&cvm_config.networking)
+}
+
+fn resolve_requested_networks(
+    networks: &[Networking],
+    cvm_config: &CvmConfig,
+) -> Result<Vec<Networking>> {
+    let resolved = networks
+        .iter()
+        .map(|networking| resolve_networking(networking, cvm_config))
+        .collect::<Vec<_>>();
+    validate_resolved_networks(&resolved)?;
+    Ok(resolved)
+}
+
+fn has_host_bridge_interface() -> bool {
+    let Ok(entries) = fs::read_dir("/sys/class/net") else {
+        return false;
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .any(|entry| entry.path().join("bridge").exists())
+}
+
+fn networks_from_vm_config(
+    request: &VmConfiguration,
+    cvm_config: &CvmConfig,
+) -> Result<Vec<Networking>> {
+    if !request.networks.is_empty() {
+        let networks = networks_from_proto(&request.networks)?;
+        resolve_requested_networks(&networks, cvm_config)
+    } else if let Some(networking) = request.networking.as_ref() {
+        match networking_from_proto(networking)? {
+            Some(networking) => resolve_requested_networks(&[networking], cvm_config),
+            None => Ok(vec![]),
+        }
+    } else {
+        Ok(vec![])
+    }
 }
 
 impl RpcHandler {
@@ -438,6 +489,24 @@ impl VmmRpc for RpcHandler {
         if request.update_gateway_urls {
             manifest.gateway_urls = request.gateway_urls.clone();
         }
+        if request.update_networking {
+            manifest.networks = if request.networks.is_empty() {
+                validate_default_network(&self.app.config.cvm)?;
+                vec![]
+            } else {
+                let networks = networks_from_proto(&request.networks)?;
+                resolve_requested_networks(&networks, &self.app.config.cvm)?
+            };
+            let is_running = self
+                .app
+                .supervisor
+                .info(&request.id)
+                .await?
+                .is_some_and(|info| info.state.status.is_running());
+            if !is_running {
+                vm_work_dir.clear_runtime_networks()?;
+            }
+        }
         vm_work_dir
             .put_manifest(&manifest)
             .context("Failed to put manifest")?;
@@ -446,9 +515,6 @@ impl VmmRpc for RpcHandler {
             .load_vm(&vm_work_dir, &Default::default(), false)
             .await
             .context("Failed to load VM")?;
-        if request.update_ports {
-            self.app.reconfigure_port_forward(&new_id).await;
-        }
         Ok(Id { id: new_id })
     }
 
@@ -519,6 +585,13 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn get_meta(self) -> Result<GetMetaResponse> {
+        let mut supported_modes = vec!["user".to_string()];
+        let default_networking = &self.app.config.cvm.networking;
+        let mut bridge_networking = default_networking.clone();
+        bridge_networking.mode = NetworkingMode::Bridge;
+        if validate_resolved_network(&bridge_networking).is_ok() || has_host_bridge_interface() {
+            supported_modes.push("bridge".to_string());
+        }
         Ok(GetMetaResponse {
             kms: Some(KmsSettings {
                 url: self
@@ -550,6 +623,15 @@ impl VmmRpc for RpcHandler {
                 max_allocable_vcpu: self.app.config.cvm.max_allocable_vcpu,
                 max_allocable_memory_in_mb: self.app.config.cvm.max_allocable_memory_in_mb,
             }),
+            networking: Some(rpc::NetworkingCapabilities {
+                supported_modes,
+                default_mode: match default_networking.mode {
+                    NetworkingMode::User => "user".to_string(),
+                    NetworkingMode::Bridge => "bridge".to_string(),
+                    NetworkingMode::Custom => String::new(),
+                },
+                default_bridge: default_networking.bridge.clone(),
+            }),
         })
     }
 
@@ -574,11 +656,6 @@ impl VmmRpc for RpcHandler {
     async fn reload_vms(self) -> Result<ReloadVmsResponse> {
         info!("Reloading VMs directory and syncing with memory state");
         self.app.reload_vms_sync().await
-    }
-
-    async fn report_dhcp_lease(self, request: DhcpLeaseRequest) -> Result<()> {
-        self.app.report_dhcp_lease(&request.mac, &request.ip).await;
-        Ok(())
     }
 
     async fn sv_list(self) -> Result<SvListResponse> {
@@ -747,5 +824,98 @@ impl RpcCall<App> for RpcHandler {
         Ok(RpcHandler {
             app: context.state.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rocket::figment::Figment;
+
+    fn test_cvm_config() -> CvmConfig {
+        let config: crate::config::Config = Figment::from(crate::config::load_config_figment(None))
+            .extract()
+            .unwrap();
+        config.cvm
+    }
+
+    fn test_vm_configuration() -> VmConfiguration {
+        VmConfiguration {
+            name: "vm-test".to_string(),
+            image: "dstack-test".to_string(),
+            compose_file: "{}".to_string(),
+            vcpu: 1,
+            memory: 1024,
+            disk_size: 10,
+            ports: vec![],
+            encrypted_env: vec![],
+            app_id: None,
+            user_config: String::new(),
+            hugepages: false,
+            pin_numa: false,
+            gpus: None,
+            kms_urls: vec![],
+            gateway_urls: vec![],
+            stopped: false,
+            no_tee: false,
+            networking: None,
+            networks: vec![],
+        }
+    }
+
+    #[test]
+    fn create_without_networking_persists_following_default() {
+        let manifest =
+            create_manifest_from_vm_config(test_vm_configuration(), &test_cvm_config()).unwrap();
+
+        assert!(manifest.networks.is_empty());
+    }
+
+    #[test]
+    fn explicit_user_networking_is_resolved_before_persist() {
+        let mut request = test_vm_configuration();
+        request.networks = vec![rpc::NetworkingConfig {
+            mode: "user".to_string(),
+            bridge_name: String::new(),
+        }];
+
+        let manifest = create_manifest_from_vm_config(request, &test_cvm_config()).unwrap();
+
+        assert_eq!(manifest.networks.len(), 1);
+        assert_eq!(manifest.networks[0].mode, NetworkingMode::User);
+        assert!(!manifest.networks[0].net.is_empty());
+    }
+
+    #[test]
+    fn bridge_name_is_rejected_for_user_mode() {
+        let err = networks_from_proto(&[rpc::NetworkingConfig {
+            mode: "user".to_string(),
+            bridge_name: "dstack-br0".to_string(),
+        }])
+        .unwrap_err();
+
+        assert!(err.to_string().contains("bridge_name is only valid"));
+    }
+
+    #[test]
+    fn repeated_networks_rejects_empty_entries() {
+        let err = networks_from_proto(&[rpc::NetworkingConfig {
+            mode: String::new(),
+            bridge_name: String::new(),
+        }])
+        .unwrap_err();
+
+        assert!(err.to_string().contains("networking mode is required"));
+    }
+
+    #[test]
+    fn repeated_networks_rejects_custom_entries() {
+        let err = networks_from_proto(&[rpc::NetworkingConfig {
+            mode: "custom".to_string(),
+            bridge_name: String::new(),
+        }])
+        .unwrap_err();
+
+        assert!(err.to_string().contains("custom networking mode"));
     }
 }

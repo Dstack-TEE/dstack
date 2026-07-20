@@ -86,10 +86,11 @@ func (r *GetKeyResponse) DecodeSignatureChain() ([][]byte, error) {
 
 // Represents the response from a quote request.
 type GetQuoteResponse struct {
-	Quote      string `json:"quote"`
-	EventLog   string `json:"event_log"`
-	ReportData string `json:"report_data"`
-	VmConfig   string `json:"vm_config"`
+	Quote       string `json:"quote"`
+	EventLog    string `json:"event_log"`
+	ReportData  string `json:"report_data"`
+	VmConfig    string `json:"vm_config"`
+	Attestation string `json:"attestation"`
 }
 
 // DecodeQuote returns the quote bytes
@@ -102,6 +103,10 @@ func (r *GetQuoteResponse) DecodeReportData() ([]byte, error) {
 	return hex.DecodeString(r.ReportData)
 }
 
+func (r *GetQuoteResponse) DecodeAttestation() ([]byte, error) {
+	return hex.DecodeString(r.Attestation)
+}
+
 // DecodeEventLog returns the event log as structured data
 func (r *GetQuoteResponse) DecodeEventLog() ([]EventLog, error) {
 	var events []EventLog
@@ -112,6 +117,11 @@ func (r *GetQuoteResponse) DecodeEventLog() ([]EventLog, error) {
 // Represents the response from an attestation request.
 type AttestResponse struct {
 	Attestation []byte
+}
+
+// GpuInfoResponse contains GPU information collected during boot.
+type GpuInfoResponse struct {
+	Attestation string `json:"attestation"`
 }
 
 // Represents an event log entry in the TCB info
@@ -572,6 +582,20 @@ func (c *DstackClient) Attest(ctx context.Context, reportData []byte) (*AttestRe
 	}
 
 	return &AttestResponse{Attestation: attestation}, nil
+}
+
+// GpuInfo returns GPU information collected during boot.
+func (c *DstackClient) GpuInfo(ctx context.Context) (*GpuInfoResponse, error) {
+	data, err := c.sendRPCRequest(ctx, "/GpuInfo", map[string]interface{}{})
+	if err != nil {
+		return nil, err
+	}
+
+	var response GpuInfoResponse
+	if err := json.Unmarshal(data, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
 }
 
 // Represents the response from a Version request.

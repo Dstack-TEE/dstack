@@ -93,10 +93,10 @@ sudo dstackup install
 
 `dstackup install` auto-detects TDX or AMD SEV-SNP. If no local guest image exists, it downloads the latest unified image from [dstack guest-OS releases](https://github.com/Dstack-TEE/dstack/releases?q=guest-os-v), requires the release SHA-256 digest by default, verifies the tarball, stages the unpack, and only then adopts the image. Current images include NVIDIA support conditionally and work on CPU-only hosts too. Pinned versions below 0.6.0 are read directly from the archived [`meta-dstack` releases](https://github.com/Dstack-TEE/meta-dstack/releases); versions 0.6.0 and later come from this repository.
 
-On TDX, `dstackup install` starts the SGX key provider automatically from `/usr/local/share/dstack/key-provider-build`. To use a different provider, pass one of:
+On TDX, `dstackup install` starts the SGX key provider automatically from `/usr/local/share/dstack/local-key-provider/build`. To use a different provider, pass one of:
 
 ```bash
-sudo dstackup install --key-provider-src /path/to/key-provider-build
+sudo dstackup install --key-provider-src /path/to/local-key-provider/build
 sudo dstackup install --use-existing-key-provider 127.0.0.1:3443
 ```
 
@@ -281,7 +281,7 @@ TDX uses an SGX-backed key provider for KMS sealing. `dstackup install` uses the
 
 ```bash
 sudo dstackup install --use-existing-key-provider 127.0.0.1:3443
-sudo dstackup install --key-provider-src /path/to/key-provider-build
+sudo dstackup install --key-provider-src /path/to/local-key-provider/build
 ```
 
 AMD SEV-SNP does not use this key provider.

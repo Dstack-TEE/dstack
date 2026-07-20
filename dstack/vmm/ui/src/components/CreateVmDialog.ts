@@ -20,6 +20,9 @@ const CreateVmDialogComponent = {
     allowAttachAllGpus: { type: Boolean, required: true },
     kmsAvailable: { type: Boolean, required: true },
     portMappingEnabled: { type: Boolean, required: true },
+    networkingModes: { type: Array, required: true },
+    defaultBridge: { type: String, default: '' },
+    defaultNetworkingLabel: { type: String, required: true },
   },
   emits: ['close', 'submit', 'load-compose'],
   template: /* html */ `
@@ -138,23 +141,40 @@ const CreateVmDialogComponent = {
                 <option value="none">None</option>
                 <option value="kms">KMS</option>
                 <option value="local">Local</option>
-                <option value="tpm">TPM</option>
+                <option value="tpm">TPM (swtpm)</option>
               </select>
             </div>
 
-            <div class="form-group full-width" v-if="form.key_provider !== 'none'">
+            <div class="form-group full-width" v-if="form.key_provider === 'kms' || form.key_provider === 'local'">
               <label for="keyProviderId">Key Provider ID</label>
               <input id="keyProviderId" v-model="form.key_provider_id" type="text" placeholder="Optional provider ID">
             </div>
 
-            <div class="form-group">
-              <label for="netMode">Networking</label>
-              <select id="netMode" v-model="form.net_mode">
-                <option value="">Default</option>
-                <option value="bridge">Bridge</option>
-                <option value="passt">Passt</option>
-                <option value="user">User</option>
-              </select>
+            <div class="form-group full-width">
+              <label>Networking</label>
+              <div class="network-config-editor">
+                <div v-if="!form.networks.length" class="network-config-empty">{{ defaultNetworkingLabel }}</div>
+                <div v-for="(network, index) in form.networks" :key="index" class="network-config-row">
+                  <select v-model="network.mode">
+                    <option v-for="mode in networkingModes" :key="mode" :value="mode">
+                      {{ mode.charAt(0).toUpperCase() + mode.slice(1) }}
+                    </option>
+                  </select>
+                  <input
+                    v-if="network.mode === 'bridge'"
+                    v-model="network.bridge_name"
+                    type="text"
+                    :placeholder="defaultBridge ? 'Override bridge (empty = ' + defaultBridge + ')' : 'Bridge name'"
+                  >
+                  <span v-else class="network-config-placeholder"></span>
+                  <button type="button" class="action-btn danger" @click="form.networks.splice(index, 1)">Remove</button>
+                  <small v-if="network.mode === 'bridge'" class="hint network-config-hint">
+                    {{ defaultBridge ? 'Leave empty to use the VMM default bridge from vmm.toml: ' + defaultBridge + '.' : 'No default bridge is configured in vmm.toml; enter a bridge interface name.' }}
+                    Guest IP is assigned by host DHCP on that bridge and reported after boot.
+                  </small>
+                </div>
+                <button type="button" class="action-btn" @click="form.networks.push({ mode: networkingModes[0] || 'user', bridge_name: '' })">Add Network</button>
+              </div>
             </div>
 
             <div class="form-group full-width">
@@ -164,7 +184,7 @@ const CreateVmDialogComponent = {
                 <label><input type="checkbox" v-model="form.public_logs"> Public logs</label>
                 <label><input type="checkbox" v-model="form.public_sysinfo"> Public sysinfo</label>
                 <label><input type="checkbox" v-model="form.public_tcbinfo"> Public TCB info</label>
-                <label><input type="checkbox" v-model="form.no_tee"> Disable TDX</label>
+                <label><input type="checkbox" v-model="form.no_tee"> No TEE</label>
                 <label><input type="checkbox" v-model="form.pin_numa"> Pin NUMA</label>
                 <label><input type="checkbox" v-model="form.hugepages"> Huge pages</label>
               </div>

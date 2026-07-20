@@ -19,6 +19,9 @@ const UpdateVmDialogComponent = {
     availableGpus: { type: Array, required: true },
     allowAttachAllGpus: { type: Boolean, required: true },
     portMappingEnabled: { type: Boolean, required: true },
+    networkingModes: { type: Array, required: true },
+    defaultBridge: { type: String, default: '' },
+    defaultNetworkingLabel: { type: String, required: true },
     kmsEnabled: { type: Boolean, required: true },
     composeHashPreview: { type: String, required: true },
   },
@@ -132,6 +135,35 @@ const UpdateVmDialogComponent = {
 
         <div class="form-group full-width" v-if="portMappingEnabled">
           <port-mapping-editor :ports="dialog.ports" />
+        </div>
+
+        <div class="form-group full-width">
+          <div class="checkbox-grid">
+            <label><input type="checkbox" v-model="dialog.updateNetworking"> Update networking</label>
+          </div>
+          <div v-if="dialog.updateNetworking" class="network-config-editor">
+            <div v-if="!dialog.networks.length" class="network-config-empty">{{ defaultNetworkingLabel }}</div>
+            <div v-for="(network, index) in dialog.networks" :key="index" class="network-config-row">
+              <select v-model="network.mode">
+                <option v-for="mode in networkingModes" :key="mode" :value="mode">
+                  {{ mode.charAt(0).toUpperCase() + mode.slice(1) }}
+                </option>
+              </select>
+              <input
+                v-if="network.mode === 'bridge'"
+                v-model="network.bridge_name"
+                type="text"
+                :placeholder="defaultBridge ? 'Override bridge (empty = ' + defaultBridge + ')' : 'Bridge name'"
+              >
+              <span v-else class="network-config-placeholder"></span>
+              <button type="button" class="action-btn danger" @click="dialog.networks.splice(index, 1)">Remove</button>
+              <small v-if="network.mode === 'bridge'" class="hint network-config-hint">
+                {{ defaultBridge ? 'Leave empty to use the VMM default bridge from vmm.toml: ' + defaultBridge + '.' : 'No default bridge is configured in vmm.toml; enter a bridge interface name.' }}
+                Guest IP is assigned by host DHCP on that bridge and reported after boot.
+              </small>
+            </div>
+            <button type="button" class="action-btn" @click="dialog.networks.push({ mode: networkingModes[0] || 'user', bridge_name: '' })">Add Network</button>
+          </div>
         </div>
 
         <div class="form-group">

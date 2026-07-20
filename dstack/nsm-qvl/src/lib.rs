@@ -211,6 +211,7 @@ pub struct AttestationDocument {
     /// Timestamp (milliseconds since epoch)
     pub timestamp: u64,
     /// PCR values
+    #[serde(alias = "nitrotpm_pcrs")]
     pub pcrs: BTreeMap<u16, Vec<u8>>,
     /// Certificate (DER-encoded) - the signing certificate
     pub certificate: Vec<u8>,

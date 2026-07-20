@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "local-key-provider"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "SGX-backed local sealing-key provider for dstack TDX guests"
+
+[dependencies]
+blake2.workspace = true
+dcap-qvl.workspace = true
+rand_core.workspace = true
+salsa20.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = [
+    "io-util",
+    "macros",
+    "net",
+    "rt",
+    "sync",
+    "time",
+] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+x25519-dalek.workspace = true
+xsalsa20poly1305.workspace = true

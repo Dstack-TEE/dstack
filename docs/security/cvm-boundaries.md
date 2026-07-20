@@ -33,7 +33,7 @@ This is the main configuration file for the application in JSON format:
 | kms_enabled | 0.3.1 | boolean | Enable/disable KMS |
 | gateway_enabled | 0.3.1 | boolean | Enable/disable gateway |
 | local_key_provider_enabled | 0.3.1 | boolean | Use a local key provider |
-| key_provider_id | 0.5.1 | string | Key provider ID. |
+| key_provider_id | 0.5.1 | string | Optional pin for the key provider identity (hex-encoded bytes). For `kms` this is the KMS CA public key; for `local` the sealing-provider MR. For `tpm` and `none` it must be an empty string — the TPM app-root public key is instance-specific and is not used as a provider id or measured as one. |
 | public_logs | 0.3.3 | boolean | Whether logs are publicly visible |
 | public_sysinfo | 0.3.3 | boolean | Whether system info is public |
 | public_tcbinfo | 0.5.1 | boolean | Whether TCB info is public |
@@ -44,10 +44,10 @@ This is the main configuration file for the application in JSON format:
 | init_script | 0.5.5 | string | Bash script that executed prior to dockerd startup |
 | storage_fs | 0.5.5 | string | Filesystem type for the data disk of the CVM. Supported values: "zfs", "ext4". default to "zfs". **ZFS:** Ensures filesystem integrity with built-in data protection features. **ext4:** Provides better performance for database applications with lower overhead and faster I/O operations, but no strong integrity protection. |
 | swap_size | 0.5.5 | string/integer | The linux swap size. default to 0. Can be in byte or human-readable format (e.g., "1G", "256M"). |
-| key_provider | 0.5.6 | string | Key provider type. Supported values: "none", "kms", "local", "tpm". |
+| key_provider | 0.5.6 | string | Key provider type. Supported values: "none", "kms", "local", "tpm". GCP vTPM and AWS EC2 NitroTPM are part of their platform trust models. The Dstack platform can use VMM-managed swtpm for seal/unseal and restart persistence, but it offers no protection against the host and is intentionally not accepted by remote verifiers. |
 
 
-The hash of this file content is extended to RTMR3 as event name `compose-hash`. Remote verifier can extract the compose-hash during remote attestation.
+The hash of this file content is extended as the dstack `compose-hash` launch event. On TDX-family platforms the launch event is measured into RTMR3. On AWS NitroTPM it is measured into non-resettable SHA384 PCR14 before the `system-ready` launch boundary. Remote verifiers extract and replay this event during attestation.
 
 
 ### .instance-info
@@ -59,7 +59,7 @@ This file contains metadata about the application instance:
 | instance_id | The instance ID, determined by the SHA256 digest of the instance_id_seed || app_id (truncated to the first 20 bytes). Empty if no_instance_id is true in app-compose.json |
 | instance_id_seed | The random seed that determines the instance ID |
 
-The hash of this file is not extended to any RTMR. Instead, the `app_id` and `instance_id` are extended to RTMR3 as event name `app-id` and `instance-id` respectively.
+The hash of this file is not extended as a single measurement. Instead, the `app_id` and `instance_id` are extended as separate dstack launch events named `app-id` and `instance-id`. On TDX-family platforms those events go into RTMR3. On AWS NitroTPM they go into SHA384 PCR14.
 
 > Because `app_id` can be pinned at deploy time (it is not necessarily derived from
 > `compose_hash`), a relying party that authorizes on `app_id` MUST also verify the
@@ -74,6 +74,7 @@ This file contains system configuration in JSON format:
 | kms_urls | array of string | List of KMS service URLs |
 | gateway_urls | array of string | List of gateway service URLs |
 | pccs_url | string | URL of the PCCS service (used when dstack components need to verify a remote TD CVM or SGX enclave) |
+| nvidia_attestation_proxy_url | string | Optional persistent OCSP and RIM cache used by NVIDIA local GPU attestation |
 | docker_registry | string | URL of the docker registry |
 | host_api_url | string | VSOCK URL of host API |
 | vm_config | string | JSON string of VM configuration (os_image_hash, cpu_count, memory_size) |
@@ -82,9 +83,10 @@ The hash of this file is not extended to any RTMR because each field has its own
 
 | Field | Security Mechanism |
 |-------|-------------------|
-| kms_urls | URLs themselves aren't security-critical. The trust anchor is the KMS root public key, which is extended to RTMR3 as event name `key-provider`. Keys obtained from KMS will either successfully decrypt/encrypt the disk or fail-and-abort. |
+| kms_urls | URLs themselves aren't security-critical. The trust anchor is the KMS root public key, which is extended as the `key-provider` launch event. On TDX-family platforms this is RTMR3; on AWS NitroTPM this is PCR14. Keys obtained from KMS will either successfully decrypt/encrypt the disk or fail-and-abort. |
 | gateway_urls | URLs aren't security-critical. Trust is established through CA certificates from KMS. App CVM and dstack-gateway CVM verify each other's CA certificates to ensure they're under the same KMS authority. |
 | pccs_url | URL isn't security-critical. Trust is anchored by the root public key pinned in the attestation verification program. |
+| nvidia_attestation_proxy_url | The URL is not a collateral trust anchor. The measured guest verifies NVIDIA signatures and the signed OCSP validity window, and continues to require a fresh GPU evidence nonce. A bad endpoint can withhold collateral and cause a denial of service, but cannot forge a successful attestation or replay an expired `good` response. |
 | docker_registry | Docker daemon verifies image integrity using the pinned image hashes in the docker-compose file. |
 | host_api_url | Used only for reporting or encrypted sealing key transport. An incorrect URL doesn't create security vulnerabilities. |
 | vm_config | Informs the CVM to report virtual hardware info to KMS when requesting keys. KMS uses this info to calculate expected RTMRs and verify image hash. If tampered with, image hash verification would fail and no keys would be distributed. |

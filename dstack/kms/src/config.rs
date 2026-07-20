@@ -52,6 +52,13 @@ pub(crate) struct KmsConfig {
     /// policy decision.
     #[serde(default)]
     pub sev_snp_key_release: bool,
+    /// Whether to enable the additional local release gate for AWS EC2 NitroTPM
+    /// key/cert material. NitroTPM is a new, non-confidential-compute attestation
+    /// mode (the AWS hypervisor is in the TCB), so production deployments need an
+    /// explicit KMS opt-in as well as a successful external policy decision —
+    /// mirroring `sev_snp_key_release`.
+    #[serde(default)]
+    pub aws_nitro_tpm_key_release: bool,
     #[serde(with = "serde_human_bytes")]
     pub admin_token_hash: Vec<u8>,
     #[serde(default)]

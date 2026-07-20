@@ -2,82 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! QEMU related code
+//! QEMU launch preparation and command construction.
 use crate::{
     app::Manifest,
-    config::{
-        CvmConfig, GatewayConfig, Networking, NetworkingMode, ProcessAnnotation, TeePlatform,
-    },
+    config::{CvmConfig, Networking, NetworkingMode, ProcessAnnotation, TeePlatform},
+    vm_launcher::{ChildCommand, LaunchSpec},
 };
+use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
 use std::{
     fs::Permissions,
     io::Write,
-    ops::Deref,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    time::{Duration, SystemTime},
 };
 
 use super::{
-    effective_vcpu_count, hugepage_numa_nodes, image::Image, pci_numa_node, round_up, GpuConfig,
-    VmState,
+    effective_vcpu_count,
+    host_share::create_shared_disk,
+    hugepage_numa_nodes,
+    image::Image,
+    mr_config::{snp_host_data, tdx_mr_config_id},
+    network::{mac_address_for_vm_index, resolved_networks, validate_resolved_networks},
+    pci_numa_node, round_up, GpuConfig, VmWorkDir,
 };
 use anyhow::{bail, Context, Result};
-use base64::prelude::*;
 use bon::Builder;
-use dstack_types::{
-    mr_config::{MrConfig, MrConfigV3},
-    shared_filenames::{
-        APP_COMPOSE, ENCRYPTED_ENV, HOST_SHARED_DISK_LABEL, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
-    },
-    AppCompose, KeyProviderKind, SysConfig,
-};
-use dstack_vmm_rpc as pb;
-use sha2::{Digest, Sha256};
-
-/// Derive a deterministic MAC address from a VM ID using SHA256.
-/// Sets locally-administered + unicast bits (0x02) per IEEE 802.
-/// Derive a deterministic MAC address from a VM ID.
-///
-/// `prefix` may contain 0-3 fixed bytes. The first byte always has the
-/// locally-administered + unicast bits set (0x02). Remaining bytes are
-/// filled from SHA256(vm_id).
-pub fn mac_address_for_vm(vm_id: &str, prefix: &[u8]) -> String {
-    let hash = Sha256::digest(vm_id.as_bytes());
-    let prefix_len = prefix.len().min(3);
-    let mut bytes = [0u8; 6];
-    // Fill prefix bytes
-    bytes[..prefix_len].copy_from_slice(&prefix[..prefix_len]);
-    // Fill remaining bytes from hash
-    for i in prefix_len..6 {
-        bytes[i] = hash[i - prefix_len];
-    }
-    // Ensure locally-administered + unicast on first byte
-    bytes[0] = (bytes[0] & 0xfe) | 0x02;
-    format!(
-        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]
-    )
-}
+use dstack_types::{shared_filenames::HOST_SHARED_DISK_LABEL, KeyProviderKind};
 use fs_err as fs;
-use serde::{Deserialize, Serialize};
-use serde_human_bytes as hex_bytes;
-use supervisor_client::supervisor::{ProcessConfig, ProcessInfo};
-
-fn networking_to_proto(n: &Networking) -> pb::NetworkingConfig {
-    let mode = match n.mode {
-        NetworkingMode::Bridge => "bridge",
-        NetworkingMode::User => "user",
-
-        NetworkingMode::Custom => "custom",
-    };
-    pb::NetworkingConfig { mode: mode.into() }
-}
-
-fn sanitize_optional<T: AsRef<str>>(value: Option<T>) -> Option<T> {
-    value.filter(|value| !value.as_ref().trim().is_empty())
-}
+use nix::unistd::User;
+use serde::Serialize;
+use supervisor_client::supervisor::ProcessConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AmdSevSnpLaunchParams {
@@ -177,31 +132,6 @@ fn detect_amd_sev_snp_qemu_capabilities(qemu_path: &Path) -> Result<AmdSevSnpLau
     parse_amd_sev_snp_qmp_capabilities(&output.stdout)
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-pub struct InstanceInfo {
-    #[serde(default, with = "hex_bytes")]
-    pub instance_id_seed: Vec<u8>,
-    #[serde(default, with = "hex_bytes")]
-    pub instance_id: Vec<u8>,
-    #[serde(default, with = "hex_bytes")]
-    pub app_id: Vec<u8>,
-}
-
-pub struct VmInfo {
-    pub manifest: Manifest,
-    pub workdir: PathBuf,
-    pub status: &'static str,
-    pub uptime: String,
-    pub exited_at: Option<String>,
-    pub instance_id: Option<String>,
-    pub boot_progress: String,
-    pub boot_error: String,
-    pub shutdown_progress: String,
-    pub image_version: String,
-    pub gateway_enabled: bool,
-    pub events: Vec<pb::GuestEvent>,
-}
-
 #[derive(Debug, Builder)]
 pub struct VmConfig {
     pub manifest: Manifest,
@@ -209,11 +139,6 @@ pub struct VmConfig {
     pub cid: u32,
     pub workdir: PathBuf,
     pub gateway_enabled: bool,
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct State {
-    started: bool,
 }
 
 fn create_hd(
@@ -241,306 +166,159 @@ fn create_hd(
     Ok(())
 }
 
-/// Create a FAT32 disk image from a directory
-fn create_shared_disk(disk_path: impl AsRef<Path>, shared_dir: impl AsRef<Path>) -> Result<()> {
-    use fatfs::{FileSystem, FormatVolumeOptions, FsOptions};
-    use std::io::{Seek, SeekFrom, Write};
-
-    let disk_path = disk_path.as_ref();
-    let shared_dir = shared_dir.as_ref();
-
-    // Must be large enough to hold all host-shared files (app-compose.json and
-    // .user-config can each be up to 50 MiB, see HostShared::copy) plus FAT32 overhead.
-    const DISK_SIZE: u64 = 128 * 1024 * 1024;
-
-    // Back the image by a file (sparse until written) and stream files into it so
-    // peak memory stays bounded regardless of DISK_SIZE or input file sizes.
-    let mut image = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(disk_path)
-        .with_context(|| format!("Failed to create disk image at {}", disk_path.display()))?;
-    image
-        .set_len(DISK_SIZE)
-        .context("Failed to size disk image")?;
-
-    {
-        let mut label_bytes = [b' '; 11];
-        let label_str = HOST_SHARED_DISK_LABEL.as_bytes();
-        let copy_len = label_str.len().min(11);
-        label_bytes[..copy_len].copy_from_slice(&label_str[..copy_len]);
-        let format_opts = FormatVolumeOptions::new()
-            .fat_type(fatfs::FatType::Fat32)
-            .volume_label(label_bytes);
-        fatfs::format_volume(&mut image, format_opts).context("Failed to format disk as FAT32")?;
-    }
-
-    // Open the formatted filesystem and stream files into it
-    {
-        image
-            .seek(SeekFrom::Start(0))
-            .context("Failed to seek to start")?;
-        let fs = FileSystem::new(&mut image, FsOptions::new())
-            .context("Failed to open FAT32 filesystem")?;
-        let root_dir = fs.root_dir();
-
-        // Copy all files from shared_dir to the FAT32 root
-        for entry in fs::read_dir(shared_dir).context("Failed to read shared directory")? {
-            let entry = entry.context("Failed to read directory entry")?;
-            let path = entry.path();
-
-            if path.is_file() {
-                let filename = entry.file_name();
-                let filename_str = filename.to_string_lossy();
-
-                let mut src = fs::File::open(&path)
-                    .with_context(|| format!("Failed to open file {}", path.display()))?;
-                let mut fat_file = root_dir
-                    .create_file(&filename_str)
-                    .with_context(|| format!("Failed to create file {filename_str} in FAT32"))?;
-                std::io::copy(&mut src, &mut fat_file)
-                    .with_context(|| format!("Failed to write file {filename_str} to FAT32"))?;
-                fat_file.flush().context("Failed to flush FAT32 file")?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-impl VmInfo {
-    pub fn to_pb(&self, gw: &GatewayConfig, brief: bool) -> pb::VmInfo {
-        let workdir = VmWorkDir::new(&self.workdir);
-        let vm_config = workdir.manifest();
-        let custom_gateway_urls = vm_config
-            .as_ref()
-            .map(|c| c.gateway_urls.clone())
-            .unwrap_or_default();
-        pb::VmInfo {
-            id: self.manifest.id.clone(),
-            name: self.manifest.name.clone(),
-            status: self.status.into(),
-            uptime: self.uptime.clone(),
-            boot_progress: self.boot_progress.clone(),
-            boot_error: self.boot_error.clone(),
-            shutdown_progress: self.shutdown_progress.clone(),
-            image_version: self.image_version.clone(),
-            configuration: if brief {
-                None
-            } else {
-                let kms_urls = vm_config
-                    .as_ref()
-                    .map(|c| c.kms_urls.clone())
-                    .unwrap_or_default();
-                let no_tee = vm_config
-                    .as_ref()
-                    .map(|c| c.no_tee)
-                    .unwrap_or(self.manifest.no_tee);
-                let stopped = !workdir.started().unwrap_or(false);
-
-                Some(pb::VmConfiguration {
-                    name: self.manifest.name.clone(),
-                    image: self.manifest.image.clone(),
-                    compose_file: {
-                        fs::read_to_string(workdir.app_compose_path()).unwrap_or_default()
-                    },
-                    encrypted_env: { fs::read(workdir.encrypted_env_path()).unwrap_or_default() },
-                    user_config: {
-                        fs::read_to_string(workdir.user_config_path()).unwrap_or_default()
-                    },
-                    vcpu: self.manifest.vcpu,
-                    memory: self.manifest.memory,
-                    disk_size: self.manifest.disk_size,
-                    ports: self
-                        .manifest
-                        .port_map
-                        .iter()
-                        .map(|pm| pb::PortMapping {
-                            protocol: pm.protocol.as_str().into(),
-                            host_address: pm.address.to_string(),
-                            host_port: pm.from as u32,
-                            vm_port: pm.to as u32,
-                        })
-                        .collect(),
-                    app_id: Some(self.manifest.app_id.clone()),
-                    hugepages: self.manifest.hugepages,
-                    pin_numa: self.manifest.pin_numa,
-                    gpus: self.manifest.gpus.as_ref().map(|g| pb::GpuConfig {
-                        attach_mode: g.attach_mode.to_string(),
-                        gpus: g
-                            .gpus
-                            .iter()
-                            .map(|gpu| pb::GpuSpec {
-                                slot: gpu.slot.clone(),
-                            })
-                            .collect(),
-                    }),
-                    kms_urls,
-                    gateway_urls: custom_gateway_urls.clone(),
-                    stopped,
-                    no_tee,
-                    networking: self.manifest.networking.as_ref().map(networking_to_proto),
-                })
-            },
-            app_url: self
-                .gateway_enabled
-                .then_some(self.instance_id.as_deref())
-                .flatten()
-                .and_then(|id| sanitize_optional(Some(id)))
-                .map(|id| {
-                    // Use custom gateway URL if available, otherwise fall back to global config
-                    if let Some(custom_gw_url) = custom_gateway_urls.first() {
-                        if let Ok(url) = url::Url::parse(custom_gw_url) {
-                            let host = url.host_str().unwrap_or(&gw.base_domain);
-                            let port = url.port().unwrap_or(443);
-                            if port == 443 {
-                                return format!("https://{id}-{}.{}", gw.agent_port, host);
-                            } else {
-                                return format!("https://{id}-{}.{}:{}", gw.agent_port, host, port);
-                            }
-                        }
-                    }
-                    // Fall back to global gateway config
-                    if gw.port == 443 {
-                        format!("https://{id}-{}.{}", gw.agent_port, gw.base_domain)
-                    } else {
-                        format!(
-                            "https://{id}-{}.{}:{}",
-                            gw.agent_port, gw.base_domain, gw.port
-                        )
-                    }
-                }),
-            app_id: self.manifest.app_id.clone(),
-            instance_id: sanitize_optional(self.instance_id.clone()),
-            exited_at: self.exited_at.clone(),
-            events: self.events.clone(),
-        }
-    }
-}
-
-impl VmState {
-    pub fn merged_info(&self, proc_state: Option<&ProcessInfo>, workdir: &VmWorkDir) -> VmInfo {
-        fn truncate(d: Duration) -> Duration {
-            Duration::from_secs(d.as_secs())
-        }
-        let is_running = match proc_state {
-            Some(info) => info.state.status.is_running(),
-            None => false,
-        };
-        let started = workdir.started().unwrap_or(false);
-        let status = if self.state.removing {
-            "removing"
-        } else {
-            match (started, is_running) {
-                (true, true) => "running",
-                (true, false) => "exited",
-                (false, true) => "stopping",
-                (false, false) => "stopped",
-            }
-        };
-
-        fn display_ts(t: Option<&SystemTime>) -> String {
-            match t {
-                None => "never".into(),
-                Some(t) => {
-                    let ts = t.elapsed().unwrap_or(Duration::MAX);
-                    humantime::format_duration(truncate(ts)).to_string()
-                }
-            }
-        }
-        let uptime = display_ts(proc_state.and_then(|info| info.state.started_at.as_ref()));
-        let exited_at = display_ts(proc_state.and_then(|info| info.state.stopped_at.as_ref()));
-        let instance_id = sanitize_optional(
-            workdir
-                .instance_info()
-                .ok()
-                .map(|info| hex::encode(info.instance_id)),
-        );
-        VmInfo {
-            manifest: self.config.manifest.clone(),
-            workdir: workdir.path().to_path_buf(),
-            instance_id,
-            status,
-            uptime,
-            exited_at: Some(exited_at),
-            boot_progress: self.state.boot_progress.clone(),
-            boot_error: self.state.boot_error.clone(),
-            shutdown_progress: self.state.shutdown_progress.clone(),
-            image_version: self.config.image.info.version.clone(),
-            gateway_enabled: self.config.gateway_enabled,
-            events: self.state.events.clone().into(),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        amd_sev_snp_memory_backend_arg, parse_amd_sev_snp_qmp_capabilities, sanitize_optional,
-        virtio_pci_device,
-    };
-
-    #[test]
-    fn sanitize_optional_filters_empty_owned_values() {
-        assert_eq!(sanitize_optional(Some(String::new())), None);
-        assert_eq!(sanitize_optional(Some("   ".to_string())), None);
-        assert_eq!(
-            sanitize_optional(Some("instance-123".to_string())),
-            Some("instance-123".to_string())
-        );
-    }
-
-    #[test]
-    fn sanitize_optional_filters_empty_borrowed_values() {
-        assert_eq!(sanitize_optional(Some("")), None);
-        assert_eq!(sanitize_optional(Some("   ")), None);
-        assert_eq!(
-            sanitize_optional(Some("instance-123")),
-            Some("instance-123")
-        );
-    }
-
-    #[test]
-    fn amd_sev_snp_memory_backend_arg_uses_passed_final_memory_size() {
-        assert_eq!(
-            amd_sev_snp_memory_backend_arg(4096),
-            "memory-backend-memfd,id=ram1,size=4096M,share=true,prealloc=false"
-        );
-    }
-
-    #[test]
-    fn amd_sev_snp_qmp_capabilities_extracts_launch_params() {
-        let stdout = br#"{"QMP":{"version":{"qemu":{"major":10,"minor":0,"micro":2}}}}
-{"return":{}}
-{"return":{"reduced-phys-bits":1,"cbitpos":51,"cert-chain":"ignored","pdh":"ignored","cpu0-id":"ignored"}}
-{"return":{}}
-"#;
-        let params = parse_amd_sev_snp_qmp_capabilities(stdout).unwrap();
-        assert_eq!(params.cbitpos, 51);
-        assert_eq!(params.reduced_phys_bits, 1);
-    }
-
-    #[test]
-    fn amd_sev_snp_uses_confidential_virtio_pci_options() {
-        assert_eq!(
-            virtio_pci_device("virtio-blk-pci,drive=hd0", true),
-            "virtio-blk-pci,drive=hd0,disable-legacy=on,iommu_platform=true"
-        );
-        assert_eq!(
-            virtio_pci_device("virtio-blk-pci,drive=hd0", false),
-            "virtio-blk-pci,drive=hd0"
-        );
-    }
-}
-
 fn virtio_pci_device(device: &str, snp: bool) -> String {
     if snp {
         format!("{device},disable-legacy=on,iommu_platform=true")
     } else {
         device.to_string()
     }
+}
+
+struct PreparedQemuLaunch {
+    workdir: VmWorkDir,
+    platform: TeePlatform,
+    networks: Vec<Networking>,
+    hugepage_numa_nodes: Option<HashMap<String, u32>>,
+    gpu_numa_nodes: HashMap<String, String>,
+    numa_cpus: Option<String>,
+    swtpm_socket: Option<PathBuf>,
+    swtpm_path: Option<PathBuf>,
+    tdx_mr_config_id: Option<String>,
+    snp_host_data: Option<String>,
+    snp_launch_params: Option<AmdSevSnpLaunchParams>,
+}
+
+impl PreparedQemuLaunch {
+    fn prepare(
+        vm: &VmConfig,
+        workdir: impl AsRef<Path>,
+        cfg: &CvmConfig,
+        gpus: &GpuConfig,
+    ) -> Result<Self> {
+        let workdir = VmWorkDir::new(workdir);
+        prepare_data_disk(vm, &workdir, cfg)?;
+        prepare_shared_dir(&workdir)?;
+        let app_compose = workdir.app_compose().context("failed to get app compose")?;
+        let platform = cfg.resolved_platform();
+        let networks = resolved_networks(&vm.manifest, cfg);
+        validate_resolved_networks(&networks)?;
+
+        let hugepage_numa_nodes = if vm.manifest.hugepages {
+            Some(hugepage_numa_nodes(gpus)?)
+        } else {
+            None
+        };
+        let gpu_numa_nodes = if vm.manifest.hugepages {
+            gpus.gpus
+                .iter()
+                .map(|gpu| Ok((gpu.slot.clone(), pci_numa_node(&gpu.slot)?)))
+                .collect::<Result<_>>()?
+        } else {
+            HashMap::new()
+        };
+        let numa_cpus = if vm.manifest.pin_numa {
+            let device = gpus.gpus.first().map(|gpu| gpu.slot.clone());
+            Some(find_numa(device)?.1)
+        } else {
+            None
+        };
+        let (swtpm_socket, swtpm_path) =
+            if matches!(app_compose.key_provider(), KeyProviderKind::Tpm) {
+                let swtpm_path = which::which("swtpm")
+                    .context("tpm key provider requested but swtpm is not installed")?;
+                let state_dir = workdir.swtpm_state_dir();
+                fs::create_dir_all(&state_dir).context("failed to create swtpm state directory")?;
+                let socket = workdir.swtpm_socket();
+                if socket.exists() {
+                    fs::remove_file(&socket).context("failed to remove stale swtpm socket")?;
+                }
+                (Some(socket), Some(swtpm_path))
+            } else {
+                (None, None)
+            };
+        prepare_shared_disk(&workdir, cfg)?;
+
+        let tee_enabled = !vm.manifest.no_tee;
+        let tdx_mr_config_id = if tee_enabled
+            && platform == TeePlatform::Tdx
+            && cfg.use_mrconfigid
+            && vm.image.info.version_tuple().unwrap_or_default() >= (0, 5, 2)
+        {
+            Some(tdx_mr_config_id(&workdir, &app_compose)?)
+        } else {
+            None
+        };
+        let (snp_host_data, snp_launch_params) =
+            if tee_enabled && platform == TeePlatform::AmdSevSnp {
+                (
+                    Some(snp_host_data(&workdir)?),
+                    Some(
+                        detect_amd_sev_snp_qemu_capabilities(&cfg.qemu_path).context(
+                            "failed to detect AMD SEV-SNP cbitpos/reduced-phys-bits from QEMU",
+                        )?,
+                    ),
+                )
+            } else {
+                (None, None)
+            };
+
+        Ok(Self {
+            workdir,
+            platform,
+            networks,
+            hugepage_numa_nodes,
+            gpu_numa_nodes,
+            numa_cpus,
+            swtpm_socket,
+            swtpm_path,
+            tdx_mr_config_id,
+            snp_host_data,
+            snp_launch_params,
+        })
+    }
+}
+
+fn prepare_data_disk(vm: &VmConfig, workdir: &VmWorkDir, cfg: &CvmConfig) -> Result<()> {
+    let hda_path = workdir.hda_path();
+    if !hda_path.exists() {
+        create_hd(
+            &hda_path,
+            vm.image.hda.as_ref(),
+            &format!("{}G", vm.manifest.disk_size),
+        )?;
+    }
+    if !cfg.user.is_empty() {
+        fs::set_permissions(&hda_path, Permissions::from_mode(0o660))?;
+    }
+    Ok(())
+}
+
+fn prepare_shared_dir(workdir: &VmWorkDir) -> Result<()> {
+    let shared_dir = workdir.shared_dir();
+    if !shared_dir.exists() {
+        fs::create_dir_all(&shared_dir)?;
+    }
+    Ok(())
+}
+
+fn prepare_shared_disk(workdir: &VmWorkDir, cfg: &CvmConfig) -> Result<()> {
+    if cfg.host_share_mode != "vhd" {
+        return Ok(());
+    }
+
+    let shared_dir = workdir.shared_dir();
+    let shared_disk_path = workdir.shared_disk_path();
+    if shared_disk_path.exists() {
+        fs::remove_file(&shared_disk_path).context("failed to remove shared disk")?;
+    }
+    create_shared_disk(&shared_disk_path, shared_dir).context("failed to create shared disk")
+}
+
+struct QemuCommandBuilder<'a> {
+    vm: &'a VmConfig,
+    cfg: &'a CvmConfig,
+    gpus: &'a GpuConfig,
+    prepared: &'a PreparedQemuLaunch,
 }
 
 impl VmConfig {
@@ -550,205 +328,290 @@ impl VmConfig {
         cfg: &CvmConfig,
         gpus: &GpuConfig,
     ) -> Result<Vec<ProcessConfig>> {
-        let workdir = VmWorkDir::new(workdir);
-        let serial_file = workdir.serial_file();
-        let serial_pty = workdir.serial_pty();
-        let shared_dir = workdir.shared_dir();
-        let disk_size = format!("{}G", self.manifest.disk_size);
-        let hda_path = workdir.hda_path();
-        if !hda_path.exists() {
-            create_hd(&hda_path, self.image.hda.as_ref(), &disk_size)?;
+        let prepared = PreparedQemuLaunch::prepare(self, workdir, cfg, gpus)?;
+        let process = QemuCommandBuilder {
+            vm: self,
+            cfg,
+            gpus,
+            prepared: &prepared,
         }
-        if !cfg.user.is_empty() {
-            fs_err::set_permissions(&hda_path, Permissions::from_mode(0o660))?;
-        }
-
-        if !shared_dir.exists() {
-            fs::create_dir_all(&shared_dir)?;
-        }
-        let app_compose = workdir.app_compose().context("Failed to get app compose")?;
-        let qemu = &cfg.qemu_path;
-        let is_amd_sev_snp =
-            cfg.resolved_platform() == TeePlatform::AmdSevSnp && !self.manifest.no_tee;
-        let mut numa_nodes_for_hugepages = if self.manifest.hugepages {
-            Some(hugepage_numa_nodes(gpus)?)
-        } else {
-            None
+        .build()?;
+        let Some(socket) = prepared.swtpm_socket.as_deref() else {
+            return Ok(vec![process]);
         };
-        let smp = effective_vcpu_count(
-            self.manifest.vcpu,
-            numa_nodes_for_hugepages
-                .as_ref()
-                .map(|nodes| nodes.len() as u32),
-        );
-        let mut mem = self.manifest.memory;
-        let mut command = Command::new(qemu);
+        let swtpm_path = prepared
+            .swtpm_path
+            .as_ref()
+            .context("missing swtpm executable for configured socket")?;
+        let (socket_uid, socket_gid) = if cfg.user.is_empty() {
+            (unsafe { libc::geteuid() }, unsafe { libc::getegid() })
+        } else {
+            let user = User::from_name(&cfg.user)
+                .context("failed to resolve QEMU user")?
+                .with_context(|| format!("QEMU user {} does not exist", cfg.user))?;
+            (user.uid.as_raw(), user.gid.as_raw())
+        };
+
+        let swtpm_args = vec![
+            "socket".into(),
+            "--tpm2".into(),
+            "--tpmstate".into(),
+            format!("dir={}", prepared.workdir.swtpm_state_dir().display()),
+            "--ctrl".into(),
+            format!(
+                "type=unixio,path={},mode=0600,uid={socket_uid},gid={socket_gid}",
+                socket.display()
+            ),
+            "--flags".into(),
+            "not-need-init,startup-clear".into(),
+        ];
+        let spec = LaunchSpec {
+            qemu: ChildCommand {
+                command: process.command,
+                args: process.args,
+            },
+            swtpm: ChildCommand {
+                command: swtpm_path.to_string_lossy().into_owned(),
+                args: swtpm_args,
+            },
+            swtpm_socket: socket.to_path_buf(),
+            startup_timeout_ms: 5_000,
+            shutdown_timeout_ms: 10_000,
+        };
+        let spec_path = prepared.workdir.launch_spec_path();
+        safe_write::safe_write(&spec_path, serde_json::to_vec_pretty(&spec)?)
+            .context("failed to write VM launch specification")?;
+        let executable =
+            std::env::current_exe().context("failed to locate dstack-vmm executable")?;
+        let launcher = ProcessConfig {
+            id: self.manifest.id.clone(),
+            name: self.manifest.name.clone(),
+            command: executable.to_string_lossy().into_owned(),
+            args: vec![
+                "vm-launcher".into(),
+                "--spec".into(),
+                spec_path.to_string_lossy().into_owned(),
+            ],
+            env: process.env,
+            cwd: process.cwd,
+            stdout: process.stdout,
+            stderr: process.stderr,
+            pidfile: process.pidfile,
+            cid: process.cid,
+            note: process.note,
+        };
+        Ok(vec![launcher])
+    }
+}
+
+impl QemuCommandBuilder<'_> {
+    fn build(&self) -> Result<ProcessConfig> {
+        let mut command = self.base_command();
+        self.configure_rootfs(&mut command)?;
+        self.configure_data_disk(&mut command);
+        self.configure_networking(&mut command)?;
+        self.vm.configure_smbios(&mut command, self.cfg);
+        self.configure_tpm_and_vsock(&mut command);
+        self.configure_host_share(&mut command)?;
+
+        let (smp, mem) = self.configure_hugepage_memory(&mut command)?;
+        self.vm
+            .configure_machine(&mut command, self.cfg, self.prepared, mem)?;
+        self.configure_gpus(&mut command)?;
+        command.arg("-smp").arg(smp.to_string());
+        command.arg("-m").arg(format!("{mem}M"));
+
+        // SNP app identity is bound through HOST_DATA, so the measured cmdline
+        // remains the image-provided cmdline.
+        if let Some(cmdline) = &self.vm.image.info.cmdline {
+            command.arg("-append").arg(cmdline);
+        }
+        self.process_config(command)
+    }
+
+    fn is_amd_sev_snp(&self) -> bool {
+        self.prepared.platform == TeePlatform::AmdSevSnp && !self.vm.manifest.no_tee
+    }
+
+    fn base_command(&self) -> Command {
+        let workdir = &self.prepared.workdir;
+        let mut command = Command::new(&self.cfg.qemu_path);
         command.arg("-accel").arg("kvm");
-        let cpu = if is_amd_sev_snp { "EPYC-v4" } else { "host" };
-        command.arg("-cpu").arg(cpu);
+        command.arg("-cpu").arg(if self.is_amd_sev_snp() {
+            "EPYC-v4"
+        } else {
+            "host"
+        });
         command.arg("-nographic");
         command.arg("-nodefaults");
         command.arg("-chardev").arg(format!(
             "pty,id=com0,path={},logfile={}",
-            serial_pty.display(),
-            serial_file.display()
+            workdir.serial_pty().display(),
+            workdir.serial_file().display()
         ));
         command.arg("-serial").arg("chardev:com0");
-        if cfg.qmp_socket {
+        if self.cfg.qmp_socket {
             command.arg("-qmp").arg(format!(
                 "unix:{},server,wait=off",
                 workdir.qmp_socket().display()
             ));
         }
-        if let Some(bios) = self.image.firmware(is_amd_sev_snp) {
+        if let Some(bios) = self.vm.image.firmware(self.is_amd_sev_snp()) {
             command.arg("-bios").arg(bios);
         }
-        command.arg("-kernel").arg(&self.image.kernel);
-        command.arg("-initrd").arg(&self.image.initrd);
-        if cfg.qemu_hotplug_off {
+        command.arg("-kernel").arg(&self.vm.image.kernel);
+        command.arg("-initrd").arg(&self.vm.image.initrd);
+        if self.cfg.qemu_hotplug_off {
             command.args([
                 "-global",
                 "ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off",
             ]);
         }
-        if cfg.qemu_pci_hole64_size > 0 {
+        if self.cfg.qemu_pci_hole64_size > 0 {
             command.args([
                 "-global",
                 &format!(
                     "q35-pcihost.pci-hole64-size=0x{:x}",
-                    cfg.qemu_pci_hole64_size
+                    self.cfg.qemu_pci_hole64_size
                 ),
             ]);
         }
-        if let Some(rootfs) = &self.image.rootfs {
-            let img_ver = self.image.info.version_tuple().unwrap_or_default();
-            let ext = rootfs
-                .extension()
-                .unwrap_or_default()
-                .to_str()
-                .unwrap_or_default();
-            match ext {
-                "iso" => {
-                    if img_ver >= (0, 5, 0) {
-                        bail!(
-                            "Unsupported rootfs type: {ext}. Image versions >= 0.5.0 must use verity rootfs"
-                        );
-                    }
-                    command.arg("-cdrom").arg(rootfs);
+        command
+    }
+
+    fn configure_rootfs(&self, command: &mut Command) -> Result<()> {
+        let Some(rootfs) = &self.vm.image.rootfs else {
+            return Ok(());
+        };
+        let image_version = self.vm.image.info.version_tuple().unwrap_or_default();
+        let extension = rootfs
+            .extension()
+            .unwrap_or_default()
+            .to_str()
+            .unwrap_or_default();
+        match extension {
+            "iso" => {
+                if image_version >= (0, 5, 0) {
+                    bail!(
+                        "Unsupported rootfs type: {extension}. Image versions >= 0.5.0 must use verity rootfs"
+                    );
                 }
-                "verity" => {
-                    command.arg("-drive").arg(format!(
-                        "file={},if=none,id=hd0,format=raw,readonly=on",
-                        rootfs.display()
-                    ));
-                    command.arg("-device").arg(virtio_pci_device(
-                        "virtio-blk-pci,drive=hd0",
-                        is_amd_sev_snp,
-                    ));
-                }
-                _ => {
-                    bail!("Unsupported rootfs type: {ext}");
-                }
+                command.arg("-cdrom").arg(rootfs);
             }
+            "verity" => {
+                command.arg("-drive").arg(format!(
+                    "file={},if=none,id=hd0,format=raw,readonly=on",
+                    rootfs.display()
+                ));
+                command.arg("-device").arg(virtio_pci_device(
+                    "virtio-blk-pci,drive=hd0",
+                    self.is_amd_sev_snp(),
+                ));
+            }
+            _ => bail!("Unsupported rootfs type: {extension}"),
         }
-        let mut processes = vec![];
+        Ok(())
+    }
+
+    fn configure_data_disk(&self, command: &mut Command) {
         command
             .arg("-drive")
-            .arg(format!("file={},if=none,id=hd1", hda_path.display()))
+            .arg(format!(
+                "file={},if=none,id=hd1",
+                self.prepared.workdir.hda_path().display()
+            ))
             .arg("-device")
             .arg(virtio_pci_device(
                 "virtio-blk-pci,drive=hd1",
-                is_amd_sev_snp,
+                self.is_amd_sev_snp(),
             ));
-        // Resolve per-VM networking override against global config.
-        // Per-VM only sets mode; shared fields (bridge name, mac_prefix, etc.)
-        // are merged from global config.
-        let resolved_networking;
-        let networking = match self.manifest.networking.as_ref() {
-            Some(vm_net) => {
-                // Per-VM override: take mode from VM, fill other fields from global
-                resolved_networking = Networking {
-                    mode: vm_net.mode,
-                    bridge: if vm_net.bridge.is_empty() {
-                        cfg.networking.bridge.clone()
-                    } else {
-                        vm_net.bridge.clone()
-                    },
-                    ..cfg.networking.clone()
-                };
-                &resolved_networking
-            }
-            None => &cfg.networking,
-        };
-        // Generate deterministic MAC for all networking modes
-        let prefix = networking.mac_prefix_bytes();
-        let mac = mac_address_for_vm(&self.manifest.id, &prefix);
-        let net_device = virtio_pci_device(
-            &format!("virtio-net-pci,netdev=net0,mac={mac}"),
-            is_amd_sev_snp,
-        );
-        let netdev = match networking.mode {
-            NetworkingMode::User => {
-                let mut netdev = format!(
-                    "user,id=net0,net={},dhcpstart={},restrict={}",
-                    networking.net,
-                    networking.dhcp_start,
-                    if networking.restrict { "yes" } else { "no" }
-                );
-                for pm in &self.manifest.port_map {
-                    netdev.push_str(&format!(
-                        ",hostfwd={}:{}:{}-:{}",
-                        pm.protocol.as_str(),
-                        pm.address,
-                        pm.from,
-                        pm.to
-                    ));
+    }
+
+    fn configure_networking(&self, command: &mut Command) -> Result<()> {
+        let hostfwd_index = self
+            .prepared
+            .networks
+            .iter()
+            .position(|networking| networking.mode == NetworkingMode::User);
+        for (index, networking) in self.prepared.networks.iter().enumerate() {
+            let net_id = format!("net{index}");
+            let mac = mac_address_for_vm_index(
+                &self.vm.manifest.id,
+                &networking.mac_prefix_bytes(),
+                index,
+            );
+            let net_device = virtio_pci_device(
+                &format!("virtio-net-pci,netdev={net_id},mac={mac}"),
+                self.is_amd_sev_snp(),
+            );
+            let netdev = match networking.mode {
+                NetworkingMode::User => {
+                    let mut netdev = format!(
+                        "user,id={net_id},net={},dhcpstart={},restrict={}",
+                        networking.net,
+                        networking.dhcp_start,
+                        if networking.restrict { "yes" } else { "no" }
+                    );
+                    if hostfwd_index == Some(index) {
+                        for mapping in &self.vm.manifest.port_map {
+                            netdev.push_str(&format!(
+                                ",hostfwd={}:{}:{}-:{}",
+                                mapping.protocol.as_str(),
+                                mapping.address,
+                                mapping.from,
+                                mapping.to
+                            ));
+                        }
+                    }
+                    netdev
                 }
-                netdev
-            }
-            NetworkingMode::Bridge => {
-                tracing::info!("bridge networking: mac={mac} bridge={}", networking.bridge);
-                format!("bridge,id=net0,br={}", networking.bridge)
-            }
-            NetworkingMode::Custom => networking.netdev.clone(),
-        };
-        command.arg("-netdev").arg(netdev);
-        command.arg("-device").arg(net_device);
-
-        self.configure_smbios(&mut command, cfg);
-
-        if matches!(app_compose.key_provider(), KeyProviderKind::Tpm) {
-            let tpm_path = if Path::new("/dev/tpmrm0").exists() {
-                "/dev/tpmrm0"
-            } else if Path::new("/dev/tpm0").exists() {
-                "/dev/tpm0"
-            } else {
-                bail!("TPM key provider requested but no TPM device found on host");
+                NetworkingMode::Bridge => {
+                    tracing::info!("bridge networking: mac={mac} bridge={}", networking.bridge);
+                    format!("bridge,id={net_id},br={}", networking.bridge)
+                }
+                NetworkingMode::Custom => {
+                    if !networking.netdev.contains(&format!("id={net_id}")) {
+                        bail!(
+                            "custom networking netdev must contain id={net_id} for interface index {index}"
+                        );
+                    }
+                    networking.netdev.clone()
+                }
             };
+            command.arg("-netdev").arg(netdev);
+            command.arg("-device").arg(net_device);
+        }
+        Ok(())
+    }
+
+    fn configure_tpm_and_vsock(&self, command: &mut Command) {
+        if let Some(socket) = &self.prepared.swtpm_socket {
             command
+                .arg("-chardev")
+                .arg(format!("socket,id=chrtpm,path={}", socket.display()))
                 .arg("-tpmdev")
-                .arg(format!("passthrough,id=tpm0,path={tpm_path}"))
+                .arg("emulator,id=tpm0,chardev=chrtpm")
                 .arg("-device")
                 .arg("tpm-tis,tpmdev=tpm0");
         }
-
         command.arg("-device").arg(virtio_pci_device(
-            &format!("vhost-vsock-pci,guest-cid={}", self.cid),
-            is_amd_sev_snp,
+            &format!("vhost-vsock-pci,guest-cid={}", self.vm.cid),
+            self.is_amd_sev_snp(),
         ));
+    }
 
-        // Configure shared files delivery: either via disk or 9p
-        match cfg.host_share_mode.as_str() {
+    fn configure_host_share(&self, command: &mut Command) -> Result<()> {
+        let workdir = &self.prepared.workdir;
+        match self.cfg.host_share_mode.as_str() {
             "9p" => {
-                // Use 9p virtfs (default)
-                let ro = if self.image.info.shared_ro {
+                let read_only = if self.vm.image.info.shared_ro {
                     "on"
                 } else {
                     "off"
                 };
                 command.arg("-virtfs").arg(format!(
-                    "local,path={},mount_tag=host-shared,readonly={ro},security_model=mapped,id=virtfs0",
-                    shared_dir.display(),
+                    "local,path={},mount_tag=host-shared,readonly={read_only},security_model=mapped,id=virtfs0",
+                    workdir.shared_dir().display(),
                 ));
             }
             "vvfat" => {
@@ -756,214 +619,152 @@ impl VmConfig {
                     .arg("-blockdev")
                     .arg(format!(
                         "driver=vvfat,node-name=vvfat0,read-only=on,dir={},label={}",
-                        shared_dir.display(),
+                        workdir.shared_dir().display(),
                         HOST_SHARED_DISK_LABEL
                     ))
                     .arg("-device")
                     .arg(virtio_pci_device(
                         "virtio-blk-pci,drive=vvfat0",
-                        is_amd_sev_snp,
+                        self.is_amd_sev_snp(),
                     ));
             }
             "vhd" => {
-                // Use a second virtual disk (hd2) to share files
-                let shared_disk_path = workdir.shared_disk_path();
-                if shared_disk_path.exists() {
-                    fs::remove_file(&shared_disk_path).context("Failed to remove shared disk")?;
-                }
-                create_shared_disk(&shared_disk_path, &shared_dir)
-                    .context("Failed to create shared disk")?;
                 command
                     .arg("-drive")
                     .arg(format!(
                         "file={},if=none,id=hd2,format=raw,readonly=on",
-                        shared_disk_path.display()
+                        workdir.shared_disk_path().display()
                     ))
                     .arg("-device")
                     .arg(virtio_pci_device(
                         "virtio-blk-pci,drive=hd2",
-                        is_amd_sev_snp,
+                        self.is_amd_sev_snp(),
                     ));
             }
-            _ => {
-                bail!("Invalid host sharing mode: {}", cfg.host_share_mode);
-            }
+            _ => bail!("Invalid host sharing mode: {}", self.cfg.host_share_mode),
+        }
+        Ok(())
+    }
+
+    fn configure_hugepage_memory(&self, command: &mut Command) -> Result<(u32, u32)> {
+        let numa_nodes = self.prepared.hugepage_numa_nodes.as_ref();
+        let smp = effective_vcpu_count(
+            self.vm.manifest.vcpu,
+            numa_nodes.map(|nodes| nodes.len() as u32),
+        );
+        if !self.vm.manifest.hugepages {
+            return Ok((smp, self.vm.manifest.memory));
         }
 
-        let hugepages = self.manifest.hugepages;
-        let pin_numa = self.manifest.pin_numa;
-        // Handle GPU configuration
-        let mut dev_num = 1;
-        let memory = self.manifest.memory;
-
-        // Handle hugepages configuration
-        if hugepages {
-            let numa_nodes = numa_nodes_for_hugepages
-                .take()
-                .context("hugepage NUMA nodes should be computed above")?;
-            let n_numa = numa_nodes.len() as u32;
-
-            // Round up CPU cores and memory to multiple times of NUMA nodes.
-            // `smp` is already the shared effective vCPU count used by vm_config.
-            let vcpu_count = smp;
-            let mem_gb = round_up(memory / 1024, n_numa);
-            let vcpu_per_node = vcpu_count / n_numa;
-            let mem_per_node = mem_gb / n_numa;
-
-            mem = mem_gb * 1024;
-
-            let mut bus_nr = 5_u32;
-
-            // Configure NUMA nodes
-            for (ind, (node, count)) in numa_nodes.into_iter().enumerate() {
-                let ind = ind as u32;
-                let cpu_start = ind * vcpu_per_node;
-                let cpu_end = (ind + 1) * vcpu_per_node - 1;
-                command.arg("-numa").arg(format!(
-                    "node,nodeid={ind},cpus={cpu_start}-{cpu_end},memdev=mem{ind}",
-                ));
-
-                command.arg("-object").arg(format!(
-                    "memory-backend-file,id=mem{ind},size={mem_per_node}G,mem-path=/dev/hugepages,share=on,prealloc=yes,host-nodes={node},policy=bind",
-                ));
-
-                let addr = 0xa + ind;
-                command.arg("-device").arg(format!(
-                    "pxb-pcie,id=pcie.node{node},bus=pcie.0,addr={addr},numa_node={ind},bus_nr={bus_nr}",
-                ));
-                bus_nr += count + 1;
-            }
+        let numa_nodes = numa_nodes
+            .context("hugepage NUMA nodes should be computed during launch preparation")?;
+        let numa_count = numa_nodes.len() as u32;
+        let memory_gib = round_up(self.vm.manifest.memory / 1024, numa_count);
+        let vcpus_per_node = smp / numa_count;
+        let memory_per_node = memory_gib / numa_count;
+        let mut bus_number = 5_u32;
+        for (index, (node, device_count)) in numa_nodes.iter().enumerate() {
+            let index = index as u32;
+            let cpu_start = index * vcpus_per_node;
+            let cpu_end = (index + 1) * vcpus_per_node - 1;
+            command.arg("-numa").arg(format!(
+                "node,nodeid={index},cpus={cpu_start}-{cpu_end},memdev=mem{index}",
+            ));
+            command.arg("-object").arg(format!(
+                "memory-backend-file,id=mem{index},size={memory_per_node}G,mem-path=/dev/hugepages,share=on,prealloc=yes,host-nodes={node},policy=bind",
+            ));
+            let address = 0xa + index;
+            command.arg("-device").arg(format!(
+                "pxb-pcie,id=pcie.node{node},bus=pcie.0,addr={address},numa_node={index},bus_nr={bus_number}",
+            ));
+            bus_number += device_count + 1;
         }
+        Ok((smp, memory_gib * 1024))
+    }
 
-        self.configure_machine(&mut command, &workdir, cfg, &app_compose, mem)?;
-
-        // Configure GPU devices
-        if !gpus.gpus.is_empty() {
-            // Add iommufd object
-            command.arg("-object").arg("iommufd,id=iommufd0");
-
-            if !hugepages {
-                // Add each GPU
-                for device in &gpus.gpus {
-                    let slot = &device.slot;
-                    command.arg("-device").arg(format!(
-                        "pcie-root-port,id=pci.{dev_num},bus=pcie.0,chassis={dev_num}",
-                    ));
-                    command.arg("-device").arg(format!(
-                        "vfio-pci,host={slot},bus=pci.{dev_num},iommufd=iommufd0",
-                    ));
-
-                    dev_num += 1;
-                }
+    fn configure_gpus(&self, command: &mut Command) -> Result<()> {
+        if self.gpus.gpus.is_empty() {
+            return Ok(());
+        }
+        command.arg("-object").arg("iommufd,id=iommufd0");
+        let mut device_number = 1;
+        for device in &self.gpus.gpus {
+            let slot = &device.slot;
+            let bus = if self.vm.manifest.hugepages {
+                let node = self
+                    .prepared
+                    .gpu_numa_nodes
+                    .get(slot)
+                    .context("gpu NUMA node should be computed during launch preparation")?;
+                format!("pcie.node{node}")
             } else {
-                // Add each GPU with NUMA node awareness for hugepages configuration
-                for device in &gpus.gpus {
-                    let slot = &device.slot;
-                    let node = pci_numa_node(slot)?;
-                    command.arg("-device").arg(format!(
-                        "pcie-root-port,id=pci.{dev_num},bus=pcie.node{node},chassis={dev_num}",
-                    ));
-                    command.arg("-device").arg(format!(
-                        "vfio-pci,host={slot},bus=pci.{dev_num},iommufd=iommufd0",
-                    ));
-                    dev_num += 1;
-                }
-            }
-
-            // Add bridges (NVSwitches) if any
-            if !gpus.bridges.is_empty() {
-                for bridge in &gpus.bridges {
-                    let slot = &bridge.slot;
-                    command.arg("-device").arg(format!(
-                        "pcie-root-port,id=pci.{dev_num},bus=pcie.0,chassis={dev_num}",
-                    ));
-                    command.arg("-device").arg(format!(
-                        "vfio-pci,host={slot},bus=pci.{dev_num},iommufd=iommufd0",
-                    ));
-                    dev_num += 1;
-                }
-            }
+                "pcie.0".into()
+            };
+            command.arg("-device").arg(format!(
+                "pcie-root-port,id=pci.{device_number},bus={bus},chassis={device_number}",
+            ));
+            command.arg("-device").arg(format!(
+                "vfio-pci,host={slot},bus=pci.{device_number},iommufd=iommufd0",
+            ));
+            device_number += 1;
         }
-        command.arg("-smp").arg(smp.to_string());
-        command.arg("-m").arg(format!("{}M", mem));
-
-        // NUMA pinning if requested
-        let mut numa_cpus = None;
-        if pin_numa {
-            if !gpus.gpus.is_empty() {
-                let (_, cpus) = find_numa(Some(gpus.gpus[0].slot.clone()))?;
-                numa_cpus = Some(cpus);
-            } else {
-                // Default to NUMA node 0 if no GPUs
-                let (_, cpus) = find_numa(None)?;
-                numa_cpus = Some(cpus);
-            }
+        for bridge in &self.gpus.bridges {
+            let slot = &bridge.slot;
+            command.arg("-device").arg(format!(
+                "pcie-root-port,id=pci.{device_number},bus=pcie.0,chassis={device_number}",
+            ));
+            command.arg("-device").arg(format!(
+                "vfio-pci,host={slot},bus=pci.{device_number},iommufd=iommufd0",
+            ));
+            device_number += 1;
         }
+        Ok(())
+    }
 
-        // SNP app identity is bound through HOST_DATA, so the measured cmdline
-        // remains the image-provided cmdline.
-        let cmdline = self.image.info.cmdline.clone();
-        if let Some(cmdline) = cmdline {
-            command.arg("-append").arg(cmdline);
+    fn process_config(&self, command: Command) -> Result<ProcessConfig> {
+        let workdir = &self.prepared.workdir;
+        let mut arguments = vec![self.cfg.qemu_path.to_string_lossy().to_string()];
+        arguments.extend(
+            command
+                .get_args()
+                .map(|argument| argument.to_string_lossy().to_string()),
+        );
+        if let Some(cpus) = &self.prepared.numa_cpus {
+            arguments.splice(0..0, ["taskset", "-c", cpus].into_iter().map(String::from));
         }
-
-        let args = command
-            .get_args()
-            .map(|arg| arg.to_string_lossy().to_string())
-            .collect::<Vec<_>>();
-
-        let pidfile_path = workdir.pid_file();
-        let stdout_path = workdir.stdout_file();
-        let stderr_path = workdir.stderr_file();
-
-        let workdir = workdir.path();
-
-        let mut cmd_args = vec![];
-        cmd_args.push(qemu.to_string_lossy().to_string());
-        cmd_args.extend(args);
-
-        // If we have NUMA pinning, we'll need to wrap the command with taskset
-        if let Some(cpus) = numa_cpus {
-            cmd_args.splice(0..0, ["taskset", "-c", &cpus].into_iter().map(|s| s.into()));
-        }
-
-        if !cfg.user.is_empty() {
-            cmd_args.splice(
+        if !self.cfg.user.is_empty() {
+            arguments.splice(
                 0..0,
-                ["sudo", "-u", &cfg.user].into_iter().map(|s| s.into()),
+                ["sudo", "-u", &self.cfg.user].into_iter().map(String::from),
             );
         }
 
-        let command = cmd_args.remove(0);
-        let note = ProcessAnnotation {
+        let command = arguments.remove(0);
+        let note = serde_json::to_string(&ProcessAnnotation {
             kind: "cvm".to_string(),
             live_for: None,
-        };
-        let note = serde_json::to_string(&note)?;
-        let process_config = ProcessConfig {
-            id: self.manifest.id.clone(),
-            args: cmd_args,
-            name: self.manifest.name.clone(),
+        })?;
+        Ok(ProcessConfig {
+            id: self.vm.manifest.id.clone(),
+            args: arguments,
+            name: self.vm.manifest.name.clone(),
             command,
             env: Default::default(),
-            cwd: workdir.to_string_lossy().to_string(),
-            stdout: stdout_path.to_string_lossy().to_string(),
-            stderr: stderr_path.to_string_lossy().to_string(),
-            pidfile: pidfile_path.to_string_lossy().to_string(),
-            cid: Some(self.cid),
+            cwd: workdir.path().to_string_lossy().to_string(),
+            stdout: workdir.stdout_file().to_string_lossy().to_string(),
+            stderr: workdir.stderr_file().to_string_lossy().to_string(),
+            pidfile: workdir.pid_file().to_string_lossy().to_string(),
+            cid: Some(self.vm.cid),
             note,
-        };
-        processes.push(process_config);
-
-        Ok(processes)
+        })
     }
-
+}
+impl VmConfig {
     fn configure_machine(
         &self,
         command: &mut Command,
-        workdir: &VmWorkDir,
         cfg: &CvmConfig,
-        app_compose: &AppCompose,
+        prepared: &PreparedQemuLaunch,
         mem: u32,
     ) -> Result<()> {
         if self.manifest.no_tee {
@@ -973,15 +774,22 @@ impl VmConfig {
             return Ok(());
         }
 
-        match cfg.resolved_platform() {
+        match prepared.platform {
             TeePlatform::Tdx => {
                 command
                     .arg("-machine")
                     .arg("q35,kernel-irqchip=split,confidential-guest-support=tdx,hpet=off");
-                self.configure_tdx_guest(command, workdir, cfg, app_compose)?;
+                self.configure_tdx_guest(command, cfg, prepared.tdx_mr_config_id.as_deref())?;
             }
             TeePlatform::AmdSevSnp => {
-                self.configure_amd_sev_snp_guest(command, workdir, cfg, mem)?;
+                let host_data = prepared
+                    .snp_host_data
+                    .as_deref()
+                    .context("snp host data should be computed during launch preparation")?;
+                let launch_params = prepared.snp_launch_params.context(
+                    "snp launch parameters should be detected during launch preparation",
+                )?;
+                self.configure_amd_sev_snp_guest(command, cfg, mem, host_data, launch_params);
             }
         }
         Ok(())
@@ -990,60 +798,9 @@ impl VmConfig {
     fn configure_tdx_guest(
         &self,
         command: &mut Command,
-        workdir: &VmWorkDir,
         cfg: &CvmConfig,
-        app_compose: &AppCompose,
+        mrconfigid: Option<&str>,
     ) -> Result<()> {
-        let img_ver = self.image.info.version_tuple().unwrap_or_default();
-        let support_mr_config_id = img_ver >= (0, 5, 2);
-
-        // Compute mrconfigid if needed
-        let mrconfigid = if cfg.use_mrconfigid && support_mr_config_id {
-            if let Some(mr_config_document) = workdir
-                .sys_config()
-                .context("Failed to read sys config for tdx mrconfigid")?
-                .mr_config
-            {
-                MrConfigV3::from_document(&mr_config_document)
-                    .context("Invalid mr_config document")?;
-                Some(
-                    BASE64_STANDARD.encode(MrConfigV3::tdx_mr_config_id_from_document(
-                        &mr_config_document,
-                    )),
-                )
-            } else {
-                let compose_hash = workdir
-                    .app_compose_hash()
-                    .context("Failed to get compose hash")?;
-                let mr_config = if app_compose.key_provider_id.is_empty() {
-                    MrConfig::V1 {
-                        compose_hash: &compose_hash,
-                    }
-                } else {
-                    let instance_info = workdir
-                        .instance_info()
-                        .context("Failed to get instance info")?;
-                    let app_id = if instance_info.app_id.is_empty() {
-                        &compose_hash[..20]
-                    } else {
-                        &instance_info.app_id
-                    };
-
-                    let key_provider = app_compose.key_provider();
-                    let key_provider_id = &app_compose.key_provider_id;
-                    MrConfig::V2 {
-                        compose_hash: &compose_hash,
-                        app_id: &app_id.try_into().context("Invalid app ID")?,
-                        key_provider,
-                        key_provider_id,
-                    }
-                };
-                Some(BASE64_STANDARD.encode(mr_config.to_mr_config_id()))
-            }
-        } else {
-            None
-        };
-
         // Build tdx-guest object with optional quote-generation-socket for kernel-level TSM support
         #[derive(Serialize)]
         struct QgsSocket {
@@ -1069,7 +826,7 @@ impl VmConfig {
         let tdx_object = TdxGuestObject {
             qom_type: "tdx-guest",
             id: "tdx",
-            mrconfigid: mrconfigid.clone(),
+            mrconfigid: mrconfigid.map(str::to_string),
             quote_generation_socket: cfg.qgs_port.map(|port| QgsSocket {
                 r#type: "vsock",
                 cid: "2",
@@ -1087,24 +844,14 @@ impl VmConfig {
     fn configure_amd_sev_snp_guest(
         &self,
         command: &mut Command,
-        workdir: &VmWorkDir,
         cfg: &CvmConfig,
         mem: u32,
-    ) -> Result<()> {
-        let mr_config_document = workdir
-            .sys_config()
-            .context("Failed to read sys config for amd sev-snp host-data")?
-            .mr_config
-            .context("mr_config is required for amd sev-snp host-data")?;
-        MrConfigV3::from_document(&mr_config_document).context("Invalid mr_config document")?;
-        let host_data =
-            BASE64_STANDARD.encode(MrConfigV3::snp_host_data_from_document(&mr_config_document));
-
+        host_data: &str,
+        snp_params: AmdSevSnpLaunchParams,
+    ) {
         command
             .arg("-object")
             .arg(amd_sev_snp_memory_backend_arg(mem));
-        let snp_params = detect_amd_sev_snp_qemu_capabilities(&cfg.qemu_path)
-            .context("failed to detect AMD SEV-SNP cbitpos/reduced-phys-bits from QEMU")?;
         command.arg("-object").arg(format!(
             "sev-snp-guest,id=sev0,policy=0x30000,sev-device=/dev/sev,kernel-hashes=on,host-data={host_data},cbitpos={},reduced-phys-bits={}",
             snp_params.cbitpos, snp_params.reduced_phys_bits
@@ -1115,7 +862,6 @@ impl VmConfig {
         if cfg.qgs_port.is_some() {
             tracing::warn!("qgs_port is ignored for amd sev-snp guests");
         }
-        Ok(())
     }
 
     fn configure_smbios(&self, command: &mut Command, cfg: &CvmConfig) {
@@ -1181,246 +927,192 @@ fn find_numa(device: Option<String>) -> Result<(String, String)> {
     Ok((numa_node, cpus))
 }
 
-pub struct VmWorkDir {
-    workdir: PathBuf,
-}
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
 
-impl Deref for VmWorkDir {
-    type Target = PathBuf;
-    fn deref(&self) -> &Self::Target {
-        &self.workdir
-    }
-}
+    use rocket::figment::{
+        providers::{Format, Toml},
+        Figment,
+    };
 
-impl AsRef<Path> for &VmWorkDir {
-    fn as_ref(&self) -> &Path {
-        self.workdir.as_ref()
-    }
-}
+    use super::{
+        amd_sev_snp_memory_backend_arg, parse_amd_sev_snp_qmp_capabilities, virtio_pci_device,
+        PreparedQemuLaunch, QemuCommandBuilder, VmConfig,
+    };
+    use crate::app::image::{Image, ImageInfo};
+    use crate::app::{GpuConfig, Manifest, PortMapping, VmWorkDir};
+    use crate::config::{Config, Protocol, TeePlatform, DEFAULT_CONFIG};
 
-impl VmWorkDir {
-    pub fn new(workdir: impl AsRef<Path>) -> Self {
-        Self {
-            workdir: workdir.as_ref().to_path_buf(),
-        }
-    }
-
-    pub fn manifest_path(&self) -> PathBuf {
-        self.workdir.join("vm-manifest.json")
+    #[test]
+    fn amd_sev_snp_memory_backend_arg_uses_passed_final_memory_size() {
+        assert_eq!(
+            amd_sev_snp_memory_backend_arg(4096),
+            "memory-backend-memfd,id=ram1,size=4096M,share=true,prealloc=false"
+        );
     }
 
-    pub fn state_path(&self) -> PathBuf {
-        self.workdir.join("vm-state.json")
+    #[test]
+    fn amd_sev_snp_qmp_capabilities_extracts_launch_params() {
+        let stdout = br#"{"QMP":{"version":{"qemu":{"major":10,"minor":0,"micro":2}}}}
+{"return":{}}
+{"return":{"reduced-phys-bits":1,"cbitpos":51,"cert-chain":"ignored","pdh":"ignored","cpu0-id":"ignored"}}
+{"return":{}}
+"#;
+        let params = parse_amd_sev_snp_qmp_capabilities(stdout).unwrap();
+        assert_eq!(params.cbitpos, 51);
+        assert_eq!(params.reduced_phys_bits, 1);
     }
 
-    pub fn manifest(&self) -> Result<Manifest> {
-        let manifest_path = self.manifest_path();
-        let manifest = fs::read_to_string(manifest_path).context("Failed to read manifest")?;
-        let manifest: Manifest =
-            serde_json::from_str(&manifest).context("Failed to parse manifest")?;
-        Ok(manifest)
+    #[test]
+    fn amd_sev_snp_uses_confidential_virtio_pci_options() {
+        assert_eq!(
+            virtio_pci_device("virtio-blk-pci,drive=hd0", true),
+            "virtio-blk-pci,drive=hd0,disable-legacy=on,iommu_platform=true"
+        );
+        assert_eq!(
+            virtio_pci_device("virtio-blk-pci,drive=hd0", false),
+            "virtio-blk-pci,drive=hd0"
+        );
     }
 
-    pub fn put_manifest(&self, manifest: &Manifest) -> Result<()> {
-        fs::create_dir_all(&self.workdir).context("Failed to create workdir")?;
-        let manifest_path = self.manifest_path();
-        fs::write(manifest_path, serde_json::to_string(manifest)?)
-            .context("Failed to write manifest")
-    }
+    #[test]
+    fn qemu_command_builder_does_not_require_prepared_paths_to_exist() {
+        let mut config: Config = Figment::from(Toml::string(DEFAULT_CONFIG))
+            .extract()
+            .unwrap();
+        config.cvm.platform = Some(TeePlatform::Tdx);
+        config.cvm.qemu_path = PathBuf::from("/not-installed/qemu-system-x86_64");
+        config.cvm.qgs_port = None;
 
-    pub fn started(&self) -> Result<bool> {
-        let state_path = self.state_path();
-        if !state_path.exists() {
-            return Ok(false);
-        }
-        let state: State =
-            serde_json::from_str(&fs::read_to_string(state_path).context("Failed to read state")?)
-                .context("Failed to parse state")?;
-        Ok(state.started)
-    }
-
-    pub fn set_started(&self, started: bool) -> Result<()> {
-        let state_path = self.state_path();
-        fs::write(state_path, serde_json::to_string(&State { started })?)
-            .context("Failed to write state")
-    }
-
-    pub fn shared_dir(&self) -> PathBuf {
-        self.workdir.join("shared")
-    }
-
-    pub fn app_compose_path(&self) -> PathBuf {
-        self.shared_dir().join(APP_COMPOSE)
-    }
-
-    pub fn app_compose_hash(&self) -> Result<[u8; 32]> {
-        use sha2::Digest;
-        let compose_path = self.app_compose_path();
-        let compose = fs::read(compose_path).context("Failed to read compose")?;
-        Ok(sha2::Sha256::new_with_prefix(&compose).finalize().into())
-    }
-
-    pub fn user_config_path(&self) -> PathBuf {
-        self.shared_dir().join(USER_CONFIG)
-    }
-
-    pub fn encrypted_env_path(&self) -> PathBuf {
-        self.shared_dir().join(ENCRYPTED_ENV)
-    }
-
-    pub fn instance_info_path(&self) -> PathBuf {
-        self.shared_dir().join(INSTANCE_INFO)
-    }
-
-    pub fn guest_ip_path(&self) -> PathBuf {
-        self.workdir.join("guest-ip")
-    }
-
-    pub fn guest_ip(&self) -> Option<String> {
-        fs::read_to_string(self.guest_ip_path())
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-    }
-
-    pub fn set_guest_ip(&self, ip: &str) -> Result<()> {
-        fs::write(self.guest_ip_path(), ip).context("failed to write guest IP")
-    }
-
-    pub fn serial_file(&self) -> PathBuf {
-        self.workdir.join("serial.log")
-    }
-
-    pub fn serial_history_file(&self) -> PathBuf {
-        self.workdir.join("serial.history.log")
-    }
-
-    pub fn serial_pty(&self) -> PathBuf {
-        self.workdir.join("serial.pty")
-    }
-
-    pub fn stdout_file(&self) -> PathBuf {
-        self.workdir.join("stdout.log")
-    }
-
-    pub fn stderr_file(&self) -> PathBuf {
-        self.workdir.join("stderr.log")
-    }
-
-    pub fn pid_file(&self) -> PathBuf {
-        self.workdir.join("qemu.pid")
-    }
-
-    pub fn hda_path(&self) -> PathBuf {
-        self.workdir.join("hda.img")
-    }
-
-    pub fn shared_disk_path(&self) -> PathBuf {
-        self.workdir.join("shared.img")
-    }
-
-    pub fn qmp_socket(&self) -> PathBuf {
-        self.workdir.join("qmp.sock")
-    }
-
-    pub fn removing_marker(&self) -> PathBuf {
-        self.workdir.join(".removing")
-    }
-
-    pub fn is_removing(&self) -> bool {
-        self.removing_marker().exists()
-    }
-
-    pub fn set_removing(&self) -> Result<()> {
-        fs::write(self.removing_marker(), "").context("Failed to write .removing marker")
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.workdir
-    }
-}
-
-impl VmWorkDir {
-    pub fn instance_info(&self) -> Result<InstanceInfo> {
-        let info_file = self.instance_info_path();
-        let info: InstanceInfo = serde_json::from_slice(&fs::read(&info_file)?)?;
-        Ok(info)
-    }
-
-    pub fn instance_info_or_default(&self) -> Result<InstanceInfo> {
-        match self.instance_info() {
-            Ok(info) => Ok(info),
-            Err(err) => match err.downcast_ref::<std::io::Error>() {
-                Some(io_err) if io_err.kind() == std::io::ErrorKind::NotFound => {
-                    Ok(InstanceInfo::default())
-                }
-                _ => Err(err),
+        let vm = VmConfig {
+            manifest: Manifest {
+                id: "vm-1".into(),
+                name: "test-vm".into(),
+                app_id: "app-1".into(),
+                vcpu: 2,
+                memory: 2048,
+                disk_size: 10,
+                image: "test-image".into(),
+                port_map: vec![PortMapping {
+                    address: "127.0.0.1".parse().unwrap(),
+                    protocol: Protocol::Tcp,
+                    from: 18080,
+                    to: 8080,
+                }],
+                created_at_ms: 0,
+                hugepages: false,
+                pin_numa: false,
+                gpus: None,
+                kms_urls: vec![],
+                gateway_urls: vec![],
+                no_tee: true,
+                networks: vec![],
             },
-        }
-    }
-
-    pub fn sys_config(&self) -> Result<SysConfig> {
-        let sys_config_file = self.shared_dir().join(SYS_CONFIG);
-        let sys_config: SysConfig = serde_json::from_slice(&fs::read(sys_config_file)?)?;
-        Ok(sys_config)
-    }
-
-    pub fn prepare_mr_config_v3(&self, app_compose: &AppCompose) -> Result<String> {
-        let compose_hash = self
-            .app_compose_hash()
-            .context("Failed to get compose hash")?;
-        let mut instance_info = self
-            .instance_info_or_default()
-            .context("Failed to get instance info")?;
-        let app_id = if instance_info.app_id.is_empty() {
-            compose_hash[..20].to_vec()
-        } else {
-            instance_info.app_id.clone()
+            image: Image {
+                info: ImageInfo {
+                    cmdline: Some("console=hvc0".into()),
+                    kernel: "kernel".into(),
+                    initrd: "initrd".into(),
+                    hda: None,
+                    rootfs: None,
+                    bios: None,
+                    bios_sev: None,
+                    rootfs_hash: None,
+                    shared_ro: false,
+                    version: "0.5.4".into(),
+                    is_dev: false,
+                    ovmf_variant: None,
+                },
+                initrd: PathBuf::from("/does-not-exist/initrd"),
+                kernel: PathBuf::from("/does-not-exist/kernel"),
+                hda: None,
+                rootfs: None,
+                bios: None,
+                bios_sev: None,
+                digest: None,
+                tdx_measurement: None,
+                sev_measurement: None,
+            },
+            cid: 100,
+            workdir: PathBuf::from("/does-not-exist/vm-1"),
+            gateway_enabled: false,
         };
-        if app_id.len() != 20 {
-            bail!(
-                "Invalid app ID length: expected 20 bytes, got {}",
-                app_id.len()
-            );
-        }
-
-        let disk_reusable = !app_compose.key_provider().is_none();
-        if !disk_reusable || instance_info.instance_id_seed.is_empty() {
-            instance_info.instance_id_seed = {
-                let mut seed = vec![0u8; 20];
-                getrandom::fill(&mut seed).context("Failed to generate instance id seed")?;
-                seed
-            };
-        }
-
-        let instance_id = if app_compose.no_instance_id {
-            Vec::new()
-        } else {
-            let mut id_path = instance_info.instance_id_seed.clone();
-            id_path.extend_from_slice(&app_id);
-            Sha256::digest(id_path)[..20].to_vec()
+        let mut prepared = PreparedQemuLaunch {
+            workdir: VmWorkDir::new("/does-not-exist/vm-1"),
+            platform: TeePlatform::Tdx,
+            networks: vec![config.cvm.networking.clone(), config.cvm.networking.clone()],
+            hugepage_numa_nodes: None,
+            gpu_numa_nodes: HashMap::new(),
+            numa_cpus: None,
+            swtpm_socket: None,
+            swtpm_path: None,
+            tdx_mr_config_id: None,
+            snp_host_data: None,
+            snp_launch_params: None,
         };
-        instance_info.app_id = app_id.clone();
-        instance_info.instance_id = instance_id.clone();
-        fs::write(
-            self.instance_info_path(),
-            serde_json::to_string(&instance_info).context("Failed to serialize instance info")?,
-        )
-        .context("Failed to write instance info")?;
 
-        Ok(MrConfigV3::new(
-            app_id,
-            compose_hash.to_vec(),
-            app_compose.key_provider(),
-            app_compose.key_provider_id.clone(),
-            instance_id,
-        )
-        .to_canonical_json())
-    }
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
 
-    pub fn app_compose(&self) -> Result<AppCompose> {
-        let compose_file = self.app_compose_path();
-        let compose: AppCompose = serde_json::from_str(&fs::read_to_string(compose_file)?)?;
-        Ok(compose)
+        assert_eq!(process.command, "/not-installed/qemu-system-x86_64");
+        assert!(process
+            .args
+            .windows(2)
+            .any(|args| args == ["-machine", "q35,kernel-irqchip=split,hpet=off"]));
+        assert!(process
+            .args
+            .windows(2)
+            .any(|args| args == ["-kernel", "/does-not-exist/kernel"]));
+        assert!(process
+            .args
+            .windows(2)
+            .any(|args| args == ["-append", "console=hvc0"]));
+        let netdevs = process
+            .args
+            .windows(2)
+            .filter(|args| args[0] == "-netdev")
+            .map(|args| args[1].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(netdevs.len(), 2);
+        assert!(netdevs[0].contains("user,id=net0"));
+        assert!(netdevs[0].contains("hostfwd=tcp:127.0.0.1:18080-:8080"));
+        assert!(netdevs[1].contains("user,id=net1"));
+        assert!(!netdevs[1].contains("hostfwd="));
+        assert!(process
+            .args
+            .iter()
+            .any(|arg| arg.contains("virtio-net-pci,netdev=net0")));
+        assert!(process
+            .args
+            .iter()
+            .any(|arg| arg.contains("virtio-net-pci,netdev=net1")));
+
+        prepared.swtpm_socket = Some(PathBuf::from("/does-not-exist/vm-1/swtpm/swtpm.sock"));
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert!(process.args.windows(2).any(|args| {
+            args == [
+                "-chardev",
+                "socket,id=chrtpm,path=/does-not-exist/vm-1/swtpm/swtpm.sock",
+            ]
+        }));
+        assert!(process
+            .args
+            .windows(2)
+            .any(|args| args == ["-tpmdev", "emulator,id=tpm0,chardev=chrtpm"]));
     }
 }

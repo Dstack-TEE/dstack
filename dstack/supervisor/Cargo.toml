@@ -16,7 +16,7 @@ bon.workspace = true
 clap = { workspace = true, features = ["derive", "string"] }
 dashmap.workspace = true
 fs-err.workspace = true
-git-version.workspace = true
+dstack-build-info.workspace = true
 libc.workspace = true
 load_config.workspace = true
 nix = { workspace = true, features = ["resource"] }

@@ -1,0 +1,67 @@
+{
+  "claims": [
+    {
+      "dbgstat": "disabled",
+      "eat_nonce": "1111111111111111111111111111111111111111111111111111111111111111",
+      "hwmodel": "GH100 A01 GSP BROM",
+      "measres": "success",
+      "oemid": "5703",
+      "secboot": true,
+      "ueid": "457723480349051719100670602112458195243836813799",
+      "x-nvidia-device-type": "gpu",
+      "x-nvidia-gpu-arch-check": true,
+      "x-nvidia-gpu-attestation-report-cert-chain": {
+        "x-nvidia-cert-expiration-date": "9999-12-31T23:59:59Z",
+        "x-nvidia-cert-ocsp-nonce-matches": true,
+        "x-nvidia-cert-ocsp-response-valid": true,
+        "x-nvidia-cert-ocsp-status": "good",
+        "x-nvidia-cert-revocation-reason": null,
+        "x-nvidia-cert-status": "valid"
+      },
+      "x-nvidia-gpu-attestation-report-cert-chain-fwid-match": true,
+      "x-nvidia-gpu-attestation-report-nonce-match": true,
+      "x-nvidia-gpu-attestation-report-parsed": true,
+      "x-nvidia-gpu-attestation-report-signature-verified": true,
+      "x-nvidia-gpu-claims-version": "3.0",
+      "x-nvidia-gpu-driver-rim-cert-chain": {
+        "x-nvidia-cert-expiration-date": "2028-04-23T05:31:21Z",
+        "x-nvidia-cert-ocsp-nonce-matches": true,
+        "x-nvidia-cert-ocsp-response-valid": true,
+        "x-nvidia-cert-ocsp-status": "good",
+        "x-nvidia-cert-revocation-reason": null,
+        "x-nvidia-cert-status": "valid"
+      },
+      "x-nvidia-gpu-driver-rim-fetched": true,
+      "x-nvidia-gpu-driver-rim-measurements-available": true,
+      "x-nvidia-gpu-driver-rim-signature-verified": true,
+      "x-nvidia-gpu-driver-rim-version-match": true,
+      "x-nvidia-gpu-driver-version": "580.159.03",
+      "x-nvidia-gpu-vbios-index-no-conflict": true,
+      "x-nvidia-gpu-vbios-rim-cert-chain": {
+        "x-nvidia-cert-expiration-date": "2027-04-30T23:59:59Z",
+        "x-nvidia-cert-ocsp-nonce-matches": true,
+        "x-nvidia-cert-ocsp-response-valid": true,
+        "x-nvidia-cert-ocsp-status": "good",
+        "x-nvidia-cert-revocation-reason": null,
+        "x-nvidia-cert-status": "valid"
+      },
+      "x-nvidia-gpu-vbios-rim-fetched": true,
+      "x-nvidia-gpu-vbios-rim-measurements-available": true,
+      "x-nvidia-gpu-vbios-rim-signature-verified": true,
+      "x-nvidia-gpu-vbios-rim-version-match": true,
+      "x-nvidia-gpu-vbios-version": "96.00.D9.00.01",
+      "x-nvidia-mismatch-measurement-records": null
+    }
+  ],
+  "detached_eat": [
+    [
+      "JWT",
+      "eyJhbGciOiJub25lIn0.eyJlYXRfbm9uY2UiOiIxMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExIiwiZXhwIjoxNzg0MjExNDYyLCJpYXQiOjE3ODQyMDc4NjIsImlzcyI6Ik5WQVQtTE9DQUwtVkVSSUZJRVIiLCJqdGkiOiI2MjcwZTgxMTVhNWMxOTExODNjNjg0ZWY4YzFkYWRmYzYxYzYzMjQyZGUwOGY0MjQzOGU3M2NmMjNjODBkMTg1Iiwic3ViIjoiTlZJRElBLVBMQVRGT1JNLUFUVEVTVEFUSU9OIiwic3VibW9kcyI6eyJHUFUtMCI6WyJESUdFU1QiLFsiU0hBMjU2IiwiMDNkZTczYjliMTU5OTM2OTNkZmMyMzY3Y2QyZjNmMDE3ZWVkYjQ2ZWZhNzY3Yzc5ZGJkODY3ODZlMGQ3OWZlYSJdXX0sIngtbnZpZGlhLW92ZXJhbGwtYXR0LXJlc3VsdCI6dHJ1ZSwieC1udmlkaWEtdmVyIjoiMy4wIn0."
+    ],
+    {
+      "GPU-0": "eyJhbGciOiJub25lIn0.eyJkYmdzdGF0IjoiZGlzYWJsZWQiLCJlYXRfbm9uY2UiOiIxMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExIiwiZXhwIjoxNzg0MjExNDYyLCJod21vZGVsIjoiR0gxMDAgQTAxIEdTUCBCUk9NIiwiaWF0IjoxNzg0MjA3ODYyLCJpc3MiOiJOVkFULUxPQ0FMLVZFUklGSUVSIiwianRpIjoiYTU5ZWQ5ODAwYThhNjFhZDc5NjVlNmI1MGRmMjEyODVlNjMxZTg5ZWNlZTM5NmMwZjc1ZDkwNjIwNWI2MDUzYiIsIm1lYXNyZXMiOiJzdWNjZXNzIiwib2VtaWQiOiI1NzAzIiwic2VjYm9vdCI6dHJ1ZSwidWVpZCI6IjQ1NzcyMzQ4MDM0OTA1MTcxOTEwMDY3MDYwMjExMjQ1ODE5NTI0MzgzNjgxMzc5OSIsIngtbnZpZGlhLWRldmljZS10eXBlIjoiZ3B1IiwieC1udmlkaWEtZ3B1LWFyY2gtY2hlY2siOnRydWUsIngtbnZpZGlhLWdwdS1hdHRlc3RhdGlvbi1yZXBvcnQtY2VydC1jaGFpbiI6eyJ4LW52aWRpYS1jZXJ0LWV4cGlyYXRpb24tZGF0ZSI6Ijk5OTktMTItMzFUMjM6NTk6NTlaIiwieC1udmlkaWEtY2VydC1vY3NwLW5vbmNlLW1hdGNoZXMiOnRydWUsIngtbnZpZGlhLWNlcnQtb2NzcC1yZXNwb25zZS12YWxpZCI6dHJ1ZSwieC1udmlkaWEtY2VydC1vY3NwLXN0YXR1cyI6Imdvb2QiLCJ4LW52aWRpYS1jZXJ0LXJldm9jYXRpb24tcmVhc29uIjpudWxsLCJ4LW52aWRpYS1jZXJ0LXN0YXR1cyI6InZhbGlkIn0sIngtbnZpZGlhLWdwdS1hdHRlc3RhdGlvbi1yZXBvcnQtY2VydC1jaGFpbi1md2lkLW1hdGNoIjp0cnVlLCJ4LW52aWRpYS1ncHUtYXR0ZXN0YXRpb24tcmVwb3J0LW5vbmNlLW1hdGNoIjp0cnVlLCJ4LW52aWRpYS1ncHUtYXR0ZXN0YXRpb24tcmVwb3J0LXBhcnNlZCI6dHJ1ZSwieC1udmlkaWEtZ3B1LWF0dGVzdGF0aW9uLXJlcG9ydC1zaWduYXR1cmUtdmVyaWZpZWQiOnRydWUsIngtbnZpZGlhLWdwdS1jbGFpbXMtdmVyc2lvbiI6IjMuMCIsIngtbnZpZGlhLWdwdS1kcml2ZXItcmltLWNlcnQtY2hhaW4iOnsieC1udmlkaWEtY2VydC1leHBpcmF0aW9uLWRhdGUiOiIyMDI4LTA0LTIzVDA1OjMxOjIxWiIsIngtbnZpZGlhLWNlcnQtb2NzcC1ub25jZS1tYXRjaGVzIjp0cnVlLCJ4LW52aWRpYS1jZXJ0LW9jc3AtcmVzcG9uc2UtdmFsaWQiOnRydWUsIngtbnZpZGlhLWNlcnQtb2NzcC1zdGF0dXMiOiJnb29kIiwieC1udmlkaWEtY2VydC1yZXZvY2F0aW9uLXJlYXNvbiI6bnVsbCwieC1udmlkaWEtY2VydC1zdGF0dXMiOiJ2YWxpZCJ9LCJ4LW52aWRpYS1ncHUtZHJpdmVyLXJpbS1mZXRjaGVkIjp0cnVlLCJ4LW52aWRpYS1ncHUtZHJpdmVyLXJpbS1tZWFzdXJlbWVudHMtYXZhaWxhYmxlIjp0cnVlLCJ4LW52aWRpYS1ncHUtZHJpdmVyLXJpbS1zaWduYXR1cmUtdmVyaWZpZWQiOnRydWUsIngtbnZpZGlhLWdwdS1kcml2ZXItcmltLXZlcnNpb24tbWF0Y2giOnRydWUsIngtbnZpZGlhLWdwdS1kcml2ZXItdmVyc2lvbiI6IjU4MC4xNTkuMDMiLCJ4LW52aWRpYS1ncHUtdmJpb3MtaW5kZXgtbm8tY29uZmxpY3QiOnRydWUsIngtbnZpZGlhLWdwdS12Ymlvcy1yaW0tY2VydC1jaGFpbiI6eyJ4LW52aWRpYS1jZXJ0LWV4cGlyYXRpb24tZGF0ZSI6IjIwMjctMDQtMzBUMjM6NTk6NTlaIiwieC1udmlkaWEtY2VydC1vY3NwLW5vbmNlLW1hdGNoZXMiOnRydWUsIngtbnZpZGlhLWNlcnQtb2NzcC1yZXNwb25zZS12YWxpZCI6dHJ1ZSwieC1udmlkaWEtY2VydC1vY3NwLXN0YXR1cyI6Imdvb2QiLCJ4LW52aWRpYS1jZXJ0LXJldm9jYXRpb24tcmVhc29uIjpudWxsLCJ4LW52aWRpYS1jZXJ0LXN0YXR1cyI6InZhbGlkIn0sIngtbnZpZGlhLWdwdS12Ymlvcy1yaW0tZmV0Y2hlZCI6dHJ1ZSwieC1udmlkaWEtZ3B1LXZiaW9zLXJpbS1tZWFzdXJlbWVudHMtYXZhaWxhYmxlIjp0cnVlLCJ4LW52aWRpYS1ncHUtdmJpb3MtcmltLXNpZ25hdHVyZS12ZXJpZmllZCI6dHJ1ZSwieC1udmlkaWEtZ3B1LXZiaW9zLXJpbS12ZXJzaW9uLW1hdGNoIjp0cnVlLCJ4LW52aWRpYS1ncHUtdmJpb3MtdmVyc2lvbiI6Ijk2LjAwLkQ5LjAwLjAxIiwieC1udmlkaWEtbWlzbWF0Y2gtbWVhc3VyZW1lbnQtcmVjb3JkcyI6bnVsbH0."
+    }
+  ],
+  "result_code": 0,
+  "result_message": "Ok"
+}

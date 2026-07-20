@@ -15,8 +15,8 @@ npm run watch
 
 `dstack-vmm` now builds the single-file HTML artifact from `build.rs` and writes it
 to Cargo's `OUT_DIR`. This requires Node.js and npm to be installed; if they are
-missing, the Rust build will fail with an installation hint. The previous
-`console_v0.html` remains untouched so the legacy UI stays available under `/v0`.
+missing, the Rust build will fail with an installation hint. The legacy
+`console_v0.html` route has been removed.
 
 The UI codebase is written in TypeScript. The build pipeline performs three steps:
 

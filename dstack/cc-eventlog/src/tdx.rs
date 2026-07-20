@@ -129,6 +129,14 @@ pub fn label_tdx_acpi_data_events(event_logs: &mut [TdxEvent]) {
     }
 }
 
+/// Decode a raw CCEL byte stream into dstack's TDX event representation.
+pub fn decode_ccel(data: &[u8]) -> Result<Vec<TdxEvent>> {
+    let mut input = data;
+    let mut event_logs = TcgEventLog::decode(&mut input)?.to_cc_event_log()?;
+    label_tdx_acpi_data_events(&mut event_logs);
+    Ok(event_logs)
+}
+
 /// Read both boottime and runtime event logs.
 pub fn read_event_log() -> Result<Vec<TdxEvent>> {
     let mut event_logs = TcgEventLog::decode_from_ccel_file()?.to_cc_event_log()?;
@@ -171,5 +179,13 @@ mod tests {
         assert_eq!(names, TDX_ACPI_DATA_EVENT_NAMES);
         assert_eq!(events[0].event, "");
         assert_eq!(events[4].event, "app-id");
+    }
+
+    #[test]
+    fn decodes_the_bundled_ccel() {
+        let events = decode_ccel(include_bytes!("../samples/ccel.bin")).unwrap();
+        assert!(!events.is_empty());
+        assert!(events.iter().all(|event| event.imr <= 3));
+        assert!(events.iter().all(|event| event.digest().len() == 48));
     }
 }

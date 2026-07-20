@@ -3,11 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const GIT_REV: &str = git_version::git_version!(
-    args = ["--abbrev=20", "--always", "--dirty=-modified"],
-    prefix = "git:",
-    fallback = "unknown"
-);
+pub const GIT_REV: &str = dstack_build_info::git_revision!();
 
 pub mod backend;
 pub mod config;

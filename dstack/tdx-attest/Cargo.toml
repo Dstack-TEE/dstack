@@ -32,3 +32,4 @@ insta.workspace = true
 serde_json.workspace = true
 dcap-qvl.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tempfile.workspace = true

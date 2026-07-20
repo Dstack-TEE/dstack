@@ -12,6 +12,7 @@
 //! For quote verification, see the tpm-qvl crate.
 
 use anyhow::{bail, Context, Result};
+use dstack_types::Platform;
 use scale::{Decode, Encode};
 use std::path::Path;
 use tracing::{debug, warn};
@@ -32,6 +33,25 @@ pub const SEALED_NV_INDEX: u32 = 0x01801101;
 const APP_PCR: u32 = 14;
 pub fn dstack_pcr_policy() -> PcrSelection {
     PcrSelection::sha256(&[0, 2, APP_PCR])
+}
+
+/// AWS NitroTPM local key-provider seal policy (SHA384 bank).
+///
+/// - PCR4/7/12: AMI/UKI boot path
+/// - PCR8: guest-computed MrConfig V2 app/config commitment
+/// - PCR14: dstack event lane at seal time (compose-hash / app-id / …;
+///   non-resettable; TDX RTMR3 analogue)
+///
+/// Defined locally rather than imported from dstack-attest because dstack-attest
+/// depends on this crate, not the other way around.
+const AWS_NITRO_PCRS: [u32; 5] = [4, 7, 8, 12, 14];
+
+pub fn dstack_pcr_policy_for_platform(platform: Platform) -> Result<PcrSelection> {
+    match platform {
+        Platform::Dstack | Platform::Gcp => Ok(dstack_pcr_policy()),
+        Platform::AwsEc2 => Ok(PcrSelection::sha384(&AWS_NITRO_PCRS)),
+        _ => bail!("TPM local key provider is not supported on {platform:?}"),
+    }
 }
 
 pub struct TpmContext {
@@ -141,6 +161,20 @@ impl TpmContext {
 
     pub fn pcr_extend_sha256(&self, pcr: u32, hash: &[u8; 32]) -> Result<()> {
         self.pcr_extend(pcr, hash, "sha256")
+    }
+
+    pub fn pcr_read_single(&self, pcr: u32, bank: &str) -> Result<Vec<u8>> {
+        let mut ctx = self.create_esapi_context()?;
+        let selection = crate::PcrSelection {
+            bank: bank.to_string(),
+            pcrs: vec![pcr],
+        };
+        let values = ctx.pcr_read(&selection)?;
+        values
+            .into_iter()
+            .find(|v| v.index == pcr)
+            .map(|v| v.value)
+            .ok_or_else(|| anyhow::anyhow!("PCR {pcr} not returned by TPM"))
     }
 
     pub fn dump_pcr_values(&self, selection: &PcrSelection) {
@@ -326,6 +360,22 @@ mod tests {
     fn test_default_pcr_policy() {
         let policy = dstack_pcr_policy();
         assert_eq!(policy.to_arg(), "sha256:0,2,14");
+    }
+
+    #[test]
+    fn aws_pcr_policy_binds_boot_config_and_event_pcrs() {
+        let policy = dstack_pcr_policy_for_platform(Platform::AwsEc2).unwrap();
+        assert_eq!(policy.to_arg(), "sha384:4,7,8,12,14");
+    }
+
+    #[test]
+    fn dstack_platform_uses_development_tpm_policy() {
+        assert_eq!(
+            dstack_pcr_policy_for_platform(Platform::Dstack)
+                .unwrap()
+                .to_arg(),
+            "sha256:0,2,14"
+        );
     }
 }
 

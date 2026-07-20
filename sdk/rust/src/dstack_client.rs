@@ -166,6 +166,13 @@ impl DstackClient {
         Ok(response)
     }
 
+    /// Returns GPU information collected during boot.
+    pub async fn gpu_info(&self) -> Result<GpuInfoResponse> {
+        let response = self.send_rpc_request("/GpuInfo", &json!({})).await?;
+        let response = serde_json::from_value::<GpuInfoResponse>(response)?;
+        Ok(response)
+    }
+
     pub async fn info(&self) -> Result<InfoResponse> {
         let response = self.send_rpc_request("/Info", &json!({})).await?;
         Ok(InfoResponse::validated_from_value(response)?)

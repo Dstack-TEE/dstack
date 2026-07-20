@@ -665,6 +665,7 @@ fn cmd_quote() -> Result<()> {
         AttestationQuote::DstackNitroEnclave(_) => {
             anyhow::bail!("nitro enclave has no raw quote; use `quote-report` instead");
         }
+        AttestationQuote::DstackAwsNitroTpm(aws) => aws.attestation_doc.clone(),
     };
     io::stdout()
         .write_all(&quote)

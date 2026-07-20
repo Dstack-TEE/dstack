@@ -55,10 +55,18 @@ impl Machine<'_> {
             &format!("file={dummy_disk},if=none,id=hd1,format=raw,readonly=on"),
             "-device",
             "virtio-blk-pci,drive=hd1",
-            "-netdev",
-            "user,id=net0",
-            "-device",
-            "virtio-net-pci,netdev=net0",
+        ]);
+
+        // One virtio-net-pci per NIC. Emitted at the same position and, for the
+        // default single-NIC case, with the exact same args as the previous
+        // hardcoded layout so RTMR0 stays byte-for-byte unchanged.
+        for i in 0..self.num_nics {
+            cmd.arg("-netdev").arg(format!("user,id=net{i}"));
+            cmd.arg("-device")
+                .arg(format!("virtio-net-pci,netdev=net{i}"));
+        }
+
+        cmd.args([
             "-object",
             "tdx-guest,id=tdx",
             "-device",

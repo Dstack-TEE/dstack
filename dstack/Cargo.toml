@@ -33,6 +33,7 @@ members = [
     "guest-agent",
     "guest-agent/rpc",
     "guest-agent-simulator",
+    "tee-simulator",
     "vmm",
     "vmm/rpc",
     "gateway",
@@ -48,6 +49,7 @@ members = [
     "host-api",
     "guest-api",
     "load_config",
+    "local-key-provider",
     "key-provider-client",
     "dstack-types",
     "cert-client",
@@ -57,16 +59,14 @@ members = [
     "serde-duration",
     "dstack-mr",
     "dstack-mr/cli",
+    "nvidia-attest-proxy",
     "verifier",
     "size-parser",
-    "port-forward",
-    "../sdk/rust",
-    "../sdk/rust/types",
-    "no_std_check",
     "crates/dstack-cli-core",
     "crates/dstack-cli",
     "crates/dstackup",
     "crates/dstack-auth",
+    "crates/build-info",
 ]
 resolver = "2"
 
@@ -74,13 +74,12 @@ resolver = "2"
 # Internal dependencies
 ra-rpc = { path = "ra-rpc", default-features = false }
 ra-tls = { path = "ra-tls" }
-dstack-sdk-types = { path = "../sdk/rust/types", version = "0.1.3", default-features = false }
 dstack-gateway-rpc = { path = "gateway/rpc" }
 dstack-kms-rpc = { path = "kms/rpc" }
 dstack-guest-agent-rpc = { path = "guest-agent/rpc" }
 dstack-vmm-rpc = { path = "vmm/rpc" }
 dstack-cli-core = { path = "crates/dstack-cli-core" }
-dstack-port-forward = { path = "port-forward" }
+dstack-build-info = { path = "crates/build-info" }
 cc-eventlog = { path = "cc-eventlog" }
 supervisor = { path = "supervisor" }
 supervisor-client = { path = "supervisor/client" }
@@ -122,14 +121,16 @@ chrono = "0.4.40"
 clap = { version = "4.5.32", features = ["derive", "string"] }
 dashmap = "6.1.0"
 fs-err = "3.1.0"
+fuser = "0.16.0"
 path-absolutize = "3.1.1"
 futures = "0.3.31"
-git-version = "0.3.9"
 libc = "0.2.171"
 log = "0.4.26"
 moka = { version = "0.12.15", default-features = false, features = ["sync"] }
 notify = "8.0.0"
+nvml-wrapper = "0.12.1"
 rand = "0.8.5"
+regorus = { version = "0.10.1", default-features = false, features = ["full-opa", "arc"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 safe-write = "0.1.2"
@@ -187,9 +188,10 @@ hyper-rustls = { version = "0.27", default-features = false, features = [
 ] }
 hyperlocal = "0.9.1"
 ipnet = { version = "2.11.0", features = ["serde"] }
-reqwest = { version = "0.12.14", default-features = false, features = [
+reqwest = { version = "0.13.4", default-features = false, features = [
     "json",
-    "rustls-tls",
+    "query",
+    "rustls",
     "charset",
     "hickory-dns",
 ] }
@@ -206,7 +208,7 @@ url = "2.5"
 # Cryptography/Security
 aes-gcm = "0.10.3"
 curve25519-dalek = "4.1.3"
-dcap-qvl = "0.3.10"
+dcap-qvl = "0.5.2"
 dcap-qvl-webpki = "0.103.4"
 elliptic-curve = { version = "0.13.8", features = ["pkcs8"] }
 getrandom = "0.3.1"
@@ -235,7 +237,7 @@ alloy = { version = "1.0.32", default-features = false }
 ez-hash = "1.1.0"
 
 # Certificate/DNS
-hickory-resolver = "0.24.4"
+hickory-resolver = "0.26.1"
 instant-acme = "0.7.2"
 pem = "3.0"
 rcgen = { version = "0.13.2", features = ["pem"] }

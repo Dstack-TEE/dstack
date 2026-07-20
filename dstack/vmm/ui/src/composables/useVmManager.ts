@@ -73,6 +73,7 @@ type VmListItem = {
   boot_progress?: string;
   shutdown_progress?: string;
   image_version?: string;
+  interfaces?: VmmTypes.INetworkInterfaceStatus[];
   configuration?: VmConfiguration;
   appCompose?: AppCompose;
 };
@@ -87,6 +88,11 @@ type PortFormEntry = {
   host_address?: string;
   host_port?: number | null;
   vm_port?: number | null;
+};
+
+type NetworkFormEntry = {
+  mode: string;
+  bridge_name?: string;
 };
 
 type VmFormState = {
@@ -118,7 +124,7 @@ type VmFormState = {
   no_tee: boolean;
   pin_numa: boolean;
   hugepages: boolean;
-  net_mode: string;
+  networks: NetworkFormEntry[];
   user_config: string;
   kms_urls: string[];
   gateway_urls: string[];
@@ -147,6 +153,8 @@ type UpdateDialogState = {
   attachAllGpus: boolean;
   selectedGpus: string[];
   updateGpuConfig: boolean;
+  updateNetworking: boolean;
+  networks: NetworkFormEntry[];
   user_config: string;
 };
 
@@ -163,6 +171,7 @@ type CloneConfigDialogState = {
   gpus?: VmmTypes.IGpuConfig;
   kms_urls?: string[];
   gateway_urls?: string[];
+  networks?: NetworkFormEntry[];
   hugepages: boolean;
   pin_numa: boolean;
   no_tee: boolean;
@@ -201,7 +210,7 @@ function createVmFormState(preLaunchScript: string): VmFormState {
     no_tee: false,
     pin_numa: false,
     hugepages: false,
-    net_mode: '',
+    networks: [],
     user_config: '',
     kms_urls: [],
     gateway_urls: [],
@@ -232,6 +241,8 @@ function createUpdateDialogState(): UpdateDialogState {
     attachAllGpus: false,
     selectedGpus: [],
     updateGpuConfig: false,
+    updateNetworking: false,
+    networks: [],
     user_config: '',
   };
 }
@@ -250,6 +261,7 @@ function createCloneConfigDialogState(): CloneConfigDialogState {
     gpus: undefined,
     kms_urls: undefined,
     gateway_urls: undefined,
+    networks: undefined,
     hugepages: false,
     pin_numa: false,
     no_tee: false,
@@ -305,7 +317,28 @@ fi
   const cloneConfigDialog: Ref<CloneConfigDialogState> = ref(createCloneConfigDialogState());
 
   const showCreateDialog = ref(false);
-  const config = ref({ portMappingEnabled: false });
+  const config = ref({
+    portMappingEnabled: false,
+    networking: null as VmmTypes.INetworkingCapabilities | null,
+  });
+  const networkingModes = computed(() => {
+    const supported = config.value.networking?.supported_modes || [];
+    const fallback = supported.length > 0 ? supported : ['user'];
+    return Array.from(new Set(fallback));
+  });
+  const defaultBridge = computed(() => config.value.networking?.default_bridge || '');
+  const defaultNetworkingLabel = computed(() => {
+    const mode = config.value.networking?.default_mode || '';
+    if (mode === 'bridge') {
+      return defaultBridge.value
+        ? `Default: Bridge (${defaultBridge.value})`
+        : 'Default: Bridge (no default bridge configured)';
+    }
+    if (mode === 'user') {
+      return 'Default: User networking';
+    }
+    return mode ? `Default: ${networkModeLabel(mode)}` : 'Default: node configuration';
+  });
   const composeHashPreview = ref('');
   const updateComposeHashPreview = ref('');
 
@@ -386,6 +419,31 @@ fi
         vm_port: port.vm_port,
       }));
 
+  const cloneNetworks = (configuration?: VmConfiguration | null): NetworkFormEntry[] => {
+    const configured = configuration?.networks && configuration.networks.length > 0
+      ? configuration.networks
+      : (configuration?.networking ? [configuration.networking] : []);
+    return configured.map((network) => ({
+      mode: network.mode || '',
+      bridge_name: network.bridge_name || '',
+    }));
+  };
+
+  const normalizeNetworks = (networks: NetworkFormEntry[] = []): VmmTypes.INetworkingConfig[] =>
+    networks
+      .map((network) => ({
+        mode: (network.mode || '').trim(),
+        bridge_name: network.mode === 'bridge' ? (network.bridge_name || '').trim() : '',
+      }))
+      .filter((network) => network.mode.length > 0);
+
+  function networkModeLabel(mode?: string | null) {
+    if (!mode) {
+      return 'Default';
+    }
+    return mode.charAt(0).toUpperCase() + mode.slice(1);
+  }
+
   function deriveGpuSelection(gpuConfig?: VmmTypes.IGpuConfig) {
     if (!gpuConfig) {
       return { attachAll: false, selected: [] as string[] };
@@ -444,7 +502,7 @@ type CreateVmPayloadSource = {
   hugepages?: boolean;
   pin_numa?: boolean;
   no_tee?: boolean;
-  net_mode?: string;
+  networks?: NetworkFormEntry[];
     gpus?: VmmTypes.IGpuConfig;
     kms_urls?: string[];
     gateway_urls?: string[];
@@ -453,6 +511,7 @@ type CreateVmPayloadSource = {
 
   function buildCreateVmPayload(source: CreateVmPayloadSource): VmmTypes.IVmConfiguration {
     const normalizedPorts = normalizePorts(source.ports);
+    const normalizedNetworks = normalizeNetworks(source.networks || []);
     return {
       name: source.name.trim(),
       image: source.image.trim(),
@@ -467,7 +526,7 @@ type CreateVmPayloadSource = {
       hugepages: !!source.hugepages,
       pin_numa: !!source.pin_numa,
       no_tee: source.no_tee ?? false,
-      networking: source.net_mode ? { mode: source.net_mode } : undefined,
+      networks: normalizedNetworks,
       gpus: source.gpus,
       kms_urls: source.kms_urls?.filter((url) => url && url.trim().length) ?? [],
       gateway_urls: source.gateway_urls?.filter((url) => url && url.trim().length) ?? [],
@@ -551,7 +610,10 @@ type CreateVmPayloadSource = {
         return vm;
       });
 
-      config.value = { portMappingEnabled: data.port_mapping_enabled };
+      config.value = {
+        ...config.value,
+        portMappingEnabled: data.port_mapping_enabled,
+      };
 
       if (expandedVMs.value.size > 0) {
         await refreshExpandedVMs();
@@ -606,6 +668,18 @@ type CreateVmPayloadSource = {
     }
     await loadVMDetails(vm.id);
     return vms.value.find((item) => item.id === vm.id) || null;
+  }
+
+  async function loadMeta() {
+    try {
+      const data = await vmmRpc.getMeta({});
+      config.value = {
+        ...config.value,
+        networking: data.networking || null,
+      };
+    } catch (error) {
+      recordError('error loading VMM metadata', error);
+    }
   }
 
   async function loadImages() {
@@ -739,7 +813,9 @@ type CreateVmPayloadSource = {
       public_logs: vmForm.value.public_logs,
       public_sysinfo: vmForm.value.public_sysinfo,
       public_tcbinfo: vmForm.value.public_tcbinfo,
-      key_provider_id: vmForm.value.key_provider_id,
+      key_provider_id: vmForm.value.key_provider === 'kms' || vmForm.value.key_provider === 'local'
+        ? vmForm.value.key_provider_id
+        : '',
       allowed_envs: vmForm.value.encryptedEnvs.map((env) => env.key),
       no_instance_id: !vmForm.value.gateway_enabled,
       secure_time: false,
@@ -912,6 +988,8 @@ type CreateVmPayloadSource = {
       attachAllGpus: gpuSelection.attachAll,
       selectedGpus: gpuSelection.selected,
       updateGpuConfig: false,
+      updateNetworking: false,
+      networks: cloneNetworks(config),
       user_config: config.user_config || '',
     };
   }
@@ -1004,7 +1082,7 @@ type CreateVmPayloadSource = {
         hugepages: vmForm.value.hugepages,
         pin_numa: vmForm.value.pin_numa,
         no_tee: vmForm.value.no_tee,
-        net_mode: vmForm.value.net_mode,
+        networks: vmForm.value.networks,
         gpus: configGpu(vmForm.value) || undefined,
         kms_urls: vmForm.value.kms_urls,
         gateway_urls: vmForm.value.gateway_urls,
@@ -1088,6 +1166,10 @@ type CreateVmPayloadSource = {
       body.update_ports = true;
       body.ports = normalizePorts(updated.ports);
       body.gpus = updateDialog.value.updateGpuConfig ? configGpu(updated, true) : undefined;
+      if (updated.updateNetworking) {
+        body.update_networking = true;
+        body.networks = normalizeNetworks(updated.networks);
+      }
 
       await vmmRpc.updateVm(body);
       updateDialog.value.encryptedEnvs = [];
@@ -1149,13 +1231,13 @@ type CreateVmPayloadSource = {
       key_provider_id: theVm.appCompose?.key_provider_id || '',
       gateway_enabled: !!theVm.appCompose?.gateway_enabled,
       gateway_urls: config.gateway_urls || [],
+      networks: cloneNetworks(config),
       public_logs: !!theVm.appCompose?.public_logs,
       public_sysinfo: !!theVm.appCompose?.public_sysinfo,
       public_tcbinfo: !!theVm.appCompose?.public_tcbinfo,
       pin_numa: !!config.pin_numa,
       hugepages: !!config.hugepages,
       no_tee: !!config.no_tee,
-      net_mode: config.networking?.mode || '',
       user_config: config.user_config || '',
       stopped: !!config.stopped,
     };
@@ -1185,6 +1267,7 @@ type CreateVmPayloadSource = {
         hugepages: source.hugepages,
         pin_numa: source.pin_numa,
         no_tee: source.no_tee,
+        networks: source.networks,
         gpus: source.gpus,
         kms_urls: source.kms_urls,
         gateway_urls: source.gateway_urls,
@@ -1277,11 +1360,6 @@ type CreateVmPayloadSource = {
   function openApiDocs() {
     closeSystemMenu();
     window.open('/api-docs/docs', '_blank', 'noopener');
-  }
-
-  function openLegacyUi() {
-    closeSystemMenu();
-    window.open('/v0', '_blank', 'noopener');
   }
 
   function shortUptime(uptime?: string | null) {
@@ -1653,6 +1731,7 @@ type CreateVmPayloadSource = {
 
   onMounted(() => {
     watchVmList();
+    loadMeta();
     loadImages();
     loadGpus();
     loadVersion();
@@ -1683,6 +1762,9 @@ type CreateVmPayloadSource = {
     cloneConfigDialog,
     showCreateDialog,
     config,
+    networkingModes,
+    defaultBridge,
+    defaultNetworkingLabel,
     composeHashPreview,
     updateComposeHashPreview,
     showDeployDialog,
@@ -1717,11 +1799,11 @@ type CreateVmPayloadSource = {
     downloadAppCompose,
     downloadUserConfig,
     getVmFeatures,
+    networkModeLabel,
     systemMenu,
     toggleSystemMenu,
     closeSystemMenu,
     openApiDocs,
-    openLegacyUi,
     reloadVMs,
     devMode,
     toggleDevMode,

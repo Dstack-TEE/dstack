@@ -97,6 +97,20 @@ Versioned dstack attestation that works across TDX / GCP / Nitro providers. Pref
 const { attestation } = await client.attest('app-state-snapshot')
 ```
 
+### `gpuInfo()`
+
+Returns GPU information collected during boot. Currently, this includes the
+complete NVIDIA `nvattest` JSON output.
+
+```typescript
+const gpu = await client.gpuInfo()
+console.log(gpu.attestation)
+```
+
+The `attestation` field is empty when no GPU attestation output is available.
+The raw output is not trusted by itself; remote verifiers should compare its
+digest with the measured `gpu-attestation` runtime event.
+
 ### `info()`
 
 App identity and TCB metadata.

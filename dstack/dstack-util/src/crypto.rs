@@ -30,6 +30,9 @@ pub fn dh_decrypt(secret: [u8; 32], ciphertext: &[u8]) -> Result<Vec<u8>> {
 
     // Derive shared secret using X25519
     let shared_secret = dh_agree(secret, ephemeral_pubkey);
+    if shared_secret.iter().all(|byte| *byte == 0) {
+        return Err(anyhow!("invalid X25519 shared secret"));
+    }
 
     // Create AES-GCM cipher
     let cipher = Aes256Gcm::new_from_slice(&shared_secret)

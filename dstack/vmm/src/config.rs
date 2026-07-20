@@ -260,6 +260,9 @@ pub struct CvmConfig {
     /// The URL of the PCCS server
     #[serde(default)]
     pub pccs_url: String,
+    /// Optional NVIDIA OCSP/RIM cache passed to guests in sys-config.
+    #[serde(default)]
+    pub nvidia_attestation_proxy_url: Option<String>,
     /// The URL of the Docker registry
     pub docker_registry: String,
     /// The start of the CID pool that allocates CIDs to VMs
@@ -518,10 +521,6 @@ pub struct Networking {
     /// Bridge interface to attach TAP device to (e.g., "virbr0")
     #[serde(default)]
     pub bridge: String,
-
-    /// Enable userspace port forwarding for bridge-mode VMs.
-    #[serde(default)]
-    pub forward_service_enabled: bool,
 
     // ── MAC prefix ─────────────────────────────────────────────────
     /// Fixed MAC address prefix (0-3 colon-separated hex bytes, e.g. "02:ab:cd").

@@ -56,7 +56,7 @@ All build commands should be run as the `ubuntu` user. Only the final installati
 ### Step 2: Verify dstack Repository
 
 The dstack repository should already be cloned and checked out on the current
-`master` branch from [Gramine Key Provider](/tutorial/gramine-key-provider):
+`master` branch from [Local Key Provider](/tutorial/gramine-key-provider):
 
 ```bash
 cd ~/dstack

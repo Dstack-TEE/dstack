@@ -109,7 +109,7 @@ curl --unix-socket /var/run/dstack.sock http://dstack/GetKey?path=my/key/path&pu
 
 ### 3. Get Quote
 
-Generates a TDX quote with given plain report data.
+Generates a quote with given plain report data. For platform-agnostic verification, use the `attestation` field in the response.
 
 **Endpoint:** `/GetQuote`
 
@@ -139,7 +139,8 @@ curl --unix-socket /var/run/dstack.sock http://dstack/GetQuote?report_data=00000
   "quote": "<hex-encoded-quote>",
   "event_log": "<json-event-log>",
   "report_data": "<hex-encoded-report-data>",
-  "vm_config": "<json-vm-config-string>"
+  "vm_config": "<json-vm-config-string>",
+  "attestation": "<hex-encoded-versioned-attestation>"
 }
 ```
 
@@ -148,7 +149,7 @@ The `event_log` field contains a JSON array of TDX event log entries. For RTMR 0
 
 ### 4. Get Info
 
-Retrieves worker information.
+Retrieves worker information, including the detected cloud platform.
 
 **Endpoint:** `/Info`
 
@@ -170,9 +171,13 @@ curl --unix-socket /var/run/dstack.sock http://dstack/Info
   "os_image_hash": "<hex-encoded-os-image-hash>",
   "key_provider_info": "<key-provider-info-string>",
   "compose_hash": "<hex-encoded-compose-hash>",
-  "vm_config": "<json-vm-config-string>"
+  "vm_config": "<json-vm-config-string>",
+  "cloud_vendor": "<detected-cloud-vendor>",
+  "cloud_product": "<detected-cloud-product>"
 }
 ```
+
+The `cloud_vendor` and `cloud_product` fields report the detected cloud platform.
 
 ### 5. Sign (not yet released)
 
@@ -279,6 +284,54 @@ curl --unix-socket /var/run/dstack.sock http://dstack/Attest?report_data=0000000
   "attestation": "<hex-encoded-attestation>"
 }
 ```
+
+### 8. GPU Info
+
+Returns GPU information collected during boot. Currently, this includes the
+complete JSON output produced by NVIDIA `nvattest`.
+The `attestation` field is empty when no GPU attestation output is available,
+for example on a VM without an NVIDIA GPU or when GPU attestation was disabled.
+
+**Endpoint:** `/GpuInfo`
+
+**Example:**
+```bash
+curl --unix-socket /var/run/dstack.sock http://dstack/GpuInfo
+```
+
+**Response:**
+```json
+{
+  "attestation": "{\"result_code\": 0, \"claims\": [...]}"
+}
+```
+
+`GpuInfo.attestation` is the exact UTF-8 `nvattest` output saved during boot;
+calling this endpoint does not perform a new attestation. To authenticate it on
+TDX, first verify the quote and replay the supplied event log to the quote's
+RTMR3. Then decode the `gpu-attestation` event payload and compare its
+`evidence_sha256` with the SHA-256 digest of the exact returned string:
+
+```python
+import hashlib
+import json
+
+gpu_info = json.load(open("gpu-info.json"))
+quote_response = json.load(open("quote.json"))
+events = quote_response["event_log"]
+if isinstance(events, str):
+    events = json.loads(events)
+
+entry = next(event for event in events if event["event"] == "gpu-attestation")
+measured = json.loads(bytes.fromhex(entry["event_payload"]))
+actual = hashlib.sha256(gpu_info["attestation"].encode()).hexdigest()
+assert actual == measured["evidence_sha256"]
+```
+
+The comparison above is meaningful only after quote verification and RTMR3
+event-log replay have succeeded. See the
+[security model](../../docs/security/security-model.md#gpu-security-for-ai-workloads)
+for the event ordering and AWS/AMD SEV-SNP verification paths.
 
 ## Error Responses
 

@@ -4,6 +4,7 @@
 
 use crate::utils::{deserialize_json_file, sha256, SysConfig};
 use anyhow::{anyhow, bail, Context, Result};
+use dcap_qvl::collateral::{CollateralClient, PHALA_PCCS_URL};
 use dstack_types::{
     shared_filenames::{HOST_SHARED_DIR, SYS_CONFIG},
     Platform,
@@ -55,7 +56,7 @@ impl HostApi {
     pub async fn notify(&self, event: &str, payload: &str) -> Result<()> {
         match Platform::detect_or_dstack() {
             Platform::Dstack => {}
-            Platform::Gcp | Platform::NitroEnclave => {
+            Platform::Gcp | Platform::NitroEnclave | Platform::AwsEc2 => {
                 // Skip notify on unsupported platforms
                 return Ok(());
             }
@@ -94,12 +95,16 @@ impl HostApi {
             .map_err(|err| anyhow!("Failed to get sealing key: {err:?}"))?;
 
         // verify the key provider quote
-        let verified_report = dcap_qvl::collateral::get_collateral_and_verify(
-            &provision.provider_quote,
-            self.pccs_url.as_deref(),
-        )
-        .await
-        .context("Failed to get quote collateral")?;
+        let pccs_url = self
+            .pccs_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .unwrap_or(PHALA_PCCS_URL);
+        let verified_report = CollateralClient::with_default_http(pccs_url)?
+            .fetch_and_verify(&provision.provider_quote)
+            .await
+            .context("Failed to get quote collateral")?;
         validate_tcb(&verified_report)?;
         let sgx_report = verified_report
             .report

@@ -25,11 +25,15 @@ The MR register values indicate the following:
     - RTMR0: OVMF records CVM's virtual hardware setup, including CPU count, memory size, and device configuration. While dstack uses fixed devices, CPU and memory specifications can vary. RTMR0 can be computed from these specifications.
     - RTMR1: OVMF records the Linux kernel measurement.
     - RTMR2: Linux kernel records kernel cmdline (including rootfs hash) and initrd measurements.
-    - RTMR3: initrd records dstack App details, including compose hash, instance id, app id, and key provider.
+    - RTMR3: initrd records dstack App details, including compose hash, GPU policy and attestation events, instance id, app id, and key provider.
 
 MRTD, RTMR0, RTMR1, and RTMR2 can be pre-calculated from the built image (given CPU+RAM specifications). Compare these with the verified quote's MRs to confirm correct base image code execution.
 
 RTMR3 differs as it contains runtime information like compose hash and instance id. Verify this by replaying the event log - if the calculated RTMR3 matches the quote's RTMR3, the event log information is valid. Then verify the compose hash, key provider, and other event log details match expectations.
+
+For a GPU launch, `compose-hash` is followed by `gpu-policy-hash` and, after successful NVIDIA attestation and policy evaluation, `gpu-attestation`. The `gpu-policy-hash` payload is `SHA-256(JCS(requirements.gpu_policy))`, using `{}` when the field is omitted. The `gpu-attestation` payload is JSON containing the verified device count, CC/DevTools state, and `evidence_sha256`.
+
+The guest-agent `GpuInfo` API returns the complete `nvattest` JSON captured during boot. It is not trustworthy by itself. After verifying the TDX quote and replaying the event log to RTMR3, hash the exact UTF-8 bytes of `GpuInfo.attestation` and require the result to equal the `gpu-attestation` event's `evidence_sha256`. See [GPU Security for AI Workloads](./security/security-model.md#gpu-security-for-ai-workloads) for the event schema, ordering, Rego example, and platform differences.
 
 ### 2.2. Determining expected MRs
 MRTD, RTMR0, RTMR1, and RTMR2 correspond to the image. dstack OS builds all related software from source.

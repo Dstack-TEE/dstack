@@ -4,6 +4,7 @@
 
 use std::{io::Cursor, path::Path};
 
+use or_panic::ResultOrPanic;
 use scale::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
@@ -120,6 +121,67 @@ pub struct AppCompose {
     pub requirements: Option<Requirements>,
 }
 
+/// Canonical source for the policy used when `requirements.gpu_policy` is
+/// absent. Both typed defaults and measurement are derived from this JSON.
+pub const DEFAULT_GPU_POLICY: &str = "{}";
+
+/// Path containing the complete output of the NVIDIA GPU attestation command.
+pub const GPU_ATTESTATION_OUTPUT: &str = "/run/nvidia-gpu-attestation/attestation.out";
+
+/// Computes the SHA-256 digest of the JCS-canonicalized raw
+/// `requirements.gpu_policy` JSON value. An absent policy is equivalent to
+/// the default empty object.
+pub fn gpu_policy_hash(compose_json: &[u8]) -> Result<[u8; 32], serde_json::Error> {
+    use sha2::{Digest, Sha256};
+
+    let compose: serde_json::Value = serde_json::from_slice(compose_json)?;
+    let default_policy: serde_json::Value = serde_json::from_str(DEFAULT_GPU_POLICY)?;
+    let policy = compose
+        .pointer("/requirements/gpu_policy")
+        .unwrap_or(&default_policy);
+    let canonical = serde_jcs::to_vec(policy)?;
+    Ok(Sha256::digest(canonical).into())
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GpuPolicy {
+    /// Whether an attached GPU must pass local TEE attestation before the
+    /// guest continues booting. Defaults to true.
+    #[serde(default = "default_true")]
+    pub attest_gpu: bool,
+    /// Optional Rego v0 policy evaluated against NVIDIA nvattest's `claims`
+    /// array. It must define the boolean rule `data.policy.nv_match`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rego: Option<String>,
+    /// Permit NVIDIA DevTools mode. This defaults to false because DevTools
+    /// disables the GPU memory-confidentiality guarantees expected in
+    /// production.
+    #[serde(default)]
+    pub allow_devtools: bool,
+    /// Permit claims whose GPU attestation debug status is `enabled`. Defaults
+    /// to false.
+    #[serde(default)]
+    pub allow_debug: bool,
+    /// Permit claims that do not assert GPU secure boot. Defaults to false.
+    #[serde(default)]
+    pub allow_insecure_boot: bool,
+}
+
+impl Default for GpuPolicy {
+    fn default() -> Self {
+        serde_json::from_str(DEFAULT_GPU_POLICY)
+            .or_panic("DEFAULT_GPU_POLICY must be a valid GPU policy")
+    }
+}
+
+impl GpuPolicy {
+    /// Returns true when no application-specific GPU policy setting is set.
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Requirements {
@@ -148,16 +210,17 @@ pub struct Requirements {
     /// (e.g. 32 random alphanumeric characters).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub launch_token_hash: Option<String>,
-    /// GPU TEE attestation requirement, defaults to `true` when omitted.
+    /// Application GPU policy applied before key provisioning. An omitted
+    /// field is parsed and measured as the default empty policy `{}`.
     ///
-    /// On guests with an NVIDIA GPU attached, `true` means the guest runs
-    /// local GPU attestation (nvattest) during system setup and refuses to
-    /// boot — before key provisioning — if the GPU fails to attest (e.g. a
-    /// non-CC GPU or CC mode disabled by the host). `false` skips attestation
-    /// and sets the GPU ready state directly. Guests without a GPU attached
-    /// are unaffected either way.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub attest_gpu: Option<bool>,
+    /// Its original JSON value is JCS-canonicalized and its SHA-256 digest is
+    /// emitted as the `gpu-policy-hash` launch event immediately after
+    /// `compose-hash`. When the field is absent, `{}` is measured. An explicitly
+    /// present default-valued field remains part of the raw measurement.
+    /// Rego receives an empty claims array when no GPU attestation is produced,
+    /// allowing applications to enforce an expected GPU count.
+    #[serde(default, skip_serializing_if = "GpuPolicy::is_default")]
+    pub gpu_policy: GpuPolicy,
 }
 
 impl Requirements {
@@ -166,7 +229,7 @@ impl Requirements {
             && self.platforms.is_none()
             && self.tdx_measure_acpi_tables.is_none()
             && self.launch_token_hash.is_none()
-            && self.attest_gpu.is_none()
+            && self.gpu_policy.is_default()
     }
 }
 
@@ -361,24 +424,6 @@ impl AppCompose {
             }
         }
     }
-
-    /// Whether an attached GPU must pass local TEE attestation before the
-    /// guest continues booting. Defaults to `true` when
-    /// `requirements.attest_gpu` is omitted.
-    ///
-    /// `requirements` are only valid on manifest_version >= 3 (guests reject
-    /// older manifests carrying them); the opt-out is additionally ignored on
-    /// legacy manifests here so a caller that skipped that validation still
-    /// fails closed.
-    pub fn attest_gpu(&self) -> bool {
-        if !matches!(self.manifest_version_u32(), Some(v) if v >= 3) {
-            return true;
-        }
-        self.requirements
-            .as_ref()
-            .and_then(|r| r.attest_gpu)
-            .unwrap_or(true)
-    }
 }
 
 #[cfg(test)]
@@ -454,7 +499,13 @@ mod app_compose_tests {
                 "os_version": ">=0.6.1",
                 "platforms": ["dstack-gcp-tdx", "dstack-tdx"],
                 "tdx_measure_acpi_tables": true,
-                "launch_token_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+                "launch_token_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                "gpu_policy": {
+                    "rego": "package policy\n\ndefault nv_match = false\n",
+                    "allow_devtools": true,
+                    "allow_debug": true,
+                    "allow_insecure_boot": true
+                }
             }
         }))
         .unwrap();
@@ -469,6 +520,15 @@ mod app_compose_tests {
             requirements.launch_token_hash.as_deref(),
             Some("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08")
         );
+        let gpu_policy = &requirements.gpu_policy;
+        assert!(gpu_policy.attest_gpu);
+        assert_eq!(
+            gpu_policy.rego.as_deref(),
+            Some("package policy\n\ndefault nv_match = false\n")
+        );
+        assert!(gpu_policy.allow_devtools);
+        assert!(gpu_policy.allow_debug);
+        assert!(gpu_policy.allow_insecure_boot);
 
         let err = serde_json::from_value::<AppCompose>(serde_json::json!({
             "manifest_version": "3",
@@ -493,7 +553,10 @@ mod app_compose_tests {
         .unwrap();
         let requirements = omitted.requirements.as_ref().unwrap();
         assert_eq!(requirements.platforms, None);
+        assert!(requirements.gpu_policy.is_default());
         assert!(requirements.is_empty());
+        let serialized = serde_json::to_value(requirements).unwrap();
+        assert!(serialized.get("gpu_policy").is_none());
 
         let explicit_empty: AppCompose = serde_json::from_value(serde_json::json!({
             "manifest_version": "3",
@@ -533,17 +596,45 @@ mod app_compose_tests {
         let requirements = launch_token.requirements.as_ref().unwrap();
         assert!(requirements.launch_token_hash.is_some());
         assert!(!requirements.is_empty());
+
+        let gpu_policy: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "docker-compose",
+            "requirements": {
+                "gpu_policy": {
+                    "rego": "package policy\n\ndefault nv_match = false\n"
+                }
+            }
+        }))
+        .unwrap();
+        let requirements = gpu_policy.requirements.as_ref().unwrap();
+        let gpu_policy = &requirements.gpu_policy;
+        assert!(gpu_policy.attest_gpu);
+        assert!(gpu_policy.rego.is_some());
+        assert!(!gpu_policy.allow_devtools);
+        assert!(!gpu_policy.allow_debug);
+        assert!(!gpu_policy.allow_insecure_boot);
+        assert!(!requirements.is_empty());
+
+        let err = serde_json::from_value::<AppCompose>(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "docker-compose",
+            "requirements": {
+                "gpu_policy": {
+                    "rego": "package policy",
+                    "allow_debugger": true
+                }
+            }
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
     }
 
     #[test]
     fn attest_gpu_defaults_to_true() {
-        let no_requirements: AppCompose = serde_json::from_value(serde_json::json!({
-            "manifest_version": 2,
-            "name": "test",
-            "runner": "docker-compose"
-        }))
-        .unwrap();
-        assert!(no_requirements.attest_gpu());
+        assert!(GpuPolicy::default().attest_gpu);
 
         let omitted: AppCompose = serde_json::from_value(serde_json::json!({
             "manifest_version": "3",
@@ -552,10 +643,40 @@ mod app_compose_tests {
             "requirements": {}
         }))
         .unwrap();
-        assert!(omitted.attest_gpu());
-        assert!(omitted.requirements.as_ref().unwrap().is_empty());
+        let requirements = omitted.requirements.as_ref().unwrap();
+        assert!(requirements.gpu_policy.attest_gpu);
+        assert!(requirements.is_empty());
+
+        let explicit_empty: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "docker-compose",
+            "requirements": {
+                "gpu_policy": {}
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            explicit_empty.requirements.unwrap().gpu_policy,
+            requirements.gpu_policy
+        );
 
         let disabled: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "docker-compose",
+            "requirements": {
+                "gpu_policy": {
+                    "attest_gpu": false
+                }
+            }
+        }))
+        .unwrap();
+        let requirements = disabled.requirements.as_ref().unwrap();
+        assert!(!requirements.gpu_policy.attest_gpu);
+        assert!(!requirements.is_empty());
+
+        let old_location = serde_json::from_value::<AppCompose>(serde_json::json!({
             "manifest_version": "3",
             "name": "test",
             "runner": "docker-compose",
@@ -563,24 +684,8 @@ mod app_compose_tests {
                 "attest_gpu": false
             }
         }))
-        .unwrap();
-        assert!(!disabled.attest_gpu());
-        let requirements = disabled.requirements.as_ref().unwrap();
-        assert_eq!(requirements.attest_gpu, Some(false));
-        assert!(!requirements.is_empty());
-
-        // The opt-out is ignored on legacy manifests (requirements are only
-        // valid on manifest_version >= 3; guests reject such composes anyway).
-        let legacy_optout: AppCompose = serde_json::from_value(serde_json::json!({
-            "manifest_version": 2,
-            "name": "test",
-            "runner": "docker-compose",
-            "requirements": {
-                "attest_gpu": false
-            }
-        }))
-        .unwrap();
-        assert!(legacy_optout.attest_gpu());
+        .unwrap_err();
+        assert!(old_location.to_string().contains("unknown field"));
     }
 
     #[test]
@@ -605,6 +710,10 @@ pub struct SysConfig {
     #[serde(default, alias = "tproxy_urls")]
     pub gateway_urls: Vec<String>,
     pub pccs_url: Option<String>,
+    /// Optional NVIDIA attestation collateral proxy. When present, nvattest
+    /// fetches both OCSP responses and RIM documents through this endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nvidia_attestation_proxy_url: Option<String>,
     pub docker_registry: Option<String>,
     pub host_api_url: Option<String>,
     /// MrConfigV3 document string for platform app/config binding.
@@ -643,6 +752,14 @@ impl SysConfig {
     }
 }
 
+fn default_num_nics() -> u32 {
+    1
+}
+
+fn is_default_num_nics(n: &u32) -> bool {
+    *n == default_num_nics()
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct VmConfig {
     #[serde(with = "hex_bytes", default)]
@@ -666,6 +783,16 @@ pub struct VmConfig {
     pub num_gpus: u32,
     #[serde(default)]
     pub num_nvswitches: u32,
+    /// Number of virtio-net NICs attached to the guest. Each NIC adds a PCI
+    /// device to the ACPI/DSDT layout and therefore changes RTMR0, so it must
+    /// be measured. Defaults to 1 and is omitted from the serialized form when
+    /// equal to 1, keeping configs (and their cache keys / hashes) produced
+    /// before this field existed byte-for-byte stable.
+    #[serde(
+        default = "default_num_nics",
+        skip_serializing_if = "is_default_num_nics"
+    )]
+    pub num_nics: u32,
     #[serde(default)]
     pub hotplug_off: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -697,6 +824,12 @@ pub struct VmConfig {
     /// Authenticode event to that digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gcp_measurement: Option<GcpOsImageMeasurementDocument>,
+    /// AWS NitroTPM image measurement material. When present, `os_image_hash`
+    /// is the unified digest `sha256(sha256sum.txt)` and boot identity is bound
+    /// via `boot_pcr_digest = sha256(PCR4||PCR7||PCR12)` in the measurement
+    /// document (like GCP / TDX lite).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_measurement: Option<AwsOsImageMeasurementDocument>,
 }
 
 /// One OVMF SEV metadata section (gpa/size/type) that affects the SEV-SNP
@@ -711,7 +844,7 @@ pub struct OvmfSection {
 fn cbor_to_vec<T: Serialize>(value: &T, context: &str) -> Vec<u8> {
     let mut out = Vec::new();
     ciborium::ser::into_writer(value, &mut out)
-        .unwrap_or_else(|e| panic!("{context}: failed to encode CBOR: {e}"));
+        .or_panic(format!("{context}: CBOR serialization should not fail"));
     out
 }
 
@@ -921,6 +1054,96 @@ impl GcpOsImageMeasurementDocument {
             &self.checksum_file,
             &self.measurement,
             GCP_MEASUREMENT_FILENAME,
+        )
+    }
+}
+
+/// AWS NitroTPM boot-image measurement material.
+///
+/// Stores a single digest of the three boot PCRs rather than the raw PCR
+/// values, to keep `measurement.aws.cbor` small while still binding the full
+/// boot path. Composition is identical to the legacy image hash:
+/// `sha256(PCR4 || PCR7 || PCR12)` (each PCR is 48-byte SHA384).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AwsOsImageMeasurement {
+    /// `sha256(PCR4 || PCR7 || PCR12)` — 32 bytes.
+    #[serde(with = "hex_bytes")]
+    pub boot_pcr_digest: Vec<u8>,
+}
+
+impl AwsOsImageMeasurement {
+    pub const BOOT_PCR_DIGEST_LEN: usize = 32;
+    pub const PCR_SHA384_LEN: usize = 48;
+
+    pub fn new(boot_pcr_digest: Vec<u8>) -> Result<Self, String> {
+        if boot_pcr_digest.len() != Self::BOOT_PCR_DIGEST_LEN {
+            return Err(format!(
+                "AwsOsImageMeasurement: boot_pcr_digest has invalid length {}, expected {}",
+                boot_pcr_digest.len(),
+                Self::BOOT_PCR_DIGEST_LEN
+            ));
+        }
+        Ok(Self { boot_pcr_digest })
+    }
+
+    /// Build from the three SHA384 boot PCRs (same order as
+    /// `aws_nitro_tpm_boot_pcr_digest`: 4, 7, 12).
+    pub fn from_boot_pcrs(pcr4: &[u8], pcr7: &[u8], pcr12: &[u8]) -> Result<Self, String> {
+        for (label, pcr) in [("pcr4", pcr4), ("pcr7", pcr7), ("pcr12", pcr12)] {
+            if pcr.len() != Self::PCR_SHA384_LEN {
+                return Err(format!(
+                    "AwsOsImageMeasurement: {label} has invalid length {}, expected {}",
+                    pcr.len(),
+                    Self::PCR_SHA384_LEN
+                ));
+            }
+        }
+        let mut buf = Vec::with_capacity(Self::PCR_SHA384_LEN * 3);
+        buf.extend_from_slice(pcr4);
+        buf.extend_from_slice(pcr7);
+        buf.extend_from_slice(pcr12);
+        Self::new(sha256(&buf).to_vec())
+    }
+
+    pub fn to_cbor_vec(&self) -> Vec<u8> {
+        cbor_to_vec(self, "AwsOsImageMeasurement")
+    }
+
+    pub fn from_cbor_slice(bytes: &[u8]) -> Result<Self, String> {
+        let measurement: Self = cbor_from_slice(bytes, "AwsOsImageMeasurement")?;
+        Self::new(measurement.boot_pcr_digest)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AwsOsImageMeasurementDocument {
+    /// Raw checksum file bytes (`sha256sum.txt`). `sha256(checksum_file)` is
+    /// the unified `os_image_hash`.
+    #[serde(with = "serde_human_bytes::base64")]
+    pub checksum_file: Vec<u8>,
+    /// Raw bytes of measurement.aws.cbor (AwsOsImageMeasurement).
+    #[serde(with = "serde_human_bytes::base64")]
+    pub measurement: Vec<u8>,
+}
+
+impl AwsOsImageMeasurementDocument {
+    pub fn new(checksum_file: Vec<u8>, measurement: Vec<u8>) -> Self {
+        Self {
+            checksum_file,
+            measurement,
+        }
+    }
+
+    pub fn decode_measurement(&self) -> Result<AwsOsImageMeasurement, String> {
+        AwsOsImageMeasurement::from_cbor_slice(&self.measurement)
+    }
+
+    pub fn verify(&self, os_image_hash: &[u8]) -> Result<(), String> {
+        verify_measurement_material(
+            os_image_hash,
+            &self.checksum_file,
+            &self.measurement,
+            "measurement.aws.cbor",
         )
     }
 }
@@ -1390,11 +1613,19 @@ impl KeyProvider {
         }
     }
 
+    /// Stable key-provider identity used for launch measurement and compose pins.
+    ///
+    /// - KMS: root CA public key
+    /// - Local: sealing-provider MR
+    /// - TPM: always empty — the derived app root pubkey is instance-specific
+    ///   (from a TPM-sealed seed) and must not be treated as a stable provider id
+    ///   or measured as one. Mode is already carried by [`Self::kind`].
+    /// - None: empty
     pub fn id(&self) -> &[u8] {
         match self {
             KeyProvider::None { .. } => &[],
             KeyProvider::Local { mr, .. } => mr,
-            KeyProvider::Tpm { pubkey, .. } => pubkey,
+            KeyProvider::Tpm { .. } => &[],
             KeyProvider::Kms { pubkey, .. } => pubkey,
         }
     }
@@ -1409,6 +1640,31 @@ pub struct KeyProviderInfo {
 impl KeyProviderInfo {
     pub fn new(name: String, id: String) -> Self {
         Self { name, id }
+    }
+}
+
+#[cfg(test)]
+mod key_provider_tests {
+    use super::*;
+
+    #[test]
+    fn tpm_key_provider_id_is_empty() {
+        let tpm = KeyProvider::Tpm {
+            key: "dummy".into(),
+            // Instance app-root pubkey may still be stored on the key handle, but
+            // it must not be reported as the stable provider id.
+            pubkey: vec![0x04; 65],
+        };
+        assert!(tpm.id().is_empty());
+        assert_eq!(tpm.kind(), KeyProviderKind::Tpm);
+
+        let kms = KeyProvider::Kms {
+            url: "https://kms.example".into(),
+            pubkey: vec![0xab; 32],
+            tmp_ca_key: String::new(),
+            tmp_ca_cert: String::new(),
+        };
+        assert_eq!(kms.id(), &[0xab; 32]);
     }
 }
 
@@ -1462,9 +1718,25 @@ pub enum Platform {
     Gcp,
     /// AWS Nitro Enclave
     NitroEnclave,
+    /// AWS EC2 instance with NitroTPM
+    #[serde(rename = "aws-ec2")]
+    AwsEc2,
 }
 
 impl Platform {
+    fn detect_from_dmi(product_name: Option<&str>, sys_vendor: Option<&str>) -> Option<Self> {
+        match product_name.map(str::trim) {
+            Some("dstack" | "qemu") => return Some(Self::Dstack),
+            Some("Google Compute Engine") => return Some(Self::Gcp),
+            _ => {}
+        }
+
+        match sys_vendor.map(str::trim) {
+            Some("Amazon EC2") => Some(Self::AwsEc2),
+            _ => None,
+        }
+    }
+
     /// Detect platform from system DMI information
     pub fn detect() -> Option<Self> {
         // Nitro Enclave: NSM device exists only inside enclave
@@ -1472,14 +1744,9 @@ impl Platform {
             return Some(Self::NitroEnclave);
         }
 
-        if let Ok(board_name) = std::fs::read_to_string("/sys/class/dmi/id/product_name") {
-            match board_name.trim() {
-                "dstack" | "qemu" => return Some(Self::Dstack),
-                "Google Compute Engine" => return Some(Self::Gcp),
-                _ => {}
-            }
-        }
-        None
+        let product_name = std::fs::read_to_string("/sys/class/dmi/id/product_name").ok();
+        let sys_vendor = std::fs::read_to_string("/sys/class/dmi/id/sys_vendor").ok();
+        Self::detect_from_dmi(product_name.as_deref(), sys_vendor.as_deref())
     }
 
     /// Detect platform from system DMI information, default to Dstack if cannot detect
@@ -1493,6 +1760,69 @@ impl Platform {
             Self::Dstack => "dstack",
             Self::Gcp => "gcp",
             Self::NitroEnclave => "aws-nitro-enclave",
+            Self::AwsEc2 => "aws-ec2",
         }
+    }
+}
+
+#[cfg(test)]
+mod platform_tests {
+    use super::Platform;
+
+    #[test]
+    fn detects_aws_ec2_from_dmi_vendor() {
+        assert_eq!(
+            Platform::detect_from_dmi(Some("HVM domU"), Some("Amazon EC2")),
+            Some(Platform::AwsEc2)
+        );
+    }
+
+    #[test]
+    fn product_name_takes_precedence_over_vendor() {
+        assert_eq!(
+            Platform::detect_from_dmi(Some("Google Compute Engine"), Some("Amazon EC2")),
+            Some(Platform::Gcp)
+        );
+    }
+}
+
+#[cfg(test)]
+mod vm_config_num_nics_tests {
+    use super::VmConfig;
+
+    fn legacy_json() -> serde_json::Value {
+        serde_json::json!({
+            "cpu_count": 4,
+            "memory_size": 4294967296u64,
+            "num_gpus": 0,
+            "num_nvswitches": 0,
+        })
+    }
+
+    #[test]
+    fn legacy_config_without_num_nics_defaults_to_one() {
+        let cfg: VmConfig = serde_json::from_value(legacy_json()).unwrap();
+        assert_eq!(cfg.num_nics, 1);
+    }
+
+    #[test]
+    fn single_nic_is_omitted_to_keep_cache_key_stable() {
+        // A config with the default single NIC must serialize identically to a
+        // legacy config, so the verifier's measurement cache key (a hash of the
+        // serialized VmConfig) is unchanged for existing deployments.
+        let cfg: VmConfig = serde_json::from_value(legacy_json()).unwrap();
+        let serialized = serde_json::to_value(&cfg).unwrap();
+        assert!(
+            serialized.get("num_nics").is_none(),
+            "num_nics must be omitted when equal to 1, got {serialized}"
+        );
+    }
+
+    #[test]
+    fn multi_nic_is_serialized() {
+        let mut cfg: VmConfig = serde_json::from_value(legacy_json()).unwrap();
+        cfg.num_nics = 2;
+        let serialized = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(serialized.get("num_nics").and_then(|v| v.as_u64()), Some(2));
     }
 }

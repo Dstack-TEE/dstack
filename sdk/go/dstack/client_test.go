@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -113,6 +115,27 @@ func TestAttest(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "report data is too large") {
 		t.Fatalf("expected error to mention report data size, got: %v", err)
+	}
+}
+
+func TestGpuInfo(t *testing.T) {
+	const attestation = `{"result_code":0,"claims":[]}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/GpuInfo" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"attestation": attestation})
+	}))
+	defer server.Close()
+
+	client := dstack.NewDstackClient(dstack.WithEndpoint(server.URL))
+	response, err := client.GpuInfo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Attestation != attestation {
+		t.Fatalf("unexpected attestation: %s", response.Attestation)
 	}
 }
 

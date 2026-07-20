@@ -1,13 +1,60 @@
 # Quickstart
 
-Deploy your first confidential workload on GCP in under 10 minutes.
-
-> **Interested in AWS Nitro Enclaves?** We support AWS Nitro attestation verification and are expanding deployment tooling. [Book a call](https://calendly.com/aspect-ux/30min) to learn more about AWS deployment options.
+Deploy your first confidential workload on GCP (or AWS EC2 NitroTPM) in under
+10 minutes.
 
 ## Prerequisites
 
+**GCP**
 - GCP account with Confidential VM quota (Intel TDX)
 - `gcloud` CLI installed and authenticated
+
+**AWS** (optional)
+- AWS account with EC2 and EBS Direct snapshot permissions
+- `aws` CLI installed and authenticated
+
+The following IAM policy covers image creation, deployment, status/log access,
+start/stop, replacement, and removal performed by `dstack-cloud`:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ebs:StartSnapshot",
+        "ebs:PutSnapshotBlock",
+        "ebs:CompleteSnapshot"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateTags",
+        "ec2:DeleteSnapshot",
+        "ec2:DescribeImages",
+        "ec2:DescribeInstances",
+        "ec2:DescribeSnapshots",
+        "ec2:GetConsoleOutput",
+        "ec2:RegisterImage",
+        "ec2:RunInstances",
+        "ec2:StartInstances",
+        "ec2:StopInstances",
+        "ec2:TerminateInstances"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+If `aws_config.iam_instance_profile` is set, also grant `iam:PassRole` for that
+specific role. `iam:PassRole` is not required for EBS Direct or for instances
+launched without an instance profile. Creating a VPC, subnet, or security group
+is outside `dstack-cloud`; supply existing IDs in `aws_config` and grant their
+management permissions separately only when needed.
 
 ## Install the CLI
 
@@ -35,20 +82,32 @@ dstack-cloud config-edit
 
 This opens an editor with the global configuration file. For GCP, configure:
 
-```toml
-[gcp]
-project = "your-gcp-project-id"
-zone = "us-central1-a"
-machine_type = "n2d-standard-4"
+```json
+{
+  "gcp": {
+    "project": "your-gcp-project-id",
+    "zone": "us-central1-a"
+  },
+  "aws": {
+    "region": "us-east-1"
+  }
+}
 ```
+
+For AWS, `dstack-cloud` writes the local boot, shared, and labeled-data RAW disks
+directly to EBS snapshots in 512-KiB checksummed blocks. It does not require an
+S3 bucket, a `vmimport` service role, or `iam:PassRole`.
 
 ## Create a Project
 
-Create a new dstack-cloud project:
-
 ```bash
+# GCP (default)
 dstack-cloud new my-app
 cd my-app
+
+# or AWS NitroTPM
+dstack-cloud new my-aws-app --platform aws --region us-east-1
+cd my-aws-app
 ```
 
 This creates a project directory with:
@@ -101,6 +160,8 @@ These are encrypted before leaving your machine and only decrypted inside the TE
 Deploy to your cloud provider:
 
 ```bash
+# AWS without a preconfigured aws_config.ami_id needs the local UKI package first:
+# dstack-cloud pull <release-image-name>
 dstack-cloud deploy
 ```
 

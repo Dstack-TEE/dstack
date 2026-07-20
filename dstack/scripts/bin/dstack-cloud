@@ -7,28 +7,31 @@
 """
 dstack-cloud: Multi-cloud VM lifecycle management tool
 
-A production-grade CLI for managing dstack VMs on various cloud platforms.
-Supports local configuration files similar to git's working model.
+A production-grade CLI for managing dstack VMs on various cloud platforms
+(GCP TDX and AWS EC2 NitroTPM). Supports local configuration files similar
+to git's working model.
 
 Usage:
-    dstack-cloud new <name>              # Create a new project
+    dstack-cloud new <name> [--platform gcp|aws]
     dstack-cloud config-edit             # Edit global configuration
-    dstack-cloud prepare                 # Generate shared files
-    dstack-cloud deploy                  # Deploy VM to cloud
+    dstack-cloud prepare                 # Generate shared files (.sys-config + compose)
+    dstack-cloud deploy                  # Deploy VM to cloud (GCP or AWS)
     dstack-cloud status                  # Check deployment status
     dstack-cloud logs [--follow]         # View serial console logs
-    dstack-cloud stop                    # Stop the VM
-    dstack-cloud start                   # Start a stopped VM
-    dstack-cloud remove                  # Remove the VM and cleanup
-    dstack-cloud list                    # List all deployments
-    dstack-cloud fw allow <port>         # Allow traffic on a port
-    dstack-cloud fw deny <port>          # Block traffic on a port
-    dstack-cloud fw remove <port>        # Remove a firewall rule
-    dstack-cloud fw list                 # List firewall rules
+    dstack-cloud stop / start / remove   # Lifecycle
+    dstack-cloud list                    # List deployments (GCP)
+    dstack-cloud fw allow|deny|list ...  # Firewall (GCP)
+
+AWS projects set "platform": "aws" in app.json and fill aws_config
+(region, networking, …). Local RAW disks are written directly to EBS snapshots.
+prepare/deploy only *embed* aws_measurement
+from the release UKI package (digest.txt + sha256sum.txt + measurement.aws.cbor
+produced at image assemble time). They never recompute PCRs or os_image_hash.
 """
 
 import argparse
 import base64
+import concurrent.futures
 import hashlib
 import json
 import logging
@@ -81,6 +84,9 @@ GLOBAL_CONFIG_PATH = os.path.expanduser(
 )
 DEFAULT_OS_IMAGE = "dstack-0.6.0"
 MONOREPO_GUEST_OS_MIN_VERSION = (0, 6, 0)
+AWS_EBS_BLOCK_SIZE = 512 * 1024
+AWS_EBS_UPLOAD_WORKERS = 8
+AWS_EBS_UPLOAD_QUEUE_DEPTH = AWS_EBS_UPLOAD_WORKERS * 2
 
 
 def guest_os_release_url(os_image: str, version: str) -> str:
@@ -112,8 +118,14 @@ class App:
     # OS image
     os_image: str = DEFAULT_OS_IMAGE
 
+    # Target cloud platform: "gcp" or "aws"
+    platform: str = "gcp"
+
     # GCP cloud configuration
     gcp_config: 'GcpConfig' = field(default_factory=lambda: GcpConfig())
+
+    # AWS cloud configuration
+    aws_config: 'AwsConfig' = field(default_factory=lambda: AwsConfig())
 
     # Docker compose file name (relative to project root)
     docker_compose_file: str = "docker-compose.yaml"
@@ -156,20 +168,21 @@ class App:
     key_provider_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
-        data = asdict(self)
-        # Convert GcpConfig to dict
-        if isinstance(data.get("gcp_config"), GcpConfig):
-            data["gcp_config"] = data["gcp_config"].to_dict()
-        return data
+        # asdict() recursively converts the nested config dataclasses too
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'App':
         known_fields = {f.name for f in cls.__dataclass_fields__.values()}
         filtered = {k: v for k, v in data.items() if k in known_fields}
 
-        # Convert gcp_config dict to GcpConfig object
+        # Convert nested config dicts
         if "gcp_config" in filtered and isinstance(filtered["gcp_config"], dict):
             filtered["gcp_config"] = GcpConfig.from_dict(filtered["gcp_config"])
+        if "aws_config" in filtered and isinstance(filtered["aws_config"], dict):
+            filtered["aws_config"] = AwsConfig.from_dict(filtered["aws_config"])
+        if "platform" in filtered and isinstance(filtered["platform"], str):
+            filtered["platform"] = filtered["platform"].lower()
 
         return cls(**filtered)
 
@@ -187,7 +200,9 @@ class App:
         return {
             "name": "myapp",
             "os_image": DEFAULT_OS_IMAGE,
+            "platform": "gcp",
             "gcp_config": GcpConfig.get_template(),
+            "aws_config": AwsConfig.get_template(),
             "instance_id_seed": instance_id_seed,
             "app_id": app_id,
             "docker_compose_file": "docker-compose.yaml",
@@ -284,11 +299,87 @@ class GcpConfig:
 
 
 @dataclass
+class AwsConfig:
+    """AWS EC2 NitroTPM deployment configuration."""
+    # Required settings
+    region: str = "us-east-1"
+    instance_name: str = ""  # Name tag / logical name
+
+    # Instance settings
+    instance_type: str = "m6i.large"
+    ami_id: str = ""  # If empty, import local UKI disk.raw as attestable AMI
+    ami_name: str = ""  # Name used when importing AMI
+
+    # Local boot image (UKI package with disk.raw + measurement.aws.cbor)
+    boot_image: str = ""  # directory name under image_search_paths
+    boot_image_tar: str = ""  # explicit path override
+
+    # Data disk
+    data_size: int = 20  # GiB for the volume created from the labeled template
+    data_snapshot: str = ""  # optional existing snapshot for data disk
+
+    # Shared-disk device names (dstack host-shared + data)
+    shared_device_name: str = "/dev/sdf"
+    data_device_name: str = "/dev/sdg"
+    root_device_name: str = "/dev/sda1"
+    volume_type: str = "gp3"
+
+    # Network
+    subnet_id: str = ""
+    security_group_ids: List[str] = field(default_factory=list)
+    iam_instance_profile: str = ""  # name or ARN
+
+    # Metadata options. Hop limit 1 keeps IMDSv2 tokens (and any instance-role
+    # credentials) unreachable from app containers behind the docker bridge;
+    # dstack itself never talks to IMDS. Set to 2 only if your containers
+    # legitimately need the instance role.
+    metadata_hop_limit: int = 1
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'AwsConfig':
+        known_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered = {k: v for k, v in data.items() if k in known_fields}
+        return cls(**filtered)
+
+    @classmethod
+    def get_template(cls) -> Dict[str, Any]:
+        """Get default template for new projects."""
+        return {
+            "region": "us-east-1",
+            "instance_name": "dstack-vm",
+            "instance_type": "m6i.large",
+            "ami_id": "",
+            "ami_name": "",
+            "boot_image": "",
+            "boot_image_tar": "",
+            "data_size": 20,
+            "data_snapshot": "",
+            "shared_device_name": "/dev/sdf",
+            "data_device_name": "/dev/sdg",
+            "root_device_name": "/dev/sda1",
+            "volume_type": "gp3",
+            "subnet_id": "",
+            "security_group_ids": [],
+            "iam_instance_profile": "",
+            "metadata_hop_limit": 1,
+        }
+
+
+@dataclass
 class DeploymentState:
     """Deployment state tracking."""
+    platform: str = "gcp"
     instance_name: str = ""
     project: str = ""
     zone: str = ""
+    region: str = ""
+    instance_id: str = ""
+    ami_id: str = ""
+    shared_snapshot: str = ""
+    data_snapshot: str = ""  # Data template snapshot created by dstack-cloud
     external_ip: str = ""
     internal_ip: str = ""
     status: str = ""  # RUNNING, STOPPED, TERMINATED, etc.
@@ -331,36 +422,35 @@ class CloudDeploymentManager:
         """Get the shared directory path (at project root)."""
         return self.work_dir / "shared"
 
-    def load_gcp_config(self) -> 'GcpConfig':
-        """Load GCP configuration from app.gcp_config."""
-        # Load app config which contains gcp_config
-        app = self.load_app_config()
-
-        # Get local gcp_config from app
-        local_gcp = app.gcp_config.to_dict()
-
-        # Merge global config with local config
-        global_config = self._load_global_config()
-        global_gcp = global_config.get("gcp", {})
-
-        # Global config is used as fallback for empty values in local config
-        merged = {**global_gcp}  # Start with global config
-        for key, value in local_gcp.items():
-            # Only override with local value if it's non-empty
+    def _merge_platform_config(self, local: Dict[str, Any], global_section: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge global platform defaults with local project overrides."""
+        merged = {**global_section}
+        for key, value in local.items():
             if value or value is False or value == 0:
                 merged[key] = value
-        return GcpConfig.from_dict(merged)
+        return merged
+
+    def load_gcp_config(self) -> 'GcpConfig':
+        """Load GCP configuration from app.gcp_config."""
+        app = self.load_app_config()
+        local_gcp = app.gcp_config.to_dict()
+        global_config = self._load_global_config()
+        global_gcp = global_config.get("gcp", {})
+        return GcpConfig.from_dict(self._merge_platform_config(local_gcp, global_gcp))
 
     def save_gcp_config(self, config: GcpConfig) -> None:
         """Save GCP configuration to app.gcp_config."""
-        # Load the full app config
         app = self.load_app_config()
-
-        # Update gcp_config
         app.gcp_config = config
-
-        # Save the updated app config
         self.save_app_config(app)
+
+    def load_aws_config(self) -> 'AwsConfig':
+        """Load AWS configuration from app.aws_config (+ global aws defaults)."""
+        app = self.load_app_config()
+        local_aws = app.aws_config.to_dict()
+        global_config = self._load_global_config()
+        global_aws = global_config.get("aws", {})
+        return AwsConfig.from_dict(self._merge_platform_config(local_aws, global_aws))
 
     def load_app_config(self, required: bool = False) -> App:
         """Load application configuration.
@@ -489,63 +579,88 @@ class CloudDeploymentManager:
             f"{', '.join(candidates)} in image_search_paths"
         )
 
-    def _generate_sys_config(self, global_config: Dict[str, Any],
-                             gcp_config: GcpConfig, app: App) -> Dict[str, Any]:
-        """Generate .sys-config.json content."""
-        # Get services section from global config
+    def _generate_sys_config(self, global_config: Dict[str, Any], app: App) -> Dict[str, Any]:
+        """Generate .sys-config.json content for the app's target platform."""
         services = global_config.get("services", {})
-
-        # Get KMS URLs from global config
-        kms_urls = services.get("kms_urls", [])
-        if not kms_urls:
-            kms_urls = ["https://kms.tdxlab.dstack.org:12001"]
-
-        # Get gateway URLs from global config
-        gateway_urls = services.get("gateway_urls", [])
-        if not gateway_urls:
-            gateway_urls = ["https://gateway.tdxlab.dstack.org:12002"]
-
-        # Get other settings
+        kms_urls = services.get("kms_urls") or ["https://kms.tdxlab.dstack.org:12001"]
+        gateway_urls = services.get("gateway_urls") or ["https://gateway.tdxlab.dstack.org:12002"]
         pccs_url = services.get("pccs_url", "")
+        nvidia_attestation_proxy_url = services.get("nvidia_attestation_proxy_url")
 
-        # Read the unified OS image hash and GCP measurement material from the
-        # local image directory. No legacy auth_hash.txt fallback: GCP now uses
-        # the same os_image_hash scheme as the other platforms,
-        # sha256(sha256sum.txt), with measurement.gcp.cbor binding the UKI
-        # Authenticode hash measured by GCP TPM PCR2.
+        platform = (app.platform or "gcp").lower()
+        if platform == "gcp":
+            platform_config = self.load_gcp_config()
+        elif platform == "aws":
+            platform_config = self.load_aws_config()
+        else:
+            raise ValueError(f"unsupported platform: {platform!r} (expected 'gcp' or 'aws')")
+
         image_dir = self._find_local_image_dir(
             global_config,
-            [gcp_config.boot_image, app.os_image],
-            gcp_config.boot_image_tar,
+            [platform_config.boot_image, app.os_image],
+            platform_config.boot_image_tar,
         )
         digest_file = image_dir / "digest.txt"
         checksum_file = image_dir / "sha256sum.txt"
-        gcp_measurement_file = image_dir / "measurement.gcp.cbor"
-        for required in (digest_file, checksum_file, gcp_measurement_file):
+        measurement_name = f"measurement.{platform}.cbor"
+        measurement_file = image_dir / measurement_name
+        for required in (digest_file, checksum_file, measurement_file):
             if not required.exists():
-                raise FileNotFoundError(f"Required GCP image file not found: {required}")
-
+                message = f"required {platform.upper()} image file not found: {required}"
+                if platform == "aws":
+                    message += (
+                        ". Use a release UKI package built by os/image/assemble.sh "
+                        "(measurement.aws.cbor is fixed at assemble time into "
+                        "os_image_hash; prepare does not recompute it)."
+                    )
+                raise FileNotFoundError(message)
         os_image_hash = digest_file.read_text().strip()
         checksum_bytes = checksum_file.read_bytes()
-        gcp_measurement_bytes = gcp_measurement_file.read_bytes()
-        logger.info(f"Read unified OS image hash from {digest_file}")
+        measurement_bytes = measurement_file.read_bytes()
 
-        # Build vm_config
+        if platform == "aws":
+            # Sanity: digest.txt must equal sha256(sha256sum.txt)
+            actual = hashlib.sha256(checksum_bytes).hexdigest()
+            if os_image_hash != actual:
+                raise ValueError(
+                    f"digest.txt ({os_image_hash}) does not match sha256(sha256sum.txt) ({actual})"
+                )
+            # Sanity: measurement.aws.cbor must be committed by sha256sum.txt
+            meas_hash = hashlib.sha256(measurement_bytes).hexdigest()
+            checksum_text = checksum_bytes.decode("utf-8", errors="replace")
+            committed = any(
+                len(parts) >= 2
+                and parts[0] == meas_hash
+                and parts[1].lstrip("*") == measurement_name
+                for parts in (line.split() for line in checksum_text.splitlines())
+            )
+            if not committed:
+                raise ValueError(
+                    "measurement.aws.cbor is not committed by sha256sum.txt; "
+                    "rebuild the image with assemble.sh"
+                )
+            logger.info(f"read fixed AWS os_image_hash from {digest_file} (assemble-time)")
+        else:
+            logger.info(f"read unified OS image hash from {digest_file}")
+
         vm_config = {
             "spec_version": 2,
             "os_image_hash": os_image_hash,
-            "gcp_measurement": {
+            f"{platform}_measurement": {
                 "checksum_file": base64.b64encode(checksum_bytes).decode("ascii"),
-                "measurement": base64.b64encode(gcp_measurement_bytes).decode("ascii"),
+                "measurement": base64.b64encode(measurement_bytes).decode("ascii"),
             },
         }
 
-        return {
+        sys_config = {
             "kms_urls": kms_urls,
             "gateway_urls": gateway_urls,
             "pccs_url": pccs_url,
-            "vm_config": json.dumps(vm_config)
+            "vm_config": json.dumps(vm_config),
         }
+        if nvidia_attestation_proxy_url:
+            sys_config["nvidia_attestation_proxy_url"] = nvidia_attestation_proxy_url
+        return sys_config
 
     def load_state(self) -> Optional[DeploymentState]:
         """Load deployment state."""
@@ -616,25 +731,7 @@ class CloudDeploymentManager:
 
         # Create a minimal raw disk image with GPT partition table
         with tempfile.TemporaryDirectory() as tmpdir:
-            raw_file = os.path.join(tmpdir, "disk.raw")
-
-            # Create a 10MB sparse file (enough for GPT)
-            disk_size_bytes = 10 * 1024 * 1024
-            with open(raw_file, 'wb') as f:
-                f.truncate(disk_size_bytes)
-
-            # Create GPT partition table with dstack-data partition using sgdisk
-            # -o: clear and create new GPT
-            # -n 1:0:0: create partition 1, start at first available, end at last available
-            # -c 1:dstack-data: set partition 1 name (PARTLABEL) to dstack-data
-            result = subprocess.run(
-                ["sgdisk", "-o", "-n", "1:0:0", "-c", "1:dstack-data", raw_file],
-                capture_output=True, text=True
-            )
-            if result.returncode != 0:
-                raise RuntimeError(f"Failed to create GPT partition table: {result.stderr}")
-
-            logger.debug("Created GPT partition table with dstack-data label")
+            self._build_data_raw_disk(Path(tmpdir))
 
             # Compress to tar.gz for upload
             tar_file = os.path.join(tmpdir, "disk.tar.gz")
@@ -676,8 +773,10 @@ class CloudDeploymentManager:
         storage_fs: Optional[str] = None,
         secure_time: Optional[bool] = None,
         no_instance_id: Optional[bool] = None,
+        platform: Optional[str] = None,
         project: Optional[str] = None,
         zone: Optional[str] = None,
+        region: Optional[str] = None,
         instance_name: Optional[str] = None,
         machine_type: Optional[str] = None,
         data_size: Optional[int] = None
@@ -708,8 +807,10 @@ class CloudDeploymentManager:
             storage_fs=storage_fs,
             secure_time=secure_time,
             no_instance_id=no_instance_id,
+            platform=platform,
             project=project,
             zone=zone,
+            region=region,
             instance_name=instance_name,
             machine_type=machine_type,
             data_size=data_size
@@ -731,8 +832,10 @@ class CloudDeploymentManager:
         storage_fs: Optional[str] = None,
         secure_time: Optional[bool] = None,
         no_instance_id: Optional[bool] = None,
+        platform: Optional[str] = None,
         project: Optional[str] = None,
         zone: Optional[str] = None,
+        region: Optional[str] = None,
         instance_name: Optional[str] = None,
         machine_type: Optional[str] = None,
         data_size: Optional[int] = None
@@ -777,7 +880,7 @@ class CloudDeploymentManager:
         shared_dir = self.work_dir / "shared"
         shared_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate app config template with embedded gcp_config
+        # Generate app config template with embedded platform configs
         app_template = App.get_template()
 
         # Apply CLI-provided values (only if specified)
@@ -785,6 +888,11 @@ class CloudDeploymentManager:
             app_template["name"] = app_name
         if os_image:
             app_template["os_image"] = os_image
+        if platform:
+            platform = platform.lower()
+            if platform not in ("gcp", "aws"):
+                raise ValueError("platform must be 'gcp' or 'aws'")
+            app_template["platform"] = platform
         if app_id:
             # Validate app_id format (40 hex chars)
             if len(app_id) != 40 or not all(c in '0123456789abcdef' for c in app_id.lower()):
@@ -812,14 +920,21 @@ class CloudDeploymentManager:
         # Apply GCP config values
         if instance_name:
             app_template["gcp_config"]["instance_name"] = instance_name
+            app_template["aws_config"]["instance_name"] = instance_name
         if project:
             app_template["gcp_config"]["project"] = project
         if zone:
             app_template["gcp_config"]["zone"] = zone
+        if region:
+            app_template["aws_config"]["region"] = region
         if machine_type:
             app_template["gcp_config"]["machine_type"] = machine_type
+            # Only map machine_type to AWS instance_type when platform is aws
+            if app_template.get("platform") == "aws":
+                app_template["aws_config"]["instance_type"] = machine_type
         if data_size is not None:
             app_template["gcp_config"]["data_size"] = data_size
+            app_template["aws_config"]["data_size"] = data_size
 
         # Create app.json at project root (not in .dstack/)
         app_config_path = self.work_dir / APP_CONFIG_FILE
@@ -869,7 +984,7 @@ class CloudDeploymentManager:
             logger.info(f"  Instance name: {instance_name}")
             logger.info("")
         logger.info("Created files:")
-        logger.info(f"  {app_config_path.name} - Application configuration (with embedded GCP config)")
+        logger.info(f"  {app_config_path.name} - Application configuration (platform configs embedded)")
         logger.info(f"  shared/ - System-generated files")
         logger.info(f"  {docker_compose.name} - Docker compose file")
         logger.info(f"  {prelaunch.name} - Prelaunch script")
@@ -893,6 +1008,7 @@ class CloudDeploymentManager:
                     "kms_urls": ["https://kms.tdxlab.dstack.org:12001"],
                     "gateway_urls": ["https://gateway.tdxlab.dstack.org:12002"],
                     "pccs_url": "",
+                    "nvidia_attestation_proxy_url": "",
                 },
                 "_comment_images": "System image search paths (for boot_image_tar auto-discovery)",
                 "image_search_paths": [
@@ -903,6 +1019,11 @@ class CloudDeploymentManager:
                     "project": "",
                     "zone": "us-central1-a",
                     "bucket": ""
+                },
+                "_comment_aws": "AWS EC2 NitroTPM platform defaults",
+                "aws": {
+                    "region": "us-east-1",
+                    "instance_type": "m6i.large"
                 }
             }
             with open(GLOBAL_CONFIG_PATH, 'w') as f:
@@ -949,18 +1070,15 @@ class CloudDeploymentManager:
             json.dump(instance_info, f, indent=2)
         logger.info(f"Generated {instance_info_path}")
 
-        # Load GCP config for sys-config generation
+        # Generate .sys-config.json (platform-specific measurement material)
         try:
-            gcp_config = self.load_gcp_config()
             global_config = self._load_global_config()
-
-            # Generate .sys-config.json
-            sys_config_content = self._generate_sys_config(global_config, gcp_config, app)
+            sys_config_content = self._generate_sys_config(global_config, app)
             sys_config_path = shared_dir / ".sys-config.json"
             with open(sys_config_path, 'w') as f:
                 json.dump(sys_config_content, f, indent=2)
-            logger.info(f"Generated {sys_config_path}")
-        except FileNotFoundError as e:
+            logger.info(f"Generated {sys_config_path} (platform={app.platform})")
+        except (FileNotFoundError, ValueError) as e:
             logger.warning(f"Could not generate .sys-config.json: {e}")
 
         # Process .env file to collect env_names
@@ -1099,11 +1217,23 @@ class CloudDeploymentManager:
             expected_dir / "disk.raw",
             expected_dir / "digest.txt",
             expected_dir / "sha256sum.txt",
+        ]
+        # Cloud packages may carry GCP and/or AWS measurement material.
+        optional_measurements = [
             expected_dir / "measurement.gcp.cbor",
+            expected_dir / "measurement.aws.cbor",
         ]
         missing_files = [p for p in expected_files if not p.exists()]
         if not missing_files:
             logger.info(f"Image ready: {expected_dir / 'disk.raw'}")
+            present = [p.name for p in optional_measurements if p.exists()]
+            if present:
+                logger.info(f"Measurement material: {', '.join(present)}")
+            else:
+                logger.warning(
+                    "No measurement.gcp.cbor or measurement.aws.cbor found; "
+                    "rebuild the UKI package with os/image/assemble.sh"
+                )
         else:
             logger.warning(
                 "Expected file(s) not found: "
@@ -1225,174 +1355,18 @@ class CloudDeploymentManager:
 
     def _create_shared_disk_image(self, config: GcpConfig, app: App) -> str:
         """Create and upload shared disk image. Returns the image name."""
-        import secrets
-        import shutil
-
-        # Check if mcopy (mtools) is installed
-        if not shutil.which("mcopy"):
-            logger.error("")
-            logger.error("Error: 'mcopy' command not found.")
-            logger.error("")
-            logger.error("Please install mtools:")
-            logger.error("  Ubuntu/Debian: sudo apt-get install mtools")
-            logger.error("  Fedora/RHEL:   sudo dnf install mtools")
-            logger.error("  Arch Linux:     sudo pacman -S mtools")
-            logger.error("")
-            raise FileNotFoundError("mcopy not found. Please install mtools package.")
-
-        # Ensure instance_id_seed and app_id exist
-        if not app.instance_id_seed:
-            app.instance_id_seed = secrets.token_hex(20)
-            logger.info(f"Generated instance_id_seed: {app.instance_id_seed}")
-            self.save_app_config(app)
-
-        if not app.app_id:
-            app.app_id = secrets.token_hex(20)
-            logger.info(f"Generated app_id: {app.app_id}")
-            self.save_app_config(app)
-
-        shared_dir = self._get_shared_dir()
-
-        # Ensure shared directory exists and generate all required files
-        shared_dir.mkdir(parents=True, exist_ok=True)
-
         shared_image_name = f"{config.instance_name}-shared"
-
-        # Process .env file: encrypt and save to shared/.encrypted-env
-        env_path = self.work_dir / app.env_file
-        env_names = []  # Collect environment variable names for allowed_envs
-
-        if env_path.exists():
-            if app.key_provider != "kms":
-                raise ValueError(f"{app.env_file} found but KMS is not enabled. "
-                               f"Enable KMS with --key-provider kms or remove {app.env_file}")
-
-            if not app.app_id:
-                raise ValueError(f"{app.env_file} found but app_id is not set. "
-                               f"Run 'dstack-cloud prepare' to generate app_id")
-
-            # Parse .env file
-            envs = self._parse_env_file(env_path)
-            if envs:
-                env_names = list(envs.keys())
-
-                # Get KMS URL from global config
-                global_config = self._load_global_config()
-                kms_urls = global_config.get("services", {}).get("kms_urls", [])
-                if not kms_urls:
-                    raise ValueError("KMS enabled but no kms_urls configured in global config")
-
-                # Get encryption public key from KMS
-                kms_url = kms_urls[0]
-                pubkey = self._get_app_encrypt_pub_key(app.app_id, kms_url)
-
-                # Encrypt environment variables
-                encrypted_env = self._encrypt_env(envs, pubkey)
-
-                # Save to shared/.encrypted-env
-                encrypted_file = shared_dir / ".encrypted-env"
-                with open(encrypted_file, 'wb') as f:
-                    f.write(encrypted_env)
-                logger.info(f"Encrypted {app.env_file} -> {encrypted_file}")
-            else:
-                logger.info(f"{app.env_file} is empty, skipping")
-
-        # Regenerate app-compose.json with env_names (if any)
-        # This must be done after .env processing and before creating the disk image
-        global_config = self._load_global_config()
-        sys_config_content = self._generate_sys_config(global_config, config, app)
-        sys_config_path = shared_dir / ".sys-config.json"
-        with open(sys_config_path, 'w') as f:
-            json.dump(sys_config_content, f, indent=2)
-        logger.info(f"Generated {sys_config_path}")
-
-        # Generate .instance_info
-        instance_info = {
-            "instance_id_seed": app.instance_id_seed,
-            "app_id": app.app_id
-        }
-        instance_info_path = shared_dir / ".instance_info"
-        with open(instance_info_path, 'w') as f:
-            json.dump(instance_info, f, indent=2)
-        logger.info(f"Generated {instance_info_path}")
-
-        # Write app-compose.json (verbatim if app.app_compose_file is set, else generated)
-        self._emit_app_compose(app, shared_dir, env_names if env_names else None)
 
         with tempfile.TemporaryDirectory() as work_dir:
             work_path = Path(work_dir)
-            raw_file = work_path / "disk.raw"
-
-            # Create FAT32 disk image (no root required). Size it to fit the
-            # shared files: app-compose.json can be large (e.g. self-contained
-            # apps embed their payload, up to the 50M guest cap), so the old
-            # fixed 8M overflowed and mcopy failed. Floor at 8M (small composes
-            # unchanged), + 4M FAT/metadata margin, rounded up to a whole MiB.
-            logger.info("Creating shared disk image...")
-            _shared_files = [shared_dir / f for f in
-                             ("app-compose.json", ".sys-config.json", ".instance_info", ".encrypted-env")]
-            _shared_files.append(self.work_dir / ".user-config")
-            _total = sum(p.stat().st_size for p in _shared_files if p.exists())
-            _bytes = max(8 * 1024 * 1024, _total + 4 * 1024 * 1024)
-            _bytes = ((_bytes + (1024 * 1024 - 1)) // (1024 * 1024)) * (1024 * 1024)
-            disk_size = str(_bytes)  # bytes
-            logger.info(f"Shared disk size: {_bytes // (1024 * 1024)}M (files {_total} bytes)")
-            subprocess.run(
-                ["truncate", "-s", disk_size, str(raw_file)],
-                check=True
-            )
-            subprocess.run(
-                ["mkfs.fat", "-F", "32", "-n", "DSTACKSHR", str(raw_file)],
-                check=True, capture_output=True
-            )
-
-            # Use mtools to copy files without mounting (no root required)
-            # Copy generated system files from shared directory
-            required_files = ["app-compose.json", ".sys-config.json", ".instance_info"]
-            for f in required_files:
-                src = shared_dir / f
-                if src.exists():
-                    subprocess.run(
-                        ["mcopy", "-i", str(raw_file), str(src), "::"],
-                        check=True
-                    )
-                else:
-                    raise FileNotFoundError(f"Required file {f} not found in {shared_dir}")
-
-            # Copy optional system files from shared directory
-            optional_files = [".encrypted-env"]
-            for f in optional_files:
-                src = shared_dir / f
-                if src.exists():
-                    subprocess.run(
-                        ["mcopy", "-i", str(raw_file), str(src), "::"],
-                        check=True
-                    )
-
-            # Copy other user-editable files from project root
-            user_files = {
-                ".user-config": ".user-config",
-            }
-
-            for src_name, dst_name in user_files.items():
-                src_path = self.work_dir / src_name
-                if src_path.exists():
-                    subprocess.run(
-                        ["mcopy", "-i", str(raw_file), str(src_path), f"::{dst_name}"],
-                        check=True
-                    )
-                    logger.info(f"Included {src_name}")
-                else:
-                    logger.warning(f"{src_name} not found, skipping")
-
-            # Create tar
+            raw_file = self._build_shared_raw_disk(app, work_path)
             tar_file = work_path / "shared-disk.tar.gz"
             subprocess.run(
-                ["tar", "-C", str(work_path), "-czvf", str(tar_file), "disk.raw"],
-                check=True, capture_output=True
+                ["tar", "-C", str(work_path), "-czvf", str(tar_file), raw_file.name],
+                check=True,
+                capture_output=True,
             )
 
-            # Upload to GCS
             logger.info("Uploading shared disk image to GCS...")
             self._run_gsutil([
                 "cp", str(tar_file), f"{config.bucket}/{shared_image_name}.tar.gz"
@@ -1412,7 +1386,6 @@ class CloudDeploymentManager:
                 "--quiet"
             ])
 
-        # Create GCP image
         logger.info("Creating GCP image from shared disk...")
         self._run_gcloud([
             "compute", "images", "create", shared_image_name,
@@ -1420,17 +1393,25 @@ class CloudDeploymentManager:
             f"--source-uri={config.bucket}/{shared_image_name}.tar.gz",
             "--guest-os-features=GVNIC"
         ])
-
         return shared_image_name
 
     def deploy(self, delete_existing: bool = False,
                force_boot_image: bool = False) -> None:
-        """Deploy VM to GCP."""
-        # Load app config first (required) - validates project exists
+        """Deploy VM to the configured cloud platform."""
         app = self.load_app_config(required=True)
+        platform = (app.platform or "gcp").lower()
+        if platform == "aws":
+            self._deploy_aws(app, delete_existing=delete_existing, force_boot_image=force_boot_image)
+        elif platform == "gcp":
+            self._deploy_gcp(app, delete_existing=delete_existing, force_boot_image=force_boot_image)
+        else:
+            raise ValueError(f"unsupported platform: {platform!r}")
+
+    def _deploy_gcp(self, app: App, delete_existing: bool = False,
+                    force_boot_image: bool = False) -> None:
+        """Deploy VM to GCP TDX."""
         config = self.load_gcp_config()
 
-        # Validate required configuration
         missing = []
         if not config.instance_name:
             missing.append("instance_name")
@@ -1441,10 +1422,9 @@ class CloudDeploymentManager:
         if missing:
             raise ValueError(
                 f"Missing required GCP configuration: {', '.join(missing)}. "
-                f"Run 'dstack-cloud new <name>' to create a project or edit dstack-app.json."
+                f"Run 'dstack-cloud new <name>' to create a project or edit app.json."
             )
 
-        # Auto-detect bucket if not specified
         if not config.bucket and config.project:
             config.bucket = f"gs://{config.project}-dstack"
 
@@ -1457,7 +1437,6 @@ class CloudDeploymentManager:
         logger.info(f"Shared Directory: {shared_dir}")
         logger.info(f"GCS Bucket: {config.bucket}")
 
-        # Check if instance already exists
         result = self._run_gcloud([
             "compute", "instances", "describe", config.instance_name,
             f"--zone={config.zone}",
@@ -1479,16 +1458,10 @@ class CloudDeploymentManager:
                     f"Use --delete to replace it."
                 )
 
-        # Check and upload boot image
         boot_image = self._check_and_upload_boot_image(config, app, force=force_boot_image)
-
-        # Create shared disk image
         shared_image = self._create_shared_disk_image(config, app)
-
-        # Ensure data disk image exists (with GPT partition labeled 'dstack-data')
         data_image = self._ensure_data_disk_image(config)
 
-        # Create TDX instance
         logger.info("Creating TDX instance...")
 
         create_args = [
@@ -1507,10 +1480,6 @@ class CloudDeploymentManager:
         provisioning = (config.provisioning_model or "STANDARD").upper()
         if provisioning == "SPOT":
             create_args.append("--provisioning-model=SPOT")
-            # STOP (vs. the gcloud default DELETE) preserves the
-            # boot/data disks across preemption so the instance can
-            # be restarted with `dstack-cloud start` and keep its
-            # LUKS-encrypted data disk intact.
             create_args.append("--instance-termination-action=STOP")
         elif provisioning != "STANDARD":
             raise RuntimeError(
@@ -1523,24 +1492,15 @@ class CloudDeploymentManager:
         if config.subnet:
             create_args.append(f"--subnet={config.subnet}")
         if config.private_ip:
-            # Bind a reserved static internal IP so the VM keeps the same RFC1918
-            # address across remove/deploy. --private-network-ip needs the subnet
-            # named, so default it when the user didn't set one.
             if not config.subnet:
                 create_args.append("--subnet=default")
             create_args.append(f"--private-network-ip={config.private_ip}")
         if config.no_public_ip:
-            # Network-isolated CVM: no ephemeral external IP. With no Cloud NAT on
-            # the subnet, this also means no internet egress. Reaching the VM still
-            # works over IAP TCP forwarding (ingress via Google's edge to the
-            # internal IP), so SSH / the on-prem courier are unaffected.
             create_args.append("--no-address")
         if config.service_account:
             create_args.append(f"--service-account={config.service_account}")
         if config.scopes:
             create_args.append(f"--scopes={','.join(config.scopes)}")
-        # Always attach firewall tag so existing firewall rules continue to work
-        # after instance recreation (e.g. deploy --delete).
         instance_tags = list(config.tags)
         firewall_tag = f"fw-{config.instance_name}"
         if firewall_tag not in instance_tags:
@@ -1553,7 +1513,6 @@ class CloudDeploymentManager:
 
         self._run_gcloud(create_args)
 
-        # Get instance details
         result = self._run_gcloud([
             "compute", "instances", "describe", config.instance_name,
             f"--zone={config.zone}",
@@ -1571,8 +1530,8 @@ class CloudDeploymentManager:
                 external_ip = access.get("natIP", "")
                 break
 
-        # Save state
         state = DeploymentState(
+            platform="gcp",
             instance_name=config.instance_name,
             project=config.project,
             zone=config.zone,
@@ -1593,7 +1552,647 @@ class CloudDeploymentManager:
         logger.info(f"Internal IP: {internal_ip}")
         logger.info("")
         logger.info("To check serial output:")
-        logger.info(f"  dstack-cloud logs")
+        logger.info("  dstack-cloud logs")
+
+    # ------------------------------------------------------------------
+    # AWS EC2 NitroTPM
+    # ------------------------------------------------------------------
+
+    def _run_aws(self, args: List[str], capture: bool = True,
+                 check: bool = True) -> subprocess.CompletedProcess:
+        """Run an aws CLI command."""
+        cmd = ["aws"] + args
+        logger.debug(f"Running: {' '.join(cmd)}")
+        if capture:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        else:
+            result = subprocess.run(cmd)
+        if check and result.returncode != 0:
+            error_msg = result.stderr if capture else "Command failed"
+            raise RuntimeError(f"aws command failed: {error_msg}")
+        return result
+
+    def _aws_json(self, args: List[str]) -> Any:
+        result = self._run_aws(args + ["--output", "json"], capture=True, check=True)
+        return json.loads(result.stdout) if result.stdout.strip() else {}
+
+    @staticmethod
+    def _aws_cli_error_code(result: subprocess.CompletedProcess) -> str:
+        """Return a safe AWS CLI error code without echoing request metadata."""
+        stderr = result.stderr or ""
+        match = re.search(r"An error occurred \(([^)]+)\)", stderr)
+        if match:
+            return match.group(1)
+        return f"exit status {result.returncode}"
+
+    def _build_shared_raw_disk(self, app: App, work_path: Optional[Path] = None) -> Path:
+        """Populate shared config and build a local FAT32 DSTACKSHR disk.raw."""
+        import secrets
+        import shutil
+
+        if not shutil.which("mcopy"):
+            logger.error("")
+            logger.error("Error: 'mcopy' command not found.")
+            logger.error("")
+            logger.error("Please install mtools:")
+            logger.error("  Ubuntu/Debian: sudo apt-get install mtools")
+            logger.error("  Fedora/RHEL:   sudo dnf install mtools")
+            logger.error("  Arch Linux:     sudo pacman -S mtools")
+            logger.error("")
+            raise FileNotFoundError("mcopy not found. Please install mtools package.")
+
+        if not app.instance_id_seed:
+            app.instance_id_seed = secrets.token_hex(20)
+            logger.info(f"Generated instance_id_seed: {app.instance_id_seed}")
+            self.save_app_config(app)
+        if not app.app_id:
+            app.app_id = secrets.token_hex(20)
+            logger.info(f"Generated app_id: {app.app_id}")
+            self.save_app_config(app)
+
+        shared_dir = self._get_shared_dir()
+        shared_dir.mkdir(parents=True, exist_ok=True)
+        global_config = self._load_global_config()
+
+        env_path = self.work_dir / app.env_file
+        env_names: List[str] = []
+        if env_path.exists():
+            if app.key_provider != "kms":
+                raise ValueError(
+                    f"{app.env_file} found but KMS is not enabled. "
+                    f"Enable KMS with --key-provider kms or remove {app.env_file}"
+                )
+            envs = self._parse_env_file(env_path)
+            if envs:
+                env_names = list(envs.keys())
+                kms_urls = global_config.get("services", {}).get("kms_urls", [])
+                if not kms_urls:
+                    raise ValueError("KMS enabled but no kms_urls configured in global config")
+                pubkey = self._get_app_encrypt_pub_key(app.app_id, kms_urls[0])
+                encrypted_file = shared_dir / ".encrypted-env"
+                with open(encrypted_file, "wb") as f:
+                    f.write(self._encrypt_env(envs, pubkey))
+                logger.info(f"Encrypted {app.env_file} -> {encrypted_file}")
+            else:
+                logger.info(f"{app.env_file} is empty, skipping")
+
+        sys_config_path = shared_dir / ".sys-config.json"
+        with open(sys_config_path, "w") as f:
+            json.dump(self._generate_sys_config(global_config, app), f, indent=2)
+        logger.info(f"Generated {sys_config_path}")
+
+        instance_info_path = shared_dir / ".instance_info"
+        with open(instance_info_path, "w") as f:
+            json.dump({
+                "instance_id_seed": app.instance_id_seed,
+                "app_id": app.app_id,
+            }, f, indent=2)
+        logger.info(f"Generated {instance_info_path}")
+
+        self._emit_app_compose(app, shared_dir, env_names or None)
+
+        if work_path is None:
+            work_path = Path(tempfile.mkdtemp(prefix="dstack-shared-"))
+        raw_file = work_path / "disk.raw"
+        required_files = [shared_dir / name for name in (
+            "app-compose.json", ".sys-config.json", ".instance_info"
+        )]
+        for path in required_files:
+            if not path.exists():
+                raise FileNotFoundError(f"Required file {path.name} not found in {shared_dir}")
+
+        shared_files = required_files + [shared_dir / ".encrypted-env"]
+        user_config = self.work_dir / ".user-config"
+        total = sum(path.stat().st_size for path in [*shared_files, user_config] if path.exists())
+        size = max(8 * 1024 * 1024, total + 4 * 1024 * 1024)
+        size = ((size + 1024 * 1024 - 1) // (1024 * 1024)) * (1024 * 1024)
+        logger.info(f"Shared disk size: {size // (1024 * 1024)}M (files {total} bytes)")
+
+        subprocess.run(["truncate", "-s", str(size), str(raw_file)], check=True)
+        subprocess.run(
+            ["mkfs.fat", "-F", "32", "-n", "DSTACKSHR", str(raw_file)],
+            check=True,
+            capture_output=True,
+        )
+        for src in shared_files:
+            if src.exists():
+                subprocess.run(["mcopy", "-i", str(raw_file), str(src), "::"], check=True)
+        if user_config.exists():
+            subprocess.run(
+                ["mcopy", "-i", str(raw_file), str(user_config), "::.user-config"],
+                check=True,
+            )
+            logger.info("Included .user-config")
+        else:
+            logger.warning(".user-config not found, skipping")
+        return raw_file
+
+    def _build_data_raw_disk(self, work_path: Optional[Path] = None) -> Path:
+        """Build a minimal GPT disk with a PARTLABEL=dstack-data partition."""
+        import shutil
+
+        if not shutil.which("sgdisk"):
+            raise FileNotFoundError(
+                "'sgdisk' command not found. Install the gdisk package."
+            )
+        if work_path is None:
+            work_path = Path(tempfile.mkdtemp(prefix="dstack-data-"))
+        work_path.mkdir(parents=True, exist_ok=True)
+        raw_file = work_path / "disk.raw"
+        subprocess.run(["truncate", "-s", "10M", str(raw_file)], check=True)
+        subprocess.run(
+            [
+                "sgdisk", "-o", "-n", "1:0:0", "-c", "1:dstack-data",
+                str(raw_file),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        return raw_file
+
+    def _aws_ebs_call(
+        self,
+        args: List[str],
+        action: str,
+        max_attempts: int = 5,
+    ) -> subprocess.CompletedProcess:
+        """Call an EBS Direct API with safe errors and transient retries."""
+        retryable = {
+            "InternalServerException",
+            "RequestThrottledException",
+            "ServiceUnavailableException",
+            "ThrottlingException",
+        }
+        result = None
+        code = "unknown"
+        for attempt in range(1, max_attempts + 1):
+            result = self._run_aws(args, capture=True, check=False)
+            if result.returncode == 0:
+                return result
+            code = self._aws_cli_error_code(result)
+            should_retry = code in retryable
+            if not should_retry or attempt == max_attempts:
+                break
+            delay = min(2 ** (attempt - 1), 8)
+            logger.warning(
+                f"AWS EBS {action} returned {code}; retrying in {delay}s "
+                f"({attempt}/{max_attempts})"
+            )
+            time.sleep(delay)
+
+        error_type = PermissionError if code in {
+            "AccessDenied",
+            "AccessDeniedException",
+            "UnauthorizedOperation",
+        } else RuntimeError
+        raise error_type(
+            f"AWS EBS {action} failed (AWS error: {code}). "
+            f"Grant ebs:{action} in {args[args.index('--region') + 1]} and retry."
+        )
+
+    def _aws_put_snapshot_block(
+        self,
+        region: str,
+        snapshot_id: str,
+        block_index: int,
+        block_data: bytes,
+    ) -> None:
+        """Upload one checksummed 512-KiB block to a pending EBS snapshot."""
+        checksum = base64.b64encode(hashlib.sha256(block_data).digest()).decode()
+        block_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                prefix=f"dstack-ebs-{block_index}-",
+                suffix=".block",
+                delete=False,
+            ) as block_file:
+                block_file.write(block_data)
+                block_path = block_file.name
+            self._aws_ebs_call([
+                "ebs", "put-snapshot-block",
+                "--region", region,
+                "--snapshot-id", snapshot_id,
+                "--block-index", str(block_index),
+                "--block-data", block_path,
+                "--data-length", str(AWS_EBS_BLOCK_SIZE),
+                "--checksum", checksum,
+                "--checksum-algorithm", "SHA256",
+            ], "PutSnapshotBlock")
+        finally:
+            if block_path:
+                Path(block_path).unlink(missing_ok=True)
+
+    def _aws_upload_snapshot_blocks(
+        self,
+        region: str,
+        snapshot_id: str,
+        raw_path: Path,
+    ) -> int:
+        """Upload all non-zero RAW blocks with bounded concurrency."""
+        raw_size = raw_path.stat().st_size
+        total_blocks = (raw_size + AWS_EBS_BLOCK_SIZE - 1) // AWS_EBS_BLOCK_SIZE
+        zero_block = bytes(AWS_EBS_BLOCK_SIZE)
+        pending = set()
+        uploaded = 0
+
+        def collect(done: set) -> None:
+            nonlocal uploaded
+            for future in done:
+                future.result()
+                uploaded += 1
+                if uploaded % 128 == 0:
+                    logger.info(
+                        f"uploaded {uploaded} non-zero EBS blocks "
+                        f"({uploaded * AWS_EBS_BLOCK_SIZE // (1024 * 1024)} MiB)"
+                    )
+
+        with raw_path.open("rb") as raw_file, concurrent.futures.ThreadPoolExecutor(
+            max_workers=AWS_EBS_UPLOAD_WORKERS,
+            thread_name_prefix="dstack-ebs",
+        ) as executor:
+            for block_index in range(total_blocks):
+                block_data = raw_file.read(AWS_EBS_BLOCK_SIZE)
+                if len(block_data) < AWS_EBS_BLOCK_SIZE:
+                    block_data += bytes(AWS_EBS_BLOCK_SIZE - len(block_data))
+                if block_data == zero_block:
+                    continue
+                pending.add(executor.submit(
+                    self._aws_put_snapshot_block,
+                    region,
+                    snapshot_id,
+                    block_index,
+                    block_data,
+                ))
+                if len(pending) >= AWS_EBS_UPLOAD_QUEUE_DEPTH:
+                    done, pending = concurrent.futures.wait(
+                        pending,
+                        return_when=concurrent.futures.FIRST_COMPLETED,
+                    )
+                    collect(done)
+            if pending:
+                done, _ = concurrent.futures.wait(pending)
+                collect(done)
+
+        logger.info(
+            f"uploaded {uploaded} non-zero blocks from {raw_size} RAW bytes "
+            f"({total_blocks} logical blocks)"
+        )
+        return uploaded
+
+    def _aws_create_snapshot_from_raw(
+        self,
+        config: AwsConfig,
+        raw_path: Path,
+        description: str,
+        client_token: str,
+    ) -> str:
+        """Write a local RAW disk directly to a new EBS snapshot."""
+        raw_size = raw_path.stat().st_size
+        if raw_size <= 0:
+            raise ValueError(f"RAW disk is empty: {raw_path}")
+        gib = 1024 * 1024 * 1024
+        volume_size = max(1, (raw_size + gib - 1) // gib)
+        logger.info(
+            f"creating {volume_size}-GiB EBS snapshot from {raw_size} RAW bytes..."
+        )
+        start = self._aws_ebs_call([
+            "ebs", "start-snapshot",
+            "--region", config.region,
+            "--volume-size", str(volume_size),
+            "--description", description[:255],
+            "--client-token", client_token[:255],
+            "--timeout", "120",
+            "--output", "json",
+        ], "StartSnapshot")
+        start_json = json.loads(start.stdout) if start.stdout.strip() else {}
+        snapshot_id = start_json.get("SnapshotId", "")
+        block_size = int(start_json.get("BlockSize", 0))
+        if not snapshot_id or block_size != AWS_EBS_BLOCK_SIZE:
+            if snapshot_id:
+                self._run_aws([
+                    "ec2", "delete-snapshot",
+                    "--region", config.region,
+                    "--snapshot-id", snapshot_id,
+                ], capture=True, check=False)
+            raise RuntimeError(
+                "EBS StartSnapshot returned no snapshot id or an unsupported block size"
+            )
+
+        try:
+            changed_blocks = self._aws_upload_snapshot_blocks(
+                config.region,
+                snapshot_id,
+                raw_path,
+            )
+            if changed_blocks == 0:
+                raise ValueError(f"RAW disk contains no non-zero data: {raw_path}")
+            self._aws_ebs_call([
+                "ebs", "complete-snapshot",
+                "--region", config.region,
+                "--snapshot-id", snapshot_id,
+                "--changed-blocks-count", str(changed_blocks),
+            ], "CompleteSnapshot")
+            wait_result = self._run_aws([
+                "ec2", "wait", "snapshot-completed",
+                "--region", config.region,
+                "--snapshot-ids", snapshot_id,
+            ], capture=True, check=False)
+            if wait_result.returncode != 0:
+                code = self._aws_cli_error_code(wait_result)
+                raise RuntimeError(
+                    "EBS snapshot did not reach completed state "
+                    f"(AWS error: {code}); grant ec2:DescribeSnapshots and retry"
+                )
+        except Exception:
+            logger.warning("EBS snapshot creation failed; deleting partial snapshot")
+            self._run_aws([
+                "ec2", "delete-snapshot",
+                "--region", config.region,
+                "--snapshot-id", snapshot_id,
+            ], capture=True, check=False)
+            raise
+
+        self._run_aws([
+            "ec2", "create-tags",
+            "--region", config.region,
+            "--resources", snapshot_id,
+            "--tags",
+            f"Key=Name,Value={description[:255]}",
+            "Key=dstack:managed-by,Value=dstack-cloud",
+        ], capture=True, check=False)
+        logger.info(f"EBS snapshot ready: {snapshot_id}")
+        return snapshot_id
+
+    def _aws_ensure_ami(self, config: AwsConfig, app: App, force: bool = False) -> str:
+        """Return an AMI id, writing local disk.raw to EBS when necessary."""
+        if config.ami_id and not force:
+            logger.info(f"using configured AMI {config.ami_id}")
+            return config.ami_id
+
+        global_config = self._load_global_config()
+        image_dir = self._find_local_image_dir(
+            global_config,
+            [config.boot_image, app.os_image],
+            config.boot_image_tar,
+        )
+        disk_raw = image_dir / "disk.raw"
+        if not disk_raw.exists():
+            raise FileNotFoundError(
+                f"boot disk not found: {disk_raw}. Run: dstack-cloud pull {app.os_image}"
+            )
+        ami_name = config.ami_name or f"dstack-{app.os_image}".replace(".", "-")[:100]
+        # Reuse existing AMI with same name if present and not forcing
+        if not force:
+            existing = self._aws_json([
+                "ec2", "describe-images",
+                "--region", config.region,
+                "--owners", "self",
+                "--filters", f"Name=name,Values={ami_name}",
+                "--query", "Images | sort_by(@, &CreationDate) | reverse(@)",
+            ])
+            if existing:
+                ami_id = existing[0].get("ImageId", "")
+                if ami_id:
+                    logger.info(f"reusing existing AMI {ami_id} ({ami_name})")
+                    return ami_id
+
+        token = f"ami-{re.sub(r'[^A-Za-z0-9-]', '-', ami_name)[:40]}-{int(time.time())}"
+        snapshot_id = self._aws_create_snapshot_from_raw(
+            config, disk_raw, f"dstack-boot-{ami_name}", token
+        )
+        mappings = json.dumps([{
+            "DeviceName": config.root_device_name,
+            "Ebs": {
+                "SnapshotId": snapshot_id,
+                "DeleteOnTermination": True,
+                "VolumeType": config.volume_type,
+            },
+        }])
+        logger.info(f"registering AMI {ami_name} from {snapshot_id}")
+        image_id = self._run_aws([
+            "ec2", "register-image",
+            "--region", config.region,
+            "--name", ami_name,
+            "--description", f"dstack attestable AMI for {app.os_image}",
+            "--architecture", "x86_64",
+            "--root-device-name", config.root_device_name,
+            "--block-device-mappings", mappings,
+            "--virtualization-type", "hvm",
+            "--ena-support",
+            "--boot-mode", "uefi",
+            "--tpm-support", "v2.0",
+            "--output", "text",
+            "--query", "ImageId",
+        ], capture=True, check=True).stdout.strip()
+        if not image_id:
+            raise RuntimeError("register-image returned empty ImageId")
+        self._run_aws([
+            "ec2", "create-tags",
+            "--region", config.region,
+            "--resources", snapshot_id, image_id,
+            "--tags",
+            f"Key=Name,Value={ami_name}",
+            "Key=dstack:managed-by,Value=dstack-cloud",
+        ], capture=True, check=False)
+        self._run_aws([
+            "ec2", "wait", "image-available",
+            "--region", config.region,
+            "--image-ids", image_id,
+        ], capture=True, check=True)
+        logger.info(f"AMI ready: {image_id}")
+        return image_id
+
+    def _deploy_aws(self, app: App, delete_existing: bool = False,
+                    force_boot_image: bool = False) -> None:
+        """Deploy VM to AWS EC2 with NitroTPM + shared/data disks."""
+        config = self.load_aws_config()
+        missing = []
+        if not config.instance_name:
+            missing.append("instance_name")
+        if not config.region:
+            missing.append("region")
+        if missing:
+            raise ValueError(
+                f"missing required AWS configuration: {', '.join(missing)}. "
+                f"Edit app.json aws_config."
+            )
+        logger.info("=== AWS EC2 NitroTPM Deployment ===")
+        logger.info(f"Region: {config.region}")
+        logger.info(f"Instance name: {config.instance_name}")
+        logger.info(f"Instance type: {config.instance_type}")
+
+        # Terminate existing by name tag if requested
+        existing = self._aws_json([
+            "ec2", "describe-instances",
+            "--region", config.region,
+            "--filters",
+            f"Name=tag:Name,Values={config.instance_name}",
+            "Name=instance-state-name,Values=pending,running,stopping,stopped",
+            "--query", "Reservations[].Instances[].InstanceId",
+        ])
+        if existing:
+            if not delete_existing:
+                raise RuntimeError(
+                    f"instance(s) with Name={config.instance_name} already exist: {existing}. "
+                    f"Use --delete to replace."
+                )
+            logger.info(f"terminating existing instances: {existing}")
+            self._run_aws([
+                "ec2", "terminate-instances",
+                "--region", config.region,
+                "--instance-ids", *existing,
+            ], capture=True, check=True)
+            self._run_aws([
+                "ec2", "wait", "instance-terminated",
+                "--region", config.region,
+                "--instance-ids", *existing,
+            ], capture=True, check=True)
+
+        ami_id = self._aws_ensure_ami(config, app, force=force_boot_image)
+
+        # Shared config disk → snapshot
+        logger.info("building shared config disk...")
+        shared_raw = self._build_shared_raw_disk(app)
+        try:
+            shared_token = f"shared-{config.instance_name}-{int(time.time())}"[:64]
+            shared_snapshot = self._aws_create_snapshot_from_raw(
+                config, shared_raw, f"dstack-shared-{config.instance_name}", shared_token
+            )
+        finally:
+            # raw lives in a temp dir; remove parent
+            try:
+                import shutil
+                shutil.rmtree(shared_raw.parent, ignore_errors=True)
+            except Exception:
+                pass
+
+        # Block device mappings: shared + data
+        managed_data_snapshot = ""
+        if config.data_snapshot:
+            data_snapshot = config.data_snapshot
+        else:
+            logger.info("building labeled data disk template...")
+            data_raw = self._build_data_raw_disk()
+            try:
+                data_token = f"data-{config.instance_name}-{int(time.time())}"[:64]
+                data_snapshot = self._aws_create_snapshot_from_raw(
+                    config, data_raw, f"dstack-data-{config.instance_name}", data_token
+                )
+                managed_data_snapshot = data_snapshot
+            finally:
+                try:
+                    import shutil
+                    shutil.rmtree(data_raw.parent, ignore_errors=True)
+                except Exception:
+                    pass
+
+        data_ebs: Dict[str, Any] = {
+            "DeleteOnTermination": True,
+            "VolumeType": config.volume_type,
+            "SnapshotId": data_snapshot,
+            "VolumeSize": int(config.data_size),
+        }
+
+        mappings = [
+            {
+                "DeviceName": config.shared_device_name,
+                "Ebs": {
+                    "SnapshotId": shared_snapshot,
+                    "DeleteOnTermination": True,
+                    "VolumeType": config.volume_type,
+                },
+            },
+            {
+                "DeviceName": config.data_device_name,
+                "Ebs": data_ebs,
+            },
+        ]
+        tags = [
+            {"Key": "Name", "Value": config.instance_name},
+            {"Key": "dstack:managed-by", "Value": "dstack-cloud"},
+            {"Key": "dstack:platform", "Value": "aws"},
+        ]
+        tag_spec = json.dumps([
+            {"ResourceType": "instance", "Tags": tags},
+            {"ResourceType": "volume", "Tags": tags},
+        ])
+        metadata = (
+            f"HttpEndpoint=enabled,HttpTokens=required,"
+            f"HttpPutResponseHopLimit={config.metadata_hop_limit}"
+        )
+        run_args = [
+            "ec2", "run-instances",
+            "--region", config.region,
+            "--image-id", ami_id,
+            "--instance-type", config.instance_type,
+            "--count", "1",
+            "--block-device-mappings", json.dumps(mappings),
+            "--metadata-options", metadata,
+            "--tag-specifications", tag_spec,
+        ]
+        if config.subnet_id:
+            run_args.extend(["--subnet-id", config.subnet_id])
+        if config.security_group_ids:
+            run_args.extend(["--security-group-ids", *config.security_group_ids])
+        if config.iam_instance_profile:
+            if config.iam_instance_profile.startswith("arn:"):
+                run_args.extend([
+                    "--iam-instance-profile", f"Arn={config.iam_instance_profile}"
+                ])
+            else:
+                run_args.extend([
+                    "--iam-instance-profile", f"Name={config.iam_instance_profile}"
+                ])
+
+        logger.info(f"launching instance from {ami_id}...")
+        run_json = self._aws_json(run_args)
+        instance_id = (run_json.get("Instances") or [{}])[0].get("InstanceId", "")
+        if not instance_id:
+            raise RuntimeError(f"run-instances returned no InstanceId: {run_json}")
+        logger.info(f"instance: {instance_id}")
+        self._run_aws([
+            "ec2", "wait", "instance-running",
+            "--region", config.region,
+            "--instance-ids", instance_id,
+        ], capture=True, check=True)
+
+        desc = self._aws_json([
+            "ec2", "describe-instances",
+            "--region", config.region,
+            "--instance-ids", instance_id,
+        ])
+        inst = (desc.get("Reservations") or [{}])[0].get("Instances", [{}])[0]
+        external_ip = inst.get("PublicIpAddress", "") or ""
+        internal_ip = inst.get("PrivateIpAddress", "") or ""
+
+        state = DeploymentState(
+            platform="aws",
+            instance_name=config.instance_name,
+            region=config.region,
+            instance_id=instance_id,
+            ami_id=ami_id,
+            shared_snapshot=shared_snapshot,
+            data_snapshot=managed_data_snapshot,
+            external_ip=external_ip,
+            internal_ip=internal_ip,
+            status=inst.get("State", {}).get("Name", "running").upper(),
+            created_at=datetime.now().isoformat(),
+            boot_image=ami_id,
+        )
+        self.save_state(state)
+
+        logger.info("")
+        logger.info("=== Deployment Complete ===")
+        logger.info(f"Instance ID: {instance_id}")
+        logger.info(f"AMI: {ami_id}")
+        logger.info(f"Shared snapshot: {shared_snapshot}")
+        if managed_data_snapshot:
+            logger.info(f"Data template snapshot: {managed_data_snapshot}")
+        logger.info(f"Public IP: {external_ip or '(none)'}")
+        logger.info(f"Private IP: {internal_ip or '(none)'}")
+        logger.info("")
+        logger.info("Serial console:")
+        logger.info("  dstack-cloud logs")
 
     def _parse_env_file(self, file_path: Path) -> Dict[str, str]:
         """Parse an environment file where each line is formatted as KEY=Value."""
@@ -2047,6 +2646,33 @@ class CloudDeploymentManager:
             "instance_url": instance_url
         }
 
+    def _print_gateway_urls(self) -> None:
+        app = self.load_app_config()
+        if not app.gateway_enabled:
+            return
+        instance_id_seed = None
+        app_id = None
+        instance_info_path = self._get_shared_dir() / ".instance_info"
+        if instance_info_path.exists():
+            try:
+                with open(instance_info_path, 'r') as f:
+                    data = json.load(f)
+                    instance_id_seed = data.get("instance_id_seed")
+                    app_id = data.get("app_id")
+            except Exception as e:
+                logger.debug(f"Failed to read .instance_info: {e}")
+        if not instance_id_seed or not app_id:
+            instance_id_seed = app.instance_id_seed
+            app_id = app.app_id
+        if instance_id_seed and app_id:
+            instance_id = self._derive_instance_id(instance_id_seed, app_id)
+            gateway_urls = self._get_gateway_urls(app, instance_id)
+            if gateway_urls:
+                print("")
+                print("Gateway URLs:")
+                print(f"  App URL:      {gateway_urls.get('app_url', 'N/A')}")
+                print(f"  Instance URL: {gateway_urls.get('instance_url', 'N/A')}")
+
     def status(self) -> None:
         """Check deployment status."""
         state = self.load_state()
@@ -2054,7 +2680,44 @@ class CloudDeploymentManager:
             logger.info("No deployment found. Run 'dstack-cloud deploy' first.")
             return
 
-        # Get current status from GCP
+        platform = (state.platform or "gcp").lower()
+        if platform == "aws":
+            if not state.instance_id:
+                logger.info("No AWS instance_id in state.")
+                return
+            desc = self._aws_json([
+                "ec2", "describe-instances",
+                "--region", state.region,
+                "--instance-ids", state.instance_id,
+            ])
+            reservations = desc.get("Reservations") or []
+            if not reservations or not reservations[0].get("Instances"):
+                logger.info(f"Instance '{state.instance_id}' not found in AWS")
+                state.status = "NOT_FOUND"
+                self.save_state(state)
+                return
+            inst = reservations[0]["Instances"][0]
+            status = (inst.get("State") or {}).get("Name", "unknown").upper()
+            external_ip = inst.get("PublicIpAddress") or ""
+            internal_ip = inst.get("PrivateIpAddress") or ""
+            state.status = status
+            state.external_ip = external_ip
+            state.internal_ip = internal_ip
+            self.save_state(state)
+            print(f"Platform:    aws")
+            print(f"Instance:    {state.instance_name}")
+            print(f"Instance ID: {state.instance_id}")
+            print(f"Region:      {state.region}")
+            print(f"Status:      {status}")
+            print(f"Public IP:   {external_ip or 'N/A'}")
+            print(f"Private IP:  {internal_ip or 'N/A'}")
+            print(f"AMI:         {state.ami_id or state.boot_image}")
+            print(f"Created:     {state.created_at}")
+            print(f"Updated:     {state.updated_at}")
+            self._print_gateway_urls()
+            return
+
+        # GCP
         result = self._run_gcloud([
             "compute", "instances", "describe", state.instance_name,
             f"--zone={state.zone}",
@@ -2070,8 +2733,6 @@ class CloudDeploymentManager:
 
         instance_info = json.loads(result.stdout)
         status = instance_info.get("status", "UNKNOWN")
-
-        # Update IPs
         external_ip = ""
         internal_ip = ""
         for iface in instance_info.get("networkInterfaces", []):
@@ -2085,6 +2746,7 @@ class CloudDeploymentManager:
         state.internal_ip = internal_ip
         self.save_state(state)
 
+        print(f"Platform:    gcp")
         print(f"Instance:    {state.instance_name}")
         print(f"Project:     {state.project}")
         print(f"Zone:        {state.zone}")
@@ -2094,40 +2756,27 @@ class CloudDeploymentManager:
         print(f"Boot Image:  {state.boot_image}")
         print(f"Created:     {state.created_at}")
         print(f"Updated:     {state.updated_at}")
+        self._print_gateway_urls()
 
-        # Display gateway URLs if enabled
-        # Try to load from .instance_info first (actual deployed values)
-        app = self.load_app_config()
-        if not app.gateway_enabled:
-            return
-
-        instance_id_seed = None
-        app_id = None
-
-        # Try to read from shared/.instance_info (actual deployed values)
-        instance_info_path = self._get_shared_dir() / ".instance_info"
-        if instance_info_path.exists():
-            try:
-                with open(instance_info_path, 'r') as f:
-                    instance_info_data = json.load(f)
-                    instance_id_seed = instance_info_data.get("instance_id_seed")
-                    app_id = instance_info_data.get("app_id")
-            except Exception as e:
-                logger.debug(f"Failed to read .instance_info: {e}")
-
-        # Fallback to app.json if .instance_info not found or missing values
-        if not instance_id_seed or not app_id:
-            instance_id_seed = app.instance_id_seed
-            app_id = app.app_id
-
-        if instance_id_seed and app_id:
-            instance_id = self._derive_instance_id(instance_id_seed, app_id)
-            gateway_urls = self._get_gateway_urls(app, instance_id)
-            if gateway_urls:
-                print("")
-                print("Gateway URLs:")
-                print(f"  App URL:      {gateway_urls.get('app_url', 'N/A')}")
-                print(f"  Instance URL: {gateway_urls.get('instance_url', 'N/A')}")
+    def _get_serial_output(self, state: DeploymentState) -> str:
+        platform = (state.platform or "gcp").lower()
+        if platform == "aws":
+            if not state.instance_id:
+                raise ValueError("no AWS instance_id in state")
+            out = self._aws_json([
+                "ec2", "get-console-output",
+                "--region", state.region,
+                "--instance-id", state.instance_id,
+                "--latest",
+            ])
+            return out.get("Output") or ""
+        result = self._run_gcloud([
+            "compute", "instances", "get-serial-port-output",
+            state.instance_name,
+            f"--zone={state.zone}",
+            f"--project={state.project}"
+        ])
+        return result.stdout
 
     def logs(self, follow: bool = False, lines: int = 100) -> None:
         """View serial console logs."""
@@ -2136,48 +2785,25 @@ class CloudDeploymentManager:
             raise ValueError("No deployment found. Run 'dstack-cloud deploy' first.")
 
         if follow:
-            # Tail logs continuously
             logger.info(f"Following serial output for {state.instance_name}...")
             logger.info("Press Ctrl+C to stop")
-
             last_output = ""
             while True:
                 try:
-                    result = self._run_gcloud([
-                        "compute", "instances", "get-serial-port-output",
-                        state.instance_name,
-                        f"--zone={state.zone}",
-                        f"--project={state.project}"
-                    ], check=False)
-
-                    if result.returncode == 0:
-                        output = result.stdout
-                        if output != last_output:
-                            # Print only new content
-                            if last_output:
-                                new_content = output[len(last_output):]
-                                if new_content:
-                                    print(new_content, end="", flush=True)
-                            else:
-                                # First time, print last N lines
-                                lines_list = output.split('\n')
-                                print('\n'.join(lines_list[-lines:]), flush=True)
-                            last_output = output
-
+                    output = self._get_serial_output(state)
+                    if output != last_output:
+                        if last_output and output.startswith(last_output):
+                            print(output[len(last_output):], end="", flush=True)
+                        else:
+                            lines_list = output.split('\n')
+                            print('\n'.join(lines_list[-lines:]), flush=True)
+                        last_output = output
                     time.sleep(2)
                 except KeyboardInterrupt:
                     print("\nStopped following logs.")
                     break
         else:
-            # Get logs once
-            result = self._run_gcloud([
-                "compute", "instances", "get-serial-port-output",
-                state.instance_name,
-                f"--zone={state.zone}",
-                f"--project={state.project}"
-            ])
-
-            output = result.stdout
+            output = self._get_serial_output(state)
             lines_list = output.split('\n')
             print('\n'.join(lines_list[-lines:]))
 
@@ -2187,7 +2813,21 @@ class CloudDeploymentManager:
         if not state or not state.instance_name:
             raise ValueError("No deployment found. Run 'dstack-cloud deploy' first.")
 
-        # Check if instance exists
+        platform = (state.platform or "gcp").lower()
+        if platform == "aws":
+            if not state.instance_id:
+                raise ValueError("no AWS instance_id in state")
+            logger.info(f"Stopping instance {state.instance_id}...")
+            self._run_aws([
+                "ec2", "stop-instances",
+                "--region", state.region,
+                "--instance-ids", state.instance_id,
+            ], capture=True, check=True)
+            state.status = "STOPPED"
+            self.save_state(state)
+            logger.info("Instance stopped.")
+            return
+
         result = self._run_gcloud([
             "compute", "instances", "describe", state.instance_name,
             f"--zone={state.zone}",
@@ -2205,7 +2845,6 @@ class CloudDeploymentManager:
             f"--zone={state.zone}",
             f"--project={state.project}"
         ])
-
         state.status = "STOPPED"
         self.save_state(state)
         logger.info("Instance stopped.")
@@ -2216,7 +2855,20 @@ class CloudDeploymentManager:
         if not state or not state.instance_name:
             raise ValueError("No deployment found. Run 'dstack-cloud deploy' first.")
 
-        # Check if instance exists
+        platform = (state.platform or "gcp").lower()
+        if platform == "aws":
+            if not state.instance_id:
+                raise ValueError("no AWS instance_id in state")
+            logger.info(f"Starting instance {state.instance_id}...")
+            self._run_aws([
+                "ec2", "start-instances",
+                "--region", state.region,
+                "--instance-ids", state.instance_id,
+            ], capture=True, check=True)
+            self.status()
+            logger.info("Instance started.")
+            return
+
         result = self._run_gcloud([
             "compute", "instances", "describe", state.instance_name,
             f"--zone={state.zone}",
@@ -2236,8 +2888,6 @@ class CloudDeploymentManager:
             f"--zone={state.zone}",
             f"--project={state.project}"
         ])
-
-        # Update state with new IP
         self.status()
         logger.info("Instance started.")
 
@@ -2248,7 +2898,35 @@ class CloudDeploymentManager:
             logger.info("No deployment found.")
             return
 
-        # Delete instance
+        platform = (state.platform or "gcp").lower()
+        if platform == "aws":
+            if state.instance_id:
+                logger.info(f"Terminating instance {state.instance_id}...")
+                self._run_aws([
+                    "ec2", "terminate-instances",
+                    "--region", state.region,
+                    "--instance-ids", state.instance_id,
+                ], capture=True, check=False)
+            if not keep_images and state.shared_snapshot:
+                logger.info(f"Deleting shared snapshot {state.shared_snapshot}...")
+                self._run_aws([
+                    "ec2", "delete-snapshot",
+                    "--region", state.region,
+                    "--snapshot-id", state.shared_snapshot,
+                ], capture=True, check=False)
+            if not keep_images and state.data_snapshot:
+                logger.info(f"Deleting data template snapshot {state.data_snapshot}...")
+                self._run_aws([
+                    "ec2", "delete-snapshot",
+                    "--region", state.region,
+                    "--snapshot-id", state.data_snapshot,
+                ], capture=True, check=False)
+            state_path = self.work_dir / STATE_FILE
+            if state_path.exists():
+                state_path.unlink()
+            logger.info("AWS deployment removed.")
+            return
+
         logger.info(f"Deleting instance {state.instance_name}...")
         self._run_gcloud([
             "compute", "instances", "delete", state.instance_name,
@@ -2258,7 +2936,6 @@ class CloudDeploymentManager:
         ], check=False)
 
         if not keep_images and state.shared_image:
-            # Delete shared disk image
             logger.info(f"Deleting shared disk image {state.shared_image}...")
             self._run_gcloud([
                 "compute", "images", "delete", state.shared_image,
@@ -2727,11 +3404,15 @@ Examples:
     new_parser.set_defaults(secure_time=None)
     new_parser.add_argument("--no-instance-id", action="store_true", help="Disable instance ID generation")
 
-    # GCP configuration options
+    # Platform / cloud configuration options
+    new_parser.add_argument("--platform", type=str, choices=["gcp", "aws"],
+                            help="Target cloud platform (default: gcp)")
     new_parser.add_argument("--project", "-p", type=str, help="GCP project ID")
     new_parser.add_argument("--zone", "-z", type=str, help="GCP zone (e.g., us-central1-a)")
-    new_parser.add_argument("--instance-name", type=str, help="GCP instance name")
-    new_parser.add_argument("--machine-type", "-m", type=str, help="Machine type (e.g., c3-standard-4)")
+    new_parser.add_argument("--region", type=str, help="AWS region (e.g., us-east-1)")
+    new_parser.add_argument("--instance-name", type=str, help="Instance name")
+    new_parser.add_argument("--machine-type", "-m", type=str,
+                            help="Machine type (GCP) or instance type (AWS)")
     new_parser.add_argument("--data-size", type=int, help="Data disk size in GB")
 
     # config-edit command
@@ -2887,8 +3568,10 @@ Examples:
                 storage_fs=args.storage_fs,
                 secure_time=args.secure_time,
                 no_instance_id=args.no_instance_id,
+                platform=args.platform,
                 project=args.project,
                 zone=args.zone,
+                region=args.region,
                 instance_name=args.instance_name,
                 machine_type=args.machine_type,
                 data_size=args.data_size

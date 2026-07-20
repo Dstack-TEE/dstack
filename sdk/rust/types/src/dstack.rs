@@ -127,6 +127,15 @@ pub struct AttestResponse {
     pub attestation: String,
 }
 
+/// Response containing the complete NVIDIA GPU attestation output.
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+pub struct GpuInfoResponse {
+    /// Complete JSON output produced by nvattest during guest boot.
+    pub attestation: String,
+}
+
 impl AttestResponse {
     pub fn decode_attestation(&self) -> Result<Vec<u8>, FromHexError> {
         hex::decode(&self.attestation)

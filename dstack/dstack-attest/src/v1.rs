@@ -78,6 +78,8 @@ pub enum PlatformEvidence {
     },
     #[serde(rename = "nitro-enclave")]
     NitroEnclave { nsm_quote: Vec<u8> },
+    #[serde(rename = "aws-nitro-tpm")]
+    AwsNitroTpm { attestation_doc: Vec<u8> },
     #[serde(rename = "sev-snp")]
     SevSnp {
         report: Vec<u8>,
@@ -375,6 +377,7 @@ mod tests {
         MrConfigV3::new(
             vec![0x11; 20],
             vec![0x22; 32],
+            None,
             dstack_types::KeyProviderKind::None,
             Vec::new(),
             vec![0x33; 20],

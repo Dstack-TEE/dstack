@@ -14,10 +14,11 @@ use std::path::Path;
 const USAGE: &str = "\
 usage:
   dstack-mr measure-os <image_dir>
-  dstack-mr inspect-measurement [tdx|snp|gcp] <measurement.cbor>
+  dstack-mr inspect-measurement [tdx|snp|gcp|aws] <measurement.cbor>
   dstack-mr tdx-measurement-cbor <image_dir>
   dstack-mr snp-measurement-cbor <image_dir>
   dstack-mr gcp-measurement-cbor <uki_auth_hash_file>
+  dstack-mr aws-measurement-cbor <pcr4_hex> <pcr7_hex> <pcr12_hex>
   dstack-mr tdx-measurement-hash <image_dir>
   dstack-mr snp-measurement-hash <image_dir>
 
@@ -80,6 +81,17 @@ fn main() -> Result<()> {
                 .context("failed to write GCP measurement CBOR")?;
             Ok(())
         }
+        Some("aws-measurement-cbor") => {
+            let pcr4 = args.next().context(USAGE)?;
+            let pcr7 = args.next().context(USAGE)?;
+            let pcr12 = args.next().context(USAGE)?;
+            let cbor = aws_measurement_cbor(&pcr4, &pcr7, &pcr12)
+                .context("failed to build AWS measurement CBOR")?;
+            std::io::stdout()
+                .write_all(&cbor)
+                .context("failed to write AWS measurement CBOR")?;
+            Ok(())
+        }
         Some("tdx-measurement-cbor") => {
             let image_dir = args.next().context(USAGE)?;
             let cbor =
@@ -122,8 +134,38 @@ fn inspect_measurement(kind: &str, path: &Path) -> Result<Value> {
             .map_err(anyhow::Error::msg),
         "gcp" => dstack_types::GcpOsImageMeasurement::cbor_json_value_from_slice(&cbor)
             .map_err(anyhow::Error::msg),
-        other => bail!("unknown measurement kind {other:?}; expected tdx, snp, or gcp"),
+        "aws" => {
+            let measurement = dstack_types::AwsOsImageMeasurement::from_cbor_slice(&cbor)
+                .map_err(anyhow::Error::msg)?;
+            serde_json::to_value(measurement).context("failed to convert AWS measurement to JSON")
+        }
+        other => bail!("unknown measurement kind {other:?}; expected tdx, snp, gcp, or aws"),
     }
+}
+
+fn decode_sha384_pcr_hex(label: &str, hex_value: &str) -> Result<Vec<u8>> {
+    let bytes =
+        hex::decode(hex_value.trim()).with_context(|| format!("{label} is not valid hex"))?;
+    if bytes.len() != dstack_types::AwsOsImageMeasurement::PCR_SHA384_LEN {
+        bail!(
+            "{label} must be {} bytes (SHA384), got {}",
+            dstack_types::AwsOsImageMeasurement::PCR_SHA384_LEN,
+            bytes.len()
+        );
+    }
+    Ok(bytes)
+}
+
+/// Encode `measurement.aws.cbor` as a single `boot_pcr_digest =
+/// sha256(PCR4||PCR7||PCR12)` (same composition as legacy image hash).
+fn aws_measurement_cbor(pcr4_hex: &str, pcr7_hex: &str, pcr12_hex: &str) -> Result<Vec<u8>> {
+    let measurement = dstack_types::AwsOsImageMeasurement::from_boot_pcrs(
+        &decode_sha384_pcr_hex("pcr4", pcr4_hex)?,
+        &decode_sha384_pcr_hex("pcr7", pcr7_hex)?,
+        &decode_sha384_pcr_hex("pcr12", pcr12_hex)?,
+    )
+    .map_err(anyhow::Error::msg)?;
+    Ok(measurement.to_cbor_vec())
 }
 
 fn read_hex_file(path: &str) -> Result<String> {
@@ -142,7 +184,11 @@ fn infer_measurement_kind(path: &str) -> Result<String> {
         Ok("snp".to_string())
     } else if filename.contains(".gcp.") || filename.contains("gcp") {
         Ok("gcp".to_string())
+    } else if filename.contains(".aws.") || filename.contains("aws") {
+        Ok("aws".to_string())
     } else {
-        bail!("cannot infer measurement kind from {filename:?}; pass tdx, snp, or gcp explicitly")
+        bail!(
+            "cannot infer measurement kind from {filename:?}; pass tdx, snp, gcp, or aws explicitly"
+        )
     }
 }

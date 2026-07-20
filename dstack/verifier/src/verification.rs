@@ -24,8 +24,8 @@ use dstack_mr::{
 use dstack_types::VmConfig;
 use hex_literal::hex;
 use ra_tls::attestation::{
-    Attestation, AttestationQuote, DstackVerifiedReport, NitroPcrs, PlatformEvidence, TpmQuote,
-    VerifiedAttestation, VersionedAttestation,
+    AppInfo, Attestation, AttestationQuote, DstackVerifiedReport, NitroPcrs, PlatformEvidence,
+    TpmQuote, VerifiedAttestation, VersionedAttestation,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -33,9 +33,37 @@ use tokio::{io::AsyncWriteExt, process::Command};
 use tracing::{debug, info, warn};
 
 use crate::types::{
-    AcpiTables, RtmrEventEntry, RtmrEventStatus, RtmrMismatch, VerificationDetails,
+    AcpiTables, PolicyBootInfo, RtmrEventEntry, RtmrEventStatus, RtmrMismatch, VerificationDetails,
     VerificationRequest, VerificationResponse,
 };
+
+/// Return the canonical TCB status and advisory list used by auth policy.
+pub fn policy_tcb_fields(attestation: &VerifiedAttestation) -> (String, Vec<String>) {
+    match &attestation.report {
+        DstackVerifiedReport::DstackAmdSevSnp(report) => (
+            report.tcb_info.tcb_status().to_string(),
+            report.advisory_ids.clone(),
+        ),
+        // AWS NitroTPM has no TDX/SNP-style TCB surface; a verified attestation
+        // is normalized to "UpToDate" so the verifier's policy boot info matches
+        // the KMS bootAuth payload and passes the shared "UpToDate" auth gate.
+        // Other no-TCB platforms (e.g. nitro enclave) stay empty and fail-closed.
+        DstackVerifiedReport::DstackAwsNitroTpm(_) => ("UpToDate".to_string(), Vec::new()),
+        _ => attestation
+            .report
+            .tdx_report()
+            .map(|report| (report.status.clone(), report.advisory_ids.clone()))
+            .unwrap_or_default(),
+    }
+}
+
+fn policy_boot_info_from_verified_app_info(
+    attestation: &VerifiedAttestation,
+    app_info: &AppInfo,
+) -> PolicyBootInfo {
+    let (tcb_status, advisory_ids) = policy_tcb_fields(attestation);
+    PolicyBootInfo::from_app_info(attestation.quote.mode(), app_info, tcb_status, advisory_ids)
+}
 
 /// best-effort: None for empty/malformed blobs.
 fn decode_key_provider_info(bytes: &[u8]) -> Option<dstack_types::KeyProviderInfo> {
@@ -312,6 +340,7 @@ impl CvmVerifier {
             })
             .hugepages(vm_config.hugepages)
             .num_gpus(vm_config.num_gpus)
+            .num_nics(vm_config.num_nics)
             .num_nvswitches(vm_config.num_nvswitches)
             .host_share_mode(vm_config.host_share_mode.clone())
             .ovmf_variant(ovmf_variant)
@@ -577,12 +606,12 @@ impl CvmVerifier {
             Ok(att) => {
                 details.quote_verified = true;
                 details.attestation_mode = Some(att.quote.mode());
-                details.tcb_status = att.report.tdx_report().map(|r| r.status.clone());
-                details.advisory_ids = att
-                    .report
-                    .tdx_report()
-                    .map(|r| r.advisory_ids.clone())
-                    .unwrap_or_default();
+                // keep the top-level tcb_status consistent with the
+                // boot_info.tcbStatus fed to the auth policy (notably AWS
+                // NitroTPM, which is normalized to "UpToDate" there).
+                let (tcb_status, advisory_ids) = policy_tcb_fields(&att);
+                details.tcb_status = (!tcb_status.is_empty()).then_some(tcb_status);
+                details.advisory_ids = advisory_ids;
                 details.report_data = Some(hex::encode(att.report_data));
                 att
             }
@@ -617,6 +646,10 @@ impl CvmVerifier {
         match verified_attestation.decode_app_info_ex(false, &request_vm_config) {
             Ok(mut info) => {
                 info.os_image_hash = vm_config.os_image_hash;
+                details.boot_info = Some(policy_boot_info_from_verified_app_info(
+                    &verified_attestation,
+                    &info,
+                ));
                 details.event_log_verified = true;
                 details.key_provider = decode_key_provider_info(&info.key_provider_info);
                 details.app_info = Some(info);
@@ -683,6 +716,12 @@ impl CvmVerifier {
                     bail!("internal error: nitro quote without a verified nitro report");
                 };
                 self.verify_os_image_hash_for_nitro_enclave(&vm_config, &report.pcrs)?;
+            }
+            AttestationQuote::DstackAwsNitroTpm(_) => {
+                let DstackVerifiedReport::DstackAwsNitroTpm(report) = &attestation.report else {
+                    bail!("internal error: NitroTPM quote without a verified NitroTPM report");
+                };
+                self.verify_os_image_hash_for_aws_nitro_tpm(&vm_config, &report.pcrs)?;
             }
             AttestationQuote::DstackAmdSevSnp(_) => {
                 self.verify_os_image_hash_for_dstack_sev(
@@ -992,6 +1031,39 @@ impl CvmVerifier {
         Ok(())
     }
 
+    /// Verify AWS EC2 NitroTPM OS image identity (unified with GCP/TDX lite):
+    /// `vm_config.aws_measurement` with `os_image_hash = sha256(sha256sum.txt)`
+    /// and `boot_pcr_digest = sha256(PCR4||PCR7||PCR12)` bound to the
+    /// attestation document PCRs. `aws_measurement` is required.
+    fn verify_os_image_hash_for_aws_nitro_tpm(
+        &self,
+        vm_config: &VmConfig,
+        pcrs: &std::collections::BTreeMap<u16, Vec<u8>>,
+    ) -> Result<()> {
+        let document = vm_config
+            .aws_measurement
+            .as_ref()
+            .context("vm_config.aws_measurement is required on AWS NitroTPM")?;
+        document
+            .verify(&vm_config.os_image_hash)
+            .map_err(anyhow::Error::msg)
+            .context("aws measurement material does not match os_image_hash")?;
+        let measurement = document
+            .decode_measurement()
+            .map_err(anyhow::Error::msg)
+            .context("failed to decode vm_config.aws_measurement")?;
+        let quoted_digest = dstack_attest::attestation::aws_nitro_tpm_boot_pcr_digest(pcrs)
+            .context("failed to compute NitroTPM boot_pcr_digest from attestation")?;
+        if measurement.boot_pcr_digest.as_slice() != quoted_digest.as_slice() {
+            bail!(
+                "AWS boot_pcr_digest mismatch: expected={}, quoted={}",
+                hex::encode(&measurement.boot_pcr_digest),
+                hex::encode(&quoted_digest)
+            );
+        }
+        Ok(())
+    }
+
     fn verify_os_image_hash_for_gcp_tdx(
         &self,
         vm_config: &VmConfig,
@@ -1205,7 +1277,73 @@ impl Mrs {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
+
+    fn aws_boot_pcrs(pcr4: u8) -> BTreeMap<u16, Vec<u8>> {
+        BTreeMap::from([
+            (4, vec![pcr4; 48]),
+            (7, vec![0x77; 48]),
+            (12, vec![0x12; 48]),
+        ])
+    }
+
+    fn aws_vm_config(pcrs: &BTreeMap<u16, Vec<u8>>) -> VmConfig {
+        let measurement =
+            dstack_types::AwsOsImageMeasurement::from_boot_pcrs(&pcrs[&4], &pcrs[&7], &pcrs[&12])
+                .expect("valid PCR lengths");
+        let measurement = measurement.to_cbor_vec();
+        let checksum_file = format!(
+            "{}  measurement.aws.cbor\n",
+            hex::encode(Sha256::digest(&measurement))
+        )
+        .into_bytes();
+        let os_image_hash = dstack_types::image_hash_from_sha256sum(&checksum_file);
+        serde_json::from_value(serde_json::json!({
+            "os_image_hash": hex::encode(os_image_hash),
+            "aws_measurement": dstack_types::AwsOsImageMeasurementDocument::new(
+                checksum_file,
+                measurement,
+            ),
+        }))
+        .expect("valid AWS vm_config")
+    }
+
+    fn test_verifier() -> CvmVerifier {
+        CvmVerifier::new(String::new(), String::new(), Duration::from_secs(1), None)
+    }
+
+    #[test]
+    fn aws_os_image_check_requires_measurement() {
+        let pcrs = aws_boot_pcrs(0x04);
+        let mut vm_config = aws_vm_config(&pcrs);
+        vm_config.aws_measurement = None;
+
+        let err = test_verifier()
+            .verify_os_image_hash_for_aws_nitro_tpm(&vm_config, &pcrs)
+            .expect_err("missing aws_measurement must fail");
+        assert!(format!("{err:#}").contains("aws_measurement is required"));
+    }
+
+    #[test]
+    fn aws_os_image_check_accepts_bound_measurement() {
+        let pcrs = aws_boot_pcrs(0x04);
+        test_verifier()
+            .verify_os_image_hash_for_aws_nitro_tpm(&aws_vm_config(&pcrs), &pcrs)
+            .expect("bound aws_measurement must verify");
+    }
+
+    #[test]
+    fn aws_os_image_check_rejects_boot_pcr_digest_mismatch() {
+        let quoted_pcrs = aws_boot_pcrs(0x04);
+        let vm_config = aws_vm_config(&aws_boot_pcrs(0x05));
+
+        let err = test_verifier()
+            .verify_os_image_hash_for_aws_nitro_tpm(&vm_config, &quoted_pcrs)
+            .expect_err("measurement for different PCRs must fail");
+        assert!(format!("{err:#}").contains("boot_pcr_digest mismatch"));
+    }
 
     fn acpi_event(name: &str, digest_byte: u8) -> TdxEvent {
         TdxEvent {

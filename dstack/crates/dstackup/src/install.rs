@@ -118,7 +118,7 @@ pub(crate) async fn cmd_install(mut o: InstallOpts) -> Result<()> {
     }
 
     // 8. resolve the key provider - run our own unless told to use an existing
-    //    one (TDX only; SNP has no SGX gramine provider).
+    //    one (TDX only; SNP has no SGX local provider).
     let (kp_addr, kp_port, kp_own_project) =
         resolve_key_provider(&o, platform, !o.no_start, &layout)?;
 
@@ -746,9 +746,7 @@ fn install_share_assets(source: &Path, layout: &InstallLayout) -> Result<()> {
     } else {
         core.join("examples")
     };
-    fs::create_dir_all(&layout.share_dir)
-        .with_context(|| format!("creating {}", layout.share_dir.display()))?;
-    copy_dir_exact(&core.join("key-provider-build"), &layout.key_provider_dir())?;
+    copy_dir_exact(&core, &layout.share_dir)?;
     copy_dir_exact(&examples, &layout.share_dir.join("examples"))?;
     println!(
         "  [ok] installed assets into {}",
@@ -773,17 +771,31 @@ fn copy_dir_all(src: &Path, dest: &Path) -> Result<()> {
         let entry = entry.with_context(|| format!("reading {}", src.display()))?;
         let src_path = entry.path();
         let dest_path = dest.join(entry.file_name());
-        let metadata = entry
-            .metadata()
-            .with_context(|| format!("reading metadata for {}", src_path.display()))?;
-        if metadata.is_dir() {
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("reading file type for {}", src_path.display()))?;
+        if file_type.is_dir() {
+            if matches!(
+                entry.file_name().to_str(),
+                Some(".git" | "__pycache__" | "node_modules" | "target" | "tests")
+            ) {
+                continue;
+            }
             copy_dir_all(&src_path, &dest_path)?;
-        } else if metadata.is_file() {
+        } else if file_type.is_file() {
             fs::copy(&src_path, &dest_path).with_context(|| {
                 format!("copying {} to {}", src_path.display(), dest_path.display())
             })?;
+            let metadata = entry
+                .metadata()
+                .with_context(|| format!("reading metadata for {}", src_path.display()))?;
             fs::set_permissions(&dest_path, metadata.permissions())
                 .with_context(|| format!("setting permissions on {}", dest_path.display()))?;
+        } else if file_type.is_symlink() {
+            bail!(
+                "source assets may not contain symlinks: {}",
+                src_path.display()
+            );
         }
     }
     Ok(())
@@ -801,14 +813,14 @@ fn resolve_key_provider(
         println!("  [ok] using existing key provider at {addr}:{port}");
         return Ok((addr, port, None));
     }
-    // AMD SEV-SNP has no SGX gramine key provider; the rendered [key_provider]
+    // AMD SEV-SNP has no SGX local key provider; the rendered [key_provider]
     // block is unused (the KMS-in-CVM runs with local_key_provider_enabled =
     // false), so don't require or start one.
     if platform == Platform::AmdSevSnp {
         println!("  [ok] no local key provider (sev-snp)");
         return Ok(("127.0.0.1".to_string(), o.key_provider_port, None));
     }
-    // TDX: run our own gramine provider from the installed static assets unless
+    // TDX: run our in-tree provider under Gramine from the installed assets unless
     // the operator points at an external provider or build directory.
     let default_key_provider_src = layout.key_provider_dir();
     let src = match o.key_provider_src.as_deref() {
@@ -840,6 +852,7 @@ fn resolve_key_provider(
         return Ok(("127.0.0.1".to_string(), o.key_provider_port, None));
     }
     let status = tool("docker")
+        .env("KEY_PROVIDER_PORT", o.key_provider_port.to_string())
         .args(["compose", "-p", &project, "-f"])
         .arg(src.join("docker-compose.yaml"))
         .args(["up", "-d"])
@@ -1230,6 +1243,30 @@ mod tests {
             checked_source_checkout(temp.path().to_path_buf()).unwrap(),
             temp.path().canonicalize().unwrap()
         );
+    }
+
+    #[test]
+    fn source_asset_copy_skips_unneeded_workspace_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let destination = temp.path().join("destination");
+        fs::create_dir_all(source.join("crate/src")).unwrap();
+        fs::create_dir_all(source.join("crate/target/debug")).unwrap();
+        fs::create_dir_all(source.join("crate/tests")).unwrap();
+        fs::create_dir_all(source.join("ui/node_modules/package")).unwrap();
+        fs::write(source.join("Cargo.toml"), "[workspace]\n").unwrap();
+        fs::write(source.join("crate/src/lib.rs"), "").unwrap();
+        fs::write(source.join("crate/target/debug/artifact"), "large").unwrap();
+        fs::write(source.join("crate/tests/integration.rs"), "large").unwrap();
+        fs::write(source.join("ui/node_modules/package/index.js"), "large").unwrap();
+
+        copy_dir_all(&source, &destination).unwrap();
+
+        assert!(destination.join("Cargo.toml").is_file());
+        assert!(destination.join("crate/src/lib.rs").is_file());
+        assert!(!destination.join("crate/target").exists());
+        assert!(!destination.join("crate/tests").exists());
+        assert!(!destination.join("ui/node_modules").exists());
     }
 
     #[test]

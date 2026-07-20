@@ -57,11 +57,6 @@ async fn beta(app: &State<App>) -> (ContentType, String) {
     index(app).await
 }
 
-#[get("/v0")]
-async fn v0(app: &State<App>) -> (ContentType, String) {
-    render_console(file_or_include_str!("console_v0.html"), app)
-}
-
 #[get("/res/<path>")]
 async fn res(path: &str) -> Result<(ContentType, String), Custom<String>> {
     match path {
@@ -183,5 +178,5 @@ fn vm_logs(
 }
 
 pub fn routes() -> Vec<Route> {
-    routes![index, v1, beta, v0, res, vm_logs]
+    routes![index, v1, beta, res, vm_logs]
 }

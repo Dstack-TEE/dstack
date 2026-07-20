@@ -7,7 +7,9 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use hickory_resolver::{lookup::TxtLookup, TokioAsyncResolver};
+use hickory_resolver::lookup::Lookup;
+use hickory_resolver::proto::rr::RData;
+use hickory_resolver::TokioResolver;
 use proxy_protocol::ProxyHeader;
 use tokio::{io::AsyncWriteExt, net::TcpStream, task::JoinSet, time::timeout};
 use tracing::{debug, info, warn};
@@ -53,7 +55,7 @@ impl AppAddress {
 pub(crate) struct AppAddressResolver {
     prefix: String,
     compat: bool,
-    resolver: TokioAsyncResolver,
+    resolver: TokioResolver,
 }
 
 impl AppAddressResolver {
@@ -70,36 +72,39 @@ impl AppAddressResolver {
     }
 }
 
-fn app_address_tokio_resolver_from_system_conf() -> Result<TokioAsyncResolver> {
-    let (config, mut options) = hickory_resolver::system_conf::read_system_conf()
-        .context("failed to read system dns config")?;
+fn app_address_tokio_resolver_from_system_conf() -> Result<TokioResolver> {
+    let mut builder = TokioResolver::builder_tokio().context("failed to read system dns config")?;
 
     // App-address records may appear shortly after a CVM/app is registered.
     // Reusing one resolver enables positive TXT caching, but we do not want a
     // transient NXDOMAIN/NODATA response to hide a newly-added app for too
     // long. Keep positive caching TTL-aware and cap negative caching.
-    options.cache_size = APP_ADDRESS_DNS_CACHE_SIZE;
+    let options = builder.options_mut();
+    options.cache_size = APP_ADDRESS_DNS_CACHE_SIZE as u64;
     options.negative_min_ttl = Some(Duration::ZERO);
     options.negative_max_ttl = Some(APP_ADDRESS_NEGATIVE_CACHE_TTL);
 
-    Ok(TokioAsyncResolver::tokio(config, options))
+    builder.build().context("failed to build dns resolver")
 }
 
-fn parse_lookup(lookup: &TxtLookup, sni: &str, txt_domain: &str) -> Result<Option<AppAddress>> {
-    let Some(txt_record) = lookup.iter().next() else {
-        return Ok(None);
-    };
-    let Some(data) = txt_record.txt_data().first() else {
-        return Ok(None);
-    };
-    AppAddress::parse(data)
-        .with_context(|| format!("failed to parse app address for {sni} via {txt_domain}"))
-        .map(Some)
+fn parse_lookup(lookup: &Lookup, sni: &str, txt_domain: &str) -> Result<Option<AppAddress>> {
+    for answer in lookup.answers() {
+        let RData::TXT(txt) = &answer.data else {
+            continue;
+        };
+        let Some(data) = txt.txt_data.first() else {
+            continue;
+        };
+        return AppAddress::parse(data)
+            .with_context(|| format!("failed to parse app address for {sni} via {txt_domain}"))
+            .map(Some);
+    }
+    Ok(None)
 }
 
 /// Resolve app address by SNI. `resolver` is shared so its DNS cache is reused.
 async fn resolve_app_address(
-    resolver: &TokioAsyncResolver,
+    resolver: &TokioResolver,
     prefix: &str,
     sni: &str,
     compat: bool,

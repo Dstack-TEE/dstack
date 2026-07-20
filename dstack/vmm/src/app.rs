@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::config::{Config, Networking, ProcessAnnotation, Protocol};
-use dstack_port_forward::{ForwardRule, ForwardService, Protocol as FwdProtocol};
 
 use anyhow::{bail, Context, Result};
 use bon::Builder;
@@ -32,12 +31,45 @@ use supervisor_client::SupervisorClient;
 use tracing::{debug, error, info, warn};
 
 pub use image::{Image, ImageInfo};
-pub use qemu::{VmConfig, VmWorkDir};
+pub(crate) use network::{
+    resolve_networking, resolved_networks, validate_resolved_network, validate_resolved_networks,
+};
+pub use qemu::VmConfig;
+pub use workdir::VmWorkDir;
 
+mod host_share;
 mod id_pool;
 mod image;
+mod mr_config;
+mod network;
 mod qemu;
 pub(crate) mod registry;
+mod vm_info;
+mod workdir;
+
+fn signal_pidfd(pid: u32, signal: libc::c_int) -> std::io::Result<()> {
+    // SAFETY: pidfd syscalls receive scalar arguments and a null siginfo pointer.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            fd,
+            signal,
+            std::ptr::null::<libc::siginfo_t>(),
+            0,
+        )
+    };
+    // SAFETY: fd was returned by pidfd_open and is owned by this function.
+    unsafe { libc::close(fd as libc::c_int) };
+    if result < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct PortMapping {
@@ -70,8 +102,24 @@ pub struct Manifest {
     pub gateway_urls: Vec<String>,
     #[serde(default)]
     pub no_tee: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub networking: Option<Networking>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub networks: Vec<Networking>,
+}
+
+impl Manifest {
+    pub fn from_json(value: serde_json::Value) -> serde_json::Result<Self> {
+        let mut map = value;
+        if let Some(obj) = map.as_object_mut() {
+            if !obj.contains_key("networks")
+                || obj["networks"].as_array().is_some_and(|a| a.is_empty())
+            {
+                if let Some(legacy) = obj.remove("networking") {
+                    obj.insert("networks".into(), serde_json::Value::Array(vec![legacy]));
+                }
+            }
+        }
+        serde_json::from_value(map)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -107,6 +155,10 @@ pub struct GpuConfig {
 }
 
 impl GpuConfig {
+    pub fn has_gpus(&self) -> bool {
+        !self.gpus.is_empty()
+    }
+
     pub fn is_empty(&self) -> bool {
         if self.attach_mode.is_all() {
             return false;
@@ -221,7 +273,6 @@ pub struct App {
     pub config: Arc<Config>,
     pub supervisor: SupervisorClient,
     state: Arc<Mutex<AppState>>,
-    forward_service: Arc<tokio::sync::Mutex<ForwardService>>,
     /// Pull status for registry images: tag → status.
     pub(crate) pull_status: Arc<Mutex<std::collections::HashMap<String, PullStatus>>>,
 }
@@ -248,10 +299,8 @@ impl App {
             state: Arc::new(Mutex::new(AppState {
                 cid_pool,
                 vms: HashMap::new(),
-                active_forwards: HashMap::new(),
             })),
             config: Arc::new(config),
-            forward_service: Arc::new(tokio::sync::Mutex::new(ForwardService::new())),
             pull_status: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
@@ -276,6 +325,13 @@ impl App {
         let image_path = self.config.image.path.join(&manifest.image);
         let image = Image::load(&image_path).context("Failed to load image")?;
         let vm_id = manifest.id.clone();
+        let mut runtime_networks = vm_work_dir.runtime_networks();
+        if runtime_networks.is_empty() && cids_assigned.contains_key(&vm_id) {
+            runtime_networks = resolved_networks(&manifest, &self.config.cvm);
+            if let Err(err) = vm_work_dir.set_runtime_networks(&runtime_networks) {
+                warn!(id = %vm_id, "failed to persist inferred runtime networks: {err}");
+            }
+        }
         let app_compose = vm_work_dir
             .app_compose()
             .context("Failed to read compose file")?;
@@ -297,9 +353,12 @@ impl App {
             match states.get_mut(&vm_id) {
                 Some(vm) => {
                     vm.config = vm_config.into();
+                    vm.state.runtime_networks = runtime_networks;
                 }
                 None => {
-                    states.add(VmState::new(vm_config));
+                    let mut vm_state = VmState::new(vm_config);
+                    vm_state.state.runtime_networks = runtime_networks;
+                    states.add(vm_state);
                 }
             }
         };
@@ -351,11 +410,27 @@ impl App {
 
             let devices = self.try_allocate_gpus(&vm_config.manifest)?;
             let processes = vm_config.config_qemu(&work_dir, &self.config.cvm, &devices)?;
+            let runtime_networks = resolved_networks(&vm_config.manifest, &self.config.cvm);
+            work_dir.set_runtime_networks(&runtime_networks)?;
+            {
+                let mut state = self.lock();
+                let vm_state = state.get_mut(id).context("VM not found")?;
+                vm_state.state.runtime_networks = runtime_networks;
+            }
             for process in processes {
-                self.supervisor
-                    .deploy(&process)
-                    .await
-                    .with_context(|| format!("Failed to start process {}", process.id))?;
+                if let Err(err) = self.supervisor.deploy(&process).await {
+                    if let Err(clear_err) = work_dir.clear_runtime_networks() {
+                        warn!(
+                            id,
+                            "failed to clear runtime networks after start failure: {clear_err}"
+                        );
+                    }
+                    if let Some(vm_state) = self.lock().get_mut(id) {
+                        vm_state.state.runtime_networks.clear();
+                    }
+                    return Err(err)
+                        .with_context(|| format!("failed to start process {}", process.id));
+                }
             }
 
             let mut state = self.lock();
@@ -374,9 +449,42 @@ impl App {
 
     pub async fn stop_vm(&self, id: &str) -> Result<()> {
         self.set_started(id, false)?;
-        self.cleanup_port_forward(id).await;
-        self.supervisor.stop(id).await?;
+        self.stop_vm_process(id).await?;
         Ok(())
+    }
+
+    async fn stop_vm_process(&self, id: &str) -> Result<()> {
+        let Some(info) = self.supervisor.info(id).await? else {
+            return Ok(());
+        };
+        // Non-TPM VMs run QEMU directly and keep the existing Supervisor stop
+        // path. Only the TPM launcher's hidden subcommand implements graceful
+        // child-process shutdown.
+        if info.config.args.first().map(String::as_str) != Some("vm-launcher") {
+            return self.supervisor.stop(id).await;
+        }
+        if info.state.status.is_running() {
+            let pid = info.state.pid.context("running VM launcher has no PID")?;
+            if let Err(error) = signal_pidfd(pid, libc::SIGTERM) {
+                warn!(id, %pid, %error, "failed to signal VM launcher gracefully; forcing shutdown");
+                return self.supervisor.stop(id).await;
+            }
+            for _ in 0..150 {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                let running = self
+                    .supervisor
+                    .info(id)
+                    .await?
+                    .is_some_and(|info| info.state.status.is_running());
+                if !running {
+                    // Synchronize Supervisor's `started` flag after the launcher
+                    // completed its graceful child cleanup.
+                    return self.supervisor.stop(id).await;
+                }
+            }
+            warn!(id, "VM launcher did not stop gracefully; forcing shutdown");
+        }
+        self.supervisor.stop(id).await
     }
 
     pub async fn remove_vm(&self, id: &str) -> Result<()> {
@@ -396,9 +504,6 @@ impl App {
             warn!("failed to write .removing marker for {id}: {err:?}");
         }
 
-        // Clean up port forwarding immediately
-        self.cleanup_port_forward(id).await;
-
         // User-initiated removal always deletes the workdir
         let app = self.clone();
         let id = id.to_string();
@@ -417,8 +522,8 @@ impl App {
     /// `delete_workdir`: true for user-initiated removal, false for orphan cleanup.
     async fn finish_remove_vm(&self, id: &str, delete_workdir: bool) -> Result<()> {
         // Stop the supervisor process (idempotent if already stopped)
-        if let Err(err) = self.supervisor.stop(id).await {
-            debug!("supervisor.stop({id}) during removal: {err:?}");
+        if let Err(err) = self.stop_vm_process(id).await {
+            debug!("graceful VM stop during removal failed: {err:?}");
         }
 
         // Poll until the process is no longer running, then remove it.
@@ -509,130 +614,6 @@ impl App {
         true
     }
 
-    /// Handle a DHCP lease notification: look up VM by MAC address, persist
-    /// the guest IP, and reconfigure port forwarding.
-    pub async fn report_dhcp_lease(&self, mac: &str, ip: &str) {
-        use crate::app::qemu::mac_address_for_vm;
-
-        let vm_id = {
-            let mut state = self.lock();
-            let prefix = self.config.cvm.networking.mac_prefix_bytes();
-            let found = state
-                .vms
-                .iter_mut()
-                .find(|(id, _)| mac_address_for_vm(id, &prefix) == mac);
-            let Some((id, vm)) = found else {
-                debug!(mac, ip, "DHCP lease for unknown MAC, ignoring");
-                return;
-            };
-            let vm_id = id.clone();
-            let workdir = VmWorkDir::new(vm.config.workdir.clone());
-            if let Err(e) = workdir.set_guest_ip(ip) {
-                error!(mac, ip, "failed to persist guest IP: {e}");
-            }
-            vm.state.guest_ip = ip.to_string();
-            info!(mac, ip, id = %vm_id, "DHCP lease updated");
-            vm_id
-        };
-        self.reconfigure_port_forward(&vm_id).await;
-    }
-
-    /// Reconfigure port forwarding for a bridge-mode VM.
-    ///
-    /// Computes desired rules from the VM's port_map and guest_ip, then diffs
-    /// against currently active rules. Only changed rules are added/removed so
-    /// existing connections on unchanged rules are not interrupted.
-    pub async fn reconfigure_port_forward(&self, id: &str) {
-        let info = {
-            let state = self.lock();
-            let Some(vm) = state.get(id) else {
-                return;
-            };
-            let networking = vm
-                .config
-                .manifest
-                .networking
-                .as_ref()
-                .unwrap_or(&self.config.cvm.networking);
-            if !networking.is_bridge() || !networking.forward_service_enabled {
-                return;
-            }
-            let guest_ip = vm.state.guest_ip.clone();
-            let port_map = vm.config.manifest.port_map.clone();
-            (guest_ip, port_map)
-        };
-
-        let (guest_ip_str, port_map) = info;
-        if guest_ip_str.is_empty() {
-            return;
-        }
-        let Ok(guest_ip) = guest_ip_str.parse::<IpAddr>() else {
-            warn!(id, ip = %guest_ip_str, "invalid guest IP, skipping port forward");
-            return;
-        };
-
-        let new_rules: Vec<ForwardRule> = port_map
-            .iter()
-            .map(|pm| ForwardRule {
-                protocol: match pm.protocol {
-                    Protocol::Tcp => FwdProtocol::Tcp,
-                    Protocol::Udp => FwdProtocol::Udp,
-                },
-                listen_addr: pm.address,
-                listen_port: pm.from,
-                target_ip: guest_ip,
-                target_port: pm.to,
-            })
-            .collect();
-
-        let old_rules = self
-            .lock()
-            .active_forwards
-            .get(id)
-            .cloned()
-            .unwrap_or_default();
-
-        let old_set: HashSet<_> = old_rules.iter().collect();
-        let new_set: HashSet<_> = new_rules.iter().collect();
-
-        let mut fwd = self.forward_service.lock().await;
-
-        // Remove rules no longer needed
-        for rule in old_rules.iter().filter(|r| !new_set.contains(r)) {
-            if let Err(e) = fwd.remove_rule(rule).await {
-                warn!(id, ?rule, "failed to remove forwarding rule: {e}");
-            }
-        }
-
-        // Add new rules
-        for rule in new_rules.iter().filter(|r| !old_set.contains(r)) {
-            if let Err(e) = fwd.add_rule(rule.clone()) {
-                warn!(id, ?rule, "failed to add forwarding rule: {e}");
-            }
-        }
-
-        drop(fwd);
-        self.lock()
-            .active_forwards
-            .insert(id.to_string(), new_rules);
-        info!(id, "port forwarding reconfigured");
-    }
-
-    /// Remove all port forwarding rules for a VM.
-    pub async fn cleanup_port_forward(&self, id: &str) {
-        let old_rules = self.lock().active_forwards.remove(id).unwrap_or_default();
-        if old_rules.is_empty() {
-            return;
-        }
-        let mut fwd = self.forward_service.lock().await;
-        for rule in &old_rules {
-            if let Err(e) = fwd.remove_rule(rule).await {
-                warn!(id, ?rule, "failed to remove forwarding rule: {e}");
-            }
-        }
-        info!(id, count = old_rules.len(), "port forwarding cleaned up");
-    }
-
     pub async fn reload_vms(&self) -> Result<()> {
         let vm_path = self.vm_dir();
         let running_vms = self.supervisor.list().await.context("Failed to list VMs")?;
@@ -690,21 +671,6 @@ impl App {
                     process.config.id
                 );
                 self.spawn_finish_remove(&process.config.id);
-            }
-        }
-
-        // Restore port forwarding for running bridge-mode VMs with persisted guest IPs
-        let vm_ids: Vec<String> = self.lock().vms.keys().cloned().collect();
-        for id in vm_ids {
-            let workdir = self.work_dir(&id);
-            if let Some(ip) = workdir.guest_ip() {
-                {
-                    let mut state = self.lock();
-                    if let Some(vm) = state.get_mut(&id) {
-                        vm.state.guest_ip = ip;
-                    }
-                }
-                self.reconfigure_port_forward(&id).await;
             }
         }
 
@@ -856,6 +822,13 @@ impl App {
         let image = Image::load(&image_path).context("Failed to load image")?;
         let vm_id = manifest.id.clone();
         let already_running = cids_assigned.contains_key(&vm_id);
+        let mut runtime_networks = vm_work_dir.runtime_networks();
+        if runtime_networks.is_empty() && already_running {
+            runtime_networks = resolved_networks(&manifest, &self.config.cvm);
+            if let Err(err) = vm_work_dir.set_runtime_networks(&runtime_networks) {
+                warn!(id = %vm_id, "failed to persist inferred runtime networks: {err}");
+            }
+        }
         let app_compose = vm_work_dir
             .app_compose()
             .context("Failed to read compose file")?;
@@ -888,7 +861,10 @@ impl App {
             match states.get_mut(&vm_id) {
                 Some(vm) => {
                     // Update existing VM but preserve statistics and CID
-                    let old_state = vm.state.clone();
+                    let mut old_state = vm.state.clone();
+                    if old_state.runtime_networks.is_empty() {
+                        old_state.runtime_networks = runtime_networks;
+                    }
                     vm.config = vm_config.into();
                     vm.state = old_state; // Preserve the existing state with statistics
                 }
@@ -897,7 +873,9 @@ impl App {
                     if !cids_assigned.contains_key(&vm_id) {
                         states.cid_pool.occupy(cid)?;
                     }
-                    states.add(VmState::new(vm_config));
+                    let mut vm_state = VmState::new(vm_config);
+                    vm_state.state.runtime_networks = runtime_networks;
+                    states.add(vm_state);
                     is_new = true;
                 }
             }
@@ -957,7 +935,7 @@ impl App {
                     &self.work_dir(&vm.config.manifest.id),
                 )
             })
-            .map(|info| info.to_pb(&self.config.gateway, request.brief))
+            .map(|info| info.to_pb(&self.config.gateway, &self.config.cvm, request.brief))
             .collect::<Vec<_>>();
         Ok(StatusResponse {
             vms,
@@ -986,7 +964,7 @@ impl App {
         };
         let info = vm_state
             .merged_info(proc_state.as_ref(), &self.work_dir(id))
-            .to_pb(&self.config.gateway, false);
+            .to_pb(&self.config.gateway, &self.config.cvm, false);
         Ok(Some(info))
     }
 
@@ -1102,7 +1080,10 @@ impl App {
         let mr_config = if use_mr_config_v3 {
             Some(
                 work_dir
-                    .prepare_mr_config_v3(&app_compose)
+                    .prepare_mr_config_v3(
+                        &app_compose,
+                        manifest.gpus.as_ref().is_some_and(GpuConfig::has_gpus),
+                    )
                     .context("Failed to prepare mr_config")?,
             )
         } else {
@@ -1288,6 +1269,7 @@ pub(crate) fn make_sys_config(
         "kms_urls": kms_urls,
         "gateway_urls": gateway_urls,
         "pccs_url": cfg.cvm.pccs_url,
+        "nvidia_attestation_proxy_url": cfg.cvm.nvidia_attestation_proxy_url,
         "docker_registry": cfg.cvm.docker_registry,
         "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
         "vm_config": serde_json::to_string(&vm_config)?,
@@ -1401,6 +1383,11 @@ fn make_vm_config(
         GpuConfig::default()
     };
     let effective_vcpus = effective_vcpu_count_for_manifest(manifest, &gpus)?;
+    // Each resolved network interface becomes one virtio-net-pci device in the
+    // QEMU command (see `VmConfig::config_qemu`), which changes the guest's
+    // ACPI/DSDT layout and therefore RTMR0. Measure the interface count so the
+    // verifier reconstructs the exact device layout.
+    let num_nics = resolved_networks(manifest, &cfg.cvm).len() as u32;
     let mut config = serde_json::to_value(dstack_types::VmConfig {
         os_image_hash,
         cpu_count: effective_vcpus,
@@ -1412,6 +1399,7 @@ fn make_vm_config(
         hugepages: manifest.hugepages,
         num_gpus: gpus.gpus.len() as u32,
         num_nvswitches: gpus.bridges.len() as u32,
+        num_nics,
         host_share_mode: cfg.cvm.host_share_mode.clone(),
         hotplug_off: cfg.cvm.qemu_hotplug_off,
         image: Some(manifest.image.clone()),
@@ -1419,6 +1407,7 @@ fn make_vm_config(
         tdx_attestation_variant,
         tdx_measurement,
         gcp_measurement: None,
+        aws_measurement: None,
     })?;
     // For backward compatibility
     config["spec_version"] = serde_json::Value::from(1);
@@ -1448,7 +1437,9 @@ fn make_vm_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{load_config_figment, TdxAttestationVariantConfig, TeePlatform};
+    use crate::config::{
+        load_config_figment, Networking, NetworkingMode, TdxAttestationVariantConfig, TeePlatform,
+    };
     use dstack_types::{
         TdxImageMeasurement, TdxMrtdCandidates, TdxOsImageMeasurement,
         TdxOsImageMeasurementDocument, TdxTdvfMeasurement,
@@ -1458,6 +1449,78 @@ mod tests {
 
     fn hex_of(byte: u8, len: usize) -> String {
         hex::encode(vec![byte; len])
+    }
+
+    #[test]
+    fn gpu_config_has_gpus_only_when_resolved_gpu_list_is_non_empty() {
+        assert!(!GpuConfig::default().has_gpus());
+        assert!(!GpuConfig {
+            attach_mode: AttachMode::All,
+            ..Default::default()
+        }
+        .has_gpus());
+        assert!(!GpuConfig {
+            bridges: vec![GpuSpec {
+                slot: "0000:01:00.0".into(),
+            }],
+            ..Default::default()
+        }
+        .has_gpus());
+        assert!(GpuConfig {
+            gpus: vec![GpuSpec {
+                slot: "0000:02:00.0".into(),
+            }],
+            ..Default::default()
+        }
+        .has_gpus());
+    }
+
+    #[test]
+    fn put_manifest_keeps_legacy_networking_for_rollback() -> Result<()> {
+        let temp = std::env::temp_dir().join(format!(
+            "dstack-vmm-manifest-test-{}",
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        let workdir = VmWorkDir::new(&temp);
+        let mut manifest = test_manifest(1024);
+        manifest.networks = vec![Networking {
+            mode: NetworkingMode::Bridge,
+            bridge: "dstack-br0".to_string(),
+            mac_prefix: String::new(),
+            net: String::new(),
+            dhcp_start: String::new(),
+            restrict: false,
+            netdev: String::new(),
+        }];
+
+        workdir.put_manifest(&manifest)?;
+        let raw = fs::read_to_string(workdir.manifest_path())?;
+        let value: serde_json::Value = serde_json::from_str(&raw)?;
+        assert_eq!(value["networks"].as_array().map(Vec::len), Some(1));
+        assert_eq!(value["networking"]["mode"], "bridge");
+        fs::remove_dir_all(temp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn manifest_deserializes_legacy_singular_networking_as_networks() {
+        let manifest: Manifest = Manifest::from_json(serde_json::json!({
+            "id": "vm-1",
+            "name": "vm-1",
+            "app_id": "app-1",
+            "vcpu": 1,
+            "memory": 1024,
+            "disk_size": 10,
+            "image": "dstack-test",
+            "port_map": [],
+            "created_at_ms": 0,
+            "networking": { "mode": "bridge", "bridge": "dstack-br0" }
+        }))
+        .unwrap();
+
+        assert_eq!(manifest.networks.len(), 1);
+        assert_eq!(manifest.networks[0].mode, NetworkingMode::Bridge);
+        assert_eq!(manifest.networks[0].bridge, "dstack-br0");
     }
 
     fn write_u16_le_at(buf: &mut [u8], off: usize, value: u16) {
@@ -1550,7 +1613,7 @@ mod tests {
             kms_urls: vec![],
             gateway_urls: vec![],
             no_tee: false,
-            networking: None,
+            networks: vec![],
         }
     }
 
@@ -1628,6 +1691,32 @@ mod tests {
         assert_eq!(effective_vcpu_count(4, Some(2)), 4);
         assert_eq!(effective_vcpu_count(3, Some(0)), 3);
         assert_eq!(effective_vcpu_count(3, None), 3);
+    }
+
+    #[test]
+    fn vm_measurement_config_ignores_networking_changes() -> Result<()> {
+        let config = test_tdx_config()?;
+        let mut bridge_manifest = test_manifest(2048);
+        bridge_manifest.networks = vec![Networking {
+            mode: NetworkingMode::Bridge,
+            bridge: "dstack-br0".to_string(),
+            mac_prefix: "02:aa:bb".to_string(),
+            net: String::new(),
+            dhcp_start: String::new(),
+            restrict: false,
+            netdev: String::new(),
+        }];
+        let user_manifest = test_manifest(2048);
+        let image = test_tdx_image(true);
+        let compose_hash = hex_of(0x22, 32);
+
+        let bridge_config =
+            make_vm_config(&config, &bridge_manifest, &image, &compose_hash, None, None)?;
+        let user_config =
+            make_vm_config(&config, &user_manifest, &image, &compose_hash, None, None)?;
+
+        assert_eq!(bridge_config, user_config);
+        Ok(())
     }
 
     #[test]
@@ -1767,6 +1856,7 @@ mod tests {
         let mut config: Config = Figment::from(load_config_figment(None)).extract()?;
         config.image.path = image_root;
         config.cvm.platform = Some(TeePlatform::AmdSevSnp);
+        config.cvm.nvidia_attestation_proxy_url = Some("http://10.0.2.2:8090".to_string());
         let compose_hash = hex_of(0x22, 32);
         let manifest = Manifest {
             id: "snp-test".to_string(),
@@ -1784,12 +1874,13 @@ mod tests {
             kms_urls: vec![],
             gateway_urls: vec![],
             no_tee: false,
-            networking: None,
+            networks: vec![],
         };
 
         let mr_config = MrConfigV3::new(
             vec![0x11; 20],
             vec![0x22; 32],
+            None,
             dstack_types::KeyProviderKind::None,
             vec![],
             vec![0x44; 20],
@@ -1842,8 +1933,13 @@ mod tests {
             .context("mr_config must be a string")?;
         let parsed_mr_config = MrConfigV3::from_document(mr_config_document)?;
 
+        assert_eq!(
+            sys_config["nvidia_attestation_proxy_url"],
+            "http://10.0.2.2:8090"
+        );
         assert_eq!(parsed_mr_config.app_id, vec![0x11; 20]);
         assert_eq!(parsed_mr_config.compose_hash, vec![0x22; 32]);
+        assert_eq!(parsed_mr_config.gpu_policy_hash, None);
         assert_eq!(vm_config["mr_config"], sys_config["mr_config"]);
         assert_eq!(
             vm_config["os_image_hash"]
@@ -1911,7 +2007,7 @@ struct VmStateMut {
     boot_progress: String,
     boot_error: String,
     shutdown_progress: String,
-    guest_ip: String,
+    runtime_networks: Vec<Networking>,
     devices: GpuConfig,
     events: VecDeque<pb::GuestEvent>,
     /// True when the VM is being removed (cleanup in progress).
@@ -1948,8 +2044,6 @@ impl VmState {
 pub(crate) struct AppState {
     cid_pool: IdPool<u32>,
     vms: HashMap<String, VmState>,
-    /// Tracks active port forwarding rules per VM ID (bridge mode only).
-    active_forwards: HashMap<String, Vec<ForwardRule>>,
 }
 
 impl AppState {

@@ -268,9 +268,18 @@ pub struct TpmsNvPublic {
 
 impl TpmsNvPublic {
     pub fn new(nv_index: u32, data_size: u16, attributes: TpmaNv) -> Self {
+        Self::new_with_name_alg(nv_index, data_size, attributes, TpmAlgId::Sha256)
+    }
+
+    pub fn new_with_name_alg(
+        nv_index: u32,
+        data_size: u16,
+        attributes: TpmaNv,
+        name_alg: TpmAlgId,
+    ) -> Self {
         Self {
             nv_index,
-            name_alg: TpmAlgId::Sha256,
+            name_alg,
             attributes,
             auth_policy: Tpm2bDigest::empty(),
             data_size,
@@ -625,8 +634,32 @@ impl TpmtPublic {
         }
     }
 
+    /// Create the TCG RSA-2048 Endorsement Key template used by NitroTPM.
+    pub fn rsa_ek() -> Self {
+        const AUTH_POLICY_A_SHA256: [u8; 32] = [
+            0x83, 0x71, 0x97, 0x67, 0x44, 0x84, 0xb3, 0xf8, 0x1a, 0x90, 0xcc, 0x8d, 0x46, 0xa5,
+            0xd7, 0x24, 0xfd, 0x52, 0xd7, 0x6e, 0x06, 0x52, 0x0b, 0x64, 0xf2, 0xa1, 0xda, 0x1b,
+            0x33, 0x14, 0x69, 0xaa,
+        ];
+
+        Self {
+            type_alg: TpmAlgId::Rsa,
+            name_alg: TpmAlgId::Sha256,
+            object_attributes: TpmaObject::new()
+                .with_fixed_tpm()
+                .with_fixed_parent()
+                .with_sensitive_data_origin()
+                .with_admin_with_policy()
+                .with_restricted()
+                .with_decrypt(),
+            auth_policy: Tpm2bDigest::new(AUTH_POLICY_A_SHA256.to_vec()),
+            parameters: TpmtPublicParms::Rsa(TpmsRsaParms::storage_key()),
+            unique: TpmtPublicUnique::Rsa(vec![0u8; 256]),
+        }
+    }
+
     /// Create a sealed data object template
-    pub fn sealed_object(policy_digest: Tpm2bDigest) -> Self {
+    pub fn sealed_object(policy_digest: Tpm2bDigest, name_alg: TpmAlgId) -> Self {
         // If policy_digest is empty, use userWithAuth; otherwise use adminWithPolicy
         let object_attributes = if policy_digest.buffer.is_empty() {
             TpmaObject::new()
@@ -642,7 +675,7 @@ impl TpmtPublic {
 
         Self {
             type_alg: TpmAlgId::KeyedHash,
-            name_alg: TpmAlgId::Sha256,
+            name_alg,
             object_attributes,
             auth_policy: policy_digest,
             parameters: TpmtPublicParms::KeyedHash(TpmsKeyedHashParms::null()),

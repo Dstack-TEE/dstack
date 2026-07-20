@@ -15,6 +15,7 @@ rocket-vsock-listener = { workspace = true }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 anyhow.workspace = true
+libc.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 shared_child.workspace = true
@@ -32,7 +33,7 @@ humantime.workspace = true
 strip-ansi-escapes.workspace = true
 tailf.workspace = true
 tokio = { workspace = true, features = ["full"] }
-git-version.workspace = true
+dstack-build-info.workspace = true
 rocket-apitoken.workspace = true
 serde_ini.workspace = true
 
@@ -46,7 +47,6 @@ safe-write.workspace = true
 guest-api = { workspace = true, features = ["client"] }
 load_config.workspace = true
 key-provider-client.workspace = true
-dstack-port-forward.workspace = true
 dstack-types.workspace = true
 dstack-mr.workspace = true
 hex_fmt.workspace = true
@@ -64,6 +64,7 @@ tar.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+tempfile.workspace = true
 
 [build-dependencies]
 or-panic.workspace = true

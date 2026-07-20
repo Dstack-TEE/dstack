@@ -12,8 +12,9 @@ use dstack_types::{
 use tracing::info;
 
 #[derive(Clone, Copy)]
-struct ExpectedMrConfig<'a> {
+struct LocalMrConfigValues<'a> {
     compose_hash: &'a [u8; 32],
+    gpu_policy_hash: &'a [u8; 32],
     app_id: &'a [u8; 20],
     instance_id: &'a [u8],
     key_provider: KeyProviderKind,
@@ -51,7 +52,7 @@ fn read_snp_host_data() -> Result<[u8; 32]> {
     Ok(parsed.host_data)
 }
 
-/// Verify the mr_config_id matches the expected value
+/// Verify the mr_config_id matches values observed locally by the guest.
 ///
 /// Configuration ID format
 /// The mr_config_id is a 48 bytes value in the following format:
@@ -62,36 +63,42 @@ fn read_snp_host_data() -> Result<[u8; 32]> {
 /// - compose_hash: [u8; 32]
 /// - app_id: [u8; 20]
 /// - key_provider_type: u8 // 0: none, 1: local, 2: kms, 3: tpm
-/// - key_provider_id: [u8] // the ca pubkey for KMS or the MR enclave for local-sgx provider, empty for none
+/// - key_provider_id: [u8] // KMS CA pubkey, local-sgx MR, or empty for none/tpm
 pub fn verify_mr_config_id(
     compose_hash: &[u8; 32],
+    gpu_policy_hash: &[u8; 32],
     app_id: &[u8; 20],
     instance_id: &[u8],
     key_provider: KeyProviderKind,
     key_provider_id: &[u8],
 ) -> Result<()> {
     let mode = AttestationMode::detect().context("Failed to detect attestation mode")?;
-    let expected = ExpectedMrConfig {
+    let local = LocalMrConfigValues {
         compose_hash,
+        gpu_policy_hash,
         app_id,
         instance_id,
         key_provider,
         key_provider_id,
     };
-    verify_mr_config_id_for_mode(mode, expected)
+    verify_mr_config_id_for_mode(mode, local)
 }
 
 fn verify_mr_config_id_for_mode(
     mode: AttestationMode,
-    expected: ExpectedMrConfig<'_>,
+    local: LocalMrConfigValues<'_>,
 ) -> Result<()> {
     match mode {
-        AttestationMode::DstackAmdSevSnp => verify_snp_mr_config(expected),
-        _ => verify_tdx_mr_config_id(expected),
+        AttestationMode::DstackAmdSevSnp => verify_snp_mr_config(local),
+        // AWS PCR8 is computed by the guest from measured reality (MrConfig V2
+        // in measure_app_info); there is no host-supplied claim to cross-check.
+        // The key_provider_id pin is enforced by verify_key_provider_id.
+        AttestationMode::DstackAwsNitroTpm => Ok(()),
+        _ => verify_tdx_mr_config_id(local),
     }
 }
 
-fn verify_tdx_mr_config_id(expected: ExpectedMrConfig<'_>) -> Result<()> {
+fn verify_tdx_mr_config_id(local: LocalMrConfigValues<'_>) -> Result<()> {
     let read_mr_config_id = read_mr_config_id().context("Failed to read mr_config_id")?;
     info!("mr_config_id: {}", hex::encode(read_mr_config_id));
     let mr_config_document = if read_mr_config_id[0] == 3 {
@@ -99,33 +106,33 @@ fn verify_tdx_mr_config_id(expected: ExpectedMrConfig<'_>) -> Result<()> {
     } else {
         None
     };
-    verify_tdx_mr_config_id_value(read_mr_config_id, mr_config_document.as_deref(), expected)
+    verify_tdx_mr_config_id_value(read_mr_config_id, mr_config_document.as_deref(), local)
 }
 
 fn verify_tdx_mr_config_id_value(
     read_mr_config_id: [u8; 48],
     mr_config_document: Option<&str>,
-    expected: ExpectedMrConfig<'_>,
+    local: LocalMrConfigValues<'_>,
 ) -> Result<()> {
     if read_mr_config_id == [0u8; 48] {
         return Ok(());
     }
     let expected_mr_config_id = match read_mr_config_id[0] {
         1 => MrConfig::V1 {
-            compose_hash: expected.compose_hash,
+            compose_hash: local.compose_hash,
         }
         .to_mr_config_id(),
         2 => MrConfig::V2 {
-            compose_hash: expected.compose_hash,
-            app_id: expected.app_id,
-            key_provider: expected.key_provider,
-            key_provider_id: expected.key_provider_id,
+            compose_hash: local.compose_hash,
+            app_id: local.app_id,
+            key_provider: local.key_provider,
+            key_provider_id: local.key_provider_id,
         }
         .to_mr_config_id(),
         3 => {
             let mr_config_document =
                 mr_config_document.context("mr_config is required for TDX MR_CONFIG_ID v3")?;
-            verify_mr_config_v3_document(mr_config_document, expected)?;
+            verify_mr_config_v3_document(mr_config_document, local)?;
             MrConfigV3::tdx_mr_config_id_from_document(mr_config_document)
         }
         _ => bail!("Invalid mr_config_id version"),
@@ -136,9 +143,9 @@ fn verify_tdx_mr_config_id_value(
     Ok(())
 }
 
-fn verify_snp_mr_config(expected: ExpectedMrConfig<'_>) -> Result<()> {
+fn verify_snp_mr_config(local: LocalMrConfigValues<'_>) -> Result<()> {
     let mr_config_document = read_mr_config_document().context("Failed to read SNP mr_config")?;
-    verify_mr_config_v3_document(&mr_config_document, expected)?;
+    verify_mr_config_v3_document(&mr_config_document, local)?;
     let read_host_data = read_snp_host_data().context("Failed to read SNP HOST_DATA")?;
     info!("snp host_data: {}", hex::encode(read_host_data));
     if MrConfigV3::snp_host_data_from_document(&mr_config_document) != read_host_data {
@@ -149,26 +156,31 @@ fn verify_snp_mr_config(expected: ExpectedMrConfig<'_>) -> Result<()> {
 
 fn verify_mr_config_v3_document(
     mr_config_document: &str,
-    expected: ExpectedMrConfig<'_>,
+    local: LocalMrConfigValues<'_>,
 ) -> Result<MrConfigV3> {
     let mr_config =
         MrConfigV3::from_document(mr_config_document).context("Invalid mr_config document")?;
     if mr_config.version != 3 {
         bail!("mr_config version must be 3");
     }
-    if mr_config.compose_hash.as_slice() != expected.compose_hash {
+    if mr_config.compose_hash.as_slice() != local.compose_hash {
         bail!("Invalid mr_config compose_hash");
     }
-    if mr_config.app_id.as_slice() != expected.app_id {
+    if let Some(declared_gpu_policy_hash) = mr_config.gpu_policy_hash.as_deref() {
+        if declared_gpu_policy_hash != local.gpu_policy_hash {
+            bail!("Invalid mr_config gpu_policy_hash");
+        }
+    }
+    if mr_config.app_id.as_slice() != local.app_id {
         bail!("Invalid mr_config app_id");
     }
-    if mr_config.instance_id.as_slice() != expected.instance_id {
+    if mr_config.instance_id.as_slice() != local.instance_id {
         bail!("Invalid mr_config instance_id");
     }
-    if mr_config.key_provider != expected.key_provider {
+    if mr_config.key_provider != local.key_provider {
         bail!("Invalid mr_config key_provider");
     }
-    if mr_config.key_provider_id.as_slice() != expected.key_provider_id {
+    if mr_config.key_provider_id.as_slice() != local.key_provider_id {
         bail!("Invalid mr_config key_provider_id");
     }
     Ok(mr_config)
@@ -190,54 +202,122 @@ mod tests {
     #[test]
     fn tdx_mr_config_id_v3_accepts_document_value() -> Result<()> {
         let compose_hash = [0x22u8; 32];
+        let gpu_policy_hash = [0x55u8; 32];
         let app_id = [0x11u8; 20];
         let instance_id = [0x44u8; 20];
         let key_provider_id = [0x33u8; 32];
         let mr_config = MrConfigV3::new(
             app_id.to_vec(),
             compose_hash.to_vec(),
+            Some(gpu_policy_hash.to_vec()),
             KeyProviderKind::Kms,
             key_provider_id.to_vec(),
             instance_id.to_vec(),
         );
         let document = mr_config.to_canonical_json();
-        let expected = ExpectedMrConfig {
+        let local = LocalMrConfigValues {
             compose_hash: &compose_hash,
+            gpu_policy_hash: &gpu_policy_hash,
             app_id: &app_id,
             instance_id: &instance_id,
             key_provider: KeyProviderKind::Kms,
             key_provider_id: &key_provider_id,
         };
 
-        verify_tdx_mr_config_id_value(mr_config.to_tdx_mr_config_id(), Some(&document), expected)
+        verify_tdx_mr_config_id_value(mr_config.to_tdx_mr_config_id(), Some(&document), local)
     }
 
     #[test]
     fn mr_config_v3_document_must_match_expected_app_info() {
         let compose_hash = [0x22u8; 32];
+        let gpu_policy_hash = [0x55u8; 32];
         let app_id = [0x11u8; 20];
         let instance_id = [0x44u8; 20];
         let key_provider_id = [0x33u8; 32];
         let document = MrConfigV3::new(
             app_id.to_vec(),
             compose_hash.to_vec(),
+            Some(gpu_policy_hash.to_vec()),
             KeyProviderKind::Kms,
             key_provider_id.to_vec(),
             instance_id.to_vec(),
         )
         .to_canonical_json();
         let wrong_app_id = [0x12u8; 20];
-        let expected = ExpectedMrConfig {
+        let local = LocalMrConfigValues {
             compose_hash: &compose_hash,
+            gpu_policy_hash: &gpu_policy_hash,
             app_id: &wrong_app_id,
             instance_id: &instance_id,
             key_provider: KeyProviderKind::Kms,
             key_provider_id: &key_provider_id,
         };
 
-        match verify_mr_config_v3_document(&document, expected) {
+        match verify_mr_config_v3_document(&document, local) {
             Ok(_) => panic!("mismatched app_id must reject"),
             Err(err) => assert!(err.to_string().contains("Invalid mr_config app_id")),
         }
+    }
+
+    #[test]
+    fn mr_config_v3_document_must_match_expected_gpu_policy_hash() {
+        let compose_hash = [0x22u8; 32];
+        let gpu_policy_hash = [0x55u8; 32];
+        let app_id = [0x11u8; 20];
+        let instance_id = [0x44u8; 20];
+        let key_provider_id = [0x33u8; 32];
+        let document = MrConfigV3::new(
+            app_id.to_vec(),
+            compose_hash.to_vec(),
+            Some(gpu_policy_hash.to_vec()),
+            KeyProviderKind::Kms,
+            key_provider_id.to_vec(),
+            instance_id.to_vec(),
+        )
+        .to_canonical_json();
+        let wrong_gpu_policy_hash = [0x56u8; 32];
+        let local = LocalMrConfigValues {
+            compose_hash: &compose_hash,
+            gpu_policy_hash: &wrong_gpu_policy_hash,
+            app_id: &app_id,
+            instance_id: &instance_id,
+            key_provider: KeyProviderKind::Kms,
+            key_provider_id: &key_provider_id,
+        };
+
+        match verify_mr_config_v3_document(&document, local) {
+            Ok(_) => panic!("mismatched gpu_policy_hash must reject"),
+            Err(err) => assert!(err
+                .to_string()
+                .contains("Invalid mr_config gpu_policy_hash")),
+        }
+    }
+
+    #[test]
+    fn mr_config_v3_skips_gpu_policy_hash_check_when_field_is_missing() -> Result<()> {
+        let compose_hash = [0x22u8; 32];
+        let actual_gpu_policy_hash = [0x55u8; 32];
+        let app_id = [0x11u8; 20];
+        let instance_id = [0x44u8; 20];
+        let key_provider_id = [0x33u8; 32];
+        let mr_config = MrConfigV3::new(
+            app_id.to_vec(),
+            compose_hash.to_vec(),
+            None,
+            KeyProviderKind::Kms,
+            key_provider_id.to_vec(),
+            instance_id.to_vec(),
+        );
+        let document = mr_config.to_canonical_json();
+        let local = LocalMrConfigValues {
+            compose_hash: &compose_hash,
+            gpu_policy_hash: &actual_gpu_policy_hash,
+            app_id: &app_id,
+            instance_id: &instance_id,
+            key_provider: KeyProviderKind::Kms,
+            key_provider_id: &key_provider_id,
+        };
+
+        verify_tdx_mr_config_id_value(mr_config.to_tdx_mr_config_id(), Some(&document), local)
     }
 }

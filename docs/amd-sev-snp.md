@@ -82,6 +82,15 @@ Verification is fail-closed and includes:
 5. the unified OS image identity, `sha256(sha256sum.txt)`, which must match
    `digest.txt` and the SNP measurement document.
 
+For a GPU VM, the optional `MrConfigV3.gpu_policy_hash` field contains
+`SHA-256(JCS(requirements.gpu_policy))`. The signed SNP report binds the exact
+MrConfigV3 document through `HOST_DATA`, so a verifier can validate the report
+and document binding and then compare this field with the expected GPU policy
+digest. If the field is absent, this optional check is not asserted. This binds
+the GPU policy, but not the later `gpu-attestation` runtime event or the
+`GpuInfo` output: the current SEV-SNP path has no quote-bound runtime
+measurement register.
+
 The verifier supports the AMD Milan, Genoa, and Turin KDS product families.
 Bergamo and Siena are handled through AMD's canonical Genoa KDS product path.
 

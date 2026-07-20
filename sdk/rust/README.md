@@ -2,6 +2,8 @@
 
 Access TEE features from your Rust application running inside dstack. Derive deterministic keys, generate attestation quotes, create TLS certificates, and sign data—all backed by hardware security.
 
+This directory is a **standalone Cargo workspace** (`dstack-sdk`, `dstack-sdk-types`, and a `no_std` check crate). It does not join the `dstack/` core workspace.
+
 ## Installation
 
 ```toml
@@ -102,6 +104,20 @@ println!("{}", info.tcb_info);
 #### `attest(report_data: Vec<u8>) -> AttestResponse`
 Generates a versioned attestation with a custom 64-byte payload.
 - `attestation`: Hex-encoded attestation
+
+#### `gpu_info() -> GpuInfoResponse`
+
+Returns GPU information collected during boot. Currently, this includes the
+complete NVIDIA `nvattest` JSON output.
+
+```rust
+let gpu = client.gpu_info().await?;
+println!("{}", gpu.attestation);
+```
+
+The `attestation` field is empty when no GPU attestation output is available.
+The raw output is not trusted by itself; remote verifiers should compare its
+digest with the measured `gpu-attestation` runtime event.
 
 ### Generate TLS Certificates
 

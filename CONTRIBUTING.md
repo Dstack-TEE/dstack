@@ -32,6 +32,47 @@ Use the narrowest owning directory. Fixture explanations and component
 READMEs should stay with their fixtures/components; general guides should be
 linked from the root README and live under `docs/`.
 
+## Test a guest without TEE hardware
+
+Development images include the extensible `dstack-tee-simulator`. Its default
+platform backend is TDX. On a VM launched with `no_tee`, that backend exposes
+the Linux interfaces used by the normal guest software:
+
+- configfs-tsm quote generation under `/sys/kernel/config/tsm/report`;
+- RTMR extension files used by `tdx-attest`;
+- a CCEL boot-event fixture.
+
+This keeps `dstack-prepare`, measurement, encrypted-storage setup, the guest
+agent, and attestation APIs on their production code paths. The generated quote
+has an intentionally invalid signature, so a production verifier or KMS must
+reject it.
+
+The service uses the default TDX backend. For direct simulator development, the
+same selection can be made explicitly with `dstack-tee-simulator --platform
+tdx`. New TEE platforms are implemented as separate backends behind the shared
+simulator lifecycle.
+
+Build or install a `dstack-dev-*` image, then deploy without KMS or gateway:
+
+```bash
+dstack deploy ./docker-compose.yml \
+  --name no-tee-dev \
+  --image dstack-dev-VERSION \
+  --no-kms \
+  --no-tee
+```
+
+To exercise persistent TPM-backed app keys as well, install `swtpm` on the VMM
+host and select `key_provider=tpm` in the VMM console (or pass `--key-provider
+tpm` in tooling that exposes the compose option). The VMM keeps the software
+TPM state in the VM work directory so that seal/unseal survives guest restarts.
+The software TPM is host-controlled and does not provide hardware isolation.
+
+The simulator package is installed only in development images. This mode
+provides no hardware isolation and must never be used with production
+workloads or secrets. Real quote generation, hardware isolation, and KMS
+authorization still require TDX or another supported TEE.
+
 ## Commit Convention
 
 This project uses [Conventional Commits](https://www.conventionalcommits.org/). Please format your commit messages as:

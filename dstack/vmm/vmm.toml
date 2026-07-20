@@ -28,6 +28,9 @@ kms_urls = ["http://127.0.0.1:8081"]
 gateway_urls = ["http://127.0.0.1:8082"]
 # PCCS URL used by guest to verify the quote from local key provider
 pccs_url = ""
+# Optional dstack GPU attestation proxy. When configured, guests use its
+# persistent NVIDIA OCSP and RIM caches during local GPU verification.
+# nvidia_attestation_proxy_url = "http://10.0.2.1:8090"
 docker_registry = ""
 cid_start = 1000
 cid_pool_size = 1000
@@ -101,7 +104,6 @@ restrict = false
 
 # for mode = "bridge"
 # bridge = "virbr0"
-forward_service_enabled = false
 
 [cvm.port_mapping]
 enabled = false

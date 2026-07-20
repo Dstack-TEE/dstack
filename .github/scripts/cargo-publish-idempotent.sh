@@ -11,7 +11,7 @@ set -euo pipefail
 
 crate=${1:?missing crate name}
 
-if output=$(cargo publish --manifest-path dstack/Cargo.toml -p "$crate" 2>&1); then
+if output=$(cargo publish --manifest-path sdk/rust/Cargo.toml -p "$crate" 2>&1); then
     echo "$output"
     exit 0
 fi

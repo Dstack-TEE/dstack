@@ -16,11 +16,12 @@ use anyhow::{anyhow, bail, Context, Result};
 use dstack_attest::emit_runtime_event;
 use dstack_kms_rpc as rpc;
 use dstack_types::{
+    gpu_policy_hash,
     shared_filenames::{
         APP_COMPOSE, APP_KEYS, DECRYPTED_ENV, DECRYPTED_ENV_JSON, ENCRYPTED_ENV,
         HOST_SHARED_DIR_NAME, HOST_SHARED_DISK_LABEL, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
     },
-    KeyProvider, KeyProviderInfo,
+    GpuPolicy, KeyProvider, KeyProviderInfo, GPU_ATTESTATION_OUTPUT,
 };
 use fs_err as fs;
 use luks2::{
@@ -727,13 +728,13 @@ fn truncate(s: &[u8], len: usize) -> &[u8] {
 /// same `instance_id`. To keep `instance_id` unique per running VM we mix in a
 /// per-instance value that lives outside the cloneable disk.
 ///
-/// On GCP we use the public key of the pre-provisioned vTPM Attestation Key. The AK
-/// is derived deterministically from the per-instance Endorsement seed held in the
-/// vTPM (not on the data disk), so a VM cloned from a disk image derives a different
-/// AK while a reboot/stop-start of the same VM keeps it stable — exactly the property
-/// we need. We hash the AK public area rather than its certificate so the binding is
-/// immune to certificate re-issuance (a re-signed cert carries new serial/validity/
-/// signature bytes for the same key).
+/// On GCP we use the public key of the pre-provisioned vTPM Attestation Key. On
+/// AWS EC2 we create the deterministic endorsement primary key and use its
+/// public area. Both values are derived from per-instance TPM state, not from the
+/// cloneable data disk, so a disk snapshot launched as a new VM gets a different
+/// binding while reboot/stop-start of the same VM keeps it stable. We hash public
+/// areas rather than certificates so the binding is immune to certificate
+/// re-issuance.
 ///
 /// Returns `Ok(None)` on platforms with no such binding; the `instance_id` then
 /// keeps its previous seed-only derivation. Fails closed: if the platform is known
@@ -754,6 +755,19 @@ fn platform_instance_binding() -> Result<Option<Vec<u8>>> {
                 bail!("gcp vTPM AK public area is empty");
             }
             Ok(Some(sha256(&ak.pub_area).to_vec()))
+        }
+        Some(Platform::AwsEc2) => {
+            let mut tpm = tpm2::TpmContext::new(None).context("failed to open NitroTPM")?;
+            let template = tpm2::TpmtPublic::rsa_ek();
+            let (handle, public_area) = tpm
+                .create_primary(tpm2::tpm_rh::ENDORSEMENT, &template)
+                .context("failed to create NitroTPM endorsement primary key")?;
+            let flush_result = tpm.flush_context(handle);
+            if public_area.is_empty() {
+                bail!("NitroTPM endorsement public area is empty");
+            }
+            flush_result.context("failed to flush NitroTPM endorsement primary key")?;
+            Ok(Some(sha256(&public_area).to_vec()))
         }
         _ => Ok(None),
     }
@@ -1047,48 +1061,164 @@ async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
     } else {
         info!("System time will be synchronized by chronyd in background");
     }
-    stage0
-        .setup_gpu()
-        .await
-        .context("Failed to verify GPU TEE attestation")?;
     let stage1 = stage0.setup_fs().await?;
     stage1.setup().await
 }
 
-/// GPU TEE attestation gate (`requirements.attest_gpu`, defaults to true).
+/// GPU TEE attestation gate (`requirements.gpu_policy.attest_gpu`, defaults to
+/// true).
 ///
 /// Runs before key provisioning so a CVM whose GPU cannot prove it is a
-/// genuine, CC-enabled NVIDIA TEE never gets its app keys. The GPU
-/// "ready" state (`nvidia-smi conf-compute -srs 1`) is only set from here —
-/// nvidia-persistenced deliberately does not set it — so CUDA work cannot be
-/// submitted to an unverified GPU either.
+/// genuine, CC-enabled NVIDIA TEE never gets its app keys. An optional
+/// application policy is measured and evaluated after `compose-hash`. The GPU
+/// "ready" state is only set through NVML from here — nvidia-persistenced
+/// deliberately does not set it — so CUDA work cannot be submitted to an
+/// unverified GPU either.
 mod gpu {
     use super::*;
 
     const NVATTEST: &str = "/usr/bin/nvattest";
-    const NVIDIA_SMI: &str = "/usr/bin/nvidia-smi";
-    const ATTESTATION_OUTPUT: &str = "/run/nvidia-gpu-attestation/attestation.out";
     const ATTESTATION_TIMEOUT: Duration = Duration::from_secs(300);
-    const NVIDIA_SMI_TIMEOUT: Duration = Duration::from_secs(60);
+    const EVENT_VERSION: u32 = 2;
+    const POLICY_ENTRYPOINT: &str = "data.policy.nv_match";
+    const TRUST_OUTPOST_POLICY: &str = "/usr/share/nvattest/policies/allow_trust_outpost_ocsp.rego";
+    /// Bound Rego evaluation so a runaway application policy cannot hang boot.
+    const POLICY_TIMEOUT: Duration = Duration::from_secs(10);
 
-    /// True if a passed-through NVIDIA GPU is present, detected via sysfs PCI
-    /// (vendor 0x10de, class VGA 0x0300xx or 3D controller 0x0302xx) so it
-    /// works even before the nvidia driver is loaded. Fails (rather than
-    /// reporting "no GPU") when the PCI bus cannot be enumerated, so a broken
-    /// /sys cannot bypass the attestation gate.
-    pub(super) fn nvidia_gpu_present() -> Result<bool> {
-        let entries =
-            fs::read_dir("/sys/bus/pci/devices").context("failed to enumerate PCI devices")?;
-        Ok(entries.filter_map(|e| e.ok()).any(|dev| {
-            let read = |name: &str| {
-                fs::read_to_string(dev.path().join(name))
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string()
-            };
-            read("vendor") == "0x10de"
-                && matches!(read("class").get(..6), Some("0x0300") | Some("0x0302"))
-        }))
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) struct GpuInventory {
+        pub(super) total: u32,
+        pub(super) nvidia: u32,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct GpuAttestationEvent {
+        version: u32,
+        provider: &'static str,
+        devices: u32,
+        cc_mode: &'static str,
+        devtools: bool,
+        evidence_sha256: String,
+    }
+
+    pub(super) struct GpuAttestationResult {
+        claims: Vec<Value>,
+        parsed_claims: Vec<NvidiaGpuClaim>,
+        output: Vec<u8>,
+        devices: u32,
+    }
+
+    impl GpuAttestationResult {
+        pub(super) fn claims(&self) -> &[Value] {
+            &self.claims
+        }
+
+        pub(super) fn event(&self, devtools: bool) -> Result<Vec<u8>> {
+            attestation_event(&self.output, self.devices, devtools)
+        }
+
+        pub(super) fn verify_claim_policy(
+            &self,
+            state: &GpuState,
+            policy: &GpuPolicy,
+        ) -> Result<()> {
+            verify_claim_policy(&self.parsed_claims, &state.devices, policy)
+        }
+    }
+
+    pub(super) struct GpuState {
+        nvml: nvml_wrapper::Nvml,
+        devices: Vec<GpuDeviceState>,
+    }
+
+    impl GpuState {
+        pub(super) fn any_devtools(&self) -> bool {
+            self.devices.iter().any(|device| device.devtools)
+        }
+
+        pub(super) fn set_ready(&self) -> Result<()> {
+            set_gpu_ready_state_with_nvml(&self.nvml)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct GpuDeviceState {
+        cc_enabled: bool,
+        devtools: bool,
+    }
+
+    #[derive(Deserialize)]
+    struct NvattestOutput {
+        result_code: i64,
+        claims: Vec<Value>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct NvidiaGpuClaim {
+        #[serde(rename = "x-nvidia-device-type")]
+        device_type: String,
+        eat_nonce: String,
+        #[serde(rename = "x-nvidia-gpu-attestation-report-nonce-match")]
+        nonce_match: bool,
+        measres: String,
+        secboot: bool,
+        dbgstat: NvidiaGpuDebugStatus,
+    }
+
+    #[derive(Debug, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "lowercase")]
+    enum NvidiaGpuDebugStatus {
+        Disabled,
+        Enabled,
+    }
+
+    struct ValidatedClaims {
+        raw: Vec<Value>,
+        parsed: Vec<NvidiaGpuClaim>,
+    }
+
+    /// Count passed-through display-class GPUs through sysfs so devices which
+    /// the NVIDIA driver did not bind cannot be hidden from the gate. Reading
+    /// the inventory is fail-closed: a mixed NVIDIA/non-NVIDIA set must not be
+    /// represented by an attestation result for only the NVIDIA subset.
+    pub(super) fn gpu_inventory() -> Result<GpuInventory> {
+        gpu_inventory_at(Path::new("/sys/bus/pci/devices"))
+    }
+
+    fn gpu_inventory_at(devices_path: &Path) -> Result<GpuInventory> {
+        let entries = fs::read_dir(devices_path).context("failed to enumerate PCI devices")?;
+        let mut inventory = GpuInventory {
+            total: 0,
+            nvidia: 0,
+        };
+        for entry in entries {
+            let device = entry.context("failed to read PCI device entry")?;
+            let class_path = device.path().join("class");
+            let class = fs::read_to_string(&class_path)
+                .with_context(|| format!("failed to read {}", class_path.display()))?;
+            if !matches!(class.trim().get(..6), Some("0x0300") | Some("0x0302")) {
+                continue;
+            }
+            inventory.total += 1;
+            let vendor_path = device.path().join("vendor");
+            let vendor = fs::read_to_string(&vendor_path)
+                .with_context(|| format!("failed to read {}", vendor_path.display()))?;
+            if vendor.trim() == "0x10de" {
+                inventory.nvidia += 1;
+            }
+        }
+        Ok(inventory)
+    }
+
+    pub(super) fn nvidia_gpu_count(inventory: GpuInventory) -> Result<u32> {
+        if inventory.total != inventory.nvidia {
+            bail!(
+                "unsupported non-NVIDIA GPU attached: found {} display GPUs, {} NVIDIA",
+                inventory.total,
+                inventory.nvidia
+            );
+        }
+        Ok(inventory.nvidia)
     }
 
     /// Run a GPU tool with a bounded timeout so a wedged driver/GPU cannot
@@ -1108,31 +1238,192 @@ mod gpu {
         .with_context(|| format!("failed to run {program}"))
     }
 
-    /// Mark the GPU as ready to accept work. Only meaningful (and only
-    /// succeeds) when the GPU runs in CC mode.
-    pub(super) async fn set_gpu_ready_state() -> Result<()> {
-        let output = run_command(
-            NVIDIA_SMI,
-            &["conf-compute", "-srs", "1"],
-            NVIDIA_SMI_TIMEOUT,
-        )
-        .await?;
-        if !output.status.success() {
-            bail!(
-                "nvidia-smi conf-compute -srs 1 failed ({}): {}",
-                output.status,
-                truncated_lossy(&output.stderr, 512),
-            );
+    fn init_nvml(expected_devices: u32) -> Result<nvml_wrapper::Nvml> {
+        let nvml = nvml_wrapper::Nvml::init().context("failed to initialize NVML")?;
+        let devices = nvml
+            .device_count()
+            .context("failed to get NVML GPU count")?;
+        if devices != expected_devices {
+            bail!("nvml GPU count mismatch: expected {expected_devices}, got {devices}");
         }
+        Ok(nvml)
+    }
+
+    fn set_gpu_ready_state_with_nvml(nvml: &nvml_wrapper::Nvml) -> Result<()> {
+        // nvml-wrapper exposes nvmlSystemSetConfComputeGpusReadyState through
+        // Device, but the transition applies to all CC GPUs in the system.
+        let first = nvml
+            .device_by_index(0)
+            .context("failed to get first NVML GPU")?;
+        first
+            .set_confidential_compute_state(true)
+            .context("failed to set GPU ready state")?;
         info!("GPU ready state set");
         Ok(())
     }
 
-    /// Run local GPU attestation via nvattest with a fresh nonce, keeping the
-    /// verifier output in /run for debugging. Fails on any non-zero exit —
-    /// including a GPU that cannot produce an attestation report at all (a
-    /// non-CC GPU, or CC mode left off by the host).
-    pub(super) async fn attest_gpu() -> Result<()> {
+    /// Read the CC and DevTools state through NVML for every expected GPU.
+    /// NVML exposes these settings as system values through Device methods;
+    /// call them for every handle so every expected device must be enumerable.
+    pub(super) fn query_gpu_state(expected_devices: u32) -> Result<GpuState> {
+        let nvml = init_nvml(expected_devices)?;
+        let mut devices = Vec::with_capacity(expected_devices as usize);
+        for index in 0..expected_devices {
+            let device = nvml
+                .device_by_index(index)
+                .with_context(|| format!("failed to get NVML GPU at index {index}"))?;
+            let cc_enabled = device
+                .is_cc_enabled()
+                .with_context(|| format!("failed to query CC mode for GPU at index {index}"))?;
+            let devtools = device.is_cc_dev_mode_enabled().with_context(|| {
+                format!("failed to query DevTools mode for GPU at index {index}")
+            })?;
+            devices.push(GpuDeviceState {
+                cc_enabled,
+                devtools,
+            });
+        }
+        Ok(GpuState { nvml, devices })
+    }
+
+    /// Set the system-wide GPU ready state without appraisal for the explicit
+    /// `gpu_policy.attest_gpu: false` compatibility path.
+    pub(super) fn set_gpu_ready_state(expected_devices: u32) -> Result<()> {
+        let nvml = init_nvml(expected_devices)?;
+        set_gpu_ready_state_with_nvml(&nvml)
+    }
+
+    fn validate_attestation_output(
+        stdout: &[u8],
+        nonce: &str,
+        expected_devices: u32,
+    ) -> Result<ValidatedClaims> {
+        let output: NvattestOutput =
+            serde_json::from_slice(stdout).context("failed to parse nvattest JSON output")?;
+        if output.result_code != 0 {
+            bail!(
+                "nvattest JSON result is not successful (result_code={})",
+                output.result_code
+            );
+        }
+        if output.claims.len() != expected_devices as usize {
+            bail!(
+                "gpu attestation count mismatch: expected {expected_devices}, got {}",
+                output.claims.len()
+            );
+        }
+        let mut parsed_claims = Vec::with_capacity(output.claims.len());
+        for (index, claim) in output.claims.iter().enumerate() {
+            let claim: NvidiaGpuClaim = serde_json::from_value(claim.clone())
+                .with_context(|| format!("invalid GPU claim at index {index}"))?;
+            if claim.device_type != "gpu" {
+                bail!("gpu claim at index {index} has an invalid device type");
+            }
+            if claim.eat_nonce != nonce || !claim.nonce_match {
+                bail!("gpu claim at index {index} has an invalid nonce");
+            }
+            parsed_claims.push(claim);
+        }
+        Ok(ValidatedClaims {
+            raw: output.claims,
+            parsed: parsed_claims,
+        })
+    }
+
+    fn verify_claim_policy(
+        claims: &[NvidiaGpuClaim],
+        devices: &[GpuDeviceState],
+        policy: &GpuPolicy,
+    ) -> Result<()> {
+        for (index, device) in devices.iter().enumerate() {
+            if !device.cc_enabled {
+                bail!("gpu at index {index} does not enable confidential compute mode");
+            }
+            if device.devtools && !policy.allow_devtools {
+                bail!("gpu at index {index} enables NVIDIA DevTools mode");
+            }
+        }
+        for (index, claim) in claims.iter().enumerate() {
+            if claim.measres != "success" {
+                bail!("gpu claim at index {index} has unsuccessful measurements");
+            }
+            if !policy.allow_insecure_boot && !claim.secboot {
+                bail!("gpu claim at index {index} does not assert secure boot");
+            }
+            if !policy.allow_debug && claim.dbgstat != NvidiaGpuDebugStatus::Disabled {
+                bail!("gpu claim at index {index} does not disable debug mode");
+            }
+        }
+        Ok(())
+    }
+
+    fn attestation_event(stdout: &[u8], devices: u32, devtools: bool) -> Result<Vec<u8>> {
+        let event = GpuAttestationEvent {
+            version: EVENT_VERSION,
+            provider: "nvidia",
+            devices,
+            cc_mode: "on",
+            devtools,
+            evidence_sha256: hex::encode(sha256(stdout)),
+        };
+        serde_json::to_vec(&event).context("failed to serialize GPU attestation event")
+    }
+
+    fn normalize_proxy_url(proxy_url: Option<&str>) -> Result<Option<String>> {
+        let Some(proxy_url) = proxy_url.map(str::trim).filter(|url| !url.is_empty()) else {
+            return Ok(None);
+        };
+        let parsed = url::Url::parse(proxy_url).context("invalid NVIDIA attestation proxy URL")?;
+        if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+            bail!("NVIDIA attestation proxy must be an absolute HTTP(S) URL");
+        }
+        if parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.path() != "/"
+        {
+            bail!(
+                "NVIDIA attestation proxy URL must not contain credentials, path, query, or fragment"
+            );
+        }
+        Ok(Some(parsed.as_str().trim_end_matches('/').to_string()))
+    }
+
+    fn nvattest_args(nonce: &str, proxy_url: Option<&str>) -> Result<Vec<String>> {
+        let mut args = vec![
+            "attest".to_string(),
+            "--device".to_string(),
+            "gpu".to_string(),
+            "--verifier".to_string(),
+            "local".to_string(),
+            "--nonce".to_string(),
+            nonce.to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+        ];
+        if let Some(proxy_url) = normalize_proxy_url(proxy_url)? {
+            args.extend([
+                "--ocsp-url".to_string(),
+                format!("{proxy_url}/ocsp"),
+                "--rim-url".to_string(),
+                proxy_url,
+                "--relying-party-policy".to_string(),
+                TRUST_OUTPOST_POLICY.to_string(),
+            ]);
+        }
+        Ok(args)
+    }
+
+    /// Run local GPU attestation via nvattest with a fresh evidence nonce. If
+    /// sys-config selects a collateral proxy, both RIM and OCSP traffic is
+    /// routed through it and NVIDIA's Trust Outpost policy accepts cached OCSP
+    /// responses whose responder nonce no longer matches. The independent GPU
+    /// evidence nonce remains mandatory and is checked below.
+    pub(super) async fn attest_gpu(
+        expected_devices: u32,
+        proxy_url: Option<&str>,
+    ) -> Result<GpuAttestationResult> {
         if !Path::new(NVATTEST).exists() {
             bail!("nvattest is not available in this image");
         }
@@ -1142,23 +1433,18 @@ mod gpu {
             warn!("failed to step system clock: {err:?}");
         }
         let nonce = hex::encode(rand::thread_rng().gen::<[u8; 32]>());
-        let output = run_command(
-            NVATTEST,
-            &[
-                "attest",
-                "--device",
-                "gpu",
-                "--verifier",
-                "local",
-                "--nonce",
-                &nonce,
-            ],
-            ATTESTATION_TIMEOUT,
-        )
-        .await?;
+        let args = nvattest_args(&nonce, proxy_url)?;
+        if args.iter().any(|arg| arg == "--relying-party-policy")
+            && !Path::new(TRUST_OUTPOST_POLICY).is_file()
+        {
+            bail!("NVIDIA attestation proxy is configured but {TRUST_OUTPOST_POLICY} is missing");
+        }
+        let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+        let output = run_command(NVATTEST, &args, ATTESTATION_TIMEOUT).await?;
         if !output.stderr.is_empty() {
             info!("nvattest: {}", truncated_lossy(&output.stderr, 2048));
         }
+        save_attestation_output(&output.stdout).context("failed to save GPU attestation output")?;
         if !output.status.success() {
             bail!(
                 "nvattest exited with {}: {}",
@@ -1166,14 +1452,66 @@ mod gpu {
                 truncated_lossy(&output.stderr, 512),
             );
         }
-        if let Err(err) = save_attestation_output(&output.stdout) {
-            warn!("failed to save GPU attestation output: {err:?}");
+        let claims = validate_attestation_output(&output.stdout, &nonce, expected_devices)?;
+        Ok(GpuAttestationResult {
+            claims: claims.raw,
+            parsed_claims: claims.parsed,
+            output: output.stdout,
+            devices: expected_devices,
+        })
+    }
+
+    pub(super) fn measure_gpu_policy(compose_path: &Path) -> Result<[u8; 32]> {
+        let compose_json = fs::read(compose_path)
+            .with_context(|| format!("failed to read {}", compose_path.display()))?;
+        let digest = gpu_policy_hash(&compose_json).context("failed to hash raw GPU policy")?;
+        emit_runtime_event("gpu-policy-hash", &digest)
+            .context("failed to emit GPU policy measurement")?;
+        Ok(digest)
+    }
+
+    pub(super) fn evaluate_rego_policy(policy: &GpuPolicy, claims: &[Value]) -> Result<()> {
+        let Some(rego) = policy.rego.as_deref() else {
+            return Ok(());
+        };
+        evaluate_policy(rego, claims).context("failed to apply GPU Rego policy")
+    }
+
+    /// Evaluate the app-provided Rego v0 policy using the same input shape as
+    /// NVIDIA relying-party policies: the nvattest `claims` JSON array.
+    pub(super) fn evaluate_policy(policy: &str, claims: &[Value]) -> Result<()> {
+        evaluate_policy_with_timeout(policy, claims, POLICY_TIMEOUT)
+    }
+
+    fn evaluate_policy_with_timeout(
+        policy: &str,
+        claims: &[Value],
+        timeout: Duration,
+    ) -> Result<()> {
+        let mut engine = regorus::Engine::new();
+        engine.set_rego_v0(true);
+        engine.set_execution_timer_config(regorus::utils::limits::ExecutionTimerConfig {
+            limit: timeout,
+            check_interval: std::num::NonZeroU32::new(1024).unwrap_or(std::num::NonZeroU32::MIN),
+        });
+        engine
+            .add_policy("gpu-policy.rego".to_string(), policy.to_string())
+            .context("failed to load GPU policy")?;
+        let input = serde_json::to_string(claims).context("failed to serialize GPU claims")?;
+        engine
+            .set_input_json(&input)
+            .context("failed to set GPU policy input")?;
+        if !engine
+            .eval_bool_query(POLICY_ENTRYPOINT.to_string(), false)
+            .context("failed to evaluate GPU policy")?
+        {
+            bail!("gpu policy rejected the attestation claims");
         }
         Ok(())
     }
 
     fn save_attestation_output(stdout: &[u8]) -> Result<()> {
-        let output_path = Path::new(ATTESTATION_OUTPUT);
+        let output_path = Path::new(GPU_ATTESTATION_OUTPUT);
         if let Some(parent) = output_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -1193,30 +1531,444 @@ mod gpu {
             None => text.to_string(),
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn add_pci_device(root: &Path, name: &str, vendor: &str, class: &str) {
+            let device = root.join(name);
+            fs::create_dir_all(&device).unwrap();
+            fs::write(device.join("vendor"), vendor).unwrap();
+            fs::write(device.join("class"), class).unwrap();
+        }
+
+        fn nvattest_output(nonce: &str, claims: usize) -> Vec<u8> {
+            let claims = (0..claims)
+                .map(|_| {
+                    serde_json::json!({
+                        "x-nvidia-device-type": "gpu",
+                        "eat_nonce": nonce,
+                        "x-nvidia-gpu-attestation-report-nonce-match": true,
+                        "measres": "success",
+                        "secboot": true,
+                        "dbgstat": "disabled"
+                    })
+                })
+                .collect::<Vec<_>>();
+            serde_json::to_vec(&serde_json::json!({
+                "result_code": 0,
+                "claims": claims,
+                "detached_eat": {}
+            }))
+            .unwrap()
+        }
+
+        // Captured with the pinned nvattest SDK on an Ubuntu 22.04 GCP A3 TDX
+        // VM with an H100 and the NVIDIA 580 open kernel driver.
+        const H100_ATTESTATION_OUTPUT: &[u8] =
+            include_bytes!("../tests/fixtures/gpu_attestation_h100.json");
+
+        #[test]
+        fn inventory_counts_nvidia_and_non_nvidia_gpus() {
+            let root = tempfile::tempdir().unwrap();
+            add_pci_device(root.path(), "0000:01:00.0", "0x10de\n", "0x030200\n");
+            add_pci_device(root.path(), "0000:02:00.0", "0x1234\n", "0x030000\n");
+            add_pci_device(root.path(), "0000:03:00.0", "0x1af4\n", "0x020000\n");
+            assert_eq!(
+                gpu_inventory_at(root.path()).unwrap(),
+                GpuInventory {
+                    total: 2,
+                    nvidia: 1
+                }
+            );
+        }
+
+        #[test]
+        fn gpu_count_rejects_non_nvidia_gpus() {
+            let mixed = GpuInventory {
+                total: 2,
+                nvidia: 1,
+            };
+            assert!(nvidia_gpu_count(mixed).is_err());
+
+            let nvidia = GpuInventory {
+                total: 2,
+                nvidia: 2,
+            };
+            assert_eq!(nvidia_gpu_count(nvidia).unwrap(), 2);
+        }
+
+        #[test]
+        fn proxy_routes_ocsp_and_rim_and_selects_outpost_policy() {
+            let nonce = format!("test-nonce-{}", std::process::id());
+            let args = nvattest_args(&nonce, Some("http://10.0.2.2:8090/")).unwrap();
+            assert!(args
+                .windows(2)
+                .any(|args| args == ["--ocsp-url", "http://10.0.2.2:8090/ocsp"]));
+            assert!(args
+                .windows(2)
+                .any(|args| args == ["--rim-url", "http://10.0.2.2:8090"]));
+            assert!(args
+                .windows(2)
+                .any(|args| args == ["--relying-party-policy", TRUST_OUTPOST_POLICY]));
+
+            let direct = nvattest_args(&nonce, None).unwrap();
+            assert!(!direct.iter().any(|arg| arg == "--ocsp-url"));
+            assert!(!direct.iter().any(|arg| arg == "--relying-party-policy"));
+        }
+
+        #[test]
+        fn proxy_url_validation_is_fail_closed() {
+            let nonce = format!("test-nonce-{}", std::process::id());
+            assert!(nvattest_args(&nonce, Some("file:///tmp/proxy")).is_err());
+            assert!(nvattest_args(&nonce, Some("https://user@example.com")).is_err());
+            assert!(nvattest_args(&nonce, Some("https://example.com?q=1")).is_err());
+            assert!(nvattest_args(&nonce, Some("https://example.com/base")).is_err());
+            assert!(normalize_proxy_url(Some("  ")).unwrap().is_none());
+        }
+
+        #[test]
+        fn basic_policy_requires_cc_and_rejects_devtools_by_default() {
+            let nonce = "44".repeat(32);
+            let output = nvattest_output(&nonce, 1);
+            let claims = validate_attestation_output(&output, &nonce, 1).unwrap();
+            let production = [GpuDeviceState {
+                cc_enabled: true,
+                devtools: false,
+            }];
+            verify_claim_policy(&claims.parsed, &production, &GpuPolicy::default()).unwrap();
+
+            let non_cc = [GpuDeviceState {
+                cc_enabled: false,
+                devtools: false,
+            }];
+            let err =
+                verify_claim_policy(&claims.parsed, &non_cc, &GpuPolicy::default()).unwrap_err();
+            assert!(err.to_string().contains("confidential compute mode"));
+
+            let devtools = [GpuDeviceState {
+                cc_enabled: true,
+                devtools: true,
+            }];
+            assert!(verify_claim_policy(&claims.parsed, &devtools, &GpuPolicy::default()).is_err());
+            verify_claim_policy(
+                &claims.parsed,
+                &devtools,
+                &GpuPolicy {
+                    allow_devtools: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+
+        #[test]
+        fn nvattest_output_requires_every_expected_gpu_and_fresh_nonce() {
+            let nonce = "11".repeat(32);
+            let valid = nvattest_output(&nonce, 2);
+            validate_attestation_output(&valid, &nonce, 2).unwrap();
+            assert!(validate_attestation_output(&valid, &nonce, 1).is_err());
+
+            let mut invalid: Value = serde_json::from_slice(&valid).unwrap();
+            invalid["claims"][1]["eat_nonce"] = Value::String("stale".to_string());
+            assert!(
+                validate_attestation_output(&serde_json::to_vec(&invalid).unwrap(), &nonce, 2)
+                    .is_err()
+            );
+
+            // Basic claim settings are enforced after structural validation.
+            let mut extra_claims: Value = serde_json::from_slice(&valid).unwrap();
+            extra_claims["claims"][0]["dbgstat"] = Value::String("enabled".to_string());
+            validate_attestation_output(&serde_json::to_vec(&extra_claims).unwrap(), &nonce, 2)
+                .unwrap();
+        }
+
+        #[test]
+        fn basic_claim_policy_is_fail_closed_and_honors_opt_ins() {
+            let nonce = "33".repeat(32);
+            let output = nvattest_output(&nonce, 1);
+            let claims = validate_attestation_output(&output, &nonce, 1).unwrap();
+            let devices = [GpuDeviceState {
+                cc_enabled: true,
+                devtools: false,
+            }];
+            verify_claim_policy(&claims.parsed, &devices, &GpuPolicy::default()).unwrap();
+
+            let with_policy = |name: &str, value: Value, policy: &GpuPolicy| {
+                let mut output: Value = serde_json::from_slice(&output).unwrap();
+                output["claims"][0][name] = value;
+                let output = serde_json::to_vec(&output).unwrap();
+                let claims = validate_attestation_output(&output, &nonce, 1).unwrap();
+                verify_claim_policy(&claims.parsed, &devices, policy)
+            };
+
+            assert!(with_policy("secboot", Value::Bool(false), &GpuPolicy::default()).is_err());
+            with_policy(
+                "secboot",
+                Value::Bool(false),
+                &GpuPolicy {
+                    allow_insecure_boot: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+            assert!(with_policy(
+                "dbgstat",
+                Value::String("enabled".to_string()),
+                &GpuPolicy::default(),
+            )
+            .is_err());
+            with_policy(
+                "dbgstat",
+                Value::String("enabled".to_string()),
+                &GpuPolicy {
+                    allow_debug: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+            let mut unknown_debug: Value = serde_json::from_slice(&output).unwrap();
+            unknown_debug["claims"][0]["dbgstat"] = Value::String("unknown".to_string());
+            assert!(validate_attestation_output(
+                &serde_json::to_vec(&unknown_debug).unwrap(),
+                &nonce,
+                1,
+            )
+            .is_err());
+
+            assert!(with_policy(
+                "measres",
+                Value::String("failure".to_string()),
+                &GpuPolicy {
+                    allow_debug: true,
+                    allow_insecure_boot: true,
+                    ..Default::default()
+                },
+            )
+            .is_err());
+
+            for required in ["measres", "secboot", "dbgstat"] {
+                let mut missing: Value = serde_json::from_slice(&output).unwrap();
+                missing["claims"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(required);
+                assert!(validate_attestation_output(
+                    &serde_json::to_vec(&missing).unwrap(),
+                    &nonce,
+                    1,
+                )
+                .is_err());
+            }
+        }
+
+        #[test]
+        fn real_h100_attestation_fixture_validates_and_drives_rego() {
+            let nonce = "11".repeat(32);
+            let claims = validate_attestation_output(H100_ATTESTATION_OUTPUT, &nonce, 1).unwrap();
+            assert_eq!(claims.raw[0]["hwmodel"], "GH100 A01 GSP BROM");
+            assert_eq!(claims.raw[0]["x-nvidia-gpu-claims-version"], "3.0");
+            verify_claim_policy(
+                &claims.parsed,
+                &[GpuDeviceState {
+                    cc_enabled: true,
+                    devtools: false,
+                }],
+                &GpuPolicy::default(),
+            )
+            .unwrap();
+
+            let policy = r#"
+                package policy
+                default nv_match = false
+                nv_match {
+                    count(input) == 1
+                    input[0].secboot == true
+                    input[0].dbgstat == "disabled"
+                    input[0].measres == "success"
+                }
+            "#;
+            evaluate_policy(policy, &claims.raw).unwrap();
+        }
+
+        #[test]
+        fn event_commits_to_complete_nvattest_output() {
+            let nonce = "22".repeat(32);
+            let output = nvattest_output(&nonce, 1);
+            let event: Value =
+                serde_json::from_slice(&attestation_event(&output, 1, true).unwrap()).unwrap();
+            assert_eq!(event["version"], EVENT_VERSION);
+            assert_eq!(event["devices"], 1);
+            assert!(event.get("policy").is_none());
+            assert_eq!(event["cc_mode"], "on");
+            assert_eq!(event["devtools"], true);
+            assert_eq!(event["evidence_sha256"], hex::encode(sha256(&output)));
+        }
+
+        #[test]
+        fn app_policy_receives_claims_array_and_must_return_true() {
+            let claims = vec![serde_json::json!({"status": "accepted"})];
+            let policy = r#"
+                package policy
+                default nv_match = false
+                nv_match {
+                    count(input) == 1
+                    input[0].status == "accepted"
+                }
+            "#;
+            evaluate_policy(policy, &claims).unwrap();
+            assert!(evaluate_policy(policy, &[]).is_err());
+
+            let rejected = vec![serde_json::json!({"status": "rejected"})];
+            assert!(evaluate_policy(policy, &rejected).is_err());
+            assert!(evaluate_policy("package policy", &claims).is_err());
+            assert!(evaluate_policy("not valid rego", &claims).is_err());
+
+            let allow_no_gpus = GpuPolicy {
+                rego: Some(
+                    r#"
+                        package policy
+                        default nv_match = false
+                        nv_match { count(input) == 0 }
+                    "#
+                    .to_string(),
+                ),
+                ..Default::default()
+            };
+            evaluate_rego_policy(&allow_no_gpus, &[]).unwrap();
+
+            let require_one_gpu = GpuPolicy {
+                rego: Some(policy.to_string()),
+                ..Default::default()
+            };
+            assert!(evaluate_rego_policy(&require_one_gpu, &[]).is_err());
+            evaluate_rego_policy(&GpuPolicy::default(), &[]).unwrap();
+        }
+
+        #[test]
+        fn rego_policy_evaluation_is_time_bounded() {
+            let policy = r#"
+                package policy
+                default nv_match = false
+                nv_match {
+                    count([x |
+                        x := numbers.range(0, 5000)[_]
+                        y := numbers.range(0, 5000)[_]
+                        x == y
+                    ]) > 0
+                }
+            "#;
+            evaluate_policy_with_timeout(policy, &[], Duration::from_millis(50)).unwrap_err();
+        }
+
+        #[test]
+        fn gpu_policy_measurement_defaults_to_empty_object_and_uses_raw_json() {
+            let no_requirements = br#"{}"#;
+            let absent = br#"{"requirements": {}}"#;
+            let empty_digest = sha256(b"{}");
+            assert_eq!(gpu_policy_hash(no_requirements).unwrap(), empty_digest);
+            assert_eq!(gpu_policy_hash(absent).unwrap(), empty_digest);
+
+            let empty = br#"{"requirements": {"gpu_policy": {}}}"#;
+            assert_eq!(gpu_policy_hash(empty).unwrap(), empty_digest);
+
+            let explicit_default = br#"{"requirements":{"gpu_policy":{"attest_gpu":true}}}"#;
+            let explicit_default_digest = gpu_policy_hash(explicit_default).unwrap();
+            assert_ne!(explicit_default_digest, empty_digest);
+
+            let reordered = br#"
+                {
+                    "requirements": {
+                        "gpu_policy": {
+                            "rego": "package policy",
+                            "allow_debug": false
+                        }
+                    }
+                }
+            "#;
+            let canonical_order =
+                br#"{"requirements":{"gpu_policy":{"allow_debug":false,"rego":"package policy"}}}"#;
+            assert_eq!(
+                gpu_policy_hash(reordered).unwrap(),
+                gpu_policy_hash(canonical_order).unwrap()
+            );
+        }
+    }
 }
 
 impl Stage0<'_> {
-    /// Enforce `requirements.attest_gpu` (default true): attest an attached
-    /// NVIDIA GPU before continuing to key provisioning, or — when explicitly
-    /// disabled — set the GPU ready state without verification.
-    async fn setup_gpu(&self) -> Result<()> {
-        if !gpu::nvidia_gpu_present()? {
-            return Ok(());
-        }
-        if !self.shared.app_compose.attest_gpu() {
-            warn!("requirements.attest_gpu is false; setting GPU ready state without attestation");
+    /// Enforce `requirements.gpu_policy.attest_gpu` (default true): attest an
+    /// attached NVIDIA GPU before continuing to key provisioning, or — when
+    /// explicitly disabled — set the GPU ready state without verification. The
+    /// optional Rego policy is always evaluated; when no attestation is
+    /// performed, its claims-array input is empty.
+    async fn measure_gpu(&self) -> Result<[u8; 32]> {
+        let gpu_policy_hash = gpu::measure_gpu_policy(&self.shared.dir.app_compose_file())?;
+
+        let gpu_policy = self
+            .shared
+            .app_compose
+            .requirements
+            .as_ref()
+            .map(|requirements| requirements.gpu_policy.clone())
+            .unwrap_or_default();
+
+        let inventory = gpu::gpu_inventory()?;
+        if !gpu_policy.attest_gpu {
+            // Attestation is explicitly disabled, so there are no claims. Rego
+            // still runs with an empty input before any GPU is made ready.
+            gpu::evaluate_rego_policy(&gpu_policy, &[])?;
+            if gpu_policy.rego.is_some() {
+                info!("application GPU Rego policy accepted an empty claims array");
+            }
+            if inventory.nvidia == 0 {
+                return Ok(gpu_policy_hash);
+            }
+            warn!(
+                "requirements.gpu_policy.attest_gpu is false; setting GPU ready state without attestation"
+            );
             // Best-effort: a GPU with CC mode off has no ready state to set.
-            if let Err(err) = gpu::set_gpu_ready_state().await {
+            if let Err(err) = gpu::set_gpu_ready_state(inventory.nvidia) {
                 warn!("failed to set GPU ready state: {err:?}");
             }
-            return Ok(());
+            return Ok(gpu_policy_hash);
+        }
+        let expected_devices = gpu::nvidia_gpu_count(inventory)?;
+        if expected_devices == 0 {
+            gpu::evaluate_rego_policy(&gpu_policy, &[])?;
+            if gpu_policy.rego.is_some() {
+                info!("application GPU Rego policy accepted an empty claims array");
+            }
+            return Ok(gpu_policy_hash);
         }
         self.vmm.notify_q("boot.progress", "attesting GPU").await;
         info!("verifying GPU TEE attestation");
-        gpu::attest_gpu().await?;
-        gpu::set_gpu_ready_state().await?;
+        let attestation = gpu::attest_gpu(
+            expected_devices,
+            self.shared
+                .sys_config
+                .nvidia_attestation_proxy_url
+                .as_deref(),
+        )
+        .await?;
+
+        let gpu_state = gpu::query_gpu_state(expected_devices)?;
+        attestation
+            .verify_claim_policy(&gpu_state, &gpu_policy)
+            .context("failed to apply basic GPU policy")?;
+        gpu::evaluate_rego_policy(&gpu_policy, attestation.claims())?;
+
+        info!("application GPU policy accepted the attestation claims and state");
+        gpu_state.set_ready()?;
+        let devtools = gpu_state.any_devtools();
+        let event = attestation.event(devtools)?;
+        emit_runtime_event("gpu-attestation", &event)
+            .context("failed to emit GPU attestation event")?;
         info!("GPU TEE attestation succeeded");
-        Ok(())
+        Ok(gpu_policy_hash)
     }
 }
 
@@ -1265,6 +2017,7 @@ impl AppIdValidator {
 struct AppInfo {
     instance_info: InstanceInfo,
     compose_hash: [u8; 32],
+    gpu_policy_hash: [u8; 32],
 }
 
 struct Stage0<'a> {
@@ -1346,7 +2099,7 @@ impl<'a> Stage0<'a> {
                 if let Some(att) = &cert.attestation {
                     match att.decode_app_info(false) {
                         Ok(kms_info) => emit_runtime_event("mr-kms", &kms_info.mr_aggregated)
-                            .context("Failed to extend mr-kms to RTMR3")?,
+                            .context("failed to extend mr-kms to the launch measurement")?,
                         Err(err) if is_unsupported_app_info_quote(&err) => {
                             warn!("Skipping mr-kms runtime event for unsupported attestation quote: {err:#}");
                         }
@@ -1368,7 +2121,7 @@ impl<'a> Stage0<'a> {
             .context("Failed to get app key")?;
 
         emit_runtime_event("os-image-hash", &response.os_image_hash)
-            .context("Failed to extend os-image-hash to RTMR3")?;
+            .context("failed to extend os-image-hash to the launch measurement")?;
 
         let (_, ca_pem) = x509_parser::pem::parse_x509_pem(tmp_ca.ca_cert.as_bytes())
             .context("Failed to parse ca cert")?;
@@ -1453,10 +2206,12 @@ impl<'a> Stage0<'a> {
     fn generate_tpm_app_keys(&self) -> Result<AppKeys> {
         let tpm = TpmContext::detect().context("failed to detect TPM context")?;
 
-        // Get PCR policy for sealing (boot chain + app PCR)
-        let pcr_policy = tpm::dstack_pcr_policy();
+        // PCR policy: platform-specific (AWS: sha384 PCR4/7/8/12/14)
+        let platform = dstack_types::Platform::detect().context("failed to detect platform")?;
+        let pcr_policy =
+            tpm::dstack_pcr_policy_for_platform(platform).context("unsupported TPM platform")?;
 
-        // Try to read sealed seed (bound to PCR values including app PCR)
+        // Try to read sealed seed (bound to boot/config/event PCRs)
         if let Some(seed) = tpm
             .unseal::<32>(tpm::SEALED_NV_INDEX, tpm::PRIMARY_KEY_HANDLE, &pcr_policy)
             .context("failed to unseal from TPM")?
@@ -1472,7 +2227,7 @@ impl<'a> Stage0<'a> {
         // No sealed seed exists, generate new one
         info!("no sealed seed found, generating new seed...");
         let seed: [u8; 32] = tpm.get_random().context("TPM RNG unavailable")?;
-        // Seal the new seed to TPM with PCR policy (including app PCR)
+        // Seal the new seed under the platform PCR policy
         tpm.seal(
             &seed,
             tpm::SEALED_NV_INDEX,
@@ -1826,7 +2581,7 @@ impl<'a> Stage0<'a> {
         Ok(())
     }
 
-    fn measure_app_info(&self) -> Result<AppInfo> {
+    async fn measure_app_info(&self) -> Result<AppInfo> {
         let compose_hash = sha256_file(self.shared.dir.app_compose_file())?;
         let truncated_compose_hash = truncate(&compose_hash, 20);
         let key_provider = self.shared.app_compose.key_provider();
@@ -1870,25 +2625,54 @@ impl<'a> Stage0<'a> {
         // app_id is the deploy-time instance_info.app_id (which defaults to the
         // truncated compose hash when unset, see above). Previously the non-KMS
         // path forced the compose-derived value; now a deployment may pin an
-        // explicit app_id even without a KMS. The app_id is measured into RTMR3
-        // (emit_runtime_event below), so a verifier sees exactly this value — with
+        // explicit app_id even without a KMS. The app_id is measured into the
+        // platform launch register, so a verifier sees exactly this value. With
         // no KMS to bind it, the relying party MUST gate the compose_hash
         // (which launcher build) separately from the app_id (which app).
 
         emit_runtime_event("system-preparing", &[])?;
         emit_runtime_event("app-id", &instance_info.app_id)?;
         emit_runtime_event("compose-hash", &compose_hash)?;
+        let gpu_policy_hash = self
+            .measure_gpu()
+            .await
+            .context("failed to verify GPU TEE attestation")?;
+
         emit_runtime_event("instance-id", &instance_id)?;
         emit_runtime_event("boot-mr-done", &[])?;
+
+        // AWS: commit the measured app identity into PCR8 (mr_config analogue).
+        // The config id is computed from measured reality (MrConfig V2), so
+        // there is no host-supplied claim to cross-check later. key_provider_id
+        // is the deploy-time pin from app-compose (empty = not pinned); the
+        // actual provider id is enforced against the pin in
+        // verify_key_provider_id.
+        let aws_config_id = dstack_types::mr_config::MrConfig::V2 {
+            compose_hash: &compose_hash,
+            app_id: instance_info
+                .app_id
+                .as_slice()
+                .try_into()
+                .ok()
+                .context("invalid app id")?,
+            key_provider,
+            key_provider_id: &self.shared.app_compose.key_provider_id,
+        }
+        .to_mr_config_id();
+        dstack_attest::measure_aws_config_pcr(&aws_config_id)
+            .context("failed to measure AWS config into PCR8")?;
+
         Ok(AppInfo {
             instance_info,
             compose_hash,
+            gpu_policy_hash,
         })
     }
 
     fn verify_app(&self, app_info: &AppInfo, keys: &AppKeys) -> Result<()> {
         config_id_verifier::verify_mr_config_id(
             &app_info.compose_hash,
+            &app_info.gpu_policy_hash,
             &app_info
                 .instance_info
                 .app_id
@@ -1901,16 +2685,16 @@ impl<'a> Stage0<'a> {
             keys.key_provider.id(),
         )?;
         self.verify_key_provider_id(keys.key_provider.id())?;
+        // TPM uses an empty id: the instance app-root pubkey is not a stable
+        // provider identity and must not enter the launch measurement chain.
         let kp_info = match &keys.key_provider {
             KeyProvider::None { .. } => KeyProviderInfo::new("none".into(), "".into()),
-            KeyProvider::Local { mr, .. } => {
-                KeyProviderInfo::new("local-sgx".into(), hex::encode(mr))
+            KeyProvider::Local { .. } => {
+                KeyProviderInfo::new("local-sgx".into(), hex::encode(keys.key_provider.id()))
             }
-            KeyProvider::Tpm { pubkey, .. } => {
-                KeyProviderInfo::new("tpm".into(), hex::encode(pubkey))
-            }
-            KeyProvider::Kms { pubkey, .. } => {
-                KeyProviderInfo::new("kms".into(), hex::encode(pubkey))
+            KeyProvider::Tpm { .. } => KeyProviderInfo::new("tpm".into(), "".into()),
+            KeyProvider::Kms { .. } => {
+                KeyProviderInfo::new("kms".into(), hex::encode(keys.key_provider.id()))
             }
         };
         emit_key_provider_info(&kp_info)?;
@@ -1920,6 +2704,7 @@ impl<'a> Stage0<'a> {
     async fn setup_fs(self) -> Result<Stage1<'a>> {
         let app_info = self
             .measure_app_info()
+            .await
             .context("Failed to measure app info")?;
         if self.shared.app_compose.key_provider().is_kms() {
             cmd_show_mrs()?;
