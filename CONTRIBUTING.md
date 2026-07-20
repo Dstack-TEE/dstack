@@ -62,6 +62,12 @@ dstack deploy ./docker-compose.yml \
   --no-tee
 ```
 
+To exercise persistent TPM-backed app keys as well, install `swtpm` on the VMM
+host and select `key_provider=tpm` in the VMM console (or pass `--key-provider
+tpm` in tooling that exposes the compose option). The VMM keeps the software
+TPM state in the VM work directory so that seal/unseal survives guest restarts.
+The software TPM is host-controlled and does not provide hardware isolation.
+
 The simulator package is installed only in development images. This mode
 provides no hardware isolation and must never be used with production
 workloads or secrets. Real quote generation, hardware isolation, and KMS

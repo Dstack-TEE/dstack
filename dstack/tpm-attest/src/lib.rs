@@ -48,7 +48,7 @@ const AWS_NITRO_PCRS: [u32; 5] = [4, 7, 8, 12, 14];
 
 pub fn dstack_pcr_policy_for_platform(platform: Platform) -> Result<PcrSelection> {
     match platform {
-        Platform::Gcp => Ok(dstack_pcr_policy()),
+        Platform::Dstack | Platform::Gcp => Ok(dstack_pcr_policy()),
         Platform::AwsEc2 => Ok(PcrSelection::sha384(&AWS_NITRO_PCRS)),
         _ => bail!("TPM local key provider is not supported on {platform:?}"),
     }
@@ -366,6 +366,16 @@ mod tests {
     fn aws_pcr_policy_binds_boot_config_and_event_pcrs() {
         let policy = dstack_pcr_policy_for_platform(Platform::AwsEc2).unwrap();
         assert_eq!(policy.to_arg(), "sha384:4,7,8,12,14");
+    }
+
+    #[test]
+    fn dstack_platform_uses_development_tpm_policy() {
+        assert_eq!(
+            dstack_pcr_policy_for_platform(Platform::Dstack)
+                .unwrap()
+                .to_arg(),
+            "sha256:0,2,14"
+        );
     }
 }
 

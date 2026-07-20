@@ -47,6 +47,30 @@ pub(crate) mod registry;
 mod vm_info;
 mod workdir;
 
+fn signal_pidfd(pid: u32, signal: libc::c_int) -> std::io::Result<()> {
+    // SAFETY: pidfd syscalls receive scalar arguments and a null siginfo pointer.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            fd,
+            signal,
+            std::ptr::null::<libc::siginfo_t>(),
+            0,
+        )
+    };
+    // SAFETY: fd was returned by pidfd_open and is owned by this function.
+    unsafe { libc::close(fd as libc::c_int) };
+    if result < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct PortMapping {
     pub address: IpAddr,
@@ -425,8 +449,42 @@ impl App {
 
     pub async fn stop_vm(&self, id: &str) -> Result<()> {
         self.set_started(id, false)?;
-        self.supervisor.stop(id).await?;
+        self.stop_vm_process(id).await?;
         Ok(())
+    }
+
+    async fn stop_vm_process(&self, id: &str) -> Result<()> {
+        let Some(info) = self.supervisor.info(id).await? else {
+            return Ok(());
+        };
+        // Non-TPM VMs run QEMU directly and keep the existing Supervisor stop
+        // path. Only the TPM launcher's hidden subcommand implements graceful
+        // child-process shutdown.
+        if info.config.args.first().map(String::as_str) != Some("vm-launcher") {
+            return self.supervisor.stop(id).await;
+        }
+        if info.state.status.is_running() {
+            let pid = info.state.pid.context("running VM launcher has no PID")?;
+            if let Err(error) = signal_pidfd(pid, libc::SIGTERM) {
+                warn!(id, %pid, %error, "failed to signal VM launcher gracefully; forcing shutdown");
+                return self.supervisor.stop(id).await;
+            }
+            for _ in 0..150 {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                let running = self
+                    .supervisor
+                    .info(id)
+                    .await?
+                    .is_some_and(|info| info.state.status.is_running());
+                if !running {
+                    // Synchronize Supervisor's `started` flag after the launcher
+                    // completed its graceful child cleanup.
+                    return self.supervisor.stop(id).await;
+                }
+            }
+            warn!(id, "VM launcher did not stop gracefully; forcing shutdown");
+        }
+        self.supervisor.stop(id).await
     }
 
     pub async fn remove_vm(&self, id: &str) -> Result<()> {
@@ -464,8 +522,8 @@ impl App {
     /// `delete_workdir`: true for user-initiated removal, false for orphan cleanup.
     async fn finish_remove_vm(&self, id: &str, delete_workdir: bool) -> Result<()> {
         // Stop the supervisor process (idempotent if already stopped)
-        if let Err(err) = self.supervisor.stop(id).await {
-            debug!("supervisor.stop({id}) during removal: {err:?}");
+        if let Err(err) = self.stop_vm_process(id).await {
+            debug!("graceful VM stop during removal failed: {err:?}");
         }
 
         // Poll until the process is no longer running, then remove it.

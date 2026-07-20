@@ -30,6 +30,7 @@ mod main_routes;
 mod main_service;
 mod one_shot;
 mod openapi;
+mod vm_launcher;
 
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const GIT_REV: &str = git_version::git_version!(
@@ -60,6 +61,9 @@ enum Command {
     Serve,
     /// One-shot VM execution mode for debugging
     Run(RunArgs),
+    /// Internal per-VM QEMU/swtpm launcher.
+    #[command(hide = true)]
+    VmLauncher(VmLauncherArgs),
 }
 
 #[derive(ClapArgs)]
@@ -72,6 +76,13 @@ struct RunArgs {
     /// Dry run: only output QEMU command without executing
     #[arg(long)]
     dry_run: bool,
+}
+
+#[derive(ClapArgs)]
+struct VmLauncherArgs {
+    /// Path to the generated VM launch specification.
+    #[arg(long)]
+    spec: String,
 }
 
 async fn run_external_api(app: App, figment: Figment, api_auth: ApiToken) -> Result<()> {
@@ -155,6 +166,12 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
+    // The per-VM launcher must stay minimal: do not load or validate the VMM
+    // server configuration in this mode.
+    if let Some(Command::VmLauncher(launcher_args)) = &args.command {
+        return vm_launcher::run(Path::new(&launcher_args.spec)).await;
+    }
+
     let figment = config::load_config_figment(args.config.as_deref());
     let config = Config::extract_or_default(&figment)?.abs_path()?;
 
@@ -166,6 +183,7 @@ async fn main() -> Result<()> {
 
     // Handle commands
     match args.command.unwrap_or_default() {
+        Command::VmLauncher(_) => unreachable!("launcher mode handled before config loading"),
         Command::Run(run_args) => {
             // One-shot VM execution mode
             return one_shot::run_one_shot(

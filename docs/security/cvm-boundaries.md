@@ -44,7 +44,7 @@ This is the main configuration file for the application in JSON format:
 | init_script | 0.5.5 | string | Bash script that executed prior to dockerd startup |
 | storage_fs | 0.5.5 | string | Filesystem type for the data disk of the CVM. Supported values: "zfs", "ext4". default to "zfs". **ZFS:** Ensures filesystem integrity with built-in data protection features. **ext4:** Provides better performance for database applications with lower overhead and faster I/O operations, but no strong integrity protection. |
 | swap_size | 0.5.5 | string/integer | The linux swap size. default to 0. Can be in byte or human-readable format (e.g., "1G", "256M"). |
-| key_provider | 0.5.6 | string | Key provider type. Supported values: "none", "kms", "local", "tpm". `"tpm"` is only supported on platforms whose TPM is part of the platform trust model (GCP vTPM, AWS EC2 NitroTPM); on other platforms guest setup fails closed, since sealing to a host-provided software TPM (e.g. swtpm under bare QEMU) offers no protection against the host. |
+| key_provider | 0.5.6 | string | Key provider type. Supported values: "none", "kms", "local", "tpm". GCP vTPM and AWS EC2 NitroTPM are part of their platform trust models. The Dstack platform can use VMM-managed swtpm for seal/unseal and restart persistence, but it offers no protection against the host and is intentionally not accepted by remote verifiers. |
 
 
 The hash of this file content is extended as the dstack `compose-hash` launch event. On TDX-family platforms the launch event is measured into RTMR3. On AWS NitroTPM it is measured into non-resettable SHA384 PCR14 before the `system-ready` launch boundary. Remote verifiers extract and replay this event during attestation.
