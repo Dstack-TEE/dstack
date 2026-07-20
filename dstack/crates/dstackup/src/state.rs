@@ -30,6 +30,10 @@ pub(crate) struct State {
     #[serde(default)]
     pub(crate) platform: String,
     pub(crate) client_url: String,
+    /// path to the management-API bearer token file the local `dstack` CLI
+    /// reads to authenticate against the VMM.
+    #[serde(default)]
+    pub(crate) client_token_path: String,
     pub(crate) auth_port: u16,
     /// systemd unit names (without the `.service` suffix).
     #[serde(default)]
