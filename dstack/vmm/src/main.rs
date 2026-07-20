@@ -205,6 +205,10 @@ async fn main() -> Result<()> {
 
     // Register this VMM instance for local discovery
     discovery::cleanup_stale_registrations();
+    // whether the management API binds a TCP address reachable beyond the local
+    // host (i.e. not a Unix socket and not a loopback IP). Used to warn when the
+    // surface is exposed without authentication.
+    let mut listen_tcp_public = false;
     let listen_address = {
         // Use Rocket's Endpoint type to parse the address exactly as Rocket would,
         // then override the port with the figment's port value (matching Rocket's behavior).
@@ -213,6 +217,7 @@ async fn main() -> Result<()> {
         match endpoint.tcp() {
             Some(addr) => {
                 let port: u16 = figment.extract_inner("port").unwrap_or(addr.port());
+                listen_tcp_public = !addr.ip().is_loopback();
                 format!("{}:{port}", addr.ip())
             }
             None => endpoint.to_string(),
@@ -240,6 +245,14 @@ async fn main() -> Result<()> {
     };
     if config.auth.enabled && !config.auth.htpasswd_file.as_os_str().is_empty() {
         api_auth = api_auth.with_htpasswd_file(&config.auth.htpasswd_file)?;
+    }
+    if !config.auth.enabled && listen_tcp_public {
+        warn!(
+            "the management API is bound to a non-loopback address ({listen_address}) with \
+             `[auth] enabled = false`: the entire VMM control surface (create/stop VM, UI, \
+             pRPC) is exposed WITHOUT authentication. set `[auth] enabled = true` with a \
+             token, or bind `address` to localhost / a Unix socket."
+        );
     }
     let supervisor = {
         let cfg = &config.supervisor;
