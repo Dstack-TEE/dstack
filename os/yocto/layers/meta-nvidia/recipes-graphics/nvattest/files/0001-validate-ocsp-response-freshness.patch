@@ -12,6 +12,9 @@ signed responses.
 Use OpenSSL's OCSP_check_validity with five minutes of clock skew. Preserve the
 SDK's existing one-hour lifetime for responses without nextUpdate and enforce
 that synthesized deadline as well.
+
+Upstream-Status: Pending
+
 ---
  nv-attestation-sdk-cpp/src/nv_ocsp.cpp | 18 ++++++++++++++++++
  1 file changed, 18 insertions(+)
