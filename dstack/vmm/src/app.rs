@@ -462,6 +462,12 @@ impl App {
         let Some(info) = self.supervisor.info(id).await? else {
             return Ok(());
         };
+        // Non-TPM VMs run QEMU directly and keep the existing Supervisor stop
+        // path. Only the TPM launcher's hidden subcommand implements graceful
+        // child-process shutdown.
+        if info.config.args.first().map(String::as_str) != Some("vm-launcher") {
+            return self.supervisor.stop(id).await;
+        }
         if info.state.status.is_running() {
             let pid = info.state.pid.context("running VM launcher has no PID")?;
             if let Err(error) = signal_pidfd(pid, libc::SIGTERM) {
