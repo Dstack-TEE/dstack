@@ -47,10 +47,16 @@ response is cached no later than its signed `nextUpdate` and no longer than
 hour from `thisUpdate`, matching the pinned NVIDIA SDK. RIM documents default
 to a 30-day TTL.
 
+When an OCSP response has less than `--ocsp-refresh-before` validity remaining
+(five minutes by default), the next request refreshes it synchronously from
+NVIDIA. Concurrent refreshes are coalesced. If the refresh fails, the proxy
+continues serving the old response only until its existing signed expiry; it
+never extends or serves an expired response.
+
 Expired entries are never served. Therefore a warm cache removes the NVIDIA
 service from the boot path only for the signed validity period; it does not
 turn revocation checking into an indefinite fail-open. Response headers expose
-`X-Dstack-Cache: HIT|MISS`, `Age`, and `X-Dstack-Cache-Expires` for operations.
+`X-Dstack-Cache: HIT|MISS|REFRESH`, `Age`, and `X-Dstack-Cache-Expires` for operations.
 Each cache kind is capped at 10,000 entries by default; the oldest entry is
 evicted when the limit is reached. Use `--max-cache-entries-per-kind` to tune
 the bound for a deployment.

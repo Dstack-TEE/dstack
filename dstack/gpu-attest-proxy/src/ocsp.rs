@@ -59,9 +59,9 @@ pub(crate) fn response_cache_expiry(
     let max_ttl = i64::try_from(max_ttl_seconds).context("maximum OCSP TTL is too large")?;
     let mut expires_at = now.checked_add(max_ttl).context("OCSP TTL overflow")?;
     for item in validity {
-        // Do not cache a response which claims to have been produced far in
-        // the future. The guest performs the authoritative freshness check.
-        if item.this_update > now.saturating_add(300) {
+        // Do not cache a response which claims to have been produced in the
+        // future. The guest performs the authoritative freshness check.
+        if item.this_update > now {
             bail!("OCSP response thisUpdate is in the future");
         }
         let signed_expiry = item

@@ -59,6 +59,10 @@ struct Args {
     #[arg(long, env = "GPU_ATTEST_PROXY_OCSP_DEFAULT_TTL", default_value = "1h", value_parser = parse_duration)]
     ocsp_default_ttl: Duration,
 
+    /// Refresh an OCSP response when less than this much validity remains.
+    #[arg(long, env = "GPU_ATTEST_PROXY_OCSP_REFRESH_BEFORE", default_value = "5m", value_parser = parse_duration)]
+    ocsp_refresh_before: Duration,
+
     /// Cache lifetime for version-addressed RIM documents.
     #[arg(long, env = "GPU_ATTEST_PROXY_RIM_TTL", default_value = "30d", value_parser = parse_duration)]
     rim_ttl: Duration,
@@ -94,6 +98,7 @@ async fn main() -> Result<()> {
         connect_timeout: args.connect_timeout,
         ocsp_max_ttl: args.ocsp_max_ttl,
         ocsp_default_ttl: args.ocsp_default_ttl,
+        ocsp_refresh_before: args.ocsp_refresh_before,
         rim_ttl: args.rim_ttl,
         max_cache_entries_per_kind: args.max_cache_entries_per_kind,
     })

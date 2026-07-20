@@ -47,6 +47,7 @@ pub struct ProxyConfig {
     pub connect_timeout: Duration,
     pub ocsp_max_ttl: Duration,
     pub ocsp_default_ttl: Duration,
+    pub ocsp_refresh_before: Duration,
     pub rim_ttl: Duration,
     pub max_cache_entries_per_kind: usize,
 }
@@ -60,6 +61,7 @@ impl ProxyConfig {
             ("connect timeout", self.connect_timeout),
             ("OCSP maximum TTL", self.ocsp_max_ttl),
             ("OCSP default TTL", self.ocsp_default_ttl),
+            ("OCSP refresh window", self.ocsp_refresh_before),
             ("RIM TTL", self.rim_ttl),
         ] {
             if value.is_zero() {
@@ -205,22 +207,37 @@ impl Proxy {
             }
         };
         if let Some(entry) = self.cache_get("ocsp", &key).await {
-            return cached_response(entry, "HIT");
+            if !self.ocsp_needs_refresh(&entry) {
+                return cached_response(entry, "HIT");
+            }
         }
 
         let fill = self.fill_lock("ocsp", &key);
         let _fill = fill.lock().await;
-        if let Some(entry) = self.cache_get("ocsp", &key).await {
-            return cached_response(entry, "HIT");
+        let cached = self.cache_get("ocsp", &key).await;
+        if let Some(entry) = &cached {
+            if !self.ocsp_needs_refresh(entry) {
+                return cached_response(entry.clone(), "HIT");
+            }
         }
 
         let upstream = match self.fetch_ocsp(body).await {
             Ok(response) => response,
             Err(error) => {
                 warn!(%error, "OCSP upstream request failed");
+                if let Some(entry) = cached {
+                    return cached_response(entry, "HIT");
+                }
                 return text_response(StatusCode::BAD_GATEWAY, "OCSP upstream unavailable\n");
             }
         };
+        if upstream.status != StatusCode::OK {
+            if let Some(entry) = &cached {
+                warn!(status = %upstream.status, "OCSP refresh returned an error; using valid cached response");
+                return cached_response(entry.clone(), "HIT");
+            }
+        }
+        let cache_state = if cached.is_some() { "REFRESH" } else { "MISS" };
         if upstream.status == StatusCode::OK {
             let now = now_epoch();
             match ocsp::response_cache_expiry(
@@ -250,7 +267,7 @@ impl Proxy {
                 }
             }
         }
-        upstream_response(upstream, "MISS")
+        upstream_response(upstream, cache_state)
     }
 
     async fn handle_rim(&self, rim_id: &str) -> Response<Full<Bytes>> {
@@ -343,6 +360,11 @@ impl Proxy {
                 None
             }
         }
+    }
+
+    fn ocsp_needs_refresh(&self, entry: &CacheEntry) -> bool {
+        entry.expires_at.saturating_sub(now_epoch())
+            <= self.config.ocsp_refresh_before.as_secs() as i64
     }
 
     fn fill_lock(&self, namespace: &str, key: &str) -> Arc<Mutex<()>> {
@@ -498,6 +520,10 @@ mod tests {
     }
 
     fn ocsp_response(now: i64) -> Bytes {
+        ocsp_response_with_ttl(now, 3600)
+    }
+
+    fn ocsp_response_with_ttl(now: i64, ttl: i64) -> Bytes {
         let format = |timestamp| {
             Utc.timestamp_opt(timestamp, 0)
                 .unwrap()
@@ -509,7 +535,7 @@ mod tests {
             cert_id,
             der(0x80, &[]),
             der(0x18, format(now - 60).as_bytes()),
-            der(0xa0, &der(0x18, format(now + 3600).as_bytes())),
+            der(0xa0, &der(0x18, format(now + ttl).as_bytes())),
         ]);
         let response_data = sequence(&[
             der(0x82, &[7; 20]),
@@ -590,6 +616,7 @@ mod tests {
             connect_timeout: Duration::from_secs(1),
             ocsp_max_ttl: Duration::from_secs(86_400),
             ocsp_default_ttl: Duration::from_secs(3600),
+            ocsp_refresh_before: Duration::from_secs(300),
             rim_ttl: Duration::from_secs(86_400),
             max_cache_entries_per_kind: 10,
         };
@@ -617,6 +644,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ocsp_cache_refreshes_before_expiry() {
+        let now = now_epoch();
+        let response = ocsp_response_with_ttl(now, 60);
+        let (upstream_url, requests, upstream) = mock_upstream(response, OCSP_CONTENT_TYPE).await;
+        let cache_dir = tempfile::tempdir().unwrap();
+        let proxy = Proxy::new(ProxyConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            cache_dir: cache_dir.path().to_path_buf(),
+            ocsp_url: upstream_url,
+            rim_url: Url::parse("https://rim.attestation.nvidia.com").unwrap(),
+            service_key: None,
+            request_timeout: Duration::from_secs(5),
+            connect_timeout: Duration::from_secs(1),
+            ocsp_max_ttl: Duration::from_secs(86_400),
+            ocsp_default_ttl: Duration::from_secs(3600),
+            ocsp_refresh_before: Duration::from_secs(300),
+            rim_ttl: Duration::from_secs(86_400),
+            max_cache_entries_per_kind: 10,
+        })
+        .await
+        .unwrap();
+
+        let nonce = std::process::id() as u8;
+        assert_eq!(
+            proxy.handle_ocsp(ocsp_request(nonce)).await.headers()["x-dstack-cache"],
+            "MISS"
+        );
+        assert_eq!(
+            proxy
+                .handle_ocsp(ocsp_request(nonce.wrapping_add(1)))
+                .await
+                .headers()["x-dstack-cache"],
+            "REFRESH"
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        upstream.abort();
+    }
+
+    #[tokio::test]
     async fn rim_cache_uses_versioned_id() {
         let response = Bytes::from_static(br#"{"id":"NV_GPU_DRIVER_GH100_580.1","rim":"test"}"#);
         let (upstream_url, requests, upstream) =
@@ -632,6 +698,7 @@ mod tests {
             connect_timeout: Duration::from_secs(1),
             ocsp_max_ttl: Duration::from_secs(86_400),
             ocsp_default_ttl: Duration::from_secs(3600),
+            ocsp_refresh_before: Duration::from_secs(300),
             rim_ttl: Duration::from_secs(86_400),
             max_cache_entries_per_kind: 10,
         })
