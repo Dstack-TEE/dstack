@@ -11,8 +11,7 @@ Shared authentication primitives for dstack HTTP and RPC administration APIs.
 HTTP integrations support:
 
 - `Authorization: Bearer <token>`;
-- a service-specific token header (`X-Admin-Token` for Gateway and
-  `X-API-Token` for VMM);
+- the shared `X-Admin-Token` header used by Gateway and VMM;
 - `Authorization: Basic ...` backed by a bcrypt Apache htpasswd file;
 - optional GET-only `?token=` links for the Gateway and VMM dashboards.
 

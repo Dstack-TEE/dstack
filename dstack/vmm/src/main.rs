@@ -91,7 +91,7 @@ async fn run_external_api(app: App, figment: Figment, api_auth: Authenticator) -
             api_auth,
             HttpAuthConfig {
                 realm: "dstack-vmm API".into(),
-                token_header: Some("X-API-Token".into()),
+                token_header: Some("X-Admin-Token".into()),
                 allow_get_query_token: true,
             },
         ))
