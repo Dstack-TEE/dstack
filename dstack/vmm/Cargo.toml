@@ -33,7 +33,7 @@ strip-ansi-escapes.workspace = true
 tailf.workspace = true
 tokio = { workspace = true, features = ["full"] }
 git-version.workspace = true
-rocket-apitoken.workspace = true
+dstack-api-auth.workspace = true
 serde_ini.workspace = true
 
 supervisor-client.workspace = true

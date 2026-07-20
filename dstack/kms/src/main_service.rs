@@ -27,7 +27,6 @@ use ra_tls::{
     kdf,
 };
 use scale::Decode;
-use sha2::Digest;
 use tokio::sync::OnceCell;
 use tracing::{info, warn};
 use upgrade_authority::{build_boot_info, ensure_app_id_len, local_kms_boot_info, BootInfo};
@@ -266,8 +265,7 @@ impl RpcHandler {
     }
 
     fn ensure_admin(&self, token: &str) -> Result<()> {
-        let token_hash = sha2::Sha256::new_with_prefix(token).finalize();
-        if token_hash.as_slice() != self.state.config.admin_token_hash.as_slice() {
+        if !dstack_api_auth::verify_sha256_token(token, &self.state.config.admin_token_hash) {
             bail!("Invalid token");
         }
         Ok(())
@@ -585,7 +583,7 @@ mod tests {
         compute_expected_measurement, MeasurementInput, OvmfSectionParam,
     };
     use cc_eventlog::RuntimeEvent;
-    use sha2::{Sha256, Sha384};
+    use sha2::{Digest, Sha256, Sha384};
     use std::collections::BTreeMap;
 
     fn hex_of(byte: u8, len: usize) -> String {

@@ -298,6 +298,10 @@ pub struct AdminConfig {
     /// env vars. Required unless `insecure_no_auth = true`.
     #[serde(default)]
     pub admin_token: String,
+    /// Optional Apache htpasswd file. Enables standard HTTP Basic auth while
+    /// preserving token authentication for existing clients.
+    #[serde(default)]
+    pub htpasswd_file: PathBuf,
     /// Disable authentication entirely. Development/testing only; never enable
     /// on an admin interface that is reachable from the network.
     #[serde(default)]

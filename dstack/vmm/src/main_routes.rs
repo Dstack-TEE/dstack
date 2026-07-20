@@ -10,7 +10,6 @@ use rocket::{
     response::{status::Custom, stream::TextStream},
     routes, Route, State,
 };
-use rocket_apitoken::Authorized;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::time::timeout;
@@ -106,7 +105,6 @@ impl Drop for StreamCounter {
 
 #[get("/logs?<id>&<follow>&<ansi>&<lines>&<ch>")]
 fn vm_logs(
-    _auth: Authorized,
     app: &State<App>,
     id: String,
     follow: bool,
