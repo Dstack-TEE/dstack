@@ -224,9 +224,6 @@ impl PreparedQemuLaunch {
         };
         let (swtpm_socket, swtpm_path) =
             if matches!(app_compose.key_provider(), KeyProviderKind::Tpm) {
-                if !vm.manifest.no_tee || !vm.image.info.is_dev {
-                    bail!("swtpm key provider is only available to no-TEE development VMs");
-                }
                 let swtpm_path = which::which("swtpm")
                     .context("tpm key provider requested but swtpm is not installed")?;
                 let state_dir = workdir.swtpm_state_dir();
