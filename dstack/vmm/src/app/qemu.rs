@@ -30,6 +30,7 @@ use anyhow::{bail, Context, Result};
 use bon::Builder;
 use dstack_types::{shared_filenames::HOST_SHARED_DISK_LABEL, KeyProviderKind};
 use fs_err as fs;
+use nix::unistd::User;
 use serde::Serialize;
 use supervisor_client::supervisor::ProcessConfig;
 
@@ -345,6 +346,14 @@ impl VmConfig {
             .swtpm_path
             .as_ref()
             .context("missing swtpm executable for configured socket")?;
+        let (socket_uid, socket_gid) = if cfg.user.is_empty() {
+            (unsafe { libc::geteuid() }, unsafe { libc::getegid() })
+        } else {
+            let user = User::from_name(&cfg.user)
+                .context("failed to resolve QEMU user")?
+                .with_context(|| format!("QEMU user {} does not exist", cfg.user))?;
+            (user.uid.as_raw(), user.gid.as_raw())
+        };
 
         let swtpm_args = vec![
             "socket".into(),
@@ -352,7 +361,10 @@ impl VmConfig {
             "--tpmstate".into(),
             format!("dir={}", prepared.workdir.swtpm_state_dir().display()),
             "--ctrl".into(),
-            format!("type=unixio,path={},mode=0600", socket.display()),
+            format!(
+                "type=unixio,path={},mode=0600,uid={socket_uid},gid={socket_gid}",
+                socket.display()
+            ),
             "--flags".into(),
             "not-need-init,startup-clear".into(),
         ];
