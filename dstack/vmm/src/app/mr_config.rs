@@ -7,7 +7,7 @@
 use anyhow::{bail, Context, Result};
 use base64::prelude::*;
 use dstack_types::mr_config::{MrConfig, MrConfigV3};
-use dstack_types::AppCompose;
+use dstack_types::{gpu_policy_hash, AppCompose};
 use fs_err as fs;
 use sha2::{Digest, Sha256};
 
@@ -60,10 +60,21 @@ pub(super) fn snp_host_data(workdir: &VmWorkDir) -> Result<String> {
 }
 
 impl VmWorkDir {
-    pub fn prepare_mr_config_v3(&self, app_compose: &AppCompose) -> Result<String> {
+    pub fn prepare_mr_config_v3(&self, app_compose: &AppCompose, has_gpus: bool) -> Result<String> {
         let compose_hash = self
             .app_compose_hash()
             .context("failed to get compose hash")?;
+        let gpu_policy_hash = if has_gpus {
+            let compose_json = fs::read(self.app_compose_path())
+                .context("failed to read app compose for GPU policy hash")?;
+            Some(
+                gpu_policy_hash(&compose_json)
+                    .context("failed to hash raw GPU policy")?
+                    .to_vec(),
+            )
+        } else {
+            None
+        };
         let mut instance_info = self
             .instance_info_or_default()
             .context("failed to get instance info")?;
@@ -106,6 +117,7 @@ impl VmWorkDir {
         Ok(MrConfigV3::new(
             app_id,
             compose_hash.to_vec(),
+            gpu_policy_hash,
             app_compose.key_provider(),
             app_compose.key_provider_id.clone(),
             instance_id,

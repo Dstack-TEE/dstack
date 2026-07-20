@@ -18,6 +18,12 @@ DSTACK_ROOTFS_FILES = "${UNPACKDIR}/repo/os/common/rootfs"
 RDEPENDS:${PN} += "bash"
 
 DEPENDS += "rsync-native tpm2-tss"
+DEPENDS += "cmake-native"
+
+# aws-lc-sys cannot detect Yocto cross builds when the build and target share
+# the same Rust target triple, and its cc builder then tries to execute a
+# target binary on the build host. Use its supported CMake builder instead.
+export AWS_LC_SYS_CMAKE_BUILDER = "1"
 
 # Ensure rsync-native is built before unpack runs
 do_unpack[depends] += "rsync-native:do_populate_sysroot"

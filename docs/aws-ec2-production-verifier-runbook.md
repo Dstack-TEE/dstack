@@ -209,6 +209,14 @@ For AWS NitroTPM, the policy must require:
   `instance-id`, `key-provider`);
 - a `report_data` challenge for external verifier flows that need liveness.
 
+For GPU workloads, PCR14 also contains `gpu-policy-hash` immediately after
+`compose-hash`. Its 32-byte payload must equal
+`SHA-256(JCS(requirements.gpu_policy))`, using `{}` when the policy is omitted.
+Because the verifier replays the event chain against the signed NitroTPM
+Attestation Document, this validates `gpu_policy_hash` on AWS. A successful GPU
+launch also adds `gpu-attestation`; its `evidence_sha256` can be compared with
+the exact UTF-8 bytes returned by `GpuInfo.attestation` after PCR14 replay.
+
 The guest also extends a `MrConfig` V2 **config commitment** into **PCR8**
 (`PCR8 = sha384(0^48 || config_id)`). This is **optional** and exists only to
 let a lightweight third-party verifier confirm `composeHash` + key-provider

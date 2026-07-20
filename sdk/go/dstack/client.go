@@ -119,6 +119,11 @@ type AttestResponse struct {
 	Attestation []byte
 }
 
+// GpuInfoResponse contains GPU information collected during boot.
+type GpuInfoResponse struct {
+	Attestation string `json:"attestation"`
+}
+
 // Represents an event log entry in the TCB info
 type EventLog struct {
 	IMR          int    `json:"imr"`
@@ -577,6 +582,20 @@ func (c *DstackClient) Attest(ctx context.Context, reportData []byte) (*AttestRe
 	}
 
 	return &AttestResponse{Attestation: attestation}, nil
+}
+
+// GpuInfo returns GPU information collected during boot.
+func (c *DstackClient) GpuInfo(ctx context.Context) (*GpuInfoResponse, error) {
+	data, err := c.sendRPCRequest(ctx, "/GpuInfo", map[string]interface{}{})
+	if err != nil {
+		return nil, err
+	}
+
+	var response GpuInfoResponse
+	if err := json.Unmarshal(data, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
 }
 
 // Represents the response from a Version request.

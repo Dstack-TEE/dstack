@@ -243,6 +243,7 @@ mod tests {
         dstack_types::mr_config::MrConfigV3::new(
             vec![0x11; 20],
             vec![0x22; 32],
+            None,
             dstack_types::KeyProviderKind::None,
             Vec::new(),
             vec![0x99; 20],

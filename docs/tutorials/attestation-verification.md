@@ -518,6 +518,8 @@ These are the standard events you'll see in the log:
 | `system-preparing` | System initialization marker | Always present |
 | `app-id` | Application identifier | Should match your app name |
 | `compose-hash` | SHA-256 of docker compose config | Should match `tcb_info.compose_hash` |
+| `gpu-policy-hash` | SHA-256 of the JCS-canonicalized GPU policy (default `{}`) | Should match the expected `requirements.gpu_policy` digest |
+| `gpu-attestation` | Verified GPU state and digest of the boot-time `nvattest` JSON | Required for an attested GPU launch; verify as described below |
 | `instance-id` | Unique instance identifier | Should match `instance_id` from response |
 | `boot-mr-done` | Boot measurements complete | Marker event |
 | `mr-kms` | KMS identity measurement | KMS public key hash |
@@ -525,6 +527,13 @@ These are the standard events you'll see in the log:
 | `key-provider` | Key provider type | e.g., `kms` |
 | `storage-fs` | Storage filesystem type | Storage configuration |
 | `system-ready` | System ready marker | Always present at end |
+
+For a successful GPU launch, the relevant order is `compose-hash`,
+`gpu-policy-hash`, `gpu-attestation`, `instance-id`, and `boot-mr-done`.
+After replaying the log to the quote's RTMR3, decode the JSON payload of
+`gpu-attestation` and compare its `evidence_sha256` with the SHA-256 digest of
+the exact UTF-8 `GpuInfo.attestation` string. `GpuInfo` reads the result saved
+during boot and does not perform a new attestation.
 
 ### Verify specific event values
 

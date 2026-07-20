@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::{Arc, RwLock};
+use std::{
+    path::Path,
+    sync::{Arc, RwLock},
+};
 
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -12,11 +15,11 @@ use dstack_guest_agent_rpc::{
     tappd_server::{TappdRpc, TappdServer},
     worker_server::{WorkerRpc, WorkerServer},
     AppInfo, AttestResponse, DeriveK256KeyResponse, DeriveKeyArgs, GetAttestationForAppKeyRequest,
-    GetKeyArgs, GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse, RawQuoteArgs,
-    SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse, VerifyRequest, VerifyResponse,
-    WorkerVersion,
+    GetKeyArgs, GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse,
+    GpuInfoResponse, RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse,
+    VerifyRequest, VerifyResponse, WorkerVersion,
 };
-use dstack_types::{AppKeys, SysConfig};
+use dstack_types::{AppKeys, SysConfig, GPU_ATTESTATION_OUTPUT};
 use ed25519_dalek::ed25519::signature::hazmat::{PrehashSigner, PrehashVerifier};
 use ed25519_dalek::{
     Signer as Ed25519Signer, SigningKey as Ed25519SigningKey, Verifier as Ed25519Verifier,
@@ -36,7 +39,7 @@ use rcgen::KeyPair;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::json;
 use sha3::{Digest, Keccak256};
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::{
     backend::{PlatformBackend, RealPlatform},
@@ -47,6 +50,20 @@ fn read_dmi_file(name: &str) -> String {
     fs::read_to_string(format!("/sys/class/dmi/id/{name}"))
         .map(|s| s.trim().to_string())
         .unwrap_or_default()
+}
+
+/// Read the GPU attestation output saved during boot. Returns an empty string
+/// when no output is available (e.g. no GPU attached or attestation disabled).
+fn read_gpu_attestation(path: &Path) -> String {
+    match fs::read_to_string(path) {
+        Ok(attestation) => attestation,
+        Err(err) => {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                warn!("failed to read GPU attestation output: {err:?}");
+            }
+            String::new()
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -326,6 +343,12 @@ impl DstackGuestRpc for InternalRpcHandler {
 
     async fn info(self) -> Result<AppInfo> {
         get_info(&self.state, false).await
+    }
+
+    async fn gpu_info(self) -> Result<GpuInfoResponse> {
+        Ok(GpuInfoResponse {
+            attestation: read_gpu_attestation(Path::new(GPU_ATTESTATION_OUTPUT)),
+        })
     }
 
     async fn sign(self, request: SignRequest) -> Result<SignResponse> {
@@ -667,6 +690,22 @@ mod tests {
     use std::collections::HashSet;
     use std::convert::TryFrom;
     use std::io::Write;
+
+    #[test]
+    fn reads_gpu_attestation_output_verbatim() {
+        let mut output = tempfile::NamedTempFile::new().unwrap();
+        let attestation = r#"{"result_code":0,"claims":[]}"#;
+        output.write_all(attestation.as_bytes()).unwrap();
+        output.flush().unwrap();
+
+        assert_eq!(read_gpu_attestation(output.path()), attestation);
+    }
+
+    #[test]
+    fn missing_gpu_attestation_output_reads_as_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(read_gpu_attestation(&dir.path().join("missing")), "");
+    }
 
     fn extract_pubkey_from_report_data(report_data: &[u8], prefix: &str) -> Result<Vec<u8>> {
         let end = report_data

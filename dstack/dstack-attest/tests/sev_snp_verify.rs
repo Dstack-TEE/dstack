@@ -352,6 +352,7 @@ fn substituted_mr_config_breaks_host_data_binding() {
     let evil = MrConfigV3::new(
         vec![0xab; 20],
         vec![0xcd; 32],
+        None,
         KeyProviderKind::None,
         Vec::new(),
         vec![0xef; 20],

@@ -109,6 +109,10 @@ pub struct MrConfigV3 {
     pub app_id: Vec<u8>,
     #[serde(with = "hex_bytes")]
     pub compose_hash: Vec<u8>,
+    /// Hash of the raw application GPU policy. GPU launches populate it;
+    /// non-GPU and historical v3 launch documents omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "hex_bytes")]
+    pub gpu_policy_hash: Option<Vec<u8>>,
     pub key_provider: KeyProviderKind,
     #[serde(default, with = "hex_bytes")]
     pub key_provider_id: Vec<u8>,
@@ -120,6 +124,7 @@ impl MrConfigV3 {
     pub fn new(
         app_id: Vec<u8>,
         compose_hash: Vec<u8>,
+        gpu_policy_hash: Option<Vec<u8>>,
         key_provider: KeyProviderKind,
         key_provider_id: Vec<u8>,
         instance_id: Vec<u8>,
@@ -128,6 +133,7 @@ impl MrConfigV3 {
             version: mr_config_v3_version(),
             app_id,
             compose_hash,
+            gpu_policy_hash,
             key_provider,
             key_provider_id,
             instance_id,
@@ -191,6 +197,7 @@ mod tests {
         let config = MrConfigV3::new(
             vec![0x11; 20],
             vec![0x22; 32],
+            Some(vec![0x55; 32]),
             KeyProviderKind::Kms,
             vec![0x33; 32],
             vec![0x44; 20],
@@ -202,6 +209,30 @@ mod tests {
         assert_eq!(config.to_snp_host_data().len(), 32);
         assert_ne!(config.to_tdx_mr_config_id(), changed.to_tdx_mr_config_id());
         assert_eq!(config.to_tdx_mr_config_id()[0], 3);
+
+        let mut changed = config.clone();
+        if let Some(gpu_policy_hash) = &mut changed.gpu_policy_hash {
+            gpu_policy_hash[0] ^= 0xff;
+        }
+        assert_ne!(config.to_snp_host_data(), changed.to_snp_host_data());
+        assert_ne!(config.to_tdx_mr_config_id(), changed.to_tdx_mr_config_id());
+    }
+
+    #[test]
+    fn mr_config_v3_omits_gpu_policy_hash_for_non_gpu_launches() -> Result<(), Box<dyn Error>> {
+        let config = MrConfigV3::new(
+            vec![0x11; 20],
+            vec![0x22; 32],
+            None,
+            KeyProviderKind::None,
+            Vec::new(),
+            vec![0x44; 20],
+        );
+        let document = config.to_canonical_json();
+
+        assert!(!document.contains("gpu_policy_hash"));
+        assert_eq!(MrConfigV3::from_document(&document)?, config);
+        Ok(())
     }
 
     #[test]
@@ -209,6 +240,7 @@ mod tests {
         let config = MrConfigV3::new(
             vec![0x11; 20],
             vec![0x22; 32],
+            Some(vec![0x55; 32]),
             KeyProviderKind::Kms,
             vec![0x33; 32],
             vec![0x44; 20],
@@ -220,6 +252,7 @@ mod tests {
             concat!(
                 "{\"app_id\":\"1111111111111111111111111111111111111111\",",
                 "\"compose_hash\":\"2222222222222222222222222222222222222222222222222222222222222222\",",
+                "\"gpu_policy_hash\":\"5555555555555555555555555555555555555555555555555555555555555555\",",
                 "\"instance_id\":\"4444444444444444444444444444444444444444\",",
                 "\"key_provider\":\"kms\",",
                 "\"key_provider_id\":\"3333333333333333333333333333333333333333333333333333333333333333\",",

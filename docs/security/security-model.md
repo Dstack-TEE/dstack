@@ -8,7 +8,7 @@ This document helps you evaluate whether dstack's security model fits your needs
 
 dstack removes the need to trust most infrastructure operators. On TEE platforms such as Intel TDX and AMD SEV-SNP, the cloud or host operator cannot read your protected memory, modify your measured code, or access your secrets without detection. On AWS EC2 NitroTPM attested instances, AWS Nitro is part of the trusted platform, and the untrusted party is the workload AWS account administrator/operator. Network attackers cannot intercept your traffic because TLS terminates inside the attested environment with keys controlled by that environment (Zero Trust HTTPS). Docker registries cannot serve malicious images because the guest verifies SHA256 digests before pulling.
 
-The primary trust input is **attested platform hardware**. Intel TDX is the production TEE path. AMD SEV-SNP is available where the selected dstack OS image and host support it, but it is new and experimental. AWS EC2 NitroTPM attested instances use a different trust root: the AWS Nitro system and AWS NitroTPM attestation PKI. In that mode, the threat model protects against the workload AWS account administrator and EC2 operator actions, but AWS remains trusted. For GPU workloads, you also trust **NVIDIA GPU hardware** and NVIDIA's Remote Attestation Service (NRAS). These are hardware-level trust assumptions.
+The primary trust input is **attested platform hardware**. Intel TDX is the production TEE path. AMD SEV-SNP is available where the selected dstack OS image and host support it, but it is new and experimental. AWS EC2 NitroTPM attested instances use a different trust root: the AWS Nitro system and AWS NitroTPM attestation PKI. In that mode, the threat model protects against the workload AWS account administrator and EC2 operator actions, but AWS remains trusted. For GPU workloads, you also trust **NVIDIA GPU hardware**, NVIDIA's attestation PKI/RIMs, and its revocation service (or NRAS when a deployment selects remote verification). These are hardware-level trust assumptions.
 
 Everything else is verifiable.
 
@@ -57,11 +57,99 @@ dstack supports NVIDIA H100, H200, and B200 GPUs in confidential compute mode fo
 
 ### How It Works
 
-GPUs are passed through via VFIO directly to the TEE-protected CVM. The GPU operates in confidential compute mode, encrypting data during computation. Both the CPU TEE and NVIDIA GPU provide hardware isolation together. If either component fails verification, the security model breaks.
+GPUs are passed through via VFIO to the TEE-protected CVM. Before key provisioning, `dstack-util setup` inventories every VGA/3D-controller PCI function, rejects non-NVIDIA display devices, and runs NVIDIA's local `nvattest` verifier over every NVIDIA-driver-visible GPU with a fresh nonce. dstack does not ship or pass a custom relying-party policy to this command; nvattest's built-in appraisal still applies. The complete JSON result (`result_code`, `result_message`, `claims`, and `detached_eat`) is saved at `/run/nvidia-gpu-attestation/attestation.out`.
+
+An application may additionally set `requirements.gpu_policy` to an object with the following deny-unknown-fields schema:
+
+- `attest_gpu` (boolean, default `true`): require local NVIDIA GPU attestation before enabling an attached GPU. Setting this to `false` skips attestation and is an explicit reduction in protection.
+- `rego` (optional string): a Rego v0 script evaluated with the nvattest output's `claims` array as `input`. It must define the boolean entrypoint `data.policy.nv_match` in `package policy`.
+- `allow_devtools` (boolean, default `false`): permit NVIDIA DevTools mode. Production applications should leave this disabled because DevTools removes the expected GPU memory-confidentiality guarantee.
+- `allow_debug` (boolean, default `false`): permit an attestation claim whose `dbgstat` is `enabled`.
+- `allow_insecure_boot` (boolean, default `false`): permit an attestation claim whose GPU `secboot` value is false.
+
+The optional Rego v0 policy can enforce deployment-specific claims. A minimal `app-compose.json` containing one looks like this; replace the placeholder with the policy source:
+
+```json
+{
+  "manifest_version": "3",
+  "name": "gpu-app",
+  "runner": "docker-compose",
+  "requirements": {
+    "gpu_policy": {
+      "rego": "<rego-v0-policy>"
+    }
+  }
+}
+```
+
+For example, the following policy requires exactly one H100 whose `hwmodel` matches the value emitted by `nvattest`:
+
+```rego
+package policy
+default nv_match = false
+
+nv_match {
+  count(input) == 1
+  input[0].hwmodel == "GH100 A01 GSP BROM"
+}
+```
+
+The policy must define the boolean rule `data.policy.nv_match`. Its `input` is the complete `claims` array from `nvattest`; when no attestation is performed, `input` is `[]`, so the example also rejects a launch without exactly one attested GPU.
+
+After measuring `compose-hash`, dstack enters the GPU setup gate and JCS-canonicalizes the original `requirements.gpu_policy` JSON value, then measures its SHA-256 digest in a `gpu-policy-hash` event. When the field is absent—including when `requirements` itself is absent—both parsing and measurement use the default empty object `{}`. Thus an omitted policy and an explicit `{}` have the same digest, while any explicitly present field, including an explicit default value, changes the digest. MrConfigV3 GPU launches also carry this digest as the optional `gpu_policy_hash` field; non-GPU launches omit it for compatibility. When the field is present, the guest compares it with the digest computed from app-compose; when it is absent, the guest skips this MrConfigV3 check. The MrConfigV3 document is bound by TDX `MR_CONFIG_ID` or SEV-SNP `HOST_DATA`, so the host cannot substitute a different GPU policy when this optional binding is present without changing the platform launch identity. The typed policy used for enforcement applies omitted-field defaults and rejects unknown fields. If GPU attestation is enabled and NVIDIA GPUs are present, dstack attests them and applies the basic settings and optional Rego policy before setting the GPU ready state. When no attestation claims are produced—because no GPU is attached or `gpu_policy.attest_gpu` is false—Rego is still evaluated with an empty array as `input` before any ready-state transition. This lets an application reject a launch whose attested GPU count is wrong. A false, undefined, malformed, or non-boolean Rego result stops boot before key provisioning.
+
+The policy digest is remotely verifiable on each supported platform, but through different carriers:
+
+- **TDX:** `gpu-policy-hash` contains the raw 32-byte digest and is measured into RTMR3. Replay the event log and compare the result with the quote's RTMR3, then compare the event payload with the expected digest. When an MrConfigV3 document includes `gpu_policy_hash`, TDX `MR_CONFIG_ID` additionally binds that field.
+- **AWS NitroTPM:** the same `gpu-policy-hash` event is extended into non-resettable SHA384 PCR14. Replay the PCR14 event chain against the signed NitroTPM Attestation Document, then compare the payload with the expected digest.
+- **AMD SEV-SNP:** there is no quote-bound runtime event register in the current stack. Instead, GPU launches put the digest in optional `MrConfigV3.gpu_policy_hash`, and the signed SNP report's `HOST_DATA` binds the exact MrConfigV3 document. Verify the SNP report and `HOST_DATA` binding, then compare the field with the expected digest. If the optional field is absent, this check is not asserted.
+
+For every NVML-enumerated GPU, dstack calls `Device::is_cc_enabled()` and `Device::is_cc_dev_mode_enabled()` and requires the NVML device count to match the expected GPU count. CC must always be ON; DevTools must be OFF unless the measured policy explicitly permits it. The typed claim checks always require `measres == "success"`; by default they also require `dbgstat == "disabled"` and `secboot == true`, with the latter two checks controlled by their explicit opt-ins. Only after the default appraisal, typed claim checks, optional Rego policy, and per-device NVML checks succeed does dstack call `Device::set_confidential_compute_state(true)` to set the GPU ready state. The dstack CPU/guest boot chain is verified independently through measured boot; a GPU claim named `secboot` refers to the GPU appraisal, not UEFI Secure Boot in the CVM.
 
 ### Dual Attestation
 
-GPU workloads require verification of both hardware components. The CPU TEE provides the quote that verifies CPU and memory isolation. NVIDIA's Remote Attestation Service (NRAS) independently verifies the GPU is genuine and running in confidential mode. Both attestations must pass for complete verification.
+GPU workloads require verification of both hardware components. The CPU TEE quote verifies the CVM and its measured guest code. NVIDIA-signed evidence, checked against NVIDIA RIMs and certificate status by `nvattest`, verifies the GPU appraisal. After the optional policy and ready-state operations succeed, dstack emits a `gpu-attestation` launch event before `system-ready`. Its versioned payload records the number of appraised devices, asserted CC/DevTools state, and SHA-256 of the complete nvattest JSON output (claims and detached EAT). On TDX, both `gpu-policy-hash` and `gpu-attestation` are append-only RTMR3 events; they are never derived from application-controlled `report_data`.
+
+For a successful TDX GPU launch, the GPU-relevant RTMR3 event order is:
+
+```text
+compose-hash
+gpu-policy-hash
+gpu-attestation
+instance-id
+boot-mr-done
+```
+
+`gpu-policy-hash` is emitted even for a GPU-less launch. `gpu-attestation` is emitted only after an attached GPU passes `nvattest`, the built-in checks, the optional Rego policy, and the NVML state checks. Its UTF-8 JSON payload has this shape:
+
+```json
+{
+  "version": 2,
+  "provider": "nvidia",
+  "devices": 1,
+  "cc_mode": "on",
+  "devtools": false,
+  "evidence_sha256": "<sha256-of-complete-nvattest-json>"
+}
+```
+
+`GpuInfo` returns that complete boot-time `nvattest` JSON in its `attestation` string; it does not run a new attestation. To bind the API result to TDX evidence: verify the quote, replay the event log to the quote's RTMR3, require exactly one pre-`system-ready` `gpu-attestation` event, decode its JSON payload, and compare `evidence_sha256` with `SHA-256(UTF-8(GpuInfo.attestation))`. Only after this comparison should the verifier inspect the returned claims. This exact-byte comparison includes any whitespace or trailing newline in the returned string.
+
+A verifier must replay the measured event log, require exactly one `gpu-policy-hash` event immediately after `compose-hash`, and compare its 32-byte payload with the expected policy digest (`SHA-256(JCS({}))` for the omitted/default policy). When MrConfigV3 includes `gpu_policy_hash`, it must match the same digest. When GPU protection is required, the verifier must also require exactly one pre-`system-ready` `gpu-attestation` event with `devices > 0` and, when applicable, the expected deployment count. The raw `attestation.out` file is not trusted by itself; if it is supplied for inspection, its digest must match the `gpu-attestation` event.
+
+### GPU Threat Model and Lifetime
+
+The GPU gate assumes a malicious host/VMM and untrusted host-provided PCI topology, while trusting the CPU TEE, the measured dstack guest/kernel, NVIDIA hardware/firmware roots, and the cryptography used by both attestation chains. Availability is out of scope.
+
+The events make the following **boot-time** statement: immediately before key provisioning, all attached VGA/3D PCI functions were NVIDIA devices, their count matched the NVML inventory, nvattest returned one fresh successfully appraised claim for each device, the measured application policy accepted those claims and GPU state when present, every enumerated GPU passed the CC/DevTools NVML checks, and setting the GPU ready state succeeded. This closes these cases:
+
+- A GPU-less launch cannot be presented as a GPU-verified launch because it has no `gpu-attestation` event.
+- A mixed launch cannot attest only its TEE-capable subset. Non-NVIDIA display GPUs are rejected, and the sysfs, NVML, and nvattest claim counts must all agree. A non-CC NVIDIA GPU either prevents evidence collection/appraisal or causes the default appraisal, application policy, or CC-state check to fail.
+- Copying another CVM's result into a file or `report_data` does not work. Only measured pre-application code can place the event before `system-ready`, and event-log replay binds it to the quoted RTMR/PCR value.
+
+This is **not a lifetime or physical co-location guarantee**. After `system-ready`, an application with sufficient guest privileges can unload the NVIDIA driver, and a malicious host may attempt PCI hot-remove/replacement or proxy GPU traffic. The boot event remains a true historical statement but does not prove that the same device is still attached. dstack also cannot rule out a live relay/cuckoo attack to a genuine remote GPU: current Hopper/Blackwell deployments do not provide a CPU-TEE-verifiable TEE-I/O/TDISP device binding. Applications that mutate the driver or PCI topology are outside this guarantee; higher-assurance deployments must prevent that behavior and re-attest before using a newly initialized GPU.
+
+AMD SEV-SNP has no runtime measurement register in the current dstack stack. The local boot gate can still fail closed, but a `gpu-attestation` event carried beside an SNP report is not remotely bound to that report and must not be accepted as dual-attestation evidence. SNP needs a measured vTPM/PCR channel before it can provide the same remote binding.
 
 ### AI Workload Protection
 
@@ -157,6 +245,14 @@ Use this checklist to verify a workload running in a dstack CVM.
 - [ ] Launch event log replays correctly (RTMR3 on TDX-family platforms, PCR14 on AWS NitroTPM)
 - [ ] Config commitment matches the expected app/config target (on AWS: PCR14 replay; PCR8 is an optional shortcut — see the [AWS verifier runbook](../aws-ec2-production-verifier-runbook.md))
 - [ ] reportData contains your challenge (replay protection)
+
+**GPU verification (when required):**
+- [ ] The `gpu-attestation` device count is greater than zero and matches the expected deployment
+- [ ] Exactly one `gpu-policy-hash` event follows `compose-hash`, and its payload matches `SHA-256(JCS(requirements.gpu_policy))` (default `{}` when omitted)
+- [ ] When MrConfigV3 includes `gpu_policy_hash`, it matches the same expected GPU policy digest
+- [ ] Exactly one `gpu-attestation` event appears before `system-ready`
+- [ ] CC is ON and the event's DevTools field complies with the measured policy
+- [ ] The platform binds the event log to a quoted RTMR/PCR (do not accept it from current SEV-SNP evidence)
 
 **Key management verification:**
 - [ ] key-provider matches expected KMS identity
