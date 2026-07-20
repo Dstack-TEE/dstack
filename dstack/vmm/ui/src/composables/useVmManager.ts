@@ -813,7 +813,9 @@ type CreateVmPayloadSource = {
       public_logs: vmForm.value.public_logs,
       public_sysinfo: vmForm.value.public_sysinfo,
       public_tcbinfo: vmForm.value.public_tcbinfo,
-      key_provider_id: vmForm.value.key_provider_id,
+      key_provider_id: vmForm.value.key_provider === 'kms' || vmForm.value.key_provider === 'local'
+        ? vmForm.value.key_provider_id
+        : '',
       allowed_envs: vmForm.value.encryptedEnvs.map((env) => env.key),
       no_instance_id: !vmForm.value.gateway_enabled,
       secure_time: false,

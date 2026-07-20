@@ -145,7 +145,7 @@ const CreateVmDialogComponent = {
               </select>
             </div>
 
-            <div class="form-group full-width" v-if="form.key_provider !== 'none'">
+            <div class="form-group full-width" v-if="form.key_provider === 'kms' || form.key_provider === 'local'">
               <label for="keyProviderId">Key Provider ID</label>
               <input id="keyProviderId" v-model="form.key_provider_id" type="text" placeholder="Optional provider ID">
             </div>
