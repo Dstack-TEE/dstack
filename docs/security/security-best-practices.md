@@ -97,11 +97,11 @@ App key release and KMS key handover still require verified caller attestation f
 
 The VMM, gateway, and KMS management surfaces must have authentication enabled in production:
 
-- VMM: set `[auth] enabled = true` with `tokens` (or `htpasswd_file`) — this guards the entire VMM HTTP/pRPC/UI surface. Never bind to a non-localhost address without it.
-- Gateway: set `[core.admin] admin_token` (or `htpasswd_file`) and keep `insecure_no_auth = false`.
-- KMS: set `admin_token_hash` (SHA-256 hex of the admin token); an empty hash denies all admin RPCs.
+- VMM: set `[auth] enabled = true` with `tokens` (or `htpasswd_file`) — this guards the entire VMM HTTP/pRPC/UI surface. Never bind to a non-localhost address without it. Clients send `Authorization: Bearer <token>` or `X-Admin-Token`.
+- Gateway: set `[core.admin] admin_token` (or `htpasswd_file`) and keep `insecure_no_auth = false`. Clients send `Authorization: Bearer <token>` or `X-Admin-Token`.
+- KMS: set `admin_token_hash` (SHA-256 hex of the admin token); an empty hash denies all admin RPCs. The KMS admin token is not an HTTP header — it is passed as the `token` field of the admin RPC request.
 
-Only bcrypt htpasswd entries are accepted (create with `htpasswd -B`), and credential comparisons are constant-time. Clients authenticate with `Authorization: Bearer <token>` (or `X-Admin-Token`). All three are fail-closed.
+VMM and gateway share the HTTP authenticator (bcrypt-only htpasswd via `htpasswd -B`, constant-time comparison). The KMS admin token is compared as a constant-time SHA-256 match. All three are fail-closed.
 
 ## Keep private material owner-only
 

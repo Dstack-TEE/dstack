@@ -439,7 +439,7 @@ curl http://<new-kms>:9203/finish
 >
 > If you skip this, `Onboard.Onboard` or later trusted RPCs will fail with KMS authorization errors.
 
-> **Admin authentication.** Onboarding itself is gated by attestation and the authorization backend above — not by a token. Separately, the KMS *admin* RPCs (for example clearing the image cache) are guarded by an admin token: set `admin_token_hash` (SHA-256 hex of your token) in the KMS `kms.toml` and send the token on admin requests via `Authorization: Bearer <token>`. An empty hash denies all admin RPCs (fail-closed). See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
+> **Admin authentication.** Onboarding itself is gated by attestation and the authorization backend above — not by a token. Separately, the KMS *admin* RPCs (for example `ClearImageCache`) are guarded by an admin token: set `admin_token_hash` (SHA-256 hex of your token) in the KMS `kms.toml`. Unlike VMM/gateway, the KMS admin token is not an HTTP header — it is passed as the `token` field of the admin RPC request (the raw token; the server hashes and compares it). An empty hash denies all admin RPCs (fail-closed). See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
 
 ---
 
