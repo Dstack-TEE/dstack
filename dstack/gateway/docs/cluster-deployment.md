@@ -289,7 +289,7 @@ Important:
 
 ### 2.7 Verify Cluster Sync
 
-The admin API requires a bearer token (see `core.admin.admin_token` in `gateway.toml`,
+The admin API requires a bearer token (see `core.admin.auth_token` in `gateway.toml`,
 or the `ADMIN_API_TOKEN` env injected by `deploy-to-vmm.sh`). Export it once:
 
 ```bash
