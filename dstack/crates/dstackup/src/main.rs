@@ -38,8 +38,8 @@ async fn main() -> Result<()> {
             let platform = default_platform(prefix.as_deref()).or_else(host::Platform::detect);
             cmd_status(&host, platform).await
         }
-        Command::Install(opts) => install::cmd_install(opts).await,
-        Command::Image(cmd) => image::cmd_image(cmd).await,
+        Command::Install(opts) => install::cmd_install(opts, &cli.release_api_base_url).await,
+        Command::Image(cmd) => image::cmd_image(cmd, &cli.release_api_base_url).await,
         Command::Destroy { prefix, purge } => destroy::cmd_destroy(prefix.as_deref(), purge).await,
     }
 }
