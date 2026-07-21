@@ -12,6 +12,7 @@ license.workspace = true
 anyhow = { workspace = true, features = ["std"] }
 binrw.workspace = true
 cmd_lib.workspace = true
+clap.workspace = true
 dstack-types.workspace = true
 tokio = { workspace = true, features = ["rt"] }
 serde_json = { workspace = true, features = ["std"] }

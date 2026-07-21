@@ -16,6 +16,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use clap::{Parser, Subcommand};
 use cmd_lib::{run_cmd, run_fun};
 use dstack_types::{AppCompose, VerityVolume as RequestedVolume};
 use dstack_volume::volume_format::{
@@ -39,38 +40,38 @@ struct VerityVolume {
     root_hash: [u8; 32],
 }
 
+#[derive(Parser)]
+#[command(about = "Discover and activate dstack verity volumes")]
+struct Cli {
+    #[command(subcommand)]
+    command: VolumeCommand,
+}
+
+#[derive(Subcommand)]
+enum VolumeCommand {
+    /// Activate every verity volume required by the measured app compose.
+    MountAll {
+        #[arg(default_value = "app-compose.json")]
+        compose: PathBuf,
+    },
+    /// Activate one required volume by its index in app compose.
+    Mount { compose: PathBuf, index: usize },
+    /// List recognized dstack volume devices.
+    Scan,
+    /// Compare required volumes with attached and active devices.
+    Status {
+        #[arg(default_value = "app-compose.json")]
+        compose: PathBuf,
+    },
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt().init();
-    let mut args = std::env::args_os().skip(1);
-    let command = args
-        .next()
-        .context(
-            "usage: dstack-volume <mount-all [COMPOSE] | mount COMPOSE INDEX | scan | status [COMPOSE]>",
-        )?;
-    match command.to_str() {
-        Some("mount-all") => mount_all(
-            args.next()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("app-compose.json")),
-        ),
-        Some("mount") => {
-            let compose = args.next().context("mount requires COMPOSE and INDEX")?;
-            let index = args
-                .next()
-                .context("mount requires COMPOSE and INDEX")?
-                .to_str()
-                .context("INDEX is not UTF-8")?
-                .parse()
-                .context("invalid volume INDEX")?;
-            mount_one(PathBuf::from(compose), index)
-        }
-        Some("scan") => scan(),
-        Some("status") => status(
-            args.next()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("app-compose.json")),
-        ),
-        _ => bail!("unknown command {:?}", command),
+    match Cli::parse().command {
+        VolumeCommand::MountAll { compose } => mount_all(compose),
+        VolumeCommand::Mount { compose, index } => mount_one(compose, index),
+        VolumeCommand::Scan => scan(),
+        VolumeCommand::Status { compose } => status(compose),
     }
 }
 
@@ -446,6 +447,15 @@ fn mapping_root(mapper_name: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cli_uses_default_compose_for_mount_all() {
+        let cli = Cli::try_parse_from(["dstack-volume", "mount-all"]).unwrap();
+        let VolumeCommand::MountAll { compose } = cli.command else {
+            panic!("unexpected command");
+        };
+        assert_eq!(compose, Path::new("app-compose.json"));
+    }
 
     fn header() -> DstackVolumeHeader {
         DstackVolumeHeader::new_verity([0x5a; 32])

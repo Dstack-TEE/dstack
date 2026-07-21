@@ -2277,6 +2277,7 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "binrw",
+ "clap",
  "cmd_lib",
  "dstack-types",
  "fs-err",
