@@ -15,9 +15,9 @@ use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
 
 use anyhow::{bail, Context, Result};
+use cmd_lib::{run_cmd, run_fun};
 use dstack_types::volume::{
     DstackVolumeHeader, DSTACK_VOLUME_HEADER_SIZE, DSTACK_VOLUME_KIND_VERITY, DSTACK_VOLUME_MAGIC,
 };
@@ -43,7 +43,7 @@ struct VerityVolume {
 }
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt().with_target(false).init();
+    tracing_subscriber::fmt().init();
     let compose_path = std::env::args_os()
         .nth(1)
         .map(PathBuf::from)
@@ -56,8 +56,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let _ = run(Command::new("modprobe").arg("dm-verity"));
-    let _ = run(Command::new("udevadm").args(["settle", "--timeout=5"]));
+    let _ = run_cmd!(modprobe dm-verity);
+    let _ = run_cmd!(udevadm settle --timeout=5);
 
     let volumes = discover_volumes()?;
     info!(
@@ -194,19 +194,6 @@ fn parse_header(bytes: &[u8]) -> Result<Option<DstackVolumeHeader>> {
 }
 
 fn resolve_verity(disk: &BlockDisk, header: DstackVolumeHeader) -> Result<VerityVolume> {
-    if header.kind_version != 1 {
-        bail!("unsupported verity version {}", header.kind_version);
-    }
-    if header.flags != 0 {
-        bail!("unsupported verity flags {:#x}", header.flags);
-    }
-    if header.data_block_size != 4096 || header.hash_block_size != 4096 {
-        bail!(
-            "unsupported verity block sizes {}/{}",
-            header.data_block_size,
-            header.hash_block_size
-        );
-    }
     if disk.partitions.is_empty() {
         bail!("raw verity layout is not defined by kind version 1");
     }
@@ -249,27 +236,19 @@ fn activate_requested(
             info!(mapper = mapper_name, "reused active verity mapping");
             return Ok(());
         }
-        checked(
-            Command::new("veritysetup").args(["close", &mapper_name]),
-            "closing stale verity mapping",
-        )?;
+        run_cmd!(veritysetup close $mapper_name).context("closing stale verity mapping")?;
     }
 
     // The on-disk root only selected a candidate. Pass the root from the
     // measured compose to veritysetup, which is the actual trust decision.
-    checked(
-        Command::new("veritysetup")
-            .arg("open")
-            .arg(&candidate.data)
-            .arg(&mapper_name)
-            .arg(&candidate.hash)
-            .arg(&expected_root),
-        "opening dm-verity volume",
-    )?;
+    let data = &candidate.data;
+    let hash = &candidate.hash;
+    run_cmd!(veritysetup open $data $mapper_name $hash $expected_root)
+        .context("opening dm-verity volume")?;
     if let Err(err) =
         verify_first_block(&mapped).and_then(|_| mount_volume(index, requested, &mapped))
     {
-        let _ = run(Command::new("veritysetup").args(["close", &mapper_name]));
+        let _ = run_cmd!(veritysetup close $mapper_name);
         return Err(err);
     }
     used.insert(candidate_index);
@@ -284,12 +263,7 @@ fn verify_first_block(path: &Path) -> Result<()> {
 }
 
 fn mount_volume(index: usize, requested: &RequestedVolume, mapped: &Path) -> Result<()> {
-    let fs_type = command_stdout(
-        Command::new("blkid")
-            .args(["-o", "value", "-s", "TYPE"])
-            .arg(mapped),
-    )
-    .unwrap_or_default();
+    let fs_type = run_fun!(blkid -o value -s TYPE $mapped).unwrap_or_default();
     match &requested.target {
         VolumeTarget::DockerSeed => {
             let mountpoint = PathBuf::from(format!("/run/dstack-verity/{index}"));
@@ -300,7 +274,7 @@ fn mount_volume(index: usize, requested: &RequestedVolume, mapped: &Path) -> Res
                 mount_read_only(mapped, &mountpoint, fs_type.trim())?;
             }
             if let Err(err) = seed_docker(&mountpoint) {
-                let _ = run(Command::new("umount").arg(&mountpoint));
+                let _ = run_cmd!(umount $mountpoint);
                 return Err(err);
             }
             info!(root = %hex::encode(requested.verity_root), "seeded docker from verity volume");
@@ -331,14 +305,12 @@ fn mount_read_only(device: &Path, target: &Path, fs_type: &str) -> Result<()> {
     } else {
         "ro"
     };
-    let mut command = Command::new("mount");
-    if !fs_type.is_empty() {
-        command.args(["-t", fs_type]);
+    if fs_type.is_empty() {
+        run_cmd!(mount -o $options $device $target).context("mounting verity volume")?;
+    } else {
+        run_cmd!(mount -t $fs_type -o $options $device $target)
+            .context("mounting verity volume")?;
     }
-    checked(
-        command.arg("-o").arg(options).arg(device).arg(target),
-        "mounting verity volume",
-    )?;
     Ok(())
 }
 
@@ -360,23 +332,15 @@ fn seed_docker(volume: &Path) -> Result<()> {
         let target = store.join("overlay2").join(layer_id).join("diff");
         fs::create_dir_all(&target)?;
         if !is_mountpoint(&target)? {
-            if let Err(err) = checked(
-                Command::new("mount")
-                    .args(["--bind"])
-                    .arg(&source)
-                    .arg(&target),
-                "binding docker layer",
-            ) {
+            if let Err(err) = run_cmd!(mount --bind $source $target).context("binding docker layer")
+            {
                 unwind_binds(&bound);
                 return Err(err);
             }
             // A bind inherits neither the intended policy nor all mount flags.
-            if let Err(err) = checked(
-                Command::new("mount")
-                    .args(["-o", "remount,bind,ro"])
-                    .arg(&target),
-                "making docker layer read-only",
-            ) {
+            if let Err(err) =
+                run_cmd!(mount -o remount,bind,ro $target).context("making docker layer read-only")
+            {
                 bound.push(target);
                 unwind_binds(&bound);
                 return Err(err);
@@ -419,13 +383,8 @@ fn child_directories(path: &Path) -> Result<Vec<PathBuf>> {
 
 fn copy_contents(source: &Path, target: &Path) -> Result<()> {
     fs::create_dir_all(target)?;
-    checked(
-        Command::new("cp")
-            .args(["-a"])
-            .arg(source.join("."))
-            .arg(target),
-        "copying docker metadata",
-    )?;
+    let source_contents = source.join(".");
+    run_cmd!(cp -a $source_contents $target).context("copying docker metadata")?;
     Ok(())
 }
 
@@ -474,10 +433,7 @@ fn copy_layer_metadata(volume: &Path, store: &Path) -> Result<()> {
             if source.file_name() == Some(OsStr::new("diff")) {
                 continue;
             }
-            checked(
-                Command::new("cp").args(["-a"]).arg(&source).arg(&target),
-                "copying docker layer metadata",
-            )?;
+            run_cmd!(cp -a $source $target).context("copying docker layer metadata")?;
         }
     }
     Ok(())
@@ -549,20 +505,12 @@ fn unescape_mountinfo(value: &[u8]) -> Vec<u8> {
 
 fn unwind_binds(paths: &[PathBuf]) {
     for path in paths.iter().rev() {
-        let _ = run(Command::new("umount").arg(path));
+        let _ = run_cmd!(umount $path);
     }
-}
-
-fn command_stdout(command: &mut Command) -> Result<String> {
-    let output = command.output()?;
-    if !output.status.success() {
-        bail!("command failed with {}", output.status);
-    }
-    Ok(String::from_utf8(output.stdout)?)
 }
 
 fn mapping_root(mapper_name: &str) -> Result<String> {
-    let status = command_stdout(Command::new("veritysetup").args(["status", mapper_name]))?;
+    let status = run_fun!(veritysetup status $mapper_name)?;
     status
         .lines()
         .find_map(|line| {
@@ -572,22 +520,6 @@ fn mapping_root(mapper_name: &str) -> Result<String> {
         })
         .map(|root| root.trim().to_string())
         .context("verity mapping status has no root hash")
-}
-
-fn run(command: &mut Command) -> Result<Output> {
-    command.output().context("running command")
-}
-
-fn checked(command: &mut Command, operation: &str) -> Result<Output> {
-    let output = command.output().with_context(|| operation.to_string())?;
-    if !output.status.success() {
-        bail!(
-            "{operation} failed with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    Ok(output)
 }
 
 #[cfg(test)]

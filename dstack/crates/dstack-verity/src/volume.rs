@@ -532,7 +532,8 @@ mod tests {
         img.seek(SeekFrom::Start(metadata.first_lba * SECTOR))?;
         img.read_exact(&mut header)?;
         assert_eq!(&header[..16], b"DSTACK_VOLUME\0\0\0");
-        assert_eq!(&header[32..64], &hex::decode(root_hash)?);
+        let decoded = DstackVolumeHeader::decode(&header)?;
+        assert_eq!(decoded.root_hash.as_slice(), hex::decode(root_hash)?);
         let mut buf = vec![0; data.len()];
         img.seek(SeekFrom::Start(data_partition.first_lba * SECTOR))?;
         img.read_exact(&mut buf)?;

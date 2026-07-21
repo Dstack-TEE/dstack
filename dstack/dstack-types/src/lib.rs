@@ -134,7 +134,7 @@ pub struct AppCompose {
 pub struct VerityVolume {
     /// dm-verity root hash (hex): the volume's content identity and integrity
     /// check. The guest matches attached devices against it.
-    #[serde(with = "hex::serde")]
+    #[serde(with = "hex_bytes")]
     pub verity_root: [u8; 32],
     /// `"docker"` (seed the docker overlay2 image store), or an absolute path
     /// where the volume's filesystem is mounted (e.g. model weights).
