@@ -15,7 +15,7 @@ DSTACK_ROOTFS_SRC ?= "${DSTACK_MONOREPO_ROOT}/os/common/rootfs"
 S = "${UNPACKDIR}/repo/dstack"
 DSTACK_ROOTFS_FILES = "${UNPACKDIR}/repo/os/common/rootfs"
 
-RDEPENDS:${PN} += "bash"
+RDEPENDS:${PN} += "bash cryptsetup util-linux-blkid util-linux-mount"
 
 DEPENDS += "rsync-native tpm2-tss"
 DEPENDS += "cmake-native"

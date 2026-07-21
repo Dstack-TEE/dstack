@@ -1773,8 +1773,10 @@ dependencies = [
  "anyhow",
  "clap",
  "dstack-cli-core",
+ "dstack-types",
  "dstack-volume",
  "fs-err",
+ "hex",
  "serde_json",
  "tokio",
  "tracing",
@@ -1786,6 +1788,7 @@ name = "dstack-cli-core"
 version = "0.6.0"
 dependencies = [
  "anyhow",
+ "dstack-types",
  "dstack-vmm-rpc",
  "http-client",
  "rustix 0.38.44",

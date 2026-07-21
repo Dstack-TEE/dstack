@@ -9,7 +9,6 @@
 //! table. Everything read from a disk is untrusted: kind handlers use the
 //! measured app compose as their source of policy and cryptographic identity.
 
-use std::collections::HashSet;
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
@@ -96,9 +95,8 @@ fn mount_all(compose_path: PathBuf) -> Result<()> {
         requested = compose.verity_volumes.len(),
         "discovered dstack volumes"
     );
-    let mut used = HashSet::new();
     for (index, requested) in compose.verity_volumes.iter().enumerate() {
-        activate_requested(index, requested, &volumes, &mut used).with_context(|| {
+        activate_requested(index, requested, &volumes).with_context(|| {
             format!(
                 "failed to activate required volume {index} at {}",
                 requested.target.display()
@@ -276,14 +274,10 @@ fn activate_requested(
     index: usize,
     requested: &RequestedVolume,
     volumes: &[VerityVolume],
-    used: &mut HashSet<usize>,
 ) -> Result<()> {
-    let (candidate_index, candidate) = volumes
+    let candidate = volumes
         .iter()
-        .enumerate()
-        .find(|(candidate_index, volume)| {
-            !used.contains(candidate_index) && volume.root_hash == requested.verity_root
-        })
+        .find(|volume| volume.root_hash == requested.verity_root)
         .context("no attached volume advertises the measured root")?;
 
     let mapper_name = format!("dstack-verity{index}");
@@ -291,9 +285,12 @@ fn activate_requested(
     let expected_root = hex::encode(requested.verity_root);
     if mapped.exists() {
         if mapping_root(&mapper_name)?.eq_ignore_ascii_case(&expected_root) {
-            verify_first_block(&mapped)?;
-            mount_volume(requested, &mapped)?;
-            used.insert(candidate_index);
+            if let Err(err) =
+                verify_first_block(&mapped).and_then(|_| mount_volume(requested, &mapped))
+            {
+                let _ = run_cmd!(veritysetup close $mapper_name);
+                return Err(err);
+            }
             info!(mapper = mapper_name, "reused active verity mapping");
             return Ok(());
         }
@@ -310,7 +307,6 @@ fn activate_requested(
         let _ = run_cmd!(veritysetup close $mapper_name);
         return Err(err);
     }
-    used.insert(candidate_index);
     Ok(())
 }
 

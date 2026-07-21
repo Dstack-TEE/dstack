@@ -142,7 +142,8 @@ fn seal_data_image(
     let uuid = uuid_from_data(data_path, data_size)?;
     let out = run_fun!(
         veritysetup format --salt $salt_hex --uuid $uuid
-            --data-block-size 4096 --hash-block-size 4096 $data_path $hash_path
+            --hash sha256 --format 1 --data-block-size 4096 --hash-block-size 4096
+            $data_path $hash_path
     )
     .context("running veritysetup format")?;
     let verity_root =

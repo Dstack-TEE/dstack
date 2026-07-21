@@ -11,7 +11,7 @@
 //! `logs`, a global `-j/--json`).
 
 use anyhow::{bail, Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use dstack_cli_core::layout::InstallLayout;
 use dstack_cli_core::vmm::{Vmm, DEFAULT_HOST};
 use dstack_cli_core::{compose, ports, rpc};
@@ -77,7 +77,7 @@ enum Command {
         ports: Vec<String>,
         /// attach a verity volume, as printed by `dstack verity`: the file name
         /// in the vmm's volumes_dir, its verity_root, and the target
-        /// (`docker` or a mount path). Repeatable.
+        /// (an absolute mount path). Repeatable.
         #[arg(long = "volume", value_name = "NAME:VERITY_ROOT:TARGET")]
         volumes: Vec<String>,
         /// deploy in non-KMS mode (ephemeral keys; no KMS required).
@@ -124,9 +124,27 @@ enum Command {
         #[arg(long, short = 'o', default_value = "verity.img")]
         output: String,
         /// squashfs compression: `none` (the default), `zstd`, or `gzip`.
-        #[arg(long, default_value = "none")]
-        compress: String,
+        #[arg(long, value_enum, default_value_t, conflicts_with = "fs_image")]
+        compress: CompressionArg,
     },
+}
+
+#[derive(Clone, Copy, Default, ValueEnum)]
+enum CompressionArg {
+    #[default]
+    None,
+    Zstd,
+    Gzip,
+}
+
+impl From<CompressionArg> for dstack_volume::Compression {
+    fn from(value: CompressionArg) -> Self {
+        match value {
+            CompressionArg::None => Self::None,
+            CompressionArg::Zstd => Self::Zstd,
+            CompressionArg::Gzip => Self::Gzip,
+        }
+    }
 }
 
 #[tokio::main]
@@ -223,16 +241,7 @@ async fn main() -> Result<()> {
             fs_image,
             output,
             compress,
-        } => {
-            cmd_verity(
-                dir.as_deref(),
-                fs_image.as_deref(),
-                &output,
-                &compress,
-                json,
-            )
-            .await
-        }
+        } => cmd_verity(dir.as_deref(), fs_image.as_deref(), &output, compress, json).await,
     }
 }
 
@@ -240,20 +249,14 @@ async fn cmd_verity(
     dir: Option<&str>,
     fs_image: Option<&str>,
     output: &str,
-    compress: &str,
+    compress: CompressionArg,
     json: bool,
 ) -> Result<()> {
-    let compress = match compress {
-        "none" => dstack_volume::Compression::None,
-        "zstd" => dstack_volume::Compression::Zstd,
-        "gzip" => dstack_volume::Compression::Gzip,
-        other => bail!("unknown --compress '{other}' (use none|zstd|gzip)"),
-    };
     let result = dstack_volume::verity(dstack_volume::VerityOptions {
         dir: dir.map(std::path::PathBuf::from),
         fs_image: fs_image.map(std::path::PathBuf::from),
         output: output.into(),
-        compress,
+        compress: compress.into(),
     })
     .await?;
 
@@ -290,13 +293,6 @@ async fn cmd_verity(
     Ok(())
 }
 
-/// A parsed `--volume` spec. All fields become part of measured app-compose.
-struct VolumeSpec {
-    source: String,
-    verity_root: String,
-    target: String,
-}
-
 /// Parse a `--volume` spec `NAME:VERITY_ROOT:TARGET`.
 ///
 /// `NAME` is the volume file in the vmm's volumes_dir. `VERITY_ROOT` and `TARGET`
@@ -305,7 +301,7 @@ struct VolumeSpec {
 /// spec to paste.
 ///
 /// `TARGET` is an absolute read-only mount path in the guest.
-fn parse_volume(spec: &str) -> Result<VolumeSpec> {
+fn parse_volume(spec: &str) -> Result<dstack_types::VerityVolume> {
     let mut parts = spec.splitn(3, ':');
     let name = parts.next().unwrap_or_default();
     let (root, target) = match (parts.next(), parts.next()) {
@@ -326,10 +322,12 @@ fn parse_volume(spec: &str) -> Result<VolumeSpec> {
     if !target.starts_with('/') {
         bail!("target '{target}' must be an absolute path");
     }
-    Ok(VolumeSpec {
+    let mut verity_root = [0; 32];
+    hex::decode_to_slice(root, &mut verity_root).context("decoding verity_root")?;
+    Ok(dstack_types::VerityVolume {
         source: name.to_string(),
-        verity_root: root.to_string(),
-        target: target.to_string(),
+        verity_root,
+        target: target.into(),
     })
 }
 
@@ -425,11 +423,7 @@ async fn cmd_deploy(
 
     // each --volume declares a measured verity_volumes entry, so the built
     // app-compose (and thus app_id) binds the attested roots.
-    let verity_volumes: Vec<(String, String, String)> = parsed_volumes
-        .iter()
-        .map(|v| (v.source.clone(), v.verity_root.clone(), v.target.clone()))
-        .collect();
-    let app_compose = compose::build_app_compose(name, &yaml, !no_kms, &verity_volumes);
+    let app_compose = compose::build_app_compose(name, &yaml, !no_kms, &parsed_volumes);
 
     let mut cfg = rpc::VmConfiguration {
         name: name.to_string(),
@@ -669,8 +663,8 @@ mod tests {
         let root = "a".repeat(64);
         let data = parse_volume(&format!("weights.img:{root}:/models/llama")).unwrap();
         assert_eq!(data.source, "weights.img");
-        assert_eq!(data.verity_root, root);
-        assert_eq!(data.target, "/models/llama");
+        assert_eq!(data.verity_root, [0xaa; 32]);
+        assert_eq!(data.target, std::path::Path::new("/models/llama"));
 
         assert!(parse_volume("weights.img").is_err()); // missing verity_root:target
         assert!(parse_volume(&format!("weights.img:{root}")).is_err()); // missing target
@@ -732,6 +726,24 @@ mod tests {
             "data",
             "--fs-image",
             "rootfs.ext4"
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "dstack",
+            "verity",
+            "--fs-image",
+            "rootfs.ext4",
+            "--compress",
+            "zstd"
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "dstack",
+            "verity",
+            "--dir",
+            "data",
+            "--compress",
+            "invalid"
         ])
         .is_err());
     }
