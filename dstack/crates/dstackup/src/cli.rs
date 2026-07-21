@@ -12,6 +12,7 @@ pub(crate) const DEFAULT_AUTH_BIN: &str = "dstack-auth";
 pub(crate) const DEFAULT_SUPERVISOR_BIN: &str = "supervisor";
 pub(crate) const DEFAULT_SOURCE_REPO: &str = "https://github.com/Dstack-TEE/dstack";
 pub(crate) const DEFAULT_SOURCE_REF: &str = "master";
+pub(crate) const DEFAULT_RELEASE_API_BASE_URL: &str = "https://api.github.com/repos";
 
 #[derive(Parser)]
 #[command(name = "dstackup", version, about = "set up and manage a dstack host")]
@@ -20,6 +21,11 @@ pub(crate) struct Cli {
     /// then the local control socket.
     #[arg(long, global = true)]
     pub(crate) host: Option<String>,
+
+    /// Base URL of the GitHub-compatible releases API. The repository path is
+    /// appended automatically (useful for an API proxy or a test server).
+    #[arg(long, global = true, default_value = DEFAULT_RELEASE_API_BASE_URL)]
+    pub(crate) release_api_base_url: String,
 
     #[command(subcommand)]
     pub(crate) command: Command,

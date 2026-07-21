@@ -64,7 +64,7 @@ struct PullSpec {
     gpu: bool,
 }
 
-pub(crate) async fn cmd_image(cmd: ImageCmd) -> Result<()> {
+pub(crate) async fn cmd_image(cmd: ImageCmd, release_api_base_url: &str) -> Result<()> {
     match cmd {
         ImageCmd::Pull {
             version,
@@ -75,7 +75,15 @@ pub(crate) async fn cmd_image(cmd: ImageCmd) -> Result<()> {
         } => {
             let image_dir = loc.dir();
             validate_image_dir(&image_dir)?;
-            pull(version.as_deref(), gpu, &image_dir, force, insecure).await?;
+            pull(
+                version.as_deref(),
+                gpu,
+                &image_dir,
+                force,
+                insecure,
+                release_api_base_url,
+            )
+            .await?;
             Ok(())
         }
         ImageCmd::List { loc } => {
@@ -98,6 +106,7 @@ pub(crate) async fn pull(
     image_dir: &str,
     force: bool,
     insecure: bool,
+    release_api_base_url: &str,
 ) -> Result<String> {
     println!(
         "dstackup image pull — {} image",
@@ -107,7 +116,7 @@ pub(crate) async fn pull(
             "unified"
         }
     );
-    let release = fetch_release(version).await?;
+    let release = fetch_release(version, release_api_base_url).await?;
 
     let asset = pick_asset(&release.assets, gpu).with_context(|| {
         format!(
@@ -376,6 +385,7 @@ pub(crate) async fn resolve_or_pull_image(
     requested: Option<&str>,
     require: bool,
     required_files: &[&str],
+    release_api_base_url: &str,
 ) -> Result<Option<String>> {
     if let Some(name) = requested {
         if !valid_image_name(name) {
@@ -391,7 +401,15 @@ pub(crate) async fn resolve_or_pull_image(
         }
         if let Some(spec) = pull_spec(name) {
             println!("  [..] image {name} not found locally; downloading it");
-            let pulled = pull(Some(&spec.version), spec.gpu, image_dir, false, false).await?;
+            let pulled = pull(
+                Some(&spec.version),
+                spec.gpu,
+                image_dir,
+                false,
+                false,
+                release_api_base_url,
+            )
+            .await?;
             ensure_image_has_required_files(image_dir, &pulled, required_files)?;
             return Ok(Some(pulled));
         }
@@ -459,7 +477,7 @@ pub(crate) async fn resolve_or_pull_image(
     } else {
         println!("  [..] no local guest image found; downloading the latest cpu image");
     }
-    let pulled = pull(None, false, image_dir, false, false).await?;
+    let pulled = pull(None, false, image_dir, false, false, release_api_base_url).await?;
 
     if Path::new(image_dir)
         .join(&pulled)
@@ -599,10 +617,10 @@ fn missing_named_image_message(image_dir: &str, name: &str) -> String {
 /// released from this monorepo. Do not probe the new repository first for old
 /// versions: the version boundary is authoritative and avoids redundant or
 /// misleading requests.
-async fn fetch_release(version: Option<&str>) -> Result<Release> {
+async fn fetch_release(version: Option<&str>, release_api_base_url: &str) -> Result<Release> {
     let client = reqwest::Client::new();
     if let Some(version) = version {
-        let (version, url, releases_url) = tagged_release_location(version)?;
+        let (version, url, releases_url) = tagged_release_location(version, release_api_base_url)?;
         return fetch_tagged_release(&client, &url, releases_url)
             .await?
             .with_context(|| {
@@ -610,7 +628,8 @@ async fn fetch_release(version: Option<&str>) -> Result<Release> {
             });
     }
 
-    let list_url = format!("https://api.github.com/repos/{REPO}/releases?per_page=100");
+    let api_base = release_api_base_url.trim_end_matches('/');
+    let list_url = format!("{api_base}/{REPO}/releases?per_page=100");
     let releases: Vec<Release> = client
         .get(&list_url)
         .header("user-agent", "dstackup")
@@ -630,13 +649,16 @@ async fn fetch_release(version: Option<&str>) -> Result<Release> {
         return Ok(release);
     }
 
-    let legacy_url = format!("https://api.github.com/repos/{LEGACY_REPO}/releases/latest");
+    let legacy_url = format!("{api_base}/{LEGACY_REPO}/releases/latest");
     fetch_tagged_release(&client, &legacy_url, LEGACY_RELEASES_URL)
         .await?
         .with_context(|| format!("no guest-OS release found; check {RELEASES_URL}"))
 }
 
-fn tagged_release_location(version: &str) -> Result<(String, String, &'static str)> {
+fn tagged_release_location(
+    version: &str,
+    release_api_base_url: &str,
+) -> Result<(String, String, &'static str)> {
     let version = version
         .trim_start_matches(RELEASE_TAG_PREFIX)
         .trim_start_matches('v');
@@ -648,7 +670,10 @@ fn tagged_release_location(version: &str) -> Result<(String, String, &'static st
     };
     Ok((
         version.to_string(),
-        format!("https://api.github.com/repos/{repo}/releases/tags/{tag_prefix}{version}"),
+        format!(
+            "{}/{repo}/releases/tags/{tag_prefix}{version}",
+            release_api_base_url.trim_end_matches('/')
+        ),
         releases_url,
     ))
 }
@@ -830,7 +855,8 @@ mod tests {
     #[test]
     fn routes_pinned_releases_at_the_monorepo_boundary() {
         for version in ["0.5.11", "v0.5.11", "guest-os-v0.5.11"] {
-            let (normalized, url, releases_url) = tagged_release_location(version).unwrap();
+            let (normalized, url, releases_url) =
+                tagged_release_location(version, crate::cli::DEFAULT_RELEASE_API_BASE_URL).unwrap();
             assert_eq!(normalized, "0.5.11");
             assert_eq!(
                 url,
@@ -840,7 +866,8 @@ mod tests {
         }
 
         for version in ["0.6.0", "0.6.0.a2", "1.0.0"] {
-            let (normalized, url, releases_url) = tagged_release_location(version).unwrap();
+            let (normalized, url, releases_url) =
+                tagged_release_location(version, crate::cli::DEFAULT_RELEASE_API_BASE_URL).unwrap();
             assert_eq!(normalized, version);
             assert_eq!(
                 url,
@@ -853,8 +880,20 @@ mod tests {
     #[test]
     fn rejects_versions_without_a_numeric_core() {
         for version in ["0.6", "latest", "0.x.0", "0.6.x"] {
-            assert!(tagged_release_location(version).is_err(), "{version}");
+            assert!(
+                tagged_release_location(version, crate::cli::DEFAULT_RELEASE_API_BASE_URL).is_err(),
+                "{version}"
+            );
         }
+    }
+
+    #[test]
+    fn release_api_base_url_is_configurable_and_trailing_slash_safe() {
+        let (_, url, _) = tagged_release_location("0.6.0", "http://127.0.0.1:1234/api/").unwrap();
+        assert_eq!(
+            url,
+            "http://127.0.0.1:1234/api/Dstack-TEE/dstack/releases/tags/guest-os-v0.6.0"
+        );
     }
 
     #[test]

@@ -28,7 +28,7 @@ const DAEMON_BINARIES: &[(&str, &str)] = &[
     ("supervisor", "supervisor"),
 ];
 
-pub(crate) async fn cmd_install(mut o: InstallOpts) -> Result<()> {
+pub(crate) async fn cmd_install(mut o: InstallOpts, release_api_base_url: &str) -> Result<()> {
     // --expose is not safe yet: the rendered vmm.toml binds the VM-control
     // plane with neither TLS nor an auth token (the management RPCs are not
     // behind an auth guard), so exposing it would hand deploy/destroy to anyone
@@ -99,6 +99,7 @@ pub(crate) async fn cmd_install(mut o: InstallOpts) -> Result<()> {
         o.image.as_deref(),
         !o.no_kms,
         required_image_files,
+        release_api_base_url,
     )
     .await?;
     let os_image_hash = resolve_image_pin(&o, &images, platform)?;
