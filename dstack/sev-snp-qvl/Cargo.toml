@@ -17,3 +17,5 @@ moka.workspace = true
 reqwest.workspace = true
 sev.workspace = true
 tokio = { workspace = true, features = ["rt", "time"] }
+x509-parser = { workspace = true, features = ["verify"] }
+pem.workspace = true

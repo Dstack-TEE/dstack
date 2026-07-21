@@ -4,6 +4,7 @@
 
 use std::ffi::{CString, OsStr};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{bail, Context, Result};
@@ -11,6 +12,7 @@ use fuser::{
     FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
     ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
+use mock_attestation::{server::MockCollateralState, tdx::TdxGenerator};
 use sha2::{Digest, Sha384};
 
 use crate::TeeBackend;
@@ -31,17 +33,14 @@ const MEASUREMENTS_DIR_INO: u64 = 7;
 const RTMR0_INO: u64 = 8;
 const CCEL_INO: u64 = 12;
 
-const TDX_QUOTE_MIN_SIZE: usize = 632;
 const MR_CONFIG_ID_RANGE: std::ops::Range<usize> = 232..280;
 const RTMR0_OFFSET: usize = 376;
 const REPORT_DATA_RANGE: std::ops::Range<usize> = 568..632;
 
-const QUOTE_FIXTURE: &[u8] = include_bytes!("../../ra-tls/assets/tdx_quote");
 const CCEL_FIXTURE: &[u8] = include_bytes!("../../cc-eventlog/samples/ccel.bin");
 
-#[derive(Clone)]
 struct SimulatorState {
-    base_quote: Vec<u8>,
+    generator: Arc<TdxGenerator>,
     ccel: Vec<u8>,
     rtmrs: [[u8; 48]; 4],
     outblob: Vec<u8>,
@@ -49,38 +48,37 @@ struct SimulatorState {
 }
 
 impl SimulatorState {
-    fn new(base_quote: &[u8], ccel: &[u8]) -> Result<Self> {
-        if base_quote.len() < TDX_QUOTE_MIN_SIZE {
-            bail!("tdx quote fixture is too short: {}", base_quote.len());
-        }
-
+    fn new(generator: Arc<TdxGenerator>, ccel: &[u8]) -> Result<Self> {
         let mut state = Self {
-            base_quote: base_quote.to_vec(),
+            generator,
             ccel: ccel.to_vec(),
             rtmrs: replay_boot_rtmrs(ccel)?,
             outblob: Vec::new(),
             generation: 0,
         };
-        state.outblob = state.make_quote([0u8; 64]);
+        state.outblob = state.make_quote([0u8; 64])?;
         Ok(state)
     }
 
-    fn make_quote(&self, report_data: [u8; 64]) -> Vec<u8> {
-        let mut quote = self.base_quote.clone();
+    fn make_quote(&self, report_data: [u8; 64]) -> Result<Vec<u8>> {
+        let mut quote = self
+            .generator
+            .attest_with_rtmrs(report_data, self.rtmrs)?
+            .quote;
         quote[MR_CONFIG_ID_RANGE].fill(0);
         for (index, rtmr) in self.rtmrs.iter().enumerate() {
             let start = RTMR0_OFFSET + index * 48;
             quote[start..start + 48].copy_from_slice(rtmr);
         }
         quote[REPORT_DATA_RANGE].copy_from_slice(&report_data);
-        quote
+        Ok(quote)
     }
 
     fn request_quote(&mut self, report_data: &[u8]) -> Result<()> {
         let report_data: [u8; 64] = report_data
             .try_into()
             .map_err(|_| anyhow::anyhow!("inblob must be exactly 64 bytes"))?;
-        self.outblob = self.make_quote(report_data);
+        self.outblob = self.make_quote(report_data)?;
         self.generation = self
             .generation
             .checked_add(1)
@@ -145,9 +143,9 @@ pub(crate) struct TdxSimulatorFs {
 }
 
 impl TdxSimulatorFs {
-    fn new() -> Result<Self> {
+    fn new(generator: Arc<TdxGenerator>) -> Result<Self> {
         Ok(Self {
-            state: SimulatorState::new(QUOTE_FIXTURE, CCEL_FIXTURE)?,
+            state: SimulatorState::new(generator, CCEL_FIXTURE)?,
             uid: unsafe { libc::geteuid() },
             gid: unsafe { libc::getegid() },
         })
@@ -433,7 +431,35 @@ impl TeeBackend for TdxBackend {
     const DEFAULT_MOUNTPOINT: &'static str = TDX_DEFAULT_MOUNTPOINT;
 
     fn create_filesystem() -> Result<Self::Fs> {
-        TdxSimulatorFs::new()
+        let collateral = Arc::new(MockCollateralState::new()?);
+        let generator = collateral.tdx.clone();
+        let root_dir = Path::new("/dstack/.host-shared/.mock-attestation");
+        fs_err::create_dir_all(root_dir)?;
+        fs_err::write(root_dir.join("tdx-root-ca.pem"), generator.root_ca_pem())?;
+        fs_err::write(
+            root_dir.join("sev-snp-root-ca.pem"),
+            collateral.sev_snp.root_ca_pem(),
+        )?;
+        fs_err::write(
+            root_dir.join("tpm-root-ca.pem"),
+            collateral.tpm.root_ca_pem(),
+        )?;
+        fs_err::write(
+            root_dir.join("nsm-root-ca.pem"),
+            collateral.nsm.root_ca_pem(),
+        )?;
+        std::thread::Builder::new()
+            .name("mock-collateral".into())
+            .spawn(move || {
+                let runtime = tokio::runtime::Runtime::new().expect("mock collateral runtime");
+                runtime
+                    .block_on(mock_attestation::server::serve(
+                        "127.0.0.1:8088".parse().unwrap(),
+                        collateral,
+                    ))
+                    .expect("mock collateral server");
+            })?;
+        TdxSimulatorFs::new(generator)
     }
 
     fn prepare_mountpoint(mountpoint: &Path) -> Result<()> {
@@ -452,7 +478,8 @@ mod tests {
 
     #[test]
     fn quote_tracks_report_data_and_rtmr_extensions() {
-        let mut state = SimulatorState::new(QUOTE_FIXTURE, CCEL_FIXTURE).unwrap();
+        let mut state =
+            SimulatorState::new(Arc::new(TdxGenerator::new().unwrap()), CCEL_FIXTURE).unwrap();
         let original_rtmr3 = state.rtmrs[3];
         let digest = [0x42; 48];
         state.extend_rtmr(3, &digest).unwrap();
@@ -464,17 +491,16 @@ mod tests {
 
         let quote = Quote::parse(&state.outblob).unwrap();
         let report = quote.report.as_td10().unwrap();
-        let fixture = Quote::parse(QUOTE_FIXTURE).unwrap();
-        let fixture_report = fixture.report.as_td10().unwrap();
         assert_eq!(report.report_data, report_data);
         assert_eq!(report.mr_config_id, [0u8; 48]);
         assert_eq!(report.rt_mr3, state.rtmrs[3]);
-        assert_eq!(report.mr_owner, fixture_report.mr_owner);
+        assert_eq!(report.mr_owner, [0u8; 48]);
     }
 
     #[test]
     fn only_rtmr_two_and_three_are_extensible() {
-        let mut state = SimulatorState::new(QUOTE_FIXTURE, CCEL_FIXTURE).unwrap();
+        let mut state =
+            SimulatorState::new(Arc::new(TdxGenerator::new().unwrap()), CCEL_FIXTURE).unwrap();
         assert!(state.extend_rtmr(0, &[0u8; 48]).is_err());
         assert!(state.extend_rtmr(2, &[0u8; 48]).is_ok());
         assert!(state.extend_rtmr(3, &[0u8; 48]).is_ok());

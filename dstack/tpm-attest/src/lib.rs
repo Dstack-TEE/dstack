@@ -99,6 +99,9 @@ impl TpmContext {
     }
 
     pub fn detect() -> Result<Self> {
+        if std::env::var_os("DSTACK_MOCK_ATTESTATION_URL").is_some() {
+            return Self::new("mock");
+        }
         let tcti = if Path::new("/dev/tpmrm0").exists() {
             "/dev/tpmrm0"
         } else if Path::new("/dev/tpm0").exists() {

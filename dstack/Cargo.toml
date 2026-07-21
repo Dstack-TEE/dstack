@@ -67,6 +67,7 @@ members = [
     "crates/dstackup",
     "crates/dstack-auth",
     "crates/build-info",
+    "crates/mock-attestation",
 ]
 resolver = "2"
 

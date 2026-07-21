@@ -562,17 +562,18 @@ fn verify_amd_snp_attestation_with_cert_chain(
     let report = AttestationReport::from_bytes(report_bytes)
         .map_err(|err| anyhow::anyhow!("failed to parse amd sev-snp report: {err}"))?;
 
+    let standard_x509_result = verify_x509_chain(&ark_bytes, &ask_bytes, &vcek_bytes);
     let ark = parse_certificate(&ark_bytes, "ark")?;
     let ask = parse_certificate(&ask_bytes, "ask")?;
     let vcek = parse_certificate(&vcek_bytes, "vcek")?;
-
-    let chain = Chain {
-        ca: ca::Chain { ark, ask },
-        vek: vcek.clone(),
-    };
-    chain
+    if standard_x509_result.is_err() {
+        Chain {
+            ca: ca::Chain { ark, ask },
+            vek: vcek.clone(),
+        }
         .verify()
         .map_err(|err| anyhow::anyhow!("amd cert chain verification failed: {err:?}"))?;
+    }
     (&vcek, &report).verify().map_err(|err| {
         anyhow::anyhow!("amd sev-snp report signature verification failed: {err:?}")
     })?;
@@ -592,6 +593,42 @@ fn verify_amd_snp_attestation_with_cert_chain(
         // external policy collateral.
         advisory_ids: Vec::new(),
     })
+}
+
+fn verify_x509_chain(ark: &CertBytes, ask: &CertBytes, vcek: &CertBytes) -> Result<()> {
+    use x509_parser::prelude::{FromDer, X509Certificate};
+
+    let ark_der = certificate_der(ark)?;
+    let ask_der = certificate_der(ask)?;
+    let vcek_der = certificate_der(vcek)?;
+    let (_, ark) = X509Certificate::from_der(&ark_der).context("failed to parse ARK X.509")?;
+    let (_, ask) = X509Certificate::from_der(&ask_der).context("failed to parse ASK X.509")?;
+    let (_, vcek) = X509Certificate::from_der(&vcek_der).context("failed to parse VCEK X.509")?;
+    if !ark.is_ca() || !ask.is_ca() {
+        bail!("AMD ARK and ASK certificates must be certificate authorities");
+    }
+    if ark.subject() != ark.issuer()
+        || ask.issuer() != ark.subject()
+        || vcek.issuer() != ask.subject()
+    {
+        bail!("AMD certificate issuer/subject chain mismatch");
+    }
+    ark.verify_signature(Some(ark.public_key()))
+        .context("ARK self-signature verification failed")?;
+    ask.verify_signature(Some(ark.public_key()))
+        .context("ASK signature verification failed")?;
+    vcek.verify_signature(Some(ask.public_key()))
+        .context("VCEK signature verification failed")?;
+    Ok(())
+}
+
+fn certificate_der(cert: &CertBytes) -> Result<Vec<u8>> {
+    match cert.encoding {
+        CertEncoding::Der => Ok(cert.bytes.clone()),
+        CertEncoding::Pem => Ok(::pem::parse(&cert.bytes)
+            .context("failed to parse certificate PEM")?
+            .into_contents()),
+    }
 }
 
 pub fn verify_amd_snp_evidence(

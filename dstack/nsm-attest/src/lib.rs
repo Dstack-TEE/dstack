@@ -36,6 +36,9 @@ pub struct NsmContext {
 impl NsmContext {
     /// Open the NSM device
     pub fn new() -> Result<Self> {
+        if std::env::var_os("DSTACK_MOCK_ATTESTATION_URL").is_some() {
+            return Ok(Self { fd: -1 });
+        }
         let fd = driver::nsm_init();
         if fd < 0 {
             bail!("Failed to open NSM device");
@@ -55,6 +58,11 @@ impl NsmContext {
         nonce: Option<&[u8]>,
         public_key: Option<&[u8]>,
     ) -> Result<Vec<u8>> {
+        if let Some(document) =
+            dstack_types::mock_attestation::request("nsm", user_data.unwrap_or_default())?
+        {
+            return Ok(document);
+        }
         let request = Request::Attestation {
             user_data: user_data.map(|d| d.to_vec().into()),
             nonce: nonce.map(|d| d.to_vec().into()),
@@ -168,7 +176,9 @@ impl NsmContext {
 
 impl Drop for NsmContext {
     fn drop(&mut self) {
-        driver::nsm_exit(self.fd);
+        if self.fd >= 0 {
+            driver::nsm_exit(self.fd);
+        }
     }
 }
 

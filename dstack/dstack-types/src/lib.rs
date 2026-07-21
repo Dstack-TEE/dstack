@@ -716,6 +716,9 @@ pub struct SysConfig {
     pub nvidia_attestation_proxy_url: Option<String>,
     pub docker_registry: Option<String>,
     pub host_api_url: Option<String>,
+    /// Development-only TEE simulator selection. Production guests ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tee_simulator: Option<TeeSimulatorConfig>,
     /// MrConfigV3 document string for platform app/config binding.
     ///
     /// Hosts generate this in JCS form, but verifiers hash the supplied string
@@ -725,6 +728,23 @@ pub struct SysConfig {
     pub mr_config: Option<String>,
     // JSON serialized VmConfig
     pub vm_config: String,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
+pub struct TeeSimulatorConfig {
+    /// Platform ABI exposed by dstack-tee-simulator. Defaults to `tdx`.
+    #[serde(default)]
+    pub platform: TeeSimulatorPlatform,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TeeSimulatorPlatform {
+    #[default]
+    Tdx,
+    SevSnp,
+    Tpm,
+    Nsm,
 }
 
 impl SysConfig {
@@ -1688,6 +1708,7 @@ pub struct ImageInfo {
     pub ovmf_variant: Option<OvmfVariant>,
 }
 
+pub mod mock_attestation;
 pub mod mr_config;
 pub mod shared_filenames;
 pub mod version;

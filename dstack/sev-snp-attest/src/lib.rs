@@ -15,7 +15,7 @@ const SNP_REPORT_SIZE: usize = 1184;
 pub const SNP_REPORT_DATA_RANGE: std::ops::Range<usize> = 0x50..0x90;
 
 /// Represents an AMD SEV-SNP attestation report.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SnpQuote {
     /// Raw SNP report bytes.
     pub report: Vec<u8>,
@@ -24,6 +24,9 @@ pub struct SnpQuote {
 }
 
 pub fn get_report(report_data: [u8; 64]) -> Result<SnpQuote> {
+    if let Some(evidence) = dstack_types::mock_attestation::request("sev-snp", &report_data)? {
+        return serde_json::from_slice(&evidence).context("failed to decode mock SEV-SNP evidence");
+    }
     if has_sev_snp_tsm_provider(Path::new(TSM_REPORT_ROOT)) {
         match get_report_configfs(report_data) {
             Ok(quote) => {

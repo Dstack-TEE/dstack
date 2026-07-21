@@ -10,6 +10,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 ciborium.workspace = true
 hex = { workspace = true, features = ["std"] }
 or-panic.workspace = true

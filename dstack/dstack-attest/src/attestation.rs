@@ -403,6 +403,15 @@ fn choose_dstack_attestation_mode(has_tdx: bool, has_sev_snp: bool) -> Result<At
 impl AttestationMode {
     /// Detect attestation mode from system
     pub fn detect() -> Result<Self> {
+        if let Ok(platform) = std::env::var("DSTACK_SIMULATED_TEE_PLATFORM") {
+            return match platform.as_str() {
+                "tdx" => Ok(Self::DstackTdx),
+                "sev-snp" => Ok(Self::DstackAmdSevSnp),
+                "tpm" => Ok(Self::DstackGcpTdx),
+                "nsm" => Ok(Self::DstackNitroEnclave),
+                value => bail!("unsupported simulated TEE platform: {value}"),
+            };
+        }
         let has_tdx = tdx_attest::is_tdx_available();
         let has_sev_snp =
             std::path::Path::new("/dev/sev-guest").exists() || has_sev_snp_tsm_provider();
