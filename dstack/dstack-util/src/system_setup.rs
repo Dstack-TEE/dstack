@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::Arc;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Display,
@@ -33,7 +34,7 @@ use ra_rpc::{
     Attestation,
 };
 use ra_tls::{
-    attestation::{AttestationMode, QuoteContentType},
+    attestation::{detect_tee_variant, AttestationVerifier, QuoteContentType, TeeVariant},
     cert::{generate_ra_cert, CertConfigV2, CertSigningRequestV2, Csr},
 };
 use rand::Rng as _;
@@ -443,7 +444,6 @@ impl<'a> GatewayContext<'a> {
         };
         let client = RaClientConfig::builder()
             .remote_uri(url)
-            .maybe_pccs_url(self.shared.sys_config.pccs_url.clone())
             .tls_client_cert(client_cert.to_string())
             .tls_client_key(client_key.to_string())
             .tls_ca_cert(ca_cert)
@@ -539,9 +539,11 @@ impl<'a> GatewayContext<'a> {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let cert_not_after = now + CERT_VALIDITY_SECS;
+        let collateral_urls = self.shared.sys_config.collateral_urls();
+        let verifier = Arc::new(AttestationVerifier::new_prod(Some(&collateral_urls))?);
         let cert_client = CertRequestClient::create(
             self.keys,
-            self.shared.sys_config.pccs_url.as_deref(),
+            verifier,
             self.shared.sys_config.vm_config.clone(),
         )
         .await
@@ -809,12 +811,12 @@ fn verify_app_compose_policy(shared: &HostShared) -> Result<()> {
             bail!("Unsupported attestation platform: requirements.platforms is empty");
         }
         let current_platform =
-            AttestationMode::detect().context("failed to detect current attestation platform")?;
+            detect_tee_variant().context("failed to detect current attestation platform")?;
         verify_platform_requirements(app_compose, current_platform)?;
     }
     if requirements.tdx_measure_acpi_tables.is_some() {
         let current_platform =
-            AttestationMode::detect().context("failed to detect current attestation platform")?;
+            detect_tee_variant().context("failed to detect current attestation platform")?;
         verify_tdx_measure_acpi_tables_requirement(
             app_compose,
             &sys_config.vm_config,
@@ -867,7 +869,7 @@ fn verify_os_version_requirement(app_compose: &AppCompose, current_os_version: &
 
 fn verify_platform_requirements(
     app_compose: &AppCompose,
-    current_platform: AttestationMode,
+    current_platform: TeeVariant,
 ) -> Result<()> {
     let Some(requirements) = app_compose.requirements.as_ref() else {
         return Ok(());
@@ -895,7 +897,7 @@ fn verify_platform_requirements(
     );
 }
 
-fn parse_requirement_platform(platform: &str, index: usize) -> Result<AttestationMode> {
+fn parse_requirement_platform(platform: &str, index: usize) -> Result<TeeVariant> {
     serde_json::from_value(serde_json::Value::String(platform.to_string()))
         .with_context(|| format!("Invalid requirements.platforms[{index}]: {platform}"))
 }
@@ -907,7 +909,7 @@ fn format_requirement_platforms(platforms: &[String]) -> String {
 fn verify_tdx_measure_acpi_tables_requirement(
     app_compose: &AppCompose,
     vm_config: &str,
-    current_platform: AttestationMode,
+    current_platform: TeeVariant,
 ) -> Result<()> {
     let Some(measure_acpi_tables) = app_compose
         .requirements
@@ -916,7 +918,7 @@ fn verify_tdx_measure_acpi_tables_requirement(
     else {
         return Ok(());
     };
-    if current_platform != AttestationMode::DstackTdx {
+    if current_platform != TeeVariant::DstackTdx {
         return Ok(());
     }
     let vm_config: dstack_types::VmConfig = serde_json::from_str(vm_config)
@@ -2037,7 +2039,7 @@ impl<'a> Stage0<'a> {
     fn host_api(&self) -> HostApi {
         HostApi::new(
             self.shared.sys_config.host_api_url.clone(),
-            self.shared.sys_config.pccs_url.clone(),
+            self.shared.sys_config.collateral_urls().pccs,
         )
     }
     fn load(args: &'a SetupArgs) -> Result<Self> {
@@ -2053,7 +2055,7 @@ impl<'a> Stage0<'a> {
         let host_shared = HostShared::copy("/tmp/.host-shared".as_ref(), &host_shared_copy_dir)?;
         let host_api = HostApi::new(
             host_shared.sys_config.host_api_url.clone(),
-            host_shared.sys_config.pccs_url.clone(),
+            host_shared.sys_config.collateral_urls().pccs,
         );
         Ok(Self {
             args,
@@ -2078,6 +2080,8 @@ impl<'a> Stage0<'a> {
                 .context("Failed to get temp ca cert")?
         };
         let cert_pair = generate_ra_cert(tmp_ca.temp_ca_cert.clone(), tmp_ca.temp_ca_key.clone())?;
+        let collateral_urls = self.shared.sys_config.collateral_urls();
+        let attestation_verifier = Arc::new(AttestationVerifier::new_prod(Some(&collateral_urls))?);
         let ra_client = RaClientConfig::builder()
             .tls_no_check(false)
             .tls_built_in_root_certs(false)
@@ -2085,7 +2089,7 @@ impl<'a> Stage0<'a> {
             .tls_client_cert(cert_pair.cert_pem)
             .tls_client_key(cert_pair.key_pem)
             .tls_ca_cert(tmp_ca.ca_cert.clone())
-            .maybe_pccs_url(self.shared.sys_config.pccs_url.clone())
+            .attestation_verifier(attestation_verifier)
             .cert_validator(Box::new(|cert| {
                 let Some(cert) = cert else {
                     bail!("Missing server cert");
@@ -2586,8 +2590,8 @@ impl<'a> Stage0<'a> {
         let truncated_compose_hash = truncate(&compose_hash, 20);
         let key_provider = self.shared.app_compose.key_provider();
         let mut instance_info = self.shared.instance_info.clone();
-        let is_snp = AttestationMode::detect()
-            .map(|mode| mode == AttestationMode::DstackAmdSevSnp)
+        let is_snp = detect_tee_variant()
+            .map(|mode| mode == TeeVariant::DstackAmdSevSnp)
             .unwrap_or(false);
 
         if instance_info.app_id.is_empty() {
@@ -2855,7 +2859,6 @@ impl Stage1<'_> {
         let config = serde_json::json!({
             "default": {
                 "core": {
-                    "pccs_url": self.shared.sys_config.pccs_url,
                     "data_disks": data_disks,
                 }
             }
@@ -3200,15 +3203,14 @@ fn test_platform_requirements_accept_matching_platform() {
         None,
         Some(&["dstack-gcp-tdx", "dstack-tdx"]),
     );
-    verify_platform_requirements(&app_compose, AttestationMode::DstackGcpTdx).unwrap();
-    verify_platform_requirements(&app_compose, AttestationMode::DstackTdx).unwrap();
+    verify_platform_requirements(&app_compose, TeeVariant::DstackGcpTdx).unwrap();
+    verify_platform_requirements(&app_compose, TeeVariant::DstackTdx).unwrap();
 }
 
 #[test]
 fn test_platform_requirements_reject_non_matching_platform() {
     let app_compose = test_app_compose(serde_json::json!("3"), None, Some(&["dstack-gcp-tdx"]));
-    let err =
-        verify_platform_requirements(&app_compose, AttestationMode::DstackAmdSevSnp).unwrap_err();
+    let err = verify_platform_requirements(&app_compose, TeeVariant::DstackAmdSevSnp).unwrap_err();
     assert!(err.to_string().contains("Unsupported attestation platform"));
 }
 
@@ -3235,13 +3237,13 @@ fn test_empty_requirements_require_v3_manifest() {
 #[test]
 fn test_platform_requirements_omitted_accepts_any_platform() {
     let app_compose = test_app_compose(serde_json::json!("3"), None, None);
-    verify_platform_requirements(&app_compose, AttestationMode::DstackAmdSevSnp).unwrap();
+    verify_platform_requirements(&app_compose, TeeVariant::DstackAmdSevSnp).unwrap();
 }
 
 #[test]
 fn test_platform_requirements_explicit_empty_rejects_all_platforms() {
     let app_compose = test_app_compose(serde_json::json!("3"), None, Some(&[]));
-    let err = verify_platform_requirements(&app_compose, AttestationMode::DstackTdx).unwrap_err();
+    let err = verify_platform_requirements(&app_compose, TeeVariant::DstackTdx).unwrap_err();
     assert!(err.to_string().contains("Unsupported attestation platform"));
 
     let app_compose = test_app_compose(serde_json::json!("2"), None, Some(&[]));
@@ -3252,7 +3254,7 @@ fn test_platform_requirements_explicit_empty_rejects_all_platforms() {
 #[test]
 fn test_platform_requirements_reject_invalid_platform_value() {
     let app_compose = test_app_compose(serde_json::json!("3"), None, Some(&["gcptdx"]));
-    let err = verify_platform_requirements(&app_compose, AttestationMode::DstackTdx).unwrap_err();
+    let err = verify_platform_requirements(&app_compose, TeeVariant::DstackTdx).unwrap_err();
     assert!(err
         .to_string()
         .contains("Invalid requirements.platforms[0]"));
@@ -3269,12 +3271,12 @@ fn test_tdx_measure_acpi_tables_requirement_matches_vm_config() {
         }
     }))
     .unwrap();
-    verify_tdx_measure_acpi_tables_requirement(&app_compose, r#"{}"#, AttestationMode::DstackTdx)
+    verify_tdx_measure_acpi_tables_requirement(&app_compose, r#"{}"#, TeeVariant::DstackTdx)
         .unwrap();
     let err = verify_tdx_measure_acpi_tables_requirement(
         &app_compose,
         r#"{"tdx_attestation_variant":"lite"}"#,
-        AttestationMode::DstackTdx,
+        TeeVariant::DstackTdx,
     )
     .unwrap_err();
     assert!(err.to_string().contains("tdx_measure_acpi_tables=true"));
@@ -3291,15 +3293,12 @@ fn test_tdx_measure_acpi_tables_requirement_matches_vm_config() {
     verify_tdx_measure_acpi_tables_requirement(
         &app_compose,
         r#"{"tdx_attestation_variant":"lite"}"#,
-        AttestationMode::DstackTdx,
+        TeeVariant::DstackTdx,
     )
     .unwrap();
-    let err = verify_tdx_measure_acpi_tables_requirement(
-        &app_compose,
-        r#"{}"#,
-        AttestationMode::DstackTdx,
-    )
-    .unwrap_err();
+    let err =
+        verify_tdx_measure_acpi_tables_requirement(&app_compose, r#"{}"#, TeeVariant::DstackTdx)
+            .unwrap_err();
     assert!(err.to_string().contains("tdx_measure_acpi_tables=false"));
 }
 
@@ -3317,7 +3316,7 @@ fn test_tdx_measure_acpi_tables_requirement_ignored_on_non_tdx() {
     verify_tdx_measure_acpi_tables_requirement(
         &app_compose,
         r#"{"tdx_attestation_variant":"lite"}"#,
-        AttestationMode::DstackAmdSevSnp,
+        TeeVariant::DstackAmdSevSnp,
     )
     .unwrap();
 }

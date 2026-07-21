@@ -130,6 +130,15 @@ impl TdxGenerator {
         report_data: [u8; 64],
         rtmrs: [[u8; 48]; 4],
     ) -> Result<TdxEvidence> {
+        self.attest_with_measurements(report_data, [0x11; 48], rtmrs)
+    }
+
+    pub fn attest_with_measurements(
+        &self,
+        report_data: [u8; 64],
+        mrtd: [u8; 48],
+        rtmrs: [[u8; 48]; 4],
+    ) -> Result<TdxEvidence> {
         let auth_key = SigningKey::random(&mut rand::thread_rng());
         let auth_pub = auth_key.verifying_key().to_encoded_point(false);
         let auth_pub: [u8; 64] = auth_pub.as_bytes()[1..].try_into().unwrap();
@@ -175,7 +184,7 @@ impl TdxGenerator {
             seam_attributes: [0; 8],
             td_attributes: [0, 0, 0, 0x10, 0, 0, 0, 0],
             xfam: [0; 8],
-            mr_td: [0x11; 48],
+            mr_td: mrtd,
             mr_config_id: [0; 48],
             mr_owner: [0; 48],
             mr_owner_config: [0; 48],

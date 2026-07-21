@@ -19,7 +19,8 @@ use ra_rpc::{
 };
 use ra_tls::{
     attestation::{
-        GetDeviceId, PlatformEvidence, QuoteContentType, VerifiedAttestation, VersionedAttestation,
+        AttestationVerifier, GetDeviceId, PlatformEvidence, QuoteContentType, VerifiedAttestation,
+        VersionedAttestation,
     },
     cert::{CaCert, CertRequest},
     rcgen::{Certificate, KeyPair, PKCS_ECDSA_P256_SHA256},
@@ -40,11 +41,19 @@ use crate::{
 #[derive(Clone)]
 pub struct OnboardState {
     config: KmsConfig,
+    attestation_verifier: Arc<AttestationVerifier>,
 }
 
 impl OnboardState {
-    pub fn new(config: KmsConfig) -> Self {
-        Self { config }
+    pub fn new(config: KmsConfig) -> Result<Self> {
+        let attestation_verifier = Arc::new(
+            AttestationVerifier::load(&config.attestation)
+                .context("failed to load attestation verifier")?,
+        );
+        Ok(Self {
+            config,
+            attestation_verifier,
+        })
     }
 }
 
@@ -98,7 +107,7 @@ impl OnboardRpc for OnboardHandler {
             &self.state.config,
             &source_url,
             &request.domain,
-            self.state.config.pccs_url.clone(),
+            self.state.attestation_verifier.clone(),
         )
         .await
         .context("Failed to onboard")?;
@@ -109,8 +118,6 @@ impl OnboardRpc for OnboardHandler {
     }
 
     async fn get_attestation_info(self) -> Result<AttestationInfoResponse> {
-        let pccs_url = self.state.config.pccs_url.clone();
-
         // Get attestation from guest agent
         let report_data = pad64([0u8; 32]);
         let response = app_attest(report_data)
@@ -130,7 +137,7 @@ impl OnboardRpc for OnboardHandler {
         .to_string();
         let verified = attestation
             .into_v1()
-            .verify(pccs_url.as_deref())
+            .verify(&self.state.attestation_verifier)
             .await
             .context("Failed to verify attestation")?;
 
@@ -412,7 +419,7 @@ impl Keys {
         cfg: &KmsConfig,
         other_kms_url: &str,
         domain: &str,
-        pccs_url: Option<String>,
+        attestation_verifier: Arc<AttestationVerifier>,
     ) -> Result<Self> {
         let attestation_slot = Arc::new(Mutex::new(None::<VerifiedAttestation>));
         let attestation_slot_out = attestation_slot.clone();
@@ -432,15 +439,16 @@ impl Keys {
                 *slot = Some(attestation);
                 Ok(())
             }))
-            .maybe_pccs_url(pccs_url.clone())
+            .attestation_verifier(attestation_verifier.clone())
             .build()
             .into_client()?;
         let mut kms_client = KmsClient::new(client);
 
         let tmp_ca = kms_client.get_temp_ca_cert().await?;
         let (ra_cert, ra_key) = gen_ra_cert(tmp_ca.temp_ca_cert, tmp_ca.temp_ca_key).await?;
-        let ra_client = RaClient::new_mtls(other_kms_url.into(), ra_cert, ra_key, pccs_url)
-            .context("Failed to create client")?;
+        let ra_client =
+            RaClient::new_mtls(other_kms_url.into(), ra_cert, ra_key, attestation_verifier)
+                .context("Failed to create client")?;
         kms_client = KmsClient::new(ra_client);
         let source_attestation = attestation_slot
             .lock()

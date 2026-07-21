@@ -76,13 +76,30 @@ impl SevSnpGenerator {
     }
 
     pub fn attest(&self, report_data: [u8; 64]) -> Result<SevSnpEvidence> {
+        self.attest_with_host_data(report_data, [0x22; 32])
+    }
+
+    pub fn attest_with_host_data(
+        &self,
+        report_data: [u8; 64],
+        host_data: [u8; 32],
+    ) -> Result<SevSnpEvidence> {
+        self.attest_with_measurement(report_data, host_data, [0x33; 48])
+    }
+
+    pub fn attest_with_measurement(
+        &self,
+        report_data: [u8; 64],
+        host_data: [u8; 32],
+        measurement: [u8; 48],
+    ) -> Result<SevSnpEvidence> {
         let mut encoded = Vec::new();
         AttestationReport::default().write_bytes(&mut encoded)?;
         encoded[0..4].copy_from_slice(&2u32.to_le_bytes());
         encoded[52..56].copy_from_slice(&1u32.to_le_bytes());
         encoded[0x50..0x90].copy_from_slice(&report_data);
-        encoded[0x90..0xc0].fill(0x11);
-        encoded[0xc0..0xe0].fill(0x22);
+        encoded[0x90..0xc0].copy_from_slice(&measurement);
+        encoded[0xc0..0xe0].copy_from_slice(&host_data);
         encoded[0x1a0..0x1e0].fill(0x33);
         let signing_key = SigningKey::from_pkcs8_pem(&self.vcek_key.serialize_pem())?;
         let signature: P384Signature =

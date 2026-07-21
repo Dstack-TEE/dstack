@@ -5,7 +5,7 @@
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::Arc,
     time::Duration,
 };
 
@@ -17,14 +17,13 @@ use cc_eventlog::{
     },
     TdxEvent,
 };
-use dstack_attest::amd_sev_snp::AmdKdsClient;
 use dstack_mr::{
     tdx::TdxRtmr0AcpiHashes, RtmrLog, RtmrLogs, TdxMeasurementDetails, TdxMeasurements,
 };
 use dstack_types::VmConfig;
 use hex_literal::hex;
 use ra_tls::attestation::{
-    AppInfo, Attestation, AttestationQuote, DstackVerifiedReport, NitroPcrs, PlatformEvidence,
+    AppInfo, Attestation, AttestationQuote, AttestationVerifier, DstackVerifiedReport, NitroPcrs,
     TpmQuote, VerifiedAttestation, VersionedAttestation,
 };
 use serde::{Deserialize, Serialize};
@@ -190,8 +189,7 @@ pub struct CvmVerifier {
     pub image_cache_dir: String,
     pub download_url: String,
     pub download_timeout: Duration,
-    pub pccs_url: Option<String>,
-    amd_kds_client: OnceLock<Result<AmdKdsClient, String>>,
+    pub attestation_verifier: Arc<AttestationVerifier>,
 }
 
 impl CvmVerifier {
@@ -199,24 +197,13 @@ impl CvmVerifier {
         image_cache_dir: String,
         download_url: String,
         download_timeout: Duration,
-        pccs_url: Option<String>,
+        attestation_verifier: Arc<AttestationVerifier>,
     ) -> Self {
         Self {
             image_cache_dir,
             download_url,
             download_timeout,
-            pccs_url,
-            amd_kds_client: OnceLock::new(),
-        }
-    }
-
-    fn amd_kds_client(&self) -> Result<&AmdKdsClient> {
-        match self
-            .amd_kds_client
-            .get_or_init(|| AmdKdsClient::new().map_err(|err| format!("{err:#}")))
-        {
-            Ok(client) => Ok(client),
-            Err(err) => bail!("failed to create amd sev-snp KDS client: {err}"),
+            attestation_verifier,
         }
     }
 
@@ -595,13 +582,7 @@ impl CvmVerifier {
 
         let debug = request.debug.unwrap_or(false);
         let attestation = attestation.into_v1();
-        let verified = if matches!(&attestation.platform, PlatformEvidence::SevSnp { .. }) {
-            attestation
-                .verify_with_amd_kds_client(self.pccs_url.as_deref(), self.amd_kds_client()?)
-                .await
-        } else {
-            attestation.verify(self.pccs_url.as_deref()).await
-        };
+        let verified = attestation.verify(&self.attestation_verifier).await;
         let verified_attestation = match verified {
             Ok(att) => {
                 details.quote_verified = true;
@@ -693,7 +674,13 @@ impl CvmVerifier {
                 self.verify_os_image_hash_for_gcp_tdx(&vm_config, &quote.tpm_quote)?;
             }
             AttestationQuote::DstackTdx(_) => {
-                if vm_config.tdx_attestation_variant.is_lite() {
+                // New images carry a self-contained measurement document even
+                // when the boot kept the legacy attestation selector. Prefer
+                // that signed-MR-bound material; retain image download only
+                // for old legacy images which do not provide it.
+                if vm_config.tdx_attestation_variant.is_lite()
+                    || vm_config.tdx_measurement.is_some()
+                {
                     self.verify_os_image_hash_for_dstack_tdx_lite(
                         &vm_config,
                         attestation,
@@ -1311,7 +1298,16 @@ mod tests {
     }
 
     fn test_verifier() -> CvmVerifier {
-        CvmVerifier::new(String::new(), String::new(), Duration::from_secs(1), None)
+        CvmVerifier::new(
+            String::new(),
+            String::new(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        )
+    }
+
+    fn test_attestation_verifier() -> Arc<AttestationVerifier> {
+        Arc::new(AttestationVerifier::new_prod(None).unwrap())
     }
 
     #[test]
@@ -1420,7 +1416,7 @@ mod tests {
             image_cache_dir.display().to_string(),
             "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
             Duration::from_secs(1),
-            None,
+            test_attestation_verifier(),
         );
 
         let response = verifier.verify(request).await.expect("verifier runs");
@@ -1431,7 +1427,7 @@ mod tests {
         assert!(!response.details.acpi_tables_verified);
         assert_eq!(
             response.details.attestation_mode,
-            Some(ra_tls::attestation::AttestationMode::DstackAmdSevSnp)
+            Some(ra_tls::attestation::TeeVariant::DstackAmdSevSnp)
         );
         assert!(
             !image_cache_dir.exists(),
@@ -1452,14 +1448,14 @@ mod tests {
             cache.path().join("cache").display().to_string(),
             "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
             Duration::from_secs(1),
-            None,
+            test_attestation_verifier(),
         );
 
         let response = verifier.verify(request).await.expect("verifier runs");
         assert!(response.is_valid, "{:?}", response.reason);
         assert_eq!(
             response.details.attestation_mode,
-            Some(ra_tls::attestation::AttestationMode::DstackAmdSevSnp)
+            Some(ra_tls::attestation::TeeVariant::DstackAmdSevSnp)
         );
     }
 
@@ -1474,7 +1470,7 @@ mod tests {
             image_cache_dir.display().to_string(),
             "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
             Duration::from_secs(1),
-            None,
+            test_attestation_verifier(),
         );
 
         let response = verifier.verify(request).await.expect("verifier runs");
@@ -1485,7 +1481,7 @@ mod tests {
         assert!(!response.details.acpi_tables_verified);
         assert_eq!(
             response.details.attestation_mode,
-            Some(ra_tls::attestation::AttestationMode::DstackTdx)
+            Some(ra_tls::attestation::TeeVariant::DstackTdx)
         );
         assert!(
             !image_cache_dir.exists(),

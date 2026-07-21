@@ -61,16 +61,7 @@ RUN make target/release/local-key-provider \
       ! -name local-key-provider -exec rm -rf {} + \
  && rm -rf /root/.cargo/registry /root/.cargo/git
 
-# Do not use `gramine-sgx-gen-private-key` here. On some hosts the Python
-# cryptography/OpenSSL stack in the Gramine image fails while generating the
-# RSA key with a generic "Unknown OpenSSL error". Generate the exact same kind
-# of Gramine signing key directly with OpenSSL instead (3072-bit RSA, public
-# exponent 3, and traditional PEM accepted by gramine-sgx-sign).
-RUN mkdir -p /root/.config/gramine \
- && chmod 0700 /root/.config /root/.config/gramine \
- && openssl genrsa -traditional -3 \
-      -out /root/.config/gramine/enclave-key.pem 3072 \
- && chmod 0600 /root/.config/gramine/enclave-key.pem \
+RUN gramine-sgx-gen-private-key \
  && make \
  && rm -f /root/.config/gramine/enclave-key.pem
 RUN gramine-sgx-sigstruct-view --output-format json local-key-provider.sig

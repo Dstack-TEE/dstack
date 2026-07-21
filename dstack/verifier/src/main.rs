@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use dstack_attest::attestation::AttestationVerifierConfig;
 use dstack_verifier::{
     CvmVerifier, VerificationDetails, VerificationRequest, VerificationResponse,
 };
@@ -13,6 +14,7 @@ use figment::{
     providers::{Env, Format, Toml},
     Figment,
 };
+use ra_tls::attestation::AttestationVerifier;
 use rocket::{fairing::AdHoc, get, post, serde::json::Json, State};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
@@ -38,9 +40,8 @@ pub struct Config {
     pub address: String,
     pub port: u16,
     pub image_cache_dir: String,
-    pub pccs_url: Option<String>,
     #[serde(default)]
-    pub root_ca: dstack_attest::attestation::RootCaPaths,
+    pub attestation: AttestationVerifierConfig,
     pub image_download_url: String,
     pub image_download_timeout_secs: u64,
 }
@@ -89,7 +90,7 @@ async fn run_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()> {
         config.image_cache_dir.clone(),
         config.image_download_url.clone(),
         std::time::Duration::from_secs(config.image_download_timeout_secs),
-        config.pccs_url.clone(),
+        Arc::new(AttestationVerifier::load(&config.attestation)?),
     );
 
     // Run verification
@@ -168,10 +169,11 @@ async fn run_cert_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()
     let cert = fs::read(file_path)
         .map_err(|e| anyhow::anyhow!("failed to read certificate {}: {}", file_path, e))?;
 
+    let attestation_verifier = AttestationVerifier::load(&config.attestation)?;
     let verified = if cert.starts_with(b"-----BEGIN") {
-        ra_tls::attestation::verify_pem(&cert, config.pccs_url.as_deref()).await
+        ra_tls::attestation::verify_pem(&cert, &attestation_verifier).await
     } else {
-        ra_tls::attestation::verify_der(&cert, config.pccs_url.as_deref()).await
+        ra_tls::attestation::verify_der(&cert, &attestation_verifier).await
     }
     .map_err(|e| anyhow::anyhow!("failed to verify RA-TLS certificate: {:#}", e))?;
 
@@ -240,11 +242,14 @@ async fn verify_cert_os_image_hash(
     if needs_image_download {
         return false;
     }
+    let Ok(attestation_verifier) = AttestationVerifier::load(&config.attestation) else {
+        return false;
+    };
     let verifier = CvmVerifier::new(
         config.image_cache_dir.clone(),
         config.image_download_url.clone(),
         std::time::Duration::from_secs(config.image_download_timeout_secs),
-        config.pccs_url.clone(),
+        Arc::new(attestation_verifier),
     );
     let mut details = VerificationDetails::default();
     verifier
@@ -271,8 +276,6 @@ async fn main() -> Result<()> {
         .merge(Env::prefixed("DSTACK_VERIFIER_"));
 
     let config: Config = figment.extract().context("Failed to load configuration")?;
-    config.root_ca.apply();
-
     // Check for oneshot modes
     if let Some(file_path) = cli.verify {
         if let Err(e) = run_oneshot(&file_path, &config).await {
@@ -293,7 +296,7 @@ async fn main() -> Result<()> {
         config.image_cache_dir.clone(),
         config.image_download_url.clone(),
         std::time::Duration::from_secs(config.image_download_timeout_secs),
-        config.pccs_url.clone(),
+        Arc::new(AttestationVerifier::load(&config.attestation)?),
     ));
 
     rocket::custom(figment)

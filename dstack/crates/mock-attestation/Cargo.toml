@@ -45,7 +45,3 @@ time.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 nsm-qvl.workspace = true
-tdx-attest.workspace = true
-sev-snp-attest.workspace = true
-nsm-attest.workspace = true
-tpm-attest.workspace = true

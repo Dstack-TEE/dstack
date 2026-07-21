@@ -25,6 +25,7 @@ async fn start(platform: &str, seed: [u8; 32]) -> (tempfile::TempDir, ChildGuard
         serde_json::json!({
             "kms_urls": [], "gateway_urls": [], "pccs_url": null,
             "docker_registry": null, "host_api_url": null, "vm_config": "{}",
+            "mr_config": "{\"version\":3,\"app_id\":\"\",\"compose_hash\":\"\",\"key_provider\":\"none\"}",
             "tee_simulator": {
                 "platform": platform,
                 "mock_attestation_seed": hex::encode(seed),
@@ -40,41 +41,40 @@ async fn start(platform: &str, seed: [u8; 32]) -> (tempfile::TempDir, ChildGuard
         path.display().to_string(),
         "--runtime-dir".to_string(),
         dir.path().display().to_string(),
+        "--dmi-root".to_string(),
+        dir.path().join("dmi").display().to_string(),
     ];
-    if platform == "tdx" {
+    if matches!(platform, "dstack-tdx" | "dstack-amd-sev-snp") {
         args.extend(["--mountpoint".into(), mountpoint.display().to_string()]);
     }
     let child = ChildGuard(
         Command::new(env!("CARGO_BIN_EXE_dstack-tee-simulator"))
             .args(args)
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::inherit())
             .spawn()
             .unwrap(),
     );
     for _ in 0..50 {
-        let ready = if platform == "tdx" {
-            mountpoint.join("com.intel.dcap/outblob").exists()
-        } else {
-            reqwest::get("http://127.0.0.1:8088/tpm/aia/root.pem")
-                .await
-                .is_ok()
+        let ready = match platform {
+            "dstack-tdx" => mountpoint.join("com.intel.dcap/outblob").exists(),
+            "dstack-amd-sev-snp" => mountpoint.join("provider").exists(),
+            _ => false,
         };
         if ready {
             return (dir, child);
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    panic!("simulator process did not become ready")
+    panic!("{platform} simulator process did not become ready")
 }
 
 #[tokio::test]
-async fn separate_simulator_process_imports_sys_config_seed_for_all_platforms() {
+async fn separate_simulator_process_imports_sys_config_seed_for_tsm_platforms() {
     let seed = [0x71; 32];
     let host = MockCollateralState::from_seed(seed, "http://127.0.0.1:18088").unwrap();
-    let client = reqwest::Client::new();
 
-    let (dir, child) = start("tdx", seed).await;
+    let (dir, child) = start("dstack-tdx", seed).await;
     let rd = [0x21; 64];
     let provider = dir.path().join("tsm/com.intel.dcap");
     fs_err::write(provider.join("inblob"), rd).unwrap();
@@ -88,53 +88,23 @@ async fn separate_simulator_process_imports_sys_config_seed_for_all_platforms() 
         .unwrap();
     drop(child);
 
-    let (_dir, child) = start("sev-snp", seed).await;
-    let evidence: mock_attestation::sev_snp::SevSnpEvidence = client
-        .post("http://127.0.0.1:8088/attest/sev-snp")
-        .body(rd.to_vec())
-        .send()
-        .await
+    let (dir, child) = start("dstack-amd-sev-snp", seed).await;
+    let provider = dir.path().join("tsm");
+    let entry = provider.join(format!("dstack-{}", std::process::id()));
+    use std::io::Write as _;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(entry.join("inblob"))
         .unwrap()
-        .json()
-        .await
+        .write_all(&rd)
         .unwrap();
+    let report = fs_err::read(entry.join("outblob")).unwrap();
+    let cert_chain = fs_err::read(entry.join("certs")).unwrap();
     sev_snp_qvl::QuoteVerifier::new_with_root(
         sev_snp_qvl::AmdSnpProduct::Milan,
         host.sev_snp.root_ca_pem().into_bytes(),
     )
-    .verify(&evidence.report, &evidence.cert_chain, &rd)
+    .verify(&report, &[cert_chain], &rd)
     .unwrap();
-    drop(child);
-
-    let (_dir, child) = start("tpm", seed).await;
-    let qualifying = [0x22; 32];
-    let quote: tpm_types::TpmQuote = client
-        .post("http://127.0.0.1:8088/attest/tpm")
-        .body(qualifying.to_vec())
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    tpm_qvl::QuoteVerifier::new(host.tpm.root_ca_pem())
-        .verify(&quote, &host.tpm.collateral())
-        .unwrap();
-    drop(child);
-
-    let (_dir, child) = start("nsm", seed).await;
-    let evidence = client
-        .post("http://127.0.0.1:8088/attest/nsm")
-        .body(rd.to_vec())
-        .send()
-        .await
-        .unwrap()
-        .bytes()
-        .await
-        .unwrap();
-    let verified = nsm_qvl::QuoteVerifier::new(host.nsm.root_ca_pem())
-        .verify(&evidence, None, None)
-        .unwrap();
-    assert_eq!(verified.user_data.as_deref(), Some(rd.as_slice()));
     drop(child);
 }

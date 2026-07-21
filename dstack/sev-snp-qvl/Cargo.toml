@@ -18,4 +18,6 @@ reqwest.workspace = true
 sev.workspace = true
 tokio = { workspace = true, features = ["rt", "time"] }
 x509-parser = { workspace = true, features = ["verify"] }
+rustls-pki-types.workspace = true
+rustls-webpki = { workspace = true, features = ["ring"] }
 pem.workspace = true

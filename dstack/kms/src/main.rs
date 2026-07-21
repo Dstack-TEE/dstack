@@ -51,7 +51,7 @@ async fn run_onboard_service(kms_config: KmsConfig, figment: Figment) -> Result<
         return Ok(());
     }
 
-    let state = OnboardState::new(kms_config);
+    let state = OnboardState::new(kms_config)?;
     let figment = figment
         .clone()
         .merge(Serialized::defaults(figment.find_value("core.onboard")?));
@@ -99,19 +99,6 @@ fn record_attestation_metrics(req: &rocket::Request<'_>, res: &rocket::Response<
         .record_attestation_request(res.status().code >= 400);
 }
 
-fn configure_amd_kds_base_from_config(config: &KmsConfig) {
-    let Some(base_url) = config
-        .amd_kds_base_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|base_url| !base_url.is_empty())
-    else {
-        return;
-    };
-    std::env::set_var("DSTACK_AMD_KDS_BASE_URL", base_url);
-    info!("AMD SEV-SNP KDS base URL configured");
-}
-
 #[rocket::main]
 async fn main() -> Result<()> {
     {
@@ -123,8 +110,6 @@ async fn main() -> Result<()> {
 
     let figment = config::load_config_figment(args.config.as_deref());
     let config: KmsConfig = figment.focus("core").extract()?;
-    config.root_ca.apply();
-    configure_amd_kds_base_from_config(&config);
 
     if config.onboard.enabled && !config.keys_exists() {
         info!("Onboarding");
@@ -145,10 +130,9 @@ async fn main() -> Result<()> {
         info!("  /prpc/{method}");
     }
 
-    let pccs_url = config.pccs_url.clone();
-    let amd_kds_base_url = config.amd_kds_base_url.clone();
     let metrics_enabled = config.metrics.enabled;
     let state = main_service::KmsState::new(config).context("Failed to initialize KMS state")?;
+    let quote_verifier = QuoteVerifier::new(state.attestation_verifier());
     let figment = figment
         .clone()
         .merge(Serialized::defaults(figment.find_value("rpc")?));
@@ -174,8 +158,7 @@ async fn main() -> Result<()> {
             .mount("/", rocket::routes![metrics]);
     }
 
-    let verifier = QuoteVerifier::new_with_amd_kds_base(pccs_url, amd_kds_base_url);
-    rocket = rocket.manage(verifier);
+    rocket = rocket.manage(quote_verifier);
 
     rocket
         .launch()

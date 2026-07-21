@@ -41,22 +41,22 @@ pub fn from_der(cert: &[u8]) -> Result<Option<VersionedAttestation>> {
 /// DER SubjectPublicKeyInfo. That binding prevents an operator-controlled
 /// network endpoint from reusing valid attestation evidence with a different
 /// TLS key.
-pub async fn verify_der(cert: &[u8], pccs_url: Option<&str>) -> Result<VerifiedRaTlsCert> {
+pub async fn verify_der(cert: &[u8], verifier: &AttestationVerifier) -> Result<VerifiedRaTlsCert> {
     let (_, cert) =
         x509_parser::parse_x509_certificate(cert).context("failed to parse certificate")?;
-    verify_cert(&cert, pccs_url).await
+    verify_cert(&cert, verifier).await
 }
 
 /// Verify the RA-TLS attestation embedded in a PEM-encoded X.509 certificate.
-pub async fn verify_pem(cert: &[u8], pccs_url: Option<&str>) -> Result<VerifiedRaTlsCert> {
+pub async fn verify_pem(cert: &[u8], verifier: &AttestationVerifier) -> Result<VerifiedRaTlsCert> {
     let (_, pem) = x509_parser::pem::parse_x509_pem(cert).context("failed to parse PEM")?;
-    verify_der(&pem.contents, pccs_url).await
+    verify_der(&pem.contents, verifier).await
 }
 
 /// Verify the RA-TLS attestation embedded in a parsed X.509 certificate.
 async fn verify_cert(
     cert: &x509_parser::prelude::X509Certificate<'_>,
-    pccs_url: Option<&str>,
+    verifier: &AttestationVerifier,
 ) -> Result<VerifiedRaTlsCert> {
     let attestation = from_cert(cert)?.context("RA-TLS attestation extension missing")?;
     let public_key_der = cert.tbs_certificate.public_key().raw.to_vec();
@@ -68,10 +68,9 @@ async fn verify_cert(
     let special_usage = cert.get_special_usage()?;
     let attestation = attestation
         .into_v1()
-        .verify_with_ra_pubkey(&public_key_der, pccs_url)
+        .verify_with_ra_pubkey(&public_key_der, verifier)
         .await
         .context("RA-TLS attestation verification failed")?;
-
     Ok(VerifiedRaTlsCert {
         public_key_der,
         attestation,
@@ -139,7 +138,8 @@ mod tests {
             .self_signed()
             .unwrap();
 
-        let result = verify_der(cert.der().as_ref(), None).await;
+        let verifier = AttestationVerifier::new_prod(None).unwrap();
+        let result = verify_der(cert.der().as_ref(), &verifier).await;
         assert!(result.is_err());
         let err = result.err().unwrap();
         assert!(err.to_string().contains("attestation extension missing"));
@@ -158,7 +158,8 @@ mod tests {
             .self_signed()
             .unwrap();
 
-        let result = verify_der(cert.der().as_ref(), None).await;
+        let verifier = AttestationVerifier::new_prod(None).unwrap();
+        let result = verify_der(cert.der().as_ref(), &verifier).await;
         assert!(result.is_err());
         let err = result.err().unwrap();
         assert!(format!("{err:#}").contains("report data mismatch"));

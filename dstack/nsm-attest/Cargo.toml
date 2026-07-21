@@ -16,7 +16,6 @@ serde.workspace = true
 tracing.workspace = true
 aws-nitro-enclaves-nsm-api = "0.4"
 ciborium.workspace = true
-dstack-types.workspace = true
 
 [dev-dependencies]
 hex.workspace = true

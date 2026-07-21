@@ -162,9 +162,6 @@ pub fn create_quote_with_gcp_ak_algo(
     pcr_selection: &PcrSelection,
     key_algo: KeyAlgorithm,
 ) -> Result<TpmQuote> {
-    if let Some(quote) = dstack_types::mock_attestation::request("tpm", qualifying_data)? {
-        return serde_json::from_slice(&quote).context("failed to decode mock TPM quote");
-    }
     let platform = dstack_types::Platform::detect().context("Unsupported platform")?;
 
     debug!("generating TPM quote with GCP pre-provisioned AK...");

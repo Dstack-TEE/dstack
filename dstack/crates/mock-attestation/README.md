@@ -43,19 +43,27 @@ Select the platform in `.sys-config.json`; omission defaults to TDX:
 ```json
 {
   "tee_simulator": {
-    "platform": "sev-snp",
+    "platform": "dstack-amd-sev-snp",
     "mock_attestation_seed": "<64 hex characters>",
     "collateral_base_url": "http://HOST_REACHABLE_FROM_VERIFIER:8088"
   }
 }
 ```
 
-Valid values are `tdx`, `sev-snp`, `tpm`, and `nsm`. The guest only reads the
+Valid values mirror the supported attestation modes: `dstack-tdx`, `gcp-tdx`,
+`amd-sev-snp`, `aws-nitro-enclave`, and `aws-nitro-tpm`. The simulator exposes
+the production guest ABI for the selected platform (TSM configfs, vTPM, or an
+NSM CUSE character device); attester libraries contain no mock HTTP or
+environment-variable path. The guest only reads the
 seed from `.sys-config.json`; it never writes credentials or roots back into
 `/dstack/.host-shared`. CI retains the generated public roots and mounts them
 into verifier/KMS/gateway. The independently running host collateral service
-reconstructs the same hierarchy from the seed. TDX uses it as `pccs_url` and
-SEV-SNP uses its `/vcek/v1` path as the KDS base.
+reconstructs the same hierarchy from the seed. Configure it under
+`[attestation.urls]`: TDX uses `pccs`, and SEV-SNP uses `amd_kds`.
+
+Every verifier process must also explicitly set
+`attestation.insecure_allow_external_trust_anchors = true`. Merely mounting and
+configuring a mock root is rejected at startup while this flag remains false.
 
 The seed adds only 64 hex bytes (the generated fragment is well below 1 KiB),
 so the existing 32 KiB sys-config copy limit does not need to be enlarged.

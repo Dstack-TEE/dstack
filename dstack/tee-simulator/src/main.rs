@@ -2,55 +2,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::path::{Path, PathBuf};
+use std::{
+    ffi::CString,
+    os::unix::ffi::OsStrExt,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{bail, Context, Result};
-use clap::{Parser, ValueEnum};
-use dstack_types::{SysConfig, TeeSimulatorConfig, TeeSimulatorPlatform};
+use clap::Parser;
+use dstack_types::{SysConfig, TeeSimulatorConfig, TeeVariant};
 use fuser::{Filesystem, MountOption, Session};
-use mock_attestation::server::MockCollateralState;
-use std::sync::Arc;
 use tracing::info;
 
+mod nsm;
+mod sev_snp;
 mod tdx;
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
-enum TeePlatform {
-    #[default]
-    Tdx,
-    SevSnp,
-    Tpm,
-    Nsm,
-}
-
-impl TeePlatform {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Tdx => "tdx",
-            Self::SevSnp => "sev-snp",
-            Self::Tpm => "tpm",
-            Self::Nsm => "nsm",
-        }
-    }
-}
-
-impl From<TeeSimulatorPlatform> for TeePlatform {
-    fn from(value: TeeSimulatorPlatform) -> Self {
-        match value {
-            TeeSimulatorPlatform::Tdx => Self::Tdx,
-            TeeSimulatorPlatform::SevSnp => Self::SevSnp,
-            TeeSimulatorPlatform::Tpm => Self::Tpm,
-            TeeSimulatorPlatform::Nsm => Self::Nsm,
-        }
-    }
-}
+mod tpm;
 
 #[derive(Parser)]
 #[command(about = "Development-only simulator for Linux TEE guest ABIs")]
 struct Args {
     /// TEE platform ABI to simulate.
-    #[arg(long, value_enum)]
-    platform: Option<TeePlatform>,
+    #[arg(long)]
+    platform: Option<TeeVariant>,
 
     /// sys-config used to select the simulated platform when --platform is omitted.
     #[arg(long, default_value = "/dstack/.host-shared/.sys-config.json")]
@@ -63,6 +37,10 @@ struct Args {
     /// Runtime state directory (overridable by unprivileged E2E tests).
     #[arg(long, default_value = "/run/dstack")]
     runtime_dir: PathBuf,
+
+    /// DMI sysfs directory. Tests may override this with a temporary directory.
+    #[arg(long, default_value = "/sys/class/dmi/id")]
+    dmi_root: PathBuf,
 }
 
 /// Platform-specific simulator backend.
@@ -127,44 +105,88 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     let config = load_config(&args.sys_config)?;
-    let platform = args.platform.unwrap_or(config.platform.into());
+    let platform = args.platform.unwrap_or(config.platform);
     fs_err::create_dir_all(&args.runtime_dir)?;
-    fs_err::write(
-        args.runtime_dir.join("tee-simulator.env"),
-        format!(
-            "DSTACK_SIMULATED_TEE_PLATFORM={} DSTACK_MOCK_ATTESTATION_URL=http://127.0.0.1:8088\n",
-            platform.as_str()
-        ),
-    )?;
     match platform {
-        TeePlatform::Tdx => run_backend::<tdx::TdxBackend>(args.mountpoint, &config),
-        platform => run_mock_service(platform, &config),
+        TeeVariant::DstackTdx => {
+            simulate_dmi(&args.runtime_dir, &args.dmi_root, "Dstack", "dstack")?;
+            run_backend::<tdx::TdxBackend>(args.mountpoint, &config)
+        }
+        TeeVariant::DstackGcpTdx => {
+            simulate_dmi(
+                &args.runtime_dir,
+                &args.dmi_root,
+                "Google",
+                "Google Compute Engine",
+            )?;
+            tpm::start_gcp_vtpm(&args.runtime_dir, &config)?;
+            run_backend::<tdx::TdxBackend>(args.mountpoint, &config)
+        }
+        TeeVariant::DstackNitroEnclave => {
+            simulate_dmi(
+                &args.runtime_dir,
+                &args.dmi_root,
+                "AWS Nitro Enclaves",
+                "Nitro Enclave",
+            )?;
+            nsm::run(&config, false)
+        }
+        TeeVariant::DstackAwsNitroTpm => {
+            simulate_dmi(&args.runtime_dir, &args.dmi_root, "Amazon EC2", "t3.metal")?;
+            if Path::new("/dev/tpmrm0").exists() || Path::new("/dev/tpm0").exists() {
+                bail!("refusing to replace a real TPM device");
+            }
+            fs_err::File::create("/dev/tpmrm0")
+                .context("failed to create simulated NitroTPM presence marker")?;
+            fs_err::write(args.runtime_dir.join("created-tpm-marker"), b"")?;
+            nsm::run(&config, true)
+        }
+        TeeVariant::DstackAmdSevSnp => {
+            simulate_dmi(&args.runtime_dir, &args.dmi_root, "Dstack", "dstack")?;
+            run_backend::<sev_snp::SevSnpBackend>(args.mountpoint, &config)
+        }
     }
 }
 
-fn run_mock_service(platform: TeePlatform, config: &TeeSimulatorConfig) -> Result<()> {
-    let seed = config
-        .mock_attestation_seed
-        .as_deref()
-        .context("tee_simulator.mock_attestation_seed is required")?;
-    let base_url = config
-        .collateral_base_url
-        .as_deref()
-        .unwrap_or("http://127.0.0.1:8088");
-    let state = Arc::new(MockCollateralState::from_seed(
-        mock_attestation::parse_seed(seed)?,
-        base_url,
-    )?);
-    info!(
-        platform = platform.as_str(),
-        "development mock attestation service ready"
-    );
-    sd_notify::notify(true, &[sd_notify::NotifyState::Ready])?;
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(mock_attestation::server::serve(
-        "127.0.0.1:8088".parse()?,
-        state,
-    ))
+/// Override the DMI strings exported by SeaBIOS through sysfs. Platform
+/// detection intentionally remains unchanged and observes the same values as
+/// it does on a real cloud VM.
+fn simulate_dmi(
+    runtime_dir: &Path,
+    dmi_root: &Path,
+    sys_vendor: &str,
+    product_name: &str,
+) -> Result<()> {
+    if dmi_root != Path::new("/sys/class/dmi/id") {
+        fs_err::create_dir_all(dmi_root)?;
+        fs_err::write(dmi_root.join("sys_vendor"), format!("{sys_vendor}\n"))?;
+        fs_err::write(dmi_root.join("product_name"), format!("{product_name}\n"))?;
+        return Ok(());
+    }
+    let dmi_dir = runtime_dir.join("dmi");
+    fs_err::create_dir_all(&dmi_dir)?;
+    for (name, value) in [("sys_vendor", sys_vendor), ("product_name", product_name)] {
+        let source = dmi_dir.join(name);
+        let target = dmi_root.join(name);
+        fs_err::write(&source, format!("{value}\n"))?;
+        let source = CString::new(source.as_os_str().as_bytes())?;
+        let target_c = CString::new(target.as_os_str().as_bytes())?;
+        let result = unsafe {
+            libc::mount(
+                source.as_ptr(),
+                target_c.as_ptr(),
+                std::ptr::null(),
+                libc::MS_BIND,
+                std::ptr::null(),
+            )
+        };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error()).with_context(|| {
+                format!("failed to simulate SeaBIOS DMI file {}", target.display())
+            });
+        }
+    }
+    Ok(())
 }
 
 fn load_config(path: &Path) -> Result<TeeSimulatorConfig> {
@@ -175,7 +197,12 @@ fn load_config(path: &Path) -> Result<TeeSimulatorConfig> {
         &fs_err::read(path).with_context(|| format!("failed to read {}", path.display()))?,
     )
     .with_context(|| format!("failed to parse {}", path.display()))?;
-    Ok(config.tee_simulator.unwrap_or_default())
+    let mr_config = config.mr_config_document();
+    let vm_config = (!config.vm_config.is_empty()).then_some(config.vm_config.clone());
+    let mut tee_simulator = config.tee_simulator.unwrap_or_default();
+    tee_simulator.mr_config = mr_config;
+    tee_simulator.vm_config = vm_config;
+    Ok(tee_simulator)
 }
 
 #[cfg(test)]
@@ -195,17 +222,18 @@ mod tests {
             load_config(Path::new("/definitely/missing/sys-config"))
                 .unwrap()
                 .platform,
-            TeeSimulatorPlatform::Tdx
+            TeeVariant::DstackTdx
         );
     }
 
     #[test]
     fn sys_config_selects_each_platform() {
         for (name, expected) in [
-            ("tdx", TeePlatform::Tdx),
-            ("sev-snp", TeePlatform::SevSnp),
-            ("tpm", TeePlatform::Tpm),
-            ("nsm", TeePlatform::Nsm),
+            ("dstack-tdx", TeeVariant::DstackTdx),
+            ("dstack-gcp-tdx", TeeVariant::DstackGcpTdx),
+            ("dstack-amd-sev-snp", TeeVariant::DstackAmdSevSnp),
+            ("dstack-nitro-enclave", TeeVariant::DstackNitroEnclave),
+            ("dstack-aws-nitro-tpm", TeeVariant::DstackAwsNitroTpm),
         ] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("sys-config.json");
@@ -219,10 +247,7 @@ mod tests {
                 .to_string(),
             )
             .unwrap();
-            assert_eq!(
-                TeePlatform::from(load_config(&path).unwrap().platform),
-                expected
-            );
+            assert_eq!(load_config(&path).unwrap().platform, expected);
         }
     }
 }

@@ -123,7 +123,7 @@ pub fn generate_assets_from_seed(
     fs_err::write(
         output.join("sys-config-fragment.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
-            "tee_simulator": { "platform": "tdx", "mock_attestation_seed": hex::encode(seed), "collateral_base_url": base_url }
+            "tee_simulator": { "platform": "dstack-tdx", "mock_attestation_seed": hex::encode(seed), "collateral_base_url": base_url }
         }))?,
     )?;
     Ok(manifest)

@@ -100,7 +100,8 @@ You usually don't need to edit the config file. Just using the default is fine, 
 - `image_cache_dir`: Directory for cached OS images (default: "/tmp/dstack-verifier/cache")
 - `image_download_url`: URL template for downloading OS images (default: dstack official releases URL)
 - `image_download_timeout_secs`: Download timeout in seconds (default: 300)
-- `pccs_url`: PCCS URL for quote verification (default: uses Intel's public PCCS)
+- `attestation.urls.pccs`: PCCS URL (default: production PCCS)
+- `attestation.urls.amd_kds`: AMD KDS URL (default: AMD production KDS)
 
 ### Example Configuration File
 
@@ -110,7 +111,9 @@ port = 8080
 image_cache_dir = "/tmp/dstack-verifier/cache"
 image_download_url = "https://download.dstack.org/os-images/mr_{OS_IMAGE_HASH}.tar.gz"
 image_download_timeout_secs = 300
-# pccs_url = "https://pccs.phala.network"
+[attestation.urls]
+# pccs = "https://pccs.phala.network"
+# amd_kds = "https://kdsintf.amd.com/vcek/v1"
 ```
 
 ## Usage
@@ -260,7 +263,7 @@ Beyond pass/fail, the result carries a few descriptive fields so a relying party
 
 - **`os_image_is_dev`** — `true` for a development OS image, `false` for production. Dev images are built for local testing and are not hardened for production use, so a relying party generally wants to reject them.
 - **`os_image_version`** — the dstack OS version (e.g. `0.5.10`), useful for enforcing a minimum version.
-- **`attestation_mode`** — the attestation mode that produced the verified quote, serialized as `AttestationMode`: `dstack-tdx`, `dstack-gcp-tdx`, `dstack-nitro-enclave`, `dstack-amd-sev-snp`, or `dstack-aws-nitro-tpm`.
+- **`attestation_mode`** — the TEE variant that produced the verified quote, serialized as `TeeVariant`: `dstack-tdx`, `dstack-gcp-tdx`, `dstack-nitro-enclave`, `dstack-amd-sev-snp`, or `dstack-aws-nitro-tpm`.
 - **`acpi_tables_verified`** — whether TDX ACPI table contents were verified. This is useful for relying parties that require `requirements.tdx_measure_acpi_tables = true`.
 - **`key_provider`** — the decoded `app_info.key_provider_info` (`{name, id}`); `name` is e.g. `kms` or `local`. A `local` key provider means the CVM is not KMS-backed, which is itself a dev/insecure posture signal. The raw bytes remain in `app_info.key_provider_info`.
 - **`boot_info`** — the policy object a relying party should feed to its auth/governance layer. For AWS EC2 NitroTPM this includes `attestationMode = dstack-aws-nitro-tpm`, PCR4/7/12-derived `osImageHash`, PCR14-bound `mrAggregated`, app identity, instance/device identity, and a `tcbStatus` normalized to `UpToDate`.

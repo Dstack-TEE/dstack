@@ -48,8 +48,6 @@ pub struct Config {
     #[serde(deserialize_with = "deserialize_app_compose", flatten)]
     pub app_compose: AppComposeWrapper,
     pub sys_config_file: PathBuf,
-    #[serde(default)]
-    pub pccs_url: Option<String>,
     pub data_disks: HashSet<PathBuf>,
 }
 

@@ -75,13 +75,21 @@ impl NsmGenerator {
     }
 
     pub fn attest(&self, report_data: &[u8]) -> Result<Vec<u8>> {
+        let pcrs = (0..=2)
+            .map(|index| (index, vec![index as u8; 48]))
+            .collect();
+        self.attest_with_pcrs(report_data, pcrs)
+    }
+
+    pub fn attest_with_pcrs(
+        &self,
+        report_data: &[u8],
+        pcrs: BTreeMap<u16, Vec<u8>>,
+    ) -> Result<Vec<u8>> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .context("system clock before UNIX epoch")?
             .as_millis() as u64;
-        let pcrs = (0..=2)
-            .map(|index| (index, vec![index as u8; 48]))
-            .collect();
         let document = Document {
             module_id: "mock-nsm".into(),
             digest: "SHA384".into(),

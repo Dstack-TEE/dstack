@@ -32,10 +32,6 @@ site_name = ""
 # outside a TEE (e.g. local dev/testing) where the local guest agent socket
 # is unavailable.
 enforce_self_authorization = true
-# Optional AMD KDS-compatible base URL for SEV-SNP collateral fetches.
-# Leave empty to use the built-in default.
-amd_kds_base_url = ""
-
 # AMD SEV-SNP key/cert release remains disabled unless this local KMS gate is
 # explicitly enabled. External auth policy must still allow the verified
 # BootInfo before any sensitive material is returned.
@@ -48,10 +44,18 @@ sev_snp_key_release = false
 aws_nitro_tpm_key_release = false
 
 # Optional attestation trust-anchor files. Omitted entries use vendor roots.
-[core.root_ca]
+[core.attestation]
+insecure_allow_external_trust_anchors = false
+
+[core.attestation.urls]
+# pccs = "https://pccs.phala.network"
+# amd_kds = "https://kdsintf.amd.com/vcek/v1"
+
+[core.attestation.root_ca]
 # tdx = "/etc/dstack/roots/intel-sgx-root-ca.der"
-# tpm = "/etc/dstack/roots/gcp-tpm-root-ca.pem"
-# nsm = "/etc/dstack/roots/aws-nitro-root-ca.pem"
+# gcp_tpm = "/etc/dstack/roots/gcp-tpm-root-ca.pem"
+# aws_nitro_enclave = "/etc/dstack/roots/aws-nitro-enclave-root-ca.pem"
+# aws_nitro_tpm = "/etc/dstack/roots/aws-nitro-tpm-root-ca.pem"
 # sev_snp_milan = "/etc/dstack/roots/amd-milan-ark.pem"
 # sev_snp_genoa = "/etc/dstack/roots/amd-genoa-ark.pem"
 # sev_snp_turin = "/etc/dstack/roots/amd-turin-ark.pem"

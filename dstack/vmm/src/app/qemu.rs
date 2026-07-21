@@ -5,7 +5,7 @@
 //! QEMU launch preparation and command construction.
 use crate::{
     app::Manifest,
-    config::{CvmConfig, Networking, NetworkingMode, ProcessAnnotation, TeePlatform},
+    config::{CvmConfig, CvmPlatform, Networking, NetworkingMode, ProcessAnnotation},
     vm_launcher::{ChildCommand, LaunchSpec},
 };
 use std::collections::HashMap;
@@ -176,7 +176,7 @@ fn virtio_pci_device(device: &str, snp: bool) -> String {
 
 struct PreparedQemuLaunch {
     workdir: VmWorkDir,
-    platform: TeePlatform,
+    platform: CvmPlatform,
     networks: Vec<Networking>,
     hugepage_numa_nodes: Option<HashMap<String, u32>>,
     gpu_numa_nodes: HashMap<String, String>,
@@ -240,7 +240,7 @@ impl PreparedQemuLaunch {
 
         let tee_enabled = !vm.manifest.no_tee;
         let tdx_mr_config_id = if tee_enabled
-            && platform == TeePlatform::Tdx
+            && platform == CvmPlatform::Tdx
             && cfg.use_mrconfigid
             && vm.image.info.version_tuple().unwrap_or_default() >= (0, 5, 2)
         {
@@ -249,7 +249,7 @@ impl PreparedQemuLaunch {
             None
         };
         let (snp_host_data, snp_launch_params) =
-            if tee_enabled && platform == TeePlatform::AmdSevSnp {
+            if tee_enabled && platform == CvmPlatform::AmdSevSnp {
                 (
                     Some(snp_host_data(&workdir)?),
                     Some(
@@ -430,7 +430,7 @@ impl QemuCommandBuilder<'_> {
     }
 
     fn is_amd_sev_snp(&self) -> bool {
-        self.prepared.platform == TeePlatform::AmdSevSnp && !self.vm.manifest.no_tee
+        self.prepared.platform == CvmPlatform::AmdSevSnp && !self.vm.manifest.no_tee
     }
 
     fn base_command(&self) -> Command {
@@ -775,13 +775,13 @@ impl VmConfig {
         }
 
         match prepared.platform {
-            TeePlatform::Tdx => {
+            CvmPlatform::Tdx => {
                 command
                     .arg("-machine")
                     .arg("q35,kernel-irqchip=split,confidential-guest-support=tdx,hpet=off");
                 self.configure_tdx_guest(command, cfg, prepared.tdx_mr_config_id.as_deref())?;
             }
-            TeePlatform::AmdSevSnp => {
+            CvmPlatform::AmdSevSnp => {
                 let host_data = prepared
                     .snp_host_data
                     .as_deref()
@@ -943,7 +943,7 @@ mod tests {
     };
     use crate::app::image::{Image, ImageInfo};
     use crate::app::{GpuConfig, Manifest, PortMapping, VmWorkDir};
-    use crate::config::{Config, Protocol, TeePlatform, DEFAULT_CONFIG};
+    use crate::config::{Config, CvmPlatform, Protocol, DEFAULT_CONFIG};
 
     #[test]
     fn amd_sev_snp_memory_backend_arg_uses_passed_final_memory_size() {
@@ -982,7 +982,7 @@ mod tests {
         let mut config: Config = Figment::from(Toml::string(DEFAULT_CONFIG))
             .extract()
             .unwrap();
-        config.cvm.platform = Some(TeePlatform::Tdx);
+        config.cvm.platform = Some(CvmPlatform::Tdx);
         config.cvm.qemu_path = PathBuf::from("/not-installed/qemu-system-x86_64");
         config.cvm.qgs_port = None;
 
@@ -1041,7 +1041,7 @@ mod tests {
         };
         let mut prepared = PreparedQemuLaunch {
             workdir: VmWorkDir::new("/does-not-exist/vm-1"),
-            platform: TeePlatform::Tdx,
+            platform: CvmPlatform::Tdx,
             networks: vec![config.cvm.networking.clone(), config.cvm.networking.clone()],
             hugepage_numa_nodes: None,
             gpu_numa_nodes: HashMap::new(),

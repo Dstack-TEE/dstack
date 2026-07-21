@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{bail, Context, Result};
-use dstack_types::TeeSimulatorConfig;
+use dstack_types::{TeeSimulatorConfig, VmConfig};
 use fuser::{
     FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
     ReplyOpen, ReplyWrite, Request, TimeOrNow,
@@ -42,6 +42,7 @@ const CCEL_FIXTURE: &[u8] = include_bytes!("../../cc-eventlog/samples/ccel.bin")
 
 struct SimulatorState {
     generator: Arc<TdxGenerator>,
+    mrtd: [u8; 48],
     ccel: Vec<u8>,
     rtmrs: [[u8; 48]; 4],
     outblob: Vec<u8>,
@@ -49,11 +50,13 @@ struct SimulatorState {
 }
 
 impl SimulatorState {
-    fn new(generator: Arc<TdxGenerator>, ccel: &[u8]) -> Result<Self> {
+    fn new(generator: Arc<TdxGenerator>, ccel: &[u8], vm_config: Option<&str>) -> Result<Self> {
+        let (mrtd, rtmrs) = measurements_for_config(ccel, vm_config)?;
         let mut state = Self {
             generator,
+            mrtd,
             ccel: ccel.to_vec(),
-            rtmrs: replay_boot_rtmrs(ccel)?,
+            rtmrs,
             outblob: Vec::new(),
             generation: 0,
         };
@@ -64,7 +67,7 @@ impl SimulatorState {
     fn make_quote(&self, report_data: [u8; 64]) -> Result<Vec<u8>> {
         let mut quote = self
             .generator
-            .attest_with_rtmrs(report_data, self.rtmrs)?
+            .attest_with_measurements(report_data, self.mrtd, self.rtmrs)?
             .quote;
         quote[MR_CONFIG_ID_RANGE].fill(0);
         for (index, rtmr) in self.rtmrs.iter().enumerate() {
@@ -114,6 +117,63 @@ impl SimulatorState {
     }
 }
 
+fn measurements_for_config(
+    ccel: &[u8],
+    vm_config: Option<&str>,
+) -> Result<([u8; 48], [[u8; 48]; 4])> {
+    let mut rtmrs = replay_boot_rtmrs(ccel)?;
+    let Some(vm_config) = vm_config else {
+        return Ok(([0x11; 48], rtmrs));
+    };
+    let value: serde_json::Value = serde_json::from_str(vm_config).context("invalid vm_config")?;
+    if value.get("tdx_measurement").is_none() {
+        return Ok(([0x11; 48], rtmrs));
+    }
+    let vm_config: VmConfig = serde_json::from_value(value).context("invalid TDX vm_config")?;
+    let Some(document) = vm_config.tdx_measurement.as_ref() else {
+        return Ok(([0x11; 48], rtmrs));
+    };
+    let events = cc_eventlog::tdx::decode_ccel(ccel).context("failed to decode CCEL fixture")?;
+    let digest = |name: &str| -> Result<Vec<u8>> {
+        let event = events
+            .iter()
+            .find(|event| event.imr == 0 && event.event == name)
+            .with_context(|| format!("CCEL fixture is missing {name}"))?;
+        Ok(event.digest())
+    };
+    let acpi_hashes = dstack_mr::tdx::TdxRtmr0AcpiHashes {
+        loader: digest("acpi-loader")?,
+        rsdp: digest("acpi-rsdp")?,
+        tables: digest("acpi-tables")?,
+    };
+    let measurements = dstack_mr::tdx::tdx_measurements_from_measurement_document(
+        document,
+        &vm_config,
+        &acpi_hashes,
+    )?;
+    let mrtd = measurements
+        .mrtd
+        .as_slice()
+        .try_into()
+        .context("invalid MRTD")?;
+    rtmrs[0] = measurements
+        .rtmr0
+        .as_slice()
+        .try_into()
+        .context("invalid RTMR0")?;
+    rtmrs[1] = measurements
+        .rtmr1
+        .as_slice()
+        .try_into()
+        .context("invalid RTMR1")?;
+    rtmrs[2] = measurements
+        .rtmr2
+        .as_slice()
+        .try_into()
+        .context("invalid RTMR2")?;
+    Ok((mrtd, rtmrs))
+}
+
 fn replay_boot_rtmrs(ccel: &[u8]) -> Result<[[u8; 48]; 4]> {
     let events = cc_eventlog::tdx::decode_ccel(ccel).context("failed to decode CCEL fixture")?;
     let mut rtmrs = [[0u8; 48]; 4];
@@ -146,7 +206,7 @@ pub(crate) struct TdxSimulatorFs {
 impl TdxSimulatorFs {
     fn new(generator: Arc<TdxGenerator>) -> Result<Self> {
         Ok(Self {
-            state: SimulatorState::new(generator, CCEL_FIXTURE)?,
+            state: SimulatorState::new(generator, CCEL_FIXTURE, None)?,
             uid: unsafe { libc::geteuid() },
             gid: unsafe { libc::getegid() },
         })
@@ -380,7 +440,7 @@ impl Filesystem for TdxSimulatorFs {
     }
 }
 
-fn ensure_configfs_mount(mountpoint: &Path) -> Result<()> {
+pub(crate) fn ensure_configfs_mount(mountpoint: &Path) -> Result<()> {
     if mountpoint != Path::new(TDX_DEFAULT_MOUNTPOINT) {
         std::fs::create_dir_all(mountpoint)
             .with_context(|| format!("failed to create {}", mountpoint.display()))?;
@@ -439,7 +499,12 @@ impl TeeBackend for TdxBackend {
         let generator = Arc::new(TdxGenerator::from_seed(mock_attestation::parse_seed(
             seed,
         )?)?);
-        TdxSimulatorFs::new(generator)
+        let mut fs = TdxSimulatorFs::new(generator)?;
+        let (mrtd, rtmrs) = measurements_for_config(CCEL_FIXTURE, config.vm_config.as_deref())?;
+        fs.state.mrtd = mrtd;
+        fs.state.rtmrs = rtmrs;
+        fs.state.outblob = fs.state.make_quote([0; 64])?;
+        Ok(fs)
     }
 
     fn prepare_mountpoint(mountpoint: &Path) -> Result<()> {
@@ -462,6 +527,7 @@ mod tests {
         let mut state = SimulatorState::new(
             Arc::new(TdxGenerator::from_seed(seed).unwrap()),
             CCEL_FIXTURE,
+            None,
         )
         .unwrap();
         let original_rtmr3 = state.rtmrs[3];
@@ -497,7 +563,8 @@ mod tests {
     #[test]
     fn only_rtmr_two_and_three_are_extensible() {
         let mut state =
-            SimulatorState::new(Arc::new(TdxGenerator::new().unwrap()), CCEL_FIXTURE).unwrap();
+            SimulatorState::new(Arc::new(TdxGenerator::new().unwrap()), CCEL_FIXTURE, None)
+                .unwrap();
         assert!(state.extend_rtmr(0, &[0u8; 48]).is_err());
         assert!(state.extend_rtmr(2, &[0u8; 48]).is_ok());
         assert!(state.extend_rtmr(3, &[0u8; 48]).is_ok());

@@ -22,7 +22,7 @@ use fs_err as fs;
 use k256::ecdsa::SigningKey;
 use ra_rpc::{CallContext, RpcCall};
 use ra_tls::{
-    attestation::{AttestationMode, VerifiedAttestation},
+    attestation::{AttestationVerifier, TeeVariant, VerifiedAttestation},
     cert::{CaCert, CertRequest, CertSigningRequestV1, CertSigningRequestV2, Csr},
     kdf,
 };
@@ -60,6 +60,7 @@ pub struct KmsStateInner {
     temp_ca_cert: String,
     temp_ca_key: String,
     verifier: CvmVerifier,
+    attestation_verifier: Arc<AttestationVerifier>,
     self_boot_info: OnceCell<BootInfo>,
     metrics: KmsMetrics,
 }
@@ -106,11 +107,15 @@ impl KmsState {
             fs::read_to_string(config.tmp_ca_key()).context("Faeild to read temp ca key")?;
         let temp_ca_cert =
             fs::read_to_string(config.tmp_ca_cert()).context("Faeild to read temp ca cert")?;
+        let attestation_verifier = Arc::new(
+            AttestationVerifier::load(&config.attestation)
+                .context("failed to load attestation verifier")?,
+        );
         let verifier = CvmVerifier::new(
             config.image.cache_dir.display().to_string(),
             config.image.download_url.clone(),
             config.image.download_timeout,
-            config.pccs_url.clone(),
+            attestation_verifier.clone(),
         );
         if !config.enforce_self_authorization {
             warn!(
@@ -125,6 +130,7 @@ impl KmsState {
                 temp_ca_cert,
                 temp_ca_key,
                 verifier,
+                attestation_verifier,
                 self_boot_info: OnceCell::new(),
                 metrics: KmsMetrics::default(),
             }),
@@ -133,6 +139,10 @@ impl KmsState {
 
     pub(crate) fn metrics(&self) -> &KmsMetrics {
         &self.inner.metrics
+    }
+
+    pub(crate) fn attestation_verifier(&self) -> Arc<AttestationVerifier> {
+        self.inner.attestation_verifier.clone()
     }
 }
 
@@ -171,10 +181,10 @@ fn ensure_key_release_allowed(
     aws_nitro_tpm_enabled: bool,
 ) -> Result<()> {
     match boot_info.attestation_mode {
-        AttestationMode::DstackAmdSevSnp if !snp_enabled => {
+        TeeVariant::DstackAmdSevSnp if !snp_enabled => {
             bail!("amd sev-snp key release is not enabled")
         }
-        AttestationMode::DstackAwsNitroTpm if !aws_nitro_tpm_enabled => {
+        TeeVariant::DstackAwsNitroTpm if !aws_nitro_tpm_enabled => {
             bail!("aws nitro-tpm key release is not enabled")
         }
         _ => Ok(()),
@@ -200,7 +210,7 @@ impl RpcHandler {
         let boot_info = self
             .state
             .self_boot_info
-            .get_or_try_init(|| local_kms_boot_info(self.state.config.pccs_url.as_deref()))
+            .get_or_try_init(|| local_kms_boot_info(&self.state.attestation_verifier))
             .await
             .context("Failed to load cached self boot info")?;
         let response = self
@@ -311,7 +321,7 @@ impl RpcHandler {
         // SNP rootfs/app/config binding is handled by the SNP launch-measurement
         // helper above. The legacy OS-image verifier is TDX-oriented and still
         // rejects SNP quotes; keep SNP on the explicit fail-closed helper path.
-        if boot_info.attestation_mode != AttestationMode::DstackAmdSevSnp {
+        if boot_info.attestation_mode != TeeVariant::DstackAmdSevSnp {
             self.verify_os_image_hash(vm_config_str.into(), att)
                 .await
                 .context("Failed to verify os image hash")?;
@@ -527,7 +537,7 @@ impl KmsRpc for RpcHandler {
             .attestation
             .clone()
             .into_v1()
-            .verify_with_ra_pubkey(&csr.pubkey, self.state.config.pccs_url.as_deref())
+            .verify_with_ra_pubkey(&csr.pubkey, &self.state.attestation_verifier)
             .await
             .context("Quote verification failed")?;
         let app_info = self
@@ -854,10 +864,7 @@ mod tests {
             .expect("aws nitrotpm attestation should produce KMS boot info");
         let pcrs = verified_aws_nitro_tpm_pcrs(&attestation);
 
-        assert_eq!(
-            boot_info.attestation_mode,
-            AttestationMode::DstackAwsNitroTpm
-        );
+        assert_eq!(boot_info.attestation_mode, TeeVariant::DstackAwsNitroTpm);
         assert_eq!(boot_info.tcb_status, "UpToDate");
         assert!(boot_info.advisory_ids.is_empty());
         assert_eq!(boot_info.app_id, vec![0x11; 20]);
@@ -912,7 +919,7 @@ mod tests {
         ensure_key_release_allowed(&boot_info, false, true).unwrap();
 
         // A TDX boot info is unaffected by the AWS gate even when it is disabled.
-        boot_info.attestation_mode = AttestationMode::DstackTdx;
+        boot_info.attestation_mode = TeeVariant::DstackTdx;
         ensure_key_release_allowed(&boot_info, false, false).unwrap();
     }
 
@@ -1005,7 +1012,7 @@ mod tests {
         let boot_info = build_boot_info_for_attestation(&attestation, false, &vm_config)
             .expect("snp attestation should build boot info through vm_config path");
 
-        assert_eq!(boot_info.attestation_mode, AttestationMode::DstackAmdSevSnp);
+        assert_eq!(boot_info.attestation_mode, TeeVariant::DstackAmdSevSnp);
         assert_eq!(boot_info.mr_aggregated.len(), 32);
         assert_eq!(boot_info.device_id, vec![0xab; 64]);
         assert_eq!(boot_info.app_id, vec![0x11; 20]);
@@ -1027,7 +1034,7 @@ mod tests {
         let boot_info = build_boot_info_for_attestation(&attestation, false, "")
             .expect("snp local KMS attestation should use embedded vm_config");
 
-        assert_eq!(boot_info.attestation_mode, AttestationMode::DstackAmdSevSnp);
+        assert_eq!(boot_info.attestation_mode, TeeVariant::DstackAmdSevSnp);
         assert_eq!(boot_info.mr_aggregated.len(), 32);
         assert_eq!(boot_info.app_id, vec![0x11; 20]);
     }
@@ -1042,7 +1049,7 @@ mod tests {
 
         let boot_info = build_boot_info_for_attestation(&attestation, false, &vm_config)
             .expect("self-contained SNP vm_config should not require KMS-local sev_snp config");
-        assert_eq!(boot_info.attestation_mode, AttestationMode::DstackAmdSevSnp);
+        assert_eq!(boot_info.attestation_mode, TeeVariant::DstackAmdSevSnp);
         assert_eq!(boot_info.device_id, vec![0xab; 64]);
     }
 

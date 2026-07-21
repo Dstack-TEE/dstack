@@ -166,11 +166,6 @@ static CONFIGFS_MKDIR_TRIED: Mutex<bool> = Mutex::new(false);
 /// 1. ConfigFS (Linux 6.7+)
 /// 2. VSock to QGS service
 pub fn get_quote(report_data: &TdxReportData) -> Result<Vec<u8>> {
-    if let Some(quote) = dstack_types::mock_attestation::request("tdx", report_data)
-        .map_err(|err| TdxAttestError::QuoteFailure(err.to_string()))?
-    {
-        return Ok(quote);
-    }
     let _guard = TDX_LOCK.lock().map_err(|_| TdxAttestError::Busy)?;
 
     if should_try_configfs() {

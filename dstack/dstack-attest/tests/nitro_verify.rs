@@ -4,7 +4,9 @@
 
 //! Integration test: verify Nitro Enclave attestation end-to-end
 
-use dstack_attest::attestation::{AttestationQuote, DstackVerifiedReport, VersionedAttestation};
+use dstack_attest::attestation::{
+    AttestationQuote, AttestationVerifier, DstackVerifiedReport, VersionedAttestation,
+};
 use nsm_qvl::{AttestationDocument, CoseSign1};
 use std::time::{Duration, SystemTime};
 
@@ -40,8 +42,9 @@ async fn verify_nitro_attestation_bin() {
         }
         _ => panic!("unexpected quote type"),
     };
+    let verifier = AttestationVerifier::new_prod(None).unwrap();
     let verified = attestation
-        .verify_with_time(None, Some(fixed_now))
+        .verify_with_time(&verifier, Some(fixed_now))
         .await
         .unwrap();
     let DstackVerifiedReport::DstackNitroEnclave(report) = verified.report else {

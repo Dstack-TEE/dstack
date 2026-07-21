@@ -9,11 +9,14 @@ ConditionPathExists=!/dev/sev-guest
 Type=notify
 ExecCondition=/bin/sh -c '! grep -qE "^(tdx_guest|sev_guest)" /sys/kernel/config/tsm/report/*/provider 2>/dev/null'
 ExecStart=/usr/bin/dstack-tee-simulator
-ExecStartPost=/bin/sh -c 'systemctl set-environment $(cat /run/dstack/tee-simulator.env)'
 ExecStartPost=/bin/systemctl set-environment DCAP_TDX_RTMR_SYSFS_PATH=/sys/kernel/config/tsm/report/com.intel.dcap/measurements DSTACK_CCEL_FILE=/sys/kernel/config/tsm/report/com.intel.dcap/ccel
 ExecStop=-/bin/fusermount3 -u /sys/kernel/config/tsm/report
+ExecStopPost=-/bin/sh -c 'test ! -s /run/dstack/swtpm.pid || kill "$(cat /run/dstack/swtpm.pid)"'
 ExecStopPost=-/bin/fusermount3 -uz /sys/kernel/config/tsm/report
-ExecStopPost=/bin/systemctl unset-environment DCAP_TDX_RTMR_SYSFS_PATH DSTACK_CCEL_FILE DSTACK_SIMULATED_TEE_PLATFORM DSTACK_MOCK_ATTESTATION_URL
+ExecStopPost=-/bin/umount /sys/class/dmi/id/sys_vendor
+ExecStopPost=-/bin/umount /sys/class/dmi/id/product_name
+ExecStopPost=-/bin/sh -c 'test ! -e /run/dstack/created-tpm-marker || rm -f /dev/tpmrm0 /run/dstack/created-tpm-marker'
+ExecStopPost=/bin/systemctl unset-environment DCAP_TDX_RTMR_SYSFS_PATH DSTACK_CCEL_FILE
 Restart=on-failure
 RestartSec=1s
 StandardOutput=journal+console
