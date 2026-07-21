@@ -51,7 +51,7 @@ impl DstackVolumeHeader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{VerityVolume, VolumeTarget};
+    use dstack_types::{VerityVolume, VolumeTarget};
 
     #[test]
     fn volume_header_round_trip() {

@@ -18,9 +18,9 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::volume_format::{DstackVolumeHeader, DSTACK_VOLUME_HEADER_SIZE};
 use anyhow::{bail, Context, Result};
 use cmd_lib::{run_cmd, run_fun};
-use dstack_types::volume::DstackVolumeHeader;
 use fs_err as fs;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -37,7 +37,7 @@ const PARTITION_ALIGNMENT_SECTORS: u64 = 2048;
 // still reserve enough trailing sectors in the raw image for the backup array
 // (128 entries * 128 bytes) plus the backup header.
 const GPT_ENTRY_SECTORS: u64 = 32;
-const VOLUME_HEADER_SIZE: usize = dstack_types::volume::DSTACK_VOLUME_HEADER_SIZE;
+const VOLUME_HEADER_SIZE: usize = DSTACK_VOLUME_HEADER_SIZE;
 
 #[derive(Clone, Copy)]
 pub enum Compression {

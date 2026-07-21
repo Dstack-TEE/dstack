@@ -10,8 +10,6 @@ use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 use size_parser::human_size;
 
-pub mod volume;
-
 /// Identifies which OVMF flavour the guest image was built with.
 ///
 /// Only the pre-202505 OVMF measurement layout is supported.

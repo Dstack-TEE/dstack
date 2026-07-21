@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! Build a verity volume from docker images or a directory.
+//! Build, describe, and activate dstack volumes.
 //!
 //! The output is a reproducible, dm-verity-protected raw disk image: partition 1
 //! is the squashfs data filesystem, and partition 2 is the dm-verity superblock
@@ -24,6 +24,7 @@ use fs_err as fs;
 pub mod oci;
 mod store;
 mod volume;
+pub mod volume_format;
 
 pub use volume::Compression;
 
