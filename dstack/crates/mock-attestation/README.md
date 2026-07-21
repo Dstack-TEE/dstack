@@ -3,7 +3,7 @@
 Development-only, cryptographically valid attestation evidence for CI and the
 `dstack-tee-simulator` dev image.
 
-The crate creates an ephemeral PKI and dynamically signs evidence for:
+The crate derives a development PKI from a 32-byte seed and dynamically signs evidence for:
 
 - Intel TDX/DCAP, including TCB Info, QE Identity, PCK certificates and CRLs;
 - AMD SEV-SNP, including ARK, ASK, VCEK and reports;
@@ -15,18 +15,21 @@ are test credentials and must never be copied into a production image.
 
 ## CLI
 
-Generate standalone roots:
+Generate matching public roots and `sys-config-fragment.json`:
 
 ```console
-dstack-mock-attestation generate --output ./mock-roots
+dstack-mock-attestation generate \
+  --output ./mock-roots \
+  --collateral-base-url http://HOST_REACHABLE_FROM_VERIFIER:8088
 ```
 
-Start the combined Mock PCCS/KDS/AIA service and write the matching public
-roots:
+Merge the generated fragment into the VM sys-config, then start the host-side
+Mock PCCS/KDS/AIA service from that same config:
 
 ```console
 dstack-mock-attestation serve \
   --listen 127.0.0.1:8088 \
+  --sys-config ./sys-config.json \
   --output ./active-mock-roots
 ```
 
@@ -39,21 +42,23 @@ Select the platform in `.sys-config.json`; omission defaults to TDX:
 
 ```json
 {
-  "tee_simulator": { "platform": "sev-snp" }
+  "tee_simulator": {
+    "platform": "sev-snp",
+    "mock_attestation_seed": "<64 hex characters>",
+    "collateral_base_url": "http://HOST_REACHABLE_FROM_VERIFIER:8088"
+  }
 }
 ```
 
-Valid values are `tdx`, `sev-snp`, `tpm`, and `nsm`. The simulator publishes
-the matching roots under:
+Valid values are `tdx`, `sev-snp`, `tpm`, and `nsm`. The guest only reads the
+seed from `.sys-config.json`; it never writes credentials or roots back into
+`/dstack/.host-shared`. CI retains the generated public roots and mounts them
+into verifier/KMS/gateway. The independently running host collateral service
+reconstructs the same hierarchy from the seed. TDX uses it as `pccs_url` and
+SEV-SNP uses its `/vcek/v1` path as the KDS base.
 
-```text
-/dstack/.host-shared/.mock-attestation/
-```
-
-and starts collateral/evidence service at `http://127.0.0.1:8088`. CI must
-mount the public roots into verifier/KMS/gateway and configure their existing
-`root_ca` paths. TDX uses the service as `pccs_url`; SEV-SNP uses
-`http://127.0.0.1:8088/vcek/v1` as its KDS base.
+The seed adds only 64 hex bytes (the generated fragment is well below 1 KiB),
+so the existing 32 KiB sys-config copy limit does not need to be enlarged.
 
 ## Required negative tests
 

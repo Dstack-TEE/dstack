@@ -31,11 +31,15 @@ impl MockCollateralState {
     }
 
     pub fn with_base_url(base_url: &str) -> Result<Self> {
+        Self::from_seed(rand::random(), base_url)
+    }
+
+    pub fn from_seed(seed: [u8; 32], base_url: &str) -> Result<Self> {
         Ok(Self {
-            tdx: Arc::new(TdxGenerator::new()?),
-            sev_snp: Arc::new(SevSnpGenerator::new()?),
-            tpm: Arc::new(TpmGenerator::with_base_url(base_url)?),
-            nsm: Arc::new(NsmGenerator::new()?),
+            tdx: Arc::new(TdxGenerator::from_seed(seed)?),
+            sev_snp: Arc::new(SevSnpGenerator::from_seed(seed)?),
+            tpm: Arc::new(TpmGenerator::from_seed(seed, base_url)?),
+            nsm: Arc::new(NsmGenerator::from_seed(seed)?),
         })
     }
 
@@ -222,6 +226,66 @@ fn binary(value: Vec<u8>, header: Option<(&str, String)>) -> Response<Body> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn independent_host_and_guest_from_sys_config_seed_interoperate() {
+        let seed = [0x5a; 32];
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let url = format!("http://{addr}");
+        // These states model separate host and CVM processes. No certificates,
+        // keys, or Arc state are exchanged after construction.
+        let host = Arc::new(MockCollateralState::from_seed(seed, &url).unwrap());
+        let guest = MockCollateralState::from_seed(seed, &url).unwrap();
+        let task = tokio::spawn(serve_listener(listener, host.clone()));
+
+        let report_data = [0x61; 64];
+        let tdx = guest.tdx.attest(report_data).unwrap();
+        let collateral = dcap_qvl::collateral::CollateralClient::with_default_http(&url)
+            .unwrap()
+            .fetch(&tdx.quote)
+            .await
+            .unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let tdx_verifier = dcap_qvl::verify::QuoteVerifier::new(host.tdx.root_ca_der());
+        tdx_verifier.verify(&tdx.quote, &collateral, now).unwrap();
+        let mut tampered = tdx.quote.clone();
+        tampered[200] ^= 1;
+        assert!(tdx_verifier.verify(&tampered, &collateral, now).is_err());
+
+        let sev = guest.sev_snp.attest(report_data).unwrap();
+        let sev_verifier = sev_snp_qvl::QuoteVerifier::new_with_root(
+            sev_snp_qvl::AmdSnpProduct::Milan,
+            host.sev_snp.root_ca_pem().into_bytes(),
+        );
+        sev_verifier
+            .verify(&sev.report, &sev.cert_chain, &report_data)
+            .unwrap();
+        assert!(sev_verifier
+            .verify(&sev.report, &sev.cert_chain, &[0x62; 64])
+            .is_err());
+
+        let qualifying = [0x63; 32];
+        let tpm = guest.tpm.attest(&qualifying).unwrap();
+        let tpm_verifier = tpm_qvl::QuoteVerifier::new(host.tpm.root_ca_pem());
+        tpm_verifier.verify(&tpm, &host.tpm.collateral()).unwrap();
+        assert!(crate::ensure_report_data(&qualifying, &[0x64; 32]).is_err());
+
+        let nsm = guest.nsm.attest(&report_data).unwrap();
+        let verified = nsm_qvl::QuoteVerifier::new(host.nsm.root_ca_pem())
+            .verify(&nsm, None, None)
+            .unwrap();
+        assert_eq!(verified.user_data.as_deref(), Some(report_data.as_slice()));
+
+        let wrong = MockCollateralState::from_seed([0xa5; 32], &url).unwrap();
+        assert!(nsm_qvl::QuoteVerifier::new(wrong.nsm.root_ca_pem())
+            .verify(&nsm, None, None)
+            .is_err());
+        task.abort();
+    }
 
     #[tokio::test]
     async fn mock_pccs_and_kds_drive_real_qvls() {

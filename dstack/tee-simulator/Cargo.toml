@@ -32,3 +32,9 @@ tokio = { workspace = true, features = ["full"] }
 [dev-dependencies]
 dcap-qvl.workspace = true
 tempfile.workspace = true
+reqwest.workspace = true
+sev-snp-qvl.workspace = true
+tpm-qvl.workspace = true
+tpm-types.workspace = true
+nsm-qvl.workspace = true
+hex.workspace = true

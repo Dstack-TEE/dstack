@@ -9,7 +9,7 @@ use p256::pkcs8::DecodePrivateKey;
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, CertificateRevocationListParams,
     CrlDistributionPoint, CustomExtension, DnType, IsCa, KeyIdMethod, KeyPair, KeyUsagePurpose,
-    SerialNumber, PKCS_ECDSA_P256_SHA256,
+    SerialNumber,
 };
 use sha2::{Digest, Sha256};
 use time::{Duration, OffsetDateTime};
@@ -32,7 +32,11 @@ impl TpmGenerator {
     }
 
     pub fn with_base_url(base_url: &str) -> Result<Self> {
-        let root_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
+        Self::from_seed(rand::random(), base_url)
+    }
+
+    pub fn from_seed(seed: [u8; 32], base_url: &str) -> Result<Self> {
+        let root_key = crate::p256_key(&seed, "tpm-root")?;
         let mut root_params = params("Mock TPM Root CA")?;
         root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         root_params.key_usages.extend([
@@ -47,7 +51,7 @@ impl TpmGenerator {
             });
         let root = root_params.self_signed(&root_key)?;
 
-        let intermediate_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
+        let intermediate_key = crate::p256_key(&seed, "tpm-intermediate")?;
         let mut intermediate_params = params("Mock TPM Attestation Intermediate CA")?;
         intermediate_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         intermediate_params.key_usages.extend([
@@ -64,7 +68,7 @@ impl TpmGenerator {
                 uris: vec![format!("{base_url}/tpm/crl/root.crl")],
             });
         let intermediate = intermediate_params.signed_by(&intermediate_key, &root, &root_key)?;
-        let ak_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
+        let ak_key = crate::p256_key(&seed, "tpm-ak")?;
         let mut ak_params = params("Mock TPM Attestation Key")?;
         ak_params.key_usages.push(KeyUsagePurpose::DigitalSignature);
         ak_params

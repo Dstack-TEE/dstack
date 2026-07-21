@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
-use dstack_types::{SysConfig, TeeSimulatorPlatform};
+use dstack_types::{SysConfig, TeeSimulatorConfig, TeeSimulatorPlatform};
 use fuser::{Filesystem, MountOption, Session};
 use mock_attestation::server::MockCollateralState;
 use std::sync::Arc;
@@ -59,6 +59,10 @@ struct Args {
     /// Override the platform backend's default mountpoint.
     #[arg(long)]
     mountpoint: Option<PathBuf>,
+
+    /// Runtime state directory (overridable by unprivileged E2E tests).
+    #[arg(long, default_value = "/run/dstack")]
+    runtime_dir: PathBuf,
 }
 
 /// Platform-specific simulator backend.
@@ -71,12 +75,15 @@ trait TeeBackend {
     const PLATFORM: &'static str;
     const DEFAULT_MOUNTPOINT: &'static str;
 
-    fn create_filesystem() -> Result<Self::Fs>;
+    fn create_filesystem(config: &TeeSimulatorConfig) -> Result<Self::Fs>;
     fn prepare_mountpoint(mountpoint: &Path) -> Result<()>;
     fn real_tee_available() -> bool;
 }
 
-fn run_backend<B: TeeBackend>(mountpoint_override: Option<PathBuf>) -> Result<()> {
+fn run_backend<B: TeeBackend>(
+    mountpoint_override: Option<PathBuf>,
+    config: &TeeSimulatorConfig,
+) -> Result<()> {
     let default_mountpoint = Path::new(B::DEFAULT_MOUNTPOINT);
     let mountpoint = mountpoint_override.as_deref().unwrap_or(default_mountpoint);
 
@@ -88,7 +95,7 @@ fn run_backend<B: TeeBackend>(mountpoint_override: Option<PathBuf>) -> Result<()
     }
     B::prepare_mountpoint(mountpoint)?;
 
-    let fs = B::create_filesystem()?;
+    let fs = B::create_filesystem(config)?;
     let mut session = Session::new(
         fs,
         mountpoint,
@@ -119,32 +126,35 @@ fn main() -> Result<()> {
         .init();
     let args = Args::parse();
 
-    let platform = args.platform.unwrap_or(load_platform(&args.sys_config)?);
-    fs_err::create_dir_all("/run/dstack")?;
+    let config = load_config(&args.sys_config)?;
+    let platform = args.platform.unwrap_or(config.platform.into());
+    fs_err::create_dir_all(&args.runtime_dir)?;
     fs_err::write(
-        "/run/dstack/tee-simulator.env",
+        args.runtime_dir.join("tee-simulator.env"),
         format!(
             "DSTACK_SIMULATED_TEE_PLATFORM={} DSTACK_MOCK_ATTESTATION_URL=http://127.0.0.1:8088\n",
             platform.as_str()
         ),
     )?;
     match platform {
-        TeePlatform::Tdx => run_backend::<tdx::TdxBackend>(args.mountpoint),
-        platform => run_mock_service(platform),
+        TeePlatform::Tdx => run_backend::<tdx::TdxBackend>(args.mountpoint, &config),
+        platform => run_mock_service(platform, &config),
     }
 }
 
-fn run_mock_service(platform: TeePlatform) -> Result<()> {
-    let state = Arc::new(MockCollateralState::new()?);
-    let root_dir = Path::new("/dstack/.host-shared/.mock-attestation");
-    fs_err::create_dir_all(root_dir)?;
-    fs_err::write(root_dir.join("tdx-root-ca.pem"), state.tdx.root_ca_pem())?;
-    fs_err::write(
-        root_dir.join("sev-snp-root-ca.pem"),
-        state.sev_snp.root_ca_pem(),
-    )?;
-    fs_err::write(root_dir.join("tpm-root-ca.pem"), state.tpm.root_ca_pem())?;
-    fs_err::write(root_dir.join("nsm-root-ca.pem"), state.nsm.root_ca_pem())?;
+fn run_mock_service(platform: TeePlatform, config: &TeeSimulatorConfig) -> Result<()> {
+    let seed = config
+        .mock_attestation_seed
+        .as_deref()
+        .context("tee_simulator.mock_attestation_seed is required")?;
+    let base_url = config
+        .collateral_base_url
+        .as_deref()
+        .unwrap_or("http://127.0.0.1:8088");
+    let state = Arc::new(MockCollateralState::from_seed(
+        mock_attestation::parse_seed(seed)?,
+        base_url,
+    )?);
     info!(
         platform = platform.as_str(),
         "development mock attestation service ready"
@@ -157,18 +167,15 @@ fn run_mock_service(platform: TeePlatform) -> Result<()> {
     ))
 }
 
-fn load_platform(path: &Path) -> Result<TeePlatform> {
+fn load_config(path: &Path) -> Result<TeeSimulatorConfig> {
     if !path.exists() {
-        return Ok(TeePlatform::Tdx);
+        return Ok(TeeSimulatorConfig::default());
     }
     let config: SysConfig = serde_json::from_slice(
         &fs_err::read(path).with_context(|| format!("failed to read {}", path.display()))?,
     )
     .with_context(|| format!("failed to parse {}", path.display()))?;
-    Ok(config
-        .tee_simulator
-        .map(|config| config.platform.into())
-        .unwrap_or_default())
+    Ok(config.tee_simulator.unwrap_or_default())
 }
 
 #[cfg(test)]
@@ -185,8 +192,10 @@ mod tests {
     #[test]
     fn missing_sys_config_defaults_to_tdx() {
         assert_eq!(
-            load_platform(Path::new("/definitely/missing/sys-config")).unwrap(),
-            TeePlatform::Tdx
+            load_config(Path::new("/definitely/missing/sys-config"))
+                .unwrap()
+                .platform,
+            TeeSimulatorPlatform::Tdx
         );
     }
 
@@ -210,7 +219,10 @@ mod tests {
                 .to_string(),
             )
             .unwrap();
-            assert_eq!(load_platform(&path).unwrap(), expected);
+            assert_eq!(
+                TeePlatform::from(load_config(&path).unwrap().platform),
+                expected
+            );
         }
     }
 }

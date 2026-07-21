@@ -735,6 +735,13 @@ pub struct TeeSimulatorConfig {
     /// Platform ABI exposed by dstack-tee-simulator. Defaults to `tdx`.
     #[serde(default)]
     pub platform: TeeSimulatorPlatform,
+    /// Hex-encoded 32-byte development PKI seed. The host collateral service
+    /// and guest simulator must receive the same seed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mock_attestation_seed: Option<String>,
+    /// Base URL used in mock collateral certificates (AIA/CRL).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collateral_base_url: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Copy, Default, PartialEq, Eq)]

@@ -8,11 +8,12 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{bail, Context, Result};
+use dstack_types::TeeSimulatorConfig;
 use fuser::{
     FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
     ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
-use mock_attestation::{server::MockCollateralState, tdx::TdxGenerator};
+use mock_attestation::tdx::TdxGenerator;
 use sha2::{Digest, Sha384};
 
 use crate::TeeBackend;
@@ -430,35 +431,14 @@ impl TeeBackend for TdxBackend {
     const PLATFORM: &'static str = "tdx";
     const DEFAULT_MOUNTPOINT: &'static str = TDX_DEFAULT_MOUNTPOINT;
 
-    fn create_filesystem() -> Result<Self::Fs> {
-        let collateral = Arc::new(MockCollateralState::new()?);
-        let generator = collateral.tdx.clone();
-        let root_dir = Path::new("/dstack/.host-shared/.mock-attestation");
-        fs_err::create_dir_all(root_dir)?;
-        fs_err::write(root_dir.join("tdx-root-ca.pem"), generator.root_ca_pem())?;
-        fs_err::write(
-            root_dir.join("sev-snp-root-ca.pem"),
-            collateral.sev_snp.root_ca_pem(),
-        )?;
-        fs_err::write(
-            root_dir.join("tpm-root-ca.pem"),
-            collateral.tpm.root_ca_pem(),
-        )?;
-        fs_err::write(
-            root_dir.join("nsm-root-ca.pem"),
-            collateral.nsm.root_ca_pem(),
-        )?;
-        std::thread::Builder::new()
-            .name("mock-collateral".into())
-            .spawn(move || {
-                let runtime = tokio::runtime::Runtime::new().expect("mock collateral runtime");
-                runtime
-                    .block_on(mock_attestation::server::serve(
-                        "127.0.0.1:8088".parse().unwrap(),
-                        collateral,
-                    ))
-                    .expect("mock collateral server");
-            })?;
+    fn create_filesystem(config: &TeeSimulatorConfig) -> Result<Self::Fs> {
+        let seed = config
+            .mock_attestation_seed
+            .as_deref()
+            .context("tee_simulator.mock_attestation_seed is required")?;
+        let generator = Arc::new(TdxGenerator::from_seed(mock_attestation::parse_seed(
+            seed,
+        )?)?);
         TdxSimulatorFs::new(generator)
     }
 
@@ -478,8 +458,12 @@ mod tests {
 
     #[test]
     fn quote_tracks_report_data_and_rtmr_extensions() {
-        let mut state =
-            SimulatorState::new(Arc::new(TdxGenerator::new().unwrap()), CCEL_FIXTURE).unwrap();
+        let seed = [0x6b; 32];
+        let mut state = SimulatorState::new(
+            Arc::new(TdxGenerator::from_seed(seed).unwrap()),
+            CCEL_FIXTURE,
+        )
+        .unwrap();
         let original_rtmr3 = state.rtmrs[3];
         let digest = [0x42; 48];
         state.extend_rtmr(3, &digest).unwrap();
@@ -495,6 +479,19 @@ mod tests {
         assert_eq!(report.mr_config_id, [0u8; 48]);
         assert_eq!(report.rt_mr3, state.rtmrs[3]);
         assert_eq!(report.mr_owner, [0u8; 48]);
+
+        let host = TdxGenerator::from_seed(seed).unwrap();
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        dcap_qvl::verify::QuoteVerifier::new(host.root_ca_der())
+            .verify(&state.outblob, &host.sample_collateral().unwrap(), now)
+            .unwrap();
+        let wrong = TdxGenerator::from_seed([0x6c; 32]).unwrap();
+        assert!(dcap_qvl::verify::QuoteVerifier::new(wrong.root_ca_der())
+            .verify(&state.outblob, &host.sample_collateral().unwrap(), now)
+            .is_err());
     }
 
     #[test]

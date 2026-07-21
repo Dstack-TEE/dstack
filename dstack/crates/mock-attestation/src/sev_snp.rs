@@ -7,7 +7,7 @@ use p384::ecdsa::{signature::DigestSigner, Signature as P384Signature, SigningKe
 use p384::pkcs8::DecodePrivateKey;
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, CertifiedKey, DnType, IsCa, KeyPair,
-    KeyUsagePurpose, PKCS_ECDSA_P384_SHA384,
+    KeyUsagePurpose,
 };
 use sev::firmware::guest::AttestationReport;
 use sha2::{Digest, Sha384};
@@ -29,15 +29,24 @@ pub struct SevSnpEvidence {
 
 impl SevSnpGenerator {
     pub fn new() -> Result<Self> {
+        Self::from_seed(rand::random())
+    }
+
+    pub fn from_seed(seed: [u8; 32]) -> Result<Self> {
         let CertifiedKey {
             cert: root,
             key_pair: root_key,
-        } = make_ca("Mock AMD Milan ARK", None)?;
+        } = make_ca("Mock AMD Milan ARK", "sev-root", &seed, None)?;
         let CertifiedKey {
             cert: ask,
             key_pair: ask_key,
-        } = make_ca("Mock AMD Milan ASK", Some((&root, &root_key)))?;
-        let vcek_key = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384)?;
+        } = make_ca(
+            "Mock AMD Milan ASK",
+            "sev-ask",
+            &seed,
+            Some((&root, &root_key)),
+        )?;
+        let vcek_key = crate::p384_key(&seed, "sev-vcek")?;
         let mut params = base_params("Mock AMD VCEK")?;
         params.key_usages.push(KeyUsagePurpose::DigitalSignature);
         let vcek = params.signed_by(&vcek_key, &ask, &ask_key)?;
@@ -86,8 +95,13 @@ impl SevSnpGenerator {
     }
 }
 
-fn make_ca(name: &str, issuer: Option<(&Certificate, &KeyPair)>) -> Result<CertifiedKey> {
-    let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384)?;
+fn make_ca(
+    name: &str,
+    label: &str,
+    seed: &[u8; 32],
+    issuer: Option<(&Certificate, &KeyPair)>,
+) -> Result<CertifiedKey> {
+    let key_pair = crate::p384_key(seed, label)?;
     let mut params = base_params(name)?;
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     params.key_usages.extend([

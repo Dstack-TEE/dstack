@@ -10,8 +10,10 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use rcgen::{BasicConstraints, CertificateParams, CertifiedKey, IsCa, KeyPair};
+use p256::pkcs8::EncodePrivateKey;
+use rcgen::KeyPair;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256, Sha384};
 
 pub mod nsm;
 pub mod server;
@@ -25,6 +27,49 @@ pub fn ensure_report_data(actual: &[u8], expected: &[u8]) -> Result<()> {
 pub mod sev_snp;
 pub mod tdx;
 pub mod tpm;
+
+pub const MOCK_SEED_LEN: usize = 32;
+
+pub fn parse_seed(value: &str) -> Result<[u8; MOCK_SEED_LEN]> {
+    let bytes = hex::decode(value).context("mock attestation seed must be hex")?;
+    bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("mock attestation seed must be 32 bytes"))
+}
+
+pub fn random_seed() -> [u8; MOCK_SEED_LEN] {
+    rand::random()
+}
+
+pub(crate) fn p256_key(seed: &[u8; 32], label: &str) -> Result<KeyPair> {
+    for counter in 0u32.. {
+        let bytes = Sha256::new()
+            .chain_update(b"dstack-mock-p256-v1")
+            .chain_update(seed)
+            .chain_update(label)
+            .chain_update(counter.to_be_bytes())
+            .finalize();
+        if let Ok(key) = p256::ecdsa::SigningKey::from_slice(&bytes) {
+            return Ok(KeyPair::from_pem(&key.to_pkcs8_pem(Default::default())?)?);
+        }
+    }
+    unreachable!()
+}
+
+pub(crate) fn p384_key(seed: &[u8; 32], label: &str) -> Result<KeyPair> {
+    for counter in 0u32.. {
+        let bytes = Sha384::new()
+            .chain_update(b"dstack-mock-p384-v1")
+            .chain_update(seed)
+            .chain_update(label)
+            .chain_update(counter.to_be_bytes())
+            .finalize();
+        if let Ok(key) = p384::ecdsa::SigningKey::from_slice(&bytes) {
+            return Ok(KeyPair::from_pem(&key.to_pkcs8_pem(Default::default())?)?);
+        }
+    }
+    unreachable!()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetManifest {
@@ -48,13 +93,23 @@ impl AssetManifest {
 }
 
 pub fn generate_assets(output: &Path) -> Result<AssetManifest> {
+    generate_assets_from_seed(output, random_seed(), "http://127.0.0.1:8088")
+}
+
+pub fn generate_assets_from_seed(
+    output: &Path,
+    seed: [u8; 32],
+    base_url: &str,
+) -> Result<AssetManifest> {
     fs_err::create_dir_all(output)?;
-    let tdx = write_ca(output, "tdx", "Mock Intel SGX Root CA")?;
-    let tpm = write_ca(output, "tpm", "Mock TPM Root CA")?;
-    let nsm = write_ca(output, "nsm", "Mock AWS Nitro Enclaves Root CA")?;
-    let milan = write_ca(output, "sev-snp-milan", "Mock AMD Milan ARK")?;
-    let genoa = write_ca(output, "sev-snp-genoa", "Mock AMD Genoa ARK")?;
-    let turin = write_ca(output, "sev-snp-turin", "Mock AMD Turin ARK")?;
+    let state = server::MockCollateralState::from_seed(seed, base_url)?;
+    state.write_roots(output)?;
+    let tdx = PathBuf::from("tdx-root-ca.pem");
+    let tpm = PathBuf::from("tpm-root-ca.pem");
+    let nsm = PathBuf::from("nsm-root-ca.pem");
+    let milan = PathBuf::from("sev-snp-root-ca.pem");
+    let genoa = milan.clone();
+    let turin = milan.clone();
     let manifest = AssetManifest {
         version: 1,
         tdx_root_ca: tdx,
@@ -65,34 +120,13 @@ pub fn generate_assets(output: &Path) -> Result<AssetManifest> {
         sev_snp_turin_root_ca: turin,
     };
     manifest.write_to(output)?;
+    fs_err::write(
+        output.join("sys-config-fragment.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "tee_simulator": { "platform": "tdx", "mock_attestation_seed": hex::encode(seed), "collateral_base_url": base_url }
+        }))?,
+    )?;
     Ok(manifest)
-}
-
-fn write_ca(output: &Path, name: &str, common_name: &str) -> Result<PathBuf> {
-    let dir = output.join(name);
-    fs_err::create_dir_all(&dir)?;
-    let CertifiedKey { cert, key_pair } = make_ca(common_name)?;
-    let cert_path = dir.join("root-ca.pem");
-    fs_err::write(&cert_path, cert.pem())?;
-    fs_err::write(dir.join("root-ca-key.pem"), key_pair.serialize_pem())?;
-    Ok(cert_path
-        .strip_prefix(output)
-        .unwrap_or(&cert_path)
-        .to_path_buf())
-}
-
-fn make_ca(common_name: &str) -> Result<CertifiedKey> {
-    let key = KeyPair::generate()?;
-    let mut params = CertificateParams::new(Vec::<String>::new())?;
-    params
-        .distinguished_name
-        .push(rcgen::DnType::CommonName, common_name);
-    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    let cert = params.self_signed(&key)?;
-    Ok(CertifiedKey {
-        cert,
-        key_pair: key,
-    })
 }
 
 #[cfg(test)]

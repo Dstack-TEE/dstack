@@ -13,7 +13,7 @@ use p256::pkcs8::DecodePrivateKey;
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, CertificateRevocationListParams,
     CertifiedKey, CustomExtension, DnType, ExtendedKeyUsagePurpose, IsCa, KeyIdMethod, KeyPair,
-    KeyUsagePurpose, SerialNumber, PKCS_ECDSA_P256_SHA256,
+    KeyUsagePurpose, SerialNumber,
 };
 use scale::Encode;
 use serde_json::json;
@@ -43,15 +43,34 @@ pub struct TdxEvidence {
 
 impl TdxGenerator {
     pub fn new() -> Result<Self> {
+        Self::from_seed(rand::random())
+    }
+
+    pub fn from_seed(seed: [u8; 32]) -> Result<Self> {
         let CertifiedKey {
             cert: root,
             key_pair: root_key,
-        } = make_root()?;
-        let (pck, pck_key) = make_leaf("Mock Intel SGX PCK Certificate", &root, &root_key, true)?;
-        let (tcb_signer, tcb_signer_key) =
-            make_leaf("Mock Intel SGX TCB Signing", &root, &root_key, false)?;
+        } = make_root(&seed)?;
+        let (pck, pck_key) = make_leaf(
+            "Mock Intel SGX PCK Certificate",
+            "tdx-pck",
+            &seed,
+            &root,
+            &root_key,
+            true,
+        )?;
+        let (tcb_signer, tcb_signer_key) = make_leaf(
+            "Mock Intel SGX TCB Signing",
+            "tdx-tcb",
+            &seed,
+            &root,
+            &root_key,
+            false,
+        )?;
         let (qe_signer, qe_signer_key) = make_leaf(
             "Mock Intel SGX QE Identity Signing",
+            "tdx-qe",
+            &seed,
             &root,
             &root_key,
             false,
@@ -233,8 +252,8 @@ impl TdxGenerator {
     }
 }
 
-fn make_root() -> Result<CertifiedKey> {
-    let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
+fn make_root(seed: &[u8; 32]) -> Result<CertifiedKey> {
+    let key_pair = crate::p256_key(seed, "tdx-root")?;
     let mut params = cert_params("Mock Intel SGX Root CA")?;
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     params.key_usages.extend([
@@ -248,11 +267,13 @@ fn make_root() -> Result<CertifiedKey> {
 
 fn make_leaf(
     name: &str,
+    label: &str,
+    seed: &[u8; 32],
     root: &Certificate,
     root_key: &KeyPair,
     pck: bool,
 ) -> Result<(Certificate, KeyPair)> {
-    let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
+    let key = crate::p256_key(seed, label)?;
     let mut params = cert_params(name)?;
     params.key_usages.push(KeyUsagePurpose::DigitalSignature);
     params

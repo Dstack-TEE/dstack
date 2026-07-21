@@ -10,7 +10,7 @@ use p384::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
 use p384::pkcs8::DecodePrivateKey;
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, CertifiedKey, DnType, IsCa, KeyPair,
-    KeyUsagePurpose, PKCS_ECDSA_P384_SHA384,
+    KeyUsagePurpose,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha384};
@@ -40,11 +40,15 @@ struct Document {
 
 impl NsmGenerator {
     pub fn new() -> Result<Self> {
+        Self::from_seed(rand::random())
+    }
+
+    pub fn from_seed(seed: [u8; 32]) -> Result<Self> {
         let CertifiedKey {
             cert: root,
             key_pair: root_key,
-        } = make_root()?;
-        let leaf_key = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384)?;
+        } = make_root(&seed)?;
+        let leaf_key = crate::p384_key(&seed, "nsm-leaf")?;
         let mut params = CertificateParams::new(Vec::<String>::new())?;
         params
             .distinguished_name
@@ -119,8 +123,8 @@ impl NsmGenerator {
     }
 }
 
-fn make_root() -> Result<CertifiedKey> {
-    let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384)?;
+fn make_root(seed: &[u8; 32]) -> Result<CertifiedKey> {
+    let key_pair = crate::p384_key(seed, "nsm-root")?;
     let mut params = CertificateParams::new(Vec::<String>::new())?;
     params
         .distinguished_name

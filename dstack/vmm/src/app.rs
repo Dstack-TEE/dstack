@@ -1269,6 +1269,7 @@ pub(crate) fn make_sys_config(
         "kms_urls": kms_urls,
         "gateway_urls": gateway_urls,
         "pccs_url": cfg.cvm.pccs_url,
+        "tee_simulator": cfg.cvm.tee_simulator,
         "nvidia_attestation_proxy_url": cfg.cvm.nvidia_attestation_proxy_url,
         "docker_registry": cfg.cvm.docker_registry,
         "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
