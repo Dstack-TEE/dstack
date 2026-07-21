@@ -10,7 +10,9 @@
 //! mounts at a path.
 //!
 //! The build needs no docker daemon and no TEE, and it's reproducible: the same
-//! inputs always give the same `verity_root`. So anyone can recompute the root
+//! inputs always give the same `verity_root`. The first partition contains a
+//! generic `DSTACK_VOLUME` envelope, followed by data and verity partitions.
+//! So anyone can recompute the root
 //! and check it against `app-compose.json`, without trusting the builder. See
 //! docs/verity-volumes.md.
 

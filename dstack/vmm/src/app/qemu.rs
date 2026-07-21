@@ -24,9 +24,7 @@ use super::{
     image::Image,
     mr_config::{snp_host_data, tdx_mr_config_id},
     network::{mac_address_for_vm_index, resolved_networks, validate_resolved_networks},
-    pci_numa_node, round_up,
-    volume::verity_serial_hint,
-    GpuConfig, VmWorkDir,
+    pci_numa_node, round_up, GpuConfig, VmWorkDir,
 };
 use anyhow::{bail, Context, Result};
 use bon::Builder;
@@ -179,7 +177,6 @@ fn virtio_pci_device(device: &str, snp: bool) -> String {
 struct PreparedVolume {
     source: String,
     read_only: bool,
-    serial: Option<String>,
 }
 
 struct PreparedQemuLaunch {
@@ -218,9 +215,6 @@ impl PreparedQemuLaunch {
             .map(|volume| PreparedVolume {
                 source: volume.source.clone(),
                 read_only: volume.read_only,
-                // File inspection belongs to launch preparation. Keep the
-                // command builder host-I/O-free so it remains deterministic.
-                serial: verity_serial_hint(Path::new(&volume.source)),
             })
             .collect();
 
@@ -561,12 +555,7 @@ impl QemuCommandBuilder<'_> {
                 drive.push_str(",readonly=on");
             }
 
-            // The serial is only a lookup hint. The guest still verifies the
-            // complete dm-verity root before using the volume.
-            let mut device = format!("virtio-blk-pci,drive={id}");
-            if let Some(serial) = &volume.serial {
-                device.push_str(&format!(",serial={serial}"));
-            }
+            let device = format!("virtio-blk-pci,drive={id}");
             command
                 .arg("-drive")
                 .arg(drive)
@@ -1098,7 +1087,6 @@ mod tests {
             volumes: vec![PreparedVolume {
                 source: "/does-not-exist/volume.img".into(),
                 read_only: true,
-                serial: Some("0123456789abcdef0123".into()),
             }],
             hugepage_numa_nodes: None,
             gpu_numa_nodes: HashMap::new(),
@@ -1141,7 +1129,7 @@ mod tests {
         assert!(process
             .args
             .iter()
-            .any(|arg| { arg == "virtio-blk-pci,drive=vol0,serial=0123456789abcdef0123" }));
+            .any(|arg| { arg == "virtio-blk-pci,drive=vol0" }));
         let volume_position = process
             .args
             .iter()

@@ -4,10 +4,11 @@
 
 //! Pack a directory into a reproducible, verity-protected disk image.
 //!
-//! The output is a raw disk with two deterministic GPT partitions:
+//! The output is a raw disk with three deterministic GPT partitions:
 //!
-//!   1. the filesystem image
-//!   2. the dm-verity superblock and hash tree
+//!   1. a generic `DSTACK_VOLUME` metadata block
+//!   2. the filesystem image
+//!   3. the dm-verity superblock and hash tree
 //!
 //! Keeping the verity data and hash devices in separate partitions means the
 //! guest never has to inspect filesystem metadata to find the hash tree. The
@@ -35,6 +36,10 @@ const PARTITION_ALIGNMENT_SECTORS: u64 = 2048;
 // still reserve enough trailing sectors in the raw image for the backup array
 // (128 entries * 128 bytes) plus the backup header.
 const GPT_ENTRY_SECTORS: u64 = 32;
+const VOLUME_HEADER_SIZE: usize = 4096;
+const VOLUME_MAGIC: &[u8; 16] = b"DSTACK_VOLUME\0\0\0";
+const VOLUME_FORMAT_VERSION: u16 = 1;
+const VOLUME_KIND_VERITY: u32 = 1;
 
 #[derive(Clone, Copy)]
 pub enum Compression {
@@ -161,8 +166,8 @@ fn seal_data_image(
     let verity_root =
         parse_root_hash(&out).context("could not find the root hash in veritysetup output")?;
 
-    // Wrap the two blobs in a deterministic GPT disk image:
-    //    p1 = data filesystem, p2 = verity superblock + hash tree.
+    // Wrap the two blobs in a deterministic GPT disk image. Partition 1 is the
+    // generic volume envelope, partition 2 is data, and partition 3 is verity.
     build_partitioned_image(data_path, data_size, &hash_path, output, &verity_root)?;
 
     Ok(BuiltVolume {
@@ -233,6 +238,7 @@ struct Partition {
 
 struct GptLayout {
     total_lbas: u64,
+    metadata: Partition,
     data: Partition,
     hash: Partition,
 }
@@ -245,7 +251,9 @@ impl GptLayout {
         let data_sectors = data_size.div_ceil(SECTOR);
         let hash_sectors = hash_size.div_ceil(SECTOR);
 
-        let data_first = PARTITION_ALIGNMENT_SECTORS;
+        let metadata_first = PARTITION_ALIGNMENT_SECTORS;
+        let metadata_last = metadata_first + VOLUME_HEADER_SIZE as u64 / SECTOR - 1;
+        let data_first = align_up(metadata_last + 1, PARTITION_ALIGNMENT_SECTORS);
         let data_last = data_first + data_sectors - 1;
         let hash_first = align_up(data_last + 1, PARTITION_ALIGNMENT_SECTORS);
         let hash_last = hash_first + hash_sectors - 1;
@@ -255,6 +263,10 @@ impl GptLayout {
         let total_lbas = align_up(min_lbas, PARTITION_ALIGNMENT_SECTORS);
         Ok(Self {
             total_lbas,
+            metadata: Partition {
+                first_lba: metadata_first,
+                last_lba: metadata_last,
+            },
             data: Partition {
                 first_lba: data_first,
                 last_lba: data_last,
@@ -298,6 +310,7 @@ fn build_partitioned_image(
 
     out = write_gpt(out, &layout, root_hash)?;
 
+    write_volume_header(&mut out, layout.metadata.first_lba * SECTOR, root_hash)?;
     copy_into(data_path, &mut out, layout.data.first_lba * SECTOR)?;
     copy_into(hash_path, &mut out, layout.hash.first_lba * SECTOR)?;
     Ok(())
@@ -321,6 +334,17 @@ fn write_gpt(mut out: fs::File, layout: &GptLayout, root_hash: &str) -> Result<f
         1,
         gpt::partition::Partition {
             part_type_guid: gpt::partition_types::LINUX_FS,
+            part_guid: uuid_from_material(&[b"dstack-volume-metadata", root_hash.as_bytes()]),
+            first_lba: layout.metadata.first_lba,
+            last_lba: layout.metadata.last_lba,
+            flags: 0,
+            name: "dstack-volume".to_string(),
+        },
+    );
+    parts.insert(
+        2,
+        gpt::partition::Partition {
+            part_type_guid: gpt::partition_types::LINUX_FS,
             part_guid: uuid_from_material(&[b"dstack-verity-data", root_hash.as_bytes()]),
             first_lba: layout.data.first_lba,
             last_lba: layout.data.last_lba,
@@ -329,7 +353,7 @@ fn write_gpt(mut out: fs::File, layout: &GptLayout, root_hash: &str) -> Result<f
         },
     );
     parts.insert(
-        2,
+        3,
         gpt::partition::Partition {
             part_type_guid: gpt::partition_types::LINUX_FS,
             part_guid: uuid_from_material(&[b"dstack-verity-hash", root_hash.as_bytes()]),
@@ -342,6 +366,32 @@ fn write_gpt(mut out: fs::File, layout: &GptLayout, root_hash: &str) -> Result<f
     disk.update_partitions(parts)
         .context("installing GPT partitions")?;
     disk.write().context("writing GPT")
+}
+
+fn write_volume_header(out: &mut fs::File, offset: u64, root_hash: &str) -> Result<()> {
+    use std::io::{Seek, SeekFrom, Write};
+
+    let root = hex::decode(root_hash).context("decoding verity root hash")?;
+    if root.len() != 32 {
+        bail!("verity root must be a 32-byte SHA-256 digest");
+    }
+
+    // Common envelope. All integer fields are little-endian. The remainder of
+    // the 4 KiB metadata partition is reserved and must stay zero.
+    let mut header = [0u8; VOLUME_HEADER_SIZE];
+    header[..16].copy_from_slice(VOLUME_MAGIC);
+    header[16..18].copy_from_slice(&VOLUME_FORMAT_VERSION.to_le_bytes());
+    header[18..20].copy_from_slice(&(VOLUME_HEADER_SIZE as u16).to_le_bytes());
+    header[20..24].copy_from_slice(&VOLUME_KIND_VERITY.to_le_bytes());
+    header[24..28].copy_from_slice(&1u32.to_le_bytes()); // verity kind version
+    header[28..32].copy_from_slice(&0u32.to_le_bytes()); // flags: partitioned
+    header[32..64].copy_from_slice(&root);
+    header[64..68].copy_from_slice(&4096u32.to_le_bytes());
+    header[68..72].copy_from_slice(&4096u32.to_le_bytes());
+
+    out.seek(SeekFrom::Start(offset))?;
+    out.write_all(&header)?;
+    Ok(())
 }
 
 fn copy_into(src: &Path, out: &mut fs::File, offset: u64) -> Result<()> {
@@ -429,12 +479,14 @@ mod tests {
     }
 
     #[test]
-    fn gpt_layout_uses_two_aligned_partitions() {
+    fn gpt_layout_uses_three_aligned_partitions() {
         let layout = GptLayout::new(4096, 8192).unwrap();
-        assert_eq!(layout.data.first_lba, PARTITION_ALIGNMENT_SECTORS);
-        assert_eq!(layout.data.last_lba, PARTITION_ALIGNMENT_SECTORS + 7);
-        assert_eq!(layout.hash.first_lba, PARTITION_ALIGNMENT_SECTORS * 2);
-        assert_eq!(layout.hash.last_lba, PARTITION_ALIGNMENT_SECTORS * 2 + 15);
+        assert_eq!(layout.metadata.first_lba, PARTITION_ALIGNMENT_SECTORS);
+        assert_eq!(layout.metadata.last_lba, PARTITION_ALIGNMENT_SECTORS + 7);
+        assert_eq!(layout.data.first_lba, PARTITION_ALIGNMENT_SECTORS * 2);
+        assert_eq!(layout.data.last_lba, PARTITION_ALIGNMENT_SECTORS * 2 + 7);
+        assert_eq!(layout.hash.first_lba, PARTITION_ALIGNMENT_SECTORS * 3);
+        assert_eq!(layout.hash.last_lba, PARTITION_ALIGNMENT_SECTORS * 3 + 15);
         assert!(layout.total_lbas - 1 - GPT_ENTRY_SECTORS > layout.hash.last_lba);
     }
 
@@ -451,7 +503,7 @@ mod tests {
         fs::File::create(&data_path)?.write_all(&data)?;
         fs::File::create(&hash_path)?.write_all(&hash)?;
 
-        let root_hash = "abc123";
+        let root_hash = "abababababababababababababababababababababababababababababababab";
         build_partitioned_image(
             &data_path,
             data.len() as u64,
@@ -468,28 +520,36 @@ mod tests {
             uuid_from_material(&[b"dstack-verity-disk", root_hash.as_bytes()])
         );
 
-        let p1 = disk.partitions().get(&1).unwrap();
-        let p2 = disk.partitions().get(&2).unwrap();
-        assert_eq!(p1.name, "dstack-data");
-        assert_eq!(p2.name, "dstack-verity");
+        let metadata = disk.partitions().get(&1).unwrap();
+        let data_partition = disk.partitions().get(&2).unwrap();
+        let hash_partition = disk.partitions().get(&3).unwrap();
+        assert_eq!(metadata.name, "dstack-volume");
+        assert_eq!(data_partition.name, "dstack-data");
+        assert_eq!(hash_partition.name, "dstack-verity");
         assert_eq!(
-            p1.part_guid,
+            data_partition.part_guid,
             uuid_from_material(&[b"dstack-verity-data", root_hash.as_bytes()])
         );
         assert_eq!(
-            p2.part_guid,
+            hash_partition.part_guid,
             uuid_from_material(&[b"dstack-verity-hash", root_hash.as_bytes()])
         );
-        assert_eq!(p1.first_lba, PARTITION_ALIGNMENT_SECTORS);
-        assert_eq!(p2.first_lba, PARTITION_ALIGNMENT_SECTORS * 2);
+        assert_eq!(metadata.first_lba, PARTITION_ALIGNMENT_SECTORS);
+        assert_eq!(data_partition.first_lba, PARTITION_ALIGNMENT_SECTORS * 2);
+        assert_eq!(hash_partition.first_lba, PARTITION_ALIGNMENT_SECTORS * 3);
 
         let mut img = fs::File::open(&image_path)?;
+        let mut header = [0u8; VOLUME_HEADER_SIZE];
+        img.seek(SeekFrom::Start(metadata.first_lba * SECTOR))?;
+        img.read_exact(&mut header)?;
+        assert_eq!(&header[..16], VOLUME_MAGIC);
+        assert_eq!(&header[32..64], &hex::decode(root_hash)?);
         let mut buf = vec![0; data.len()];
-        img.seek(SeekFrom::Start(p1.first_lba * SECTOR))?;
+        img.seek(SeekFrom::Start(data_partition.first_lba * SECTOR))?;
         img.read_exact(&mut buf)?;
         assert_eq!(buf, data);
         let mut buf = vec![0; hash.len()];
-        img.seek(SeekFrom::Start(p2.first_lba * SECTOR))?;
+        img.seek(SeekFrom::Start(hash_partition.first_lba * SECTOR))?;
         img.read_exact(&mut buf)?;
         assert_eq!(buf, hash);
 
