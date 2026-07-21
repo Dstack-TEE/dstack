@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "dstack-volumes"
+name = "dstack-volume"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

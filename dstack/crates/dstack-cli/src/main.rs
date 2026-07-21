@@ -154,7 +154,7 @@ async fn main() -> Result<()> {
         .without_time()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("warn,dstack_volumes=info")),
+                .unwrap_or_else(|_| EnvFilter::new("warn,dstack_volume=info")),
         )
         .init();
     let cli = Cli::parse();
@@ -268,12 +268,12 @@ async fn cmd_verity(
     json: bool,
 ) -> Result<()> {
     let compress = match compress {
-        "none" => dstack_volumes::Compression::None,
-        "zstd" => dstack_volumes::Compression::Zstd,
-        "gzip" => dstack_volumes::Compression::Gzip,
+        "none" => dstack_volume::Compression::None,
+        "zstd" => dstack_volume::Compression::Zstd,
+        "gzip" => dstack_volume::Compression::Gzip,
         other => bail!("unknown --compress '{other}' (use none|zstd|gzip)"),
     };
-    let result = dstack_volumes::verity(dstack_volumes::VerityOptions {
+    let result = dstack_volume::verity(dstack_volume::VerityOptions {
         images: images.to_vec(),
         dir: dir.map(std::path::PathBuf::from),
         fs_image: fs_image.map(std::path::PathBuf::from),

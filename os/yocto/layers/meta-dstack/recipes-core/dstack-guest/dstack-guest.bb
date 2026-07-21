@@ -32,7 +32,7 @@ DSTACK_SERVICES = "dstack-guest-agent.service dstack-guest-agent.socket dstack-p
 SYSTEMD_PACKAGES = "${@bb.utils.contains('DISTRO_FEATURES','systemd','${PN}','',d)}"
 SYSTEMD_SERVICE:${PN} = "${@bb.utils.contains('DISTRO_FEATURES','systemd','${DSTACK_SERVICES}','',d)}"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
-EXTRA_CARGO_FLAGS = "-p dstack-guest-agent -p dstack-util -p dstack-volumes"
+EXTRA_CARGO_FLAGS = "-p dstack-guest-agent -p dstack-util -p dstack-volume"
 
 inherit cargo_bin
 

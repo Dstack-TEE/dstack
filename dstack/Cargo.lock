@@ -1839,7 +1839,7 @@ dependencies = [
  "anyhow",
  "clap",
  "dstack-cli-core",
- "dstack-volumes",
+ "dstack-volume",
  "fs-err",
  "serde_json",
  "tokio",
@@ -2338,7 +2338,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dstack-volumes"
+name = "dstack-volume"
 version = "0.6.0"
 dependencies = [
  "anyhow",

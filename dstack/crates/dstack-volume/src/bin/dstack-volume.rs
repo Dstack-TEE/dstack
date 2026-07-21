@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use cmd_lib::{run_cmd, run_fun};
 use dstack_types::{AppCompose, VerityVolume as RequestedVolume, VolumeTarget};
-use dstack_volumes::volume_format::{
+use dstack_volume::volume_format::{
     DstackVolumeHeader, DSTACK_VOLUME_HEADER_SIZE, DSTACK_VOLUME_KIND_VERITY, DSTACK_VOLUME_MAGIC,
 };
 use fs_err::{self as fs, File};
