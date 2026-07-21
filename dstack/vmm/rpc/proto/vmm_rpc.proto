@@ -118,17 +118,7 @@ message VmConfiguration {
   optional NetworkingConfig networking = 18;
   // Per-VM networking overrides. If set, wins over singular networking.
   repeated NetworkingConfig networks = 19;
-  // Extra volumes to attach (e.g. pre-baked verity volumes). The host only
-  // supplies bytes; the guest verifies content against the measured verity_root.
-  repeated VmVolume volumes = 20;
-}
-
-// An extra disk attached to the VM, such as a pre-baked verity volume.
-message VmVolume {
-  // Volume file name, resolved against the vmm's configured cvm.volumes_dir.
-  string source = 1;
-  // Attach the disk read-only.
-  bool read_only = 2;
+  reserved 20;
 }
 
 // Per-VM networking configuration.

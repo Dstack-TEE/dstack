@@ -65,6 +65,7 @@ mod tests {
     fn verity_volume_validates_root_and_target_during_deserialization(
     ) -> Result<(), serde_json::Error> {
         let volume: VerityVolume = serde_json::from_value(serde_json::json!({
+            "source": "models.img",
             "verity_root": "5a".repeat(32),
             "target": "/run/models"
         }))?;
@@ -76,11 +77,13 @@ mod tests {
         );
 
         assert!(serde_json::from_value::<VerityVolume>(serde_json::json!({
+            "source": "models.img",
             "verity_root": "abcd",
             "target": "/run/models"
         }))
         .is_err());
         assert!(serde_json::from_value::<VerityVolume>(serde_json::json!({
+            "source": "models.img",
             "verity_root": "5a".repeat(32),
             "target": "relative/path"
         }))

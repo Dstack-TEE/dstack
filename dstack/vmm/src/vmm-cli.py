@@ -341,26 +341,6 @@ def parse_port_mapping(port_str: str) -> Dict:
         raise argparse.ArgumentTypeError(f"Invalid port mapping format: {port_str}")
 
 
-def parse_volume(spec: str) -> Dict:
-    """Parse a volume spec "name" | "name:ro" into a dictionary.
-
-    `name` is a bare file name resolved by the VMM against cvm.volumes_dir.
-    Verity volumes are read-only (the VMM enforces it regardless).
-    """
-    parts = spec.split(":")
-    name = parts[0]
-    mode = parts[1] if len(parts) > 1 else "ro"
-    if len(parts) > 2 or mode != "ro":
-        raise argparse.ArgumentTypeError(
-            f'volume spec must be "name" or "name:ro" (verity volumes are read-only), got {spec!r}'
-        )
-    if not name or "/" in name or ".." in name:
-        raise argparse.ArgumentTypeError(
-            f"volume name must be a bare file name (no '/' or '..'), got {name!r}"
-        )
-    return {"source": name, "read_only": True}
-
-
 def read_utf8(filepath: str) -> str:
     """Read a file and return its contents as a UTF-8 string."""
     with open(filepath, "rb") as f:
@@ -912,7 +892,6 @@ class VmmCLI:
             "app_id": args.app_id,
             "user_config": user_config,
             "ports": [parse_port_mapping(port) for port in args.port or []],
-            "volumes": [parse_volume(v) for v in args.volume or []],
             "hugepages": args.hugepages,
             "pin_numa": args.pin_numa,
             "stopped": args.stopped,
@@ -1775,12 +1754,6 @@ def main():
         action="append",
         type=str,
         help="Port mapping in format: protocol[:address]:from:to",
-    )
-    deploy_parser.add_argument(
-        "--volume",
-        action="append",
-        type=str,
-        help='Attach a read-only volume by name from cvm.volumes_dir: "name" | "name:ro"',
     )
     deploy_parser.add_argument(
         "--gpu",

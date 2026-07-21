@@ -169,15 +169,6 @@ impl VmInfo {
                     no_tee,
                     networking: configured_networking,
                     networks: configured_networks,
-                    volumes: self
-                        .manifest
-                        .volumes
-                        .iter()
-                        .map(|volume| pb::VmVolume {
-                            source: volume.source.clone(),
-                            read_only: volume.read_only,
-                        })
-                        .collect(),
                 })
             },
             app_url: self

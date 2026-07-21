@@ -130,6 +130,8 @@ pub struct AppCompose {
 /// A pre-baked, read-only dm-verity volume attached to the CVM.
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct VerityVolume {
+    /// Bare image file name resolved by the VMM under `cvm.volumes_dir`.
+    pub source: String,
     /// dm-verity root hash (hex): the volume's content identity and integrity
     /// check. The guest matches attached devices against it.
     #[serde(with = "hex_bytes")]

@@ -184,7 +184,9 @@ pub fn create_manifest_from_vm_config(
         Some(gpus) => resolve_gpus_with_config(gpus, cvm_config)?,
         None => GpuConfig::default(),
     };
-    let volumes = resolve_volumes(&request.volumes, cvm_config)?;
+    let app_compose: AppCompose = serde_json::from_str(&request.compose_file)
+        .context("invalid app-compose in VM configuration")?;
+    let volumes = resolve_volumes(&app_compose.verity_volumes, cvm_config)?;
 
     Ok(Manifest {
         id,
@@ -211,7 +213,7 @@ pub fn create_manifest_from_vm_config(
 /// bare file name under that directory; the host attaches the bytes, and the
 /// guest verifies content against the measured `verity_root`.
 fn resolve_volumes(
-    reqs: &[rpc::VmVolume],
+    reqs: &[dstack_types::VerityVolume],
     cvm_config: &crate::config::CvmConfig,
 ) -> Result<Vec<crate::app::VmVolume>> {
     if reqs.is_empty() {
@@ -903,7 +905,8 @@ mod tests {
         VmConfiguration {
             name: "vm-test".to_string(),
             image: "dstack-test".to_string(),
-            compose_file: "{}".to_string(),
+            compose_file: r#"{"manifest_version":2,"name":"test","runner":"docker-compose"}"#
+                .to_string(),
             vcpu: 1,
             memory: 1024,
             disk_size: 10,
@@ -920,7 +923,6 @@ mod tests {
             no_tee: false,
             networking: None,
             networks: vec![],
-            volumes: vec![],
         }
     }
 
@@ -1014,9 +1016,10 @@ mod tests {
         cvm_config.volumes_dir = tmp.path().to_string_lossy().into_owned();
 
         let volumes = resolve_volumes(
-            &[rpc::VmVolume {
+            &[dstack_types::VerityVolume {
                 source: "volume.img".into(),
-                read_only: false,
+                verity_root: [0; 32],
+                target: "/run/volume".into(),
             }],
             &cvm_config,
         )?;

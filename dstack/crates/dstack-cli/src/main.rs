@@ -290,9 +290,9 @@ async fn cmd_verity(
     Ok(())
 }
 
-/// A parsed `--volume` spec: the disk to attach plus its measured verity entry.
+/// A parsed `--volume` spec. All fields become part of measured app-compose.
 struct VolumeSpec {
-    volume: rpc::VmVolume,
+    source: String,
     verity_root: String,
     target: String,
 }
@@ -327,12 +327,7 @@ fn parse_volume(spec: &str) -> Result<VolumeSpec> {
         bail!("target '{target}' must be an absolute path");
     }
     Ok(VolumeSpec {
-        // verity volumes are read-only by construction; a writable one would let a
-        // guest corrupt the shared backing file (the vmm also forces this).
-        volume: rpc::VmVolume {
-            source: name.to_string(),
-            read_only: true,
-        },
+        source: name.to_string(),
         verity_root: root.to_string(),
         target: target.to_string(),
     })
@@ -430,12 +425,11 @@ async fn cmd_deploy(
 
     // each --volume declares a measured verity_volumes entry, so the built
     // app-compose (and thus app_id) binds the attested roots.
-    let verity_volumes: Vec<(String, String)> = parsed_volumes
+    let verity_volumes: Vec<(String, String, String)> = parsed_volumes
         .iter()
-        .map(|v| (v.verity_root.clone(), v.target.clone()))
+        .map(|v| (v.source.clone(), v.verity_root.clone(), v.target.clone()))
         .collect();
     let app_compose = compose::build_app_compose(name, &yaml, !no_kms, &verity_volumes);
-    let volumes: Vec<_> = parsed_volumes.into_iter().map(|v| v.volume).collect();
 
     let mut cfg = rpc::VmConfiguration {
         name: name.to_string(),
@@ -445,7 +439,6 @@ async fn cmd_deploy(
         memory,
         disk_size: disk,
         ports: port_maps.clone(),
-        volumes,
         ..Default::default()
     };
 
@@ -675,8 +668,7 @@ mod tests {
     fn parses_volume_specs() {
         let root = "a".repeat(64);
         let data = parse_volume(&format!("weights.img:{root}:/models/llama")).unwrap();
-        assert_eq!(data.volume.source, "weights.img");
-        assert!(data.volume.read_only);
+        assert_eq!(data.source, "weights.img");
         assert_eq!(data.verity_root, root);
         assert_eq!(data.target, "/models/llama");
 

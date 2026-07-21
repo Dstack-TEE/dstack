@@ -47,6 +47,7 @@ This adds the following measured entry to `app-compose.json`:
 {
   "verity_volumes": [
     {
+      "source": "models.img",
       "verity_root": "a1b2c3d4...",
       "target": "/run/models"
     }
@@ -59,7 +60,7 @@ The target must be an absolute path on a writable guest filesystem, such as
 
 ## Guest activation
 
-Before the application starts, `dstack-volume`:
+Before the application starts, `dstack-volume mount-all app-compose.json`:
 
 1. Scans `/sys/class/block` for disks whose first partition, or whole disk when
    unpartitioned, starts with the `DSTACK_VOLUME` magic.
@@ -71,6 +72,11 @@ Before the application starts, `dstack-volume`:
 A required volume that is missing, malformed, or fails verification stops guest
 preparation. dm-verity continues verifying blocks lazily as the application
 reads them.
+
+For diagnostics, `dstack-volume scan` lists recognized disks and
+`dstack-volume status app-compose.json` compares requested roots with attached
+and active devices. A single entry can be activated with
+`dstack-volume mount app-compose.json INDEX`.
 
 ## Trust and limitations
 

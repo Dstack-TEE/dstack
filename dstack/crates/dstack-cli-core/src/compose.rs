@@ -13,14 +13,14 @@ use serde_json::json;
 /// `kms_enabled` selects KMS mode (deterministic, upgradeable per-app keys);
 /// gateway and local-key-provider are off for the direct-port single-node flow.
 ///
-/// `verity_volumes` is a list of `(verity_root, target)` pairs. Each becomes a
+/// `verity_volumes` is a list of `(source, verity_root, target)` tuples. Each becomes a
 /// measured `verity_volumes` entry, so the CVM only seeds content matching the
 /// attested root. Empty for a normal deploy.
 pub fn build_app_compose(
     name: &str,
     docker_compose_yaml: &str,
     kms_enabled: bool,
-    verity_volumes: &[(String, String)],
+    verity_volumes: &[(String, String, String)],
 ) -> String {
     let mut manifest = json!({
         "manifest_version": 2,
@@ -43,7 +43,7 @@ pub fn build_app_compose(
     if !verity_volumes.is_empty() {
         manifest["verity_volumes"] = json!(verity_volumes
             .iter()
-            .map(|(root, target)| json!({ "verity_root": root, "target": target }))
+            .map(|(source, root, target)| json!({ "source": source, "verity_root": root, "target": target }))
             .collect::<Vec<_>>());
     }
     // pretty-print via Value's Display (`{:#}`) — infallible, and byte-identical

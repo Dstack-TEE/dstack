@@ -41,22 +41,58 @@ struct VerityVolume {
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt().init();
-    let compose_path = std::env::args_os()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("app-compose.json"));
+    let mut args = std::env::args_os().skip(1);
+    let command = args
+        .next()
+        .context(
+            "usage: dstack-volume <mount-all [COMPOSE] | mount COMPOSE INDEX | scan | status [COMPOSE]>",
+        )?;
+    match command.to_str() {
+        Some("mount-all") => mount_all(
+            args.next()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("app-compose.json")),
+        ),
+        Some("mount") => {
+            let compose = args.next().context("mount requires COMPOSE and INDEX")?;
+            let index = args
+                .next()
+                .context("mount requires COMPOSE and INDEX")?
+                .to_str()
+                .context("INDEX is not UTF-8")?
+                .parse()
+                .context("invalid volume INDEX")?;
+            mount_one(PathBuf::from(compose), index)
+        }
+        Some("scan") => scan(),
+        Some("status") => status(
+            args.next()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("app-compose.json")),
+        ),
+        _ => bail!("unknown command {:?}", command),
+    }
+}
+
+fn read_compose(compose_path: &Path) -> Result<AppCompose> {
     // Deserialize the complete shared type before probing any untrusted disk.
     // This validates roots and targets as part of parsing the measured compose.
-    let compose: AppCompose = serde_json::from_slice(&fs::read(&compose_path)?)
-        .with_context(|| format!("parsing {}", compose_path.display()))?;
+    serde_json::from_slice(&fs::read(compose_path)?)
+        .with_context(|| format!("parsing {}", compose_path.display()))
+}
+
+fn prepare_volumes() -> Result<Vec<VerityVolume>> {
+    let _ = run_cmd!(modprobe dm-verity);
+    let _ = run_cmd!(udevadm settle --timeout=5);
+    discover_volumes()
+}
+
+fn mount_all(compose_path: PathBuf) -> Result<()> {
+    let compose = read_compose(&compose_path)?;
     if compose.verity_volumes.is_empty() {
         return Ok(());
     }
-
-    let _ = run_cmd!(modprobe dm-verity);
-    let _ = run_cmd!(udevadm settle --timeout=5);
-
-    let volumes = discover_volumes()?;
+    let volumes = prepare_volumes()?;
     info!(
         found = volumes.len(),
         requested = compose.verity_volumes.len(),
@@ -70,6 +106,53 @@ fn main() -> Result<()> {
                 requested.target.display()
             )
         })?;
+    }
+    Ok(())
+}
+
+fn mount_one(compose_path: PathBuf, index: usize) -> Result<()> {
+    let compose = read_compose(&compose_path)?;
+    let requested = compose
+        .verity_volumes
+        .get(index)
+        .with_context(|| format!("volume index {index} is out of range"))?;
+    let volumes = prepare_volumes()?;
+    activate_requested(index, requested, &volumes, &mut HashSet::new()).with_context(|| {
+        format!(
+            "failed to activate required volume {index} at {}",
+            requested.target.display()
+        )
+    })
+}
+
+fn scan() -> Result<()> {
+    for volume in prepare_volumes()? {
+        println!(
+            "{}\tdata={}\thash={}",
+            hex::encode(volume.root_hash),
+            volume.data.display(),
+            volume.hash.display()
+        );
+    }
+    Ok(())
+}
+
+fn status(compose_path: PathBuf) -> Result<()> {
+    let compose = read_compose(&compose_path)?;
+    let volumes = prepare_volumes()?;
+    for (index, requested) in compose.verity_volumes.iter().enumerate() {
+        let attached = volumes
+            .iter()
+            .any(|volume| volume.root_hash == requested.verity_root);
+        let mapper_name = format!("dstack-verity{index}");
+        let active = Path::new("/dev/mapper").join(&mapper_name).exists()
+            && mapping_root(&mapper_name)?
+                .eq_ignore_ascii_case(&hex::encode(requested.verity_root));
+        println!(
+            "{index}\troot={}\ttarget={}\tattached={attached}\tactive={active}",
+            hex::encode(requested.verity_root),
+            requested.target.display()
+        );
     }
     Ok(())
 }
