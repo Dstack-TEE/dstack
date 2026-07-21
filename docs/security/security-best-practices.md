@@ -93,6 +93,16 @@ The KMS TLS listener may keep `rpc.tls.mutual.mandatory = false` because bootstr
 
 App key release and KMS key handover still require verified caller attestation from the RA-TLS client certificate. Certificate signing verifies the CSR signature and embedded attestation before signing.
 
+## Management/admin API authentication
+
+The VMM, gateway, and KMS management surfaces must have authentication enabled in production:
+
+- VMM: set `[auth] enabled = true` with `tokens` (or `htpasswd_file`) — this guards the entire VMM HTTP/pRPC/UI surface. Never bind to a non-localhost address without it. Clients send `Authorization: Bearer <token>` or `X-Admin-Token`.
+- Gateway: set `[core.admin] admin_token` (or `htpasswd_file`) and keep `insecure_no_auth = false`. Clients send `Authorization: Bearer <token>` or `X-Admin-Token`.
+- KMS: enable `[core.admin]` with an `auth_token` (or `htpasswd_file`); the admin RPCs are served on a dedicated listener and clients send `Authorization: Bearer <token>` or `X-Admin-Token`. Enabled with no credential denies all admin RPCs (fail-closed).
+
+All three share the same HTTP authenticator: bcrypt-only htpasswd (via `htpasswd -B`), constant-time token comparison, and fail-closed behavior.
+
 ## Keep private material owner-only
 
 Secret-bearing files should be owner-only (`0600`) wherever possible, including app keys, decrypted env files, KMS root keys, gateway WireGuard/TLS keys, and ACME credentials. Preserve restrictive permissions when copying volumes, backing up `/etc/kms/certs`, or moving gateway and certbot state between hosts. Public issue [#606](https://github.com/Dstack-TEE/dstack/issues/606) tracks the remaining low-cost hardening work in dstack-managed file writes.

@@ -129,6 +129,7 @@ Verify you have a running CVM:
 
 ```bash
 cd ~/dstack/dstack/vmm
+export DSTACK_VMM_AUTH_USER=admin
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 ./src/vmm-cli.py --url http://127.0.0.1:9080 lsvm
 ```
@@ -141,6 +142,7 @@ The VMM provides a `/guest/Info` endpoint that proxies into the CVM and retrieve
 
 ```bash
 cd ~/dstack/dstack/vmm
+export DSTACK_VMM_AUTH_USER=admin
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 
 # Get the VM UUID for hello-world
@@ -384,6 +386,7 @@ Compare the CVM's actual measurements against your expected values:
 # verify-measurements.sh
 
 cd ~/dstack/dstack/vmm
+export DSTACK_VMM_AUTH_USER=admin
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 
 # Get VM UUID
@@ -576,6 +579,7 @@ echo "Image:    $IMAGE_VERSION"
 echo ""
 
 cd ~/dstack/dstack/vmm
+export DSTACK_VMM_AUTH_USER=admin
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 
 # --- Step 1: Get VM UUID ---

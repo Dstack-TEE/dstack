@@ -29,16 +29,16 @@ const DAEMON_BINARIES: &[(&str, &str)] = &[
 ];
 
 pub(crate) async fn cmd_install(mut o: InstallOpts) -> Result<()> {
-    // --expose is not safe yet: the rendered vmm.toml binds the VM-control
-    // plane with neither TLS nor an auth token (the management RPCs are not
-    // behind an auth guard), so exposing it would hand deploy/destroy to anyone
-    // who can reach the IP. Refuse until the TLS+token transport lands; the
-    // supported path is localhost + an SSH tunnel.
+    // --expose is not safe yet: the rendered vmm.toml now gates the management
+    // API behind a generated token, but the transport is still plain HTTP, so
+    // exposing it would send that bearer token in cleartext to anyone on-path.
+    // Refuse until the TLS transport lands; the supported path is localhost + an
+    // SSH tunnel.
     if let Some(ip) = &o.expose {
         bail!(
             "--expose {ip} is not yet safe: it would bind the VM-control plane on \
-             {ip}:{port} with no TLS and no auth. reach the dashboard over an SSH \
-             tunnel instead: ssh -L {port}:127.0.0.1:{port} <host>",
+             {ip}:{port} over plain HTTP, leaking the API token in cleartext. reach \
+             the dashboard over an SSH tunnel instead: ssh -L {port}:127.0.0.1:{port} <host>",
             port = o.dashboard_port
         );
     }
@@ -81,10 +81,24 @@ pub(crate) async fn cmd_install(mut o: InstallOpts) -> Result<()> {
     let client_url = format!("http://{bind}:{}", o.dashboard_port);
     let kms_port = resolve_kms_port(&o, &st)?;
 
+    // management-API token: reuse the one a prior install wrote (so re-runs and
+    // an already-running VMM keep matching credentials), else mint a fresh one
+    // below once the config dir exists. The existing token authenticates the
+    // preflight probe against an already-running, auth-enabled VMM.
+    let token_path = layout.config_dir.join("vmm-auth-token");
+    let existing_token = read_token_file(&token_path);
+
     // 4. preflight - fail BEFORE any side effect (image download, key provider,
     //    dirs, units), so a CID/port clash can't half-install the host.
     let cid_start = pick_cid_start(o.cid_start, &host::occupied_cid_ranges())?;
-    let kms_owned = kms_port_owned(&st, &client_url, kms_port, o.no_kms).await;
+    let kms_owned = kms_port_owned(
+        &st,
+        &client_url,
+        existing_token.as_deref(),
+        kms_port,
+        o.no_kms,
+    )
+    .await;
     let port_plan = tcp_port_plan(&o, &st, platform, &bind, &client_url, kms_port, kms_owned);
     preflight_ports(&port_plan)?;
 
@@ -117,6 +131,15 @@ pub(crate) async fn cmd_install(mut o: InstallOpts) -> Result<()> {
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     }
 
+    // ensure a management-API token exists on disk (0600) before rendering the
+    // config that references it. The local `dstack` CLI reads this path from the
+    // install state, so it authenticates automatically.
+    let vmm_token = match existing_token {
+        Some(t) => t,
+        None => generate_vmm_token()?,
+    };
+    write_token_file(&token_path, &vmm_token)?;
+
     // 8. resolve the key provider - run our own unless told to use an existing
     //    one (TDX only; SNP has no SGX local provider).
     let (kp_addr, kp_port, kp_own_project) =
@@ -144,6 +167,8 @@ pub(crate) async fn cmd_install(mut o: InstallOpts) -> Result<()> {
         key_provider_port: kp_port as u32,
         kms_urls: kms_urls.clone(),
         platform,
+        auth_enabled: true,
+        auth_token: vmm_token.clone(),
         ..Default::default()
     });
     // the KMS-in-CVM reaches the host auth webhook at 10.0.2.2:<auth_port>.
@@ -191,6 +216,7 @@ pub(crate) async fn cmd_install(mut o: InstallOpts) -> Result<()> {
     st.run_dir = layout.run_dir.display().to_string();
     st.allowlist_path = allow_path.display().to_string();
     st.client_url = client_url.clone();
+    st.client_token_path = token_path.display().to_string();
     st.auth_port = o.auth_port;
     st.platform = platform.vmm_str().to_string();
     st.image = o.image.clone();
@@ -215,7 +241,7 @@ pub(crate) async fn cmd_install(mut o: InstallOpts) -> Result<()> {
     st.auth_unit = auth_unit.clone();
 
     // 11. VMM systemd unit (idempotent).
-    if vmm_reachable(&client_url).await {
+    if vmm_reachable(&client_url, Some(&vmm_token)).await {
         println!("  [ok] VMM already serving at {client_url}");
     } else {
         install_unit(
@@ -225,7 +251,7 @@ pub(crate) async fn cmd_install(mut o: InstallOpts) -> Result<()> {
         .context("installing the VMM unit")?;
         println!("  [ok] started {vmm_unit}.service");
         print!("  [..] waiting for VMM at {client_url} ");
-        if wait_ready(&client_url, Duration::from_secs(25)).await {
+        if wait_ready(&client_url, Some(&vmm_token), Duration::from_secs(25)).await {
             println!("=> ready");
         } else {
             println!("=> not ready within timeout (journalctl -u {vmm_unit})");
@@ -241,7 +267,7 @@ pub(crate) async fn cmd_install(mut o: InstallOpts) -> Result<()> {
     if o.no_kms {
         println!("  (--no-kms: skipping KMS deploy)");
     } else {
-        let vmm = Vmm::connect(&client_url)?;
+        let vmm = Vmm::connect_with_token(&client_url, Some(&vmm_token))?;
         let existing = match &st.kms_vm_id {
             Some(id) if vmm.has_vm(id).await => Some(id.clone()),
             _ => None,
@@ -1007,7 +1033,13 @@ fn tcp_port_plan(
     ports
 }
 
-async fn kms_port_owned(st: &State, client_url: &str, kms_port: u16, no_kms: bool) -> bool {
+async fn kms_port_owned(
+    st: &State,
+    client_url: &str,
+    token: Option<&str>,
+    kms_port: u16,
+    no_kms: bool,
+) -> bool {
     if no_kms
         || st.client_url != client_url
         || state_kms_port(st) != Some(kms_port)
@@ -1019,7 +1051,7 @@ async fn kms_port_owned(st: &State, client_url: &str, kms_port: u16, no_kms: boo
     let Some(kms_vm_id) = &st.kms_vm_id else {
         return false;
     };
-    match Vmm::connect(client_url) {
+    match Vmm::connect_with_token(client_url, token) {
         Ok(vmm) => vmm.has_vm(kms_vm_id).await,
         Err(_) => false,
     }
@@ -1158,18 +1190,18 @@ fn kms_vm_boot_state(
 }
 
 /// one-shot liveness probe of the VMM.
-async fn vmm_reachable(client_url: &str) -> bool {
-    match Vmm::connect(client_url) {
+async fn vmm_reachable(client_url: &str, token: Option<&str>) -> bool {
+    match Vmm::connect_with_token(client_url, token) {
         Ok(vmm) => vmm.status().await.is_ok(),
         Err(_) => false,
     }
 }
 
 /// poll the VMM `Status` RPC until it succeeds or the deadline passes.
-async fn wait_ready(client_url: &str, timeout: Duration) -> bool {
+async fn wait_ready(client_url: &str, token: Option<&str>, timeout: Duration) -> bool {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        if let Ok(vmm) = Vmm::connect(client_url) {
+        if let Ok(vmm) = Vmm::connect_with_token(client_url, token) {
             if vmm.status().await.is_ok() {
                 return true;
             }
@@ -1179,6 +1211,30 @@ async fn wait_ready(client_url: &str, timeout: Duration) -> bool {
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
+}
+
+/// mint a 256-bit management-API token, hex-encoded, from the OS RNG.
+fn generate_vmm_token() -> Result<String> {
+    let mut buf = [0u8; 32];
+    let mut f = fs::File::open("/dev/urandom").context("opening /dev/urandom")?;
+    std::io::Read::read_exact(&mut f, &mut buf).context("reading /dev/urandom")?;
+    Ok(hex::encode(buf))
+}
+
+/// read a previously written management-API token, if the file exists and is
+/// non-empty.
+pub(crate) fn read_token_file(path: &Path) -> Option<String> {
+    let token = fs::read_to_string(path).ok()?;
+    let token = token.trim();
+    (!token.is_empty()).then(|| token.to_string())
+}
+
+/// write the management-API token atomically with owner-only (0600)
+/// permissions — it is a bearer credential, so it is created 0600 up front
+/// (never exposed with wider bits, even transiently).
+fn write_token_file(path: &Path, token: &str) -> Result<()> {
+    dstack_cli_core::fsutil::write_atomic_mode(path, token, 0o600)
+        .with_context(|| format!("writing {}", path.display()))
 }
 
 #[cfg(test)]

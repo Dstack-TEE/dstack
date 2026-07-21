@@ -85,6 +85,7 @@ cd ~/gateway-deploy
 set -a; source .env; set +a
 
 cd ~/dstack/dstack/vmm
+export DSTACK_VMM_AUTH_USER=admin
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 
 ./src/vmm-cli.py --url http://127.0.0.1:9080 deploy \
@@ -408,6 +409,7 @@ Navigate to the VMM directory first:
 
 ```bash
 cd ~/dstack/dstack/vmm
+export DSTACK_VMM_AUTH_USER=admin
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 ```
 
