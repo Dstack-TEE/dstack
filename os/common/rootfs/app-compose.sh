@@ -62,15 +62,8 @@ compose_start() {
             echo "ERROR: nerdctl-compose requires pre-built images; Compose build sections are not supported" >&2
             return 1
         fi
-        if [ "$snapshotter" = stargz ]; then
-            nerdctl-compose-pull.sh "$COMPOSE_FILE" "$NERDCTL_NAMESPACE"
-        fi
-        compose_args=(up --remove-orphans -d)
-        if [ "$snapshotter" = stargz ]; then
-            compose_args+=(--pull never)
-        fi
         nerdctl --namespace "$NERDCTL_NAMESPACE" --snapshotter "$snapshotter" \
-            compose -f "$COMPOSE_FILE" "${compose_args[@]}"
+            compose -f "$COMPOSE_FILE" up --remove-orphans -d
         ;;
     esac
 }

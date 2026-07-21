@@ -5,6 +5,19 @@ version = 2
   address = "/run/containerd-stargz-grpc/containerd-stargz-grpc.sock"
   [proxy_plugins.stargz.exports]
     root = "/var/lib/containerd-stargz-grpc/"
+    enable_remote_snapshot_annotations = "true"
+
+# containerd's transfer service only registers its default snapshotter unless
+# unpack_config is specified. Keep overlayfs available and add stargz so
+# `nerdctl compose up` can pull directly into either snapshotter. The remote
+# snapshot annotations exported above are what make stargz pulls lazy.
+[plugins."io.containerd.transfer.v1.local"]
+  [[plugins."io.containerd.transfer.v1.local".unpack_config]]
+    platform = "linux/amd64"
+    snapshotter = "overlayfs"
+  [[plugins."io.containerd.transfer.v1.local".unpack_config]]
+    platform = "linux/amd64"
+    snapshotter = "stargz"
 
 [plugins]
   [plugins."io.containerd.grpc.v1.cri"]
