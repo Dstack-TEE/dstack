@@ -2272,6 +2272,7 @@ name = "dstack-verity"
 version = "0.6.0"
 dependencies = [
  "anyhow",
+ "cmd_lib",
  "dstack-types",
  "flate2",
  "fs-err",

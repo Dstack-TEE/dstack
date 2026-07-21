@@ -17,9 +17,9 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::Command;
 
 use anyhow::{bail, Context, Result};
+use cmd_lib::{run_cmd, run_fun};
 use dstack_types::volume::DstackVolumeHeader;
 use fs_err as fs;
 use sha2::{Digest, Sha256};
@@ -87,19 +87,13 @@ pub fn build_volume(
     let data_path = tmp.path().join("data.fs");
 
     // 1. reproducible squashfs.
-    let mut cmd = Command::new("mksquashfs");
-    cmd.arg(store).arg(&data_path);
-    cmd.args(compress.args());
-    cmd.args([
-        "-all-time",
-        EPOCH,
-        "-mkfs-time",
-        EPOCH,
-        "-noappend",
-        "-no-progress",
-        "-xattrs",
-    ]);
-    run(cmd, "mksquashfs")?;
+    let compression_args = compress.args();
+    run_cmd!(
+        mksquashfs $store $data_path $[compression_args]
+            -all-time $EPOCH -mkfs-time $EPOCH -noappend -no-progress -xattrs
+            >/dev/null
+    )
+    .context("running mksquashfs")?;
 
     // 2. the verity data region must be block-aligned; pad the squashfs up.
     let bytes_used = squashfs_bytes_used(&data_path)?;
@@ -147,20 +141,11 @@ fn seal_data_image(
     // want the whole image reproducible, not just the root. The UUID sits in the
     // hash tree, not the hashed data, so it never changes the root.
     let uuid = uuid_from_data(data_path, data_size)?;
-    let mut cmd = Command::new("veritysetup");
-    cmd.args([
-        "format",
-        "--salt",
-        salt_hex,
-        "--uuid",
-        &uuid,
-        "--data-block-size",
-        "4096",
-        "--hash-block-size",
-        "4096",
-    ]);
-    cmd.arg(data_path).arg(&hash_path);
-    let out = capture(cmd, "veritysetup format")?;
+    let out = run_fun!(
+        veritysetup format --salt $salt_hex --uuid $uuid
+            --data-block-size 4096 --hash-block-size 4096 $data_path $hash_path
+    )
+    .context("running veritysetup format")?;
     let verity_root =
         parse_root_hash(&out).context("could not find the root hash in veritysetup output")?;
 
@@ -406,40 +391,11 @@ fn parse_root_hash(output: &str) -> Option<String> {
 }
 
 fn require_tool(name: &str) -> Result<()> {
-    // spawning at all means the binary is on PATH; a non-zero exit from
-    // `--version` (some builds) still counts as present.
-    let present = Command::new(name)
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok();
+    let present = run_cmd!(which $name >/dev/null 2>&1).is_ok();
     if !present {
         bail!("`{name}` not found on PATH (install squashfs-tools / cryptsetup)");
     }
     Ok(())
-}
-
-fn run(mut cmd: Command, what: &str) -> Result<()> {
-    let status = cmd
-        .stdout(std::process::Stdio::null())
-        .status()
-        .with_context(|| format!("running {what}"))?;
-    if !status.success() {
-        bail!("{what} failed with {status}");
-    }
-    Ok(())
-}
-
-fn capture(mut cmd: Command, what: &str) -> Result<String> {
-    let out = cmd.output().with_context(|| format!("running {what}"))?;
-    if !out.status.success() {
-        bail!(
-            "{what} failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 #[cfg(test)]
