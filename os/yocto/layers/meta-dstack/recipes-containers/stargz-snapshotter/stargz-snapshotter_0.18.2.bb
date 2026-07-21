@@ -19,7 +19,7 @@ INSANE_SKIP:${PN} += "already-stripped"
 SYSTEMD_SERVICE:${PN} = "containerd-stargz-grpc.service"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
-RDEPENDS:${PN} += "fuse3-utils"
+RDEPENDS:${PN} += "containerd-config fuse3-utils"
 
 do_install() {
     install -d ${D}${bindir} ${D}${systemd_system_unitdir}

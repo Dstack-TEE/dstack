@@ -297,25 +297,6 @@ mount --rbind $DATA_MNT/var/lib/containerd-stargz-grpc /var/lib/containerd-starg
 mount --rbind $DATA_MNT/var/lib/sysbox /var/lib/sysbox
 mount --rbind $WORK_DIR /dstack
 
-# Register the optional remote snapshotter. docker-compose continues to use
-# Docker's own overlayfs image store; nerdctl-compose selects this plugin only
-# when app-compose.json requests snapshotter=stargz.
-CONTAINERD_CONFIG=/etc/containerd/config.toml
-mkdir -p /etc/containerd
-if [ ! -s "$CONTAINERD_CONFIG" ]; then
-	containerd config default >"$CONTAINERD_CONFIG"
-fi
-if ! grep -qE '^[[:space:]]*\[proxy_plugins\.stargz\]' "$CONTAINERD_CONFIG"; then
-	cat >>"$CONTAINERD_CONFIG" <<'EOF'
-
-[proxy_plugins.stargz]
-  type = "snapshot"
-  address = "/run/containerd-stargz-grpc/containerd-stargz-grpc.sock"
-  [proxy_plugins.stargz.exports]
-    root = "/var/lib/containerd-stargz-grpc/"
-EOF
-fi
-
 echo "======== Disk usage ========"
 df -h
 echo "============================"

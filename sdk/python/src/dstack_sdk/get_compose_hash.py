@@ -218,7 +218,10 @@ def preprocess_app_compose(app_compose: AppCompose) -> AppCompose:
 
     if data.get("runner") == "bash" and "docker_compose_file" in data:
         del data["docker_compose_file"]
-    elif data.get("runner") in ("docker-compose", "nerdctl-compose") and "bash_script" in data:
+    elif (
+        data.get("runner") in ("docker-compose", "nerdctl-compose")
+        and "bash_script" in data
+    ):
         del data["bash_script"]
 
     if "pre_launch_script" in data and not data["pre_launch_script"]:

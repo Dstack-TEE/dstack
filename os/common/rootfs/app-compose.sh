@@ -63,29 +63,7 @@ compose_start() {
             return 1
         fi
         if [ "$snapshotter" = stargz ]; then
-            # containerd's transfer-service pull path does not add the remote
-            # snapshot annotations required by stargz. Register every Compose
-            # image with ctr-remote before nerdctl creates the containers.
-            while IFS= read -r image; do
-                [ -n "$image" ] || continue
-                auth_args=()
-                registry=${image%%/*}
-                case "$registry" in
-                *.*|*:*|localhost) ;;
-                *) registry="docker.io" ;;
-                esac
-                if [ -r /root/.docker/config.json ]; then
-                    auth=$(jq -r --arg registry "$registry" '
-                        .auths[$registry].auth //
-                        (if $registry == "docker.io" then .auths["https://index.docker.io/v1/"].auth else empty end) // empty
-                    ' /root/.docker/config.json)
-                    if [ -n "$auth" ]; then
-                        auth_args=(--user "$(printf '%s' "$auth" | base64 -d)")
-                    fi
-                fi
-                ctr-remote --namespace "$NERDCTL_NAMESPACE" images rpull \
-                    --snapshotter "$snapshotter" "${auth_args[@]}" "$image"
-            done < <(docker compose -f "$COMPOSE_FILE" config --images)
+            nerdctl-compose-pull.sh "$COMPOSE_FILE" "$NERDCTL_NAMESPACE"
         fi
         compose_args=(up --remove-orphans -d)
         if [ "$snapshotter" = stargz ]; then
