@@ -51,7 +51,7 @@ impl DstackVolumeHeader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dstack_types::{VerityVolume, VolumeTarget};
+    use dstack_types::VerityVolume;
 
     #[test]
     fn volume_header_round_trip() {
@@ -69,7 +69,7 @@ mod tests {
             "target": "/run/models"
         }))?;
         assert_eq!(volume.verity_root, [0x5a; 32]);
-        assert_eq!(volume.target, VolumeTarget::Mount("/run/models".into()));
+        assert_eq!(volume.target, std::path::PathBuf::from("/run/models"));
         assert_eq!(
             serde_json::to_value(&volume)?["verity_root"],
             "5a".repeat(32)
@@ -77,7 +77,7 @@ mod tests {
 
         assert!(serde_json::from_value::<VerityVolume>(serde_json::json!({
             "verity_root": "abcd",
-            "target": "docker"
+            "target": "/run/models"
         }))
         .is_err());
         assert!(serde_json::from_value::<VerityVolume>(serde_json::json!({

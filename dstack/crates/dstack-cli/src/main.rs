@@ -108,24 +108,17 @@ enum Command {
     },
     /// Scaffold a new app project in the current directory.
     Init,
-    /// Build a verity volume that pre-loads docker images (or a directory) into
-    /// a CVM.
+    /// Build a read-only verity data volume from a directory or filesystem image.
     ///
-    /// The CVM mounts the volume instead of pulling and unpacking the images, so
-    /// it starts in seconds. The build runs anywhere — no docker daemon, no TEE —
-    /// but needs root, `mksquashfs`, and `veritysetup`. It prints a verity_root
-    /// to paste into your compose. See docs/verity-volumes.md.
+    /// The build needs no daemon or TEE. It prints a verity_root to paste into
+    /// the deploy command. See docs/verity-volumes.md.
     Verity {
-        /// images to bake in, ideally pinned by digest (e.g. `repo@sha256:...`).
-        #[arg(value_name = "IMAGE")]
-        images: Vec<String>,
-        /// pack this directory into a data volume instead of images (mounted at a
-        /// path you choose in the compose).
-        #[arg(long, value_name = "PATH", conflicts_with = "images")]
+        /// Pack this directory into a read-only data volume.
+        #[arg(long, value_name = "PATH")]
         dir: Option<String>,
         /// wrap an existing filesystem image instead of building squashfs. The
         /// guest mounts it read-only after dm-verity verification.
-        #[arg(long = "fs-image", value_name = "PATH", conflicts_with_all = ["images", "dir"])]
+        #[arg(long = "fs-image", value_name = "PATH", conflicts_with = "dir")]
         fs_image: Option<String>,
         /// where to write the volume.
         #[arg(long, short = 'o', default_value = "verity.img")]
@@ -133,13 +126,6 @@ enum Command {
         /// squashfs compression: `none` (the default), `zstd`, or `gzip`.
         #[arg(long, default_value = "none")]
         compress: String,
-        /// image platform to fetch; must match the guest. `linux/amd64` today,
-        /// `linux/arm64` for arm64 hosts.
-        #[arg(long, default_value = "linux/amd64")]
-        platform: String,
-        /// allow plain-HTTP registries (loopback registries already use HTTP).
-        #[arg(long)]
-        plain_http: bool,
     },
 }
 
@@ -233,22 +219,16 @@ async fn main() -> Result<()> {
         Command::Info { .. } => stub("info"),
         Command::Init => stub("init"),
         Command::Verity {
-            images,
             dir,
             fs_image,
             output,
             compress,
-            platform,
-            plain_http,
         } => {
             cmd_verity(
-                &images,
                 dir.as_deref(),
                 fs_image.as_deref(),
                 &output,
                 &compress,
-                &platform,
-                plain_http,
                 json,
             )
             .await
@@ -256,15 +236,11 @@ async fn main() -> Result<()> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn cmd_verity(
-    images: &[String],
     dir: Option<&str>,
     fs_image: Option<&str>,
     output: &str,
     compress: &str,
-    platform: &str,
-    plain_http: bool,
     json: bool,
 ) -> Result<()> {
     let compress = match compress {
@@ -274,13 +250,10 @@ async fn cmd_verity(
         other => bail!("unknown --compress '{other}' (use none|zstd|gzip)"),
     };
     let result = dstack_volume::verity(dstack_volume::VerityOptions {
-        images: images.to_vec(),
         dir: dir.map(std::path::PathBuf::from),
         fs_image: fs_image.map(std::path::PathBuf::from),
         output: output.into(),
         compress,
-        platform: platform.to_string(),
-        plain_http,
     })
     .await?;
 
@@ -289,38 +262,17 @@ async fn cmd_verity(
         .len();
 
     if json {
-        let imgs: Vec<_> = result
-            .images
-            .iter()
-            .map(|i| {
-                serde_json::json!({
-                    "reference": i.reference,
-                    "manifestDigest": i.manifest_digest,
-                    "configDigest": i.config_digest,
-                    "topChainId": i.top_chain_id,
-                })
-            })
-            .collect();
         print_json(&serde_json::json!({
             "verityRoot": result.verity_root,
             "output": result.output.display().to_string(),
             "dataSize": result.data_size,
             "volumeSize": volume_size,
-            "images": imgs,
         }));
         return Ok(());
     }
 
     let mib = volume_size as f64 / 1_048_576.0;
     println!("wrote {} ({mib:.1} MiB)", result.output.display());
-    if !result.images.is_empty() {
-        // the manifest digest is what `image: repo@sha256:...` pins — not the
-        // config digest (the image id), which can't be pulled by digest.
-        println!("\nbaked images — pin each by digest in your compose:");
-        for i in &result.images {
-            println!("  {} @ {}", i.reference, i.manifest_digest);
-        }
-    }
     let file = result
         .output
         .file_name()
@@ -328,19 +280,13 @@ async fn cmd_verity(
         .unwrap_or_else(|| result.output.display().to_string());
     // a data volume mounts at a path you choose; it must be writable (the guest
     // rootfs is read-only), e.g. under /run.
-    let target = if result.images.is_empty() {
-        "/run/models"
-    } else {
-        "docker"
-    };
+    let target = "/run/models";
     println!("\ncopy {file} into the vmm's volumes_dir, then deploy with:");
     println!(
         "  dstack deploy -c docker-compose.yaml --volume {file}:{}:{target}",
         result.verity_root
     );
-    if result.images.is_empty() {
-        println!("  (change {target} to your mount path)");
-    }
+    println!("  (change {target} to your mount path)");
     Ok(())
 }
 
@@ -358,7 +304,7 @@ struct VolumeSpec {
 /// seeds content matching the attested root. `dstack verity` prints the exact
 /// spec to paste.
 ///
-/// `TARGET` is `docker` (seed the image store) or an absolute mount path.
+/// `TARGET` is an absolute read-only mount path in the guest.
 fn parse_volume(spec: &str) -> Result<VolumeSpec> {
     let mut parts = spec.splitn(3, ':');
     let name = parts.next().unwrap_or_default();
@@ -377,8 +323,8 @@ fn parse_volume(spec: &str) -> Result<VolumeSpec> {
     if root.len() != 64 || !root.bytes().all(|b| b.is_ascii_hexdigit()) {
         bail!("verity_root '{root}' must be 64 hex chars (copy it from `dstack verity`)");
     }
-    if target != "docker" && !target.starts_with('/') {
-        bail!("target '{target}' must be \"docker\" or an absolute path");
+    if !target.starts_with('/') {
+        bail!("target '{target}' must be an absolute path");
     }
     Ok(VolumeSpec {
         // verity volumes are read-only by construction; a writable one would let a
@@ -728,19 +674,17 @@ mod tests {
     #[test]
     fn parses_volume_specs() {
         let root = "a".repeat(64);
-        let docker = parse_volume(&format!("images.img:{root}:docker")).unwrap();
-        assert_eq!(docker.volume.source, "images.img");
-        assert!(docker.volume.read_only);
-        assert_eq!(docker.verity_root, root);
-        assert_eq!(docker.target, "docker");
-
         let data = parse_volume(&format!("weights.img:{root}:/models/llama")).unwrap();
+        assert_eq!(data.volume.source, "weights.img");
+        assert!(data.volume.read_only);
+        assert_eq!(data.verity_root, root);
         assert_eq!(data.target, "/models/llama");
 
         assert!(parse_volume("weights.img").is_err()); // missing verity_root:target
         assert!(parse_volume(&format!("weights.img:{root}")).is_err()); // missing target
-        assert!(parse_volume(&format!("../escape.img:{root}:docker")).is_err()); // path separator
-        assert!(parse_volume("x.img:nothex:docker").is_err()); // verity_root not hex
+        assert!(parse_volume(&format!("../escape.img:{root}:/models")).is_err()); // path separator
+        assert!(parse_volume("x.img:nothex:/models").is_err()); // verity_root not hex
+        assert!(parse_volume(&format!("x.img:{root}:docker")).is_err()); // docker seed removed
         assert!(parse_volume(&format!("x.img:{root}:relative/path")).is_err()); // bad target
     }
 
@@ -782,13 +726,7 @@ mod tests {
     fn parses_verity_fs_image_flag() {
         let cli = Cli::parse_from(["dstack", "verity", "--fs-image", "rootfs.ext4"]);
         match cli.command {
-            Command::Verity {
-                images,
-                dir,
-                fs_image,
-                ..
-            } => {
-                assert!(images.is_empty());
+            Command::Verity { dir, fs_image, .. } => {
                 assert_eq!(dir, None);
                 assert_eq!(fs_image.as_deref(), Some("rootfs.ext4"));
             }

@@ -10,7 +10,6 @@
 //! measured app compose as their source of policy and cryptographic identity.
 
 use std::collections::HashSet;
-use std::ffi::OsStr;
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
@@ -18,16 +17,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use cmd_lib::{run_cmd, run_fun};
-use dstack_types::{AppCompose, VerityVolume as RequestedVolume, VolumeTarget};
+use dstack_types::{AppCompose, VerityVolume as RequestedVolume};
 use dstack_volume::volume_format::{
     DstackVolumeHeader, DSTACK_VOLUME_HEADER_SIZE, DSTACK_VOLUME_KIND_VERITY, DSTACK_VOLUME_MAGIC,
 };
 use fs_err::{self as fs, File};
-use serde_json::Value;
 use tracing::{info, warn};
 
 const MAX_DISKS: usize = 64;
-const DOCKER_STORE: &str = "/var/lib/docker";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct BlockDisk {
@@ -70,7 +67,7 @@ fn main() -> Result<()> {
     for (index, requested) in compose.verity_volumes.iter().enumerate() {
         if let Err(err) = activate_requested(index, requested, &volumes, &mut used) {
             failures += 1;
-            warn!(index, target = %display_target(&requested.target), error = %format_args!("{err:#}"), "failed to activate required volume");
+            warn!(index, target = %requested.target.display(), error = %format_args!("{err:#}"), "failed to activate required volume");
         }
     }
     if failures != 0 {
@@ -231,7 +228,7 @@ fn activate_requested(
     if mapped.exists() {
         if mapping_root(&mapper_name)?.eq_ignore_ascii_case(&expected_root) {
             verify_first_block(&mapped)?;
-            mount_volume(index, requested, &mapped)?;
+            mount_volume(requested, &mapped)?;
             used.insert(candidate_index);
             info!(mapper = mapper_name, "reused active verity mapping");
             return Ok(());
@@ -245,9 +242,7 @@ fn activate_requested(
     let hash = &candidate.hash;
     run_cmd!(veritysetup open $data $mapper_name $hash $expected_root)
         .context("opening dm-verity volume")?;
-    if let Err(err) =
-        verify_first_block(&mapped).and_then(|_| mount_volume(index, requested, &mapped))
-    {
+    if let Err(err) = verify_first_block(&mapped).and_then(|_| mount_volume(requested, &mapped)) {
         let _ = run_cmd!(veritysetup close $mapper_name);
         return Err(err);
     }
@@ -262,41 +257,17 @@ fn verify_first_block(path: &Path) -> Result<()> {
         .with_context(|| format!("verifying first block of {}", path.display()))
 }
 
-fn mount_volume(index: usize, requested: &RequestedVolume, mapped: &Path) -> Result<()> {
+fn mount_volume(requested: &RequestedVolume, mapped: &Path) -> Result<()> {
     let fs_type = run_fun!(blkid -o value -s TYPE $mapped).unwrap_or_default();
-    match &requested.target {
-        VolumeTarget::DockerSeed => {
-            let mountpoint = PathBuf::from(format!("/run/dstack-verity/{index}"));
-            fs::create_dir_all(&mountpoint)?;
-            if is_mountpoint(&mountpoint)? {
-                ensure_mounted_from(&mountpoint, mapped)?;
-            } else {
-                mount_read_only(mapped, &mountpoint, fs_type.trim())?;
-            }
-            if let Err(err) = seed_docker(&mountpoint) {
-                let _ = run_cmd!(umount $mountpoint);
-                return Err(err);
-            }
-            info!(root = %hex::encode(requested.verity_root), "seeded docker from verity volume");
-        }
-        VolumeTarget::Mount(target) => {
-            fs::create_dir_all(target)?;
-            if is_mountpoint(target)? {
-                ensure_mounted_from(target, mapped)?;
-            } else {
-                mount_read_only(mapped, target, fs_type.trim())?;
-            }
-            info!(root = %hex::encode(requested.verity_root), target = %target.display(), "mounted verity volume");
-        }
+    let target = &requested.target;
+    fs::create_dir_all(target)?;
+    if is_mountpoint(target)? {
+        ensure_mounted_from(target, mapped)?;
+    } else {
+        mount_read_only(mapped, target, fs_type.trim())?;
     }
+    info!(root = %hex::encode(requested.verity_root), target = %target.display(), "mounted verity volume");
     Ok(())
-}
-
-fn display_target(target: &VolumeTarget) -> std::borrow::Cow<'_, str> {
-    match target {
-        VolumeTarget::DockerSeed => "docker".into(),
-        VolumeTarget::Mount(path) => path.to_string_lossy(),
-    }
 }
 
 fn mount_read_only(device: &Path, target: &Path, fs_type: &str) -> Result<()> {
@@ -310,131 +281,6 @@ fn mount_read_only(device: &Path, target: &Path, fs_type: &str) -> Result<()> {
     } else {
         run_cmd!(mount -t $fs_type -o $options $device $target)
             .context("mounting verity volume")?;
-    }
-    Ok(())
-}
-
-fn seed_docker(volume: &Path) -> Result<()> {
-    let store = Path::new(DOCKER_STORE);
-    let overlay = volume.join("overlay2");
-    let mut bound = Vec::new();
-    for layer in child_directories(&overlay)? {
-        if layer.file_name() == Some(OsStr::new("l")) {
-            continue;
-        }
-        let source = layer.join("diff");
-        if !source.is_dir() {
-            continue;
-        }
-        let layer_id = layer
-            .file_name()
-            .context("docker layer path has no file name")?;
-        let target = store.join("overlay2").join(layer_id).join("diff");
-        fs::create_dir_all(&target)?;
-        if !is_mountpoint(&target)? {
-            if let Err(err) = run_cmd!(mount --bind $source $target).context("binding docker layer")
-            {
-                unwind_binds(&bound);
-                return Err(err);
-            }
-            // A bind inherits neither the intended policy nor all mount flags.
-            if let Err(err) =
-                run_cmd!(mount -o remount,bind,ro $target).context("making docker layer read-only")
-            {
-                bound.push(target);
-                unwind_binds(&bound);
-                return Err(err);
-            }
-            bound.push(target);
-        }
-    }
-
-    let copy_result = (|| -> Result<()> {
-        copy_contents(
-            &volume.join("image/overlay2/imagedb"),
-            &store.join("image/overlay2/imagedb"),
-        )?;
-        copy_contents(
-            &volume.join("image/overlay2/layerdb"),
-            &store.join("image/overlay2/layerdb"),
-        )?;
-        copy_contents(&volume.join("overlay2/l"), &store.join("overlay2/l"))?;
-        merge_repositories(volume, store)?;
-        copy_layer_metadata(volume, store)
-    })();
-    if let Err(err) = copy_result {
-        unwind_binds(&bound);
-        return Err(err);
-    }
-    Ok(())
-}
-
-fn child_directories(path: &Path) -> Result<Vec<PathBuf>> {
-    let mut result = Vec::new();
-    for entry in fs::read_dir(path).with_context(|| format!("reading {}", path.display()))? {
-        let path = entry?.path();
-        if path.is_dir() {
-            result.push(path);
-        }
-    }
-    result.sort();
-    Ok(result)
-}
-
-fn copy_contents(source: &Path, target: &Path) -> Result<()> {
-    fs::create_dir_all(target)?;
-    let source_contents = source.join(".");
-    run_cmd!(cp -a $source_contents $target).context("copying docker metadata")?;
-    Ok(())
-}
-
-fn merge_repositories(volume: &Path, store: &Path) -> Result<()> {
-    let source = volume.join("image/overlay2/repositories.json");
-    let target = store.join("image/overlay2/repositories.json");
-    if target.exists() {
-        let temporary = target.with_extension("json.dstack-tmp");
-        let mut current: Value = serde_json::from_slice(&fs::read(&target)?)?;
-        let incoming: Value = serde_json::from_slice(&fs::read(&source)?)?;
-        merge_json(&mut current, incoming);
-        fs::write(&temporary, serde_json::to_vec(&current)?)?;
-        fs::rename(&temporary, &target)?;
-    } else {
-        fs::copy(&source, &target)?;
-    }
-    Ok(())
-}
-
-fn merge_json(current: &mut Value, incoming: Value) {
-    match (current, incoming) {
-        (Value::Object(current), Value::Object(incoming)) => {
-            for (key, value) in incoming {
-                merge_json(current.entry(key).or_insert(Value::Null), value);
-            }
-        }
-        (current, incoming) => *current = incoming,
-    }
-}
-
-fn copy_layer_metadata(volume: &Path, store: &Path) -> Result<()> {
-    for layer in child_directories(&volume.join("overlay2"))? {
-        let Some(id) = layer.file_name() else {
-            continue;
-        };
-        if id == OsStr::new("l") {
-            continue;
-        }
-        let target = store.join("overlay2").join(id);
-        if target.join("link").exists() {
-            continue;
-        }
-        fs::create_dir_all(&target)?;
-        for entry in fs::read_dir(&layer)? {
-            let source = entry?.path();
-            if source.file_name() == Some(OsStr::new("diff")) {
-                continue;
-            }
-            run_cmd!(cp -a $source $target).context("copying docker layer metadata")?;
-        }
     }
     Ok(())
 }
@@ -503,12 +349,6 @@ fn unescape_mountinfo(value: &[u8]) -> Vec<u8> {
     decoded
 }
 
-fn unwind_binds(paths: &[PathBuf]) {
-    for path in paths.iter().rev() {
-        let _ = run_cmd!(umount $path);
-    }
-}
-
 fn mapping_root(mapper_name: &str) -> Result<String> {
     let status = run_fun!(veritysetup status $mapper_name)?;
     status
@@ -560,19 +400,6 @@ mod tests {
             partitions: vec![],
         };
         assert!(resolve_verity(&disk, header()).is_err());
-    }
-
-    #[test]
-    fn recursively_merges_json_objects() {
-        let mut current = serde_json::json!({"repo": {"old": 1, "same": 1}});
-        merge_json(
-            &mut current,
-            serde_json::json!({"repo": {"new": 2, "same": 3}}),
-        );
-        assert_eq!(
-            current,
-            serde_json::json!({"repo": {"old": 1, "new": 2, "same": 3}})
-        );
     }
 
     #[test]

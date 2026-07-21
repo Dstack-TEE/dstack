@@ -68,8 +68,7 @@ pub struct BuiltVolume {
 /// Build `output`: a GPT disk image with the squashfs data partition and a
 /// separate dm-verity hash partition.
 ///
-/// `store` is any directory — a docker overlay2 store, or plain data. `salt`
-/// fixes the verity root.
+/// `store` is the directory to pack; `salt` fixes the verity root.
 ///
 /// The verity UUID is derived from the squashfs bytes, so two different volumes
 /// get two different UUIDs. That matters because a VM can mount several volumes

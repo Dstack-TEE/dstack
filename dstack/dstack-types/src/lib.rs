@@ -134,47 +134,23 @@ pub struct VerityVolume {
     /// check. The guest matches attached devices against it.
     #[serde(with = "hex_bytes")]
     pub verity_root: [u8; 32],
-    /// `"docker"` (seed the docker overlay2 image store), or an absolute path
-    /// where the volume's filesystem is mounted (e.g. model weights).
-    pub target: VolumeTarget,
+    /// Absolute path where the volume's filesystem is mounted.
+    #[serde(deserialize_with = "deserialize_absolute_path")]
+    pub target: std::path::PathBuf,
 }
 
-/// How a verified volume is exposed inside the guest.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum VolumeTarget {
-    DockerSeed,
-    Mount(std::path::PathBuf),
-}
-
-impl Serialize for VolumeTarget {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            Self::DockerSeed => serializer.serialize_str("docker"),
-            Self::Mount(path) => serializer.serialize_str(&path.to_string_lossy()),
-        }
+fn deserialize_absolute_path<'de, D>(deserializer: D) -> Result<std::path::PathBuf, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    let path = std::path::PathBuf::from(&value);
+    if !path.is_absolute() {
+        return Err(serde::de::Error::custom(format!(
+            "volume target must be an absolute path, got '{value}'"
+        )));
     }
-}
-
-impl<'de> Deserialize<'de> for VolumeTarget {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        if value == "docker" {
-            return Ok(Self::DockerSeed);
-        }
-        let path = std::path::PathBuf::from(&value);
-        if !path.is_absolute() {
-            return Err(serde::de::Error::custom(format!(
-                "volume target must be \"docker\" or an absolute path, got '{value}'"
-            )));
-        }
-        Ok(Self::Mount(path))
-    }
+    Ok(path)
 }
 
 /// Canonical source for the policy used when `requirements.gpu_policy` is

@@ -4,10 +4,8 @@
 
 //! Build, describe, and activate dstack volumes.
 //!
-//! The output is a reproducible, dm-verity-protected raw disk image: partition 1
-//! is the squashfs data filesystem, and partition 2 is the dm-verity superblock
-//! plus hash tree. A `docker` volume seeds the overlay2 store; a data volume just
-//! mounts at a path.
+//! The output is a reproducible, dm-verity-protected raw disk image containing
+//! a filesystem that the guest mounts read-only at a measured path.
 //!
 //! The build needs no docker daemon and no TEE, and it's reproducible: the same
 //! inputs always give the same `verity_root`. The first partition contains a
@@ -19,10 +17,7 @@
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
-use fs_err as fs;
 
-pub mod oci;
-mod store;
 mod volume;
 pub mod volume_format;
 
@@ -36,11 +31,7 @@ pub use volume::Compression;
 const VERITY_SALT: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 pub struct VerityOptions {
-    /// image references to bake in, e.g. `nvidia/cuda:12.4.1-runtime-ubuntu22.04`.
-    /// Empty when building a data volume from `dir`.
-    pub images: Vec<String>,
-    /// build a data volume from this directory instead of docker images. The
-    /// resulting volume is mounted at a `target: "/path"` in the compose.
+    /// Build a volume from this directory.
     pub dir: Option<PathBuf>,
     /// wrap an existing filesystem image as the verity data partition. This is
     /// for hand-built ext4/xfs/etc. images; `dstack verity --dir` still produces
@@ -49,90 +40,23 @@ pub struct VerityOptions {
     pub output: PathBuf,
     /// squashfs compression (default: none — zero decompression at read time).
     pub compress: Compression,
-    /// allow plain-HTTP registries (loopback registries default to HTTP anyway).
-    pub plain_http: bool,
-    /// target platform `os/arch` for image pulls (e.g. `linux/amd64`). Explicit
-    /// so the build is reproducible and matches the guest's arch.
-    pub platform: String,
 }
 
 pub struct VerityResult {
     pub verity_root: String,
     pub data_size: u64,
     pub output: PathBuf,
-    pub images: Vec<ResolvedImage>,
-}
-
-pub struct ResolvedImage {
-    pub reference: String,
-    pub manifest_digest: String,
-    pub config_digest: String,
-    pub top_chain_id: String,
 }
 
 pub async fn verity(opts: VerityOptions) -> Result<VerityResult> {
-    let source_count =
-        (!opts.images.is_empty()) as u8 + opts.dir.is_some() as u8 + opts.fs_image.is_some() as u8;
-    if source_count != 1 {
-        bail!("give exactly one source: images, --dir <path>, or --fs-image <path>");
-    }
-    if let Some(dir) = &opts.dir {
-        verity_dir(dir.clone(), opts.output, opts.compress).await
-    } else if let Some(fs_image) = &opts.fs_image {
-        verity_fs_image(fs_image.clone(), opts.output).await
-    } else {
-        verity_docker(opts).await
+    match (opts.dir, opts.fs_image) {
+        (Some(dir), None) => verity_dir(dir, opts.output, opts.compress).await,
+        (None, Some(fs_image)) => verity_fs_image(fs_image, opts.output).await,
+        _ => bail!("give exactly one source: --dir <path> or --fs-image <path>"),
     }
 }
 
-/// Bake docker images into a `docker`-target volume.
-async fn verity_docker(opts: VerityOptions) -> Result<VerityResult> {
-    // 1. pull every image (daemonless, verified against its digests). Dedup
-    // repeated references so `verity alpine alpine` doesn't pull twice.
-    let mut seen = std::collections::HashSet::new();
-    let refs: Vec<&String> = opts.images.iter().filter(|r| seen.insert(*r)).collect();
-    let mut pulled = Vec::with_capacity(refs.len());
-    for r in refs {
-        tracing::info!("resolving {r}");
-        pulled.push(oci::pull(r, opts.plain_http, &opts.platform).await?);
-    }
-
-    // 2. lay out a deterministic overlay2 store, then pack + verity it. Both are
-    // synchronous and privileged (mknod / trusted xattr); do them off the async
-    // reactor.
-    let output = opts.output.clone();
-    let compress = opts.compress;
-    let (built, resolved) = tokio::task::spawn_blocking(move || -> Result<_> {
-        let tmp = tempfile::tempdir().context("creating scratch dir")?;
-        let store_dir = tmp.path().join("store");
-        fs::create_dir_all(&store_dir)?;
-        let tops = store::build_store(&pulled, &store_dir)?;
-        let built = volume::build_volume(&store_dir, &output, VERITY_SALT, compress)?;
-        let resolved = pulled
-            .iter()
-            .zip(&tops)
-            .map(|(img, top)| ResolvedImage {
-                reference: img.reference.clone(),
-                manifest_digest: img.manifest_digest.clone(),
-                config_digest: img.config_digest.clone(),
-                top_chain_id: top.clone(),
-            })
-            .collect::<Vec<_>>();
-        Ok((built, resolved))
-    })
-    .await
-    .context("the build task failed")??;
-
-    Ok(VerityResult {
-        verity_root: built.verity_root,
-        data_size: built.data_size,
-        output: opts.output,
-        images: resolved,
-    })
-}
-
-/// Bake a directory tree into a data volume (mounted at a `target: "/path"`).
-/// No docker, no overlay2 layout — just a reproducible squashfs of the tree.
+/// Bake a directory tree into a reproducible squashfs data volume.
 async fn verity_dir(dir: PathBuf, output: PathBuf, compress: Compression) -> Result<VerityResult> {
     if !dir.is_dir() {
         bail!("--dir '{}' is not a directory", dir.display());
@@ -148,7 +72,6 @@ async fn verity_dir(dir: PathBuf, output: PathBuf, compress: Compression) -> Res
         verity_root: built.verity_root,
         data_size: built.data_size,
         output,
-        images: vec![],
     })
 }
 
@@ -168,6 +91,5 @@ async fn verity_fs_image(fs_image: PathBuf, output: PathBuf) -> Result<VerityRes
         verity_root: built.verity_root,
         data_size: built.data_size,
         output,
-        images: vec![],
     })
 }
