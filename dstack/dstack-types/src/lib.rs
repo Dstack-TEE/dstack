@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 use size_parser::human_size;
 
+pub mod volume;
+
 /// Identifies which OVMF flavour the guest image was built with.
 ///
 /// Only the pre-202505 OVMF measurement layout is supported.
@@ -128,19 +130,53 @@ pub struct AppCompose {
 }
 
 /// A pre-baked, read-only dm-verity volume attached to the CVM.
-#[derive(Deserialize, Serialize, Debug, Clone, Default)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct VerityVolume {
     /// dm-verity root hash (hex): the volume's content identity and integrity
     /// check. The guest matches attached devices against it.
-    #[serde(default)]
-    pub verity_root: String,
+    #[serde(with = "hex::serde")]
+    pub verity_root: [u8; 32],
     /// `"docker"` (seed the docker overlay2 image store), or an absolute path
     /// where the volume's filesystem is mounted (e.g. model weights).
-    ///
-    /// Defaulted so one malformed entry doesn't fail the whole AppCompose parse;
-    /// the guest skips an entry with an empty root or target.
-    #[serde(default)]
-    pub target: String,
+    pub target: VolumeTarget,
+}
+
+/// How a verified volume is exposed inside the guest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VolumeTarget {
+    DockerSeed,
+    Mount(std::path::PathBuf),
+}
+
+impl Serialize for VolumeTarget {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::DockerSeed => serializer.serialize_str("docker"),
+            Self::Mount(path) => serializer.serialize_str(&path.to_string_lossy()),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for VolumeTarget {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if value == "docker" {
+            return Ok(Self::DockerSeed);
+        }
+        let path = std::path::PathBuf::from(&value);
+        if !path.is_absolute() {
+            return Err(serde::de::Error::custom(format!(
+                "volume target must be \"docker\" or an absolute path, got '{value}'"
+            )));
+        }
+        Ok(Self::Mount(path))
+    }
 }
 
 /// Canonical source for the policy used when `requirements.gpu_policy` is

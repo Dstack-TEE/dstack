@@ -11,47 +11,28 @@
 
 use std::collections::HashSet;
 use std::ffi::OsStr;
-use std::fs::{self, File};
 use std::io::Read;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
+use dstack_types::volume::{
+    DstackVolumeHeader, DSTACK_VOLUME_HEADER_SIZE, DSTACK_VOLUME_KIND_VERITY, DSTACK_VOLUME_MAGIC,
+};
+use dstack_types::{AppCompose, VerityVolume as RequestedVolume, VolumeTarget};
+use fs_err::{self as fs, File};
+use serde_json::Value;
+use tracing::{info, warn};
 
-const MAGIC: &[u8; 16] = b"DSTACK_VOLUME\0\0\0";
-const HEADER_SIZE: usize = 4096;
-const FORMAT_VERSION: u16 = 1;
-const KIND_VERITY: u32 = 1;
 const MAX_DISKS: usize = 64;
 const DOCKER_STORE: &str = "/var/lib/docker";
 
-#[derive(Debug, Deserialize)]
-struct AppCompose {
-    #[serde(default)]
-    verity_volumes: Vec<RequestedVolume>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RequestedVolume {
-    verity_root: String,
-    target: String,
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct BlockDisk {
     path: PathBuf,
     partitions: Vec<(u32, PathBuf)>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct VolumeHeader {
-    kind: u32,
-    kind_version: u32,
-    flags: u32,
-    root_hash: [u8; 32],
-    data_block_size: u32,
-    hash_block_size: u32,
 }
 
 #[derive(Debug)]
@@ -62,14 +43,15 @@ struct VerityVolume {
 }
 
 fn main() -> Result<()> {
+    tracing_subscriber::fmt().with_target(false).init();
     let compose_path = std::env::args_os()
         .nth(1)
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("app-compose.json"));
-    let compose: AppCompose = serde_json::from_slice(
-        &fs::read(&compose_path).with_context(|| format!("reading {}", compose_path.display()))?,
-    )
-    .with_context(|| format!("parsing {}", compose_path.display()))?;
+    // Deserialize the complete shared type before probing any untrusted disk.
+    // This validates roots and targets as part of parsing the measured compose.
+    let compose: AppCompose = serde_json::from_slice(&fs::read(&compose_path)?)
+        .with_context(|| format!("parsing {}", compose_path.display()))?;
     if compose.verity_volumes.is_empty() {
         return Ok(());
     }
@@ -78,26 +60,36 @@ fn main() -> Result<()> {
     let _ = run(Command::new("udevadm").args(["settle", "--timeout=5"]));
 
     let volumes = discover_volumes()?;
-    eprintln!(
-        "dstack-volume: found {} volume(s), {} requested",
-        volumes.len(),
-        compose.verity_volumes.len()
+    info!(
+        found = volumes.len(),
+        requested = compose.verity_volumes.len(),
+        "discovered dstack volumes"
     );
     let mut used = HashSet::new();
+    let mut failures = 0;
     for (index, requested) in compose.verity_volumes.iter().enumerate() {
         if let Err(err) = activate_requested(index, requested, &volumes, &mut used) {
-            eprintln!(
-                "dstack-volume: volume {index} ({}): {err:#}; skipping",
-                requested.target
-            );
+            failures += 1;
+            warn!(index, target = %display_target(&requested.target), error = %format_args!("{err:#}"), "failed to activate required volume");
         }
+    }
+    if failures != 0 {
+        bail!("failed to activate {failures} required volume(s)");
     }
     Ok(())
 }
 
 fn discover_volumes() -> Result<Vec<VerityVolume>> {
     let mut found = Vec::new();
-    for disk in list_disks()?.into_iter().take(MAX_DISKS) {
+    let disks = list_disks()?;
+    if disks.len() > MAX_DISKS {
+        warn!(
+            found = disks.len(),
+            limit = MAX_DISKS,
+            "block-device scan truncated"
+        );
+    }
+    for disk in disks.into_iter().take(MAX_DISKS) {
         // A partitioned disk has exactly one envelope location: partition 1.
         // Only a disk with no kernel-recognized partitions is probed at offset 0.
         let probe = if disk.partitions.is_empty() {
@@ -111,69 +103,80 @@ fn discover_volumes() -> Result<Vec<VerityVolume>> {
             continue;
         };
         match header.kind {
-            KIND_VERITY => match resolve_verity(&disk, header) {
+            DSTACK_VOLUME_KIND_VERITY => match resolve_verity(&disk, header) {
                 Ok(volume) => found.push(volume),
-                Err(err) => eprintln!(
-                    "dstack-volume: ignoring malformed verity volume {}: {err:#}",
-                    disk.path.display()
-                ),
+                Err(err) => {
+                    warn!(disk = %disk.path.display(), error = %format_args!("{err:#}"), "ignoring malformed verity volume")
+                }
             },
-            kind => eprintln!(
-                "dstack-volume: ignoring unsupported kind {kind} on {}",
-                disk.path.display()
-            ),
+            kind => warn!(kind, disk = %disk.path.display(), "ignoring unsupported volume kind"),
         }
     }
     Ok(found)
 }
 
 fn list_disks() -> Result<Vec<BlockDisk>> {
-    let output = checked(
-        Command::new("lsblk").args(["-rnbpo", "PATH,TYPE,PARTN"]),
-        "listing block devices",
-    )?;
-    let text = String::from_utf8(output.stdout).context("lsblk output is not UTF-8")?;
-    let mut disks = Vec::<BlockDisk>::new();
-    let mut current = None;
-    for line in text.lines() {
-        let mut fields = line.split_whitespace();
-        let Some(path) = fields.next() else { continue };
-        let Some(kind) = fields.next() else { continue };
-        match kind {
-            "disk" => {
-                disks.push(BlockDisk {
-                    path: PathBuf::from(path),
-                    partitions: Vec::new(),
-                });
-                current = Some(disks.len() - 1);
-            }
-            "part" => {
-                let Some(number) = fields.next().and_then(|v| v.parse::<u32>().ok()) else {
-                    continue;
-                };
-                // lsblk -p emits children immediately below their parent disk.
-                if let Some(index) = current {
-                    disks[index].partitions.push((number, PathBuf::from(path)));
-                }
-            }
-            _ => {}
-        }
+    list_disks_at(Path::new("/sys/class/block"), Path::new("/dev"))
+}
+
+fn list_disks_at(sysfs: &Path, devfs: &Path) -> Result<Vec<BlockDisk>> {
+    struct Entry {
+        name: std::ffi::OsString,
+        sysfs_path: PathBuf,
+        partition: Option<u32>,
     }
+
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(sysfs)? {
+        let entry = entry?;
+        let class_path = entry.path();
+        let partition = if class_path.join("partition").exists() {
+            Some(
+                fs::read_to_string(class_path.join("partition"))?
+                    .trim()
+                    .parse()?,
+            )
+        } else {
+            None
+        };
+        entries.push(Entry {
+            name: entry.file_name(),
+            sysfs_path: fs::canonicalize(class_path)?,
+            partition,
+        });
+    }
+
+    let mut disks = entries
+        .iter()
+        .filter(|entry| entry.partition.is_none() && entry.sysfs_path.join("device").exists())
+        .map(|entry| BlockDisk {
+            path: devfs.join(&entry.name),
+            partitions: entries
+                .iter()
+                .filter_map(|partition| {
+                    let number = partition.partition?;
+                    (partition.sysfs_path.parent() == Some(entry.sysfs_path.as_path()))
+                        .then(|| (number, devfs.join(&partition.name)))
+                })
+                .collect(),
+        })
+        .collect::<Vec<_>>();
     for disk in &mut disks {
         disk.partitions.sort_by_key(|(number, _)| *number);
     }
+    disks.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(disks)
 }
 
-fn read_header(path: &Path) -> Result<Option<VolumeHeader>> {
+fn read_header(path: &Path) -> Result<Option<DstackVolumeHeader>> {
     let mut file = match File::open(path) {
         Ok(file) => file,
         Err(err) => {
-            eprintln!("dstack-volume: cannot open {}: {err}", path.display());
+            warn!(path = %path.display(), %err, "cannot open block device");
             return Ok(None);
         }
     };
-    let mut bytes = [0u8; HEADER_SIZE];
+    let mut bytes = [0u8; DSTACK_VOLUME_HEADER_SIZE];
     if let Err(err) = file.read_exact(&mut bytes) {
         if err.kind() == std::io::ErrorKind::UnexpectedEof {
             return Ok(None);
@@ -183,30 +186,14 @@ fn read_header(path: &Path) -> Result<Option<VolumeHeader>> {
     parse_header(&bytes).with_context(|| format!("parsing envelope on {}", path.display()))
 }
 
-fn parse_header(bytes: &[u8]) -> Result<Option<VolumeHeader>> {
-    if bytes.len() < HEADER_SIZE || &bytes[..16] != MAGIC {
+fn parse_header(bytes: &[u8]) -> Result<Option<DstackVolumeHeader>> {
+    if bytes.len() < DSTACK_VOLUME_HEADER_SIZE || &bytes[..16] != DSTACK_VOLUME_MAGIC {
         return Ok(None);
     }
-    let version = u16::from_le_bytes(bytes[16..18].try_into()?);
-    let header_size = u16::from_le_bytes(bytes[18..20].try_into()?) as usize;
-    if version != FORMAT_VERSION {
-        bail!("unsupported envelope version {version}");
-    }
-    if header_size != HEADER_SIZE {
-        bail!("invalid header size {header_size}");
-    }
-    let root_hash = bytes[32..64].try_into()?;
-    Ok(Some(VolumeHeader {
-        kind: u32::from_le_bytes(bytes[20..24].try_into()?),
-        kind_version: u32::from_le_bytes(bytes[24..28].try_into()?),
-        flags: u32::from_le_bytes(bytes[28..32].try_into()?),
-        root_hash,
-        data_block_size: u32::from_le_bytes(bytes[64..68].try_into()?),
-        hash_block_size: u32::from_le_bytes(bytes[68..72].try_into()?),
-    }))
+    Ok(Some(DstackVolumeHeader::decode(bytes)?))
 }
 
-fn resolve_verity(disk: &BlockDisk, header: VolumeHeader) -> Result<VerityVolume> {
+fn resolve_verity(disk: &BlockDisk, header: DstackVolumeHeader) -> Result<VerityVolume> {
     if header.kind_version != 1 {
         bail!("unsupported verity version {}", header.kind_version);
     }
@@ -243,38 +230,49 @@ fn activate_requested(
     volumes: &[VerityVolume],
     used: &mut HashSet<usize>,
 ) -> Result<()> {
-    let expected = hex::decode(&requested.verity_root).context("invalid verity_root hex")?;
-    if expected.len() != 32 {
-        bail!("verity_root must contain 32 bytes");
-    }
-    let candidate = volumes
+    let (candidate_index, candidate) = volumes
         .iter()
         .enumerate()
         .find(|(candidate_index, volume)| {
-            !used.contains(candidate_index) && volume.root_hash.as_slice() == expected
+            !used.contains(candidate_index) && volume.root_hash == requested.verity_root
         })
         .context("no attached volume advertises the measured root")?;
 
     let mapper_name = format!("dstack-verity{index}");
+    let mapped = PathBuf::from(format!("/dev/mapper/{mapper_name}"));
+    let expected_root = hex::encode(requested.verity_root);
+    if mapped.exists() {
+        if mapping_root(&mapper_name)?.eq_ignore_ascii_case(&expected_root) {
+            verify_first_block(&mapped)?;
+            mount_volume(index, requested, &mapped)?;
+            used.insert(candidate_index);
+            info!(mapper = mapper_name, "reused active verity mapping");
+            return Ok(());
+        }
+        checked(
+            Command::new("veritysetup").args(["close", &mapper_name]),
+            "closing stale verity mapping",
+        )?;
+    }
+
     // The on-disk root only selected a candidate. Pass the root from the
     // measured compose to veritysetup, which is the actual trust decision.
     checked(
         Command::new("veritysetup")
             .arg("open")
-            .arg(&candidate.1.data)
+            .arg(&candidate.data)
             .arg(&mapper_name)
-            .arg(&candidate.1.hash)
-            .arg(&requested.verity_root),
+            .arg(&candidate.hash)
+            .arg(&expected_root),
         "opening dm-verity volume",
     )?;
-    let mapped = PathBuf::from(format!("/dev/mapper/{mapper_name}"));
     if let Err(err) =
         verify_first_block(&mapped).and_then(|_| mount_volume(index, requested, &mapped))
     {
         let _ = run(Command::new("veritysetup").args(["close", &mapper_name]));
         return Err(err);
     }
-    used.insert(candidate.0);
+    used.insert(candidate_index);
     Ok(())
 }
 
@@ -292,32 +290,39 @@ fn mount_volume(index: usize, requested: &RequestedVolume, mapped: &Path) -> Res
             .arg(mapped),
     )
     .unwrap_or_default();
-    if requested.target == "docker" {
-        let mountpoint = PathBuf::from(format!("/run/dstack-verity/{index}"));
-        fs::create_dir_all(&mountpoint)?;
-        mount_read_only(mapped, &mountpoint, fs_type.trim())?;
-        if let Err(err) = seed_docker(&mountpoint) {
-            let _ = run(Command::new("umount").arg(&mountpoint));
-            return Err(err);
+    match &requested.target {
+        VolumeTarget::DockerSeed => {
+            let mountpoint = PathBuf::from(format!("/run/dstack-verity/{index}"));
+            fs::create_dir_all(&mountpoint)?;
+            if is_mountpoint(&mountpoint)? {
+                ensure_mounted_from(&mountpoint, mapped)?;
+            } else {
+                mount_read_only(mapped, &mountpoint, fs_type.trim())?;
+            }
+            if let Err(err) = seed_docker(&mountpoint) {
+                let _ = run(Command::new("umount").arg(&mountpoint));
+                return Err(err);
+            }
+            info!(root = %hex::encode(requested.verity_root), "seeded docker from verity volume");
         }
-        eprintln!(
-            "dstack-volume: seeded docker from {}",
-            requested.verity_root
-        );
-    } else {
-        let target = Path::new(&requested.target);
-        if !target.is_absolute() {
-            bail!("mount target must be absolute");
+        VolumeTarget::Mount(target) => {
+            fs::create_dir_all(target)?;
+            if is_mountpoint(target)? {
+                ensure_mounted_from(target, mapped)?;
+            } else {
+                mount_read_only(mapped, target, fs_type.trim())?;
+            }
+            info!(root = %hex::encode(requested.verity_root), target = %target.display(), "mounted verity volume");
         }
-        fs::create_dir_all(target).with_context(|| format!("creating {}", target.display()))?;
-        mount_read_only(mapped, target, fs_type.trim())?;
-        eprintln!(
-            "dstack-volume: mounted {} at {}",
-            requested.verity_root,
-            target.display()
-        );
     }
     Ok(())
+}
+
+fn display_target(target: &VolumeTarget) -> std::borrow::Cow<'_, str> {
+    match target {
+        VolumeTarget::DockerSeed => "docker".into(),
+        VolumeTarget::Mount(path) => path.to_string_lossy(),
+    }
 }
 
 fn mount_read_only(device: &Path, target: &Path, fs_type: &str) -> Result<()> {
@@ -429,19 +434,26 @@ fn merge_repositories(volume: &Path, store: &Path) -> Result<()> {
     let target = store.join("image/overlay2/repositories.json");
     if target.exists() {
         let temporary = target.with_extension("json.dstack-tmp");
-        let output = checked(
-            Command::new("jq")
-                .args(["-s", ".[0] * .[1]"])
-                .arg(&target)
-                .arg(&source),
-            "merging docker repositories",
-        )?;
-        fs::write(&temporary, output.stdout)?;
+        let mut current: Value = serde_json::from_slice(&fs::read(&target)?)?;
+        let incoming: Value = serde_json::from_slice(&fs::read(&source)?)?;
+        merge_json(&mut current, incoming);
+        fs::write(&temporary, serde_json::to_vec(&current)?)?;
         fs::rename(&temporary, &target)?;
     } else {
         fs::copy(&source, &target)?;
     }
     Ok(())
+}
+
+fn merge_json(current: &mut Value, incoming: Value) {
+    match (current, incoming) {
+        (Value::Object(current), Value::Object(incoming)) => {
+            for (key, value) in incoming {
+                merge_json(current.entry(key).or_insert(Value::Null), value);
+            }
+        }
+        (current, incoming) => *current = incoming,
+    }
 }
 
 fn copy_layer_metadata(volume: &Path, store: &Path) -> Result<()> {
@@ -472,10 +484,67 @@ fn copy_layer_metadata(volume: &Path, store: &Path) -> Result<()> {
 }
 
 fn is_mountpoint(path: &Path) -> Result<bool> {
-    let needle = format!(" {} ", path.display());
-    Ok(fs::read_to_string("/proc/self/mountinfo")?
-        .lines()
-        .any(|line| line.contains(&needle)))
+    Ok(mountpoint_device(path)?.is_some())
+}
+
+fn ensure_mounted_from(target: &Path, device: &Path) -> Result<()> {
+    let mounted = mountpoint_device(target)?.context("mount point disappeared")?;
+    let expected = device_number(fs::metadata(device)?.rdev());
+    if mounted != expected {
+        bail!(
+            "{} is mounted from device {}:{}, expected {}:{}",
+            target.display(),
+            mounted.0,
+            mounted.1,
+            expected.0,
+            expected.1
+        );
+    }
+    Ok(())
+}
+
+fn mountpoint_device(path: &Path) -> Result<Option<(u64, u64)>> {
+    let target = path.as_os_str().as_bytes();
+    for line in fs::read_to_string("/proc/self/mountinfo")?.lines() {
+        let mut fields = line.split_ascii_whitespace();
+        let Some(device) = fields.nth(2) else {
+            continue;
+        };
+        let Some(mountpoint) = fields.nth(1) else {
+            continue;
+        };
+        if unescape_mountinfo(mountpoint.as_bytes()) == target {
+            let (major, minor) = device
+                .split_once(':')
+                .context("invalid mountinfo device number")?;
+            return Ok(Some((major.parse()?, minor.parse()?)));
+        }
+    }
+    Ok(None)
+}
+
+fn device_number(device: u64) -> (u64, u64) {
+    let major = ((device >> 8) & 0xfff) | ((device >> 32) & 0xffff_f000);
+    let minor = (device & 0xff) | ((device >> 12) & 0xffff_ff00);
+    (major, minor)
+}
+
+fn unescape_mountinfo(value: &[u8]) -> Vec<u8> {
+    let mut decoded = Vec::with_capacity(value.len());
+    let mut index = 0;
+    while index < value.len() {
+        if value[index] == b'\\' && index + 3 < value.len() {
+            let octal = &value[index + 1..index + 4];
+            if octal.iter().all(|byte| matches!(byte, b'0'..=b'7')) {
+                decoded.push((octal[0] - b'0') * 64 + (octal[1] - b'0') * 8 + (octal[2] - b'0'));
+                index += 4;
+                continue;
+            }
+        }
+        decoded.push(value[index]);
+        index += 1;
+    }
+    decoded
 }
 
 fn unwind_binds(paths: &[PathBuf]) {
@@ -490,6 +559,19 @@ fn command_stdout(command: &mut Command) -> Result<String> {
         bail!("command failed with {}", output.status);
     }
     Ok(String::from_utf8(output.stdout)?)
+}
+
+fn mapping_root(mapper_name: &str) -> Result<String> {
+    let status = command_stdout(Command::new("veritysetup").args(["status", mapper_name]))?;
+    status
+        .lines()
+        .find_map(|line| {
+            let line = line.trim();
+            line.strip_prefix("root hash:")
+                .or_else(|| line.strip_prefix("Root hash:"))
+        })
+        .map(|root| root.trim().to_string())
+        .context("verity mapping status has no root hash")
 }
 
 fn run(command: &mut Command) -> Result<Output> {
@@ -512,44 +594,16 @@ fn checked(command: &mut Command, operation: &str) -> Result<Output> {
 mod tests {
     use super::*;
 
-    fn header() -> [u8; HEADER_SIZE] {
-        let mut bytes = [0u8; HEADER_SIZE];
-        bytes[..16].copy_from_slice(MAGIC);
-        bytes[16..18].copy_from_slice(&1u16.to_le_bytes());
-        bytes[18..20].copy_from_slice(&(HEADER_SIZE as u16).to_le_bytes());
-        bytes[20..24].copy_from_slice(&KIND_VERITY.to_le_bytes());
-        bytes[24..28].copy_from_slice(&1u32.to_le_bytes());
-        bytes[32..64].fill(0x5a);
-        bytes[64..68].copy_from_slice(&4096u32.to_le_bytes());
-        bytes[68..72].copy_from_slice(&4096u32.to_le_bytes());
-        bytes
-    }
-
-    #[test]
-    fn parses_volume_envelope() {
-        assert_eq!(
-            parse_header(&header()).unwrap(),
-            Some(VolumeHeader {
-                kind: KIND_VERITY,
-                kind_version: 1,
-                flags: 0,
-                root_hash: [0x5a; 32],
-                data_block_size: 4096,
-                hash_block_size: 4096,
-            })
-        );
+    fn header() -> DstackVolumeHeader {
+        DstackVolumeHeader::new_verity([0x5a; 32])
     }
 
     #[test]
     fn ignores_non_volume_data() {
-        assert_eq!(parse_header(&[0u8; HEADER_SIZE]).unwrap(), None);
-    }
-
-    #[test]
-    fn rejects_unknown_envelope_version() {
-        let mut bytes = header();
-        bytes[16..18].copy_from_slice(&2u16.to_le_bytes());
-        assert!(parse_header(&bytes).is_err());
+        assert_eq!(
+            parse_header(&[0u8; DSTACK_VOLUME_HEADER_SIZE]).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -562,7 +616,7 @@ mod tests {
                 (3, "/dev/test3".into()),
             ],
         };
-        let volume = resolve_verity(&disk, parse_header(&header()).unwrap().unwrap()).unwrap();
+        let volume = resolve_verity(&disk, header()).unwrap();
         assert_eq!(volume.data, Path::new("/dev/test2"));
         assert_eq!(volume.hash, Path::new("/dev/test3"));
     }
@@ -573,6 +627,49 @@ mod tests {
             path: "/dev/test".into(),
             partitions: vec![],
         };
-        assert!(resolve_verity(&disk, parse_header(&header()).unwrap().unwrap()).is_err());
+        assert!(resolve_verity(&disk, header()).is_err());
+    }
+
+    #[test]
+    fn recursively_merges_json_objects() {
+        let mut current = serde_json::json!({"repo": {"old": 1, "same": 1}});
+        merge_json(
+            &mut current,
+            serde_json::json!({"repo": {"new": 2, "same": 3}}),
+        );
+        assert_eq!(
+            current,
+            serde_json::json!({"repo": {"old": 1, "new": 2, "same": 3}})
+        );
+    }
+
+    #[test]
+    fn decodes_mountinfo_escapes() {
+        assert_eq!(unescape_mountinfo(b"/run/my\\040volume"), b"/run/my volume");
+    }
+
+    #[test]
+    fn discovers_partitions_from_sysfs_parentage() -> Result<()> {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir()?;
+        let sysfs = temp.path().join("sys/class/block");
+        let devices = temp.path().join("sys/devices/block/vda");
+        let partition = devices.join("vda1");
+        fs::create_dir_all(&sysfs)?;
+        fs::create_dir_all(devices.join("device"))?;
+        fs::create_dir_all(&partition)?;
+        fs::write(partition.join("partition"), "1\n")?;
+        symlink(&devices, sysfs.join("vda"))?;
+        symlink(&partition, sysfs.join("vda1"))?;
+
+        assert_eq!(
+            list_disks_at(&sysfs, Path::new("/dev"))?,
+            vec![BlockDisk {
+                path: "/dev/vda".into(),
+                partitions: vec![(1, "/dev/vda1".into())],
+            }]
+        );
+        Ok(())
     }
 }

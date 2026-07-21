@@ -20,6 +20,7 @@ use std::path::Path;
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
+use dstack_types::volume::DstackVolumeHeader;
 use fs_err as fs;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -36,10 +37,7 @@ const PARTITION_ALIGNMENT_SECTORS: u64 = 2048;
 // still reserve enough trailing sectors in the raw image for the backup array
 // (128 entries * 128 bytes) plus the backup header.
 const GPT_ENTRY_SECTORS: u64 = 32;
-const VOLUME_HEADER_SIZE: usize = 4096;
-const VOLUME_MAGIC: &[u8; 16] = b"DSTACK_VOLUME\0\0\0";
-const VOLUME_FORMAT_VERSION: u16 = 1;
-const VOLUME_KIND_VERITY: u32 = 1;
+const VOLUME_HEADER_SIZE: usize = dstack_types::volume::DSTACK_VOLUME_HEADER_SIZE;
 
 #[derive(Clone, Copy)]
 pub enum Compression {
@@ -376,18 +374,9 @@ fn write_volume_header(out: &mut fs::File, offset: u64, root_hash: &str) -> Resu
         bail!("verity root must be a 32-byte SHA-256 digest");
     }
 
-    // Common envelope. All integer fields are little-endian. The remainder of
-    // the 4 KiB metadata partition is reserved and must stay zero.
-    let mut header = [0u8; VOLUME_HEADER_SIZE];
-    header[..16].copy_from_slice(VOLUME_MAGIC);
-    header[16..18].copy_from_slice(&VOLUME_FORMAT_VERSION.to_le_bytes());
-    header[18..20].copy_from_slice(&(VOLUME_HEADER_SIZE as u16).to_le_bytes());
-    header[20..24].copy_from_slice(&VOLUME_KIND_VERITY.to_le_bytes());
-    header[24..28].copy_from_slice(&1u32.to_le_bytes()); // verity kind version
-    header[28..32].copy_from_slice(&0u32.to_le_bytes()); // flags: partitioned
-    header[32..64].copy_from_slice(&root);
-    header[64..68].copy_from_slice(&4096u32.to_le_bytes());
-    header[68..72].copy_from_slice(&4096u32.to_le_bytes());
+    let header = DstackVolumeHeader::new_verity(root.try_into().expect("length checked above"))
+        .encode()
+        .context("encoding volume header")?;
 
     out.seek(SeekFrom::Start(offset))?;
     out.write_all(&header)?;
@@ -542,7 +531,7 @@ mod tests {
         let mut header = [0u8; VOLUME_HEADER_SIZE];
         img.seek(SeekFrom::Start(metadata.first_lba * SECTOR))?;
         img.read_exact(&mut header)?;
-        assert_eq!(&header[..16], VOLUME_MAGIC);
+        assert_eq!(&header[..16], b"DSTACK_VOLUME\0\0\0");
         assert_eq!(&header[32..64], &hex::decode(root_hash)?);
         let mut buf = vec![0; data.len()];
         img.seek(SeekFrom::Start(data_partition.first_lba * SECTOR))?;
