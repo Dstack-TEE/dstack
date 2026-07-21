@@ -84,6 +84,7 @@ If `/guest/Info` returns empty or errors, check that the CVM is running:
 
 ```bash
 cd ~/dstack/dstack/vmm
+export DSTACK_VMM_AUTH_USER=admin
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 ./src/vmm-cli.py --url http://127.0.0.1:9080 lsvm
 ```

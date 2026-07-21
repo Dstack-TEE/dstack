@@ -4,6 +4,7 @@
 
 //! `dstackup destroy` — tear down what `install` started.
 
+use crate::install::read_token_file;
 use crate::state::{read_state, state_path};
 use crate::systemd::{remove_unit, systemctl, tool};
 use anyhow::{Context, Result};
@@ -26,7 +27,8 @@ pub(crate) async fn cmd_destroy(prefix: Option<&str>, purge: bool) -> Result<()>
             // and the CVM qemu via the unit's cgroup. Look it up by recorded id
             // AND by name, so an install that died before persisting kms_vm_id
             // (or a torn state file) doesn't leave the CVM orphaned.
-            if let Ok(vmm) = Vmm::connect(&st.client_url) {
+            let token = read_token_file(Path::new(&st.client_token_path));
+            if let Ok(vmm) = Vmm::connect_with_token(&st.client_url, token.as_deref()) {
                 let mut target = st.kms_vm_id.clone();
                 if target.is_none() {
                     if let Ok(s) = vmm.status().await {

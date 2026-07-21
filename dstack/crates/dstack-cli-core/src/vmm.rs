@@ -11,7 +11,7 @@
 use anyhow::{anyhow, bail, Result};
 use dstack_vmm_rpc::vmm_client::VmmClient;
 use dstack_vmm_rpc::{Id, StatusRequest, StatusResponse, VmConfiguration};
-use http_client::http_request;
+use http_client::http_request_with_headers;
 use http_client::prpc::PrpcClient;
 
 /// default local VMM control socket (created by `dstackup install`).
@@ -20,25 +20,46 @@ pub const DEFAULT_HOST: &str = "unix:/var/run/dstack/vmm.sock";
 /// a connection to a VMM — local unix socket or remote http endpoint.
 pub struct Vmm {
     rpc: VmmClient<PrpcClient>,
-    /// base string usable with [`http_request`] for non-prpc endpoints.
+    /// base string usable with [`http_request_with_headers`] for non-prpc endpoints.
     base: String,
+    /// bearer token sent with every request when the VMM has `[auth]` enabled.
+    auth_token: Option<String>,
 }
 
 impl Vmm {
     /// connect to a VMM addressed by `host`:
     /// `unix:/path/to/vmm.sock` (local) or `http(s)://host:port` (remote).
     pub fn connect(host: &str) -> Result<Self> {
+        Self::connect_with_token(host, None)
+    }
+
+    /// like [`Vmm::connect`], additionally sending `Authorization: Bearer
+    /// <token>` with every request — required when the VMM has `[auth]`
+    /// enabled. An empty or `None` token sends no header.
+    pub fn connect_with_token(host: &str, token: Option<&str>) -> Result<Self> {
         let host = host.trim();
+        let token = token.map(str::trim).filter(|t| !t.is_empty());
+        let with_token = |client: PrpcClient| match token {
+            Some(token) => client.with_bearer_token(token),
+            None => client,
+        };
         if let Some(sock) = host.strip_prefix("unix:") {
-            let rpc = VmmClient::new(PrpcClient::new_unix(sock.to_string(), "/prpc".to_string()));
+            let client = PrpcClient::new_unix(sock.to_string(), "/prpc".to_string());
+            let rpc = VmmClient::new(with_token(client));
             Ok(Self {
                 rpc,
                 base: format!("unix:{sock}"),
+                auth_token: token.map(str::to_string),
             })
         } else if host.starts_with("http://") || host.starts_with("https://") {
             let base = host.trim_end_matches('/').to_string();
-            let rpc = VmmClient::new(PrpcClient::new(format!("{base}/prpc")));
-            Ok(Self { rpc, base })
+            let client = PrpcClient::new(format!("{base}/prpc"));
+            let rpc = VmmClient::new(with_token(client));
+            Ok(Self {
+                rpc,
+                base,
+                auth_token: token.map(str::to_string),
+            })
         } else {
             bail!(
                 "unsupported host '{host}': expected unix:/path/to/vmm.sock or http(s)://host:port"
@@ -112,7 +133,14 @@ impl Vmm {
     /// socket and over the localhost HTTP endpoint written by `dstackup install`.
     pub async fn logs(&self, id: &str, lines: u32) -> Result<String> {
         let path = format!("/logs?id={id}&follow=false&ansi=false&lines={lines}");
-        let (status, body) = http_request("GET", &self.base, &path, b"").await?;
+        let auth_header;
+        let mut headers: Vec<(&str, &str)> = Vec::new();
+        if let Some(token) = &self.auth_token {
+            auth_header = format!("Bearer {token}");
+            headers.push(("Authorization", auth_header.as_str()));
+        }
+        let (status, body) =
+            http_request_with_headers("GET", &self.base, &path, b"", &headers).await?;
         if status != 200 {
             bail!("vmm /logs returned status {status}");
         }

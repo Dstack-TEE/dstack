@@ -32,7 +32,9 @@ struct Cli {
     #[arg(long, global = true, value_name = "DIR")]
     prefix: Option<String>,
 
-    /// auth token for a remote VMM.
+    /// auth token for a VMM with `[auth]` enabled (sent as `Authorization:
+    /// Bearer`). Falls back to `DSTACK_VMM_TOKEN`, then the token written by
+    /// `dstackup install`.
     #[arg(long, global = true)]
     token: Option<String>,
 
@@ -105,8 +107,6 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    // remote-auth wiring lands with the TLS+token transport.
-    let _ = &cli.token;
     let defaults = LocalDefaults::read(cli.prefix.as_deref());
     let use_local_defaults = cli.host.is_none();
     let host = cli
@@ -114,11 +114,24 @@ async fn main() -> Result<()> {
         .clone()
         .or_else(|| defaults.as_ref().and_then(|d| d.client_url.clone()))
         .unwrap_or_else(|| DEFAULT_HOST.to_string());
+    // auth token: --token, then DSTACK_VMM_TOKEN, then the token file written
+    // by `dstackup install` (local defaults only).
+    let token = cli
+        .token
+        .clone()
+        .or_else(|| std::env::var("DSTACK_VMM_TOKEN").ok())
+        .filter(|t| !t.trim().is_empty())
+        .or_else(|| {
+            use_local_defaults
+                .then(|| defaults.as_ref().and_then(LocalDefaults::token))
+                .flatten()
+        });
+    let token = token.as_deref();
     let json = cli.json;
 
     match cli.command {
-        Command::Apps => cmd_apps(&host, json).await,
-        Command::Logs { id, lines } => cmd_logs(&host, &id, lines).await,
+        Command::Apps => cmd_apps(&host, token, json).await,
+        Command::Logs { id, lines } => cmd_logs(&host, token, &id, lines).await,
         Command::Deploy {
             compose,
             compose_file,
@@ -149,6 +162,7 @@ async fn main() -> Result<()> {
             };
             cmd_deploy(
                 &host,
+                token,
                 &compose,
                 &name,
                 image.as_deref(),
@@ -178,6 +192,7 @@ fn resolve_compose_arg(positional: Option<String>, flagged: Option<String>) -> R
 
 struct LocalDefaults {
     client_url: Option<String>,
+    client_token_path: Option<String>,
     image: Option<String>,
     allowlist_path: Option<String>,
 }
@@ -197,6 +212,11 @@ impl LocalDefaults {
                 .and_then(|x| x.as_str())
                 .filter(|s| !s.is_empty())
                 .map(str::to_string),
+            client_token_path: v
+                .get("client_token_path")
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
             image: v
                 .get("image")
                 .and_then(|x| x.as_str())
@@ -212,6 +232,14 @@ impl LocalDefaults {
 
     fn allowlist_path(&self) -> Option<String> {
         self.allowlist_path.clone()
+    }
+
+    /// read the VMM API token from the file recorded by `dstackup install`.
+    fn token(&self) -> Option<String> {
+        let path = self.client_token_path.as_ref()?;
+        let token = std::fs::read_to_string(path).ok()?;
+        let token = token.trim();
+        (!token.is_empty()).then(|| token.to_string())
     }
 }
 
@@ -307,6 +335,7 @@ mod tests {
 #[allow(clippy::too_many_arguments)]
 async fn cmd_deploy(
     host: &str,
+    token: Option<&str>,
     compose_path: &str,
     name: &str,
     image: Option<&str>,
@@ -339,7 +368,7 @@ async fn cmd_deploy(
         ..Default::default()
     };
 
-    let vmm = Vmm::connect(host)?;
+    let vmm = Vmm::connect_with_token(host, token)?;
     let hash = vmm.get_compose_hash(&cfg).await?;
     let app_id = short(&hash, 40);
     cfg.app_id = Some(app_id.clone());
@@ -429,8 +458,8 @@ fn stub(name: &str) -> Result<()> {
     )
 }
 
-async fn cmd_apps(host: &str, json: bool) -> Result<()> {
-    let vmm = Vmm::connect(host)?;
+async fn cmd_apps(host: &str, token: Option<&str>, json: bool) -> Result<()> {
+    let vmm = Vmm::connect_with_token(host, token)?;
     let resp = vmm.status().await?;
     if json {
         let arr: Vec<_> = resp
@@ -470,8 +499,8 @@ async fn cmd_apps(host: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_logs(host: &str, id: &str, lines: u32) -> Result<()> {
-    let vmm = Vmm::connect(host)?;
+async fn cmd_logs(host: &str, token: Option<&str>, id: &str, lines: u32) -> Result<()> {
+    let vmm = Vmm::connect_with_token(host, token)?;
     let logs = vmm.logs(id, lines).await?;
     print!("{logs}");
     Ok(())

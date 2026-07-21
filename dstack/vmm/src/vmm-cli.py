@@ -63,7 +63,8 @@ def load_config() -> Dict[str, Any]:
     """Load configuration from the default config file.
 
     Returns:
-        Dictionary with configuration values (url, auth_user, auth_password)
+        Dictionary with configuration values (url, auth_user, auth_password,
+        auth_token)
 
     """
     if not os.path.exists(DEFAULT_CONFIG_PATH):
@@ -371,12 +372,29 @@ class VmmClient:
         base_url: str,
         auth_user: Optional[str] = None,
         auth_password: Optional[str] = None,
+        auth_token: Optional[str] = None,
     ):
-        """Initialize the client with a base URL and optional auth credentials."""
+        """Initialize the client with a base URL and optional auth credentials.
+
+        Two credential forms are supported for a VMM with `[auth]` enabled:
+        a bearer token (sent as `Authorization: Bearer <token>`), or HTTP Basic
+        (user + password). A bearer token takes precedence when both are set.
+        """
         self.base_url = base_url.rstrip("/")
         self.use_uds = self.base_url.startswith("unix:")
-        self.auth_user = auth_user
-        self.auth_password = auth_password
+        self.auth_user = auth_user or None
+        self.auth_password = auth_password or None
+        self.auth_token = auth_token or None
+        # fail fast on a half-configured Basic credential: silently sending no
+        # auth header would make requests fail against `[auth] enabled = true`
+        # in a way that is hard to diagnose.
+        if not self.auth_token and bool(self.auth_user) != bool(self.auth_password):
+            missing = "password" if self.auth_user else "username"
+            raise ValueError(
+                f"incomplete VMM Basic auth credentials: {missing} is missing. "
+                "set both username and password, or use a bearer token "
+                "(--token / DSTACK_VMM_TOKEN)."
+            )
 
         if self.use_uds:
             self.uds_path = self.base_url[5:]  # Remove 'unix:' prefix
@@ -410,13 +428,17 @@ class VmmClient:
         if headers is None:
             headers = {}
 
-        # Add Basic Authentication header if credentials are provided
-        if self.auth_user and self.auth_password:
-            credentials = f"{self.auth_user}:{self.auth_password}"
-            encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode(
-                "ascii"
-            )
-            headers["Authorization"] = f"Basic {encoded_credentials}"
+        # Add an auth header when credentials are provided. A bearer token wins
+        # over Basic when both happen to be set.
+        if "Authorization" not in headers:
+            if self.auth_token:
+                headers["Authorization"] = f"Bearer {self.auth_token}"
+            elif self.auth_user and self.auth_password:
+                credentials = f"{self.auth_user}:{self.auth_password}"
+                encoded_credentials = base64.b64encode(
+                    credentials.encode("utf-8")
+                ).decode("ascii")
+                headers["Authorization"] = f"Basic {encoded_credentials}"
 
         # Prepare the body
         if isinstance(body, dict):
@@ -480,11 +502,12 @@ class VmmCLI:
         base_url: str,
         auth_user: Optional[str] = None,
         auth_password: Optional[str] = None,
+        auth_token: Optional[str] = None,
     ):
         """Initialize the CLI with a base URL and optional auth credentials."""
         self.base_url = base_url.rstrip("/")
         self.headers = {"Content-Type": "application/json"}
-        self.client = VmmClient(base_url, auth_user, auth_password)
+        self.client = VmmClient(base_url, auth_user, auth_password, auth_token)
 
     def rpc_call(self, method: str, params: Optional[Dict] = None) -> Dict:
         """Make an RPC call to the dstack-vmm API."""
@@ -1519,6 +1542,7 @@ def main():
     default_auth_password = os.environ.get(
         "DSTACK_VMM_AUTH_PASSWORD", config.get("auth_password")
     )
+    default_auth_token = os.environ.get("DSTACK_VMM_TOKEN", config.get("auth_token"))
 
     parser.add_argument(
         "--url",
@@ -1536,6 +1560,13 @@ def main():
         "--auth-password",
         default=default_auth_password,
         help="Basic auth password (can also be set via DSTACK_VMM_AUTH_PASSWORD env var or config file)",
+    )
+    parser.add_argument(
+        "--token",
+        default=default_auth_token,
+        help="bearer token for a VMM with `[auth]` enabled, sent as "
+        "`Authorization: Bearer` (can also be set via DSTACK_VMM_TOKEN env var "
+        "or config file). Takes precedence over --auth-user/--auth-password.",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
@@ -1939,7 +1970,11 @@ def main():
 
     # Resolve the URL with auto-discovery
     url = resolve_vmm_url(instances, config, args.url)
-    cli = VmmCLI(url, args.auth_user, args.auth_password)
+    try:
+        cli = VmmCLI(url, args.auth_user, args.auth_password, args.token)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
 
     if args.command == "lsvm":
         cli.list_vms(args.verbose, args.json)

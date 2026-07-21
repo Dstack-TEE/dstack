@@ -31,9 +31,38 @@ fn sibling(path: &Path, suffix: &str) -> PathBuf {
 /// durable across a power loss. `tmp` and `path` are in the same directory so
 /// the rename is atomic.
 pub fn write_atomic(path: &Path, contents: &str) -> Result<()> {
+    write_atomic_inner(path, contents, None)
+}
+
+/// like [`write_atomic`], but the temp file is created with `mode` (Unix
+/// permission bits) *before* any content is written, so a secret never exists
+/// on disk with broader-than-intended permissions — not even transiently
+/// between the rename and a follow-up `chmod`. Use for credential files
+/// (`0o600`). The final file keeps `mode` because `rename` preserves it.
+pub fn write_atomic_mode(path: &Path, contents: &str, mode: u32) -> Result<()> {
+    write_atomic_inner(path, contents, Some(mode))
+}
+
+fn write_atomic_inner(path: &Path, contents: &str, mode: Option<u32>) -> Result<()> {
     let tmp = sibling(path, ".tmp");
-    let mut f =
-        File::create(&tmp).with_context(|| format!("creating temp file {}", tmp.display()))?;
+    let mut opts = OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    if let Some(mode) = mode {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(mode);
+    }
+    let mut f = opts
+        .open(&tmp)
+        .with_context(|| format!("creating temp file {}", tmp.display()))?;
+    // if a stale temp file survived a crash, `create` reused it without
+    // resetting its mode; tighten it before writing the secret.
+    #[cfg(unix)]
+    if let Some(mode) = mode {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))
+            .with_context(|| format!("setting mode on {}", tmp.display()))?;
+    }
     f.write_all(contents.as_bytes())
         .with_context(|| format!("writing {}", tmp.display()))?;
     f.sync_all()
@@ -83,6 +112,20 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "two");
         // no temp file left behind.
         assert!(!sibling(&p, ".tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_mode_creates_owner_only_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("dstack-fsmode-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("token");
+        write_atomic_mode(&p, "secret", 0o600).unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "secret");
+        let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "credential file must be 0600, got {mode:o}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
