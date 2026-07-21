@@ -628,7 +628,7 @@ async fn fetch_release(version: Option<&str>, release_api_base_url: &str) -> Res
             });
     }
 
-    let api_base = release_api_base_url.trim_end_matches('/');
+    let api_base = release_api_base_url.trim().trim_end_matches('/');
     let list_url = format!("{api_base}/{REPO}/releases?per_page=100");
     let releases: Vec<Release> = client
         .get(&list_url)
@@ -672,7 +672,7 @@ fn tagged_release_location(
         version.to_string(),
         format!(
             "{}/{repo}/releases/tags/{tag_prefix}{version}",
-            release_api_base_url.trim_end_matches('/')
+            release_api_base_url.trim().trim_end_matches('/')
         ),
         releases_url,
     ))
@@ -889,7 +889,8 @@ mod tests {
 
     #[test]
     fn release_api_base_url_is_configurable_and_trailing_slash_safe() {
-        let (_, url, _) = tagged_release_location("0.6.0", "http://127.0.0.1:1234/api/").unwrap();
+        let (_, url, _) =
+            tagged_release_location("0.6.0", "  http://127.0.0.1:1234/api/  ").unwrap();
         assert_eq!(
             url,
             "http://127.0.0.1:1234/api/Dstack-TEE/dstack/releases/tags/guest-os-v0.6.0"

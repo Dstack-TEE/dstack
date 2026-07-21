@@ -22,8 +22,8 @@ pub(crate) struct Cli {
     #[arg(long, global = true)]
     pub(crate) host: Option<String>,
 
-    /// Base URL of the GitHub-compatible releases API. The repository path is
-    /// appended automatically (useful for an API proxy or a test server).
+    /// Base URL of the GitHub-compatible releases API, including its `/repos`
+    /// prefix. The owner/repository path is appended automatically.
     #[arg(long, global = true, default_value = DEFAULT_RELEASE_API_BASE_URL)]
     pub(crate) release_api_base_url: String,
 
