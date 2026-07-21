@@ -57,6 +57,16 @@ impl Machine<'_> {
             "virtio-blk-pci,drive=hd1",
         ]);
 
+        // Verity volumes are emitted after hd1 and before networking, matching
+        // dstack-vmm's QEMU device order.
+        for i in 0..self.num_verity_volumes {
+            let id = format!("vol{i}");
+            cmd.arg("-drive").arg(format!(
+                "file={dummy_disk},if=none,id={id},format=raw,readonly=on"
+            ));
+            cmd.arg("-device").arg(format!("virtio-blk-pci,drive={id}"));
+        }
+
         // One virtio-net-pci per NIC. Emitted at the same position and, for the
         // default single-NIC case, with the exact same args as the previous
         // hardcoded layout so RTMR0 stays byte-for-byte unchanged.

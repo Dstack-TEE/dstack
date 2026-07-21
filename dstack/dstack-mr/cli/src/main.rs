@@ -70,6 +70,10 @@ struct MachineConfig {
     #[arg(long, default_value = "1")]
     num_nics: u32,
 
+    /// Number of virtio-blk verity volumes
+    #[arg(long, default_value = "0")]
+    num_verity_volumes: u32,
+
     /// Disable hotplug
     #[arg(long, default_value = "false")]
     hotplug_off: Bool,
@@ -138,6 +142,7 @@ fn main() -> Result<()> {
                 .num_gpus(config.num_gpus)
                 .num_nvswitches(config.num_nvswitches)
                 .num_nics(config.num_nics)
+                .num_verity_volumes(config.num_verity_volumes)
                 .hotplug_off(config.hotplug_off)
                 .root_verity(config.root_verity)
                 .maybe_qemu_version(config.qemu_version.clone())

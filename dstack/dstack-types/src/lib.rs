@@ -792,6 +792,10 @@ fn is_default_num_nics(n: &u32) -> bool {
     *n == default_num_nics()
 }
 
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct VmConfig {
     #[serde(with = "hex_bytes", default)]
@@ -825,6 +829,11 @@ pub struct VmConfig {
         skip_serializing_if = "is_default_num_nics"
     )]
     pub num_nics: u32,
+    /// Number of read-only verity volume devices attached to the guest. Each
+    /// volume adds a virtio-blk PCI device before the NICs and therefore
+    /// changes the measured ACPI/DSDT layout.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub num_verity_volumes: u32,
     #[serde(default)]
     pub hotplug_off: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1819,7 +1828,7 @@ mod platform_tests {
 }
 
 #[cfg(test)]
-mod vm_config_num_nics_tests {
+mod vm_config_device_count_tests {
     use super::VmConfig;
 
     fn legacy_json() -> serde_json::Value {
@@ -1835,6 +1844,7 @@ mod vm_config_num_nics_tests {
     fn legacy_config_without_num_nics_defaults_to_one() {
         let cfg: VmConfig = serde_json::from_value(legacy_json()).unwrap();
         assert_eq!(cfg.num_nics, 1);
+        assert_eq!(cfg.num_verity_volumes, 0);
     }
 
     #[test]
@@ -1856,5 +1866,21 @@ mod vm_config_num_nics_tests {
         cfg.num_nics = 2;
         let serialized = serde_json::to_value(&cfg).unwrap();
         assert_eq!(serialized.get("num_nics").and_then(|v| v.as_u64()), Some(2));
+    }
+
+    #[test]
+    fn verity_volume_count_is_serialized_only_when_nonzero() {
+        let mut cfg: VmConfig = serde_json::from_value(legacy_json()).unwrap();
+        let serialized = serde_json::to_value(&cfg).unwrap();
+        assert!(serialized.get("num_verity_volumes").is_none());
+
+        cfg.num_verity_volumes = 2;
+        let serialized = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(
+            serialized
+                .get("num_verity_volumes")
+                .and_then(|v| v.as_u64()),
+            Some(2)
+        );
     }
 }

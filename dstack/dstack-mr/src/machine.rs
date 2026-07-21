@@ -33,6 +33,9 @@ pub struct Machine<'a> {
     /// predate this field keep the historical single-NIC layout.
     #[builder(default = 1)]
     pub num_nics: u32,
+    /// Number of virtio-blk verity volumes attached before the NICs.
+    #[builder(default)]
+    pub num_verity_volumes: u32,
     pub hotplug_off: bool,
     pub root_verity: bool,
     #[builder(default)]

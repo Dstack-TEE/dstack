@@ -1400,6 +1400,7 @@ fn make_vm_config(
     // ACPI/DSDT layout and therefore RTMR0. Measure the interface count so the
     // verifier reconstructs the exact device layout.
     let num_nics = resolved_networks(manifest, &cfg.cvm).len() as u32;
+    let num_verity_volumes = manifest.volumes.len() as u32;
     let mut config = serde_json::to_value(dstack_types::VmConfig {
         os_image_hash,
         cpu_count: effective_vcpus,
@@ -1412,6 +1413,7 @@ fn make_vm_config(
         num_gpus: gpus.gpus.len() as u32,
         num_nvswitches: gpus.bridges.len() as u32,
         num_nics,
+        num_verity_volumes,
         host_share_mode: cfg.cvm.host_share_mode.clone(),
         hotplug_off: cfg.cvm.qemu_hotplug_off,
         image: Some(manifest.image.clone()),
@@ -1729,6 +1731,33 @@ mod tests {
             make_vm_config(&config, &user_manifest, &image, &compose_hash, None, None)?;
 
         assert_eq!(bridge_config, user_config);
+        Ok(())
+    }
+
+    #[test]
+    fn vm_measurement_config_includes_verity_volume_count() -> Result<()> {
+        let config = test_tdx_config()?;
+        let mut manifest = test_manifest(2048);
+        manifest.volumes = vec![
+            VmVolume {
+                source: "/volumes/a.img".into(),
+                read_only: true,
+            },
+            VmVolume {
+                source: "/volumes/b.img".into(),
+                read_only: true,
+            },
+        ];
+        let vm_config = make_vm_config(
+            &config,
+            &manifest,
+            &test_tdx_image(true),
+            &hex_of(0x22, 32),
+            None,
+            None,
+        )?;
+
+        assert_eq!(vm_config["num_verity_volumes"], 2);
         Ok(())
     }
 
