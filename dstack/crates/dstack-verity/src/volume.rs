@@ -370,11 +370,11 @@ fn write_volume_header(out: &mut fs::File, offset: u64, root_hash: &str) -> Resu
     use std::io::{Seek, SeekFrom, Write};
 
     let root = hex::decode(root_hash).context("decoding verity root hash")?;
-    if root.len() != 32 {
-        bail!("verity root must be a 32-byte SHA-256 digest");
-    }
-
-    let header = DstackVolumeHeader::new_verity(root.try_into().expect("length checked above"))
+    let root: [u8; 32] = root
+        .as_slice()
+        .try_into()
+        .context("verity root must be a 32-byte SHA-256 digest")?;
+    let header = DstackVolumeHeader::new_verity(root)
         .encode()
         .context("encoding volume header")?;
 

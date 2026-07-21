@@ -354,10 +354,10 @@ fn seed_docker(volume: &Path) -> Result<()> {
         if !source.is_dir() {
             continue;
         }
-        let target = store
-            .join("overlay2")
-            .join(layer.file_name().unwrap())
-            .join("diff");
+        let layer_id = layer
+            .file_name()
+            .context("docker layer path has no file name")?;
+        let target = store.join("overlay2").join(layer_id).join("diff");
         fs::create_dir_all(&target)?;
         if !is_mountpoint(&target)? {
             if let Err(err) = checked(
