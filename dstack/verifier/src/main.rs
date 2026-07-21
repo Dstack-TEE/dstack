@@ -39,6 +39,8 @@ pub struct Config {
     pub port: u16,
     pub image_cache_dir: String,
     pub pccs_url: Option<String>,
+    #[serde(default)]
+    pub root_ca: dstack_attest::attestation::RootCaPaths,
     pub image_download_url: String,
     pub image_download_timeout_secs: u64,
 }
@@ -269,6 +271,7 @@ async fn main() -> Result<()> {
         .merge(Env::prefixed("DSTACK_VERIFIER_"));
 
     let config: Config = figment.extract().context("Failed to load configuration")?;
+    config.root_ca.apply();
 
     // Check for oneshot modes
     if let Some(file_path) = cli.verify {

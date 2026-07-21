@@ -20,6 +20,7 @@ fs-err.workspace = true
 hex.workspace = true
 hex_fmt.workspace = true
 or-panic.workspace = true
+pem.workspace = true
 scale = { workspace = true, features = ["derive"] }
 sev-snp-attest.workspace = true
 sev-snp-qvl.workspace = true

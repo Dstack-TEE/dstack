@@ -35,6 +35,8 @@ pub(crate) struct ImageConfig {
 pub(crate) struct KmsConfig {
     pub cert_dir: PathBuf,
     pub pccs_url: Option<String>,
+    #[serde(default)]
+    pub root_ca: dstack_attest::attestation::RootCaPaths,
     /// Optional AMD KDS-compatible base URL used for SEV-SNP collateral requests.
     ///
     /// Empty by default. When set, the KMS process exports this base URL for

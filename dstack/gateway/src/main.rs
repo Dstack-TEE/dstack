@@ -237,6 +237,7 @@ async fn main() -> Result<()> {
     let figment = config::load_config_figment(args.config.as_deref());
 
     let config = figment.focus("core").extract::<Config>()?;
+    config.root_ca.apply();
 
     // Validate node_id
     if config.sync.enabled && config.sync.node_id == 0 {

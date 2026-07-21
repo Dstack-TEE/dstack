@@ -29,6 +29,89 @@ use serde_human_bytes as hex_bytes;
 use sha2::Digest as _;
 use tpm_qvl::verify::VerifiedReport as TpmVerifiedReport;
 
+const TDX_ROOT_CA_ENV: &str = "DSTACK_TDX_ROOT_CA";
+const TPM_ROOT_CA_ENV: &str = "DSTACK_TPM_ROOT_CA";
+const NSM_ROOT_CA_ENV: &str = "DSTACK_NSM_ROOT_CA";
+const SNP_MILAN_ROOT_CA_ENV: &str = "DSTACK_SNP_MILAN_ROOT_CA";
+const SNP_GENOA_ROOT_CA_ENV: &str = "DSTACK_SNP_GENOA_ROOT_CA";
+const SNP_TURIN_ROOT_CA_ENV: &str = "DSTACK_SNP_TURIN_ROOT_CA";
+
+/// File paths for attestation trust anchors. Empty fields retain the vendor
+/// production roots. Paths are read by the verifier, never by the attester.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RootCaPaths {
+    pub tdx: Option<std::path::PathBuf>,
+    pub tpm: Option<std::path::PathBuf>,
+    pub nsm: Option<std::path::PathBuf>,
+    pub sev_snp_milan: Option<std::path::PathBuf>,
+    pub sev_snp_genoa: Option<std::path::PathBuf>,
+    pub sev_snp_turin: Option<std::path::PathBuf>,
+}
+
+impl RootCaPaths {
+    /// Install paths before serving verification requests.
+    pub fn apply(&self) {
+        for (name, value) in [
+            (TDX_ROOT_CA_ENV, self.tdx.as_deref()),
+            (TPM_ROOT_CA_ENV, self.tpm.as_deref()),
+            (NSM_ROOT_CA_ENV, self.nsm.as_deref()),
+            (SNP_MILAN_ROOT_CA_ENV, self.sev_snp_milan.as_deref()),
+            (SNP_GENOA_ROOT_CA_ENV, self.sev_snp_genoa.as_deref()),
+            (SNP_TURIN_ROOT_CA_ENV, self.sev_snp_turin.as_deref()),
+        ] {
+            if let Some(path) = value {
+                std::env::set_var(name, path)
+            }
+        }
+    }
+}
+
+fn read_configured_root(env: &str) -> Result<Option<Vec<u8>>> {
+    let Some(path) = std::env::var_os(env).filter(|p| !p.is_empty()) else {
+        return Ok(None);
+    };
+    fs_err::read(&path)
+        .with_context(|| {
+            format!(
+                "failed to read root CA configured by {env} from {}",
+                std::path::Path::new(&path).display()
+            )
+        })
+        .map(Some)
+}
+
+fn nsm_quote_verifier() -> Result<nsm_qvl::QuoteVerifier> {
+    match read_configured_root(NSM_ROOT_CA_ENV)? {
+        Some(pem) => Ok(nsm_qvl::QuoteVerifier::new(
+            String::from_utf8(pem).context("NSM root CA is not UTF-8 PEM")?,
+        )),
+        None => Ok(nsm_qvl::QuoteVerifier::new_prod()),
+    }
+}
+
+fn tpm_quote_verifier(platform: Platform) -> Result<tpm_qvl::QuoteVerifier> {
+    match read_configured_root(TPM_ROOT_CA_ENV)? {
+        Some(pem) => Ok(tpm_qvl::QuoteVerifier::new(
+            String::from_utf8(pem).context("TPM root CA is not UTF-8 PEM")?,
+        )),
+        None => tpm_qvl::QuoteVerifier::new_prod(platform),
+    }
+}
+
+fn snp_quote_verifier() -> Result<sev_snp_qvl::QuoteVerifier> {
+    let mut verifier = sev_snp_qvl::QuoteVerifier::new_prod();
+    for (env, product) in [
+        (SNP_MILAN_ROOT_CA_ENV, sev_snp_qvl::AmdSnpProduct::Milan),
+        (SNP_GENOA_ROOT_CA_ENV, sev_snp_qvl::AmdSnpProduct::Genoa),
+        (SNP_TURIN_ROOT_CA_ENV, sev_snp_qvl::AmdSnpProduct::Turin),
+    ] {
+        if let Some(root) = read_configured_root(env)? {
+            verifier = verifier.with_root(product, root);
+        }
+    }
+    Ok(verifier)
+}
+
 // Re-export TpmQuote from tpm-types
 pub use tpm_types::TpmQuote;
 
@@ -51,6 +134,28 @@ fn dcap_collateral_client(pccs_url: Option<&str>) -> Result<CollateralClient> {
         Some(pccs_url) => CollateralClient::with_default_http(pccs_url),
         None => CollateralClient::from_env(),
     }
+}
+
+async fn verify_tdx_quote(pccs_url: Option<&str>, quote: &[u8]) -> Result<TdxVerifiedReport> {
+    let collateral = dcap_collateral_client(pccs_url)?.fetch(quote).await?;
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .context("system clock is before UNIX epoch")?
+        .as_secs();
+    let verifier = match read_configured_root(TDX_ROOT_CA_ENV)? {
+        Some(root) => {
+            let root = if root.starts_with(b"-----BEGIN") {
+                pem::parse(root)
+                    .context("failed to parse TDX root CA PEM")?
+                    .into_contents()
+            } else {
+                root
+            };
+            dcap_qvl::verify::QuoteVerifier::new(root)
+        }
+        None => dcap_qvl::verify::QuoteVerifier::new_prod(),
+    };
+    verifier.verify(quote, &collateral, now)
 }
 
 /// Path to sys-config.json in the host-shared dir.
@@ -907,7 +1012,8 @@ impl AttestationV1 {
                 let tdx_report =
                     verify_tdx_quote_with_events(pccs_url, quote, &runtime_events, &report_data)
                         .await?;
-                let tpm_report = tpm_qvl::get_collateral_and_verify(tpm_quote)
+                let tpm_report = tpm_quote_verifier(tpm_quote.platform)?
+                    .fetch_and_verify(tpm_quote)
                     .await
                     .context("failed to verify TPM quote")?;
                 let qualifying_data = sha256(quote);
@@ -935,13 +1041,9 @@ impl AttestationV1 {
                 let nsm = DstackNitroQuote {
                     nsm_quote: nsm_quote.clone(),
                 };
-                let verified_report = nsm_qvl::verify_attestation(
-                    &nsm.nsm_quote,
-                    nsm_qvl::AWS_NITRO_ENCLAVES_ROOT_G1,
-                    None,
-                    now,
-                )
-                .context("NSM attestation verification failed")?;
+                let verified_report = nsm_quote_verifier()?
+                    .verify(&nsm.nsm_quote, None, now)
+                    .context("NSM attestation verification failed")?;
                 let Some(user_data) = verified_report.user_data.clone() else {
                     bail!("NSM attestation document does not contain user_data");
                 };
@@ -983,8 +1085,8 @@ impl AttestationV1 {
                         &owned_kds_client
                     }
                 };
-                let verified = kds_client
-                    .verify_evidence_with_kds_fallback(report, cert_chain, &report_data)
+                let verified = snp_quote_verifier()?
+                    .fetch_and_verify(kds_client, report, cert_chain, &report_data)
                     .await?;
                 verify_snp_mr_config_host_data(mr_config, &verified.host_data)?;
                 DstackVerifiedReport::DstackAmdSevSnp(verified)
@@ -1631,8 +1733,7 @@ async fn verify_tdx_quote_with_events(
     runtime_events: &[RuntimeEvent],
     report_data: &[u8; 64],
 ) -> Result<TdxVerifiedReport> {
-    let tdx_report = dcap_collateral_client(pccs_url)?
-        .fetch_and_verify(quote)
+    let tdx_report = verify_tdx_quote(pccs_url, quote)
         .await
         .context("Failed to get collateral")?;
     validate_tcb(&tdx_report)?;
@@ -1659,13 +1760,9 @@ fn verify_aws_nitro_tpm_attestation_doc(
     report_data: &[u8; 64],
     now: Option<SystemTime>,
 ) -> Result<AwsNitroTpmVerifiedReport> {
-    let verified_report = nsm_qvl::verify_attestation(
-        attestation_doc,
-        nsm_qvl::AWS_NITRO_ENCLAVES_ROOT_G1,
-        None,
-        now,
-    )
-    .context("COSE attestation document verification failed")?;
+    let verified_report = nsm_quote_verifier()?
+        .verify(attestation_doc, None, now)
+        .context("COSE attestation document verification failed")?;
 
     let Some(user_data) = verified_report.user_data.clone() else {
         bail!("NitroTPM attestation document does not contain user_data");
@@ -2176,8 +2273,8 @@ impl Attestation {
                         &owned_kds_client
                     }
                 };
-                let verified = kds_client
-                    .verify_evidence_with_kds_fallback(&q.report, &q.cert_chain, &self.report_data)
+                let verified = snp_quote_verifier()?
+                    .fetch_and_verify(kds_client, &q.report, &q.cert_chain, &self.report_data)
                     .await?;
                 verify_snp_mr_config_host_data(&q.mr_config, &verified.host_data)?;
                 DstackVerifiedReport::DstackAmdSevSnp(verified)
@@ -2257,13 +2354,9 @@ impl Attestation {
     ) -> Result<NitroVerifiedReport> {
         // Verify COSE signature and certificate chain using nsm-qvl
         // CRL fetch is unreliable (e.g. 403 from S3), so keep it disabled here by default.
-        let verified_report = nsm_qvl::verify_attestation(
-            &nsm_quote.nsm_quote,
-            nsm_qvl::AWS_NITRO_ENCLAVES_ROOT_G1,
-            None,
-            now,
-        )
-        .context("NSM attestation verification failed")?;
+        let verified_report = nsm_quote_verifier()?
+            .verify(&nsm_quote.nsm_quote, None, now)
+            .context("NSM attestation verification failed")?;
 
         // Verify user_data matches report_data
         let Some(user_data) = verified_report.user_data.clone() else {
@@ -2291,7 +2384,9 @@ impl Attestation {
         quote: &TpmQuote,
         qualifying_data: &[u8],
     ) -> Result<TpmVerifiedReport> {
-        let report = tpm_qvl::get_collateral_and_verify(quote).await?;
+        let report = tpm_quote_verifier(quote.platform)?
+            .fetch_and_verify(quote)
+            .await?;
         let pcr_ind = self
             .quote
             .mode()
@@ -2316,8 +2411,7 @@ impl Attestation {
     }
 
     async fn verify_tdx(&self, pccs_url: Option<&str>, quote: &[u8]) -> Result<TdxVerifiedReport> {
-        let tdx_report = dcap_collateral_client(pccs_url)?
-            .fetch_and_verify(quote)
+        let tdx_report = verify_tdx_quote(pccs_url, quote)
             .await
             .context("Failed to get collateral")?;
         validate_tcb(&tdx_report)?;

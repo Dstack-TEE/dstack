@@ -123,6 +123,7 @@ async fn main() -> Result<()> {
 
     let figment = config::load_config_figment(args.config.as_deref());
     let config: KmsConfig = figment.focus("core").extract()?;
+    config.root_ca.apply();
     configure_amd_kds_base_from_config(&config);
 
     if config.onboard.enabled && !config.keys_exists() {

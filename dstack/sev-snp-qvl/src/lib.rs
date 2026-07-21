@@ -41,6 +41,115 @@ pub enum AmdSnpProduct {
     Turin,
 }
 
+/// AMD SEV-SNP quote verifier with caller-owned ARK trust anchors.
+///
+/// One ARK is required per supported processor family because AMD operates a
+/// separate hierarchy for each family. `new_prod` uses the ARKs shipped by the
+/// `sev` crate; `new` accepts PEM encoded ARKs from the caller.
+#[derive(Debug, Clone)]
+pub struct QuoteVerifier {
+    milan_ark_pem: Vec<u8>,
+    genoa_ark_pem: Vec<u8>,
+    turin_ark_pem: Vec<u8>,
+}
+
+impl QuoteVerifier {
+    pub fn new(milan_ark_pem: Vec<u8>, genoa_ark_pem: Vec<u8>, turin_ark_pem: Vec<u8>) -> Self {
+        Self {
+            milan_ark_pem,
+            genoa_ark_pem,
+            turin_ark_pem,
+        }
+    }
+
+    pub fn new_prod() -> Self {
+        Self::new(
+            builtin::milan::ARK.to_vec(),
+            builtin::genoa::ARK.to_vec(),
+            builtin::turin::ARK.to_vec(),
+        )
+    }
+
+    /// Create a production verifier overriding one product-family ARK.
+    pub fn new_with_root(product: AmdSnpProduct, ark_pem: Vec<u8>) -> Self {
+        Self::new_prod().with_root(product, ark_pem)
+    }
+
+    /// Override one product-family ARK.
+    pub fn with_root(mut self, product: AmdSnpProduct, ark_pem: Vec<u8>) -> Self {
+        match product {
+            AmdSnpProduct::Milan => self.milan_ark_pem = ark_pem,
+            AmdSnpProduct::Genoa => self.genoa_ark_pem = ark_pem,
+            AmdSnpProduct::Turin => self.turin_ark_pem = ark_pem,
+        }
+        self
+    }
+
+    fn ark(&self, product: AmdSnpProduct) -> CertBytes {
+        CertBytes {
+            bytes: match product {
+                AmdSnpProduct::Milan => self.milan_ark_pem.clone(),
+                AmdSnpProduct::Genoa => self.genoa_ark_pem.clone(),
+                AmdSnpProduct::Turin => self.turin_ark_pem.clone(),
+            },
+            encoding: CertEncoding::Pem,
+        }
+    }
+
+    pub fn verify(
+        &self,
+        report: &[u8],
+        cert_chain: &[Vec<u8>],
+        expected_report_data: &[u8; 64],
+    ) -> Result<VerifiedAmdSnpReport> {
+        let (ask, vcek) = normalize_ask_vcek_certs(cert_chain)?;
+        let verified =
+            verify_amd_snp_attestation_with_certs_and_arks(report, ask, vcek, |product| {
+                self.ark(product)
+            })?;
+        if &verified.report_data != expected_report_data {
+            bail!("amd sev-snp report_data mismatch");
+        }
+        Ok(verified)
+    }
+
+    pub async fn fetch_and_verify(
+        &self,
+        kds_client: &AmdKdsClient,
+        report: &[u8],
+        cert_chain: &[Vec<u8>],
+        expected_report_data: &[u8; 64],
+    ) -> Result<VerifiedAmdSnpReport> {
+        if !cert_chain.is_empty() {
+            return self.verify(report, cert_chain, expected_report_data);
+        }
+        let report_obj = AttestationReport::from_bytes(report)
+            .map_err(|err| anyhow!("failed to parse amd sev-snp report: {err}"))?;
+        let mut errors = Vec::new();
+        for product in amd_snp_product_candidates_for_report(&report_obj)? {
+            match kds_client
+                .fetch_collateral_for_product(product, &report_obj)
+                .await
+            {
+                Ok(collateral) => match verify_amd_snp_attestation_with_cert_chain(
+                    report,
+                    self.ark(product),
+                    collateral.ask,
+                    collateral.vcek,
+                ) {
+                    Ok(verified) if &verified.report_data == expected_report_data => {
+                        return Ok(verified);
+                    }
+                    Ok(_) => bail!("amd sev-snp report_data mismatch"),
+                    Err(err) => errors.push(format!("{}: {err:#}", product.kds_name())),
+                },
+                Err(err) => errors.push(format!("{}: {err:#}", product.kds_name())),
+            }
+        }
+        bail!("amd sev-snp verification failed: {}", errors.join("; "))
+    }
+}
+
 impl AmdSnpProduct {
     fn kds_name(self) -> &'static str {
         match self {
@@ -401,6 +510,17 @@ fn verify_amd_snp_attestation_with_certs(
     ask_bytes: CertBytes,
     vcek_bytes: CertBytes,
 ) -> Result<VerifiedAmdSnpReport> {
+    verify_amd_snp_attestation_with_certs_and_arks(report_bytes, ask_bytes, vcek_bytes, |product| {
+        product.builtin_ark()
+    })
+}
+
+fn verify_amd_snp_attestation_with_certs_and_arks(
+    report_bytes: &[u8],
+    ask_bytes: CertBytes,
+    vcek_bytes: CertBytes,
+    ark_for_product: impl Fn(AmdSnpProduct) -> CertBytes,
+) -> Result<VerifiedAmdSnpReport> {
     if report_bytes.len() != 1184 {
         bail!(
             "invalid amd sev-snp report length: expected 1184 bytes, got {}",
@@ -413,7 +533,7 @@ fn verify_amd_snp_attestation_with_certs(
     for product in amd_snp_product_candidates_for_report(&report)? {
         match verify_amd_snp_attestation_with_cert_chain(
             report_bytes,
-            product.builtin_ark(),
+            ark_for_product(product),
             ask_bytes.clone(),
             vcek_bytes.clone(),
         ) {

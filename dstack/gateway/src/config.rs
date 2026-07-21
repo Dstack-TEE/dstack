@@ -220,6 +220,8 @@ pub struct Config {
     pub wg: WgConfig,
     pub proxy: ProxyConfig,
     pub pccs_url: Option<String>,
+    #[serde(default)]
+    pub root_ca: dstack_attest::attestation::RootCaPaths,
     pub recycle: RecycleConfig,
     pub set_ulimit: bool,
     pub rpc_domain: String,
