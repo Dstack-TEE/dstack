@@ -13,10 +13,28 @@ use serde_json::json;
 /// `kms_enabled` selects KMS mode (deterministic, upgradeable per-app keys);
 /// gateway and local-key-provider are off for the direct-port single-node flow.
 pub fn build_app_compose(name: &str, docker_compose_yaml: &str, kms_enabled: bool) -> String {
-    let manifest = json!({
-        "manifest_version": 2,
+    build_app_compose_with_runtime(
+        name,
+        docker_compose_yaml,
+        kms_enabled,
+        "docker-compose",
+        None,
+    )
+}
+
+/// Build an app-compose manifest with an explicitly selected compose frontend.
+/// `snapshotter` is meaningful only for `nerdctl-compose`.
+pub fn build_app_compose_with_runtime(
+    name: &str,
+    docker_compose_yaml: &str,
+    kms_enabled: bool,
+    runner: &str,
+    snapshotter: Option<&str>,
+) -> String {
+    let mut manifest = json!({
+        "manifest_version": if runner == "nerdctl-compose" { json!("3") } else { json!(2) },
         "name": name,
-        "runner": "docker-compose",
+        "runner": runner,
         "docker_compose_file": docker_compose_yaml,
         "kms_enabled": kms_enabled,
         "gateway_enabled": false,
@@ -31,7 +49,30 @@ pub fn build_app_compose(name: &str, docker_compose_yaml: &str, kms_enabled: boo
         // (NTS is also currently broken in guest images — see dstack#745.)
         "secure_time": false,
     });
+    if let Some(snapshotter) = snapshotter {
+        manifest["snapshotter"] = json!(snapshotter);
+    }
     // pretty-print via Value's Display (`{:#}`) — infallible, and byte-identical
     // to serde_json::to_string_pretty (avoids an expect on an unfailable Result).
     format!("{manifest:#}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nerdctl_manifest_uses_v3_and_records_snapshotter() {
+        let body = build_app_compose_with_runtime(
+            "test",
+            "services: {}",
+            false,
+            "nerdctl-compose",
+            Some("stargz"),
+        );
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(value["manifest_version"], "3");
+        assert_eq!(value["runner"], "nerdctl-compose");
+        assert_eq!(value["snapshotter"], "stargz");
+    }
 }

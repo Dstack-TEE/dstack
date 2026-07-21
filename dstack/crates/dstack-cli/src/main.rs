@@ -11,7 +11,7 @@
 //! `logs`, a global `-j/--json`).
 
 use anyhow::{bail, Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use dstack_cli_core::layout::InstallLayout;
 use dstack_cli_core::vmm::{Vmm, DEFAULT_HOST};
 use dstack_cli_core::{compose, ports, rpc};
@@ -44,6 +44,37 @@ struct Cli {
 
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+enum ComposeRunner {
+    #[default]
+    DockerCompose,
+    NerdctlCompose,
+}
+
+impl ComposeRunner {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::DockerCompose => "docker-compose",
+            Self::NerdctlCompose => "nerdctl-compose",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum Snapshotter {
+    Overlayfs,
+    Stargz,
+}
+
+impl Snapshotter {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Overlayfs => "overlayfs",
+            Self::Stargz => "stargz",
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -84,6 +115,12 @@ enum Command {
         /// build + hash the compose and print it, without deploying.
         #[arg(long)]
         dry_run: bool,
+        /// compose frontend used inside the guest.
+        #[arg(long, value_enum, default_value = "docker-compose")]
+        runner: ComposeRunner,
+        /// containerd snapshotter (supported only with --runner nerdctl-compose).
+        #[arg(long, value_enum)]
+        snapshotter: Option<Snapshotter>,
     },
     /// List deployed apps.
     Apps,
@@ -144,6 +181,8 @@ async fn main() -> Result<()> {
             no_kms,
             allowlist,
             dry_run,
+            runner,
+            snapshotter,
         } => {
             let compose = resolve_compose_arg(compose, compose_file)?;
             let image = if use_local_defaults {
@@ -174,6 +213,8 @@ async fn main() -> Result<()> {
                 allowlist.as_deref(),
                 dry_run,
                 json,
+                runner,
+                snapshotter,
             )
             .await
         }
@@ -347,10 +388,21 @@ async fn cmd_deploy(
     allowlist: Option<&str>,
     dry_run: bool,
     json: bool,
+    runner: ComposeRunner,
+    snapshotter: Option<Snapshotter>,
 ) -> Result<()> {
+    if matches!(runner, ComposeRunner::DockerCompose) && snapshotter.is_some() {
+        bail!("--snapshotter is only supported with --runner nerdctl-compose");
+    }
     let yaml = std::fs::read_to_string(compose_path)
         .with_context(|| format!("reading compose file '{compose_path}'"))?;
-    let app_compose = compose::build_app_compose(name, &yaml, !no_kms);
+    let app_compose = compose::build_app_compose_with_runtime(
+        name,
+        &yaml,
+        !no_kms,
+        runner.as_str(),
+        snapshotter.map(Snapshotter::as_str),
+    );
 
     let mut port_maps = Vec::new();
     for spec in port_specs {

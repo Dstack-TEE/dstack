@@ -102,10 +102,12 @@ class AppCompose:
         requirements: Optional[Union[Requirements, Dict[str, Any]]] = None,
         bash_script: Optional[str] = None,  # Legacy
         pre_launch_script: Optional[str] = None,  # Legacy
+        snapshotter: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize a new ``AppCompose`` instance with arbitrary extra fields."""
         self.runner = runner
+        self.snapshotter = snapshotter
         self.manifest_version = manifest_version
         self.name = name
         self.features = features
@@ -216,7 +218,7 @@ def preprocess_app_compose(app_compose: AppCompose) -> AppCompose:
 
     if data.get("runner") == "bash" and "docker_compose_file" in data:
         del data["docker_compose_file"]
-    elif data.get("runner") == "docker-compose" and "bash_script" in data:
+    elif data.get("runner") in ("docker-compose", "nerdctl-compose") and "bash_script" in data:
         del data["bash_script"]
 
     if "pre_launch_script" in data and not data["pre_launch_script"]:

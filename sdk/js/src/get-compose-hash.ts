@@ -61,6 +61,7 @@ export interface AppCompose extends SortableObject {
   // Deprecated
   features?: string[];
   runner: string;
+  snapshotter?: "overlayfs" | "stargz";
   docker_compose_file?: string;
   docker_config?: DockerConfig;
   public_logs?: boolean;
@@ -86,7 +87,7 @@ function preprocessAppCompose(dic: AppCompose): AppCompose {
   const obj: AppCompose = { ...dic };
   if (obj.runner === "bash" && "docker_compose_file" in obj) {
     delete obj.docker_compose_file;
-  } else if (obj.runner === "docker-compose" && "bash_script" in obj) {
+  } else if ((obj.runner === "docker-compose" || obj.runner === "nerdctl-compose") && "bash_script" in obj) {
     delete obj.bash_script;
   }
   if ("pre_launch_script" in obj && !obj.pre_launch_script) {

@@ -51,6 +51,7 @@ type AppCompose struct {
 	Name                    string          `json:"name,omitempty"`
 	Features                []string        `json:"features,omitempty"` // Deprecated
 	Runner                  string          `json:"runner"`
+	Snapshotter             string          `json:"snapshotter,omitempty"`
 	DockerComposeFile       string          `json:"docker_compose_file,omitempty"`
 	DockerConfig            *DockerConfig   `json:"docker_config,omitempty"`
 	PublicLogs              *bool           `json:"public_logs,omitempty"`
@@ -74,7 +75,7 @@ type AppCompose struct {
 func preprocessAppCompose(appCompose AppCompose) AppCompose {
 	if appCompose.Runner == "bash" {
 		appCompose.DockerComposeFile = ""
-	} else if appCompose.Runner == "docker-compose" {
+	} else if appCompose.Runner == "docker-compose" || appCompose.Runner == "nerdctl-compose" {
 		appCompose.BashScript = ""
 	}
 

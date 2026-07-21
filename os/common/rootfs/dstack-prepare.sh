@@ -285,14 +285,36 @@ dstack-util setup --work-dir $WORK_DIR --device "$DATA_DEVICE" --mount-point $DA
 log "Mounting container runtime dirs to persistent storage"
 mkdir -p $DATA_MNT/var/lib/docker
 mkdir -p $DATA_MNT/var/lib/containerd
+mkdir -p $DATA_MNT/var/lib/containerd-stargz-grpc
 mkdir -p $DATA_MNT/var/lib/sysbox
 mkdir -p /var/lib/docker
 mkdir -p /var/lib/containerd
+mkdir -p /var/lib/containerd-stargz-grpc
 mkdir -p /var/lib/sysbox
 mount --rbind $DATA_MNT/var/lib/docker /var/lib/docker
 mount --rbind $DATA_MNT/var/lib/containerd /var/lib/containerd
+mount --rbind $DATA_MNT/var/lib/containerd-stargz-grpc /var/lib/containerd-stargz-grpc
 mount --rbind $DATA_MNT/var/lib/sysbox /var/lib/sysbox
 mount --rbind $WORK_DIR /dstack
+
+# Register the optional remote snapshotter. docker-compose continues to use
+# Docker's own overlayfs image store; nerdctl-compose selects this plugin only
+# when app-compose.json requests snapshotter=stargz.
+CONTAINERD_CONFIG=/etc/containerd/config.toml
+mkdir -p /etc/containerd
+if [ ! -s "$CONTAINERD_CONFIG" ]; then
+	containerd config default >"$CONTAINERD_CONFIG"
+fi
+if ! grep -qE '^[[:space:]]*\[proxy_plugins\.stargz\]' "$CONTAINERD_CONFIG"; then
+	cat >>"$CONTAINERD_CONFIG" <<'EOF'
+
+[proxy_plugins.stargz]
+  type = "snapshot"
+  address = "/run/containerd-stargz-grpc/containerd-stargz-grpc.sock"
+  [proxy_plugins.stargz.exports]
+    root = "/var/lib/containerd-stargz-grpc/"
+EOF
+fi
 
 echo "======== Disk usage ========"
 df -h
@@ -309,7 +331,7 @@ fi
 
 RUNNER=$(jq -r '.runner' app-compose.json)
 case "$RUNNER" in
-docker-compose)
+docker-compose|nerdctl-compose)
 	if [[ ! -f docker-compose.yaml ]]; then
 		jq -r '.docker_compose_file' app-compose.json >docker-compose.yaml
 	fi

@@ -13,6 +13,9 @@ IMAGE_INSTALL = "\
     nftables \
     docker-moby \
     docker-compose \
+    nerdctl \
+    containerd-cni \
+    stargz-snapshotter \
     dstack-guest \
     wireguard-tools \
     cryptsetup \

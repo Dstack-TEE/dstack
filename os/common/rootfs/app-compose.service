@@ -1,7 +1,7 @@
 [Unit]
 Description=App Compose Service
-Wants=docker.service
-After=docker.service dstack-prepare.service dstack-guest-agent.service
+Wants=docker.service containerd.service containerd-stargz-grpc.service
+After=docker.service containerd.service containerd-stargz-grpc.service dstack-prepare.service dstack-guest-agent.service
 
 [Service]
 Type=oneshot
@@ -9,7 +9,7 @@ RemainAfterExit=true
 EnvironmentFile=-/dstack/.host-shared/.decrypted-env
 WorkingDirectory=/dstack
 ExecStart=/bin/app-compose.sh
-ExecStop=/bin/docker compose stop
+ExecStop=/bin/app-compose.sh stop
 StandardOutput=journal+console
 StandardError=journal+console
 
