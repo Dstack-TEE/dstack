@@ -63,15 +63,13 @@ fn main() -> Result<()> {
         "discovered dstack volumes"
     );
     let mut used = HashSet::new();
-    let mut failures = 0;
     for (index, requested) in compose.verity_volumes.iter().enumerate() {
-        if let Err(err) = activate_requested(index, requested, &volumes, &mut used) {
-            failures += 1;
-            warn!(index, target = %requested.target.display(), error = %format_args!("{err:#}"), "failed to activate required volume");
-        }
-    }
-    if failures != 0 {
-        bail!("failed to activate {failures} required volume(s)");
+        activate_requested(index, requested, &volumes, &mut used).with_context(|| {
+            format!(
+                "failed to activate required volume {index} at {}",
+                requested.target.display()
+            )
+        })?;
     }
     Ok(())
 }

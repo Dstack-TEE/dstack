@@ -11,12 +11,11 @@ use dstack_types::AppCompose;
 use dstack_vmm_rpc as rpc;
 use dstack_vmm_rpc::vmm_server::{VmmRpc, VmmServer};
 use dstack_vmm_rpc::{
-    AppId, ComposeHash as RpcComposeHash, DhcpLeaseRequest, GatewaySettings, GetInfoResponse,
-    GetMetaResponse, Id, ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings,
-    ListGpusResponse, PublicKeyResponse, PullRegistryImageRequest, RegistryImageInfo,
-    RegistryImageListResponse, ReloadVmsResponse, ResizeVmRequest, ResourcesSettings,
-    StatusRequest, StatusResponse, SvListResponse, SvProcessInfo, UpdateVmRequest, VersionResponse,
-    VmConfiguration,
+    AppId, ComposeHash as RpcComposeHash, GatewaySettings, GetInfoResponse, GetMetaResponse, Id,
+    ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings, ListGpusResponse, PublicKeyResponse,
+    PullRegistryImageRequest, RegistryImageInfo, RegistryImageListResponse, ReloadVmsResponse,
+    ResizeVmRequest, ResourcesSettings, StatusRequest, StatusResponse, SvListResponse,
+    SvProcessInfo, UpdateVmRequest, VersionResponse, VmConfiguration,
 };
 use fs_err as fs;
 use or_panic::ResultOrPanic;
@@ -285,7 +284,6 @@ fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Result<Option<Network
         dhcp_start: String::new(),
         restrict: false,
         netdev: String::new(),
-        forward_service_enabled: false,
     }))
 }
 
@@ -577,9 +575,6 @@ impl VmmRpc for RpcHandler {
             .load_vm(&vm_work_dir, &Default::default(), false)
             .await
             .context("Failed to load VM")?;
-        if request.update_ports {
-            self.app.reconfigure_port_forward(&request.id).await;
-        }
         Ok(Id { id: new_id })
     }
 
@@ -695,7 +690,6 @@ impl VmmRpc for RpcHandler {
                     NetworkingMode::Bridge => "bridge".to_string(),
                     NetworkingMode::Custom => String::new(),
                 },
-                forward_service_enabled: default_networking.forward_service_enabled,
                 default_bridge: default_networking.bridge.clone(),
             }),
         })
@@ -722,11 +716,6 @@ impl VmmRpc for RpcHandler {
     async fn reload_vms(self) -> Result<ReloadVmsResponse> {
         info!("Reloading VMs directory and syncing with memory state");
         self.app.reload_vms_sync().await
-    }
-
-    async fn report_dhcp_lease(self, request: DhcpLeaseRequest) -> Result<()> {
-        self.app.report_dhcp_lease(&request.mac, &request.ip).await;
-        Ok(())
     }
 
     async fn sv_list(self) -> Result<SvListResponse> {
@@ -989,29 +978,6 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("custom networking mode"));
-    }
-
-    #[test]
-    fn multiple_bridges_are_rejected_when_builtin_forwarding_is_enabled() {
-        let mut cvm_config = test_cvm_config();
-        cvm_config.networking.forward_service_enabled = true;
-        let mut request = test_vm_configuration();
-        request.networks = vec![
-            rpc::NetworkingConfig {
-                mode: "bridge".to_string(),
-                bridge_name: "lo".to_string(),
-            },
-            rpc::NetworkingConfig {
-                mode: "bridge".to_string(),
-                bridge_name: "lo".to_string(),
-            },
-        ];
-
-        let err = create_manifest_from_vm_config(request, &cvm_config).unwrap_err();
-
-        assert!(err
-            .to_string()
-            .contains("built-in port forwarding supports only one bridge"));
     }
 
     #[test]
