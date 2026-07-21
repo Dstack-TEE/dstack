@@ -54,8 +54,6 @@ enum VolumeCommand {
         #[arg(default_value = "app-compose.json")]
         compose: PathBuf,
     },
-    /// Activate one required volume by its index in app compose.
-    Mount { compose: PathBuf, index: usize },
     /// List recognized dstack volume devices.
     Scan,
     /// Compare required volumes with attached and active devices.
@@ -69,7 +67,6 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt().init();
     match Cli::parse().command {
         VolumeCommand::MountAll { compose } => mount_all(compose),
-        VolumeCommand::Mount { compose, index } => mount_one(compose, index),
         VolumeCommand::Scan => scan(),
         VolumeCommand::Status { compose } => status(compose),
     }
@@ -109,21 +106,6 @@ fn mount_all(compose_path: PathBuf) -> Result<()> {
         })?;
     }
     Ok(())
-}
-
-fn mount_one(compose_path: PathBuf, index: usize) -> Result<()> {
-    let compose = read_compose(&compose_path)?;
-    let requested = compose
-        .verity_volumes
-        .get(index)
-        .with_context(|| format!("volume index {index} is out of range"))?;
-    let volumes = prepare_volumes()?;
-    activate_requested(index, requested, &volumes, &mut HashSet::new()).with_context(|| {
-        format!(
-            "failed to activate required volume {index} at {}",
-            requested.target.display()
-        )
-    })
 }
 
 fn scan() -> Result<()> {

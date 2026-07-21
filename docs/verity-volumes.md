@@ -75,8 +75,7 @@ reads them.
 
 For diagnostics, `dstack-volume scan` lists recognized disks and
 `dstack-volume status app-compose.json` compares requested roots with attached
-and active devices. A single entry can be activated with
-`dstack-volume mount app-compose.json INDEX`.
+and active devices.
 
 ## Trust and limitations
 
