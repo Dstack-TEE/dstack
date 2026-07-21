@@ -286,14 +286,17 @@ log "Mounting container runtime dirs to persistent storage"
 mkdir -p $DATA_MNT/var/lib/docker
 mkdir -p $DATA_MNT/var/lib/containerd
 mkdir -p $DATA_MNT/var/lib/containerd-stargz-grpc
+mkdir -p $DATA_MNT/var/lib/nerdctl
 mkdir -p $DATA_MNT/var/lib/sysbox
 mkdir -p /var/lib/docker
 mkdir -p /var/lib/containerd
 mkdir -p /var/lib/containerd-stargz-grpc
+mkdir -p /var/lib/nerdctl
 mkdir -p /var/lib/sysbox
 mount --rbind $DATA_MNT/var/lib/docker /var/lib/docker
 mount --rbind $DATA_MNT/var/lib/containerd /var/lib/containerd
 mount --rbind $DATA_MNT/var/lib/containerd-stargz-grpc /var/lib/containerd-stargz-grpc
+mount --rbind $DATA_MNT/var/lib/nerdctl /var/lib/nerdctl
 mount --rbind $DATA_MNT/var/lib/sysbox /var/lib/sysbox
 mount --rbind $WORK_DIR /dstack
 
