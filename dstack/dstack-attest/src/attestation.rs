@@ -1733,7 +1733,7 @@ async fn verify_tdx_quote_with_events(
     let tdx_report = verifier
         .verify_tdx_quote(quote)
         .await
-        .context("Failed to get collateral")?;
+        .context("failed to verify TDX quote")?;
     validate_tcb(&tdx_report)?;
 
     let td_report = tdx_report.report.as_td10().context("no td report")?;
@@ -2394,7 +2394,7 @@ impl Attestation {
         let tdx_report = verifier
             .verify_tdx_quote(quote)
             .await
-            .context("Failed to get collateral")?;
+            .context("failed to verify TDX quote")?;
         validate_tcb(&tdx_report)?;
 
         let td_report = tdx_report.report.as_td10().context("no td report")?;
