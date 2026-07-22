@@ -3,6 +3,7 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 DEST=${1:?staging tree required}
+DEST=$(realpath -m "$DEST")
 FLAVOR=${2:-prod}
 install -d "$DEST/usr/bin" "$DEST/usr/lib/systemd/system" \
   "$DEST/etc/systemd/journald.conf.d" "$DEST/etc/systemd/resolved.conf.d" \
@@ -24,15 +25,17 @@ cp -a "$ROOT/os/common/rootfs/containerd.service.d/." "$DEST/etc/systemd/system/
 # build deterministic and prevents an accidental lockfile update.
 if [[ ${DSTACK_SKIP_RUST:-0} != 1 ]]; then
   export CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true
-  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$ROOT=/usr/src/dstack -C strip=debuginfo"
+  build_root=$(dirname "$DEST")
+  export CARGO_TARGET_DIR="$build_root/dstack-cargo-target"
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$ROOT=/usr/src/dstack --remap-path-prefix=$build_root=/usr/src/dstack-build -C strip=debuginfo"
   cargo build --locked --offline --release --manifest-path "$ROOT/dstack/Cargo.toml" \
     -p dstack-guest-agent -p dstack-util
-  install -m0755 "$ROOT/dstack/target/release/dstack-guest-agent" \
-    "$ROOT/dstack/target/release/dstack-util" "$DEST/usr/bin/"
+  install -m0755 "$CARGO_TARGET_DIR/release/dstack-guest-agent" \
+    "$CARGO_TARGET_DIR/release/dstack-util" "$DEST/usr/bin/"
   if [[ $FLAVOR == dev ]]; then
     cargo build --locked --offline --release --manifest-path "$ROOT/dstack/Cargo.toml" \
       -p dstack-tee-simulator
-    install -m0755 "$ROOT/dstack/target/release/dstack-tee-simulator" "$DEST/usr/bin/"
+    install -m0755 "$CARGO_TARGET_DIR/release/dstack-tee-simulator" "$DEST/usr/bin/"
     install -Dm0644 "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-tee-simulator/files/dstack-tee-simulator.service" \
       "$DEST/usr/lib/systemd/system/dstack-tee-simulator.service"
     install -Dm0644 "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-tee-simulator/files/tee-simulator.conf" \

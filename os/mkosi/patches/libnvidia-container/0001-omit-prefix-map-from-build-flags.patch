@@ -1,0 +1,15 @@
+# Prefix-map arguments contain the intentionally different clean-build path.
+# They must affect compilation without becoming runtime version metadata.
+diff --git a/Makefile b/Makefile
+index 1a5115c..87c501c 100644
+--- a/Makefile
++++ b/Makefile
+@@ -203,7 +203,7 @@ DEPENDENCIES   := $(BIN_OBJS:%.o=%.d) $(LIB_OBJS:%.lo=%.d)
+ $(BUILD_DEFS):
+ 	@printf '#define BUILD_DATE     "%s"\n' '$(strip $(DATE))' >$(BUILD_DEFS)
+ 	@printf '#define BUILD_COMPILER "%s " __VERSION__\n' '$(notdir $(COMPILER))' >>$(BUILD_DEFS)
+-	@printf '#define BUILD_FLAGS    "%s"\n' '$(strip $(CPPFLAGS) $(CFLAGS) $(LDFLAGS))' >>$(BUILD_DEFS)
++	@printf '#define BUILD_FLAGS    "%s"\n' '$(strip $(filter-out -ffile-prefix-map=% -fmacro-prefix-map=%,$(CPPFLAGS) $(CFLAGS) $(LDFLAGS)))' >>$(BUILD_DEFS)
+ 	@printf '#define BUILD_REVISION "%s"\n' '$(strip $(REVISION))' >>$(BUILD_DEFS)
+ 	@printf '#define BUILD_PLATFORM "%s"\n' '$(strip $(PLATFORM))' >>$(BUILD_DEFS)
+ 

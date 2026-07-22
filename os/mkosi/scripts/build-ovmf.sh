@@ -6,6 +6,8 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 BUILD_DIR=${1:?build directory required}
 OUT=${2:?output file required}
+BUILD_DIR=$(realpath -m "$BUILD_DIR")
+OUT=$(realpath -m "$OUT")
 REV=fbe0805b2091393406952e84724188f8c1941837
 src="$BUILD_DIR/edk2"
 if [[ ! -d $src/.git ]]; then

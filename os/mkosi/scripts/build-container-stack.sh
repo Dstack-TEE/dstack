@@ -7,6 +7,8 @@ SELF="$ROOT/os/mkosi"
 source "$SELF/versions.env"
 BUILD_DIR=${1:?build directory required}
 STAGE=${2:?rootfs staging tree required}
+BUILD_DIR=$(realpath -m "$BUILD_DIR")
+STAGE=$(realpath -m "$STAGE")
 mkdir -p "$BUILD_DIR/downloads" "$STAGE/usr/bin"
 
 checkout() {
@@ -17,6 +19,7 @@ checkout() {
   git -C "$dir" fetch -q --depth=1 origin "$rev"
   git -C "$dir" checkout -q --detach FETCH_HEAD
   git -C "$dir" reset -q --hard "$rev"
+  git -C "$dir" clean -qfdx
 }
 fetch_sha256() {
   local url=$1 sha=$2 output=$3
@@ -26,8 +29,17 @@ fetch_sha256() {
 
 lnc="$BUILD_DIR/libnvidia-container"
 checkout https://github.com/NVIDIA/libnvidia-container.git "$LIBNVIDIA_CONTAINER_REVISION" "$lnc"
+patch -d "$lnc" -p1 --fuzz=0 < \
+  "$SELF/patches/libnvidia-container/0001-omit-prefix-map-from-build-flags.patch"
+export CFLAGS="${CFLAGS:-} -O2 -g0 -ffile-prefix-map=$BUILD_DIR=/usr/src/container-stack -fmacro-prefix-map=$BUILD_DIR=/usr/src/container-stack"
+export LDFLAGS="${LDFLAGS:-} -Wl,--build-id=none"
+export CGO_CFLAGS="$CFLAGS"
+export GOFLAGS="${GOFLAGS:-} -trimpath -buildvcs=false"
 make -C "$lnc" -j"${JOBS:-$(nproc)}" LIB_VERSION=1.18.1 \
   WITH_NVCGO=yes WITH_LIBELF=yes WITH_TIRPC=yes all
+# Upstream adds a CRC of its unshipped split-debug file. The debug file is not
+# installed, and its CRC varies with the clean build directory.
+objcopy --remove-section=.gnu_debuglink "$lnc/libnvidia-container.so.1.18.1"
 install -m0755 "$lnc/nvidia-container-cli" "$STAGE/usr/bin/"
 install -Dm0755 "$lnc/libnvidia-container.so.1.18.1" "$STAGE/usr/lib/x86_64-linux-gnu/libnvidia-container.so.1.18.1"
 ln -sfn libnvidia-container.so.1.18.1 "$STAGE/usr/lib/x86_64-linux-gnu/libnvidia-container.so.1"

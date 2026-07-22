@@ -7,6 +7,7 @@ ROOT=$(cd "$SELF/../.." && pwd)
 source "$SELF/versions.env"
 action=${1:-image}
 BUILD_DIR=${2:-$SELF/build}
+BUILD_DIR=$(realpath -m "$BUILD_DIR")
 case "$action" in
   image|repro-check|lint) ;;
   *) echo "Usage: $0 {image|repro-check|lint} [build-dir]" >&2; exit 2 ;;
@@ -66,6 +67,9 @@ EOF
   mkosi --directory "$SELF" --force --extra-tree="$stage" "${devargs[@]}" \
     --format=directory --output-directory="$work" --output=rootfs \
     --compress-output=no --bootable=no build
+  # ldconfig's binary auxiliary cache records traversal-dependent ordering.
+  # /var is volatile at runtime, so ship no host-generated cache.
+  rm -f "$tree/var/cache/ldconfig/aux-cache"
   mkdir -p "$tree/usr/lib/modules"
   cp -a "$kstage/usr/lib/modules/." "$tree/usr/lib/modules/"
   "$SELF/tests/check-parity.py" "$SELF/parity.json" "$tree" "$kstage" "$flavor"

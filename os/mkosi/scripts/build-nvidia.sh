@@ -32,14 +32,15 @@ rm -rf "$src"
 chmod +x "$run"
 "$run" -x --target "$src" >/dev/null
 patch -d "$src" -p1 --fuzz=0 < "$SELF/patches/nvidia/0001-linux-7.1-drop-legacy-of-gpio-api.patch"
+module_map="-fdebug-prefix-map=$BUILD_DIR=/usr/src/nvidia -fmacro-prefix-map=$BUILD_DIR=/usr/src/nvidia -fdebug-prefix-map=$KERNEL_SRC=/usr/src/linux -fmacro-prefix-map=$KERNEL_SRC=/usr/src/linux -fdebug-prefix-map=$KERNEL_BUILD=/usr/src/linux-build -fmacro-prefix-map=$KERNEL_BUILD=/usr/src/linux-build"
 # Linux 7.1's gen-btf.sh cannot execute its space-containing PAHOLE wrapper
 # for external modules (the awk program is passed with literal quotes). Keep
 # BTF enabled for the kernel/in-tree modules, but omit it for NVIDIA's modules.
 make -C "$src/kernel-open" -j"${JOBS:-$(nproc)}" \
   SYSSRC="$KERNEL_SRC" SYSOUT="$KERNEL_BUILD" \
-  CONFIG_DEBUG_INFO_BTF_MODULES= modules
+  KCFLAGS="$module_map" CONFIG_DEBUG_INFO_BTF_MODULES= modules
 make -C "$src/kernel-open" SYSSRC="$KERNEL_SRC" SYSOUT="$KERNEL_BUILD" \
-  CONFIG_DEBUG_INFO_BTF_MODULES= INSTALL_MOD_PATH="$KERNEL_STAGE" modules_install
+  KCFLAGS="$module_map" CONFIG_DEBUG_INFO_BTF_MODULES= INSTALL_MOD_PATH="$KERNEL_STAGE" modules_install
 if [[ -d $KERNEL_STAGE/lib/modules ]]; then
   mkdir -p "$KERNEL_STAGE/usr/lib/modules"
   cp -a "$KERNEL_STAGE/lib/modules/." "$KERNEL_STAGE/usr/lib/modules/"

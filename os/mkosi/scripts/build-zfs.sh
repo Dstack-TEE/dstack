@@ -13,7 +13,9 @@ KERNEL_STAGE=$(realpath -m "${5:?kernel staging tree required}")
 src="$B/zfs"
 export CFLAGS="${CFLAGS:-} -O2 -g0 -ffile-prefix-map=$B=/usr/src/zfs"
 export CXXFLAGS="${CXXFLAGS:-} -O2 -g0 -ffile-prefix-map=$B=/usr/src/zfs"
-export KCFLAGS="${KCFLAGS:-} -fmacro-prefix-map=$B=/usr/src/zfs"
+export KCFLAGS="${KCFLAGS:-} -fdebug-prefix-map=$B=/usr/src/zfs -fmacro-prefix-map=$B=/usr/src/zfs -fdebug-prefix-map=$KERNEL_SRC=/usr/src/linux -fmacro-prefix-map=$KERNEL_SRC=/usr/src/linux -fdebug-prefix-map=$KERNEL_BUILD=/usr/src/linux-build -fmacro-prefix-map=$KERNEL_BUILD=/usr/src/linux-build"
+export KAFLAGS="${KAFLAGS:-} $KCFLAGS"
+export KCPPFLAGS="${KCPPFLAGS:-} $KCFLAGS"
 if [[ ! -d $src/.git ]]; then git init -q "$src"; git -C "$src" remote add origin https://github.com/openzfs/zfs.git; fi
 git -C "$src" fetch -q --depth=1 origin "$ZFS_REVISION"
 git -C "$src" checkout -q --detach FETCH_HEAD
@@ -27,8 +29,11 @@ mkdir -p "$B/build"
   --with-linux-obj="$KERNEL_BUILD" --with-config=all --enable-systemd \
   --disable-pyzfs --without-dracutdir --with-udevdir=/usr/lib/udev \
   --with-systemdunitdir=/usr/lib/systemd/system)
-make -C "$B/build" -j"${JOBS:-$(nproc)}"
-make -C "$B/build" DESTDIR="$ROOT_STAGE" install
+# Linux 7.1 drives pahole 1.25's nondeterministic optimized encoder for
+# external modules. Kernel/in-tree BTF remains enabled; omit only ZFS module
+# BTF, as is also required for NVIDIA's external modules on this toolchain.
+make -C "$B/build" -j"${JOBS:-$(nproc)}" CONFIG_DEBUG_INFO_BTF_MODULES=
+make -C "$B/build" CONFIG_DEBUG_INFO_BTF_MODULES= DESTDIR="$ROOT_STAGE" install
 # ZFS installs kernel modules below DESTDIR/lib; merge them into usr-merge.
 if [[ -d $ROOT_STAGE/lib/modules ]]; then
   mkdir -p "$KERNEL_STAGE/usr/lib/modules"

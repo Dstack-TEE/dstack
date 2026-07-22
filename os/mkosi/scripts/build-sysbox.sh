@@ -7,6 +7,8 @@ SELF="$ROOT/os/mkosi"
 source "$SELF/versions.env"
 B=${1:?build directory required}
 STAGE=${2:?rootfs staging tree required}
+B=$(realpath -m "$B")
+STAGE=$(realpath -m "$STAGE")
 checkout() {
   local url=$1 rev=$2 dir=$3
   if [[ ! -d $dir/.git ]]; then git init -q "$dir"; git -C "$dir" remote add origin "$url"; fi

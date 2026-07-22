@@ -18,6 +18,9 @@ install -m0644 "$kernel" "$OUT/files/bzImage"
 
 # Combined squashfs + dm-verity tree, matching Yocto's separate-hash=0 output.
 rootfs="$OUT/files/rootfs.squashfs.verity"
+# mksquashfs -noappend overwrites its filesystem but does not reliably remove
+# a longer dm-verity tail left by a previous invocation.
+truncate -s 0 "$rootfs"
 env -u SOURCE_DATE_EPOCH mksquashfs "$TREE" "$rootfs" -noappend -all-root -no-progress \
   -comp zstd -mkfs-time "$SOURCE_DATE_EPOCH" -all-time "$SOURCE_DATE_EPOCH" >/dev/null
 data_size=$(stat -c %s "$rootfs")
@@ -25,6 +28,7 @@ data_size=$(( (data_size + 4095) / 4096 * 4096 ))
 truncate -s "$data_size" "$rootfs"
 verity_output=$(veritysetup format "$rootfs" "$rootfs" \
   --hash-offset="$data_size" --data-block-size=4096 --hash-block-size=4096 \
+  --uuid=00000000-0000-0000-0000-000000000000 \
   --salt="$(printf '%064x' 0)")
 root_hash=$(awk '/Root hash:/ {print $3}' <<<"$verity_output")
 [[ $root_hash =~ ^[0-9a-f]{64}$ ]] || { echo "failed to obtain verity root hash" >&2; exit 1; }

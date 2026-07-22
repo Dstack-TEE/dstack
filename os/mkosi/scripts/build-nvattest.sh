@@ -7,23 +7,41 @@ SELF="$ROOT/os/mkosi"
 source "$SELF/versions.env"
 BUILD_DIR=${1:?build directory required}
 STAGE=${2:?rootfs staging tree required}
-src="$BUILD_DIR/attestation-sdk"
-build="$BUILD_DIR/build"
+BUILD_DIR=$(realpath -m "$BUILD_DIR")
+STAGE=$(realpath -m "$STAGE")
+checkout="$BUILD_DIR/attestation-sdk"
+# Cargo includes the literal RUSTFLAGS in crate disambiguators. A prefix-map
+# containing work-a/work-b would therefore change Rust symbol hashes even
+# though the mapped paths are equal. Serialize this component in a stable,
+# clean pathname and keep the per-build checkout as the verified input.
+canonical=/var/tmp/dstack-mkosi-nvattest
+exec 9>"$canonical.lock"
+flock 9
+src="$canonical/attestation-sdk"
+build="$canonical/build"
 
-if [[ ! -d $src/.git ]]; then
+if [[ ! -d $checkout/.git ]]; then
   mkdir -p "$BUILD_DIR"
-  git init -q "$src"
-  git -C "$src" remote add origin https://github.com/NVIDIA/attestation-sdk.git
+  git init -q "$checkout"
+  git -C "$checkout" remote add origin https://github.com/NVIDIA/attestation-sdk.git
 fi
-git -C "$src" fetch -q --depth=1 origin "$NVATTEST_REVISION"
-git -C "$src" checkout -q --detach FETCH_HEAD
-git -C "$src" reset -q --hard "$NVATTEST_REVISION"
+git -C "$checkout" fetch -q --depth=1 origin "$NVATTEST_REVISION"
+git -C "$checkout" checkout -q --detach FETCH_HEAD
+git -C "$checkout" reset -q --hard "$NVATTEST_REVISION"
+git -C "$checkout" clean -qfdx
+rm -rf "$canonical"
+mkdir -p "$canonical"
+cp -a "$checkout" "$src"
 patch -d "$src" -p1 --fuzz=0 < \
   "$ROOT/os/yocto/layers/meta-nvidia/recipes-graphics/nvattest/files/0001-validate-ocsp-response-freshness.patch"
 patch -d "$src" -p1 --fuzz=0 < \
   "$SELF/patches/nvattest/0001-pin-fetchcontent-inputs.patch"
 
 rm -rf "$build"
+export CFLAGS="${CFLAGS:-} -O2 -g0 -ffile-prefix-map=$canonical=/usr/src/nvattest -fmacro-prefix-map=$canonical=/usr/src/nvattest"
+export CXXFLAGS="${CXXFLAGS:-} -O2 -g0 -ffile-prefix-map=$canonical=/usr/src/nvattest -fmacro-prefix-map=$canonical=/usr/src/nvattest"
+export CARGO_INCREMENTAL=0
+export RUSTFLAGS="--remap-path-prefix=$canonical=/usr/src/nvattest -C strip=debuginfo"
 cmake -S "$src/nv-attestation-cli" -B "$build" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
   -DNVAT_BUILD_TESTS=OFF -DNVAT_BUILD_SAMPLES=OFF \
@@ -32,8 +50,6 @@ cmake -S "$src/nv-attestation-cli" -B "$build" -G Ninja \
 install -m0644 \
   "$ROOT/os/yocto/layers/meta-nvidia/recipes-graphics/nvattest/files/regorus-ffi-Cargo.lock" \
   "$build/_deps/regorus-src/bindings/ffi/Cargo.lock"
-export CARGO_INCREMENTAL=0
-export RUSTFLAGS="--remap-path-prefix=$BUILD_DIR=/usr/src/nvattest -C strip=debuginfo"
 cmake --build "$build" -j"${JOBS:-$(nproc)}"
 cmp "$ROOT/os/yocto/layers/meta-nvidia/recipes-graphics/nvattest/files/regorus-ffi-Cargo.lock" \
   "$build/_deps/regorus-src/bindings/ffi/Cargo.lock"
