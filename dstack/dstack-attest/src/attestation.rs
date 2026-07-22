@@ -1490,12 +1490,6 @@ impl<T> Attestation<T> {
         })
     }
 
-    /// Compatibility wrapper retained for callers that still pass vm_config.
-    /// The config no longer changes event-log stripping behavior.
-    pub fn get_tdx_event_log_string_for_config(&self, _config: &str) -> Option<String> {
-        self.get_tdx_event_log_string()
-    }
-
     pub fn get_td10_report(&self) -> Option<TDReport10> {
         self.tdx_quote()
             .and_then(|q| Quote::parse(&q.quote).ok())

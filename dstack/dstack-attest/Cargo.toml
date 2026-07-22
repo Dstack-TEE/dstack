@@ -17,6 +17,7 @@ dcap-qvl.workspace = true
 dstack-types.workspace = true
 ez-hash.workspace = true
 fs-err.workspace = true
+safe-write.workspace = true
 hex.workspace = true
 hex_fmt.workspace = true
 or-panic.workspace = true

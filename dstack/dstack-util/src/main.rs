@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use dstack_attest::emit_runtime_event_with_version;
+use dstack_attest::emit_runtime_event;
 use dstack_types::{KeyProvider, KeyProviderKind};
 use fs_err as fs;
 use getrandom::fill as getrandom;
@@ -686,22 +686,7 @@ fn hex_decode(hex_str: &str) -> Result<Vec<u8>> {
 
 fn cmd_extend(extend_args: ExtendArgs) -> Result<()> {
     let payload = hex_decode(&extend_args.payload).context("Failed to decode payload")?;
-    let version = read_event_log_version()?;
-    emit_runtime_event_with_version(&extend_args.event, &payload, version)
-        .context("Failed to extend RTMR")
-}
-
-fn read_event_log_version() -> Result<dstack_types::EventLogVersion> {
-    let path = std::path::Path::new(dstack_types::shared_filenames::HOST_SHARED_DIR)
-        .join(dstack_types::shared_filenames::APP_COMPOSE);
-    let data = match fs::read_to_string(&path) {
-        Ok(data) => data,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
-        Err(err) => return Err(err).with_context(|| format!("failed to read {}", path.display())),
-    };
-    let compose = serde_json::from_str::<dstack_types::AppCompose>(&data)
-        .with_context(|| format!("failed to parse {}", path.display()))?;
-    Ok(compose.event_log_version)
+    emit_runtime_event(&extend_args.event, &payload).context("Failed to extend RTMR")
 }
 
 fn cmd_rand(rand_args: RandArgs) -> Result<()> {

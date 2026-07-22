@@ -1788,6 +1788,7 @@ dependencies = [
  "rand 0.8.6",
  "rmp-serde",
  "rsa",
+ "safe-write",
  "serde",
  "serde-human-bytes",
  "serde_json",

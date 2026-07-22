@@ -26,6 +26,47 @@ mod v1;
 /// Appending to the event log and extending the platform register must be one
 /// atomic unit so log order always matches measurement-extension order.
 static EMIT_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+const RUNTIME_EVENT_VERSION_FILE: &str = "/run/log/dstack/runtime_event_version";
+
+/// Configure the system-wide digest format used by subsequently emitted events.
+///
+/// The setting is persisted under `/run/log/dstack`, so separate dstack-util
+/// processes share it. This must be called before [`emit_runtime_event`].
+/// Repeating the same configuration is allowed; changing it is rejected.
+pub fn set_runtime_event_version(version: EventLogVersion) -> anyhow::Result<()> {
+    let value = match version {
+        EventLogVersion::V1 => "1",
+        EventLogVersion::V2 => "2",
+    };
+    if let Some(parent) = std::path::Path::new(RUNTIME_EVENT_VERSION_FILE).parent() {
+        fs_err::create_dir_all(parent).context("failed to create runtime event log directory")?;
+    }
+    match fs_err::read_to_string(RUNTIME_EVENT_VERSION_FILE) {
+        Ok(configured) => {
+            anyhow::ensure!(
+                configured.trim() == value,
+                "runtime event version already set to {}",
+                configured.trim()
+            );
+            Ok(())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            safe_write::safe_write(RUNTIME_EVENT_VERSION_FILE, value.as_bytes())
+                .context("failed to write runtime event version")
+        }
+        Err(err) => Err(err).context("failed to read runtime event version"),
+    }
+}
+
+fn runtime_event_version() -> anyhow::Result<EventLogVersion> {
+    let value = fs_err::read_to_string(RUNTIME_EVENT_VERSION_FILE)
+        .context("runtime event version is not configured")?;
+    match value.trim() {
+        "1" => Ok(EventLogVersion::V1),
+        "2" => Ok(EventLogVersion::V2),
+        value => anyhow::bail!("invalid runtime event version: {value}"),
+    }
+}
 
 /// Emit a dstack measured event using the legacy V1 digest format.
 ///
@@ -33,15 +74,7 @@ static EMIT_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 /// - GCP TPM: SHA256 PCR14
 /// - AWS NitroTPM: SHA384 PCR14
 pub fn emit_runtime_event(event: &str, payload: &[u8]) -> anyhow::Result<()> {
-    emit_runtime_event_with_version(event, payload, EventLogVersion::V1)
-}
-
-/// Emit a runtime event using an explicit event-log format.
-pub fn emit_runtime_event_with_version(
-    event: &str,
-    payload: &[u8],
-    version: EventLogVersion,
-) -> anyhow::Result<()> {
+    let version = runtime_event_version()?;
     let event = RuntimeEvent::new(event.to_string(), payload.to_vec(), version);
 
     let mode = detect_tee_variant()?;
