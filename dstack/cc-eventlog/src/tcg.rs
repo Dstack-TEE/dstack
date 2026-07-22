@@ -4,7 +4,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{codecs::VecOf, runtime_events::DSTACK_RUNTIME_EVENT_TYPE, tdx::TdxEvent};
+use crate::{codecs::VecOf, tdx::TdxEvent};
 use anyhow::{bail, Context, Result};
 use scale::Decode;
 use std::path::PathBuf;
@@ -302,8 +302,10 @@ impl TcgEventLog {
     }
 
     pub fn decode_from_ccel_file() -> Result<Self> {
-        let data = read_ccel_raw()?;
-        Self::decode(&mut data.as_slice())
+        let path = ccel_file_path()?;
+        let data = fs_err::read(&path)
+            .with_context(|| format!("failed to read CCEL from {}", path.display()))?;
+        Self::decode(&mut data.as_slice()).context("failed to decode CCEL")
     }
 
     pub fn to_cc_event_log(&self) -> Result<Vec<TdxEvent>> {
@@ -318,8 +320,8 @@ impl TcgEventLog {
 
 /// Resolve the CCEL path, honoring `DSTACK_CCEL_FILE` when set.
 ///
-/// Overrides must be non-empty absolute paths so relative values cannot
-/// silently resolve against the process working directory.
+/// Overrides must be non-empty absolute paths so relative values cannot silently
+/// resolve against the process working directory.
 fn ccel_file_path() -> Result<PathBuf> {
     let Some(value) = std::env::var_os(CCEL_FILE_ENV) else {
         return Ok(PathBuf::from(CCEL_FILE));
@@ -335,52 +337,6 @@ fn ccel_file_path() -> Result<PathBuf> {
         );
     }
     Ok(path)
-}
-
-/// Read the raw ACPI CCEL table bytes.
-pub fn read_ccel_raw() -> Result<Vec<u8>> {
-    let path = ccel_file_path()?;
-    fs_err::read(&path).with_context(|| format!("failed to read CCEL from {}", path.display()))
-}
-
-/// Return the length of the valid TCG event log prefix within a raw CCEL buffer.
-///
-/// ACPI CCEL tables are fixed-size regions padded with 0xFF; the event stream
-/// either ends with a 0xFFFFFFFF terminator or by running into that padding.
-/// This parses the buffer to find where real events end so the trailer can be
-/// stripped before appending runtime events.
-pub fn ccel_content_len(raw: &[u8]) -> Result<usize> {
-    let input = &mut &raw[..];
-    TcgEventLog::decode(input)?;
-    Ok(raw.len() - input.len())
-}
-
-/// Encode dstack runtime events as TCG_PCR_EVENT2 records.
-///
-/// Non-runtime events in the slice are skipped. Each runtime event becomes:
-/// - pcrIndex  = imr + 1 (0-based TdxEvent -> 1-based TCG pcrIndex)
-/// - eventType = DSTACK_RUNTIME_EVENT_TYPE
-/// - digests   = [{ TPM_ALG_SHA384, <48-byte digest> }]
-/// - event     = the digest pre-image bytes (`preimage`), so that
-///   sha384(event) == digest holds for any TCG parser.
-pub fn encode_runtime_events_as_tcg(events: &[TdxEvent]) -> Vec<u8> {
-    let mut out = Vec::new();
-    for event in events {
-        let Some(runtime) = event.to_runtime_event() else {
-            continue;
-        };
-        let preimage = runtime.preimage();
-        let digest = event.digest();
-        let pcr_index = event.imr.saturating_add(1);
-        out.extend_from_slice(&pcr_index.to_le_bytes());
-        out.extend_from_slice(&event.event_type.to_le_bytes());
-        out.extend_from_slice(&1u32.to_le_bytes());
-        out.extend_from_slice(&TPM_ALG_SHA384.to_le_bytes());
-        out.extend_from_slice(&digest);
-        out.extend_from_slice(&(preimage.len() as u32).to_le_bytes());
-        out.extend_from_slice(&preimage);
-    }
-    out
 }
 
 fn parse_spec_id_event_log<I: scale::Input>(
@@ -430,9 +386,6 @@ impl TryFrom<TcgEvent> for TdxEvent {
             .next()
             .context("digest not found")?
             .hash;
-        let event_payload: Vec<u8> = value.event.into();
-        let preimage =
-            (value.event_type == DSTACK_RUNTIME_EVENT_TYPE).then(|| hex::encode(&event_payload));
         Ok(TdxEvent {
             imr: value
                 .imr_index
@@ -441,27 +394,11 @@ impl TryFrom<TcgEvent> for TdxEvent {
             event_type: value.event_type,
             digest,
             event: Default::default(),
-            event_payload,
+            event_payload: value.event.into(),
             version: Default::default(),
-            preimage,
+            preimage: None,
         })
     }
-}
-
-/// Build a merged TCG binary event log: raw ACPI CCEL (boot-time) followed by
-/// the given runtime events encoded as TCG_PCR_EVENT2 records.
-///
-/// Non-runtime entries in `events` are ignored; only events with
-/// `event_type == DSTACK_RUNTIME_EVENT_TYPE` are appended.
-pub fn build_ccel_event_log(events: &[TdxEvent]) -> Result<Vec<u8>> {
-    let raw = read_ccel_raw()?;
-    let end = ccel_content_len(&raw)?;
-    let mut out = raw[..end].to_vec();
-    out.extend_from_slice(&encode_runtime_events_as_tcg(events));
-    // Append the 0xFFFFFFFF terminator so parsers know where the event
-    // stream ends (the original ACPI table has trailing 0xFF padding).
-    out.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
-    Ok(out)
 }
 
 #[cfg(test)]

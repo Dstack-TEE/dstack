@@ -122,11 +122,6 @@ impl TdxEvent {
     }
 
     pub fn digest(&self) -> Vec<u8> {
-        // Parsed TCG/CCEL records already carry the authoritative digest, but
-        // do not necessarily retain dstack's structured event name/payload.
-        if !self.digest.is_empty() {
-            return self.digest.clone();
-        }
         if let Some(runtime_event) = self.to_runtime_event() {
             return runtime_event.sha384_digest().to_vec();
         }

@@ -45,7 +45,6 @@ pub fn simulated_quote_response(
         report_data: report_data.to_vec(),
         vm_config: vm_config.to_string(),
         attestation: versioned,
-        event_log_ccel: Vec::new(),
     })
 }
 

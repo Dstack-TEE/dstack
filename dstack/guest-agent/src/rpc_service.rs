@@ -885,7 +885,6 @@ pNs85uhOZE8z2jr8Pg==
                     report_data: report_data.to_vec(),
                     vm_config: vm_config.to_string(),
                     attestation: Vec::new(),
-                    event_log_ccel: Vec::new(),
                 })
             }
 
