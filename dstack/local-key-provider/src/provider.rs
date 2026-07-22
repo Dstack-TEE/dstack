@@ -5,8 +5,10 @@
 use dcap_qvl::{
     collateral::CollateralClient,
     quote::{Quote, TDReport10},
+    QuotePolicy, TcbStatus,
 };
 use sha2::{Digest, Sha256};
+use std::time::{Duration, SystemTime};
 use tracing::{debug, info};
 
 use crate::{
@@ -58,17 +60,25 @@ impl KeyProvider {
     }
 
     async fn verify_tdx_quote(&self, raw_quote: &[u8]) -> Result<TDReport10, ProviderError> {
-        let report = self
+        let collateral = self
             .collateral
-            .fetch_and_verify(raw_quote)
+            .fetch(raw_quote)
             .await
             .map_err(|error| ProviderError::QuoteVerification(error.to_string()))?;
-        let tdx_report = report.report.as_td10().copied().ok_or_else(|| {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_err(|error| ProviderError::QuoteVerification(error.to_string()))?
+            .as_secs();
+        let policy = tdx_quote_policy(now);
+        let claims = dcap_qvl::verify::QuoteVerifier::new_prod()
+            .verify_with_policy(raw_quote, collateral, now, &policy)
+            .map_err(|error| ProviderError::QuoteVerification(error.to_string()))?;
+        let tdx_report = claims.report.as_td10().copied().ok_or_else(|| {
             ProviderError::QuoteVerification("verified quote is not a TDX quote".into())
         })?;
         debug!(
-            tcb_status = %report.status,
-            advisories = ?report.advisory_ids,
+            tcb_status = %claims.tcb.status,
+            advisories = ?claims.tcb.advisory_ids,
             "TDX quote verified"
         );
         Ok(tdx_report)
@@ -108,6 +118,22 @@ fn measurements(report: &TDReport10) -> Vec<u8> {
     output.extend_from_slice(&report.rt_mr2);
     output.extend_from_slice(&report.rt_mr3);
     output
+}
+
+const TCB_OUT_OF_DATE_GRACE_PERIOD: Duration = Duration::from_secs(15 * 24 * 60 * 60);
+
+fn tdx_quote_policy(now: u64) -> QuotePolicy {
+    QuotePolicy::strict(now)
+        .allow_status(TcbStatus::SWHardeningNeeded)
+        .allow_status(TcbStatus::ConfigurationNeeded)
+        .allow_status(TcbStatus::ConfigurationAndSWHardeningNeeded)
+        .allow_status(TcbStatus::OutOfDate)
+        .allow_status(TcbStatus::OutOfDateConfigurationNeeded)
+        .platform_grace_period(TCB_OUT_OF_DATE_GRACE_PERIOD)
+        .qe_grace_period(TCB_OUT_OF_DATE_GRACE_PERIOD)
+        .allow_dynamic_platform(true)
+        .allow_cached_keys(true)
+        .allow_smt(true)
 }
 
 #[cfg(test)]

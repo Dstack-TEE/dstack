@@ -9,7 +9,10 @@
 /// and REPORT_DATA occupies bytes 568..632 (64 bytes).
 pub const TDX_QUOTE_REPORT_DATA_RANGE: std::ops::Range<usize> = 568..632;
 
-use std::{borrow::Cow, time::SystemTime};
+use std::{
+    borrow::Cow,
+    time::{Duration, SystemTime},
+};
 
 use anyhow::{anyhow, bail, Context, Result};
 use cc_eventlog::{RuntimeEvent, TdxEvent};
@@ -17,6 +20,7 @@ use dcap_qvl::{
     collateral::CollateralClient,
     quote::{EnclaveReport, Quote, Report, TDReport10, TDReport15},
     verify::VerifiedReport as TdxVerifiedReport,
+    QuotePolicy, TcbStatus, TcbStatusWithAdvisory,
 };
 pub use dstack_types::CollateralUrls;
 #[cfg(feature = "quote")]
@@ -182,8 +186,40 @@ impl AttestationVerifier {
             .duration_since(SystemTime::UNIX_EPOCH)
             .context("system clock is before UNIX epoch")?
             .as_secs();
-        self.tdx.verify(quote, &collateral, now)
+        let claims = self
+            .tdx
+            .verify_with_policy(quote, collateral, now, &tdx_quote_policy(now))?;
+        Ok(TdxVerifiedReport {
+            status: claims.tcb.status.to_string(),
+            advisory_ids: claims.tcb.advisory_ids,
+            report: claims.report,
+            ppid: claims.platform.pck.ppid,
+            platform_status: TcbStatusWithAdvisory::new(
+                claims.platform.tcb_level.tcb_status,
+                claims.platform.tcb_level.advisory_ids,
+            ),
+            qe_status: TcbStatusWithAdvisory::new(
+                claims.qe.tcb_level.tcb_status,
+                claims.qe.tcb_level.advisory_ids,
+            ),
+        })
     }
+}
+
+const TCB_OUT_OF_DATE_GRACE_PERIOD: Duration = Duration::from_secs(15 * 24 * 60 * 60);
+
+fn tdx_quote_policy(now: u64) -> QuotePolicy {
+    QuotePolicy::strict(now)
+        .allow_status(TcbStatus::SWHardeningNeeded)
+        .allow_status(TcbStatus::ConfigurationNeeded)
+        .allow_status(TcbStatus::ConfigurationAndSWHardeningNeeded)
+        .allow_status(TcbStatus::OutOfDate)
+        .allow_status(TcbStatus::OutOfDateConfigurationNeeded)
+        .platform_grace_period(TCB_OUT_OF_DATE_GRACE_PERIOD)
+        .qe_grace_period(TCB_OUT_OF_DATE_GRACE_PERIOD)
+        .allow_dynamic_platform(true)
+        .allow_cached_keys(true)
+        .allow_smt(true)
 }
 
 fn read_root_file(path: Option<&std::path::Path>, platform: &str) -> Result<Option<Vec<u8>>> {
