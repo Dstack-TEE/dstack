@@ -160,6 +160,7 @@ class GetQuoteResponse(BaseModel):
     event_log: str
     report_data: str = ""
     vm_config: str = ""
+    attestation: str = ""
     event_log_ccel: str = ""
 
     def decode_quote(self) -> bytes:

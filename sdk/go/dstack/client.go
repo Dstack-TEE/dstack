@@ -90,6 +90,7 @@ type GetQuoteResponse struct {
 	EventLog     string `json:"event_log"`
 	ReportData   string `json:"report_data"`
 	VmConfig     string `json:"vm_config"`
+	Attestation  string `json:"attestation"`
 	EventLogCCEL string `json:"event_log_ccel"`
 }
 

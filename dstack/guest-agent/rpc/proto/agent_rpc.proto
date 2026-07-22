@@ -234,7 +234,8 @@ message GetQuoteResponse {
   //                     V2: canonical JSON (UTF-8)
   //
   // Empty on platforms without an ACPI CCEL table (e.g. Nitro Enclaves).
-  bytes event_log_ccel = 5;
+  bytes attestation = 5;
+  bytes event_log_ccel = 6;
 }
 
 message EmitEventArgs {

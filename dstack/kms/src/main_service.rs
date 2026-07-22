@@ -781,7 +781,7 @@ mod tests {
     }
 
     fn runtime_event(event: &str, payload: Vec<u8>) -> RuntimeEvent {
-        RuntimeEvent::new(event.to_string(), payload)
+        RuntimeEvent::new(event.to_string(), payload, Default::default())
     }
 
     fn verified_aws_nitro_tpm_attestation(

@@ -114,6 +114,8 @@ pub struct GetQuoteResponse {
     /// Merged TCG binary event log (boot-time CCEL + runtime events as
     /// TCG_PCR_EVENT2), hex-encoded. Empty on platforms without ACPI CCEL.
     #[serde(default)]
+    pub attestation: String,
+    #[serde(default)]
     pub event_log_ccel: String,
 }
 
