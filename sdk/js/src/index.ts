@@ -52,6 +52,8 @@ export interface EventLog {
   digest: string
   event: string
   event_payload: string
+  version?: 1 | 2
+  preimage?: string
 }
 
 export interface TcbInfo {

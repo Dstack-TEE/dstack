@@ -2100,8 +2100,7 @@ impl<'a> Stage0<'a> {
             .tls_client_key(cert_pair.key_pem)
             .tls_ca_cert(tmp_ca.ca_cert.clone())
             .attestation_verifier(attestation_verifier)
-            .cert_validator({
-                Box::new(move |cert| {
+            .cert_validator(Box::new(|cert| {
                 let Some(cert) = cert else {
                     bail!("Missing server cert");
                 };
@@ -2122,8 +2121,7 @@ impl<'a> Stage0<'a> {
                     }
                 }
                 Ok(())
-                })
-            })
+            }))
             .build()
             .into_client()
             .context("Failed to create client")?;

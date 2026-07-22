@@ -448,6 +448,22 @@ impl TryFrom<TcgEvent> for TdxEvent {
     }
 }
 
+/// Build a merged TCG binary event log: raw ACPI CCEL (boot-time) followed by
+/// the given runtime events encoded as TCG_PCR_EVENT2 records.
+///
+/// Non-runtime entries in `events` are ignored; only events with
+/// `event_type == DSTACK_RUNTIME_EVENT_TYPE` are appended.
+pub fn build_ccel_event_log(events: &[TdxEvent]) -> Result<Vec<u8>> {
+    let raw = read_ccel_raw()?;
+    let end = ccel_content_len(&raw)?;
+    let mut out = raw[..end].to_vec();
+    out.extend_from_slice(&encode_runtime_events_as_tcg(events));
+    // Append the 0xFFFFFFFF terminator so parsers know where the event
+    // stream ends (the original ACPI table has trailing 0xFF padding).
+    out.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -224,6 +224,8 @@ class EventLog(BaseModel):
     digest: str
     event: str
     event_payload: str
+    version: Optional[int] = None
+    preimage: Optional[str] = None
 
 
 class TcbInfo(BaseModel):

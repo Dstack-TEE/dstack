@@ -817,11 +817,7 @@ pub trait TdxAttestationExt {
     fn tdx_event_log_string(&self) -> Option<String> {
         self.tdx_event_log().map(|event_log| {
             let mut events: Vec<TdxEvent> = event_log.to_vec();
-            for event in &mut events {
-                if matches!(event.version, EventLogVersion::V2) {
-                    event.fill_preimage();
-                }
-            }
+            cc_eventlog::tdx::fill_v2_preimages(&mut events);
             serde_json::to_string(&events).unwrap_or_default()
         })
     }
@@ -1449,11 +1445,7 @@ impl<T> Attestation<T> {
     /// digest pre-images alongside events.
     pub fn fill_event_preimages(&mut self) {
         if let Some(q) = self.tdx_quote_mut() {
-            for event in &mut q.event_log {
-                if matches!(event.version, EventLogVersion::V2) {
-                    event.fill_preimage();
-                }
-            }
+            cc_eventlog::tdx::fill_v2_preimages(&mut q.event_log);
         }
     }
 
@@ -1481,11 +1473,7 @@ impl<T> Attestation<T> {
                     stripped
                 })
                 .collect();
-            for event in &mut stripped {
-                if matches!(event.version, EventLogVersion::V2) {
-                    event.fill_preimage();
-                }
-            }
+            cc_eventlog::tdx::fill_v2_preimages(&mut stripped);
             serde_json::to_string(&stripped).unwrap_or_default()
         })
     }
@@ -1505,7 +1493,7 @@ impl<T> Attestation<T> {
         let Some(q) = self.tdx_quote() else {
             return Ok(Vec::new());
         };
-        cc_eventlog::tdx::build_ccel_event_log(&q.event_log)
+        cc_eventlog::tcg::build_ccel_event_log(&q.event_log)
     }
 }
 

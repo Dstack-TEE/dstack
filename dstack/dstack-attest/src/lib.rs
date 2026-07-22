@@ -43,12 +43,20 @@ fn runtime_event_lock() -> anyhow::Result<fs_err::File> {
 /// processes share it. This must be called before [`emit_runtime_event`].
 /// Repeating the same configuration is allowed; changing it is rejected.
 pub fn set_runtime_event_version(version: EventLogVersion) -> anyhow::Result<()> {
+    let _lock = runtime_event_lock()?;
+    set_runtime_event_version_file(RUNTIME_EVENT_VERSION_FILE, version)
+}
+
+fn set_runtime_event_version_file(
+    path: impl AsRef<std::path::Path>,
+    version: EventLogVersion,
+) -> anyhow::Result<()> {
+    let path = path.as_ref();
     let value = match version {
         EventLogVersion::V1 => "1",
         EventLogVersion::V2 => "2",
     };
-    let _lock = runtime_event_lock()?;
-    match fs_err::read_to_string(RUNTIME_EVENT_VERSION_FILE) {
+    match fs_err::read_to_string(path) {
         Ok(configured) => {
             anyhow::ensure!(
                 configured.trim() == value,
@@ -58,7 +66,7 @@ pub fn set_runtime_event_version(version: EventLogVersion) -> anyhow::Result<()>
             Ok(())
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            safe_write::safe_write(RUNTIME_EVENT_VERSION_FILE, value.as_bytes())
+            safe_write::safe_write(path, value.as_bytes())
                 .context("failed to write runtime event version")
         }
         Err(err) => Err(err).context("failed to read runtime event version"),
@@ -66,8 +74,15 @@ pub fn set_runtime_event_version(version: EventLogVersion) -> anyhow::Result<()>
 }
 
 fn runtime_event_version() -> anyhow::Result<EventLogVersion> {
-    let value = fs_err::read_to_string(RUNTIME_EVENT_VERSION_FILE)
-        .context("runtime event version is not configured")?;
+    runtime_event_version_file(RUNTIME_EVENT_VERSION_FILE)
+}
+
+fn runtime_event_version_file(
+    path: impl AsRef<std::path::Path>,
+) -> anyhow::Result<EventLogVersion> {
+    let value = fs_err::read_to_string(path).context(
+        "runtime event version is not configured; complete dstack system setup before emitting events",
+    )?;
     match value.trim() {
         "1" => Ok(EventLogVersion::V1),
         "2" => Ok(EventLogVersion::V2),
@@ -75,7 +90,38 @@ fn runtime_event_version() -> anyhow::Result<EventLogVersion> {
     }
 }
 
-/// Emit a dstack measured event using the legacy V1 digest format.
+#[cfg(test)]
+mod runtime_event_version_tests {
+    use super::*;
+
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("dstack-{name}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn rejects_conflicting_runtime_event_version() {
+        let path = temp_path("event-version-conflict");
+        let _ = fs_err::remove_file(&path);
+        set_runtime_event_version_file(&path, EventLogVersion::V1).unwrap();
+        set_runtime_event_version_file(&path, EventLogVersion::V1).unwrap();
+        let err = set_runtime_event_version_file(&path, EventLogVersion::V2).unwrap_err();
+        assert!(err.to_string().contains("already set to 1"));
+        let _ = fs_err::remove_file(path);
+    }
+
+    #[test]
+    fn reports_unconfigured_runtime_event_version() {
+        let path = temp_path("event-version-missing");
+        let _ = fs_err::remove_file(&path);
+        let err = runtime_event_version_file(path).unwrap_err();
+        assert!(err.to_string().contains("complete dstack system setup"));
+    }
+}
+
+/// Emit a dstack measured event using the system-configured digest format.
+///
+/// The event-log append and platform-register extension are serialized by a
+/// system-wide file lock so their ordering cannot diverge across processes.
 ///
 /// - TDX-family: RTMR3
 /// - GCP TPM: SHA256 PCR14

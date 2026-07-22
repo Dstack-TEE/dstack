@@ -137,6 +137,8 @@ type EventLog struct {
 	Digest       string `json:"digest"`
 	Event        string `json:"event"`
 	EventPayload string `json:"event_payload"`
+	Version      int    `json:"version,omitempty"`
+	Preimage     string `json:"preimage,omitempty"`
 }
 
 // Represents the TCB information

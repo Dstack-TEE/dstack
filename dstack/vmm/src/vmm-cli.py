@@ -841,8 +841,10 @@ class VmmCLI:
                 app_compose["swap_size"] = swap_bytes
             else:
                 app_compose.pop("swap_size", None)
-        if args.event_log_version is not None:
+        if args.event_log_version == 2:
             app_compose["event_log_version"] = args.event_log_version
+        elif args.event_log_version == 1:
+            app_compose.pop("event_log_version", None)
 
         compose_file = json.dumps(app_compose, indent=4, ensure_ascii=False).encode(
             "utf-8"

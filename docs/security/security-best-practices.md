@@ -176,3 +176,9 @@ the boot boundary. In particular, select the expected claim before
 `boot-mr-done`/`system-ready`, reject duplicate trusted claim names, and replay
 the complete quoted chain. Never accept an arbitrary later event solely because
 its digest matches its supplied pre-image.
+
+V2 is a coordinated upgrade. Upgrade every KMS, gateway, verifier, and other
+relying party before enabling `event_log_version: 2`; older verifiers interpret
+runtime events as V1 and reject the quote. Older guest images may ignore the
+compose field and emit V1 events, so confirm that the selected image advertises
+V2 support before relying on per-event claims.

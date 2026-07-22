@@ -86,6 +86,10 @@ pub enum EventLogVersion {
 }
 
 impl EventLogVersion {
+    pub fn is_v1(&self) -> bool {
+        matches!(self, Self::V1)
+    }
+
     pub fn from_u32(v: u32) -> Option<Self> {
         match v {
             1 => Some(EventLogVersion::V1),
@@ -153,7 +157,7 @@ pub struct AppCompose {
     pub storage_fs: Option<String>,
     #[serde(default, with = "human_size")]
     pub swap_size: u64,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "EventLogVersion::is_v1")]
     pub event_log_version: EventLogVersion,
     /// Per-port policy consumed by the gateway (PROXY protocol opt-in,
     /// optional port whitelist).
@@ -569,6 +573,27 @@ mod app_compose_tests {
         let compose = parse_compose(serde_json::json!("3")).unwrap();
         assert_eq!(compose.manifest_version, "3");
         assert_eq!(compose.manifest_version_u32(), Some(3));
+    }
+
+    #[test]
+    fn event_log_v1_is_omitted_but_v2_is_serialized() {
+        #[derive(Serialize)]
+        struct VersionField {
+            #[serde(skip_serializing_if = "EventLogVersion::is_v1")]
+            event_log_version: EventLogVersion,
+        }
+
+        let v1 = serde_json::to_value(VersionField {
+            event_log_version: EventLogVersion::V1,
+        })
+        .unwrap();
+        assert!(v1.get("event_log_version").is_none());
+
+        let v2 = serde_json::to_value(VersionField {
+            event_log_version: EventLogVersion::V2,
+        })
+        .unwrap();
+        assert_eq!(v2["event_log_version"], 2);
     }
 
     #[test]

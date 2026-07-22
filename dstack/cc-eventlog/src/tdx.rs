@@ -55,10 +55,9 @@ pub struct TdxEvent {
 
     /// Optional digest pre-image, hex-encoded.
     ///
-    /// The exact bytes hashed to produce `digest`. Only populated when
-    /// explicitly requested (e.g., via RPC opt-in) so that relying parties can
-    /// verify the digest computation or inspect v2 JSON content without
-    /// knowing the dstack schema.
+    /// The exact bytes hashed to produce `digest`. V2 events exposed through
+    /// quote and attestation APIs always include it, allowing relying parties
+    /// to verify `sha384(hex_decode(preimage)) == digest`.
     /// Never included in scale encoding (derivable from other fields).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[codec(skip)]
@@ -163,6 +162,15 @@ impl From<RuntimeEvent> for TdxEvent {
             event_payload: value.payload,
             version,
             preimage: None,
+        }
+    }
+}
+
+/// Populate digest preimages for all V2 runtime events.
+pub fn fill_v2_preimages(events: &mut [TdxEvent]) {
+    for event in events {
+        if matches!(event.version, EventLogVersion::V2) {
+            event.fill_preimage();
         }
     }
 }
@@ -318,20 +326,4 @@ mod tests {
         let json = serde_json::to_string(&tdx).unwrap();
         assert!(!json.contains("preimage"));
     }
-}
-
-/// Build a merged TCG binary event log: raw ACPI CCEL (boot-time) followed by
-/// the given runtime events encoded as TCG_PCR_EVENT2 records.
-///
-/// Non-runtime entries in `events` are ignored; only events with
-/// `event_type == DSTACK_RUNTIME_EVENT_TYPE` are appended.
-pub fn build_ccel_event_log(events: &[TdxEvent]) -> Result<Vec<u8>> {
-    let raw = crate::tcg::read_ccel_raw()?;
-    let end = crate::tcg::ccel_content_len(&raw)?;
-    let mut out = raw[..end].to_vec();
-    out.extend_from_slice(&crate::tcg::encode_runtime_events_as_tcg(events));
-    // Append the 0xFFFFFFFF terminator so parsers know where the event
-    // stream ends (the original ACPI table has trailing 0xFF padding).
-    out.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
-    Ok(out)
 }
