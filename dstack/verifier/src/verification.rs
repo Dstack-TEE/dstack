@@ -1354,6 +1354,8 @@ mod tests {
             digest: vec![digest_byte; 48],
             event: name.to_string(),
             event_payload: TDX_ACPI_DATA_EVENT_PAYLOAD.to_vec(),
+            version: Default::default(),
+            hash_input: None,
         }
     }
 
