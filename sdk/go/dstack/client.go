@@ -130,8 +130,13 @@ type EventLog struct {
 	Digest       string `json:"digest"`
 	Event        string `json:"event"`
 	EventPayload string `json:"event_payload"`
-	Version      int    `json:"version,omitempty"`
-	Preimage     string `json:"preimage,omitempty"`
+	// Runtime event log version. The field is omitted from the wire format for
+	// version 1, so a zero value means V1 rather than "unset"; treat 0 and 1
+	// alike. Only dstack runtime events carry a version.
+	Version int `json:"version,omitempty"`
+	// Hex-encoded digest pre-image, present on V2 runtime events. When set,
+	// sha384(hex_decode(Preimage)) equals Digest.
+	Preimage string `json:"preimage,omitempty"`
 }
 
 // Represents the TCB information

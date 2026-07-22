@@ -23,6 +23,15 @@ const RUNTIME_EVENT_DIR: &str = "/run/log/dstack";
 const RUNTIME_EVENT_VERSION_FILE: &str = "/run/log/dstack/runtime_event_version";
 const RUNTIME_EVENT_LOCK_FILE: &str = "/run/log/dstack/runtime_event.lock";
 
+/// Acquire the system-wide runtime event lock, blocking until it is available.
+///
+/// The wait is deliberately unbounded. The lock serializes the event-log append
+/// with the measurement-register extension, and that ordering is what makes
+/// replay reproduce the quoted register value. Proceeding after a timeout would
+/// break the invariant, and failing after one would abort a boot that is merely
+/// slow, so waiting is the only safe option. A holder that dies releases the
+/// lock automatically (flock is dropped when the file descriptor closes), which
+/// leaves a live but wedged holder as the sole way to block emission.
 fn runtime_event_lock() -> anyhow::Result<fs_err::File> {
     fs_err::create_dir_all(RUNTIME_EVENT_DIR)
         .context("failed to create runtime event log directory")?;
@@ -60,7 +69,9 @@ fn set_runtime_event_version_file(
         Ok(configured) => {
             anyhow::ensure!(
                 configured.trim() == value,
-                "runtime event version already set to {}",
+                "runtime event version is already set to {} for this boot and cannot be \
+                 changed to {value}; the setting is fixed when system setup runs, so restart \
+                 the CVM to apply a new app-compose `event_log_version`",
                 configured.trim()
             );
             Ok(())
@@ -105,7 +116,12 @@ mod runtime_event_version_tests {
         set_runtime_event_version_file(&path, EventLogVersion::V1).unwrap();
         set_runtime_event_version_file(&path, EventLogVersion::V1).unwrap();
         let err = set_runtime_event_version_file(&path, EventLogVersion::V2).unwrap_err();
-        assert!(err.to_string().contains("already set to 1"));
+        let message = err.to_string();
+        assert!(message.contains("already set to 1"), "{message}");
+        assert!(
+            message.contains("restart the CVM"),
+            "the conflict error must tell the operator how to apply a new version: {message}"
+        );
         let _ = fs_err::remove_file(path);
     }
 

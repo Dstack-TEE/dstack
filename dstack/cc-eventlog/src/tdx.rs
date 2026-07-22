@@ -49,7 +49,7 @@ pub struct TdxEvent {
     /// Skipped by scale codec for binary compat with legacy attestations
     /// (which only ever contain V1 events).
     /// Serde skips serialization when V1 so existing JSON outputs stay clean.
-    #[serde(default, skip_serializing_if = "is_v1")]
+    #[serde(default, skip_serializing_if = "EventLogVersion::is_v1")]
     #[codec(skip)]
     pub version: EventLogVersion,
 
@@ -62,10 +62,6 @@ pub struct TdxEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[codec(skip)]
     pub preimage: Option<String>,
-}
-
-fn is_v1(v: &EventLogVersion) -> bool {
-    matches!(v, EventLogVersion::V1)
 }
 
 impl TdxEvent {
