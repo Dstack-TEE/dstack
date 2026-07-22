@@ -839,6 +839,14 @@ fn verify_manifest_feature_requirements(app_compose: &AppCompose) -> Result<()> 
             "requirements requires manifest_version >= {MANIFEST_VERSION_3}; use string manifest_version \"{MANIFEST_VERSION_3}\" so older guests fail closed"
         );
     }
+    if app_compose.runner == "nerdctl-compose" && manifest_version < MANIFEST_VERSION_3 {
+        bail!(
+            "nerdctl-compose requires manifest_version >= {MANIFEST_VERSION_3}; use string manifest_version \"{MANIFEST_VERSION_3}\" so older guests fail closed"
+        );
+    }
+    if app_compose.runner != "nerdctl-compose" && app_compose.snapshotter.is_some() {
+        bail!("snapshotter is only supported by the nerdctl-compose runner");
+    }
     Ok(())
 }
 
@@ -3160,6 +3168,27 @@ fn test_os_version_requirement_requires_v3_manifest() {
     let app_compose = test_app_compose(serde_json::json!("2"), Some(">=0.6.1"), None);
     let err = verify_manifest_feature_requirements(&app_compose).unwrap_err();
     assert!(err.to_string().contains("requires manifest_version"));
+}
+
+#[test]
+fn test_nerdctl_compose_requires_v3_manifest() {
+    let mut app_compose = test_app_compose(serde_json::json!(2), None, None);
+    app_compose.runner = "nerdctl-compose".to_string();
+    let err = verify_manifest_feature_requirements(&app_compose).unwrap_err();
+    assert!(err.to_string().contains("nerdctl-compose requires"));
+
+    app_compose.manifest_version = "3".to_string();
+    verify_manifest_feature_requirements(&app_compose).unwrap();
+}
+
+#[test]
+fn test_snapshotter_is_rejected_for_other_runners() {
+    let mut app_compose = test_app_compose(serde_json::json!("3"), None, None);
+    app_compose.snapshotter = Some(dstack_types::ContainerSnapshotter::Stargz);
+    let err = verify_manifest_feature_requirements(&app_compose).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("snapshotter is only supported by the nerdctl-compose runner"));
 }
 
 #[test]

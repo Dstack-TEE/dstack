@@ -735,6 +735,7 @@ mod tests {
             name: String::new(),
             features: Vec::new(),
             runner: String::new(),
+            snapshotter: None,
             docker_compose_file: None,
             public_logs: false,
             public_sysinfo: false,

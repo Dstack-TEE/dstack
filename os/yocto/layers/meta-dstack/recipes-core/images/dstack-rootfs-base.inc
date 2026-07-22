@@ -13,6 +13,9 @@ IMAGE_INSTALL = "\
     nftables \
     docker-moby \
     docker-compose \
+    nerdctl \
+    containerd-cni \
+    stargz-snapshotter \
     dstack-guest \
     wireguard-tools \
     cryptsetup \
@@ -188,5 +191,6 @@ mkdirs() {
     mkdir -p ${IMAGE_ROOTFS}/etc/wireguard
     mkdir -p ${IMAGE_ROOTFS}/var/lib/docker
     mkdir -p ${IMAGE_ROOTFS}/var/lib/containerd
+    mkdir -p ${IMAGE_ROOTFS}/var/lib/nerdctl
     ln -sf dstack ${IMAGE_ROOTFS}/tapp
 }

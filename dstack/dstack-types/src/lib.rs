@@ -80,6 +80,10 @@ pub struct AppCompose {
     #[serde(default)]
     pub features: Vec<String>,
     pub runner: String,
+    /// containerd snapshotter used by the `nerdctl-compose` runner.
+    /// The field is invalid for other runners.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshotter: Option<ContainerSnapshotter>,
     #[serde(default)]
     pub docker_compose_file: Option<String>,
     #[serde(default)]
@@ -191,6 +195,13 @@ mod verity_volume_tests {
             .contains("duplicate verity volume target"));
         validate_verity_volumes(&[volume(1, "/a"), volume(2, "/b")]).unwrap();
     }
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ContainerSnapshotter {
+    Overlayfs,
+    Stargz,
 }
 
 /// Canonical source for the policy used when `requirements.gpu_policy` is
@@ -515,6 +526,26 @@ mod app_compose_tests {
         let compose = parse_compose(serde_json::json!("3")).unwrap();
         assert_eq!(compose.manifest_version, "3");
         assert_eq!(compose.manifest_version_u32(), Some(3));
+    }
+
+    #[test]
+    fn parses_supported_container_snapshotters() {
+        let compose: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "nerdctl-compose",
+            "snapshotter": "stargz"
+        }))
+        .unwrap();
+        assert_eq!(compose.snapshotter, Some(ContainerSnapshotter::Stargz));
+
+        let invalid = serde_json::from_value::<AppCompose>(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "nerdctl-compose",
+            "snapshotter": "unknown"
+        }));
+        assert!(invalid.is_err());
     }
 
     #[test]
