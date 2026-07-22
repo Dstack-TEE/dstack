@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 D=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=/dev/null
 source "$D/versions.env"
 [[ $KERNEL_VERSION == 7.* && $KERNEL_VERSION != *-rc* ]]
 [[ $KERNEL_SHA256 =~ ^[0-9a-f]{64}$ ]]

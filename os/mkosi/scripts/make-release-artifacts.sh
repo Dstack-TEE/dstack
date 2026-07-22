@@ -3,6 +3,7 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 SELF="$ROOT/os/mkosi"
+# shellcheck source=/dev/null
 source "$SELF/versions.env"
 TREE=${1:?mkosi root tree required}
 KERNEL_TREE=${2:?kernel staging tree required}

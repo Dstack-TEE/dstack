@@ -3,7 +3,7 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 MKOSI_DIR="$ROOT/os/mkosi"
-# shellcheck source=../versions.env
+# shellcheck source=/dev/null
 source "$MKOSI_DIR/versions.env"
 BUILD_DIR=${1:?build directory required}
 STAGING=${2:?staging tree required}

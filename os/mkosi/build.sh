@@ -3,6 +3,7 @@
 set -euo pipefail
 SELF=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(cd "$SELF/../.." && pwd)
+# shellcheck source=/dev/null
 source "$SELF/versions.env"
 action=${1:-image}
 BUILD_DIR=${2:-$SELF/build}

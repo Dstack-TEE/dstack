@@ -173,6 +173,14 @@ precedence = "override"
 
 # Generated files
 
+# Experimental Debian/mkosi guest OS backend. Some native configuration
+# formats (JSON, apt, kernel config and gitignore) cannot carry SPDX headers.
+[[annotations]]
+path = "os/mkosi/**"
+SPDX-FileCopyrightText = "© 2026 Phala Network <dstack@phala.network>"
+SPDX-License-Identifier = "Apache-2.0"
+precedence = "override"
+
 [[annotations]]
 path = "dstack/kms/auth-eth/typechain-types/**"
 SPDX-FileCopyrightText = "NONE"

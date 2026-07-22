@@ -30,4 +30,3 @@ if [[ ${DSTACK_SKIP_RUST:-0} != 1 ]]; then
     "$ROOT/dstack/target/release/dstack-util" "$DEST/usr/bin/"
 fi
 find "$DEST" -print0 | xargs -0r touch --no-dereference --date="@${SOURCE_DATE_EPOCH:?}"
-

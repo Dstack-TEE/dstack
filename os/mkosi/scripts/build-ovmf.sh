@@ -30,6 +30,7 @@ sed -i -e 's/-flto/-fno-lto/g' -e 's/-DUSING_LTO//g' \
 sed -i 's/-Werror /-Werror -Wno-maybe-uninitialized -Wno-stringop-overflow /g' \
   "$src/BaseTools/Conf/tools_def.template"
 rm -f "$src/Conf/tools_def.txt"
+# shellcheck source=/dev/null
 (cd "$src" && set +u && source edksetup.sh BaseTools >/dev/null && \
   build -a X64 -t GCC5 -b RELEASE -n "${JOBS:-$(nproc)}" \
     -p OvmfPkg/IntelTdx/IntelTdxX64.dsc)
