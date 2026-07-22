@@ -56,6 +56,9 @@ jobs:
           forge build --sizes
         id: build
 
+      - name: Install OpenZeppelin upgrades validator
+        run: npm install --no-save --package-lock=false @openzeppelin/upgrades-core@^1.37.0
+
       - name: Run Forge tests
         run: |
           forge test --ffi -vvv
