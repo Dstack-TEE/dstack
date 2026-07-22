@@ -168,7 +168,6 @@ class GetQuoteResponse(BaseModel):
     def decode_event_log(self) -> "List[EventLog]":
         return [EventLog(**event) for event in json.loads(self.event_log)]
 
-
     def replay_rtmrs(self) -> Dict[int, str]:
         parsed_event_log = json.loads(self.event_log)
         rtmrs: Dict[int, str] = {}
