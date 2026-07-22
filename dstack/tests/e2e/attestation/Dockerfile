@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+# SPDX-License-Identifier: Apache-2.0
+
 FROM rust:1.92-bookworm AS builder
 WORKDIR /src
 COPY . .

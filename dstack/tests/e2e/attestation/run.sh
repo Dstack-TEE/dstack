@@ -1,4 +1,8 @@
 #!/bin/bash
+
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+# SPDX-License-Identifier: Apache-2.0
+
 set -euo pipefail
 cd "$(dirname "$0")"
 docker compose build
