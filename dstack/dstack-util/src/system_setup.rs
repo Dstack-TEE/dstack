@@ -3033,6 +3033,16 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
         if area.encryption() != "aes-xts-plain64" {
             bail!("Invalid LUKS keyslot encryption: {}", area.encryption());
         }
+        // Pin where the encrypted key material is read from. The binary area
+        // must sit between the two header copies and the encrypted payload;
+        // otherwise a host with raw disk access could redirect it elsewhere.
+        if area.offset() < 2 * hdr_size || area.offset() + area.size() > PAYLOAD_OFFSET {
+            bail!(
+                "Invalid LUKS keyslot area: offset={} size={}",
+                area.offset(),
+                area.size()
+            );
+        }
         if *key_size != 64 {
             bail!("Invalid LUKS keyslot key size: {key_size}");
         }
@@ -3043,6 +3053,9 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
             let LuksKdf::pbkdf2 {
                 hash,
                 iterations: _,
+                // Salts are left unchecked on purpose: the passphrase is
+                // high-entropy and KMS-derived, so an attacker-chosen salt
+                // buys nothing without it (see security report #552).
                 salt: _,
             } = kdf
             else {
@@ -3131,6 +3144,30 @@ fn test_validate_luks2_header() {
     assert!(error
         .to_string()
         .contains("Invalid LUKS keyslot encryption"));
+}
+
+#[test]
+fn test_validate_luks2_header_rejects_out_of_range_keyslot_area() {
+    // Redirect the keyslot binary area below the header region. Same length
+    // so the surrounding header stays intact; "00768" parses to 768, which is
+    // inside the header copies (< 2 * hdr_size) rather than the metadata gap.
+    let mut header = include_bytes!("../tests/fixtures/luks_header_good").to_vec();
+    let needle = br#""offset":"32768""#;
+    let replacement = br#""offset":"00768""#;
+    let mut patched = 0;
+    let mut i = 0;
+    while i + needle.len() <= header.len() {
+        if &header[i..i + needle.len()] == needle {
+            header[i..i + needle.len()].copy_from_slice(replacement);
+            patched += 1;
+            i += needle.len();
+        } else {
+            i += 1;
+        }
+    }
+    assert_eq!(patched, 2, "expected to patch both header copies");
+    let error = validate_luks2_headers(&mut &header[..]).unwrap_err();
+    assert!(error.to_string().contains("Invalid LUKS keyslot area"));
 }
 
 #[cfg(test)]
