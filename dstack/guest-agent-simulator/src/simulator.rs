@@ -53,8 +53,11 @@ pub fn simulated_attest_response(
     report_data: [u8; 64],
     patch_report_data: bool,
 ) -> Result<AttestResponse> {
-    let attestation =
+    let mut attestation =
         maybe_patch_report_data(attestation, report_data, patch_report_data, "attest");
+    if let Some(event_log) = attestation.platform.tdx_event_log_mut() {
+        cc_eventlog::tdx::fill_v2_preimages(event_log);
+    }
     Ok(AttestResponse {
         attestation: VersionedAttestation::V1 { attestation }.to_bytes()?,
     })

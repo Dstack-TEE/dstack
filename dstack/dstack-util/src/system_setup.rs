@@ -14,7 +14,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use dstack_attest::emit_runtime_event;
+use dstack_attest::{emit_runtime_event, set_runtime_event_version};
 use dstack_kms_rpc as rpc;
 use dstack_types::{
     gpu_policy_hash,
@@ -1052,6 +1052,8 @@ fn unquote_os_release_value(value: &str) -> String {
 
 pub async fn cmd_sys_setup(args: SetupArgs) -> Result<()> {
     let stage0 = Stage0::load(&args)?;
+    set_runtime_event_version(stage0.shared.app_compose.event_log_version)
+        .context("failed to configure runtime event version")?;
     let vmm = stage0.host_api();
     let result = do_sys_setup(stage0).await;
     if let Err(err) = &result {

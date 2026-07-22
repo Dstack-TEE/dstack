@@ -165,19 +165,6 @@ async def test_tls_key_uniqueness():
 
 
 @pytest.mark.asyncio
-async def test_replay_rtmr():
-    client = AsyncDstackClient()
-    result = await client.get_quote("test")
-    # TODO evidence_api is a bit out-of-date, we need an up-to-date implementation.
-    tdxQuote = TdxQuote(bytearray(bytes.fromhex(result.quote)))
-    rtmrs = result.replay_rtmrs()
-    assert rtmrs[0] == tdxQuote.body.rtmr0.hex()
-    assert rtmrs[1] == tdxQuote.body.rtmr1.hex()
-    assert rtmrs[2] == tdxQuote.body.rtmr2.hex()
-    assert rtmrs[3] == tdxQuote.body.rtmr3.hex()
-
-
-@pytest.mark.asyncio
 async def test_get_quote_raw_hash_error():
     with pytest.raises(ValueError) as excinfo:
         client = AsyncDstackClient()

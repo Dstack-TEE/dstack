@@ -33,7 +33,7 @@ console.log(Buffer.from(key.key).toString('hex'))
 
 const quote = await client.getQuote('app-state-snapshot')
 console.log(quote.quote)
-console.log(quote.replayRtmrs())
+console.log(quote.event_log)
 ```
 
 The constructor probes `/var/run/dstack.sock`, then `/run/dstack.sock`, then the `/var/run/dstack/` and `/run/dstack/` variants. Pass an explicit endpoint for HTTP or for a non-default socket:
@@ -86,7 +86,6 @@ Generate a raw TDX quote. `reportData` is up to 64 bytes (string, Buffer, or Uin
 const quote = await client.getQuote('user:alice:nonce123')
 quote.quote        // hex-encoded TDX quote
 quote.event_log    // JSON string of measured events
-quote.replayRtmrs() // recompute RTMR[0..3] from the event log
 ```
 
 ### `attest(reportData)`

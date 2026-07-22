@@ -162,3 +162,23 @@ services:
     image: nginx@sha256:eee5eae48e79b2e75178328c7c585b89d676eaae616f03f9a1813aaed820745a
     network_mode: host
 ```
+## Runtime event-log V2 policies
+
+Event-log V2 exposes canonical digest pre-images so a relying party can check
+individual claims such as `compose-hash`. Verifying
+`sha384(preimage) == digest` proves only that those bytes participate in the
+quoted RTMR/PCR extension chain. It does **not** prove that trusted dstack boot
+code originated the event name: privileged code inside the CVM can append
+additional measured events after boot.
+
+Policies that trust a named V2 event must therefore also validate ordering and
+the boot boundary. In particular, select the expected claim before
+`boot-mr-done`/`system-ready`, reject duplicate trusted claim names, and replay
+the complete quoted chain. Never accept an arbitrary later event solely because
+its digest matches its supplied pre-image.
+
+V2 is a coordinated upgrade. Upgrade every KMS, gateway, verifier, and other
+relying party before enabling `event_log_version: 2`; older verifiers interpret
+runtime events as V1 and reject the quote. Older guest images may ignore the
+compose field and emit V1 events, so confirm that the selected image advertises
+V2 support before relying on per-event claims.

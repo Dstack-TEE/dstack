@@ -58,13 +58,6 @@ async fn main() -> anyhow::Result<()> {
     let quote_bytes = response.decode_quote()?;
     println!("  Decoded quote bytes length: {}", quote_bytes.len());
 
-    // Replay RTMRs from event log
-    let rtmrs = response.replay_rtmrs()?;
-    println!("  Replayed RTMRs: {} entries", rtmrs.len());
-    for (idx, rtmr) in rtmrs.iter() {
-        println!("    RTMR{}: {}", idx, rtmr);
-    }
-
     // 4. Get TLS key for server authentication
     let tls_config = TlsKeyConfig::builder()
         .subject("my-app.example.com")

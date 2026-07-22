@@ -32,6 +32,7 @@ type AppCompose = {
   launch_token_hash?: string;
   pre_launch_script?: string;
   init_script?: string;
+  event_log_version?: number;
 };
 
 type KeyProviderKind = 'none' | 'kms' | 'local' | 'tpm';
@@ -129,6 +130,7 @@ type VmFormState = {
   kms_urls: string[];
   gateway_urls: string[];
   stopped: boolean;
+  event_log_version: number;
 };
 
 type UpdateDialogState = {
@@ -215,6 +217,7 @@ function createVmFormState(preLaunchScript: string): VmFormState {
     kms_urls: [],
     gateway_urls: [],
     stopped: false,
+    event_log_version: 1,
   };
 }
 
@@ -850,6 +853,10 @@ type CreateVmPayloadSource = {
       appCompose.swap_size = swapBytes;
     }
 
+    if (vmForm.value.event_log_version && vmForm.value.event_log_version !== 1) {
+      appCompose.event_log_version = vmForm.value.event_log_version;
+    }
+
     const launchToken = vmForm.value.encryptedEnvs.find((env) => env.key === 'APP_LAUNCH_TOKEN');
     if (launchToken) {
       appCompose.launch_token_hash = await calcComposeHash(launchToken.value);
@@ -1240,6 +1247,7 @@ type CreateVmPayloadSource = {
       no_tee: !!config.no_tee,
       user_config: config.user_config || '',
       stopped: !!config.stopped,
+      event_log_version: theVm.appCompose?.event_log_version || 1,
     };
 
     // Show Create VM dialog instead of Clone Config dialog

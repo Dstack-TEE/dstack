@@ -70,10 +70,7 @@ The Rust SDK currently requests the default `secp256k1` key material. Use distin
 
 ```rust
 let quote = client.get_quote(b"user:alice:nonce123".to_vec()).await?;
-
-// Replay RTMRs from the event log
-let rtmrs = quote.replay_rtmrs()?;
-println!("{:?}", rtmrs);
+println!("{}", quote.event_log);
 ```
 
 **Parameters:**
@@ -82,7 +79,6 @@ println!("{:?}", rtmrs);
 **Returns:** `GetQuoteResponse`
 - `quote`: Hex-encoded TDX quote
 - `event_log`: JSON string of measured events
-- `replay_rtmrs()`: Method to compute RTMR values from event log
 
 ### Get Instance Info
 

@@ -395,6 +395,8 @@ impl TryFrom<TcgEvent> for TdxEvent {
             digest,
             event: Default::default(),
             event_payload: value.event.into(),
+            version: Default::default(),
+            preimage: None,
         })
     }
 }

@@ -34,9 +34,7 @@ impl PlatformBackend for RealPlatform {
     fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse> {
         let attestation = Attestation::quote(&report_data).context("Failed to get quote")?;
         let tdx_quote = attestation.get_tdx_quote_bytes();
-        let tdx_event_log = attestation.get_tdx_event_log_string_for_config(vm_config);
-        // TDX callers already have quote + event_log. Only non-TDX platforms
-        // need the platform-adaptive versioned attestation payload.
+        let tdx_event_log = attestation.get_tdx_event_log_string();
         let versioned = if tdx_quote.is_some() {
             Vec::new()
         } else {
@@ -55,7 +53,9 @@ impl PlatformBackend for RealPlatform {
     }
 
     fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
-        let attestation = Attestation::quote(&report_data).context("Failed to get attestation")?;
+        let mut attestation =
+            Attestation::quote(&report_data).context("Failed to get attestation")?;
+        attestation.fill_event_preimages();
         Ok(AttestResponse {
             attestation: attestation.into_versioned().to_bytes()?,
         })

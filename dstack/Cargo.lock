@@ -767,13 +767,16 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "digest 0.10.7",
+ "dstack-types",
  "ez-hash",
  "fs-err",
  "hex",
  "insta",
+ "or-panic",
  "parity-scale-codec",
  "serde",
  "serde-human-bytes",
+ "serde_jcs",
  "serde_json",
  "sha2 0.10.9",
 ]
@@ -1785,6 +1788,8 @@ dependencies = [
  "rand 0.8.6",
  "rmp-serde",
  "rsa",
+ "rustix 0.38.44",
+ "safe-write",
  "serde",
  "serde-human-bytes",
  "serde_json",
@@ -1996,9 +2001,11 @@ name = "dstack-guest-agent-simulator"
 version = "0.6.0"
 dependencies = [
  "anyhow",
+ "cc-eventlog",
  "clap",
  "dstack-guest-agent",
  "dstack-guest-agent-rpc",
+ "dstack-types",
  "ra-rpc",
  "ra-tls",
  "rocket",

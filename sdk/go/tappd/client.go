@@ -11,7 +11,6 @@ package tappd
 import (
 	"bytes"
 	"context"
-	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -98,63 +97,6 @@ type TappdInfoResponse struct {
 	AppCert    string  `json:"app_cert"`
 	TcbInfo    TcbInfo `json:"tcb_info"`
 	AppName    string  `json:"app_name"`
-}
-
-const INIT_MR = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-
-// Replays the RTMR history to calculate final RTMR values
-func replayRTMR(history []string) (string, error) {
-	if len(history) == 0 {
-		return INIT_MR, nil
-	}
-
-	mr := make([]byte, 48)
-
-	for _, content := range history {
-		contentBytes, err := hex.DecodeString(content)
-		if err != nil {
-			return "", err
-		}
-
-		if len(contentBytes) < 48 {
-			padding := make([]byte, 48-len(contentBytes))
-			contentBytes = append(contentBytes, padding...)
-		}
-
-		h := sha512.New384()
-		h.Write(append(mr, contentBytes...))
-		mr = h.Sum(nil)
-	}
-
-	return hex.EncodeToString(mr), nil
-}
-
-// Replays the RTMR history to calculate final RTMR values
-func (r *TdxQuoteResponse) ReplayRTMRs() (map[int]string, error) {
-	var eventLog []struct {
-		IMR    int    `json:"imr"`
-		Digest string `json:"digest"`
-	}
-	json.Unmarshal([]byte(r.EventLog), &eventLog)
-
-	rtmrs := make(map[int]string, 4)
-	for idx := 0; idx < 4; idx++ {
-		history := make([]string, 0)
-		for _, event := range eventLog {
-			if event.IMR == idx {
-				history = append(history, event.Digest)
-			}
-		}
-
-		rtmr, err := replayRTMR(history)
-		if err != nil {
-			return nil, err
-		}
-
-		rtmrs[idx] = rtmr
-	}
-
-	return rtmrs, nil
 }
 
 // Handles communication with the Tappd service.

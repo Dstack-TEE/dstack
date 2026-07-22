@@ -12,7 +12,7 @@ pub const TDX_QUOTE_REPORT_DATA_RANGE: std::ops::Range<usize> = 568..632;
 use std::{borrow::Cow, time::SystemTime};
 
 use anyhow::{anyhow, bail, Context, Result};
-use cc_eventlog::{RuntimeEvent, TdxEvent};
+use cc_eventlog::{EventLogVersion, RuntimeEvent, TdxEvent};
 use dcap_qvl::{
     collateral::CollateralClient,
     quote::{EnclaveReport, Quote, Report, TDReport10, TDReport15},
@@ -231,9 +231,7 @@ fn tdx_root_der(root: Vec<u8>) -> Result<Vec<u8>> {
 pub use tpm_types::TpmQuote;
 
 use crate::amd_sev_snp::{AmdKdsClient, VerifiedAmdSnpReport};
-use crate::v1::{
-    is_tdx_acpi_data_event, strip_tdx_event_log_for_config, strip_tdx_runtime_event_log,
-};
+use crate::v1::{strip_tdx_event_log_for_config, strip_tdx_runtime_event_log};
 pub use crate::v1::{Attestation as AttestationV1, PlatformEvidence, StackEvidence};
 
 pub const SNP_REPORT_DATA_RANGE: std::ops::Range<usize> = 0x50..0x90;
@@ -817,8 +815,11 @@ pub trait TdxAttestationExt {
 
     /// Returns the TDX event log serialized as JSON.
     fn tdx_event_log_string(&self) -> Option<String> {
-        self.tdx_event_log()
-            .map(|event_log| serde_json::to_string(event_log).unwrap_or_default())
+        self.tdx_event_log().map(|event_log| {
+            let mut events: Vec<TdxEvent> = event_log.to_vec();
+            cc_eventlog::tdx::fill_v2_preimages(&mut events);
+            serde_json::to_string(&events).unwrap_or_default()
+        })
     }
 
     /// Returns the parsed TD10 report from the embedded TDX quote.
@@ -1438,6 +1439,16 @@ impl<T> Attestation<T> {
         self.tdx_quote().map(|q| q.quote.clone())
     }
 
+    /// Populate `preimage` on every V2 runtime event in the TDX event log.
+    ///
+    /// Useful before serializing an attestation so relying parties get the
+    /// digest pre-images alongside events.
+    pub fn fill_event_preimages(&mut self) {
+        if let Some(q) = self.tdx_quote_mut() {
+            cc_eventlog::tdx::fill_v2_preimages(&mut q.event_log);
+        }
+    }
+
     /// Get TDX event log bytes
     pub fn get_tdx_event_log_bytes(&self) -> Option<Vec<u8>> {
         self.tdx_quote()
@@ -1446,35 +1457,23 @@ impl<T> Attestation<T> {
 
     /// Get TDX event log string with RTMR[0-2] payloads stripped to reduce size.
     /// Only digests are kept for boot-time events; runtime events (RTMR3) retain full payload.
+    ///
     pub fn get_tdx_event_log_string(&self) -> Option<String> {
-        self.get_tdx_event_log_string_for_config("")
-    }
-
-    /// Get TDX event log string for a vm_config.
-    ///
-    /// Always keeps the `ACPI DATA` marker payloads on the three RTMR0 ACPI
-    /// digest events, regardless of the vm_config's `tdx_attestation_variant`,
-    /// so callers that consume the top-level `event_log` can semantically
-    /// identify the ACPI table digest events without consulting the
-    /// versioned attestation field, and a verifier can choose lite
-    /// verification for any TDX boot rather than only ones resolved to lite
-    /// at launch.
-    ///
-    /// `config` is accepted for API stability but no longer changes the
-    /// result.
-    pub fn get_tdx_event_log_string_for_config(&self, _config: &str) -> Option<String> {
         self.tdx_quote().map(|q| {
-            let stripped: Vec<_> = q
+            let mut stripped: Vec<_> = q
                 .event_log
                 .iter()
-                .map(|e| {
-                    let mut stripped = e.stripped();
-                    if is_tdx_acpi_data_event(e) {
-                        stripped.event_payload = e.event_payload.clone();
+                .map(|event| {
+                    let mut stripped = event.stripped();
+                    // Keep the marker used by TDX-lite verification to identify
+                    // the three RTMR0 ACPI digest events.
+                    if cc_eventlog::tdx::is_tdx_acpi_data_event(event) {
+                        stripped.event_payload = event.event_payload.clone();
                     }
                     stripped
                 })
                 .collect();
+            cc_eventlog::tdx::fill_v2_preimages(&mut stripped);
             serde_json::to_string(&stripped).unwrap_or_default()
         })
     }
@@ -2104,12 +2103,12 @@ impl Attestation {
             TeeVariant::DstackAmdSevSnp
             | TeeVariant::DstackTdx
             | TeeVariant::DstackGcpTdx
-            // AWS: prefer host-shared sys-config vm_config (carries
-            // aws_measurement + unified os_image_hash); validated below.
+            // AWS prefers host-shared vm_config because it carries the
+            // aws_measurement and unified os_image_hash validated below.
             | TeeVariant::DstackAwsNitroTpm => {
                 read_vm_config().context("Failed to read vm config")?
             }
-            // NitroEnclave derives config from the quote's image hash below.
+            // NitroEnclave derives config from the signed image hash below.
             TeeVariant::DstackNitroEnclave => String::new(),
         };
         let runtime_events = match mode {
@@ -2118,7 +2117,11 @@ impl Attestation {
             }
             TeeVariant::DstackAmdSevSnp => vec![],
             TeeVariant::DstackNitroEnclave => match app_id {
-                Some(app_id) => vec![RuntimeEvent::new("app-id".to_string(), app_id.to_vec())],
+                Some(app_id) => vec![RuntimeEvent::new(
+                    "app-id".to_string(),
+                    app_id.to_vec(),
+                    EventLogVersion::V1,
+                )],
                 None => vec![],
             },
         };
@@ -2298,9 +2301,24 @@ impl Attestation {
         })
     }
 
-    /// Wrap into a versioned attestation for encoding
+    /// Wrap into a versioned attestation for encoding.
+    ///
+    /// When any runtime event uses a non-V1 event-log version, force the V1
+    /// msgpack wire format so the `version` field is preserved (SCALE
+    /// V0 skips it for legacy binary compat). Otherwise default to V0 for
+    /// backward compat with callers that expect the SCALE format.
     pub fn into_versioned(self) -> VersionedAttestation {
-        VersionedAttestation::V0 { attestation: self }
+        let has_v2 = self
+            .runtime_events
+            .iter()
+            .any(|e| !matches!(e.version, EventLogVersion::V1));
+        if has_v2 {
+            VersionedAttestation::V1 {
+                attestation: self.into(),
+            }
+        } else {
+            VersionedAttestation::V0 { attestation: self }
+        }
     }
 
     /// Verify the quote
@@ -2607,42 +2625,63 @@ mod tests {
             digest: vec![event_type as u8; 48],
             event: String::new(),
             event_payload: event_payload.to_vec(),
+            version: EventLogVersion::V1,
+            preimage: None,
         }
     }
 
     #[test]
-    fn tdx_event_log_string_always_keeps_acpi_data_payloads() {
+    fn get_quote_event_log_keeps_acpi_data_payloads() {
         let mut attestation = dummy_tdx_attestation([0u8; 64]);
         let AttestationQuote::DstackTdx(tdx_quote) = &mut attestation.quote else {
             panic!("expected TDX attestation");
         };
         tdx_quote.event_log = vec![
             tdx_event(0, 10, b"ACPI DATA"),
+            tdx_event(0, 10, b"ACPI DATA"),
+            tdx_event(0, 10, b"ACPI DATA"),
             tdx_event(0, 4, b"boot-payload"),
-            tdx_event(3, 8, b"runtime-payload"),
+            tdx_event(
+                3,
+                cc_eventlog::DSTACK_RUNTIME_EVENT_TYPE,
+                b"v1-runtime-payload",
+            ),
+            {
+                let mut event = tdx_event(
+                    3,
+                    cc_eventlog::DSTACK_RUNTIME_EVENT_TYPE,
+                    b"v2-runtime-payload",
+                );
+                event.version = EventLogVersion::V2;
+                event
+            },
         ];
 
         // The ACPI DATA marker payload is retained regardless of the
         // vm_config's tdx_attestation_variant (including no vm_config at
         // all), so a verifier can choose lite verification for any TDX boot.
-        for config in [
-            r#"{"tdx_attestation_variant":"lite"}"#,
-            r#"{"tdx_attestation_variant":"legacy"}"#,
-            "",
-        ] {
-            let events: Vec<TdxEvent> = serde_json::from_str(
-                &attestation
-                    .get_tdx_event_log_string_for_config(config)
-                    .expect("TDX event log"),
-            )
-            .unwrap_or_else(|e| panic!("decode event log for config {config:?}: {e}"));
-            assert_eq!(
-                events[0].event_payload, b"ACPI DATA",
-                "config {config:?} must keep the ACPI DATA marker payload"
-            );
-            assert!(events[1].event_payload.is_empty());
-            assert!(events[2].event_payload.is_empty());
-        }
+        let events: Vec<TdxEvent> = serde_json::from_str(
+            &attestation
+                .get_tdx_event_log_string()
+                .expect("TDX event log"),
+        )
+        .unwrap_or_else(|e| panic!("decode GetQuote event log: {e}"));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| cc_eventlog::tdx::is_tdx_acpi_data_event(event))
+                .count(),
+            3,
+            "GetQuote must retain all three TDX-lite ACPI DATA markers"
+        );
+        assert!(events[3].event_payload.is_empty());
+        assert_eq!(events[4].event_payload, b"v1-runtime-payload");
+        assert!(
+            events[4].preimage.is_none(),
+            "V1 output must remain unchanged"
+        );
+        assert_eq!(events[5].event_payload, b"v2-runtime-payload");
+        assert!(events[5].preimage.is_some(), "V2 must include its preimage");
     }
 
     #[test]
@@ -2750,6 +2789,44 @@ mod tests {
     }
 
     #[test]
+    fn into_versioned_uses_v0_when_all_events_are_v1() {
+        let mut att = dummy_tdx_attestation([7u8; 64]);
+        att.runtime_events.push(cc_eventlog::RuntimeEvent::new(
+            "app-id".into(),
+            vec![1, 2, 3],
+            cc_eventlog::EventLogVersion::V1,
+        ));
+        let versioned = att.into_versioned();
+        assert!(
+            matches!(versioned, VersionedAttestation::V0 { .. }),
+            "V1-only events should stay on the V0/SCALE wire format"
+        );
+    }
+
+    #[test]
+    fn into_versioned_upgrades_to_v1_when_any_event_is_v2() {
+        let mut att = dummy_tdx_attestation([8u8; 64]);
+        att.runtime_events.push(cc_eventlog::RuntimeEvent::new(
+            "app-id".into(),
+            vec![1, 2, 3],
+            cc_eventlog::EventLogVersion::V1,
+        ));
+        att.runtime_events.push(cc_eventlog::RuntimeEvent::new(
+            "compose-hash".into(),
+            vec![4, 5, 6],
+            cc_eventlog::EventLogVersion::V2,
+        ));
+        let versioned = att.into_versioned();
+        assert!(
+            matches!(versioned, VersionedAttestation::V1 { .. }),
+            "presence of a V2 event must force the V1 msgpack wire format to preserve `version`"
+        );
+    }
+    fn v1_event(event: String, payload: Vec<u8>) -> RuntimeEvent {
+        RuntimeEvent::new(event, payload, EventLogVersion::V1)
+    }
+
+    #[test]
     fn nitro_pcrs_from_verified_extracts_0_1_2() {
         let mut map = std::collections::BTreeMap::new();
         map.insert(0u16, vec![0xaa; 48]);
@@ -2800,13 +2877,13 @@ mod tests {
 
         let mr_key_provider = sha256(b"aws nitrotpm key provider");
         let events = vec![
-            RuntimeEvent::new("system-preparing".into(), Vec::new()),
-            RuntimeEvent::new("app-id".into(), vec![0x11; 20]),
-            RuntimeEvent::new("compose-hash".into(), vec![0x22; 32]),
-            RuntimeEvent::new("instance-id".into(), vec![0x33; 20]),
-            RuntimeEvent::new("boot-mr-done".into(), Vec::new()),
-            RuntimeEvent::new("key-provider".into(), b"tpm".to_vec()),
-            RuntimeEvent::new("system-ready".into(), Vec::new()),
+            v1_event("system-preparing".into(), Vec::new()),
+            v1_event("app-id".into(), vec![0x11; 20]),
+            v1_event("compose-hash".into(), vec![0x22; 32]),
+            v1_event("instance-id".into(), vec![0x33; 20]),
+            v1_event("boot-mr-done".into(), Vec::new()),
+            v1_event("key-provider".into(), b"tpm".to_vec()),
+            v1_event("system-ready".into(), Vec::new()),
         ];
         let replayed_pcr14 = cc_eventlog::replay_events::<Sha384>(&events, None);
         pcrs.insert(AWS_NITRO_TPM_EVENT_PCR, replayed_pcr14.to_vec());
@@ -2833,7 +2910,7 @@ mod tests {
         );
 
         let mut changed_events = events.clone();
-        changed_events[2] = RuntimeEvent::new("compose-hash".into(), vec![0xee; 32]);
+        changed_events[2] = v1_event("compose-hash".into(), vec![0xee; 32]);
         let changed_pcr14 = cc_eventlog::replay_events::<Sha384>(&changed_events, None);
         let mut changed_pcrs = pcrs.clone();
         changed_pcrs.insert(AWS_NITRO_TPM_EVENT_PCR, changed_pcr14.to_vec());
@@ -2887,14 +2964,14 @@ mod tests {
         // Single PCR14 lane: all events (including after system-ready) are
         // measured and must be replayed for full (non-boottime) decode.
         let events = vec![
-            RuntimeEvent::new("system-preparing".into(), Vec::new()),
-            RuntimeEvent::new("app-id".into(), vec![0x11; 20]),
-            RuntimeEvent::new("compose-hash".into(), vec![0x22; 32]),
-            RuntimeEvent::new("instance-id".into(), vec![0x33; 20]),
-            RuntimeEvent::new("boot-mr-done".into(), Vec::new()),
-            RuntimeEvent::new("storage-fs".into(), b"ext4".to_vec()),
-            RuntimeEvent::new("system-ready".into(), Vec::new()),
-            RuntimeEvent::new("app-runtime".into(), b"ready".to_vec()),
+            v1_event("system-preparing".into(), Vec::new()),
+            v1_event("app-id".into(), vec![0x11; 20]),
+            v1_event("compose-hash".into(), vec![0x22; 32]),
+            v1_event("instance-id".into(), vec![0x33; 20]),
+            v1_event("boot-mr-done".into(), Vec::new()),
+            v1_event("storage-fs".into(), b"ext4".to_vec()),
+            v1_event("system-ready".into(), Vec::new()),
+            v1_event("app-runtime".into(), b"ready".to_vec()),
         ];
 
         let full_pcr = cc_eventlog::replay_events::<Sha384>(&events, None);
@@ -2942,10 +3019,7 @@ mod tests {
             .iter()
             .take_while(|event| event.event != "boot-mr-done")
             .cloned()
-            .chain(std::iter::once(RuntimeEvent::new(
-                "boot-mr-done".into(),
-                Vec::new(),
-            )))
+            .chain(std::iter::once(v1_event("boot-mr-done".into(), Vec::new())))
             .collect();
         let mut early_pcrs = pcrs.clone();
         early_pcrs.insert(AWS_NITRO_TPM_EVENT_PCR, early_pcr.to_vec());

@@ -199,15 +199,16 @@ message GpuInfoResponse {
 message GetQuoteResponse {
   // TDX quote (empty on non-TDX platforms such as AMD SEV-SNP)
   bytes quote = 1;
-  // Event log (empty on non-TDX platforms)
+  // Event log (empty on non-TDX platforms). V2 runtime events always include
+  // their hex-encoded digest preimage. Clients should verify
+  // sha384(hex_decode(preimage)) == digest.
   string event_log = 2;
   // Report data
   bytes report_data = 3;
   // Hw config
   string vm_config = 4;
   // Platform-adaptive versioned attestation (SCALE/msgpack encoded). Populated
-  // on non-TDX TEE platforms (AMD SEV-SNP, ...). TDX uses `quote` + `event_log`
-  // above to keep this response compact.
+  // on non-TDX platforms; TDX uses quote + event_log above.
   bytes attestation = 5;
 }
 

@@ -143,19 +143,6 @@ async fn test_tappd_client_get_quote_integration() {
             println!("  Quote decode error: {}", e);
         }
     }
-
-    // Test RTMR replay
-    match response.replay_rtmrs() {
-        Ok(rtmrs) => {
-            println!("  Replayed RTMRs: {} entries", rtmrs.len());
-            for (idx, rtmr) in rtmrs.iter() {
-                println!("    RTMR{}: {}", idx, rtmr);
-            }
-        }
-        Err(e) => {
-            println!("  RTMR replay error: {}", e);
-        }
-    }
 }
 
 // Helper function to get a test client

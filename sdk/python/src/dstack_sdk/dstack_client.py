@@ -5,7 +5,6 @@
 import base64
 import binascii
 import functools
-import hashlib
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 import json
@@ -29,23 +28,6 @@ try:
     __version__ = _pkg_version("dstack-sdk")
 except PackageNotFoundError:
     __version__ = "0.0.0+unknown"
-
-
-INIT_MR = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-
-
-def replay_rtmr(history: list[str]) -> str:
-    if len(history) == 0:
-        return INIT_MR
-    mr = bytes.fromhex(INIT_MR)
-    for content in history:
-        # mr = sha384(concat(mr, content))
-        # if content is shorter than 48 bytes, pad it with zeros
-        content_bytes = bytes.fromhex(content)
-        if len(content_bytes) < 48:
-            content_bytes = content_bytes.ljust(48, b"\0")
-        mr = hashlib.sha384(mr + content_bytes).digest()
-    return mr.hex()
 
 
 def get_endpoint(endpoint: str | None = None) -> str:
@@ -168,16 +150,6 @@ class GetQuoteResponse(BaseModel):
     def decode_event_log(self) -> "List[EventLog]":
         return [EventLog(**event) for event in json.loads(self.event_log)]
 
-    def replay_rtmrs(self) -> Dict[int, str]:
-        parsed_event_log = json.loads(self.event_log)
-        rtmrs: Dict[int, str] = {}
-        for idx in range(4):
-            history = [
-                event["digest"] for event in parsed_event_log if event.get("imr") == idx
-            ]
-            rtmrs[idx] = replay_rtmr(history)
-        return rtmrs
-
 
 class AttestResponse(BaseModel):
     attestation: str
@@ -220,6 +192,8 @@ class EventLog(BaseModel):
     digest: str
     event: str
     event_payload: str
+    version: Optional[int] = None
+    preimage: Optional[str] = None
 
 
 class TcbInfo(BaseModel):

@@ -11,7 +11,6 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
-	"crypto/sha512"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
@@ -131,6 +130,13 @@ type EventLog struct {
 	Digest       string `json:"digest"`
 	Event        string `json:"event"`
 	EventPayload string `json:"event_payload"`
+	// Runtime event log version. The field is omitted from the wire format for
+	// version 1, so a zero value means V1 rather than "unset"; treat 0 and 1
+	// alike. Only dstack runtime events carry a version.
+	Version int `json:"version,omitempty"`
+	// Hex-encoded digest pre-image, present on V2 runtime events. When set,
+	// sha384(hex_decode(Preimage)) equals Digest.
+	Preimage string `json:"preimage,omitempty"`
 }
 
 // Represents the TCB information
@@ -182,63 +188,6 @@ func (r *InfoResponse) DecodeTcbInfo() (*TcbInfo, error) {
 	}
 
 	return &tcbInfo, nil
-}
-
-const INIT_MR = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-
-// Replays the RTMR history to calculate final RTMR values
-func replayRTMR(history []string) (string, error) {
-	if len(history) == 0 {
-		return INIT_MR, nil
-	}
-
-	mr := make([]byte, 48)
-
-	for _, content := range history {
-		contentBytes, err := hex.DecodeString(content)
-		if err != nil {
-			return "", err
-		}
-
-		if len(contentBytes) < 48 {
-			padding := make([]byte, 48-len(contentBytes))
-			contentBytes = append(contentBytes, padding...)
-		}
-
-		h := sha512.New384()
-		h.Write(append(mr, contentBytes...))
-		mr = h.Sum(nil)
-	}
-
-	return hex.EncodeToString(mr), nil
-}
-
-// Replays the RTMR history to calculate final RTMR values
-func (r *GetQuoteResponse) ReplayRTMRs() (map[int]string, error) {
-	var eventLog []struct {
-		IMR    int    `json:"imr"`
-		Digest string `json:"digest"`
-	}
-	json.Unmarshal([]byte(r.EventLog), &eventLog)
-
-	rtmrs := make(map[int]string, 4)
-	for idx := 0; idx < 4; idx++ {
-		history := make([]string, 0)
-		for _, event := range eventLog {
-			if event.IMR == idx {
-				history = append(history, event.Digest)
-			}
-		}
-
-		rtmr, err := replayRTMR(history)
-		if err != nil {
-			return nil, err
-		}
-
-		rtmrs[idx] = rtmr
-	}
-
-	return rtmrs, nil
 }
 
 // QuoteHashAlgorithm represents the hash algorithm used for quote generation

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import fs from 'fs'
-import { sha384 } from '@noble/hashes/sha512'
 import { send_rpc_request } from './send-rpc-request'
 export { getComposeHash } from './get-compose-hash'
 export { verifyEnvEncryptPublicKey, verifyEnvEncryptPublicKeyLegacy } from './verify-env-encrypt-public-key'
@@ -52,6 +51,8 @@ export interface EventLog {
   digest: string
   event: string
   event_payload: string
+  version?: 1 | 2
+  preimage?: string
 }
 
 export interface TcbInfo {
@@ -99,8 +100,6 @@ export interface GetQuoteResponse {
   report_data?: Hex
   vm_config?: string
   attestation?: Hex
-
-  replayRtmrs: () => string[]
 }
 
 export interface AttestResponse {
@@ -145,36 +144,6 @@ function x509key_to_uint8array(pem: string, max_length?: number) {
     result[i] = binaryDer.charCodeAt(i)
   }
   return result
-}
-
-function replay_rtmr(history: string[]): string {
-  const INIT_MR = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-  if (history.length === 0) {
-    return INIT_MR
-  }
-  let mr = Buffer.from(INIT_MR, 'hex')
-  for (const content of history) {
-    // Convert hex string to buffer
-    let contentBuffer = Buffer.from(content, 'hex')
-    // Pad content with zeros if shorter than 48 bytes
-    if (contentBuffer.length < 48) {
-      const padding = Buffer.alloc(48 - contentBuffer.length, 0)
-      contentBuffer = Buffer.concat([contentBuffer, padding])
-    }
-    mr = Buffer.from(sha384(Buffer.concat([mr, contentBuffer])))
-  }
-  return mr.toString('hex')
-}
-
-function reply_rtmrs(event_log: EventLog[]): Record<number, string> {
-  const rtmrs: Array<string> = []
-  for (let idx = 0; idx < 4; idx++) {
-    const history = event_log
-      .filter(event => event.imr === idx)
-      .map(event => event.digest)
-    rtmrs[idx] = replay_rtmr(history)
-  }
-  return rtmrs
 }
 
 export interface TlsKeyOptions {
@@ -310,11 +279,6 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
       const err = result['error'] as string
       throw new Error(err)
     }
-    Object.defineProperty(result, 'replayRtmrs', {
-      get: () => () => reply_rtmrs(JSON.parse(result.event_log) as EventLog[]),
-      enumerable: true,
-      configurable: false,
-    })
     return Object.freeze(result)
   }
 
@@ -529,11 +493,6 @@ export class TappdClient extends DstackClient<TcbInfoV03x> {
       const err = result['error'] as string
       throw new Error(err)
     }
-    Object.defineProperty(result, 'replayRtmrs', {
-      get: () => () => reply_rtmrs(JSON.parse(result.event_log) as EventLog[]),
-      enumerable: true,
-      configurable: false,
-    })
     return Object.freeze(result)
   }
 

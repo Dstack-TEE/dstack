@@ -145,6 +145,13 @@ impl PlatformEvidence {
             .and_then(|document| MrConfigV3::from_document(document).ok())
     }
 
+    pub fn tdx_event_log_mut(&mut self) -> Option<&mut Vec<TdxEvent>> {
+        match self {
+            Self::Tdx { event_log, .. } => Some(event_log),
+            _ => None,
+        }
+    }
+
     pub fn into_stripped(self) -> Self {
         self.into_stripped_for_config("")
     }
@@ -372,6 +379,8 @@ impl Attestation {
 mod tests {
     use super::*;
     use cc_eventlog::tdx::TDX_ACPI_DATA_EVENT_TYPE;
+    use dstack_types::mr_config::MrConfigV3;
+    use dstack_types::EventLogVersion;
 
     fn test_mr_config_document() -> String {
         MrConfigV3::new(
@@ -396,6 +405,8 @@ mod tests {
                     digest: vec![0xaa, 0xbb, 0xcc],
                     event: "pod".into(),
                     event_payload: vec![0xde, 0xad, 0xbe, 0xef],
+                    version: EventLogVersion::V1,
+                    preimage: None,
                 }],
             },
             StackEvidence::DstackPod {
@@ -403,6 +414,7 @@ mod tests {
                 runtime_events: vec![RuntimeEvent {
                     event: "pod".into(),
                     payload: vec![0xca, 0xfe, 0xba, 0xbe],
+                    version: EventLogVersion::V1,
                 }],
                 config: "{}".into(),
                 report_data_payload: "{\"hello\":\"world\"}".into(),
@@ -474,6 +486,8 @@ mod tests {
             digest: vec![idx as u8; 48],
             event: String::new(),
             event_payload: vec![0xff; idx + 1],
+            version: EventLogVersion::V1,
+            preimage: None,
         }
     }
 
@@ -484,6 +498,8 @@ mod tests {
             digest: vec![idx as u8; 48],
             event: String::new(),
             event_payload: TDX_ACPI_DATA_EVENT_PAYLOAD.to_vec(),
+            version: EventLogVersion::V1,
+            preimage: None,
         }
     }
 
@@ -491,6 +507,7 @@ mod tests {
         RuntimeEvent {
             event: "app-id".into(),
             payload: vec![0x42],
+            version: EventLogVersion::V1,
         }
         .into()
     }

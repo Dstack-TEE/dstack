@@ -681,7 +681,7 @@ mod tests {
         config::{AppComposeWrapper, Config},
     };
     use dstack_guest_agent_rpc::{GetAttestationForAppKeyRequest, SignRequest};
-    use dstack_types::{AppCompose, AppKeys, KeyProvider};
+    use dstack_types::{AppCompose, AppKeys, EventLogVersion, KeyProvider};
     use ed25519_dalek::ed25519::signature::hazmat::PrehashVerifier;
     use ed25519_dalek::{
         Signature as Ed25519Signature, Verifier, VerifyingKey as Ed25519VerifyingKey,
@@ -752,6 +752,7 @@ mod tests {
             secure_time: false,
             storage_fs: None,
             swap_size: 0,
+            event_log_version: EventLogVersion::V1,
             port_policy: Default::default(),
             requirements: None,
             verity_volumes: Vec::new(),

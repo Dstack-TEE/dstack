@@ -841,6 +841,10 @@ class VmmCLI:
                 app_compose["swap_size"] = swap_bytes
             else:
                 app_compose.pop("swap_size", None)
+        if args.event_log_version == 2:
+            app_compose["event_log_version"] = args.event_log_version
+        elif args.event_log_version == 1:
+            app_compose.pop("event_log_version", None)
 
         compose_file = json.dumps(app_compose, indent=4, ensure_ascii=False).encode(
             "utf-8"
@@ -1719,6 +1723,13 @@ def main():
         type=parse_memory_size,
         default=None,
         help="Swap size (e.g. 4G). Set to 0 to disable",
+    )
+    compose_parser.add_argument(
+        "--event-log-version",
+        type=int,
+        choices=[1, 2],
+        default=None,
+        help="RTMR3 runtime event-log digest format (1: legacy binary, 2: JCS canonical JSON). Omit to use the guest default (1).",
     )
     compose_parser.add_argument(
         "--output", required=True, help="Path to output app-compose.json file"
