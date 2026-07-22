@@ -9,6 +9,7 @@
 //! table. Everything read from a disk is untrusted: kind handlers use the
 //! measured app compose as their source of policy and cryptographic identity.
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
@@ -96,13 +97,24 @@ fn mount_all(compose_path: PathBuf) -> Result<()> {
         requested = compose.verity_volumes.len(),
         "discovered dstack volumes"
     );
+    let mut active_roots: HashMap<[u8; 32], PathBuf> = HashMap::new();
     for (index, requested) in compose.verity_volumes.iter().enumerate() {
-        activate_requested(index, requested, &volumes).with_context(|| {
+        if let Some(mapped) = active_roots.get(&requested.verity_root) {
+            mount_volume(requested, mapped).with_context(|| {
+                format!(
+                    "failed to mount required volume {index} at {}",
+                    requested.target.display()
+                )
+            })?;
+            continue;
+        }
+        let mapped = activate_requested(index, requested, &volumes).with_context(|| {
             format!(
                 "failed to activate required volume {index} at {}",
                 requested.target.display()
             )
         })?;
+        active_roots.insert(requested.verity_root, mapped);
     }
     Ok(())
 }
@@ -126,10 +138,17 @@ fn status(compose_path: PathBuf) -> Result<()> {
         let attached = volumes
             .iter()
             .any(|volume| volume.root_hash == requested.verity_root);
-        let mapper_name = format!("dstack-verity{index}");
-        let active = Path::new("/dev/mapper").join(&mapper_name).exists()
-            && mapping_root(&mapper_name)?
-                .eq_ignore_ascii_case(&hex::encode(requested.verity_root));
+        let expected_root = hex::encode(requested.verity_root);
+        let mut active = false;
+        for mapper_index in 0..compose.verity_volumes.len() {
+            let mapper_name = format!("dstack-verity{mapper_index}");
+            if Path::new("/dev/mapper").join(&mapper_name).exists()
+                && mapping_root(&mapper_name)?.eq_ignore_ascii_case(&expected_root)
+            {
+                active = true;
+                break;
+            }
+        }
         println!(
             "{index}\troot={}\ttarget={}\tattached={attached}\tactive={active}",
             hex::encode(requested.verity_root),
@@ -275,7 +294,7 @@ fn activate_requested(
     index: usize,
     requested: &RequestedVolume,
     volumes: &[VerityVolume],
-) -> Result<()> {
+) -> Result<PathBuf> {
     let candidate = volumes
         .iter()
         .find(|volume| volume.root_hash == requested.verity_root)
@@ -293,7 +312,7 @@ fn activate_requested(
                 return Err(err);
             }
             info!(mapper = mapper_name, "reused active verity mapping");
-            return Ok(());
+            return Ok(mapped);
         }
         run_cmd!(veritysetup close $mapper_name).context("closing stale verity mapping")?;
     }
@@ -308,7 +327,7 @@ fn activate_requested(
         let _ = run_cmd!(veritysetup close $mapper_name);
         return Err(err);
     }
-    Ok(())
+    Ok(mapped)
 }
 
 fn verify_first_block(path: &Path) -> Result<()> {

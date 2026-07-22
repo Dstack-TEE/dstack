@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashSet;
 use std::ops::Deref;
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -237,7 +238,19 @@ fn resolve_volumes(
         bail!("volumes requested but cvm.volumes_dir is not configured");
     }
     let base = fs::canonicalize(dir)?;
+    let mut roots = HashSet::new();
     reqs.iter()
+        .filter(|volume| {
+            let first = roots.insert(volume.verity_root);
+            if !first {
+                warn!(
+                    root = %hex::encode(volume.verity_root),
+                    source = volume.source,
+                    "not attaching duplicate verity root"
+                );
+            }
+            first
+        })
         .map(|v| {
             let real = resolve_volume_source(&base, &v.source)?;
             Ok(crate::app::VmVolume {
@@ -1054,6 +1067,40 @@ mod tests {
         assert_eq!(
             volumes[0].source,
             tmp.path().join("volume.img").display().to_string()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_volumes_attaches_duplicate_root_once() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        fs::write(tmp.path().join("first.img"), b"volume")?;
+        let mut cvm_config = test_cvm_config();
+        cvm_config.volumes_dir = tmp.path().to_string_lossy().into_owned();
+        let root = [7; 32];
+
+        let volumes = resolve_volumes(
+            &[
+                dstack_types::VerityVolume {
+                    source: "first.img".into(),
+                    verity_root: root,
+                    target: "/run/first".into(),
+                },
+                dstack_types::VerityVolume {
+                    // This source deliberately does not exist: the first entry
+                    // owns the single attachment for this content root.
+                    source: "duplicate.img".into(),
+                    verity_root: root,
+                    target: "/run/second".into(),
+                },
+            ],
+            &cvm_config,
+        )?;
+
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(
+            volumes[0].source,
+            tmp.path().join("first.img").display().to_string()
         );
         Ok(())
     }

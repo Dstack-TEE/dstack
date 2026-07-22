@@ -73,6 +73,10 @@ A required volume that is missing, malformed, or fails verification stops guest
 preparation. dm-verity continues verifying blocks lazily as the application
 reads them.
 
+The same `verity_root` may be declared more than once with different targets.
+The VMM attaches one disk for that root, and the guest mounts the verified
+content at each requested target.
+
 For diagnostics, `dstack-volume scan` lists recognized disks and
 `dstack-volume status app-compose.json` compares requested roots with attached
 and active devices.

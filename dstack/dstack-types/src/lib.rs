@@ -141,19 +141,12 @@ pub struct VerityVolume {
     pub target: std::path::PathBuf,
 }
 
-/// Reject ambiguous volume declarations before any disk is attached or
-/// activated. A root identifies one logical volume, and a mount target can
-/// only be owned by one volume.
+/// Reject ambiguous mount declarations before any disk is attached or
+/// activated. The same root may intentionally be mounted at multiple targets,
+/// but a target can only be owned by one volume.
 pub fn validate_verity_volumes(volumes: &[VerityVolume]) -> Result<(), String> {
-    let mut roots = std::collections::HashSet::new();
     let mut targets = std::collections::HashSet::new();
     for volume in volumes {
-        if !roots.insert(volume.verity_root) {
-            return Err(format!(
-                "duplicate verity root {}",
-                hex::encode(volume.verity_root)
-            ));
-        }
         if !targets.insert(&volume.target) {
             return Err(format!(
                 "duplicate verity volume target {}",
@@ -191,10 +184,8 @@ mod verity_volume_tests {
     }
 
     #[test]
-    fn rejects_duplicate_roots_and_targets() {
-        assert!(validate_verity_volumes(&[volume(1, "/a"), volume(1, "/b")])
-            .unwrap_err()
-            .contains("duplicate verity root"));
+    fn allows_duplicate_roots_but_rejects_duplicate_targets() {
+        validate_verity_volumes(&[volume(1, "/a"), volume(1, "/b")]).unwrap();
         assert!(validate_verity_volumes(&[volume(1, "/a"), volume(2, "/a")])
             .unwrap_err()
             .contains("duplicate verity volume target"));
