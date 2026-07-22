@@ -95,6 +95,12 @@ configfs ABI. The GCP case exposes a TPM event log through
 `/sys/kernel/security/tpm0/binary_bios_measurements` and replays it into
 `swtpm`, so the quoted PCRs and event log remain consistent.
 
+The NitroTPM case exposes a kernel vTPM device backed by `swtpm`. Its proxy
+implements AWS's NSM vendor command on the TPM wire protocol; the attestation
+client therefore follows the same EK, salted session, authenticated NV buffer,
+and vendor-command path used on real NitroTPM hardware. It does not expose or
+fall back to `/dev/nsm`.
+
 Development root certificates are written as files and configured in
 `verifier.toml`. The test explicitly enables
 `insecure_allow_external_trust_anchors`; production defaults remain unchanged.

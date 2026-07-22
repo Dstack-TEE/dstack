@@ -19,7 +19,6 @@ use libc::{iovec, size_t};
 use mock_attestation::{nsm::NsmGenerator, parse_seed};
 
 static GENERATOR: OnceLock<Arc<NsmGenerator>> = OnceLock::new();
-static AWS_NITRO_TPM: OnceLock<bool> = OnceLock::new();
 static CUSE: OnceLock<CuseApi> = OnceLock::new();
 
 type FuseReq = *mut c_void;
@@ -192,15 +191,7 @@ fn handle(request: Request) -> Response {
                     .as_ref()
                     .map(|data| data.as_slice())
                     .unwrap_or_default();
-                if AWS_NITRO_TPM.get().copied().unwrap_or(false) {
-                    let pcrs = [4u16, 7, 8, 12, 14]
-                        .into_iter()
-                        .map(|index| (index, vec![0; 48]))
-                        .collect();
-                    generator.attest_with_pcrs(user_data, pcrs).ok()
-                } else {
-                    generator.attest(user_data).ok()
-                }
+                generator.attest(user_data).ok()
             })
             .map(|document| Response::Attestation { document })
             .unwrap_or(Response::Error(ErrorCode::InternalError)),
@@ -220,7 +211,7 @@ fn handle(request: Request) -> Response {
     }
 }
 
-pub fn run(config: &TeeSimulatorConfig, aws_nitro_tpm: bool) -> Result<()> {
+pub fn run(config: &TeeSimulatorConfig) -> Result<()> {
     anyhow::ensure!(
         !std::path::Path::new("/dev/nsm").exists(),
         "refusing to replace a real NSM device"
@@ -234,9 +225,6 @@ pub fn run(config: &TeeSimulatorConfig, aws_nitro_tpm: bool) -> Result<()> {
     GENERATOR
         .set(Arc::new(NsmGenerator::from_seed(parse_seed(seed)?)?))
         .map_err(|_| anyhow::anyhow!("NSM simulator was already initialized"))?;
-    AWS_NITRO_TPM
-        .set(aws_nitro_tpm)
-        .map_err(|_| anyhow::anyhow!("NSM simulator mode was already initialized"))?;
 
     let device_name = CString::new("DEVNAME=nsm")?;
     let mut device_args = [device_name.as_ptr(), ptr::null()];

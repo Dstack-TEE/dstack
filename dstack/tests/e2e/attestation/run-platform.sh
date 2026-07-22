@@ -93,7 +93,7 @@ for _ in $(seq 1 100); do
 done
 curl -fsS http://127.0.0.1:18088/tpm/aia/root.pem >/dev/null
 
-if [[ "$TEE_PLATFORM" == dstack-gcp-tdx ]]; then
+if [[ "$TEE_PLATFORM" == dstack-gcp-tdx || "$TEE_PLATFORM" == dstack-aws-nitro-tpm ]]; then
   mount -t tmpfs -o mode=0755 tmpfs /sys/kernel/security
   mkdir -p /sys/kernel/security/tpm0
   cp /usr/local/share/dstack/tpm_eventlog.bin /sys/kernel/security/tpm0/binary_bios_measurements
@@ -114,7 +114,7 @@ case "$TEE_PLATFORM" in
       sleep .05
     done
     ;;
-  dstack-nitro-enclave|dstack-aws-nitro-tpm)
+  dstack-nitro-enclave)
     for _ in $(seq 1 200); do
       if [[ ! -e /dev/nsm && -r /sys/class/cuse/nsm/dev ]]; then
         IFS=: read -r major minor < /sys/class/cuse/nsm/dev
@@ -126,6 +126,17 @@ case "$TEE_PLATFORM" in
     if [[ ! -e /dev/nsm ]]; then
       echo "NSM device node was not created" >&2
       find /sys -path '*nsm*' -o -path '*cuse*' 2>/dev/null | head -100 >&2
+      cat "$WORK/simulator.log" >&2
+      exit 1
+    fi
+    ;;
+  dstack-aws-nitro-tpm)
+    for _ in $(seq 1 200); do
+      [[ -e /dev/tpm0 || -e /dev/tpmrm0 ]] && break
+      sleep .05
+    done
+    if [[ ! -e /dev/tpm0 && ! -e /dev/tpmrm0 ]]; then
+      echo "NitroTPM device node was not created" >&2
       cat "$WORK/simulator.log" >&2
       exit 1
     fi

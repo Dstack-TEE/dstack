@@ -129,17 +129,11 @@ fn main() -> Result<()> {
                 "AWS Nitro Enclaves",
                 "Nitro Enclave",
             )?;
-            nsm::run(&config, false)
+            nsm::run(&config)
         }
         TeeVariant::DstackAwsNitroTpm => {
             simulate_dmi(&args.runtime_dir, &args.dmi_root, "Amazon EC2", "t3.metal")?;
-            if Path::new("/dev/tpmrm0").exists() || Path::new("/dev/tpm0").exists() {
-                bail!("refusing to replace a real TPM device");
-            }
-            fs_err::File::create("/dev/tpmrm0")
-                .context("failed to create simulated NitroTPM presence marker")?;
-            fs_err::write(args.runtime_dir.join("created-tpm-marker"), b"")?;
-            nsm::run(&config, true)
+            tpm::run_nitro_vtpm(&args.runtime_dir, &config)
         }
         TeeVariant::DstackAmdSevSnp => {
             simulate_dmi(&args.runtime_dir, &args.dmi_root, "Dstack", "dstack")?;

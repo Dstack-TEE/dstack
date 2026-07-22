@@ -29,10 +29,6 @@ const TPMA_SESSION_CONTINUE_SESSION: u8 = 1 << 0;
 type HmacSha512 = Hmac<Sha512>;
 
 pub(crate) fn attestation_document(report_data: &[u8]) -> Result<Vec<u8>> {
-    if nsm_attest::is_nitro_enclave() {
-        return nsm_attest::get_attestation(report_data)
-            .context("failed to get NitroTPM NSM document");
-    }
     let request = nsm_api::Request::Attestation {
         user_data: Some(report_data.to_vec().into()),
         nonce: None,
