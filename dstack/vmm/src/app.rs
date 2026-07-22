@@ -79,6 +79,14 @@ pub struct PortMapping {
     pub to: u16,
 }
 
+/// An extra disk attached to the VM (e.g. a pre-baked verity volume). `source`
+/// is an absolute host path already resolved and validated by the VMM against
+/// `cvm.volumes_dir`.
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct VmVolume {
+    pub source: String,
+}
+
 #[derive(Deserialize, Serialize, Clone, Builder, Debug)]
 pub struct Manifest {
     pub id: String,
@@ -104,6 +112,8 @@ pub struct Manifest {
     pub no_tee: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub networks: Vec<Networking>,
+    #[serde(default)]
+    pub volumes: Vec<VmVolume>,
 }
 
 impl Manifest {
@@ -1181,7 +1191,7 @@ fn append_boot_separator(path: &std::path::Path) {
     if !path.exists() {
         return;
     }
-    let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(path) else {
+    let Ok(mut file) = fs::OpenOptions::new().append(true).open(path) else {
         return;
     };
     let timestamp = humantime::format_rfc3339_seconds(std::time::SystemTime::now());
@@ -1204,7 +1214,7 @@ fn rotate_serial_log(work_dir: &VmWorkDir, max_bytes: u64) {
         return;
     }
     let history = work_dir.serial_history_file();
-    let Ok(mut file) = std::fs::OpenOptions::new()
+    let Ok(mut file) = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&history)
@@ -1390,6 +1400,7 @@ fn make_vm_config(
     // ACPI/DSDT layout and therefore RTMR0. Measure the interface count so the
     // verifier reconstructs the exact device layout.
     let num_nics = resolved_networks(manifest, &cfg.cvm).len() as u32;
+    let num_verity_volumes = manifest.volumes.len() as u32;
     let mut config = serde_json::to_value(dstack_types::VmConfig {
         os_image_hash,
         cpu_count: effective_vcpus,
@@ -1402,6 +1413,7 @@ fn make_vm_config(
         num_gpus: gpus.gpus.len() as u32,
         num_nvswitches: gpus.bridges.len() as u32,
         num_nics,
+        num_verity_volumes,
         host_share_mode: cfg.cvm.host_share_mode.clone(),
         hotplug_off: cfg.cvm.qemu_hotplug_off,
         image: Some(manifest.image.clone()),
@@ -1616,6 +1628,7 @@ mod tests {
             gateway_urls: vec![],
             no_tee: false,
             networks: vec![],
+            volumes: vec![],
         }
     }
 
@@ -1718,6 +1731,31 @@ mod tests {
             make_vm_config(&config, &user_manifest, &image, &compose_hash, None, None)?;
 
         assert_eq!(bridge_config, user_config);
+        Ok(())
+    }
+
+    #[test]
+    fn vm_measurement_config_includes_verity_volume_count() -> Result<()> {
+        let config = test_tdx_config()?;
+        let mut manifest = test_manifest(2048);
+        manifest.volumes = vec![
+            VmVolume {
+                source: "/volumes/a.img".into(),
+            },
+            VmVolume {
+                source: "/volumes/b.img".into(),
+            },
+        ];
+        let vm_config = make_vm_config(
+            &config,
+            &manifest,
+            &test_tdx_image(true),
+            &hex_of(0x22, 32),
+            None,
+            None,
+        )?;
+
+        assert_eq!(vm_config["num_verity_volumes"], 2);
         Ok(())
     }
 
@@ -1877,6 +1915,7 @@ mod tests {
             gateway_urls: vec![],
             no_tee: false,
             networks: vec![],
+            volumes: vec![],
         };
 
         let mr_config = MrConfigV3::new(

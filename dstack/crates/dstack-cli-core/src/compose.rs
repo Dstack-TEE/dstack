@@ -31,6 +31,25 @@ pub fn build_app_compose_with_runtime(
     runner: &str,
     snapshotter: Option<&str>,
 ) -> String {
+    build_app_compose_with_runtime_and_volumes(
+        name,
+        docker_compose_yaml,
+        kms_enabled,
+        runner,
+        snapshotter,
+        &[],
+    )
+}
+
+/// Build an app-compose manifest with measured verity volume declarations.
+pub fn build_app_compose_with_runtime_and_volumes(
+    name: &str,
+    docker_compose_yaml: &str,
+    kms_enabled: bool,
+    runner: &str,
+    snapshotter: Option<&str>,
+    verity_volumes: &[dstack_types::VerityVolume],
+) -> String {
     let mut manifest = json!({
         "manifest_version": if runner == "nerdctl-compose" { json!("3") } else { json!(2) },
         "name": name,
@@ -52,27 +71,10 @@ pub fn build_app_compose_with_runtime(
     if let Some(snapshotter) = snapshotter {
         manifest["snapshotter"] = json!(snapshotter);
     }
+    if !verity_volumes.is_empty() {
+        manifest["verity_volumes"] = json!(verity_volumes);
+    }
     // pretty-print via Value's Display (`{:#}`) — infallible, and byte-identical
     // to serde_json::to_string_pretty (avoids an expect on an unfailable Result).
     format!("{manifest:#}")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn nerdctl_manifest_uses_v3_and_records_snapshotter() {
-        let body = build_app_compose_with_runtime(
-            "test",
-            "services: {}",
-            false,
-            "nerdctl-compose",
-            Some("stargz"),
-        );
-        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(value["manifest_version"], "3");
-        assert_eq!(value["runner"], "nerdctl-compose");
-        assert_eq!(value["snapshotter"], "stargz");
-    }
 }

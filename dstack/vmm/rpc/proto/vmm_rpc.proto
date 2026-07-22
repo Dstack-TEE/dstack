@@ -118,6 +118,7 @@ message VmConfiguration {
   optional NetworkingConfig networking = 18;
   // Per-VM networking overrides. If set, wins over singular networking.
   repeated NetworkingConfig networks = 19;
+  reserved 20;
 }
 
 // Per-VM networking configuration.

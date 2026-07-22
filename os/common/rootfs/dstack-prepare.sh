@@ -306,6 +306,9 @@ echo "============================"
 
 cd /dstack
 
+# Verify and mount required read-only data volumes before the application starts.
+/bin/dstack-volume mount-all app-compose.json
+
 if [ "$(jq 'has("init_script")' app-compose.json)" == true ]; then
 	log "Running init script"
 	dstack-util notify-host -e "boot.progress" -d "init-script" || true

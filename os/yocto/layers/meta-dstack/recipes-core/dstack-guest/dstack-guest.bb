@@ -15,7 +15,7 @@ DSTACK_ROOTFS_SRC ?= "${DSTACK_MONOREPO_ROOT}/os/common/rootfs"
 S = "${UNPACKDIR}/repo/dstack"
 DSTACK_ROOTFS_FILES = "${UNPACKDIR}/repo/os/common/rootfs"
 
-RDEPENDS:${PN} += "bash"
+RDEPENDS:${PN} += "bash cryptsetup util-linux-blkid util-linux-mount"
 
 DEPENDS += "rsync-native tpm2-tss"
 DEPENDS += "cmake-native"
@@ -32,7 +32,7 @@ DSTACK_SERVICES = "dstack-guest-agent.service dstack-guest-agent.socket dstack-p
 SYSTEMD_PACKAGES = "${@bb.utils.contains('DISTRO_FEATURES','systemd','${PN}','',d)}"
 SYSTEMD_SERVICE:${PN} = "${@bb.utils.contains('DISTRO_FEATURES','systemd','${DSTACK_SERVICES}','',d)}"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
-EXTRA_CARGO_FLAGS = "-p dstack-guest-agent -p dstack-util"
+EXTRA_CARGO_FLAGS = "-p dstack-guest-agent -p dstack-util -p dstack-volume"
 
 inherit cargo_bin
 
@@ -66,6 +66,7 @@ do_install() {
     install -d ${D}${sysconfdir}/systemd/journald.conf.d
     install -m 0755 ${CARGO_BINDIR}/dstack-util ${D}${bindir}
     install -m 0755 ${CARGO_BINDIR}/dstack-guest-agent ${D}${bindir}
+    install -m 0755 ${CARGO_BINDIR}/dstack-volume ${D}${bindir}
     install -m 0755 ${DSTACK_ROOTFS_FILES}/dstack-prepare.sh ${D}${bindir}
     install -m 0755 ${DSTACK_ROOTFS_FILES}/ephemeral-docker.sh ${D}${bindir}
     install -m 0755 ${DSTACK_ROOTFS_FILES}/wg-checker.sh ${D}${bindir}

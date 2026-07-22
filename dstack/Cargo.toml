@@ -64,6 +64,7 @@ members = [
     "size-parser",
     "crates/dstack-cli-core",
     "crates/dstack-cli",
+    "crates/dstack-volume",
     "crates/dstackup",
     "crates/dstack-auth",
     "crates/api-auth",
@@ -81,6 +82,7 @@ dstack-kms-rpc = { path = "kms/rpc" }
 dstack-guest-agent-rpc = { path = "guest-agent/rpc" }
 dstack-vmm-rpc = { path = "vmm/rpc" }
 dstack-cli-core = { path = "crates/dstack-cli-core" }
+dstack-volume = { path = "crates/dstack-volume" }
 dstack-api-auth = { path = "crates/api-auth" }
 dstack-build-info = { path = "crates/build-info" }
 cc-eventlog = { path = "cc-eventlog" }

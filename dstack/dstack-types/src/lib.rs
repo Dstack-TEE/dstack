@@ -123,6 +123,78 @@ pub struct AppCompose {
     /// of silently ignoring the requirements.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requirements: Option<Requirements>,
+    /// Read-only, dm-verity-protected volumes pre-seeded into the CVM. Each
+    /// `verity_root` is measured (it is part of these compose bytes), so the
+    /// guest only mounts content matching the attested app. See
+    /// docs/verity-volumes.md.
+    #[serde(default)]
+    pub verity_volumes: Vec<VerityVolume>,
+}
+
+/// A pre-baked, read-only dm-verity volume attached to the CVM.
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct VerityVolume {
+    /// Bare image file name resolved by the VMM under `cvm.volumes_dir`.
+    pub source: String,
+    /// dm-verity root hash (hex): the volume's content identity and integrity
+    /// check. The guest matches attached devices against it.
+    #[serde(with = "hex_bytes")]
+    pub verity_root: [u8; 32],
+    /// Absolute path where the volume's filesystem is mounted.
+    #[serde(deserialize_with = "deserialize_absolute_path")]
+    pub target: std::path::PathBuf,
+}
+
+/// Reject ambiguous mount declarations before any disk is attached or
+/// activated. The same root may intentionally be mounted at multiple targets,
+/// but a target can only be owned by one volume.
+pub fn validate_verity_volumes(volumes: &[VerityVolume]) -> Result<(), String> {
+    let mut targets = std::collections::HashSet::new();
+    for volume in volumes {
+        if !targets.insert(&volume.target) {
+            return Err(format!(
+                "duplicate verity volume target {}",
+                volume.target.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn deserialize_absolute_path<'de, D>(deserializer: D) -> Result<std::path::PathBuf, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    let path = std::path::PathBuf::from(&value);
+    if !path.is_absolute() {
+        return Err(serde::de::Error::custom(format!(
+            "volume target must be an absolute path, got '{value}'"
+        )));
+    }
+    Ok(path)
+}
+
+#[cfg(test)]
+mod verity_volume_tests {
+    use super::{validate_verity_volumes, VerityVolume};
+
+    fn volume(root: u8, target: &str) -> VerityVolume {
+        VerityVolume {
+            source: format!("{root}.img"),
+            verity_root: [root; 32],
+            target: target.into(),
+        }
+    }
+
+    #[test]
+    fn allows_duplicate_roots_but_rejects_duplicate_targets() {
+        validate_verity_volumes(&[volume(1, "/a"), volume(1, "/b")]).unwrap();
+        assert!(validate_verity_volumes(&[volume(1, "/a"), volume(2, "/a")])
+            .unwrap_err()
+            .contains("duplicate verity volume target"));
+        validate_verity_volumes(&[volume(1, "/a"), volume(2, "/b")]).unwrap();
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -893,6 +965,10 @@ fn is_default_num_nics(n: &u32) -> bool {
     *n == default_num_nics()
 }
 
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct VmConfig {
     #[serde(with = "hex_bytes", default)]
@@ -926,6 +1002,11 @@ pub struct VmConfig {
         skip_serializing_if = "is_default_num_nics"
     )]
     pub num_nics: u32,
+    /// Number of read-only verity volume devices attached to the guest. Each
+    /// volume adds a virtio-blk PCI device before the NICs and therefore
+    /// changes the measured ACPI/DSDT layout.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub num_verity_volumes: u32,
     #[serde(default)]
     pub hotplug_off: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1921,7 +2002,7 @@ mod platform_tests {
 }
 
 #[cfg(test)]
-mod vm_config_num_nics_tests {
+mod vm_config_device_count_tests {
     use super::VmConfig;
 
     fn legacy_json() -> serde_json::Value {
@@ -1937,6 +2018,7 @@ mod vm_config_num_nics_tests {
     fn legacy_config_without_num_nics_defaults_to_one() {
         let cfg: VmConfig = serde_json::from_value(legacy_json()).unwrap();
         assert_eq!(cfg.num_nics, 1);
+        assert_eq!(cfg.num_verity_volumes, 0);
     }
 
     #[test]
@@ -1958,5 +2040,21 @@ mod vm_config_num_nics_tests {
         cfg.num_nics = 2;
         let serialized = serde_json::to_value(&cfg).unwrap();
         assert_eq!(serialized.get("num_nics").and_then(|v| v.as_u64()), Some(2));
+    }
+
+    #[test]
+    fn verity_volume_count_is_serialized_only_when_nonzero() {
+        let mut cfg: VmConfig = serde_json::from_value(legacy_json()).unwrap();
+        let serialized = serde_json::to_value(&cfg).unwrap();
+        assert!(serialized.get("num_verity_volumes").is_none());
+
+        cfg.num_verity_volumes = 2;
+        let serialized = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(
+            serialized
+                .get("num_verity_volumes")
+                .and_then(|v| v.as_u64()),
+            Some(2)
+        );
     }
 }

@@ -8,6 +8,7 @@
 //! directory so that CLI tools can discover all running instances on the host.
 
 use anyhow::{Context, Result};
+use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
@@ -99,7 +100,7 @@ impl DiscoveryRegistration {
 
 impl Drop for DiscoveryRegistration {
     fn drop(&mut self) {
-        match std::fs::remove_file(&self.path) {
+        match fs::remove_file(&self.path) {
             Ok(()) => info!("unregistered VMM instance at {}", self.path.display()),
             Err(e) => warn!(
                 "failed to remove discovery file {}: {e}",
@@ -112,7 +113,7 @@ impl Drop for DiscoveryRegistration {
 /// Clean up stale discovery files from dead processes.
 pub fn cleanup_stale_registrations() {
     let dir = discovery_dir();
-    let entries = match std::fs::read_dir(dir) {
+    let entries = match fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
     };
@@ -122,7 +123,7 @@ pub fn cleanup_stale_registrations() {
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        let content = match std::fs::read_to_string(&path) {
+        let content = match fs::read_to_string(&path) {
             Ok(c) => c,
             Err(_) => continue,
         };
@@ -138,7 +139,7 @@ pub fn cleanup_stale_registrations() {
                 info.pid,
                 path.display()
             );
-            let _ = std::fs::remove_file(&path);
+            let _ = fs::remove_file(&path);
         }
     }
 }

@@ -18,5 +18,11 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 dstack-cli-core.workspace = true
+dstack-volume.workspace = true
+dstack-types.workspace = true
+fs-err.workspace = true
+hex.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true }

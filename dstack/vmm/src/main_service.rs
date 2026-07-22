@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashSet;
 use std::ops::Deref;
+use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
@@ -18,6 +20,7 @@ use dstack_vmm_rpc::{
 };
 use fs_err as fs;
 use or_panic::ResultOrPanic;
+use path_absolutize::Absolutize;
 use ra_rpc::{CallContext, RpcCall};
 use tracing::{info, warn};
 
@@ -182,6 +185,9 @@ pub fn create_manifest_from_vm_config(
         Some(gpus) => resolve_gpus_with_config(gpus, cvm_config)?,
         None => GpuConfig::default(),
     };
+    let verity_volumes = extract_verity_volumes(&request.compose_file)?;
+    dstack_types::validate_verity_volumes(&verity_volumes).map_err(anyhow::Error::msg)?;
+    let volumes = resolve_volumes(&verity_volumes, cvm_config)?;
 
     Ok(Manifest {
         id,
@@ -200,7 +206,84 @@ pub fn create_manifest_from_vm_config(
         gateway_urls: request.gateway_urls.clone(),
         no_tee: request.no_tee,
         networks: networks_from_vm_config(&request, cvm_config)?,
+        volumes,
     })
+}
+
+/// Extract only the field understood by this VMM. Keep every other app-compose
+/// field opaque so newer guest schemas and legacy third-party clients remain
+/// compatible with older VMMs.
+fn extract_verity_volumes(compose: &str) -> Result<Vec<dstack_types::VerityVolume>> {
+    let Ok(compose) = serde_json::from_str::<serde_json::Value>(compose) else {
+        return Ok(vec![]);
+    };
+    let Some(volumes) = compose.get("verity_volumes") else {
+        return Ok(vec![]);
+    };
+    serde_json::from_value(volumes.clone()).context("invalid verity_volumes in app-compose")
+}
+
+/// Resolve requested volumes against `cvm.volumes_dir`. Each `source` must be a
+/// bare file name under that directory; the host attaches the bytes, and the
+/// guest verifies content against the measured `verity_root`.
+fn resolve_volumes(
+    reqs: &[dstack_types::VerityVolume],
+    cvm_config: &crate::config::CvmConfig,
+) -> Result<Vec<crate::app::VmVolume>> {
+    if reqs.is_empty() {
+        return Ok(vec![]);
+    }
+    let dir = cvm_config.volumes_dir.trim();
+    if dir.is_empty() {
+        bail!("volumes requested but cvm.volumes_dir is not configured");
+    }
+    let base = fs::canonicalize(dir)?;
+    let mut roots = HashSet::new();
+    reqs.iter()
+        .filter(|volume| {
+            let first = roots.insert(volume.verity_root);
+            if !first {
+                warn!(
+                    root = %hex::encode(volume.verity_root),
+                    source = volume.source,
+                    "not attaching duplicate verity root"
+                );
+            }
+            first
+        })
+        .map(|v| {
+            let real = resolve_volume_source(&base, &v.source)?;
+            Ok(crate::app::VmVolume {
+                source: real.to_string_lossy().into_owned(),
+            })
+        })
+        .collect()
+}
+
+fn resolve_volume_source(base: &Path, source: &str) -> Result<PathBuf> {
+    if source.is_empty() {
+        bail!("invalid volume source: empty path");
+    }
+
+    let source_path = Path::new(source);
+    let mut components = source_path.components();
+    if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+        bail!("invalid volume source '{source}': must be a bare file name");
+    }
+
+    let real = fs::canonicalize(base.join(source_path))?;
+    real.absolutize_virtually(base)
+        .with_context(|| format!("volume '{source}' escapes volumes_dir"))?;
+
+    // QEMU's -drive parser treats ',' as an option separator and '=' as an
+    // option key/value delimiter. Keep this guard while volumes are attached
+    // through `-drive file=...`.
+    let real_str = real.to_string_lossy();
+    if real_str.contains(',') || real_str.contains('=') {
+        bail!("volume '{source}' resolves to a path with ',' or '='");
+    }
+
+    Ok(real)
 }
 
 fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Result<Option<Networking>> {
@@ -872,6 +955,25 @@ mod tests {
     }
 
     #[test]
+    fn volume_extraction_keeps_other_compose_fields_opaque() -> Result<()> {
+        assert!(extract_verity_volumes("not json")?.is_empty());
+        assert!(extract_verity_volumes(r#"{"future_manifest":true}"#)?.is_empty());
+
+        let compose = serde_json::json!({
+            "unknown_future_field": { "anything": true },
+            "verity_volumes": [{
+                "source": "volume.img",
+                "verity_root": "11".repeat(32),
+                "target": "/run/volume"
+            }]
+        });
+        let volumes = extract_verity_volumes(&compose.to_string())?;
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0].verity_root, [0x11; 32]);
+        Ok(())
+    }
+
+    #[test]
     fn explicit_user_networking_is_resolved_before_persist() {
         let mut request = test_vm_configuration();
         request.networks = vec![rpc::NetworkingConfig {
@@ -917,5 +1019,89 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("custom networking mode"));
+    }
+
+    #[test]
+    fn resolve_volume_source_rejects_escape_symlink_and_qemu_metachars() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let volumes = tmp.path().join("volumes");
+        fs::create_dir_all(&volumes)?;
+        fs::write(volumes.join("ok.img"), b"ok")?;
+        let base = fs::canonicalize(&volumes)?;
+
+        let ok = resolve_volume_source(&base, "ok.img")?;
+        assert_eq!(ok, base.join("ok.img"));
+
+        let err = resolve_volume_source(&base, "../ok.img").unwrap_err();
+        assert!(format!("{err:#}").contains("must be a bare file name"));
+
+        fs::write(tmp.path().join("outside.img"), b"outside")?;
+        std::os::unix::fs::symlink(tmp.path().join("outside.img"), volumes.join("link.img"))?;
+        let err = resolve_volume_source(&base, "link.img").unwrap_err();
+        assert!(format!("{err:#}").contains("escapes volumes_dir"));
+
+        fs::write(volumes.join("bad,readonly=off"), b"bad")?;
+        let err = resolve_volume_source(&base, "bad,readonly=off").unwrap_err();
+        assert!(format!("{err:#}").contains("',' or '='"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_volumes_resolves_measured_source() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        fs::write(tmp.path().join("volume.img"), b"volume")?;
+        let mut cvm_config = test_cvm_config();
+        cvm_config.volumes_dir = tmp.path().to_string_lossy().into_owned();
+
+        let volumes = resolve_volumes(
+            &[dstack_types::VerityVolume {
+                source: "volume.img".into(),
+                verity_root: [0; 32],
+                target: "/run/volume".into(),
+            }],
+            &cvm_config,
+        )?;
+
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(
+            volumes[0].source,
+            tmp.path().join("volume.img").display().to_string()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_volumes_attaches_duplicate_root_once() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        fs::write(tmp.path().join("first.img"), b"volume")?;
+        let mut cvm_config = test_cvm_config();
+        cvm_config.volumes_dir = tmp.path().to_string_lossy().into_owned();
+        let root = [7; 32];
+
+        let volumes = resolve_volumes(
+            &[
+                dstack_types::VerityVolume {
+                    source: "first.img".into(),
+                    verity_root: root,
+                    target: "/run/first".into(),
+                },
+                dstack_types::VerityVolume {
+                    // This source deliberately does not exist: the first entry
+                    // owns the single attachment for this content root.
+                    source: "duplicate.img".into(),
+                    verity_root: root,
+                    target: "/run/second".into(),
+                },
+            ],
+            &cvm_config,
+        )?;
+
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(
+            volumes[0].source,
+            tmp.path().join("first.img").display().to_string()
+        );
+        Ok(())
     }
 }

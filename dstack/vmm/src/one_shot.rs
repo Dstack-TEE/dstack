@@ -6,6 +6,7 @@ use crate::app::{make_sys_config, Image, VmConfig, VmWorkDir};
 use crate::config::Config;
 use crate::main_service;
 use anyhow::{Context, Result};
+use fs_err as fs;
 
 pub async fn run_one_shot(
     vm_config_path: &str,
@@ -328,14 +329,14 @@ Compose file content (first 200 chars):
 
         // Configure stdio to match supervisor behavior
         if !process_config.stdout.is_empty() {
-            let stdout_file = std::fs::File::create(&process_config.stdout)
-                .context("Failed to create stdout file")?;
-            cmd.stdout(stdout_file);
+            let stdout_file =
+                fs::File::create(&process_config.stdout).context("Failed to create stdout file")?;
+            cmd.stdout(stdout_file.into_file());
         }
         if !process_config.stderr.is_empty() {
-            let stderr_file = std::fs::File::create(&process_config.stderr)
-                .context("Failed to create stderr file")?;
-            cmd.stderr(stderr_file);
+            let stderr_file =
+                fs::File::create(&process_config.stderr).context("Failed to create stderr file")?;
+            cmd.stderr(stderr_file.into_file());
         }
 
         cmd.current_dir(&workdir_path);
