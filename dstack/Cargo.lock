@@ -1788,6 +1788,7 @@ dependencies = [
  "rand 0.8.6",
  "rmp-serde",
  "rsa",
+ "rustix 0.38.44",
  "safe-write",
  "serde",
  "serde-human-bytes",

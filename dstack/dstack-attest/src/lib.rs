@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::{LazyLock, Mutex};
-
 use anyhow::Context;
 use cc_eventlog::{EventLogVersion, RuntimeEvent};
 
@@ -21,12 +19,23 @@ mod aws_nitro_tpm;
 mod sev_snp;
 mod v1;
 
-/// Serializes measured event emission within this process.
-///
-/// Appending to the event log and extending the platform register must be one
-/// atomic unit so log order always matches measurement-extension order.
-static EMIT_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+const RUNTIME_EVENT_DIR: &str = "/run/log/dstack";
 const RUNTIME_EVENT_VERSION_FILE: &str = "/run/log/dstack/runtime_event_version";
+const RUNTIME_EVENT_LOCK_FILE: &str = "/run/log/dstack/runtime_event.lock";
+
+fn runtime_event_lock() -> anyhow::Result<fs_err::File> {
+    fs_err::create_dir_all(RUNTIME_EVENT_DIR)
+        .context("failed to create runtime event log directory")?;
+    let lock = fs_err::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(RUNTIME_EVENT_LOCK_FILE)
+        .context("failed to open runtime event lock")?;
+    rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive)
+        .context("failed to lock runtime event emission")?;
+    Ok(lock)
+}
 
 /// Configure the system-wide digest format used by subsequently emitted events.
 ///
@@ -38,9 +47,7 @@ pub fn set_runtime_event_version(version: EventLogVersion) -> anyhow::Result<()>
         EventLogVersion::V1 => "1",
         EventLogVersion::V2 => "2",
     };
-    if let Some(parent) = std::path::Path::new(RUNTIME_EVENT_VERSION_FILE).parent() {
-        fs_err::create_dir_all(parent).context("failed to create runtime event log directory")?;
-    }
+    let _lock = runtime_event_lock()?;
     match fs_err::read_to_string(RUNTIME_EVENT_VERSION_FILE) {
         Ok(configured) => {
             anyhow::ensure!(
@@ -74,14 +81,12 @@ fn runtime_event_version() -> anyhow::Result<EventLogVersion> {
 /// - GCP TPM: SHA256 PCR14
 /// - AWS NitroTPM: SHA384 PCR14
 pub fn emit_runtime_event(event: &str, payload: &[u8]) -> anyhow::Result<()> {
+    // Hold the system-wide lock across both the log append and register
+    // extension so separate processes cannot make their ordering diverge.
+    let _lock = runtime_event_lock()?;
     let version = runtime_event_version()?;
     let event = RuntimeEvent::new(event.to_string(), payload.to_vec(), version);
-
     let mode = detect_tee_variant()?;
-
-    // Hold the lock across both the log append and the register extension so
-    // that the on-disk log order always matches the RTMR extension order.
-    let _guard = EMIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     event.emit().context("Failed to emit runtime event")?;
 
