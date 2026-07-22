@@ -1501,9 +1501,9 @@ checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 
 [[package]]
 name = "dcap-qvl"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82af46ebeaf7d7aa0481f324bad8848b90b44f377d23787b2d8e79e479dd06b1"
+checksum = "26bb988bf78cd9a44477ee4bbfa9768335c3b58df75860ea048aee3356c90d7c"
 dependencies = [
  "anyhow",
  "asn1_der",
