@@ -85,8 +85,6 @@ pub struct PortMapping {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct VmVolume {
     pub source: String,
-    #[serde(default)]
-    pub read_only: bool,
 }
 
 #[derive(Deserialize, Serialize, Clone, Builder, Debug)]
@@ -1741,11 +1739,9 @@ mod tests {
         manifest.volumes = vec![
             VmVolume {
                 source: "/volumes/a.img".into(),
-                read_only: true,
             },
             VmVolume {
                 source: "/volumes/b.img".into(),
-                read_only: true,
             },
         ];
         let vm_config = make_vm_config(

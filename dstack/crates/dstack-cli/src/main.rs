@@ -420,6 +420,7 @@ async fn cmd_deploy(
         .iter()
         .map(|s| parse_volume(s))
         .collect::<Result<Vec<_>>>()?;
+    dstack_types::validate_verity_volumes(&parsed_volumes).map_err(anyhow::Error::msg)?;
 
     // each --volume declares a measured verity_volumes entry, so the built
     // app-compose (and thus app_id) binds the attested roots.

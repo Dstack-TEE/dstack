@@ -141,6 +141,29 @@ pub struct VerityVolume {
     pub target: std::path::PathBuf,
 }
 
+/// Reject ambiguous volume declarations before any disk is attached or
+/// activated. A root identifies one logical volume, and a mount target can
+/// only be owned by one volume.
+pub fn validate_verity_volumes(volumes: &[VerityVolume]) -> Result<(), String> {
+    let mut roots = std::collections::HashSet::new();
+    let mut targets = std::collections::HashSet::new();
+    for volume in volumes {
+        if !roots.insert(volume.verity_root) {
+            return Err(format!(
+                "duplicate verity root {}",
+                hex::encode(volume.verity_root)
+            ));
+        }
+        if !targets.insert(&volume.target) {
+            return Err(format!(
+                "duplicate verity volume target {}",
+                volume.target.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn deserialize_absolute_path<'de, D>(deserializer: D) -> Result<std::path::PathBuf, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -153,6 +176,30 @@ where
         )));
     }
     Ok(path)
+}
+
+#[cfg(test)]
+mod verity_volume_tests {
+    use super::{validate_verity_volumes, VerityVolume};
+
+    fn volume(root: u8, target: &str) -> VerityVolume {
+        VerityVolume {
+            source: format!("{root}.img"),
+            verity_root: [root; 32],
+            target: target.into(),
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_roots_and_targets() {
+        assert!(validate_verity_volumes(&[volume(1, "/a"), volume(1, "/b")])
+            .unwrap_err()
+            .contains("duplicate verity root"));
+        assert!(validate_verity_volumes(&[volume(1, "/a"), volume(2, "/a")])
+            .unwrap_err()
+            .contains("duplicate verity volume target"));
+        validate_verity_volumes(&[volume(1, "/a"), volume(2, "/b")]).unwrap();
+    }
 }
 
 /// Canonical source for the policy used when `requirements.gpu_policy` is

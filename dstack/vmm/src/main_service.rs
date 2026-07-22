@@ -184,9 +184,9 @@ pub fn create_manifest_from_vm_config(
         Some(gpus) => resolve_gpus_with_config(gpus, cvm_config)?,
         None => GpuConfig::default(),
     };
-    let app_compose: AppCompose = serde_json::from_str(&request.compose_file)
-        .context("invalid app-compose in VM configuration")?;
-    let volumes = resolve_volumes(&app_compose.verity_volumes, cvm_config)?;
+    let verity_volumes = extract_verity_volumes(&request.compose_file)?;
+    dstack_types::validate_verity_volumes(&verity_volumes).map_err(anyhow::Error::msg)?;
+    let volumes = resolve_volumes(&verity_volumes, cvm_config)?;
 
     Ok(Manifest {
         id,
@@ -209,6 +209,19 @@ pub fn create_manifest_from_vm_config(
     })
 }
 
+/// Extract only the field understood by this VMM. Keep every other app-compose
+/// field opaque so newer guest schemas and legacy third-party clients remain
+/// compatible with older VMMs.
+fn extract_verity_volumes(compose: &str) -> Result<Vec<dstack_types::VerityVolume>> {
+    let Ok(compose) = serde_json::from_str::<serde_json::Value>(compose) else {
+        return Ok(vec![]);
+    };
+    let Some(volumes) = compose.get("verity_volumes") else {
+        return Ok(vec![]);
+    };
+    serde_json::from_value(volumes.clone()).context("invalid verity_volumes in app-compose")
+}
+
 /// Resolve requested volumes against `cvm.volumes_dir`. Each `source` must be a
 /// bare file name under that directory; the host attaches the bytes, and the
 /// guest verifies content against the measured `verity_root`.
@@ -229,11 +242,6 @@ fn resolve_volumes(
             let real = resolve_volume_source(&base, &v.source)?;
             Ok(crate::app::VmVolume {
                 source: real.to_string_lossy().into_owned(),
-                // Verity volumes are always read-only: the backing file is shared
-                // content-addressed data, so a writable attach could only let one
-                // guest corrupt it for every other tenant. Force it regardless of
-                // what the client asked for.
-                read_only: true,
             })
         })
         .collect()
@@ -905,8 +913,7 @@ mod tests {
         VmConfiguration {
             name: "vm-test".to_string(),
             image: "dstack-test".to_string(),
-            compose_file: r#"{"manifest_version":2,"name":"test","runner":"docker-compose"}"#
-                .to_string(),
+            compose_file: "{}".to_string(),
             vcpu: 1,
             memory: 1024,
             disk_size: 10,
@@ -932,6 +939,25 @@ mod tests {
             create_manifest_from_vm_config(test_vm_configuration(), &test_cvm_config()).unwrap();
 
         assert!(manifest.networks.is_empty());
+    }
+
+    #[test]
+    fn volume_extraction_keeps_other_compose_fields_opaque() -> Result<()> {
+        assert!(extract_verity_volumes("not json")?.is_empty());
+        assert!(extract_verity_volumes(r#"{"future_manifest":true}"#)?.is_empty());
+
+        let compose = serde_json::json!({
+            "unknown_future_field": { "anything": true },
+            "verity_volumes": [{
+                "source": "volume.img",
+                "verity_root": "11".repeat(32),
+                "target": "/run/volume"
+            }]
+        });
+        let volumes = extract_verity_volumes(&compose.to_string())?;
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0].verity_root, [0x11; 32]);
+        Ok(())
     }
 
     #[test]
@@ -1009,7 +1035,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_volumes_forces_read_only() -> Result<()> {
+    fn resolve_volumes_resolves_measured_source() -> Result<()> {
         let tmp = tempfile::tempdir()?;
         fs::write(tmp.path().join("volume.img"), b"volume")?;
         let mut cvm_config = test_cvm_config();
@@ -1025,7 +1051,10 @@ mod tests {
         )?;
 
         assert_eq!(volumes.len(), 1);
-        assert!(volumes[0].read_only);
+        assert_eq!(
+            volumes[0].source,
+            tmp.path().join("volume.img").display().to_string()
+        );
         Ok(())
     }
 }

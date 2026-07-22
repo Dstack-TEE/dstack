@@ -86,6 +86,7 @@ fn prepare_volumes() -> Result<Vec<VerityVolume>> {
 
 fn mount_all(compose_path: PathBuf) -> Result<()> {
     let compose = read_compose(&compose_path)?;
+    dstack_types::validate_verity_volumes(&compose.verity_volumes).map_err(anyhow::Error::msg)?;
     if compose.verity_volumes.is_empty() {
         return Ok(());
     }

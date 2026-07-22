@@ -176,7 +176,6 @@ fn virtio_pci_device(device: &str, snp: bool) -> String {
 
 struct PreparedVolume {
     source: String,
-    read_only: bool,
 }
 
 struct PreparedQemuLaunch {
@@ -214,7 +213,6 @@ impl PreparedQemuLaunch {
             .iter()
             .map(|volume| PreparedVolume {
                 source: volume.source.clone(),
-                read_only: volume.read_only,
             })
             .collect();
 
@@ -550,10 +548,10 @@ impl QemuCommandBuilder<'_> {
         // established device order.
         for (index, volume) in self.prepared.volumes.iter().enumerate() {
             let id = format!("vol{index}");
-            let mut drive = format!("file={},if=none,id={id},format=raw", volume.source);
-            if volume.read_only {
-                drive.push_str(",readonly=on");
-            }
+            let drive = format!(
+                "file={},if=none,id={id},format=raw,readonly=on",
+                volume.source
+            );
 
             let device = format!("virtio-blk-pci,drive={id}");
             command
@@ -1048,7 +1046,6 @@ mod tests {
                 networks: vec![],
                 volumes: vec![VmVolume {
                     source: "/does-not-exist/volume.img".into(),
-                    read_only: true,
                 }],
             },
             image: Image {
@@ -1086,7 +1083,6 @@ mod tests {
             networks: vec![config.cvm.networking.clone(), config.cvm.networking.clone()],
             volumes: vec![PreparedVolume {
                 source: "/does-not-exist/volume.img".into(),
-                read_only: true,
             }],
             hugepage_numa_nodes: None,
             gpu_numa_nodes: HashMap::new(),
