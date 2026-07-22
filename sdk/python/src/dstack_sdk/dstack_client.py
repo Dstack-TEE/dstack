@@ -440,7 +440,6 @@ class AsyncDstackClient(BaseClient):
     async def get_quote(
         self,
         report_data: str | bytes,
-        include_preimages: bool = False,
         include_ccel: bool = False,
     ) -> GetQuoteResponse:
         """Request an attestation quote for the provided report data."""
@@ -456,7 +455,6 @@ class AsyncDstackClient(BaseClient):
             "GetQuote",
             {
                 "report_data": hex,
-                "include_preimages": include_preimages,
                 "include_ccel": include_ccel,
             },
         )
@@ -614,7 +612,6 @@ class DstackClient(BaseClient):
     def get_quote(
         self,
         report_data: str | bytes,
-        include_preimages: bool = False,
         include_ccel: bool = False,
     ) -> GetQuoteResponse:
         """Request an attestation quote for the provided report data."""

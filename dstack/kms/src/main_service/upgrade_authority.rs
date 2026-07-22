@@ -185,7 +185,6 @@ pub(crate) async fn app_attest(report_data: Vec<u8>) -> Result<AttestResponse> {
     dstack_client()
         .attest(RawQuoteArgs {
             report_data,
-            include_preimages: false,
             include_ccel: false,
         })
         .await

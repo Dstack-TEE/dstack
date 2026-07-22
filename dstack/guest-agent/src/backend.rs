@@ -14,14 +14,9 @@ pub trait PlatformBackend: Send + Sync {
         &self,
         report_data: [u8; 64],
         vm_config: &str,
-        include_preimages: bool,
         include_ccel: bool,
     ) -> Result<GetQuoteResponse>;
-    fn attest_response(
-        &self,
-        report_data: [u8; 64],
-        include_preimages: bool,
-    ) -> Result<AttestResponse>;
+    fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse>;
 }
 
 #[derive(Debug, Default)]
@@ -45,12 +40,11 @@ impl PlatformBackend for RealPlatform {
         &self,
         report_data: [u8; 64],
         vm_config: &str,
-        include_preimages: bool,
         include_ccel: bool,
     ) -> Result<GetQuoteResponse> {
         let attestation = Attestation::quote(&report_data).context("Failed to get quote")?;
         let tdx_quote = attestation.get_tdx_quote_bytes();
-        let tdx_event_log = attestation.get_tdx_event_log_string_with_preimages(include_preimages);
+        let tdx_event_log = attestation.get_tdx_event_log_string();
         let event_log_ccel = if include_ccel {
             attestation
                 .get_tdx_event_log_ccel()
@@ -76,16 +70,10 @@ impl PlatformBackend for RealPlatform {
         })
     }
 
-    fn attest_response(
-        &self,
-        report_data: [u8; 64],
-        include_preimages: bool,
-    ) -> Result<AttestResponse> {
+    fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
         let mut attestation =
             Attestation::quote(&report_data).context("Failed to get attestation")?;
-        if include_preimages {
-            attestation.fill_event_preimages();
-        }
+        attestation.fill_event_preimages();
         Ok(AttestResponse {
             attestation: attestation.into_versioned().to_bytes()?,
         })

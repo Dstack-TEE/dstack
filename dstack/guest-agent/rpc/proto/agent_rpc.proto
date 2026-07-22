@@ -170,18 +170,10 @@ message TdxQuoteArgs {
 message RawQuoteArgs {
   // 64 bytes of report data
   bytes report_data = 1;
-  // If true, include digest preimages for TDX runtime events. This flag has no
-  // effect on non-TDX platforms, whose GetQuote event_log is empty.
-  // Non-runtime events (boot-time/TCG events) will have preimage unset.
-  // The preimage is hex-encoded bytes of the digest pre-image:
-  // - v2 runtime events: hex of UTF-8 JCS canonical JSON
-  // - v1 runtime events: hex of binary concat (event_type_le || ":" || name || ":" || payload)
-  // Clients can verify: sha384(hex_decode(preimage)) == event.digest
-  // Enables relying parties to verify digests or inspect claims without
-  // knowing the dstack event schema.
-  bool include_preimages = 2;
+  // V2 runtime events always include their hex-encoded digest preimage in the
+  // returned event log. Clients verify sha384(hex_decode(preimage)) == digest.
   // If true, return the merged TDX binary CCEL in GetQuoteResponse.
-  bool include_ccel = 3;
+  bool include_ccel = 2;
 }
 
 message TdxQuoteResponse {

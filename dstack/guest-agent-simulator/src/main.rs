@@ -81,7 +81,6 @@ impl PlatformBackend for SimulatorPlatform {
         &self,
         report_data: [u8; 64],
         vm_config: &str,
-        include_preimages: bool,
         include_ccel: bool,
     ) -> Result<GetQuoteResponse> {
         simulator::simulated_quote_response(
@@ -89,22 +88,12 @@ impl PlatformBackend for SimulatorPlatform {
             report_data,
             vm_config,
             self.patch_report_data,
-            include_preimages,
             include_ccel,
         )
     }
 
-    fn attest_response(
-        &self,
-        report_data: [u8; 64],
-        include_preimages: bool,
-    ) -> Result<AttestResponse> {
-        simulator::simulated_attest_response(
-            &self.attestation,
-            report_data,
-            self.patch_report_data,
-            include_preimages,
-        )
+    fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
+        simulator::simulated_attest_response(&self.attestation, report_data, self.patch_report_data)
     }
 }
 

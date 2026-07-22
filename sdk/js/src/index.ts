@@ -302,7 +302,7 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
 
   async getQuote(
     report_data: string | Buffer | Uint8Array,
-    options: { includePreimages?: boolean; includeCCEL?: boolean } = {},
+    options: { includeCCEL?: boolean } = {},
   ): Promise<GetQuoteResponse> {
     let hex = to_hex(report_data)
     if (hex.length > 128) {
@@ -310,7 +310,6 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
     }
     const payload = JSON.stringify({
       report_data: hex,
-      include_preimages: options.includePreimages ?? false,
       include_ccel: options.includeCCEL ?? false,
     })
     const result = await send_rpc_request<GetQuoteResponse>(this.endpoint, '/GetQuote', payload)

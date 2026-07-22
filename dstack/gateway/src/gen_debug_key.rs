@@ -50,7 +50,6 @@ async fn main() -> Result<()> {
     let quote_response = simulator_client
         .get_quote(RawQuoteArgs {
             report_data: report_data.to_vec(),
-            include_preimages: false,
             include_ccel: false,
         })
         .await

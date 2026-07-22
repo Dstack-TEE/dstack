@@ -815,21 +815,14 @@ pub trait TdxAttestationExt {
 
     /// Returns the TDX event log serialized as JSON.
     fn tdx_event_log_string(&self) -> Option<String> {
-        self.tdx_event_log_string_with_preimages(false)
-    }
-
-    /// Returns JSON and optionally attaches each runtime digest pre-image.
-    fn tdx_event_log_string_with_preimages(&self, include_preimages: bool) -> Option<String> {
         self.tdx_event_log().map(|event_log| {
-            if include_preimages {
-                let mut events: Vec<TdxEvent> = event_log.to_vec();
-                for event in &mut events {
+            let mut events: Vec<TdxEvent> = event_log.to_vec();
+            for event in &mut events {
+                if matches!(event.version, EventLogVersion::V2) {
                     event.fill_preimage();
                 }
-                serde_json::to_string(&events).unwrap_or_default()
-            } else {
-                serde_json::to_string(event_log).unwrap_or_default()
             }
+            serde_json::to_string(&events).unwrap_or_default()
         })
     }
 
@@ -1450,14 +1443,16 @@ impl<T> Attestation<T> {
         self.tdx_quote().map(|q| q.quote.clone())
     }
 
-    /// Populate `preimage` on every runtime event in the TDX event log.
+    /// Populate `preimage` on every V2 runtime event in the TDX event log.
     ///
     /// Useful before serializing an attestation so relying parties get the
     /// digest pre-images alongside events.
     pub fn fill_event_preimages(&mut self) {
         if let Some(q) = self.tdx_quote_mut() {
             for event in &mut q.event_log {
-                event.fill_preimage();
+                if matches!(event.version, EventLogVersion::V2) {
+                    event.fill_preimage();
+                }
             }
         }
     }
@@ -1471,17 +1466,7 @@ impl<T> Attestation<T> {
     /// Get TDX event log string with RTMR[0-2] payloads stripped to reduce size.
     /// Only digests are kept for boot-time events; runtime events (RTMR3) retain full payload.
     ///
-    /// When `include_preimages` is true, each runtime event carries its digest
-    /// pre-image (hex-encoded) so relying parties can verify or inspect it directly.
     pub fn get_tdx_event_log_string(&self) -> Option<String> {
-        self.get_tdx_event_log_string_with_preimages(false)
-    }
-
-    /// Get the stripped TDX event log and optionally attach hash pre-images.
-    pub fn get_tdx_event_log_string_with_preimages(
-        &self,
-        include_preimages: bool,
-    ) -> Option<String> {
         self.tdx_quote().map(|q| {
             let mut stripped: Vec<_> = q
                 .event_log
@@ -1496,8 +1481,8 @@ impl<T> Attestation<T> {
                     stripped
                 })
                 .collect();
-            if include_preimages {
-                for event in &mut stripped {
+            for event in &mut stripped {
+                if matches!(event.version, EventLogVersion::V2) {
                     event.fill_preimage();
                 }
             }
@@ -2689,31 +2674,44 @@ mod tests {
             tdx_event(
                 3,
                 cc_eventlog::DSTACK_RUNTIME_EVENT_TYPE,
-                b"runtime-payload",
+                b"v1-runtime-payload",
             ),
+            {
+                let mut event = tdx_event(
+                    3,
+                    cc_eventlog::DSTACK_RUNTIME_EVENT_TYPE,
+                    b"v2-runtime-payload",
+                );
+                event.version = EventLogVersion::V2;
+                event
+            },
         ];
 
         // The ACPI DATA marker payload is retained regardless of the
         // vm_config's tdx_attestation_variant (including no vm_config at
         // all), so a verifier can choose lite verification for any TDX boot.
-        for include_preimages in [false, true] {
-            let events: Vec<TdxEvent> = serde_json::from_str(
-                &attestation
-                    .get_tdx_event_log_string_with_preimages(include_preimages)
-                    .expect("TDX event log"),
-            )
-            .unwrap_or_else(|e| panic!("decode GetQuote event log: {e}"));
-            assert_eq!(
-                events
-                    .iter()
-                    .filter(|event| cc_eventlog::tdx::is_tdx_acpi_data_event(event))
-                    .count(),
-                3,
-                "GetQuote must retain all three TDX-lite ACPI DATA markers"
-            );
-            assert!(events[3].event_payload.is_empty());
-            assert_eq!(events[4].event_payload, b"runtime-payload");
-        }
+        let events: Vec<TdxEvent> = serde_json::from_str(
+            &attestation
+                .get_tdx_event_log_string()
+                .expect("TDX event log"),
+        )
+        .unwrap_or_else(|e| panic!("decode GetQuote event log: {e}"));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| cc_eventlog::tdx::is_tdx_acpi_data_event(event))
+                .count(),
+            3,
+            "GetQuote must retain all three TDX-lite ACPI DATA markers"
+        );
+        assert!(events[3].event_payload.is_empty());
+        assert_eq!(events[4].event_payload, b"v1-runtime-payload");
+        assert!(
+            events[4].preimage.is_none(),
+            "V1 output must remain unchanged"
+        );
+        assert_eq!(events[5].event_payload, b"v2-runtime-payload");
+        assert!(events[5].preimage.is_some(), "V2 must include its preimage");
     }
 
     #[test]
