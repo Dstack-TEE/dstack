@@ -9,7 +9,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
-	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -56,45 +55,6 @@ func TestGetQuote(t *testing.T) {
 	err = json.Unmarshal([]byte(resp.EventLog), &eventLog)
 	if err != nil {
 		t.Errorf("expected event log to be a valid JSON object: %v", err)
-	}
-
-	// Get quote RTMRs manually
-	quoteBytes, err := resp.DecodeQuote()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	quoteRtmrs := [4][48]byte{
-		[48]byte(quoteBytes[376:424]),
-		[48]byte(quoteBytes[424:472]),
-		[48]byte(quoteBytes[472:520]),
-		[48]byte(quoteBytes[520:568]),
-	}
-
-	// Test ReplayRTMRs
-	rtmrs, err := resp.ReplayRTMRs()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(rtmrs) != 4 {
-		t.Errorf("expected 4 RTMRs, got %d", len(rtmrs))
-	}
-
-	// Verify RTMRs
-	for i := 0; i < 4; i++ {
-		if rtmrs[i] == "" {
-			t.Errorf("expected RTMR %d to not be empty", i)
-		}
-
-		rtmrBytes, err := hex.DecodeString(rtmrs[i])
-		if err != nil {
-			t.Errorf("expected RTMR %d to be valid hex: %v", i, err)
-		}
-
-		if !bytes.Equal(rtmrBytes, quoteRtmrs[i][:]) {
-			t.Errorf("expected RTMR %d to be %s, got %s", i, hex.EncodeToString(quoteRtmrs[i][:]), rtmrs[i])
-		}
 	}
 }
 

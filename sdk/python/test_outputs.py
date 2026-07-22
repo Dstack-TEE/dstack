@@ -118,7 +118,6 @@ async def main():  # noqa: D103
             tappd_quote = tappd_client.tdx_quote("test-data", "raw")
             print(f"  quote length: {len(tappd_quote.quote)}")
             print(f"  event_log length: {len(tappd_quote.event_log)}")
-            print(f"  rtmrs count: {len(tappd_quote.replay_rtmrs())}")
         except Exception as error:
             print(f"  error: {error}")
 
@@ -137,7 +136,6 @@ async def main():  # noqa: D103
             async_tappd_quote = await async_tappd_client.tdx_quote("test-data", "raw")
             print(f"  quote length: {len(async_tappd_quote.quote)}")
             print(f"  event_log length: {len(async_tappd_quote.event_log)}")
-            print(f"  rtmrs count: {len(async_tappd_quote.replay_rtmrs())}")
         except Exception as error:
             print(f"  error: {error}")
 
@@ -147,14 +145,12 @@ async def main():  # noqa: D103
         dstack_quote = client.get_quote("test-data-for-quote")
         print(f"  quote length: {len(dstack_quote.quote)}")
         print(f"  event_log length: {len(dstack_quote.event_log)}")
-        print(f"  rtmrs count: {len(dstack_quote.replay_rtmrs())}")
 
         print("\n5.2 AsyncDstackClient.get_quote():")
         async_client = AsyncDstackClient()
         async_dstack_quote = await async_client.get_quote("test-data-for-quote")
         print(f"  quote length: {len(async_dstack_quote.quote)}")
         print(f"  event_log length: {len(async_dstack_quote.event_log)}")
-        print(f"  rtmrs count: {len(async_dstack_quote.replay_rtmrs())}")
 
         # Test get_compose_hash
         print("\n6. Testing get_compose_hash")

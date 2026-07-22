@@ -19,7 +19,6 @@ hex = { workspace = true, features = ["alloc"] }
 pkcs8 = { workspace = true, features = ["pem"] }
 serde.workspace = true
 serde_json = { workspace = true, features = ["alloc"] }
-sha2.workspace = true
 
 [dev-dependencies]
 dcap-qvl.workspace = true
@@ -36,6 +35,5 @@ std = [
     "pkcs8/pem",
     "serde/std",
     "serde_json/std",
-    "sha2/std",
     "borsh?/std",
 ]

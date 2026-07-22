@@ -46,7 +46,6 @@ describe('DstackClient', () => {
     expect(result).toHaveProperty('event_log')
     expect(result.event_log.substring(0, 1) === '{')
     expect(() => JSON.parse(result.event_log)).not.toThrowError()
-    expect(result.replayRtmrs().length).toBe(4)
   })
 
   it('should be able to attest', async () => {

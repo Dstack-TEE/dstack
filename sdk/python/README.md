@@ -76,10 +76,7 @@ ed_key = client.get_key('signing/key', algorithm='ed25519')
 
 ```python
 quote = client.get_quote(b'user:alice:nonce123')
-
-# Replay RTMRs from the event log
-rtmrs = quote.replay_rtmrs()
-print(rtmrs)
+print(quote.event_log)
 ```
 
 **Parameters:**
@@ -88,7 +85,6 @@ print(rtmrs)
 **Returns:** `GetQuoteResponse`
 - `quote`: Hex-encoded TDX quote
 - `event_log`: JSON string of measured events
-- `replay_rtmrs()`: Method to compute RTMR values from the event log
 - `decode_quote()` / `decode_event_log()`: Helpers
 
 ### Versioned Attestation

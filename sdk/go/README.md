@@ -123,13 +123,6 @@ func main() {
 
 	fmt.Println("TDX Quote:", quote.Quote)
 	fmt.Println("Event Log:", quote.EventLog)
-
-	// Verify measurement registers
-	rtmrs, err := quote.ReplayRTMRs()
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println("RTMR0-3:", rtmrs)
 }
 ```
 
@@ -574,7 +567,6 @@ Generates a TDX attestation quote containing the provided report data.
 **Returns:** `GetQuoteResponse`
 - `Quote`: TDX quote as hex string
 - `EventLog`: JSON string of system events
-- `ReplayRTMRs()`: Function returning computed RTMR values
 
 **Use Cases:**
 - Remote attestation of application state

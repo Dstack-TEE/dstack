@@ -55,21 +55,6 @@ async fn test_tls_key_uniqueness() {
 }
 
 #[tokio::test]
-async fn test_replay_rtmr() {
-    let client = AsyncDstackClient::new(None);
-    let result = client.get_quote("test".into()).await.unwrap();
-    let rtmrs = result.replay_rtmrs().unwrap();
-    let quote = result.decode_quote().unwrap();
-
-    let tdx_quote = Quote::parse(&quote).unwrap();
-    let quote_report = tdx_quote.report.as_td10().unwrap();
-    assert_eq!(rtmrs[&0], hex::encode(quote_report.rt_mr0));
-    assert_eq!(rtmrs[&1], hex::encode(quote_report.rt_mr1));
-    assert_eq!(rtmrs[&2], hex::encode(quote_report.rt_mr2));
-    assert_eq!(rtmrs[&3], hex::encode(quote_report.rt_mr3));
-}
-
-#[tokio::test]
 async fn test_report_data() {
     let report_data = "test";
     let client = AsyncDstackClient::new(None);

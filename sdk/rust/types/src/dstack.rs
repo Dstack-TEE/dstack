@@ -2,39 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use alloc::{
-    collections::BTreeMap,
-    string::{String, ToString},
-    vec::Vec,
-};
-use anyhow::{Context as _, Result};
-use hex::{encode as hex_encode, FromHexError};
+use alloc::{string::String, vec::Vec};
+use hex::FromHexError;
 use serde::{Deserialize, Serialize};
 use serde_json::{from_str, Value};
-use sha2::Digest;
 
 #[cfg(feature = "borsh_schema")]
 use borsh::BorshSchema;
 #[cfg(feature = "borsh")]
 use borsh::{BorshDeserialize, BorshSerialize};
-
-const INIT_MR: &str = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
-
-fn replay_rtmr(history: Vec<String>) -> Result<String, FromHexError> {
-    if history.is_empty() {
-        return Ok(INIT_MR.to_string());
-    }
-    let mut mr = hex::decode(INIT_MR)?;
-    for content in history {
-        let mut content_bytes = hex::decode(content)?;
-        if content_bytes.len() < 48 {
-            content_bytes.resize(48, 0);
-        }
-        mr.extend_from_slice(&content_bytes);
-        mr = sha2::Sha384::digest(&mr).to_vec();
-    }
-    Ok(hex_encode(mr))
-}
 
 /// Represents an event log entry in the system
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
@@ -153,27 +129,6 @@ impl GetQuoteResponse {
 
     pub fn decode_event_log(&self) -> Result<Vec<EventLog>, serde_json::Error> {
         serde_json::from_str(&self.event_log)
-    }
-
-
-    pub fn replay_rtmrs(&self) -> Result<BTreeMap<u8, String>> {
-        let parsed_event_log: Vec<EventLog> = self.decode_event_log()?;
-        let mut rtmrs = BTreeMap::new();
-        for idx in 0..4 {
-            let mut history = Vec::new();
-            for event in &parsed_event_log {
-                if event.imr == idx {
-                    history.push(event.digest.clone());
-                }
-            }
-            rtmrs.insert(
-                idx as u8,
-                replay_rtmr(history)
-                    .ok()
-                    .context("Invalid digest in event log")?,
-            );
-        }
-        Ok(rtmrs)
     }
 }
 
