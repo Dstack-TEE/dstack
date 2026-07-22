@@ -68,65 +68,7 @@ pub fn router(state: Arc<MockCollateralState>) -> Router {
         .route("/tpm/aia/intermediate.der", get(tpm_intermediate))
         .route("/tpm/crl/root.crl", get(tpm_root_crl))
         .route("/tpm/crl/intermediate.crl", get(tpm_intermediate_crl))
-        .route("/attest/tdx", axum::routing::post(attest_tdx))
-        .route("/attest/sev-snp", axum::routing::post(attest_sev_snp))
-        .route("/attest/tpm", axum::routing::post(attest_tpm))
-        .route("/attest/nsm", axum::routing::post(attest_nsm))
         .with_state(state)
-}
-
-async fn attest_tdx(
-    State(state): State<Arc<MockCollateralState>>,
-    body: axum::body::Bytes,
-) -> impl IntoResponse {
-    let Ok(report_data) = <[u8; 64]>::try_from(body.as_ref()) else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    match state.tdx.attest(report_data) {
-        Ok(e) => binary(e.quote, None),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
-}
-
-async fn attest_sev_snp(
-    State(state): State<Arc<MockCollateralState>>,
-    body: axum::body::Bytes,
-) -> impl IntoResponse {
-    let Ok(report_data) = <[u8; 64]>::try_from(body.as_ref()) else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    match state
-        .sev_snp
-        .attest(report_data)
-        .and_then(|e| Ok(serde_json::to_vec(&e)?))
-    {
-        Ok(e) => binary(e, None),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
-}
-
-async fn attest_tpm(
-    State(state): State<Arc<MockCollateralState>>,
-    body: axum::body::Bytes,
-) -> impl IntoResponse {
-    match state
-        .tpm
-        .attest(&body)
-        .and_then(|e| Ok(serde_json::to_vec(&e)?))
-    {
-        Ok(e) => binary(e, None),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
-}
-
-async fn attest_nsm(
-    State(state): State<Arc<MockCollateralState>>,
-    body: axum::body::Bytes,
-) -> impl IntoResponse {
-    match state.nsm.attest(&body) {
-        Ok(e) => binary(e, None),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
 }
 
 pub async fn serve(addr: SocketAddr, state: Arc<MockCollateralState>) -> Result<()> {
@@ -154,9 +96,14 @@ async fn pck_crl(State(state): State<Arc<MockCollateralState>>) -> impl IntoResp
 }
 
 async fn tcb_info(State(state): State<Arc<MockCollateralState>>) -> impl IntoResponse {
-    let collateral = state.tdx.sample_collateral().unwrap();
+    let Ok(collateral) = state.tdx.sample_collateral() else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    let Ok(tcb_info) = serde_json::from_str::<serde_json::Value>(&collateral.tcb_info) else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
     json_response(
-        json!({"tcbInfo": serde_json::from_str::<serde_json::Value>(&collateral.tcb_info).unwrap(), "signature": hex::encode(collateral.tcb_info_signature)}),
+        json!({"tcbInfo": tcb_info, "signature": hex::encode(collateral.tcb_info_signature)}),
         Some((
             "SGX-TCB-Info-Issuer-Chain",
             collateral.tcb_info_issuer_chain,
@@ -165,9 +112,14 @@ async fn tcb_info(State(state): State<Arc<MockCollateralState>>) -> impl IntoRes
 }
 
 async fn qe_identity(State(state): State<Arc<MockCollateralState>>) -> impl IntoResponse {
-    let collateral = state.tdx.sample_collateral().unwrap();
+    let Ok(collateral) = state.tdx.sample_collateral() else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    let Ok(qe_identity) = serde_json::from_str::<serde_json::Value>(&collateral.qe_identity) else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
     json_response(
-        json!({"enclaveIdentity": serde_json::from_str::<serde_json::Value>(&collateral.qe_identity).unwrap(), "signature": hex::encode(collateral.qe_identity_signature)}),
+        json!({"enclaveIdentity": qe_identity, "signature": hex::encode(collateral.qe_identity_signature)}),
         Some((
             "SGX-Enclave-Identity-Issuer-Chain",
             collateral.qe_identity_issuer_chain,
@@ -203,10 +155,13 @@ fn json_response(value: serde_json::Value, header: Option<(&str, String)>) -> Re
         .headers_mut()
         .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     if let Some((name, value)) = header {
-        response.headers_mut().insert(
-            axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
-            HeaderValue::from_str(&urlencoding::encode(&value)).unwrap(),
-        );
+        let Ok(name) = axum::http::HeaderName::from_bytes(name.as_bytes()) else {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        };
+        let Ok(value) = HeaderValue::from_str(&urlencoding::encode(&value)) else {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        };
+        response.headers_mut().insert(name, value);
     }
     response
 }
@@ -215,10 +170,13 @@ fn binary(value: Vec<u8>, header: Option<(&str, String)>) -> Response<Body> {
     let mut response = Response::new(Body::from(value));
     *response.status_mut() = StatusCode::OK;
     if let Some((name, value)) = header {
-        response.headers_mut().insert(
-            axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
-            HeaderValue::from_str(&urlencoding::encode(&value)).unwrap(),
-        );
+        let Ok(name) = axum::http::HeaderName::from_bytes(name.as_bytes()) else {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        };
+        let Ok(value) = HeaderValue::from_str(&urlencoding::encode(&value)) else {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        };
+        response.headers_mut().insert(name, value);
     }
     response
 }
@@ -318,79 +276,6 @@ mod tests {
         .fetch_and_verify(&kds, &sev_evidence.report, &[], &[0x43; 64])
         .await
         .unwrap();
-        task.abort();
-    }
-
-    #[tokio::test]
-    async fn dynamic_attestation_endpoints_pass_all_real_qvls() {
-        let state = Arc::new(MockCollateralState::new().unwrap());
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let task = tokio::spawn(serve_listener(listener, state.clone()));
-        let base = format!("http://{addr}/attest");
-        let client = reqwest::Client::new();
-
-        let tdx = client
-            .post(format!("{base}/tdx"))
-            .body(vec![0x11; 64])
-            .send()
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap();
-        let tdx_collateral = state.tdx.sample_collateral().unwrap();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        dcap_qvl::verify::QuoteVerifier::new(state.tdx.root_ca_der())
-            .verify(&tdx, &tdx_collateral, now)
-            .unwrap();
-
-        let sev = client
-            .post(format!("{base}/sev-snp"))
-            .body(vec![0x12; 64])
-            .send()
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap();
-        let sev: crate::sev_snp::SevSnpEvidence = serde_json::from_slice(&sev).unwrap();
-        sev_snp_qvl::QuoteVerifier::new_with_root(
-            sev_snp_qvl::AmdSnpProduct::Milan,
-            state.sev_snp.root_ca_pem().into_bytes(),
-        )
-        .verify(&sev.report, &sev.cert_chain, &[0x12; 64])
-        .unwrap();
-
-        let tpm = client
-            .post(format!("{base}/tpm"))
-            .body(vec![0x13; 32])
-            .send()
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap();
-        let tpm: tpm_types::TpmQuote = serde_json::from_slice(&tpm).unwrap();
-        tpm_qvl::QuoteVerifier::new(state.tpm.root_ca_pem())
-            .verify(&tpm, &state.tpm.collateral())
-            .unwrap();
-
-        let nsm = client
-            .post(format!("{base}/nsm"))
-            .body(vec![0x14; 64])
-            .send()
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap();
-        nsm_qvl::QuoteVerifier::new(state.nsm.root_ca_pem())
-            .verify(&nsm, None, None)
-            .unwrap();
         task.abort();
     }
 

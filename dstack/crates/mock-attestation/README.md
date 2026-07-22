@@ -33,8 +33,9 @@ dstack-mock-attestation serve \
   --output ./active-mock-roots
 ```
 
-The server exposes production-shaped collateral endpoints and dynamic evidence
-under `/attest/{tdx,sev-snp,tpm,nsm}`.
+The server exposes only production-shaped public collateral endpoints. Evidence
+is generated inside the development guest by `dstack-tee-simulator`; the HTTP
+service deliberately provides no unauthenticated signing endpoint.
 
 ## Dev image
 
@@ -50,8 +51,9 @@ Select the platform in `.sys-config.json`; omission defaults to TDX:
 }
 ```
 
-Valid values mirror the supported attestation modes: `dstack-tdx`, `gcp-tdx`,
-`amd-sev-snp`, `aws-nitro-enclave`, and `aws-nitro-tpm`. The simulator exposes
+Valid values mirror the supported attestation modes: `dstack-tdx`,
+`dstack-gcp-tdx`, `dstack-amd-sev-snp`, `dstack-nitro-enclave`, and
+`dstack-aws-nitro-tpm`. The simulator exposes
 the production guest ABI for the selected platform (TSM configfs, vTPM, or an
 NSM CUSE character device); attester libraries contain no mock HTTP or
 environment-variable path. The guest only reads the

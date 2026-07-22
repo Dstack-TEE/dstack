@@ -7,6 +7,7 @@ use clap::Parser;
 use config::KmsConfig;
 use main_service::{KmsState, RpcHandler};
 use ra_rpc::rocket_helper::QuoteVerifier;
+use ra_tls::attestation::AttestationVerifier;
 use rocket::{
     fairing::AdHoc,
     figment::{providers::Serialized, Figment},
@@ -49,7 +50,9 @@ async fn run_onboard_service(kms_config: KmsConfig, figment: Figment) -> Result<
     }
 
     if !kms_config.onboard.auto_bootstrap_domain.is_empty() {
-        onboard_service::bootstrap_keys(&kms_config).await?;
+        let verifier = AttestationVerifier::load(&kms_config.attestation)
+            .context("failed to load attestation verifier")?;
+        onboard_service::bootstrap_keys(&kms_config, &verifier).await?;
         return Ok(());
     }
 

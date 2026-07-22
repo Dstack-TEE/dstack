@@ -73,7 +73,7 @@ impl RpcCall<OnboardState> for OnboardHandler {
 
 impl OnboardRpc for OnboardHandler {
     async fn bootstrap(self, request: BootstrapRequest) -> Result<BootstrapResponse> {
-        ensure_self_kms_allowed(&self.state.config)
+        ensure_self_kms_allowed(&self.state.config, &self.state.attestation_verifier)
             .await
             .context("KMS is not allowed to bootstrap")?;
         let keys = Keys::generate(&request.domain)
@@ -446,16 +446,20 @@ impl Keys {
 
         let tmp_ca = kms_client.get_temp_ca_cert().await?;
         let (ra_cert, ra_key) = gen_ra_cert(tmp_ca.temp_ca_cert, tmp_ca.temp_ca_key).await?;
-        let ra_client =
-            RaClient::new_mtls(other_kms_url.into(), ra_cert, ra_key, attestation_verifier)
-                .context("Failed to create client")?;
+        let ra_client = RaClient::new_mtls(
+            other_kms_url.into(),
+            ra_cert,
+            ra_key,
+            attestation_verifier.clone(),
+        )
+        .context("Failed to create client")?;
         kms_client = KmsClient::new(ra_client);
         let source_attestation = attestation_slot
             .lock()
             .map_err(|_| anyhow::anyhow!("source attestation mutex poisoned"))?
             .clone()
             .context("Missing source KMS attestation")?;
-        ensure_kms_allowed(cfg, &source_attestation)
+        ensure_kms_allowed(cfg, &source_attestation, &attestation_verifier)
             .await
             .context("Source KMS is not allowed for onboarding")?;
 
@@ -533,8 +537,8 @@ pub(crate) async fn update_certs(cfg: &KmsConfig) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn bootstrap_keys(cfg: &KmsConfig) -> Result<()> {
-    ensure_self_kms_allowed(cfg)
+pub(crate) async fn bootstrap_keys(cfg: &KmsConfig, verifier: &AttestationVerifier) -> Result<()> {
+    ensure_self_kms_allowed(cfg, verifier)
         .await
         .context("KMS is not allowed to auto-bootstrap")?;
     let keys = Keys::generate(&cfg.onboard.auto_bootstrap_domain)

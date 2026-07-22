@@ -79,7 +79,10 @@ struct CuseApi {
 }
 
 fn cuse() -> &'static CuseApi {
-    CUSE.get().expect("CUSE API must be initialized")
+    let Some(cuse) = CUSE.get() else {
+        std::process::abort();
+    };
+    cuse
 }
 
 unsafe fn load_cuse() -> Result<CuseApi> {

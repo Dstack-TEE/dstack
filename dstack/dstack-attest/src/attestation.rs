@@ -66,51 +66,65 @@ pub struct AttestationVerifier {
 impl AttestationVerifier {
     pub fn load(config: &AttestationVerifierConfig) -> Result<Self> {
         let roots = &config.root_ca;
-        let external_requested = roots.tdx.is_some()
-            || roots.gcp_tpm.is_some()
-            || roots.aws_nitro_enclave.is_some()
-            || roots.aws_nitro_tpm.is_some()
-            || roots.sev_snp_milan.is_some()
-            || roots.sev_snp_genoa.is_some()
-            || roots.sev_snp_turin.is_some();
+        let RootCaPaths {
+            tdx,
+            gcp_tpm,
+            aws_nitro_enclave,
+            aws_nitro_tpm,
+            sev_snp_milan,
+            sev_snp_genoa,
+            sev_snp_turin,
+        } = roots;
+        let external_requested = [
+            tdx,
+            gcp_tpm,
+            aws_nitro_enclave,
+            aws_nitro_tpm,
+            sev_snp_milan,
+            sev_snp_genoa,
+            sev_snp_turin,
+        ]
+        .into_iter()
+        .any(Option::is_some);
         anyhow::ensure!(
             !external_requested || config.insecure_allow_external_trust_anchors,
             "external attestation trust anchors are configured but \
              insecure_allow_external_trust_anchors is false"
         );
-        let tdx = match read_root_file(roots.tdx.as_deref(), "TDX")? {
+        let tdx = match read_root_file(tdx.as_deref(), "TDX")? {
             Some(root) => dcap_qvl::verify::QuoteVerifier::new(tdx_root_der(root)?),
             None => dcap_qvl::verify::QuoteVerifier::new_prod(),
         };
-        let gcp_tpm = match read_root_file(roots.gcp_tpm.as_deref(), "GCP TPM")? {
-            Some(root) => tpm_qvl::QuoteVerifier::new(pem_string(root, "GCP TPM")?),
+        let gcp_tpm = match read_root_file(gcp_tpm.as_deref(), "GCP TPM")? {
+            Some(root) => tpm_qvl::QuoteVerifier::new(validated_pem_string(root, "GCP TPM")?),
             None => tpm_qvl::QuoteVerifier::new_prod(Platform::Gcp)?,
         };
         let nsm = |path, name| -> Result<nsm_qvl::QuoteVerifier> {
             Ok(match read_root_file(path, name)? {
-                Some(root) => nsm_qvl::QuoteVerifier::new(pem_string(root, name)?),
+                Some(root) => nsm_qvl::QuoteVerifier::new(validated_pem_string(root, name)?),
                 None => nsm_qvl::QuoteVerifier::new_prod(),
             })
         };
         let mut sev_snp = sev_snp_qvl::QuoteVerifier::new_prod();
         for (path, name, product) in [
             (
-                roots.sev_snp_milan.as_deref(),
+                sev_snp_milan.as_deref(),
                 "SEV-SNP Milan",
                 sev_snp_qvl::AmdSnpProduct::Milan,
             ),
             (
-                roots.sev_snp_genoa.as_deref(),
+                sev_snp_genoa.as_deref(),
                 "SEV-SNP Genoa",
                 sev_snp_qvl::AmdSnpProduct::Genoa,
             ),
             (
-                roots.sev_snp_turin.as_deref(),
+                sev_snp_turin.as_deref(),
                 "SEV-SNP Turin",
                 sev_snp_qvl::AmdSnpProduct::Turin,
             ),
         ] {
             if let Some(root) = read_root_file(path, name)? {
+                validate_x509_certificate(&root, name)?;
                 sev_snp = sev_snp.with_root(product, root);
             }
         }
@@ -130,8 +144,8 @@ impl AttestationVerifier {
             tdx,
             tdx_collateral: CollateralClient::with_default_http(pccs)?,
             gcp_tpm,
-            aws_nitro_enclave: nsm(roots.aws_nitro_enclave.as_deref(), "AWS Nitro Enclave")?,
-            aws_nitro_tpm: nsm(roots.aws_nitro_tpm.as_deref(), "AWS NitroTPM")?,
+            aws_nitro_enclave: nsm(aws_nitro_enclave.as_deref(), "AWS Nitro Enclave")?,
+            aws_nitro_tpm: nsm(aws_nitro_tpm.as_deref(), "AWS NitroTPM")?,
             sev_snp,
             amd_kds: AmdKdsClient::with_base_url(amd_kds)?,
         })
@@ -181,11 +195,32 @@ fn read_root_file(path: Option<&std::path::Path>, platform: &str) -> Result<Opti
         .map(Some)
 }
 
-fn pem_string(root: Vec<u8>, platform: &str) -> Result<String> {
+fn validated_pem_string(root: Vec<u8>, platform: &str) -> Result<String> {
+    validate_x509_certificate(&root, platform)?;
     String::from_utf8(root).with_context(|| format!("{platform} root CA is not UTF-8 PEM"))
 }
 
+fn validate_x509_certificate(root: &[u8], platform: &str) -> Result<()> {
+    use x509_parser::prelude::{FromDer, X509Certificate};
+    let der = if root.starts_with(b"-----BEGIN") {
+        pem::parse(root)
+            .with_context(|| format!("failed to parse {platform} root CA PEM"))?
+            .into_contents()
+    } else {
+        root.to_vec()
+    };
+    let (remaining, certificate) = X509Certificate::from_der(&der)
+        .with_context(|| format!("failed to parse {platform} root CA certificate"))?;
+    anyhow::ensure!(remaining.is_empty(), "trailing data in {platform} root CA");
+    anyhow::ensure!(
+        certificate.is_ca(),
+        "{platform} root certificate is not a CA"
+    );
+    Ok(())
+}
+
 fn tdx_root_der(root: Vec<u8>) -> Result<Vec<u8>> {
+    validate_x509_certificate(&root, "TDX")?;
     if root.starts_with(b"-----BEGIN") {
         return Ok(pem::parse(root)?.into_contents());
     }
@@ -2491,6 +2526,60 @@ mod tests {
             read_root_file(Some(&path), "test").unwrap(),
             Some(b"test root".to_vec())
         );
+        fs_err::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn every_external_root_is_parsed_during_load() {
+        let path = std::env::temp_dir().join(format!(
+            "dstack-invalid-root-ca-test-{}",
+            std::process::id()
+        ));
+        fs_err::write(&path, b"not a certificate").unwrap();
+        let roots = [
+            RootCaPaths {
+                tdx: Some(path.clone()),
+                ..Default::default()
+            },
+            RootCaPaths {
+                gcp_tpm: Some(path.clone()),
+                ..Default::default()
+            },
+            RootCaPaths {
+                aws_nitro_enclave: Some(path.clone()),
+                ..Default::default()
+            },
+            RootCaPaths {
+                aws_nitro_tpm: Some(path.clone()),
+                ..Default::default()
+            },
+            RootCaPaths {
+                sev_snp_milan: Some(path.clone()),
+                ..Default::default()
+            },
+            RootCaPaths {
+                sev_snp_genoa: Some(path.clone()),
+                ..Default::default()
+            },
+            RootCaPaths {
+                sev_snp_turin: Some(path.clone()),
+                ..Default::default()
+            },
+        ];
+        for root_ca in roots {
+            let config = AttestationVerifierConfig {
+                insecure_allow_external_trust_anchors: true,
+                root_ca,
+                ..Default::default()
+            };
+            let error = AttestationVerifier::load(&config)
+                .err()
+                .expect("invalid external root must fail during load");
+            assert!(
+                format!("{error:#}").contains("root CA"),
+                "unexpected error: {error:#}"
+            );
+        }
         fs_err::remove_file(path).unwrap();
     }
 

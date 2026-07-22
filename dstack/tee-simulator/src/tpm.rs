@@ -46,6 +46,20 @@ struct NvWriteTemplate {
     request: Vec<u8>,
 }
 
+fn read_be_u16(bytes: &[u8], field: &str) -> Result<u16> {
+    let bytes: [u8; 2] = bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("invalid {field} length"))?;
+    Ok(u16::from_be_bytes(bytes))
+}
+
+fn read_be_u32(bytes: &[u8], field: &str) -> Result<u32> {
+    let bytes: [u8; 4] = bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("invalid {field} length"))?;
+    Ok(u32::from_be_bytes(bytes))
+}
+
 fn command(program: &str, args: &[&str]) -> Result<()> {
     let status = Command::new(program)
         .args(args)
@@ -356,7 +370,7 @@ fn proxy_tpm_commands(
         }
         command.truncate(size);
         anyhow::ensure!(command.len() >= 10, "truncated TPM command");
-        let code = u32::from_be_bytes(command[6..10].try_into().unwrap());
+        let code = read_be_u32(&command[6..10], "TPM command code")?;
         let response = if code == TPM2_CC_AWS_NSM_REQUEST {
             let template = nv_write
                 .as_ref()
@@ -405,20 +419,19 @@ fn parse_nv_write(command: &[u8]) -> Result<Option<NvWriteTemplate>> {
     if command.len() < 24 {
         return Ok(None);
     }
-    let index = u32::from_be_bytes(command[14..18].try_into().unwrap());
+    let index = read_be_u32(&command[14..18], "NV index")?;
     if !(0x0100_0000..=0x01ff_ffff).contains(&index) {
         return Ok(None);
     }
-    let auth_size = u32::from_be_bytes(command[18..22].try_into().unwrap()) as usize;
+    let auth_size = read_be_u32(&command[18..22], "NV authorization size")? as usize;
     let data_size_pos = 22usize
         .checked_add(auth_size)
         .context("NV write size overflow")?;
     anyhow::ensure!(command.len() >= data_size_pos + 4, "truncated NV write");
-    let data_size = u16::from_be_bytes(
-        command[data_size_pos..data_size_pos + 2]
-            .try_into()
-            .unwrap(),
-    ) as usize;
+    let data_size = read_be_u16(
+        &command[data_size_pos..data_size_pos + 2],
+        "NV write data size",
+    )? as usize;
     let data_start = data_size_pos + 2;
     let data_end = data_start + data_size;
     anyhow::ensure!(command.len() >= data_end + 2, "truncated NV write data");
@@ -451,11 +464,10 @@ fn handle_nsm_vendor_command(
 fn set_nv_public_size(response: &mut [u8], size: usize) -> Result<()> {
     anyhow::ensure!(response.len() >= 26, "truncated NV_ReadPublic response");
     let policy_size_pos = 22;
-    let policy_size = u16::from_be_bytes(
-        response[policy_size_pos..policy_size_pos + 2]
-            .try_into()
-            .unwrap(),
-    ) as usize;
+    let policy_size = read_be_u16(
+        &response[policy_size_pos..policy_size_pos + 2],
+        "NV policy size",
+    )? as usize;
     let data_size_pos = policy_size_pos + 2 + policy_size;
     anyhow::ensure!(
         response.len() >= data_size_pos + 2,
@@ -467,12 +479,11 @@ fn set_nv_public_size(response: &mut [u8], size: usize) -> Result<()> {
 
 fn nv_read_response(command: &[u8], contents: &[u8]) -> Result<Vec<u8>> {
     anyhow::ensure!(command.len() >= 4, "truncated NV_Read command");
-    let size = u16::from_be_bytes(
-        command[command.len() - 4..command.len() - 2]
-            .try_into()
-            .unwrap(),
-    ) as usize;
-    let offset = u16::from_be_bytes(command[command.len() - 2..].try_into().unwrap()) as usize;
+    let size = read_be_u16(
+        &command[command.len() - 4..command.len() - 2],
+        "NV read size",
+    )? as usize;
+    let offset = read_be_u16(&command[command.len() - 2..], "NV read offset")? as usize;
     let end = (offset + size).min(contents.len());
     anyhow::ensure!(offset <= end, "invalid NV_Read offset");
     let data = &contents[offset..end];
@@ -493,7 +504,7 @@ fn transact(stream: &mut UnixStream, command: &[u8]) -> Result<Vec<u8>> {
     stream.write_all(command)?;
     let mut header = [0u8; 10];
     stream.read_exact(&mut header)?;
-    let size = u32::from_be_bytes(header[2..6].try_into().unwrap()) as usize;
+    let size = read_be_u32(&header[2..6], "TPM response size")? as usize;
     anyhow::ensure!(size >= header.len(), "invalid TPM response size");
     let mut response = Vec::with_capacity(size);
     response.extend_from_slice(&header);

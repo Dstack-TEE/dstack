@@ -189,7 +189,11 @@ VERIFIER_RC=$?
 set -e
 if [[ ! -s "$WORK/request.json.verification.json" ]]; then
   cat "$WORK/verifier.log" >&2
-  exit "${VERIFIER_RC:-1}"
+  exit 1
+fi
+if (( VERIFIER_RC != 0 )); then
+  cat "$WORK/verifier.log" >&2
+  exit "$VERIFIER_RC"
 fi
 cat "$WORK/request.json.verification.json"
 jq -e '.details.quote_verified == true' "$WORK/request.json.verification.json" >/dev/null

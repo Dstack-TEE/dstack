@@ -1841,10 +1841,15 @@ impl Platform {
 
     /// Detect platform from system DMI information
     pub fn detect() -> Option<Self> {
+        // `/dev/nsm` is the authoritative Nitro Enclave ABI. Check it before
+        // DMI because an enclave may inherit EC2-identifying DMI strings from
+        // its parent host, while a regular EC2 instance does not expose NSM.
+        if Path::new("/dev/nsm").exists() {
+            return Some(Self::NitroEnclave);
+        }
         let product_name = std::fs::read_to_string("/sys/class/dmi/id/product_name").ok();
         let sys_vendor = std::fs::read_to_string("/sys/class/dmi/id/sys_vendor").ok();
         Self::detect_from_dmi(product_name.as_deref(), sys_vendor.as_deref())
-            .or_else(|| Path::new("/dev/nsm").exists().then_some(Self::NitroEnclave))
     }
 
     /// Detect platform from system DMI information, default to Dstack if cannot detect

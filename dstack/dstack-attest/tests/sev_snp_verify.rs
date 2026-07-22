@@ -272,6 +272,28 @@ fn forged_report_bytes_fail_signature_verification() {
 }
 
 #[test]
+fn tampered_real_amd_ask_fails_chain_verification() {
+    let report = fixture_report();
+    let mut ask_der = pem::parse(SEV_ASK_PEM)
+        .expect("parse real AMD ASK")
+        .into_contents();
+    let last = ask_der.last_mut().expect("ASK DER is non-empty");
+    *last ^= 1;
+    let tampered_ask = pem::encode(&pem::Pem::new("CERTIFICATE", ask_der));
+
+    let error = verify_amd_snp_attestation(&AmdSnpAttestationInput {
+        report: &report,
+        ask_pem: tampered_ask.as_bytes(),
+        vcek_pem: SEV_VCEK_PEM,
+    })
+    .expect_err("tampered AMD ASK must fail verification");
+    assert!(
+        error.to_string().contains("cert chain verification"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[test]
 fn wrong_collateral_is_rejected() {
     let report = fixture_report();
     // The ASK presented as the VCEK leaf: the report signature won't verify

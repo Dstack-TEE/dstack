@@ -169,11 +169,11 @@ async fn run_cert_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()
     let cert = fs::read(file_path)
         .map_err(|e| anyhow::anyhow!("failed to read certificate {}: {}", file_path, e))?;
 
-    let attestation_verifier = AttestationVerifier::load(&config.attestation)?;
+    let attestation_verifier = Arc::new(AttestationVerifier::load(&config.attestation)?);
     let verified = if cert.starts_with(b"-----BEGIN") {
-        ra_tls::attestation::verify_pem(&cert, &attestation_verifier).await
+        ra_tls::attestation::verify_pem(&cert, attestation_verifier.as_ref()).await
     } else {
-        ra_tls::attestation::verify_der(&cert, &attestation_verifier).await
+        ra_tls::attestation::verify_der(&cert, attestation_verifier.as_ref()).await
     }
     .map_err(|e| anyhow::anyhow!("failed to verify RA-TLS certificate: {:#}", e))?;
 
@@ -182,7 +182,8 @@ async fn run_cert_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()
     // every platform except TDX legacy this is a self-contained check (no image
     // download); relying parties should only trust `os_image_hash` when
     // `os_image_hash_verified` is true.
-    let os_image_hash_verified = verify_cert_os_image_hash(&verified.attestation, config).await;
+    let os_image_hash_verified =
+        verify_cert_os_image_hash(&verified.attestation, config, &attestation_verifier).await;
     let output = serde_json::json!({
         "is_valid": true,
         "details": {
@@ -230,6 +231,7 @@ async fn run_cert_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()
 async fn verify_cert_os_image_hash(
     attestation: &ra_tls::attestation::VerifiedAttestation,
     config: &Config,
+    attestation_verifier: &Arc<AttestationVerifier>,
 ) -> bool {
     use ra_tls::attestation::AttestationQuote;
     // Only TDX legacy verification downloads the image; skip it here and report
@@ -242,14 +244,11 @@ async fn verify_cert_os_image_hash(
     if needs_image_download {
         return false;
     }
-    let Ok(attestation_verifier) = AttestationVerifier::load(&config.attestation) else {
-        return false;
-    };
     let verifier = CvmVerifier::new(
         config.image_cache_dir.clone(),
         config.image_download_url.clone(),
         std::time::Duration::from_secs(config.image_download_timeout_secs),
-        Arc::new(attestation_verifier),
+        attestation_verifier.clone(),
     );
     let mut details = VerificationDetails::default();
     verifier

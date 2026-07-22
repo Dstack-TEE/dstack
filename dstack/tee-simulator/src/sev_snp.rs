@@ -120,7 +120,10 @@ impl Filesystem for SevSnpFs {
                 .to_str()
                 .is_some_and(|name| name.starts_with("dstack-"))
         {
-            reply.entry(&TTL, &self.attr(ENTRY).expect("entry attr"), 0);
+            match self.attr(ENTRY) {
+                Some(attr) => reply.entry(&TTL, &attr, 0),
+                None => reply.error(libc::EIO),
+            }
         } else {
             reply.error(libc::EACCES);
         }
@@ -184,7 +187,10 @@ impl Filesystem for SevSnpFs {
         reply: ReplyCreate,
     ) {
         match Self::child(parent, name).filter(|ino| *ino == INBLOB) {
-            Some(ino) => reply.created(&TTL, &self.attr(ino).expect("inblob attr"), 0, 0, 1),
+            Some(ino) => match self.attr(ino) {
+                Some(attr) => reply.created(&TTL, &attr, 0, 0, 1),
+                None => reply.error(libc::EIO),
+            },
             None => reply.error(libc::EACCES),
         }
     }
@@ -230,10 +236,14 @@ impl Filesystem for SevSnpFs {
             reply.error(libc::EINVAL);
             return;
         }
-        let report_data: [u8; 64] = data.try_into().expect("length checked");
-        let measurement = self.report[0x90..0xc0]
-            .try_into()
-            .expect("simulated report has a measurement");
+        let Ok(report_data) = data.try_into() else {
+            reply.error(libc::EINVAL);
+            return;
+        };
+        let Ok(measurement) = self.report[0x90..0xc0].try_into() else {
+            reply.error(libc::EIO);
+            return;
+        };
         match self
             .generator
             .attest_with_measurement(report_data, self.host_data, measurement)

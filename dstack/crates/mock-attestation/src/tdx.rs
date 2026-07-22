@@ -141,7 +141,9 @@ impl TdxGenerator {
     ) -> Result<TdxEvidence> {
         let auth_key = SigningKey::random(&mut rand::thread_rng());
         let auth_pub = auth_key.verifying_key().to_encoded_point(false);
-        let auth_pub: [u8; 64] = auth_pub.as_bytes()[1..].try_into().unwrap();
+        let auth_pub: [u8; 64] = auth_pub.as_bytes()[1..]
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("invalid P-256 public key length"))?;
         let qe_auth = vec![0u8; 32];
         let mut qe_hash_input = Vec::from(auth_pub);
         qe_hash_input.extend_from_slice(&qe_auth);

@@ -1268,6 +1268,7 @@ pub(crate) fn make_sys_config(
     let mut sys_config = json!({
         "kms_urls": kms_urls,
         "gateway_urls": gateway_urls,
+        "pccs_url": cfg.cvm.pccs_url,
         "collateral_urls": { "pccs": cfg.cvm.pccs_url },
         "tee_simulator": cfg.cvm.tee_simulator,
         "nvidia_attestation_proxy_url": cfg.cvm.nvidia_attestation_proxy_url,
@@ -1916,6 +1917,8 @@ mod tests {
         let sys_config_document =
             make_sys_config(&config, &manifest, &compose_hash, Some(mr_config), None)?;
         let sys_config: serde_json::Value = serde_json::from_str(&sys_config_document)?;
+        assert_eq!(sys_config["pccs_url"], config.cvm.pccs_url);
+        assert_eq!(sys_config["collateral_urls"]["pccs"], config.cvm.pccs_url);
         let vm_config: serde_json::Value = serde_json::from_str(
             sys_config["vm_config"]
                 .as_str()
