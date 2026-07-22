@@ -14,10 +14,11 @@ use crate::openapi::{OpenApiDoc, RenderedDoc};
 #[cfg(all(feature = "rocket", feature = "openapi"))]
 use rocket::response::content::{RawHtml, RawJson};
 #[cfg(all(feature = "rocket", feature = "openapi"))]
-use std::{borrow::Cow, sync::Arc};
+use std::borrow::Cow;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use ra_tls::traits::CertExt;
+use ra_tls::{attestation::AttestationVerifier, traits::CertExt};
 use rocket::listener::unix::UnixStream;
 use rocket::listener::{Connection, Listener};
 use rocket::tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -181,10 +182,9 @@ fn unix_peer_cred(stream: &UnixStream) -> Option<UnixPeerCred> {
     })
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct QuoteVerifier {
-    pccs_url: Option<String>,
-    amd_kds_base_url: Option<String>,
+    verifier: Arc<AttestationVerifier>,
 }
 
 pub mod deps {
@@ -316,26 +316,8 @@ impl<'r> FromRequest<'r> for &'r QuoteVerifier {
 }
 
 impl QuoteVerifier {
-    pub fn new(pccs_url: Option<String>) -> Self {
-        Self::new_with_amd_kds_base(pccs_url, None)
-    }
-
-    pub fn new_with_amd_kds_base(
-        pccs_url: Option<String>,
-        amd_kds_base_url: Option<String>,
-    ) -> Self {
-        Self {
-            pccs_url,
-            amd_kds_base_url: amd_kds_base_url
-                .map(|url| url.trim().to_string())
-                .filter(|url| !url.is_empty()),
-        }
-    }
-
-    fn configure_amd_kds_base_for_request(&self) {
-        if let Some(base_url) = &self.amd_kds_base_url {
-            std::env::set_var("DSTACK_AMD_KDS_BASE_URL", base_url);
-        }
+    pub fn new(verifier: Arc<AttestationVerifier>) -> Self {
+        Self { verifier }
     }
 }
 
@@ -460,21 +442,6 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn quote_verifier_carries_trimmed_amd_kds_base_url() {
-        let verifier = QuoteVerifier::new_with_amd_kds_base(
-            None,
-            Some("  https://mirror.example.com/vcek/v1/  ".to_string()),
-        );
-        assert_eq!(
-            verifier.amd_kds_base_url.as_deref(),
-            Some("https://mirror.example.com/vcek/v1/")
-        );
-
-        let verifier = QuoteVerifier::new_with_amd_kds_base(None, Some("   ".to_string()));
-        assert!(verifier.amd_kds_base_url.is_none());
-    }
-
-    #[test]
     fn custom_unix_endpoint_maps_to_remote_endpoint() {
         let endpoint = Endpoint::new(UnixPeerEndpoint {
             path: PathBuf::from("/tmp/test.sock"),
@@ -567,7 +534,6 @@ pub async fn handle_prpc_impl<S, Call: RpcCall<S>>(
         .flatten();
     let attestation = match (request.quote_verifier, attestation) {
         (Some(quote_verifier), Some(attestation)) => {
-            quote_verifier.configure_amd_kds_base_for_request();
             let pubkey = request
                 .certificate
                 .context("certificate is missing")?
@@ -576,7 +542,7 @@ pub async fn handle_prpc_impl<S, Call: RpcCall<S>>(
                 .to_vec();
             let verified = attestation
                 .into_v1()
-                .verify_with_ra_pubkey(&pubkey, quote_verifier.pccs_url.as_deref())
+                .verify_with_ra_pubkey(&pubkey, &quote_verifier.verifier)
                 .await
                 .context("invalid quote")?;
             Some(verified)

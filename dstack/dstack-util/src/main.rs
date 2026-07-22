@@ -450,7 +450,7 @@ fn cmd_attest_info(args: AttestInfoArgs) -> Result<()> {
     match attestation {
         VersionedAttestation::V0 { attestation } => {
             println!("version: V0");
-            println!("mode: {:?}", attestation.quote.mode());
+            println!("mode: {:?}", attestation.quote.variant());
             println!("config_bytes: {}", attestation.config.len());
             match attestation.tdx_quote() {
                 Some(tdx) => {
@@ -495,7 +495,7 @@ fn cmd_attest_json(args: AttestJsonArgs) -> Result<()> {
 
     let json = match attestation {
         VersionedAttestation::V0 { attestation } => {
-            let mode = attestation.quote.mode().as_str();
+            let mode = attestation.quote.variant().as_str();
             let tdx_quote = match attestation.tdx_quote() {
                 Some(tdx) => serde_json::json!({
                     "quote": hex::encode(&tdx.quote),
@@ -1188,7 +1188,7 @@ async fn cmd_tpm_verify(args: TpmVerifyArgs) -> Result<()> {
     println!("[Step 1] Fetching quote collateral (certificates + CRLs)...");
     let collateral = tpm_qvl::get_collateral(&tpm_quote, &root_ca_pem)
         .await
-        .context("Failed to get collateral")?;
+        .context("failed to get TPM collateral")?;
     let crl_count = collateral.crls.len()
         + if collateral.root_ca_crl.is_some() {
             1

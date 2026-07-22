@@ -4,6 +4,7 @@
 
 use anyhow::{bail, Context, Result};
 use cmd_lib::run_cmd as cmd;
+use dstack_attest::attestation::AttestationVerifierConfig;
 use ipnet::Ipv4Net;
 use load_config::load_config;
 use rocket::figment::Figment;
@@ -219,7 +220,8 @@ pub struct SyncConfig {
 pub struct Config {
     pub wg: WgConfig,
     pub proxy: ProxyConfig,
-    pub pccs_url: Option<String>,
+    #[serde(default)]
+    pub attestation: AttestationVerifierConfig,
     pub recycle: RecycleConfig,
     pub set_ulimit: bool,
     pub rpc_domain: String,

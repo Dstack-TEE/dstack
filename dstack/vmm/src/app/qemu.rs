@@ -3,20 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! QEMU launch preparation and command construction.
-use crate::{
-    app::Manifest,
-    config::{CvmConfig, Networking, NetworkingMode, ProcessAnnotation, TeePlatform},
-    vm_launcher::{ChildCommand, LaunchSpec},
-};
-use std::collections::HashMap;
-use std::os::unix::fs::PermissionsExt;
-use std::{
-    fs::Permissions,
-    io::Write,
-    path::{Path, PathBuf},
-    process::{Command, Stdio},
-};
-
 use super::{
     effective_vcpu_count,
     host_share::create_shared_disk,
@@ -26,12 +12,27 @@ use super::{
     network::{mac_address_for_vm_index, resolved_networks, validate_resolved_networks},
     pci_numa_node, round_up, GpuConfig, VmWorkDir,
 };
+use crate::{
+    app::Manifest,
+    config::{CvmConfig, CvmPlatform, Networking, NetworkingMode, ProcessAnnotation},
+    vm_launcher::{ChildCommand, LaunchSpec},
+};
 use anyhow::{bail, Context, Result};
 use bon::Builder;
-use dstack_types::{shared_filenames::HOST_SHARED_DISK_LABEL, KeyProviderKind};
+use dstack_types::{
+    shared_filenames::HOST_SHARED_DISK_LABEL, KeyProviderKind, TeeSimulatorConfig, TeeVariant,
+};
 use fs_err as fs;
 use nix::unistd::User;
 use serde::Serialize;
+use std::collections::HashMap;
+use std::os::unix::fs::PermissionsExt;
+use std::{
+    fs::Permissions,
+    io::Write,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+};
 use supervisor_client::supervisor::ProcessConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,9 +179,18 @@ struct PreparedVolume {
     source: String,
 }
 
+fn needs_qemu_swtpm(key_provider: KeyProviderKind, simulator: Option<&TeeSimulatorConfig>) -> bool {
+    if !matches!(key_provider, KeyProviderKind::Tpm) {
+        return false;
+    }
+    !matches!(
+        simulator.map(|config| config.platform),
+        Some(TeeVariant::DstackGcpTdx | TeeVariant::DstackAwsNitroTpm)
+    )
+}
 struct PreparedQemuLaunch {
     workdir: VmWorkDir,
-    platform: TeePlatform,
+    platform: CvmPlatform,
     networks: Vec<Networking>,
     volumes: Vec<PreparedVolume>,
     hugepage_numa_nodes: Option<HashMap<String, u32>>,
@@ -236,7 +246,7 @@ impl PreparedQemuLaunch {
             None
         };
         let (swtpm_socket, swtpm_path) =
-            if matches!(app_compose.key_provider(), KeyProviderKind::Tpm) {
+            if needs_qemu_swtpm(app_compose.key_provider(), cfg.tee_simulator.as_ref()) {
                 let swtpm_path = which::which("swtpm")
                     .context("tpm key provider requested but swtpm is not installed")?;
                 let state_dir = workdir.swtpm_state_dir();
@@ -253,7 +263,7 @@ impl PreparedQemuLaunch {
 
         let tee_enabled = !vm.manifest.no_tee;
         let tdx_mr_config_id = if tee_enabled
-            && platform == TeePlatform::Tdx
+            && platform == CvmPlatform::Tdx
             && cfg.use_mrconfigid
             && vm.image.info.version_tuple().unwrap_or_default() >= (0, 5, 2)
         {
@@ -262,7 +272,7 @@ impl PreparedQemuLaunch {
             None
         };
         let (snp_host_data, snp_launch_params) =
-            if tee_enabled && platform == TeePlatform::AmdSevSnp {
+            if tee_enabled && platform == CvmPlatform::AmdSevSnp {
                 (
                     Some(snp_host_data(&workdir)?),
                     Some(
@@ -445,7 +455,7 @@ impl QemuCommandBuilder<'_> {
     }
 
     fn is_amd_sev_snp(&self) -> bool {
-        self.prepared.platform == TeePlatform::AmdSevSnp && !self.vm.manifest.no_tee
+        self.prepared.platform == CvmPlatform::AmdSevSnp && !self.vm.manifest.no_tee
     }
 
     fn base_command(&self) -> Command {
@@ -810,13 +820,13 @@ impl VmConfig {
         }
 
         match prepared.platform {
-            TeePlatform::Tdx => {
+            CvmPlatform::Tdx => {
                 command
                     .arg("-machine")
                     .arg("q35,kernel-irqchip=split,confidential-guest-support=tdx,hpet=off");
                 self.configure_tdx_guest(command, cfg, prepared.tdx_mr_config_id.as_deref())?;
             }
-            TeePlatform::AmdSevSnp => {
+            CvmPlatform::AmdSevSnp => {
                 let host_data = prepared
                     .snp_host_data
                     .as_deref()
@@ -973,12 +983,29 @@ mod tests {
     };
 
     use super::{
-        amd_sev_snp_memory_backend_arg, parse_amd_sev_snp_qmp_capabilities, virtio_pci_device,
-        PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder, VmConfig,
+        amd_sev_snp_memory_backend_arg, needs_qemu_swtpm, parse_amd_sev_snp_qmp_capabilities,
+        virtio_pci_device, PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder, VmConfig,
     };
     use crate::app::image::{Image, ImageInfo};
     use crate::app::{GpuConfig, Manifest, PortMapping, VmVolume, VmWorkDir};
-    use crate::config::{Config, Protocol, TeePlatform, DEFAULT_CONFIG};
+    use crate::config::{Config, CvmPlatform, Protocol, DEFAULT_CONFIG};
+    use dstack_types::{KeyProviderKind, TeeSimulatorConfig, TeeVariant};
+
+    #[test]
+    fn qemu_swtpm_is_omitted_when_simulator_provides_the_tpm() {
+        for platform in [TeeVariant::DstackGcpTdx, TeeVariant::DstackAwsNitroTpm] {
+            let simulator = TeeSimulatorConfig {
+                platform,
+                ..Default::default()
+            };
+            assert!(!needs_qemu_swtpm(KeyProviderKind::Tpm, Some(&simulator)));
+        }
+
+        let tdx = TeeSimulatorConfig::default();
+        assert!(needs_qemu_swtpm(KeyProviderKind::Tpm, Some(&tdx)));
+        assert!(needs_qemu_swtpm(KeyProviderKind::Tpm, None));
+        assert!(!needs_qemu_swtpm(KeyProviderKind::Kms, None));
+    }
 
     #[test]
     fn amd_sev_snp_memory_backend_arg_uses_passed_final_memory_size() {
@@ -1017,7 +1044,7 @@ mod tests {
         let mut config: Config = Figment::from(Toml::string(DEFAULT_CONFIG))
             .extract()
             .unwrap();
-        config.cvm.platform = Some(TeePlatform::Tdx);
+        config.cvm.platform = Some(CvmPlatform::Tdx);
         config.cvm.qemu_path = PathBuf::from("/not-installed/qemu-system-x86_64");
         config.cvm.qgs_port = None;
 
@@ -1079,7 +1106,7 @@ mod tests {
         };
         let mut prepared = PreparedQemuLaunch {
             workdir: VmWorkDir::new("/does-not-exist/vm-1"),
-            platform: TeePlatform::Tdx,
+            platform: CvmPlatform::Tdx,
             networks: vec![config.cvm.networking.clone(), config.cvm.networking.clone()],
             volumes: vec![PreparedVolume {
                 source: "/does-not-exist/volume.img".into(),

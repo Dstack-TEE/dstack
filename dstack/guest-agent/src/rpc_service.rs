@@ -10,6 +10,7 @@ use std::{
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use cert_client::CertRequestClient;
+use dstack_attest::attestation::AttestationVerifier;
 use dstack_guest_agent_rpc::{
     dstack_guest_server::{DstackGuestRpc, DstackGuestServer},
     tappd_server::{TappdRpc, TappdServer},
@@ -160,11 +161,12 @@ impl AppState {
         let sys_config: SysConfig =
             serde_json::from_str(&fs::read_to_string(&config.sys_config_file)?)
                 .context("Failed to parse VM config")?;
+        let collateral_urls = sys_config.collateral_urls();
         let vm_config = sys_config.vm_config;
-        let cert_client =
-            CertRequestClient::create(&keys, config.pccs_url.as_deref(), vm_config.clone())
-                .await
-                .context("Failed to create cert signer")?;
+        let verifier = Arc::new(AttestationVerifier::new_prod(Some(&collateral_urls))?);
+        let cert_client = CertRequestClient::create(&keys, verifier, vm_config.clone())
+            .await
+            .context("Failed to create cert signer")?;
         let me = Self {
             inner: Arc::new(AppStateInner {
                 config,
@@ -764,7 +766,6 @@ mod tests {
             keys_file: String::new(),
             app_compose: dummy_appcompose_wrapper,
             sys_config_file: String::new().into(),
-            pccs_url: None,
             data_disks: HashSet::new(),
         };
 
@@ -837,7 +838,8 @@ pNs85uhOZE8z2jr8Pg==
             },
         };
 
-        let dummy_cert_client = CertRequestClient::create(&dummy_keys, None, String::new())
+        let verifier = Arc::new(AttestationVerifier::new_prod(None).unwrap());
+        let dummy_cert_client = CertRequestClient::create(&dummy_keys, verifier, String::new())
             .await
             .expect("Failed to create CertRequestClient");
 

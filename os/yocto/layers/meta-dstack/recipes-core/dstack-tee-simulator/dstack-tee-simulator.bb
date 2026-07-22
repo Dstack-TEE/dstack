@@ -13,7 +13,7 @@ DSTACK_CORE_SRC ?= "${DSTACK_MONOREPO_ROOT}/dstack"
 S = "${UNPACKDIR}/repo/dstack"
 
 DEPENDS += "rsync-native"
-RDEPENDS:${PN} += "fuse3-utils kernel-module-fuse"
+RDEPENDS:${PN} += "fuse3-utils kernel-module-fuse swtpm tpm2-tools openssl"
 do_unpack[depends] += "rsync-native:do_populate_sysroot"
 
 SYSTEMD_SERVICE:${PN} = "dstack-tee-simulator.service"

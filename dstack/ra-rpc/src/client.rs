@@ -2,14 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{bail, Context, Result};
 use prpc::{
     client::{Error, RequestClient},
     Message,
 };
-use ra_tls::{attestation::VerifiedAttestation, traits::CertExt};
+use ra_tls::{
+    attestation::{AttestationVerifier, VerifiedAttestation},
+    traits::CertExt,
+};
 use reqwest::{tls::TlsInfo, Certificate, Client, Identity, Response};
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -38,7 +41,7 @@ pub struct RaClientConfig {
     tls_ca_cert: Option<String>,
     #[builder(default = true)]
     tls_built_in_root_certs: bool,
-    pccs_url: Option<String>,
+    attestation_verifier: Option<Arc<AttestationVerifier>>,
     cert_validator: Option<CertValidator>,
 }
 
@@ -75,9 +78,13 @@ impl RaClientConfig {
             builder = builder.tls_certs_only(ca_cert);
         }
         let client = builder.build().context("failed to create client")?;
+        let attestation_verifier = self
+            .attestation_verifier
+            .map(Ok)
+            .unwrap_or_else(|| AttestationVerifier::new_prod(None).map(Arc::new))?;
         Ok(RaClient {
             remote_uri: self.remote_uri,
-            pccs_url: self.pccs_url,
+            attestation_verifier,
             client,
             cert_validator: self.cert_validator,
             verify_server_attestation: self.verify_server_attestation,
@@ -87,7 +94,7 @@ impl RaClientConfig {
 
 pub struct RaClient {
     remote_uri: String,
-    pccs_url: Option<String>,
+    attestation_verifier: Arc<AttestationVerifier>,
     client: Client,
     cert_validator: Option<CertValidator>,
     verify_server_attestation: bool,
@@ -107,7 +114,7 @@ impl RaClient {
         remote_uri: String,
         cert_pem: String,
         key_pem: String,
-        pccs_url: Option<String>,
+        attestation_verifier: Arc<AttestationVerifier>,
     ) -> Result<Self> {
         RaClientConfig::builder()
             .tls_no_check(true)
@@ -115,7 +122,7 @@ impl RaClient {
             .remote_uri(remote_uri)
             .tls_client_cert(cert_pem)
             .tls_client_key(key_pem)
-            .maybe_pccs_url(pccs_url)
+            .attestation_verifier(attestation_verifier)
             .build()
             .into_client()
             .context("failed to create client")
@@ -147,7 +154,7 @@ impl RaClient {
                 Some(attestation) => {
                     let verified_attestation = attestation
                         .into_v1()
-                        .verify_with_ra_pubkey(cert.public_key().raw, self.pccs_url.as_deref())
+                        .verify_with_ra_pubkey(cert.public_key().raw, &self.attestation_verifier)
                         .await
                         .context("Failed to verify the attestation report")?;
                     Some(verified_attestation)

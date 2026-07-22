@@ -9,7 +9,7 @@ import app from './index';
 const TEST_CONFIG_PATH = './test-auth-config.json';
 
 const baseBootInfo = {
-  attestationMode: 'dstack-tdx',
+  teeVariant: 'dstack-tdx',
   mrAggregated: '0xabc123',
   osImageHash: '0x1fbb0cf9cc6cfbf23d6b779776fabad2c5403d643badb9e5e238615e4960a78a',
   appId: '0xapp123',
@@ -106,7 +106,7 @@ describe('auth-simple', () => {
 
       const sevSnpBootInfo = {
         ...baseBootInfo,
-        attestationMode: 'dstack-amd-sev-snp',
+        teeVariant: 'dstack-amd-sev-snp',
         tcbStatus: 'OutOfDate'
       };
       const denied = await app.fetch(new Request('http://localhost/bootAuth/kms', {

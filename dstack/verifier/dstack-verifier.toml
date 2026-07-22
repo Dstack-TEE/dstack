@@ -15,5 +15,18 @@ image_download_url = "https://download.dstack.org/os-images/mr_{OS_IMAGE_HASH}.t
 # Image download timeout in seconds
 image_download_timeout_secs = 300
 
-# Optional PCCS URL for quote verification
-# pccs_url = "https://pccs.phala.network"
+[attestation]
+insecure_allow_external_trust_anchors = false
+
+[attestation.urls]
+# pccs = "https://pccs.phala.network"
+# amd_kds = "https://kdsintf.amd.com/vcek/v1"
+
+[attestation.root_ca]
+# tdx = "/etc/dstack/roots/intel-sgx-root-ca.der"
+# gcp_tpm = "/etc/dstack/roots/gcp-tpm-root-ca.pem"
+# aws_nitro_enclave = "/etc/dstack/roots/aws-nitro-enclave-root-ca.pem"
+# aws_nitro_tpm = "/etc/dstack/roots/aws-nitro-tpm-root-ca.pem"
+# sev_snp_milan = "/etc/dstack/roots/amd-milan-ark.pem"
+# sev_snp_genoa = "/etc/dstack/roots/amd-genoa-ark.pem"
+# sev_snp_turin = "/etc/dstack/roots/amd-turin-ark.pem"

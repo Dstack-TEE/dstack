@@ -291,7 +291,7 @@ mod tests {
     #[test]
     fn deserializes_the_kms_bootinfo_wire_contract() {
         let wire = r#"{
-            "attestationMode": "dstack",
+            "teeVariant": "dstack",
             "mrAggregated": "0xAABB",
             "osImageHash": "0xC2AA",
             "mrSystem": "0xdead",

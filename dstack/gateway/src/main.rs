@@ -10,13 +10,17 @@ use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, GetTlsKeyAr
 use dstack_kms_rpc::SignCertRequest;
 use http_client::prpc::PrpcClient;
 use ra_rpc::{client::RaClient, prpc_routes as prpc, rocket_helper::QuoteVerifier};
-use ra_tls::cert::{CertConfigV2, CertSigningRequestV2, Csr};
 use ra_tls::rcgen::KeyPair;
+use ra_tls::{
+    attestation::AttestationVerifier,
+    cert::{CertConfigV2, CertSigningRequestV2, Csr},
+};
 use rocket::{
     fairing::AdHoc,
     figment::{providers::Serialized, Figment},
 };
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tracing::info;
 
 use admin_service::AdminRpcHandler;
@@ -237,7 +241,6 @@ async fn main() -> Result<()> {
     let figment = config::load_config_figment(args.config.as_deref());
 
     let config = figment.focus("core").extract::<Config>()?;
-
     // Validate node_id
     if config.sync.enabled && config.sync.node_id == 0 {
         anyhow::bail!("node_id must be greater than 0");
@@ -269,7 +272,10 @@ async fn main() -> Result<()> {
         Some(info.app_id)
     };
     let proxy_config = config.proxy.clone();
-    let pccs_url = config.pccs_url.clone();
+    let attestation_verifier = Arc::new(
+        AttestationVerifier::load(&config.attestation)
+            .context("failed to load attestation verifier")?,
+    );
     let admin_auth = if config.admin.enabled {
         Some(admin_auth::AdminAuthFairing::from_config(&config.admin)?)
     } else {
@@ -315,7 +321,7 @@ async fn main() -> Result<()> {
             })
         }))
         .manage(state.clone());
-    let verifier = QuoteVerifier::new(pccs_url);
+    let verifier = QuoteVerifier::new(attestation_verifier);
     rocket = rocket.manage(verifier);
     let main_srv = rocket.launch();
     let admin_state = state.clone();

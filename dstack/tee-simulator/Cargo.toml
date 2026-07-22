@@ -17,12 +17,29 @@ path = "src/main.rs"
 anyhow.workspace = true
 cc-eventlog.workspace = true
 clap.workspace = true
+dstack-types.workspace = true
+dstack-mr.workspace = true
 fuser.workspace = true
 libc.workspace = true
 sd-notify.workspace = true
 sha2.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+serde_json.workspace = true
+fs-err.workspace = true
+hex.workspace = true
+mock-attestation = { path = "../crates/mock-attestation" }
+tokio = { workspace = true, features = ["full"] }
+libloading = "0.8"
+pem.workspace = true
+aws-nitro-enclaves-nsm-api = "0.4"
+serde_cbor = "0.11"
 
 [dev-dependencies]
 dcap-qvl.workspace = true
+tempfile.workspace = true
+reqwest.workspace = true
+sev-snp-qvl.workspace = true
+tpm-qvl.workspace = true
+tpm-types.workspace = true
+nsm-qvl.workspace = true

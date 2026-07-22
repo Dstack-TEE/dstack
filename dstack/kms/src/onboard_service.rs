@@ -19,7 +19,8 @@ use ra_rpc::{
 };
 use ra_tls::{
     attestation::{
-        GetDeviceId, PlatformEvidence, QuoteContentType, VerifiedAttestation, VersionedAttestation,
+        AttestationVerifier, GetDeviceId, PlatformEvidence, QuoteContentType, VerifiedAttestation,
+        VersionedAttestation,
     },
     cert::{CaCert, CertRequest},
     rcgen::{Certificate, KeyPair, PKCS_ECDSA_P256_SHA256},
@@ -40,11 +41,19 @@ use crate::{
 #[derive(Clone)]
 pub struct OnboardState {
     config: KmsConfig,
+    attestation_verifier: Arc<AttestationVerifier>,
 }
 
 impl OnboardState {
-    pub fn new(config: KmsConfig) -> Self {
-        Self { config }
+    pub fn new(config: KmsConfig) -> Result<Self> {
+        let attestation_verifier = Arc::new(
+            AttestationVerifier::load(&config.attestation)
+                .context("failed to load attestation verifier")?,
+        );
+        Ok(Self {
+            config,
+            attestation_verifier,
+        })
     }
 }
 
@@ -64,7 +73,7 @@ impl RpcCall<OnboardState> for OnboardHandler {
 
 impl OnboardRpc for OnboardHandler {
     async fn bootstrap(self, request: BootstrapRequest) -> Result<BootstrapResponse> {
-        ensure_self_kms_allowed(&self.state.config)
+        ensure_self_kms_allowed(&self.state.config, &self.state.attestation_verifier)
             .await
             .context("KMS is not allowed to bootstrap")?;
         let keys = Keys::generate(&request.domain)
@@ -98,7 +107,7 @@ impl OnboardRpc for OnboardHandler {
             &self.state.config,
             &source_url,
             &request.domain,
-            self.state.config.pccs_url.clone(),
+            self.state.attestation_verifier.clone(),
         )
         .await
         .context("Failed to onboard")?;
@@ -109,8 +118,6 @@ impl OnboardRpc for OnboardHandler {
     }
 
     async fn get_attestation_info(self) -> Result<AttestationInfoResponse> {
-        let pccs_url = self.state.config.pccs_url.clone();
-
         // Get attestation from guest agent
         let report_data = pad64([0u8; 32]);
         let response = app_attest(report_data)
@@ -120,7 +127,7 @@ impl OnboardRpc for OnboardHandler {
         // Decode and verify the attestation to get real device ID
         let attestation = VersionedAttestation::from_bytes(&response.attestation)
             .context("Failed to decode attestation")?;
-        let attestation_mode = match &attestation.clone().into_v1().platform {
+        let tee_variant = match &attestation.clone().into_v1().platform {
             PlatformEvidence::Tdx { .. } => "dstack-tdx",
             PlatformEvidence::SevSnp { .. } => "dstack-amd-sev-snp",
             PlatformEvidence::GcpTdx { .. } => "dstack-gcp-tdx",
@@ -130,7 +137,7 @@ impl OnboardRpc for OnboardHandler {
         .to_string();
         let verified = attestation
             .into_v1()
-            .verify(pccs_url.as_deref())
+            .verify(&self.state.attestation_verifier)
             .await
             .context("Failed to verify attestation")?;
 
@@ -154,7 +161,7 @@ impl OnboardRpc for OnboardHandler {
 
         build_attestation_info_response(
             &verified,
-            attestation_mode,
+            tee_variant,
             &info.vm_config,
             self.state.config.site_name.clone(),
             eth_rpc_url,
@@ -169,7 +176,7 @@ impl OnboardRpc for OnboardHandler {
 
 fn build_attestation_info_response(
     verified: &VerifiedAttestation,
-    attestation_mode: String,
+    tee_variant: String,
     vm_config: &str,
     site_name: String,
     eth_rpc_url: String,
@@ -182,7 +189,7 @@ fn build_attestation_info_response(
         device_id: sha2::Sha256::digest(&raw_device_id).to_vec(),
         mr_aggregated: boot_info.mr_aggregated,
         os_image_hash: boot_info.os_image_hash,
-        attestation_mode,
+        tee_variant,
         site_name,
         eth_rpc_url,
         kms_contract_address,
@@ -329,7 +336,7 @@ mod tests {
         assert_eq!(response.ppid, vec![0xab; 64]);
         assert_eq!(response.mr_aggregated.len(), 32);
         assert_eq!(response.os_image_hash, os_image_hash.to_vec());
-        assert_eq!(response.attestation_mode, "dstack-amd-sev-snp");
+        assert_eq!(response.tee_variant, "dstack-amd-sev-snp");
         assert_eq!(response.site_name, "test-site");
         assert_eq!(response.eth_rpc_url, "https://rpc.example");
         assert_eq!(response.kms_contract_address, "0x1234");
@@ -412,7 +419,7 @@ impl Keys {
         cfg: &KmsConfig,
         other_kms_url: &str,
         domain: &str,
-        pccs_url: Option<String>,
+        attestation_verifier: Arc<AttestationVerifier>,
     ) -> Result<Self> {
         let attestation_slot = Arc::new(Mutex::new(None::<VerifiedAttestation>));
         let attestation_slot_out = attestation_slot.clone();
@@ -432,22 +439,27 @@ impl Keys {
                 *slot = Some(attestation);
                 Ok(())
             }))
-            .maybe_pccs_url(pccs_url.clone())
+            .attestation_verifier(attestation_verifier.clone())
             .build()
             .into_client()?;
         let mut kms_client = KmsClient::new(client);
 
         let tmp_ca = kms_client.get_temp_ca_cert().await?;
         let (ra_cert, ra_key) = gen_ra_cert(tmp_ca.temp_ca_cert, tmp_ca.temp_ca_key).await?;
-        let ra_client = RaClient::new_mtls(other_kms_url.into(), ra_cert, ra_key, pccs_url)
-            .context("Failed to create client")?;
+        let ra_client = RaClient::new_mtls(
+            other_kms_url.into(),
+            ra_cert,
+            ra_key,
+            attestation_verifier.clone(),
+        )
+        .context("Failed to create client")?;
         kms_client = KmsClient::new(ra_client);
         let source_attestation = attestation_slot
             .lock()
             .map_err(|_| anyhow::anyhow!("source attestation mutex poisoned"))?
             .clone()
             .context("Missing source KMS attestation")?;
-        ensure_kms_allowed(cfg, &source_attestation)
+        ensure_kms_allowed(cfg, &source_attestation, &attestation_verifier)
             .await
             .context("Source KMS is not allowed for onboarding")?;
 
@@ -525,8 +537,8 @@ pub(crate) async fn update_certs(cfg: &KmsConfig) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn bootstrap_keys(cfg: &KmsConfig) -> Result<()> {
-    ensure_self_kms_allowed(cfg)
+pub(crate) async fn bootstrap_keys(cfg: &KmsConfig, verifier: &AttestationVerifier) -> Result<()> {
+    ensure_self_kms_allowed(cfg, verifier)
         .await
         .context("KMS is not allowed to auto-bootstrap")?;
     let keys = Keys::generate(&cfg.onboard.auto_bootstrap_domain)

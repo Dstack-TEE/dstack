@@ -812,13 +812,22 @@ pub struct SysConfig {
     pub kms_urls: Vec<String>,
     #[serde(default, alias = "tproxy_urls")]
     pub gateway_urls: Vec<String>,
-    pub pccs_url: Option<String>,
+    /// Backward-compatible input for sys-config files produced by older hosts.
+    #[serde(default, rename = "pccs_url", skip_serializing)]
+    legacy_pccs_url: Option<String>,
+    /// Attestation collateral service endpoints. Platform defaults are used
+    /// for fields that are absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collateral_urls: Option<CollateralUrls>,
     /// Optional NVIDIA attestation collateral proxy. When present, nvattest
     /// fetches both OCSP responses and RIM documents through this endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nvidia_attestation_proxy_url: Option<String>,
     pub docker_registry: Option<String>,
     pub host_api_url: Option<String>,
+    /// Development-only TEE simulator selection. Production guests ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tee_simulator: Option<TeeSimulatorConfig>,
     /// MrConfigV3 document string for platform app/config binding.
     ///
     /// Hosts generate this in JCS form, but verifiers hash the supplied string
@@ -828,6 +837,99 @@ pub struct SysConfig {
     pub mr_config: Option<String>,
     // JSON serialized VmConfig
     pub vm_config: String,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct CollateralUrls {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pccs: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amd_kds: Option<String>,
+}
+
+impl SysConfig {
+    pub fn collateral_urls(&self) -> CollateralUrls {
+        let mut urls = self.collateral_urls.clone().unwrap_or_default();
+        if urls.pccs.is_none() {
+            urls.pccs.clone_from(&self.legacy_pccs_url);
+        }
+        urls
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
+pub struct TeeSimulatorConfig {
+    /// Platform ABI exposed by dstack-tee-simulator. Defaults to `dstack-tdx`.
+    #[serde(default)]
+    pub platform: TeeVariant,
+    /// Hex-encoded 32-byte development PKI seed. The host collateral service
+    /// and guest simulator must receive the same seed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mock_attestation_seed: Option<String>,
+    /// Base URL used in mock collateral certificates (AIA/CRL).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collateral_base_url: Option<String>,
+    /// Populated in memory by the simulator from the top-level sys-config.
+    #[serde(skip)]
+    pub mr_config: Option<String>,
+    /// Populated in memory from the top-level sys-config. Mock reports use the
+    /// same image-measurement document that the guest sends to verifiers.
+    #[serde(skip)]
+    pub vm_config: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode)]
+pub enum TeeVariant {
+    #[default]
+    #[serde(rename = "dstack-tdx")]
+    DstackTdx,
+    #[serde(rename = "dstack-gcp-tdx")]
+    DstackGcpTdx,
+    #[serde(rename = "dstack-nitro-enclave")]
+    DstackNitroEnclave,
+    #[serde(rename = "dstack-amd-sev-snp")]
+    DstackAmdSevSnp,
+    #[serde(rename = "dstack-aws-nitro-tpm")]
+    DstackAwsNitroTpm,
+}
+
+impl TeeVariant {
+    pub fn has_tdx(self) -> bool {
+        matches!(self, Self::DstackTdx | Self::DstackGcpTdx)
+    }
+
+    pub fn tpm_event_pcr_and_bank(self) -> Option<(u32, &'static str)> {
+        match self {
+            Self::DstackGcpTdx => Some((14, "sha256")),
+            Self::DstackAwsNitroTpm => Some((14, "sha384")),
+            Self::DstackTdx | Self::DstackAmdSevSnp | Self::DstackNitroEnclave => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DstackTdx => "dstack-tdx",
+            Self::DstackGcpTdx => "dstack-gcp-tdx",
+            Self::DstackAmdSevSnp => "dstack-amd-sev-snp",
+            Self::DstackNitroEnclave => "dstack-nitro-enclave",
+            Self::DstackAwsNitroTpm => "dstack-aws-nitro-tpm",
+        }
+    }
+}
+
+impl std::str::FromStr for TeeVariant {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "dstack-tdx" => Ok(Self::DstackTdx),
+            "dstack-gcp-tdx" => Ok(Self::DstackGcpTdx),
+            "dstack-amd-sev-snp" => Ok(Self::DstackAmdSevSnp),
+            "dstack-nitro-enclave" => Ok(Self::DstackNitroEnclave),
+            "dstack-aws-nitro-tpm" => Ok(Self::DstackAwsNitroTpm),
+            _ => Err(format!("unsupported TEE variant: {value}")),
+        }
+    }
 }
 
 impl SysConfig {
@@ -1851,11 +1953,12 @@ impl Platform {
 
     /// Detect platform from system DMI information
     pub fn detect() -> Option<Self> {
-        // Nitro Enclave: NSM device exists only inside enclave
+        // `/dev/nsm` is the authoritative Nitro Enclave ABI. Check it before
+        // DMI because an enclave may inherit EC2-identifying DMI strings from
+        // its parent host, while a regular EC2 instance does not expose NSM.
         if Path::new("/dev/nsm").exists() {
             return Some(Self::NitroEnclave);
         }
-
         let product_name = std::fs::read_to_string("/sys/class/dmi/id/product_name").ok();
         let sys_vendor = std::fs::read_to_string("/sys/class/dmi/id/sys_vendor").ok();
         Self::detect_from_dmi(product_name.as_deref(), sys_vendor.as_deref())

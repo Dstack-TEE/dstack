@@ -37,6 +37,48 @@ pub fn get_root_ca(platform: Platform) -> Result<&'static str> {
     }
 }
 
+/// Verifies TPM quotes against a caller-selected trust anchor.
+///
+/// This follows `dcap_qvl::verify::QuoteVerifier`: [`Self::new_prod`] selects
+/// the bundled platform root and [`Self::new`] accepts a PEM root CA.
+#[derive(Debug, Clone)]
+pub struct QuoteVerifier {
+    root_ca_pem: String,
+}
+
+impl QuoteVerifier {
+    pub fn new(root_ca_pem: impl Into<String>) -> Self {
+        Self {
+            root_ca_pem: root_ca_pem.into(),
+        }
+    }
+
+    pub fn new_prod(platform: Platform) -> Result<Self> {
+        Ok(Self::new(get_root_ca(platform)?))
+    }
+
+    pub fn root_ca_pem(&self) -> &str {
+        &self.root_ca_pem
+    }
+
+    pub fn verify(
+        &self,
+        quote: &tpm_types::TpmQuote,
+        collateral: &QuoteCollateral,
+    ) -> Result<verify::VerifiedReport, VerificationError> {
+        verify::verify_quote_with_ca(quote, collateral, &self.root_ca_pem)
+    }
+
+    #[cfg(feature = "crl-download")]
+    pub async fn fetch_and_verify(
+        &self,
+        quote: &tpm_types::TpmQuote,
+    ) -> Result<verify::VerifiedReport> {
+        let collateral = collateral::get_collateral(quote, &self.root_ca_pem).await?;
+        self.verify(quote, &collateral).map_err(Into::into)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuoteCollateral {
     /// Intermediate certificate chain (PEM format) from device
