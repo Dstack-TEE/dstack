@@ -1,0 +1,12 @@
+[Unit]
+Description=Initialize dstack immutable guest state
+Before=docker.service dstack-prepare.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/mkdir -p /dstack /dstack/.host-shared /var/lib/docker /var/lib/containerd /etc/wireguard
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+

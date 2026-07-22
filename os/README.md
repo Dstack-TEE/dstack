@@ -9,15 +9,17 @@ os/
 ├── common/rootfs/            # backend-independent guest payload
 ├── image/                    # backend-independent release assembler
 ├── spec/                     # versioned backend artifact contract
-└── yocto/                    # the currently implemented backend
+├── mkosi/                    # experimental pinned Debian/mkosi backend
+└── yocto/                    # production backend
     ├── deps/                 # external Yocto layers (git submodules)
     ├── layers/               # dstack-owned Yocto layers
     └── tools/                # Yocto-specific host workarounds
 ```
 
-A future backend can be added at `os/<backend>/` (for example `os/mkosi/`)
-without moving shared payload or duplicating release packaging. No mkosi
-backend is implemented today.
+A backend can be added at `os/<backend>/` without moving shared payload or
+duplicating release packaging. The mkosi backend is experimental but implements
+the same artifact-manifest and common release-assembly contract as Yocto; see
+[`mkosi/README.md`](mkosi/README.md) for its scope and acceptance criteria.
 
 ## Build
 

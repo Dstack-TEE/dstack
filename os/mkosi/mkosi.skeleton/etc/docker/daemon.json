@@ -1,0 +1,6 @@
+{
+  "iptables": true,
+  "ip6tables": true,
+  "storage-driver": "overlay2"
+}
+

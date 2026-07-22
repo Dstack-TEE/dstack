@@ -1,0 +1,59 @@
+# Experimental mkosi backend
+
+This is a deliberately small Debian/mkosi implementation of the dstack guest
+OS. It is an experiment, not yet a replacement for the release Yocto backend.
+It tracks the Yocto image's confidential-computing, container, storage,
+network, TPM, SSH, chrony and dstack guest-service capabilities.
+
+## Reproducibility model
+
+`versions.env` pins the stable 7.x kernel tarball by SHA-256 and selects an
+immutable Debian snapshot. `Cargo.lock`, `--locked --offline`, a fixed
+`SOURCE_DATE_EPOCH`, normalized file mtimes, fixed kernel build identity and
+mkosi's deterministic image construction close the remaining inputs. The two
+dstack binaries therefore require an already populated Cargo cache; use a
+vendored source tree in hermetic CI. `DSTACK_SKIP_RUST=1` exists only for
+rootfs/kernel development and does **not** produce a functional guest.
+
+The custom kernel starts from `x86_64_defconfig`, then applies the reviewed
+`kernel.config` fragment. This is the practical upstream equivalent of Yocto's
+`linux-yocto-tiny` plus explicit features: disabling arbitrary defconfig
+symbols without resolving Kconfig dependencies would be less auditable. Both
+the TDX DMA patch and the ACPI BadAML/SystemMemory sandbox patch are reused
+verbatim from `meta-dstack`; patch fuzz is forbidden. The final `.config` is
+checked before compilation.
+
+## Build and acceptance
+
+Host requirements include mkosi >= 26, systemd tools, a C/Rust kernel and EDK2
+build toolchain, `bc`, `bison`, `flex`, `nasm`, `iasl`, OpenSSL/ELF/UUID
+development headers, `patch`, `pax-utils` (`lddtree`), `squashfs-tools`,
+`cryptsetup`, `gdisk`, `dosfstools`, `mtools`, `curl`, `xz`, QEMU/KVM and root
+privileges (or a working user namespace). Full UKI release assembly also needs
+the pinned `nitro-tpm-pcr-compute` described by `os/image/assemble.sh`.
+
+```sh
+./os/mkosi/build.sh lint
+./os/build.sh --backend mkosi --build-dir "$PWD/os/mkosi/build"
+./os/mkosi/build.sh repro-check "$PWD/os/mkosi/repro"
+# QEMU smoke-test the assembled UKI disk (host OVMF path is distro-specific)
+qemu-system-x86_64 -machine q35 -m 2G -nographic \
+  -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
+  -drive if=virtio,format=raw,file=os/mkosi/build/out/prod/dstack-0.6.0/disk.raw
+```
+
+Acceptance means: the static contract passes; a disk with systemd-boot/UKI
+boots on x86_64 QEMU; `/proc/config.gz` contains the checked TDX/SNP, TPM,
+ACPI, dm-verity/crypt, virtio, container and hardening options; dstack services
+are enabled; and two clean builds compare byte-for-byte. The backend exports
+artifact-manifest schema v1 and delegates final assembly to
+`os/image/assemble.sh`, exactly like Yocto. Its output contains the same
+`dstack-0.6.0/` directory, bare-metal and UKI tarballs, partitioned combined
+squashfs/dm-verity image, metadata, measurements, checksums, kernel, initramfs,
+OVMF and UKI. Package contents differ because this backend uses Debian, but
+consumers see the same release format and partition labels.
+
+The firmware is not Debian's generic OVMF: `build-ovmf.sh` builds the same
+EDK2 stable-202502 revision and `pre202505` TDX measurement layout selected by
+the Yocto recipe. A generic OVMF cannot be substituted because `dstack-mr`
+would produce invalid or unparseable TDX measurement material.
