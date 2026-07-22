@@ -29,7 +29,6 @@ pub fn simulated_quote_response(
     report_data: [u8; 64],
     vm_config: &str,
     patch_report_data: bool,
-    _include_ccel: bool,
 ) -> Result<GetQuoteResponse> {
     let attestation = maybe_patch_report_data(attestation, report_data, patch_report_data, "quote");
     let Some(quote) = attestation.tdx_quote_bytes() else {

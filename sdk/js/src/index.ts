@@ -300,18 +300,12 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
     })
   }
 
-  async getQuote(
-    report_data: string | Buffer | Uint8Array,
-    options: { includeCCEL?: boolean } = {},
-  ): Promise<GetQuoteResponse> {
+  async getQuote(report_data: string | Buffer | Uint8Array): Promise<GetQuoteResponse> {
     let hex = to_hex(report_data)
     if (hex.length > 128) {
       throw new Error(`Report data is too large, it should be less than 64 bytes.`)
     }
-    const payload = JSON.stringify({
-      report_data: hex,
-      include_ccel: options.includeCCEL ?? false,
-    })
+    const payload = JSON.stringify({ report_data: hex })
     const result = await send_rpc_request<GetQuoteResponse>(this.endpoint, '/GetQuote', payload)
     if ('error' in result) {
       const err = result['error'] as string

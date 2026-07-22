@@ -143,22 +143,11 @@ impl DstackClient {
     }
 
     pub async fn get_quote(&self, report_data: Vec<u8>) -> Result<GetQuoteResponse> {
-        self.get_quote_with_options(report_data, false).await
-    }
-
-    pub async fn get_quote_with_options(
-        &self,
-        report_data: Vec<u8>,
-        include_ccel: bool,
-    ) -> Result<GetQuoteResponse> {
         if report_data.is_empty() || report_data.len() > 64 {
             anyhow::bail!("Invalid report data length")
         }
         let hex_data = hex_encode(report_data);
-        let data = json!({
-            "report_data": hex_data,
-            "include_ccel": include_ccel,
-        });
+        let data = json!({ "report_data": hex_data });
         let response = self.send_rpc_request("/GetQuote", &data).await?;
         let response = serde_json::from_value::<GetQuoteResponse>(response)?;
 

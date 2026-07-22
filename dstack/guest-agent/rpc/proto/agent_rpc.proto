@@ -172,8 +172,6 @@ message RawQuoteArgs {
   bytes report_data = 1;
   // V2 runtime events always include their hex-encoded digest preimage in the
   // returned event log. Clients verify sha384(hex_decode(preimage)) == digest.
-  // If true, return the merged TDX binary CCEL in GetQuoteResponse.
-  bool include_ccel = 2;
 }
 
 message TdxQuoteResponse {
@@ -232,7 +230,6 @@ message GetQuoteResponse {
   //                     V2: canonical JSON (UTF-8)
   //
   // Empty on platforms without an ACPI CCEL table (e.g. Nitro Enclaves).
-  // Populated only when RawQuoteArgs.include_ccel is true.
   bytes event_log_ccel = 6;
 }
 

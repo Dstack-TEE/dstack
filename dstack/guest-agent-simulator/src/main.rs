@@ -77,18 +77,12 @@ impl PlatformBackend for SimulatorPlatform {
         )
     }
 
-    fn quote_response(
-        &self,
-        report_data: [u8; 64],
-        vm_config: &str,
-        include_ccel: bool,
-    ) -> Result<GetQuoteResponse> {
+    fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse> {
         simulator::simulated_quote_response(
             &self.attestation,
             report_data,
             vm_config,
             self.patch_report_data,
-            include_ccel,
         )
     }
 

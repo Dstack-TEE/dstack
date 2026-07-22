@@ -440,7 +440,6 @@ class AsyncDstackClient(BaseClient):
     async def get_quote(
         self,
         report_data: str | bytes,
-        include_ccel: bool = False,
     ) -> GetQuoteResponse:
         """Request an attestation quote for the provided report data."""
         if not report_data or not isinstance(report_data, (bytes, str)):
@@ -451,13 +450,7 @@ class AsyncDstackClient(BaseClient):
         if len(report_bytes) > 64:
             raise ValueError("report_data must be less than 64 bytes")
         hex = binascii.hexlify(report_bytes).decode()
-        result = await self._send_rpc_request(
-            "GetQuote",
-            {
-                "report_data": hex,
-                "include_ccel": include_ccel,
-            },
-        )
+        result = await self._send_rpc_request("GetQuote", {"report_data": hex})
         return GetQuoteResponse(**result)
 
     async def attest(
@@ -612,7 +605,6 @@ class DstackClient(BaseClient):
     def get_quote(
         self,
         report_data: str | bytes,
-        include_ccel: bool = False,
     ) -> GetQuoteResponse:
         """Request an attestation quote for the provided report data."""
         raise NotImplementedError

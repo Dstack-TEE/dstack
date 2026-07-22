@@ -378,7 +378,6 @@ impl DistributedCertBot {
         let quote = match agent
             .get_quote(RawQuoteArgs {
                 report_data: report_data.clone(),
-                include_ccel: false,
             })
             .await
         {
@@ -390,13 +389,7 @@ impl DistributedCertBot {
         };
 
         // Get attestation
-        let attestation_str = match agent
-            .attest(RawQuoteArgs {
-                report_data,
-                include_ccel: false,
-            })
-            .await
-        {
+        let attestation_str = match agent.attest(RawQuoteArgs { report_data }).await {
             Ok(resp) => serde_json::to_string(&resp).unwrap_or_default(),
             Err(err) => {
                 warn!("failed to get attestation for ACME account: {err:?}");
@@ -455,7 +448,6 @@ impl DistributedCertBot {
         let quote = match agent
             .get_quote(RawQuoteArgs {
                 report_data: report_data.clone(),
-                include_ccel: false,
             })
             .await
         {
@@ -467,13 +459,7 @@ impl DistributedCertBot {
         };
 
         // Get attestation
-        let attestation = match agent
-            .attest(RawQuoteArgs {
-                report_data,
-                include_ccel: false,
-            })
-            .await
-        {
+        let attestation = match agent.attest(RawQuoteArgs { report_data }).await {
             Ok(resp) => serde_json::to_string(&resp).unwrap_or_default(),
             Err(err) => {
                 warn!(domain, "failed to get attestation: {err:?}");

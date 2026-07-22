@@ -10,12 +10,7 @@ use ra_tls::attestation::{QuoteContentType, VersionedAttestation};
 pub trait PlatformBackend: Send + Sync {
     fn attestation_for_info(&self) -> Result<VersionedAttestation>;
     fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation>;
-    fn quote_response(
-        &self,
-        report_data: [u8; 64],
-        vm_config: &str,
-        include_ccel: bool,
-    ) -> Result<GetQuoteResponse>;
+    fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse>;
     fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse>;
 }
 
@@ -36,22 +31,13 @@ impl PlatformBackend for RealPlatform {
             .into_versioned())
     }
 
-    fn quote_response(
-        &self,
-        report_data: [u8; 64],
-        vm_config: &str,
-        include_ccel: bool,
-    ) -> Result<GetQuoteResponse> {
+    fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse> {
         let attestation = Attestation::quote(&report_data).context("Failed to get quote")?;
         let tdx_quote = attestation.get_tdx_quote_bytes();
         let tdx_event_log = attestation.get_tdx_event_log_string();
-        let event_log_ccel = if include_ccel {
-            attestation
-                .get_tdx_event_log_ccel()
-                .context("failed to build TDX CCEL event log")?
-        } else {
-            Vec::new()
-        };
+        let event_log_ccel = attestation
+            .get_tdx_event_log_ccel()
+            .context("failed to build TDX CCEL event log")?;
         let versioned = if tdx_quote.is_some() {
             Vec::new()
         } else {
