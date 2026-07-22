@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
 use ra_tls::attestation::Attestation;
 use ra_tls::attestation::{QuoteContentType, VersionedAttestation};
+use tracing::warn;
 
 pub trait PlatformBackend: Send + Sync {
     fn attestation_for_info(&self) -> Result<VersionedAttestation>;
@@ -35,9 +36,13 @@ impl PlatformBackend for RealPlatform {
         let attestation = Attestation::quote(&report_data).context("Failed to get quote")?;
         let tdx_quote = attestation.get_tdx_quote_bytes();
         let tdx_event_log = attestation.get_tdx_event_log_string();
-        let event_log_ccel = attestation
-            .get_tdx_event_log_ccel()
-            .context("failed to build TDX CCEL event log")?;
+        let event_log_ccel = match attestation.get_tdx_event_log_ccel() {
+            Ok(event_log) => event_log,
+            Err(err) => {
+                warn!(error = ?err, "failed to build TDX CCEL event log");
+                Vec::new()
+            }
+        };
         let versioned = if tdx_quote.is_some() {
             Vec::new()
         } else {
