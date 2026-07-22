@@ -5,7 +5,7 @@
 use std::sync::{LazyLock, Mutex};
 
 use anyhow::Context;
-use cc_eventlog::RuntimeEvent;
+use cc_eventlog::{EventLogVersion, RuntimeEvent};
 
 pub use cc_eventlog as ccel;
 pub use tdx_attest as tdx;
@@ -21,26 +21,20 @@ mod aws_nitro_tpm;
 mod sev_snp;
 mod v1;
 
-/// Serializes measured event emission within this process.
-///
-/// Appending to the event log and extending the platform measurement register
-/// must happen atomically as a unit: the log order has to match the extension
-/// order, otherwise replay during quote verification will not reproduce the
-/// measured value. Concurrent callers, for example multiple `emit_event` RPCs
-/// hitting the guest-agent at once, would otherwise be able to interleave their
-/// log writes and register extensions.
 static EMIT_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-/// Emit a dstack measured event and log the event.
-///
-/// Semantics match bare TDX RTMR3: every dstack event extends a single
-/// append-only measurement register.
-///
-/// - TDX-family: RTMR3
-/// - GCP TPM: SHA256 PCR14
-/// - AWS NitroTPM: SHA384 PCR14 (not PCR23; no launch/runtime PCR split)
+/// Emit a runtime event that extends RTMR3 and logs the event.
 pub fn emit_runtime_event(event: &str, payload: &[u8]) -> anyhow::Result<()> {
-    let event = RuntimeEvent::new(event.to_string(), payload.to_vec());
+    emit_runtime_event_with_version(event, payload, EventLogVersion::V1)
+}
+
+/// Emit a runtime event using an explicit event-log format.
+pub fn emit_runtime_event_with_version(
+    event: &str,
+    payload: &[u8],
+    version: EventLogVersion,
+) -> anyhow::Result<()> {
+    let event = RuntimeEvent::new(event.to_string(), payload.to_vec(), version);
 
     let mode = detect_tee_variant()?;
 

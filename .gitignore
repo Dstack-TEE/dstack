@@ -16,5 +16,5 @@ node_modules/
 __pycache__
 /.ruff_cache/
 .planning/
-/dstack/vmm/src/console_v1.html
+/vmm/src/console_v1.html
 .claude/worktrees/

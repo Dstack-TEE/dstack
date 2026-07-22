@@ -12,7 +12,7 @@ pub const TDX_QUOTE_REPORT_DATA_RANGE: std::ops::Range<usize> = 568..632;
 use std::{borrow::Cow, time::SystemTime};
 
 use anyhow::{anyhow, bail, Context, Result};
-use cc_eventlog::{RuntimeEvent, TdxEvent};
+use cc_eventlog::{EventLogVersion, RuntimeEvent, TdxEvent};
 use dcap_qvl::{
     collateral::CollateralClient,
     quote::{EnclaveReport, Quote, Report, TDReport10, TDReport15},
@@ -231,9 +231,7 @@ fn tdx_root_der(root: Vec<u8>) -> Result<Vec<u8>> {
 pub use tpm_types::TpmQuote;
 
 use crate::amd_sev_snp::{AmdKdsClient, VerifiedAmdSnpReport};
-use crate::v1::{
-    is_tdx_acpi_data_event, strip_tdx_event_log_for_config, strip_tdx_runtime_event_log,
-};
+use crate::v1::{strip_tdx_event_log_for_config, strip_tdx_runtime_event_log};
 pub use crate::v1::{Attestation as AttestationV1, PlatformEvidence, StackEvidence};
 
 pub const SNP_REPORT_DATA_RANGE: std::ops::Range<usize> = 0x50..0x90;
@@ -816,9 +814,21 @@ pub trait TdxAttestationExt {
     fn tdx_event_log(&self) -> Option<&[TdxEvent]>;
 
     /// Returns the TDX event log serialized as JSON.
-    fn tdx_event_log_string(&self) -> Option<String> {
-        self.tdx_event_log()
-            .map(|event_log| serde_json::to_string(event_log).unwrap_or_default())
+    ///
+    /// When `include_hash_inputs` is true, each runtime event carries its
+    /// digest pre-image (hex-encoded) so relying parties can verify it directly.
+    fn tdx_event_log_string(&self, include_hash_inputs: bool) -> Option<String> {
+        self.tdx_event_log().map(|event_log| {
+            if include_hash_inputs {
+                let mut events: Vec<TdxEvent> = event_log.to_vec();
+                for event in &mut events {
+                    event.fill_hash_input();
+                }
+                serde_json::to_string(&events).unwrap_or_default()
+            } else {
+                serde_json::to_string(event_log).unwrap_or_default()
+            }
+        })
     }
 
     /// Returns the parsed TD10 report from the embedded TDX quote.
@@ -1438,6 +1448,18 @@ impl<T> Attestation<T> {
         self.tdx_quote().map(|q| q.quote.clone())
     }
 
+    /// Populate `hash_input` on every runtime event in the TDX event log.
+    ///
+    /// Useful before serializing an attestation so relying parties get the
+    /// digest pre-images alongside events.
+    pub fn fill_event_hash_inputs(&mut self) {
+        if let Some(q) = self.tdx_quote_mut() {
+            for event in &mut q.event_log {
+                event.fill_hash_input();
+            }
+        }
+    }
+
     /// Get TDX event log bytes
     pub fn get_tdx_event_log_bytes(&self) -> Option<Vec<u8>> {
         self.tdx_quote()
@@ -1446,22 +1468,21 @@ impl<T> Attestation<T> {
 
     /// Get TDX event log string with RTMR[0-2] payloads stripped to reduce size.
     /// Only digests are kept for boot-time events; runtime events (RTMR3) retain full payload.
-    pub fn get_tdx_event_log_string(&self) -> Option<String> {
-        self.get_tdx_event_log_string_for_config("")
+    ///
+    /// When `include_hash_inputs` is true, each runtime event carries its digest
+    /// pre-image (hex-encoded) so relying parties can verify or inspect it directly.
+    pub fn get_tdx_event_log_string(&self, include_hash_inputs: bool) -> Option<String> {
+        self.tdx_quote().map(|q| {
+            let mut stripped: Vec<_> = q.event_log.iter().map(|e| e.stripped()).collect();
+            if include_hash_inputs {
+                for event in &mut stripped {
+                    event.fill_hash_input();
+                }
+            }
+            serde_json::to_string(&stripped).unwrap_or_default()
+        })
     }
 
-    /// Get TDX event log string for a vm_config.
-    ///
-    /// Always keeps the `ACPI DATA` marker payloads on the three RTMR0 ACPI
-    /// digest events, regardless of the vm_config's `tdx_attestation_variant`,
-    /// so callers that consume the top-level `event_log` can semantically
-    /// identify the ACPI table digest events without consulting the
-    /// versioned attestation field, and a verifier can choose lite
-    /// verification for any TDX boot rather than only ones resolved to lite
-    /// at launch.
-    ///
-    /// `config` is accepted for API stability but no longer changes the
-    /// result.
     pub fn get_tdx_event_log_string_for_config(&self, _config: &str) -> Option<String> {
         self.tdx_quote().map(|q| {
             let stripped: Vec<_> = q
@@ -1469,7 +1490,7 @@ impl<T> Attestation<T> {
                 .iter()
                 .map(|e| {
                     let mut stripped = e.stripped();
-                    if is_tdx_acpi_data_event(e) {
+                    if cc_eventlog::tdx::is_tdx_acpi_data_event(e) {
                         stripped.event_payload = e.event_payload.clone();
                     }
                     stripped
@@ -1483,6 +1504,18 @@ impl<T> Attestation<T> {
         self.tdx_quote()
             .and_then(|q| Quote::parse(&q.quote).ok())
             .and_then(|quote| quote.report.as_td10().cloned())
+    }
+
+    /// Get the merged TCG binary CCEL event log (boot-time CCEL + runtime
+    /// events encoded as TCG_PCR_EVENT2 records).
+    ///
+    /// Returns an empty `Vec` on platforms without a TDX quote (e.g. Nitro).
+    /// Propagates errors from reading or parsing the ACPI CCEL file.
+    pub fn get_tdx_event_log_ccel(&self) -> Result<Vec<u8>> {
+        let Some(q) = self.tdx_quote() else {
+            return Ok(Vec::new());
+        };
+        cc_eventlog::tdx::build_ccel_event_log(&q.event_log)
     }
 }
 
@@ -2094,6 +2127,14 @@ impl Attestation {
     }
 
     pub fn quote_with_app_id(report_data: &[u8; 64], app_id: Option<[u8; 20]>) -> Result<Self> {
+        Self::quote_with_app_id_and_event_log_version(report_data, app_id, EventLogVersion::V1)
+    }
+
+    pub fn quote_with_app_id_and_event_log_version(
+        report_data: &[u8; 64],
+        app_id: Option<[u8; 20]>,
+        event_log_version: EventLogVersion,
+    ) -> Result<Self> {
         // Lock to prevent concurrent quote generation (TDX driver doesn't support it)
         let _guard = QUOTE_LOCK
             .lock()
@@ -2104,12 +2145,9 @@ impl Attestation {
             TeeVariant::DstackAmdSevSnp
             | TeeVariant::DstackTdx
             | TeeVariant::DstackGcpTdx
-            // AWS: prefer host-shared sys-config vm_config (carries
-            // aws_measurement + unified os_image_hash); validated below.
             | TeeVariant::DstackAwsNitroTpm => {
                 read_vm_config().context("Failed to read vm config")?
             }
-            // NitroEnclave derives config from the quote's image hash below.
             TeeVariant::DstackNitroEnclave => String::new(),
         };
         let runtime_events = match mode {
@@ -2118,7 +2156,11 @@ impl Attestation {
             }
             TeeVariant::DstackAmdSevSnp => vec![],
             TeeVariant::DstackNitroEnclave => match app_id {
-                Some(app_id) => vec![RuntimeEvent::new("app-id".to_string(), app_id.to_vec())],
+                Some(app_id) => vec![RuntimeEvent::new(
+                    "app-id".to_string(),
+                    app_id.to_vec(),
+                    event_log_version,
+                )],
                 None => vec![],
             },
         };
@@ -2298,9 +2340,24 @@ impl Attestation {
         })
     }
 
-    /// Wrap into a versioned attestation for encoding
+    /// Wrap into a versioned attestation for encoding.
+    ///
+    /// When any runtime event uses a non-V1 event-log version, force the V1
+    /// msgpack wire format so the `version` field is preserved (SCALE
+    /// V0 skips it for legacy binary compat). Otherwise default to V0 for
+    /// backward compat with callers that expect the SCALE format.
     pub fn into_versioned(self) -> VersionedAttestation {
-        VersionedAttestation::V0 { attestation: self }
+        let has_v2 = self
+            .runtime_events
+            .iter()
+            .any(|e| !matches!(e.version, EventLogVersion::V1));
+        if has_v2 {
+            VersionedAttestation::V1 {
+                attestation: self.into(),
+            }
+        } else {
+            VersionedAttestation::V0 { attestation: self }
+        }
     }
 
     /// Verify the quote
@@ -2607,6 +2664,8 @@ mod tests {
             digest: vec![event_type as u8; 48],
             event: String::new(),
             event_payload: event_payload.to_vec(),
+            version: EventLogVersion::V1,
+            hash_input: None,
         }
     }
 
@@ -2750,216 +2809,37 @@ mod tests {
     }
 
     #[test]
-    fn nitro_pcrs_from_verified_extracts_0_1_2() {
-        let mut map = std::collections::BTreeMap::new();
-        map.insert(0u16, vec![0xaa; 48]);
-        map.insert(1u16, vec![0xbb; 48]);
-        map.insert(2u16, vec![0xcc; 48]);
-        map.insert(3u16, vec![0xdd; 48]); // ignored
-        let pcrs = NitroPcrs::from_verified(&map).unwrap();
-        assert_eq!(pcrs.pcr0, vec![0xaa; 48]);
-        assert_eq!(pcrs.pcr1, vec![0xbb; 48]);
-        assert_eq!(pcrs.pcr2, vec![0xcc; 48]);
-
-        // missing a required PCR is an error
-        map.remove(&1u16);
-        assert!(NitroPcrs::from_verified(&map).is_err());
-    }
-
-    #[test]
-    fn nitro_pcrs_debug_detection_and_image_hash() {
-        let debug = NitroPcrs {
-            pcr0: vec![0u8; 48],
-            pcr1: vec![0u8; 48],
-            pcr2: vec![0u8; 48],
-        };
-        assert!(debug.is_debug());
-
-        let prod = NitroPcrs {
-            pcr0: vec![1u8; 48],
-            pcr1: vec![0u8; 48],
-            pcr2: vec![0u8; 48],
-        };
-        assert!(!prod.is_debug());
-        // image_hash = sha256(pcr0 || pcr1 || pcr2), never the all-zero sentinel
-        assert_eq!(
-            prod.image_hash(),
-            sha256([&prod.pcr0, &prod.pcr1, &prod.pcr2]).to_vec()
+    fn into_versioned_uses_v0_when_all_events_are_v1() {
+        let mut att = dummy_tdx_attestation([7u8; 64]);
+        att.runtime_events.push(cc_eventlog::RuntimeEvent::new(
+            "app-id".into(),
+            vec![1, 2, 3],
+            cc_eventlog::EventLogVersion::V1,
+        ));
+        let versioned = att.into_versioned();
+        assert!(
+            matches!(versioned, VersionedAttestation::V0 { .. }),
+            "V1-only events should stay on the V0/SCALE wire format"
         );
     }
 
     #[test]
-    fn aws_nitro_tpm_mr_aggregated_replays_pcr14_like_rtmr3() -> Result<()> {
-        let pcr4 = vec![0x04; 48];
-        let pcr7 = vec![0x07; 48];
-        let pcr12 = vec![0x12; 48];
-        let mut pcrs = std::collections::BTreeMap::new();
-        pcrs.insert(4u16, pcr4.clone());
-        pcrs.insert(7u16, pcr7.clone());
-        pcrs.insert(12u16, pcr12.clone());
-
-        let mr_key_provider = sha256(b"aws nitrotpm key provider");
-        let events = vec![
-            RuntimeEvent::new("system-preparing".into(), Vec::new()),
-            RuntimeEvent::new("app-id".into(), vec![0x11; 20]),
-            RuntimeEvent::new("compose-hash".into(), vec![0x22; 32]),
-            RuntimeEvent::new("instance-id".into(), vec![0x33; 20]),
-            RuntimeEvent::new("boot-mr-done".into(), Vec::new()),
-            RuntimeEvent::new("key-provider".into(), b"tpm".to_vec()),
-            RuntimeEvent::new("system-ready".into(), Vec::new()),
-        ];
-        let replayed_pcr14 = cc_eventlog::replay_events::<Sha384>(&events, None);
-        pcrs.insert(AWS_NITRO_TPM_EVENT_PCR, replayed_pcr14.to_vec());
-
-        let mrs = decode_mr_aws_nitro_tpm_from_pcrs(false, &mr_key_provider, &pcrs, &events)?;
-
-        assert_eq!(
-            mrs.mr_system,
-            sha256([
-                pcr4.as_slice(),
-                pcr7.as_slice(),
-                pcr12.as_slice(),
-                mr_key_provider.as_slice(),
-            ])
+    fn into_versioned_upgrades_to_v1_when_any_event_is_v2() {
+        let mut att = dummy_tdx_attestation([8u8; 64]);
+        att.runtime_events.push(cc_eventlog::RuntimeEvent::new(
+            "app-id".into(),
+            vec![1, 2, 3],
+            cc_eventlog::EventLogVersion::V1,
+        ));
+        att.runtime_events.push(cc_eventlog::RuntimeEvent::new(
+            "compose-hash".into(),
+            vec![4, 5, 6],
+            cc_eventlog::EventLogVersion::V2,
+        ));
+        let versioned = att.into_versioned();
+        assert!(
+            matches!(versioned, VersionedAttestation::V1 { .. }),
+            "presence of a V2 event must force the V1 msgpack wire format to preserve `version`"
         );
-        assert_eq!(
-            mrs.mr_aggregated,
-            sha256([
-                pcr4.as_slice(),
-                pcr7.as_slice(),
-                pcr12.as_slice(),
-                replayed_pcr14.as_slice(),
-            ])
-        );
-
-        let mut changed_events = events.clone();
-        changed_events[2] = RuntimeEvent::new("compose-hash".into(), vec![0xee; 32]);
-        let changed_pcr14 = cc_eventlog::replay_events::<Sha384>(&changed_events, None);
-        let mut changed_pcrs = pcrs.clone();
-        changed_pcrs.insert(AWS_NITRO_TPM_EVENT_PCR, changed_pcr14.to_vec());
-        let changed_mrs = decode_mr_aws_nitro_tpm_from_pcrs(
-            false,
-            &mr_key_provider,
-            &changed_pcrs,
-            &changed_events,
-        )?;
-
-        assert_eq!(mrs.mr_system, changed_mrs.mr_system);
-        assert_ne!(mrs.mr_aggregated, changed_mrs.mr_aggregated);
-
-        let mut changed_pcrs = pcrs.clone();
-        changed_pcrs.insert(12, vec![0x99; 48]);
-        let changed_pcr12 =
-            decode_mr_aws_nitro_tpm_from_pcrs(false, &mr_key_provider, &changed_pcrs, &events)?;
-        assert_ne!(mrs.mr_system, changed_pcr12.mr_system);
-        assert_ne!(mrs.mr_aggregated, changed_pcr12.mr_aggregated);
-
-        let mut missing_pcrs = pcrs.clone();
-        missing_pcrs.remove(&AWS_NITRO_TPM_EVENT_PCR);
-        let err = match decode_mr_aws_nitro_tpm_from_pcrs(
-            false,
-            &mr_key_provider,
-            &missing_pcrs,
-            &events,
-        ) {
-            Ok(_) => panic!("missing PCR14 must be rejected"),
-            Err(err) => err,
-        };
-        assert!(format!("{err:#}").contains("PCR 14 not found"));
-
-        let mut mismatched_pcrs = pcrs.clone();
-        mismatched_pcrs.insert(AWS_NITRO_TPM_EVENT_PCR, vec![0xff; 48]);
-        let err = match decode_mr_aws_nitro_tpm_from_pcrs(
-            false,
-            &mr_key_provider,
-            &mismatched_pcrs,
-            &events,
-        ) {
-            Ok(_) => panic!("mismatched PCR14 must be rejected"),
-            Err(err) => err,
-        };
-        assert!(format!("{err:#}").contains("PCR14 mismatch"));
-        Ok(())
-    }
-
-    #[test]
-    fn aws_nitro_tpm_pcr14_replays_full_event_log_like_rtmr3() -> Result<()> {
-        // Single PCR14 lane: all events (including after system-ready) are
-        // measured and must be replayed for full (non-boottime) decode.
-        let events = vec![
-            RuntimeEvent::new("system-preparing".into(), Vec::new()),
-            RuntimeEvent::new("app-id".into(), vec![0x11; 20]),
-            RuntimeEvent::new("compose-hash".into(), vec![0x22; 32]),
-            RuntimeEvent::new("instance-id".into(), vec![0x33; 20]),
-            RuntimeEvent::new("boot-mr-done".into(), Vec::new()),
-            RuntimeEvent::new("storage-fs".into(), b"ext4".to_vec()),
-            RuntimeEvent::new("system-ready".into(), Vec::new()),
-            RuntimeEvent::new("app-runtime".into(), b"ready".to_vec()),
-        ];
-
-        let full_pcr = cc_eventlog::replay_events::<Sha384>(&events, None);
-        let early_pcr = cc_eventlog::replay_events::<Sha384>(&events, Some("boot-mr-done"));
-        let mr_key_provider = sha256(b"aws nitrotpm key provider");
-        let pcrs = std::collections::BTreeMap::from([
-            (4u16, vec![0x04; 48]),
-            (7u16, vec![0x07; 48]),
-            (12u16, vec![0x12; 48]),
-            (AWS_NITRO_TPM_EVENT_PCR, full_pcr.to_vec()),
-        ]);
-
-        let mrs = decode_mr_aws_nitro_tpm_from_pcrs(false, &mr_key_provider, &pcrs, &events)?;
-        assert_eq!(
-            mrs.mr_aggregated,
-            sha256([
-                pcrs[&4].as_slice(),
-                pcrs[&7].as_slice(),
-                pcrs[&12].as_slice(),
-                full_pcr.as_slice(),
-            ])
-        );
-
-        // A full runtime quote (PCR14 covers the whole log) decoded in
-        // boottime mode binds the full replay to the quoted register, then
-        // returns the boot-mr-done snapshot for the MR — it must NOT fail the
-        // integrity check. This is the SignCert path (runtime quote, boot-time
-        // MR).
-        let early_from_full =
-            decode_mr_aws_nitro_tpm_from_pcrs(true, &mr_key_provider, &pcrs, &events)?;
-        assert_eq!(
-            early_from_full.mr_aggregated,
-            sha256([
-                pcrs[&4].as_slice(),
-                pcrs[&7].as_slice(),
-                pcrs[&12].as_slice(),
-                early_pcr.as_slice(),
-            ])
-        );
-
-        // A genuine early quote carries both the truncated PCR14 and the
-        // truncated event log; the full replay of that log equals the quoted
-        // early PCR14, so the binding passes and the MR uses the same value.
-        let early_events: Vec<RuntimeEvent> = events
-            .iter()
-            .take_while(|event| event.event != "boot-mr-done")
-            .cloned()
-            .chain(std::iter::once(RuntimeEvent::new(
-                "boot-mr-done".into(),
-                Vec::new(),
-            )))
-            .collect();
-        let mut early_pcrs = pcrs.clone();
-        early_pcrs.insert(AWS_NITRO_TPM_EVENT_PCR, early_pcr.to_vec());
-        let early_ok =
-            decode_mr_aws_nitro_tpm_from_pcrs(true, &mr_key_provider, &early_pcrs, &early_events)?;
-        assert_eq!(
-            early_ok.mr_aggregated,
-            sha256([
-                early_pcrs[&4].as_slice(),
-                early_pcrs[&7].as_slice(),
-                early_pcrs[&12].as_slice(),
-                early_pcr.as_slice(),
-            ])
-        );
-        Ok(())
     }
 }

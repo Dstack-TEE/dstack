@@ -25,3 +25,4 @@ ra-rpc = { workspace = true, features = ["rocket"] }
 ra-tls = { workspace = true, features = ["quote"] }
 dstack-guest-agent = { path = "../guest-agent" }
 dstack-guest-agent-rpc.workspace = true
+dstack-types.workspace = true

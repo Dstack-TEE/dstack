@@ -14,7 +14,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use dstack_attest::emit_runtime_event;
+use dstack_attest::emit_runtime_event_with_version;
 use dstack_kms_rpc as rpc;
 use dstack_types::{
     gpu_policy_hash,
@@ -775,10 +775,13 @@ fn platform_instance_binding() -> Result<Option<Vec<u8>>> {
     }
 }
 
-fn emit_key_provider_info(provider_info: &KeyProviderInfo) -> Result<()> {
+fn emit_key_provider_info(
+    provider_info: &KeyProviderInfo,
+    event_log_version: dstack_types::EventLogVersion,
+) -> Result<()> {
     info!("Key provider info: {provider_info:?}");
     let provider_info_json = serde_json::to_vec(&provider_info)?;
-    emit_runtime_event("key-provider", &provider_info_json)?;
+    emit_runtime_event_with_version("key-provider", &provider_info_json, event_log_version)?;
     Ok(())
 }
 
@@ -1471,11 +1474,14 @@ mod gpu {
         })
     }
 
-    pub(super) fn measure_gpu_policy(compose_path: &Path) -> Result<[u8; 32]> {
+    pub(super) fn measure_gpu_policy(
+        compose_path: &Path,
+        event_log_version: dstack_types::EventLogVersion,
+    ) -> Result<[u8; 32]> {
         let compose_json = fs::read(compose_path)
             .with_context(|| format!("failed to read {}", compose_path.display()))?;
         let digest = gpu_policy_hash(&compose_json).context("failed to hash raw GPU policy")?;
-        emit_runtime_event("gpu-policy-hash", &digest)
+        emit_runtime_event_with_version("gpu-policy-hash", &digest, event_log_version)
             .context("failed to emit GPU policy measurement")?;
         Ok(digest)
     }
@@ -1916,7 +1922,10 @@ impl Stage0<'_> {
     /// optional Rego policy is always evaluated; when no attestation is
     /// performed, its claims-array input is empty.
     async fn measure_gpu(&self) -> Result<[u8; 32]> {
-        let gpu_policy_hash = gpu::measure_gpu_policy(&self.shared.dir.app_compose_file())?;
+        let gpu_policy_hash = gpu::measure_gpu_policy(
+            &self.shared.dir.app_compose_file(),
+            self.shared.app_compose.event_log_version,
+        )?;
 
         let gpu_policy = self
             .shared
@@ -1975,8 +1984,12 @@ impl Stage0<'_> {
         gpu_state.set_ready()?;
         let devtools = gpu_state.any_devtools();
         let event = attestation.event(devtools)?;
-        emit_runtime_event("gpu-attestation", &event)
-            .context("failed to emit GPU attestation event")?;
+        emit_runtime_event_with_version(
+            "gpu-attestation",
+            &event,
+            self.shared.app_compose.event_log_version,
+        )
+        .context("failed to emit GPU attestation event")?;
         info!("GPU TEE attestation succeeded");
         Ok(gpu_policy_hash)
     }
@@ -2098,7 +2111,9 @@ impl<'a> Stage0<'a> {
             .tls_client_key(cert_pair.key_pem)
             .tls_ca_cert(tmp_ca.ca_cert.clone())
             .attestation_verifier(attestation_verifier)
-            .cert_validator(Box::new(|cert| {
+            .cert_validator({
+                let event_log_version = self.shared.app_compose.event_log_version;
+                Box::new(move |cert| {
                 let Some(cert) = cert else {
                     bail!("Missing server cert");
                 };
@@ -2110,7 +2125,7 @@ impl<'a> Stage0<'a> {
                 }
                 if let Some(att) = &cert.attestation {
                     match att.decode_app_info(false) {
-                        Ok(kms_info) => emit_runtime_event("mr-kms", &kms_info.mr_aggregated)
+                        Ok(kms_info) => emit_runtime_event_with_version("mr-kms", &kms_info.mr_aggregated, event_log_version)
                             .context("failed to extend mr-kms to the launch measurement")?,
                         Err(err) if is_unsupported_app_info_quote(&err) => {
                             warn!("Skipping mr-kms runtime event for unsupported attestation quote: {err:#}");
@@ -2119,7 +2134,8 @@ impl<'a> Stage0<'a> {
                     }
                 }
                 Ok(())
-            }))
+                })
+            })
             .build()
             .into_client()
             .context("Failed to create client")?;
@@ -2132,8 +2148,12 @@ impl<'a> Stage0<'a> {
             .await
             .context("Failed to get app key")?;
 
-        emit_runtime_event("os-image-hash", &response.os_image_hash)
-            .context("failed to extend os-image-hash to the launch measurement")?;
+        emit_runtime_event_with_version(
+            "os-image-hash",
+            &response.os_image_hash,
+            self.shared.app_compose.event_log_version,
+        )
+        .context("failed to extend os-image-hash to the launch measurement")?;
 
         let (_, ca_pem) = x509_parser::pem::parse_x509_pem(tmp_ca.ca_cert.as_bytes())
             .context("Failed to parse ca cert")?;
@@ -2642,16 +2662,36 @@ impl<'a> Stage0<'a> {
         // no KMS to bind it, the relying party MUST gate the compose_hash
         // (which launcher build) separately from the app_id (which app).
 
-        emit_runtime_event("system-preparing", &[])?;
-        emit_runtime_event("app-id", &instance_info.app_id)?;
-        emit_runtime_event("compose-hash", &compose_hash)?;
+        emit_runtime_event_with_version(
+            "system-preparing",
+            &[],
+            self.shared.app_compose.event_log_version,
+        )?;
+        emit_runtime_event_with_version(
+            "app-id",
+            &instance_info.app_id,
+            self.shared.app_compose.event_log_version,
+        )?;
+        emit_runtime_event_with_version(
+            "compose-hash",
+            &compose_hash,
+            self.shared.app_compose.event_log_version,
+        )?;
         let gpu_policy_hash = self
             .measure_gpu()
             .await
             .context("failed to verify GPU TEE attestation")?;
 
-        emit_runtime_event("instance-id", &instance_id)?;
-        emit_runtime_event("boot-mr-done", &[])?;
+        emit_runtime_event_with_version(
+            "instance-id",
+            &instance_id,
+            self.shared.app_compose.event_log_version,
+        )?;
+        emit_runtime_event_with_version(
+            "boot-mr-done",
+            &[],
+            self.shared.app_compose.event_log_version,
+        )?;
 
         // AWS: commit the measured app identity into PCR8 (mr_config analogue).
         // The config id is computed from measured reality (MrConfig V2), so
@@ -2709,7 +2749,7 @@ impl<'a> Stage0<'a> {
                 KeyProviderInfo::new("kms".into(), hex::encode(keys.key_provider.id()))
             }
         };
-        emit_key_provider_info(&kp_info)?;
+        emit_key_provider_info(&kp_info, self.shared.app_compose.event_log_version)?;
         Ok(())
     }
 
@@ -2741,7 +2781,11 @@ impl<'a> Stage0<'a> {
 
         // Parse kernel command line options
         let opts = parse_dstack_options(&self.shared).context("Failed to parse kernel cmdline")?;
-        emit_runtime_event("storage-fs", opts.storage_fs.to_string().as_bytes())?;
+        emit_runtime_event_with_version(
+            "storage-fs",
+            opts.storage_fs.to_string().as_bytes(),
+            self.shared.app_compose.event_log_version,
+        )?;
         info!(
             "Filesystem options: encryption={}, filesystem={:?}",
             opts.storage_encrypted, opts.storage_fs
@@ -2757,7 +2801,11 @@ impl<'a> Stage0<'a> {
                 &serde_json::to_string(&app_info.instance_info)?,
             )
             .await;
-        emit_runtime_event("system-ready", &[])?;
+        emit_runtime_event_with_version(
+            "system-ready",
+            &[],
+            self.shared.app_compose.event_log_version,
+        )?;
         self.vmm.notify_q("boot.progress", "data disk ready").await;
 
         if !self.shared.app_compose.key_provider().is_kms() {

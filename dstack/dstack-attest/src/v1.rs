@@ -7,7 +7,6 @@ use cc_eventlog::{
     tdx::{self, TDX_ACPI_DATA_EVENT_PAYLOAD},
     RuntimeEvent, TdxEvent,
 };
-use dstack_types::mr_config::MrConfigV3;
 use serde::{Deserialize, Serialize};
 use tpm_types::TpmQuote;
 
@@ -133,16 +132,11 @@ impl PlatformEvidence {
         }
     }
 
-    pub fn sev_snp_mr_config_document(&self) -> Option<&str> {
+    pub fn tdx_event_log_mut(&mut self) -> Option<&mut Vec<TdxEvent>> {
         match self {
-            Self::SevSnp { mr_config, .. } => Some(mr_config.as_str()),
+            Self::Tdx { event_log, .. } => Some(event_log),
             _ => None,
         }
-    }
-
-    pub fn sev_snp_mr_config(&self) -> Option<MrConfigV3> {
-        self.sev_snp_mr_config_document()
-            .and_then(|document| MrConfigV3::from_document(document).ok())
     }
 
     pub fn into_stripped(self) -> Self {
@@ -372,6 +366,8 @@ impl Attestation {
 mod tests {
     use super::*;
     use cc_eventlog::tdx::TDX_ACPI_DATA_EVENT_TYPE;
+    use dstack_types::mr_config::MrConfigV3;
+    use dstack_types::EventLogVersion;
 
     fn test_mr_config_document() -> String {
         MrConfigV3::new(
@@ -396,6 +392,8 @@ mod tests {
                     digest: vec![0xaa, 0xbb, 0xcc],
                     event: "pod".into(),
                     event_payload: vec![0xde, 0xad, 0xbe, 0xef],
+                    version: EventLogVersion::V1,
+                    hash_input: None,
                 }],
             },
             StackEvidence::DstackPod {
@@ -403,6 +401,7 @@ mod tests {
                 runtime_events: vec![RuntimeEvent {
                     event: "pod".into(),
                     payload: vec![0xca, 0xfe, 0xba, 0xbe],
+                    version: EventLogVersion::V1,
                 }],
                 config: "{}".into(),
                 report_data_payload: "{\"hello\":\"world\"}".into(),
@@ -474,6 +473,8 @@ mod tests {
             digest: vec![idx as u8; 48],
             event: String::new(),
             event_payload: vec![0xff; idx + 1],
+            version: EventLogVersion::V1,
+            hash_input: None,
         }
     }
 
@@ -484,6 +485,8 @@ mod tests {
             digest: vec![idx as u8; 48],
             event: String::new(),
             event_payload: TDX_ACPI_DATA_EVENT_PAYLOAD.to_vec(),
+            version: EventLogVersion::V1,
+            hash_input: None,
         }
     }
 
@@ -491,6 +494,7 @@ mod tests {
         RuntimeEvent {
             event: "app-id".into(),
             payload: vec![0x42],
+            version: EventLogVersion::V1,
         }
         .into()
     }

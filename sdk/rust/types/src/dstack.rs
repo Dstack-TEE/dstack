@@ -111,11 +111,10 @@ pub struct GetQuoteResponse {
     /// VM configuration
     #[serde(default)]
     pub vm_config: String,
-    /// Platform-adaptive versioned attestation in hexadecimal format. Populated
-    /// for every TEE platform (TDX, AMD SEV-SNP, ...); this is the payload to
-    /// send to dstack-verifier for platform-agnostic verification.
+    /// Merged TCG binary event log (boot-time CCEL + runtime events as
+    /// TCG_PCR_EVENT2), hex-encoded. Empty on platforms without ACPI CCEL.
     #[serde(default)]
-    pub attestation: String,
+    pub event_log_ccel: String,
 }
 
 /// Response containing a versioned attestation
@@ -154,6 +153,10 @@ impl GetQuoteResponse {
 
     pub fn decode_event_log(&self) -> Result<Vec<EventLog>, serde_json::Error> {
         serde_json::from_str(&self.event_log)
+    }
+
+    pub fn decode_event_log_ccel(&self) -> Result<Vec<u8>, FromHexError> {
+        hex::decode(&self.event_log_ccel)
     }
 
     pub fn replay_rtmrs(&self) -> Result<BTreeMap<u8, String>> {

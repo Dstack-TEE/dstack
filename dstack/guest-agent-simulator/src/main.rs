@@ -6,7 +6,7 @@ mod simulator;
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use dstack_guest_agent::{
     backend::PlatformBackend,
@@ -14,6 +14,7 @@ use dstack_guest_agent::{
     run_server, AppState,
 };
 use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
+use dstack_types::EventLogVersion;
 use ra_tls::attestation::VersionedAttestation;
 use serde::Deserialize;
 use tracing::warn;
@@ -77,17 +78,36 @@ impl PlatformBackend for SimulatorPlatform {
         )
     }
 
-    fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse> {
+    fn quote_response(
+        &self,
+        report_data: [u8; 64],
+        vm_config: &str,
+        include_hash_inputs: bool,
+    ) -> Result<GetQuoteResponse> {
         simulator::simulated_quote_response(
             &self.attestation,
             report_data,
             vm_config,
             self.patch_report_data,
+            include_hash_inputs,
         )
     }
 
-    fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
-        simulator::simulated_attest_response(&self.attestation, report_data, self.patch_report_data)
+    fn attest_response(
+        &self,
+        report_data: [u8; 64],
+        include_hash_inputs: bool,
+    ) -> Result<AttestResponse> {
+        simulator::simulated_attest_response(
+            &self.attestation,
+            report_data,
+            self.patch_report_data,
+            include_hash_inputs,
+        )
+    }
+
+    fn emit_event(&self, event: &str, _payload: &[u8], _version: EventLogVersion) -> Result<()> {
+        bail!("runtime event emission is unavailable in simulator mode: {event}")
     }
 }
 
@@ -142,6 +162,15 @@ mod tests {
     }
 
     #[test]
+    fn simulator_rejects_runtime_event_emission() {
+        let platform = load_fixture_platform();
+        let err = platform
+            .emit_event("test.event", b"payload", EventLogVersion::V1)
+            .unwrap_err();
+        assert!(err.to_string().contains("unavailable in simulator mode"));
+    }
+
+    #[test]
     fn simulator_provides_certificate_attestation() {
         let platform = load_fixture_platform();
         let cert_attestation = platform
@@ -155,7 +184,7 @@ mod tests {
     fn simulator_attest_response_uses_supplied_report_data() {
         let platform = load_fixture_platform();
         let report_data = [0x5a; 64];
-        let response = platform.attest_response(report_data).unwrap();
+        let response = platform.attest_response(report_data, false).unwrap();
         let patched = VersionedAttestation::from_bytes(&response.attestation)
             .unwrap()
             .into_v1();
@@ -172,7 +201,7 @@ mod tests {
         let original = fixture.clone().into_v1().report_data().unwrap();
         let platform = SimulatorPlatform::new(fixture, false);
         let report_data = [0x5a; 64];
-        let response = platform.attest_response(report_data).unwrap();
+        let response = platform.attest_response(report_data, false).unwrap();
         let patched = VersionedAttestation::from_bytes(&response.attestation)
             .unwrap()
             .into_v1();
