@@ -297,9 +297,9 @@ risk is already outside dstack's confidentiality/integrity guarantees.
 
 ### Out-of-date TCBs have a bounded grace period
 
-dstack applies `dcap-qvl`'s quote policy after cryptographic verification. Platform and quoting-enclave TCB levels reported as `OutOfDate` are accepted for 15 days after the corresponding TCB level's publication date. Once that grace period expires, verification fails. `Revoked` TCBs are always rejected.
+dstack applies `dcap-qvl`'s quote policy after cryptographic verification. `UpToDate` is accepted, while platform and quoting-enclave TCB levels reported as `OutOfDate` are accepted for 15 days after the corresponding TCB level's publication date. Once that grace period expires, verification fails. All other TCB statuses, including `ConfigurationNeeded`, `SWHardeningNeeded`, and `Revoked`, are rejected.
 
-Other non-current statuses (`ConfigurationNeeded`, `SWHardeningNeeded`, and their combinations) remain accepted and are surfaced in the verified report for downstream policy decisions. `validate_tcb` separately enforces hard invariants: debug mode must be off, and the SEAM/service-TD measurements must be well-formed.
+`validate_tcb` separately enforces hard invariants: debug mode must be off, and the SEAM/service-TD measurements must be well-formed.
 
 ### Development modes are auditable, not production-safe
 

@@ -210,11 +210,7 @@ const TCB_OUT_OF_DATE_GRACE_PERIOD: Duration = Duration::from_secs(15 * 24 * 60 
 
 fn tdx_quote_policy(now: u64) -> QuotePolicy {
     QuotePolicy::strict(now)
-        .allow_status(TcbStatus::SWHardeningNeeded)
-        .allow_status(TcbStatus::ConfigurationNeeded)
-        .allow_status(TcbStatus::ConfigurationAndSWHardeningNeeded)
         .allow_status(TcbStatus::OutOfDate)
-        .allow_status(TcbStatus::OutOfDateConfigurationNeeded)
         .platform_grace_period(TCB_OUT_OF_DATE_GRACE_PERIOD)
         .qe_grace_period(TCB_OUT_OF_DATE_GRACE_PERIOD)
         .allow_dynamic_platform(true)
@@ -2514,6 +2510,22 @@ pub struct AppInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tdx_policy_accepts_only_up_to_date_and_out_of_date() {
+        let policy = tdx_quote_policy(0);
+        assert!(policy.is_status_acceptable(TcbStatus::UpToDate));
+        assert!(policy.is_status_acceptable(TcbStatus::OutOfDate));
+        for status in [
+            TcbStatus::OutOfDateConfigurationNeeded,
+            TcbStatus::ConfigurationAndSWHardeningNeeded,
+            TcbStatus::ConfigurationNeeded,
+            TcbStatus::SWHardeningNeeded,
+            TcbStatus::Revoked,
+        ] {
+            assert!(!policy.is_status_acceptable(status));
+        }
+    }
 
     #[test]
     fn external_trust_anchor_requires_explicit_insecure_opt_in() {
