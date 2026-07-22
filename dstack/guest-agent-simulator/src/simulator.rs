@@ -43,7 +43,7 @@ pub fn simulated_quote_response(
     Ok(GetQuoteResponse {
         quote,
         event_log: attestation
-            .tdx_event_log_string(include_hash_inputs)
+            .tdx_event_log_string_with_hash_inputs(include_hash_inputs)
             .unwrap_or_default(),
         report_data: report_data.to_vec(),
         vm_config: vm_config.to_string(),

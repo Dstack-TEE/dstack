@@ -912,15 +912,6 @@ pNs85uhOZE8z2jr8Pg==
                     attestation: VersionedAttestation::V1 { attestation }.to_bytes()?,
                 })
             }
-
-            fn emit_event(
-                &self,
-                _event: &str,
-                _payload: &[u8],
-                _version: EventLogVersion,
-            ) -> Result<()> {
-                Ok(())
-            }
         }
 
         let inner = AppStateInner {

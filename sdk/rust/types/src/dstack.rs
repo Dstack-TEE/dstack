@@ -111,10 +111,13 @@ pub struct GetQuoteResponse {
     /// VM configuration
     #[serde(default)]
     pub vm_config: String,
-    /// Merged TCG binary event log (boot-time CCEL + runtime events as
-    /// TCG_PCR_EVENT2), hex-encoded. Empty on platforms without ACPI CCEL.
+    /// Platform-adaptive versioned attestation, hex-encoded. Populated on
+    /// non-TDX platforms; TDX uses `quote` and `event_log`.
     #[serde(default)]
     pub attestation: String,
+    /// Merged TCG binary event log (boot-time CCEL + runtime events as
+    /// TCG_PCR_EVENT2), hex-encoded. Empty unless hash inputs were requested,
+    /// or on platforms without ACPI CCEL.
     #[serde(default)]
     pub event_log_ccel: String,
 }

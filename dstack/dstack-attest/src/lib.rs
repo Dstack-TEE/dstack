@@ -21,9 +21,17 @@ mod aws_nitro_tpm;
 mod sev_snp;
 mod v1;
 
+/// Serializes measured event emission within this process.
+///
+/// Appending to the event log and extending the platform register must be one
+/// atomic unit so log order always matches measurement-extension order.
 static EMIT_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-/// Emit a runtime event that extends RTMR3 and logs the event.
+/// Emit a dstack measured event using the legacy V1 digest format.
+///
+/// - TDX-family: RTMR3
+/// - GCP TPM: SHA256 PCR14
+/// - AWS NitroTPM: SHA384 PCR14
 pub fn emit_runtime_event(event: &str, payload: &[u8]) -> anyhow::Result<()> {
     emit_runtime_event_with_version(event, payload, EventLogVersion::V1)
 }

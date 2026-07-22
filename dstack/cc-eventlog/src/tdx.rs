@@ -133,12 +133,20 @@ impl TdxEvent {
     /// For boot-time TCG events, the pre-image is inherent in the original log format
     /// and not reconstructable from this struct, so `hash_input` stays `None`.
     pub fn fill_hash_input(&mut self) {
+        if self.hash_input.is_some() {
+            return;
+        }
         if let Some(runtime_event) = self.to_runtime_event() {
             self.hash_input = Some(hex::encode(runtime_event.hash_input()));
         }
     }
 
     pub fn digest(&self) -> Vec<u8> {
+        // Parsed TCG/CCEL records already carry the authoritative digest, but
+        // do not necessarily retain dstack's structured event name/payload.
+        if !self.digest.is_empty() {
+            return self.digest.clone();
+        }
         if let Some(runtime_event) = self.to_runtime_event() {
             return runtime_event.sha384_digest().to_vec();
         }

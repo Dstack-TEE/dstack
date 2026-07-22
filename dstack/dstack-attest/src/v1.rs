@@ -7,6 +7,7 @@ use cc_eventlog::{
     tdx::{self, TDX_ACPI_DATA_EVENT_PAYLOAD},
     RuntimeEvent, TdxEvent,
 };
+use dstack_types::mr_config::MrConfigV3;
 use serde::{Deserialize, Serialize};
 use tpm_types::TpmQuote;
 
@@ -130,6 +131,18 @@ impl PlatformEvidence {
             Self::SevSnp { cert_chain, .. } => Some(cert_chain.as_slice()),
             _ => None,
         }
+    }
+
+    pub fn sev_snp_mr_config_document(&self) -> Option<&str> {
+        match self {
+            Self::SevSnp { mr_config, .. } => Some(mr_config.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn sev_snp_mr_config(&self) -> Option<MrConfigV3> {
+        self.sev_snp_mr_config_document()
+            .and_then(|document| MrConfigV3::from_document(document).ok())
     }
 
     pub fn tdx_event_log_mut(&mut self) -> Option<&mut Vec<TdxEvent>> {

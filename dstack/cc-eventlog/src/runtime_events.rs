@@ -33,9 +33,13 @@ pub struct RuntimeEvent {
     #[serde(with = "base64")]
     pub payload: Vec<u8>,
     /// Event log version
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_v1")]
     #[codec(skip)]
     pub version: EventLogVersion,
+}
+
+fn is_v1(version: &EventLogVersion) -> bool {
+    matches!(version, EventLogVersion::V1)
 }
 
 impl RuntimeEvent {

@@ -170,7 +170,9 @@ message TdxQuoteArgs {
 message RawQuoteArgs {
   // 64 bytes of report data
   bytes report_data = 1;
-  // If true, include the digest hash input for each runtime event in the response.
+  // If true, include digest hash inputs for TDX runtime events and include the
+  // merged TDX CCEL binary in GetQuoteResponse. This flag has no effect on
+  // non-TDX platforms, whose GetQuote event_log is empty.
   // Non-runtime events (boot-time/TCG events) will have hash_input unset.
   // The hash_input is hex-encoded bytes of the digest pre-image:
   // - v2 runtime events: hex of UTF-8 JCS canonical JSON
@@ -214,6 +216,9 @@ message GetQuoteResponse {
   bytes report_data = 3;
   // Hw config
   string vm_config = 4;
+  // Platform-adaptive versioned attestation (SCALE/msgpack encoded). Populated
+  // on non-TDX platforms; TDX uses quote + event_log above.
+  bytes attestation = 5;
   // TCG binary Confidential Computing Event Log (CCEL) containing both
   // boot-time events (from the ACPI CCEL table) and dstack runtime events
   // (RTMR3) merged into a single stream.
@@ -234,15 +239,7 @@ message GetQuoteResponse {
   //                     V2: canonical JSON (UTF-8)
   //
   // Empty on platforms without an ACPI CCEL table (e.g. Nitro Enclaves).
-  bytes attestation = 5;
   bytes event_log_ccel = 6;
-}
-
-message EmitEventArgs {
-  // The event name
-  string event = 1;
-  // The event data
-  bytes payload = 2;
 }
 
 // The request to derive a key

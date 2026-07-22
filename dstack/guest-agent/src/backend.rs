@@ -3,9 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result};
-use dstack_attest::emit_runtime_event_with_version;
 use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
-use dstack_types::EventLogVersion;
 use ra_tls::attestation::Attestation;
 use ra_tls::attestation::{QuoteContentType, VersionedAttestation};
 
@@ -23,7 +21,6 @@ pub trait PlatformBackend: Send + Sync {
         report_data: [u8; 64],
         include_hash_inputs: bool,
     ) -> Result<AttestResponse>;
-    fn emit_event(&self, event: &str, payload: &[u8], version: EventLogVersion) -> Result<()>;
 }
 
 #[derive(Debug, Default)]
@@ -51,13 +48,21 @@ impl PlatformBackend for RealPlatform {
     ) -> Result<GetQuoteResponse> {
         let attestation = Attestation::quote(&report_data).context("Failed to get quote")?;
         let tdx_quote = attestation.get_tdx_quote_bytes();
-        let tdx_event_log = attestation.get_tdx_event_log_string(include_hash_inputs);
-        let event_log_ccel = attestation.get_tdx_event_log_ccel().unwrap_or_default();
+        let tdx_event_log =
+            attestation.get_tdx_event_log_string_with_hash_inputs(include_hash_inputs);
+        // CCEL can be tens of KiB. Reuse the existing explicit hash-input
+        // opt-in because CCEL runtime records contain those same pre-images.
+        let event_log_ccel = if include_hash_inputs {
+            attestation
+                .get_tdx_event_log_ccel()
+                .context("failed to build TDX CCEL event log")?
+        } else {
+            Vec::new()
+        };
         let versioned = if tdx_quote.is_some() {
             Vec::new()
         } else {
             attestation
-                .clone()
                 .into_versioned()
                 .to_bytes()
                 .context("Failed to encode versioned attestation")?
@@ -85,9 +90,5 @@ impl PlatformBackend for RealPlatform {
         Ok(AttestResponse {
             attestation: attestation.into_versioned().to_bytes()?,
         })
-    }
-
-    fn emit_event(&self, event: &str, payload: &[u8], version: EventLogVersion) -> Result<()> {
-        emit_runtime_event_with_version(event, payload, version)
     }
 }

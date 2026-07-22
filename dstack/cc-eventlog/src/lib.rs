@@ -77,6 +77,13 @@ mod tests {
             // hash_input bytes we stored as TCG event data.
             let runtime = orig.to_runtime_event().unwrap();
             assert_eq!(got.event_payload, runtime.hash_input());
+            assert_eq!(
+                got.hash_input.as_deref(),
+                Some(hex::encode(&got.event_payload).as_str())
+            );
+            // Decoded CCEL records do not retain the structured dstack event
+            // tuple, so digest() must use the authoritative stored digest.
+            assert_eq!(got.digest(), got.digest);
             // Property: sha384(event_data) == digest
             let h = Sha384::hash([got.event_payload.as_slice()]);
             assert_eq!(h.as_slice(), got.digest.as_slice());

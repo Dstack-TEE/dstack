@@ -4,7 +4,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{codecs::VecOf, tdx::TdxEvent};
+use crate::{codecs::VecOf, runtime_events::DSTACK_RUNTIME_EVENT_TYPE, tdx::TdxEvent};
 use anyhow::{bail, Context, Result};
 use scale::Decode;
 use std::path::PathBuf;
@@ -316,7 +316,10 @@ impl TcgEventLog {
     }
 }
 
-/// Read the raw ACPI CCEL table bytes from `/sys/firmware/acpi/tables/data/CCEL`.
+/// Resolve the CCEL path, honoring `DSTACK_CCEL_FILE` when set.
+///
+/// Overrides must be non-empty absolute paths so relative values cannot
+/// silently resolve against the process working directory.
 fn ccel_file_path() -> Result<PathBuf> {
     let Some(value) = std::env::var_os(CCEL_FILE_ENV) else {
         return Ok(PathBuf::from(CCEL_FILE));
@@ -334,8 +337,10 @@ fn ccel_file_path() -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Read the raw ACPI CCEL table bytes.
 pub fn read_ccel_raw() -> Result<Vec<u8>> {
-    fs_err::read(ccel_file_path()?).context("Failed to read CCEL")
+    let path = ccel_file_path()?;
+    fs_err::read(&path).with_context(|| format!("failed to read CCEL from {}", path.display()))
 }
 
 /// Return the length of the valid TCG event log prefix within a raw CCEL buffer.
@@ -425,6 +430,9 @@ impl TryFrom<TcgEvent> for TdxEvent {
             .next()
             .context("digest not found")?
             .hash;
+        let event_payload: Vec<u8> = value.event.into();
+        let hash_input =
+            (value.event_type == DSTACK_RUNTIME_EVENT_TYPE).then(|| hex::encode(&event_payload));
         Ok(TdxEvent {
             imr: value
                 .imr_index
@@ -433,9 +441,9 @@ impl TryFrom<TcgEvent> for TdxEvent {
             event_type: value.event_type,
             digest,
             event: Default::default(),
-            event_payload: value.event.into(),
+            event_payload,
             version: Default::default(),
-            hash_input: None,
+            hash_input,
         })
     }
 }
