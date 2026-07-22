@@ -22,9 +22,26 @@ build_one() {
   local out=$1 work=$2 flavor=$3
   local stage="$work/rootfs-stage" kstage="$work/kernel-stage" tree="$work/rootfs"
   rm -rf "$work" "$out"; mkdir -p "$stage" "$kstage" "$out"
-  "$SELF/scripts/stage-rootfs.sh" "$stage"
+  "$SELF/scripts/stage-rootfs.sh" "$stage" "$flavor"
+  "$SELF/scripts/build-container-stack.sh" "$work/container-stack-build" "$stage"
+  "$SELF/scripts/build-sysbox.sh" "$work/sysbox-build" "$stage"
+  "$SELF/scripts/build-nvattest.sh" "$work/nvattest-build" "$stage"
   "$SELF/scripts/build-kernel.sh" "$work" "$kstage"
+  "$SELF/scripts/build-nvidia.sh" "$work/nvidia-build" \
+    "$work/linux-$KERNEL_VERSION" "$work/kernel-build" "$stage" "$kstage"
+  "$SELF/scripts/build-zfs.sh" "$work/zfs-build" \
+    "$work/linux-$KERNEL_VERSION" "$work/kernel-build" "$stage" "$kstage"
   "$SELF/scripts/build-ovmf.sh" "$work/ovmf-build" "$kstage/ovmf.fd"
+  # ExtraTrees is copied over Debian's usr-merged root where /bin, /sbin and
+  # /lib are symlinks. Normalize build systems (notably OpenZFS) that install
+  # into the legacy physical directories before handing the tree to mkosi.
+  for legacy in bin sbin lib lib64; do
+    if [[ -d $stage/$legacy && ! -L $stage/$legacy ]]; then
+      mkdir -p "$stage/usr/$legacy"
+      cp -a "$stage/$legacy/." "$stage/usr/$legacy/"
+      rm -rf "${stage:?}/$legacy"
+    fi
+  done
   cat > "$work/mkosi.local.conf" <<EOF
 [Content]
 ExtraTrees=$stage
@@ -43,13 +60,15 @@ EOF
   fi
   devargs=()
   if [[ $flavor == dev ]]; then
-    devargs+=(--package=strace --package=tcpdump --package=gdb --package=vim)
+    devargs+=(--package=strace --package=tcpdump --package=gdb --package=vim \
+      --package=openssh-server)
   fi
   mkosi --directory "$SELF" --force --extra-tree="$stage" "${devargs[@]}" \
     --format=directory --output-directory="$work" --output=rootfs \
     --compress-output=no --bootable=no build
   mkdir -p "$tree/usr/lib/modules"
   cp -a "$kstage/usr/lib/modules/." "$tree/usr/lib/modules/"
+  "$SELF/tests/check-parity.py" "$SELF/parity.json" "$tree" "$kstage" "$flavor"
   artifact_dir="$work/artifacts/$flavor"
   "$SELF/scripts/make-release-artifacts.sh" "$tree" "$kstage" "$artifact_dir" "$flavor"
   DIST_DIR="$out" \

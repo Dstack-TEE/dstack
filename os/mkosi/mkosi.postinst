@@ -5,7 +5,8 @@ set -euo pipefail
 # mkosi executes post-installation scripts outside the image with BUILDROOT.
 B=${BUILDROOT:?}
 mkdir -p "$B/dev" "$B/proc" "$B/sys" "$B/run" "$B/tmp" "$B/dstack" \
-  "$B/etc/wireguard" "$B/var/lib/docker" "$B/var/lib/containerd"
+  "$B/etc/wireguard" "$B/var/lib/docker" "$B/var/lib/containerd" \
+  "$B/var/volatile" "$B/dstack/.host-shared"
 rm -f "$B/etc/machine-id" "$B/var/lib/dbus/machine-id"
 : > "$B/etc/machine-id"
 rm -rf "$B/var/cache/apt/"* "$B/var/lib/apt/lists/"* "$B/var/log/"*
@@ -14,8 +15,14 @@ ln -sfn dstack "$B/tapp"
 ln -sfn ../lib/systemd/systemd "$B/usr/sbin/init"
 
 systemctl --root="$B" enable systemd-networkd systemd-resolved chrony docker \
+    var-volatile.mount dstack-volatile-binds.service \
     dstack-firstboot.service dstack-prepare.service \
     dstack-guest-agent.socket dstack-guest-agent.service \
-    app-compose.service wg-checker.service
+    app-compose.service wg-checker.service nvidia-persistenced.service \
+    nvidia-fabricmanager.service containerd-stargz-grpc.service \
+    sysbox.service sysbox-fs.service sysbox-mgr.service
 systemctl --root="$B" mask getty@.service serial-getty@.service debug-shell.service \
     sleep.target suspend.target hibernate.target hybrid-sleep.target
+if [[ -x $B/usr/bin/dstack-tee-simulator ]]; then
+  systemctl --root="$B" enable dstack-tee-simulator.service
+fi

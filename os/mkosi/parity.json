@@ -1,0 +1,137 @@
+{
+  "reference": "os/yocto/layers/meta-dstack/recipes-core/images/dstack-rootfs.bb",
+  "required_rootfs_paths": {
+    "dstack-guest": [
+      "usr/bin/dstack-guest-agent",
+      "usr/bin/dstack-util"
+    ],
+    "container": [
+      "usr/bin/docker",
+      "usr/bin/containerd",
+      "usr/bin/nerdctl",
+      "usr/bin/containerd-stargz-grpc",
+      "etc/containerd/config.toml",
+      "usr/bin/docker-compose",
+      "usr/lib/cni/bridge",
+      "usr/lib/cni/host-local",
+      "usr/lib/systemd/system/containerd-stargz-grpc.service",
+      "etc/docker/daemon.json"
+    ],
+    "sysbox-0.6.7": [
+      "usr/bin/sysbox-runc",
+      "usr/bin/sysbox-fs",
+      "usr/bin/sysbox-mgr",
+      "usr/lib/systemd/system/sysbox.service",
+      "usr/lib/systemd/system/sysbox-fs.service",
+      "usr/lib/systemd/system/sysbox-mgr.service",
+      "etc/sysctl.d/99-sysbox-sysctl.conf",
+      "etc/modules-load.d/50-sysbox-mod.conf"
+    ],
+    "zfs-2.4.0": [
+      "usr/sbin/zfs",
+      "usr/sbin/zpool",
+      "usr/lib/systemd/system/zfs.target",
+      "usr/libexec/zfs/zed.d"
+    ],
+    "nvidia-595.58.03": [
+      "usr/bin/nvidia-smi",
+      "usr/bin/nvidia-persistenced",
+      "usr/bin/nv-fabricmanager",
+      "usr/lib/systemd/system/nvidia-fabricmanager.service",
+      "usr/bin/nvidia-gpu-detect",
+      "usr/lib/x86_64-linux-gnu/libnvidia-nscq.so.2",
+      "etc/systemd/system/nvidia-fabricmanager.service.d/10-nvswitch-condition.conf"
+    ],
+    "nvidia-container": [
+      "usr/bin/nvidia-container-cli",
+      "usr/bin/nvidia-container-runtime",
+      "usr/bin/nvidia-ctk",
+      "etc/nvidia-container-runtime/config.toml"
+    ],
+    "nvattest-2026.06.09": [
+      "usr/bin/nvattest",
+      "usr/lib/libnvat.so.1",
+      "usr/share/nvattest/policies/allow_trust_outpost_ocsp.rego",
+      "usr/lib/systemd/system/dstack-prepare.service.d/10-nvidia-gpu-ordering.conf"
+    ],
+    "security-and-tee": [
+      "usr/sbin/cryptsetup",
+      "usr/bin/tpm2_getrandom",
+      "etc/ssh/sshd_config.d/10-dstack.conf",
+      "usr/lib/systemd/system/var-volatile.mount",
+      "usr/lib/systemd/system/dstack-volatile-binds.service"
+    ]
+  },
+  "required_kernel_globs": {
+    "nvidia": [
+      "usr/lib/modules/*/kernel/drivers/video/nvidia.ko",
+      "usr/lib/modules/*/kernel/drivers/video/nvidia-uvm.ko",
+      "usr/lib/modules/*/kernel/drivers/video/nvidia-modeset.ko",
+      "usr/lib/modules/*/kernel/drivers/video/nvidia-drm.ko",
+      "usr/lib/modules/*/kernel/drivers/video/nvidia-peermem.ko"
+    ],
+    "zfs": [
+      "usr/lib/modules/*/extra/zfs.ko"
+    ]
+  },
+  "dev_only_paths": [
+    "usr/bin/dstack-tee-simulator",
+    "usr/bin/strace",
+    "usr/bin/gdb",
+    "usr/sbin/sshd"
+  ],
+  "required_rootfs_globs": {
+    "nvidia-firmware": [
+      "usr/lib/firmware/nvidia/595.58.03/*"
+    ],
+    "nvidia-libraries": [
+      "usr/lib/x86_64-linux-gnu/libcuda.so.595.58.03",
+      "usr/lib/x86_64-linux-gnu/libnvidia-ml.so.595.58.03"
+    ],
+    "cni-plugins": [
+      "usr/lib/cni/loopback",
+      "usr/lib/cni/portmap"
+    ]
+  },
+  "required_kernel_config": [
+    "CONFIG_ACPI_TABLE_UPGRADE=y",
+    "CONFIG_INTEL_TDX_GUEST=y",
+    "CONFIG_TDX_GUEST_DRIVER=y",
+    "CONFIG_AMD_MEM_ENCRYPT=y",
+    "CONFIG_SEV_GUEST=y",
+    "CONFIG_TCG_TPM=y",
+    "CONFIG_DM_CRYPT=y",
+    "CONFIG_DM_VERITY=y",
+    "CONFIG_OVERLAY_FS=y",
+    "CONFIG_USER_NS=y",
+    "CONFIG_SECCOMP_FILTER=y",
+    "CONFIG_BRIDGE_NETFILTER=m",
+    "CONFIG_TUN=m",
+    "CONFIG_FUSE_FS=y",
+    "CONFIG_NF_TABLES=m",
+    "CONFIG_IP_SET=m",
+    "CONFIG_WIREGUARD=y",
+    "CONFIG_DEBUG_INFO_BTF=y",
+    "CONFIG_CUSE=y",
+    "CONFIG_TCG_VTPM_PROXY=y",
+    "CONFIG_SECURITY_SELINUX=y",
+    "CONFIG_SCSI=n",
+    "CONFIG_INPUT=n",
+    "CONFIG_VT=n",
+    "CONFIG_WIRELESS=n",
+    "CONFIG_SOUND=n",
+    "CONFIG_USB_SUPPORT=n"
+  ],
+  "prod_forbidden_paths": [
+    "usr/bin/dstack-tee-simulator",
+    "usr/sbin/sshd",
+    "usr/bin/gdb",
+    "usr/bin/strace"
+  ],
+  "runtime_link_paths": [
+    "usr/bin/nvattest",
+    "usr/bin/nvidia-smi",
+    "usr/bin/nvidia-container-cli",
+    "usr/sbin/zfs"
+  ]
+}

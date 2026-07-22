@@ -3,6 +3,7 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 DEST=${1:?staging tree required}
+FLAVOR=${2:-prod}
 install -d "$DEST/usr/bin" "$DEST/usr/lib/systemd/system" \
   "$DEST/etc/systemd/journald.conf.d" "$DEST/etc/systemd/resolved.conf.d" \
   "$DEST/etc/systemd/system/docker.service.d" \
@@ -28,5 +29,14 @@ if [[ ${DSTACK_SKIP_RUST:-0} != 1 ]]; then
     -p dstack-guest-agent -p dstack-util
   install -m0755 "$ROOT/dstack/target/release/dstack-guest-agent" \
     "$ROOT/dstack/target/release/dstack-util" "$DEST/usr/bin/"
+  if [[ $FLAVOR == dev ]]; then
+    cargo build --locked --offline --release --manifest-path "$ROOT/dstack/Cargo.toml" \
+      -p dstack-tee-simulator
+    install -m0755 "$ROOT/dstack/target/release/dstack-tee-simulator" "$DEST/usr/bin/"
+    install -Dm0644 "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-tee-simulator/files/dstack-tee-simulator.service" \
+      "$DEST/usr/lib/systemd/system/dstack-tee-simulator.service"
+    install -Dm0644 "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-tee-simulator/files/tee-simulator.conf" \
+      "$DEST/etc/tee-simulator.conf"
+  fi
 fi
 find "$DEST" -print0 | xargs -0r touch --no-dereference --date="@${SOURCE_DATE_EPOCH:?}"

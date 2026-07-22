@@ -1,9 +1,15 @@
 # Experimental mkosi backend
 
-This is a deliberately small Debian/mkosi implementation of the dstack guest
-OS. It is an experiment, not yet a replacement for the release Yocto backend.
-It tracks the Yocto image's confidential-computing, container, storage,
-network, TPM, SSH, chrony and dstack guest-service capabilities.
+This is an experimental Debian/mkosi implementation of the dstack guest OS.
+It is not yet a replacement for the release Yocto backend. Its acceptance
+target is functional parity with the Yocto image, not merely release archive
+compatibility. `parity.json` is the machine-checked inventory used by a build.
+
+The backend builds the same dstack services plus the pinned Yocto component
+set: Linux 7.1, NVIDIA 595.58.03 (open modules, userspace, firmware, Fabric
+Manager and NSCQ), nvattest 2026.06.09 with the OCSP-freshness patch, OpenZFS
+2.4.0 with upstream Linux 6.19--7.1 compatibility backports, Sysbox 0.6.7,
+NVIDIA Container Toolkit, nerdctl, CNI plugins and stargz-snapshotter 0.18.2.
 
 ## Reproducibility model
 
@@ -25,12 +31,15 @@ checked before compilation.
 
 ## Build and acceptance
 
-Host requirements include mkosi >= 26, systemd tools, a C/Rust kernel and EDK2
-build toolchain, `bc`, `bison`, `flex`, `nasm`, `iasl`, OpenSSL/ELF/UUID
-development headers, `patch`, `pax-utils` (`lddtree`), `squashfs-tools`,
-`cryptsetup`, `gdisk`, `dosfstools`, `mtools`, `curl`, `xz`, QEMU/KVM and root
-privileges (or a working user namespace). Full UKI release assembly also needs
-the pinned `nitro-tpm-pcr-compute` described by `os/image/assemble.sh`.
+Host requirements include mkosi >= 26, systemd tools, C/C++/Go/Rust kernel and
+EDK2 build toolchains, `autoconf`, `automake`, `libtool`, `bc`, `bison`,
+`flex`, `nasm`, `iasl`, and development headers for OpenSSL, ELF, UUID, udev,
+aio, attr, blkid, curl, seccomp and tirpc. BTF generation requires `pahole`
+(the `dwarves` package). Runtime build tools include `patch`,
+`pax-utils` (`lddtree`), `squashfs-tools`, `cryptsetup`, `gdisk`,
+`dosfstools`, `mtools`, `curl`, `xz`, QEMU/KVM and root privileges (or a
+working user namespace). Full UKI release assembly also needs the pinned
+`nitro-tpm-pcr-compute` described by `os/image/assemble.sh`.
 
 ```sh
 ./os/mkosi/build.sh lint
@@ -42,6 +51,10 @@ qemu-system-x86_64 -machine q35 -m 2G -nographic \
   -drive if=virtio,format=raw,file=os/mkosi/build/out/prod/dstack-0.6.0/disk.raw
 ```
 
+On a 16-job development host, a clean production work directory takes about
+17 minutes (measured 16m45s); allow 20--30 minutes with cold compiler and
+network caches. `repro-check` performs two such builds sequentially.
+
 Acceptance means: the static contract passes; a disk with systemd-boot/UKI
 boots on x86_64 QEMU; `/proc/config.gz` contains the checked TDX/SNP, TPM,
 ACPI, dm-verity/crypt, virtio, container and hardening options; dstack services
@@ -50,8 +63,9 @@ artifact-manifest schema v1 and delegates final assembly to
 `os/image/assemble.sh`, exactly like Yocto. Its output contains the same
 `dstack-0.6.0/` directory, bare-metal and UKI tarballs, partitioned combined
 squashfs/dm-verity image, metadata, measurements, checksums, kernel, initramfs,
-OVMF and UKI. Package contents differ because this backend uses Debian, but
-consumers see the same release format and partition labels.
+OVMF and UKI. Debian supplies the base userspace while the parity checker
+requires the Yocto-visible binaries, services, configuration, kernel modules
+and production/development separation before assembly is allowed to proceed.
 
 The firmware is not Debian's generic OVMF: `build-ovmf.sh` builds the same
 EDK2 stable-202502 revision and `pre202505` TDX measurement layout selected by

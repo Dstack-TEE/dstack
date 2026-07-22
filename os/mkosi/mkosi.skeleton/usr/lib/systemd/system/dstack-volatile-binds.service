@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+[Unit]
+Description=Bind volatile state over the immutable root
+DefaultDependencies=no
+Requires=var-volatile.mount
+After=var-volatile.mount
+Before=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/dstack-volatile-binds.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=local-fs.target

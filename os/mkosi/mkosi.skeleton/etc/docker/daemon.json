@@ -1,5 +1,8 @@
 {
-  "iptables": true,
-  "ip6tables": true,
-  "storage-driver": "overlay2"
+  "log-driver": "json-file",
+  "log-opts": {"max-size": "100m", "max-file": "10"},
+  "runtimes": {
+    "nvidia": {"args": [], "path": "nvidia-container-runtime"},
+    "sysbox-runc": {"path": "/usr/bin/sysbox-runc"}
+  }
 }
