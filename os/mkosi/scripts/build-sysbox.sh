@@ -42,4 +42,3 @@ mkdir -p "$STAGE/var/lib/sysbox"
 printf 'sysbox:100000:65536\n' >> "$STAGE/etc/subuid"
 printf 'sysbox:100000:65536\n' >> "$STAGE/etc/subgid"
 find "$STAGE" -print0 | xargs -0r touch -h -d "@${SOURCE_DATE_EPOCH:?}"
-
