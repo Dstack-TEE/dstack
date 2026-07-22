@@ -14,12 +14,13 @@ pub trait PlatformBackend: Send + Sync {
         &self,
         report_data: [u8; 64],
         vm_config: &str,
-        include_hash_inputs: bool,
+        include_preimages: bool,
+        include_ccel: bool,
     ) -> Result<GetQuoteResponse>;
     fn attest_response(
         &self,
         report_data: [u8; 64],
-        include_hash_inputs: bool,
+        include_preimages: bool,
     ) -> Result<AttestResponse>;
 }
 
@@ -44,15 +45,13 @@ impl PlatformBackend for RealPlatform {
         &self,
         report_data: [u8; 64],
         vm_config: &str,
-        include_hash_inputs: bool,
+        include_preimages: bool,
+        include_ccel: bool,
     ) -> Result<GetQuoteResponse> {
         let attestation = Attestation::quote(&report_data).context("Failed to get quote")?;
         let tdx_quote = attestation.get_tdx_quote_bytes();
-        let tdx_event_log =
-            attestation.get_tdx_event_log_string_with_hash_inputs(include_hash_inputs);
-        // CCEL can be tens of KiB. Reuse the existing explicit hash-input
-        // opt-in because CCEL runtime records contain those same pre-images.
-        let event_log_ccel = if include_hash_inputs {
+        let tdx_event_log = attestation.get_tdx_event_log_string_with_preimages(include_preimages);
+        let event_log_ccel = if include_ccel {
             attestation
                 .get_tdx_event_log_ccel()
                 .context("failed to build TDX CCEL event log")?
@@ -80,12 +79,12 @@ impl PlatformBackend for RealPlatform {
     fn attest_response(
         &self,
         report_data: [u8; 64],
-        include_hash_inputs: bool,
+        include_preimages: bool,
     ) -> Result<AttestResponse> {
         let mut attestation =
             Attestation::quote(&report_data).context("Failed to get attestation")?;
-        if include_hash_inputs {
-            attestation.fill_event_hash_inputs();
+        if include_preimages {
+            attestation.fill_event_preimages();
         }
         Ok(AttestResponse {
             attestation: attestation.into_versioned().to_bytes()?,

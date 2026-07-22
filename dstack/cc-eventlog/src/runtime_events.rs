@@ -119,7 +119,7 @@ impl RuntimeEvent {
     /// - V1: `SHA(event_type_le || ":" || event_name || ":" || payload)`
     /// - V2: `SHA(canonical_json({"name":"...","type":134217729,"payload":"hex..."}))`
     pub fn digest<H: Hasher>(&self) -> H::Output {
-        H::hash([self.hash_input().as_slice()])
+        H::hash([self.preimage().as_slice()])
     }
 
     /// The exact byte sequence that gets hashed to produce the digest.
@@ -129,7 +129,7 @@ impl RuntimeEvent {
     ///
     /// - V1: binary concatenation `event_type_le || ":" || name || ":" || payload`
     /// - V2: UTF-8 bytes of the JCS canonical JSON
-    pub fn hash_input(&self) -> Vec<u8> {
+    pub fn preimage(&self) -> Vec<u8> {
         match self.version {
             EventLogVersion::V1 => {
                 let mut buf = Vec::with_capacity(4 + 1 + self.event.len() + 1 + self.payload.len());

@@ -116,8 +116,8 @@ pub struct GetQuoteResponse {
     #[serde(default)]
     pub attestation: String,
     /// Merged TCG binary event log (boot-time CCEL + runtime events as
-    /// TCG_PCR_EVENT2), hex-encoded. Empty unless hash inputs were requested,
-    /// or on platforms without ACPI CCEL.
+    /// TCG_PCR_EVENT2), hex-encoded. Empty unless requested with
+    /// `include_ccel`, or on platforms without ACPI CCEL.
     #[serde(default)]
     pub event_log_ccel: String,
 }

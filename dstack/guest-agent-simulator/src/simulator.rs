@@ -29,7 +29,8 @@ pub fn simulated_quote_response(
     report_data: [u8; 64],
     vm_config: &str,
     patch_report_data: bool,
-    include_hash_inputs: bool,
+    include_preimages: bool,
+    _include_ccel: bool,
 ) -> Result<GetQuoteResponse> {
     let attestation = maybe_patch_report_data(attestation, report_data, patch_report_data, "quote");
     let Some(quote) = attestation.tdx_quote_bytes() else {
@@ -43,7 +44,7 @@ pub fn simulated_quote_response(
     Ok(GetQuoteResponse {
         quote,
         event_log: attestation
-            .tdx_event_log_string_with_hash_inputs(include_hash_inputs)
+            .tdx_event_log_string_with_preimages(include_preimages)
             .unwrap_or_default(),
         report_data: report_data.to_vec(),
         vm_config: vm_config.to_string(),
@@ -56,14 +57,14 @@ pub fn simulated_attest_response(
     attestation: &VersionedAttestation,
     report_data: [u8; 64],
     patch_report_data: bool,
-    include_hash_inputs: bool,
+    include_preimages: bool,
 ) -> Result<AttestResponse> {
     let mut attestation =
         maybe_patch_report_data(attestation, report_data, patch_report_data, "attest");
-    if include_hash_inputs {
+    if include_preimages {
         if let Some(event_log) = attestation.platform.tdx_event_log_mut() {
             for event in event_log {
-                event.fill_hash_input();
+                event.fill_preimage();
             }
         }
     }

@@ -74,11 +74,11 @@ mod tests {
             assert_eq!(got.event_type, orig.event_type);
             assert_eq!(got.digest, orig.digest());
             // The event_payload carried in TdxEvent after TCG round-trip is the
-            // hash_input bytes we stored as TCG event data.
+            // preimage bytes we stored as TCG event data.
             let runtime = orig.to_runtime_event().unwrap();
-            assert_eq!(got.event_payload, runtime.hash_input());
+            assert_eq!(got.event_payload, runtime.preimage());
             assert_eq!(
-                got.hash_input.as_deref(),
+                got.preimage.as_deref(),
                 Some(hex::encode(&got.event_payload).as_str())
             );
             // Decoded CCEL records do not retain the structured dstack event

@@ -539,12 +539,19 @@ func (c *DstackClient) GetKey(ctx context.Context, path string, purpose string, 
 
 // Gets a quote from the dstack service.
 func (c *DstackClient) GetQuote(ctx context.Context, reportData []byte) (*GetQuoteResponse, error) {
+	return c.GetQuoteWithOptions(ctx, reportData, false, false)
+}
+
+// GetQuoteWithOptions optionally includes event digest preimages and/or CCEL.
+func (c *DstackClient) GetQuoteWithOptions(ctx context.Context, reportData []byte, includePreimages, includeCCEL bool) (*GetQuoteResponse, error) {
 	if len(reportData) > 64 {
 		return nil, fmt.Errorf("report data is too large, it should be at most 64 bytes")
 	}
 
 	payload := map[string]interface{}{
-		"report_data": hex.EncodeToString(reportData),
+		"report_data":       hex.EncodeToString(reportData),
+		"include_preimages": includePreimages,
+		"include_ccel":      includeCCEL,
 	}
 
 	data, err := c.sendRPCRequest(ctx, "/GetQuote", payload)

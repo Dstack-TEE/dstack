@@ -81,7 +81,7 @@ pub struct TdxEvent {
     /// Never included in scale encoding (derivable from other fields).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[codec(skip)]
-    pub hash_input: Option<String>,
+    pub preimage: Option<String>,
 }
 
 fn is_v1(v: &EventLogVersion) -> bool {
@@ -97,7 +97,7 @@ impl TdxEvent {
             event,
             event_payload,
             version: EventLogVersion::default(),
-            hash_input: None,
+            preimage: None,
         }
     }
 
@@ -112,7 +112,7 @@ impl TdxEvent {
                 event: self.event.clone(),
                 event_payload: self.event_payload.clone(),
                 version: self.version,
-                hash_input: self.hash_input.clone(),
+                preimage: self.preimage.clone(),
             }
         } else {
             Self {
@@ -122,22 +122,22 @@ impl TdxEvent {
                 event: self.event.clone(),
                 event_payload: Vec::new(),
                 version: self.version,
-                hash_input: self.hash_input.clone(),
+                preimage: self.preimage.clone(),
             }
         }
     }
 
-    /// Populate `hash_input` with the digest pre-image.
+    /// Populate `preimage` with the digest pre-image.
     ///
     /// For runtime events, this is the byte sequence defined by V1/V2 digest algorithms.
     /// For boot-time TCG events, the pre-image is inherent in the original log format
-    /// and not reconstructable from this struct, so `hash_input` stays `None`.
-    pub fn fill_hash_input(&mut self) {
-        if self.hash_input.is_some() {
+    /// and not reconstructable from this struct, so `preimage` stays `None`.
+    pub fn fill_preimage(&mut self) {
+        if self.preimage.is_some() {
             return;
         }
         if let Some(runtime_event) = self.to_runtime_event() {
-            self.hash_input = Some(hex::encode(runtime_event.hash_input()));
+            self.preimage = Some(hex::encode(runtime_event.preimage()));
         }
     }
 
@@ -181,7 +181,7 @@ impl From<RuntimeEvent> for TdxEvent {
             event: value.event,
             event_payload: value.payload,
             version,
-            hash_input: None,
+            preimage: None,
         }
     }
 }
@@ -193,35 +193,35 @@ mod tests {
     use sha2::{Digest as _, Sha384 as Sha384Hasher};
 
     #[test]
-    fn fill_hash_input_v1() {
+    fn fill_preimage_v1() {
         let runtime = RuntimeEvent::new(
             "compose-hash".to_string(),
             vec![0xde, 0xad],
             EventLogVersion::V1,
         );
         let mut tdx: TdxEvent = runtime.into();
-        assert_eq!(tdx.hash_input, None);
-        tdx.fill_hash_input();
-        let input_hex = tdx.hash_input.as_ref().expect("hash_input populated");
+        assert_eq!(tdx.preimage, None);
+        tdx.fill_preimage();
+        let input_hex = tdx.preimage.as_ref().expect("preimage populated");
         let input = hex::decode(input_hex).unwrap();
-        // Hashing the hash_input must reproduce the event digest
+        // Hashing the preimage must reproduce the event digest
         let actual = Sha384Hasher::digest(&input);
         assert_eq!(actual.as_slice(), &tdx.digest);
     }
 
     #[test]
-    fn fill_hash_input_v2_is_canonical_json() {
+    fn fill_preimage_v2_is_canonical_json() {
         let runtime = RuntimeEvent::new(
             "compose-hash".to_string(),
             vec![0xab, 0xcd],
             EventLogVersion::V2,
         );
         let mut tdx: TdxEvent = runtime.into();
-        tdx.fill_hash_input();
-        let input_hex = tdx.hash_input.as_ref().expect("hash_input populated");
+        tdx.fill_preimage();
+        let input_hex = tdx.preimage.as_ref().expect("preimage populated");
         let input = hex::decode(input_hex).unwrap();
         let input_str = std::str::from_utf8(&input).unwrap();
-        // V2 hash_input is the canonical JSON (version is carried out-of-band)
+        // V2 preimage is the canonical JSON (version is carried out-of-band)
         assert!(input_str.contains(r#""name":"compose-hash""#));
         assert!(input_str.contains(r#""type":134217729"#));
         assert!(input_str.contains(r#""payload":"abcd""#));
@@ -232,31 +232,31 @@ mod tests {
     }
 
     #[test]
-    fn fill_hash_input_skips_non_runtime_events() {
+    fn fill_preimage_skips_non_runtime_events() {
         let mut boot_event = TdxEvent::new(0, 0x1, "EV_POST_CODE".to_string(), vec![1, 2, 3]);
-        boot_event.fill_hash_input();
-        assert_eq!(boot_event.hash_input, None);
+        boot_event.fill_preimage();
+        assert_eq!(boot_event.preimage, None);
     }
 
     #[test]
-    fn hash_input_not_serialized_by_scale() {
+    fn preimage_not_serialized_by_scale() {
         use scale::{Decode, Encode};
         let runtime = RuntimeEvent::new("test".to_string(), vec![1, 2], EventLogVersion::V2);
         let mut tdx: TdxEvent = runtime.into();
-        tdx.fill_hash_input();
-        assert!(tdx.hash_input.is_some());
+        tdx.fill_preimage();
+        assert!(tdx.preimage.is_some());
         let encoded = tdx.encode();
         let decoded = TdxEvent::decode(&mut &encoded[..]).unwrap();
-        // hash_input is codec(skip) so it's None after round-trip
-        assert_eq!(decoded.hash_input, None);
+        // preimage is codec(skip) so it's None after round-trip
+        assert_eq!(decoded.preimage, None);
     }
 
     #[test]
-    fn hash_input_skipped_from_json_when_none() {
+    fn preimage_skipped_from_json_when_none() {
         let runtime = RuntimeEvent::new("test".to_string(), vec![1], EventLogVersion::V1);
         let tdx: TdxEvent = runtime.into();
         let json = serde_json::to_string(&tdx).unwrap();
-        assert!(!json.contains("hash_input"));
+        assert!(!json.contains("preimage"));
     }
 }
 

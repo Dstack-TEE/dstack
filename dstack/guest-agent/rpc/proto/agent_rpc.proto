@@ -170,17 +170,18 @@ message TdxQuoteArgs {
 message RawQuoteArgs {
   // 64 bytes of report data
   bytes report_data = 1;
-  // If true, include digest hash inputs for TDX runtime events and include the
-  // merged TDX CCEL binary in GetQuoteResponse. This flag has no effect on
-  // non-TDX platforms, whose GetQuote event_log is empty.
-  // Non-runtime events (boot-time/TCG events) will have hash_input unset.
-  // The hash_input is hex-encoded bytes of the digest pre-image:
+  // If true, include digest preimages for TDX runtime events. This flag has no
+  // effect on non-TDX platforms, whose GetQuote event_log is empty.
+  // Non-runtime events (boot-time/TCG events) will have preimage unset.
+  // The preimage is hex-encoded bytes of the digest pre-image:
   // - v2 runtime events: hex of UTF-8 JCS canonical JSON
   // - v1 runtime events: hex of binary concat (event_type_le || ":" || name || ":" || payload)
-  // Clients can verify: sha384(hex_decode(hash_input)) == event.digest
+  // Clients can verify: sha384(hex_decode(preimage)) == event.digest
   // Enables relying parties to verify digests or inspect claims without
   // knowing the dstack event schema.
-  bool include_hash_inputs = 2;
+  bool include_preimages = 2;
+  // If true, return the merged TDX binary CCEL in GetQuoteResponse.
+  bool include_ccel = 3;
 }
 
 message TdxQuoteResponse {
@@ -239,6 +240,7 @@ message GetQuoteResponse {
   //                     V2: canonical JSON (UTF-8)
   //
   // Empty on platforms without an ACPI CCEL table (e.g. Nitro Enclaves).
+  // Populated only when RawQuoteArgs.include_ccel is true.
   bytes event_log_ccel = 6;
 }
 

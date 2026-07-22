@@ -815,16 +815,16 @@ pub trait TdxAttestationExt {
 
     /// Returns the TDX event log serialized as JSON.
     fn tdx_event_log_string(&self) -> Option<String> {
-        self.tdx_event_log_string_with_hash_inputs(false)
+        self.tdx_event_log_string_with_preimages(false)
     }
 
     /// Returns JSON and optionally attaches each runtime digest pre-image.
-    fn tdx_event_log_string_with_hash_inputs(&self, include_hash_inputs: bool) -> Option<String> {
+    fn tdx_event_log_string_with_preimages(&self, include_preimages: bool) -> Option<String> {
         self.tdx_event_log().map(|event_log| {
-            if include_hash_inputs {
+            if include_preimages {
                 let mut events: Vec<TdxEvent> = event_log.to_vec();
                 for event in &mut events {
-                    event.fill_hash_input();
+                    event.fill_preimage();
                 }
                 serde_json::to_string(&events).unwrap_or_default()
             } else {
@@ -1450,14 +1450,14 @@ impl<T> Attestation<T> {
         self.tdx_quote().map(|q| q.quote.clone())
     }
 
-    /// Populate `hash_input` on every runtime event in the TDX event log.
+    /// Populate `preimage` on every runtime event in the TDX event log.
     ///
     /// Useful before serializing an attestation so relying parties get the
     /// digest pre-images alongside events.
-    pub fn fill_event_hash_inputs(&mut self) {
+    pub fn fill_event_preimages(&mut self) {
         if let Some(q) = self.tdx_quote_mut() {
             for event in &mut q.event_log {
-                event.fill_hash_input();
+                event.fill_preimage();
             }
         }
     }
@@ -1471,16 +1471,16 @@ impl<T> Attestation<T> {
     /// Get TDX event log string with RTMR[0-2] payloads stripped to reduce size.
     /// Only digests are kept for boot-time events; runtime events (RTMR3) retain full payload.
     ///
-    /// When `include_hash_inputs` is true, each runtime event carries its digest
+    /// When `include_preimages` is true, each runtime event carries its digest
     /// pre-image (hex-encoded) so relying parties can verify or inspect it directly.
     pub fn get_tdx_event_log_string(&self) -> Option<String> {
-        self.get_tdx_event_log_string_with_hash_inputs(false)
+        self.get_tdx_event_log_string_with_preimages(false)
     }
 
     /// Get the stripped TDX event log and optionally attach hash pre-images.
-    pub fn get_tdx_event_log_string_with_hash_inputs(
+    pub fn get_tdx_event_log_string_with_preimages(
         &self,
-        include_hash_inputs: bool,
+        include_preimages: bool,
     ) -> Option<String> {
         self.tdx_quote().map(|q| {
             let mut stripped: Vec<_> = q
@@ -1496,9 +1496,9 @@ impl<T> Attestation<T> {
                     stripped
                 })
                 .collect();
-            if include_hash_inputs {
+            if include_preimages {
                 for event in &mut stripped {
-                    event.fill_hash_input();
+                    event.fill_preimage();
                 }
             }
             serde_json::to_string(&stripped).unwrap_or_default()
@@ -2671,7 +2671,7 @@ mod tests {
             event: String::new(),
             event_payload: event_payload.to_vec(),
             version: EventLogVersion::V1,
-            hash_input: None,
+            preimage: None,
         }
     }
 
@@ -2696,10 +2696,10 @@ mod tests {
         // The ACPI DATA marker payload is retained regardless of the
         // vm_config's tdx_attestation_variant (including no vm_config at
         // all), so a verifier can choose lite verification for any TDX boot.
-        for include_hash_inputs in [false, true] {
+        for include_preimages in [false, true] {
             let events: Vec<TdxEvent> = serde_json::from_str(
                 &attestation
-                    .get_tdx_event_log_string_with_hash_inputs(include_hash_inputs)
+                    .get_tdx_event_log_string_with_preimages(include_preimages)
                     .expect("TDX event log"),
             )
             .unwrap_or_else(|e| panic!("decode GetQuote event log: {e}"));

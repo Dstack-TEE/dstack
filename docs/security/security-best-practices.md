@@ -166,7 +166,7 @@ services:
 
 Event-log V2 exposes canonical digest pre-images so a relying party can check
 individual claims such as `compose-hash`. Verifying
-`sha384(hash_input) == digest` proves only that those bytes participate in the
+`sha384(preimage) == digest` proves only that those bytes participate in the
 quoted RTMR/PCR extension chain. It does **not** prove that trusted dstack boot
 code originated the event name: privileged code inside the CVM can append
 additional measured events after boot.

@@ -361,7 +361,7 @@ pub fn ccel_content_len(raw: &[u8]) -> Result<usize> {
 /// - pcrIndex  = imr + 1 (0-based TdxEvent -> 1-based TCG pcrIndex)
 /// - eventType = DSTACK_RUNTIME_EVENT_TYPE
 /// - digests   = [{ TPM_ALG_SHA384, <48-byte digest> }]
-/// - event     = the digest pre-image bytes (`hash_input`), so that
+/// - event     = the digest pre-image bytes (`preimage`), so that
 ///   sha384(event) == digest holds for any TCG parser.
 pub fn encode_runtime_events_as_tcg(events: &[TdxEvent]) -> Vec<u8> {
     let mut out = Vec::new();
@@ -369,7 +369,7 @@ pub fn encode_runtime_events_as_tcg(events: &[TdxEvent]) -> Vec<u8> {
         let Some(runtime) = event.to_runtime_event() else {
             continue;
         };
-        let hash_input = runtime.hash_input();
+        let preimage = runtime.preimage();
         let digest = event.digest();
         let pcr_index = event.imr.saturating_add(1);
         out.extend_from_slice(&pcr_index.to_le_bytes());
@@ -377,8 +377,8 @@ pub fn encode_runtime_events_as_tcg(events: &[TdxEvent]) -> Vec<u8> {
         out.extend_from_slice(&1u32.to_le_bytes());
         out.extend_from_slice(&TPM_ALG_SHA384.to_le_bytes());
         out.extend_from_slice(&digest);
-        out.extend_from_slice(&(hash_input.len() as u32).to_le_bytes());
-        out.extend_from_slice(&hash_input);
+        out.extend_from_slice(&(preimage.len() as u32).to_le_bytes());
+        out.extend_from_slice(&preimage);
     }
     out
 }
@@ -431,7 +431,7 @@ impl TryFrom<TcgEvent> for TdxEvent {
             .context("digest not found")?
             .hash;
         let event_payload: Vec<u8> = value.event.into();
-        let hash_input =
+        let preimage =
             (value.event_type == DSTACK_RUNTIME_EVENT_TYPE).then(|| hex::encode(&event_payload));
         Ok(TdxEvent {
             imr: value
@@ -443,7 +443,7 @@ impl TryFrom<TcgEvent> for TdxEvent {
             event: Default::default(),
             event_payload,
             version: Default::default(),
-            hash_input,
+            preimage,
         })
     }
 }

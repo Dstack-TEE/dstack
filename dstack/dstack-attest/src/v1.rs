@@ -406,7 +406,7 @@ mod tests {
                     event: "pod".into(),
                     event_payload: vec![0xde, 0xad, 0xbe, 0xef],
                     version: EventLogVersion::V1,
-                    hash_input: None,
+                    preimage: None,
                 }],
             },
             StackEvidence::DstackPod {
@@ -487,7 +487,7 @@ mod tests {
             event: String::new(),
             event_payload: vec![0xff; idx + 1],
             version: EventLogVersion::V1,
-            hash_input: None,
+            preimage: None,
         }
     }
 
@@ -499,7 +499,7 @@ mod tests {
             event: String::new(),
             event_payload: TDX_ACPI_DATA_EVENT_PAYLOAD.to_vec(),
             version: EventLogVersion::V1,
-            hash_input: None,
+            preimage: None,
         }
     }
 

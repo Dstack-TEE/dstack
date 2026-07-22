@@ -378,7 +378,8 @@ impl DistributedCertBot {
         let quote = match agent
             .get_quote(RawQuoteArgs {
                 report_data: report_data.clone(),
-                include_hash_inputs: false,
+                include_preimages: false,
+                include_ccel: false,
             })
             .await
         {
@@ -393,7 +394,8 @@ impl DistributedCertBot {
         let attestation_str = match agent
             .attest(RawQuoteArgs {
                 report_data,
-                include_hash_inputs: false,
+                include_preimages: false,
+                include_ccel: false,
             })
             .await
         {
@@ -455,7 +457,8 @@ impl DistributedCertBot {
         let quote = match agent
             .get_quote(RawQuoteArgs {
                 report_data: report_data.clone(),
-                include_hash_inputs: false,
+                include_preimages: false,
+                include_ccel: false,
             })
             .await
         {
@@ -470,7 +473,8 @@ impl DistributedCertBot {
         let attestation = match agent
             .attest(RawQuoteArgs {
                 report_data,
-                include_hash_inputs: false,
+                include_preimages: false,
+                include_ccel: false,
             })
             .await
         {

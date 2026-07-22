@@ -192,21 +192,25 @@ impl AppState {
     fn quote_response(
         &self,
         report_data: [u8; 64],
-        include_hash_inputs: bool,
+        include_preimages: bool,
+        include_ccel: bool,
     ) -> Result<GetQuoteResponse> {
-        self.inner
-            .platform
-            .quote_response(report_data, &self.inner.vm_config, include_hash_inputs)
+        self.inner.platform.quote_response(
+            report_data,
+            &self.inner.vm_config,
+            include_preimages,
+            include_ccel,
+        )
     }
 
     fn attest_response(
         &self,
         report_data: [u8; 64],
-        include_hash_inputs: bool,
+        include_preimages: bool,
     ) -> Result<AttestResponse> {
         self.inner
             .platform
-            .attest_response(report_data, include_hash_inputs)
+            .attest_response(report_data, include_preimages)
     }
 }
 
@@ -351,7 +355,7 @@ impl DstackGuestRpc for InternalRpcHandler {
     async fn get_quote(self, request: RawQuoteArgs) -> Result<GetQuoteResponse> {
         let report_data = pad64(&request.report_data).context("Report data is too long")?;
         self.state
-            .quote_response(report_data, request.include_hash_inputs)
+            .quote_response(report_data, request.include_preimages, request.include_ccel)
     }
 
     async fn info(self) -> Result<AppInfo> {
@@ -460,7 +464,7 @@ impl DstackGuestRpc for InternalRpcHandler {
     async fn attest(self, request: RawQuoteArgs) -> Result<AttestResponse> {
         let report_data = pad64(&request.report_data).context("Report data is too long")?;
         self.state
-            .attest_response(report_data, request.include_hash_inputs)
+            .attest_response(report_data, request.include_preimages)
     }
 
     async fn version(self) -> Result<WorkerVersion> {
@@ -562,7 +566,7 @@ impl TappdRpc for InternalRpcHandlerV0 {
         };
         let report_data =
             content_type.to_report_data_with_hash(&request.report_data, &request.hash_algorithm)?;
-        let response = self.state.quote_response(report_data, false)?;
+        let response = self.state.quote_response(report_data, false, false)?;
         Ok(TdxQuoteResponse {
             quote: response.quote,
             event_log: response.event_log,
@@ -655,7 +659,7 @@ impl WorkerRpc for ExternalRpcHandler {
                 let ed_bytes = ed25519_report_string.as_bytes();
                 ed25519_report_data[..ed_bytes.len()].copy_from_slice(ed_bytes);
 
-                self.state.quote_response(ed25519_report_data, false)
+                self.state.quote_response(ed25519_report_data, false, false)
             }
             "secp256k1" | "secp256k1_prehashed" => {
                 let secp256k1_key = SigningKey::from_slice(&key_response.key)
@@ -668,7 +672,8 @@ impl WorkerRpc for ExternalRpcHandler {
                 let secp_bytes = secp256k1_report_string.as_bytes();
                 secp256k1_report_data[..secp_bytes.len()].copy_from_slice(secp_bytes);
 
-                self.state.quote_response(secp256k1_report_data, false)
+                self.state
+                    .quote_response(secp256k1_report_data, false, false)
             }
             _ => Err(anyhow::anyhow!("Unsupported algorithm")),
         }
@@ -883,7 +888,8 @@ pNs85uhOZE8z2jr8Pg==
                 &self,
                 report_data: [u8; 64],
                 vm_config: &str,
-                _include_hash_inputs: bool,
+                _include_preimages: bool,
+                _include_ccel: bool,
             ) -> Result<GetQuoteResponse> {
                 let attestation = patch_report_data(&self.attestation, report_data);
                 let Some(quote) = attestation.platform.tdx_quote().map(ToOwned::to_owned) else {
@@ -905,7 +911,7 @@ pNs85uhOZE8z2jr8Pg==
             fn attest_response(
                 &self,
                 report_data: [u8; 64],
-                _include_hash_inputs: bool,
+                _include_preimages: bool,
             ) -> Result<AttestResponse> {
                 let attestation = patch_report_data(&self.attestation, report_data);
                 Ok(AttestResponse {
