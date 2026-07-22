@@ -171,7 +171,7 @@ App boot authorization.
 **Request:**
 ```json
 {
-  "attestationMode": "dstack-tdx",
+  "teeVariant": "dstack-tdx",
   "mrAggregated": "0x...",
   "osImageHash": "0x...",
   "appId": "0x...",

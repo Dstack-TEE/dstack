@@ -181,7 +181,7 @@ jq -e \
   .is_valid == true and
   .details.quote_verified == true and
   .details.report_data == $expected_report_data and
-  .details.boot_info.attestationMode == "dstack-aws-nitro-tpm" and
+  .details.boot_info.teeVariant == "dstack-aws-nitro-tpm" and
   .details.boot_info.tcbStatus == "UpToDate" and
   .details.boot_info.osImageHash == $expected_os_image_hash
 ' request.json.verification.json
@@ -226,9 +226,9 @@ key_provider_id })` and compare it to PCR8. dstack's own verifier and KMS do
 **not** check PCR8 — they rely on PCR14 replay — so it is not part of the
 required policy above.
 
-The `attestationMode` field is carried in the verified boot info for
+The `teeVariant` field is carried in the verified boot info for
 observability; a relying party may additionally assert
-`attestationMode == "dstack-aws-nitro-tpm"` against the verifier output, but the
+`teeVariant == "dstack-aws-nitro-tpm"` against the verifier output, but the
 authorization contract itself keys on the standard fields above.
 
 Same-account AWS KMS is not a trusted secret authority in this threat model if
@@ -261,7 +261,7 @@ Require the generated `endpoint-cert.pem.ratls-verification.json` to contain:
 ```bash
 jq -e '
   .is_valid == true and
-  .details.attestation_mode == "dstack-aws-nitro-tpm" and
+  .details.tee_variant == "dstack-aws-nitro-tpm" and
   .details.app_info.os_image_hash_verified == true
 ' endpoint-cert.pem.ratls-verification.json
 ```

@@ -293,7 +293,7 @@ Expected fields:
 - `device_id`
 - `mr_aggregated`
 - `os_image_hash`
-- `attestation_mode`
+- `tee_variant`
 
 Extract values:
 

@@ -9,7 +9,7 @@ import { readFileSync, existsSync } from 'fs';
 
 // zod schemas for validation - compatible with auth-eth implementation
 const BootInfoSchema = z.object({
-  attestationMode: z.string().optional().default(''),
+  teeVariant: z.string().optional().default(''),
   mrAggregated: z.string().describe('aggregated MR measurement'),
   osImageHash: z.string().describe('OS Image hash'),
   appId: z.string().describe('application ID'),

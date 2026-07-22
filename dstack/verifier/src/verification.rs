@@ -61,7 +61,12 @@ fn policy_boot_info_from_verified_app_info(
     app_info: &AppInfo,
 ) -> PolicyBootInfo {
     let (tcb_status, advisory_ids) = policy_tcb_fields(attestation);
-    PolicyBootInfo::from_app_info(attestation.quote.mode(), app_info, tcb_status, advisory_ids)
+    PolicyBootInfo::from_app_info(
+        attestation.quote.variant(),
+        app_info,
+        tcb_status,
+        advisory_ids,
+    )
 }
 
 /// best-effort: None for empty/malformed blobs.
@@ -586,7 +591,7 @@ impl CvmVerifier {
         let verified_attestation = match verified {
             Ok(att) => {
                 details.quote_verified = true;
-                details.attestation_mode = Some(att.quote.mode());
+                details.tee_variant = Some(att.quote.variant());
                 // keep the top-level tcb_status consistent with the
                 // boot_info.tcbStatus fed to the auth policy (notably AWS
                 // NitroTPM, which is normalized to "UpToDate" there).
@@ -1426,7 +1431,7 @@ mod tests {
         assert!(response.details.os_image_hash_verified);
         assert!(!response.details.acpi_tables_verified);
         assert_eq!(
-            response.details.attestation_mode,
+            response.details.tee_variant,
             Some(ra_tls::attestation::TeeVariant::DstackAmdSevSnp)
         );
         assert!(
@@ -1454,7 +1459,7 @@ mod tests {
         let response = verifier.verify(request).await.expect("verifier runs");
         assert!(response.is_valid, "{:?}", response.reason);
         assert_eq!(
-            response.details.attestation_mode,
+            response.details.tee_variant,
             Some(ra_tls::attestation::TeeVariant::DstackAmdSevSnp)
         );
     }
@@ -1480,7 +1485,7 @@ mod tests {
         assert!(response.details.os_image_hash_verified);
         assert!(!response.details.acpi_tables_verified);
         assert_eq!(
-            response.details.attestation_mode,
+            response.details.tee_variant,
             Some(ra_tls::attestation::TeeVariant::DstackTdx)
         );
         assert!(

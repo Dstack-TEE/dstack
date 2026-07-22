@@ -23,12 +23,12 @@ pub(crate) fn build_boot_info(
     use_boottime_mr: bool,
     vm_config_str: &str,
 ) -> Result<BootInfo> {
-    let mode = att.quote.mode();
+    let variant = att.quote.variant();
     let (tcb_status, advisory_ids) = dstack_verifier::policy_tcb_fields(att);
     let app_info = att.decode_app_info_ex(use_boottime_mr, vm_config_str)?;
     ensure_app_id_len(&app_info.app_id)?;
     Ok(BootInfo {
-        attestation_mode: mode,
+        tee_variant: variant,
         mr_aggregated: app_info.mr_aggregated.to_vec(),
         os_image_hash: app_info.os_image_hash,
         mr_system: app_info.mr_system.to_vec(),

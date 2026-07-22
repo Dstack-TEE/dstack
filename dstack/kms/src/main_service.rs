@@ -216,7 +216,7 @@ fn ensure_key_release_allowed(
     snp_enabled: bool,
     aws_nitro_tpm_enabled: bool,
 ) -> Result<()> {
-    match boot_info.attestation_mode {
+    match boot_info.tee_variant {
         TeeVariant::DstackAmdSevSnp if !snp_enabled => {
             bail!("amd sev-snp key release is not enabled")
         }
@@ -320,7 +320,7 @@ impl RpcHandler {
         // SNP rootfs/app/config binding is handled by the SNP launch-measurement
         // helper above. The legacy OS-image verifier is TDX-oriented and still
         // rejects SNP quotes; keep SNP on the explicit fail-closed helper path.
-        if boot_info.attestation_mode != TeeVariant::DstackAmdSevSnp {
+        if boot_info.tee_variant != TeeVariant::DstackAmdSevSnp {
             self.verify_os_image_hash(vm_config_str.into(), att)
                 .await
                 .context("Failed to verify os image hash")?;
@@ -875,7 +875,7 @@ mod tests {
             .expect("aws nitrotpm attestation should produce KMS boot info");
         let pcrs = verified_aws_nitro_tpm_pcrs(&attestation);
 
-        assert_eq!(boot_info.attestation_mode, TeeVariant::DstackAwsNitroTpm);
+        assert_eq!(boot_info.tee_variant, TeeVariant::DstackAwsNitroTpm);
         assert_eq!(boot_info.tcb_status, "UpToDate");
         assert!(boot_info.advisory_ids.is_empty());
         assert_eq!(boot_info.app_id, vec![0x11; 20]);
@@ -930,7 +930,7 @@ mod tests {
         ensure_key_release_allowed(&boot_info, false, true).unwrap();
 
         // A TDX boot info is unaffected by the AWS gate even when it is disabled.
-        boot_info.attestation_mode = TeeVariant::DstackTdx;
+        boot_info.tee_variant = TeeVariant::DstackTdx;
         ensure_key_release_allowed(&boot_info, false, false).unwrap();
     }
 
@@ -1023,7 +1023,7 @@ mod tests {
         let boot_info = build_boot_info_for_attestation(&attestation, false, &vm_config)
             .expect("snp attestation should build boot info through vm_config path");
 
-        assert_eq!(boot_info.attestation_mode, TeeVariant::DstackAmdSevSnp);
+        assert_eq!(boot_info.tee_variant, TeeVariant::DstackAmdSevSnp);
         assert_eq!(boot_info.mr_aggregated.len(), 32);
         assert_eq!(boot_info.device_id, vec![0xab; 64]);
         assert_eq!(boot_info.app_id, vec![0x11; 20]);
@@ -1045,7 +1045,7 @@ mod tests {
         let boot_info = build_boot_info_for_attestation(&attestation, false, "")
             .expect("snp local KMS attestation should use embedded vm_config");
 
-        assert_eq!(boot_info.attestation_mode, TeeVariant::DstackAmdSevSnp);
+        assert_eq!(boot_info.tee_variant, TeeVariant::DstackAmdSevSnp);
         assert_eq!(boot_info.mr_aggregated.len(), 32);
         assert_eq!(boot_info.app_id, vec![0x11; 20]);
     }
@@ -1060,7 +1060,7 @@ mod tests {
 
         let boot_info = build_boot_info_for_attestation(&attestation, false, &vm_config)
             .expect("self-contained SNP vm_config should not require KMS-local sev_snp config");
-        assert_eq!(boot_info.attestation_mode, TeeVariant::DstackAmdSevSnp);
+        assert_eq!(boot_info.tee_variant, TeeVariant::DstackAmdSevSnp);
         assert_eq!(boot_info.device_id, vec![0xab; 64]);
     }
 
