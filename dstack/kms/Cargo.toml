@@ -48,6 +48,7 @@ serde-duration.workspace = true
 dstack-verifier = { workspace = true, default-features = false }
 dstack-mr.workspace = true
 dstack-attest.workspace = true
+dstack-api-auth.workspace = true
 
 [dev-dependencies]
 cc-eventlog.workspace = true

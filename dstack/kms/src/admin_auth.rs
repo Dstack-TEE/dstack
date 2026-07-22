@@ -1,8 +1,14 @@
-// SPDX-FileCopyrightText: © 2025-2026 Phala Network <dstack@phala.network>
+// SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! Backwards-compatible Gateway adapter for the shared API authenticator.
+//! KMS adapter for the shared API authenticator, guarding the admin listener.
+//!
+//! Unlike the KMS public RPC surface (which authenticates callers by RA-TLS
+//! attestation), the admin API is reached by operators/tooling, so it uses the
+//! same shared-token/htpasswd HTTP mechanism as the VMM and gateway. The token
+//! is configured via `core.admin.auth_token`, or the `DSTACK_KMS_ADMIN_TOKEN` /
+//! `ADMIN_API_TOKEN` environment variables.
 
 use anyhow::{bail, Result};
 use dstack_api_auth::{Authenticator, HttpAuthConfig, HttpAuthFairing};
@@ -10,7 +16,7 @@ use rocket::Route;
 
 use crate::config::AdminConfig;
 
-const ENV_ADMIN_TOKEN: &str = "DSTACK_GATEWAY_ADMIN_TOKEN";
+const ENV_ADMIN_TOKEN: &str = "DSTACK_KMS_ADMIN_TOKEN";
 const ENV_ADMIN_TOKEN_COMPAT: &str = "ADMIN_API_TOKEN";
 
 pub struct AdminAuthFairing(HttpAuthFairing);
@@ -49,9 +55,9 @@ impl AdminAuthFairing {
 
 fn http_config() -> HttpAuthConfig {
     HttpAuthConfig {
-        realm: "dstack-gateway admin".into(),
+        realm: "dstack-kms admin".into(),
         token_header: Some("X-Admin-Token".into()),
-        allow_get_query_token: true,
+        allow_get_query_token: false,
     }
 }
 
@@ -67,4 +73,42 @@ impl rocket::fairing::Fairing for AdminAuthFairing {
 
 pub fn routes() -> Vec<Route> {
     dstack_api_auth::routes()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enabled_without_credentials_fails_closed() {
+        // the token can also come from the environment; make sure neither var is
+        // set so this exercises the missing-credential path.
+        std::env::remove_var(ENV_ADMIN_TOKEN);
+        std::env::remove_var(ENV_ADMIN_TOKEN_COMPAT);
+        let cfg = AdminConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        assert!(AdminAuthFairing::from_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn insecure_no_auth_is_allowed() {
+        let cfg = AdminConfig {
+            enabled: true,
+            insecure_no_auth: true,
+            ..Default::default()
+        };
+        assert!(AdminAuthFairing::from_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn configured_token_builds() {
+        let cfg = AdminConfig {
+            enabled: true,
+            auth_token: "secret".into(),
+            ..Default::default()
+        };
+        assert!(AdminAuthFairing::from_config(&cfg).is_ok());
+    }
 }

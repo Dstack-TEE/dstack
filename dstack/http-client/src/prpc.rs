@@ -12,6 +12,7 @@ use serde::{de::DeserializeOwned, Serialize};
 pub struct PrpcClient {
     base_url: String,
     path_append: String,
+    auth_token: Option<String>,
 }
 
 impl PrpcClient {
@@ -19,6 +20,7 @@ impl PrpcClient {
         Self {
             base_url,
             path_append: String::new(),
+            auth_token: None,
         }
     }
 
@@ -29,7 +31,15 @@ impl PrpcClient {
         Self {
             base_url: format!("unix:{socket_path}"),
             path_append: path,
+            auth_token: None,
         }
+    }
+
+    /// Send `Authorization: Bearer <token>` with every request.
+    pub fn with_bearer_token(mut self, token: impl Into<String>) -> Self {
+        let token = token.into();
+        self.auth_token = (!token.is_empty()).then_some(token);
+        self
     }
 }
 
@@ -41,7 +51,15 @@ impl RequestClient for PrpcClient {
     {
         let body = serde_json::to_vec(&body).context("Failed to serialize body")?;
         let path = format!("{}{path}?json", self.path_append);
-        let (status, body) = super::http_request("POST", &self.base_url, &path, &body).await?;
+        let auth_header;
+        let mut headers: Vec<(&str, &str)> = Vec::new();
+        if let Some(token) = &self.auth_token {
+            auth_header = format!("Bearer {token}");
+            headers.push(("Authorization", auth_header.as_str()));
+        }
+        let (status, body) =
+            super::http_request_with_headers("POST", &self.base_url, &path, &body, &headers)
+                .await?;
         if status != 200 {
             anyhow::bail!("Invalid status code: {status}, path={path}");
         }

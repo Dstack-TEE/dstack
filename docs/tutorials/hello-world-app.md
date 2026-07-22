@@ -184,6 +184,7 @@ Use `vmm-cli.py compose` to generate the encrypted deployment manifest. The `--g
 
 ```bash
 cd ~/dstack/dstack/vmm
+export DSTACK_VMM_AUTH_USER=admin
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 
 ./src/vmm-cli.py --url http://127.0.0.1:9080 compose \
@@ -265,6 +266,7 @@ ssh user@your-server
 
 ```bash
 cd ~/dstack/dstack/vmm
+export DSTACK_VMM_AUTH_USER=admin
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 
 SRV_DOMAIN=$(grep ^SRV_DOMAIN ~/gateway-deploy/.env | cut -d= -f2)
@@ -373,6 +375,7 @@ Navigate to the VMM directory:
 
 ```bash
 cd ~/dstack/dstack/vmm
+export DSTACK_VMM_AUTH_USER=admin
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 ```
 

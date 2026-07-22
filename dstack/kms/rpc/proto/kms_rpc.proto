@@ -105,14 +105,20 @@ service KMS {
   rpc GetTempCaCert(google.protobuf.Empty) returns (GetTempCaCertResponse);
   // Sign a certificate
   rpc SignCert(SignCertRequest) returns (SignCertResponse);
+}
+
+// The KMS admin RPC service. Served on a separate admin listener
+// (`[core.admin]`) behind the shared HTTP authenticator, so the credential
+// travels in the `Authorization`/`X-Admin-Token` header rather than the
+// request body.
+service Admin {
   // Clear the image cache
   rpc ClearImageCache(ClearImageCacheRequest) returns (google.protobuf.Empty);
 }
 
 message ClearImageCacheRequest {
-  string token = 1;
-  string image_hash = 2;
-  string config_hash = 3;
+  string image_hash = 1;
+  string config_hash = 2;
 }
 
 message BootstrapRequest {

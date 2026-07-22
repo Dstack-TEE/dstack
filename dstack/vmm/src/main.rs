@@ -8,6 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use app::App;
 use clap::{Args as ClapArgs, Parser, Subcommand};
 use config::Config;
+use dstack_api_auth::{Authenticator, HttpAuthConfig, HttpAuthFairing};
 use guest_api_service::GuestApiHandler;
 use host_api_service::HostApiHandler;
 use main_service::RpcHandler;
@@ -16,7 +17,6 @@ use rocket::{
     fairing::AdHoc,
     figment::{providers::Serialized, Figment},
 };
-use rocket_apitoken::ApiToken;
 use rocket_vsock_listener::VsockListener;
 use supervisor_client::SupervisorClient;
 use tracing::{error, info, warn};
@@ -81,7 +81,7 @@ struct VmLauncherArgs {
     spec: String,
 }
 
-async fn run_external_api(app: App, figment: Figment, api_auth: ApiToken) -> Result<()> {
+async fn run_external_api(app: App, figment: Figment, api_auth: Authenticator) -> Result<()> {
     let version = app_version();
     let openapi_doc = openapi::build_openapi_doc(&version)?;
 
@@ -94,7 +94,15 @@ async fn run_external_api(app: App, figment: Figment, api_auth: ApiToken) -> Res
             ra_rpc::prpc_routes!(App, RpcHandler, trim: "Teepod."),
         )
         .manage(app)
-        .manage(api_auth)
+        .attach(HttpAuthFairing::new(
+            api_auth,
+            HttpAuthConfig {
+                realm: "dstack-vmm API".into(),
+                token_header: Some("X-Admin-Token".into()),
+                allow_get_query_token: true,
+            },
+        ))
+        .mount("/", dstack_api_auth::routes())
         .attach(AdHoc::on_response("Add app rev header", |_req, res| {
             Box::pin(async move {
                 res.set_raw_header("X-App-Version", app_version());
@@ -197,6 +205,10 @@ async fn main() -> Result<()> {
 
     // Register this VMM instance for local discovery
     discovery::cleanup_stale_registrations();
+    // whether the management API binds a TCP address reachable beyond the local
+    // host (i.e. not a Unix socket and not a loopback IP). Used to warn when the
+    // surface is exposed without authentication.
+    let mut listen_tcp_public = false;
     let listen_address = {
         // Use Rocket's Endpoint type to parse the address exactly as Rocket would,
         // then override the port with the figment's port value (matching Rocket's behavior).
@@ -205,6 +217,7 @@ async fn main() -> Result<()> {
         match endpoint.tcp() {
             Some(addr) => {
                 let port: u16 = figment.extract_inner("port").unwrap_or(addr.port());
+                listen_tcp_public = !addr.ip().is_loopback();
                 format!("{}:{port}", addr.ip())
             }
             None => endpoint.to_string(),
@@ -225,7 +238,22 @@ async fn main() -> Result<()> {
         }
     };
 
-    let api_auth = ApiToken::new(config.auth.tokens.clone(), config.auth.enabled);
+    let mut api_auth = if config.auth.enabled {
+        Authenticator::from_tokens(config.auth.tokens.clone())
+    } else {
+        Authenticator::disabled()
+    };
+    if config.auth.enabled && !config.auth.htpasswd_file.as_os_str().is_empty() {
+        api_auth = api_auth.with_htpasswd_file(&config.auth.htpasswd_file)?;
+    }
+    if !config.auth.enabled && listen_tcp_public {
+        warn!(
+            "the management API is bound to a non-loopback address ({listen_address}) with \
+             `[auth] enabled = false`: the entire VMM control surface (create/stop VM, UI, \
+             pRPC) is exposed WITHOUT authentication. set `[auth] enabled = true` with a \
+             token, or bind `address` to localhost / a Unix socket."
+        );
+    }
     let supervisor = {
         let cfg = &config.supervisor;
         let abs_exe = Path::new(&cfg.exe).absolutize()?;

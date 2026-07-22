@@ -63,3 +63,28 @@ Open `vmm.toml` and adjust dstack-gateway configuration in the `gateway` section
 
 - `base_domain`: Same as `base_domain` from `gateway.toml`'s `core.proxy` section
 - `port`: Same as `listen_port` from `gateway.toml`'s `core.proxy` section
+
+## Admin API authentication
+
+The gateway exposes a separate admin API (used for sync, WireGuard peer management, and other operator RPCs). Configure it in the `core.admin` section of `gateway.toml`:
+
+```toml
+[core.admin]
+enabled = true
+address = "0.0.0.0:9016"
+# generate with: openssl rand -hex 32
+admin_token = "<paste output of: openssl rand -hex 32>"
+# alternatively, an Apache bcrypt htpasswd file (htpasswd -B -c admin.htpasswd admin)
+# htpasswd_file = "/etc/dstack/gateway-admin.htpasswd"
+insecure_no_auth = false
+```
+
+- `enabled`: enable the admin API server.
+- `address`: bind address/port for the admin API.
+- `admin_token`: shared admin token. It can also be supplied via the environment variables `DSTACK_GATEWAY_ADMIN_TOKEN` or `ADMIN_API_TOKEN` instead of the config file.
+- `htpasswd_file`: path to an Apache bcrypt htpasswd file (create with `htpasswd -B -c admin.htpasswd admin`); only bcrypt entries are accepted. Can be used instead of, or alongside, `admin_token`.
+- `insecure_no_auth`: development-only escape hatch that disables admin authentication. Never enable it on a network-reachable admin interface.
+
+The admin server is fail-closed: if it is enabled with no `admin_token` and no `htpasswd_file`, and `insecure_no_auth` is `false`, it refuses to start rather than exposing an unauthenticated admin API.
+
+Clients authenticate by sending `Authorization: Bearer <token>` or the `X-Admin-Token: <token>` header.

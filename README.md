@@ -73,6 +73,9 @@ Setting up dstack on your own hardware? Start with the [self-hosted quick onboar
 
 Building or customizing the guest OS itself? Follow the [guest-OS build guide](./docs/building-guest-os.md).
 
+Developing without TEE hardware? Use a development image with
+[no-TEE mode and swtpm](./docs/development-without-tee.md).
+
 ## Architecture
 
 ![Architecture](./docs/assets/arch.png)

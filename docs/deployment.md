@@ -74,6 +74,11 @@ reuse = true
 image_path = "./images"
 run_path = "./run/vm"
 
+[auth]
+enabled = true
+# generate with: openssl rand -hex 32
+tokens = ["<paste output of: openssl rand -hex 32>"]
+
 [cvm]
 kms_urls = []
 gateway_urls = []
@@ -92,6 +97,10 @@ range = [
 address = "vsock:2"
 port = 10000
 ```
+
+> **VMM API authentication (required for non-localhost binds).** Since [PR #796](https://github.com/Dstack-TEE/dstack/pull/796), the `[auth]` token guards the *entire* VMM surface — creating and stopping CVMs, the web UI, and all pRPC calls — not just `/logs`. Because the example above binds `tcp:0.0.0.0:9080` (reachable off the host), you MUST enable `[auth]`; otherwise the whole control API is exposed unauthenticated. Auth is fail-closed: with `enabled = true` and no usable credential, requests are rejected.
+>
+> Clients authenticate with `Authorization: Bearer <token>` (or the `X-Admin-Token: <token>` header). Instead of inline `tokens`, you can point to an Apache bcrypt htpasswd file with `htpasswd_file = "/etc/dstack/admin.htpasswd"` (create it with `htpasswd -B -c /etc/dstack/admin.htpasswd admin`). Only bcrypt (`-B`) entries are accepted.
 
 Download guest images from [dstack guest-OS releases](https://github.com/Dstack-TEE/dstack/releases) and extract to `./images/`.
 
@@ -112,6 +121,8 @@ Production KMS requires:
 - **Auth server**: Webhook server that validates boot requests and returns authorization decisions
 
 #### Auth Server Options
+
+> **Note:** the boot-authorization webhook below (auth-simple / auth-eth) is a *different* mechanism from the KMS admin-API authentication. The webhook allowlists which CVMs may boot and receive keys; the admin API (`[core.admin]` in `kms.toml`) guards operator RPCs. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
 
 | Server | Use Case | Configuration |
 |--------|----------|---------------|
@@ -427,6 +438,8 @@ curl http://<new-kms>:9203/finish
 > - the source KMS must allow the destination KMS
 >
 > If you skip this, `Onboard.Onboard` or later trusted RPCs will fail with KMS authorization errors.
+
+> **Admin authentication.** Onboarding itself is gated by attestation and the authorization backend above — not by a token. Separately, the KMS *admin* RPCs (for example `ClearImageCache`) are served on a dedicated `[core.admin]` listener behind the shared HTTP authenticator, just like the VMM and gateway: set `[core.admin] enabled = true` with an `auth_token` (or the `DSTACK_KMS_ADMIN_TOKEN` / `ADMIN_API_TOKEN` env vars), and clients send `Authorization: Bearer <token>` or `X-Admin-Token`. Enabled with neither `auth_token` nor `htpasswd_file` (and `insecure_no_auth = false`) fails closed — the KMS refuses to start. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
 
 ---
 

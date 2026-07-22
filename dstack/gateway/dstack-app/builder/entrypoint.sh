@@ -95,7 +95,7 @@ sync_connections_interval = "${SYNC_CONNECTIONS_INTERVAL:-30s}"
 enabled = true
 address = "${ADMIN_LISTEN_ADDR:-0.0.0.0}"
 port = ${ADMIN_LISTEN_PORT:-8001}
-admin_token = "${ADMIN_API_TOKEN}"
+auth_token = "${ADMIN_API_TOKEN}"
 
 [core.wg]
 public_key = "$PUBLIC_KEY"

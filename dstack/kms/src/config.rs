@@ -53,8 +53,6 @@ pub(crate) struct KmsConfig {
     /// mirroring `sev_snp_key_release`.
     #[serde(default)]
     pub aws_nitro_tpm_key_release: bool,
-    #[serde(with = "serde_human_bytes")]
-    pub admin_token_hash: Vec<u8>,
     #[serde(default)]
     pub site_name: String,
     /// Whether trusted RPCs require the KMS to first attest itself to its
@@ -64,12 +62,39 @@ pub(crate) struct KmsConfig {
     #[serde(default = "default_true")]
     pub enforce_self_authorization: bool,
     pub metrics: MetricsConfig,
+    /// Admin API listener + authentication. The admin RPCs (e.g.
+    /// `ClearImageCache`) are served here, behind the shared HTTP authenticator.
+    #[serde(default)]
+    pub admin: AdminConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct MetricsConfig {
     /// Whether to expose the unauthenticated Prometheus `/metrics` endpoint.
     pub enabled: bool,
+}
+
+/// Admin API listener + authentication, mirroring the gateway `[core.admin]`
+/// section. The listen `address`/`port` are read from the same `[core.admin]`
+/// section by Rocket. The token travels in the `Authorization`/`X-Admin-Token`
+/// header.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct AdminConfig {
+    /// Whether to serve the admin API at all.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Shared admin token required to call any admin RPC. Can also be supplied
+    /// via `DSTACK_KMS_ADMIN_TOKEN` / `ADMIN_API_TOKEN`. Required unless
+    /// `insecure_no_auth = true`.
+    #[serde(default)]
+    pub auth_token: String,
+    /// Optional Apache bcrypt htpasswd file, accepted in addition to the token.
+    #[serde(default)]
+    pub htpasswd_file: PathBuf,
+    /// Development-only escape hatch: serve the admin API with no auth. Never
+    /// enable on a network-reachable listener.
+    #[serde(default)]
+    pub insecure_no_auth: bool,
 }
 
 fn default_true() -> bool {
@@ -153,4 +178,24 @@ pub(crate) struct Dev {
 pub(crate) struct OnboardConfig {
     pub enabled: bool,
     pub auto_bootstrap_domain: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_parses_with_admin_disabled_and_no_hash() {
+        let figment = load_config_figment(None);
+        let config: KmsConfig = figment
+            .focus("core")
+            .extract()
+            .expect("kms.toml must parse into KmsConfig");
+        assert!(!config.admin.enabled, "admin must be off by default");
+        assert!(
+            config.admin.auth_token.is_empty(),
+            "default admin token must be empty (fail-closed)"
+        );
+        assert!(!config.admin.insecure_no_auth);
+    }
 }

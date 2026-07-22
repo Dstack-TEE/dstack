@@ -256,6 +256,7 @@ Use the VMM CLI tool to deploy the CVM:
 cd ~/dstack/dstack/vmm
 
 # Set VMM auth from saved token
+export DSTACK_VMM_AUTH_USER=admin
 export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 
 # Generate app-compose.json with local key provider enabled
@@ -306,7 +307,7 @@ curl -s -H "Authorization: Bearer $(cat ~/.dstack/secrets/vmm-auth-token)" \
   "http://127.0.0.1:9080/logs?id=VM_ID&follow=true&ansi=false"
 ```
 
-> **Note:** The VMM logs endpoint requires Bearer token authentication. The `vmm-cli.py logs` command may not work with token auth — use curl directly as shown above.
+> **Note:** The VMM logs endpoint requires authentication. `vmm-cli.py logs` sends credentials automatically when `DSTACK_VMM_TOKEN` (or `--token`) is set, so it works against an auth-enabled VMM; the curl form above is an equivalent alternative.
 
 Look for these log messages indicating KMS entered onboard mode:
 ```

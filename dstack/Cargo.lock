@@ -410,6 +410,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bcrypt"
+version = "0.17.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abaf6da45c74385272ddf00e1ac074c7d8a6c1a1dda376902bd6a427522a8b2c"
+dependencies = [
+ "base64 0.22.1",
+ "blowfish",
+ "getrandom 0.3.4",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
 name = "binascii"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -562,6 +575,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "blowfish"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e412e2cd0f2b2d93e02543ceae7917b3c70331573df19ee046bcbc35e45e87d7"
+dependencies = [
+ "byteorder",
+ "cipher 0.4.4",
 ]
 
 [[package]]
@@ -1709,6 +1732,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dstack-api-auth"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "bcrypt",
+ "rocket",
+ "sha2 0.10.9",
+ "subtle",
+]
+
+[[package]]
 name = "dstack-attest"
 version = "0.6.0"
 dependencies = [
@@ -1805,6 +1840,7 @@ dependencies = [
  "clap",
  "cmd_lib",
  "dstack-attest",
+ "dstack-api-auth",
  "dstack-build-info",
  "dstack-gateway-rpc",
  "dstack-guest-agent-rpc",
@@ -1844,7 +1880,6 @@ dependencies = [
  "sha2 0.10.9",
  "shared_child",
  "smallvec",
- "subtle",
  "tdx-attest",
  "tempfile",
  "tokio",
@@ -1958,6 +1993,7 @@ dependencies = [
  "cc-eventlog",
  "chrono",
  "clap",
+ "dstack-api-auth",
  "dstack-attest",
  "dstack-build-info",
  "dstack-guest-agent-rpc",
@@ -2225,6 +2261,7 @@ dependencies = [
  "bon",
  "clap",
  "dirs 6.0.0",
+ "dstack-api-auth",
  "dstack-build-info",
  "dstack-kms-rpc",
  "dstack-mr",
@@ -2251,7 +2288,6 @@ dependencies = [
  "ra-rpc",
  "reqwest",
  "rocket",
- "rocket-apitoken",
  "rocket-vsock-listener",
  "safe-write",
  "serde",
@@ -6034,14 +6070,6 @@ dependencies = [
  "version_check",
  "x509-parser",
  "yansi",
-]
-
-[[package]]
-name = "rocket-apitoken"
-version = "0.1.0"
-source = "git+https://github.com/kvinwang/rocket-apitoken?branch=dev#7b5c1e864217b928e08913886c1a3ddd849e254c"
-dependencies = [
- "rocket",
 ]
 
 [[package]]

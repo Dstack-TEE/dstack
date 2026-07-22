@@ -298,8 +298,14 @@ pub struct AdminConfig {
     /// Shared secret required to call any admin endpoint (RPC + dashboard).
     /// Can also be supplied via `DSTACK_GATEWAY_ADMIN_TOKEN` / `ADMIN_API_TOKEN`
     /// env vars. Required unless `insecure_no_auth = true`.
+    ///
+    /// Accepts the legacy `admin_token` key for backward compatibility.
+    #[serde(default, alias = "admin_token")]
+    pub auth_token: String,
+    /// Optional Apache htpasswd file. Enables standard HTTP Basic auth while
+    /// preserving token authentication for existing clients.
     #[serde(default)]
-    pub admin_token: String,
+    pub htpasswd_file: PathBuf,
     /// Disable authentication entirely. Development/testing only; never enable
     /// on an admin interface that is reachable from the network.
     #[serde(default)]
@@ -352,7 +358,24 @@ pub fn setup_wireguard(config: &WgConfig) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocket::figment::providers::{Format, Toml};
     use std::str::FromStr;
+
+    #[test]
+    fn admin_auth_token_reads_new_and_legacy_keys() {
+        // new key
+        let cfg: AdminConfig =
+            Figment::from(Toml::string("enabled = true\nauth_token = \"new\"\n"))
+                .extract()
+                .unwrap();
+        assert_eq!(cfg.auth_token, "new");
+        // legacy `admin_token` key still deserializes via the serde alias
+        let cfg: AdminConfig =
+            Figment::from(Toml::string("enabled = true\nadmin_token = \"legacy\"\n"))
+                .extract()
+                .unwrap();
+        assert_eq!(cfg.auth_token, "legacy");
+    }
 
     #[test]
     fn test_validate() {

@@ -15,6 +15,8 @@ use rocket::{
 };
 use tracing::{info, warn};
 
+mod admin_auth;
+mod admin_service;
 mod config;
 // mod ct_log;
 mod crypto;
@@ -131,6 +133,21 @@ async fn main() -> Result<()> {
     }
 
     let metrics_enabled = config.metrics.enabled;
+    let admin_config = config.admin.clone();
+    // build the admin listener figment from `[core.admin]` before `config` is
+    // moved into the state; the fairing is built now so a misconfigured admin
+    // (enabled but no credential) fails fast before we start serving.
+    let admin_setup = if admin_config.enabled {
+        let admin_value = figment
+            .find_value("core.admin")
+            .context("core.admin section not found")?;
+        let admin_figment =
+            Figment::from(rocket::Config::default()).merge(Serialized::defaults(admin_value));
+        let admin_fairing = admin_auth::AdminAuthFairing::from_config(&admin_config)?;
+        Some((admin_figment, admin_fairing))
+    } else {
+        None
+    };
     let state = main_service::KmsState::new(config).context("Failed to initialize KMS state")?;
     let quote_verifier = QuoteVerifier::new(state.attestation_verifier());
     let figment = figment
@@ -146,7 +163,7 @@ async fn main() -> Result<()> {
             "/prpc",
             ra_rpc::prpc_routes!(KmsState, RpcHandler, trim: "KMS."),
         )
-        .manage(state);
+        .manage(state.clone());
 
     if metrics_enabled {
         info!("Prometheus metrics endpoint enabled at /metrics");
@@ -160,9 +177,33 @@ async fn main() -> Result<()> {
 
     rocket = rocket.manage(quote_verifier);
 
-    rocket
-        .launch()
-        .await
-        .map_err(|err| anyhow!(err.to_string()))?;
+    let main_srv = rocket.launch();
+    match admin_setup {
+        Some((admin_figment, admin_fairing)) => {
+            if admin_config.insecure_no_auth {
+                warn!(
+                    "admin API is served with insecure_no_auth = true; the admin RPCs are exposed without authentication"
+                );
+            } else {
+                info!("admin API authentication enabled");
+            }
+            let admin_srv = rocket::custom(admin_figment)
+                .attach(admin_fairing)
+                .mount("/", admin_auth::routes())
+                .mount(
+                    "/prpc",
+                    ra_rpc::prpc_routes!(KmsState, admin_service::AdminRpcHandler, trim: "Admin."),
+                )
+                .manage(state)
+                .launch();
+            tokio::try_join!(
+                async { main_srv.await.map_err(|err| anyhow!(err.to_string())) },
+                async { admin_srv.await.map_err(|err| anyhow!(err.to_string())) },
+            )?;
+        }
+        None => {
+            main_srv.await.map_err(|err| anyhow!(err.to_string()))?;
+        }
+    }
     Ok(())
 }
