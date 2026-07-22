@@ -1188,7 +1188,7 @@ async fn cmd_tpm_verify(args: TpmVerifyArgs) -> Result<()> {
     println!("[Step 1] Fetching quote collateral (certificates + CRLs)...");
     let collateral = tpm_qvl::get_collateral(&tpm_quote, &root_ca_pem)
         .await
-        .context("Failed to get collateral")?;
+        .context("failed to get TPM collateral")?;
     let crl_count = collateral.crls.len()
         + if collateral.root_ca_crl.is_some() {
             1

@@ -1,0 +1,256 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: dstack-full-e2e
+
+x-suite-env: &suite-env
+  DSTACK_E2E_STATE_DIR: /suite-state
+  DSTACK_E2E_CONFIG_DIR: /suite-state/config
+  DSTACK_E2E_RUN_DIR: /suite-state/run
+  DSTACK_E2E_VM_DIR: /suite-state/vm
+  DSTACK_E2E_VOLUMES_DIR: /suite-state/volumes
+  DSTACK_E2E_IMAGE_ROOT: /images
+  DSTACK_E2E_IMAGE_NAME: ${DSTACK_E2E_IMAGE_NAME:-dstack-0.6.0}
+  DSTACK_E2E_PLATFORM: ${DSTACK_E2E_PLATFORM:-tdx}
+  DSTACK_E2E_VMM_PORT: ${DSTACK_E2E_VMM_PORT:-29080}
+  DSTACK_E2E_AUTH_PORT: ${DSTACK_E2E_AUTH_PORT:-28011}
+  DSTACK_E2E_ARTIFACT_PORT: ${DSTACK_E2E_ARTIFACT_PORT:-38081}
+  DSTACK_E2E_KMS_OLD_HOST_PORT: ${DSTACK_E2E_KMS_OLD_HOST_PORT:-28082}
+  DSTACK_E2E_KMS_LATEST_HOST_PORT: ${DSTACK_E2E_KMS_LATEST_HOST_PORT:-28083}
+  DSTACK_E2E_KMS_RPC_DOMAIN: ${DSTACK_E2E_KMS_RPC_DOMAIN:-}
+  DSTACK_E2E_GATEWAY1_RPC_HOST_PORT: ${DSTACK_E2E_GATEWAY1_RPC_HOST_PORT:-28000}
+  DSTACK_E2E_GATEWAY1_ADMIN_HOST_PORT: ${DSTACK_E2E_GATEWAY1_ADMIN_HOST_PORT:-28001}
+  DSTACK_E2E_GATEWAY1_PROXY_HOST_PORT: ${DSTACK_E2E_GATEWAY1_PROXY_HOST_PORT:-28443}
+  DSTACK_E2E_GATEWAY1_WG_HOST_PORT: ${DSTACK_E2E_GATEWAY1_WG_HOST_PORT:-28120}
+  DSTACK_E2E_GATEWAY2_RPC_HOST_PORT: ${DSTACK_E2E_GATEWAY2_RPC_HOST_PORT:-28100}
+  DSTACK_E2E_GATEWAY2_ADMIN_HOST_PORT: ${DSTACK_E2E_GATEWAY2_ADMIN_HOST_PORT:-28101}
+  DSTACK_E2E_GATEWAY2_PROXY_HOST_PORT: ${DSTACK_E2E_GATEWAY2_PROXY_HOST_PORT:-28543}
+  DSTACK_E2E_GATEWAY2_WG_HOST_PORT: ${DSTACK_E2E_GATEWAY2_WG_HOST_PORT:-28121}
+  DSTACK_E2E_GATEWAY_APP_ID: ${DSTACK_E2E_GATEWAY_APP_ID:-}
+  DSTACK_E2E_KEY_PROVIDER_PORT: ${DSTACK_E2E_KEY_PROVIDER_PORT:-13443}
+  DSTACK_E2E_HOST_API_PORT: ${DSTACK_E2E_HOST_API_PORT:-20011}
+  DSTACK_E2E_CID_START: ${DSTACK_E2E_CID_START:-15000}
+  DSTACK_E2E_QGS_PORT: ${DSTACK_E2E_QGS_PORT:-4050}
+  DSTACK_E2E_QEMU_PATH: ${DSTACK_E2E_QEMU_PATH:-/usr/bin/qemu-system-x86_64}
+  DSTACK_E2E_BASE_DOMAIN: ${DSTACK_E2E_BASE_DOMAIN:-e2e.test}
+  DSTACK_E2E_MOCK_CF_HTTP_PORT: ${DSTACK_E2E_MOCK_CF_HTTP_PORT:-38080}
+  DSTACK_E2E_PEBBLE_HTTP_PORT: ${DSTACK_E2E_PEBBLE_HTTP_PORT:-34000}
+  DSTACK_E2E_APP_NAME: ${DSTACK_E2E_APP_NAME:-dstack-e2e-nginx}
+  DSTACK_E2E_NAME_PREFIX: ${DSTACK_E2E_NAME_PREFIX:-dstack-e2e}
+  DSTACK_E2E_PHASE: ${DSTACK_E2E_PHASE:-upgrade}
+  DSTACK_E2E_CURRENT_VERSION: ${DSTACK_E2E_CURRENT_VERSION:-0.6.0}
+
+services:
+  init-config:
+    build:
+      context: ./runtime
+    image: dstack-e2e-runtime:local
+    network_mode: host
+    volumes:
+      - ./state:/suite-state
+      - ./scripts:/suite/scripts:ro
+      - ${DSTACK_E2E_IMAGE_STORE:-../../../meta-dstack/build/images}:/images:ro
+    environment:
+      <<: *suite-env
+    command: ["/suite/scripts/render-config.sh"]
+
+  mock-cf-dns-api:
+    build:
+      context: ./mock-cf-dns
+    image: dstack-e2e-mock-cf-dns:local
+    networks:
+      e2e-net:
+        ipv4_address: 172.31.0.10
+    ports:
+      - "0.0.0.0:${DSTACK_E2E_MOCK_CF_HTTP_PORT:-38080}:8080"
+    environment:
+      PORT: 8080
+      DEBUG: ${DSTACK_E2E_MOCK_DEBUG:-false}
+      MOCK_CF_ZONES: ${DSTACK_E2E_BASE_DOMAIN:-e2e.test},test,local
+      MOCK_CF_API_TOKEN: test-token
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  pebble:
+    # Custom Pebble build used by the existing gateway E2E suite. It supports
+    # plain HTTP ACME URLs, which keeps the host-side Gateway bootstrap simple.
+    image: ${DSTACK_E2E_PEBBLE_IMAGE:-kvin/pebble:latest}
+    command: ["-http", "-dnsserver", "172.31.0.10:53"]
+    networks:
+      e2e-net:
+        ipv4_address: 172.31.0.11
+    ports:
+      - "0.0.0.0:${DSTACK_E2E_PEBBLE_HTTP_PORT:-34000}:14000"
+      - "0.0.0.0:${DSTACK_E2E_PEBBLE_MGMT_PORT:-35000}:15000"
+    environment:
+      PEBBLE_VA_NOSLEEP: "1"
+      PEBBLE_VA_ALWAYS_VALID: "1"
+    depends_on:
+      mock-cf-dns-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:14000/dir || curl -fsS http://127.0.0.1:14000/dir >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  aesmd:
+    build:
+      context: ../../dstack/local-key-provider
+      dockerfile: build/Dockerfile.aesmd
+    image: dstack-e2e-aesmd:local
+    privileged: true
+    network_mode: host
+    devices:
+      - "/dev/sgx_enclave:/dev/sgx_enclave"
+      - "/dev/sgx_provision:/dev/sgx_provision"
+    volumes:
+      - ${DSTACK_E2E_QCNL_CONF:-../../dstack/local-key-provider/build/sgx_default_qcnl.conf}:/etc/sgx_default_qcnl.conf:ro
+      - aesmd-sock:/var/run/aesmd/
+    restart: unless-stopped
+
+  local-keyprovider:
+    build:
+      context: ../../dstack
+      dockerfile: local-key-provider/build/Dockerfile.key-provider
+      args:
+        APT_SNAPSHOT: ${APT_SNAPSHOT:-20260423T000000Z}
+        SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-1776902400}
+        RUSTUP_VERSION: ${RUSTUP_VERSION:-1.28.2}
+        RUSTUP_INIT_SHA256: ${RUSTUP_INIT_SHA256:-20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c}
+        RUST_TOOLCHAIN: ${RUST_TOOLCHAIN:-1.92.0}
+    image: dstack-e2e-local-keyprovider:local
+    privileged: true
+    devices:
+      - "/dev/sgx_enclave:/dev/sgx_enclave"
+      - "/dev/sgx_provision:/dev/sgx_provision"
+    depends_on:
+      - aesmd
+    environment:
+      PCCS_URL: ${PCCS_URL:-https://pccs.phala.network}
+      LISTEN_ADDR: 0.0.0.0:3443
+    volumes:
+      - aesmd-sock:/var/run/aesmd/
+    ports:
+      - "127.0.0.1:${DSTACK_E2E_KEY_PROVIDER_PORT:-13443}:3443"
+    healthcheck:
+      # The provider is a raw TCP service without an HTTP health endpoint.
+      # Opening the socket proves that the production SGX enclave was loaded;
+      # the container cannot listen while AESMD/DCAP provisioning is broken.
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/3443'"]
+      interval: 2s
+      timeout: 3s
+      retries: 45
+      start_period: 10s
+    restart: unless-stopped
+
+  auth:
+    image: dstack-e2e-runtime:local
+    network_mode: host
+    depends_on:
+      init-config:
+        condition: service_completed_successfully
+    volumes:
+      - ./state:/suite-state
+      - ../../dstack:/workspace:ro
+    command:
+      - bash
+      - -lc
+      - exec /workspace/target/release/dstack-auth --config /suite-state/config/auth-allowlist.json --address 0.0.0.0 --port ${DSTACK_E2E_AUTH_PORT:-28011}
+    restart: unless-stopped
+
+  artifacts:
+    image: dstack-e2e-runtime:local
+    network_mode: host
+    depends_on:
+      init-config:
+        condition: service_completed_successfully
+    volumes:
+      - ./state:/suite-state
+    # Keep an in-band request journal.  The runner uses the exact successful
+    # OS archive GETs as evidence that both KMS versions exercised image
+    # download/verification; VM serial logs do not include container stdout.
+    command:
+      - bash
+      - -lc
+      - >-
+        exec python3 -u -m http.server "${DSTACK_E2E_ARTIFACT_PORT:-38081}"
+        --bind 0.0.0.0 --directory /suite-state/artifacts
+        2> >(tee -a /suite-state/work/artifacts-access.log >&2)
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:${DSTACK_E2E_ARTIFACT_PORT:-38081}/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  vmm:
+    image: dstack-e2e-runtime:local
+    privileged: true
+    pid: host
+    network_mode: host
+    devices:
+      - "/dev/kvm:/dev/kvm"
+      - "/dev/vhost-vsock:/dev/vhost-vsock"
+    depends_on:
+      init-config:
+        condition: service_completed_successfully
+      auth:
+        condition: service_started
+      artifacts:
+        condition: service_healthy
+      local-keyprovider:
+        condition: service_healthy
+    volumes:
+      - ./state:/suite-state
+      - ../../dstack:/workspace:ro
+      - ${DSTACK_E2E_IMAGE_STORE:-../../../meta-dstack/build/images}:/images:ro
+      - /dev:/dev
+      - /lib/modules:/lib/modules:ro
+    environment:
+      RUST_LOG: ${DSTACK_E2E_VMM_RUST_LOG:-info,dstack_vmm=info}
+    command:
+      - bash
+      - -lc
+      - exec /workspace/target/release/dstack-vmm -c /suite-state/config/vmm.toml
+    restart: unless-stopped
+
+  runner:
+    image: dstack-e2e-runtime:local
+    network_mode: host
+    depends_on:
+      mock-cf-dns-api:
+        condition: service_healthy
+      pebble:
+        condition: service_healthy
+      auth:
+        condition: service_started
+      artifacts:
+        condition: service_healthy
+      vmm:
+        condition: service_started
+    volumes:
+      - ./state:/suite-state
+      - ./scripts:/suite/scripts:ro
+      - ../../dstack:/workspace:ro
+    environment:
+      <<: *suite-env
+      DSTACK_E2E_CLEAN_START: ${DSTACK_E2E_CLEAN_START:-true}
+      DSTACK_E2E_CLEANUP_AFTER: ${DSTACK_E2E_CLEANUP_AFTER:-false}
+      DSTACK_E2E_APP_VCPU: ${DSTACK_E2E_APP_VCPU:-2}
+      DSTACK_E2E_APP_MEMORY: ${DSTACK_E2E_APP_MEMORY:-2048}
+    command: ["/suite/scripts/runner.sh"]
+
+networks:
+  e2e-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
+
+volumes:
+  aesmd-sock:

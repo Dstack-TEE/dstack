@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{bail, Context, Result};
-use dstack_attest::attestation::{Attestation, AttestationMode, AttestationQuote};
+use dstack_attest::attestation::{detect_tee_variant, Attestation, AttestationQuote, TeeVariant};
 use dstack_types::{
     mr_config::{MrConfig, MrConfigV3},
     shared_filenames::{host_shared_dir, SYS_CONFIG},
@@ -72,7 +72,7 @@ pub fn verify_mr_config_id(
     key_provider: KeyProviderKind,
     key_provider_id: &[u8],
 ) -> Result<()> {
-    let mode = AttestationMode::detect().context("Failed to detect attestation mode")?;
+    let mode = detect_tee_variant().context("Failed to detect attestation mode")?;
     let local = LocalMrConfigValues {
         compose_hash,
         gpu_policy_hash,
@@ -84,16 +84,13 @@ pub fn verify_mr_config_id(
     verify_mr_config_id_for_mode(mode, local)
 }
 
-fn verify_mr_config_id_for_mode(
-    mode: AttestationMode,
-    local: LocalMrConfigValues<'_>,
-) -> Result<()> {
+fn verify_mr_config_id_for_mode(mode: TeeVariant, local: LocalMrConfigValues<'_>) -> Result<()> {
     match mode {
-        AttestationMode::DstackAmdSevSnp => verify_snp_mr_config(local),
+        TeeVariant::DstackAmdSevSnp => verify_snp_mr_config(local),
         // AWS PCR8 is computed by the guest from measured reality (MrConfig V2
         // in measure_app_info); there is no host-supplied claim to cross-check.
         // The key_provider_id pin is enforced by verify_key_provider_id.
-        AttestationMode::DstackAwsNitroTpm => Ok(()),
+        TeeVariant::DstackAwsNitroTpm => Ok(()),
         _ => verify_tdx_mr_config_id(local),
     }
 }

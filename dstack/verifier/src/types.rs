@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use dstack_types::KeyProviderInfo;
-use ra_tls::attestation::{AppInfo, AttestationMode};
+use ra_tls::attestation::{AppInfo, TeeVariant};
 use serde::{Deserialize, Serialize};
 
 use serde_human_bytes as serde_bytes;
@@ -32,7 +32,7 @@ pub struct VerificationResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PolicyBootInfo {
-    pub attestation_mode: AttestationMode,
+    pub attestation_mode: TeeVariant,
     #[serde(with = "serde_bytes")]
     pub mr_aggregated: Vec<u8>,
     #[serde(with = "serde_bytes")]
@@ -55,7 +55,7 @@ pub struct PolicyBootInfo {
 
 impl PolicyBootInfo {
     pub fn from_app_info(
-        attestation_mode: AttestationMode,
+        attestation_mode: TeeVariant,
         app_info: &AppInfo,
         tcb_status: String,
         advisory_ids: Vec<String>,
@@ -100,7 +100,7 @@ pub struct VerificationDetails {
     /// dstack OS version, from the same metadata.json.
     pub os_image_version: Option<String>,
     /// Attestation mode that produced the verified quote.
-    pub attestation_mode: Option<AttestationMode>,
+    pub attestation_mode: Option<TeeVariant>,
     pub report_data: Option<String>,
     pub tcb_status: Option<String>,
     pub advisory_ids: Vec<String>,
@@ -157,7 +157,7 @@ pub enum RtmrEventStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ra_tls::attestation::AttestationMode;
+    use ra_tls::attestation::TeeVariant;
 
     // the README documents sending either `attestation` or
     // (`quote` + `event_log` + `vm_config`); every field is optional, so any
@@ -206,7 +206,7 @@ mod tests {
         };
 
         let boot_info = PolicyBootInfo::from_app_info(
-            AttestationMode::DstackAwsNitroTpm,
+            TeeVariant::DstackAwsNitroTpm,
             &app_info,
             String::new(),
             Vec::new(),

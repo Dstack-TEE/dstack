@@ -240,8 +240,8 @@ Compose file content (first 200 chars):
         .context("Failed to get app compose")?;
     let platform = config.cvm.resolved_platform();
     let use_mr_config_v3 = !manifest.no_tee
-        && (platform == crate::config::TeePlatform::AmdSevSnp
-            || (platform == crate::config::TeePlatform::Tdx
+        && (platform == crate::config::CvmPlatform::AmdSevSnp
+            || (platform == crate::config::CvmPlatform::Tdx
                 && config.cvm.use_mrconfigid
                 && !app_compose.key_provider_id.is_empty()));
     let mr_config = if use_mr_config_v3 {

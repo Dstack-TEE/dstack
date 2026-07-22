@@ -127,12 +127,17 @@ fn get_report_configfs(report_data: [u8; 64]) -> Result<SnpQuote> {
 }
 
 fn write_first_existing(paths: &[std::path::PathBuf], binary: &[u8], hex: &[u8]) -> Result<()> {
+    use std::io::Write;
     let mut last_err = None;
     for path in paths {
         if !path.exists() {
             continue;
         }
-        match fs_err::write(path, binary).or_else(|_| fs_err::write(path, hex)) {
+        let write = |data: &[u8]| -> std::io::Result<()> {
+            let mut file = std::fs::OpenOptions::new().write(true).open(path)?;
+            file.write_all(data)
+        };
+        match write(binary).or_else(|_| write(hex)) {
             Ok(()) => return Ok(()),
             Err(err) => last_err = Some(err),
         }

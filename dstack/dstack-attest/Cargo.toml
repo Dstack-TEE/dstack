@@ -20,6 +20,7 @@ fs-err.workspace = true
 hex.workspace = true
 hex_fmt.workspace = true
 or-panic.workspace = true
+pem.workspace = true
 scale = { workspace = true, features = ["derive"] }
 sev-snp-attest.workspace = true
 sev-snp-qvl.workspace = true
@@ -35,6 +36,7 @@ nsm-qvl.workspace = true
 tpm-qvl.workspace = true
 tpm-types.workspace = true
 tracing.workspace = true
+x509-parser.workspace = true
 insta.workspace = true
 errify.workspace = true
 aws-nitro-enclaves-nsm-api = { version = "0.4", optional = true }

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use dstack_attest::attestation::AttestationVerifierConfig;
 use load_config::load_config;
 use rocket::figment::Figment;
 use serde::Deserialize;
@@ -34,15 +35,8 @@ pub(crate) struct ImageConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct KmsConfig {
     pub cert_dir: PathBuf,
-    pub pccs_url: Option<String>,
-    /// Optional AMD KDS-compatible base URL used for SEV-SNP collateral requests.
-    ///
-    /// Empty by default. When set, the KMS process exports this base URL for
-    /// dstack-attest before any attestation verification happens. The base URL
-    /// must expose AMD KDS-compatible paths under `/vcek/v1`, e.g.
-    /// `https://kdsintf.amd.com/vcek/v1` or a trusted mirror/cache.
     #[serde(default)]
-    pub amd_kds_base_url: Option<String>,
+    pub attestation: AttestationVerifierConfig,
     pub auth_api: AuthApi,
     pub onboard: OnboardConfig,
     pub image: ImageConfig,

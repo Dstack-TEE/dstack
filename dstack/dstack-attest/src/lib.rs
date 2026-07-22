@@ -11,7 +11,7 @@ pub use cc_eventlog as ccel;
 pub use tdx_attest as tdx;
 pub use tpm_attest as tpm;
 
-use crate::attestation::AttestationMode;
+use crate::attestation::{detect_tee_variant, TeeVariant};
 
 pub mod amd_sev_snp;
 pub mod attestation;
@@ -42,7 +42,7 @@ static EMIT_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 pub fn emit_runtime_event(event: &str, payload: &[u8]) -> anyhow::Result<()> {
     let event = RuntimeEvent::new(event.to_string(), payload.to_vec());
 
-    let mode = AttestationMode::detect()?;
+    let mode = detect_tee_variant()?;
 
     // Hold the lock across both the log append and the register extension so
     // that the on-disk log order always matches the RTMR extension order.
@@ -82,8 +82,8 @@ pub fn emit_runtime_event(event: &str, payload: &[u8]) -> anyhow::Result<()> {
 /// of producing quotes that can never verify. Does **not** append to the
 /// dstack event log / PCR14 lane — config is a separate register.
 pub fn measure_aws_config_pcr(config_id: &[u8; 48]) -> anyhow::Result<()> {
-    let mode = AttestationMode::detect()?;
-    if mode != AttestationMode::DstackAwsNitroTpm {
+    let mode = detect_tee_variant()?;
+    if mode != TeeVariant::DstackAwsNitroTpm {
         return Ok(());
     }
     let config_pcr = u32::from(crate::attestation::AWS_NITRO_TPM_CONFIG_PCR);

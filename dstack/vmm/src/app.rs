@@ -1073,8 +1073,8 @@ impl App {
             .app_compose()
             .context("Failed to get app compose")?;
         let use_mr_config_v3 = !manifest.no_tee
-            && (platform == crate::config::TeePlatform::AmdSevSnp
-                || (platform == crate::config::TeePlatform::Tdx
+            && (platform == crate::config::CvmPlatform::AmdSevSnp
+                || (platform == crate::config::CvmPlatform::Tdx
                     && cfg.cvm.use_mrconfigid
                     && !app_compose.key_provider_id.is_empty()));
         let mr_config = if use_mr_config_v3 {
@@ -1269,6 +1269,8 @@ pub(crate) fn make_sys_config(
         "kms_urls": kms_urls,
         "gateway_urls": gateway_urls,
         "pccs_url": cfg.cvm.pccs_url,
+        "collateral_urls": { "pccs": cfg.cvm.pccs_url },
+        "tee_simulator": cfg.cvm.tee_simulator,
         "nvidia_attestation_proxy_url": cfg.cvm.nvidia_attestation_proxy_url,
         "docker_registry": cfg.cvm.docker_registry,
         "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
@@ -1338,8 +1340,8 @@ fn make_vm_config(
     requirements: Option<&dstack_types::Requirements>,
 ) -> Result<serde_json::Value> {
     let platform = cfg.cvm.resolved_platform();
-    let is_amd_sev_snp = platform == crate::config::TeePlatform::AmdSevSnp && !manifest.no_tee;
-    let is_tdx = platform == crate::config::TeePlatform::Tdx && !manifest.no_tee;
+    let is_amd_sev_snp = platform == crate::config::CvmPlatform::AmdSevSnp && !manifest.no_tee;
+    let is_tdx = platform == crate::config::CvmPlatform::Tdx && !manifest.no_tee;
     let tdx_attestation_variant = if is_tdx {
         tdx_attestation_variant_from_requirements(requirements).unwrap_or_else(|| {
             cfg.cvm
@@ -1438,7 +1440,7 @@ fn make_vm_config(
 mod tests {
     use super::*;
     use crate::config::{
-        load_config_figment, Networking, NetworkingMode, TdxAttestationVariantConfig, TeePlatform,
+        load_config_figment, CvmPlatform, Networking, NetworkingMode, TdxAttestationVariantConfig,
     };
     use dstack_types::{
         TdxImageMeasurement, TdxMrtdCandidates, TdxOsImageMeasurement,
@@ -1674,7 +1676,7 @@ mod tests {
 
     fn test_tdx_config() -> Result<Config> {
         let mut config: Config = Figment::from(load_config_figment(None)).extract()?;
-        config.cvm.platform = Some(TeePlatform::Tdx);
+        config.cvm.platform = Some(CvmPlatform::Tdx);
         config.cvm.tdx_attestation_variant = TdxAttestationVariantConfig::Auto;
         Ok(config)
     }
@@ -1855,7 +1857,7 @@ mod tests {
 
         let mut config: Config = Figment::from(load_config_figment(None)).extract()?;
         config.image.path = image_root;
-        config.cvm.platform = Some(TeePlatform::AmdSevSnp);
+        config.cvm.platform = Some(CvmPlatform::AmdSevSnp);
         config.cvm.nvidia_attestation_proxy_url = Some("http://10.0.2.2:8090".to_string());
         let compose_hash = hex_of(0x22, 32);
         let manifest = Manifest {
@@ -1915,6 +1917,8 @@ mod tests {
         let sys_config_document =
             make_sys_config(&config, &manifest, &compose_hash, Some(mr_config), None)?;
         let sys_config: serde_json::Value = serde_json::from_str(&sys_config_document)?;
+        assert_eq!(sys_config["pccs_url"], config.cvm.pccs_url);
+        assert_eq!(sys_config["collateral_urls"]["pccs"], config.cvm.pccs_url);
         let vm_config: serde_json::Value = serde_json::from_str(
             sys_config["vm_config"]
                 .as_str()

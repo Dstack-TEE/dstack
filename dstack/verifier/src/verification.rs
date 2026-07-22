@@ -5,7 +5,7 @@
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::Arc,
     time::Duration,
 };
 
@@ -17,14 +17,13 @@ use cc_eventlog::{
     },
     TdxEvent,
 };
-use dstack_attest::amd_sev_snp::AmdKdsClient;
 use dstack_mr::{
     tdx::TdxRtmr0AcpiHashes, RtmrLog, RtmrLogs, TdxMeasurementDetails, TdxMeasurements,
 };
 use dstack_types::VmConfig;
 use hex_literal::hex;
 use ra_tls::attestation::{
-    AppInfo, Attestation, AttestationQuote, DstackVerifiedReport, NitroPcrs, PlatformEvidence,
+    AppInfo, Attestation, AttestationQuote, AttestationVerifier, DstackVerifiedReport, NitroPcrs,
     TpmQuote, VerifiedAttestation, VersionedAttestation,
 };
 use serde::{Deserialize, Serialize};
@@ -190,8 +189,7 @@ pub struct CvmVerifier {
     pub image_cache_dir: String,
     pub download_url: String,
     pub download_timeout: Duration,
-    pub pccs_url: Option<String>,
-    amd_kds_client: OnceLock<Result<AmdKdsClient, String>>,
+    pub attestation_verifier: Arc<AttestationVerifier>,
 }
 
 impl CvmVerifier {
@@ -199,24 +197,13 @@ impl CvmVerifier {
         image_cache_dir: String,
         download_url: String,
         download_timeout: Duration,
-        pccs_url: Option<String>,
+        attestation_verifier: Arc<AttestationVerifier>,
     ) -> Self {
         Self {
             image_cache_dir,
             download_url,
             download_timeout,
-            pccs_url,
-            amd_kds_client: OnceLock::new(),
-        }
-    }
-
-    fn amd_kds_client(&self) -> Result<&AmdKdsClient> {
-        match self
-            .amd_kds_client
-            .get_or_init(|| AmdKdsClient::new().map_err(|err| format!("{err:#}")))
-        {
-            Ok(client) => Ok(client),
-            Err(err) => bail!("failed to create amd sev-snp KDS client: {err}"),
+            attestation_verifier,
         }
     }
 
@@ -421,6 +408,31 @@ impl CvmVerifier {
             .is_some_and(|digest| digest == expected))
     }
 
+    fn prune_unlisted_image_files(extracted_dir: &Path, files_doc: &str) -> Result<()> {
+        let listed_files: Vec<&OsStr> = files_doc
+            .lines()
+            .flat_map(|line| line.split_whitespace().nth(1))
+            .map(|s| s.as_ref())
+            .collect();
+        let files = fs_err::read_dir(extracted_dir).context("Failed to read directory")?;
+        for file in files {
+            let file = file.context("Failed to read directory entry")?;
+            let filename = file.file_name();
+            // sha256sum.txt is the content-addressed OS identity and is needed
+            // again when a legacy TDX quote is verified from the cache.
+            if filename != OsStr::new("sha256sum.txt")
+                && !listed_files.contains(&filename.as_os_str())
+            {
+                if file.path().is_dir() {
+                    fs_err::remove_dir_all(file.path()).context("Failed to remove directory")?;
+                } else {
+                    fs_err::remove_file(file.path()).context("Failed to remove file")?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn tdx_acpi_hashes_from_event_log(event_log: &[TdxEvent]) -> Result<TdxRtmr0AcpiHashes> {
         let rtmr0_events = event_log
             .iter()
@@ -570,13 +582,7 @@ impl CvmVerifier {
 
         let debug = request.debug.unwrap_or(false);
         let attestation = attestation.into_v1();
-        let verified = if matches!(&attestation.platform, PlatformEvidence::SevSnp { .. }) {
-            attestation
-                .verify_with_amd_kds_client(self.pccs_url.as_deref(), self.amd_kds_client()?)
-                .await
-        } else {
-            attestation.verify(self.pccs_url.as_deref()).await
-        };
+        let verified = attestation.verify(&self.attestation_verifier).await;
         let verified_attestation = match verified {
             Ok(att) => {
                 details.quote_verified = true;
@@ -668,7 +674,13 @@ impl CvmVerifier {
                 self.verify_os_image_hash_for_gcp_tdx(&vm_config, &quote.tpm_quote)?;
             }
             AttestationQuote::DstackTdx(_) => {
-                if vm_config.tdx_attestation_variant.is_lite() {
+                // New images carry a self-contained measurement document even
+                // when the boot kept the legacy attestation selector. Prefer
+                // that signed-MR-bound material; retain image download only
+                // for old legacy images which do not provide it.
+                if vm_config.tdx_attestation_variant.is_lite()
+                    || vm_config.tdx_measurement.is_some()
+                {
                     self.verify_os_image_hash_for_dstack_tdx_lite(
                         &vm_config,
                         attestation,
@@ -1180,23 +1192,7 @@ impl CvmVerifier {
         let sha256sum_path = extracted_dir.join("sha256sum.txt");
         let files_doc =
             fs_err::read_to_string(&sha256sum_path).context("Failed to read sha256sum.txt")?;
-        let listed_files: Vec<&OsStr> = files_doc
-            .lines()
-            .flat_map(|line| line.split_whitespace().nth(1))
-            .map(|s| s.as_ref())
-            .collect();
-        let files = fs_err::read_dir(&extracted_dir).context("Failed to read directory")?;
-        for file in files {
-            let file = file.context("Failed to read directory entry")?;
-            let filename = file.file_name();
-            if !listed_files.contains(&filename.as_os_str()) {
-                if file.path().is_dir() {
-                    fs_err::remove_dir_all(file.path()).context("Failed to remove directory")?;
-                } else {
-                    fs_err::remove_file(file.path()).context("Failed to remove file")?;
-                }
-            }
-        }
+        Self::prune_unlisted_image_files(&extracted_dir, &files_doc)?;
 
         // All image modes are addressed by sha256(sha256sum.txt). Extra
         // measurement CBOR files are ordinary sha256sum.txt entries and do not
@@ -1302,7 +1298,16 @@ mod tests {
     }
 
     fn test_verifier() -> CvmVerifier {
-        CvmVerifier::new(String::new(), String::new(), Duration::from_secs(1), None)
+        CvmVerifier::new(
+            String::new(),
+            String::new(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        )
+    }
+
+    fn test_attestation_verifier() -> Arc<AttestationVerifier> {
+        Arc::new(AttestationVerifier::new_prod(None).unwrap())
     }
 
     #[test]
@@ -1385,6 +1390,21 @@ mod tests {
         assert!(decode_key_provider_info(b"not json").is_none());
     }
 
+    #[test]
+    fn image_cache_pruning_keeps_checksum_identity() {
+        let dir = tempfile::tempdir().expect("temp image directory");
+        let files_doc = "00  metadata.json\n";
+        fs_err::write(dir.path().join("sha256sum.txt"), files_doc).unwrap();
+        fs_err::write(dir.path().join("metadata.json"), "{}").unwrap();
+        fs_err::write(dir.path().join("unmeasured"), "remove me").unwrap();
+
+        CvmVerifier::prune_unlisted_image_files(dir.path(), files_doc).unwrap();
+
+        assert!(dir.path().join("sha256sum.txt").exists());
+        assert!(dir.path().join("metadata.json").exists());
+        assert!(!dir.path().join("unmeasured").exists());
+    }
+
     #[tokio::test]
     async fn verifies_sev_snp_attestation_fixture_without_image_download() {
         let request: VerificationRequest =
@@ -1396,7 +1416,7 @@ mod tests {
             image_cache_dir.display().to_string(),
             "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
             Duration::from_secs(1),
-            None,
+            test_attestation_verifier(),
         );
 
         let response = verifier.verify(request).await.expect("verifier runs");
@@ -1407,7 +1427,7 @@ mod tests {
         assert!(!response.details.acpi_tables_verified);
         assert_eq!(
             response.details.attestation_mode,
-            Some(ra_tls::attestation::AttestationMode::DstackAmdSevSnp)
+            Some(ra_tls::attestation::TeeVariant::DstackAmdSevSnp)
         );
         assert!(
             !image_cache_dir.exists(),
@@ -1428,14 +1448,14 @@ mod tests {
             cache.path().join("cache").display().to_string(),
             "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
             Duration::from_secs(1),
-            None,
+            test_attestation_verifier(),
         );
 
         let response = verifier.verify(request).await.expect("verifier runs");
         assert!(response.is_valid, "{:?}", response.reason);
         assert_eq!(
             response.details.attestation_mode,
-            Some(ra_tls::attestation::AttestationMode::DstackAmdSevSnp)
+            Some(ra_tls::attestation::TeeVariant::DstackAmdSevSnp)
         );
     }
 
@@ -1450,7 +1470,7 @@ mod tests {
             image_cache_dir.display().to_string(),
             "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
             Duration::from_secs(1),
-            None,
+            test_attestation_verifier(),
         );
 
         let response = verifier.verify(request).await.expect("verifier runs");
@@ -1461,7 +1481,7 @@ mod tests {
         assert!(!response.details.acpi_tables_verified);
         assert_eq!(
             response.details.attestation_mode,
-            Some(ra_tls::attestation::AttestationMode::DstackTdx)
+            Some(ra_tls::attestation::TeeVariant::DstackTdx)
         );
         assert!(
             !image_cache_dir.exists(),

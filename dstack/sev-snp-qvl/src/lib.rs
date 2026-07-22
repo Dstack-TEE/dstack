@@ -10,7 +10,7 @@
 //! must still bind the verified measurement to app/config identity before
 //! production key release.
 
-use std::{thread, time::Duration};
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use moka::sync::Cache;
@@ -27,8 +27,7 @@ const VLEK_CERT_GUID: [u8; 16] = [
     0xa8, 0x07, 0x4b, 0xc2, 0xa2, 0x5a, 0x48, 0x3e, 0xaa, 0xe6, 0x39, 0xc0, 0x45, 0xa0, 0xb8, 0xa1,
 ];
 const CERT_TABLE_ENTRY_SIZE: usize = 24;
-const AMD_KDS_BASE_URL_ENV: &str = "DSTACK_AMD_KDS_BASE_URL";
-const AMD_KDS_DEFAULT_BASE_URL: &str = "https://kdsintf.amd.com/vcek/v1";
+pub const AMD_KDS_DEFAULT_BASE_URL: &str = "https://kdsintf.amd.com/vcek/v1";
 const AMD_KDS_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const AMD_KDS_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const AMD_KDS_CA_CACHE_CAPACITY: u64 = 16;
@@ -39,6 +38,136 @@ pub enum AmdSnpProduct {
     Milan,
     Genoa,
     Turin,
+}
+
+/// AMD SEV-SNP quote verifier with caller-owned ARK trust anchors.
+///
+/// One ARK is required per supported processor family because AMD operates a
+/// separate hierarchy for each family. `new_prod` uses the ARKs shipped by the
+/// `sev` crate; `new` accepts PEM encoded ARKs from the caller.
+#[derive(Debug, Clone)]
+pub struct QuoteVerifier {
+    milan_ark_pem: Vec<u8>,
+    genoa_ark_pem: Vec<u8>,
+    turin_ark_pem: Vec<u8>,
+    external_roots: [bool; 3],
+}
+
+impl QuoteVerifier {
+    pub fn new(milan_ark_pem: Vec<u8>, genoa_ark_pem: Vec<u8>, turin_ark_pem: Vec<u8>) -> Self {
+        Self {
+            milan_ark_pem,
+            genoa_ark_pem,
+            turin_ark_pem,
+            external_roots: [true; 3],
+        }
+    }
+
+    pub fn new_prod() -> Self {
+        Self {
+            milan_ark_pem: builtin::milan::ARK.to_vec(),
+            genoa_ark_pem: builtin::genoa::ARK.to_vec(),
+            turin_ark_pem: builtin::turin::ARK.to_vec(),
+            external_roots: [false; 3],
+        }
+    }
+
+    /// Create a production verifier overriding one product-family ARK.
+    pub fn new_with_root(product: AmdSnpProduct, ark_pem: Vec<u8>) -> Self {
+        Self::new_prod().with_root(product, ark_pem)
+    }
+
+    /// Override one product-family ARK.
+    pub fn with_root(mut self, product: AmdSnpProduct, ark_pem: Vec<u8>) -> Self {
+        match product {
+            AmdSnpProduct::Milan => {
+                self.milan_ark_pem = ark_pem;
+                self.external_roots[0] = true;
+            }
+            AmdSnpProduct::Genoa => {
+                self.genoa_ark_pem = ark_pem;
+                self.external_roots[1] = true;
+            }
+            AmdSnpProduct::Turin => {
+                self.turin_ark_pem = ark_pem;
+                self.external_roots[2] = true;
+            }
+        }
+        self
+    }
+
+    fn ark(&self, product: AmdSnpProduct) -> CertBytes {
+        CertBytes {
+            bytes: match product {
+                AmdSnpProduct::Milan => self.milan_ark_pem.clone(),
+                AmdSnpProduct::Genoa => self.genoa_ark_pem.clone(),
+                AmdSnpProduct::Turin => self.turin_ark_pem.clone(),
+            },
+            encoding: CertEncoding::Pem,
+        }
+    }
+
+    fn uses_external_root(&self, product: AmdSnpProduct) -> bool {
+        self.external_roots[match product {
+            AmdSnpProduct::Milan => 0,
+            AmdSnpProduct::Genoa => 1,
+            AmdSnpProduct::Turin => 2,
+        }]
+    }
+
+    pub fn verify(
+        &self,
+        report: &[u8],
+        cert_chain: &[Vec<u8>],
+        expected_report_data: &[u8; 64],
+    ) -> Result<VerifiedAmdSnpReport> {
+        let (ask, vcek) = normalize_ask_vcek_certs(cert_chain)?;
+        let verified =
+            verify_amd_snp_attestation_with_certs_and_arks(report, ask, vcek, |product| {
+                (self.ark(product), self.uses_external_root(product))
+            })?;
+        if &verified.report_data != expected_report_data {
+            bail!("amd sev-snp report_data mismatch");
+        }
+        Ok(verified)
+    }
+
+    pub async fn fetch_and_verify(
+        &self,
+        kds_client: &AmdKdsClient,
+        report: &[u8],
+        cert_chain: &[Vec<u8>],
+        expected_report_data: &[u8; 64],
+    ) -> Result<VerifiedAmdSnpReport> {
+        if !cert_chain.is_empty() {
+            return self.verify(report, cert_chain, expected_report_data);
+        }
+        let report_obj = AttestationReport::from_bytes(report)
+            .map_err(|err| anyhow!("failed to parse amd sev-snp report: {err}"))?;
+        let mut errors = Vec::new();
+        for product in amd_snp_product_candidates_for_report(&report_obj)? {
+            match kds_client
+                .fetch_collateral_for_product(product, &report_obj)
+                .await
+            {
+                Ok(collateral) => match verify_amd_snp_attestation_with_cert_chain(
+                    report,
+                    self.ark(product),
+                    collateral.ask,
+                    collateral.vcek,
+                    self.uses_external_root(product),
+                ) {
+                    Ok(verified) if &verified.report_data == expected_report_data => {
+                        return Ok(verified);
+                    }
+                    Ok(_) => bail!("amd sev-snp report_data mismatch"),
+                    Err(err) => errors.push(format!("{}: {err:#}", product.kds_name())),
+                },
+                Err(err) => errors.push(format!("{}: {err:#}", product.kds_name())),
+            }
+        }
+        bail!("amd sev-snp verification failed: {}", errors.join("; "))
+    }
 }
 
 impl AmdSnpProduct {
@@ -181,7 +310,7 @@ pub struct AmdKdsClient {
 
 impl AmdKdsClient {
     pub fn new() -> Result<Self> {
-        Self::with_base_url(amd_kds_base_url())
+        Self::with_base_url(AMD_KDS_DEFAULT_BASE_URL)
     }
 
     pub fn with_base_url(base_url: impl AsRef<str>) -> Result<Self> {
@@ -197,56 +326,6 @@ impl AmdKdsClient {
             ca_cache: Cache::new(AMD_KDS_CA_CACHE_CAPACITY),
             vcek_cache: Cache::new(AMD_KDS_VCEK_CACHE_CAPACITY),
         })
-    }
-
-    pub async fn verify_evidence_with_kds_fallback(
-        &self,
-        report: &[u8],
-        cert_chain: &[Vec<u8>],
-        expected_report_data: &[u8; 64],
-    ) -> Result<VerifiedAmdSnpReport> {
-        if !cert_chain.is_empty() {
-            return verify_amd_snp_evidence(report, cert_chain, expected_report_data);
-        }
-        if report.len() != 1184 {
-            bail!(
-                "invalid amd sev-snp report length: expected 1184 bytes, got {}",
-                report.len()
-            );
-        }
-        let report_obj = AttestationReport::from_bytes(report)
-            .map_err(|err| anyhow::anyhow!("failed to parse amd sev-snp report: {err}"))?;
-        let collateral = self
-            .fetch_collateral_for_report(&report_obj)
-            .await
-            .context("failed to fetch amd sev-snp KDS collateral for empty cert_chain")?;
-        let verified = verify_amd_snp_attestation_with_cert_chain(
-            report,
-            collateral.ark,
-            collateral.ask,
-            collateral.vcek,
-        )?;
-        if &verified.report_data != expected_report_data {
-            bail!("amd sev-snp report_data mismatch");
-        }
-        Ok(verified)
-    }
-
-    async fn fetch_collateral_for_report(
-        &self,
-        report: &AttestationReport,
-    ) -> Result<AmdKdsCollateral> {
-        let mut errors = Vec::new();
-        for product in amd_snp_product_candidates_for_report(report)? {
-            match self.fetch_collateral_for_product(product, report).await {
-                Ok(collateral) => return Ok(collateral),
-                Err(err) => errors.push(format!("{}: {err:#}", product.kds_name())),
-            }
-        }
-        bail!(
-            "amd sev-snp KDS collateral unavailable for supported products: {}",
-            errors.join("; ")
-        )
     }
 
     async fn fetch_collateral_for_product(
@@ -401,6 +480,17 @@ fn verify_amd_snp_attestation_with_certs(
     ask_bytes: CertBytes,
     vcek_bytes: CertBytes,
 ) -> Result<VerifiedAmdSnpReport> {
+    verify_amd_snp_attestation_with_certs_and_arks(report_bytes, ask_bytes, vcek_bytes, |product| {
+        (product.builtin_ark(), false)
+    })
+}
+
+fn verify_amd_snp_attestation_with_certs_and_arks(
+    report_bytes: &[u8],
+    ask_bytes: CertBytes,
+    vcek_bytes: CertBytes,
+    ark_for_product: impl Fn(AmdSnpProduct) -> (CertBytes, bool),
+) -> Result<VerifiedAmdSnpReport> {
     if report_bytes.len() != 1184 {
         bail!(
             "invalid amd sev-snp report length: expected 1184 bytes, got {}",
@@ -411,11 +501,13 @@ fn verify_amd_snp_attestation_with_certs(
         .map_err(|err| anyhow::anyhow!("failed to parse amd sev-snp report: {err}"))?;
     let mut errors = Vec::new();
     for product in amd_snp_product_candidates_for_report(&report)? {
+        let (ark, external_root) = ark_for_product(product);
         match verify_amd_snp_attestation_with_cert_chain(
             report_bytes,
-            product.builtin_ark(),
+            ark,
             ask_bytes.clone(),
             vcek_bytes.clone(),
+            external_root,
         ) {
             Ok(verified) => return Ok(verified),
             Err(err) => errors.push(format!("{}: {err:#}", product.kds_name())),
@@ -432,6 +524,7 @@ fn verify_amd_snp_attestation_with_cert_chain(
     ark_bytes: CertBytes,
     ask_bytes: CertBytes,
     vcek_bytes: CertBytes,
+    external_root: bool,
 ) -> Result<VerifiedAmdSnpReport> {
     if report_bytes.len() != 1184 {
         bail!(
@@ -445,14 +538,16 @@ fn verify_amd_snp_attestation_with_cert_chain(
     let ark = parse_certificate(&ark_bytes, "ark")?;
     let ask = parse_certificate(&ask_bytes, "ask")?;
     let vcek = parse_certificate(&vcek_bytes, "vcek")?;
-
-    let chain = Chain {
-        ca: ca::Chain { ark, ask },
-        vek: vcek.clone(),
-    };
-    chain
+    if external_root {
+        verify_x509_chain(&ark_bytes, &ask_bytes, &vcek_bytes)?;
+    } else {
+        Chain {
+            ca: ca::Chain { ark, ask },
+            vek: vcek.clone(),
+        }
         .verify()
         .map_err(|err| anyhow::anyhow!("amd cert chain verification failed: {err:?}"))?;
+    }
     (&vcek, &report).verify().map_err(|err| {
         anyhow::anyhow!("amd sev-snp report signature verification failed: {err:?}")
     })?;
@@ -474,6 +569,97 @@ fn verify_amd_snp_attestation_with_cert_chain(
     })
 }
 
+fn verify_x509_chain(ark: &CertBytes, ask: &CertBytes, vcek: &CertBytes) -> Result<()> {
+    use x509_parser::prelude::{FromDer, X509Certificate};
+
+    let ark_der = certificate_der(ark)?;
+    let ask_der = certificate_der(ask)?;
+    let vcek_der = certificate_der(vcek)?;
+    let (_, ark) = X509Certificate::from_der(&ark_der).context("failed to parse ARK X.509")?;
+    let (_, ask) = X509Certificate::from_der(&ask_der).context("failed to parse ASK X.509")?;
+    let (_, vcek) = X509Certificate::from_der(&vcek_der).context("failed to parse VCEK X.509")?;
+    if !ark.is_ca() || !ask.is_ca() {
+        bail!("AMD ARK and ASK certificates must be certificate authorities");
+    }
+    if ark.subject() != ark.issuer()
+        || ask.issuer() != ark.subject()
+        || vcek.issuer() != ask.subject()
+    {
+        bail!("AMD certificate issuer/subject chain mismatch");
+    }
+    verify_certificate_signature(&ark_der, &ark)
+        .context("ARK self-signature verification failed")?;
+    verify_certificate_signature(&ark_der, &ask).context("ASK signature verification failed")?;
+    verify_certificate_signature(&ask_der, &vcek).context("VCEK signature verification failed")?;
+    Ok(())
+}
+
+fn verify_certificate_signature(
+    issuer_der: &[u8],
+    certificate: &x509_parser::certificate::X509Certificate<'_>,
+) -> Result<()> {
+    use rustls_pki_types::CertificateDer;
+    const RSA_PSS_OID: &str = "1.2.840.113549.1.1.10";
+    const ECDSA_SHA384_OID: &str = "1.2.840.10045.4.3.3";
+    const SHA384_OID: &str = "2.16.840.1.101.3.4.2.2";
+    const MGF1_OID: &str = "1.2.840.113549.1.1.8";
+
+    anyhow::ensure!(
+        certificate.signature_algorithm == certificate.tbs_certificate.signature,
+        "certificate signatureAlgorithm does not match TBSCertificate signature"
+    );
+    let oid = certificate.signature_algorithm.algorithm.to_id_string();
+    let algorithm = match oid.as_str() {
+        RSA_PSS_OID => {
+            use x509_parser::signature_algorithm::SignatureAlgorithm;
+            let SignatureAlgorithm::RSASSA_PSS(params) =
+                SignatureAlgorithm::try_from(&certificate.signature_algorithm)
+                    .context("invalid RSA-PSS signature parameters")?
+            else {
+                bail!("invalid RSA-PSS signature parameters");
+            };
+            let mask = params
+                .mask_gen_algorithm()
+                .context("invalid RSA-PSS mask generation parameters")?;
+            anyhow::ensure!(
+                params.hash_algorithm_oid().to_id_string() == SHA384_OID
+                    && mask.mgf.to_id_string() == MGF1_OID
+                    && mask.hash.to_id_string() == SHA384_OID
+                    && params.salt_length() == 48
+                    && params.trailer_field() == 1,
+                "RSA-PSS certificate signature must use SHA-384, MGF1-SHA384, and a 48-byte salt"
+            );
+            webpki::ring::RSA_PSS_2048_8192_SHA384_LEGACY_KEY
+        }
+        ECDSA_SHA384_OID => {
+            anyhow::ensure!(
+                certificate.signature_algorithm.parameters.is_none(),
+                "ECDSA-SHA384 signature parameters must be absent"
+            );
+            webpki::ring::ECDSA_P384_SHA384
+        }
+        _ => bail!("unsupported certificate signature algorithm: {oid}"),
+    };
+    let issuer_der = CertificateDer::from(issuer_der);
+    let issuer = webpki::EndEntityCert::try_from(&issuer_der)
+        .context("failed to parse certificate issuer")?;
+    let message = certificate.tbs_certificate.as_ref();
+    let signature = certificate.signature_value.data.as_ref();
+    issuer
+        .verify_signature(algorithm, message, signature)
+        .context("invalid certificate signature")?;
+    Ok(())
+}
+
+fn certificate_der(cert: &CertBytes) -> Result<Vec<u8>> {
+    match cert.encoding {
+        CertEncoding::Der => Ok(cert.bytes.clone()),
+        CertEncoding::Pem => Ok(::pem::parse(&cert.bytes)
+            .context("failed to parse certificate PEM")?
+            .into_contents()),
+    }
+}
+
 pub fn verify_amd_snp_evidence(
     report: &[u8],
     cert_chain: &[Vec<u8>],
@@ -485,51 +671,6 @@ pub fn verify_amd_snp_evidence(
         bail!("amd sev-snp report_data mismatch");
     }
     Ok(verified)
-}
-
-pub fn verify_amd_snp_evidence_with_kds_fallback(
-    report: &[u8],
-    cert_chain: &[Vec<u8>],
-    expected_report_data: &[u8; 64],
-) -> Result<VerifiedAmdSnpReport> {
-    if !cert_chain.is_empty() {
-        return verify_amd_snp_evidence(report, cert_chain, expected_report_data);
-    }
-
-    let report = report.to_vec();
-    let expected_report_data = *expected_report_data;
-    thread::spawn(move || -> Result<VerifiedAmdSnpReport> {
-        let kds_client = AmdKdsClient::new()?;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .context("failed to create amd sev-snp KDS fallback runtime")?;
-        runtime.block_on(kds_client.verify_evidence_with_kds_fallback(
-            &report,
-            &[],
-            &expected_report_data,
-        ))
-    })
-    .join()
-    .map_err(|_| anyhow!("amd sev-snp KDS fallback worker panicked"))?
-}
-
-pub async fn verify_amd_snp_evidence_with_kds_fallback_async(
-    report: &[u8],
-    cert_chain: &[Vec<u8>],
-    expected_report_data: &[u8; 64],
-) -> Result<VerifiedAmdSnpReport> {
-    AmdKdsClient::new()?
-        .verify_evidence_with_kds_fallback(report, cert_chain, expected_report_data)
-        .await
-}
-
-fn amd_kds_base_url() -> String {
-    std::env::var(AMD_KDS_BASE_URL_ENV)
-        .ok()
-        .map(|url| url.trim().trim_end_matches('/').to_string())
-        .filter(|url| !url.is_empty())
-        .unwrap_or_else(|| AMD_KDS_DEFAULT_BASE_URL.to_string())
 }
 
 fn normalize_amd_kds_base_url(base_url: &str) -> Result<String> {

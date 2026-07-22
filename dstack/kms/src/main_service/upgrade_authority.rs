@@ -9,8 +9,7 @@ use dstack_guest_agent_rpc::{
     dstack_guest_client::DstackGuestClient, AttestResponse, RawQuoteArgs,
 };
 use http_client::prpc::PrpcClient;
-use ra_tls::attestation::VerifiedAttestation;
-use ra_tls::attestation::VersionedAttestation;
+use ra_tls::attestation::{AttestationVerifier, VerifiedAttestation, VersionedAttestation};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -50,7 +49,7 @@ pub(crate) fn ensure_app_id_len(app_id: &[u8]) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn local_kms_boot_info(pccs_url: Option<&str>) -> Result<BootInfo> {
+pub(crate) async fn local_kms_boot_info(verifier: &AttestationVerifier) -> Result<BootInfo> {
     let response = app_attest(pad64([0u8; 32]))
         .await
         .context("Failed to get local KMS attestation")?;
@@ -58,7 +57,7 @@ pub(crate) async fn local_kms_boot_info(pccs_url: Option<&str>) -> Result<BootIn
         .context("Failed to decode local KMS attestation")?;
     let verified = attestation
         .into_v1()
-        .verify(pccs_url)
+        .verify(verifier)
         .await
         .context("Failed to verify local KMS attestation")?;
     build_boot_info_for_attestation(&verified, false, "")
@@ -193,11 +192,14 @@ pub(crate) fn pad64(hash: [u8; 32]) -> Vec<u8> {
     padded
 }
 
-pub(crate) async fn ensure_self_kms_allowed(cfg: &KmsConfig) -> Result<()> {
+pub(crate) async fn ensure_self_kms_allowed(
+    cfg: &KmsConfig,
+    verifier: &AttestationVerifier,
+) -> Result<()> {
     if !cfg.enforce_self_authorization {
         return Ok(());
     }
-    let boot_info = local_kms_boot_info(cfg.pccs_url.as_deref())
+    let boot_info = local_kms_boot_info(verifier)
         .await
         .context("failed to build local KMS boot info")?;
     let response = cfg
@@ -214,6 +216,7 @@ pub(crate) async fn ensure_self_kms_allowed(cfg: &KmsConfig) -> Result<()> {
 pub(crate) async fn ensure_kms_allowed(
     cfg: &KmsConfig,
     attestation: &VerifiedAttestation,
+    verifier: &AttestationVerifier,
 ) -> Result<()> {
     let mut boot_info = build_boot_info_for_attestation(attestation, false, "")
         .context("failed to build KMS boot info from attestation")?;
@@ -223,7 +226,7 @@ pub(crate) async fn ensure_kms_allowed(
     // validates OS image integrity transitively through the RTMR measurement chain.
     // TODO: remove once all source KMS instances use the unified PHALA_RATLS_ATTESTATION format.
     if boot_info.os_image_hash.is_empty() {
-        let local_info = local_kms_boot_info(cfg.pccs_url.as_deref())
+        let local_info = local_kms_boot_info(verifier)
             .await
             .context("failed to get local KMS boot info for os_image_hash fallback")?;
         boot_info.os_image_hash = local_info.os_image_hash;

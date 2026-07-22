@@ -2,11 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use dstack_kms_rpc::{kms_client::KmsClient, SignCertRequest};
 use dstack_types::{AppKeys, KeyProvider};
 use ra_rpc::client::{RaClient, RaClientConfig};
-use ra_tls::cert::{generate_ra_cert, CaCert, CertSigningRequestV2};
+use ra_tls::{
+    attestation::AttestationVerifier,
+    cert::{generate_ra_cert, CaCert, CertSigningRequestV2},
+};
 
 pub enum CertRequestClient {
     Local {
@@ -54,7 +59,7 @@ impl CertRequestClient {
 
     pub async fn create(
         keys: &AppKeys,
-        pccs_url: Option<&str>,
+        attestation_verifier: Arc<AttestationVerifier>,
         vm_config: String,
     ) -> Result<CertRequestClient> {
         match &keys.key_provider {
@@ -79,7 +84,7 @@ impl CertRequestClient {
                     .tls_client_key(client_cert.key_pem)
                     .tls_ca_cert(keys.ca_cert.clone())
                     .tls_built_in_root_certs(false)
-                    .maybe_pccs_url(pccs_url.map(|s| s.to_string()))
+                    .attestation_verifier(attestation_verifier)
                     .build()
                     .into_client()
                     .context("Failed to create RA client")?;

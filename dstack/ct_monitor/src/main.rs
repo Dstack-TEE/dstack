@@ -42,7 +42,6 @@ struct VerificationRequest {
     quote: String,
     event_log: String,
     vm_config: String,
-    pccs_url: Option<String>,
 }
 
 /// Response from dstack-verifier
@@ -88,7 +87,6 @@ struct AcmeInfoResponse {
 struct Monitor {
     gateway_uri: String,
     verifier_url: String,
-    pccs_url: Option<String>,
     base_domain: String,
     known_keys: BTreeSet<Vec<u8>>,
     last_checked: Option<u64>,
@@ -112,13 +110,12 @@ struct CTLog {
 impl Monitor {
     /// Create a new monitor
     /// `gateway` format: `base_domain[:port]`, e.g., `example.com` or `example.com:8443`
-    fn new(gateway: String, verifier_url: String, pccs_url: Option<String>) -> Result<Self> {
+    fn new(gateway: String, verifier_url: String) -> Result<Self> {
         let (base_domain, gateway_uri) = Self::parse_gateway(&gateway)?;
         validate_domain(&base_domain)?;
         Ok(Self {
             gateway_uri,
             verifier_url,
-            pccs_url,
             base_domain,
             known_keys: BTreeSet::new(),
             last_checked: None,
@@ -175,7 +172,6 @@ impl Monitor {
             quote: hex::encode(&quote_response.quote),
             event_log: quote_response.event_log,
             vm_config: quote_response.vm_config,
-            pccs_url: self.pccs_url.clone(),
         };
 
         // Call verifier
@@ -402,10 +398,6 @@ struct Args {
     /// The dstack-verifier URL
     #[arg(short, long, env = "VERIFIER_URL")]
     verifier_url: String,
-
-    /// PCCS URL for TDX collateral fetching (optional)
-    #[arg(long, env = "PCCS_URL")]
-    pccs_url: Option<String>,
 }
 
 #[tokio::main]
@@ -416,7 +408,7 @@ async fn main() -> anyhow::Result<()> {
         fmt().with_env_filter(filter).with_ansi(false).init();
     }
     let args = Args::parse();
-    let mut monitor = Monitor::new(args.gateway, args.verifier_url, args.pccs_url)?;
+    let mut monitor = Monitor::new(args.gateway, args.verifier_url)?;
     monitor.run().await;
     Ok(())
 }

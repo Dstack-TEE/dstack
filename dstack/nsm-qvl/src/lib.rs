@@ -48,6 +48,48 @@ pub struct NsmCollateral {
 /// Fingerprint: 64:1A:03:21:A3:E2:44:EF:E4:56:46:31:95:D6:06:31:7E:D7:CD:CC:3C:17:56:E0:98:93:F3:C6:8F:79:BB:5B
 pub const AWS_NITRO_ENCLAVES_ROOT_G1: &str = include_str!("../certs/AWS_NitroEnclaves_Root-G1.pem");
 
+/// Verifies NSM attestation documents against a caller-selected trust anchor.
+///
+/// This mirrors `dcap_qvl::verify::QuoteVerifier`: use [`Self::new_prod`] for
+/// AWS production or [`Self::new`] to inject a PEM encoded root certificate.
+#[derive(Debug, Clone)]
+pub struct QuoteVerifier {
+    root_ca_pem: String,
+}
+
+impl QuoteVerifier {
+    pub fn new(root_ca_pem: impl Into<String>) -> Self {
+        Self {
+            root_ca_pem: root_ca_pem.into(),
+        }
+    }
+
+    pub fn new_prod() -> Self {
+        Self::new(AWS_NITRO_ENCLAVES_ROOT_G1)
+    }
+
+    pub fn root_ca_pem(&self) -> &str {
+        &self.root_ca_pem
+    }
+
+    pub fn verify(
+        &self,
+        cose_sign1_bytes: &[u8],
+        collateral: Option<&NsmCollateral>,
+        now: Option<std::time::SystemTime>,
+    ) -> Result<NsmVerifiedReport> {
+        verify_attestation(cose_sign1_bytes, &self.root_ca_pem, collateral, now)
+    }
+
+    pub async fn fetch_and_verify(
+        &self,
+        cose_sign1_bytes: &[u8],
+        now: Option<std::time::SystemTime>,
+    ) -> Result<NsmVerifiedReport> {
+        collateral::get_collateral_and_verify(cose_sign1_bytes, &self.root_ca_pem, now).await
+    }
+}
+
 /// Parsed COSE Sign1 structure for NSM attestation
 #[derive(Debug)]
 pub struct CoseSign1 {

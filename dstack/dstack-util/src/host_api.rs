@@ -47,7 +47,8 @@ impl HostApi {
             None => {
                 let local_config: SysConfig =
                     deserialize_json_file(format!("{HOST_SHARED_DIR}/{SYS_CONFIG}"))?;
-                Self::new(local_config.host_api_url, local_config.pccs_url)
+                let pccs = local_config.collateral_urls().pccs;
+                Self::new(local_config.host_api_url, pccs)
             }
         };
         Ok(api)

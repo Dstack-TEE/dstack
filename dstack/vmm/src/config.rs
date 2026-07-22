@@ -109,12 +109,12 @@ impl Protocol {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum TeePlatform {
+pub enum CvmPlatform {
     Tdx,
     AmdSevSnp,
 }
 
-impl TeePlatform {
+impl CvmPlatform {
     /// Detect the host TEE platform from /proc/cpuinfo. Used when the operator
     /// did not pin a platform in the config (`platform` omitted, or `auto`).
     pub fn detect() -> Self {
@@ -181,7 +181,7 @@ impl PortMappingConfig {
 /// Deserialize the optional `platform` config field. `None` (field omitted, or
 /// the legacy literal `auto`) means "detect the host TEE"; `tdx` / `amd-sev-snp`
 /// pin a platform. Keeping `auto` accepted preserves existing vmm.toml configs.
-fn deserialize_platform<'de, D>(deserializer: D) -> Result<Option<TeePlatform>, D::Error>
+fn deserialize_platform<'de, D>(deserializer: D) -> Result<Option<CvmPlatform>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -195,8 +195,8 @@ where
     Ok(
         match Option::<PlatformSetting>::deserialize(deserializer)? {
             None | Some(PlatformSetting::Auto) => None,
-            Some(PlatformSetting::Tdx) => Some(TeePlatform::Tdx),
-            Some(PlatformSetting::AmdSevSnp) => Some(TeePlatform::AmdSevSnp),
+            Some(PlatformSetting::Tdx) => Some(CvmPlatform::Tdx),
+            Some(PlatformSetting::AmdSevSnp) => Some(CvmPlatform::AmdSevSnp),
         },
     )
 }
@@ -204,8 +204,8 @@ where
 impl CvmConfig {
     /// The effective TEE platform: the configured one, or host auto-detection
     /// when left unset (`platform` omitted / `auto`).
-    pub fn resolved_platform(&self) -> TeePlatform {
-        self.platform.unwrap_or_else(TeePlatform::detect)
+    pub fn resolved_platform(&self) -> CvmPlatform {
+        self.platform.unwrap_or_else(CvmPlatform::detect)
     }
 }
 
@@ -250,7 +250,7 @@ pub struct CvmConfig {
     /// the host TEE from /proc/cpuinfo (AMD SEV-SNP vs Intel TDX); set `tdx` or
     /// `amd-sev-snp` to force a platform.
     #[serde(default, deserialize_with = "deserialize_platform")]
-    pub platform: Option<TeePlatform>,
+    pub platform: Option<CvmPlatform>,
     pub qemu_path: PathBuf,
     /// The URL of the KMS server
     pub kms_urls: Vec<String>,
@@ -260,6 +260,9 @@ pub struct CvmConfig {
     /// The URL of the PCCS server
     #[serde(default)]
     pub pccs_url: String,
+    /// Development-image simulator configuration copied into guest sys-config.
+    #[serde(default)]
+    pub tee_simulator: Option<dstack_types::TeeSimulatorConfig>,
     /// Optional NVIDIA OCSP/RIM cache passed to guests in sys-config.
     #[serde(default)]
     pub nvidia_attestation_proxy_url: Option<String>,
@@ -726,8 +729,8 @@ mod tests {
 
     #[test]
     fn tee_platform_deserializes_amd_sev_snp() {
-        let platform: TeePlatform = serde_json::from_str("\"amd-sev-snp\"").unwrap();
-        assert_eq!(platform, TeePlatform::AmdSevSnp);
+        let platform: CvmPlatform = serde_json::from_str("\"amd-sev-snp\"").unwrap();
+        assert_eq!(platform, CvmPlatform::AmdSevSnp);
     }
 
     #[test]
@@ -735,17 +738,17 @@ mod tests {
         #[derive(Deserialize)]
         struct Wrap {
             #[serde(default, deserialize_with = "deserialize_platform")]
-            platform: Option<TeePlatform>,
+            platform: Option<CvmPlatform>,
         }
         let parse = |s: &str| serde_json::from_str::<Wrap>(s).unwrap().platform;
         // Omitted and the legacy `auto` literal both mean "auto-detect" (None).
         assert_eq!(parse("{}"), None);
         assert_eq!(parse(r#"{"platform":"auto"}"#), None);
         // Explicit platforms are pinned.
-        assert_eq!(parse(r#"{"platform":"tdx"}"#), Some(TeePlatform::Tdx));
+        assert_eq!(parse(r#"{"platform":"tdx"}"#), Some(CvmPlatform::Tdx));
         assert_eq!(
             parse(r#"{"platform":"amd-sev-snp"}"#),
-            Some(TeePlatform::AmdSevSnp)
+            Some(CvmPlatform::AmdSevSnp)
         );
     }
 
@@ -788,20 +791,20 @@ mod tests {
     fn tee_platform_auto_detects_amd_sev_snp_from_flag() {
         let cpuinfo = "flags : fpu svm sev sev_es sev_snp debug_swap";
         assert_eq!(
-            TeePlatform::resolve_from_cpuinfo(cpuinfo),
-            TeePlatform::AmdSevSnp
+            CvmPlatform::resolve_from_cpuinfo(cpuinfo),
+            CvmPlatform::AmdSevSnp
         );
     }
 
     #[test]
     fn tee_platform_auto_detects_tdx_host() {
         let cpuinfo = "flags : fpu vmx tdx_host_platform";
-        assert_eq!(TeePlatform::resolve_from_cpuinfo(cpuinfo), TeePlatform::Tdx);
+        assert_eq!(CvmPlatform::resolve_from_cpuinfo(cpuinfo), CvmPlatform::Tdx);
     }
 
     #[test]
     fn tee_platform_auto_falls_back_to_tdx_without_tee_flag() {
         let cpuinfo = "flags : fpu vmx";
-        assert_eq!(TeePlatform::resolve_from_cpuinfo(cpuinfo), TeePlatform::Tdx);
+        assert_eq!(CvmPlatform::resolve_from_cpuinfo(cpuinfo), CvmPlatform::Tdx);
     }
 }
