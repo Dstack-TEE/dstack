@@ -187,7 +187,7 @@ async fn run_cert_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()
     let output = serde_json::json!({
         "is_valid": true,
         "details": {
-            "attestation_mode": verified.attestation.quote.mode(),
+            "tee_variant": verified.attestation.quote.variant(),
             "report_data": hex::encode(verified.attestation.report_data),
             "public_key_der": hex::encode(&verified.public_key_der),
             "app_id_extension": verified.app_id.as_ref().map(hex::encode),

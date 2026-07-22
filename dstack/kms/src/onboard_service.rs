@@ -127,7 +127,7 @@ impl OnboardRpc for OnboardHandler {
         // Decode and verify the attestation to get real device ID
         let attestation = VersionedAttestation::from_bytes(&response.attestation)
             .context("Failed to decode attestation")?;
-        let attestation_mode = match &attestation.clone().into_v1().platform {
+        let tee_variant = match &attestation.clone().into_v1().platform {
             PlatformEvidence::Tdx { .. } => "dstack-tdx",
             PlatformEvidence::SevSnp { .. } => "dstack-amd-sev-snp",
             PlatformEvidence::GcpTdx { .. } => "dstack-gcp-tdx",
@@ -161,7 +161,7 @@ impl OnboardRpc for OnboardHandler {
 
         build_attestation_info_response(
             &verified,
-            attestation_mode,
+            tee_variant,
             &info.vm_config,
             self.state.config.site_name.clone(),
             eth_rpc_url,
@@ -176,7 +176,7 @@ impl OnboardRpc for OnboardHandler {
 
 fn build_attestation_info_response(
     verified: &VerifiedAttestation,
-    attestation_mode: String,
+    tee_variant: String,
     vm_config: &str,
     site_name: String,
     eth_rpc_url: String,
@@ -189,7 +189,7 @@ fn build_attestation_info_response(
         device_id: sha2::Sha256::digest(&raw_device_id).to_vec(),
         mr_aggregated: boot_info.mr_aggregated,
         os_image_hash: boot_info.os_image_hash,
-        attestation_mode,
+        tee_variant,
         site_name,
         eth_rpc_url,
         kms_contract_address,
@@ -336,7 +336,7 @@ mod tests {
         assert_eq!(response.ppid, vec![0xab; 64]);
         assert_eq!(response.mr_aggregated.len(), 32);
         assert_eq!(response.os_image_hash, os_image_hash.to_vec());
-        assert_eq!(response.attestation_mode, "dstack-amd-sev-snp");
+        assert_eq!(response.tee_variant, "dstack-amd-sev-snp");
         assert_eq!(response.site_name, "test-site");
         assert_eq!(response.eth_rpc_url, "https://rpc.example");
         assert_eq!(response.kms_contract_address, "0x1234");

@@ -174,8 +174,8 @@ SPDX-License-Identifier: Apache-2.0
         <div v-else-if="attestationInfo" class="attestation-info">
             <h3>Attestation Info (for on-chain registration)</h3>
             <div class="info-row">
-                <span class="info-label">Attestation Mode:</span>
-                <span class="info-value">{{ attestationInfo.attestation_mode }}</span>
+                <span class="info-label">TEE Variant:</span>
+                <span class="info-value">{{ attestationInfo.tee_variant }}</span>
             </div>
             <div class="info-row" v-if="attestationInfo.ppid">
                 <span class="info-label">PPID:</span>

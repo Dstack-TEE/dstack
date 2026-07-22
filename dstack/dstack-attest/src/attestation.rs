@@ -450,7 +450,7 @@ fn has_sev_snp_tsm_provider() -> bool {
     false
 }
 
-fn choose_dstack_attestation_mode(has_tdx: bool, has_sev_snp: bool) -> Result<TeeVariant> {
+fn choose_dstack_tee_variant(has_tdx: bool, has_sev_snp: bool) -> Result<TeeVariant> {
     if has_tdx {
         return Ok(TeeVariant::DstackTdx);
     }
@@ -468,7 +468,7 @@ pub fn detect_tee_variant() -> Result<TeeVariant> {
     // First, try to detect platform from DMI product name
     let platform = Platform::detect_or_dstack();
     match platform {
-        Platform::Dstack => choose_dstack_attestation_mode(has_tdx, has_sev_snp),
+        Platform::Dstack => choose_dstack_tee_variant(has_tdx, has_sev_snp),
         Platform::Gcp => {
             // GCP platform: TDX + TPM dual mode
             if has_tdx {
@@ -1286,7 +1286,7 @@ pub enum AttestationQuote {
 }
 
 impl AttestationQuote {
-    pub fn mode(&self) -> TeeVariant {
+    pub fn variant(&self) -> TeeVariant {
         match self {
             AttestationQuote::DstackTdx(_) => TeeVariant::DstackTdx,
             AttestationQuote::DstackAmdSevSnp(_) => TeeVariant::DstackAmdSevSnp,
@@ -1303,7 +1303,7 @@ mod compatibility_tests {
     use scale::Encode;
 
     #[test]
-    fn attestation_mode_scale_discriminants_preserve_existing_wire_values() {
+    fn tee_variant_scale_discriminants_preserve_existing_wire_values() {
         assert_eq!(TeeVariant::DstackTdx.encode(), vec![0]);
         assert_eq!(TeeVariant::DstackGcpTdx.encode(), vec![1]);
         assert_eq!(TeeVariant::DstackNitroEnclave.encode(), vec![2]);
@@ -1312,7 +1312,7 @@ mod compatibility_tests {
     }
 
     #[test]
-    fn attestation_mode_deserializes_canonical_names() {
+    fn tee_variant_deserializes_canonical_names() {
         let parse = |value| serde_json::from_str::<TeeVariant>(value).unwrap();
         assert_eq!(parse(r#""dstack-tdx""#), TeeVariant::DstackTdx);
         assert_eq!(parse(r#""dstack-gcp-tdx""#), TeeVariant::DstackGcpTdx);
@@ -1360,17 +1360,17 @@ mod compatibility_tests {
     }
 
     #[test]
-    fn dstack_attestation_mode_prefers_tdx_when_both_tdx_and_tsm_exist() {
+    fn dstack_tee_variant_prefers_tdx_when_both_tdx_and_tsm_exist() {
         assert_eq!(
-            choose_dstack_attestation_mode(true, true).unwrap(),
+            choose_dstack_tee_variant(true, true).unwrap(),
             TeeVariant::DstackTdx
         );
     }
 
     #[test]
-    fn dstack_attestation_mode_uses_snp_when_only_snp_exists() {
+    fn dstack_tee_variant_uses_snp_when_only_snp_exists() {
         assert_eq!(
-            choose_dstack_attestation_mode(false, true).unwrap(),
+            choose_dstack_tee_variant(false, true).unwrap(),
             TeeVariant::DstackAmdSevSnp
         );
     }
@@ -2365,7 +2365,7 @@ impl Attestation {
         let report = verifier.gcp_tpm.fetch_and_verify(quote).await?;
         let pcr_ind = self
             .quote
-            .mode()
+            .variant()
             .tpm_event_pcr_and_bank()
             .map(|(pcr, _)| pcr)
             .context("Failed to get event PCR no")?;

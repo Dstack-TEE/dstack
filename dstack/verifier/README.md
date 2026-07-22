@@ -40,7 +40,7 @@ against the returned evidence.
     "acpi_tables_verified": true,         // true only when TDX ACPI table contents are verified
     "os_image_is_dev": false,             // true=dev image, false=prod, null=unknown/N/A
     "os_image_version": "0.5.10",         // dstack OS version, null if unknown
-    "attestation_mode": "dstack-tdx",   // dstack-tdx | dstack-gcp-tdx | dstack-nitro-enclave | dstack-amd-sev-snp | dstack-aws-nitro-tpm
+    "tee_variant": "dstack-tdx",   // dstack-tdx | dstack-gcp-tdx | dstack-nitro-enclave | dstack-amd-sev-snp | dstack-aws-nitro-tpm
     "report_data": "hex-encoded-64-byte-report-data",
     "tcb_status": "UpToDate",
     "advisory_ids": [],
@@ -61,7 +61,7 @@ against the returned evidence.
       "key_provider_info": "hex-string"
     },
     "boot_info": {
-      "attestationMode": "dstack-aws-nitro-tpm",
+      "teeVariant": "dstack-aws-nitro-tpm",
       "mrAggregated": "hex-string",
       "osImageHash": "hex-string",
       "mrSystem": "hex-string",
@@ -161,7 +161,7 @@ The verification checks that:
 
 Clients, gateways, or release validators should combine this certificate-level
 check with the policy fields emitted by `/verify`: accepted OS image,
-`attestationMode`, `mrAggregated`, app compose hash, KMS identity, a
+`teeVariant`, `mrAggregated`, app compose hash, KMS identity, a
 `report_data` challenge, and any deployment-specific endpoint allowlist.
 
 ### Running with Docker Compose
@@ -263,9 +263,9 @@ Beyond pass/fail, the result carries a few descriptive fields so a relying party
 
 - **`os_image_is_dev`** — `true` for a development OS image, `false` for production. Dev images are built for local testing and are not hardened for production use, so a relying party generally wants to reject them.
 - **`os_image_version`** — the dstack OS version (e.g. `0.5.10`), useful for enforcing a minimum version.
-- **`attestation_mode`** — the TEE variant that produced the verified quote, serialized as `TeeVariant`: `dstack-tdx`, `dstack-gcp-tdx`, `dstack-nitro-enclave`, `dstack-amd-sev-snp`, or `dstack-aws-nitro-tpm`.
+- **`tee_variant`** — the TEE variant that produced the verified quote, serialized as `TeeVariant`: `dstack-tdx`, `dstack-gcp-tdx`, `dstack-nitro-enclave`, `dstack-amd-sev-snp`, or `dstack-aws-nitro-tpm`.
 - **`acpi_tables_verified`** — whether TDX ACPI table contents were verified. This is useful for relying parties that require `requirements.tdx_measure_acpi_tables = true`.
 - **`key_provider`** — the decoded `app_info.key_provider_info` (`{name, id}`); `name` is e.g. `kms` or `local`. A `local` key provider means the CVM is not KMS-backed, which is itself a dev/insecure posture signal. The raw bytes remain in `app_info.key_provider_info`.
-- **`boot_info`** — the policy object a relying party should feed to its auth/governance layer. For AWS EC2 NitroTPM this includes `attestationMode = dstack-aws-nitro-tpm`, PCR4/7/12-derived `osImageHash`, PCR14-bound `mrAggregated`, app identity, instance/device identity, and a `tcbStatus` normalized to `UpToDate`.
+- **`boot_info`** — the policy object a relying party should feed to its auth/governance layer. For AWS EC2 NitroTPM this includes `teeVariant = dstack-aws-nitro-tpm`, PCR4/7/12-derived `osImageHash`, PCR14-bound `mrAggregated`, app identity, instance/device identity, and a `tcbStatus` normalized to `UpToDate`.
 
 `os_image_is_dev` and `os_image_version` are read from the image's `metadata.json`, which is part of `sha256sum.txt` and therefore bound to the `os_image_hash` that step 3 verifies against the quote — so they are as trustworthy as the os-image-hash check itself. They are `null` when the platform does not expose them (e.g. GCP TDX / Nitro Enclave) or when the image predates the field (images without `is_dev` are always production).
