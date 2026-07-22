@@ -155,7 +155,7 @@ mod tests {
     fn simulator_attest_response_uses_supplied_report_data() {
         let platform = load_fixture_platform();
         let report_data = [0x5a; 64];
-        let response = platform.attest_response(report_data, false).unwrap();
+        let response = platform.attest_response(report_data).unwrap();
         let patched = VersionedAttestation::from_bytes(&response.attestation)
             .unwrap()
             .into_v1();
@@ -172,7 +172,7 @@ mod tests {
         let original = fixture.clone().into_v1().report_data().unwrap();
         let platform = SimulatorPlatform::new(fixture, false);
         let report_data = [0x5a; 64];
-        let response = platform.attest_response(report_data, false).unwrap();
+        let response = platform.attest_response(report_data).unwrap();
         let patched = VersionedAttestation::from_bytes(&response.attestation)
             .unwrap()
             .into_v1();
