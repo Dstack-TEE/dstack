@@ -8,6 +8,7 @@ SRC_URI = " \
     git://github.com/NVIDIA/attestation-sdk.git;protocol=https;branch=main \
     file://10-nvidia-gpu-ordering.conf \
     file://0001-validate-ocsp-response-freshness.patch \
+    file://regorus-ffi-Cargo.lock \
 "
 SRCREV = "9d12801cea8a198ea0f29640dfaf8a4017c841c5"
 
@@ -74,13 +75,30 @@ do_compile:prepend() {
     export CARGO_HOST_LINKER="${WORKDIR}/wrappers/linker-native-wrapper.sh"
 }
 
+# regorus does not commit bindings/ffi/Cargo.lock.  Without a lockfile Cargo
+# resolves the newest semver-compatible proc-macro dependencies on every clean
+# build (for example syn 3.0.2 vs 3.0.3), which changes the dynamic string table
+# ordering and GNU build IDs of both libnvat and nvattest.  Install a reviewed
+# lockfile after FetchContent has populated regorus and fail if Cargo rewrites it.
+do_configure:append() {
+    install -m 0644 ${UNPACKDIR}/regorus-ffi-Cargo.lock \
+        ${B}/_deps/regorus-src/bindings/ffi/Cargo.lock
+}
+
+do_compile:append() {
+    cmp ${UNPACKDIR}/regorus-ffi-Cargo.lock \
+        ${B}/_deps/regorus-src/bindings/ffi/Cargo.lock || \
+        bbfatal "Cargo changed the pinned regorus FFI lockfile"
+}
+
 # Network is needed at configure/compile time because:
 #  - nv-attestation-cli CMake FetchContent: CLI11, nlohmann-json (+ fmt/spdlog
 #    headers)
 #  - nv-attestation-sdk-cpp CMake FetchContent: Corrosion, regorus, jwt-cpp
 #  - Corrosion runs cargo, which fetches the regorus-ffi crate dependencies
-# All refs are pinned (git tags/commits) upstream. TODO: vendor these via
-# SRC_URI + cargo vendor for a fully offline, reproducible fetch.
+# All refs are pinned (git tags/commits) upstream, and the regorus FFI Cargo
+# graph is pinned by the lockfile above. TODO: vendor these via SRC_URI + cargo
+# vendor to make the already reproducible fetch fully offline as well.
 do_configure[network] = "1"
 do_compile[network] = "1"
 
