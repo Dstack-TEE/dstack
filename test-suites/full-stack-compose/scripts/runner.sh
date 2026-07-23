@@ -501,7 +501,10 @@ capture_gateway_state() {
     | jq -S '. as $status | {
         id: $status.id,
         uuid: ([$status.nodes[] | select(.id == $status.id)][0].uuid),
-        hosts: ([$status.hosts[] | {instance_id,ip,app_id,base_domain}] | sort_by(.instance_id))
+        # The active WireGuard address can move to the surviving Gateway
+        # subnet during a rolling restart. It is runtime routing state, not a
+        # durable identity invariant.
+        hosts: ([$status.hosts[] | {instance_id,app_id,base_domain}] | sort_by(.instance_id))
       }' \
     > "$WORK_DIR/gateway${node}-${stage}.status.json"
   admin_curl "$node" GetCertbotConfig | jq -S \
