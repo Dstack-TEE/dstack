@@ -56,6 +56,20 @@ class DstackTestTests(unittest.TestCase):
                     dstack_test.resolve_model("codex", None), "test-codex-model"
                 )
 
+    def test_orchestrator_can_record_dependency_skip(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            plan_path = self.copy_fixture(Path(temporary))
+            plan = render.load_plan(plan_path)
+            case = plan.cases[0]
+            value = dstack_test.skip_case(
+                case, "run-skip", "prerequisite case failed", ["tc-prereq-001"]
+            )
+            self.assertEqual(value["status"], "SKIPPED")
+            result_dir = case.path / "results" / "run-skip"
+            result = dstack_test.validate_summary(case, result_dir / "result.json")
+            self.assertEqual(result["status"], "SKIPPED")
+            self.assertIn("tc-prereq-001", (result_dir / "session.jsonl").read_text())
+
     def test_validate_and_render_fixture(self) -> None:
         plan = render.load_plan(FIXTURE)
         valid = dstack_test.validate_run(plan, "run-demo")

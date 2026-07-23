@@ -82,7 +82,15 @@ Review the plan for change coverage, regression breadth, compatibility matrices,
 
 ### 3.5 Execute
 
-An AI executor must:
+The `run-plan` orchestration agent must first read the guide, index, and every
+case specification. It processes cases in index order, starts an independent
+case-agent session for each runnable case, and reads the completed result before
+deciding about later cases. It may mark a later case `SKIPPED` without launching
+it only when a recorded earlier non-PASS result demonstrably makes the later
+case's prerequisite false or its result meaningless. Similarity, expected cost,
+or a mere possibility of failure is not sufficient. Independent cases continue.
+
+Each case executor must:
 
 1. read the plan `README.md` and `index.json`;
 2. execute cases in index order unless the guide explicitly permits parallelism;

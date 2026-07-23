@@ -8,7 +8,8 @@ This document defines the normative format for AI sessions, case summaries, run 
 <a id="report-principles"></a>
 ## 1. Principles
 
-1. Each case runs in an independent Codex or Claude session.
+1. `run-plan` uses an AI scheduling session before each case, and each case it
+   executes runs in an independent Codex or Claude session.
 2. The agent's native JSONL is the primary source for commands, tool calls, and raw output.
 3. The agent writes one shallow `result.json`; it does not copy command output into that file.
 4. The runner generates `runner.json`, timestamps, exit code, checksums, and run aggregates.
@@ -47,6 +48,11 @@ dstack-test run-case \
 ```
 
 The runner supplies the plan guide, `case.md`, output location, status rules, and result schema in the prompt. The agent must read the guide before the case and must not modify plan specifications.
+
+For a dependency-driven skip, the orchestrator creates a synthetic one-event
+case session containing the reason and causal earlier case IDs. It does not
+pretend that the skipped case was executed. The full decision process remains
+available under the run-level `decisions/` directory.
 
 <a id="report-layout"></a>
 ## 4. Result layout

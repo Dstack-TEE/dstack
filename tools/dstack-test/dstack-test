@@ -319,6 +319,100 @@ def run_case(
     return {"case": case.id, "status": result["status"], "result_dir": str(result_dir)}
 
 
+def skip_case(
+    case: render.CaseEntry,
+    run_id: str,
+    reason: str,
+    blocked_by: list[str],
+    model: str | None = None,
+) -> dict[str, Any]:
+    result_dir = case.path / "results" / run_id
+    if result_dir.exists() and any(result_dir.iterdir()):
+        raise DstackTestError(f"result directory is not empty: {result_dir}")
+    result_dir.mkdir(parents=True, exist_ok=True)
+    now = utc_now()
+    event = {
+        "type": "orchestrator.skip",
+        "case_id": case.id,
+        "reason": reason,
+        "blocked_by": blocked_by,
+    }
+    (result_dir / "session.jsonl").write_text(
+        json.dumps(event, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    result = {
+        "schema_version": "1.0",
+        "case_id": case.id,
+        "status": "SKIPPED",
+        "summary": reason,
+        "steps": [],
+        "artifacts": [],
+        "remarks": "Skipped by the run-plan orchestrator after evaluating prior results.",
+    }
+    atomic_json(result_dir / "result.json", result)
+    atomic_json(
+        result_dir / "runner.json",
+        {
+            "schema_version": "1.0",
+            "run_id": run_id,
+            "case_id": case.id,
+            "agent": {
+                "type": "run-plan-scheduler",
+                "model": model or "unknown",
+            },
+            "session": {
+                "format": "orchestrator-decision-jsonl",
+                "path": "session.jsonl",
+                "events": 1,
+            },
+            "result_path": "result.json",
+            "started_at": now,
+            "finished_at": now,
+            "duration_ms": 0,
+            "exit_code": 0,
+            "result_valid": True,
+            "result_error": None,
+        },
+    )
+    write_sha256s(result_dir)
+    return {"case": case.id, "status": "SKIPPED", "result_dir": str(result_dir)}
+
+
+def orchestration_prompt(
+    plan: render.Plan,
+    case: render.CaseEntry,
+    prior: list[dict[str, Any]],
+    decision_path: Path,
+    extra_prompt: str,
+) -> str:
+    prior_json = json.dumps(prior, ensure_ascii=False, indent=2)
+    return f"""You are the dstack test-plan scheduling agent. Decide whether the next case should be executed; do not execute the case yourself.
+
+Read the plan guide at {plan.guide_path}, index at {plan.root / "index.json"}, every case specification, and the prior results below. The next case in authoritative order is {case.id} at {case.spec_path}.
+
+Prior completed results:
+{prior_json}
+
+Decision rules:
+- Choose RUN unless a recorded prior non-PASS result demonstrably makes this case's prerequisite false or makes its result meaningless.
+- Choose SKIP only for such a proven dependency consequence. Similarity, cost, likely failure, or an independently checkable prerequisite is not sufficient.
+- A SKIP decision must name one or more causal earlier case IDs in blocked_by and explain the exact dependency.
+- Never reinterpret a product failure as a scheduling failure. Independent cases continue after FAIL, BLOCKED, or SKIPPED.
+- Do not modify the plan or any case result.
+
+Atomically write exactly this shallow JSON object to {decision_path}:
+{{
+  "decision": "RUN|SKIP",
+  "reason": "concise evidence-based reason",
+  "blocked_by": ["prior-case-id"]
+}}
+For RUN, blocked_by must be empty. Finish after writing the decision.
+
+Additional caller constraints:
+{extra_prompt or "None"}
+"""
+
+
 def write_sha256s(root: Path) -> None:
     entries: list[str] = []
     for path in sorted(
@@ -609,37 +703,109 @@ def main(argv: list[str] | None = None) -> int:
             args.overwrite,
         )
     elif args.subcommand == "run-plan":
-        values = []
-        total = len(plan.cases)
-        for index, case in enumerate(plan.cases, 1):
-            print(f"[{index}/{total}] starting {case.id}", file=sys.stderr, flush=True)
-            try:
-                case_value = run_case(
+        run_dir = plan.root / "results" / args.run_id
+        existing = run_dir.exists() or any(
+            (case.path / "results" / args.run_id).exists() for case in plan.cases
+        )
+        if existing and not args.overwrite:
+            raise DstackTestError(
+                f"run {args.run_id!r} already exists; pass --overwrite to replace it"
+            )
+        if args.overwrite:
+            shutil.rmtree(run_dir, ignore_errors=True)
+            for case in plan.cases:
+                shutil.rmtree(case.path / "results" / args.run_id, ignore_errors=True)
+        decisions_dir = run_dir / "decisions"
+        decisions_dir.mkdir(parents=True, exist_ok=True)
+        effective_model = resolve_model(args.agent, args.model)
+        prior: list[dict[str, Any]] = []
+        for number, case in enumerate(plan.cases, 1):
+            print(
+                f"[{number}/{len(plan.cases)}] scheduling {case.id}",
+                file=sys.stderr,
+                flush=True,
+            )
+            decision_path = decisions_dir / f"{case.id}.json"
+            prompt = orchestration_prompt(
+                plan, case, prior, decision_path, prompt_text(args)
+            )
+            (decisions_dir / f"{case.id}.prompt.md").write_text(
+                prompt, encoding="utf-8"
+            )
+            command = agent_command(
+                args.agent,
+                effective_model,
+                args.workdir.resolve(),
+                prompt,
+                args.agent_arg,
+            )
+            with (
+                (decisions_dir / f"{case.id}.session.jsonl").open("wb") as stdout,
+                (decisions_dir / f"{case.id}.stderr.log").open("wb") as stderr,
+            ):
+                completed = subprocess.run(
+                    command, cwd=args.workdir, stdout=stdout, stderr=stderr, check=False
+                )
+            validate_session(decisions_dir / f"{case.id}.session.jsonl")
+            if completed.returncode != 0:
+                raise DstackTestError(
+                    f"scheduler failed for {case.id} with exit code {completed.returncode}"
+                )
+            decision = render.load_json(decision_path)
+            action = decision.get("decision")
+            reason = decision.get("reason")
+            blocked_by = decision.get("blocked_by", [])
+            if (
+                action not in ("RUN", "SKIP")
+                or not isinstance(reason, str)
+                or not reason.strip()
+                or not isinstance(blocked_by, list)
+            ):
+                raise DstackTestError(f"invalid scheduling decision for {case.id}")
+            prior_by_id = {item["case_id"]: item for item in prior}
+            if action == "SKIP":
+                if not blocked_by or any(
+                    ref not in prior_by_id or prior_by_id[ref]["status"] == "PASS"
+                    for ref in blocked_by
+                ):
+                    raise DstackTestError(
+                        f"invalid blocked_by references for {case.id}"
+                    )
+                skip_case(case, args.run_id, reason, blocked_by, effective_model)
+                result = {"case_id": case.id, "status": "SKIPPED", "summary": reason}
+            else:
+                if blocked_by:
+                    raise DstackTestError(
+                        f"RUN decision has blocked_by entries for {case.id}"
+                    )
+                run_case(
                     plan,
                     case,
                     args.run_id,
                     args.agent,
-                    args.model,
+                    effective_model,
                     args.workdir.resolve(),
                     prompt_text(args),
                     args.agent_arg,
-                    args.overwrite,
+                    False,
                 )
-                values.append(case_value)
-                print(
-                    f"[{index}/{total}] finished {case.id}: {case_value['status']}",
-                    file=sys.stderr,
-                    flush=True,
+                result = validate_summary(
+                    case, case.path / "results" / args.run_id / "result.json"
                 )
-            except DstackTestError as error:
-                values.append({"case": case.id, "runner_error": str(error)})
-                print(
-                    f"[{index}/{total}] runner error for {case.id}: {error}",
-                    file=sys.stderr,
-                    flush=True,
-                )
+            prior.append(
+                {
+                    "case_id": case.id,
+                    "status": result["status"],
+                    "summary": result["summary"],
+                }
+            )
+            print(
+                f"[{number}/{len(plan.cases)}] {case.id}: {result['status']}",
+                file=sys.stderr,
+                flush=True,
+            )
         run = finalize_run(plan, args.run_id, context_value(args.context))
-        value = {"cases": values, "run": run}
+        value = {"decisions": prior, "run": run}
     elif args.subcommand == "finalize":
         value = finalize_run(plan, args.run_id, context_value(args.context))
     elif args.subcommand == "validate":
