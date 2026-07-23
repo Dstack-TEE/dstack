@@ -24,7 +24,7 @@ cp -a "$ROOT/os/common/rootfs/containerd.service.d/." "$DEST/etc/systemd/system/
 # Cargo.lock pins Rust dependencies. Offline mode makes a warm, vendored/cache
 # build deterministic and prevents an accidental lockfile update.
 if [[ ${DSTACK_SKIP_RUST:-0} != 1 ]]; then
-  export CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true
+  export CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=${CARGO_NET_OFFLINE:-false}
   build_root=$(dirname "$DEST")
   export CARGO_TARGET_DIR="$build_root/dstack-cargo-target"
   export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$ROOT=/usr/src/dstack --remap-path-prefix=$build_root=/usr/src/dstack-build -C strip=debuginfo"

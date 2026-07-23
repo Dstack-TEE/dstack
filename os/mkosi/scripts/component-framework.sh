@@ -39,14 +39,18 @@ key_tree() {
 }
 
 key_tools() {
-    local tool
+    local tool path package
     for tool; do
-        printf 'tool\0%s\0' "$tool"
+        path=$(readlink -f "$(command -v "$tool")")
+        printf 'tool\0%s\0%s\0' "$tool" "$path"
+        sha256sum "$path"
         case "$tool" in
             gcc|ld|cmake|make|autoconf|automake|tar) "$tool" --version | head -1 ;;
             go) go version ;;
             *) "$tool" --version ;;
         esac
+        package=$(dpkg-query -S "$path" 2>/dev/null | head -1 | cut -d: -f1 || true)
+        [[ -z $package ]] || key_packages "$package"
     done
 }
 
@@ -84,7 +88,8 @@ component_run() {
         key_value component-schema-v1 "$COMPONENT_NAME" "$FLAVOR" \
           "${SOURCE_DATE_EPOCH:?}" "$(uname -m)"
         key_file "$definition" "$SELF/scripts/component-framework.sh" \
-          "$SELF/scripts/dev-cache.sh"
+          "$SELF/scripts/dev-cache.sh" "$SELF/scripts/install-toolchains.sh" \
+          "$SELF/mkosi.build" "$SELF/mkosi.conf"
         component_cache_key
     } | sha256sum | cut -d' ' -f1)
     COMPONENT_KEYS[$name]=$key

@@ -14,8 +14,8 @@ component_cache_key() {
 }
 
 component_build() {
-    mkdir -p "$WORK/component-stages/ovmf"
+    mkdir -p "$WORK/component-stages/ovmf/usr/lib/dstack/firmware"
     "$COMPONENT_PATH/ovmf-build.sh" "$WORK/ovmf-build" \
-      "$WORK/component-stages/ovmf/ovmf.fd" \
-      "$WORK/component-stages/ovmf/ovmf-sev.fd"
+      "$WORK/component-stages/ovmf/usr/lib/dstack/firmware/ovmf.fd" \
+      "$WORK/component-stages/ovmf/usr/lib/dstack/firmware/ovmf-sev.fd"
 }

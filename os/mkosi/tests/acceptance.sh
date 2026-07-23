@@ -29,8 +29,8 @@ grep -q 'ovmf-build.sh' "$D/components/ovmf/ovmf.sh"
 grep -q 'fbe0805b2091393406952e84724188f8c1941837' "$D/components/ovmf/ovmf-build.sh"
 grep -q 'AmdSev/AmdSevX64.dsc' "$D/components/ovmf/ovmf-build.sh"
 grep -q '0006-OvmfPkg-AmdSev-drop-embedded-grub.patch' "$D/components/ovmf/ovmf.sh"
-grep -q 'objcopy --strip-debug' "$D/build.sh"
-grep -q 'depmod -b.*KERNEL_VERSION-dstack' "$D/build.sh"
+grep -q 'objcopy --strip-debug' "$D/mkosi.build"
+grep -q 'depmod -b.*KERNEL_VERSION-dstack' "$D/mkosi.build"
 grep -q 'prune-rootfs.sh' "$D/build.sh"
 if grep -q '^[[:space:]]*ovmf$' "$D/mkosi.conf"; then
   echo 'distribution OVMF must not be installed in the guest rootfs' >&2
@@ -54,11 +54,14 @@ grep -q '0001-linux-6.19-7.1-compat.patch' "$D/components/zfs/zfs-build.sh"
 grep -q -- '--fuzz=0' "$D/components/zfs/zfs-build.sh"
 python3 -m json.tool "$D/parity.json" >/dev/null
 grep -q 'rootfs.img.parted.verity' "$D/../image/assemble.sh"
-bash -n "$D"/*.sh "$D"/scripts/*.sh "$D"/components/*/*.sh "$D"/tests/*.sh
+bash -n "$D"/*.sh "$D"/mkosi.build "$D"/scripts/*.sh "$D"/components/*/*.sh "$D"/tests/*.sh
 grep -q 'dstack-.*-uki.tar.gz' "$D/build.sh"
 grep -Fq "FLAVORS=\${FLAVORS:-prod}" "$D/build.sh"
-grep -Fq "[[ \$action == dev-image ]] && component_cache_args+=(--dev-cache)" "$D/build.sh"
-grep -q 'scripts/build-components.sh' "$D/build.sh"
+grep -q 'DSTACK_COMPONENT_CACHE.*dev-image' "$D/build.sh"
+grep -q 'scripts/build-components.sh' "$D/mkosi.build"
+grep -q '^BuildPackages=' "$D/mkosi.conf"
+grep -q '^ToolsTree=yes$' "$D/mkosi.conf"
+grep -q 'install-toolchains.sh' "$D/mkosi.build"
 for component in dstack-rust container-stack sysbox nvattest kernel nvidia zfs ovmf; do
   definition="$D/components/$component/$component.sh"
   grep -q "^COMPONENT_NAME=$component$" "$definition"

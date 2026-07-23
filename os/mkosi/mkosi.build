@@ -1,0 +1,65 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+
+# Enter the mkosi build root so every compiler and build dependency comes from
+# the pinned Debian snapshot rather than from the host.
+if [[ ${container:-} != mkosi ]]; then
+    exec mkosi-chroot "$CHROOT_SCRIPT" "$@"
+fi
+
+ROOT="$SRCDIR/dstack"
+SELF="$ROOT/os/mkosi"
+# shellcheck source=/dev/null
+source "$SELF/versions.env"
+
+export HOME=/var/tmp/dstack-home
+export CARGO_HOME=/var/tmp/dstack-cargo-home
+export GOCACHE=/var/tmp/dstack-go-cache
+export GOMODCACHE=/var/tmp/dstack-go-mod-cache
+export XDG_CACHE_HOME=/var/tmp/dstack-xdg-cache
+mkdir -p "$HOME" "$CARGO_HOME" "$GOCACHE" "$GOMODCACHE" "$XDG_CACHE_HOME"
+
+cache_enabled=${DSTACK_COMPONENT_CACHE:-0}
+if [[ $cache_enabled == 1 ]]; then
+    export DSTACK_DEV_CACHE_DIR="$SRCDIR/component-cache/components"
+    toolchain_downloads="$SRCDIR/component-cache/toolchains"
+else
+    toolchain_downloads=/var/tmp/dstack-toolchain-downloads
+fi
+export PATH="/opt/dstack-toolchains/rust/bin:/opt/dstack-toolchains/go/bin:$PATH"
+"$SELF/scripts/install-toolchains.sh" "$toolchain_downloads"
+
+work=/var/tmp/dstack-component-work
+kernel_stage=/var/tmp/dstack-kernel-stage
+mkdir -p "$work" "$kernel_stage"
+args=()
+[[ $cache_enabled == 1 ]] && args+=(--dev-cache)
+"$SELF/scripts/build-components.sh" "${args[@]}" \
+  "$work" "$DESTDIR" "$kernel_stage" "${DSTACK_BUILD_FLAVOR:?}"
+
+# Normalize any legacy physical directories before mkosi copies DESTDIR over
+# Debian's usr-merged root. Use the same strict merger so this cannot overwrite
+# a component-owned path silently.
+for legacy in bin sbin lib lib64; do
+    if [[ -d $DESTDIR/$legacy && ! -L $DESTDIR/$legacy ]]; then
+        mkdir -p "$DESTDIR/usr/$legacy"
+        "$SELF/scripts/merge-component-trees.py" "$DESTDIR/usr/$legacy" \
+          "legacy-$legacy=$DESTDIR/$legacy"
+        rm -rf "${DESTDIR:?}/$legacy"
+    fi
+done
+
+# Merge kernel/firmware outputs into the build install tree. mkosi copies
+# DESTDIR into the final image after removing the build-package overlay.
+"$SELF/scripts/merge-component-trees.py" "$DESTDIR" \
+  "kernel=$kernel_stage"
+ln -sfn usr/lib "$DESTDIR/lib"
+depmod -b "$DESTDIR" "$KERNEL_VERSION-dstack"
+rm -f "$DESTDIR/lib"
+if [[ $DSTACK_BUILD_FLAVOR == prod ]]; then
+    find "$DESTDIR/usr/lib/modules" -type f -name '*.ko' \
+      -exec objcopy --strip-debug {} \;
+fi
+find "$DESTDIR" -print0 | xargs -0r touch --no-dereference \
+  --date="@${SOURCE_DATE_EPOCH:?}"

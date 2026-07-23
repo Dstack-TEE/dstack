@@ -14,8 +14,6 @@ case "$action" in
   *) echo "Usage: $0 {image|dev-image|repro-check|lint} [build-dir]" >&2; exit 2 ;;
 esac
 if [[ $action == lint ]]; then exec "$SELF/tests/acceptance.sh"; fi
-component_cache_args=()
-[[ $action == dev-image ]] && component_cache_args+=(--dev-cache)
 command -v mkosi >/dev/null || { echo 'mkosi >= 26 is required' >&2; exit 1; }
 actual=$(mkosi --version | awk '{print $2}' | cut -d. -f1)
 (( actual >= MKOSI_MIN_VERSION )) || { echo "mkosi >= $MKOSI_MIN_VERSION required" >&2; exit 1; }
@@ -24,63 +22,43 @@ export TZ=UTC LC_ALL=C
 
 build_one() {
   local out=$1 work=$2 flavor=$3
-  local stage="$work/rootfs-stage" kstage="$work/kernel-stage" tree="$work/rootfs"
-  rm -rf "$work" "$out"; mkdir -p "$stage" "$kstage" "$out"
-  "$SELF/scripts/build-components.sh" "${component_cache_args[@]}" \
-    "$work" "$stage" "$kstage" "$flavor"
-  # NVIDIA and ZFS are assembled from independent cacheable stage trees.
-  # Regenerate indexes only after every module tree has been merged.
-  ln -sfn usr/lib "$kstage/lib"
-  depmod -b "$kstage" "$KERNEL_VERSION-dstack"
-  rm -f "$kstage/lib"
-  if [[ $flavor == prod ]]; then
-    # Yocto splits module DWARF into debug packages which are not shipped in
-    # the production image. Keep BTF and loadable ELF metadata, but do not put
-    # hundreds of MiB of host-side DWARF into the immutable guest root.
-    find "$kstage/usr/lib/modules" -type f -name '*.ko' -exec objcopy --strip-debug {} \;
+  local kstage="$work/kernel-stage" tree="$work/rootfs"
+  rm -rf "$work" "$out"; mkdir -p "$out"
+
+  mkosi_args=(
+    --directory "$SELF"
+    --force
+    --format=directory
+    --output-directory="$work"
+    --output=rootfs
+    --compress-output=no
+    --bootable=no
+    --environment="DSTACK_BUILD_FLAVOR=$flavor"
+    --environment="DSTACK_COMPONENT_CACHE=$([[ $action == dev-image ]] && echo 1 || echo 0)"
+    --environment="JOBS=${JOBS:-$(nproc)}"
+  )
+  if [[ $action == dev-image ]]; then
+    cache_root=${DSTACK_DEV_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dstack/mkosi-dev}
+    mkdir -p "$cache_root"
+    mkosi_args+=(--build-sources="$cache_root:component-cache")
   fi
-  # ExtraTrees is copied over Debian's usr-merged root where /bin, /sbin and
-  # /lib are symlinks. Normalize build systems (notably OpenZFS) that install
-  # into the legacy physical directories before handing the tree to mkosi.
-  for legacy in bin sbin lib lib64; do
-    if [[ -d $stage/$legacy && ! -L $stage/$legacy ]]; then
-      mkdir -p "$stage/usr/$legacy"
-      cp -a "$stage/$legacy/." "$stage/usr/$legacy/"
-      rm -rf "${stage:?}/$legacy"
-    fi
-  done
-  cat > "$work/mkosi.local.conf" <<EOF
-[Content]
-ExtraTrees=$stage
-Bootable=no
-[Output]
-Format=directory
-OutputDirectory=$work
-Output=rootfs
-CompressOutput=no
-EOF
   if [[ $flavor == dev ]]; then
-    cat >> "$work/mkosi.local.conf" <<EOF
-[Content]
-Packages=strace,tcpdump,gdb,vim
-EOF
-  fi
-  devargs=()
-  if [[ $flavor == dev ]]; then
-    devargs+=(--package=strace --package=tcpdump --package=gdb --package=vim \
+    mkosi_args+=(--package=strace --package=tcpdump --package=gdb --package=vim \
       --package=openssh-server)
   fi
-  mkosi --directory "$SELF" --force --extra-tree="$stage" "${devargs[@]}" \
-    --format=directory --output-directory="$work" --output=rootfs \
-    --compress-output=no --bootable=no build
+  mkosi "${mkosi_args[@]}" build
+
+  mkdir -p "$kstage/usr/lib"
+  cp -a "$tree/usr/lib/modules" "$kstage/usr/lib/"
+  install -m0644 "$tree/usr/lib/dstack/firmware/ovmf.fd" "$kstage/ovmf.fd"
+  install -m0644 "$tree/usr/lib/dstack/firmware/ovmf-sev.fd" "$kstage/ovmf-sev.fd"
+  rm -rf "$tree/usr/lib/dstack/firmware"
   if [[ $flavor == prod ]]; then
     "$SELF/scripts/prune-rootfs.sh" "$tree"
   fi
   # ldconfig's binary auxiliary cache records traversal-dependent ordering.
   # /var is volatile at runtime, so ship no host-generated cache.
   rm -f "$tree/var/cache/ldconfig/aux-cache"
-  mkdir -p "$tree/usr/lib/modules"
-  cp -a "$kstage/usr/lib/modules/." "$tree/usr/lib/modules/"
   "$SELF/tests/check-parity.py" "$SELF/parity.json" "$tree" "$kstage" "$flavor"
   artifact_dir="$work/artifacts/$flavor"
   "$SELF/scripts/make-release-artifacts.sh" "$tree" "$kstage" "$artifact_dir" "$flavor"

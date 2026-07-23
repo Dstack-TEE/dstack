@@ -13,13 +13,17 @@ NVIDIA Container Toolkit, nerdctl, CNI plugins and stargz-snapshotter 0.18.2.
 
 ## Reproducibility model
 
-`versions.env` pins the stable 7.x kernel tarball by SHA-256 and selects an
-immutable Debian snapshot. `Cargo.lock`, `--locked --offline`, a fixed
-`SOURCE_DATE_EPOCH`, normalized file mtimes, fixed kernel build identity and
-mkosi's deterministic image construction close the remaining inputs. The two
-dstack binaries therefore require an already populated Cargo cache; use a
-vendored source tree in hermetic CI. `DSTACK_SKIP_RUST=1` exists only for
-rootfs/kernel development and does **not** produce a functional guest.
+`versions.env` pins the stable 7.x kernel, Rust 1.92.0 and Go 1.22.2
+archives by SHA-256 and selects an immutable Debian snapshot. All components
+are compiled by `mkosi.build` inside mkosi's build-package overlay; host
+Rust/Go/GCC binaries are never used. C/C++ compilers, linkers, headers and
+build systems come from that snapshot, while the Rust and Go distributions are
+installed under `/opt/dstack-toolchains` after checksum verification. A mkosi
+tools tree built from the same snapshot supplies image-construction tools.
+`Cargo.lock`, `--locked`, a fixed `SOURCE_DATE_EPOCH`, normalized file mtimes,
+fixed kernel build identity and mkosi's deterministic image construction close
+the remaining inputs. `DSTACK_SKIP_RUST=1` exists only for rootfs/kernel
+development and does **not** produce a functional guest.
 
 The custom kernel starts from `x86_64_defconfig`, then applies the reviewed
 `kernel.config` fragment. This is the practical upstream equivalent of Yocto's
@@ -31,15 +35,12 @@ checked before compilation.
 
 ## Build and acceptance
 
-Host requirements include mkosi >= 26, systemd tools, C/C++/Go/Rust kernel and
-EDK2 build toolchains, `autoconf`, `automake`, `libtool`, `bc`, `bison`,
-`flex`, `nasm`, `iasl`, and development headers for OpenSSL, ELF, UUID, udev,
-aio, attr, blkid, curl, seccomp and tirpc. BTF generation requires `pahole`
-(the `dwarves` package). Runtime build tools include `patch`,
-`pax-utils` (`lddtree`), `squashfs-tools`, `cryptsetup`, `gdisk`,
-`dosfstools`, `mtools`, `curl`, `xz`, QEMU/KVM and root privileges (or a
-working user namespace). Full UKI release assembly also needs the pinned
-`nitro-tpm-pcr-compute` described by `os/image/assemble.sh`.
+Host compilation toolchains are not required. mkosi 26 creates the pinned
+Debian build overlay and tools tree containing all component compilers and
+headers. Host-side release assembly still requires `pax-utils` (`lddtree`),
+`squashfs-tools`, `cryptsetup`, `gdisk`, `dosfstools`, `mtools`, QEMU/KVM and
+root privileges (or a working user namespace). Full UKI release assembly also
+needs the pinned `nitro-tpm-pcr-compute` described by `os/image/assemble.sh`.
 
 ```sh
 ./os/mkosi/build.sh lint
