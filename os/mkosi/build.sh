@@ -48,6 +48,9 @@ build_one() {
       gcc --version | head -1; ld --version | head -1; go version
       rustc --version; cargo --version; cmake --version | head -1
       make --version | head -1; pahole --version; tar --version | head -1
+      python3 --version; ninja --version; autoconf --version | head -1
+      automake --version | head -1; zstd --version | head -1
+      dpkg-query -W -f='${binary:Package}=${Version}\n' | sort
     } | sha256sum | cut -d' ' -f1)
   fi
   component_key() {
