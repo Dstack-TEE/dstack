@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -20,8 +22,15 @@ FIXTURE = HERE / "fixtures" / "sample-plan"
 CLI = TOOL_DIR / "dstack-test"
 sys.path.insert(0, str(TOOL_DIR))
 
-import dstack_test  # noqa: E402
 import render  # noqa: E402
+
+spec = importlib.util.spec_from_loader(
+    "dstack_test", SourceFileLoader("dstack_test", str(CLI))
+)
+if spec is None or spec.loader is None:
+    raise RuntimeError(f"failed to load {CLI}")
+dstack_test = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(dstack_test)
 
 
 class DstackTestTests(unittest.TestCase):
@@ -29,6 +38,13 @@ class DstackTestTests(unittest.TestCase):
         plan = root / "plan"
         shutil.copytree(FIXTURE, plan)
         return plan
+
+    def test_run_command_defaults(self) -> None:
+        args = dstack_test.build_parser().parse_args(
+            ["run-plan", "--plan", str(FIXTURE)]
+        )
+        self.assertEqual(args.agent, "codex")
+        self.assertRegex(args.run_id, r"^run-\d{8}T\d{6}Z-[0-9a-f]{6}$")
 
     def test_validate_and_render_fixture(self) -> None:
         plan = render.load_plan(FIXTURE)

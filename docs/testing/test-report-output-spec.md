@@ -30,17 +30,18 @@ dstack-test package
 dstack-test render
 ```
 
-Options use kebab-case. Select an executor with `--agent codex` or `--agent claude`; do not introduce separate `--codex` or `--claude` switches.
+Options use kebab-case. Execution defaults to Codex; select Claude with
+`--agent claude`. Do not introduce separate `--codex` or `--claude` switches.
+`run-case` and `run-plan` generate a unique run ID when `--run-id` is omitted.
+Commands that operate on an existing run still require its ID.
 
 <a id="report-run-case"></a>
 ## 3. Case execution
 
 ```bash
 dstack-test run-case \
-  --agent codex \
   --plan <plan> \
   --case <case-id-or-directory> \
-  --run-id <run-id> \
   --workdir <repository> \
   -- "Additional execution constraints"
 ```

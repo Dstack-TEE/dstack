@@ -12,16 +12,15 @@ self-contained interactive HTML report.
 
 ```bash
 tools/dstack-test/dstack-test run-case \
-  --agent codex \
   --plan path/to/plan \
   --case tc-gw-pp-001 \
-  --run-id run-20260723-001 \
   --workdir "$PWD" \
   -- "Do not restart the physical host"
 ```
 
-Use `--agent claude` for Claude Code. Additional CLI options may be passed with
-repeatable `--agent-arg`. The runner writes only below:
+The executor defaults to Codex; use `--agent claude` for Claude Code. The run ID
+is generated when `--run-id` is omitted. Additional CLI options may be passed
+with repeatable `--agent-arg`. The runner writes only below:
 
 ```text
 <case>/results/<run-id>/
@@ -38,9 +37,7 @@ repeatable `--agent-arg`. The runner writes only below:
 
 ```bash
 tools/dstack-test/dstack-test run-plan \
-  --agent codex \
   --plan path/to/plan \
-  --run-id run-20260723-001 \
   --context run-context.json \
   -- "Follow the environment restrictions in README.md"
 ```
