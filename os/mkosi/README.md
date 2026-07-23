@@ -60,11 +60,13 @@ DSTACK_DEV_CACHE_DIR="$HOME/.cache/dstack/mkosi-dev" \
 
 The cache covers dstack Rust, the container stack, Sysbox, nvattest, the
 kernel build tree, NVIDIA, ZFS and both OVMF variants. Its key conservatively
-includes all tracked and untracked mkosi/Yocto/dstack inputs, tool versions,
-architecture, flavor and `SOURCE_DATE_EPOCH`. `image` and `repro-check`
-unconditionally disable this development cache, even if the internal enable
-flag is inherited from the environment. Release artifacts, Debian rootfs,
-dm-verity data and measurements are never cached.
+includes the inputs, tools, packages and component dependencies declared by
+each file in `components/`, plus architecture, flavor and
+`SOURCE_DATE_EPOCH`. `build-components.sh` is intentionally only the ordered
+component list. Component install trees are merged with strict non-directory
+conflict detection. `image` and `repro-check` never pass the development-cache
+option. Release artifacts, Debian rootfs, dm-verity data and measurements are
+never cached.
 
 On a 16-job development host, a clean production work directory takes about
 17 minutes (measured 16m45s); allow 20--30 minutes with cold compiler and

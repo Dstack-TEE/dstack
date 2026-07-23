@@ -21,7 +21,7 @@ for service in dstack-guest-agent dstack-prepare app-compose wg-checker; do
 done
 grep -q 'artifact-manifest.json' "$D/scripts/make-release-artifacts.sh"
 grep -q 'image/assemble.sh' "$D/build.sh"
-grep -q 'build-ovmf.sh' "$D/scripts/build-components.sh"
+grep -q 'build-ovmf.sh' "$D/components/ovmf.sh"
 grep -q 'fbe0805b2091393406952e84724188f8c1941837' "$D/scripts/build-ovmf.sh"
 grep -q 'AmdSev/AmdSevX64.dsc' "$D/scripts/build-ovmf.sh"
 grep -q 'objcopy --strip-debug' "$D/build.sh"
@@ -51,5 +51,13 @@ grep -q 'rootfs.img.parted.verity' "$D/../image/assemble.sh"
 bash -n "$D"/*.sh "$D"/scripts/*.sh "$D"/tests/*.sh
 grep -Fq "[[ \$action == dev-image ]] && component_cache_args+=(--dev-cache)" "$D/build.sh"
 grep -q 'scripts/build-components.sh' "$D/build.sh"
+for component in dstack-rust container-stack sysbox nvattest kernel nvidia zfs ovmf; do
+  definition="$D/components/$component.sh"
+  grep -q "^COMPONENT_NAME=$component$" "$definition"
+  grep -q '^component_cache_key()' "$definition"
+  grep -q '^component_build()' "$definition"
+  grep -q '^COMPONENT_CACHE_PATHS=' "$definition"
+done
 "$D/tests/test-dev-cache.sh"
+"$D/tests/test-component-merge.sh"
 echo 'mkosi static acceptance passed'
