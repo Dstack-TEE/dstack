@@ -20,10 +20,10 @@ env:
   # These values were produced by two cache-disabled local builds. The job
   # checks out this exact source revision so the embedded Git revision is also
   # identical. Refresh all four values together when updating the baseline.
-  BASELINE_REVISION: 11137678684431f58d73e8869a032be9492c1400
-  SOURCE_DATE_EPOCH: '1784828416'
-  BARE_SHA256: a5c14693afb9381ff6912ee1ce2ba61e079e1ef1290fe9caa18f7660a9ca3376
-  UKI_SHA256: f8e7e4b4d62208ab58cfe897fc2ab7634e9c2b49d695c6cb30f75ce370956a3f
+  BASELINE_REVISION: a7e7059dce4f710af3d2cae66ff05aa0435772e8
+  SOURCE_DATE_EPOCH: '1784835822'
+  BARE_SHA256: a020d9b42deeab621af5122d298a2338b15784278d7d93ad95937cd6d0c974bc
+  UKI_SHA256: bc46dd619c706fc99e033cfabf885be99ae94c8f8da451ae278dbbd57576276f
 
 jobs:
   cross-host:
