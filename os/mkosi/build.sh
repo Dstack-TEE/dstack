@@ -5,6 +5,7 @@ SELF=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(cd "$SELF/../.." && pwd)
 # shellcheck source=/dev/null
 source "$SELF/versions.env"
+FLAVORS=${FLAVORS:-prod}
 action=${1:-image}
 BUILD_DIR=${2:-$SELF/build}
 BUILD_DIR=$(realpath -m "$BUILD_DIR")

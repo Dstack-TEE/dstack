@@ -55,6 +55,7 @@ grep -q -- '--fuzz=0' "$D/components/zfs/zfs-build.sh"
 python3 -m json.tool "$D/parity.json" >/dev/null
 grep -q 'rootfs.img.parted.verity' "$D/../image/assemble.sh"
 bash -n "$D"/*.sh "$D"/scripts/*.sh "$D"/components/*/*.sh "$D"/tests/*.sh
+grep -q '^FLAVORS=\${FLAVORS:-prod}$' "$D/build.sh"
 grep -Fq "[[ \$action == dev-image ]] && component_cache_args+=(--dev-cache)" "$D/build.sh"
 grep -q 'scripts/build-components.sh' "$D/build.sh"
 for component in dstack-rust container-stack sysbox nvattest kernel nvidia zfs ovmf; do
