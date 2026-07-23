@@ -55,6 +55,8 @@ build_one() {
   fi
   mkosi "${mkosi_args[@]}" build
 
+  "$SELF/scripts/normalize-skeleton-modes.sh" "$tree"
+
   mkdir -p "$kstage/usr/lib"
   cp -a "$tree/usr/lib/modules" "$kstage/usr/lib/"
   install -m0644 "$tree/usr/lib/dstack/firmware/ovmf.fd" "$kstage/ovmf.fd"
