@@ -9,6 +9,7 @@ use super::{
     hugepage_numa_nodes,
     image::Image,
     mr_config::{snp_host_data, tdx_mr_config_id},
+    needs_qemu_swtpm,
     network::{mac_address_for_vm_index, resolved_networks, validate_resolved_networks},
     pci_numa_node, round_up, GpuConfig, VmWorkDir,
 };
@@ -19,7 +20,7 @@ use crate::{
 };
 use anyhow::{bail, Context, Result};
 use bon::Builder;
-use dstack_types::{shared_filenames::HOST_SHARED_DISK_LABEL, KeyProviderKind, TeeVariant};
+use dstack_types::shared_filenames::HOST_SHARED_DISK_LABEL;
 use fs_err as fs;
 use nix::unistd::User;
 use serde::Serialize;
@@ -177,16 +178,6 @@ struct PreparedVolume {
     source: String,
 }
 
-fn simulated_platform_provides_tpm(platform: Option<TeeVariant>) -> bool {
-    matches!(
-        platform,
-        Some(TeeVariant::DstackGcpTdx | TeeVariant::DstackAwsNitroTpm)
-    )
-}
-
-fn needs_qemu_swtpm(key_provider: KeyProviderKind, simulated_tee: Option<TeeVariant>) -> bool {
-    matches!(key_provider, KeyProviderKind::Tpm) && !simulated_platform_provides_tpm(simulated_tee)
-}
 struct PreparedQemuLaunch {
     workdir: VmWorkDir,
     platform: CvmPlatform,
@@ -244,20 +235,22 @@ impl PreparedQemuLaunch {
         } else {
             None
         };
-        let (swtpm_socket, swtpm_path) =
-            if needs_qemu_swtpm(app_compose.key_provider(), vm.manifest.simulated_tee) {
-                let swtpm_path = which::which("swtpm")
-                    .context("tpm key provider requested but swtpm is not installed")?;
-                let state_dir = workdir.swtpm_state_dir();
-                fs::create_dir_all(&state_dir).context("failed to create swtpm state directory")?;
-                let socket = workdir.swtpm_socket();
-                if socket.exists() {
-                    fs::remove_file(&socket).context("failed to remove stale swtpm socket")?;
-                }
-                (Some(socket), Some(swtpm_path))
-            } else {
-                (None, None)
-            };
+        let attach_swtpm = vm.manifest.qemu_swtpm.unwrap_or_else(|| {
+            needs_qemu_swtpm(app_compose.key_provider(), vm.manifest.simulated_tee)
+        });
+        let (swtpm_socket, swtpm_path) = if attach_swtpm {
+            let swtpm_path = which::which("swtpm")
+                .context("tpm key provider requested but swtpm is not installed")?;
+            let state_dir = workdir.swtpm_state_dir();
+            fs::create_dir_all(&state_dir).context("failed to create swtpm state directory")?;
+            let socket = workdir.swtpm_socket();
+            if socket.exists() {
+                fs::remove_file(&socket).context("failed to remove stale swtpm socket")?;
+            }
+            (Some(socket), Some(swtpm_path))
+        } else {
+            (None, None)
+        };
         prepare_shared_disk(&workdir, cfg)?;
 
         let tee_enabled = !vm.manifest.no_tee;
@@ -1069,6 +1062,7 @@ mod tests {
                 gateway_urls: vec![],
                 no_tee: true,
                 simulated_tee: None,
+                qemu_swtpm: Some(false),
                 networks: vec![],
                 volumes: vec![VmVolume {
                     source: "/does-not-exist/volume.img".into(),

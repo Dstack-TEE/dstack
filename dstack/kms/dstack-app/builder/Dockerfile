@@ -44,7 +44,8 @@ RUN ./pin-packages.sh ./qemu-pinned-packages.txt && \
     python3-sphinx-rtd-theme \
     build-essential \
     flex \
-    bison && \
+    bison \
+    swtpm && \
     rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 RUN git clone https://github.com/kvinwang/qemu-tdx.git --depth 1 --branch dstack-qemu-9.2.1 --single-branch && \
     cd qemu-tdx && git fetch --depth 1 origin ${QEMU_REV} && \

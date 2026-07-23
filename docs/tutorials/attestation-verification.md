@@ -254,7 +254,7 @@ cat /var/lib/dstack/images/dstack-0.5.7/metadata.json | jq .
 # Install QEMU build dependencies
 sudo apt-get update
 sudo apt-get install -y git libslirp-dev python3-pip ninja-build \
-  pkg-config libglib2.0-dev build-essential flex bison
+  pkg-config libglib2.0-dev build-essential flex bison swtpm
 
 # Clone the custom QEMU fork
 cd ~/dstack

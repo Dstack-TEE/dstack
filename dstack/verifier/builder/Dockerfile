@@ -76,6 +76,7 @@ RUN ./pin-packages.sh ./pinned-packages.txt && \
     curl \
     libglib2.0-0 \
     libslirp0 \
+    swtpm \
     && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 COPY --from=verifier-builder /build/repo/dstack/target/x86_64-unknown-linux-musl/release/dstack-verifier /usr/local/bin/dstack-verifier
 COPY --from=verifier-builder /build/.GIT_REV /etc/

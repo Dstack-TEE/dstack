@@ -112,6 +112,10 @@ pub struct Manifest {
     pub no_tee: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub simulated_tee: Option<dstack_types::TeeVariant>,
+    /// Deployment-time decision to attach QEMU swtpm. None is reserved for
+    /// manifests created before this field existed and is resolved lazily.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qemu_swtpm: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub networks: Vec<Networking>,
     #[serde(default)]
@@ -1106,6 +1110,7 @@ impl App {
             &manifest,
             &hex::encode(compose_hash),
             mr_config,
+            app_compose.key_provider(),
             app_compose.requirements.as_ref(),
         )?;
         fs::write(shared_dir.join(SYS_CONFIG), &sys_config_str)
@@ -1288,6 +1293,7 @@ pub(crate) fn make_sys_config(
     manifest: &Manifest,
     compose_hash: &str,
     mr_config: Option<String>,
+    key_provider: dstack_types::KeyProviderKind,
     requirements: Option<&dstack_types::Requirements>,
 ) -> Result<String> {
     let image_path = cfg.image.path.join(&manifest.image);
@@ -1307,12 +1313,13 @@ pub(crate) fn make_sys_config(
         bail!("Unsupported image version: {img_ver:?}");
     }
 
-    let vm_config = make_vm_config(
+    let vm_config = make_vm_config_with_key_provider(
         cfg,
         manifest,
         &image,
         compose_hash,
         mr_config.clone(),
+        key_provider,
         requirements,
     )?;
     let mut sys_config = json!({
@@ -1380,12 +1387,33 @@ fn tdx_attestation_variant_from_requirements(
         })
 }
 
+#[cfg(test)]
 fn make_vm_config(
+    cfg: &Config,
+    manifest: &Manifest,
+    image: &Image,
+    compose_hash: &str,
+    mr_config: Option<String>,
+    requirements: Option<&dstack_types::Requirements>,
+) -> Result<serde_json::Value> {
+    make_vm_config_with_key_provider(
+        cfg,
+        manifest,
+        image,
+        compose_hash,
+        mr_config,
+        dstack_types::KeyProviderKind::None,
+        requirements,
+    )
+}
+
+fn make_vm_config_with_key_provider(
     cfg: &Config,
     manifest: &Manifest,
     image: &Image,
     _compose_hash: &str,
     mr_config: Option<String>,
+    key_provider: dstack_types::KeyProviderKind,
     requirements: Option<&dstack_types::Requirements>,
 ) -> Result<serde_json::Value> {
     let platform = cfg.cvm.resolved_platform();
@@ -1440,6 +1468,9 @@ fn make_vm_config(
     // verifier reconstructs the exact device layout.
     let num_nics = resolved_networks(manifest, &cfg.cvm).len() as u32;
     let num_verity_volumes = manifest.volumes.len() as u32;
+    let qemu_swtpm = manifest
+        .qemu_swtpm
+        .unwrap_or_else(|| needs_qemu_swtpm(key_provider, manifest.simulated_tee));
     let mut config = serde_json::to_value(dstack_types::VmConfig {
         os_image_hash,
         cpu_count: effective_vcpus,
@@ -1453,6 +1484,7 @@ fn make_vm_config(
         num_nvswitches: gpus.bridges.len() as u32,
         num_nics,
         num_verity_volumes,
+        qemu_swtpm,
         host_share_mode: cfg.cvm.host_share_mode.clone(),
         hotplug_off: cfg.cvm.qemu_hotplug_off,
         image: Some(manifest.image.clone()),
@@ -1485,6 +1517,21 @@ fn make_vm_config(
         );
     }
     Ok(config)
+}
+
+pub(crate) fn simulated_platform_provides_tpm(platform: Option<dstack_types::TeeVariant>) -> bool {
+    matches!(
+        platform,
+        Some(dstack_types::TeeVariant::DstackGcpTdx | dstack_types::TeeVariant::DstackAwsNitroTpm)
+    )
+}
+
+pub(crate) fn needs_qemu_swtpm(
+    key_provider: dstack_types::KeyProviderKind,
+    simulated_tee: Option<dstack_types::TeeVariant>,
+) -> bool {
+    matches!(key_provider, dstack_types::KeyProviderKind::Tpm)
+        && !simulated_platform_provides_tpm(simulated_tee)
 }
 
 #[cfg(test)]
@@ -1723,6 +1770,7 @@ mod tests {
             gateway_urls: vec![],
             no_tee: false,
             simulated_tee: None,
+            qemu_swtpm: Some(false),
             networks: vec![],
             volumes: vec![],
         }
@@ -1852,6 +1900,25 @@ mod tests {
         )?;
 
         assert_eq!(vm_config["num_verity_volumes"], 2);
+        Ok(())
+    }
+
+    #[test]
+    fn vm_measurement_config_includes_qemu_swtpm() -> Result<()> {
+        let config = test_tdx_config()?;
+        let mut manifest = test_manifest(2048);
+        manifest.qemu_swtpm = Some(true);
+
+        let vm_config = make_vm_config(
+            &config,
+            &manifest,
+            &test_tdx_image(true),
+            &hex_of(0x22, 32),
+            None,
+            None,
+        )?;
+
+        assert_eq!(vm_config["qemu_swtpm"], true);
         Ok(())
     }
 
@@ -2011,6 +2078,7 @@ mod tests {
             gateway_urls: vec![],
             no_tee: false,
             simulated_tee: None,
+            qemu_swtpm: Some(false),
             networks: vec![],
             volumes: vec![],
         };
@@ -2050,8 +2118,14 @@ mod tests {
         let build_hash = Sha256::digest(sha256sum.as_bytes()).to_vec();
         fs::write(image_dir.join("digest.txt"), hex::encode(&build_hash))?;
 
-        let sys_config_document =
-            make_sys_config(&config, &manifest, &compose_hash, Some(mr_config), None)?;
+        let sys_config_document = make_sys_config(
+            &config,
+            &manifest,
+            &compose_hash,
+            Some(mr_config),
+            dstack_types::KeyProviderKind::None,
+            None,
+        )?;
         let sys_config: serde_json::Value = serde_json::from_str(&sys_config_document)?;
         assert!(sys_config.get("tee_simulator").is_none());
         assert_eq!(sys_config["pccs_url"], config.cvm.pccs_url);
