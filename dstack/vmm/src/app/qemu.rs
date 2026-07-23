@@ -234,8 +234,7 @@ impl PreparedQemuLaunch {
         } else {
             None
         };
-        let attach_swtpm = vm.manifest.swtpm;
-        let (swtpm_socket, swtpm_path) = if attach_swtpm {
+        let (swtpm_socket, swtpm_path) = if vm.manifest.swtpm {
             let swtpm_path = which::which("swtpm")
                 .context("tpm key provider requested but swtpm is not installed")?;
             let state_dir = workdir.swtpm_state_dir();
