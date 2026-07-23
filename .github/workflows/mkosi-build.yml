@@ -20,10 +20,10 @@ env:
   # These values were produced by two cache-disabled local builds. The job
   # checks out this exact source revision so the embedded Git revision is also
   # identical. Refresh all four values together when updating the baseline.
-  BASELINE_REVISION: ba69541abdf1520ee43aaea13202260b2bb24362
-  SOURCE_DATE_EPOCH: '1784815731'
-  BARE_SHA256: fe3bec292b08d8004ad1cc02ec0db6a651b3f6dfb4d402374ce8c257c26092f0
-  UKI_SHA256: 60dd994be45adb8135fb045d31cd8fed71e4674f1f95565625037b25757a0bff
+  BASELINE_REVISION: 0b80830d1efd024a2511176d083134b846979628
+  SOURCE_DATE_EPOCH: '1784823805'
+  BARE_SHA256: 9b55932f086d6f836de32ed8420ebb74f464bf118758f8392e17dabb7a6a6b03
+  UKI_SHA256: 5ca2d94c4e2ba39344fbca3c88234967a3e237cb1d104d1f5dea2f1d01ba8959
 
 jobs:
   cross-host:
@@ -97,8 +97,8 @@ jobs:
       - name: Build without component cache
         env:
           # ubuntu-latest currently provides four vCPUs and 16 GiB of RAM.
-          # Two compile jobs keep peak kernel/OVMF memory safely below that.
-          JOBS: '2'
+          # Do not oversubscribe either the CPU or compiler memory.
+          JOBS: '4'
         run: |
           test -z "${DSTACK_DEV_CACHE_DIR:-}"
           # GitHub-hosted Ubuntu runners restrict unprivileged user namespaces.
@@ -116,10 +116,13 @@ jobs:
             "DSTACK_MR_BIN=$DSTACK_MR_BIN" \
             "JOBS=$JOBS" \
             ./os/mkosi/build.sh image "$RUNNER_TEMP/mkosi-cross-host"
+          sudo chown -R "$USER:$USER" "$RUNNER_TEMP/mkosi-cross-host/out"
 
       - name: Compare with local byte-for-byte baseline
         run: |
           cd "$RUNNER_TEMP/mkosi-cross-host/out/prod"
+          tar -xOf dstack-0.6.0.tar.gz dstack-0.6.0/sha256sum.txt
+          tar -xOf dstack-0.6.0.tar.gz dstack-0.6.0/metadata.json
           sha256sum dstack-0.6.0.tar.gz dstack-0.6.0-uki.tar.gz \
             | tee cross-host.sha256
           printf '%s  %s\n' "$BARE_SHA256" dstack-0.6.0.tar.gz \
