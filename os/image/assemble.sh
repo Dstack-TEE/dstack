@@ -306,11 +306,18 @@ build_uki_disk_image() {
         tmp_dir=$(mktemp -d)
         trap 'rm -rf "$tmp_dir"' EXIT
 
-        # Create EFI filesystem with UKI as bootloader
+        # Fix both the FAT volume metadata and directory entry timestamps.
+        # mmd stamps new directories with wall-clock time, so populate the
+        # filesystem recursively from a normalized host-side tree instead.
         local efi_img=${tmp_dir}/efi.img
-        mkfs.vfat -F 32 -n DSTACKEFI -C "$efi_img" $((efi_size_aligned / 1024)) >/dev/null
-        mmd -i "$efi_img" ::EFI ::EFI/BOOT
-        mcopy -i "$efi_img" "$uki_file" ::EFI/BOOT/BOOTX64.EFI
+        local efi_tree=${tmp_dir}/tree
+        mkdir -p "$efi_tree/EFI/BOOT"
+        cp "$uki_file" "$efi_tree/EFI/BOOT/BOOTX64.EFI"
+        find "$efi_tree" -print0 | xargs -0r touch --no-dereference \
+          --date="@${SOURCE_DATE_EPOCH:-0}"
+        mkfs.vfat --invariant -F 32 -n DSTACKEFI -C "$efi_img" \
+          $((efi_size_aligned / 1024)) >/dev/null
+        mcopy -smp -i "$efi_img" "$efi_tree/EFI" ::
 
         dd if="$efi_img" of="$disk_img" bs=$align seek=$((efi_start / align)) conv=notrunc status=none
         dd if="$rootfs_img" of="$disk_img" bs=$align seek=$((rootfs_start / align)) conv=notrunc status=none
