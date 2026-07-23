@@ -21,17 +21,17 @@ actual=$(mkosi --version | awk '{print $2}' | cut -d. -f1)
 }
 export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --format=%ct)}
 export TZ=UTC LC_ALL=C
+# A production invocation reconstructs the tools tree once from the immutable
+# snapshot, then shares that read-only environment across all requested flavors
+# or both legs of repro-check.
+if [[ $action != dev-image ]]; then
+  mkosi --directory "$SELF" clean -f
+fi
 
 build_one() {
   local out=$1 work=$2 flavor=$3
   local kstage="$work/kernel-stage" tree="$work/rootfs"
   rm -rf "$work" "$out"; mkdir -p "$out"
-  # Production builds reconstruct the tools tree from the immutable snapshot;
-  # no previously generated build environment is trusted.
-  if [[ $action != dev-image ]]; then
-    mkosi --directory "$SELF" clean -f
-  fi
-
   mkosi_args=(
     --directory "$SELF"
     --force
