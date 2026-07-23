@@ -26,7 +26,8 @@ struct Args {
     #[arg(long)]
     platform: Option<TeeVariant>,
 
-    /// Development-only simulator config.
+    /// Development-only simulator config. The systemd unit overrides this
+    /// standalone default with its early-mounted runtime path.
     #[arg(long, default_value = "/dstack/.host-shared/.tee-simulator.json")]
     config: PathBuf,
 
@@ -220,9 +221,7 @@ mod tests {
             fs_err::write(
                 &path,
                 serde_json::json!({
-                    "kms_urls": [], "gateway_urls": [], "pccs_url": null,
-                    "docker_registry": null, "host_api_url": null, "vm_config": "{}",
-                "platform": name
+                    "platform": name
                 })
                 .to_string(),
             )

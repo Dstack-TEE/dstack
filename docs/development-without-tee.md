@@ -99,6 +99,10 @@ collateral_base_url = "http://10.0.2.2:18088"
 exe = "/home/USER/.local/bin/supervisor"
 ```
 
+The VMM writes these settings to the guest's development-only
+`.tee-simulator.json`. The guest starts the simulator only when that file is
+present in the host share.
+
 Start the VMM from a stable working directory because its default API socket is
 relative to that directory:
 

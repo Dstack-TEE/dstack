@@ -1,15 +1,11 @@
 [Unit]
-Description=dstack development TEE ABI simulator (TDX backend)
+Description=dstack development TEE ABI simulator
 Documentation=https://github.com/Dstack-TEE/dstack/blob/master/CONTRIBUTING.md
 Before=dstack-prepare.service
-ConditionPathExists=!/dev/tdx_guest
-ConditionPathExists=!/dev/sev-guest
 
 [Service]
 Type=notify
-ExecCondition=/bin/sh -c '! grep -qE "^(tdx_guest|sev_guest)" /sys/kernel/config/tsm/report/*/provider 2>/dev/null'
-ExecStartPre=/bin/mkdir -p /run/dstack/tee-simulator-host-shared
-ExecStartPre=/usr/bin/dstack-util host-shared mount --mount-point /run/dstack/tee-simulator-host-shared
+ExecCondition=/bin/sh -c '/usr/bin/dstack-util host-shared mount --mount-point /run/dstack/tee-simulator-host-shared && { test -f /run/dstack/tee-simulator-host-shared/.tee-simulator.json || { /usr/bin/dstack-util host-shared unmount --mount-point /run/dstack/tee-simulator-host-shared; exit 1; }; }'
 ExecStart=/usr/bin/dstack-tee-simulator --config /run/dstack/tee-simulator-host-shared/.tee-simulator.json
 ExecStartPost=/bin/systemctl set-environment DCAP_TDX_RTMR_SYSFS_PATH=/sys/kernel/config/tsm/report/com.intel.dcap/measurements DSTACK_CCEL_FILE=/sys/kernel/config/tsm/report/com.intel.dcap/ccel
 ExecStartPost=-/usr/bin/dstack-util host-shared unmount --mount-point /run/dstack/tee-simulator-host-shared

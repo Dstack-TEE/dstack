@@ -1108,16 +1108,7 @@ impl App {
         )?;
         fs::write(shared_dir.join(SYS_CONFIG), &sys_config_str)
             .context("Failed to write vm config")?;
-        if let Some(mut simulator_config) = cfg.cvm.tee_simulator.clone() {
-            let sys_config: dstack_types::SysConfig = serde_json::from_str(&sys_config_str)?;
-            simulator_config.mr_config = sys_config.mr_config;
-            simulator_config.vm_config = Some(sys_config.vm_config);
-            fs::write(
-                shared_dir.join(TEE_SIMULATOR_CONFIG),
-                serde_json::to_vec(&simulator_config)?,
-            )
-            .context("Failed to write TEE simulator config")?;
-        }
+        sync_tee_simulator_config(&shared_dir, cfg.cvm.tee_simulator.as_ref(), &sys_config_str)?;
         Ok(())
     }
 
@@ -1251,6 +1242,27 @@ fn rotate_serial_log(work_dir: &VmWorkDir, max_bytes: u64) {
             }
         }
     }
+}
+
+fn sync_tee_simulator_config(
+    shared_dir: &Path,
+    simulator_config: Option<&dstack_types::TeeSimulatorConfig>,
+    sys_config: &str,
+) -> Result<()> {
+    let path = shared_dir.join(TEE_SIMULATOR_CONFIG);
+    let Some(simulator_config) = simulator_config else {
+        if path.exists() {
+            fs::remove_file(&path).context("failed to remove stale TEE simulator config")?;
+        }
+        return Ok(());
+    };
+
+    let sys_config: dstack_types::SysConfig = serde_json::from_str(sys_config)?;
+    let mut simulator_config = simulator_config.clone();
+    simulator_config.mr_config = sys_config.mr_config;
+    simulator_config.vm_config = Some(sys_config.vm_config);
+    fs::write(path, serde_json::to_vec(&simulator_config)?)
+        .context("failed to write TEE simulator config")
 }
 
 pub(crate) fn make_sys_config(
@@ -1472,6 +1484,40 @@ mod tests {
 
     fn hex_of(byte: u8, len: usize) -> String {
         hex::encode(vec![byte; len])
+    }
+
+    #[test]
+    fn simulator_config_is_written_separately_with_measurement_inputs() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let config = dstack_types::TeeSimulatorConfig {
+            platform: dstack_types::TeeVariant::DstackAmdSevSnp,
+            mock_attestation_seed: Some("11".repeat(32)),
+            collateral_base_url: Some("http://127.0.0.1:18088".into()),
+            ..Default::default()
+        };
+        let mr_config = r#"{"version":3}"#;
+        let vm_config = r#"{"image":"dev"}"#;
+        let sys_config = serde_json::json!({
+            "kms_urls": [],
+            "gateway_urls": [],
+            "vm_config": vm_config,
+            "mr_config": mr_config,
+        })
+        .to_string();
+
+        sync_tee_simulator_config(dir.path(), Some(&config), &sys_config)?;
+
+        let written: dstack_types::TeeSimulatorConfig =
+            serde_json::from_slice(&fs::read(dir.path().join(TEE_SIMULATOR_CONFIG))?)?;
+        assert_eq!(written.platform, config.platform);
+        assert_eq!(written.mock_attestation_seed, config.mock_attestation_seed);
+        assert_eq!(written.collateral_base_url, config.collateral_base_url);
+        assert_eq!(written.mr_config.as_deref(), Some(mr_config));
+        assert_eq!(written.vm_config.as_deref(), Some(vm_config));
+
+        sync_tee_simulator_config(dir.path(), None, &sys_config)?;
+        assert!(!dir.path().join(TEE_SIMULATOR_CONFIG).exists());
+        Ok(())
     }
 
     #[test]
