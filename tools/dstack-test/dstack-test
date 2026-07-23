@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: D100, D101, D102, D103
+# ruff: noqa: D100, D101, D102, D103, D107
 """Run, validate, package, and render dstack test plans."""
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import zipfile
 from datetime import UTC, datetime
@@ -378,39 +379,185 @@ def skip_case(
     return {"case": case.id, "status": "SKIPPED", "result_dir": str(result_dir)}
 
 
-def orchestration_prompt(
-    plan: render.Plan,
-    case: render.CaseEntry,
-    prior: list[dict[str, Any]],
-    decision_path: Path,
-    extra_prompt: str,
-) -> str:
-    prior_json = json.dumps(prior, ensure_ascii=False, indent=2)
-    return f"""You are the dstack test-plan scheduling agent. Decide whether the next case should be executed; do not execute the case yourself.
+def orchestration_prompt(plan: render.Plan, extra_prompt: str) -> str:
+    return f"""You are the dstack test-plan orchestrator. You drive the entire loop.
 
-Read the plan guide at {plan.guide_path}, index at {plan.root / "index.json"}, every case specification, and the prior results below. The next case in authoritative order is {case.id} at {case.spec_path}.
+Read {plan.guide_path}, {plan.root / "index.json"}, and all indexed case specifications first. Then repeatedly call `{Path(__file__).resolve()} next-case`. It returns the first unresolved case, its description, and prior results. For each READY case, choose exactly one action:
 
-Prior completed results:
-{prior_json}
+- Run it with `{Path(__file__).resolve()} run-case --case <case-id>`.
+- Only when a prior non-PASS result demonstrably invalidates an explicit prerequisite, record it with `{Path(__file__).resolve()} complete-case --case <case-id> --result SKIPPED --blocked-by <prior-id> --reason <reason>`.
 
-Decision rules:
-- Choose RUN unless a recorded prior non-PASS result demonstrably makes this case's prerequisite false or makes its result meaningless.
-- Choose SKIP only for such a proven dependency consequence. Similarity, cost, likely failure, or an independently checkable prerequisite is not sufficient.
-- A SKIP decision must name one or more causal earlier case IDs in blocked_by and explain the exact dependency.
-- Never reinterpret a product failure as a scheduling failure. Independent cases continue after FAIL, BLOCKED, or SKIPPED.
-- Do not modify the plan or any case result.
-
-Atomically write exactly this shallow JSON object to {decision_path}:
-{{
-  "decision": "RUN|SKIP",
-  "reason": "concise evidence-based reason",
-  "blocked_by": ["prior-case-id"]
-}}
-For RUN, blocked_by must be empty. Finish after writing the decision.
+After either action, call next-case again. You may issue the action and next-case as two commands in one shell tool call. Continue until next-case returns COMPLETE. Do not skip for cost, similarity, likely failure, or independently checkable prerequisites. Do not edit plan or result files yourself. Do not call run-plan, finalize, validate, package, or render.
 
 Additional caller constraints:
 {extra_prompt or "None"}
 """
+
+
+class ControlState:
+    def __init__(self, plan: render.Plan, args: argparse.Namespace, model: str | None):
+        self.plan, self.args, self.model = plan, args, model
+        self.lock = threading.Lock()
+
+    def prior(self) -> list[dict[str, Any]]:
+        values = []
+        for case in self.plan.cases:
+            path = case.path / "results" / self.args.run_id / "result.json"
+            if path.is_file():
+                result = validate_summary(case, path)
+                values.append(
+                    {
+                        "case_id": case.id,
+                        "status": result["status"],
+                        "summary": result["summary"],
+                    }
+                )
+        return values
+
+    def next_case(self, *, announce: bool = True) -> dict[str, Any]:
+        prior = self.prior()
+        done = {item["case_id"] for item in prior}
+        for number, case in enumerate(self.plan.cases, 1):
+            if case.id not in done:
+                if announce:
+                    print(
+                        f"[{number}/{len(self.plan.cases)}] next case: {case.id}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                return {
+                    "status": "READY",
+                    "position": {"index": number, "total": len(self.plan.cases)},
+                    "case": {
+                        "id": case.id,
+                        "title": case.title,
+                        "spec_path": str(case.spec_path),
+                        "specification": case.spec_path.read_text(encoding="utf-8"),
+                    },
+                    "prior_results": prior,
+                }
+        return {
+            "status": "COMPLETE",
+            "completed": len(done),
+            "total": len(self.plan.cases),
+        }
+
+    def current(self, case_id: str) -> tuple[render.CaseEntry, int]:
+        next_value = self.next_case(announce=False)
+        if next_value["status"] != "READY" or next_value["case"]["id"] != case_id:
+            raise DstackTestError(f"{case_id} is not the current unresolved case")
+        return find_case(self.plan, case_id), next_value["position"]["index"]
+
+    def handle(self, request: dict[str, Any]) -> dict[str, Any]:
+        with self.lock:
+            action = request.get("action")
+            if action == "next-case":
+                return self.next_case()
+            case, number = self.current(str(request.get("case")))
+            if action == "run-case":
+                print(
+                    f"[{number}/{len(self.plan.cases)}] executing {case.id}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                value = run_case(
+                    self.plan,
+                    case,
+                    self.args.run_id,
+                    self.args.agent,
+                    self.model,
+                    self.args.workdir.resolve(),
+                    prompt_text(self.args),
+                    self.args.agent_arg,
+                    False,
+                )
+                print(
+                    f"[{number}/{len(self.plan.cases)}] finished {case.id}: {value['status']}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return value
+            if action == "complete-case":
+                if request.get("result") != "SKIPPED":
+                    raise DstackTestError(
+                        "complete-case currently accepts only SKIPPED"
+                    )
+                blocked_by = request.get("blocked_by", [])
+                prior = {item["case_id"]: item for item in self.prior()}
+                if not blocked_by or any(
+                    ref not in prior or prior[ref]["status"] == "PASS"
+                    for ref in blocked_by
+                ):
+                    raise DstackTestError(
+                        "blocked_by must reference prior non-PASS cases"
+                    )
+                value = skip_case(
+                    case,
+                    self.args.run_id,
+                    str(request.get("reason", "")),
+                    blocked_by,
+                    self.model,
+                )
+                print(
+                    f"[{number}/{len(self.plan.cases)}] skipped {case.id}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return value
+            raise DstackTestError(f"unsupported control action: {action}")
+
+
+def control_request(request: dict[str, Any]) -> dict[str, Any]:
+    control_dir = os.environ.get("DSTACK_TEST_CONTROL_DIR")
+    if not control_dir:
+        raise DstackTestError("command requires an active run-plan control server")
+    root = Path(control_dir)
+    request_id = secrets.token_hex(12)
+    request_path = root / f"{request_id}.request.json"
+    response_path = root / f"{request_id}.response.json"
+    atomic_json(request_path, request)
+    deadline = time.monotonic() + 86400
+    while not response_path.is_file():
+        if time.monotonic() > deadline:
+            raise DstackTestError("control request timed out")
+        time.sleep(0.1)
+    response = render.load_json(response_path)
+    request_path.unlink(missing_ok=True)
+    response_path.unlink(missing_ok=True)
+    if not response.get("ok"):
+        raise DstackTestError(response.get("error", "control request failed"))
+    return response["value"]
+
+
+class FileControlServer:
+    def __init__(self, state: ControlState, root: Path):
+        self.state, self.root = state, root
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+
+    def start(self) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.thread.start()
+
+    def serve(self) -> None:
+        while not self.stop_event.is_set():
+            for request_path in sorted(self.root.glob("*.request.json")):
+                response_path = request_path.with_name(
+                    request_path.name.replace(".request.json", ".response.json")
+                )
+                if response_path.exists():
+                    continue
+                try:
+                    value = self.state.handle(render.load_json(request_path))
+                    response = {"ok": True, "value": value}
+                except Exception as error:
+                    response = {"ok": False, "error": str(error)}
+                atomic_json(response_path, response)
+            self.stop_event.wait(0.05)
+
+    def close(self) -> None:
+        self.stop_event.set()
+        self.thread.join()
 
 
 def write_sha256s(root: Path) -> None:
@@ -606,9 +753,14 @@ def package_plan(plan: render.Plan, run_id: str, output: Path) -> None:
 
 
 def add_common_plan(
-    parser: argparse.ArgumentParser, *, run_id_required: bool = True
+    parser: argparse.ArgumentParser,
+    *,
+    run_id_required: bool = True,
+    plan_required: bool = True,
 ) -> None:
-    parser.add_argument("--plan", type=Path, required=True, help="test-plan directory")
+    parser.add_argument(
+        "--plan", type=Path, required=plan_required, help="test-plan directory"
+    )
     parser.add_argument(
         "--run-id",
         required=run_id_required,
@@ -624,7 +776,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_case_parser = sub.add_parser(
         "run-case", help="run one indexed case in a fresh AI session"
     )
-    add_common_plan(run_case_parser, run_id_required=False)
+    add_common_plan(run_case_parser, run_id_required=False, plan_required=False)
     run_case_parser.add_argument(
         "--case", required=True, help="case ID or indexed case directory"
     )
@@ -653,7 +805,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_plan.add_argument("--agent-arg", action="append", default=[])
     run_plan.add_argument("--overwrite", action="store_true")
+    run_plan.add_argument("--resume", action="store_true")
     run_plan.add_argument("prompt", nargs=argparse.REMAINDER)
+
+    sub.add_parser("next-case", help="return the next unresolved controlled case")
+    complete = sub.add_parser(
+        "complete-case", help="complete a controlled case without execution"
+    )
+    complete.add_argument("--case", required=True)
+    complete.add_argument("--result", choices=("SKIPPED",), required=True)
+    complete.add_argument("--blocked-by", action="append", default=[])
+    complete.add_argument("--reason", required=True)
 
     finalize = sub.add_parser("finalize", help="materialize run.json from case results")
     add_common_plan(finalize)
@@ -689,6 +851,31 @@ def prompt_text(args: argparse.Namespace) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if os.environ.get("DSTACK_TEST_CONTROL_DIR") and args.subcommand in (
+        "next-case",
+        "run-case",
+        "complete-case",
+    ):
+        if args.subcommand == "next-case":
+            value = control_request({"action": "next-case"})
+        elif args.subcommand == "run-case":
+            value = control_request({"action": "run-case", "case": args.case})
+        else:
+            value = control_request(
+                {
+                    "action": "complete-case",
+                    "case": args.case,
+                    "result": args.result,
+                    "blocked_by": args.blocked_by,
+                    "reason": args.reason,
+                }
+            )
+        print(json.dumps(value, ensure_ascii=False, indent=2))
+        return 0
+    if not getattr(args, "plan", None):
+        raise DstackTestError(
+            "--plan is required outside a controlled run-plan session"
+        )
     plan = render.load_plan(args.plan)
     if args.subcommand == "run-case":
         value = run_case(
@@ -707,105 +894,58 @@ def main(argv: list[str] | None = None) -> int:
         existing = run_dir.exists() or any(
             (case.path / "results" / args.run_id).exists() for case in plan.cases
         )
-        if existing and not args.overwrite:
+        if existing and not (args.overwrite or args.resume):
             raise DstackTestError(
-                f"run {args.run_id!r} already exists; pass --overwrite to replace it"
+                f"run {args.run_id!r} already exists; pass --resume or --overwrite"
             )
         if args.overwrite:
             shutil.rmtree(run_dir, ignore_errors=True)
             for case in plan.cases:
                 shutil.rmtree(case.path / "results" / args.run_id, ignore_errors=True)
-        decisions_dir = run_dir / "decisions"
-        decisions_dir.mkdir(parents=True, exist_ok=True)
+        run_dir.mkdir(parents=True, exist_ok=True)
         effective_model = resolve_model(args.agent, args.model)
-        prior: list[dict[str, Any]] = []
-        for number, case in enumerate(plan.cases, 1):
-            print(
-                f"[{number}/{len(plan.cases)}] scheduling {case.id}",
-                file=sys.stderr,
-                flush=True,
-            )
-            decision_path = decisions_dir / f"{case.id}.json"
-            prompt = orchestration_prompt(
-                plan, case, prior, decision_path, prompt_text(args)
-            )
-            (decisions_dir / f"{case.id}.prompt.md").write_text(
-                prompt, encoding="utf-8"
-            )
-            command = agent_command(
-                args.agent,
-                effective_model,
-                args.workdir.resolve(),
-                prompt,
-                args.agent_arg,
-            )
+        state = ControlState(plan, args, effective_model)
+        control_dir = run_dir / "control"
+        server = FileControlServer(state, control_dir)
+        server.start()
+        prompt = orchestration_prompt(plan, prompt_text(args))
+        (run_dir / "orchestrator-prompt.md").write_text(prompt, encoding="utf-8")
+        environment = os.environ.copy()
+        environment["DSTACK_TEST_CONTROL_DIR"] = str(control_dir)
+        command = agent_command(
+            args.agent, effective_model, args.workdir.resolve(), prompt, args.agent_arg
+        )
+        try:
             with (
-                (decisions_dir / f"{case.id}.session.jsonl").open("wb") as stdout,
-                (decisions_dir / f"{case.id}.stderr.log").open("wb") as stderr,
+                (run_dir / "orchestrator.jsonl").open("wb") as stdout,
+                (run_dir / "orchestrator-stderr.log").open("wb") as stderr,
             ):
                 completed = subprocess.run(
-                    command, cwd=args.workdir, stdout=stdout, stderr=stderr, check=False
+                    command,
+                    cwd=args.workdir,
+                    env=environment,
+                    stdout=stdout,
+                    stderr=stderr,
+                    check=False,
                 )
-            validate_session(decisions_dir / f"{case.id}.session.jsonl")
-            if completed.returncode != 0:
-                raise DstackTestError(
-                    f"scheduler failed for {case.id} with exit code {completed.returncode}"
-                )
-            decision = render.load_json(decision_path)
-            action = decision.get("decision")
-            reason = decision.get("reason")
-            blocked_by = decision.get("blocked_by", [])
-            if (
-                action not in ("RUN", "SKIP")
-                or not isinstance(reason, str)
-                or not reason.strip()
-                or not isinstance(blocked_by, list)
-            ):
-                raise DstackTestError(f"invalid scheduling decision for {case.id}")
-            prior_by_id = {item["case_id"]: item for item in prior}
-            if action == "SKIP":
-                if not blocked_by or any(
-                    ref not in prior_by_id or prior_by_id[ref]["status"] == "PASS"
-                    for ref in blocked_by
-                ):
-                    raise DstackTestError(
-                        f"invalid blocked_by references for {case.id}"
-                    )
-                skip_case(case, args.run_id, reason, blocked_by, effective_model)
-                result = {"case_id": case.id, "status": "SKIPPED", "summary": reason}
-            else:
-                if blocked_by:
-                    raise DstackTestError(
-                        f"RUN decision has blocked_by entries for {case.id}"
-                    )
-                run_case(
-                    plan,
-                    case,
-                    args.run_id,
-                    args.agent,
-                    effective_model,
-                    args.workdir.resolve(),
-                    prompt_text(args),
-                    args.agent_arg,
-                    False,
-                )
-                result = validate_summary(
-                    case, case.path / "results" / args.run_id / "result.json"
-                )
-            prior.append(
-                {
-                    "case_id": case.id,
-                    "status": result["status"],
-                    "summary": result["summary"],
-                }
-            )
-            print(
-                f"[{number}/{len(plan.cases)}] {case.id}: {result['status']}",
-                file=sys.stderr,
-                flush=True,
-            )
+        finally:
+            server.close()
+            shutil.rmtree(control_dir, ignore_errors=True)
+        events, detected_model = validate_session(run_dir / "orchestrator.jsonl")
+        atomic_json(
+            run_dir / "orchestrator-runner.json",
+            {
+                "schema_version": "1.0",
+                "agent": {
+                    "type": args.agent,
+                    "model": detected_model or effective_model or "unknown",
+                },
+                "events": events,
+                "exit_code": completed.returncode,
+            },
+        )
         run = finalize_run(plan, args.run_id, context_value(args.context))
-        value = {"decisions": prior, "run": run}
+        value = {"orchestrator_exit_code": completed.returncode, "run": run}
     elif args.subcommand == "finalize":
         value = finalize_run(plan, args.run_id, context_value(args.context))
     elif args.subcommand == "validate":

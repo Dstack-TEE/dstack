@@ -42,16 +42,15 @@ tools/dstack-test/dstack-test run-plan \
   -- "Follow the environment restrictions in README.md"
 ```
 
-Before each case, `run-plan` starts a scheduling-agent session that reads the
-guide, index, all case specifications, and prior results. The runner—not the
-scheduling agent—then invokes `run-case` in a fresh session when the decision is
-`RUN`. When a
-prior non-PASS result demonstrably invalidates a later prerequisite, it records
-that later case as `SKIPPED` with the causal case IDs instead of starting an
-unnecessary case session. It must not skip independent or merely expensive
-cases. The complete orchestration session is stored at
-`<plan>/results/<run-id>/decisions/`. Keeping scheduling and case execution in
-separate processes avoids nested agent CLIs and preserves trust boundaries.
+`run-plan` starts one orchestration-agent session. The agent drives the loop by
+calling `next-case`, followed by either `run-case` or `complete-case`, until the
+server reports `COMPLETE`. A file-based control channel lets the outer runner
+launch each case agent outside the orchestrator sandbox. When a prior non-PASS
+result demonstrably invalidates a later prerequisite, the orchestrator records
+that case as `SKIPPED`; it must not skip independent or merely expensive cases.
+The complete control conversation is stored in `orchestrator.jsonl`.
+
+An interrupted run can be continued with the same run ID and `--resume`.
 
 ## Finalize and validate
 
