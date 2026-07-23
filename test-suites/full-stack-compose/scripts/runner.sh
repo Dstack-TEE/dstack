@@ -571,8 +571,12 @@ render_app() {
 }
 
 deploy_app() {
-  local label=$1 mode=$2 kms_url=$3 guest_image=${4:-$IMAGE_NAME} out vm_id
-  render_app "$label" "$mode"
+  local label=$1 mode=$2 kms_url=$3 guest_image=${4:-$IMAGE_NAME} manifest_mode out vm_id
+  manifest_mode=$mode
+  # v0.5.11 only accepts numeric manifest versions. Omitting v3 requirements
+  # lets that released guest select its native legacy TDX attestation path.
+  [[ "$guest_image" == "$OLD_IMAGE_NAME" ]] && manifest_mode=auto
+  render_app "$label" "$manifest_mode"
   log "deploying $label app CVM (forced TDX $mode)"
   if ! out=$("${VMM_CLI[@]}" deploy \
     --name "${SUITE_PREFIX}-${label}" \
