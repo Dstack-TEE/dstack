@@ -67,5 +67,6 @@ for component in dstack-rust container-stack sysbox nvattest kernel nvidia zfs o
   grep -q '^COMPONENT_CACHE_PATHS=' "$definition"
 done
 "$D/tests/test-dev-cache.sh"
+"$D/tests/test-component-framework.sh"
 "$D/tests/test-component-merge.sh"
 echo 'mkosi static acceptance passed'
