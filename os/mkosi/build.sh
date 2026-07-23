@@ -13,10 +13,8 @@ case "$action" in
   *) echo "Usage: $0 {image|dev-image|repro-check|lint} [build-dir]" >&2; exit 2 ;;
 esac
 if [[ $action == lint ]]; then exec "$SELF/tests/acceptance.sh"; fi
-unset DSTACK_DEV_CACHE_ACTIVE
-[[ $action == dev-image ]] && export DSTACK_DEV_CACHE_ACTIVE=1
-# shellcheck source=/dev/null
-source "$SELF/scripts/dev-cache.sh"
+component_cache_args=()
+[[ $action == dev-image ]] && component_cache_args+=(--dev-cache)
 command -v mkosi >/dev/null || { echo 'mkosi >= 26 is required' >&2; exit 1; }
 actual=$(mkosi --version | awk '{print $2}' | cut -d. -f1)
 (( actual >= MKOSI_MIN_VERSION )) || { echo "mkosi >= $MKOSI_MIN_VERSION required" >&2; exit 1; }
@@ -26,87 +24,9 @@ export TZ=UTC LC_ALL=C
 build_one() {
   local out=$1 work=$2 flavor=$3
   local stage="$work/rootfs-stage" kstage="$work/kernel-stage" tree="$work/rootfs"
-  local components="$work/component-stages" source_fingerprint=disabled tool_fingerprint=disabled
-  rm -rf "$work" "$out"; mkdir -p "$stage" "$kstage" "$out" "$components"
-  if [[ ${DSTACK_DEV_CACHE_ACTIVE:-0} == 1 ]]; then
-    source_fingerprint=$(
-      git -C "$ROOT" ls-files -z --cached --others --exclude-standard -- \
-        dstack os/common os/mkosi os/yocto/layers/meta-dstack \
-        os/yocto/layers/meta-nvidia \
-      | sort -z | while IFS= read -r -d '' input; do
-          if [[ -f $ROOT/$input ]]; then
-            sha256sum "$ROOT/$input"
-          elif [[ -d $ROOT/$input ]]; then
-            printf 'gitlink %s %s\n' "$input" \
-              "$(git -C "$ROOT/$input" rev-parse HEAD)"
-          else
-            printf 'missing %s\n' "$input"
-          fi
-        done | sha256sum | cut -d' ' -f1
-    )
-    tool_fingerprint=$({
-      gcc --version | head -1; ld --version | head -1; go version
-      rustc --version; cargo --version; cmake --version | head -1
-      make --version | head -1; pahole --version; tar --version | head -1
-      python3 --version; ninja --version; autoconf --version | head -1
-      automake --version | head -1; zstd --version | head -1
-      dpkg-query -W -f='${binary:Package}=${Version}\n' | sort
-    } | sha256sum | cut -d' ' -f1)
-  fi
-  component_key() {
-    dev_cache_key "$1" "$flavor" "$source_fingerprint" \
-      "$tool_fingerprint" "$SOURCE_DATE_EPOCH" "$(uname -m)"
-  }
-  merge_stage() { cp -a "$1/." "$2/"; }
-
-  base_stage="$components/dstack-rust"
-  dev_cache_run dstack-rust "$(component_key dstack-rust)" "$work" 1 \
-    component-stages/dstack-rust -- \
-    "$SELF/scripts/stage-rootfs.sh" "$base_stage" "$flavor"
-  merge_stage "$base_stage" "$stage"
-
-  container_stage="$components/container-stack"
-  dev_cache_run container-stack "$(component_key container-stack)" "$work" 1 \
-    component-stages/container-stack -- \
-    "$SELF/scripts/build-container-stack.sh" "$work/container-stack-build" "$container_stage"
-  merge_stage "$container_stage" "$stage"
-
-  sysbox_stage="$components/sysbox"
-  dev_cache_run sysbox "$(component_key sysbox)" "$work" 1 \
-    component-stages/sysbox -- \
-    "$SELF/scripts/build-sysbox.sh" "$work/sysbox-build" "$sysbox_stage"
-  merge_stage "$sysbox_stage" "$stage"
-
-  nvattest_stage="$components/nvattest"
-  dev_cache_run nvattest "$(component_key nvattest)" "$work" 1 \
-    component-stages/nvattest -- \
-    "$SELF/scripts/build-nvattest.sh" "$work/nvattest-build" "$nvattest_stage"
-  merge_stage "$nvattest_stage" "$stage"
-
-  dev_cache_run kernel "$(component_key kernel)" "$work" 3 \
-    "linux-$KERNEL_VERSION" kernel-build kernel-stage -- \
-    "$SELF/scripts/build-kernel.sh" "$work" "$kstage"
-
-  nvidia_root="$components/nvidia-root" nvidia_kernel="$components/nvidia-kernel"
-  dev_cache_run nvidia "$(component_key nvidia)" "$work" 2 \
-    component-stages/nvidia-root component-stages/nvidia-kernel -- \
-    "$SELF/scripts/build-nvidia.sh" "$work/nvidia-build" \
-      "$work/linux-$KERNEL_VERSION" "$work/kernel-build" "$nvidia_root" "$nvidia_kernel"
-  merge_stage "$nvidia_root" "$stage"; merge_stage "$nvidia_kernel" "$kstage"
-
-  zfs_root="$components/zfs-root" zfs_kernel="$components/zfs-kernel"
-  dev_cache_run zfs "$(component_key zfs)" "$work" 2 \
-    component-stages/zfs-root component-stages/zfs-kernel -- \
-    "$SELF/scripts/build-zfs.sh" "$work/zfs-build" \
-      "$work/linux-$KERNEL_VERSION" "$work/kernel-build" "$zfs_root" "$zfs_kernel"
-  merge_stage "$zfs_root" "$stage"; merge_stage "$zfs_kernel" "$kstage"
-
-  ovmf_stage="$components/ovmf"; mkdir -p "$ovmf_stage"
-  dev_cache_run ovmf "$(component_key ovmf)" "$work" 1 component-stages/ovmf -- \
-    "$SELF/scripts/build-ovmf.sh" "$work/ovmf-build" \
-      "$ovmf_stage/ovmf.fd" "$ovmf_stage/ovmf-sev.fd"
-  install -Dm0644 "$ovmf_stage/ovmf.fd" "$kstage/ovmf.fd"
-  install -Dm0644 "$ovmf_stage/ovmf-sev.fd" "$kstage/ovmf-sev.fd"
+  rm -rf "$work" "$out"; mkdir -p "$stage" "$kstage" "$out"
+  "$SELF/scripts/build-components.sh" "${component_cache_args[@]}" \
+    "$work" "$stage" "$kstage" "$flavor"
   # ExtraTrees is copied over Debian's usr-merged root where /bin, /sbin and
   # /lib are symlinks. Normalize build systems (notably OpenZFS) that install
   # into the legacy physical directories before handing the tree to mkosi.

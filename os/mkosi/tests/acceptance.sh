@@ -21,7 +21,7 @@ for service in dstack-guest-agent dstack-prepare app-compose wg-checker; do
 done
 grep -q 'artifact-manifest.json' "$D/scripts/make-release-artifacts.sh"
 grep -q 'image/assemble.sh' "$D/build.sh"
-grep -q 'build-ovmf.sh' "$D/build.sh"
+grep -q 'build-ovmf.sh' "$D/scripts/build-components.sh"
 grep -q 'fbe0805b2091393406952e84724188f8c1941837' "$D/scripts/build-ovmf.sh"
 grep -q 'AmdSev/AmdSevX64.dsc' "$D/scripts/build-ovmf.sh"
 grep -q '"firmware_sev":"files/ovmf-sev.fd"' "$D/scripts/make-release-artifacts.sh"
@@ -42,7 +42,7 @@ grep -q -- '--fuzz=0' "$D/scripts/build-zfs.sh"
 python3 -m json.tool "$D/parity.json" >/dev/null
 grep -q 'rootfs.img.parted.verity' "$D/../image/assemble.sh"
 bash -n "$D"/*.sh "$D"/scripts/*.sh "$D"/tests/*.sh
-grep -q '^unset DSTACK_DEV_CACHE_ACTIVE$' "$D/build.sh"
-grep -Fq "[[ \$action == dev-image ]] && export DSTACK_DEV_CACHE_ACTIVE=1" "$D/build.sh"
+grep -Fq "[[ \$action == dev-image ]] && component_cache_args+=(--dev-cache)" "$D/build.sh"
+grep -q 'scripts/build-components.sh' "$D/build.sh"
 "$D/tests/test-dev-cache.sh"
 echo 'mkosi static acceptance passed'
