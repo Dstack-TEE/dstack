@@ -3,7 +3,7 @@
 # Build the same pinned Intel TDX OVMF generation consumed by dstack-mr. A
 # stock distro OVMF is not compatible with dstack's TDX measurement format.
 set -euo pipefail
-ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)
 BUILD_DIR=${1:?build directory required}
 OUT=${2:?output file required}
 SEV_OUT=${3:?SEV output file required}

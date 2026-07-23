@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
-ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)
 SELF="$ROOT/os/mkosi"
 # shellcheck source=/dev/null
 source "$SELF/versions.env"
@@ -30,7 +30,7 @@ fetch_sha256() {
 lnc="$BUILD_DIR/libnvidia-container"
 checkout https://github.com/NVIDIA/libnvidia-container.git "$LIBNVIDIA_CONTAINER_REVISION" "$lnc"
 patch -d "$lnc" -p1 --fuzz=0 < \
-  "$SELF/patches/libnvidia-container/0001-omit-prefix-map-from-build-flags.patch"
+  "$SELF/components/container-stack/patches/0001-omit-prefix-map-from-build-flags.patch"
 export CFLAGS="${CFLAGS:-} -O2 -g0 -ffile-prefix-map=$BUILD_DIR=/usr/src/container-stack -fmacro-prefix-map=$BUILD_DIR=/usr/src/container-stack"
 export LDFLAGS="${LDFLAGS:-} -Wl,--build-id=none"
 export CGO_CFLAGS="$CFLAGS"

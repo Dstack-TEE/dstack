@@ -66,7 +66,9 @@ key_dependency() {
 }
 
 component_run() {
-    local name=$1 definition="$COMPONENT_DIR/$1.sh" key
+    local name=$1 definition key
+    COMPONENT_PATH="$COMPONENT_DIR/$name"
+    definition="$COMPONENT_PATH/$name.sh"
     COMPONENT_NAME=''
     COMPONENT_CACHE_PATHS=()
     COMPONENT_ROOTFS_TREES=()

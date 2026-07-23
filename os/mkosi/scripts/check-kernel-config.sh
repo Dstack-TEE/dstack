@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 config=${1:?kernel .config required}
-fragment=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/kernel.config
+fragment=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/components/kernel/kernel.config
 failed=0
 while IFS= read -r line; do
     [[ $line =~ ^CONFIG_[A-Z0-9_]+=(y|m|n)$ ]] || continue

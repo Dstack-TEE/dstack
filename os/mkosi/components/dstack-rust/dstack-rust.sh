@@ -6,11 +6,11 @@ COMPONENT_ROOTFS_TREES=(component-stages/dstack-rust)
 COMPONENT_KERNEL_TREES=()
 
 component_cache_key() {
-    key_file "$SELF/scripts/stage-rootfs.sh"
+    key_file "$COMPONENT_PATH/dstack-rust-build.sh"
     key_tree dstack os/common/rootfs
     key_tools rustc cargo
 }
 
 component_build() {
-    "$SELF/scripts/stage-rootfs.sh" "$WORK/component-stages/dstack-rust" "$FLAVOR"
+    "$COMPONENT_PATH/dstack-rust-build.sh" "$WORK/component-stages/dstack-rust" "$FLAVOR"
 }

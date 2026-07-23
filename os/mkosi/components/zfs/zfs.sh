@@ -8,15 +8,15 @@ COMPONENT_KERNEL_TREES=(component-stages/zfs-kernel)
 component_cache_key() {
     key_dependency kernel
     key_value "$ZFS_VERSION" "$ZFS_REVISION"
-    key_file "$SELF/scripts/build-zfs.sh" \
-      "$SELF/patches/zfs/0001-linux-6.19-7.1-compat.patch" \
+    key_file "$COMPONENT_PATH/zfs-build.sh" \
+      "$COMPONENT_PATH/patches/0001-linux-6.19-7.1-compat.patch" \
       "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-zfs/dstack-zfs/0001-Define-strndupa-if-it-does-not-exist.patch"
     key_tools gcc make autoconf automake
     key_packages libssl-dev libelf-dev zlib1g-dev libtool uuid-dev
 }
 
 component_build() {
-    "$SELF/scripts/build-zfs.sh" "$WORK/zfs-build" \
+    "$COMPONENT_PATH/zfs-build.sh" "$WORK/zfs-build" \
       "$WORK/linux-$KERNEL_VERSION" "$WORK/kernel-build" \
       "$WORK/component-stages/zfs-root" "$WORK/component-stages/zfs-kernel"
 }

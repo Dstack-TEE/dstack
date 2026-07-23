@@ -61,12 +61,20 @@ DSTACK_DEV_CACHE_DIR="$HOME/.cache/dstack/mkosi-dev" \
 The cache covers dstack Rust, the container stack, Sysbox, nvattest, the
 kernel build tree, NVIDIA, ZFS and both OVMF variants. Its key conservatively
 includes the inputs, tools, packages and component dependencies declared by
-each file in `components/`, plus architecture, flavor and
+each descriptor in `components/<name>/<name>.sh`, plus architecture, flavor and
 `SOURCE_DATE_EPOCH`. `build-components.sh` is intentionally only the ordered
 component list. Component install trees are merged with strict non-directory
 conflict detection. `image` and `repro-check` never pass the development-cache
 option. Release artifacts, Debian rootfs, dm-verity data and measurements are
 never cached.
+
+mkosi's `Incremental=`, `CacheDirectory=` and `BuildDirectory=` cover
+whole-image/rootfs and persistent-work-directory reuse; they do not provide
+independently keyed output trees for components or reject file collisions when
+those trees are installed. The small component layer only supplies those two
+missing policies. Source download, build, cache-key inputs and output ownership
+remain together under `components/<name>/`; production builds bypass the layer's
+archive cache completely.
 
 On a 16-job development host, a clean production work directory takes about
 17 minutes (measured 16m45s); allow 20--30 minutes with cold compiler and
@@ -84,7 +92,7 @@ OVMF and UKI. Debian supplies the base userspace while the parity checker
 requires the Yocto-visible binaries, services, configuration, kernel modules
 and production/development separation before assembly is allowed to proceed.
 
-The firmware is not Debian's generic OVMF: `build-ovmf.sh` builds the same
+The firmware is not Debian's generic OVMF: `components/ovmf/ovmf-build.sh` builds the same
 EDK2 stable-202502 revision and `pre202505` TDX measurement layout selected by
 the Yocto recipe. A generic OVMF cannot be substituted because `dstack-mr`
 would produce invalid or unparseable TDX measurement material.

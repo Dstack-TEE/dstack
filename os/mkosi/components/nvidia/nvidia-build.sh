@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
-ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)
 SELF="$ROOT/os/mkosi"
 # shellcheck source=/dev/null
 source "$SELF/versions.env"
@@ -31,7 +31,7 @@ fetch_sha256 "https://us.download.nvidia.com/tesla/$NVIDIA_VERSION/NVIDIA-Linux-
 rm -rf "$src"
 chmod +x "$run"
 "$run" -x --target "$src" >/dev/null
-patch -d "$src" -p1 --fuzz=0 < "$SELF/patches/nvidia/0001-linux-7.1-drop-legacy-of-gpio-api.patch"
+patch -d "$src" -p1 --fuzz=0 < "$SELF/components/nvidia/patches/0001-linux-7.1-drop-legacy-of-gpio-api.patch"
 module_map="-fdebug-prefix-map=$BUILD_DIR=/usr/src/nvidia -fmacro-prefix-map=$BUILD_DIR=/usr/src/nvidia -fdebug-prefix-map=$KERNEL_SRC=/usr/src/linux -fmacro-prefix-map=$KERNEL_SRC=/usr/src/linux -fdebug-prefix-map=$KERNEL_BUILD=/usr/src/linux-build -fmacro-prefix-map=$KERNEL_BUILD=/usr/src/linux-build"
 # Linux 7.1's gen-btf.sh cannot execute its space-containing PAHOLE wrapper
 # for external modules (the awk program is passed with literal quotes). Keep

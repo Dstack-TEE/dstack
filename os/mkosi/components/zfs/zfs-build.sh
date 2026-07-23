@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
-ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)
 SELF="$ROOT/os/mkosi"
 # shellcheck source=/dev/null
 source "$SELF/versions.env"
@@ -21,7 +21,7 @@ git -C "$src" fetch -q --depth=1 origin "$ZFS_REVISION"
 git -C "$src" checkout -q --detach FETCH_HEAD
 git -C "$src" reset -q --hard "$ZFS_REVISION"
 git -C "$src" clean -qfdx
-patch -d "$src" -p1 --fuzz=0 < "$SELF/patches/zfs/0001-linux-6.19-7.1-compat.patch"
+patch -d "$src" -p1 --fuzz=0 < "$SELF/components/zfs/patches/0001-linux-6.19-7.1-compat.patch"
 patch -d "$src" -p1 --fuzz=0 < "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-zfs/dstack-zfs/0001-Define-strndupa-if-it-does-not-exist.patch"
 (cd "$src" && ./autogen.sh)
 mkdir -p "$B/build"

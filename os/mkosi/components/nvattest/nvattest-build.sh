@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
-ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)
 SELF="$ROOT/os/mkosi"
 # shellcheck source=/dev/null
 source "$SELF/versions.env"
@@ -35,7 +35,7 @@ cp -a "$checkout" "$src"
 patch -d "$src" -p1 --fuzz=0 < \
   "$ROOT/os/yocto/layers/meta-nvidia/recipes-graphics/nvattest/files/0001-validate-ocsp-response-freshness.patch"
 patch -d "$src" -p1 --fuzz=0 < \
-  "$SELF/patches/nvattest/0001-pin-fetchcontent-inputs.patch"
+  "$SELF/components/nvattest/patches/0001-pin-fetchcontent-inputs.patch"
 
 rm -rf "$build"
 export CFLAGS="${CFLAGS:-} -O2 -g0 -ffile-prefix-map=$canonical=/usr/src/nvattest -fmacro-prefix-map=$canonical=/usr/src/nvattest"

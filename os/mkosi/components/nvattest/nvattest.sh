@@ -7,7 +7,7 @@ COMPONENT_KERNEL_TREES=()
 
 component_cache_key() {
     key_value "$NVATTEST_VERSION" "$NVATTEST_REVISION"
-    key_file "$SELF/scripts/build-nvattest.sh"
+    key_file "$COMPONENT_PATH/nvattest-build.sh"
     key_tree os/mkosi/patches/nvattest \
       os/yocto/layers/meta-nvidia/recipes-graphics/nvattest
     key_tools gcc cmake ninja rustc cargo
@@ -15,6 +15,6 @@ component_cache_key() {
 }
 
 component_build() {
-    "$SELF/scripts/build-nvattest.sh" "$WORK/nvattest-build" \
+    "$COMPONENT_PATH/nvattest-build.sh" "$WORK/nvattest-build" \
       "$WORK/component-stages/nvattest"
 }

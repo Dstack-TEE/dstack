@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
-ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)
 MKOSI_DIR="$ROOT/os/mkosi"
 # shellcheck source=/dev/null
 source "$MKOSI_DIR/versions.env"
@@ -58,7 +58,7 @@ done
 
 make -C "$src" O="$BUILD_DIR/kernel-build" PAHOLE="$pahole_wrapper" x86_64_defconfig
 "$src/scripts/kconfig/merge_config.sh" -m -O "$BUILD_DIR/kernel-build" \
-    "$BUILD_DIR/kernel-build/.config" "$MKOSI_DIR/kernel.config"
+    "$BUILD_DIR/kernel-build/.config" "$MKOSI_DIR/components/kernel/kernel.config"
 make -C "$src" O="$BUILD_DIR/kernel-build" PAHOLE="$pahole_wrapper" olddefconfig
 "$MKOSI_DIR/scripts/check-kernel-config.sh" "$BUILD_DIR/kernel-build/.config"
 make -C "$src" O="$BUILD_DIR/kernel-build" PAHOLE="$pahole_wrapper" -j"$JOBS" bzImage modules
