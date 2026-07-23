@@ -22,8 +22,11 @@ rootfs="$OUT/files/rootfs.squashfs.verity"
 # mksquashfs -noappend overwrites its filesystem but does not reliably remove
 # a longer dm-verity tail left by a previous invocation.
 truncate -s 0 "$rootfs"
+# Privileged mkosi runs can inherit host default ACLs from their workspace.
+# The guest rootfs does not rely on xattrs, so exclude this host-only metadata.
 env -u SOURCE_DATE_EPOCH mksquashfs "$TREE" "$rootfs" -noappend -all-root -no-progress \
-  -comp zstd -mkfs-time "$SOURCE_DATE_EPOCH" -all-time "$SOURCE_DATE_EPOCH" >/dev/null
+  -no-xattrs -comp zstd -mkfs-time "$SOURCE_DATE_EPOCH" \
+  -all-time "$SOURCE_DATE_EPOCH" >/dev/null
 data_size=$(stat -c %s "$rootfs")
 data_size=$(( (data_size + 4095) / 4096 * 4096 ))
 truncate -s "$data_size" "$rootfs"
