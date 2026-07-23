@@ -30,6 +30,14 @@ pub mod tpm;
 
 pub const MOCK_SEED_LEN: usize = 32;
 
+/// Returns whether the simulated platform provides its own TPM device.
+pub fn platform_provides_tpm(platform: dstack_types::TeeVariant) -> bool {
+    matches!(
+        platform,
+        dstack_types::TeeVariant::DstackGcpTdx | dstack_types::TeeVariant::DstackAwsNitroTpm
+    )
+}
+
 pub fn parse_seed(value: &str) -> Result<[u8; MOCK_SEED_LEN]> {
     let bytes = hex::decode(value).context("mock attestation seed must be hex")?;
     bytes
@@ -147,5 +155,16 @@ mod tests {
         ] {
             assert!(dir.path().join(path).exists());
         }
+    }
+
+    #[test]
+    fn identifies_platforms_that_provide_a_tpm() {
+        assert!(platform_provides_tpm(
+            dstack_types::TeeVariant::DstackGcpTdx
+        ));
+        assert!(platform_provides_tpm(
+            dstack_types::TeeVariant::DstackAwsNitroTpm
+        ));
+        assert!(!platform_provides_tpm(dstack_types::TeeVariant::DstackTdx));
     }
 }

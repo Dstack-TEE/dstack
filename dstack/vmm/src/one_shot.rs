@@ -265,7 +265,6 @@ Compose file content (first 200 chars):
         &manifest,
         &compose_hash,
         mr_config,
-        app_compose.key_provider(),
         app_compose.requirements.as_ref(),
     )?;
     let sys_config_path = vm_work_dir.shared_dir().join(".sys-config.json");

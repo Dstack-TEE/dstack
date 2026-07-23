@@ -1109,7 +1109,6 @@ impl App {
             &manifest,
             &hex::encode(compose_hash),
             mr_config,
-            app_compose.key_provider(),
             app_compose.requirements.as_ref(),
         )?;
         fs::write(shared_dir.join(SYS_CONFIG), &sys_config_str)
@@ -1292,7 +1291,6 @@ pub(crate) fn make_sys_config(
     manifest: &Manifest,
     compose_hash: &str,
     mr_config: Option<String>,
-    key_provider: dstack_types::KeyProviderKind,
     requirements: Option<&dstack_types::Requirements>,
 ) -> Result<String> {
     let image_path = cfg.image.path.join(&manifest.image);
@@ -1312,13 +1310,12 @@ pub(crate) fn make_sys_config(
         bail!("Unsupported image version: {img_ver:?}");
     }
 
-    let vm_config = make_vm_config_with_key_provider(
+    let vm_config = make_vm_config(
         cfg,
         manifest,
         &image,
         compose_hash,
         mr_config.clone(),
-        key_provider,
         requirements,
     )?;
     let mut sys_config = json!({
@@ -1386,33 +1383,12 @@ fn tdx_attestation_variant_from_requirements(
         })
 }
 
-#[cfg(test)]
 fn make_vm_config(
-    cfg: &Config,
-    manifest: &Manifest,
-    image: &Image,
-    compose_hash: &str,
-    mr_config: Option<String>,
-    requirements: Option<&dstack_types::Requirements>,
-) -> Result<serde_json::Value> {
-    make_vm_config_with_key_provider(
-        cfg,
-        manifest,
-        image,
-        compose_hash,
-        mr_config,
-        dstack_types::KeyProviderKind::None,
-        requirements,
-    )
-}
-
-fn make_vm_config_with_key_provider(
     cfg: &Config,
     manifest: &Manifest,
     image: &Image,
     _compose_hash: &str,
     mr_config: Option<String>,
-    _key_provider: dstack_types::KeyProviderKind,
     requirements: Option<&dstack_types::Requirements>,
 ) -> Result<serde_json::Value> {
     let platform = cfg.cvm.resolved_platform();
@@ -1516,19 +1492,12 @@ fn make_vm_config_with_key_provider(
     Ok(config)
 }
 
-pub(crate) fn simulated_platform_provides_tpm(platform: Option<dstack_types::TeeVariant>) -> bool {
-    matches!(
-        platform,
-        Some(dstack_types::TeeVariant::DstackGcpTdx | dstack_types::TeeVariant::DstackAwsNitroTpm)
-    )
-}
-
 pub(crate) fn needs_swtpm(
     key_provider: dstack_types::KeyProviderKind,
     simulated_tee: Option<dstack_types::TeeVariant>,
 ) -> bool {
     matches!(key_provider, dstack_types::KeyProviderKind::Tpm)
-        && !simulated_platform_provides_tpm(simulated_tee)
+        && !simulated_tee.is_some_and(mock_attestation::platform_provides_tpm)
 }
 
 #[cfg(test)]
@@ -2115,14 +2084,8 @@ mod tests {
         let build_hash = Sha256::digest(sha256sum.as_bytes()).to_vec();
         fs::write(image_dir.join("digest.txt"), hex::encode(&build_hash))?;
 
-        let sys_config_document = make_sys_config(
-            &config,
-            &manifest,
-            &compose_hash,
-            Some(mr_config),
-            dstack_types::KeyProviderKind::None,
-            None,
-        )?;
+        let sys_config_document =
+            make_sys_config(&config, &manifest, &compose_hash, Some(mr_config), None)?;
         let sys_config: serde_json::Value = serde_json::from_str(&sys_config_document)?;
         assert!(sys_config.get("tee_simulator").is_none());
         assert_eq!(sys_config["pccs_url"], config.cvm.pccs_url);
