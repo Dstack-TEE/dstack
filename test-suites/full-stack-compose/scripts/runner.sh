@@ -115,7 +115,7 @@ wait_vm_stopped() {
   local id=$1 deadline=$((SECONDS + 180)) status
   while (( SECONDS < deadline )); do
     status=$("${VMM_CLI[@]}" info "$id" --json 2>/dev/null | jq -r '.status // ""' || true)
-    [[ "$status" != running && "$status" != starting ]] && return
+    [[ "$status" == stopped || "$status" == exited ]] && return
     sleep 2
   done
   die "VM $id did not stop"
