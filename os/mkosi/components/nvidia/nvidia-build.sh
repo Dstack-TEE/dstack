@@ -17,7 +17,8 @@ mkdir -p "$downloads" "$ROOT_STAGE/usr/bin" "$ROOT_STAGE/usr/lib/x86_64-linux-gn
 fetch_sha256() {
   local url=$1 sha=$2 output=$3
   if [[ ! -f $output ]]; then
-    curl -fL --retry 3 -o "$output.tmp" "$url"
+    curl -fL --retry 3 --retry-all-errors --connect-timeout 30 \
+      --max-time 300 -o "$output.tmp" "$url"
     mv "$output.tmp" "$output"
   fi
   echo "$sha  $output" | sha256sum -c --status || {
