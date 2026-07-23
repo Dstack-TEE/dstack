@@ -63,7 +63,10 @@ would make a passing result irrelevant to production:
 
    - `/dev/kvm`, `/dev/vhost-vsock`, Intel TDX, and QGS (default port `4050`)
    - `/dev/sgx_enclave` and `/dev/sgx_provision`
-   - a working SGX QCNL/PCCS configuration
+   - a working host SGX QCNL configuration at `/etc/sgx_default_qcnl.conf`
+     whose PCCS is provisioned for this physical platform; override its path
+     with `DSTACK_E2E_QCNL_CONF` when needed. A public PCCS only works after
+     this platform's PCK certificate has been registered there.
    - an IPv4/DNS name for the host that is reachable from both the host-side
      deployment client and QEMU user-networked CVMs; the suite derives
      `<default-route-ip>.nip.io`, or accepts `DSTACK_E2E_KMS_RPC_DOMAIN`

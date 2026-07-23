@@ -109,7 +109,7 @@ services:
       - "/dev/sgx_enclave:/dev/sgx_enclave"
       - "/dev/sgx_provision:/dev/sgx_provision"
     volumes:
-      - ${DSTACK_E2E_QCNL_CONF:-../../dstack/local-key-provider/build/sgx_default_qcnl.conf}:/etc/sgx_default_qcnl.conf:ro
+      - ${DSTACK_E2E_QCNL_CONF:-/etc/sgx_default_qcnl.conf}:/etc/sgx_default_qcnl.conf:ro
       - aesmd-sock:/var/run/aesmd/
     restart: unless-stopped
 
