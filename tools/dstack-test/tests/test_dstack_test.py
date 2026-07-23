@@ -77,7 +77,7 @@ class DstackTestTests(unittest.TestCase):
                 """#!/usr/bin/env python3
 import json, pathlib, re, sys
 prompt=sys.argv[-1]
-match=re.search(r'原子写入([^\\n]+/result\\.json)',prompt)
+match=re.search(r'atomically write the summary to ([^\\n]+/result\\.json)',prompt)
 if not match: raise SystemExit(9)
 path=pathlib.Path(match.group(1).strip())
 path.parent.mkdir(parents=True,exist_ok=True)

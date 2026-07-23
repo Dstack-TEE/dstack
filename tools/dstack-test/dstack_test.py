@@ -157,11 +157,11 @@ def result_schema_text(case_id: str) -> str:
   "schema_version": "1.0",
   "case_id": "{case_id}",
   "status": "PASS|FAIL|BLOCKED|NOT_RUN|SKIPPED",
-  "summary": "简短总结",
+  "summary": "Concise result summary",
   "steps": [
-    {{"id": "{case_id}-step-01", "status": "PASS|FAIL|BLOCKED|NOT_RUN|SKIPPED", "observed": "实际观察总结"}}
+    {{"id": "{case_id}-step-01", "status": "PASS|FAIL|BLOCKED|NOT_RUN|SKIPPED", "observed": "Concise observation"}}
   ],
-  "artifacts": [{{"name": "附件名称", "path": "artifacts/相对路径"}}],
+  "artifacts": [{{"name": "Artifact name", "path": "artifacts/relative-path"}}],
   "remarks": ""
 }}'''
 
@@ -169,31 +169,31 @@ def result_schema_text(case_id: str) -> str:
 def build_prompt(
     plan: render.Plan, case: render.CaseEntry, result_dir: Path, user_prompt: str
 ) -> str:
-    return f"""你正在执行一个dstack规范测试用例。
+    return f"""You are executing a test case under the dstack test specification.
 
-测试计划说明：{plan.guide_path}
-测试用例：{case.spec_path}
-执行结果目录：{result_dir}
-完整会话由外部runner自动保存，你不需要手工复制命令输出。
+Test plan guide: {plan.guide_path}
+Test case: {case.spec_path}
+Result directory: {result_dir}
+The external runner saves the complete session; do not manually copy command output.
 
-执行规则：
-1. 先阅读测试计划说明，再阅读case.md。
-2. 不得修改测试计划、index.json、case.md、fixtures或测试脚本。
-3. 只能把测试产物写到本次结果目录或说明书明确允许的临时目录。
-4. 严格按case.md逐步执行；每一步开始和结束时，在回复中包含对应step ID，方便会话索引。
-5. 实际命令必须通过工具执行，不得用推测或总结代替执行。
-6. 只要实际结果没有完全满足预期，该步骤和用例就是FAIL。
-7. 前置环境阻止被测行为开始时为BLOCKED；不得使用PARTIAL。
-8. 不得把模拟结果当作真实硬件结果。
-9. 不得把token、私钥、密钥材料或其他secret输出到会话或附件。
-10. 截图、日志和其他附件写入{result_dir / "artifacts"}。
-11. 结束前把总结原子写入{result_dir / "result.json"}，不得写到其他位置。
-12. result.json必须是以下浅层结构，不要嵌入命令输出：
+Execution rules:
+1. Read the test plan guide before reading case.md.
+2. Do not modify the plan, index.json, case.md, fixtures, or test scripts.
+3. Write artifacts only to this result directory or a temporary location explicitly allowed by the guide.
+4. Follow case.md step by step. Include the step ID in messages at the start and end of each step so the session can be indexed.
+5. Execute actual commands with tools; do not substitute inference or summaries for execution.
+6. If an actual result does not fully satisfy the expected result, mark the step and case FAIL.
+7. Use BLOCKED when an external prerequisite prevents the tested behavior from starting. Never use PARTIAL.
+8. Never present simulation results as physical-hardware results.
+9. Do not emit tokens, private keys, key material, or other secrets into the session or attachments.
+10. Write screenshots, logs, and other attachments to {result_dir / "artifacts"}.
+11. Before finishing, atomically write the summary to {result_dir / "result.json"} and nowhere else.
+12. result.json must use this shallow structure and must not embed command output:
 {result_schema_text(case.id)}
-13. 最终回复必须说明用例状态和result.json路径。
+13. In the final response, state the case status and result.json path.
 
-调用方附加要求：
-{user_prompt.strip() or "无"}
+Additional caller requirements:
+{user_prompt.strip() or "None"}
 """
 
 

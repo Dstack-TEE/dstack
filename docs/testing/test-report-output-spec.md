@@ -1,28 +1,27 @@
 <!-- SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-
 <a id="dstack-test-report-output-spec"></a>
-# dstack 测试报告输出规范
+# dstack Test Report Output Specification
 
-本文规定 AI执行会话、用例总结、run汇总、附件、引用、打包和单文件HTML的格式。测试方法见[dstack 测试方法](dstack-test-methodology.md#dstack-test-methodology)，用例格式见[测试用例编写规范](test-case-authoring-spec.md#dstack-test-case-authoring-spec)。
+This document defines the normative format for AI sessions, case summaries, run summaries, attachments, cross-references, packages, and self-contained HTML reports. See the [test methodology](dstack-test-methodology.md#dstack-test-methodology) and [case authoring specification](test-case-authoring-spec.md#dstack-test-case-authoring-spec).
 
 <a id="report-principles"></a>
-## 1. 输出原则
+## 1. Principles
 
-1. 每条用例由一个独立Codex或Claude会话执行；
-2. Agent原生JSONL会话是命令、tool call和原始输出的主要证据；
-3. Agent只写一个浅层`result.json`，不在其中复制命令输出；
-4. `runner.json`、run汇总、时间、退出码和摘要由工具生成；
-5. 公共版本与环境只在run顶层记录；
-6. 截图、日志和二进制文件作为独立附件；
-7. 所有产物保留稳定锚点并可内联为单个HTML文件。
+1. Each case runs in an independent Codex or Claude session.
+2. The agent's native JSONL is the primary source for commands, tool calls, and raw output.
+3. The agent writes one shallow `result.json`; it does not copy command output into that file.
+4. The runner generates `runner.json`, timestamps, exit code, checksums, and run aggregates.
+5. Common versions and environment information appear once at run level.
+6. Screenshots, long logs, and binary captures are separate attachments.
+7. Stable anchors make every object linkable in one offline HTML report.
 
-<a id="report-command-style"></a>
-## 2. 统一命令
+<a id="report-commands"></a>
+## 2. Command interface
 
-工具对外统一命名为`dstack-test`：
+The single public command is `dstack-test`, with consistently named subcommands:
 
-```bash
+```text
 dstack-test run-case
 dstack-test run-plan
 dstack-test finalize
@@ -31,25 +30,25 @@ dstack-test package
 dstack-test render
 ```
 
-参数统一使用kebab-case。Agent通过`--agent codex`或`--agent claude`选择，不使用独立的`--codex`、`--claude`开关。
+Options use kebab-case. Select an executor with `--agent codex` or `--agent claude`; do not introduce separate `--codex` or `--claude` switches.
 
 <a id="report-run-case"></a>
-## 3. 单用例执行
+## 3. Case execution
 
 ```bash
 dstack-test run-case \
   --agent codex \
-  --plan path/to/plan \
-  --case tc-gw-pp-001 \
-  --run-id run-20260723-001 \
-  --workdir path/to/repository \
-  -- "附加执行要求"
+  --plan <plan> \
+  --case <case-id-or-directory> \
+  --run-id <run-id> \
+  --workdir <repository> \
+  -- "Additional execution constraints"
 ```
 
-runner自动把顶层说明书、`case.md`、结果目录、统一状态规则和总结schema加入Agent prompt。Agent必须先读说明书，再按用例执行；不得修改Plan规格。
+The runner supplies the plan guide, `case.md`, output location, status rules, and result schema in the prompt. The agent must read the guide before the case and must not modify plan specifications.
 
 <a id="report-layout"></a>
-## 4. 结果目录
+## 4. Result layout
 
 ```text
 <case>/results/<run-id>/
@@ -62,92 +61,81 @@ runner自动把顶层说明书、`case.md`、结果目录、统一状态规则�
 └── SHA256SUMS
 
 <plan>/results/<run-id>/
-├── context.json          # 可选
 ├── run.json
+├── context.json          # optional
 └── SHA256SUMS
 ```
 
-不同用例写不同目录，因此可以并行执行。已存在的非空run目录默认不得覆盖；显式重跑需使用`--overwrite`。
+Separate case directories permit independent sessions. A non-empty result directory must not be overwritten unless the caller explicitly supplies `--overwrite`.
 
-<a id="report-session-jsonl"></a>
+<a id="report-session"></a>
 ## 5. `session.jsonl`
 
-runner直接保存Agent CLI的原生事件流：
+The runner stores the native agent CLI event stream without rewriting it. Every non-empty line is one complete JSON object. Commands, tool calls, tool results, agent messages, and errors remain in their original format. Renderer adapters normalize Codex and Claude events only for display; the stored file remains unchanged.
 
-- Codex：`codex exec --json`；
-- Claude：`claude --print --verbose --output-format stream-json`。
-
-每行必须是一个完整JSON对象。runner不改写或摘要stdout中的事件。命令、tool call、tool result、Agent消息和错误均保留在会话中。Claude和Codex格式不同，由HTML渲染器的adapter在读取时统一展示，原文件保持不变。
-
-Agent应在步骤开始和结束的消息中包含完整step ID，例如：
+The agent should include the complete step ID when beginning and completing a step:
 
 ```text
-[DSTACK-TEST-STEP-START tc-gw-pp-001-step-01]
-[DSTACK-TEST-STEP-END tc-gw-pp-001-step-01 PASS]
+tc-gw-pp-001-step-01
 ```
 
-渲染器据此链接步骤与会话事件。没有标记时，可搜索step ID；仍找不到时显示`WHOLE_SESSION_FALLBACK`，并保留整个会话作为证据。
+The renderer links matching session events to the step. If no marker is found, it exposes the complete session as fallback evidence rather than inventing a narrower association.
 
 <a id="report-runner-json"></a>
 ## 6. `runner.json`
 
-`runner.json`只能由`dstack-test`生成：
+Only `dstack-test` writes this file:
 
 ```json
 {
   "schema_version": "1.0",
   "run_id": "run-20260723-001",
   "case_id": "tc-gw-pp-001",
-  "agent": {
-    "type": "codex",
-    "model": "gpt-5.4"
-  },
+  "agent": {"type": "codex", "model": "gpt-5-codex"},
   "session": {
     "format": "codex-jsonl",
     "path": "session.jsonl",
-    "events": 137
+    "events": 42
   },
   "prompt_path": "prompt.md",
   "result_path": "result.json",
-  "started_at": "2026-07-23T08:10:00.000Z",
-  "finished_at": "2026-07-23T08:17:15.000Z",
-  "duration_ms": 435000,
+  "started_at": "2026-07-23T18:00:00.000Z",
+  "finished_at": "2026-07-23T18:04:32.000Z",
+  "duration_ms": 272000,
   "exit_code": 0,
   "result_valid": true,
   "result_error": null
 }
 ```
 
-模型名优先从会话事件提取，其次使用显式`--model`，否则填写`unknown`，不得猜测。
+Extract the model name from the session when possible, otherwise use explicit `--model`, then `unknown`; never guess. The exit code describes agent infrastructure, not product status. A valid `FAIL` result may accompany a successful agent exit.
 
-runner退出码描述Agent执行基础设施，不等于测试状态。Agent正常完成且写出合法`FAIL`结果时，runner仍可成功退出。
+<a id="report-result-json"></a>
+## 7. Shallow `result.json`
 
-<a id="report-case-json"></a>
-## 7. 浅层 `result.json`
-
-Agent在结束前原子写入：
+Before exiting, the agent atomically writes:
 
 ```json
 {
   "schema_version": "1.0",
   "case_id": "tc-gw-pp-001",
   "status": "PASS",
-  "summary": "Gateway解析入站Proxy v1地址并向启用PP的应用端口正确转发。",
+  "summary": "Gateway forwarded the Proxy v1 address to the PP-enabled application port.",
   "steps": [
     {
       "id": "tc-gw-pp-001-step-01",
       "status": "PASS",
-      "observed": "Gateway缓存中的端口8443配置为pp=true。"
+      "observed": "Gateway's cached port 8443 policy had pp=true."
     },
     {
       "id": "tc-gw-pp-001-step-02",
       "status": "PASS",
-      "observed": "后端记录已清空，初始记录数为0。"
+      "observed": "The capture backend was ready and initially contained zero records."
     }
   ],
   "artifacts": [
     {
-      "name": "backend-capture",
+      "name": "Backend capture",
       "path": "artifacts/backend-capture.json"
     }
   ],
@@ -155,46 +143,42 @@ Agent在结束前原子写入：
 }
 ```
 
-约束：
+Constraints:
 
-- 状态只能是`PASS`、`FAIL`、`BLOCKED`、`NOT_RUN`或`SKIPPED`；
-- 不得使用`PARTIAL`；
-- `PASS`要求至少一个步骤，且所有步骤均为`PASS`；
-- step ID必须来自`case.md`；
-- `observed`只写简短观察总结，不复制命令原文；
-- artifact路径必须位于本次结果目录内；
-- 不能嵌入token、私钥或密钥材料。
+- status is `PASS`, `FAIL`, `BLOCKED`, `NOT_RUN`, or `SKIPPED`;
+- `PARTIAL` is forbidden;
+- `PASS` requires at least one step and all steps must be `PASS`;
+- step IDs must come from `case.md`;
+- `observed` is a concise observation, not copied raw command output;
+- artifact paths must remain inside the result directory; and
+- results must not contain tokens, private keys, or other secrets.
 
 <a id="report-artifacts"></a>
-## 8. 附件
+## 8. Attachments
 
-截图、长日志、JSON响应和二进制捕获写入`artifacts/`。`result.json`只保存名称和相对路径。finalize阶段生成`SHA256SUMS`；HTML根据MIME类型：
-
-- 图片：内联展示并提供下载；
-- 文本和JSON：默认折叠展示原文；
-- 其他二进制：内联为data URI下载链接。
-
-附件不能使用绝对路径或`..`逃逸结果目录。
+Put screenshots, long logs, JSON responses, and binary captures under `artifacts/`; reference them by name and relative path in `result.json`. Generate `SHA256SUMS` during finalization. The renderer displays images inline, shows text and JSON in collapsible blocks, and provides embedded download links for other files. Absolute paths and `..` traversal are forbidden.
 
 <a id="report-run-json"></a>
-## 9. `run.json`
+## 9. Run summary
 
-全部用例结束后，`dstack-test finalize`扫描各用例结果并生成：
+After all cases, `dstack-test finalize` scans case outputs and generates `run.json`:
 
 ```json
 {
   "schema_version": "1.0",
   "id": "run-20260723-001",
   "anchor": "run-20260723-001",
-  "plan_id": "plan-gateway-proxy-protocol",
+  "plan_id": "dstack-v0-6-0-release",
   "status": "COMPLETED",
-  "started_at": "2026-07-23T08:10:00.000Z",
-  "finished_at": "2026-07-23T09:12:00.000Z",
-  "executors": [
-    {"type": "codex", "model": "gpt-5.4"}
-  ],
-  "software_under_test": {},
-  "environment": {},
+  "started_at": "2026-07-23T18:00:00.000Z",
+  "finished_at": "2026-07-23T20:00:00.000Z",
+  "executors": [{"type": "codex", "model": "gpt-5-codex"}],
+  "software_under_test": {
+    "repository": "Dstack-TEE/dstack",
+    "candidate": "0123456789abcdef",
+    "previous_release": "v0.5.11"
+  },
+  "environment": {"level": "INTEGRATION", "simulated": true},
   "summary": {
     "total": 1,
     "completed": 1,
@@ -217,28 +201,28 @@ Agent在结束前原子写入：
 }
 ```
 
-公共软件版本和环境由`--context <json>`提供。只有特殊旧版组件写入单用例`version_overrides`。
+Supply common versions and environment data through `--context <json>`. Put exceptional component versions in the relevant case result only.
 
 <a id="report-validation"></a>
-## 10. 校验
+## 10. Validation
 
 ```bash
 dstack-test validate --plan <plan> --run-id <run-id>
 ```
 
-至少校验：
+Validation must cover at least:
 
-1. Plan目录、ID、锚点和索引顺序；
-2. `session.jsonl`每个非空行均为JSON对象；
-3. `runner.json`和`result.json`存在且case/run ID一致；
-4. 用例和步骤状态一致；
-5. artifact路径合法且文件存在；
-6. 顶层统计可由用例结果重新计算；
-7. 完成run不存在缺失用例；
-8. `SHA256SUMS`与文件内容一致。
+1. plan paths, IDs, anchors, and index order;
+2. one JSON object per non-empty session line;
+3. required runner/result files and matching case/run IDs;
+4. consistent case and step statuses;
+5. safe, existing artifact paths;
+6. recomputable run statistics;
+7. no missing case in a completed run; and
+8. complete and correct `SHA256SUMS` files.
 
 <a id="report-package"></a>
-## 11. 打包
+## 11. Packaging
 
 ```bash
 dstack-test package \
@@ -247,11 +231,10 @@ dstack-test package \
   --output <plan-id>-<run-id>.tar.gz
 ```
 
-支持`.tar.gz`、`.tgz`、`.tar`和`.zip`。工具必须先校验，再打包完整Plan及指定run结果；
-不得夹带同一Plan下其他历史run的结果。
+Supported formats are `.tar.gz`, `.tgz`, `.tar`, and `.zip`. Validate before packaging. Include the complete plan and selected run, but exclude every other historical run stored beside it.
 
 <a id="report-html"></a>
-## 12. 单文件HTML
+## 12. Self-contained HTML
 
 ```bash
 dstack-test render \
@@ -260,15 +243,14 @@ dstack-test render \
   --output report.html
 ```
 
-HTML必须离线可用并内联全部CSS、JavaScript、会话事件、文本、JSON、图片和可下载附件。展示内容包括：
+The output must work offline and inline all CSS, JavaScript, session events, text, JSON, images, and downloadable attachments. It must provide:
 
-- 章／节／用例三级目录；
-- 测试说明书和`case.md`原始要求；
-- 公共版本、环境和Agent模型；
-- 状态统计、搜索和状态过滤；
-- 每条用例总结及逐步observed结果；
-- step到对应会话事件的跳转；
-- 原始Agent消息、tool call、命令输出和错误的交互式折叠；
-- 所有附件；
-- 完整原始会话折叠区；
-- 稳定交叉引用锚点。
+- chapter/section/case navigation;
+- the original guide and `case.md` requirements;
+- common versions, environment, and executor model;
+- status summaries, search, and status filters;
+- each case summary and step observation;
+- step-to-session-event links;
+- collapsible original agent messages, tool calls, command output, and errors;
+- every attachment and the complete raw session; and
+- stable cross-reference anchors.

@@ -1,113 +1,92 @@
 <!-- SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-
 <a id="dstack-test-case-authoring-spec"></a>
-# dstack 测试用例编写规范
+# dstack Test-Case Authoring Specification
 
-本文规定测试 Plan、索引和 `case.md` 的写法。总体方法见[dstack 测试方法](dstack-test-methodology.md#dstack-test-methodology)，结果格式见[测试报告输出规范](test-report-output-spec.md#dstack-test-report-output-spec)。
+This document defines the normative layout and content of a dstack test plan and its `case.md` files. See the [test methodology](dstack-test-methodology.md#dstack-test-methodology) and [report output specification](test-report-output-spec.md#dstack-test-report-output-spec).
 
-<a id="authoring-plan-layout"></a>
-## 1. Plan目录
+<a id="case-plan-layout"></a>
+## 1. Plan layout
 
 ```text
 <plan>/
 ├── index.json
 ├── README.md
-├── schemas/
-├── results/
+├── results/<run-id>/
 └── <chapter>/
-    ├── README.md             # 可选
+    ├── README.md                 # optional
     └── <section>/
-        ├── README.md         # 可选
+        ├── README.md             # optional
         └── <case-id>/
             ├── case.md
-            ├── fixtures/     # 可选
-            ├── scripts/      # 可选
-            └── results/
+            ├── fixtures/         # optional
+            ├── scripts/          # optional
+            └── results/<run-id>/
 ```
 
-测试组织只允许章、节、用例三个语义层级。用例必须放在独立目录中，规格文件固定命名为 `case.md`。
+Only chapter, section, and case are semantic organization levels. Each case has its own directory and a specification named `case.md`.
 
-<a id="authoring-identifiers"></a>
-## 2. ID和锚点
+<a id="case-identifiers"></a>
+## 2. IDs and anchors
 
-所有可引用对象必须使用显式、稳定、全局唯一的 ASCII ID：
+All referenceable objects use explicit, stable, globally unique ASCII IDs. Use lowercase letters, digits, and hyphens. IDs must not change when titles change. Place `<a id="..."></a>` before each referenceable heading and use relative paths with fragments for cross-file links.
+
+Recommended forms:
 
 ```text
 chapter-gateway
 section-gateway-proxy-protocol
 tc-gw-pp-001
 tc-gw-pp-001-step-01
-req-gw-pp-inbound-v1
-risk-gw-pp-client-address
+req-gw-pp-001
+risk-gw-spoofing-001
 ```
 
-规则：
+<a id="case-plan-guide"></a>
+## 3. Top-level guide
 
-- 仅使用小写字母、数字和连字符；
-- ID发布后不得因标题变化而改变；
-- Markdown不得依赖标题自动生成的 slug；
-- 每个可引用标题前必须写 `<a id="..."></a>`；
-- 跨文件引用使用相对路径和 fragment，例如 `case.md#tc-gw-pp-001-step-01`。
+The top-level `README.md` is the first document an executor reads. It must state:
 
-<a id="authoring-readme"></a>
-## 3. 顶层说明书
+1. objectives and scope;
+2. system topology and system under test;
+3. hardware, software, account, and external-service requirements;
+4. reproducible common setup commands;
+5. shared preconditions and health checks;
+6. status rules and release acceptance criteria;
+7. evidence, redaction, and attachment rules;
+8. order, concurrency, and stop conditions;
+9. cleanup and recovery; and
+10. validation, packaging, and rendering commands.
 
-顶层 `README.md`是执行器必须首先阅读的文件，至少包含：
+Avoid non-reproducible instructions such as “configure a working KMS.”
 
-1. 测试目标和范围；
-2. 被测系统和测试拓扑；
-3. 硬件、软件、账号及外部服务要求；
-4. 公共环境配置命令；
-5. 公共前置条件和健康检查；
-6. 状态判定规则；
-7. 证据、脱敏和附件规则；
-8. 执行顺序、并发限制和停止条件；
-9. 清理与环境恢复方法；
-10. 打包、上传和本地渲染方法。
-
-环境配置命令应可直接执行；不得使用“配置好KMS”“准备可用证书”等无法复现的描述。
-
-<a id="authoring-index"></a>
+<a id="case-index"></a>
 ## 4. `index.json`
 
-索引是用例发现和顺序的权威来源。最低结构如下：
+The index is authoritative for discovery and order. A minimal example is:
 
 ```json
 {
   "schema_version": "1.0",
-  "id": "plan-gateway-proxy-protocol",
-  "title": "Gateway Proxy Protocol Test Plan",
-  "guide": {
-    "path": "README.md",
-    "anchor": "test-plan-guide"
-  },
+  "id": "dstack-v0-6-0-release",
+  "title": "dstack v0.6.0 Release Test Plan",
+  "guide": "README.md",
   "chapters": [
     {
       "id": "chapter-gateway",
-      "order": 1,
       "title": "Gateway",
-      "path": "01-gateway",
+      "order": 1,
       "sections": [
         {
           "id": "section-gateway-proxy-protocol",
-          "order": 1,
           "title": "Proxy Protocol",
-          "path": "01-gateway/01-proxy-protocol",
+          "order": 1,
           "cases": [
             {
               "id": "tc-gw-pp-001",
+              "title": "Forward a Proxy v1 client address over TLS termination",
               "order": 1,
-              "title": "TLS终止路径转发Proxy v1地址",
-              "priority": "P0",
-              "path": "01-gateway/01-proxy-protocol/tc-gw-pp-001",
-              "spec": {
-                "path": "01-gateway/01-proxy-protocol/tc-gw-pp-001/case.md",
-                "anchor": "tc-gw-pp-001"
-              },
-              "requirements": ["req-gw-pp-inbound-v1"],
-              "risks": ["risk-gw-pp-client-address"],
-              "tags": ["gateway", "proxy-protocol", "e2e"]
+              "path": "01-gateway/01-proxy-protocol/tc-gw-pp-001"
             }
           ]
         }
@@ -117,184 +96,155 @@ risk-gw-pp-client-address
 }
 ```
 
-章、节和用例数组顺序必须与 `order`一致。路径必须留在 Plan根目录内，不得包含绝对路径或 `..`逃逸。
+Array order must agree with `order`. Paths must remain below the plan root and must not contain absolute paths or `..` traversal.
 
-<a id="authoring-case-sections"></a>
-## 5. `case.md`固定结构
+<a id="case-required-structure"></a>
+## 5. Required `case.md` structure
 
-每条用例按以下顺序编写：
+Use this order:
 
 ```markdown
 <a id="tc-example-001"></a>
-# TC-EXAMPLE-001：标题
+# TC-EXAMPLE-001: Title
 
-<a id="tc-example-001-metadata"></a>
-## 元数据
+## Metadata
 
-<a id="tc-example-001-objective"></a>
-## 测试目标
+## Objective
 
-<a id="tc-example-001-preconditions"></a>
-## 前置条件
+## Preconditions
 
-<a id="tc-example-001-data"></a>
-## 测试数据
+## Test Data
 
-<a id="tc-example-001-steps"></a>
-## 测试步骤
+## Steps
 
 <a id="tc-example-001-step-01"></a>
-### Step 1：步骤标题
+### Step 1: Step title
 
-操作说明。
+Action instructions.
 
-**预期结果：**
+**Expected results:**
 
-- 可观察结果一；
-- 可观察结果二。
+- First observable result.
+- Second observable result.
 
-<a id="tc-example-001-cleanup"></a>
-## 后置条件
+## Postconditions
 ```
 
-<a id="authoring-metadata"></a>
-## 6. 元数据
+<a id="case-metadata"></a>
+## 6. Metadata
 
-元数据至少包含：
+At minimum include case ID, priority (`P0`, `P1`, or `P2`), type (for example Functional, Security, Compatibility, Regression, or Performance), minimum environment level, automation suitability, and requirement/risk references.
 
-- ID；
-- 优先级 `P0`、`P1`或`P2`；
-- 类型，例如 Functional、Security、Compatibility、Regression、Performance；
-- 最低环境等级；
-- 是否适合自动化；
-- Requirement和Risk引用；
-- Tags。
+Do not repeat common versions in every case. When a case requires an old or special component version, add a **Special Version Requirements** field and record the actual value as a result-level version override.
 
-公共版本不在每条用例重复。需要旧版或特殊组件时，在用例中增加“特殊版本要求”，执行结果写入 `version_overrides`。
+<a id="case-objective"></a>
+## 7. Objective
 
-<a id="authoring-objective"></a>
-## 7. 测试目标
+Define one independently decidable behavior: the relevant configuration or state, the action, and the essential externally observable result. Split a case when its title contains multiple independent “and” clauses. An implementation function name or a script's zero exit status is not a product objective.
 
-目标只描述一个可独立判定的行为。若标题中出现多个互不依赖的“并且”，通常应拆分用例。目标需要说明：
+<a id="case-preconditions"></a>
+## 8. Preconditions
 
-- 什么配置或状态；
-- 执行什么行为；
-- 对外可观察的核心结果。
+Preconditions must be verifiable and distinct from the tested action. Put shared environment conditions in the plan guide and only case-specific conditions in the case. If a prerequisite fails before the tested behavior starts, preserve evidence and report `BLOCKED`; do not report a product `FAIL` for setup failure.
 
-不得把实现函数名或已有测试脚本退出零当作产品目标。
+<a id="case-test-data"></a>
+## 9. Test data
 
-<a id="authoring-preconditions"></a>
-## 8. 前置条件
+Prefer JSON blocks for protocol fields, boundary values, and expected values. Document how random values are generated and preserve the actual values in results. Use RFC documentation address ranges for security-test addresses. Never put reusable credentials, tokens, private keys, or production secrets in plan files.
 
-前置条件必须可验证并区分于测试步骤。每项应说明所需状态，而不是隐含测试结果。公共环境条件写在顶层说明书，用例只写本用例特有条件。
+<a id="case-steps"></a>
+## 10. Steps and expected results
 
-若前置条件失败，执行器记录命令证据并把用例标为 `BLOCKED`；不能把 setup错误记为产品 `FAIL`。
+Prefer three to eight logical steps. One logical step may invoke several mechanical commands, but it validates one phase. Every step must have:
 
-<a id="authoring-test-data"></a>
-## 9. 测试数据
+1. an explicit unique anchor;
+2. a reproducible action;
+3. precise, observable, comparable expected results; and
+4. at least one item of command evidence in the native session.
 
-测试数据优先使用 JSON代码块，固定协议字段、边界值和预期值。随机数据必须说明生成方式并在结果中保存实际值。安全测试地址应使用 RFC文档网段，避免依赖执行主机随机地址。
+Do not write a separate failure criterion. If the actual result does not fully satisfy the expected result, the step and case are `FAIL`. Replace vague words such as “normal,” “correct,” or “without errors” with exact states, fields, addresses, digests, counts, or response codes.
 
-<a id="authoring-steps"></a>
-## 10. 步骤和预期结果
+<a id="case-postconditions"></a>
+## 11. Postconditions
 
-每条用例推荐 3至8个逻辑步骤。一个步骤可以执行多条机械命令，但只验证一个阶段性结果。每一步必须：
+State which data is removed, which services are stopped or retained, how modified policy/configuration is restored, which state is intentionally retained for later cases, and how cleanup failures are recorded. Cleanup failure does not erase the original test result but must be reported.
 
-1. 有显式锚点；
-2. 描述执行动作；
-3. 描述可观察、可比较的预期结果；
-4. 能产生至少一条命令证据。
-
-不单独编写失败判据：只要实际结果没有完全满足预期，该步骤即为 `FAIL`，用例即为 `FAIL`。
-
-避免使用“正常”“正确”“无异常”等模糊结果，应写为具体状态、字段、地址、摘要、计数或响应码。
-
-<a id="authoring-cleanup"></a>
-## 11. 后置条件
-
-后置条件描述：
-
-- 清除哪些测试数据；
-- 停止或保留哪些服务；
-- 如何恢复修改的 policy和配置；
-- 哪些状态供后续用例复用；
-- 清理失败时如何记录。
-
-<a id="authoring-proxy-example"></a>
-## 12. Proxy Protocol样例
+<a id="case-proxy-example"></a>
+## 12. Proxy Protocol example
 
 ````markdown
 <a id="tc-gw-pp-001"></a>
-# TC-GW-PP-001：启用PP的应用端口接收正确客户端地址
+# TC-GW-PP-001: A PP-enabled application port receives the client address
 
-<a id="tc-gw-pp-001-objective"></a>
-## 测试目标
+## Metadata
 
-验证Gateway启用Inbound Proxy Protocol且应用端口声明`pp=true`时，
-上游Proxy v1客户端地址被转发给应用，后续HTTP请求正常完成。
+- Priority: P0
+- Type: Functional, Regression, Security
+- Environment: INTEGRATION
+- Requirements: req-gw-pp-001
+- Risks: risk-gw-spoofing-001
 
-<a id="tc-gw-pp-001-preconditions"></a>
-## 前置条件
+## Objective
 
-1. Gateway配置`inbound_pp_enabled=true`。
-2. guest已注册，端口8443配置`pp=true`。
-3. capture backend ready，Gateway已加载该instance的port policy。
+Verify that, when inbound Proxy Protocol is enabled and application port 8443 declares `pp=true`, gateway forwards the Proxy v1 client address to the application and completes the following HTTP request.
 
-<a id="tc-gw-pp-001-data"></a>
-## 测试数据
+## Preconditions
+
+1. Gateway has `inbound_pp_enabled=true`.
+2. The guest is registered and port 8443 has `pp=true`.
+3. The capture backend is ready and gateway has loaded the instance port policy.
+
+## Test Data
 
 ```json
 {
   "source": "198.51.100.27:45678",
-  "destination": "203.0.113.10:443",
-  "app_port": 8443
+  "destination": "203.0.113.10:8443",
+  "request_id": "tc-gw-pp-001"
 }
 ```
 
-<a id="tc-gw-pp-001-steps"></a>
-## 测试步骤
-
 <a id="tc-gw-pp-001-step-01"></a>
-### Step 1：检查生效策略
+### Step 1: Check effective policy
 
-查询guest和Gateway中的端口策略。
+Query the guest and gateway port policy.
 
-**预期结果：** Instance ID正确，端口8443存在且`pp=true`。
+**Expected results:** The instance ID matches; port 8443 exists and has `pp=true`.
 
 <a id="tc-gw-pp-001-step-02"></a>
-### Step 2：清理后端记录
+### Step 2: Reset capture state
 
-清除capture backend历史记录。
+Clear earlier capture records.
 
-**预期结果：** backend ready且记录数为0。
+**Expected results:** The backend is ready and contains zero records.
 
 <a id="tc-gw-pp-001-step-03"></a>
-### Step 3：发送请求
+### Step 3: Send the request
 
-发送Proxy v1 header，在同一连接完成TLS和HTTP请求。
+Send a Proxy v1 header, then complete TLS and HTTP on the same connection.
 
-**预期结果：** TLS成功，HTTP返回200，request ID匹配。
+**Expected results:** TLS succeeds, HTTP returns 200, and the request ID matches.
 
 <a id="tc-gw-pp-001-step-04"></a>
-### Step 4：检查捕获结果
+### Step 4: Inspect the capture
 
-查询capture backend记录。
+Query the backend capture records.
 
-**预期结果：** 恰好一条新记录，source和destination与测试数据一致，HTTP请求完整。
+**Expected results:** Exactly one new record exists; source and destination match the test data and the HTTP request is complete.
 ````
 
-<a id="authoring-review-checklist"></a>
-## 13. 评审清单
+<a id="case-review-checklist"></a>
+## 13. Review checklist
 
-提交前确认：
+Before submission, confirm that:
 
-- 用例目录、ID和索引一致；
-- 显式锚点存在且唯一；
-- 每条用例引用需求或风险；
-- 目标只有一个核心行为；
-- 前置条件可验证；
-- 每一步有精确预期；
-- 步骤数量合理且能产生原始证据；
-- 模拟和真实硬件要求明确；
-- 后置条件可恢复环境；
-- 不包含密钥、token和环境私密值。
+- directory, case ID, and index entry agree;
+- explicit anchors are present and unique;
+- each case references a requirement or risk;
+- the objective has one core behavior;
+- preconditions are verifiable;
+- every step has precise expected results and raw evidence;
+- step count is reasonable;
+- simulation and physical-hardware requirements are explicit;
+- postconditions restore the environment; and
+- no secret or environment-private value is present.
