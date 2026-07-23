@@ -22,12 +22,13 @@ fetch() {
 }
 
 install_rust_component() {
-    local component=$1 sha=$2 archive dir
+    local component=$1 sha=$2 archive base dir
     archive="$DOWNLOADS/$component-$RUST_TOOLCHAIN_VERSION-x86_64-unknown-linux-gnu.tar.xz"
     fetch "https://static.rust-lang.org/dist/${archive##*/}" "$sha" "$archive"
+    base=${archive##*/}
     dir=$(mktemp -d "/var/tmp/$component.XXXXXX")
     tar -C "$dir" -xf "$archive"
-    "$dir/${archive##*/.tar.xz}/install.sh" \
+    "$dir/${base%.tar.xz}/install.sh" \
       --prefix="$PREFIX/rust" --disable-ldconfig >/dev/null
     rm -rf "$dir"
 }

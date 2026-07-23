@@ -2,3 +2,5 @@ build*/
 repro*/
 *.raw
 *.raw.zst
+mkosi.tools/
+mkosi.tools.manifest
