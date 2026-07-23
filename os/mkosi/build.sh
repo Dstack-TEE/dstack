@@ -27,6 +27,12 @@ build_one() {
   rm -rf "$work" "$out"; mkdir -p "$stage" "$kstage" "$out"
   "$SELF/scripts/build-components.sh" "${component_cache_args[@]}" \
     "$work" "$stage" "$kstage" "$flavor"
+  if [[ $flavor == prod ]]; then
+    # Yocto splits module DWARF into debug packages which are not shipped in
+    # the production image. Keep BTF and loadable ELF metadata, but do not put
+    # hundreds of MiB of host-side DWARF into the immutable guest root.
+    find "$kstage/usr/lib/modules" -type f -name '*.ko' -exec objcopy --strip-debug {} +
+  fi
   # ExtraTrees is copied over Debian's usr-merged root where /bin, /sbin and
   # /lib are symlinks. Normalize build systems (notably OpenZFS) that install
   # into the legacy physical directories before handing the tree to mkosi.
