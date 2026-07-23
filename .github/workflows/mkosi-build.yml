@@ -118,6 +118,45 @@ jobs:
             ./os/mkosi/build.sh image "$RUNNER_TEMP/mkosi-cross-host"
           sudo chown -R "$USER:$USER" "$RUNNER_TEMP/mkosi-cross-host/out"
 
+      - name: Record canonical rootfs tree
+        if: always()
+        run: |
+          root="$RUNNER_TEMP/mkosi-cross-host/work-prod/rootfs"
+          test -d "$root" || exit 0
+          sudo python3 - "$root" > "$RUNNER_TEMP/rootfs.manifest" <<'PY'
+          import hashlib
+          import os
+          import stat
+          import sys
+
+          root = sys.argv[1]
+          hardlinks = {}
+          for base, dirs, files in os.walk(root, topdown=True, followlinks=False):
+              dirs.sort()
+              files.sort()
+              for name in dirs + files:
+                  path = os.path.join(base, name)
+                  rel = os.path.relpath(path, root)
+                  info = os.lstat(path)
+                  mode = stat.S_IMODE(info.st_mode)
+                  if stat.S_ISREG(info.st_mode):
+                      digest = hashlib.sha256()
+                      with open(path, "rb") as stream:
+                          for block in iter(lambda: stream.read(1024 * 1024), b""):
+                              digest.update(block)
+                      key = (info.st_dev, info.st_ino)
+                      first = hardlinks.setdefault(key, rel)
+                      detail = f"sha256={digest.hexdigest()} hardlink={first}"
+                  elif stat.S_ISLNK(info.st_mode):
+                      detail = f"target={os.readlink(path)}"
+                  elif stat.S_ISCHR(info.st_mode) or stat.S_ISBLK(info.st_mode):
+                      detail = f"device={os.major(info.st_rdev)}:{os.minor(info.st_rdev)}"
+                  else:
+                      detail = "-"
+                  print(f"{rel}\t{stat.S_IFMT(info.st_mode):o}\t{mode:o}\t"
+                        f"{info.st_uid}:{info.st_gid}\t{info.st_size}\t{detail}")
+          PY
+
       - name: Compare with local byte-for-byte baseline
         run: |
           cd "$RUNNER_TEMP/mkosi-cross-host/out/prod"
@@ -135,5 +174,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mkosi-cross-host-sha256
-          path: ${{ runner.temp }}/mkosi-cross-host/out/prod/cross-host.sha256
+          path: |
+            ${{ runner.temp }}/mkosi-cross-host/out/prod/cross-host.sha256
+            ${{ runner.temp }}/rootfs.manifest
           retention-days: 30
