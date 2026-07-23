@@ -98,5 +98,7 @@ if [[ $action == image || $action == dev-image ]]; then
 fi
 build_one "$BUILD_DIR/a" "$BUILD_DIR/work-a" prod
 build_one "$BUILD_DIR/b" "$BUILD_DIR/work-b" prod
-cmp "$BUILD_DIR/a/dstack-0.6.0.tar.gz" "$BUILD_DIR/b/dstack-0.6.0.tar.gz"
+cmp "$BUILD_DIR/a/dstack-$DSTACK_VERSION.tar.gz" "$BUILD_DIR/b/dstack-$DSTACK_VERSION.tar.gz"
+cmp "$BUILD_DIR/a/dstack-$DSTACK_VERSION-uki.tar.gz" \
+  "$BUILD_DIR/b/dstack-$DSTACK_VERSION-uki.tar.gz"
 echo 'reproducibility check passed'
