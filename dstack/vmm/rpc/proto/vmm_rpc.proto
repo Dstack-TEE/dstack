@@ -119,6 +119,9 @@ message VmConfiguration {
   // Per-VM networking overrides. If set, wins over singular networking.
   repeated NetworkingConfig networks = 19;
   reserved 20;
+  // Development-only TEE ABI to simulate for this VM. When set, the VMM
+  // launches a non-TEE VM and provides an instance-specific simulator config.
+  optional string simulated_tee = 21;
 }
 
 // Per-VM networking configuration.

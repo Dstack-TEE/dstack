@@ -189,6 +189,16 @@ pub fn create_manifest_from_vm_config(
     dstack_types::validate_verity_volumes(&verity_volumes).map_err(anyhow::Error::msg)?;
     let volumes = resolve_volumes(&verity_volumes, cvm_config)?;
 
+    let simulated_tee = request
+        .simulated_tee
+        .as_deref()
+        .map(str::parse)
+        .transpose()
+        .map_err(anyhow::Error::msg)?;
+    if simulated_tee.is_some() && cvm_config.tee_simulator.is_none() {
+        bail!("tee simulator credentials are not configured on this VMM");
+    }
+
     Ok(Manifest {
         id,
         name: request.name.clone(),
@@ -204,7 +214,8 @@ pub fn create_manifest_from_vm_config(
         gpus: Some(gpus),
         kms_urls: request.kms_urls.clone(),
         gateway_urls: request.gateway_urls.clone(),
-        no_tee: request.no_tee,
+        no_tee: request.no_tee || simulated_tee.is_some(),
+        simulated_tee,
         networks: networks_from_vm_config(&request, cvm_config)?,
         volumes,
     })
@@ -941,6 +952,7 @@ mod tests {
             gateway_urls: vec![],
             stopped: false,
             no_tee: false,
+            simulated_tee: None,
             networking: None,
             networks: vec![],
         }
@@ -952,6 +964,47 @@ mod tests {
             create_manifest_from_vm_config(test_vm_configuration(), &test_cvm_config()).unwrap();
 
         assert!(manifest.networks.is_empty());
+    }
+
+    #[test]
+    fn simulated_tee_is_selected_per_instance_and_implies_no_tee() {
+        let mut request = test_vm_configuration();
+        request.simulated_tee = Some("dstack-amd-sev-snp".into());
+        let mut config = test_cvm_config();
+        config.tee_simulator = Some(dstack_types::TeeSimulatorConfig {
+            mock_attestation_seed: Some("11".repeat(32)),
+            ..Default::default()
+        });
+
+        let manifest = create_manifest_from_vm_config(request, &config).unwrap();
+
+        assert_eq!(
+            manifest.simulated_tee,
+            Some(dstack_types::TeeVariant::DstackAmdSevSnp)
+        );
+        assert!(manifest.no_tee);
+    }
+
+    #[test]
+    fn simulated_tee_requires_node_credentials() {
+        let mut request = test_vm_configuration();
+        request.simulated_tee = Some("dstack-tdx".into());
+
+        let err = create_manifest_from_vm_config(request, &test_cvm_config()).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("tee simulator credentials are not configured"));
+    }
+
+    #[test]
+    fn invalid_simulated_tee_is_rejected() {
+        let mut request = test_vm_configuration();
+        request.simulated_tee = Some("not-a-platform".into());
+
+        let err = create_manifest_from_vm_config(request, &test_cvm_config()).unwrap_err();
+
+        assert!(err.to_string().contains("unsupported TEE variant"));
     }
 
     #[test]

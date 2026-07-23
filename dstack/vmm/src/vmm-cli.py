@@ -901,6 +901,8 @@ class VmmCLI:
             "stopped": args.stopped,
             "no_tee": args.no_tee,
         }
+        if args.simulated_tee:
+            params["simulated_tee"] = args.simulated_tee
         if args.swap is not None:
             swap_bytes = max(0, int(round(args.swap)) * 1024 * 1024)
             if swap_bytes > 0:
@@ -1810,6 +1812,17 @@ def main():
         help="Force-enable Intel TDX (default)",
     )
     deploy_parser.set_defaults(no_tee=False)
+    deploy_parser.add_argument(
+        "--simulated-tee",
+        choices=[
+            "dstack-tdx",
+            "dstack-gcp-tdx",
+            "dstack-amd-sev-snp",
+            "dstack-nitro-enclave",
+            "dstack-aws-nitro-tpm",
+        ],
+        help="Simulate the selected TEE ABI for this VM (development images only)",
+    )
     deploy_parser.add_argument(
         "--net",
         choices=["bridge", "user"],

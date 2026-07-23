@@ -110,6 +110,8 @@ pub struct Manifest {
     pub gateway_urls: Vec<String>,
     #[serde(default)]
     pub no_tee: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub simulated_tee: Option<dstack_types::TeeVariant>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub networks: Vec<Networking>,
     #[serde(default)]
@@ -1108,7 +1110,8 @@ impl App {
         )?;
         fs::write(shared_dir.join(SYS_CONFIG), &sys_config_str)
             .context("Failed to write vm config")?;
-        sync_tee_simulator_config(&shared_dir, cfg.cvm.tee_simulator.as_ref(), &sys_config_str)?;
+        let simulator_config = simulator_config_for_manifest(&self.config.cvm, &manifest)?;
+        sync_tee_simulator_config(&shared_dir, simulator_config.as_ref(), &sys_config_str)?;
         Ok(())
     }
 
@@ -1244,7 +1247,22 @@ fn rotate_serial_log(work_dir: &VmWorkDir, max_bytes: u64) {
     }
 }
 
-fn sync_tee_simulator_config(
+pub(crate) fn simulator_config_for_manifest(
+    cvm: &crate::config::CvmConfig,
+    manifest: &Manifest,
+) -> Result<Option<dstack_types::TeeSimulatorConfig>> {
+    let Some(platform) = manifest.simulated_tee else {
+        return Ok(None);
+    };
+    let mut config = cvm
+        .tee_simulator
+        .clone()
+        .context("tee simulator credentials are not configured on this VMM")?;
+    config.platform = platform;
+    Ok(Some(config))
+}
+
+pub(crate) fn sync_tee_simulator_config(
     shared_dir: &Path,
     simulator_config: Option<&dstack_types::TeeSimulatorConfig>,
     sys_config: &str,
@@ -1521,6 +1539,28 @@ mod tests {
     }
 
     #[test]
+    fn instance_platform_overrides_node_simulator_template() -> Result<()> {
+        let mut config = test_tdx_config()?;
+        config.cvm.tee_simulator = Some(dstack_types::TeeSimulatorConfig {
+            platform: dstack_types::TeeVariant::DstackTdx,
+            mock_attestation_seed: Some("11".repeat(32)),
+            ..Default::default()
+        });
+        let mut manifest = test_manifest(2048);
+        assert!(simulator_config_for_manifest(&config.cvm, &manifest)?.is_none());
+        manifest.simulated_tee = Some(dstack_types::TeeVariant::DstackNitroEnclave);
+
+        let resolved = simulator_config_for_manifest(&config.cvm, &manifest)?
+            .context("simulator config should be enabled")?;
+
+        assert_eq!(
+            resolved.platform,
+            dstack_types::TeeVariant::DstackNitroEnclave
+        );
+        Ok(())
+    }
+
+    #[test]
     fn gpu_config_has_gpus_only_when_resolved_gpu_list_is_non_empty() {
         assert!(!GpuConfig::default().has_gpus());
         assert!(!GpuConfig {
@@ -1682,6 +1722,7 @@ mod tests {
             kms_urls: vec![],
             gateway_urls: vec![],
             no_tee: false,
+            simulated_tee: None,
             networks: vec![],
             volumes: vec![],
         }
@@ -1969,6 +2010,7 @@ mod tests {
             kms_urls: vec![],
             gateway_urls: vec![],
             no_tee: false,
+            simulated_tee: None,
             networks: vec![],
             volumes: vec![],
         };

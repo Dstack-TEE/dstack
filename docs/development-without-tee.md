@@ -89,7 +89,6 @@ qemu_path = "/usr/bin/qemu-system-x86_64"
 mode = "user"
 
 [cvm.tee_simulator]
-platform = "dstack-tdx"
 # Development credential only. Use a different random 32-byte hex seed for
 # each isolated test environment; never use it for production secrets.
 mock_attestation_seed = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -99,9 +98,11 @@ collateral_base_url = "http://10.0.2.2:18088"
 exe = "/home/USER/.local/bin/supervisor"
 ```
 
-The VMM writes these settings to the guest's development-only
-`.tee-simulator.json`. The guest starts the simulator only when that file is
-present in the host share.
+These node-local settings provide development credentials and collateral URLs;
+they do not enable simulation globally. Each deployment selects its simulated
+platform with `--simulated-tee`. The VMM then writes an instance-specific
+`.tee-simulator.json`, and the guest starts the simulator only when that file
+is present in the host share.
 
 Start the VMM from a stable working directory because its default API socket is
 relative to that directory:
@@ -153,7 +154,8 @@ dstack compose \
   --output app-compose.json
 ```
 
-Deploy with the development image, no KMS, and no TEE:
+Deploy with the development image, no KMS, and an instance-specific simulated
+TEE platform:
 
 ```bash
 dstack deploy \
@@ -161,7 +163,7 @@ dstack deploy \
   --image dstack-dev-<version> \
   --compose app-compose.json \
   --vcpu 2 --memory 3G --disk 10G \
-  --no-tee
+  --simulated-tee dstack-tdx
 ```
 
 Successful output contains a VM ID. `dstack info VM_ID` should eventually show

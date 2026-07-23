@@ -260,7 +260,8 @@ pub struct CvmConfig {
     /// The URL of the PCCS server
     #[serde(default)]
     pub pccs_url: String,
-    /// Development-image simulator configuration copied into guest sys-config.
+    /// Node-local credentials and collateral settings used when an individual
+    /// VM requests a simulated TEE platform.
     #[serde(default)]
     pub tee_simulator: Option<dstack_types::TeeSimulatorConfig>,
     /// Optional NVIDIA OCSP/RIM cache passed to guests in sys-config.
