@@ -627,6 +627,12 @@ impl VmmRpc for RpcHandler {
                 vm_work_dir.clear_runtime_networks()?;
             }
         }
+        let compose_file = fs::read_to_string(vm_work_dir.app_compose_path())
+            .context("failed to read app compose for swtpm decision")?;
+        manifest.qemu_swtpm = Some(needs_qemu_swtpm(
+            key_provider_from_compose(&compose_file)?,
+            manifest.simulated_tee,
+        ));
         vm_work_dir
             .put_manifest(&manifest)
             .context("Failed to put manifest")?;

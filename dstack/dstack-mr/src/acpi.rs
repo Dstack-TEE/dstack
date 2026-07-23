@@ -6,6 +6,7 @@
 //! translated from an original Go implementation.
 
 use anyhow::{bail, Context, Result};
+use fs_err as fs;
 use log::debug;
 use scale::Decode;
 use std::os::unix::fs::FileTypeExt;
