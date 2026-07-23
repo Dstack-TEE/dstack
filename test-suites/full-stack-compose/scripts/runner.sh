@@ -115,7 +115,7 @@ wait_vm_stopped() {
   local id=$1 deadline=$((SECONDS + 180)) status
   while (( SECONDS < deadline )); do
     status=$("${VMM_CLI[@]}" info "$id" --json 2>/dev/null | jq -r '.status // ""' || true)
-    [[ "$status" != running && "$status" != starting ]] && return
+    [[ "$status" == stopped || "$status" == exited ]] && return
     sleep 2
   done
   die "VM $id did not stop"
@@ -501,7 +501,10 @@ capture_gateway_state() {
     | jq -S '. as $status | {
         id: $status.id,
         uuid: ([$status.nodes[] | select(.id == $status.id)][0].uuid),
-        hosts: ([$status.hosts[] | {instance_id,ip,app_id,base_domain}] | sort_by(.instance_id))
+        # The active WireGuard address can move to the surviving Gateway
+        # subnet during a rolling restart. It is runtime routing state, not a
+        # durable identity invariant.
+        hosts: ([$status.hosts[] | {instance_id,app_id,base_domain}] | sort_by(.instance_id))
       }' \
     > "$WORK_DIR/gateway${node}-${stage}.status.json"
   admin_curl "$node" GetCertbotConfig | jq -S \
@@ -552,10 +555,14 @@ assert_gateway_dns_credential_usable() {
 }
 
 render_app() {
-  local label=$1 mode=$2 meta app_id hash
+  local label=$1 mode=$2 meta app_id hash image_ref=$APP_IMAGE_ID
+  # The v0.5.11 Docker Compose treats a local image ID (`sha256:...`) as a
+  # repository name and tries to pull it. The pre-launch script has already
+  # loaded the digest-recorded archive under its original tag.
+  [[ "$mode" == auto ]] && image_ref=$APP_IMAGE
   meta=$(/suite/scripts/app_compose.py nginx \
     --name "${APP_NAME}-${label}" \
-    --image-ref "$APP_IMAGE_ID" \
+    --image-ref "$image_ref" \
     --image-archive app.tar \
     --artifact-port "$ARTIFACT_PORT" \
     --attestation-mode "$mode" \
@@ -568,12 +575,16 @@ render_app() {
 }
 
 deploy_app() {
-  local label=$1 mode=$2 kms_url=$3 out vm_id
-  render_app "$label" "$mode"
+  local label=$1 mode=$2 kms_url=$3 guest_image=${4:-$IMAGE_NAME} manifest_mode out vm_id
+  manifest_mode=$mode
+  # v0.5.11 only accepts numeric manifest versions. Omitting v3 requirements
+  # lets that released guest select its native legacy TDX attestation path.
+  [[ "$guest_image" == "$OLD_IMAGE_NAME" ]] && manifest_mode=auto
+  render_app "$label" "$manifest_mode"
   log "deploying $label app CVM (forced TDX $mode)"
   if ! out=$("${VMM_CLI[@]}" deploy \
     --name "${SUITE_PREFIX}-${label}" \
-    --image "$IMAGE_NAME" \
+    --image "$guest_image" \
     --compose "$WORK_DIR/${label}.app-compose.json" \
     --kms-url "$kms_url" \
     --gateway-url "$GATEWAY1_URL" \
@@ -737,10 +748,10 @@ PY
 
   jq -e '
     .kms_enabled == true and .gateway_enabled == true
-    and .manifest_version == "3"
-    and .requirements.tdx_measure_acpi_tables == true
+    and .manifest_version == 2
+    and (has("requirements") | not)
   ' "$WORK_DIR/legacy.app-compose.json" >/dev/null \
-    || die "legacy app manifest did not force the legacy TDX verifier"
+    || die "v0.5.11 app manifest is not legacy-compatible"
   jq -e '
     .kms_enabled == true and .gateway_enabled == true
     and .manifest_version == "3"
@@ -750,8 +761,10 @@ PY
 
   jq -e --arg id "$GATEWAY_APP_ID" \
     --arg device "$ATTESTED_DEVICE_ID" \
+    --arg current_image "$OS_IMAGE_HASH" \
+    --arg old_image "$OLD_OS_IMAGE_HASH" \
     '.gatewayAppId == $id and .gatewayAppId != "any"
-      and (.osImages | length) == 1
+      and (.osImages | sort == ([$current_image, $old_image] | sort))
       and (.kms.mrAggregated | length) == 2
       and (.kms.allowAnyDevice == false)
       and (.kms.devices == [$device])
@@ -806,7 +819,7 @@ phase_upgrade() {
   gateway_version 2 old
   bootstrap_gateway
 
-  deploy_app legacy legacy "$KMS_OLD_URL"
+  deploy_app legacy legacy "$KMS_OLD_URL" "$OLD_IMAGE_NAME"
   verify_app_via_gateway legacy 1
   verify_app_via_gateway legacy 2
   capture_kms_identity old "$KMS_OLD_HOST_PORT" "$(cat "$WORK_DIR/legacy.app_id")"
@@ -848,14 +861,23 @@ phase_upgrade() {
   assert_no_insecure_shortcuts
   save_vm_logs
   # dstack-kms runs in an inner container, whose stdout is not part of the CVM
-  # serial log returned by VMM.  Each KMS has a fresh data disk, so two 200 GETs
-  # for the exact measured archive prove that both verifiers downloaded it.
+  # serial log returned by VMM.  Require an observed successful fetch of each
+  # exact measured archive, but do not require one fetch per KMS: onboarding
+  # deliberately copies durable KMS state and its verified-image cache.  The
+  # exact two-image allowlist asserted above, absence of disabled-verification
+  # paths below, and successful key delivery to old/current-image guests prove
+  # that the serving KMS accepted both images without assuming cache misses.
   local os_archive_gets
   os_archive_gets=$(grep -Fc \
     "GET /os/mr_${OS_IMAGE_HASH}.tar.gz HTTP/1.1\" 200" \
     "$WORK_DIR/artifacts-access.log" || true)
-  (( os_archive_gets >= 2 )) \
-    || die "expected verified OS image downloads by both KMS versions, saw ${os_archive_gets}"
+  (( os_archive_gets >= 1 )) \
+    || die "expected a verified current OS image archive download, saw ${os_archive_gets}"
+  os_archive_gets=$(grep -Fc \
+    "GET /os/mr_${OLD_OS_IMAGE_HASH}.tar.gz HTTP/1.1\" 200" \
+    "$WORK_DIR/artifacts-access.log" || true)
+  (( os_archive_gets >= 1 )) \
+    || die "expected a verified v0.5.11 OS image archive download, saw ${os_archive_gets}"
   if grep -E 'Image verification is disabled|self-authorization is disabled' \
     "$WORK_DIR/kms-"*.vm.log; then
     die "KMS logs contain a forbidden disabled verification path"
