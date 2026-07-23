@@ -24,8 +24,9 @@ rootfs="$OUT/files/rootfs.squashfs.verity"
 truncate -s 0 "$rootfs"
 # Privileged mkosi runs can inherit host default ACLs from their workspace.
 # The guest rootfs does not rely on xattrs, so exclude this host-only metadata.
+# A single compressor worker also avoids host-CPU-dependent fragment ordering.
 env -u SOURCE_DATE_EPOCH mksquashfs "$TREE" "$rootfs" -noappend -all-root -no-progress \
-  -no-xattrs -comp zstd -mkfs-time "$SOURCE_DATE_EPOCH" \
+  -no-xattrs -processors 1 -comp zstd -mkfs-time "$SOURCE_DATE_EPOCH" \
   -all-time "$SOURCE_DATE_EPOCH" >/dev/null
 data_size=$(stat -c %s "$rootfs")
 data_size=$(( (data_size + 4095) / 4096 * 4096 ))
