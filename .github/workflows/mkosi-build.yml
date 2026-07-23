@@ -64,8 +64,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
             build-essential ca-certificates cmake cpio cryptsetup-bin curl \
-            dosfstools gdisk git jq libssl-dev mtools pax-utils pkg-config \
-            python3-venv squashfs-tools systemd-ukify xz-utils zstd
+            debian-archive-keyring dosfstools gdisk git jq libssl-dev mtools \
+            pax-utils pkg-config python3-venv squashfs-tools systemd-ukify \
+            xz-utils zstd
 
       - name: Install pinned mkosi and Rust/Go tools
         run: |
