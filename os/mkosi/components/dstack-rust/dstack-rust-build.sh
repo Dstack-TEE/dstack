@@ -18,8 +18,10 @@ install -m0644 "$ROOT/os/common/rootfs/journald.conf" "$DEST/etc/systemd/journal
 install -m0644 "$ROOT/os/common/rootfs/llmnr.conf" "$DEST/etc/systemd/resolved.conf.d/dstack.conf"
 install -m0644 "$ROOT/os/common/rootfs/tdx-attest.conf" "$DEST/etc/"
 install -m0644 "$ROOT/os/common/rootfs/sysctl.d/99-dstack.conf" "$DEST/etc/sysctl.d/"
-cp -a "$ROOT/os/common/rootfs/docker.service.d/." "$DEST/etc/systemd/system/docker.service.d/"
-cp -a "$ROOT/os/common/rootfs/containerd.service.d/." "$DEST/etc/systemd/system/containerd.service.d/"
+install -m0644 "$ROOT/os/common/rootfs/docker.service.d/"* \
+  "$DEST/etc/systemd/system/docker.service.d/"
+install -m0644 "$ROOT/os/common/rootfs/containerd.service.d/"* \
+  "$DEST/etc/systemd/system/containerd.service.d/"
 
 # Cargo.lock and --locked pin every registry/git dependency. The hermetic
 # mkosi build root may fetch missing inputs but cannot update the lock file.
