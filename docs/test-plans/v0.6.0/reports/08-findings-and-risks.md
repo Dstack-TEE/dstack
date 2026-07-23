@@ -18,6 +18,7 @@
 | F-14 | High | no-TEE simulator 在 prepare 前读取尚不存在的 `/dstack/.host-shared/.sys-config.json`，缺 seed 后触发 guest reboot loop | 增加 simulator 前置 host-share config mount/copy，修正文档并添加 VMM-to-boot E2E |
 | F-15 | Medium | VMM 的 swtpm Unix socket 继承完整 VM 路径，较长 HOME 直接超过 AF_UNIX 限制 | 创建短 runtime socket 或部署前校验并给出可操作错误 |
 | F-16 | Test-harness | KMS onboarding 会复制 durable verified-image cache，因此“每个 KMS 必须重新 HTTP GET OS archive”会产生假失败 | PR #820 改为要求每个精确 archive 至少有一次成功 fetch，并结合 exact allowlist、禁止 disabled-verification 路径及 old/current guest 成功取钥判断 |
+| F-17 | Low / observability | v0.5.11→current VMM process 切换保持 QEMU/identity/routes，但 current VMM 重载 old state 后 event history 为空、`boot_progress` 显示 `running` 而非切换前的 `done` | 明确 event buffer 是否设计为仅内存态；若 UI/API 要求重启连续性，则持久化或从 supervisor/guest 重建最终 progress |
 
 ## Yocto configcheck 特别审计项
 
@@ -27,4 +28,4 @@
 
 ## 发布建议
 
-当前建议：**NO-GO（仅针对宣称完成 v0.6.0 preview 全量门禁）**。Local-Key-Provider 重启持久性、同/不同 app 的 v0.5.11/current 混合 guest、guest image upgrade/rollback 与真实 TDX service rolling upgrade已有正向证据，但 COMP-02、物理 host reboot、真实 GPU/云平台和最终镜像审计仍未完成，不应将报告表述为全量通过。
+当前建议：**NO-GO（仅针对宣称完成 v0.6.0 preview 全量门禁）**。Local-Key-Provider 重启持久性、v0.5.11→current VMM 原地切换、同/不同 app 的混合 guest、guest image upgrade/rollback 与真实 TDX service rolling upgrade 已有正向证据，但全 old service baseline、物理 host reboot、真实 GPU/云平台和最终镜像审计仍未完成，不应将报告表述为全量通过。

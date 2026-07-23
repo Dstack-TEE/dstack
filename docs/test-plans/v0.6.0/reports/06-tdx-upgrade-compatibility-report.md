@@ -71,6 +71,12 @@ KMS/Gateway 兼容测试。
 13. 额外部署与 legacy VM 使用相同 app ID/compose、但使用 current OS image 的 CVM；
     两者同时通过两个 Gateway 可达，instance ID 不同，数据盘 UUID 分别为
     `8ef37605-...` 与 `638afe4b-...`；同 app 的 key 相同，而不同 app 的 key 不同。
+14. 从 dstack tag `v0.5.11`（`40eaf35e...`）构建 VMM（binary SHA-256
+    `513ccf2f...57c9ab`），由它创建并运行 v0.5.11 guest；将 VMM process 切换为
+    current、复用同一 detached supervisor 后，QEMU PID `112717` 未变化、uptime
+    连续增长、app/instance ID 未变且双 Gateway 路由持续健康。current VMM 可读取
+    old state；内存态 event history 被重置且 `boot_progress` 显示为 `running`，单独
+    记录为管理面可观测性边界，不影响运行中 CVM。
 
 原始日志：
 
@@ -81,6 +87,9 @@ KMS/Gateway 兼容测试。
 /home/kvin/src/dstack-v060-artifacts/logs/lkp-persistence-image-upgrade-rollback-evidence.txt
 /home/kvin/src/dstack-v060-artifacts/logs/vmm-service-recovery.log
 /home/kvin/src/dstack-v060-artifacts/logs/same-app-mixed-image-isolation.log
+/home/kvin/src/dstack-v060-artifacts/logs/comp02-vmm-in-place-upgrade-evidence.txt
+/home/kvin/src/dstack-v060-artifacts/logs/vmm-0.5.11-upgrade-baseline.log
+/home/kvin/src/dstack-v060-artifacts/logs/vmm-current-after-0.5.11-upgrade.log
 ```
 
 ## COMP 用例审计
@@ -88,7 +97,7 @@ KMS/Gateway 兼容测试。
 | 用例 | 结论 | 本次覆盖与缺口 |
 |---|---|---|
 | COMP-01 | PARTIAL | 建立了 old service + v0.5.11 guest 的真实 key/TLS/storage 基线，但 VMM 不是 old，且 KMS/Gateway 基线是 0.5.8 |
-| COMP-02 | NOT RUN | 未执行 old→new VMM 原地升级 |
+| COMP-02 | PASS | v0.5.11→current VMM process 切换复用同一 supervisor；QEMU PID/identity/uptime 连续且双路由健康 |
 | COMP-03 | PASS | v0.5.11 guest 切换 latest KMS 后重新启动、取 key；KMS identity 与 app key 保持 |
 | COMP-04 | PASS | v0.5.11 guest 在两个 Gateway 完成 rolling upgrade 后仍可达，DNS/TLS/WireGuard 路径恢复 |
 | COMP-05 | PASS | latest VMM 创建全新 v0.5.11 image CVM，legacy numeric manifest 被接受，之后可由 latest service 继续服务 |
@@ -102,5 +111,5 @@ KMS/Gateway 兼容测试。
 
 Local-Key-Provider 阻塞已经解除；真实 TDX 证据支持 v0.5.11/current 混合 guest、
 Local-Key-Provider KMS onboarding、Gateway rolling upgrade 及密钥/状态连续性。它不支持
-把 COMP-01..10 全部写成 PASS：old→latest VMM 原地升级和物理 host reboot 仍缺专项
-执行。模拟报告不能替代这些项目。
+把 COMP-01..10 全部写成 PASS：COMP-01 的全 old service baseline 与 COMP-10 的
+物理 host reboot 仍缺专项执行。模拟报告不能替代这些项目。

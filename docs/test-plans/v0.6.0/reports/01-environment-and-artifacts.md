@@ -49,6 +49,7 @@ release 构建成功的目标：
 | meta-dstack v0.5.11 archive | `dstack-0.5.11.tar.gz`; SHA-256 `6f95a2a0b59975780e6f5d8bfbf016d50148092889554e4f8272c401ee549e42` |
 | v0.5.11 guest image | `dstack-0.5.11`; measurement/digest `c2aa0186182fe8a404f16d5f3facb334d89be32703b3571c401b114a8b6e700d` |
 | v0.5.11 source revision | `ce04e924e17e3cb9d38d258338cbe71e8c08d575` |
+| dstack VMM v0.5.11 | tag commit `40eaf35e6b3f112998d01569f2a26110baab123b`; locally built binary SHA-256 `513ccf2f6d2860df985b8cc3e6cf471e144f5c79c468a0abc17b3004f357c9ab` |
 | current guest image | `dstack-0.6.0`; measurement/digest `91bc72e3ca6f283cc0549d761ee436d381d1e8c4ddc4c23354e05c9bbccfdec1` |
 | old KMS container | `dstacktee/dstack-kms:0.5.8@sha256:9650dcb47dad0065470f432f00e78e012912214ef1a5b1d7272918817e61a26d` |
 | old Gateway container | `dstacktee/dstack-gateway:0.5.8@sha256:6eb1dc1a5000f37cc5b0322d3fdb71e7f2e31859b5e3a611634919278cee2411` |
@@ -58,3 +59,13 @@ release 构建成功的目标：
 `AESM_NO_PLATFORM_CERT_DATA`（error 44）。改用已为本机完成 provisioning 的本地
 PCCS 后，同一 production SGX enclave 稳定健康。该变化是测试基础设施修复，不是
 关闭证明校验或使用 mock Local-Key-Provider。
+
+可复核的 quote、quote-derived measurement/device ID、KMS identity/app key、exact
+allowlist 与 HA summary 被选择性保存到：
+
+```text
+/home/kvin/src/dstack-v060-artifacts/evidence/real-tdx-lkp/
+```
+
+目录内 `SHA256SUMS` 固化各证据文件；未把测试 token、environment secret 或私钥纳入
+证据包。

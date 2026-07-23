@@ -5,7 +5,7 @@
 | 用例 | 优先级 | 状态 | 本次证据/缺口 |
 |---|---:|---|---|
 | COMP-01 | P0 | PARTIAL | 真实 TDX 上建立 old service + v0.5.11 guest 的 key/TLS/storage 基线；VMM 非 old，service baseline 为 0.5.8 |
-| COMP-02 | P0 | NOT RUN | 未执行 old→new VMM 原地升级 |
+| COMP-02 | P0 | PASS | v0.5.11→current VMM process 切换复用 detached supervisor；QEMU PID、uptime、identity 和双路由连续 |
 | COMP-03 | P0 | PASS | v0.5.11 guest 切换 latest KMS 并重启；CA SPKI、root k256 key 与 per-app key 保持 |
 | COMP-04 | P0 | PASS | v0.5.11 guest 在两个 Gateway rolling upgrade 后仍可达，DNS/TLS/WireGuard 恢复 |
 | COMP-05 | P0 | PASS | latest VMM 创建全新 v0.5.11 guest；legacy manifest、取钥、存储与 latest service 路径通过 |
@@ -103,11 +103,11 @@
 ## 统计
 
 - 总数：95
-- PASS: 8
+- PASS: 9
 - BLOCKED: 7
 - FAIL: 1
 - FAIL (SIMULATED): 1
-- NOT RUN: 36
+- NOT RUN: 35
 - PARTIAL: 42
 
 真实 TDX rolling-upgrade 的逐项边界见 `06-tdx-upgrade-compatibility-report.md`。确切 v0.5.11 guest 已参与；release 未提供 v0.5.11 service artifacts，且未执行的升级/回滚/host reboot 项不得由相邻 PASS 推断。
