@@ -32,7 +32,8 @@ build_one() {
     "$work/linux-$KERNEL_VERSION" "$work/kernel-build" "$stage" "$kstage"
   "$SELF/scripts/build-zfs.sh" "$work/zfs-build" \
     "$work/linux-$KERNEL_VERSION" "$work/kernel-build" "$stage" "$kstage"
-  "$SELF/scripts/build-ovmf.sh" "$work/ovmf-build" "$kstage/ovmf.fd"
+  "$SELF/scripts/build-ovmf.sh" "$work/ovmf-build" \
+    "$kstage/ovmf.fd" "$kstage/ovmf-sev.fd"
   # ExtraTrees is copied over Debian's usr-merged root where /bin, /sbin and
   # /lib are symlinks. Normalize build systems (notably OpenZFS) that install
   # into the legacy physical directories before handing the tree to mkosi.

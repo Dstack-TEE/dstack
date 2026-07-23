@@ -6,8 +6,10 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 BUILD_DIR=${1:?build directory required}
 OUT=${2:?output file required}
+SEV_OUT=${3:?SEV output file required}
 BUILD_DIR=$(realpath -m "$BUILD_DIR")
 OUT=$(realpath -m "$OUT")
+SEV_OUT=$(realpath -m "$SEV_OUT")
 REV=fbe0805b2091393406952e84724188f8c1941837
 src="$BUILD_DIR/edk2"
 if [[ ! -d $src/.git ]]; then
@@ -21,6 +23,8 @@ git -C "$src" submodule update --init --recursive --depth=1
 git -C "$src" reset -q --hard "$REV"
 patch -d "$src" -p1 --forward --fuzz=0 < \
   "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-ovmf/dstack-ovmf/0004-Reproduciable.patch"
+patch -d "$src" -p1 --forward --fuzz=0 < \
+  "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-ovmf/dstack-ovmf/0006-OvmfPkg-AmdSev-drop-embedded-grub.patch"
 
 make -s -C "$src/BaseTools" -j"${JOBS:-$(nproc)}"
 export WORKSPACE="$src" EDK_TOOLS_PATH="$src/BaseTools"
@@ -37,4 +41,8 @@ rm -f "$src/Conf/tools_def.txt"
   build -a X64 -t GCC5 -b RELEASE -n "${JOBS:-$(nproc)}" \
     -p OvmfPkg/IntelTdx/IntelTdxX64.dsc)
 install -Dm0644 "$src/Build/IntelTdx/RELEASE_GCC5/FV/OVMF.fd" "$OUT"
-touch -d "@${SOURCE_DATE_EPOCH:?}" "$OUT"
+(cd "$src" && set +u && source edksetup.sh BaseTools >/dev/null && \
+  build -a X64 -t GCC5 -b RELEASE -n "${JOBS:-$(nproc)}" \
+    -p OvmfPkg/AmdSev/AmdSevX64.dsc)
+install -Dm0644 "$src/Build/AmdSev/RELEASE_GCC5/FV/OVMF.fd" "$SEV_OUT"
+touch -d "@${SOURCE_DATE_EPOCH:?}" "$OUT" "$SEV_OUT"

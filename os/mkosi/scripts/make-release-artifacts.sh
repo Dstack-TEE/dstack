@@ -58,9 +58,13 @@ find "$ird" -print0 | xargs -0 touch -h -d "@$SOURCE_DATE_EPOCH"
 
 # OVMF is the pinned TDX build; the EFI stub comes from the Debian snapshot.
 ovmf="$KERNEL_TREE/ovmf.fd"
+ovmf_sev="$KERNEL_TREE/ovmf-sev.fd"
 stub=$(find "$TREE/usr/lib/systemd/boot/efi" -type f -name 'linuxx64.efi.stub' | head -1)
-[[ -f $ovmf && -f $stub ]] || { echo 'OVMF or systemd EFI stub missing' >&2; exit 1; }
+[[ -f $ovmf && -f $ovmf_sev && -f $stub ]] || {
+  echo 'TDX/SEV OVMF or systemd EFI stub missing' >&2; exit 1;
+}
 install -m0644 "$ovmf" "$OUT/files/ovmf.fd"
+install -m0644 "$ovmf_sev" "$OUT/files/ovmf-sev.fd"
 
 cmdline="console=ttyS0 init=/init panic=1 net.ifnames=0 biosdevname=0 mce=off oops=panic pci=noearly pci=nommconf random.trust_cpu=y random.trust_bootloader=n tsc=reliable no-kvmclock dstack.rootfs_hash=$root_hash dstack.rootfs_size=$data_size"
 ukify build --efi-arch=x64 --stub="$stub" --linux="$kernel" \
@@ -80,7 +84,7 @@ data={"schema_version":1,"backend":"mkosi","image":{"name":name,"version":versio
 "boot":{"ovmf_variant":ovmf_variant},"verity":{"root_hash":root_hash,"data_size":data_size},
 "artifacts":{"initramfs":"files/initramfs.cpio.gz","kernel":"files/bzImage",
 "firmware":"files/ovmf.fd","rootfs_verity":"files/rootfs.squashfs.verity",
-"firmware_sev":None,"uki":"files/dstack-uki.efi"},
+"firmware_sev":"files/ovmf-sev.fd","uki":"files/dstack-uki.efi"},
 "backend_metadata":{"machine":"dstack","distribution":"debian"}}
 with open(path,"w") as f: json.dump(data,f,indent=2); f.write("\n")
 PY
