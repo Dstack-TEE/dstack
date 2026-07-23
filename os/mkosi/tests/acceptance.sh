@@ -42,4 +42,7 @@ grep -q -- '--fuzz=0' "$D/scripts/build-zfs.sh"
 python3 -m json.tool "$D/parity.json" >/dev/null
 grep -q 'rootfs.img.parted.verity' "$D/../image/assemble.sh"
 bash -n "$D"/*.sh "$D"/scripts/*.sh "$D"/tests/*.sh
+grep -q '^unset DSTACK_DEV_CACHE_ACTIVE$' "$D/build.sh"
+grep -Fq "[[ \$action == dev-image ]] && export DSTACK_DEV_CACHE_ACTIVE=1" "$D/build.sh"
+"$D/tests/test-dev-cache.sh"
 echo 'mkosi static acceptance passed'
