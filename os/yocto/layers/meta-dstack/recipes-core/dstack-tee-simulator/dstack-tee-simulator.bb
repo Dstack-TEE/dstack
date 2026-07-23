@@ -12,9 +12,13 @@ DSTACK_CORE_SRC ?= "${DSTACK_MONOREPO_ROOT}/dstack"
 
 S = "${UNPACKDIR}/repo/dstack"
 
-DEPENDS += "rsync-native"
-RDEPENDS:${PN} += "fuse3-utils kernel-module-fuse swtpm tpm2-tools openssl"
+DEPENDS += "rsync-native cmake-native"
+RDEPENDS:${PN} += "dstack-guest fuse3-utils swtpm tpm2-tools openssl"
 do_unpack[depends] += "rsync-native:do_populate_sysroot"
+
+# aws-lc-sys cannot detect this Yocto cross build reliably with its default
+# cc builder. Its supported CMake builder does not execute target binaries.
+export AWS_LC_SYS_CMAKE_BUILDER = "1"
 
 SYSTEMD_SERVICE:${PN} = "dstack-tee-simulator.service"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"

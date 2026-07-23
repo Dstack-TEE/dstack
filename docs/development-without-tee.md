@@ -88,6 +88,13 @@ qemu_path = "/usr/bin/qemu-system-x86_64"
 [cvm.networking]
 mode = "user"
 
+[cvm.tee_simulator]
+platform = "dstack-tdx"
+# Development credential only. Use a different random 32-byte hex seed for
+# each isolated test environment; never use it for production secrets.
+mock_attestation_seed = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+collateral_base_url = "http://10.0.2.2:18088"
+
 [supervisor]
 exe = "/home/USER/.local/bin/supervisor"
 ```

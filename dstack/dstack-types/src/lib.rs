@@ -893,9 +893,6 @@ pub struct SysConfig {
     pub nvidia_attestation_proxy_url: Option<String>,
     pub docker_registry: Option<String>,
     pub host_api_url: Option<String>,
-    /// Development-only TEE simulator selection. Production guests ignore it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tee_simulator: Option<TeeSimulatorConfig>,
     /// MrConfigV3 document string for platform app/config binding.
     ///
     /// Hosts generate this in JCS form, but verifiers hash the supplied string
@@ -937,12 +934,11 @@ pub struct TeeSimulatorConfig {
     /// Base URL used in mock collateral certificates (AIA/CRL).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collateral_base_url: Option<String>,
-    /// Populated in memory by the simulator from the top-level sys-config.
-    #[serde(skip)]
+    /// MrConfigV3 document used to generate mock platform evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mr_config: Option<String>,
-    /// Populated in memory from the top-level sys-config. Mock reports use the
-    /// same image-measurement document that the guest sends to verifiers.
-    #[serde(skip)]
+    /// JSON serialized VmConfig used to generate mock platform evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vm_config: Option<String>,
 }
 

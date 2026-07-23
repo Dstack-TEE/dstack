@@ -5,6 +5,7 @@
 pub const APP_COMPOSE: &str = "app-compose.json";
 pub const APP_KEYS: &str = ".appkeys.json";
 pub const SYS_CONFIG: &str = ".sys-config.json";
+pub const TEE_SIMULATOR_CONFIG: &str = ".tee-simulator.json";
 pub const USER_CONFIG: &str = ".user-config";
 pub const ENCRYPTED_ENV: &str = ".encrypted-env";
 pub const DECRYPTED_ENV: &str = ".decrypted-env";

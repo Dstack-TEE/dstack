@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use dstack_types::{SysConfig, TeeSimulatorConfig, TeeVariant};
+use dstack_types::{TeeSimulatorConfig, TeeVariant};
 use fuser::{Filesystem, MountOption, Session};
 use tracing::info;
 
@@ -26,9 +26,9 @@ struct Args {
     #[arg(long)]
     platform: Option<TeeVariant>,
 
-    /// sys-config used to select the simulated platform when --platform is omitted.
-    #[arg(long, default_value = "/dstack/.host-shared/.sys-config.json")]
-    sys_config: PathBuf,
+    /// Development-only simulator config.
+    #[arg(long, default_value = "/dstack/.host-shared/.tee-simulator.json")]
+    config: PathBuf,
 
     /// Override the platform backend's default mountpoint.
     #[arg(long)]
@@ -104,7 +104,7 @@ fn main() -> Result<()> {
         .init();
     let args = Args::parse();
 
-    let config = load_config(&args.sys_config)?;
+    let config = load_config(&args.config)?;
     let platform = args.platform.unwrap_or(config.platform);
     fs_err::create_dir_all(&args.runtime_dir)?;
     match platform {
@@ -184,19 +184,10 @@ fn simulate_dmi(
 }
 
 fn load_config(path: &Path) -> Result<TeeSimulatorConfig> {
-    if !path.exists() {
-        return Ok(TeeSimulatorConfig::default());
-    }
-    let config: SysConfig = serde_json::from_slice(
+    serde_json::from_slice(
         &fs_err::read(path).with_context(|| format!("failed to read {}", path.display()))?,
     )
-    .with_context(|| format!("failed to parse {}", path.display()))?;
-    let mr_config = config.mr_config_document();
-    let vm_config = (!config.vm_config.is_empty()).then_some(config.vm_config.clone());
-    let mut tee_simulator = config.tee_simulator.unwrap_or_default();
-    tee_simulator.mr_config = mr_config;
-    tee_simulator.vm_config = vm_config;
-    Ok(tee_simulator)
+    .with_context(|| format!("failed to parse {}", path.display()))
 }
 
 #[cfg(test)]
@@ -211,17 +202,12 @@ mod tests {
     }
 
     #[test]
-    fn missing_sys_config_defaults_to_tdx() {
-        assert_eq!(
-            load_config(Path::new("/definitely/missing/sys-config"))
-                .unwrap()
-                .platform,
-            TeeVariant::DstackTdx
-        );
+    fn missing_config_is_rejected() {
+        assert!(load_config(Path::new("/definitely/missing/config")).is_err());
     }
 
     #[test]
-    fn sys_config_selects_each_platform() {
+    fn config_selects_each_platform() {
         for (name, expected) in [
             ("dstack-tdx", TeeVariant::DstackTdx),
             ("dstack-gcp-tdx", TeeVariant::DstackGcpTdx),
@@ -236,7 +222,7 @@ mod tests {
                 serde_json::json!({
                     "kms_urls": [], "gateway_urls": [], "pccs_url": null,
                     "docker_registry": null, "host_api_url": null, "vm_config": "{}",
-                    "tee_simulator": {"platform": name}
+                "platform": name
                 })
                 .to_string(),
             )

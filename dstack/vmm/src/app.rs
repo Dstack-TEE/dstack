@@ -9,7 +9,7 @@ use bon::Builder;
 use dstack_kms_rpc::kms_client::KmsClient;
 use dstack_types::mr_config::MrConfigV3;
 use dstack_types::shared_filenames::{
-    APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
+    APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, SYS_CONFIG, TEE_SIMULATOR_CONFIG, USER_CONFIG,
 };
 use dstack_vmm_rpc::{
     self as pb, GpuInfo, ReloadVmsResponse, StatusRequest, StatusResponse, VmConfiguration,
@@ -1106,8 +1106,18 @@ impl App {
             mr_config,
             app_compose.requirements.as_ref(),
         )?;
-        fs::write(shared_dir.join(SYS_CONFIG), sys_config_str)
+        fs::write(shared_dir.join(SYS_CONFIG), &sys_config_str)
             .context("Failed to write vm config")?;
+        if let Some(mut simulator_config) = cfg.cvm.tee_simulator.clone() {
+            let sys_config: dstack_types::SysConfig = serde_json::from_str(&sys_config_str)?;
+            simulator_config.mr_config = sys_config.mr_config;
+            simulator_config.vm_config = Some(sys_config.vm_config);
+            fs::write(
+                shared_dir.join(TEE_SIMULATOR_CONFIG),
+                serde_json::to_vec(&simulator_config)?,
+            )
+            .context("Failed to write TEE simulator config")?;
+        }
         Ok(())
     }
 
@@ -1280,7 +1290,6 @@ pub(crate) fn make_sys_config(
         "gateway_urls": gateway_urls,
         "pccs_url": cfg.cvm.pccs_url,
         "collateral_urls": { "pccs": cfg.cvm.pccs_url },
-        "tee_simulator": cfg.cvm.tee_simulator,
         "nvidia_attestation_proxy_url": cfg.cvm.nvidia_attestation_proxy_url,
         "docker_registry": cfg.cvm.docker_registry,
         "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
@@ -1956,6 +1965,7 @@ mod tests {
         let sys_config_document =
             make_sys_config(&config, &manifest, &compose_hash, Some(mr_config), None)?;
         let sys_config: serde_json::Value = serde_json::from_str(&sys_config_document)?;
+        assert!(sys_config.get("tee_simulator").is_none());
         assert_eq!(sys_config["pccs_url"], config.cvm.pccs_url);
         assert_eq!(sys_config["collateral_urls"]["pccs"], config.cvm.pccs_url);
         let vm_config: serde_json::Value = serde_json::from_str(

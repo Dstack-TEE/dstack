@@ -30,9 +30,9 @@ enum Command {
         /// Write the roots matching this server instance into this directory.
         #[arg(long)]
         output: Option<PathBuf>,
-        /// Read the seed and collateral URL from a sys-config JSON file.
+        /// Read the seed and collateral URL from a simulator config JSON file.
         #[arg(long)]
-        sys_config: Option<PathBuf>,
+        config: Option<PathBuf>,
     },
 }
 
@@ -52,13 +52,11 @@ async fn main() -> Result<()> {
         Command::Serve {
             listen,
             output,
-            sys_config,
+            config,
         } => {
-            let state = if let Some(path) = sys_config {
-                let config: dstack_types::SysConfig = serde_json::from_slice(&fs_err::read(path)?)?;
-                let config = config
-                    .tee_simulator
-                    .ok_or_else(|| anyhow::anyhow!("tee_simulator config missing"))?;
+            let state = if let Some(path) = config {
+                let config: dstack_types::TeeSimulatorConfig =
+                    serde_json::from_slice(&fs_err::read(path)?)?;
                 let seed = mock_attestation::parse_seed(
                     config
                         .mock_attestation_seed

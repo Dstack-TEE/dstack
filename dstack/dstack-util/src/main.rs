@@ -30,6 +30,7 @@ use utils::AppKeys;
 mod crypto;
 mod docker_compose;
 mod host_api;
+mod host_shared;
 mod parse_env_file;
 mod system_setup;
 mod utils;
@@ -66,6 +67,8 @@ enum Commands {
     Rand(RandArgs),
     /// Prepare dstack system.
     Setup(SetupArgs),
+    /// Mount or unmount the host-provided shared directory.
+    HostShared(host_shared::HostSharedArgs),
     /// Refresh the dstack gateway configuration
     GatewayRefresh(GatewayRefreshArgs),
     /// Notify the host about the dstack app
@@ -1292,6 +1295,7 @@ async fn main() -> Result<()> {
         Commands::Setup(args) => {
             cmd_sys_setup(args).await?;
         }
+        Commands::HostShared(args) => host_shared::cmd_host_shared(args)?,
         Commands::GatewayRefresh(args) => {
             cmd_gateway_refresh(args).await?;
         }
