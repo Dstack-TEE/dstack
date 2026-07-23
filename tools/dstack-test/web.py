@@ -27,6 +27,8 @@ class Dashboard:
         host: str,
         port: int,
     ):
+        """Create a dashboard bound to *host* and *port*."""
+
         class Handler(http.server.BaseHTTPRequestHandler):
             def log_message(self, _format: str, *_args: Any) -> None:
                 pass
@@ -70,13 +72,16 @@ class Dashboard:
 
     @property
     def address(self) -> tuple[str, int]:
+        """Return the effective listening address."""
         host, port = self.server.server_address[:2]
         return str(host), int(port)
 
     def start(self) -> None:
+        """Start serving the dashboard in the background."""
         self.thread.start()
 
     def close(self) -> None:
+        """Stop the dashboard and release its listening socket."""
         self.server.shutdown()
         self.server.server_close()
         self.thread.join()
