@@ -26,10 +26,10 @@ patch -d "$src" -p1 --forward --fuzz=0 < \
 patch -d "$src" -p1 --forward --fuzz=0 < \
   "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-ovmf/dstack-ovmf/0006-OvmfPkg-AmdSev-drop-embedded-grub.patch"
 
+export PYTHON_COMMAND=python3
 make -s -C "$src/BaseTools" -j"${JOBS:-$(nproc)}"
 export WORKSPACE="$src" EDK_TOOLS_PATH="$src/BaseTools"
 export PATH="$EDK_TOOLS_PATH/BinWrappers/PosixLike:$PATH"
-export PYTHON_COMMAND=python3
 # Yocto disables EDK2 LTO for deterministic link ordering.
 sed -i -e 's/-flto/-fno-lto/g' -e 's/-DUSING_LTO//g' \
   "$src/BaseTools/Conf/tools_def.template"
