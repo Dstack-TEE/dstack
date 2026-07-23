@@ -27,7 +27,10 @@ grep -q 'AmdSev/AmdSevX64.dsc' "$D/scripts/build-ovmf.sh"
 grep -q 'objcopy --strip-debug' "$D/build.sh"
 grep -q 'depmod -b.*KERNEL_VERSION-dstack' "$D/build.sh"
 grep -q 'prune-rootfs.sh' "$D/build.sh"
-! grep -q '^[[:space:]]*ovmf$' "$D/mkosi.conf"
+if grep -q '^[[:space:]]*ovmf$' "$D/mkosi.conf"; then
+  echo 'distribution OVMF must not be installed in the guest rootfs' >&2
+  exit 1
+fi
 grep -q '"firmware_sev":"files/ovmf-sev.fd"' "$D/scripts/make-release-artifacts.sh"
 grep -q 'measurement.snp.cbor' "$D/tests/check-output.sh"
 grep -q '0001-validate-ocsp-response-freshness.patch' "$D/scripts/build-nvattest.sh"
