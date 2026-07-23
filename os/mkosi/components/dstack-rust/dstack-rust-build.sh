@@ -27,7 +27,9 @@ if [[ ${DSTACK_SKIP_RUST:-0} != 1 ]]; then
   export CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=${CARGO_NET_OFFLINE:-false}
   build_root=$(dirname "$DEST")
   export CARGO_TARGET_DIR="$build_root/dstack-cargo-target"
-  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$ROOT=/usr/src/dstack --remap-path-prefix=$build_root=/usr/src/dstack-build -C strip=debuginfo"
+  # A single codegen unit avoids LLVM partition/scheduling differences across
+  # hosts with different CPU counts while retaining parallel crate builds.
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$ROOT=/usr/src/dstack --remap-path-prefix=$build_root=/usr/src/dstack-build -C codegen-units=1 -C strip=debuginfo"
   cargo build --locked --release --manifest-path "$ROOT/dstack/Cargo.toml" \
     -p dstack-guest-agent -p dstack-util
   install -m0755 "$CARGO_TARGET_DIR/release/dstack-guest-agent" \
