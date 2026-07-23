@@ -70,7 +70,7 @@ install -m0644 "$ovmf_sev" "$OUT/files/ovmf-sev.fd"
 cmdline="console=ttyS0 init=/init panic=1 net.ifnames=0 biosdevname=0 mce=off oops=panic pci=noearly pci=nommconf random.trust_cpu=y random.trust_bootloader=n tsc=reliable no-kvmclock dstack.rootfs_hash=$root_hash dstack.rootfs_size=$data_size"
 ukify build --efi-arch=x64 --stub="$stub" --linux="$kernel" \
   --initrd="$OUT/files/initramfs.cpio.gz" --cmdline="$cmdline" \
-  --os-release="$TREE/usr/lib/os-release" \
+  --os-release="@$TREE/usr/lib/os-release" \
   --output="$OUT/files/dstack-uki.efi"
 touch -d "@$SOURCE_DATE_EPOCH" "$OUT/files/"*
 
