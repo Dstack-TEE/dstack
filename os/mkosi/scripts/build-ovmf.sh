@@ -41,6 +41,7 @@ rm -f "$src/Conf/tools_def.txt"
   build -a X64 -t GCC5 -b RELEASE -n "${JOBS:-$(nproc)}" \
     -p OvmfPkg/IntelTdx/IntelTdxX64.dsc)
 install -Dm0644 "$src/Build/IntelTdx/RELEASE_GCC5/FV/OVMF.fd" "$OUT"
+# shellcheck source=/dev/null
 (cd "$src" && set +u && source edksetup.sh BaseTools >/dev/null && \
   build -a X64 -t GCC5 -b RELEASE -n "${JOBS:-$(nproc)}" \
     -p OvmfPkg/AmdSev/AmdSevX64.dsc)
