@@ -123,6 +123,7 @@ type VmFormState = {
   public_sysinfo: boolean;
   public_tcbinfo: boolean;
   no_tee: boolean;
+  simulated_tee: string;
   pin_numa: boolean;
   hugepages: boolean;
   networks: NetworkFormEntry[];
@@ -177,6 +178,7 @@ type CloneConfigDialogState = {
   hugepages: boolean;
   pin_numa: boolean;
   no_tee: boolean;
+  simulated_tee: string;
   encrypted_env?: Uint8Array;
   app_id?: string;
   stopped: boolean;
@@ -210,6 +212,7 @@ function createVmFormState(preLaunchScript: string): VmFormState {
     public_sysinfo: true,
     public_tcbinfo: true,
     no_tee: false,
+    simulated_tee: '',
     pin_numa: false,
     hugepages: false,
     networks: [],
@@ -268,6 +271,7 @@ function createCloneConfigDialogState(): CloneConfigDialogState {
     hugepages: false,
     pin_numa: false,
     no_tee: false,
+    simulated_tee: '',
     encrypted_env: undefined,
     app_id: undefined,
     stopped: false,
@@ -505,6 +509,7 @@ type CreateVmPayloadSource = {
   hugepages?: boolean;
   pin_numa?: boolean;
   no_tee?: boolean;
+  simulated_tee?: string;
   networks?: NetworkFormEntry[];
     gpus?: VmmTypes.IGpuConfig;
     kms_urls?: string[];
@@ -529,6 +534,7 @@ type CreateVmPayloadSource = {
       hugepages: !!source.hugepages,
       pin_numa: !!source.pin_numa,
       no_tee: source.no_tee ?? false,
+      simulated_tee: source.simulated_tee || undefined,
       networks: normalizedNetworks,
       gpus: source.gpus,
       kms_urls: source.kms_urls?.filter((url) => url && url.trim().length) ?? [],
@@ -1089,6 +1095,7 @@ type CreateVmPayloadSource = {
         hugepages: vmForm.value.hugepages,
         pin_numa: vmForm.value.pin_numa,
         no_tee: vmForm.value.no_tee,
+        simulated_tee: vmForm.value.simulated_tee,
         networks: vmForm.value.networks,
         gpus: configGpu(vmForm.value) || undefined,
         kms_urls: vmForm.value.kms_urls,
@@ -1245,6 +1252,7 @@ type CreateVmPayloadSource = {
       pin_numa: !!config.pin_numa,
       hugepages: !!config.hugepages,
       no_tee: !!config.no_tee,
+      simulated_tee: config.simulated_tee || '',
       user_config: config.user_config || '',
       stopped: !!config.stopped,
       event_log_version: theVm.appCompose?.event_log_version || 1,
@@ -1275,6 +1283,7 @@ type CreateVmPayloadSource = {
         hugepages: source.hugepages,
         pin_numa: source.pin_numa,
         no_tee: source.no_tee,
+        simulated_tee: source.simulated_tee,
         networks: source.networks,
         gpus: source.gpus,
         kms_urls: source.kms_urls,

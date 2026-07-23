@@ -74,6 +74,10 @@ struct MachineConfig {
     #[arg(long, default_value = "0")]
     num_verity_volumes: u32,
 
+    /// Attach a QEMU tpm-tis device backed by swtpm
+    #[arg(long, default_value = "false")]
+    swtpm: bool,
+
     /// Disable hotplug
     #[arg(long, default_value = "false")]
     hotplug_off: Bool,
@@ -143,6 +147,7 @@ fn main() -> Result<()> {
                 .num_nvswitches(config.num_nvswitches)
                 .num_nics(config.num_nics)
                 .num_verity_volumes(config.num_verity_volumes)
+                .swtpm(config.swtpm)
                 .hotplug_off(config.hotplug_off)
                 .root_verity(config.root_verity)
                 .maybe_qemu_version(config.qemu_version.clone())

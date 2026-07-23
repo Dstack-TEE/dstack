@@ -8,12 +8,12 @@
 use anyhow::{bail, Context, Result};
 use log::debug;
 use scale::Decode;
+use std::process::Command;
 
 use crate::Machine;
 
 const LDR_LENGTH: usize = 4096;
 const FIXED_STRING_LEN: usize = 56;
-
 #[derive(Debug, Clone)]
 pub struct Tables {
     pub tables: Vec<u8>,
@@ -23,6 +23,9 @@ pub struct Tables {
 
 impl Machine<'_> {
     fn create_tables(&self) -> Result<Vec<u8>> {
+        if self.swtpm {
+            bail!("swtpm measurement is not supported");
+        }
         if self.cpu_count == 0 {
             bail!("cpuCount must be greater than 0");
         }
@@ -33,7 +36,7 @@ impl Machine<'_> {
         let shared_dir = "/bin";
 
         // Prepare the command arguments
-        let mut cmd = std::process::Command::new("dstack-acpi-tables");
+        let mut cmd = Command::new("dstack-acpi-tables");
         cmd.args([
             "-cpu",
             "qemu64",

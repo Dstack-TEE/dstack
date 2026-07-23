@@ -167,6 +167,10 @@ impl VmInfo {
                     gateway_urls: custom_gateway_urls.clone(),
                     stopped,
                     no_tee,
+                    simulated_tee: self
+                        .manifest
+                        .simulated_tee
+                        .map(|platform| platform.as_str().to_string()),
                     networking: configured_networking,
                     networks: configured_networks,
                 })

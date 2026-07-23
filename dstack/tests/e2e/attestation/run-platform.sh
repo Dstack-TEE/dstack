@@ -10,6 +10,7 @@ SEED=7171717171717171717171717171717171717171717171717171717171717171
 REPORT_DATA=42424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242
 WORK=/run/attestation-e2e
 SYS_CONFIG=/dstack/.host-shared/.sys-config.json
+SIM_CONFIG=/dstack/.host-shared/.tee-simulator.json
 mkdir -p "$WORK" /run/log/dstack
 mount -t tmpfs -o mode=0755 tmpfs /sys/kernel/config
 mkdir -p /sys/kernel/config/tsm/report
@@ -76,19 +77,24 @@ cat > "$SYS_CONFIG" <<JSON
   "docker_registry": null,
   "host_api_url": null,
   "mr_config": $(jq -Rn --arg value "$MR_CONFIG" '$value'),
-  "vm_config": $(jq -Rn --arg value "$VM_CONFIG" '$value'),
-  "tee_simulator": {
-    "platform": "$TEE_PLATFORM",
-    "mock_attestation_seed": "$SEED",
-    "collateral_base_url": "http://127.0.0.1:18088"
-  }
+  "vm_config": $(jq -Rn --arg value "$VM_CONFIG" '$value')
+}
+JSON
+
+cat > "$SIM_CONFIG" <<JSON
+{
+  "platform": "$TEE_PLATFORM",
+  "mock_attestation_seed": "$SEED",
+  "collateral_base_url": "http://127.0.0.1:18088",
+  "mr_config": $(jq -Rn --arg value "$MR_CONFIG" '$value'),
+  "vm_config": $(jq -Rn --arg value "$VM_CONFIG" '$value')
 }
 JSON
 
 # Reconstruct public roots and production-shaped collateral from the same seed.
 dstack-mock-attestation serve \
   --listen 127.0.0.1:18088 \
-  --sys-config "$SYS_CONFIG" \
+  --config "$SIM_CONFIG" \
   --output "$WORK/roots" >"$WORK/collateral.log" 2>&1 &
 COLLATERAL_PID=$!
 for _ in $(seq 1 100); do
@@ -109,7 +115,7 @@ if [[ "$TEE_PLATFORM" == dstack-gcp-tdx || "$TEE_PLATFORM" == dstack-aws-nitro-t
   chmod 0666 /dev/vtpmx
 fi
 
-dstack-tee-simulator --sys-config "$SYS_CONFIG" >"$WORK/simulator.log" 2>&1 &
+dstack-tee-simulator --config "$SIM_CONFIG" >"$WORK/simulator.log" 2>&1 &
 SIM_PID=$!
 case "$TEE_PLATFORM" in
   dstack-tdx|dstack-gcp-tdx|dstack-amd-sev-snp)

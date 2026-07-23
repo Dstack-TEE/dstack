@@ -9,7 +9,7 @@ use bon::Builder;
 use dstack_kms_rpc::kms_client::KmsClient;
 use dstack_types::mr_config::MrConfigV3;
 use dstack_types::shared_filenames::{
-    APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
+    APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, SYS_CONFIG, TEE_SIMULATOR_CONFIG, USER_CONFIG,
 };
 use dstack_vmm_rpc::{
     self as pb, GpuInfo, ReloadVmsResponse, StatusRequest, StatusResponse, VmConfiguration,
@@ -110,6 +110,11 @@ pub struct Manifest {
     pub gateway_urls: Vec<String>,
     #[serde(default)]
     pub no_tee: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub simulated_tee: Option<dstack_types::TeeVariant>,
+    /// Deployment-time decision to attach QEMU swtpm.
+    #[serde(default)]
+    pub swtpm: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub networks: Vec<Networking>,
     #[serde(default)]
@@ -1106,8 +1111,10 @@ impl App {
             mr_config,
             app_compose.requirements.as_ref(),
         )?;
-        fs::write(shared_dir.join(SYS_CONFIG), sys_config_str)
+        fs::write(shared_dir.join(SYS_CONFIG), &sys_config_str)
             .context("Failed to write vm config")?;
+        let simulator_config = simulator_config_for_manifest(&self.config.cvm, &manifest)?;
+        sync_tee_simulator_config(&shared_dir, simulator_config.as_ref(), &sys_config_str)?;
         Ok(())
     }
 
@@ -1243,6 +1250,42 @@ fn rotate_serial_log(work_dir: &VmWorkDir, max_bytes: u64) {
     }
 }
 
+pub(crate) fn simulator_config_for_manifest(
+    cvm: &crate::config::CvmConfig,
+    manifest: &Manifest,
+) -> Result<Option<dstack_types::TeeSimulatorConfig>> {
+    let Some(platform) = manifest.simulated_tee else {
+        return Ok(None);
+    };
+    let mut config = cvm
+        .tee_simulator
+        .clone()
+        .context("tee simulator credentials are not configured on this VMM")?;
+    config.platform = platform;
+    Ok(Some(config))
+}
+
+pub(crate) fn sync_tee_simulator_config(
+    shared_dir: &Path,
+    simulator_config: Option<&dstack_types::TeeSimulatorConfig>,
+    sys_config: &str,
+) -> Result<()> {
+    let path = shared_dir.join(TEE_SIMULATOR_CONFIG);
+    let Some(simulator_config) = simulator_config else {
+        if path.exists() {
+            fs::remove_file(&path).context("failed to remove stale TEE simulator config")?;
+        }
+        return Ok(());
+    };
+
+    let sys_config: dstack_types::SysConfig = serde_json::from_str(sys_config)?;
+    let mut simulator_config = simulator_config.clone();
+    simulator_config.mr_config = sys_config.mr_config;
+    simulator_config.vm_config = Some(sys_config.vm_config);
+    fs::write(path, serde_json::to_vec(&simulator_config)?)
+        .context("failed to write TEE simulator config")
+}
+
 pub(crate) fn make_sys_config(
     cfg: &Config,
     manifest: &Manifest,
@@ -1280,7 +1323,6 @@ pub(crate) fn make_sys_config(
         "gateway_urls": gateway_urls,
         "pccs_url": cfg.cvm.pccs_url,
         "collateral_urls": { "pccs": cfg.cvm.pccs_url },
-        "tee_simulator": cfg.cvm.tee_simulator,
         "nvidia_attestation_proxy_url": cfg.cvm.nvidia_attestation_proxy_url,
         "docker_registry": cfg.cvm.docker_registry,
         "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
@@ -1401,6 +1443,7 @@ fn make_vm_config(
     // verifier reconstructs the exact device layout.
     let num_nics = resolved_networks(manifest, &cfg.cvm).len() as u32;
     let num_verity_volumes = manifest.volumes.len() as u32;
+    let swtpm = manifest.swtpm;
     let mut config = serde_json::to_value(dstack_types::VmConfig {
         os_image_hash,
         cpu_count: effective_vcpus,
@@ -1414,6 +1457,7 @@ fn make_vm_config(
         num_nvswitches: gpus.bridges.len() as u32,
         num_nics,
         num_verity_volumes,
+        swtpm,
         host_share_mode: cfg.cvm.host_share_mode.clone(),
         hotplug_off: cfg.cvm.qemu_hotplug_off,
         image: Some(manifest.image.clone()),
@@ -1448,6 +1492,14 @@ fn make_vm_config(
     Ok(config)
 }
 
+pub(crate) fn needs_swtpm(
+    key_provider: dstack_types::KeyProviderKind,
+    simulated_tee: Option<dstack_types::TeeVariant>,
+) -> bool {
+    matches!(key_provider, dstack_types::KeyProviderKind::Tpm)
+        && !simulated_tee.is_some_and(mock_attestation::platform_provides_tpm)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1463,6 +1515,62 @@ mod tests {
 
     fn hex_of(byte: u8, len: usize) -> String {
         hex::encode(vec![byte; len])
+    }
+
+    #[test]
+    fn simulator_config_is_written_separately_with_measurement_inputs() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let config = dstack_types::TeeSimulatorConfig {
+            platform: dstack_types::TeeVariant::DstackAmdSevSnp,
+            mock_attestation_seed: Some("11".repeat(32)),
+            collateral_base_url: Some("http://127.0.0.1:18088".into()),
+            ..Default::default()
+        };
+        let mr_config = r#"{"version":3}"#;
+        let vm_config = r#"{"image":"dev"}"#;
+        let sys_config = serde_json::json!({
+            "kms_urls": [],
+            "gateway_urls": [],
+            "vm_config": vm_config,
+            "mr_config": mr_config,
+        })
+        .to_string();
+
+        sync_tee_simulator_config(dir.path(), Some(&config), &sys_config)?;
+
+        let written: dstack_types::TeeSimulatorConfig =
+            serde_json::from_slice(&fs::read(dir.path().join(TEE_SIMULATOR_CONFIG))?)?;
+        assert_eq!(written.platform, config.platform);
+        assert_eq!(written.mock_attestation_seed, config.mock_attestation_seed);
+        assert_eq!(written.collateral_base_url, config.collateral_base_url);
+        assert_eq!(written.mr_config.as_deref(), Some(mr_config));
+        assert_eq!(written.vm_config.as_deref(), Some(vm_config));
+
+        sync_tee_simulator_config(dir.path(), None, &sys_config)?;
+        assert!(!dir.path().join(TEE_SIMULATOR_CONFIG).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn instance_platform_overrides_node_simulator_template() -> Result<()> {
+        let mut config = test_tdx_config()?;
+        config.cvm.tee_simulator = Some(dstack_types::TeeSimulatorConfig {
+            platform: dstack_types::TeeVariant::DstackTdx,
+            mock_attestation_seed: Some("11".repeat(32)),
+            ..Default::default()
+        });
+        let mut manifest = test_manifest(2048);
+        assert!(simulator_config_for_manifest(&config.cvm, &manifest)?.is_none());
+        manifest.simulated_tee = Some(dstack_types::TeeVariant::DstackNitroEnclave);
+
+        let resolved = simulator_config_for_manifest(&config.cvm, &manifest)?
+            .context("simulator config should be enabled")?;
+
+        assert_eq!(
+            resolved.platform,
+            dstack_types::TeeVariant::DstackNitroEnclave
+        );
+        Ok(())
     }
 
     #[test]
@@ -1627,6 +1735,8 @@ mod tests {
             kms_urls: vec![],
             gateway_urls: vec![],
             no_tee: false,
+            simulated_tee: None,
+            swtpm: false,
             networks: vec![],
             volumes: vec![],
         }
@@ -1756,6 +1866,25 @@ mod tests {
         )?;
 
         assert_eq!(vm_config["num_verity_volumes"], 2);
+        Ok(())
+    }
+
+    #[test]
+    fn vm_measurement_config_includes_swtpm() -> Result<()> {
+        let config = test_tdx_config()?;
+        let mut manifest = test_manifest(2048);
+        manifest.swtpm = true;
+
+        let vm_config = make_vm_config(
+            &config,
+            &manifest,
+            &test_tdx_image(true),
+            &hex_of(0x22, 32),
+            None,
+            None,
+        )?;
+
+        assert_eq!(vm_config["swtpm"], true);
         Ok(())
     }
 
@@ -1914,6 +2043,8 @@ mod tests {
             kms_urls: vec![],
             gateway_urls: vec![],
             no_tee: false,
+            simulated_tee: None,
+            swtpm: false,
             networks: vec![],
             volumes: vec![],
         };
@@ -1956,6 +2087,7 @@ mod tests {
         let sys_config_document =
             make_sys_config(&config, &manifest, &compose_hash, Some(mr_config), None)?;
         let sys_config: serde_json::Value = serde_json::from_str(&sys_config_document)?;
+        assert!(sys_config.get("tee_simulator").is_none());
         assert_eq!(sys_config["pccs_url"], config.cvm.pccs_url);
         assert_eq!(sys_config["collateral_urls"]["pccs"], config.cvm.pccs_url);
         let vm_config: serde_json::Value = serde_json::from_str(

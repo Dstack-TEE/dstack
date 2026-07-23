@@ -19,9 +19,7 @@ use crate::{
 };
 use anyhow::{bail, Context, Result};
 use bon::Builder;
-use dstack_types::{
-    shared_filenames::HOST_SHARED_DISK_LABEL, KeyProviderKind, TeeSimulatorConfig, TeeVariant,
-};
+use dstack_types::shared_filenames::HOST_SHARED_DISK_LABEL;
 use fs_err as fs;
 use nix::unistd::User;
 use serde::Serialize;
@@ -179,15 +177,6 @@ struct PreparedVolume {
     source: String,
 }
 
-fn needs_qemu_swtpm(key_provider: KeyProviderKind, simulator: Option<&TeeSimulatorConfig>) -> bool {
-    if !matches!(key_provider, KeyProviderKind::Tpm) {
-        return false;
-    }
-    !matches!(
-        simulator.map(|config| config.platform),
-        Some(TeeVariant::DstackGcpTdx | TeeVariant::DstackAwsNitroTpm)
-    )
-}
 struct PreparedQemuLaunch {
     workdir: VmWorkDir,
     platform: CvmPlatform,
@@ -245,20 +234,19 @@ impl PreparedQemuLaunch {
         } else {
             None
         };
-        let (swtpm_socket, swtpm_path) =
-            if needs_qemu_swtpm(app_compose.key_provider(), cfg.tee_simulator.as_ref()) {
-                let swtpm_path = which::which("swtpm")
-                    .context("tpm key provider requested but swtpm is not installed")?;
-                let state_dir = workdir.swtpm_state_dir();
-                fs::create_dir_all(&state_dir).context("failed to create swtpm state directory")?;
-                let socket = workdir.swtpm_socket();
-                if socket.exists() {
-                    fs::remove_file(&socket).context("failed to remove stale swtpm socket")?;
-                }
-                (Some(socket), Some(swtpm_path))
-            } else {
-                (None, None)
-            };
+        let (swtpm_socket, swtpm_path) = if vm.manifest.swtpm {
+            let swtpm_path = which::which("swtpm")
+                .context("tpm key provider requested but swtpm is not installed")?;
+            let state_dir = workdir.swtpm_state_dir();
+            fs::create_dir_all(&state_dir).context("failed to create swtpm state directory")?;
+            let socket = workdir.swtpm_socket();
+            if socket.exists() {
+                fs::remove_file(&socket).context("failed to remove stale swtpm socket")?;
+            }
+            (Some(socket), Some(swtpm_path))
+        } else {
+            (None, None)
+        };
         prepare_shared_disk(&workdir, cfg)?;
 
         let tee_enabled = !vm.manifest.no_tee;
@@ -983,28 +971,27 @@ mod tests {
     };
 
     use super::{
-        amd_sev_snp_memory_backend_arg, needs_qemu_swtpm, parse_amd_sev_snp_qmp_capabilities,
-        virtio_pci_device, PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder, VmConfig,
+        amd_sev_snp_memory_backend_arg, parse_amd_sev_snp_qmp_capabilities, virtio_pci_device,
+        PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder, VmConfig,
     };
     use crate::app::image::{Image, ImageInfo};
-    use crate::app::{GpuConfig, Manifest, PortMapping, VmVolume, VmWorkDir};
+    use crate::app::{needs_swtpm, GpuConfig, Manifest, PortMapping, VmVolume, VmWorkDir};
     use crate::config::{Config, CvmPlatform, Protocol, DEFAULT_CONFIG};
-    use dstack_types::{KeyProviderKind, TeeSimulatorConfig, TeeVariant};
+    use dstack_types::{KeyProviderKind, TeeVariant};
 
     #[test]
-    fn qemu_swtpm_is_omitted_when_simulator_provides_the_tpm() {
+    fn swtpm_is_omitted_when_simulator_provides_the_tpm() {
         for platform in [TeeVariant::DstackGcpTdx, TeeVariant::DstackAwsNitroTpm] {
-            let simulator = TeeSimulatorConfig {
-                platform,
-                ..Default::default()
-            };
-            assert!(!needs_qemu_swtpm(KeyProviderKind::Tpm, Some(&simulator)));
+            assert!(!needs_swtpm(KeyProviderKind::Tpm, Some(platform)));
+            assert!(!needs_swtpm(KeyProviderKind::Kms, Some(platform)));
         }
 
-        let tdx = TeeSimulatorConfig::default();
-        assert!(needs_qemu_swtpm(KeyProviderKind::Tpm, Some(&tdx)));
-        assert!(needs_qemu_swtpm(KeyProviderKind::Tpm, None));
-        assert!(!needs_qemu_swtpm(KeyProviderKind::Kms, None));
+        assert!(needs_swtpm(
+            KeyProviderKind::Tpm,
+            Some(TeeVariant::DstackTdx)
+        ));
+        assert!(needs_swtpm(KeyProviderKind::Tpm, None));
+        assert!(!needs_swtpm(KeyProviderKind::Kms, None));
     }
 
     #[test]
@@ -1070,6 +1057,8 @@ mod tests {
                 kms_urls: vec![],
                 gateway_urls: vec![],
                 no_tee: true,
+                simulated_tee: None,
+                swtpm: false,
                 networks: vec![],
                 volumes: vec![VmVolume {
                     source: "/does-not-exist/volume.img".into(),

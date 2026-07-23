@@ -2312,6 +2312,7 @@ dependencies = [
  "libc",
  "load_config",
  "lspci",
+ "mock-attestation",
  "nix 0.29.0",
  "or-panic",
  "path-absolutize",

@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::app::{make_sys_config, Image, VmConfig, VmWorkDir};
+use crate::app::{
+    make_sys_config, simulator_config_for_manifest, sync_tee_simulator_config, Image, VmConfig,
+    VmWorkDir,
+};
 use crate::config::Config;
 use crate::main_service;
 use anyhow::{Context, Result};
@@ -265,7 +268,13 @@ Compose file content (first 200 chars):
         app_compose.requirements.as_ref(),
     )?;
     let sys_config_path = vm_work_dir.shared_dir().join(".sys-config.json");
-    fs_err::write(&sys_config_path, sys_config_str).context("Failed to write sys config")?;
+    fs_err::write(&sys_config_path, &sys_config_str).context("Failed to write sys config")?;
+    let simulator_config = simulator_config_for_manifest(&config.cvm, &manifest)?;
+    sync_tee_simulator_config(
+        &vm_work_dir.shared_dir(),
+        simulator_config.as_ref(),
+        &sys_config_str,
+    )?;
 
     // Create vm-state.json with initial state
     vm_work_dir

@@ -15,7 +15,7 @@ are test credentials and must never be copied into a production image.
 
 ## CLI
 
-Generate matching public roots and `sys-config-fragment.json`:
+Generate matching public roots and `tee-simulator.json`:
 
 ```console
 dstack-mock-attestation generate \
@@ -23,13 +23,13 @@ dstack-mock-attestation generate \
   --collateral-base-url http://HOST_REACHABLE_FROM_VERIFIER:8088
 ```
 
-Merge the generated fragment into the VM sys-config, then start the host-side
-Mock PCCS/KDS/AIA service from that same config:
+Use the generated simulator config for both the guest-side simulator and the
+host-side Mock PCCS/KDS/AIA service:
 
 ```console
 dstack-mock-attestation serve \
   --listen 127.0.0.1:8088 \
-  --sys-config ./sys-config.json \
+  --config ./mock-roots/tee-simulator.json \
   --output ./active-mock-roots
 ```
 
@@ -39,15 +39,14 @@ service deliberately provides no unauthenticated signing endpoint.
 
 ## Dev image
 
-Select the platform in `.sys-config.json`; omission defaults to TDX:
+Select the platform in the development-only `.tee-simulator.json`; omission
+defaults to TDX:
 
 ```json
 {
-  "tee_simulator": {
-    "platform": "dstack-amd-sev-snp",
-    "mock_attestation_seed": "<64 hex characters>",
-    "collateral_base_url": "http://HOST_REACHABLE_FROM_VERIFIER:8088"
-  }
+  "platform": "dstack-amd-sev-snp",
+  "mock_attestation_seed": "<64 hex characters>",
+  "collateral_base_url": "http://HOST_REACHABLE_FROM_VERIFIER:8088"
 }
 ```
 
@@ -57,7 +56,7 @@ Valid values mirror the supported attestation modes: `dstack-tdx`,
 the production guest ABI for the selected platform (TSM configfs, vTPM, or an
 NSM CUSE character device); attester libraries contain no mock HTTP or
 environment-variable path. The guest only reads the
-seed from `.sys-config.json`; it never writes credentials or roots back into
+seed from `.tee-simulator.json`; it never writes credentials or roots back into
 `/dstack/.host-shared`. CI retains the generated public roots and mounts them
 into verifier/KMS/gateway. The independently running host collateral service
 reconstructs the same hierarchy from the seed. Configure it under
@@ -67,8 +66,7 @@ Every verifier process must also explicitly set
 `attestation.insecure_allow_external_trust_anchors = true`. Merely mounting and
 configuring a mock root is rejected at startup while this flag remains false.
 
-The seed adds only 64 hex bytes (the generated fragment is well below 1 KiB),
-so the existing 32 KiB sys-config copy limit does not need to be enlarged.
+The seed adds only 64 hex bytes (the simulator config is well below 1 KiB).
 
 ## Required negative tests
 

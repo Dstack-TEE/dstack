@@ -25,8 +25,8 @@ use ra_rpc::{CallContext, RpcCall};
 use tracing::{info, warn};
 
 use crate::app::{
-    resolve_networking, validate_resolved_network, validate_resolved_networks, App, AttachMode,
-    GpuConfig, GpuSpec, Manifest, PortMapping, VmWorkDir,
+    needs_swtpm, resolve_networking, validate_resolved_network, validate_resolved_networks, App,
+    AttachMode, GpuConfig, GpuSpec, Manifest, PortMapping, VmWorkDir,
 };
 use crate::config::{CvmConfig, Networking, NetworkingMode};
 
@@ -58,6 +58,29 @@ fn app_id_of(compose_file: &str) -> String {
         }
     }
     truncate40(&hex_sha256(compose_file)).to_string()
+}
+
+fn key_provider_from_compose(compose_file: &str) -> Result<dstack_types::KeyProviderKind> {
+    let compose: serde_json::Value =
+        serde_json::from_str(compose_file).context("invalid app compose JSON")?;
+    if let Some(provider) = compose.get("key_provider").filter(|value| !value.is_null()) {
+        return serde_json::from_value(provider.clone()).context("invalid key_provider");
+    }
+    if compose
+        .get("kms_enabled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Ok(dstack_types::KeyProviderKind::Kms);
+    }
+    if compose
+        .get("local_key_provider_enabled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Ok(dstack_types::KeyProviderKind::Local);
+    }
+    Ok(dstack_types::KeyProviderKind::None)
 }
 
 /// Validate the VM label, restricting it to a safe character set to prevent injection vectors.
@@ -189,6 +212,18 @@ pub fn create_manifest_from_vm_config(
     dstack_types::validate_verity_volumes(&verity_volumes).map_err(anyhow::Error::msg)?;
     let volumes = resolve_volumes(&verity_volumes, cvm_config)?;
 
+    let simulated_tee = request
+        .simulated_tee
+        .as_deref()
+        .map(str::parse)
+        .transpose()
+        .map_err(anyhow::Error::msg)?;
+    if simulated_tee.is_some() && cvm_config.tee_simulator.is_none() {
+        bail!("tee simulator credentials are not configured on this VMM");
+    }
+    let key_provider = key_provider_from_compose(&request.compose_file)?;
+    let swtpm = needs_swtpm(key_provider, simulated_tee);
+
     Ok(Manifest {
         id,
         name: request.name.clone(),
@@ -204,7 +239,9 @@ pub fn create_manifest_from_vm_config(
         gpus: Some(gpus),
         kms_urls: request.kms_urls.clone(),
         gateway_urls: request.gateway_urls.clone(),
-        no_tee: request.no_tee,
+        no_tee: request.no_tee || simulated_tee.is_some(),
+        simulated_tee,
+        swtpm,
         networks: networks_from_vm_config(&request, cvm_config)?,
         volumes,
     })
@@ -590,6 +627,12 @@ impl VmmRpc for RpcHandler {
                 vm_work_dir.clear_runtime_networks()?;
             }
         }
+        let compose_file = fs::read_to_string(vm_work_dir.app_compose_path())
+            .context("failed to read app compose for swtpm decision")?;
+        manifest.swtpm = needs_swtpm(
+            key_provider_from_compose(&compose_file)?,
+            manifest.simulated_tee,
+        );
         vm_work_dir
             .put_manifest(&manifest)
             .context("Failed to put manifest")?;
@@ -941,6 +984,7 @@ mod tests {
             gateway_urls: vec![],
             stopped: false,
             no_tee: false,
+            simulated_tee: None,
             networking: None,
             networks: vec![],
         }
@@ -952,6 +996,74 @@ mod tests {
             create_manifest_from_vm_config(test_vm_configuration(), &test_cvm_config()).unwrap();
 
         assert!(manifest.networks.is_empty());
+    }
+
+    #[test]
+    fn simulated_tee_is_selected_per_instance_and_implies_no_tee() {
+        let mut request = test_vm_configuration();
+        request.simulated_tee = Some("dstack-amd-sev-snp".into());
+        let mut config = test_cvm_config();
+        config.tee_simulator = Some(dstack_types::TeeSimulatorConfig {
+            mock_attestation_seed: Some("11".repeat(32)),
+            ..Default::default()
+        });
+
+        let manifest = create_manifest_from_vm_config(request, &config).unwrap();
+
+        assert_eq!(
+            manifest.simulated_tee,
+            Some(dstack_types::TeeVariant::DstackAmdSevSnp)
+        );
+        assert!(manifest.no_tee);
+        assert!(!manifest.swtpm);
+    }
+
+    #[test]
+    fn swtpm_is_decided_at_deployment_from_key_provider_and_simulator() {
+        let cases = [
+            (None, "tpm", true),
+            (Some("dstack-tdx"), "tpm", true),
+            (Some("dstack-gcp-tdx"), "tpm", false),
+            (Some("dstack-aws-nitro-tpm"), "tpm", false),
+            (Some("dstack-tdx"), "kms", false),
+        ];
+        let mut config = test_cvm_config();
+        config.tee_simulator = Some(dstack_types::TeeSimulatorConfig {
+            mock_attestation_seed: Some("11".repeat(32)),
+            ..Default::default()
+        });
+
+        for (simulated_tee, key_provider, expected) in cases {
+            let mut request = test_vm_configuration();
+            request.simulated_tee = simulated_tee.map(str::to_string);
+            request.compose_file = serde_json::json!({ "key_provider": key_provider }).to_string();
+
+            let manifest = create_manifest_from_vm_config(request, &config).unwrap();
+
+            assert_eq!(manifest.swtpm, expected);
+        }
+    }
+
+    #[test]
+    fn simulated_tee_requires_node_credentials() {
+        let mut request = test_vm_configuration();
+        request.simulated_tee = Some("dstack-tdx".into());
+
+        let err = create_manifest_from_vm_config(request, &test_cvm_config()).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("tee simulator credentials are not configured"));
+    }
+
+    #[test]
+    fn invalid_simulated_tee_is_rejected() {
+        let mut request = test_vm_configuration();
+        request.simulated_tee = Some("not-a-platform".into());
+
+        let err = create_manifest_from_vm_config(request, &test_cvm_config()).unwrap_err();
+
+        assert!(err.to_string().contains("unsupported TEE variant"));
     }
 
     #[test]

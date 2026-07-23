@@ -1,18 +1,18 @@
 [Unit]
-Description=dstack development TEE ABI simulator (TDX backend)
+Description=dstack development TEE ABI simulator
 Documentation=https://github.com/Dstack-TEE/dstack/blob/master/CONTRIBUTING.md
 Before=dstack-prepare.service
-ConditionPathExists=!/dev/tdx_guest
-ConditionPathExists=!/dev/sev-guest
 
 [Service]
 Type=notify
-ExecCondition=/bin/sh -c '! grep -qE "^(tdx_guest|sev_guest)" /sys/kernel/config/tsm/report/*/provider 2>/dev/null'
-ExecStart=/usr/bin/dstack-tee-simulator
+ExecCondition=/bin/sh -c '/usr/bin/dstack-util host-shared mount --mount-point /run/dstack/tee-simulator-host-shared && { test -f /run/dstack/tee-simulator-host-shared/.tee-simulator.json || { /usr/bin/dstack-util host-shared unmount --mount-point /run/dstack/tee-simulator-host-shared; exit 1; }; }'
+ExecStart=/usr/bin/dstack-tee-simulator --config /run/dstack/tee-simulator-host-shared/.tee-simulator.json
 ExecStartPost=/bin/systemctl set-environment DCAP_TDX_RTMR_SYSFS_PATH=/sys/kernel/config/tsm/report/com.intel.dcap/measurements DSTACK_CCEL_FILE=/sys/kernel/config/tsm/report/com.intel.dcap/ccel
+ExecStartPost=-/usr/bin/dstack-util host-shared unmount --mount-point /run/dstack/tee-simulator-host-shared
 ExecStop=-/bin/fusermount3 -u /sys/kernel/config/tsm/report
 ExecStopPost=-/bin/sh -c 'test ! -s /run/dstack/swtpm.pid || kill "$(cat /run/dstack/swtpm.pid)"'
 ExecStopPost=-/bin/fusermount3 -uz /sys/kernel/config/tsm/report
+ExecStopPost=-/usr/bin/dstack-util host-shared unmount --mount-point /run/dstack/tee-simulator-host-shared
 ExecStopPost=-/bin/umount /sys/class/dmi/id/sys_vendor
 ExecStopPost=-/bin/umount /sys/class/dmi/id/product_name
 ExecStopPost=-/bin/sh -c 'test ! -e /run/dstack/created-tpm-marker || rm -f /dev/tpmrm0 /run/dstack/created-tpm-marker'

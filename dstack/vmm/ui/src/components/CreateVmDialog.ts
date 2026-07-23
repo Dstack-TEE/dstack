@@ -141,7 +141,7 @@ const CreateVmDialogComponent = {
                 <option value="none">None</option>
                 <option value="kms">KMS</option>
                 <option value="local">Local</option>
-                <option value="tpm">TPM (swtpm)</option>
+                <option value="tpm">TPM</option>
               </select>
             </div>
 
@@ -198,6 +198,19 @@ const CreateVmDialogComponent = {
                 <label><input type="checkbox" v-model="form.pin_numa"> Pin NUMA</label>
                 <label><input type="checkbox" v-model="form.hugepages"> Huge pages</label>
               </div>
+            </div>
+
+            <div class="form-group full-width">
+              <label for="simulatedTeeSelect">Simulated TEE (development only)</label>
+              <select id="simulatedTeeSelect" v-model="form.simulated_tee">
+                <option value="">Disabled</option>
+                <option value="dstack-tdx">dstack TDX</option>
+                <option value="dstack-gcp-tdx">GCP TDX</option>
+                <option value="dstack-amd-sev-snp">AMD SEV-SNP</option>
+                <option value="dstack-nitro-enclave">AWS Nitro Enclave</option>
+                <option value="dstack-aws-nitro-tpm">AWS NitroTPM</option>
+              </select>
+              <small class="hint">Selecting a platform makes this instance run without hardware TEE. Key provider selection remains independent.</small>
             </div>
 
             <div class="form-group full-width" v-if="form.key_provider === 'kms'">

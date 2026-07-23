@@ -893,9 +893,6 @@ pub struct SysConfig {
     pub nvidia_attestation_proxy_url: Option<String>,
     pub docker_registry: Option<String>,
     pub host_api_url: Option<String>,
-    /// Development-only TEE simulator selection. Production guests ignore it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tee_simulator: Option<TeeSimulatorConfig>,
     /// MrConfigV3 document string for platform app/config binding.
     ///
     /// Hosts generate this in JCS form, but verifiers hash the supplied string
@@ -937,12 +934,11 @@ pub struct TeeSimulatorConfig {
     /// Base URL used in mock collateral certificates (AIA/CRL).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collateral_base_url: Option<String>,
-    /// Populated in memory by the simulator from the top-level sys-config.
-    #[serde(skip)]
+    /// MrConfigV3 document used to generate mock platform evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mr_config: Option<String>,
-    /// Populated in memory from the top-level sys-config. Mock reports use the
-    /// same image-measurement document that the guest sends to verifiers.
-    #[serde(skip)]
+    /// JSON serialized VmConfig used to generate mock platform evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vm_config: Option<String>,
 }
 
@@ -1037,6 +1033,10 @@ fn is_zero(n: &u32) -> bool {
     *n == 0
 }
 
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct VmConfig {
     #[serde(with = "hex_bytes", default)]
@@ -1075,6 +1075,10 @@ pub struct VmConfig {
     /// changes the measured ACPI/DSDT layout.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub num_verity_volumes: u32,
+    /// Whether QEMU attaches a software TPM device. The TPM changes the ACPI
+    /// table layout and must therefore be included in TDX measurement inputs.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub swtpm: bool,
     #[serde(default)]
     pub hotplug_off: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2123,6 +2127,20 @@ mod vm_config_device_count_tests {
                 .get("num_verity_volumes")
                 .and_then(|v| v.as_u64()),
             Some(2)
+        );
+    }
+
+    #[test]
+    fn swtpm_is_serialized_only_when_enabled() {
+        let mut cfg: VmConfig = serde_json::from_value(legacy_json()).unwrap();
+        let serialized = serde_json::to_value(&cfg).unwrap();
+        assert!(serialized.get("swtpm").is_none());
+
+        cfg.swtpm = true;
+        let serialized = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(
+            serialized.get("swtpm").and_then(|v| v.as_bool()),
+            Some(true)
         );
     }
 }
