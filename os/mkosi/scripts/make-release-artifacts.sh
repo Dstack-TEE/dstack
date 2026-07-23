@@ -53,7 +53,8 @@ while read -r lib; do
 done < <(lddtree -l -R "$TREE" "${verity_bin#"$TREE"}")
 install -m0755 "$ROOT/os/yocto/layers/meta-dstack/recipes-core/images/dstack-initscript/init" "$ird/init"
 find "$ird" -print0 | xargs -0 touch -h -d "@$SOURCE_DATE_EPOCH"
-(cd "$ird" && find . -print0 | sort -z | cpio --null -o --format=newc --reproducible 2>/dev/null) \
+(cd "$ird" && find . -print0 | sort -z | \
+  cpio --null -o --format=newc --reproducible --owner=0:0 2>/dev/null) \
   | gzip -n -9 > "$OUT/files/initramfs.cpio.gz"
 
 # OVMF is the pinned TDX build; the EFI stub comes from the Debian snapshot.
