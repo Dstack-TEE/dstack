@@ -21,6 +21,11 @@ for path in \
   rm -rf "${ROOTFS:?}/$path"
 done
 
+# mkosi's final systemd setup may recreate these only for privileged builds.
+# They belong to volatile runtime state and must not enter the immutable image.
+rm -f "$ROOTFS/var/lib/dbus/machine-id"
+find "$ROOTFS/var/log" -mindepth 1 -delete
+
 # Static archives and libtool metadata are build inputs. All production
 # consumers use the corresponding shared objects.
 find "$ROOTFS/usr" -type f \( -name '*.a' -o -name '*.la' \) -delete
