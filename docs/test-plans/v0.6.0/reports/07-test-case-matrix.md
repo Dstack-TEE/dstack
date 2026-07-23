@@ -10,7 +10,7 @@
 | COMP-04 | P0 | PASS | v0.5.11 guest 在两个 Gateway rolling upgrade 后仍可达，DNS/TLS/WireGuard 恢复 |
 | COMP-05 | P0 | PASS | latest VMM 创建全新 v0.5.11 guest；legacy manifest、取钥、存储与 latest service 路径通过 |
 | COMP-06 | P0 | PASS | latest guest 真实 TDX lite 启动，exact image policy、取钥及 Gateway 路径通过 |
-| COMP-07 | P0 | PARTIAL | old/current guest 并行且不同 app ID 无串扰；缺同 app 双 image identity crossover 专项断言 |
+| COMP-07 | P0 | PASS | 同 app v0.5.11/current VM 并行且四条路由通过；instance/data UUID 隔离；同 app key 稳定、不同 app key 不同 |
 | COMP-08 | P0 | PASS | 同一 VM/app ID/data disk 完成 v0.5.11→current；原 ext4 UUID 挂载且双 Gateway 可达 |
 | COMP-09 | P0 | PASS | current→v0.5.11 回滚、原盘和路由恢复；old hash 移除时明确 deny，恢复 policy 后恢复 |
 | COMP-10 | P0 | PARTIAL | VMM service restart 后 KMS、双 Gateway、old/current guest、identity 与四条路由恢复；未重启物理 host |
@@ -103,11 +103,11 @@
 ## 统计
 
 - 总数：95
-- PASS: 7
+- PASS: 8
 - BLOCKED: 7
 - FAIL: 1
 - FAIL (SIMULATED): 1
 - NOT RUN: 36
-- PARTIAL: 43
+- PARTIAL: 42
 
 真实 TDX rolling-upgrade 的逐项边界见 `06-tdx-upgrade-compatibility-report.md`。确切 v0.5.11 guest 已参与；release 未提供 v0.5.11 service artifacts，且未执行的升级/回滚/host reboot 项不得由相邻 PASS 推断。

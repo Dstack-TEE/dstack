@@ -68,6 +68,9 @@ KMS/Gateway 兼容测试。
 12. 强制重启承载整个测试拓扑的 VMM service，使 latest KMS、两个 latest Gateway、
     v0.5.11/current guest 同时经历管理面故障与自动恢复；五个 CVM 均回到 `done`，
     KMS identity SHA-256 仍为 `09d697...a9056`，四条 guest/Gateway 路由全部恢复。
+13. 额外部署与 legacy VM 使用相同 app ID/compose、但使用 current OS image 的 CVM；
+    两者同时通过两个 Gateway 可达，instance ID 不同，数据盘 UUID 分别为
+    `8ef37605-...` 与 `638afe4b-...`；同 app 的 key 相同，而不同 app 的 key 不同。
 
 原始日志：
 
@@ -77,6 +80,7 @@ KMS/Gateway 兼容测试。
 /home/kvin/src/dstack-v060-artifacts/logs/full-stack-tdx-upgrade-e2e-lkp-persistence-base.log
 /home/kvin/src/dstack-v060-artifacts/logs/lkp-persistence-image-upgrade-rollback-evidence.txt
 /home/kvin/src/dstack-v060-artifacts/logs/vmm-service-recovery.log
+/home/kvin/src/dstack-v060-artifacts/logs/same-app-mixed-image-isolation.log
 ```
 
 ## COMP 用例审计
@@ -89,7 +93,7 @@ KMS/Gateway 兼容测试。
 | COMP-04 | PASS | v0.5.11 guest 在两个 Gateway 完成 rolling upgrade 后仍可达，DNS/TLS/WireGuard 路径恢复 |
 | COMP-05 | PASS | latest VMM 创建全新 v0.5.11 image CVM，legacy numeric manifest 被接受，之后可由 latest service 继续服务 |
 | COMP-06 | PASS | latest VMM 创建 current image，TDX lite policy、exact image allowlist、key 与 Gateway 路径通过 |
-| COMP-07 | PARTIAL | old/current guest 并行可达且使用独立 app ID；未执行计划要求的同 app image 双版本 identity crossover 专项断言 |
+| COMP-07 | PASS | 同 app ID 的 v0.5.11/current VM 并行、四条路由通过；instance/data UUID 隔离；同 app key 稳定且不同 app key 不同 |
 | COMP-08 | PASS | 同一 legacy VM/app ID/data disk 从 v0.5.11 更新为 current；原 ext4 UUID 挂载且双 Gateway 可达 |
 | COMP-09 | PASS | 同一 VM 回滚 v0.5.11、原盘与路由恢复；删除 old hash 时明确 deny，恢复 policy 后恢复 |
 | COMP-10 | PARTIAL | VMM service restart 触发 KMS、双 Gateway、old/current guest 联合恢复；identity 与四条路由通过；未重启物理 host |
@@ -98,5 +102,5 @@ KMS/Gateway 兼容测试。
 
 Local-Key-Provider 阻塞已经解除；真实 TDX 证据支持 v0.5.11/current 混合 guest、
 Local-Key-Provider KMS onboarding、Gateway rolling upgrade 及密钥/状态连续性。它不支持
-把 COMP-01..10 全部写成 PASS：old→latest VMM 原地升级、同 app 双 VM 并行交叉身份
-和物理 host reboot 仍缺专项执行。模拟报告不能替代这些项目。
+把 COMP-01..10 全部写成 PASS：old→latest VMM 原地升级和物理 host reboot 仍缺专项
+执行。模拟报告不能替代这些项目。

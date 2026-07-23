@@ -27,4 +27,4 @@
 
 ## 发布建议
 
-当前建议：**NO-GO（仅针对宣称完成 v0.6.0 preview 全量门禁）**。Local-Key-Provider 重启持久性、v0.5.11/current 混合 guest、guest image upgrade/rollback 与真实 TDX service rolling upgrade已有正向证据，但 COMP-02、COMP-07 的同 app 并行隔离、物理 host reboot、真实 GPU/云平台和最终镜像审计仍未完成，不应将报告表述为全量通过。
+当前建议：**NO-GO（仅针对宣称完成 v0.6.0 preview 全量门禁）**。Local-Key-Provider 重启持久性、同/不同 app 的 v0.5.11/current 混合 guest、guest image upgrade/rollback 与真实 TDX service rolling upgrade已有正向证据，但 COMP-02、物理 host reboot、真实 GPU/云平台和最终镜像审计仍未完成，不应将报告表述为全量通过。
