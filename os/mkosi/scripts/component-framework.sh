@@ -89,7 +89,7 @@ component_run() {
           "${SOURCE_DATE_EPOCH:?}" "$(uname -m)"
         key_file "$definition" "$SELF/scripts/component-framework.sh" \
           "$SELF/scripts/dev-cache.sh" "$SELF/scripts/install-toolchains.sh" \
-          "$SELF/mkosi.build" "$SELF/mkosi.conf"
+          "$SELF/mkosi.build" "$SELF/mkosi.conf" "$SELF/mkosi.tools.conf"
         component_cache_key
     } | sha256sum | cut -d' ' -f1)
     COMPONENT_KEYS[$name]=$key

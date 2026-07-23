@@ -30,6 +30,12 @@ else
 fi
 export PATH="/opt/dstack-toolchains/rust/bin:/opt/dstack-toolchains/go/bin:$PATH"
 "$SELF/scripts/install-toolchains.sh" "$toolchain_downloads"
+printf 'gcc: '; gcc --version | head -1
+printf 'g++: '; g++ --version | head -1
+printf 'ld: '; ld --version | head -1
+printf 'cmake: '; cmake --version | head -1
+dpkg-query -W -f='build-package: ${binary:Package}=${Version}\n' \
+  gcc g++ binutils cmake make ninja-build dwarves
 
 work=/var/tmp/dstack-component-work
 kernel_stage=/var/tmp/dstack-kernel-stage

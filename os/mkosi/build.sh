@@ -14,9 +14,11 @@ case "$action" in
   *) echo "Usage: $0 {image|dev-image|repro-check|lint} [build-dir]" >&2; exit 2 ;;
 esac
 if [[ $action == lint ]]; then exec "$SELF/tests/acceptance.sh"; fi
-command -v mkosi >/dev/null || { echo 'mkosi >= 26 is required' >&2; exit 1; }
+command -v mkosi >/dev/null || { echo "mkosi $MKOSI_VERSION is required" >&2; exit 1; }
 actual=$(mkosi --version | awk '{print $2}' | cut -d. -f1)
-(( actual >= MKOSI_MIN_VERSION )) || { echo "mkosi >= $MKOSI_MIN_VERSION required" >&2; exit 1; }
+[[ $actual == "$MKOSI_VERSION" ]] || {
+  echo "mkosi $MKOSI_VERSION required, found $actual" >&2; exit 1;
+}
 export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --format=%ct)}
 export TZ=UTC LC_ALL=C
 
@@ -24,6 +26,11 @@ build_one() {
   local out=$1 work=$2 flavor=$3
   local kstage="$work/kernel-stage" tree="$work/rootfs"
   rm -rf "$work" "$out"; mkdir -p "$out"
+  # Production builds reconstruct the tools tree from the immutable snapshot;
+  # no previously generated build environment is trusted.
+  if [[ $action != dev-image ]]; then
+    mkosi --directory "$SELF" clean -f
+  fi
 
   mkosi_args=(
     --directory "$SELF"
