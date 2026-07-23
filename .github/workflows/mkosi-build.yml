@@ -6,6 +6,11 @@ name: Verify mkosi reproducibility
 
 on:
   workflow_dispatch:
+  # Bootstrap this new workflow once before it exists on the default branch.
+  # Remove this trigger after the hosted-runner baseline check completes.
+  pull_request:
+    paths:
+      - '.github/workflows/mkosi-build.yml'
 
 concurrency:
   group: mkosi-build-${{ github.ref }}
