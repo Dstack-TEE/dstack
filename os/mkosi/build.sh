@@ -1,6 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
+umask 0022
 SELF=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(cd "$SELF/../.." && pwd)
 # shellcheck source=/dev/null
