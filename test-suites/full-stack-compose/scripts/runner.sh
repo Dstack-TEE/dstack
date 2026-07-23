@@ -555,10 +555,14 @@ assert_gateway_dns_credential_usable() {
 }
 
 render_app() {
-  local label=$1 mode=$2 meta app_id hash
+  local label=$1 mode=$2 meta app_id hash image_ref=$APP_IMAGE_ID
+  # The v0.5.11 Docker Compose treats a local image ID (`sha256:...`) as a
+  # repository name and tries to pull it. The pre-launch script has already
+  # loaded the digest-recorded archive under its original tag.
+  [[ "$mode" == auto ]] && image_ref=$APP_IMAGE
   meta=$(/suite/scripts/app_compose.py nginx \
     --name "${APP_NAME}-${label}" \
-    --image-ref "$APP_IMAGE_ID" \
+    --image-ref "$image_ref" \
     --image-archive app.tar \
     --artifact-port "$ARTIFACT_PORT" \
     --attestation-mode "$mode" \
