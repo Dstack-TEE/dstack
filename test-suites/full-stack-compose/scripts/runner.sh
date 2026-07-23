@@ -861,19 +861,23 @@ phase_upgrade() {
   assert_no_insecure_shortcuts
   save_vm_logs
   # dstack-kms runs in an inner container, whose stdout is not part of the CVM
-  # serial log returned by VMM.  Each KMS has a fresh data disk, so two 200 GETs
-  # for the exact measured archive prove that both verifiers downloaded it.
+  # serial log returned by VMM.  Require an observed successful fetch of each
+  # exact measured archive, but do not require one fetch per KMS: onboarding
+  # deliberately copies durable KMS state and its verified-image cache.  The
+  # exact two-image allowlist asserted above, absence of disabled-verification
+  # paths below, and successful key delivery to old/current-image guests prove
+  # that the serving KMS accepted both images without assuming cache misses.
   local os_archive_gets
   os_archive_gets=$(grep -Fc \
     "GET /os/mr_${OS_IMAGE_HASH}.tar.gz HTTP/1.1\" 200" \
     "$WORK_DIR/artifacts-access.log" || true)
-  (( os_archive_gets >= 2 )) \
-    || die "expected verified OS image downloads by both KMS versions, saw ${os_archive_gets}"
+  (( os_archive_gets >= 1 )) \
+    || die "expected a verified current OS image archive download, saw ${os_archive_gets}"
   os_archive_gets=$(grep -Fc \
     "GET /os/mr_${OLD_OS_IMAGE_HASH}.tar.gz HTTP/1.1\" 200" \
     "$WORK_DIR/artifacts-access.log" || true)
-  (( os_archive_gets >= 2 )) \
-    || die "expected v0.5.11 OS verification by both KMS versions, saw ${os_archive_gets}"
+  (( os_archive_gets >= 1 )) \
+    || die "expected a verified v0.5.11 OS image archive download, saw ${os_archive_gets}"
   if grep -E 'Image verification is disabled|self-authorization is disabled' \
     "$WORK_DIR/kms-"*.vm.log; then
     die "KMS logs contain a forbidden disabled verification path"
