@@ -10,7 +10,7 @@
 
 发布预览版前仍必须关闭以下 P0 门禁：
 
-1. 完成 COMP-02 的 VMM 原地升级、COMP-08/09 的 guest image upgrade/rollback，以及 COMP-10 的物理 host reboot；
+1. 完成 COMP-02 的 VMM 原地升级、COMP-07 的同 app 双版本并行隔离，以及 COMP-10 的物理 host reboot；COMP-08/09 的 guest image upgrade/rollback 与 policy deny/recovery 已补测通过；
 2. 若发布门禁坚持要求 v0.5.11 KMS/Gateway/VMM，需先提供 release 未包含的可追溯 service artifacts；当前已完成的是确切 v0.5.11 guest 与 0.5.8→current service rolling upgrade；
 3. 对真实 NVIDIA、GCP TDX、AWS NitroTPM、AMD SEV-SNP 环境完成硬件证明负向测试；
 4. 处理或接受构建与依赖风险清单中的发布风险。
@@ -30,7 +30,7 @@
 | `prek run --all-files` | PASS | 所有 hook 通过 |
 | REUSE | TEST-HARNESS ISSUE | 仅本地生成的 9 个短期证书缺少 SPDX 信息 |
 | Yocto production image | FAIL / patched artifact built | 原样因 kernel-module-fuse packaging 失败；最小测试补丁后产物校验通过 |
-| TDX mixed guest / rolling upgrade | PASS（限定范围） | production SGX Local-Key-Provider；v0.5.11/current guest；0.5.8→current KMS/Gateway；key/SPKI/state/HA 连续性通过；完整 COMP-01..10 尚未全覆盖 |
+| TDX mixed guest / rolling upgrade | PASS（限定范围） | production SGX Local-Key-Provider 重启持久性；v0.5.11/current guest；image upgrade/rollback；0.5.8→current KMS/Gateway；key/SPKI/state/HA 连续性通过；完整 COMP-01..10 尚未全覆盖 |
 | no-TEE + swtpm | FAIL (SIMULATED) | TPM/swtpm host 装配成功；dev guest 在进入 `/init` 前停止推进 |
 
 ## 结果解释

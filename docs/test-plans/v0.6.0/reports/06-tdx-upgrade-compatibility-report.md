@@ -55,12 +55,24 @@ KMS/Gateway 兼容测试。
    能用原 credential 强制重新签发证书；
 8. clean rerun 的 rolling upgrade HA probe：4350 次请求、0 failures、1921 次成功
    failover，持续 253195 ms。
+9. production SGX Local-Key-Provider 容器重启后，latest KMS CVM 被强制 stop/start；
+   它重新取得 `local-sgx` key、挂载原加密数据盘，重启前后 KMS identity JSON
+   SHA-256 均为 `09d697...a9056`，app-key JSON SHA-256 均为
+   `56ff10...7c05e`；
+10. 同一 legacy VM、app ID 与数据盘完成 v0.5.11→current→v0.5.11 image
+    transition；两个方向均挂载相同 ext4 UUID
+    `8ef37605-73d4-4790-a31a-6ff0dad2cd33`，并通过两个 Gateway；
+11. 从 exact allowlist 临时删除 v0.5.11 OS hash 后，回滚 guest 在
+    `requesting app keys` 阶段被明确拒绝：`Boot denied: os image not allowed`；恢复
+    hash 后同一 VM、数据盘和两条 Gateway 路由恢复。
 
 原始日志：
 
 ```text
 /home/kvin/src/dstack-v060-artifacts/logs/full-stack-tdx-upgrade-e2e-v0511-mixed-final.log
 /home/kvin/src/dstack-v060-artifacts/logs/full-stack-tdx-upgrade-e2e-v0511-mixed-exit0.log
+/home/kvin/src/dstack-v060-artifacts/logs/full-stack-tdx-upgrade-e2e-lkp-persistence-base.log
+/home/kvin/src/dstack-v060-artifacts/logs/lkp-persistence-image-upgrade-rollback-evidence.txt
 ```
 
 ## COMP 用例审计
@@ -74,13 +86,13 @@ KMS/Gateway 兼容测试。
 | COMP-05 | PASS | latest VMM 创建全新 v0.5.11 image CVM，legacy numeric manifest 被接受，之后可由 latest service 继续服务 |
 | COMP-06 | PASS | latest VMM 创建 current image，TDX lite policy、exact image allowlist、key 与 Gateway 路径通过 |
 | COMP-07 | PARTIAL | old/current guest 并行可达且使用独立 app ID；未执行计划要求的同 app image 双版本 identity crossover 专项断言 |
-| COMP-08 | NOT RUN | 未执行同一 canary 的 O→N image 原地升级及身份/存储策略检查 |
-| COMP-09 | NOT RUN | 未执行 N→O rollback 与 policy-deny 对照 |
+| COMP-08 | PASS | 同一 legacy VM/app ID/data disk 从 v0.5.11 更新为 current；原 ext4 UUID 挂载且双 Gateway 可达 |
+| COMP-09 | PASS | 同一 VM 回滚 v0.5.11、原盘与路由恢复；删除 old hash 时明确 deny，恢复 policy 后恢复 |
 | COMP-10 | PARTIAL | guest/KMS/Gateway 级 stop/start 与服务恢复有覆盖；未重启物理 host |
 
 ## 结论与边界
 
 Local-Key-Provider 阻塞已经解除；真实 TDX 证据支持 v0.5.11/current 混合 guest、
 Local-Key-Provider KMS onboarding、Gateway rolling upgrade 及密钥/状态连续性。它不支持
-把 COMP-01..10 全部写成 PASS：VMM 原地升级、app image upgrade/rollback、同 app
-交叉身份和物理 host reboot 仍缺专项执行。模拟报告不能替代这些项目。
+把 COMP-01..10 全部写成 PASS：old→latest VMM 原地升级、同 app 双 VM 并行交叉身份
+和物理 host reboot 仍缺专项执行。模拟报告不能替代这些项目。
