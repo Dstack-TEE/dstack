@@ -15,6 +15,7 @@ import unittest
 import zipfile
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 TOOL_DIR = HERE.parent
@@ -45,6 +46,15 @@ class DstackTestTests(unittest.TestCase):
         )
         self.assertEqual(args.agent, "codex")
         self.assertRegex(args.run_id, r"^run-\d{8}T\d{6}Z-[0-9a-f]{6}$")
+
+    def test_codex_model_is_read_from_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / "config.toml"
+            config.write_text('model = "test-codex-model"\n', encoding="utf-8")
+            with mock.patch.dict(os.environ, {"CODEX_HOME": temporary}):
+                self.assertEqual(
+                    dstack_test.resolve_model("codex", None), "test-codex-model"
+                )
 
     def test_validate_and_render_fixture(self) -> None:
         plan = render.load_plan(FIXTURE)

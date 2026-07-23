@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import render
+import tomllib
 
 TERMINAL_STATUS = ("PASS", "FAIL", "BLOCKED", "NOT_RUN", "SKIPPED")
 
@@ -223,6 +224,20 @@ def agent_command(
     raise DstackTestError(f"unsupported agent: {agent}")
 
 
+def resolve_model(agent: str, model: str | None) -> str | None:
+    if model or agent != "codex":
+        return model
+    config_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+    config_path = config_home / "config.toml"
+    if not config_path.is_file():
+        return None
+    try:
+        configured = tomllib.loads(config_path.read_text(encoding="utf-8")).get("model")
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    return configured if isinstance(configured, str) and configured else None
+
+
 def run_case(
     plan: render.Plan,
     case: render.CaseEntry,
@@ -248,7 +263,8 @@ def run_case(
     stderr_path = result_dir / "agent-stderr.log"
     started_at = utc_now()
     start = time.monotonic_ns()
-    command = agent_command(agent, model, workdir, full_prompt, extra)
+    effective_model = resolve_model(agent, model)
+    command = agent_command(agent, effective_model, workdir, full_prompt, extra)
     binary = shutil.which(command[0])
     if not binary:
         raise DstackTestError(f"agent CLI not found: {command[0]}")
@@ -272,7 +288,10 @@ def run_case(
         "schema_version": "1.0",
         "run_id": run_id,
         "case_id": case.id,
-        "agent": {"type": agent, "model": detected_model or model or "unknown"},
+        "agent": {
+            "type": agent,
+            "model": detected_model or effective_model or "unknown",
+        },
         "session": {
             "format": f"{agent}-jsonl",
             "path": "session.jsonl",
