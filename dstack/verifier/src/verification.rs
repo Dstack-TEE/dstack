@@ -334,7 +334,7 @@ impl CvmVerifier {
             .num_gpus(vm_config.num_gpus)
             .num_nics(vm_config.num_nics)
             .num_verity_volumes(vm_config.num_verity_volumes)
-            .qemu_swtpm(vm_config.qemu_swtpm)
+            .swtpm(vm_config.swtpm)
             .num_nvswitches(vm_config.num_nvswitches)
             .host_share_mode(vm_config.host_share_mode.clone())
             .ovmf_variant(ovmf_variant)

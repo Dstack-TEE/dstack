@@ -378,10 +378,9 @@ FROM dstacktee/dstack-kms@sha256:11ac59f524a22462ccd2152219b0bec48a28ceb734e3250
 FROM ubuntu:24.04
 
 # Install runtime dependencies
-# The QEMU libraries are required by dstack-acpi-tables. swtpm is used when
-# reconstructing ACPI tables for VMs that attached a QEMU TPM device.
+# libglib2.0-0t64, libpixman-1-0, and libslirp0 are required by dstack-acpi-tables (QEMU binary)
 RUN apt-get update && \
-    apt-get install -y ca-certificates curl libglib2.0-0t64 libpixman-1-0 libslirp0 swtpm && \
+    apt-get install -y ca-certificates curl libglib2.0-0t64 libpixman-1-0 libslirp0 && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 20.x for auth-eth

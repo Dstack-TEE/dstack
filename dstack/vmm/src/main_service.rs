@@ -25,8 +25,8 @@ use ra_rpc::{CallContext, RpcCall};
 use tracing::{info, warn};
 
 use crate::app::{
-    needs_qemu_swtpm, resolve_networking, validate_resolved_network, validate_resolved_networks,
-    App, AttachMode, GpuConfig, GpuSpec, Manifest, PortMapping, VmWorkDir,
+    needs_swtpm, resolve_networking, validate_resolved_network, validate_resolved_networks, App,
+    AttachMode, GpuConfig, GpuSpec, Manifest, PortMapping, VmWorkDir,
 };
 use crate::config::{CvmConfig, Networking, NetworkingMode};
 
@@ -222,7 +222,7 @@ pub fn create_manifest_from_vm_config(
         bail!("tee simulator credentials are not configured on this VMM");
     }
     let key_provider = key_provider_from_compose(&request.compose_file)?;
-    let qemu_swtpm = needs_qemu_swtpm(key_provider, simulated_tee);
+    let swtpm = needs_swtpm(key_provider, simulated_tee);
 
     Ok(Manifest {
         id,
@@ -241,7 +241,7 @@ pub fn create_manifest_from_vm_config(
         gateway_urls: request.gateway_urls.clone(),
         no_tee: request.no_tee || simulated_tee.is_some(),
         simulated_tee,
-        qemu_swtpm: Some(qemu_swtpm),
+        swtpm,
         networks: networks_from_vm_config(&request, cvm_config)?,
         volumes,
     })
@@ -629,10 +629,10 @@ impl VmmRpc for RpcHandler {
         }
         let compose_file = fs::read_to_string(vm_work_dir.app_compose_path())
             .context("failed to read app compose for swtpm decision")?;
-        manifest.qemu_swtpm = Some(needs_qemu_swtpm(
+        manifest.swtpm = needs_swtpm(
             key_provider_from_compose(&compose_file)?,
             manifest.simulated_tee,
-        ));
+        );
         vm_work_dir
             .put_manifest(&manifest)
             .context("Failed to put manifest")?;
@@ -1015,11 +1015,11 @@ mod tests {
             Some(dstack_types::TeeVariant::DstackAmdSevSnp)
         );
         assert!(manifest.no_tee);
-        assert_eq!(manifest.qemu_swtpm, Some(false));
+        assert!(!manifest.swtpm);
     }
 
     #[test]
-    fn qemu_swtpm_is_decided_at_deployment_from_key_provider_and_simulator() {
+    fn swtpm_is_decided_at_deployment_from_key_provider_and_simulator() {
         let cases = [
             (None, "tpm", true),
             (Some("dstack-tdx"), "tpm", true),
@@ -1040,7 +1040,7 @@ mod tests {
 
             let manifest = create_manifest_from_vm_config(request, &config).unwrap();
 
-            assert_eq!(manifest.qemu_swtpm, Some(expected));
+            assert_eq!(manifest.swtpm, expected);
         }
     }
 

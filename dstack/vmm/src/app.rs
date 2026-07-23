@@ -112,10 +112,9 @@ pub struct Manifest {
     pub no_tee: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub simulated_tee: Option<dstack_types::TeeVariant>,
-    /// Deployment-time decision to attach QEMU swtpm. None is reserved for
-    /// manifests created before this field existed and is resolved lazily.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub qemu_swtpm: Option<bool>,
+    /// Deployment-time decision to attach QEMU swtpm.
+    #[serde(default)]
+    pub swtpm: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub networks: Vec<Networking>,
     #[serde(default)]
@@ -1413,7 +1412,7 @@ fn make_vm_config_with_key_provider(
     image: &Image,
     _compose_hash: &str,
     mr_config: Option<String>,
-    key_provider: dstack_types::KeyProviderKind,
+    _key_provider: dstack_types::KeyProviderKind,
     requirements: Option<&dstack_types::Requirements>,
 ) -> Result<serde_json::Value> {
     let platform = cfg.cvm.resolved_platform();
@@ -1468,9 +1467,7 @@ fn make_vm_config_with_key_provider(
     // verifier reconstructs the exact device layout.
     let num_nics = resolved_networks(manifest, &cfg.cvm).len() as u32;
     let num_verity_volumes = manifest.volumes.len() as u32;
-    let qemu_swtpm = manifest
-        .qemu_swtpm
-        .unwrap_or_else(|| needs_qemu_swtpm(key_provider, manifest.simulated_tee));
+    let swtpm = manifest.swtpm;
     let mut config = serde_json::to_value(dstack_types::VmConfig {
         os_image_hash,
         cpu_count: effective_vcpus,
@@ -1484,7 +1481,7 @@ fn make_vm_config_with_key_provider(
         num_nvswitches: gpus.bridges.len() as u32,
         num_nics,
         num_verity_volumes,
-        qemu_swtpm,
+        swtpm,
         host_share_mode: cfg.cvm.host_share_mode.clone(),
         hotplug_off: cfg.cvm.qemu_hotplug_off,
         image: Some(manifest.image.clone()),
@@ -1526,7 +1523,7 @@ pub(crate) fn simulated_platform_provides_tpm(platform: Option<dstack_types::Tee
     )
 }
 
-pub(crate) fn needs_qemu_swtpm(
+pub(crate) fn needs_swtpm(
     key_provider: dstack_types::KeyProviderKind,
     simulated_tee: Option<dstack_types::TeeVariant>,
 ) -> bool {
@@ -1770,7 +1767,7 @@ mod tests {
             gateway_urls: vec![],
             no_tee: false,
             simulated_tee: None,
-            qemu_swtpm: Some(false),
+            swtpm: false,
             networks: vec![],
             volumes: vec![],
         }
@@ -1904,10 +1901,10 @@ mod tests {
     }
 
     #[test]
-    fn vm_measurement_config_includes_qemu_swtpm() -> Result<()> {
+    fn vm_measurement_config_includes_swtpm() -> Result<()> {
         let config = test_tdx_config()?;
         let mut manifest = test_manifest(2048);
-        manifest.qemu_swtpm = Some(true);
+        manifest.swtpm = true;
 
         let vm_config = make_vm_config(
             &config,
@@ -1918,7 +1915,7 @@ mod tests {
             None,
         )?;
 
-        assert_eq!(vm_config["qemu_swtpm"], true);
+        assert_eq!(vm_config["swtpm"], true);
         Ok(())
     }
 
@@ -2078,7 +2075,7 @@ mod tests {
             gateway_urls: vec![],
             no_tee: false,
             simulated_tee: None,
-            qemu_swtpm: Some(false),
+            swtpm: false,
             networks: vec![],
             volumes: vec![],
         };

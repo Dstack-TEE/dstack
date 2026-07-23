@@ -38,7 +38,7 @@ pub struct Machine<'a> {
     pub num_verity_volumes: u32,
     /// Whether QEMU attaches a tpm-tis device backed by swtpm.
     #[builder(default)]
-    pub qemu_swtpm: bool,
+    pub swtpm: bool,
     pub hotplug_off: bool,
     pub root_verity: bool,
     #[builder(default)]

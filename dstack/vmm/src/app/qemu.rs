@@ -9,7 +9,6 @@ use super::{
     hugepage_numa_nodes,
     image::Image,
     mr_config::{snp_host_data, tdx_mr_config_id},
-    needs_qemu_swtpm,
     network::{mac_address_for_vm_index, resolved_networks, validate_resolved_networks},
     pci_numa_node, round_up, GpuConfig, VmWorkDir,
 };
@@ -235,9 +234,7 @@ impl PreparedQemuLaunch {
         } else {
             None
         };
-        let attach_swtpm = vm.manifest.qemu_swtpm.unwrap_or_else(|| {
-            needs_qemu_swtpm(app_compose.key_provider(), vm.manifest.simulated_tee)
-        });
+        let attach_swtpm = vm.manifest.swtpm;
         let (swtpm_socket, swtpm_path) = if attach_swtpm {
             let swtpm_path = which::which("swtpm")
                 .context("tpm key provider requested but swtpm is not installed")?;
@@ -975,27 +972,27 @@ mod tests {
     };
 
     use super::{
-        amd_sev_snp_memory_backend_arg, needs_qemu_swtpm, parse_amd_sev_snp_qmp_capabilities,
-        virtio_pci_device, PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder, VmConfig,
+        amd_sev_snp_memory_backend_arg, parse_amd_sev_snp_qmp_capabilities, virtio_pci_device,
+        PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder, VmConfig,
     };
     use crate::app::image::{Image, ImageInfo};
-    use crate::app::{GpuConfig, Manifest, PortMapping, VmVolume, VmWorkDir};
+    use crate::app::{needs_swtpm, GpuConfig, Manifest, PortMapping, VmVolume, VmWorkDir};
     use crate::config::{Config, CvmPlatform, Protocol, DEFAULT_CONFIG};
     use dstack_types::{KeyProviderKind, TeeVariant};
 
     #[test]
-    fn qemu_swtpm_is_omitted_when_simulator_provides_the_tpm() {
+    fn swtpm_is_omitted_when_simulator_provides_the_tpm() {
         for platform in [TeeVariant::DstackGcpTdx, TeeVariant::DstackAwsNitroTpm] {
-            assert!(!needs_qemu_swtpm(KeyProviderKind::Tpm, Some(platform)));
-            assert!(!needs_qemu_swtpm(KeyProviderKind::Kms, Some(platform)));
+            assert!(!needs_swtpm(KeyProviderKind::Tpm, Some(platform)));
+            assert!(!needs_swtpm(KeyProviderKind::Kms, Some(platform)));
         }
 
-        assert!(needs_qemu_swtpm(
+        assert!(needs_swtpm(
             KeyProviderKind::Tpm,
             Some(TeeVariant::DstackTdx)
         ));
-        assert!(needs_qemu_swtpm(KeyProviderKind::Tpm, None));
-        assert!(!needs_qemu_swtpm(KeyProviderKind::Kms, None));
+        assert!(needs_swtpm(KeyProviderKind::Tpm, None));
+        assert!(!needs_swtpm(KeyProviderKind::Kms, None));
     }
 
     #[test]
@@ -1062,7 +1059,7 @@ mod tests {
                 gateway_urls: vec![],
                 no_tee: true,
                 simulated_tee: None,
-                qemu_swtpm: Some(false),
+                swtpm: false,
                 networks: vec![],
                 volumes: vec![VmVolume {
                     source: "/does-not-exist/volume.img".into(),

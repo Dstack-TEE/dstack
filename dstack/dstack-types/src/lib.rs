@@ -1078,7 +1078,7 @@ pub struct VmConfig {
     /// Whether QEMU attaches a software TPM device. The TPM changes the ACPI
     /// table layout and must therefore be included in TDX measurement inputs.
     #[serde(default, skip_serializing_if = "is_false")]
-    pub qemu_swtpm: bool,
+    pub swtpm: bool,
     #[serde(default)]
     pub hotplug_off: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2131,15 +2131,15 @@ mod vm_config_device_count_tests {
     }
 
     #[test]
-    fn qemu_swtpm_is_serialized_only_when_enabled() {
+    fn swtpm_is_serialized_only_when_enabled() {
         let mut cfg: VmConfig = serde_json::from_value(legacy_json()).unwrap();
         let serialized = serde_json::to_value(&cfg).unwrap();
-        assert!(serialized.get("qemu_swtpm").is_none());
+        assert!(serialized.get("swtpm").is_none());
 
-        cfg.qemu_swtpm = true;
+        cfg.swtpm = true;
         let serialized = serde_json::to_value(&cfg).unwrap();
         assert_eq!(
-            serialized.get("qemu_swtpm").and_then(|v| v.as_bool()),
+            serialized.get("swtpm").and_then(|v| v.as_bool()),
             Some(true)
         );
     }

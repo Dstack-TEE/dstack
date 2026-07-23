@@ -6,74 +6,14 @@
 //! translated from an original Go implementation.
 
 use anyhow::{bail, Context, Result};
-use fs_err as fs;
 use log::debug;
 use scale::Decode;
-use std::os::unix::fs::FileTypeExt;
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
-use std::time::Duration;
+use std::process::Command;
 
 use crate::Machine;
 
 const LDR_LENGTH: usize = 4096;
 const FIXED_STRING_LEN: usize = 56;
-static SWTPM_ID: AtomicU64 = AtomicU64::new(0);
-
-struct SwtpmGuard {
-    child: Child,
-    state_dir: PathBuf,
-    socket: PathBuf,
-}
-
-impl Drop for SwtpmGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = fs::remove_dir_all(&self.state_dir);
-    }
-}
-
-fn start_measurement_swtpm() -> Result<SwtpmGuard> {
-    let id = SWTPM_ID.fetch_add(1, Ordering::Relaxed);
-    let state_dir =
-        std::env::temp_dir().join(format!("dstack-mr-swtpm-{}-{id}", std::process::id()));
-    fs::create_dir_all(&state_dir).context("failed to create measurement swtpm state directory")?;
-    let socket = state_dir.join("swtpm.sock");
-    let child = Command::new("swtpm")
-        .args(["socket", "--tpm2", "--tpmstate"])
-        .arg(format!("dir={}", state_dir.display()))
-        .arg("--ctrl")
-        .arg(format!("type=unixio,path={}", socket.display()))
-        .args(["--flags", "startup-clear"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .inspect_err(|_| {
-            let _ = fs::remove_dir_all(&state_dir);
-        })
-        .context("failed to start swtpm for ACPI measurement")?;
-    let mut guard = SwtpmGuard {
-        child,
-        state_dir,
-        socket,
-    };
-
-    for _ in 0..100 {
-        if fs::metadata(&guard.socket).is_ok_and(|metadata| metadata.file_type().is_socket()) {
-            return Ok(guard);
-        }
-        if guard.child.try_wait()?.is_some() {
-            bail!("measurement swtpm exited before its socket was ready");
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    bail!("timed out waiting for measurement swtpm socket")
-}
-
 #[derive(Debug, Clone)]
 pub struct Tables {
     pub tables: Vec<u8>,
@@ -83,6 +23,9 @@ pub struct Tables {
 
 impl Machine<'_> {
     fn create_tables(&self) -> Result<Vec<u8>> {
+        if self.swtpm {
+            bail!("swtpm measurement is not supported");
+        }
         if self.cpu_count == 0 {
             bail!("cpuCount must be greater than 0");
         }
@@ -134,18 +77,6 @@ impl Machine<'_> {
             cmd.arg("-netdev").arg(format!("user,id=net{i}"));
             cmd.arg("-device")
                 .arg(format!("virtio-net-pci,netdev=net{i}"));
-        }
-
-        let swtpm = self.qemu_swtpm.then(start_measurement_swtpm).transpose()?;
-        if let Some(swtpm) = &swtpm {
-            cmd.arg("-chardev")
-                .arg(format!("socket,id=chrtpm,path={}", swtpm.socket.display()))
-                .args([
-                    "-tpmdev",
-                    "emulator,id=tpm0,chardev=chrtpm",
-                    "-device",
-                    "tpm-tis,tpmdev=tpm0",
-                ]);
         }
 
         cmd.args([
