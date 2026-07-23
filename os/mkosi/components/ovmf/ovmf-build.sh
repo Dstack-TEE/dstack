@@ -19,7 +19,14 @@ if [[ ! -d $src/.git ]]; then
 fi
 git -C "$src" fetch -q --depth=1 origin "$REV"
 git -C "$src" checkout -q --detach FETCH_HEAD
-git -C "$src" submodule update --init --recursive --depth=1
+for attempt in 1 2 3; do
+  if git -C "$src" submodule update --init --recursive --depth=1; then
+    break
+  fi
+  (( attempt < 3 )) || { echo 'failed to fetch OVMF submodules' >&2; exit 1; }
+  git -C "$src" submodule sync --recursive
+  sleep $((attempt * 5))
+done
 git -C "$src" reset -q --hard "$REV"
 patch -d "$src" -p1 --forward --fuzz=0 < \
   "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-ovmf/dstack-ovmf/0004-Reproduciable.patch"
