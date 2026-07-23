@@ -1,0 +1,101 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: mkosi cross-host reproducibility
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/mkosi-reproducibility.yml'
+      - 'os/mkosi/**'
+      - 'os/image/**'
+      - 'os/common/rootfs/**'
+      - 'dstack/**'
+
+concurrency:
+  group: mkosi-repro-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # These values were produced by two cache-disabled local builds. The job
+  # checks out this exact source revision so the embedded Git revision is also
+  # identical. Refresh all four values together when updating the baseline.
+  BASELINE_REVISION: 4cbdffdfd70ce6b1add8962b1bcea30dc671de06
+  SOURCE_DATE_EPOCH: '1784793184'
+  BARE_SHA256: 7969920fcce2f868d5c967e5b8b114b9406e85900316039b9d47073afca52138
+  UKI_SHA256: 4a4e6eb7587e0f02b24d37e7bb56b718f923af104d86151fa04045c7d63c8aa5
+
+jobs:
+  cross-host:
+    name: Compare with local mkosi baseline
+    runs-on: yocto-builder
+    timeout-minutes: 90
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout locally verified revision
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.BASELINE_REVISION }}
+          fetch-depth: 0
+
+      - name: Install host image assembly tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential ca-certificates cmake cpio cryptsetup-bin curl \
+            dosfstools gdisk git jq libssl-dev mtools pax-utils pkg-config \
+            python3-venv squashfs-tools systemd-ukify xz-utils zstd
+
+      - name: Install pinned mkosi and Rust/Go tools
+        run: |
+          python3 -m venv "$RUNNER_TEMP/mkosi-venv"
+          "$RUNNER_TEMP/mkosi-venv/bin/pip" install --disable-pip-version-check \
+            'mkosi==26'
+          echo "$RUNNER_TEMP/mkosi-venv/bin" >> "$GITHUB_PATH"
+          sudo ./os/mkosi/scripts/install-toolchains.sh \
+            "$RUNNER_TEMP/toolchain-downloads"
+          echo '/opt/dstack-toolchains/rust/bin' >> "$GITHUB_PATH"
+          echo '/opt/dstack-toolchains/go/bin' >> "$GITHUB_PATH"
+
+      - name: Build pinned host measurement tools
+        env:
+          CARGO_HOME: ${{ runner.temp }}/cargo-home
+          CARGO_TARGET_DIR: ${{ runner.temp }}/cargo-target
+        run: |
+          cargo install --locked \
+            --git https://github.com/aws/NitroTPM-Tools \
+            --rev d76d6eeebd4169b00a3c3af9858852d48f40e748 \
+            --root "$RUNNER_TEMP/host-tools" nitro-tpm-pcr-compute
+          cargo build --locked --release --manifest-path dstack/Cargo.toml \
+            -p dstack-mr
+          echo "$RUNNER_TEMP/host-tools/bin" >> "$GITHUB_PATH"
+          echo "DSTACK_MR_BIN=$RUNNER_TEMP/cargo-target/release/dstack-mr" \
+            >> "$GITHUB_ENV"
+
+      - name: Build without component cache
+        env:
+          JOBS: '64'
+        run: |
+          test -z "${DSTACK_DEV_CACHE_DIR:-}"
+          ./os/mkosi/build.sh image "$RUNNER_TEMP/mkosi-cross-host"
+
+      - name: Compare with local byte-for-byte baseline
+        run: |
+          cd "$RUNNER_TEMP/mkosi-cross-host/out/prod"
+          printf '%s  %s\n' "$BARE_SHA256" dstack-0.6.0.tar.gz \
+            | sha256sum --check --strict
+          printf '%s  %s\n' "$UKI_SHA256" dstack-0.6.0-uki.tar.gz \
+            | sha256sum --check --strict
+          sha256sum dstack-0.6.0.tar.gz dstack-0.6.0-uki.tar.gz \
+            > cross-host.sha256
+
+      - name: Upload verification record
+        uses: actions/upload-artifact@v4
+        with:
+          name: mkosi-cross-host-sha256
+          path: ${{ runner.temp }}/mkosi-cross-host/out/prod/cross-host.sha256
+          retention-days: 30
