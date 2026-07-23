@@ -10,10 +10,12 @@ from pathlib import Path
 
 
 def exists(path: Path) -> bool:
+    """Return whether a path exists, including a dangling symlink."""
     return path.exists() or path.is_symlink()
 
 
 def merge(component: str, source: Path, destination: Path) -> None:
+    """Merge one component tree into the destination without overwrites."""
     if not source.is_dir():
         raise SystemExit(f"{component}: missing install tree: {source}")
     for root, directories, files in os.walk(source):
@@ -46,6 +48,7 @@ def merge(component: str, source: Path, destination: Path) -> None:
 
 
 def main() -> None:
+    """Merge the component specifications passed on the command line."""
     destination = Path(sys.argv[1])
     destination.mkdir(parents=True, exist_ok=True)
     for specification in sys.argv[2:]:
