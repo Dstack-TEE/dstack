@@ -18,6 +18,7 @@ export CARGO_HOME=/var/tmp/dstack-cargo-home
 export GOCACHE=/var/tmp/dstack-go-cache
 export GOMODCACHE=/var/tmp/dstack-go-mod-cache
 export XDG_CACHE_HOME=/var/tmp/dstack-xdg-cache
+export TAR_OPTIONS="${TAR_OPTIONS:-} --no-same-owner"
 mkdir -p "$HOME" "$CARGO_HOME" "$GOCACHE" "$GOMODCACHE" "$XDG_CACHE_HOME"
 
 cache_enabled=${DSTACK_COMPONENT_CACHE:-0}
