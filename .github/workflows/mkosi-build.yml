@@ -2,20 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-name: mkosi cross-host reproducibility
+name: Verify mkosi reproducibility
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - '.github/workflows/mkosi-reproducibility.yml'
-      - 'os/mkosi/**'
-      - 'os/image/**'
-      - 'os/common/rootfs/**'
-      - 'dstack/**'
 
 concurrency:
-  group: mkosi-repro-${{ github.event.pull_request.number || github.ref }}
+  group: mkosi-build-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -30,12 +23,26 @@ env:
 jobs:
   cross-host:
     name: Compare with local mkosi baseline
-    runs-on: yocto-builder
-    timeout-minutes: 90
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
     permissions:
       contents: read
 
     steps:
+      # GitHub-hosted runners have enough CPU and memory for this build, but
+      # their preinstalled SDKs consume most of the available disk. Remove only
+      # those unused SDKs before checkout; the OS build itself remains hermetic.
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/.ghcup \
+            /usr/local/lib/android \
+            /usr/local/share/boost \
+            /usr/share/dotnet
+          df -h /
+
       - name: Checkout locally verified revision
         uses: actions/checkout@v5
         with:
@@ -78,7 +85,9 @@ jobs:
 
       - name: Build without component cache
         env:
-          JOBS: '64'
+          # ubuntu-latest currently provides four vCPUs and 16 GiB of RAM.
+          # Two compile jobs keep peak kernel/OVMF memory safely below that.
+          JOBS: '2'
         run: |
           test -z "${DSTACK_DEV_CACHE_DIR:-}"
           ./os/mkosi/build.sh image "$RUNNER_TEMP/mkosi-cross-host"
