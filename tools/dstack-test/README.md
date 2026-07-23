@@ -39,6 +39,7 @@ with repeatable `--agent-arg`. The runner writes only below:
 tools/dstack-test/dstack-test run-plan \
   --plan path/to/plan \
   --context run-context.json \
+  --web \
   -- "Follow the environment restrictions in README.md"
 ```
 
@@ -51,6 +52,20 @@ that case as `SKIPPED`; it must not skip independent or merely expensive cases.
 The complete control conversation is stored in `orchestrator.jsonl`.
 
 An interrupted run can be continued with the same run ID and `--resume`.
+
+`--web` starts a read-only live dashboard on `127.0.0.1` and an automatically
+selected port. Use `--web-host 0.0.0.0 --web-port 8000` for remote access;
+there is no built-in authentication, so expose it only on a trusted network or
+through an authenticated tunnel. The dashboard shows case status and polls the
+native orchestrator/case JSONL files for near-real-time output.
+
+After a run has finished, serve the same historical sessions with:
+
+```bash
+tools/dstack-test/dstack-test serve \
+  --plan path/to/plan --run-id run-20260723-001 \
+  --host 127.0.0.1 --port 8000
+```
 
 ## Finalize and validate
 

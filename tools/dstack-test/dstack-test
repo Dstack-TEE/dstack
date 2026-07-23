@@ -26,6 +26,7 @@ from typing import Any
 
 import render
 import tomllib
+import web
 
 TERMINAL_STATUS = ("PASS", "FAIL", "BLOCKED", "NOT_RUN", "SKIPPED")
 
@@ -560,6 +561,59 @@ class FileControlServer:
         self.thread.join()
 
 
+def dashboard_state(plan: render.Plan, run_id: str) -> dict[str, Any]:
+    run_path = plan.root / "results" / run_id / "run.json"
+    run = render.load_json(run_path) if run_path.is_file() else {}
+    counts = {status: 0 for status in (*TERMINAL_STATUS, "RUNNING", "PENDING")}
+    cases = []
+    for case in plan.cases:
+        result_path = case.path / "results" / run_id / "result.json"
+        session_path = case.path / "results" / run_id / "session.jsonl"
+        if result_path.is_file():
+            status = str(render.load_json(result_path).get("status", "PENDING"))
+        else:
+            status = "RUNNING" if session_path.is_file() else "PENDING"
+        counts[status] = counts.get(status, 0) + 1
+        cases.append({"id": case.id, "title": case.title, "status": status})
+    orchestrator = plan.root / "results" / run_id / "orchestrator.jsonl"
+    return {
+        "title": plan.index.get("title", plan.index["id"]),
+        "run_id": run_id,
+        "run_status": run.get("status", "RUNNING"),
+        "orchestrator_status": "PASS"
+        if run_path.is_file()
+        else ("RUNNING" if orchestrator.is_file() else "PENDING"),
+        "counts": counts,
+        "cases": cases,
+    }
+
+
+def dashboard_log(
+    plan: render.Plan, run_id: str, agent: str, offset: int
+) -> dict[str, Any]:
+    if agent == "orchestrator":
+        path = plan.root / "results" / run_id / "orchestrator.jsonl"
+    elif agent.startswith("case:"):
+        case = find_case(plan, agent.removeprefix("case:"))
+        path = case.path / "results" / run_id / "session.jsonl"
+    else:
+        raise DstackTestError("unknown agent session")
+    if not path.is_file():
+        return {"text": "", "next_offset": 0, "reset": offset > 0}
+    size = path.stat().st_size
+    reset = offset > size
+    with path.open("rb") as source:
+        source.seek(0 if reset else offset)
+        data = source.read(1024 * 1024)
+        next_offset = source.tell()
+    return {
+        "text": data.decode("utf-8", errors="replace"),
+        "next_offset": next_offset,
+        "reset": reset,
+        "eof": next_offset >= size,
+    }
+
+
 def write_sha256s(root: Path) -> None:
     entries: list[str] = []
     for path in sorted(
@@ -806,6 +860,9 @@ def build_parser() -> argparse.ArgumentParser:
     run_plan.add_argument("--agent-arg", action="append", default=[])
     run_plan.add_argument("--overwrite", action="store_true")
     run_plan.add_argument("--resume", action="store_true")
+    run_plan.add_argument("--web", action="store_true", help="serve a live dashboard")
+    run_plan.add_argument("--web-host", default="127.0.0.1")
+    run_plan.add_argument("--web-port", type=int, default=0)
     run_plan.add_argument("prompt", nargs=argparse.REMAINDER)
 
     sub.add_parser("next-case", help="return the next unresolved controlled case")
@@ -835,6 +892,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_common_plan(render_parser)
     render_parser.add_argument("--output", type=Path, required=True)
+
+    serve = sub.add_parser("serve", help="serve a live or historical run dashboard")
+    add_common_plan(serve)
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
     return parser
 
 
@@ -908,6 +970,21 @@ def main(argv: list[str] | None = None) -> int:
         control_dir = run_dir / "control"
         server = FileControlServer(state, control_dir)
         server.start()
+        dashboard = None
+        if args.web:
+            dashboard = web.Dashboard(
+                lambda: dashboard_state(plan, args.run_id),
+                lambda agent, offset: dashboard_log(plan, args.run_id, agent, offset),
+                args.web_host,
+                args.web_port,
+            )
+            dashboard.start()
+            web_host, web_port = dashboard.address
+            print(
+                f"dashboard: http://{web_host}:{web_port}/",
+                file=sys.stderr,
+                flush=True,
+            )
         prompt = orchestration_prompt(plan, prompt_text(args))
         (run_dir / "orchestrator-prompt.md").write_text(prompt, encoding="utf-8")
         environment = os.environ.copy()
@@ -931,6 +1008,8 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             server.close()
             shutil.rmtree(control_dir, ignore_errors=True)
+            if dashboard:
+                dashboard.close()
         events, detected_model = validate_session(run_dir / "orchestrator.jsonl")
         atomic_json(
             run_dir / "orchestrator-runner.json",
@@ -968,6 +1047,21 @@ def main(argv: list[str] | None = None) -> int:
             "output": str(args.output),
             "bytes": args.output.stat().st_size,
         }
+    elif args.subcommand == "serve":
+        dashboard = web.Dashboard(
+            lambda: dashboard_state(plan, args.run_id),
+            lambda agent, offset: dashboard_log(plan, args.run_id, agent, offset),
+            args.host,
+            args.port,
+        )
+        dashboard.start()
+        host, port = dashboard.address
+        print(f"dashboard: http://{host}:{port}/", file=sys.stderr, flush=True)
+        try:
+            dashboard.thread.join()
+        except KeyboardInterrupt:
+            dashboard.close()
+        return 0
     else:
         raise AssertionError(args.subcommand)
     print(json.dumps(value, ensure_ascii=False, indent=2))

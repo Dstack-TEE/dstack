@@ -81,6 +81,14 @@ class DstackTestTests(unittest.TestCase):
         self.assertIn("198.51.100.27:45678", output)
         self.assertIn("session-tc-gw-pp-001-event-2", output)
 
+    def test_dashboard_exposes_historical_status_and_log(self) -> None:
+        plan = render.load_plan(FIXTURE)
+        state = dstack_test.dashboard_state(plan, "run-demo")
+        self.assertEqual(state["cases"][0]["status"], "PASS")
+        log = dstack_test.dashboard_log(plan, "run-demo", "case:tc-gw-pp-001", 0)
+        self.assertGreater(log["next_offset"], 0)
+        self.assertIn("thread.started", log["text"])
+
     def test_finalize_rebuilds_run_summary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             plan_path = self.copy_fixture(Path(temporary))

@@ -261,3 +261,14 @@ The output must work offline and inline all CSS, JavaScript, session events, tex
 - collapsible original agent messages, tool calls, command output, and errors;
 - every attachment and the complete raw session; and
 - stable cross-reference anchors.
+
+<a id="report-live-dashboard"></a>
+## 13. Live and historical dashboard
+
+`run-plan --web` starts a read-only HTTP dashboard for case status and the
+native JSONL output of the orchestrator and every case agent. The browser polls
+incremental byte ranges so active output appears without rewriting session
+files. `dstack-test serve --plan <plan> --run-id <run-id>` exposes the same view
+for a completed or interrupted run. The server has no built-in authentication;
+non-loopback binding is permitted only on a trusted network or behind an
+authenticated tunnel.
