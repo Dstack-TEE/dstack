@@ -67,6 +67,9 @@ EOF
   mkosi --directory "$SELF" --force --extra-tree="$stage" "${devargs[@]}" \
     --format=directory --output-directory="$work" --output=rootfs \
     --compress-output=no --bootable=no build
+  if [[ $flavor == prod ]]; then
+    "$SELF/scripts/prune-rootfs.sh" "$tree"
+  fi
   # ldconfig's binary auxiliary cache records traversal-dependent ordering.
   # /var is volatile at runtime, so ship no host-generated cache.
   rm -f "$tree/var/cache/ldconfig/aux-cache"
