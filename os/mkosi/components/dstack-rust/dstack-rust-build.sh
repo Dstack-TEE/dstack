@@ -21,19 +21,19 @@ install -m0644 "$ROOT/os/common/rootfs/sysctl.d/99-dstack.conf" "$DEST/etc/sysct
 cp -a "$ROOT/os/common/rootfs/docker.service.d/." "$DEST/etc/systemd/system/docker.service.d/"
 cp -a "$ROOT/os/common/rootfs/containerd.service.d/." "$DEST/etc/systemd/system/containerd.service.d/"
 
-# Cargo.lock pins Rust dependencies. Offline mode makes a warm, vendored/cache
-# build deterministic and prevents an accidental lockfile update.
+# Cargo.lock and --locked pin every registry/git dependency. The hermetic
+# mkosi build root may fetch missing inputs but cannot update the lock file.
 if [[ ${DSTACK_SKIP_RUST:-0} != 1 ]]; then
   export CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=${CARGO_NET_OFFLINE:-false}
   build_root=$(dirname "$DEST")
   export CARGO_TARGET_DIR="$build_root/dstack-cargo-target"
   export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$ROOT=/usr/src/dstack --remap-path-prefix=$build_root=/usr/src/dstack-build -C strip=debuginfo"
-  cargo build --locked --offline --release --manifest-path "$ROOT/dstack/Cargo.toml" \
+  cargo build --locked --release --manifest-path "$ROOT/dstack/Cargo.toml" \
     -p dstack-guest-agent -p dstack-util
   install -m0755 "$CARGO_TARGET_DIR/release/dstack-guest-agent" \
     "$CARGO_TARGET_DIR/release/dstack-util" "$DEST/usr/bin/"
   if [[ $FLAVOR == dev ]]; then
-    cargo build --locked --offline --release --manifest-path "$ROOT/dstack/Cargo.toml" \
+    cargo build --locked --release --manifest-path "$ROOT/dstack/Cargo.toml" \
       -p dstack-tee-simulator
     install -m0755 "$CARGO_TARGET_DIR/release/dstack-tee-simulator" "$DEST/usr/bin/"
     install -Dm0644 "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-tee-simulator/files/dstack-tee-simulator.service" \
