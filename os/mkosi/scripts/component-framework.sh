@@ -110,7 +110,4 @@ component_run() {
 component_assemble() {
     "$SELF/scripts/merge-component-trees.py" "$STAGE" "${COMPONENT_ROOTFS[@]}"
     "$SELF/scripts/merge-component-trees.py" "$KSTAGE" "${COMPONENT_KERNEL[@]}"
-    ln -sfn usr/lib "$KSTAGE/lib"
-    depmod -b "$KSTAGE" "$KERNEL_VERSION-dstack"
-    rm -f "$KSTAGE/lib"
 }
