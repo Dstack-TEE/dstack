@@ -748,10 +748,10 @@ PY
 
   jq -e '
     .kms_enabled == true and .gateway_enabled == true
-    and .manifest_version == "3"
-    and .requirements.tdx_measure_acpi_tables == true
+    and .manifest_version == 2
+    and (has("requirements") | not)
   ' "$WORK_DIR/legacy.app-compose.json" >/dev/null \
-    || die "legacy app manifest did not force the legacy TDX verifier"
+    || die "v0.5.11 app manifest is not legacy-compatible"
   jq -e '
     .kms_enabled == true and .gateway_enabled == true
     and .manifest_version == "3"
@@ -761,8 +761,10 @@ PY
 
   jq -e --arg id "$GATEWAY_APP_ID" \
     --arg device "$ATTESTED_DEVICE_ID" \
+    --arg current_image "$OS_IMAGE_HASH" \
+    --arg old_image "$OLD_OS_IMAGE_HASH" \
     '.gatewayAppId == $id and .gatewayAppId != "any"
-      and (.osImages | length) == 1
+      and (.osImages | sort == ([$current_image, $old_image] | sort))
       and (.kms.mrAggregated | length) == 2
       and (.kms.allowAnyDevice == false)
       and (.kms.devices == [$device])
