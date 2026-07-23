@@ -13,7 +13,7 @@
 | COMP-07 | P0 | PARTIAL | old/current guest 并行且不同 app ID 无串扰；缺同 app 双 image identity crossover 专项断言 |
 | COMP-08 | P0 | PASS | 同一 VM/app ID/data disk 完成 v0.5.11→current；原 ext4 UUID 挂载且双 Gateway 可达 |
 | COMP-09 | P0 | PASS | current→v0.5.11 回滚、原盘和路由恢复；old hash 移除时明确 deny，恢复 policy 后恢复 |
-| COMP-10 | P0 | PARTIAL | guest/service stop/start 与恢复有覆盖；未重启物理 host |
+| COMP-10 | P0 | PARTIAL | VMM service restart 后 KMS、双 Gateway、old/current guest、identity 与四条路由恢复；未重启物理 host |
 | ATT-01 | P0 | PARTIAL | 四种新 SDK 与 simulator 已通过；未在新真实镜像取证 |
 | ATT-02 | P0 | PARTIAL | Rust core replay/canonicalization 通过；缺独立真实 quote replay 证据 |
 | ATT-03 | P0 | PARTIAL | core 与多 SDK 测试通过；未完成四语言统一 mutation corpus |
@@ -56,7 +56,7 @@
 | GKW-01 | P0 | PARTIAL | 三节点 DNS/ACME/TLS 本地 E2E 通过；缺旧/新真实 guest app path |
 | GKW-02 | P1 | NOT RUN | 未执行该用例的完整步骤与断言 |
 | GKW-03 | P1 | NOT RUN | 未执行该用例的完整步骤与断言 |
-| GKW-04 | P1 | PARTIAL | 三节点同步覆盖；未完成 KMS/Gateway 联合重启与 guest 恢复 |
+| GKW-04 | P1 | PASS | VMM service restart 使 KMS 与双 Gateway 联合重启；old/current guest 自动恢复，KMS identity 不变且四条路由通过 |
 | GKW-05 | P1 | PARTIAL | KMS cache 单测覆盖；并发真实 verification 未跑 |
 | GKW-06 | P1 | PARTIAL | Foundry 54 tests 通过；未在每条部署链做 rehearsal |
 | PLAT-01 | P0 | BLOCKED | 无 NVIDIA GPU/生产 OCSP 在线环境 |
@@ -103,11 +103,11 @@
 ## 统计
 
 - 总数：95
-- PASS: 6
+- PASS: 7
 - BLOCKED: 7
 - FAIL: 1
 - FAIL (SIMULATED): 1
 - NOT RUN: 36
-- PARTIAL: 44
+- PARTIAL: 43
 
 真实 TDX rolling-upgrade 的逐项边界见 `06-tdx-upgrade-compatibility-report.md`。确切 v0.5.11 guest 已参与；release 未提供 v0.5.11 service artifacts，且未执行的升级/回滚/host reboot 项不得由相邻 PASS 推断。

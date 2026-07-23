@@ -65,6 +65,9 @@ KMS/Gateway 兼容测试。
 11. 从 exact allowlist 临时删除 v0.5.11 OS hash 后，回滚 guest 在
     `requesting app keys` 阶段被明确拒绝：`Boot denied: os image not allowed`；恢复
     hash 后同一 VM、数据盘和两条 Gateway 路由恢复。
+12. 强制重启承载整个测试拓扑的 VMM service，使 latest KMS、两个 latest Gateway、
+    v0.5.11/current guest 同时经历管理面故障与自动恢复；五个 CVM 均回到 `done`，
+    KMS identity SHA-256 仍为 `09d697...a9056`，四条 guest/Gateway 路由全部恢复。
 
 原始日志：
 
@@ -73,6 +76,7 @@ KMS/Gateway 兼容测试。
 /home/kvin/src/dstack-v060-artifacts/logs/full-stack-tdx-upgrade-e2e-v0511-mixed-exit0.log
 /home/kvin/src/dstack-v060-artifacts/logs/full-stack-tdx-upgrade-e2e-lkp-persistence-base.log
 /home/kvin/src/dstack-v060-artifacts/logs/lkp-persistence-image-upgrade-rollback-evidence.txt
+/home/kvin/src/dstack-v060-artifacts/logs/vmm-service-recovery.log
 ```
 
 ## COMP 用例审计
@@ -88,7 +92,7 @@ KMS/Gateway 兼容测试。
 | COMP-07 | PARTIAL | old/current guest 并行可达且使用独立 app ID；未执行计划要求的同 app image 双版本 identity crossover 专项断言 |
 | COMP-08 | PASS | 同一 legacy VM/app ID/data disk 从 v0.5.11 更新为 current；原 ext4 UUID 挂载且双 Gateway 可达 |
 | COMP-09 | PASS | 同一 VM 回滚 v0.5.11、原盘与路由恢复；删除 old hash 时明确 deny，恢复 policy 后恢复 |
-| COMP-10 | PARTIAL | guest/KMS/Gateway 级 stop/start 与服务恢复有覆盖；未重启物理 host |
+| COMP-10 | PARTIAL | VMM service restart 触发 KMS、双 Gateway、old/current guest 联合恢复；identity 与四条路由通过；未重启物理 host |
 
 ## 结论与边界
 

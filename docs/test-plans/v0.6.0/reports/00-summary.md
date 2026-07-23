@@ -30,7 +30,7 @@
 | `prek run --all-files` | PASS | 所有 hook 通过 |
 | REUSE | TEST-HARNESS ISSUE | 仅本地生成的 9 个短期证书缺少 SPDX 信息 |
 | Yocto production image | FAIL / patched artifact built | 原样因 kernel-module-fuse packaging 失败；最小测试补丁后产物校验通过 |
-| TDX mixed guest / rolling upgrade | PASS（限定范围） | production SGX Local-Key-Provider 重启持久性；v0.5.11/current guest；image upgrade/rollback；0.5.8→current KMS/Gateway；key/SPKI/state/HA 连续性通过；完整 COMP-01..10 尚未全覆盖 |
+| TDX mixed guest / rolling upgrade | PASS（限定范围） | production SGX Local-Key-Provider 重启持久性；v0.5.11/current guest；image upgrade/rollback；0.5.8→current KMS/Gateway；VMM service 故障恢复；key/SPKI/state/HA 连续性通过；完整 COMP-01..10 尚未全覆盖 |
 | no-TEE + swtpm | FAIL (SIMULATED) | TPM/swtpm host 装配成功；dev guest 在进入 `/init` 前停止推进 |
 
 ## 结果解释
