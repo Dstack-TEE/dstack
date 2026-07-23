@@ -101,7 +101,14 @@ jobs:
           JOBS: '2'
         run: |
           test -z "${DSTACK_DEV_CACHE_DIR:-}"
-          ./os/mkosi/build.sh image "$RUNNER_TEMP/mkosi-cross-host"
+          # GitHub-hosted Ubuntu runners restrict unprivileged user namespaces.
+          # Run mkosi as root instead of weakening the runner's AppArmor policy.
+          sudo --set-home env \
+            "PATH=$PATH" \
+            "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" \
+            "DSTACK_MR_BIN=$DSTACK_MR_BIN" \
+            "JOBS=$JOBS" \
+            ./os/mkosi/build.sh image "$RUNNER_TEMP/mkosi-cross-host"
 
       - name: Compare with local byte-for-byte baseline
         run: |
