@@ -127,7 +127,7 @@ GATEWAY_ADMIN_TOKEN=$(tr -d '[:space:]' < "$token_file")
 
 cat > "$CONFIG_DIR/auth-allowlist.json" <<JSON
 {
-  "osImages": ["$OS_IMAGE_HASH"],
+  "osImages": ["$OS_IMAGE_HASH", "$OLD_OS_IMAGE_HASH"],
   "gatewayAppId": "$GATEWAY_APP_ID",
   "kms": {
     "mrAggregated": [],
