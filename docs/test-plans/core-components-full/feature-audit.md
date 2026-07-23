@@ -713,4 +713,3 @@ This audit is derived from the repository source inventory and is the traceabili
 <a id="req-int-mixed-005"></a><a id="risk-int-mixed-005"></a>| `req-int-mixed-005` | `risk-int-mixed-005` | [tc-int-mixed-005](06-integration/04-pinned-mixed-version-matrix/tc-int-mixed-005/case.md#tc-int-mixed-005) — Verifier evidence compatibility for pinned releases | P0 |
 <a id="req-int-mixed-006"></a><a id="risk-int-mixed-006"></a>| `req-int-mixed-006` | `risk-int-mixed-006` | [tc-int-mixed-006](06-integration/04-pinned-mixed-version-matrix/tc-int-mixed-006/case.md#tc-int-mixed-006) — Rolling restart under four-version online mix | P0 |
 <a id="req-int-mixed-007"></a><a id="risk-int-mixed-007"></a>| `req-int-mixed-007` | `risk-int-mixed-007` | [tc-int-mixed-007](06-integration/04-pinned-mixed-version-matrix/tc-int-mixed-007/case.md#tc-int-mixed-007) — Optional and unknown protobuf fields across pinned versions | P0 |
-

@@ -85,6 +85,12 @@ class DstackTestTests(unittest.TestCase):
         plan = render.load_plan(FIXTURE)
         state = dstack_test.dashboard_state(plan, "run-demo")
         self.assertEqual(state["cases"][0]["status"], "PASS")
+        self.assertEqual(
+            state["chapters"][0]["sections"][0]["cases"][0]["id"], "tc-gw-pp-001"
+        )
+        case = dstack_test.dashboard_case(plan, "tc-gw-pp-001")
+        self.assertEqual(case["chapter"], "Gateway")
+        self.assertIn("<h2>Steps</h2>", case["html"])
         log = dstack_test.dashboard_log(plan, "run-demo", "case:tc-gw-pp-001", 0)
         self.assertGreater(log["next_offset"], 0)
         self.assertIn("thread.started", log["text"])

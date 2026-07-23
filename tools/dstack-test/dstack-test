@@ -566,6 +566,9 @@ def dashboard_state(plan: render.Plan, run_id: str) -> dict[str, Any]:
     run = render.load_json(run_path) if run_path.is_file() else {}
     counts = {status: 0 for status in (*TERMINAL_STATUS, "RUNNING", "PENDING")}
     cases = []
+    chapters: list[dict[str, Any]] = []
+    chapter_by_id: dict[str, dict[str, Any]] = {}
+    section_by_id: dict[str, dict[str, Any]] = {}
     for case in plan.cases:
         result_path = case.path / "results" / run_id / "result.json"
         session_path = case.path / "results" / run_id / "session.jsonl"
@@ -574,7 +577,27 @@ def dashboard_state(plan: render.Plan, run_id: str) -> dict[str, Any]:
         else:
             status = "RUNNING" if session_path.is_file() else "PENDING"
         counts[status] = counts.get(status, 0) + 1
-        cases.append({"id": case.id, "title": case.title, "status": status})
+        case_value = {"id": case.id, "title": case.title, "status": status}
+        cases.append(case_value)
+        chapter = chapter_by_id.get(case.chapter_id)
+        if chapter is None:
+            chapter = {
+                "id": case.chapter_id,
+                "title": case.chapter_title,
+                "sections": [],
+            }
+            chapter_by_id[case.chapter_id] = chapter
+            chapters.append(chapter)
+        section = section_by_id.get(case.section_id)
+        if section is None:
+            section = {
+                "id": case.section_id,
+                "title": case.section_title,
+                "cases": [],
+            }
+            section_by_id[case.section_id] = section
+            chapter["sections"].append(section)
+        section["cases"].append(case_value)
     orchestrator = plan.root / "results" / run_id / "orchestrator.jsonl"
     return {
         "title": plan.index.get("title", plan.index["id"]),
@@ -585,6 +608,19 @@ def dashboard_state(plan: render.Plan, run_id: str) -> dict[str, Any]:
         else ("RUNNING" if orchestrator.is_file() else "PENDING"),
         "counts": counts,
         "cases": cases,
+        "chapters": chapters,
+    }
+
+
+def dashboard_case(plan: render.Plan, case_id: str) -> dict[str, Any]:
+    """Return a rendered test-case specification for the live dashboard."""
+    case = find_case(plan, case_id)
+    return {
+        "id": case.id,
+        "title": case.title,
+        "chapter": case.chapter_title,
+        "section": case.section_title,
+        "html": render.markdown_to_html(case.spec_path.read_text(encoding="utf-8")),
     }
 
 
@@ -975,6 +1011,7 @@ def main(argv: list[str] | None = None) -> int:
             dashboard = web.Dashboard(
                 lambda: dashboard_state(plan, args.run_id),
                 lambda agent, offset: dashboard_log(plan, args.run_id, agent, offset),
+                lambda case_id: dashboard_case(plan, case_id),
                 args.web_host,
                 args.web_port,
             )
@@ -1051,6 +1088,7 @@ def main(argv: list[str] | None = None) -> int:
         dashboard = web.Dashboard(
             lambda: dashboard_state(plan, args.run_id),
             lambda agent, offset: dashboard_log(plan, args.run_id, agent, offset),
+            lambda case_id: dashboard_case(plan, case_id),
             args.host,
             args.port,
         )
