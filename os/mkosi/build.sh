@@ -31,7 +31,7 @@ build_one() {
     # Yocto splits module DWARF into debug packages which are not shipped in
     # the production image. Keep BTF and loadable ELF metadata, but do not put
     # hundreds of MiB of host-side DWARF into the immutable guest root.
-    find "$kstage/usr/lib/modules" -type f -name '*.ko' -exec objcopy --strip-debug {} +
+    find "$kstage/usr/lib/modules" -type f -name '*.ko' -exec objcopy --strip-debug {} \;
   fi
   # ExtraTrees is copied over Debian's usr-merged root where /bin, /sbin and
   # /lib are symlinks. Normalize build systems (notably OpenZFS) that install
