@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "case_id": "tc-gw-pp-001",
+  "status": "PASS",
+  "summary": "The Proxy v1 source address reached the backend.",
+  "steps": [
+    {"id": "tc-gw-pp-001-step-01", "status": "PASS", "observed": "Port 8443 had pp=true."},
+    {"id": "tc-gw-pp-001-step-02", "status": "PASS", "observed": "Backend observed 198.51.100.27:45678 and returned HTTP 200."}
+  ],
+  "artifacts": [
+    {"name": "Backend capture", "path": "artifacts/backend-capture.json"}
+  ],
+  "remarks": ""
+}
