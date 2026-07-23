@@ -591,23 +591,34 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.subcommand == "run-plan":
         values = []
-        for case in plan.cases:
+        total = len(plan.cases)
+        for index, case in enumerate(plan.cases, 1):
+            print(f"[{index}/{total}] starting {case.id}", file=sys.stderr, flush=True)
             try:
-                values.append(
-                    run_case(
-                        plan,
-                        case,
-                        args.run_id,
-                        args.agent,
-                        args.model,
-                        args.workdir.resolve(),
-                        prompt_text(args),
-                        args.agent_arg,
-                        args.overwrite,
-                    )
+                case_value = run_case(
+                    plan,
+                    case,
+                    args.run_id,
+                    args.agent,
+                    args.model,
+                    args.workdir.resolve(),
+                    prompt_text(args),
+                    args.agent_arg,
+                    args.overwrite,
+                )
+                values.append(case_value)
+                print(
+                    f"[{index}/{total}] finished {case.id}: {case_value['status']}",
+                    file=sys.stderr,
+                    flush=True,
                 )
             except DstackTestError as error:
                 values.append({"case": case.id, "runner_error": str(error)})
+                print(
+                    f"[{index}/{total}] runner error for {case.id}: {error}",
+                    file=sys.stderr,
+                    flush=True,
+                )
         run = finalize_run(plan, args.run_id, context_value(args.context))
         value = {"cases": values, "run": run}
     elif args.subcommand == "finalize":

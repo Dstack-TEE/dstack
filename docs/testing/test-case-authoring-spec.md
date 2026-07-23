@@ -70,23 +70,33 @@ The index is authoritative for discovery and order. A minimal example is:
   "schema_version": "1.0",
   "id": "dstack-v0-6-0-release",
   "title": "dstack v0.6.0 Release Test Plan",
-  "guide": "README.md",
+  "guide": {"path": "README.md", "anchor": "release-test-guide"},
   "chapters": [
     {
       "id": "chapter-gateway",
       "title": "Gateway",
       "order": 1,
+      "path": "01-gateway",
       "sections": [
         {
           "id": "section-gateway-proxy-protocol",
           "title": "Proxy Protocol",
           "order": 1,
+          "path": "01-gateway/01-proxy-protocol",
           "cases": [
             {
               "id": "tc-gw-pp-001",
               "title": "Forward a Proxy v1 client address over TLS termination",
               "order": 1,
-              "path": "01-gateway/01-proxy-protocol/tc-gw-pp-001"
+              "priority": "P0",
+              "path": "01-gateway/01-proxy-protocol/tc-gw-pp-001",
+              "spec": {
+                "path": "01-gateway/01-proxy-protocol/tc-gw-pp-001/case.md",
+                "anchor": "tc-gw-pp-001"
+              },
+              "requirements": ["req-gw-pp-001"],
+              "risks": ["risk-gw-spoofing-001"],
+              "tags": ["gateway", "proxy-protocol"]
             }
           ]
         }
