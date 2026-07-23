@@ -120,14 +120,15 @@ jobs:
       - name: Compare with local byte-for-byte baseline
         run: |
           cd "$RUNNER_TEMP/mkosi-cross-host/out/prod"
+          sha256sum dstack-0.6.0.tar.gz dstack-0.6.0-uki.tar.gz \
+            | tee cross-host.sha256
           printf '%s  %s\n' "$BARE_SHA256" dstack-0.6.0.tar.gz \
             | sha256sum --check --strict
           printf '%s  %s\n' "$UKI_SHA256" dstack-0.6.0-uki.tar.gz \
             | sha256sum --check --strict
-          sha256sum dstack-0.6.0.tar.gz dstack-0.6.0-uki.tar.gz \
-            > cross-host.sha256
 
       - name: Upload verification record
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: mkosi-cross-host-sha256
