@@ -20,6 +20,8 @@ actual=$(mkosi --version | awk '{print $2}' | cut -d. -f1)
   echo "mkosi $MKOSI_VERSION required, found $actual" >&2; exit 1;
 }
 export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --format=%ct)}
+revision=$(git -C "$ROOT" rev-parse HEAD)
+export DSTACK_GIT_REVISION=${DSTACK_GIT_REVISION:-git:${revision:0:20}}
 export TZ=UTC LC_ALL=C
 # A production invocation reconstructs the tools tree once from the immutable
 # snapshot, then shares that read-only environment across all requested flavors
@@ -42,6 +44,7 @@ build_one() {
     --bootable=no
     --environment="DSTACK_BUILD_FLAVOR=$flavor"
     --environment="DSTACK_COMPONENT_CACHE=$([[ $action == dev-image ]] && echo 1 || echo 0)"
+    --environment="DSTACK_GIT_REVISION=$DSTACK_GIT_REVISION"
     --environment="JOBS=${JOBS:-$(nproc)}"
   )
   if [[ $action == dev-image ]]; then

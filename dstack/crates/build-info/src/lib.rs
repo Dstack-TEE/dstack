@@ -15,16 +15,19 @@ pub use git_version::git_version as __git_version;
 #[macro_export]
 macro_rules! git_revision {
     () => {
-        $crate::__git_version!(
-            args = [
-                "--abbrev=20",
-                "--always",
-                "--dirty=-modified",
-                "--exclude=*"
-            ],
-            prefix = "git:",
-            fallback = "unknown"
-        )
+        match option_env!("DSTACK_GIT_REVISION") {
+            Some(revision) => revision,
+            None => $crate::__git_version!(
+                args = [
+                    "--abbrev=20",
+                    "--always",
+                    "--dirty=-modified",
+                    "--exclude=*"
+                ],
+                prefix = "git:",
+                fallback = "unknown"
+            ),
+        }
     };
 }
 
