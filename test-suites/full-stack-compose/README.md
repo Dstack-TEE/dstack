@@ -73,7 +73,9 @@ would make a passing result irrelevant to production:
    - Docker and WireGuard kernel support
 
 3. Provide an unpacked dstack image directory containing `digest.txt` and
-   `sha256sum.txt`. Copy `.env.example` to `.env` when paths or ports differ.
+   `sha256sum.txt` for both the current image (`DSTACK_E2E_IMAGE_NAME`) and the
+   v0.5.11 compatibility image (`DSTACK_E2E_OLD_IMAGE_NAME`). Copy
+   `.env.example` to `.env` when paths or ports differ.
 
 ## Run
 

@@ -11,6 +11,7 @@ VOLUMES_DIR=${DSTACK_E2E_VOLUMES_DIR:-$STATE_DIR/volumes}
 ARTIFACT_DIR=${DSTACK_E2E_ARTIFACT_DIR:-$STATE_DIR/artifacts}
 IMAGE_ROOT=${DSTACK_E2E_IMAGE_ROOT:-/images}
 IMAGE_NAME=${DSTACK_E2E_IMAGE_NAME:-dstack-0.6.0}
+OLD_IMAGE_NAME=${DSTACK_E2E_OLD_IMAGE_NAME:-dstack-0.5.11}
 PLATFORM=${DSTACK_E2E_PLATFORM:-tdx}
 
 VMM_PORT=${DSTACK_E2E_VMM_PORT:-29080}
@@ -65,13 +66,6 @@ if ! getent ahostsv4 "$KMS_RPC_DOMAIN" >/dev/null 2>&1; then
   exit 1
 fi
 
-image_dir="$IMAGE_ROOT/$IMAGE_NAME"
-if [[ ! -d "$image_dir" ]]; then
-  echo "ERROR: image directory not found: $image_dir" >&2
-  echo "Set DSTACK_E2E_IMAGE_STORE to a host directory containing $IMAGE_NAME/" >&2
-  exit 1
-fi
-
 digest_file=digest.txt
 if [[ "$PLATFORM" == "amd-sev-snp" || "$PLATFORM" == "sev-snp" || "$PLATFORM" == "snp" ]]; then
   PLATFORM=amd-sev-snp
@@ -81,33 +75,49 @@ elif [[ "$PLATFORM" != tdx ]]; then
   exit 1
 fi
 
-if [[ ! -s "$image_dir/$digest_file" ]]; then
-  echo "ERROR: missing $image_dir/$digest_file; production-compatible E2E never permits an unpinned OS image" >&2
-  exit 1
-fi
-OS_IMAGE_HASH=$(tr -d '[:space:]' < "$image_dir/$digest_file")
-if [[ ! "$OS_IMAGE_HASH" =~ ^[0-9a-f]{64}$ ]]; then
-  echo "ERROR: invalid OS image digest: $OS_IMAGE_HASH" >&2
-  exit 1
-fi
+package_os_image() {
+  local name=$1 image_dir="$IMAGE_ROOT/$1" image_hash
+  if [[ ! -d "$image_dir" ]]; then
+    echo "ERROR: image directory not found: $image_dir" >&2
+    echo "Set DSTACK_E2E_IMAGE_STORE to a host directory containing $name/" >&2
+    exit 1
+  fi
+  if [[ ! -s "$image_dir/$digest_file" ]]; then
+    echo "ERROR: missing $image_dir/$digest_file; production-compatible E2E never permits an unpinned OS image" >&2
+    exit 1
+  fi
+  image_hash=$(tr -d '[:space:]' < "$image_dir/$digest_file")
+  if [[ ! "$image_hash" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "ERROR: invalid OS image digest for $name: $image_hash" >&2
+    exit 1
+  fi
 
-# Build the exact flat archive consumed by the KMS verifier. Verify the source
-# first and include only the measured files named by sha256sum.txt.
-(
-  cd "$image_dir"
-  sha256sum -c sha256sum.txt
-  mapfile -t measured_files < <(awk '{print $2}' sha256sum.txt)
-  for file in "${measured_files[@]}"; do
-    [[ "$file" != */* && -f "$file" ]] || {
-      echo "ERROR: unsafe or missing measured image file: $file" >&2
-      exit 1
-    }
-  done
-  tar -czf "$ARTIFACT_DIR/os/mr_${OS_IMAGE_HASH}.tar.gz.tmp" \
-    sha256sum.txt "${measured_files[@]}"
-)
-mv "$ARTIFACT_DIR/os/mr_${OS_IMAGE_HASH}.tar.gz.tmp" \
-  "$ARTIFACT_DIR/os/mr_${OS_IMAGE_HASH}.tar.gz"
+  # Build the exact flat archive consumed by the KMS verifier. Verify the
+  # source first and include only files named by sha256sum.txt.
+  (
+    cd "$image_dir"
+    sha256sum -c sha256sum.txt >&2
+    mapfile -t measured_files < <(awk '{print $2}' sha256sum.txt)
+    for file in "${measured_files[@]}"; do
+      [[ "$file" != */* && -f "$file" ]] || {
+        echo "ERROR: unsafe or missing measured image file: $file" >&2
+        exit 1
+      }
+    done
+    tar -czf "$ARTIFACT_DIR/os/mr_${image_hash}.tar.gz.tmp" \
+      sha256sum.txt "${measured_files[@]}"
+  )
+  mv "$ARTIFACT_DIR/os/mr_${image_hash}.tar.gz.tmp" \
+    "$ARTIFACT_DIR/os/mr_${image_hash}.tar.gz"
+  printf '%s' "$image_hash"
+}
+
+OS_IMAGE_HASH=$(package_os_image "$IMAGE_NAME")
+if [[ "$OLD_IMAGE_NAME" == "$IMAGE_NAME" ]]; then
+  OLD_OS_IMAGE_HASH=$OS_IMAGE_HASH
+else
+  OLD_OS_IMAGE_HASH=$(package_os_image "$OLD_IMAGE_NAME")
+fi
 
 token_file="$STATE_DIR/gateway-admin-token"
 if [[ ! -s "$token_file" ]]; then
@@ -237,8 +247,10 @@ VM_DIR=$VM_DIR
 ARTIFACT_DIR=$ARTIFACT_DIR
 IMAGE_ROOT=$IMAGE_ROOT
 IMAGE_NAME=$IMAGE_NAME
+OLD_IMAGE_NAME=$OLD_IMAGE_NAME
 PLATFORM=$PLATFORM
 OS_IMAGE_HASH=$OS_IMAGE_HASH
+OLD_OS_IMAGE_HASH=$OLD_OS_IMAGE_HASH
 VMM_PORT=$VMM_PORT
 AUTH_PORT=$AUTH_PORT
 ARTIFACT_PORT=$ARTIFACT_PORT
@@ -271,5 +283,6 @@ echo "  auth:         http://10.0.2.2:${AUTH_PORT}"
 echo "  artifacts:    http://10.0.2.2:${ARTIFACT_PORT}"
 echo "  old KMS:      https://${KMS_RPC_DOMAIN}:${KMS_OLD_HOST_PORT}"
 echo "  latest KMS:   https://${KMS_RPC_DOMAIN}:${KMS_LATEST_HOST_PORT}"
-echo "  image:        ${IMAGE_NAME} (${OS_IMAGE_HASH})"
+echo "  current image: ${IMAGE_NAME} (${OS_IMAGE_HASH})"
+echo "  old image:     ${OLD_IMAGE_NAME} (${OLD_OS_IMAGE_HASH})"
 echo "  gateway app:  ${GATEWAY_APP_ID}"

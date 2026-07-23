@@ -568,12 +568,12 @@ render_app() {
 }
 
 deploy_app() {
-  local label=$1 mode=$2 kms_url=$3 out vm_id
+  local label=$1 mode=$2 kms_url=$3 guest_image=${4:-$IMAGE_NAME} out vm_id
   render_app "$label" "$mode"
   log "deploying $label app CVM (forced TDX $mode)"
   if ! out=$("${VMM_CLI[@]}" deploy \
     --name "${SUITE_PREFIX}-${label}" \
-    --image "$IMAGE_NAME" \
+    --image "$guest_image" \
     --compose "$WORK_DIR/${label}.app-compose.json" \
     --kms-url "$kms_url" \
     --gateway-url "$GATEWAY1_URL" \
@@ -806,7 +806,7 @@ phase_upgrade() {
   gateway_version 2 old
   bootstrap_gateway
 
-  deploy_app legacy legacy "$KMS_OLD_URL"
+  deploy_app legacy legacy "$KMS_OLD_URL" "$OLD_IMAGE_NAME"
   verify_app_via_gateway legacy 1
   verify_app_via_gateway legacy 2
   capture_kms_identity old "$KMS_OLD_HOST_PORT" "$(cat "$WORK_DIR/legacy.app_id")"
