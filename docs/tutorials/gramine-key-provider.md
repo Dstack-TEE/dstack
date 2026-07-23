@@ -70,10 +70,10 @@ git clone https://github.com/Dstack-TEE/dstack.git
 cd dstack/dstack/local-key-provider/build
 ```
 
-The bundled `sgx_default_qcnl.conf` points AESM at the Phala PCCS. To use a
-different PCCS, edit its `pccs_url` while keeping certificate verification
-enabled, and export the provider's base URL as `PCCS_URL` before running
-Compose.
+Compose mounts the host's `/etc/sgx_default_qcnl.conf` into the AESM
+container. Make sure that file points at a working PCCS before starting the
+services. To use a different PCCS for the provider, export its base URL as
+`PCCS_URL` before running Compose.
 
 Build and start both AESM and the provider:
 
