@@ -29,7 +29,9 @@ build_one() {
     "$work" "$stage" "$kstage" "$flavor"
   # NVIDIA and ZFS are assembled from independent cacheable stage trees.
   # Regenerate indexes only after every module tree has been merged.
+  ln -sfn usr/lib "$kstage/lib"
   depmod -b "$kstage" "$KERNEL_VERSION-dstack"
+  rm -f "$kstage/lib"
   if [[ $flavor == prod ]]; then
     # Yocto splits module DWARF into debug packages which are not shipped in
     # the production image. Keep BTF and loadable ELF metadata, but do not put
