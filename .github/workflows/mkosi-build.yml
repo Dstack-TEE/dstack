@@ -71,7 +71,7 @@ jobs:
         run: |
           python3 -m venv "$RUNNER_TEMP/mkosi-venv"
           "$RUNNER_TEMP/mkosi-venv/bin/pip" install --disable-pip-version-check \
-            'mkosi==26'
+            'mkosi @ git+https://github.com/systemd/mkosi.git@84af20892b61c8e177e391f997ded8b4cb5514f2'
           echo "$RUNNER_TEMP/mkosi-venv/bin" >> "$GITHUB_PATH"
           sudo ./os/mkosi/scripts/install-toolchains.sh \
             "$RUNNER_TEMP/toolchain-downloads"
