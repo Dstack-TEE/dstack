@@ -103,8 +103,15 @@ jobs:
           test -z "${DSTACK_DEV_CACHE_DIR:-}"
           # GitHub-hosted Ubuntu runners restrict unprivileged user namespaces.
           # Run mkosi as root instead of weakening the runner's AppArmor policy.
+          # Keep setup-python out of the build PATH because Ubuntu's lddtree
+          # expects the distro Python and its python3-pyelftools module.
+          ci_bin="$RUNNER_TEMP/mkosi-ci-bin"
+          mkdir -p "$ci_bin"
+          ln -s "$(command -v mkosi)" "$ci_bin/mkosi"
+          ln -s "$(command -v nitro-tpm-pcr-compute)" \
+            "$ci_bin/nitro-tpm-pcr-compute"
           sudo --set-home env \
-            "PATH=$PATH" \
+            "PATH=$ci_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
             "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" \
             "DSTACK_MR_BIN=$DSTACK_MR_BIN" \
             "JOBS=$JOBS" \
