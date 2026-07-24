@@ -14,6 +14,7 @@ grep -q "^Snapshot=$DEBIAN_SNAPSHOT" "$D/mkosi.conf"
 grep -q '^Format=tar$' "$D/mkosi.conf"
 grep -q '^Output=dstack-0.6.0$' "$D/mkosi.conf"
 grep -q '^CompressOutput=gz$' "$D/mkosi.conf"
+grep -q '^SplitArtifacts=$' "$D/mkosi.conf"
 grep -q '^Bootable=no$' "$D/mkosi.conf"
 grep -q '^Bootloader=none$' "$D/mkosi.conf"
 for key in ACPI ACPI_TABLE_UPGRADE INTEL_TDX_GUEST TDX_GUEST_DRIVER \
