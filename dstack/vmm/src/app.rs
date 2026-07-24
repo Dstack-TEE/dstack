@@ -283,6 +283,20 @@ pub(crate) enum PullStatus {
     Failed(String),
 }
 
+fn needs_mr_config_v3(
+    manifest: &Manifest,
+    platform: crate::config::CvmPlatform,
+    use_mrconfigid: bool,
+    has_key_provider_id: bool,
+) -> bool {
+    manifest.simulated_tee == Some(dstack_types::TeeVariant::DstackAmdSevSnp)
+        || (!manifest.no_tee
+            && (platform == crate::config::CvmPlatform::AmdSevSnp
+                || (platform == crate::config::CvmPlatform::Tdx
+                    && use_mrconfigid
+                    && has_key_provider_id)))
+}
+
 #[derive(Clone)]
 pub struct App {
     pub config: Arc<Config>,
@@ -1087,11 +1101,12 @@ impl App {
         let app_compose = work_dir
             .app_compose()
             .context("Failed to get app compose")?;
-        let use_mr_config_v3 = !manifest.no_tee
-            && (platform == crate::config::CvmPlatform::AmdSevSnp
-                || (platform == crate::config::CvmPlatform::Tdx
-                    && cfg.cvm.use_mrconfigid
-                    && !app_compose.key_provider_id.is_empty()));
+        let use_mr_config_v3 = needs_mr_config_v3(
+            &manifest,
+            platform,
+            cfg.cvm.use_mrconfigid,
+            !app_compose.key_provider_id.is_empty(),
+        );
         let mr_config = if use_mr_config_v3 {
             Some(
                 work_dir
@@ -1740,6 +1755,14 @@ mod tests {
             networks: vec![],
             volumes: vec![],
         }
+    }
+
+    #[test]
+    fn simulated_sev_snp_requires_mr_config_even_without_tee() {
+        let mut manifest = test_manifest(2048);
+        manifest.no_tee = true;
+        manifest.simulated_tee = Some(dstack_types::TeeVariant::DstackAmdSevSnp);
+        assert!(needs_mr_config_v3(&manifest, CvmPlatform::Tdx, true, false));
     }
 
     fn dummy_tdx_measurement_document() -> TdxOsImageMeasurementDocument {
