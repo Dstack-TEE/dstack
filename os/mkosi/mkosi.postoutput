@@ -9,6 +9,10 @@ source "$SELF/versions.env"
 FLAVOR=${DSTACK_BUILD_FLAVOR:?}
 WORK="$OUTPUTDIR/.dstack-$FLAVOR"
 
+# mkosi creates an extensionless convenience symlink for its compressed tar.
+# The release directory has that same Yocto-defined name, so remove the link
+# before assemble.sh atomically replaces the native tar and creates the tree.
+rm -f "$OUTPUTDIR/dstack-$DSTACK_VERSION"
 DSTACK_MR_BIN="$OUTPUTDIR/.image-tools/dstack-mr" \
 NITRO_TPM_PCR_COMPUTE_BIN="$OUTPUTDIR/.image-tools/nitro-tpm-pcr-compute" \
 DIST_DIR="$OUTPUTDIR" \
