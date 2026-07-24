@@ -467,6 +467,35 @@ pub(crate) fn ensure_configfs_mount(mountpoint: &Path) -> Result<()> {
             }
         }
     }
+    // configfs rejects arbitrary directories when no kernel TSM provider has
+    // registered the `tsm` subsystem. In a no-TEE development guest the
+    // simulator is that provider, so shadow the otherwise-empty configfs with
+    // a private tmpfs and create the userspace ABI hierarchy there.
+    if let Err(error) = std::fs::create_dir_all(mountpoint) {
+        if !matches!(error.raw_os_error(), Some(libc::EPERM) | Some(libc::EACCES)) {
+            return Err(error)
+                .with_context(|| format!("failed to create {}", mountpoint.display()));
+        }
+        let source = CString::new("dstack-tee-simulator")?;
+        let target = CString::new("/sys/kernel/config")?;
+        let fstype = CString::new("tmpfs")?;
+        let data = CString::new("mode=0755")?;
+        let rc = unsafe {
+            libc::mount(
+                source.as_ptr(),
+                target.as_ptr(),
+                fstype.as_ptr(),
+                libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
+                data.as_ptr().cast(),
+            )
+        };
+        if rc != 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("failed to mount simulator configfs shadow");
+        }
+        std::fs::create_dir_all(mountpoint)
+            .with_context(|| format!("failed to create {}", mountpoint.display()))?;
+    }
     if !mountpoint.is_dir() {
         bail!(
             "tsm report mountpoint is unavailable: {}",

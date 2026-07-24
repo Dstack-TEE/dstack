@@ -86,7 +86,12 @@ fn cuse() -> &'static CuseApi {
 }
 
 unsafe fn load_cuse() -> Result<CuseApi> {
-    let library = Box::leak(Box::new(libloading::Library::new("libfuse3.so.3")?));
+    // FUSE 3.18 bumped the shared-library SONAME to 4. Keep the older SONAME
+    // fallback so development binaries also run on distributions that still
+    // ship the previous ABI.
+    let library = libloading::Library::new("libfuse3.so.4")
+        .or_else(|_| libloading::Library::new("libfuse3.so.3"))?;
+    let library = Box::leak(Box::new(library));
     Ok(CuseApi {
         main: *library.get(b"cuse_lowlevel_main\0")?,
         reply_open: *library.get(b"fuse_reply_open\0")?,
