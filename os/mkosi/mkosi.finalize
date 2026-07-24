@@ -1,0 +1,26 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+
+ROOT="$SRCDIR/dstack"
+SELF="$ROOT/os/mkosi"
+TREE=${BUILDROOT:?}
+FLAVOR=${DSTACK_BUILD_FLAVOR:?}
+WORK="$OUTPUTDIR/.dstack-$FLAVOR"
+KSTAGE="$WORK/kernel-stage"
+ARTIFACTS="$WORK/artifacts"
+
+"$SELF/scripts/normalize-skeleton-modes.sh" "$TREE"
+mkdir -p "$KSTAGE/usr/lib" "$OUTPUTDIR/.image-tools"
+cp -a "$TREE/usr/lib/modules" "$KSTAGE/usr/lib/"
+install -m0644 "$TREE/usr/lib/dstack/firmware/ovmf.fd" "$KSTAGE/ovmf.fd"
+install -m0644 "$TREE/usr/lib/dstack/firmware/ovmf-sev.fd" "$KSTAGE/ovmf-sev.fd"
+install -m0755 "$TREE/usr/lib/dstack/image-tools/"* "$OUTPUTDIR/.image-tools/"
+rm -rf "$TREE/usr/lib/dstack/firmware" "$TREE/usr/lib/dstack/image-tools"
+
+if [[ $FLAVOR == prod ]]; then
+    "$SELF/scripts/prune-rootfs.sh" "$TREE"
+fi
+rm -f "$TREE/var/cache/ldconfig/aux-cache"
+"$SELF/tests/check-parity.py" "$SELF/parity.json" "$TREE" "$KSTAGE" "$FLAVOR"
+"$SELF/scripts/make-release-artifacts.sh" "$TREE" "$KSTAGE" "$ARTIFACTS" "$FLAVOR"

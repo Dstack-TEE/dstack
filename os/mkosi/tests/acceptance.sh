@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 D=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-for component in dstack-rust container-stack sysbox nvattest kernel nvidia zfs ovmf; do
+for component in dstack-rust image-tools container-stack sysbox nvattest kernel nvidia zfs ovmf; do
   test -f "$D/components/$component/$component.sh"
   test -x "$D/components/$component/$component-build.sh"
 done
@@ -24,14 +24,14 @@ for service in dstack-guest-agent dstack-prepare app-compose wg-checker; do
   grep -q "$service" "$D/mkosi.postinst"
 done
 grep -q 'artifact-manifest.json' "$D/scripts/make-release-artifacts.sh"
-grep -q 'image/assemble.sh' "$D/build.sh"
+grep -q 'image/assemble.sh' "$D/mkosi.postoutput"
 grep -q 'ovmf-build.sh' "$D/components/ovmf/ovmf.sh"
 grep -q 'fbe0805b2091393406952e84724188f8c1941837' "$D/components/ovmf/ovmf-build.sh"
 grep -q 'AmdSev/AmdSevX64.dsc' "$D/components/ovmf/ovmf-build.sh"
 grep -q '0006-OvmfPkg-AmdSev-drop-embedded-grub.patch' "$D/components/ovmf/ovmf.sh"
 grep -q 'objcopy --strip-debug' "$D/mkosi.build"
 grep -q 'depmod -b.*KERNEL_VERSION-dstack' "$D/mkosi.build"
-grep -q 'prune-rootfs.sh' "$D/build.sh"
+grep -q 'prune-rootfs.sh' "$D/mkosi.finalize"
 if grep -q '^[[:space:]]*ovmf$' "$D/mkosi.conf"; then
   echo 'distribution OVMF must not be installed in the guest rootfs' >&2
   exit 1
@@ -54,8 +54,9 @@ grep -q '0001-linux-6.19-7.1-compat.patch' "$D/components/zfs/zfs-build.sh"
 grep -q -- '--fuzz=0' "$D/components/zfs/zfs-build.sh"
 python3 -m json.tool "$D/parity.json" >/dev/null
 grep -q 'rootfs.img.parted.verity' "$D/../image/assemble.sh"
-bash -n "$D"/*.sh "$D"/mkosi.build "$D"/scripts/*.sh "$D"/components/*/*.sh "$D"/tests/*.sh
-grep -q 'dstack-.*-uki.tar.gz' "$D/build.sh"
+bash -n "$D"/*.sh "$D"/mkosi.build "$D"/mkosi.clean "$D"/mkosi.finalize \
+  "$D"/mkosi.postoutput "$D"/scripts/*.sh "$D"/components/*/*.sh "$D"/tests/*.sh
+grep -q 'Archiving UKI image' "$D/../image/assemble.sh"
 grep -Fq "FLAVORS=\${FLAVORS:-prod}" "$D/build.sh"
 grep -q 'DSTACK_COMPONENT_CACHE.*dev-image' "$D/build.sh"
 grep -q 'scripts/build-components.sh' "$D/mkosi.build"
@@ -66,7 +67,7 @@ grep -q 'clean -f' "$D/build.sh"
 grep -q 'install-toolchains.sh' "$D/mkosi.build"
 grep -q '^RUST_TOOLCHAIN_VERSION=1.92.0$' "$D/versions.env"
 grep -q '^GO_TOOLCHAIN_VERSION=1.22.2$' "$D/versions.env"
-for component in dstack-rust container-stack sysbox nvattest kernel nvidia zfs ovmf; do
+for component in dstack-rust image-tools container-stack sysbox nvattest kernel nvidia zfs ovmf; do
   definition="$D/components/$component/$component.sh"
   grep -q "^COMPONENT_NAME=$component$" "$definition"
   grep -q '^component_cache_key()' "$definition"

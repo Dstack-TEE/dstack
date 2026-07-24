@@ -1,0 +1,21 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+
+ROOT="$SRCDIR/dstack"
+SELF="$ROOT/os/mkosi"
+# shellcheck source=/dev/null
+source "$SELF/versions.env"
+FLAVOR=${DSTACK_BUILD_FLAVOR:?}
+WORK="$OUTPUTDIR/.dstack-$FLAVOR"
+
+DSTACK_MR_BIN="$OUTPUTDIR/.image-tools/dstack-mr" \
+NITRO_TPM_PCR_COMPUTE_BIN="$OUTPUTDIR/.image-tools/nitro-tpm-pcr-compute" \
+DIST_DIR="$OUTPUTDIR" \
+TAR_OPTIONS="--sort=name --mtime=@$SOURCE_DATE_EPOCH --owner=0 --group=0 --numeric-owner" \
+  "$ROOT/os/image/assemble.sh" --manifest "$WORK/artifacts/artifact-manifest.json"
+
+release_name=dstack
+[[ $FLAVOR == dev ]] && release_name=dstack-dev
+"$SELF/tests/check-output.sh" "$OUTPUTDIR/$release_name-$DSTACK_VERSION" "$FLAVOR"
+rm -rf "$WORK" "$OUTPUTDIR/.image-tools"

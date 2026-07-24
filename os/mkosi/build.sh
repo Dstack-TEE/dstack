@@ -33,14 +33,12 @@ fi
 
 build_one() {
   local out=$1 work=$2 flavor=$3
-  local kstage="$work/kernel-stage" tree="$work/rootfs"
   rm -rf "$work" "$out"; mkdir -p "$out"
   mkosi_args=(
     --directory "$SELF"
     --force
-    --format=directory
-    --output-directory="$work"
-    --output=rootfs
+    --format=none
+    --output-directory="$out"
     --compress-output=no
     --bootable=no
     --environment="DSTACK_BUILD_FLAVOR=$flavor"
@@ -58,29 +56,6 @@ build_one() {
       --package=openssh-server)
   fi
   mkosi "${mkosi_args[@]}" build
-
-  "$SELF/scripts/normalize-skeleton-modes.sh" "$tree"
-
-  mkdir -p "$kstage/usr/lib"
-  cp -a "$tree/usr/lib/modules" "$kstage/usr/lib/"
-  install -m0644 "$tree/usr/lib/dstack/firmware/ovmf.fd" "$kstage/ovmf.fd"
-  install -m0644 "$tree/usr/lib/dstack/firmware/ovmf-sev.fd" "$kstage/ovmf-sev.fd"
-  rm -rf "$tree/usr/lib/dstack/firmware"
-  if [[ $flavor == prod ]]; then
-    "$SELF/scripts/prune-rootfs.sh" "$tree"
-  fi
-  # ldconfig's binary auxiliary cache records traversal-dependent ordering.
-  # /var is volatile at runtime, so ship no host-generated cache.
-  rm -f "$tree/var/cache/ldconfig/aux-cache"
-  "$SELF/tests/check-parity.py" "$SELF/parity.json" "$tree" "$kstage" "$flavor"
-  artifact_dir="$work/artifacts/$flavor"
-  "$SELF/scripts/make-release-artifacts.sh" "$tree" "$kstage" "$artifact_dir" "$flavor"
-  DIST_DIR="$out" \
-    TAR_OPTIONS="--sort=name --mtime=@$SOURCE_DATE_EPOCH --owner=0 --group=0 --numeric-owner" \
-    "$ROOT/os/image/assemble.sh" --manifest "$artifact_dir/artifact-manifest.json"
-  release_name=dstack
-  [[ $flavor == dev ]] && release_name=dstack-dev
-  "$SELF/tests/check-output.sh" "$out/$release_name-$DSTACK_VERSION" "$flavor"
 }
 
 if [[ $action == image || $action == dev-image ]]; then

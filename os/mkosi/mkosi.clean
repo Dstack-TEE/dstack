@@ -1,0 +1,7 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+
+[[ -n ${OUTPUTDIR:-} ]] || exit 0
+find "$OUTPUTDIR" -maxdepth 1 \( -name 'dstack-*' -o -name '.dstack-*' \
+  -o -name '.image-tools' \) -exec rm -rf -- {} +

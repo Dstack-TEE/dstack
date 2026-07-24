@@ -13,11 +13,6 @@ FLAVOR=${4:?flavor required}
 SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:?}
 export SOURCE_DATE_EPOCH TZ=UTC LC_ALL=C
 mkdir -p "$OUT/files"
-TREE_RUNNER="$SELF/scripts/run-in-tree.sh"
-TOOLS_TREE=${DSTACK_TOOLS_TREE:-$SELF/mkosi.tools}
-[[ -x $TOOLS_TREE/usr/bin/mksquashfs ]] || {
-  echo "mksquashfs missing from pinned mkosi tools tree" >&2; exit 1;
-}
 
 kernel="$KERNEL_TREE/usr/lib/modules/$KERNEL_VERSION-dstack/vmlinuz"
 install -m0644 "$kernel" "$OUT/files/bzImage"
@@ -30,17 +25,14 @@ truncate -s 0 "$rootfs"
 # Privileged mkosi runs can inherit host default ACLs from their workspace.
 # The guest rootfs does not rely on xattrs, so exclude this host-only metadata.
 # A single compressor worker also avoids host-CPU-dependent fragment ordering.
-env -u SOURCE_DATE_EPOCH "$TREE_RUNNER" "$TOOLS_TREE" /usr/bin/mksquashfs \
-  "$TREE" "$rootfs" -noappend -all-root -no-progress \
+env -u SOURCE_DATE_EPOCH mksquashfs "$TREE" "$rootfs" \
+  -noappend -all-root -no-progress \
   -no-xattrs -processors 1 -comp zstd -mkfs-time "$SOURCE_DATE_EPOCH" \
   -all-time "$SOURCE_DATE_EPOCH" >/dev/null
 data_size=$(stat -c %s "$rootfs")
 data_size=$(( (data_size + 4095) / 4096 * 4096 ))
 truncate -s "$data_size" "$rootfs"
-verity_program=$(find "$TREE" -type f \( -path '*/sbin/veritysetup' -o \
-  -path '*/bin/veritysetup' \) -printf '/%P\n' | head -1)
-[[ -n $verity_program ]] || { echo 'veritysetup missing from mkosi tree' >&2; exit 1; }
-verity_output=$("$TREE_RUNNER" "$TREE" "$verity_program" format "$rootfs" "$rootfs" \
+verity_output=$(veritysetup format "$rootfs" "$rootfs" \
   --hash-offset="$data_size" --data-block-size=4096 --hash-block-size=4096 \
   --uuid=00000000-0000-0000-0000-000000000000 \
   --salt="$(printf '%064x' 0)")
