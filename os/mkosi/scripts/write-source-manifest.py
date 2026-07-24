@@ -7,7 +7,6 @@ import pathlib
 import subprocess
 import sys
 
-
 root = pathlib.Path(sys.argv[1]).resolve()
 output = pathlib.Path(sys.argv[2]).resolve()
 entries = subprocess.check_output(
