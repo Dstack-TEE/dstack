@@ -2014,6 +2014,7 @@ impl Platform {
         match product_name.map(str::trim) {
             Some("dstack" | "qemu") => return Some(Self::Dstack),
             Some("Google Compute Engine") => return Some(Self::Gcp),
+            Some("Nitro Enclave") => return Some(Self::NitroEnclave),
             _ => {}
         }
 
@@ -2069,6 +2070,14 @@ mod platform_tests {
         assert_eq!(
             Platform::detect_from_dmi(Some("Google Compute Engine"), Some("Amazon EC2")),
             Some(Platform::Gcp)
+        );
+    }
+
+    #[test]
+    fn detects_nitro_enclave_from_simulated_dmi() {
+        assert_eq!(
+            Platform::detect_from_dmi(Some("Nitro Enclave"), Some("AWS Nitro Enclaves")),
+            Some(Platform::NitroEnclave)
         );
     }
 }
