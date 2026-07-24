@@ -6,12 +6,15 @@ use fs_err as fs;
 use path_absolutize::Absolutize;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use dstack_types::{
-    SevOsImageMeasurementDocument, TdxOsImageMeasurementDocument, SNP_MEASUREMENT_FILENAME,
-    TDX_MEASUREMENT_FILENAME,
+    AwsOsImageMeasurementDocument, GCP_MEASUREMENT_FILENAME, GcpOsImageMeasurementDocument,
+    SNP_MEASUREMENT_FILENAME, SevOsImageMeasurementDocument, TDX_MEASUREMENT_FILENAME,
+    TdxOsImageMeasurementDocument,
 };
 use serde::{Deserialize, Serialize};
+
+const AWS_MEASUREMENT_FILENAME: &str = "measurement.aws.cbor";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ImageInfo {
@@ -79,6 +82,10 @@ pub struct Image {
     pub tdx_measurement: Option<TdxOsImageMeasurementDocument>,
     /// AMD SEV-SNP no-image-download measurement material.
     pub sev_measurement: Option<SevOsImageMeasurementDocument>,
+    /// GCP TDX no-image-download measurement material.
+    pub gcp_measurement: Option<GcpOsImageMeasurementDocument>,
+    /// AWS NitroTPM no-image-download measurement material.
+    pub aws_measurement: Option<AwsOsImageMeasurementDocument>,
 }
 
 impl Image {
@@ -148,6 +155,18 @@ impl Image {
             )),
             _ => None,
         };
+        let gcp_measurement = load_measurement_document(
+            &base_path,
+            &sha256sum,
+            GCP_MEASUREMENT_FILENAME,
+            GcpOsImageMeasurementDocument::new,
+        )?;
+        let aws_measurement = load_measurement_document(
+            &base_path,
+            &sha256sum,
+            AWS_MEASUREMENT_FILENAME,
+            AwsOsImageMeasurementDocument::new,
+        )?;
         if info.version.is_empty() {
             // Older images does not have version field. Fallback to the version of the image folder name
             info.version = guess_version(&base_path).unwrap_or_default();
@@ -163,6 +182,8 @@ impl Image {
             digest,
             tdx_measurement,
             sev_measurement,
+            gcp_measurement,
+            aws_measurement,
         }
         .ensure_exists()
     }
@@ -196,6 +217,24 @@ impl Image {
         }
         Ok(self)
     }
+}
+
+fn load_measurement_document<T>(
+    base_path: &Path,
+    checksum_file: &Option<Vec<u8>>,
+    filename: &str,
+    constructor: impl FnOnce(Vec<u8>, Vec<u8>) -> T,
+) -> Result<Option<T>> {
+    let path = base_path.join(filename);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let Some(checksum_file) = checksum_file else {
+        return Ok(None);
+    };
+    let measurement =
+        fs::read(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    Ok(Some(constructor(checksum_file.clone(), measurement)))
 }
 
 fn guess_version(base_path: &Path) -> Option<String> {

@@ -4,20 +4,20 @@
 
 //! QEMU launch preparation and command construction.
 use super::{
-    effective_vcpu_count,
+    GpuConfig, VmWorkDir, effective_vcpu_count,
     host_share::create_shared_disk,
     hugepage_numa_nodes,
     image::Image,
     mr_config::{snp_host_data, tdx_mr_config_id},
     network::{mac_address_for_vm_index, resolved_networks, validate_resolved_networks},
-    pci_numa_node, round_up, GpuConfig, VmWorkDir,
+    pci_numa_node, round_up,
 };
 use crate::{
     app::Manifest,
     config::{CvmConfig, CvmPlatform, Networking, NetworkingMode, ProcessAnnotation},
     vm_launcher::{ChildCommand, LaunchSpec},
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use bon::Builder;
 use dstack_types::shared_filenames::HOST_SHARED_DISK_LABEL;
 use fs_err as fs;
@@ -966,17 +966,17 @@ mod tests {
     use std::path::PathBuf;
 
     use rocket::figment::{
-        providers::{Format, Toml},
         Figment,
+        providers::{Format, Toml},
     };
 
     use super::{
-        amd_sev_snp_memory_backend_arg, parse_amd_sev_snp_qmp_capabilities, virtio_pci_device,
         PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder, VmConfig,
+        amd_sev_snp_memory_backend_arg, parse_amd_sev_snp_qmp_capabilities, virtio_pci_device,
     };
     use crate::app::image::{Image, ImageInfo};
-    use crate::app::{needs_swtpm, GpuConfig, Manifest, PortMapping, VmVolume, VmWorkDir};
-    use crate::config::{Config, CvmPlatform, Protocol, DEFAULT_CONFIG};
+    use crate::app::{GpuConfig, Manifest, PortMapping, VmVolume, VmWorkDir, needs_swtpm};
+    use crate::config::{Config, CvmPlatform, DEFAULT_CONFIG, Protocol};
     use dstack_types::{KeyProviderKind, TeeVariant};
 
     #[test]
@@ -1088,6 +1088,8 @@ mod tests {
                 digest: None,
                 tdx_measurement: None,
                 sev_measurement: None,
+                gcp_measurement: None,
+                aws_measurement: None,
             },
             cid: 100,
             workdir: PathBuf::from("/does-not-exist/vm-1"),
@@ -1120,28 +1122,36 @@ mod tests {
         .unwrap();
 
         assert_eq!(process.command, "/not-installed/qemu-system-x86_64");
-        assert!(process
-            .args
-            .windows(2)
-            .any(|args| args == ["-machine", "q35,kernel-irqchip=split,hpet=off"]));
-        assert!(process
-            .args
-            .windows(2)
-            .any(|args| args == ["-kernel", "/does-not-exist/kernel"]));
-        assert!(process
-            .args
-            .windows(2)
-            .any(|args| args == ["-append", "console=hvc0"]));
+        assert!(
+            process
+                .args
+                .windows(2)
+                .any(|args| args == ["-machine", "q35,kernel-irqchip=split,hpet=off"])
+        );
+        assert!(
+            process
+                .args
+                .windows(2)
+                .any(|args| args == ["-kernel", "/does-not-exist/kernel"])
+        );
+        assert!(
+            process
+                .args
+                .windows(2)
+                .any(|args| args == ["-append", "console=hvc0"])
+        );
         assert!(process.args.windows(2).any(|args| {
             args == [
                 "-drive",
                 "file=/does-not-exist/volume.img,if=none,id=vol0,format=raw,readonly=on",
             ]
         }));
-        assert!(process
-            .args
-            .iter()
-            .any(|arg| { arg == "virtio-blk-pci,drive=vol0" }));
+        assert!(
+            process
+                .args
+                .iter()
+                .any(|arg| { arg == "virtio-blk-pci,drive=vol0" })
+        );
         let volume_position = process
             .args
             .iter()
@@ -1164,14 +1174,18 @@ mod tests {
         assert!(netdevs[0].contains("hostfwd=tcp:127.0.0.1:18080-:8080"));
         assert!(netdevs[1].contains("user,id=net1"));
         assert!(!netdevs[1].contains("hostfwd="));
-        assert!(process
-            .args
-            .iter()
-            .any(|arg| arg.contains("virtio-net-pci,netdev=net0")));
-        assert!(process
-            .args
-            .iter()
-            .any(|arg| arg.contains("virtio-net-pci,netdev=net1")));
+        assert!(
+            process
+                .args
+                .iter()
+                .any(|arg| arg.contains("virtio-net-pci,netdev=net0"))
+        );
+        assert!(
+            process
+                .args
+                .iter()
+                .any(|arg| arg.contains("virtio-net-pci,netdev=net1"))
+        );
 
         prepared.swtpm_socket = Some(PathBuf::from("/does-not-exist/vm-1/swtpm/swtpm.sock"));
         let process = QemuCommandBuilder {
@@ -1188,9 +1202,11 @@ mod tests {
                 "socket,id=chrtpm,path=/does-not-exist/vm-1/swtpm/swtpm.sock",
             ]
         }));
-        assert!(process
-            .args
-            .windows(2)
-            .any(|args| args == ["-tpmdev", "emulator,id=tpm0,chardev=chrtpm"]));
+        assert!(
+            process
+                .args
+                .windows(2)
+                .any(|args| args == ["-tpmdev", "emulator,id=tpm0,chardev=chrtpm"])
+        );
     }
 }
