@@ -8,8 +8,11 @@ use std::{
     ffi::CString,
     mem,
     os::raw::{c_int, c_uint, c_void},
+    path::Path,
     ptr,
     sync::{Arc, OnceLock},
+    thread,
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -117,9 +120,51 @@ unsafe extern "C" fn release(req: FuseReq, _fi: *mut FuseFileInfo) {
 }
 
 unsafe extern "C" fn init_done(_userdata: *mut c_void) {
+    if let Err(error) = ensure_nsm_device() {
+        tracing::error!(?error, "failed to publish simulated NSM device");
+        return;
+    }
     if let Err(error) = sd_notify::notify(true, &[sd_notify::NotifyState::Ready]) {
         tracing::error!(?error, "failed to notify systemd that NSM is ready");
     }
+}
+
+fn ensure_nsm_device() -> Result<()> {
+    let device_path = Path::new("/dev/nsm");
+    let sysfs_paths = [
+        Path::new("/sys/class/misc/nsm/dev"),
+        Path::new("/sys/devices/virtual/misc/nsm/dev"),
+    ];
+    for _ in 0..100 {
+        if device_path.exists() {
+            return Ok(());
+        }
+        if let Some(device) = sysfs_paths
+            .iter()
+            .find_map(|path| fs_err::read_to_string(path).ok())
+        {
+            let (major, minor) = device
+                .trim()
+                .split_once(':')
+                .context("invalid NSM device number")?;
+            let major = major.parse::<u32>().context("invalid NSM major number")?;
+            let minor = minor.parse::<u32>().context("invalid NSM minor number")?;
+            let path = CString::new("/dev/nsm")?;
+            let result = unsafe {
+                libc::mknod(
+                    path.as_ptr(),
+                    libc::S_IFCHR | 0o660,
+                    libc::makedev(major, minor),
+                )
+            };
+            if result == 0 || device_path.exists() {
+                return Ok(());
+            }
+            return Err(std::io::Error::last_os_error()).context("failed to create /dev/nsm");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    anyhow::bail!("CUSE NSM device did not appear in sysfs")
 }
 
 unsafe extern "C" fn ioctl(
