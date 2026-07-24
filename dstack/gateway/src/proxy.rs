@@ -22,7 +22,7 @@ use tokio::{
     runtime::Runtime,
     time::timeout,
 };
-use tracing::{debug, error, info, info_span, Instrument};
+use tracing::{debug, debug_span, error, info, Instrument};
 
 use crate::{
     config::ProxyConfig,
@@ -141,7 +141,7 @@ async fn handle_connection(inbound: TcpStream, state: Proxy) -> Result<()> {
         .await
         .context("proxy protocol header timeout")?
         .context("failed to read proxy protocol header")?;
-    info!("client address: {}", DisplayAddr(&pp_header));
+    debug!("client address: {}", DisplayAddr(&pp_header));
 
     let (sni, buffer) = timeout(timeouts.handshake, take_sni(&mut inbound))
         .await
@@ -203,11 +203,11 @@ pub async fn proxy_main(rt: &Runtime, config: &ProxyConfig, proxy: Proxy) -> Res
                 // Disable Nagle: this is a latency-sensitive proxy and small
                 // request/response traffic otherwise stalls on delayed ACKs.
                 let _ = inbound.set_nodelay(true);
-                let span = info_span!("conn", id = next_connection_id());
+                let span = debug_span!("conn", id = next_connection_id());
                 let _enter = span.enter();
                 let conn_entered = EnteredCounter::new(&NUM_CONNECTIONS);
 
-                info!(%from, "new connection");
+                debug!(%from, "new connection");
                 let proxy = proxy.clone();
                 rt.spawn(
                     async move {
@@ -217,7 +217,7 @@ pub async fn proxy_main(rt: &Runtime, config: &ProxyConfig, proxy: Proxy) -> Res
                             timeout(timeouts.total, handle_connection(inbound, proxy)).await;
                         match result {
                             Ok(Ok(_)) => {
-                                info!("connection closed");
+                                debug!("connection closed");
                             }
                             Ok(Err(e)) => {
                                 error!("connection error: {e:#}");
