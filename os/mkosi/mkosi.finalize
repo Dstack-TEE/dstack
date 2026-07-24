@@ -18,9 +18,6 @@ install -m0644 "$TREE/usr/lib/dstack/firmware/ovmf-sev.fd" "$KSTAGE/ovmf-sev.fd"
 install -m0755 "$TREE/usr/lib/dstack/image-tools/"* "$OUTPUTDIR/.image-tools/"
 rm -rf "$TREE/usr/lib/dstack/firmware" "$TREE/usr/lib/dstack/image-tools"
 
-if [[ $FLAVOR == prod ]]; then
-    "$SELF/scripts/prune-rootfs.sh" "$TREE"
-fi
 rm -f "$TREE/var/cache/ldconfig/aux-cache"
 "$SELF/tests/check-parity.py" "$SELF/parity.json" "$TREE" "$KSTAGE" "$FLAVOR"
 "$SELF/scripts/make-release-artifacts.sh" "$TREE" "$KSTAGE" "$ARTIFACTS" "$FLAVOR"

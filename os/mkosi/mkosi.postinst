@@ -9,7 +9,6 @@ mkdir -p "$B/dev" "$B/proc" "$B/sys" "$B/run" "$B/tmp" "$B/dstack" \
   "$B/var/volatile" "$B/dstack/.host-shared"
 rm -f "$B/etc/machine-id" "$B/var/lib/dbus/machine-id"
 : > "$B/etc/machine-id"
-rm -rf "$B/var/cache/apt/"* "$B/var/lib/apt/lists/"* "$B/var/log/"*
 ln -sfn /run/systemd/resolve/stub-resolv.conf "$B/etc/resolv.conf"
 ln -sfn dstack "$B/tapp"
 ln -sfn ../lib/systemd/systemd "$B/usr/sbin/init"

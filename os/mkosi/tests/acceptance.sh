@@ -31,7 +31,9 @@ grep -q 'AmdSev/AmdSevX64.dsc' "$D/components/ovmf/ovmf-build.sh"
 grep -q '0006-OvmfPkg-AmdSev-drop-embedded-grub.patch' "$D/components/ovmf/ovmf.sh"
 grep -q 'objcopy --strip-debug' "$D/mkosi.build"
 grep -q 'depmod -b.*KERNEL_VERSION-dstack' "$D/mkosi.build"
-grep -q 'prune-rootfs.sh' "$D/mkosi.finalize"
+grep -q '^CleanPackageMetadata=yes$' "$D/mkosi.conf"
+grep -q '^WithDocs=no$' "$D/mkosi.conf"
+grep -q '/var/lib/dpkg' "$D/mkosi.profiles/prod/mkosi.conf"
 if grep -q '^[[:space:]]*ovmf$' "$D/mkosi.conf"; then
   echo 'distribution OVMF must not be installed in the guest rootfs' >&2
   exit 1

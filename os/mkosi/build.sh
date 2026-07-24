@@ -41,7 +41,8 @@ build_one() {
     --output-directory="$out"
     --compress-output=no
     --bootable=no
-    --environment="DSTACK_BUILD_FLAVOR=$flavor"
+    --profile="$flavor"
+    --source-date-epoch="$SOURCE_DATE_EPOCH"
     --environment="DSTACK_COMPONENT_CACHE=$([[ $action == dev-image ]] && echo 1 || echo 0)"
     --environment="DSTACK_GIT_REVISION=$DSTACK_GIT_REVISION"
     --environment="JOBS=${JOBS:-$(nproc)}"
@@ -50,10 +51,6 @@ build_one() {
     cache_root=${DSTACK_DEV_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dstack/mkosi-dev}
     mkdir -p "$cache_root"
     mkosi_args+=(--build-sources="$cache_root:component-cache")
-  fi
-  if [[ $flavor == dev ]]; then
-    mkosi_args+=(--package=strace --package=tcpdump --package=gdb --package=vim \
-      --package=openssh-server)
   fi
   mkosi "${mkosi_args[@]}" build
 }
