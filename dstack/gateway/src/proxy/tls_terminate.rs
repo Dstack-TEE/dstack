@@ -110,6 +110,15 @@ pub(crate) fn create_acceptor_with_cert_resolver(
         CryptoProvider::AwsLcRs => rustls::crypto::aws_lc_rs::default_provider(),
         CryptoProvider::Ring => rustls::crypto::ring::default_provider(),
     };
+    // Stateless session tickets. TLS 1.2 resumption already works via the
+    // in-memory session-ID cache, but TLS 1.3 resumption requires a ticketer;
+    // without one, every reconnect pays a full handshake (a large RSA signing
+    // cost on the server). Installing a ticketer restores resumption for 1.3.
+    let ticketer = match proxy_config.tls_crypto_provider {
+        CryptoProvider::AwsLcRs => rustls::crypto::aws_lc_rs::Ticketer::new(),
+        CryptoProvider::Ring => rustls::crypto::ring::Ticketer::new(),
+    }
+    .context("failed to create TLS session ticketer")?;
     let supported_versions = proxy_config
         .tls_versions
         .iter()
@@ -124,6 +133,8 @@ pub(crate) fn create_acceptor_with_cert_resolver(
         .context("failed to build TLS config")?
         .with_no_client_auth()
         .with_cert_resolver(cert_resolver);
+
+    config.ticketer = ticketer;
 
     if h2 {
         config.alpn_protocols = vec![b"h2".to_vec()];
