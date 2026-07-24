@@ -447,7 +447,7 @@ fn proxy_tpm_commands(
             let template = nv_write
                 .as_ref()
                 .context("NitroTPM vendor command without an NV request")?;
-            nsm_response = Some(handle_nsm_vendor_command(generator, template)?);
+            nsm_response = Some(handle_nsm_vendor_command(generator, template, backend)?);
             tpm_success_response()
         } else if code == TPM2_CC_NV_READ && nsm_response.is_some() {
             nv_read_response(
@@ -553,14 +553,15 @@ fn parse_nv_write(command: &[u8]) -> Result<Option<NvWriteTemplate>> {
 fn handle_nsm_vendor_command(
     generator: &NsmGenerator,
     template: &NvWriteTemplate,
+    backend: &mut UnixStream,
 ) -> Result<Vec<u8>> {
     let request: NsmRequest = serde_cbor::from_slice(&template.request)?;
     let response = match request {
         NsmRequest::Attestation { user_data, .. } => {
             let pcrs = [4u16, 7, 8, 12, 14]
                 .into_iter()
-                .map(|i| (i, vec![0; 48]))
-                .collect();
+                .map(|index| Ok((index, read_sha384_pcr(backend, index)?)))
+                .collect::<Result<_>>()?;
             let document = generator.attest_with_pcrs(
                 user_data.as_ref().map(|v| v.as_slice()).unwrap_or_default(),
                 pcrs,
@@ -570,6 +571,35 @@ fn handle_nsm_vendor_command(
         _ => anyhow::bail!("unsupported NitroTPM NSM request"),
     };
     Ok(serde_cbor::to_vec(&response)?)
+}
+
+fn read_sha384_pcr(backend: &mut UnixStream, index: u16) -> Result<Vec<u8>> {
+    anyhow::ensure!(index < 24, "invalid PCR index {index}");
+    let mut command = Vec::with_capacity(20);
+    command.extend_from_slice(&0x8001u16.to_be_bytes());
+    command.extend_from_slice(&20u32.to_be_bytes());
+    command.extend_from_slice(&0x0000_017eu32.to_be_bytes());
+    command.extend_from_slice(&1u32.to_be_bytes());
+    command.extend_from_slice(&0x000cu16.to_be_bytes());
+    command.push(3);
+    let mut selection = [0u8; 3];
+    selection[index as usize / 8] = 1 << (index % 8);
+    command.extend_from_slice(&selection);
+
+    let response = transact(backend, &command)?;
+    anyhow::ensure!(response.len() >= 30, "truncated TPM PCR_Read response");
+    anyhow::ensure!(
+        read_be_u32(&response[6..10], "TPM PCR_Read response code")? == 0,
+        "TPM PCR_Read failed"
+    );
+    anyhow::ensure!(
+        read_be_u32(&response[24..28], "TPM PCR digest count")? == 1,
+        "unexpected TPM PCR digest count"
+    );
+    let size = read_be_u16(&response[28..30], "TPM PCR digest size")? as usize;
+    anyhow::ensure!(size == 48, "unexpected SHA-384 PCR size {size}");
+    anyhow::ensure!(response.len() >= 30 + size, "truncated TPM PCR digest");
+    Ok(response[30..30 + size].to_vec())
 }
 
 fn set_nv_public_size(response: &mut [u8], size: usize) -> Result<()> {
