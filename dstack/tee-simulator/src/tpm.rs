@@ -237,30 +237,28 @@ fn install_fixture_event_log() -> Result<()> {
         return Ok(());
     }
     let tpm_dir = event_log.parent().context("TPM event log has no parent")?;
-    if let Err(error) = fs_err::create_dir_all(tpm_dir) {
-        if !matches!(error.raw_os_error(), Some(libc::EPERM) | Some(libc::EACCES)) {
-            return Err(error).context("failed to create simulated TPM event-log directory");
-        }
-        let source = CString::new("dstack-tee-simulator")?;
-        let target = CString::new("/sys/kernel/security")?;
-        let fstype = CString::new("tmpfs")?;
-        let data = CString::new("mode=0755")?;
-        let rc = unsafe {
-            libc::mount(
-                source.as_ptr(),
-                target.as_ptr(),
-                fstype.as_ptr(),
-                libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
-                data.as_ptr().cast(),
-            )
-        };
-        if rc != 0 {
-            return Err(std::io::Error::last_os_error())
-                .context("failed to mount simulated securityfs shadow");
-        }
-        fs_err::create_dir_all(tpm_dir)
-            .context("failed to create simulated TPM event-log directory")?;
+    // securityfs does not permit userspace to create a synthetic TPM event
+    // log hierarchy. Shadow it in this development-only guest before
+    // publishing the fixture that was replayed into the simulated PCRs.
+    let source = CString::new("dstack-tee-simulator")?;
+    let target = CString::new("/sys/kernel/security")?;
+    let fstype = CString::new("tmpfs")?;
+    let data = CString::new("mode=0755")?;
+    let rc = unsafe {
+        libc::mount(
+            source.as_ptr(),
+            target.as_ptr(),
+            fstype.as_ptr(),
+            libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
+            data.as_ptr().cast(),
+        )
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("failed to mount simulated securityfs shadow");
     }
+    fs_err::create_dir_all(tpm_dir)
+        .context("failed to create TPM event-log directory in securityfs shadow")?;
     fs_err::write(
         event_log,
         include_bytes!("../../cc-eventlog/samples/tpm_eventlog.bin"),
