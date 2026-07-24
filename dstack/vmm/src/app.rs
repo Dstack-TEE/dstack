@@ -4,7 +4,7 @@
 
 use crate::config::{Config, Networking, ProcessAnnotation, Protocol};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use bon::Builder;
 use dstack_kms_rpc::kms_client::KmsClient;
 use dstack_types::mr_config::MrConfigV3;
@@ -1525,7 +1525,7 @@ pub(crate) fn needs_swtpm(
 mod tests {
     use super::*;
     use crate::config::{
-        CvmPlatform, Networking, NetworkingMode, TdxAttestationVariantConfig, load_config_figment,
+        load_config_figment, CvmPlatform, Networking, NetworkingMode, TdxAttestationVariantConfig,
     };
     use dstack_types::{
         TdxImageMeasurement, TdxMrtdCandidates, TdxOsImageMeasurement,
@@ -1597,31 +1597,25 @@ mod tests {
     #[test]
     fn gpu_config_has_gpus_only_when_resolved_gpu_list_is_non_empty() {
         assert!(!GpuConfig::default().has_gpus());
-        assert!(
-            !GpuConfig {
-                attach_mode: AttachMode::All,
-                ..Default::default()
-            }
-            .has_gpus()
-        );
-        assert!(
-            !GpuConfig {
-                bridges: vec![GpuSpec {
-                    slot: "0000:01:00.0".into(),
-                }],
-                ..Default::default()
-            }
-            .has_gpus()
-        );
-        assert!(
-            GpuConfig {
-                gpus: vec![GpuSpec {
-                    slot: "0000:02:00.0".into(),
-                }],
-                ..Default::default()
-            }
-            .has_gpus()
-        );
+        assert!(!GpuConfig {
+            attach_mode: AttachMode::All,
+            ..Default::default()
+        }
+        .has_gpus());
+        assert!(!GpuConfig {
+            bridges: vec![GpuSpec {
+                slot: "0000:01:00.0".into(),
+            }],
+            ..Default::default()
+        }
+        .has_gpus());
+        assert!(GpuConfig {
+            gpus: vec![GpuSpec {
+                slot: "0000:02:00.0".into(),
+            }],
+            ..Default::default()
+        }
+        .has_gpus());
     }
 
     #[test]

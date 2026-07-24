@@ -6,11 +6,11 @@ use fs_err as fs;
 use path_absolutize::Absolutize;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use dstack_types::{
-    AwsOsImageMeasurementDocument, GCP_MEASUREMENT_FILENAME, GcpOsImageMeasurementDocument,
-    SNP_MEASUREMENT_FILENAME, SevOsImageMeasurementDocument, TDX_MEASUREMENT_FILENAME,
-    TdxOsImageMeasurementDocument,
+    AwsOsImageMeasurementDocument, GcpOsImageMeasurementDocument, SevOsImageMeasurementDocument,
+    TdxOsImageMeasurementDocument, GCP_MEASUREMENT_FILENAME, SNP_MEASUREMENT_FILENAME,
+    TDX_MEASUREMENT_FILENAME,
 };
 use serde::{Deserialize, Serialize};
 
