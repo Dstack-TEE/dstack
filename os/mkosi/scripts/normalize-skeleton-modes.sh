@@ -22,7 +22,7 @@ while IFS= read -r -d '' source; do
     else
         chmod 0644 "$destination"
     fi
-done < <(find "$SKELETON" -type f -print0)
+done < <(find "$SKELETON" -type f ! -name .dstack-keep -print0)
 
 while IFS= read -r -d '' directory; do
     relative=${directory#"$SKELETON"}
