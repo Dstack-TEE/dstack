@@ -228,6 +228,9 @@ pub(crate) async fn connect_multiple_hosts(
             }
         }
     };
+    // Disable Nagle on the upstream socket for the same reason as the inbound
+    // side: avoid delayed-ACK stalls on small proxied messages.
+    let _ = connection.set_nodelay(true);
     debug!("connected to {:?}", connection.peer_addr());
     Ok((connection, counter, instance_id))
 }

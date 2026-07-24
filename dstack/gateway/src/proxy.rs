@@ -200,6 +200,9 @@ pub async fn proxy_main(rt: &Runtime, config: &ProxyConfig, proxy: Proxy) -> Res
             .await;
         match accepted {
             Ok((inbound, from)) => {
+                // Disable Nagle: this is a latency-sensitive proxy and small
+                // request/response traffic otherwise stalls on delayed ACKs.
+                let _ = inbound.set_nodelay(true);
                 let span = info_span!("conn", id = next_connection_id());
                 let _enter = span.enter();
                 let conn_entered = EnteredCounter::new(&NUM_CONNECTIONS);
