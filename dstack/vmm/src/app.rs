@@ -1528,8 +1528,8 @@ fn make_vm_config(
     Ok(config)
 }
 
-fn simulated_aws_image_measurement()
--> Result<(Vec<u8>, dstack_types::AwsOsImageMeasurementDocument)> {
+fn simulated_aws_image_measurement(
+) -> Result<(Vec<u8>, dstack_types::AwsOsImageMeasurementDocument)> {
     let zero_pcr = [0u8; dstack_types::AwsOsImageMeasurement::PCR_SHA384_LEN];
     let measurement =
         dstack_types::AwsOsImageMeasurement::from_boot_pcrs(&zero_pcr, &zero_pcr, &zero_pcr)
