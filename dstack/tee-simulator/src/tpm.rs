@@ -226,7 +226,14 @@ fn create_tpm_device_node() -> Result<()> {
         .trim()
         .split_once(':')
         .context("invalid /sys/class/tpm/tpm0/dev")?;
-    command("mknod", &["/dev/tpm0", "c", major, minor])
+    if let Err(error) = command("mknod", &["/dev/tpm0", "c", major, minor]) {
+        // udev can create the node between the existence check above and
+        // mknod. In that case the requested device is already available.
+        if !Path::new("/dev/tpm0").exists() {
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 fn provision_nv(index: &str, contents: &Path) -> Result<()> {
@@ -314,7 +321,12 @@ pub fn run_nitro_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
         .trim()
         .split_once(':')
         .context("invalid vTPM device number")?;
-    command("mknod", &["/dev/tpm0", "c", major, minor])?;
+    if let Err(error) = command("mknod", &["/dev/tpm0", "c", major, minor]) {
+        // udev races manual node creation after VTPM_PROXY_IOC_NEW_DEV.
+        if !Path::new("/dev/tpm0").exists() {
+            return Err(error);
+        }
+    }
     sd_notify::notify(true, &[sd_notify::NotifyState::Ready])?;
     let result = proxy_thread
         .join()
