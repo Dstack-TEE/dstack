@@ -22,6 +22,7 @@ component_framework_init "$use_cache" "$ROOT" "$SELF" \
 
 components=(
   dstack-rust
+  image-tools
   container-stack
   sysbox
   nvattest
