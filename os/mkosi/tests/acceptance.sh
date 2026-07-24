@@ -21,7 +21,7 @@ done
 grep -q '0002-acpi-sandbox' "$D/components/kernel/kernel-build.sh"
 grep -q -- '--fuzz=0' "$D/components/kernel/kernel-build.sh"
 for service in dstack-guest-agent dstack-prepare app-compose wg-checker; do
-  grep -q "$service" "$D/mkosi.postinst"
+  grep -q "$service" "$D/mkosi.skeleton/usr/lib/systemd/system-preset/80-dstack.preset"
 done
 grep -q 'artifact-manifest.json' "$D/scripts/make-release-artifacts.sh"
 grep -q 'image/assemble.sh' "$D/mkosi.postoutput"

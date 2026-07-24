@@ -32,15 +32,12 @@ if [[ $action != dev-image ]]; then
 fi
 
 build_one() {
-  local out=$1 work=$2 flavor=$3
-  rm -rf "$work" "$out"; mkdir -p "$out"
+  local out=$1 flavor=$2
+  mkdir -p "$out"
   mkosi_args=(
     --directory "$SELF"
     --force
-    --format=none
     --output-directory="$out"
-    --compress-output=no
-    --bootable=no
     --profile="$flavor"
     --source-date-epoch="$SOURCE_DATE_EPOCH"
     --environment="DSTACK_COMPONENT_CACHE=$([[ $action == dev-image ]] && echo 1 || echo 0)"
@@ -56,11 +53,11 @@ build_one() {
 }
 
 if [[ $action == image || $action == dev-image ]]; then
-  for flavor in $FLAVORS; do build_one "$BUILD_DIR/out/$flavor" "$BUILD_DIR/work-$flavor" "$flavor"; done
+  for flavor in $FLAVORS; do build_one "$BUILD_DIR/out/$flavor" "$flavor"; done
   exit
 fi
-build_one "$BUILD_DIR/a" "$BUILD_DIR/work-a" prod
-build_one "$BUILD_DIR/b" "$BUILD_DIR/work-b" prod
+build_one "$BUILD_DIR/a" prod
+build_one "$BUILD_DIR/b" prod
 cmp "$BUILD_DIR/a/dstack-$DSTACK_VERSION.tar.gz" "$BUILD_DIR/b/dstack-$DSTACK_VERSION.tar.gz"
 cmp "$BUILD_DIR/a/dstack-$DSTACK_VERSION-uki.tar.gz" \
   "$BUILD_DIR/b/dstack-$DSTACK_VERSION-uki.tar.gz"
