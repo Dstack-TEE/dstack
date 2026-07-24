@@ -115,7 +115,22 @@ pub fn start_gcp_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
         }
         thread::sleep(Duration::from_millis(20));
     }
-    command("tpm2_startup", &["-c"])?;
+    let mut startup_error = None;
+    for _ in 0..100 {
+        match command("tpm2_startup", &["-c"]) {
+            Ok(()) => {
+                startup_error = None;
+                break;
+            }
+            Err(error) => {
+                startup_error = Some(error);
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
+    if let Some(error) = startup_error {
+        return Err(error).context("GCP vTPM did not become ready");
+    }
     replay_fixture_event_log()?;
 
     let template_with_size = state_dir.join("ak.tpm2b-public");
