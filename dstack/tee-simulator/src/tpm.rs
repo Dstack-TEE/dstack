@@ -18,7 +18,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use aws_nitro_enclaves_nsm_api::api::{Request as NsmRequest, Response as NsmResponse};
 use dstack_types::TeeSimulatorConfig;
 use mock_attestation::{nsm::NsmGenerator, parse_seed, server::MockCollateralState};
