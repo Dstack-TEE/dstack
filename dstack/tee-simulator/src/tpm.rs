@@ -440,9 +440,6 @@ fn proxy_tpm_commands(
         command.truncate(size);
         anyhow::ensure!(command.len() >= 10, "truncated TPM command");
         let code = read_be_u32(&command[6..10], "TPM command code")?;
-        if code >= 0x2000_0000 {
-            eprintln!("NitroTPM proxy received vendor command 0x{code:08x}");
-        }
         let response = if code == TPM2_CC_AWS_NSM_REQUEST {
             let template = nv_write
                 .as_ref()
