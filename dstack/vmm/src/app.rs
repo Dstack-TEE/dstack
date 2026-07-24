@@ -1425,11 +1425,18 @@ fn make_vm_config(
     // identity: digest.txt = sha256(sha256sum.txt). Lite TDX/SNP carry extra
     // split CBOR measurement material, but that material is committed by
     // sha256sum.txt instead of defining a second image hash.
-    let os_image_hash = image
+    let mut os_image_hash = image
         .digest
         .as_ref()
         .and_then(|d| hex::decode(d).ok())
         .unwrap_or_default();
+    let simulated_aws_measurement = if is_aws_nitro_tpm {
+        let (image_hash, measurement) = simulated_aws_image_measurement()?;
+        os_image_hash = image_hash;
+        Some(measurement)
+    } else {
+        None
+    };
     // Attach the lite measurement material whenever the image provides it,
     // regardless of the resolved attestation variant: the guest's exposed
     // event log always retains the RTMR0 ACPI digest events (see
@@ -1472,14 +1479,7 @@ fn make_vm_config(
     } else {
         None
     };
-    let aws_measurement =
-        if is_aws_nitro_tpm {
-            Some(image.aws_measurement.clone().context(
-                "AWS NitroTPM image is missing measurement.aws.cbor measurement material",
-            )?)
-        } else {
-            None
-        };
+    let aws_measurement = simulated_aws_measurement;
     let mut config = serde_json::to_value(dstack_types::VmConfig {
         os_image_hash,
         cpu_count: effective_vcpus,
@@ -1526,6 +1526,25 @@ fn make_vm_config(
         );
     }
     Ok(config)
+}
+
+fn simulated_aws_image_measurement()
+-> Result<(Vec<u8>, dstack_types::AwsOsImageMeasurementDocument)> {
+    let zero_pcr = [0u8; dstack_types::AwsOsImageMeasurement::PCR_SHA384_LEN];
+    let measurement =
+        dstack_types::AwsOsImageMeasurement::from_boot_pcrs(&zero_pcr, &zero_pcr, &zero_pcr)
+            .map_err(anyhow::Error::msg)?
+            .to_cbor_vec();
+    let checksum_file = format!(
+        "{}  measurement.aws.cbor\n",
+        hex::encode(Sha256::digest(&measurement))
+    )
+    .into_bytes();
+    let image_hash = Sha256::digest(&checksum_file).to_vec();
+    Ok((
+        image_hash,
+        dstack_types::AwsOsImageMeasurementDocument::new(checksum_file, measurement),
+    ))
 }
 
 pub(crate) fn needs_swtpm(
@@ -1784,6 +1803,19 @@ mod tests {
         manifest.no_tee = true;
         manifest.simulated_tee = Some(dstack_types::TeeVariant::DstackAmdSevSnp);
         assert!(needs_mr_config_v3(&manifest, CvmPlatform::Tdx, true, false));
+    }
+
+    #[test]
+    fn simulated_nitro_tpm_measurement_matches_zero_boot_pcrs() -> Result<()> {
+        let (image_hash, document) = simulated_aws_image_measurement()?;
+        document.verify(&image_hash).map_err(anyhow::Error::msg)?;
+        let measurement = document.decode_measurement().map_err(anyhow::Error::msg)?;
+        let zero_pcr = [0u8; dstack_types::AwsOsImageMeasurement::PCR_SHA384_LEN];
+        let expected =
+            dstack_types::AwsOsImageMeasurement::from_boot_pcrs(&zero_pcr, &zero_pcr, &zero_pcr)
+                .map_err(anyhow::Error::msg)?;
+        assert_eq!(measurement, expected);
+        Ok(())
     }
 
     fn dummy_tdx_measurement_document() -> TdxOsImageMeasurementDocument {
