@@ -35,12 +35,14 @@ checked before compilation.
 
 ## Build and acceptance
 
-Host compilation toolchains are not required. mkosi 26 creates the pinned
-Debian build overlay and tools tree containing all component compilers and
-headers. Host-side release assembly still requires `pax-utils` (`lddtree`),
-`squashfs-tools`, `cryptsetup`, `gdisk`, `dosfstools`, `mtools`, QEMU/KVM and
-root privileges (or a working user namespace). Full UKI release assembly also
-needs the pinned `nitro-tpm-pcr-compute` described by `os/image/assemble.sh`.
+Host compilation and image-assembly toolchains are not required. mkosi 26
+creates the pinned Debian build overlay containing all component compilers and
+headers. Its minimized `misc` tools-tree profile plus explicit packages supplies
+`lddtree`, squashfs, dm-verity, disk, archive and UKI tools. The repository's
+`dstack-mr` and the pinned `nitro-tpm-pcr-compute` revision are compiled by
+`mkosi.build`, exported only for `mkosi.postoutput`, and removed from the guest.
+The host needs mkosi's own dependencies and root privileges (or a working user
+namespace), but no Rust, Go, C or C++ compiler.
 
 ```sh
 ./os/mkosi/build.sh lint
@@ -59,15 +61,18 @@ DSTACK_DEV_CACHE_DIR="$HOME/.cache/dstack/mkosi-dev" \
   ./os/mkosi/build.sh dev-image "$PWD/os/mkosi/build-dev"
 ```
 
-The cache covers dstack Rust, the container stack, Sysbox, nvattest, the
+The cache covers dstack Rust, image tools, the container stack, Sysbox, nvattest, the
 kernel build tree, NVIDIA, ZFS and both OVMF variants. Its key conservatively
 includes the inputs, tools, packages and component dependencies declared by
 each descriptor in `components/<name>/<name>.sh`, plus architecture, flavor and
-`SOURCE_DATE_EPOCH`. `build-components.sh` is intentionally only the ordered
-component list. Component install trees are merged with strict non-directory
-conflict detection. `image` and `repro-check` never pass the development-cache
-option. Release artifacts, Debian rootfs, dm-verity data and measurements are
-never cached.
+`SOURCE_DATE_EPOCH`. For linked worktrees, `build.sh` records the Git-owned and
+untracked source path inventory on the host, while file contents are hashed in
+the mkosi build root; Git metadata is never mounted into the sandbox.
+`build-components.sh` is intentionally only the ordered component list.
+Component install trees are merged with strict non-directory conflict
+detection. `image` and `repro-check` never calculate, read or write component
+cache keys. Release artifacts, Debian rootfs, dm-verity data and measurements
+are never cached.
 
 mkosi's `Incremental=`, `CacheDirectory=` and `BuildDirectory=` cover
 whole-image/rootfs and persistent-work-directory reuse; they do not provide
@@ -78,8 +83,8 @@ remain together under `components/<name>/`; production builds bypass the layer's
 archive cache completely.
 
 On a 16-job development host, a clean production work directory takes about
-17 minutes (measured 16m45s); allow 20--30 minutes with cold compiler and
-network caches. `repro-check` performs two such builds sequentially.
+27 minutes with warm package downloads; allow 30--45 minutes with cold network
+caches. `repro-check` performs two such builds sequentially.
 
 Acceptance means: the static contract passes; a disk with systemd-boot/UKI
 boots on x86_64 QEMU; `/proc/config.gz` contains the checked TDX/SNP, TPM,
@@ -97,3 +102,31 @@ The firmware is not Debian's generic OVMF: `components/ovmf/ovmf-build.sh` build
 EDK2 stable-202502 revision and `pre202505` TDX measurement layout selected by
 the Yocto recipe. A generic OVMF cannot be substituted because `dstack-mr`
 would produce invalid or unparseable TDX measurement material.
+
+## Native mkosi boundary
+
+The distribution snapshot, build-only packages, guest packages, profiles,
+source mounts, source-date epoch, tools tree, package cleanup, file removal,
+systemd presets, tmpfiles, service masks and the build/postinstall/finalize/
+postoutput/clean lifecycle are mkosi-native. The native tar output is replaced
+in `mkosi.postoutput` by the identically named Yocto-compatible archive, so no
+unrelated mkosi rootfs artifact escapes the staging directory.
+
+Only three project-specific mechanisms remain:
+
+1. `make-release-artifacts.sh` and `os/image/assemble.sh` implement the existing
+   combined squashfs/dm-verity layout, initramfs command-line protocol,
+   measurements and archive member contract. mkosi's repart/UKI formats would
+   change that external interface.
+2. The development-only component cache provides independently keyed output
+   trees. mkosi's `Incremental=`, `BuildDirectory=` and
+   `BuildSourcesEphemeral=buildcache` cache a whole image or mutable build tree,
+   not isolated component install outputs.
+3. `merge-component-trees.py` rejects conflicting component-owned rootfs paths;
+   mkosi's normal tree overlays intentionally use last-writer-wins semantics.
+
+The tiny postinstall hook is also retained because mkosi's native `MachineId=`
+supports a UUID, `random`, or `uninitialized`, while the Yocto contract requires
+an existing but empty `/etc/machine-id`. Rust and Go distributions are pinned by
+version and SHA-256 inside the mkosi build overlay because Debian trixie's Rust
+package is too old for this workspace; they never come from the host.
