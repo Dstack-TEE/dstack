@@ -135,10 +135,17 @@ fn ensure_nsm_device() -> Result<()> {
         Path::new("/sys/class/misc/nsm/dev"),
         Path::new("/sys/devices/virtual/misc/nsm/dev"),
     ];
+    let mut stable_checks = 0;
     for _ in 0..100 {
         if device_path.exists() {
-            return Ok(());
+            stable_checks += 1;
+            if stable_checks >= 10 {
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(20));
+            continue;
         }
+        stable_checks = 0;
         if let Some(device) = sysfs_paths
             .iter()
             .find_map(|path| fs_err::read_to_string(path).ok())
@@ -158,7 +165,8 @@ fn ensure_nsm_device() -> Result<()> {
                 )
             };
             if result == 0 || device_path.exists() {
-                return Ok(());
+                thread::sleep(Duration::from_millis(20));
+                continue;
             }
             return Err(std::io::Error::last_os_error()).context("failed to create /dev/nsm");
         }
