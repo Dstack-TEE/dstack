@@ -112,7 +112,7 @@ postoutput/clean lifecycle are mkosi-native. The native tar output is replaced
 in `mkosi.postoutput` by the identically named Yocto-compatible archive, so no
 unrelated mkosi rootfs artifact escapes the staging directory.
 
-Only three project-specific mechanisms remain:
+Only four project-specific mechanisms remain:
 
 1. `make-release-artifacts.sh` and `os/image/assemble.sh` implement the existing
    combined squashfs/dm-verity layout, initramfs command-line protocol,
@@ -124,6 +124,10 @@ Only three project-specific mechanisms remain:
    not isolated component install outputs.
 3. `merge-component-trees.py` rejects conflicting component-owned rootfs paths;
    mkosi's normal tree overlays intentionally use last-writer-wins semantics.
+4. `normalize-skeleton-modes.sh` maps regular skeleton files to Git's two
+   portable mode classes (0644 or 0755). mkosi correctly preserves source
+   modes, but Git worktrees on shared hosts can add group-write bits that are
+   not represented in the Git index and would otherwise change the rootfs.
 
 The tiny postinstall hook is also retained because mkosi's native `MachineId=`
 supports a UUID, `random`, or `uninitialized`, while the Yocto contract requires
