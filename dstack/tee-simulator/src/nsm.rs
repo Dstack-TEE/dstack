@@ -40,7 +40,7 @@ struct CuseInfo {
 #[repr(C)]
 struct CuseOperations {
     init: *const c_void,
-    init_done: *const c_void,
+    init_done: Option<unsafe extern "C" fn(*mut c_void)>,
     destroy: *const c_void,
     open: Option<unsafe extern "C" fn(FuseReq, *mut FuseFileInfo)>,
     read: *const c_void,
@@ -114,6 +114,12 @@ unsafe extern "C" fn open(req: FuseReq, fi: *mut FuseFileInfo) {
 
 unsafe extern "C" fn release(req: FuseReq, _fi: *mut FuseFileInfo) {
     (cuse().reply_err)(req, 0);
+}
+
+unsafe extern "C" fn init_done(_userdata: *mut c_void) {
+    if let Err(error) = sd_notify::notify(true, &[sd_notify::NotifyState::Ready]) {
+        tracing::error!(?error, "failed to notify systemd that NSM is ready");
+    }
 }
 
 unsafe extern "C" fn ioctl(
@@ -245,7 +251,7 @@ pub fn run(config: &TeeSimulatorConfig) -> Result<()> {
     };
     let operations = CuseOperations {
         init: ptr::null(),
-        init_done: ptr::null(),
+        init_done: Some(init_done),
         destroy: ptr::null(),
         open: Some(open),
         read: ptr::null(),
@@ -256,7 +262,6 @@ pub fn run(config: &TeeSimulatorConfig) -> Result<()> {
         ioctl: Some(ioctl),
         poll: ptr::null(),
     };
-    sd_notify::notify(true, &[sd_notify::NotifyState::Ready])?;
     let program = CString::new("dstack-tee-simulator")?;
     let foreground = CString::new("-f")?;
     let single_threaded = CString::new("-s")?;
