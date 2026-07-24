@@ -89,6 +89,10 @@ external_port = 443
 max_connections_per_app = 2000
 # Whether to read PROXY protocol from inbound connections (e.g. from Cloudflare).
 inbound_pp_enabled = false
+# Use splice(2) zero-copy relaying for the TLS-passthrough path (Linux only).
+# Bulk throughput +~12%, but small-request latency regresses. Enable only for
+# passthrough traffic dominated by large transfers.
+tcp_splice_enabled = false
 
 [core.proxy.port_policy_fetch]
 # Background lazy-fetch of port_policy from legacy CVM agents.

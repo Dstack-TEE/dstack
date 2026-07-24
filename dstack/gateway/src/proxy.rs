@@ -45,6 +45,7 @@ pub(crate) type AddressGroup = smallvec::SmallVec<[AddressInfo; 4]>;
 mod io_bridge;
 pub(crate) mod port_policy;
 mod sni;
+mod splice;
 mod tls_passthough;
 mod tls_terminate;
 

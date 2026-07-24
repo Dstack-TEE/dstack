@@ -132,6 +132,17 @@ pub struct ProxyConfig {
     /// (e.g. when behind a PP-aware load balancer like Cloudflare).
     #[serde(default)]
     pub inbound_pp_enabled: bool,
+    /// Use `splice(2)` zero-copy relaying for the TLS-passthrough path. Both
+    /// sides are raw TCP there, so payload never needs to enter userspace.
+    /// Linux-only; ignored for the TLS-terminate path.
+    ///
+    /// Tradeoff (measured on a 4-core gateway): bulk passthrough throughput
+    /// +~12% with a lower tail latency under load, but small-request latency
+    /// regresses (each tiny message pays an extra pipe hop). Enable it for
+    /// passthrough traffic dominated by large transfers; leave it off (default)
+    /// for request/response passthrough workloads.
+    #[serde(default)]
+    pub tcp_splice_enabled: bool,
     /// Background lazy-fetch behaviour for `port_policy` (legacy CVMs).
     pub port_policy_fetch: PortPolicyFetchConfig,
 }

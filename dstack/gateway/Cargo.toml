@@ -67,7 +67,7 @@ dstack-api-auth.workspace = true
 cached-cell.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-nix = { workspace = true, features = ["resource"] }
+nix = { workspace = true, features = ["resource", "fs", "socket", "zerocopy"] }
 
 [[bin]]
 name = "gen_debug_key"
