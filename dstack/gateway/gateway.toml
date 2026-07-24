@@ -77,7 +77,7 @@ tls_versions = ["1.2"]
 listen_addr = "0.0.0.0"
 listen_port = 8443
 agent_port = 8090
-buffer_size = 8192
+buffer_size = 65536
 # number of hosts to try to connect to
 connect_top_n = 3
 localhost_enabled = false
