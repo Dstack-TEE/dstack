@@ -91,6 +91,16 @@ jobs:
           cd "$RUNNER_TEMP/mkosi-cross-host/out/prod"
           tar -xOf dstack-0.6.0.tar.gz dstack-0.6.0/sha256sum.txt
           tar -xOf dstack-0.6.0.tar.gz dstack-0.6.0/metadata.json
+          mkdir "$RUNNER_TEMP/rootfs-inspect"
+          sudo unsquashfs -d "$RUNNER_TEMP/rootfs-inspect" -o 1048576 \
+            dstack-0.6.0/rootfs.img.parted.verity >/dev/null
+          sudo chown -R "$USER:$USER" "$RUNNER_TEMP/rootfs-inspect"
+          (cd "$RUNNER_TEMP/rootfs-inspect" && \
+            find . -type f -print0 | sort -z | xargs -0 sha256sum) \
+            > rootfs-files.sha256
+          (cd "$RUNNER_TEMP/rootfs-inspect" && \
+            find . -printf '%y %m %u:%g %p -> %l\n' | sort) \
+            > rootfs-tree.txt
           sha256sum dstack-0.6.0.tar.gz dstack-0.6.0-uki.tar.gz \
             | tee cross-host.sha256
           printf '%s  %s\n' "$BARE_SHA256" dstack-0.6.0.tar.gz \
@@ -103,5 +113,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mkosi-cross-host-sha256
-          path: ${{ runner.temp }}/mkosi-cross-host/out/prod/cross-host.sha256
+          path: |
+            ${{ runner.temp }}/mkosi-cross-host/out/prod/cross-host.sha256
+            ${{ runner.temp }}/mkosi-cross-host/out/prod/rootfs-files.sha256
+            ${{ runner.temp }}/mkosi-cross-host/out/prod/rootfs-tree.txt
           retention-days: 30
