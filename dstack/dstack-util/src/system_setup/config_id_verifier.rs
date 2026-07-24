@@ -91,6 +91,9 @@ fn verify_mr_config_id_for_mode(mode: TeeVariant, local: LocalMrConfigValues<'_>
         // in measure_app_info); there is no host-supplied claim to cross-check.
         // The key_provider_id pin is enforced by verify_key_provider_id.
         TeeVariant::DstackAwsNitroTpm => Ok(()),
+        // Nitro Enclave binds the image through the signed NSM document and
+        // the app ID through its runtime event. It has no TDX mr_config_id.
+        TeeVariant::DstackNitroEnclave => Ok(()),
         _ => verify_tdx_mr_config_id(local),
     }
 }
@@ -316,5 +319,23 @@ mod tests {
         };
 
         verify_tdx_mr_config_id_value(mr_config.to_tdx_mr_config_id(), Some(&document), local)
+    }
+
+    #[test]
+    fn nitro_enclave_does_not_require_tdx_mr_config() -> Result<()> {
+        let compose_hash = [0u8; 32];
+        let gpu_policy_hash = [0u8; 32];
+        let app_id = [0u8; 20];
+        let instance_id = [0u8; 20];
+        let local = LocalMrConfigValues {
+            compose_hash: &compose_hash,
+            gpu_policy_hash: &gpu_policy_hash,
+            app_id: &app_id,
+            instance_id: &instance_id,
+            key_provider: KeyProviderKind::None,
+            key_provider_id: &[],
+        };
+
+        verify_mr_config_id_for_mode(TeeVariant::DstackNitroEnclave, local)
     }
 }
