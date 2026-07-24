@@ -82,9 +82,8 @@ touch -d "@$SOURCE_DATE_EPOCH" "$OUT/files/"*
 
 is_dev=false; name=dstack
 if [[ $FLAVOR == dev ]]; then is_dev=true; name=dstack-dev; fi
-revision=$(git -C "$ROOT" rev-parse HEAD)
 python3 - "$OUT/artifact-manifest.json" "$name" "$FLAVOR" "$is_dev" \
-  "$revision" "$root_hash" "$data_size" "$DSTACK_VERSION" "$OVMF_VARIANT" <<'PY'
+  "${DSTACK_SOURCE_REVISION:?}" "$root_hash" "$data_size" "$DSTACK_VERSION" "$OVMF_VARIANT" <<'PY'
 import json, sys
 path,name,flavor,is_dev,revision,root_hash,data_size,version,ovmf_variant=sys.argv[1:]
 data={"schema_version":1,"backend":"mkosi","image":{"name":name,"version":version,

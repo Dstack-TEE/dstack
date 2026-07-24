@@ -42,6 +42,7 @@ build_one() {
     --source-date-epoch="$SOURCE_DATE_EPOCH"
     --environment="DSTACK_COMPONENT_CACHE=$([[ $action == dev-image ]] && echo 1 || echo 0)"
     --environment="DSTACK_GIT_REVISION=$DSTACK_GIT_REVISION"
+    --environment="DSTACK_SOURCE_REVISION=$revision"
     --environment="JOBS=${JOBS:-$(nproc)}"
   )
   if [[ $action == dev-image ]]; then
