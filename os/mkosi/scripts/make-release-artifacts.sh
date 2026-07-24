@@ -19,16 +19,34 @@ install -m0644 "$kernel" "$OUT/files/bzImage"
 
 # Combined squashfs + dm-verity tree, matching Yocto's separate-hash=0 output.
 rootfs="$OUT/files/rootfs.squashfs.verity"
+sort_file="$OUT/.squashfs-sort"
 # mksquashfs -noappend overwrites its filesystem but does not reliably remove
 # a longer dm-verity tail left by a previous invocation.
 truncate -s 0 "$rootfs"
+# mksquashfs otherwise uses source-directory inode order as a tiebreaker. That
+# order differs between overlayfs/user-namespace and privileged CI builds even
+# when every path, mode and file byte is identical. Give every path a stable,
+# unique priority so packing order is independent of the backing filesystem.
+find "$TREE" -mindepth 1 -printf '%P\n' | LC_ALL=C sort > "$sort_file.paths"
+if grep -q '[[:space:]]' "$sort_file.paths"; then
+  echo 'rootfs paths containing whitespace are unsupported by mksquashfs -sort' >&2
+  exit 1
+fi
+if (( $(wc -l < "$sort_file.paths") > 65535 )); then
+  echo 'rootfs has too many paths for unique mksquashfs priorities' >&2
+  exit 1
+fi
+awk '{ print $0, 32767 - NR }' "$sort_file.paths" > "$sort_file"
+rm -f "$sort_file.paths"
 # Privileged mkosi runs can inherit host default ACLs from their workspace.
 # The guest rootfs does not rely on xattrs, so exclude this host-only metadata.
 # A single compressor worker also avoids host-CPU-dependent fragment ordering.
 env -u SOURCE_DATE_EPOCH mksquashfs "$TREE" "$rootfs" \
   -noappend -all-root -no-progress \
+  -sort "$sort_file" \
   -no-xattrs -processors 1 -comp zstd -mkfs-time "$SOURCE_DATE_EPOCH" \
   -all-time "$SOURCE_DATE_EPOCH" >/dev/null
+rm -f "$sort_file"
 data_size=$(stat -c %s "$rootfs")
 data_size=$(( (data_size + 4095) / 4096 * 4096 ))
 truncate -s "$data_size" "$rootfs"
