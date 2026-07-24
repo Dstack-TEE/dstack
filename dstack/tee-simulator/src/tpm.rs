@@ -18,7 +18,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use aws_nitro_enclaves_nsm_api::api::{Request as NsmRequest, Response as NsmResponse};
 use dstack_types::TeeSimulatorConfig;
 use mock_attestation::{nsm::NsmGenerator, parse_seed, server::MockCollateralState};
@@ -29,7 +29,9 @@ const TPM2_CC_NV_WRITE: u32 = 0x0000_0137;
 const TPM2_CC_NV_DEFINE_SPACE: u32 = 0x0000_012a;
 const TPM2_CC_NV_READ: u32 = 0x0000_014e;
 const TPM2_CC_NV_READ_PUBLIC: u32 = 0x0000_0169;
+const TPM2_CC_GET_CAPABILITY: u32 = 0x0000_017a;
 const TPM2_CC_AWS_NSM_REQUEST: u32 = 0x2000_0001;
+const TPM2_CAP_COMMANDS: u32 = 2;
 const VTPM_PROXY_IOC_NEW_DEV: libc::c_ulong = 0xc014_a100;
 const VTPM_PROXY_FLAG_TPM2: u32 = 1;
 
@@ -475,12 +477,51 @@ fn proxy_tpm_commands(
                     nv_write = Some(template);
                 }
             }
-            transact(backend, &command)?
+            let mut response = transact(backend, &command)?;
+            advertise_nsm_vendor_command(code, &mut response)?;
+            response
         };
         proxy
             .write_all(&response)
             .context("failed to write vTPM response")?;
     }
+}
+
+fn advertise_nsm_vendor_command(code: u32, response: &mut Vec<u8>) -> Result<()> {
+    if code != TPM2_CC_GET_CAPABILITY || response.len() < 19 {
+        return Ok(());
+    }
+    let response_code = read_be_u32(&response[6..10], "TPM response code")?;
+    let capability = read_be_u32(&response[11..15], "TPM capability")?;
+    if response_code != 0 || capability != TPM2_CAP_COMMANDS || response[10] != 0 {
+        return Ok(());
+    }
+    let count = read_be_u32(&response[15..19], "TPM command attribute count")? as usize;
+    let attributes_end = 19usize
+        .checked_add(count.checked_mul(4).context("TPM command count overflow")?)
+        .context("TPM command attributes overflow")?;
+    anyhow::ensure!(
+        response.len() >= attributes_end,
+        "truncated TPM command attributes"
+    );
+    if response[19..attributes_end].chunks_exact(4).any(|value| {
+        read_be_u32(value, "TPM command attributes")
+            .is_ok_and(|attributes| attributes == TPM2_CC_AWS_NSM_REQUEST)
+    }) {
+        return Ok(());
+    }
+    let insertion = response[19..attributes_end]
+        .chunks_exact(4)
+        .position(|value| {
+            read_be_u32(value, "TPM command attributes")
+                .is_ok_and(|attributes| attributes & 0x2000_ffff > TPM2_CC_AWS_NSM_REQUEST)
+        })
+        .map_or(attributes_end, |index| 19 + index * 4);
+    response.splice(insertion..insertion, TPM2_CC_AWS_NSM_REQUEST.to_be_bytes());
+    response[15..19].copy_from_slice(&((count + 1) as u32).to_be_bytes());
+    let response_size = response.len() as u32;
+    response[2..6].copy_from_slice(&response_size.to_be_bytes());
+    Ok(())
 }
 
 fn parse_nv_write(command: &[u8]) -> Result<Option<NvWriteTemplate>> {
@@ -584,4 +625,34 @@ fn transact(stream: &mut UnixStream, command: &[u8]) -> Result<Vec<u8>> {
 
 fn tpm_success_response() -> Vec<u8> {
     [0x80, 0x01, 0, 0, 0, 10, 0, 0, 0, 0].to_vec()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_capability_advertises_nsm_vendor_command() {
+        let mut response = Vec::new();
+        response.extend_from_slice(&0x8001u16.to_be_bytes());
+        response.extend_from_slice(&23u32.to_be_bytes());
+        response.extend_from_slice(&0u32.to_be_bytes());
+        response.push(0);
+        response.extend_from_slice(&TPM2_CAP_COMMANDS.to_be_bytes());
+        response.extend_from_slice(&1u32.to_be_bytes());
+        response.extend_from_slice(&0x2000_1000u32.to_be_bytes());
+
+        advertise_nsm_vendor_command(TPM2_CC_GET_CAPABILITY, &mut response).unwrap();
+
+        assert_eq!(read_be_u32(&response[2..6], "size").unwrap(), 27);
+        assert_eq!(read_be_u32(&response[15..19], "count").unwrap(), 2);
+        assert_eq!(
+            read_be_u32(&response[19..23], "vendor command").unwrap(),
+            TPM2_CC_AWS_NSM_REQUEST
+        );
+        assert_eq!(
+            read_be_u32(&response[23..27], "existing command").unwrap(),
+            0x2000_1000
+        );
+    }
 }
