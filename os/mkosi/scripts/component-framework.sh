@@ -23,19 +23,30 @@ key_file() {
 }
 
 key_tree() {
-    local path input
-    for path; do
-        git -C "$ROOT" ls-files -z --cached --others --exclude-standard -- "$path"
-    done | sort -zu | while IFS= read -r -d '' input; do
-        if [[ -f $ROOT/$input ]]; then
-            key_file "$ROOT/$input"
-        elif [[ -d $ROOT/$input ]]; then
-            printf 'gitlink\0%s\0%s\0' "$input" \
-              "$(git -C "$ROOT/$input" rev-parse HEAD)"
-        else
-            printf 'missing\0%s\0' "$input"
-        fi
-    done
+    local kind input value path matches
+    [[ -f ${DSTACK_SOURCE_MANIFEST:?} ]] || {
+        echo "development source manifest is missing" >&2
+        return 1
+    }
+    while IFS= read -r -d '' kind &&
+          IFS= read -r -d '' input &&
+          IFS= read -r -d '' value; do
+        matches=0
+        for path; do
+            path=${path%/}
+            if [[ $input == "$path" || $input == "$path/"* ]]; then
+                matches=1
+                break
+            fi
+        done
+        [[ $matches == 1 ]] || continue
+        case "$kind" in
+            file) key_file "$ROOT/$input" ;;
+            gitlink) printf 'gitlink\0%s\0%s\0' "$input" "$value" ;;
+            missing) printf 'missing\0%s\0' "$input" ;;
+            *) echo "invalid source manifest entry: $kind" >&2; return 1 ;;
+        esac
+    done < "$DSTACK_SOURCE_MANIFEST"
 }
 
 key_tools() {

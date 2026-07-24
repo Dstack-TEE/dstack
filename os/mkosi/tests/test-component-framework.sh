@@ -6,13 +6,14 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/project/components/base" "$tmp/project/components/dependent"
 printf one > "$tmp/project/input"
+printf 'file\0project/input\0\0' > "$tmp/source-manifest"
 
 cat > "$tmp/project/components/base/base.sh" <<'EOF_COMPONENT'
 COMPONENT_NAME=base
 COMPONENT_CACHE_PATHS=(stages/base)
 COMPONENT_ROOTFS_TREES=(stages/base)
 COMPONENT_KERNEL_TREES=()
-component_cache_key() { key_file "$ROOT/project/input"; }
+component_cache_key() { key_tree project; }
 component_build() {
     mkdir -p "$WORK/stages/base"
     printf x >> "$ROOT/base-count"
@@ -39,6 +40,7 @@ SELF=$D
 source "$D/scripts/dev-cache.sh"
 source "$D/scripts/component-framework.sh"
 export SOURCE_DATE_EPOCH=1 DSTACK_DEV_CACHE_DIR="$ROOT/cache"
+export DSTACK_SOURCE_MANIFEST="$ROOT/source-manifest"
 component_framework_init 1 "$ROOT" "$SELF" "$WORK" "$ROOT/rootfs" \
   "$ROOT/kernel" prod
 COMPONENT_DIR="$ROOT/project/components"

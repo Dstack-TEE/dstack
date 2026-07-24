@@ -65,6 +65,7 @@ bash -n "$D"/*.sh "$D"/mkosi.build "$D"/mkosi.clean "$D"/mkosi.finalize \
 grep -q 'Archiving UKI image' "$D/../image/assemble.sh"
 grep -Fq "FLAVORS=\${FLAVORS:-prod}" "$D/build.sh"
 grep -q 'DSTACK_COMPONENT_CACHE.*dev-image' "$D/build.sh"
+grep -q 'write-source-manifest.py' "$D/build.sh"
 grep -q 'DSTACK_SOURCE_REVISION.*revision' "$D/build.sh"
 grep -q 'DSTACK_SOURCE_REVISION:?' "$D/scripts/make-release-artifacts.sh"
 grep -q 'scripts/build-components.sh' "$D/mkosi.build"

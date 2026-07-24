@@ -48,7 +48,10 @@ build_one() {
   if [[ $action == dev-image ]]; then
     cache_root=${DSTACK_DEV_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dstack/mkosi-dev}
     mkdir -p "$cache_root"
+    "$SELF/scripts/write-source-manifest.py" "$ROOT" \
+      "$cache_root/source-manifest"
     mkosi_args+=(--build-sources="$cache_root:component-cache")
+    mkosi_args+=(--environment="DSTACK_SOURCE_MANIFEST=/work/src/component-cache/source-manifest")
   fi
   mkosi "${mkosi_args[@]}" build
 }
