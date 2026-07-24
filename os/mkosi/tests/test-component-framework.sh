@@ -59,3 +59,14 @@ printf two > "$tmp/project/input"
 [[ $(cat "$tmp/dependent-count") == xx ]]
 [[ $(cat "$tmp/work-3/stages/dependent/value") == two ]]
 echo 'component framework tests passed'
+
+# Cache key declarations are development-only policy. A production build must
+# neither evaluate them nor require access to their source metadata.
+sed -i 's/component_framework_init 1 /component_framework_init 0 /' "$tmp/run.sh"
+cat >> "$tmp/project/components/base/base.sh" <<'EOF_COMPONENT'
+component_cache_key() { echo 'production evaluated cache key' >&2; return 1; }
+EOF_COMPONENT
+rm -rf "$tmp/work-4"
+"$tmp/run.sh" "$D" "$tmp" "$tmp/work-4"
+[[ $(cat "$tmp/work-4/stages/base/value") == two ]]
+echo 'production component framework tests passed'

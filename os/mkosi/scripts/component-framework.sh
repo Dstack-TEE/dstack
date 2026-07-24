@@ -84,14 +84,22 @@ component_run() {
     declare -F component_cache_key >/dev/null
     declare -F component_build >/dev/null
 
-    key=$({
-        key_value component-schema-v1 "$COMPONENT_NAME" "$FLAVOR" \
-          "${SOURCE_DATE_EPOCH:?}" "$(uname -m)"
-        key_file "$definition" "$SELF/scripts/component-framework.sh" \
-          "$SELF/scripts/dev-cache.sh" "$SELF/scripts/install-toolchains.sh" \
-          "$SELF/mkosi.build" "$SELF/mkosi.conf" "$SELF/mkosi.tools.conf"
-        component_cache_key
-    } | sha256sum | cut -d' ' -f1)
+    # Production does not read or write the component cache, so it must not
+    # inspect cache-only inputs either. Besides avoiding wasted work, this
+    # keeps production builds independent of linked-worktree Git metadata that
+    # is intentionally not mounted into mkosi's source sandbox.
+    if [[ $COMPONENT_CACHE == 1 ]]; then
+        key=$({
+            key_value component-schema-v1 "$COMPONENT_NAME" "$FLAVOR" \
+              "${SOURCE_DATE_EPOCH:?}" "$(uname -m)"
+            key_file "$definition" "$SELF/scripts/component-framework.sh" \
+              "$SELF/scripts/dev-cache.sh" "$SELF/scripts/install-toolchains.sh" \
+              "$SELF/mkosi.build" "$SELF/mkosi.conf" "$SELF/mkosi.tools.conf"
+            component_cache_key
+        } | sha256sum | cut -d' ' -f1)
+    else
+        key=disabled
+    fi
     COMPONENT_KEYS[$name]=$key
     # shellcheck disable=SC2317 # Invoked indirectly by dev_cache_run.
     component_build_cached() {
