@@ -39,6 +39,18 @@ struct AmdSevSnpLaunchParams {
     reduced_phys_bits: u32,
 }
 
+fn simulated_smbios_identity(
+    platform: Option<dstack_types::TeeVariant>,
+) -> Option<(&'static str, &'static str)> {
+    use dstack_types::TeeVariant;
+    match platform? {
+        TeeVariant::DstackTdx | TeeVariant::DstackAmdSevSnp => Some(("Dstack", "dstack")),
+        TeeVariant::DstackGcpTdx => Some(("Google", "Google Compute Engine")),
+        TeeVariant::DstackNitroEnclave => Some(("AWS Nitro Enclaves", "Nitro Enclave")),
+        TeeVariant::DstackAwsNitroTpm => Some(("Amazon EC2", "t3.metal")),
+    }
+}
+
 fn parse_amd_sev_snp_qmp_capabilities(stdout: &[u8]) -> Result<AmdSevSnpLaunchParams> {
     let stdout = std::str::from_utf8(stdout).context("QMP output is not valid UTF-8")?;
     let mut qmp_error = None;
@@ -913,8 +925,15 @@ impl VmConfig {
         cfg_if(&mut types[0], "date", &p.bios_date);
         cfg_if(&mut types[0], "release", &p.bios_release);
         // SMBIOS type=1 (System Information)
-        cfg_if(&mut types[1], "manufacturer", &p.sys_vendor);
-        cfg_if(&mut types[1], "product", &p.product_name);
+        if let Some((manufacturer, product)) =
+            simulated_smbios_identity(self.manifest.simulated_tee)
+        {
+            types[1].push(format!("manufacturer={manufacturer}"));
+            types[1].push(format!("product={product}"));
+        } else {
+            cfg_if(&mut types[1], "manufacturer", &p.sys_vendor);
+            cfg_if(&mut types[1], "product", &p.product_name);
+        }
         cfg_if(&mut types[1], "version", &p.product_version);
         cfg_if(&mut types[1], "serial", &p.product_serial);
         cfg_if(&mut types[1], "uuid", &p.product_uuid);
