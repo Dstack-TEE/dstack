@@ -38,6 +38,9 @@ grep -q 'objcopy --strip-debug' "$D/mkosi.build"
 grep -q 'depmod -b.*KERNEL_VERSION-dstack' "$D/mkosi.build"
 grep -q '^CleanPackageMetadata=yes$' "$D/mkosi.conf"
 grep -q '^WithDocs=no$' "$D/mkosi.conf"
+grep -q '/var/lib/docker/.dstack-keep' "$D/mkosi.conf"
+grep -q '/var/lib/tpm2-tss/system/keystore 0755' \
+  "$D/mkosi.skeleton/usr/lib/tmpfiles.d/dstack-image.conf"
 grep -q '/var/lib/dpkg' "$D/mkosi.profiles/prod/mkosi.conf"
 if grep -q '^[[:space:]]*ovmf$' "$D/mkosi.conf"; then
   echo 'distribution OVMF must not be installed in the guest rootfs' >&2
