@@ -6,6 +6,7 @@
 //! template and certificate NV indices consumed by `tpm-attest`.
 
 use std::{
+    ffi::CString,
     io::{Read, Write},
     os::{
         fd::{AsRawFd, FromRawFd},
@@ -117,6 +118,7 @@ pub fn start_gcp_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
     }
     command("tpm2_startup", &["-c"])?;
     replay_fixture_event_log()?;
+    install_fixture_event_log()?;
 
     let template_with_size = state_dir.join("ak.tpm2b-public");
     let generated_public = state_dir.join("ak.public");
@@ -210,6 +212,45 @@ fn replay_fixture_event_log() -> Result<()> {
         let extension = format!("{}:sha256={}", event.pcr_index, hex::encode(event.digest));
         command("tpm2_pcrextend", &[&extension])?;
     }
+    Ok(())
+}
+
+fn install_fixture_event_log() -> Result<()> {
+    let security_root = Path::new("/sys/kernel/security");
+    let event_log = security_root.join("tpm0/binary_bios_measurements");
+    if event_log.exists() {
+        return Ok(());
+    }
+    let tpm_dir = event_log.parent().context("TPM event log has no parent")?;
+    if let Err(error) = fs_err::create_dir_all(tpm_dir) {
+        if !matches!(error.raw_os_error(), Some(libc::EPERM) | Some(libc::EACCES)) {
+            return Err(error).context("failed to create simulated TPM event-log directory");
+        }
+        let source = CString::new("dstack-tee-simulator")?;
+        let target = CString::new("/sys/kernel/security")?;
+        let fstype = CString::new("tmpfs")?;
+        let data = CString::new("mode=0755")?;
+        let rc = unsafe {
+            libc::mount(
+                source.as_ptr(),
+                target.as_ptr(),
+                fstype.as_ptr(),
+                libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
+                data.as_ptr().cast(),
+            )
+        };
+        if rc != 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("failed to mount simulated securityfs shadow");
+        }
+        fs_err::create_dir_all(tpm_dir)
+            .context("failed to create simulated TPM event-log directory")?;
+    }
+    fs_err::write(
+        event_log,
+        include_bytes!("../../cc-eventlog/samples/tpm_eventlog.bin"),
+    )
+    .context("failed to install simulated TPM event log")?;
     Ok(())
 }
 
