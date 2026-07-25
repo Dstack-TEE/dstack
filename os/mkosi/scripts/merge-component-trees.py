@@ -14,6 +14,16 @@ def exists(path: Path) -> bool:
     return path.exists() or path.is_symlink()
 
 
+def is_real_dir(path: Path) -> bool:
+    """Return whether a path is a directory that is not a symlink to one.
+
+    A symlink to a directory must never be treated as a mergeable directory:
+    the merge would follow it and write the component payload outside the
+    staging root, silently omitting those files from the image.
+    """
+    return path.is_dir() and not path.is_symlink()
+
+
 def merge(component: str, source: Path, destination: Path) -> None:
     """Merge one component tree into the destination without overwrites."""
     if not source.is_dir():
@@ -23,6 +33,11 @@ def merge(component: str, source: Path, destination: Path) -> None:
         files.sort()
         relative = Path(root).relative_to(source)
         target_root = destination / relative
+        # os.walk is top-down, so every ancestor of target_root was validated
+        # and created by an earlier iteration of this loop; checking the
+        # directory itself is enough to keep the whole descent inside the root.
+        if exists(target_root) and not is_real_dir(target_root):
+            raise SystemExit(f"component install conflict: {component}: {target_root}")
         target_root.mkdir(parents=True, exist_ok=True)
         for name in directories:
             src = Path(root) / name
@@ -30,9 +45,10 @@ def merge(component: str, source: Path, destination: Path) -> None:
             if src.is_symlink():
                 files.append(name)
                 continue
-            if exists(dst) and not dst.is_dir():
+            if exists(dst) and not is_real_dir(dst):
                 raise SystemExit(f"component install conflict: {component}: {dst}")
             dst.mkdir(exist_ok=True)
+            shutil.copymode(src, dst)
         for name in files:
             src = Path(root) / name
             dst = target_root / name
