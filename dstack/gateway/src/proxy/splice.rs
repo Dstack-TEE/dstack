@@ -124,8 +124,12 @@ async fn splice_one(src: Arc<TcpStream>, dst: Arc<TcpStream>) -> Result<()> {
 
     loop {
         // Move a chunk from the source socket into the pipe.
+        // Try the syscall first and only wait for readiness when it actually
+        // blocks. `try_io` decides with one atomic read of the cached readiness
+        // flag, where `readable()` builds, polls and drops a `Readiness` future
+        // every time -- which showed up as ~2.4% of total time on the
+        // small-request passthrough profile, paid once per splice.
         let n = loop {
-            src.readable().await.context("readable error")?;
             match src.try_io(Interest::READABLE, || {
                 splice(
                     src.as_ref(),
@@ -138,7 +142,9 @@ async fn splice_one(src: Arc<TcpStream>, dst: Arc<TcpStream>) -> Result<()> {
                 .map_err(errno_to_io)
             }) {
                 Ok(n) => break n,
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    src.readable().await.context("readable error")?;
+                }
                 Err(e) => return Err(e).context("splice src->pipe failed"),
             }
         };
@@ -151,7 +157,6 @@ async fn splice_one(src: Arc<TcpStream>, dst: Arc<TcpStream>) -> Result<()> {
         // Drain the pipe fully into the destination socket.
         let mut left = n;
         while left > 0 {
-            dst.writable().await.context("writable error")?;
             match dst.try_io(Interest::WRITABLE, || {
                 splice(
                     pipe.rd(),
@@ -171,7 +176,9 @@ async fn splice_one(src: Arc<TcpStream>, dst: Arc<TcpStream>) -> Result<()> {
                         pipe.drained = true;
                     }
                 }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    dst.writable().await.context("writable error")?;
+                }
                 Err(e) => return Err(e).context("splice pipe->dst failed"),
             }
         }
