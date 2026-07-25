@@ -30,6 +30,18 @@ for key in ACPI ACPI_TABLE_UPGRADE INTEL_TDX_GUEST TDX_GUEST_DRIVER \
  NF_TABLES VSOCKETS HARDENED_USERCOPY; do
   grep -Eq "^CONFIG_${key}=(y|m)$" "$D/components/kernel/kernel.config" || { echo "missing CONFIG_$key"; exit 1; }
 done
+# The hardening baseline is owned by the production audit script; read the
+# requirements from it so the two cannot drift. x86_64_defconfig enables
+# several of these, so the fragment must pin every one of them explicitly.
+audit="$D/../yocto/tools/aws/audit-aws-ec2-image-hardening.sh"
+test -f "$audit"
+required=0
+while read -r key want; do
+  required=$((required + 1))
+  grep -q "^${key}=${want}$" "$D/components/kernel/kernel.config" || {
+    echo "kernel.config does not pin $key=$want required by $audit"; exit 1; }
+done < <(sed -n 's/^require_config \(CONFIG_[A-Z0-9_]*\) \([ynm]\)$/\1 \2/p' "$audit")
+[[ $required -ge 10 ]]
 grep -q '0002-acpi-sandbox' "$D/components/kernel/kernel-build.sh"
 grep -q -- '--fuzz=0' "$D/components/kernel/kernel-build.sh"
 for service in dstack-guest-agent dstack-prepare app-compose wg-checker; do
