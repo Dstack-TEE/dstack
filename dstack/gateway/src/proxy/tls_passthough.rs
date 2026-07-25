@@ -20,7 +20,7 @@ use crate::{
 };
 
 use super::{
-    io_bridge::bridge,
+    io_bridge::bridge_tcp,
     port_policy::{filter_allowed_addresses, should_send_pp},
     AddressGroup,
 };
@@ -292,7 +292,7 @@ pub(crate) async fn proxy_to_app(
                 .context("failed to splice between inbound and outbound")?;
         }
     } else {
-        bridge(inbound, outbound, &state.config.proxy)
+        bridge_tcp(inbound, outbound, &state.config.proxy)
             .await
             .context("failed to copy between inbound and outbound")?;
     }
