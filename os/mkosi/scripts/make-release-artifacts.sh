@@ -52,16 +52,38 @@ install -m0755 "$TREE/usr/bin/busybox" "$ird/bin/busybox"
 for applet in sh mount mkdir cat grep head cut basename realpath switch_root; do
   ln -s busybox "$ird/bin/$applet"
 done
-verity_bin=$(find "$TREE" -type f \( -path '*/sbin/veritysetup' -o -path '*/bin/veritysetup' \) | head -1)
-[[ -n $verity_bin ]] || { echo 'veritysetup missing from mkosi tree' >&2; exit 1; }
+# readdir order is not stable and a second match would make the initramfs (and
+# therefore the verity root hash) depend on the filesystem, so sort and take the
+# first record without a pipe that could SIGPIPE under pipefail.
+mapfile -d '' -t verity_matches < <(
+  find "$TREE" -type f \( -path '*/sbin/veritysetup' -o -path '*/bin/veritysetup' \) \
+    -print0 | sort -z)
+[[ ${#verity_matches[@]} -gt 0 ]] || { echo 'veritysetup missing from mkosi tree' >&2; exit 1; }
+verity_bin=${verity_matches[0]}
 install -m0755 "$verity_bin" "$ird/sbin/veritysetup"
 command -v lddtree >/dev/null || { echo 'lddtree (pax-utils) is required' >&2; exit 1; }
+# lddtree prints a bare soname instead of a path for anything it cannot resolve
+# inside the root, and its exit status is invisible through a process
+# substitution. Silently dropping those produced an initramfs that built,
+# measured and released cleanly, then failed in early boot with
+# "veritysetup: error while loading shared libraries".
+lddtree_out=$(lddtree -l -R "$TREE" "${verity_bin#"$TREE"}") || {
+  echo 'lddtree failed to resolve the veritysetup dependency tree' >&2; exit 1; }
+[[ -n $lddtree_out ]] || { echo 'lddtree produced no output' >&2; exit 1; }
 while read -r lib; do
+  [[ -n $lib ]] || continue
   [[ $lib == "$verity_bin" ]] && continue
+  if [[ $lib != /* ]]; then
+    echo "lddtree could not resolve '$lib' inside $TREE" >&2
+    exit 1
+  fi
   rel=${lib#"$TREE"}
-  [[ $rel == /* ]] || continue
+  if [[ $rel == "$lib" ]]; then
+    echo "lddtree resolved '$lib' outside the image tree $TREE" >&2
+    exit 1
+  fi
   install -Dm0755 "$lib" "$ird$rel"
-done < <(lddtree -l -R "$TREE" "${verity_bin#"$TREE"}")
+done <<< "$lddtree_out"
 install -m0755 "$ROOT/os/yocto/layers/meta-dstack/recipes-core/images/dstack-initscript/init" "$ird/init"
 find "$ird" -print0 | xargs -0 touch -h -d "@$SOURCE_DATE_EPOCH"
 (cd "$ird" && find . -print0 | sort -z | \
@@ -71,7 +93,10 @@ find "$ird" -print0 | xargs -0 touch -h -d "@$SOURCE_DATE_EPOCH"
 # OVMF is the pinned TDX build; the EFI stub comes from the Debian snapshot.
 ovmf="$KERNEL_TREE/ovmf.fd"
 ovmf_sev="$KERNEL_TREE/ovmf-sev.fd"
-stub=$(find "$TREE/usr/lib/systemd/boot/efi" -type f -name 'linuxx64.efi.stub' | head -1)
+mapfile -d '' -t stub_matches < <(
+  find "$TREE/usr/lib/systemd/boot/efi" -type f -name 'linuxx64.efi.stub' \
+    -print0 | sort -z)
+stub=${stub_matches[0]-}
 [[ -f $ovmf && -f $ovmf_sev && -f $stub ]] || {
   echo 'TDX/SEV OVMF or systemd EFI stub missing' >&2; exit 1;
 }
