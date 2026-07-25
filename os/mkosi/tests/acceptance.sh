@@ -146,8 +146,25 @@ test ! -e "$D/components/zfs/patches"
 test ! -e "$D/components/nvidia/patches"
 python3 -m json.tool "$D/parity.json" >/dev/null
 grep -q 'rootfs.img.parted.verity' "$D/../image/assemble.sh"
+# mkosi.postinst was missing here, so a syntax error in it only surfaced part
+# way into a ~30 minute build.
 bash -n "$D"/*.sh "$D"/mkosi.build "$D"/mkosi.clean "$D"/mkosi.finalize \
-  "$D"/mkosi.postoutput "$D"/scripts/*.sh "$D"/components/*/*.sh "$D"/tests/*.sh
+  "$D"/mkosi.postinst "$D"/mkosi.postoutput "$D"/scripts/*.sh \
+  "$D"/components/*/*.sh "$D"/tests/*.sh "$D"/mkosi.skeleton/usr/bin/*.sh \
+  "$D"/../image/kernel-cmdline.sh
+# The Python helpers were only ever exercised by a real build. Keep the
+# bytecode out of the source tree, which is mounted into the build sandbox.
+pycache=$(mktemp -d)
+trap 'rm -rf "$pycache"' EXIT
+PYTHONPYCACHEPREFIX="$pycache" python3 -m py_compile "$D"/scripts/*.py "$D"/tests/*.py
+# The UKI command line and the one recorded in metadata.json feed the same
+# measurements, so both must come from the single shared definition.
+grep -q 'kernel-cmdline.sh' "$D/scripts/make-release-artifacts.sh"
+grep -q 'kernel-cmdline.sh' "$D/../image/assemble.sh"
+if grep -q 'random.trust_bootloader' "$D/scripts/make-release-artifacts.sh"; then
+  echo 'kernel command line must not be restated outside kernel-cmdline.sh' >&2
+  exit 1
+fi
 grep -q 'Archiving UKI image' "$D/../image/assemble.sh"
 grep -Fq "FLAVORS=\${FLAVORS:-prod}" "$D/build.sh"
 grep -q 'DSTACK_COMPONENT_CACHE.*dev-image' "$D/build.sh"

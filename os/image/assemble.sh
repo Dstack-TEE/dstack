@@ -379,15 +379,15 @@ create_partitioned_rootfs "$ROOTFS_IMAGE" "${OUTPUT_DIR}/rootfs.img.parted.verit
 
 echo "Generating metadata.json to ${OUTPUT_DIR}/metadata.json (ovmf_variant=$OVMF_VARIANT)"
 
-KARG0="console=ttyS0 init=/init panic=1 net.ifnames=0 biosdevname=0"
-KARG1="mce=off oops=panic pci=noearly pci=nommconf random.trust_cpu=y random.trust_bootloader=n tsc=reliable no-kvmclock"
-KARG2="dstack.rootfs_hash=$ROOT_HASH dstack.rootfs_size=$DATA_SIZE"
+# shellcheck source=kernel-cmdline.sh
+. "$(dirname "${BASH_SOURCE[0]}")/kernel-cmdline.sh"
+KERNEL_CMDLINE=$(dstack_kernel_cmdline "$ROOT_HASH" "$DATA_SIZE")
 
 cat <<EOF > "${OUTPUT_DIR}/metadata.json"
 {
     "bios": "ovmf.fd",${BIOS_SEV_JSON}
     "kernel": "bzImage",
-    "cmdline": "$KARG0 $KARG1 $KARG2",
+    "cmdline": "$KERNEL_CMDLINE",
     "initrd": "initramfs.cpio.gz",
     "rootfs": "rootfs.img.parted.verity",
     "version": "$DSTACK_VERSION",

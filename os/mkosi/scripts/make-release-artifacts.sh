@@ -103,7 +103,11 @@ stub=${stub_matches[0]-}
 install -m0644 "$ovmf" "$OUT/files/ovmf.fd"
 install -m0644 "$ovmf_sev" "$OUT/files/ovmf-sev.fd"
 
-cmdline="console=ttyS0 init=/init panic=1 net.ifnames=0 biosdevname=0 mce=off oops=panic pci=noearly pci=nommconf random.trust_cpu=y random.trust_bootloader=n tsc=reliable no-kvmclock dstack.rootfs_hash=$root_hash dstack.rootfs_size=$data_size"
+# Same definition assemble.sh records in metadata.json; the UKI and the
+# measurement inputs must describe the same command line.
+# shellcheck source=../../image/kernel-cmdline.sh
+source "$ROOT/os/image/kernel-cmdline.sh"
+cmdline=$(dstack_kernel_cmdline "$root_hash" "$data_size")
 ukify build --efi-arch=x64 --stub="$stub" --linux="$kernel" \
   --initrd="$OUT/files/initramfs.cpio.gz" --cmdline="$cmdline" \
   --os-release="@$TREE/usr/lib/os-release" \
