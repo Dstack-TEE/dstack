@@ -19,11 +19,8 @@ release_name=dstack
 [[ $FLAVOR == dev ]] && release_name=dstack-dev
 "$SELF/tests/check-output.sh" "$OUTPUTDIR/$release_name-$DSTACK_VERSION" "$FLAVOR"
 
-# Drop mkosi's own rootfs tar and its convenience symlink. They are a plain
-# Debian rootfs, unmeasured and not part of the release contract; leaving them
-# behind would ship an unrelated image beside the release artifacts. This runs
-# in the staging directory, before mkosi promotes it, so they never appear in
-# the output directory at all.
-rm -f "$OUTPUTDIR/dstack-$DSTACK_VERSION-rootfs.tar" \
-      "$OUTPUTDIR/dstack-$DSTACK_VERSION-rootfs"
+# mkosi's own rootfs tar is removed by build.sh once mkosi has finished, not
+# here: build_image() calls print_output_size() on it after the postoutput
+# scripts and after staging is promoted, so deleting it at this point makes
+# mkosi fail on its own bookkeeping.
 rm -rf "$WORK" "$OUTPUTDIR/.image-tools"

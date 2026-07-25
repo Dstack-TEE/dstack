@@ -84,6 +84,12 @@ build_one() {
     mkosi_args+=(--environment="DSTACK_SOURCE_MANIFEST=/work/src/component-cache/source-manifest")
   fi
   mkosi "${mkosi_args[@]}" build
+  # mkosi's own output is a plain Debian rootfs: unmeasured, not part of the
+  # release contract, and it would otherwise sit beside the release artifacts.
+  # It can only be removed after mkosi returns, because build_image() stats it
+  # once more to report its size after the postoutput scripts have run.
+  rm -f "$out/dstack-$DSTACK_VERSION-rootfs.tar" \
+        "$out/dstack-$DSTACK_VERSION-rootfs"
 }
 
 if [[ $action == image || $action == dev-image ]]; then

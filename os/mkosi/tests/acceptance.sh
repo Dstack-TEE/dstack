@@ -24,13 +24,22 @@ grep -q "^Snapshot=$DEBIAN_SNAPSHOT" "$D/mkosi.conf"
 grep -q '^Format=tar$' "$D/mkosi.conf"
 # mkosi's own tar must not share the release name: sharing it made mkosi
 # track the release tarball as one of its outputs, which clean/--force may
-# delete. mkosi.postoutput discards the rootfs tar before staging is promoted.
+# delete. build.sh discards it once mkosi has finished with it.
 grep -q '^Output=%i-%v-rootfs$' "$D/mkosi.conf"
 # %i/%v expand in file order, so these must be declared before Output=.
 grep -q "^ImageVersion=$DSTACK_VERSION\$" "$D/mkosi.conf"
 awk '/^ImageVersion=/{v=NR} /^Output=/{o=NR} END{exit !(v && o && v < o)}' "$D/mkosi.conf"
 grep -q '^Bootable=no$' "$D/mkosi.conf"
-grep -q 'rootfs.tar' "$D/mkosi.postoutput"
+# SplitArtifacts must stay empty: the kernel split is produced even with
+# Bootable=no and would drop a stray .vmlinuz beside the release artifacts.
+grep -q '^SplitArtifacts=$' "$D/mkosi.conf"
+# The rootfs tar is removed after mkosi returns, not in postoutput: mkosi
+# stats it again to print its size once staging has been promoted.
+grep -Fq 'rootfs.tar' "$D/build.sh"
+if grep -Fq 'rootfs.tar"' "$D/mkosi.postoutput"; then
+  echo 'removing the rootfs tar in postoutput breaks mkosi output bookkeeping' >&2
+  exit 1
+fi
 # KernelCommandLine= is dead with Bootable=no and contradicted the command
 # line actually measured into the UKI; the real one lives in the release script.
 if grep -q '^KernelCommandLine=' "$D/mkosi.conf"; then
