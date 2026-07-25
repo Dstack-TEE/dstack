@@ -30,6 +30,7 @@ for service in dstack-guest-agent dstack-prepare app-compose wg-checker; do
 done
 grep -q 'artifact-manifest.json' "$D/scripts/make-release-artifacts.sh"
 grep -q -- '--hard-dereference' "$D/scripts/make-release-artifacts.sh"
+grep -q -- '--mode=g-s' "$D/scripts/make-release-artifacts.sh"
 grep -q 'mksquashfs -.*-tar' "$D/scripts/make-release-artifacts.sh"
 grep -q 'image/assemble.sh' "$D/mkosi.postoutput"
 grep -q 'ovmf-build.sh' "$D/components/ovmf/ovmf.sh"

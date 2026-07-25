@@ -29,7 +29,7 @@ truncate -s 0 "$rootfs"
 # host-CPU-dependent fragment ordering.
 (cd "$TREE" && tar --sort=name --format=gnu \
   --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
-  --hard-dereference -cf - .) | \
+  --mode=g-s --hard-dereference -cf - .) | \
   env -u SOURCE_DATE_EPOCH mksquashfs - "$rootfs" -tar \
     -noappend -all-root -no-progress -exports -no-hardlinks -no-tailends \
     -no-xattrs -processors 1 -comp zstd -mkfs-time "$SOURCE_DATE_EPOCH" \
