@@ -70,6 +70,12 @@ done
 "$SELF/scripts/merge-component-trees.py" "$DESTDIR" \
   "kernel=$kernel_stage"
 ln -sfn usr/lib "$DESTDIR/lib"
+# Run depmod ourselves and then normalize mtimes below. mkosi's own run_depmod
+# is nondeterministic, and it skips a kernel directory only when all four
+# outputs exist and every *.ko* mtime is <= modules.dep's. The normalization
+# is what keeps that condition true, so it is load-bearing for repro-check: if
+# a future mkosi tightens the comparison, its depmod fires again and two
+# otherwise identical builds stop matching.
 depmod -b "$DESTDIR" "$KERNEL_VERSION-dstack"
 rm -f "$DESTDIR/lib"
 if [[ $DSTACK_BUILD_FLAVOR == prod ]]; then

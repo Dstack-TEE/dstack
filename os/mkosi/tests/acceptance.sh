@@ -22,11 +22,21 @@ yocto_series=$(sed -n 's/^PREFERRED_VERSION_linux-yocto ?= "\([0-9.]*\)%".*/\1/p
 [[ $KERNEL_VERSION == "$yocto_series".* ]]
 grep -q "^Snapshot=$DEBIAN_SNAPSHOT" "$D/mkosi.conf"
 grep -q '^Format=tar$' "$D/mkosi.conf"
-grep -q '^Output=dstack-0.6.0$' "$D/mkosi.conf"
-grep -q '^CompressOutput=gz$' "$D/mkosi.conf"
-grep -q '^SplitArtifacts=$' "$D/mkosi.conf"
+# mkosi's own tar must not share the release name: sharing it made mkosi
+# track the release tarball as one of its outputs, which clean/--force may
+# delete. mkosi.postoutput discards the rootfs tar before staging is promoted.
+grep -q '^Output=%i-%v-rootfs$' "$D/mkosi.conf"
+# %i/%v expand in file order, so these must be declared before Output=.
+grep -q "^ImageVersion=$DSTACK_VERSION\$" "$D/mkosi.conf"
+awk '/^ImageVersion=/{v=NR} /^Output=/{o=NR} END{exit !(v && o && v < o)}' "$D/mkosi.conf"
 grep -q '^Bootable=no$' "$D/mkosi.conf"
-grep -q '^Bootloader=none$' "$D/mkosi.conf"
+grep -q 'rootfs.tar' "$D/mkosi.postoutput"
+# KernelCommandLine= is dead with Bootable=no and contradicted the command
+# line actually measured into the UKI; the real one lives in the release script.
+if grep -q '^KernelCommandLine=' "$D/mkosi.conf"; then
+  echo 'KernelCommandLine= is unreachable with Bootable=no' >&2
+  exit 1
+fi
 for key in ACPI ACPI_TABLE_UPGRADE INTEL_TDX_GUEST TDX_GUEST_DRIVER \
  AMD_MEM_ENCRYPT SEV_GUEST TCG_TPM VIRTIO_PCI VIRTIO_NET BLK_DEV_NVME \
  DM_CRYPT DM_VERITY OVERLAY_FS CGROUPS USER_NS SECCOMP BPF_SYSCALL \

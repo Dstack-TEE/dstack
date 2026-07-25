@@ -31,7 +31,11 @@ export TZ=UTC LC_ALL=C
 # snapshot, then shares that read-only environment across all requested flavors
 # or both legs of repro-check.
 if [[ $action != dev-image ]]; then
-  mkosi --directory "$SELF" clean -f
+  # --directory only chdirs, and no OutputDirectory= is configured, so without
+  # the same --output-directory the build uses, mkosi.clean would run its
+  # removal against os/mkosi/ instead of the build tree.
+  mkdir -p "$BUILD_DIR/out"
+  mkosi --directory "$SELF" --output-directory="$BUILD_DIR/out" clean -f
 fi
 
 build_one() {
