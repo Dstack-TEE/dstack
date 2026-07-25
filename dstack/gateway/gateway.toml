@@ -93,6 +93,9 @@ inbound_pp_enabled = false
 # Bulk throughput +~12%, but small-request latency regresses. Enable only for
 # passthrough traffic dominated by large transfers.
 tcp_splice_enabled = false
+# Offload TLS record crypto to the kernel (kTLS) on the terminate path.
+# Hands session keys to the kernel; see config.rs for the security note.
+ktls_enabled = false
 
 [core.proxy.port_policy_fetch]
 # Background lazy-fetch of port_policy from legacy CVM agents.

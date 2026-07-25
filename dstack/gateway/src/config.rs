@@ -143,6 +143,16 @@ pub struct ProxyConfig {
     /// for request/response passthrough workloads.
     #[serde(default)]
     pub tcp_splice_enabled: bool,
+    /// Offload TLS record encryption to the kernel (kTLS) on the
+    /// TLS-terminate path. The handshake still runs in rustls; only the
+    /// symmetric crypto moves into the kernel afterwards. Linux-only.
+    ///
+    /// Security note: enabling this hands the negotiated session keys to the
+    /// kernel via `dangerous_extract_secrets`, so the keys live outside
+    /// rustls' control. Inside a CVM the kernel is part of the measured TCB,
+    /// but on a non-TEE host this widens key exposure. Off by default.
+    #[serde(default)]
+    pub ktls_enabled: bool,
     /// Background lazy-fetch behaviour for `port_policy` (legacy CVMs).
     pub port_policy_fetch: PortPolicyFetchConfig,
 }

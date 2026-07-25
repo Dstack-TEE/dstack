@@ -136,6 +136,13 @@ pub(crate) fn create_acceptor_with_cert_resolver(
 
     config.ticketer = ticketer;
 
+    // kTLS needs the negotiated traffic secrets so it can install them into
+    // the kernel's TLS ULP. This is opt-in because it moves session keys
+    // outside rustls' control (see `ktls_enabled` docs).
+    if proxy_config.ktls_enabled {
+        config.enable_secret_extraction = true;
+    }
+
     if h2 {
         config.alpn_protocols = vec![b"h2".to_vec()];
     }
@@ -281,6 +288,40 @@ impl Proxy {
         Ok(tls_stream)
     }
 
+    /// Accept a TLS connection and hand the socket over to kernel TLS.
+    ///
+    /// The handshake still runs in rustls; afterwards the negotiated keys are
+    /// installed into the kernel TLS ULP so record encryption happens there.
+    /// The inner IO must be wrapped in `CorkStream` because that is the only
+    /// way to drain a rustls stream cleanly at a record boundary.
+    async fn tls_accept_ktls(
+        &self,
+        inbound: TcpStream,
+        buffer: Vec<u8>,
+        h2: bool,
+    ) -> Result<ktls::KtlsStream<MergedStream>> {
+        let stream = ktls::CorkStream::new(MergedStream {
+            buffer,
+            buffer_cursor: 0,
+            inbound,
+        });
+        let acceptor = if h2 {
+            &self.h2_acceptor
+        } else {
+            &self.acceptor
+        };
+        let tls_stream = timeout(
+            self.config.proxy.timeouts.handshake,
+            acceptor.accept(stream),
+        )
+        .await
+        .context("handshake timeout")?
+        .context("failed to accept tls connection")?;
+        ktls::config_ktls_server(tls_stream)
+            .await
+            .context("failed to enable kernel TLS")
+    }
+
     pub(super) async fn proxy(
         &self,
         inbound: TcpStream,
@@ -302,20 +343,93 @@ impl Proxy {
             .with_context(|| format!("app <{app_id}> not found"))?;
         let addresses = filter_allowed_addresses(self, addresses, app_id, port)?;
         debug!("selected top n hosts: {addresses:?}");
-        let tls_stream = self.tls_accept(inbound, buffer, h2).await?;
+        if self.config.proxy.ktls_enabled {
+            let tls_stream = self.tls_accept_ktls(inbound, buffer, h2).await?;
+            if self.config.proxy.tcp_splice_enabled {
+                // With kTLS the socket carries plaintext from userspace's point
+                // of view, so the payload can be relayed with splice and never
+                // enters this process at all.
+                let (mut outbound, _counter, instance_id) =
+                    self.connect_upstream(addresses, port, app_id).await?;
+                self.send_pp_header(&mut outbound, &instance_id, port, pp_header)
+                    .await?;
+                let (drained, stream) = tls_stream.into_raw();
+                let (buffered, tcp) = stream.into_parts();
+                // Anything already read during handshake drain must reach the
+                // app before the kernel starts moving bytes directly.
+                for chunk in [drained.unwrap_or_default(), buffered] {
+                    if !chunk.is_empty() {
+                        outbound
+                            .write_all(&chunk)
+                            .await
+                            .context("failed to flush drained data to app")?;
+                    }
+                }
+                return super::splice::splice_bidirectional(tcp, outbound)
+                    .await
+                    .context("ktls splice error");
+            }
+            self.relay_to_app(tls_stream, addresses, port, app_id, pp_header)
+                .await
+        } else {
+            let tls_stream = self.tls_accept(inbound, buffer, h2).await?;
+            self.relay_to_app(tls_stream, addresses, port, app_id, pp_header)
+                .await
+        }
+    }
+
+    /// Connect to the app and relay an already-terminated TLS stream to it.
+    ///
+    /// Generic over the accepted stream so the userspace-rustls and kTLS
+    /// paths share the same connect / PROXY-protocol / bridging logic.
+    /// Race a connection to the app's top-N addresses.
+    async fn connect_upstream(
+        &self,
+        addresses: super::AddressGroup,
+        port: u16,
+        app_id: &str,
+    ) -> Result<(TcpStream, crate::models::EnteredCounter, String)> {
         let max_connections = self.config.proxy.max_connections_per_app;
-        let (mut outbound, _counter, instance_id) = timeout(
+        timeout(
             self.config.proxy.timeouts.connect,
             connect_multiple_hosts(addresses, port, max_connections, app_id),
         )
         .await
         .map_err(|_| anyhow!("connecting timeout"))?
-        .context("failed to connect to app")?;
-        if should_send_pp(self, &instance_id, port) {
+        .context("failed to connect to app")
+    }
+
+    /// Forward the client's address to the app when its port policy asks for it.
+    async fn send_pp_header(
+        &self,
+        outbound: &mut TcpStream,
+        instance_id: &str,
+        port: u16,
+        pp_header: ProxyHeader,
+    ) -> Result<()> {
+        if should_send_pp(self, instance_id, port) {
             let pp_header_bin =
                 proxy_protocol::encode(pp_header).context("failed to encode pp header")?;
             outbound.write_all(&pp_header_bin).await?;
         }
+        Ok(())
+    }
+
+    async fn relay_to_app<S>(
+        &self,
+        tls_stream: S,
+        addresses: super::AddressGroup,
+        port: u16,
+        app_id: &str,
+        pp_header: ProxyHeader,
+    ) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let (mut outbound, _counter, instance_id) =
+            self.connect_upstream(addresses, port, app_id).await?;
+        self.send_pp_header(&mut outbound, &instance_id, port, pp_header)
+            .await?;
         bridge(
             IgnoreUnexpectedEofStream::new(tls_stream),
             outbound,
@@ -357,6 +471,31 @@ impl AsyncRead for MergedStream {
         this.inbound.poll_read(cx, buf)
     }
 }
+impl MergedStream {
+    /// Unwrap to the raw socket, returning any bytes still buffered from the
+    /// pre-handshake sniff. After a completed handshake the buffer is drained,
+    /// so the returned `Vec` is normally empty; callers that bypass the
+    /// `AsyncRead` impl (e.g. splice) must still handle a non-empty remainder.
+    fn into_parts(self) -> (Vec<u8>, TcpStream) {
+        let remaining = self.buffer[self.buffer_cursor.min(self.buffer.len())..].to_vec();
+        (remaining, self.inbound)
+    }
+}
+
+impl std::os::fd::AsRawFd for MergedStream {
+    fn as_raw_fd(&self) -> std::os::fd::RawFd {
+        self.inbound.as_raw_fd()
+    }
+}
+
+impl ktls::AsyncReadReady for MergedStream {
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        // Safe to defer to the socket: by the time kTLS takes over, the
+        // buffered ClientHello prefix has already been consumed by rustls.
+        self.inbound.poll_read_ready(cx)
+    }
+}
+
 impl AsyncWrite for MergedStream {
     fn poll_write(
         self: std::pin::Pin<&mut Self>,
