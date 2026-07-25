@@ -1888,6 +1888,7 @@ dependencies = [
  "ipnet",
  "jemallocator",
  "ktls",
+ "libc",
  "load_config",
  "nix 0.29.0",
  "or-panic",

@@ -45,6 +45,7 @@ pub(crate) type AddressGroup = smallvec::SmallVec<[AddressInfo; 4]>;
 mod adaptive_ktls;
 mod io_bridge;
 pub(crate) mod port_policy;
+mod reuseport;
 mod sni;
 mod splice;
 mod tls_passthough;
@@ -389,8 +390,26 @@ fn probe_reuse_port(config: &ProxyConfig) -> Result<()> {
 /// in the default model.
 fn start_thread_per_core(config: ProxyConfig, app_state: Proxy) -> Result<()> {
     let workers = config.workers.max(1);
+    // Bind every listener here, in order, rather than letting each thread bind
+    // its own: the reuseport steering program selects a socket by its position
+    // in the group, so the order has to be ours to control.
+    let mut per_worker: Vec<Vec<std::net::TcpListener>> =
+        (0..workers).map(|_| Vec::new()).collect();
+    for &port in &config.listen_port {
+        let addr = std::net::SocketAddr::from((config.listen_addr, port));
+        let group = reuseport::bind_group(addr, workers, LISTEN_BACKLOG)
+            .with_context(|| format!("failed to bind reuseport group on {addr}"))?;
+        info!(
+            "tcp bridge listening on {}:{} across {} listeners",
+            config.listen_addr, port, workers
+        );
+        for (i, l) in group.into_iter().enumerate() {
+            per_worker[i].push(l);
+        }
+    }
+
     let config = Arc::new(config);
-    for i in 0..workers {
+    for (i, std_listeners) in per_worker.into_iter().enumerate() {
         let config = config.clone();
         let app_state = app_state.clone();
         std::thread::Builder::new()
@@ -401,7 +420,13 @@ fn start_thread_per_core(config: ProxyConfig, app_state: Proxy) -> Result<()> {
                     .build()
                     .or_panic("Failed to build Tokio runtime");
                 let result = rt.block_on(async {
-                    let listeners = bind_listeners(&config, true).await?;
+                    let mut listeners = Vec::with_capacity(std_listeners.len());
+                    for l in std_listeners {
+                        listeners.push(
+                            TcpListener::from_std(l)
+                                .context("failed to register listener with tokio")?,
+                        );
+                    }
                     accept_loop(listeners, app_state, None).await
                 });
                 if let Err(err) = result {
