@@ -72,7 +72,7 @@ impl PooledPipe {
             return Ok(Self {
                 rd: Some(rd),
                 wr: Some(wr),
-                drained: false,
+                drained: true,
             });
         }
         let (rd, wr) = pipe().context("failed to create splice pipe")?;
@@ -80,7 +80,7 @@ impl PooledPipe {
         Ok(Self {
             rd: Some(rd),
             wr: Some(wr),
-            drained: false,
+            drained: true,
         })
     }
 
@@ -137,11 +137,10 @@ async fn splice_one(src: Arc<TcpStream>, dst: Arc<TcpStream>) -> Result<()> {
             }
         };
         if n == 0 {
-            // Source is at EOF and every chunk was fully drained below, so the
-            // pipe is empty and safe to reuse.
-            pipe.drained = true;
-            break;
+            break; // EOF on source; the pipe was left empty by the last drain
         }
+        // A chunk is in the pipe now: not safe to recycle until fully drained.
+        pipe.drained = false;
 
         // Drain the pipe fully into the destination socket.
         let mut left = n;
@@ -158,7 +157,14 @@ async fn splice_one(src: Arc<TcpStream>, dst: Arc<TcpStream>) -> Result<()> {
                 )
                 .map_err(errno_to_io)
             }) {
-                Ok(m) => left -= m,
+                Ok(m) => {
+                    left -= m;
+                    if left == 0 {
+                        // Fully drained: the pipe is empty again, so it can go
+                        // back to the pool even if the connection dies next.
+                        pipe.drained = true;
+                    }
+                }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
                 Err(e) => return Err(e).context("splice pipe->dst failed"),
             }
