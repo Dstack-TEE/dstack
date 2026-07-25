@@ -103,6 +103,10 @@ where
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProxyConfig {
     pub tls_crypto_provider: CryptoProvider,
@@ -134,18 +138,26 @@ pub struct ProxyConfig {
     /// `[99, 42, 101, 101]`. Rebalancing costs one channel send per *rebalanced
     /// connection*, never per request. Requires `thread_per_core`.
     ///
-    /// The trade, measured over 6 restarts per arm on a 4-core gateway:
+    /// On by default. It used to be opt-in, because handing a connection over
+    /// cost 2-3% wherever the hash was already even -- that turned out to be a
+    /// bug (the migrated socket kept its registration on the accepting core's
+    /// reactor), and with it fixed the trade is one-sided. Measured on a 4-core
+    /// gateway, 3-5 runs per arm after warmup:
     ///
-    /// | connections | off | on |
-    /// |---|---|---|
-    /// | 16 (hash skews) | 236 110 rps, worst core 72% | 251 840 rps, worst core 85% |
-    /// | 50 (hash even) | 291 932 rps | 287 440 rps |
+    /// | workload | off | on | |
+    /// |---|---|---|---|
+    /// | passthrough small-request, 8 conns | 113 350 | 143 341 | **+26.5%** |
+    /// | passthrough small-request, 16 conns | 231 043 | 258 787 | **+12.0%** |
+    /// | passthrough small-request, 50 conns | 294 937 | 295 311 | +0.1% |
+    /// | TLS terminate small-request, 50 conns | 244 304 | 246 228 | +0.8% |
+    /// | TLS terminate, connections/s | 41 024 | 43 019 | +4.9% |
+    /// | passthrough, connections/s | 17 431 | 17 319 | -0.6% |
+    /// | passthrough, bulk throughput | 12.10 GB/s | 12.16 GB/s | +0.5% |
     ///
-    /// So it trades ~1.5% at high connection counts, where the hash is already
-    /// even and the balancer only costs its bookkeeping, for ~6.7% where the
-    /// hash skews -- and it lifts the worst case far more than the average, from
-    /// a core at 47% to none below 76%.
-    #[serde(default)]
+    /// The gain is largest where the hash has fewest connections to spread and
+    /// the worst-loaded core would otherwise starve: at 16 connections the
+    /// quietest core goes from 63% to 97% busy.
+    #[serde(default = "default_true")]
     pub connection_rebalance: bool,
     #[serde(default)]
     pub base_domain: Option<String>,

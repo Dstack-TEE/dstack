@@ -16,6 +16,16 @@
 //! connection* -- not per connection, and never per request -- so the
 //! thread-per-core property that made this model fast in the first place is kept
 //! for everything already in flight.
+//!
+//! This is the same shape as HAProxy's multi-queue accept, which picks the least
+//! loaded of three candidate threads and pushes the connection onto its ring.
+//! Two of its choices were tried here and did not transfer: capping accepts per
+//! wakeup (its `maxaccept`) and routing every connection through the channel even
+//! when it stays local both measured within noise. Its shared listening socket
+//! measured clearly worse for us -- 227k against 245k at 16 connections -- since
+//! every worker's reactor then wakes on every connection. Its own numbers say the
+//! same thing from the other side: put HAProxy on per-thread reuseport listeners
+//! (`shards by-thread`) and it drops 15%, below our thread-per-core.
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
