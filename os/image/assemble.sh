@@ -313,8 +313,19 @@ build_uki_disk_image() {
         local efi_tree=${tmp_dir}/tree
         mkdir -p "$efi_tree/EFI/BOOT"
         cp "$uki_file" "$efi_tree/EFI/BOOT/BOOTX64.EFI"
+        # FAT stores local time and mtools converts using TZ, so the image
+        # would otherwise differ between builders in different time zones.
+        export TZ=UTC
+        # FAT timestamps start at 1980-01-01, so a Unix epoch of 0 does not
+        # round-trip: it wraps and every directory entry is dated 2107. No
+        # backend entrypoint exports SOURCE_DATE_EPOCH today, so clamp rather
+        # than fall back to 0.
+        local fat_epoch=${SOURCE_DATE_EPOCH:-0}
+        if [ "$fat_epoch" -lt 315532800 ]; then
+            fat_epoch=315532800
+        fi
         find "$efi_tree" -print0 | xargs -0r touch --no-dereference \
-          --date="@${SOURCE_DATE_EPOCH:-0}"
+          --date="@${fat_epoch}"
         mkfs.vfat --invariant -F 32 -n DSTACKEFI -C "$efi_img" \
           $((efi_size_aligned / 1024)) >/dev/null
         mcopy -smp -i "$efi_img" "$efi_tree/EFI" ::
@@ -406,13 +417,12 @@ if [ "$ENABLE_UKI_IMAGE" = "1" ]; then
         echo "Skipping UKI disk image creation because the backend did not export a UKI" >&2
     elif command -v sgdisk >/dev/null && \
          command -v mkfs.vfat >/dev/null && \
-         command -v mcopy >/dev/null && \
-         command -v mmd >/dev/null; then
+         command -v mcopy >/dev/null; then
         create_uki_artifacts "${OUTPUT_DIR}"
         UKI_CREATED=1
     else
         echo "Error: cannot create UKI disk image because required tools are missing" >&2
-        echo "Missing tools are among: sgdisk (gdisk), mkfs.vfat (dosfstools), mcopy/mmd (mtools)" >&2
+        echo "Missing tools are among: sgdisk (gdisk), mkfs.vfat (dosfstools), mcopy (mtools)" >&2
         echo "Install them (e.g. apt-get install -y gdisk dosfstools mtools) or set ENABLE_UKI_IMAGE=0" >&2
         exit 1
     fi
