@@ -22,10 +22,26 @@ actual=$(mkosi --version | awk '{print $2}' | cut -d. -f1)
 }
 export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --format=%ct)}
 revision=$(git -C "$ROOT" rev-parse HEAD)
+# BuildSources= mounts and compiles the working tree, not HEAD, so without this
+# an uncommitted change would produce an image whose guest agent and measured
+# metadata.json both report a clean upstream revision. git_revision! marks this
+# the same way when it derives the value itself.
+dirty=
+if ! git -C "$ROOT" diff --quiet HEAD -- || \
+   [[ -n $(git -C "$ROOT" ls-files --others --exclude-standard) ]]; then
+  if [[ ${DSTACK_ALLOW_DIRTY:-0} != 1 ]]; then
+    echo "refusing to build from a dirty worktree: the recorded revision would" >&2
+    echo "not describe the sources being compiled. Commit or stash the changes," >&2
+    echo "or set DSTACK_ALLOW_DIRTY=1 to record the revision as -modified." >&2
+    exit 1
+  fi
+  dirty=-modified
+fi
 # Distinct from the Yocto backend's DSTACK_GIT_REVISION, which is a bare SHA
 # used for release metadata. This one is compiled into the binaries by
 # dstack-build-info and must carry the "git:" display prefix.
-export DSTACK_BUILD_GIT_REVISION=${DSTACK_BUILD_GIT_REVISION:-git:${revision:0:20}}
+export DSTACK_BUILD_GIT_REVISION=${DSTACK_BUILD_GIT_REVISION:-git:${revision:0:20}$dirty}
+revision="$revision$dirty"
 export TZ=UTC LC_ALL=C
 # A production invocation reconstructs the tools tree once from the immutable
 # snapshot, then shares that read-only environment across all requested flavors

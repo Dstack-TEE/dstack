@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 """Describe Git-owned and untracked source paths for development cache keys."""
 

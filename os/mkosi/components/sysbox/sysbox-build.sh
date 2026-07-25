@@ -15,6 +15,11 @@ checkout() {
   git -C "$dir" fetch -q --depth=1 origin "$rev"
   git -C "$dir" checkout -q --detach FETCH_HEAD
   git -C "$dir" reset -q --hard "$rev"
+  # reset --hard leaves untracked files, so on a revision bump in an existing
+  # work directory the previous vendor/ tree and the copied-in generated
+  # protobuf sources would survive and be linked into the new binaries. Every
+  # other component with a git checkout already does this.
+  git -C "$dir" clean -qfdx
 }
 mkdir -p "$B"
 checkout https://github.com/nestybox/sysbox.git "$SYSBOX_REVISION" "$B/sysbox"
@@ -40,7 +45,9 @@ for f in sysbox.service sysbox-fs.service sysbox-mgr.service; do
 done
 install -Dm0644 "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-sysbox/files/99-sysbox-sysctl.conf" "$STAGE/etc/sysctl.d/99-sysbox-sysctl.conf"
 install -Dm0644 "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-sysbox/files/50-sysbox-mod.conf" "$STAGE/etc/modules-load.d/50-sysbox-mod.conf"
-mkdir -p "$STAGE/var/lib/sysbox"
-printf 'sysbox:100000:65536\n' >> "$STAGE/etc/subuid"
-printf 'sysbox:100000:65536\n' >> "$STAGE/etc/subgid"
+mkdir -p "$STAGE/var/lib/sysbox" "$STAGE/etc"
+# Truncating, not appending: the staging tree is reused across dev-image runs,
+# and duplicate entries here are a fatal parse error for some userns tooling.
+printf 'sysbox:100000:65536\n' > "$STAGE/etc/subuid"
+printf 'sysbox:100000:65536\n' > "$STAGE/etc/subgid"
 find "$STAGE" -print0 | xargs -0r touch -h -d "@${SOURCE_DATE_EPOCH:?}"

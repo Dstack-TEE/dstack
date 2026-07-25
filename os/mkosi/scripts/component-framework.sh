@@ -91,9 +91,18 @@ component_run() {
     unset -f component_cache_key component_build component_prepare_outputs 2>/dev/null || true
     # shellcheck source=/dev/null
     source "$definition"
-    [[ $COMPONENT_NAME == "$name" ]]
-    declare -F component_cache_key >/dev/null
-    declare -F component_build >/dev/null
+    [[ $COMPONENT_NAME == "$name" ]] || {
+        echo "$definition declares COMPONENT_NAME=$COMPONENT_NAME, expected $name" >&2
+        exit 1
+    }
+    declare -F component_cache_key >/dev/null || {
+        echo "$definition does not define component_cache_key" >&2
+        exit 1
+    }
+    declare -F component_build >/dev/null || {
+        echo "$definition does not define component_build" >&2
+        exit 1
+    }
 
     # Production does not read or write the component cache, so it must not
     # inspect cache-only inputs either. Besides avoiding wasted work, this

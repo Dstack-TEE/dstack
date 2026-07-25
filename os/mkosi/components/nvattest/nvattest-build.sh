@@ -14,6 +14,9 @@ checkout="$BUILD_DIR/attestation-sdk"
 # containing work-a/work-b would therefore change Rust symbol hashes even
 # though the mapped paths are equal. Serialize this component in a stable,
 # clean pathname and keep the per-build checkout as the verified input.
+#
+# The path is fixed and its parent is world-writable, so it must be created
+# rather than adopted. flock only serializes; it does not establish ownership.
 canonical=/var/tmp/dstack-mkosi-nvattest
 exec 9>"$canonical.lock"
 flock 9
@@ -30,7 +33,9 @@ git -C "$checkout" checkout -q --detach FETCH_HEAD
 git -C "$checkout" reset -q --hard "$NVATTEST_REVISION"
 git -C "$checkout" clean -qfdx
 rm -rf "$canonical"
-mkdir -p "$canonical"
+# No -p: this must fail if anything recreated the path between the removal and
+# here, rather than build from a tree someone else owns.
+mkdir -m 0700 "$canonical"
 cp -a "$checkout" "$src"
 patch -d "$src" -p1 --fuzz=0 < \
   "$ROOT/os/yocto/layers/meta-nvidia/recipes-graphics/nvattest/files/0001-validate-ocsp-response-freshness.patch"
