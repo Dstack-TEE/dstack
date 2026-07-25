@@ -124,6 +124,16 @@ path = "os/yocto/**"
 SPDX-FileCopyrightText = "Copyright (c) Hashforest Technology LLC"
 SPDX-License-Identifier = "Apache-2.0"
 
+# Experimental Debian/mkosi guest OS backend. Supplies the copyright for the
+# formats that cannot carry a header; everything that can now does. It is
+# deliberately not precedence = "override", so a patch backported from an
+# upstream project keeps that project's license instead of being relabelled
+# Apache-2.0.
+[[annotations]]
+path = "os/mkosi/**"
+SPDX-FileCopyrightText = "© 2026 Phala Network <dstack@phala.network>"
+SPDX-License-Identifier = "Apache-2.0"
+
 # Legacy cross-component tools kept outside the Yocto backend.
 
 [[annotations]]
@@ -172,14 +182,6 @@ SPDX-License-Identifier = "Apache-2.0"
 precedence = "override"
 
 # Generated files
-
-# Experimental Debian/mkosi guest OS backend. Some native configuration
-# formats (JSON, apt, kernel config and gitignore) cannot carry SPDX headers.
-[[annotations]]
-path = "os/mkosi/**"
-SPDX-FileCopyrightText = "© 2026 Phala Network <dstack@phala.network>"
-SPDX-License-Identifier = "Apache-2.0"
-precedence = "override"
 
 [[annotations]]
 path = "dstack/kms/auth-eth/typechain-types/**"

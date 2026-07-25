@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright (c) Hashforest Technology LLC
+#
 # SPDX-License-Identifier: Apache-2.0
 # shellcheck shell=bash
 #

@@ -55,7 +55,7 @@ if [[ $action != dev-image ]]; then
 fi
 
 build_one() {
-  local out=$1 flavor=$2
+  local out=$1 flavor=$2 jobs=${3:-${JOBS:-$(nproc)}}
   mkdir -p "$out"
   mkosi_args=(
     --directory "$SELF"
@@ -66,7 +66,7 @@ build_one() {
     --environment="DSTACK_COMPONENT_CACHE=$([[ $action == dev-image ]] && echo 1 || echo 0)"
     --environment="DSTACK_BUILD_GIT_REVISION=$DSTACK_BUILD_GIT_REVISION"
     --environment="DSTACK_SOURCE_REVISION=$revision"
-    --environment="JOBS=${JOBS:-$(nproc)}"
+    --environment="JOBS=$jobs"
   )
   if [[ $action == dev-image ]]; then
     cache_root=${DSTACK_DEV_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dstack/mkosi-dev}
@@ -90,8 +90,15 @@ if [[ $action == image || $action == dev-image ]]; then
   for flavor in $FLAVORS; do build_one "$BUILD_DIR/out/$flavor" "$flavor"; done
   exit
 fi
-build_one "$BUILD_DIR/a" prod
-build_one "$BUILD_DIR/b" prod
+# The two legs deliberately differ in job count as well as in path. Build
+# output that depends on parallelism is a real failure mode here -- the kernel
+# component carries a pahole wrapper precisely because its BTF encoder varied
+# with Kbuild's job count -- and it is invisible when both legs run identically.
+jobs_a=${JOBS:-$(nproc)}
+jobs_b=${REPRO_JOBS_B:-$(( jobs_a > 1 ? (jobs_a + 1) / 2 : 1 ))}
+echo "reproducibility check: leg a with $jobs_a jobs, leg b with $jobs_b jobs"
+build_one "$BUILD_DIR/a" prod "$jobs_a"
+build_one "$BUILD_DIR/b" prod "$jobs_b"
 cmp "$BUILD_DIR/a/dstack-$DSTACK_VERSION.tar.gz" "$BUILD_DIR/b/dstack-$DSTACK_VERSION.tar.gz"
 cmp "$BUILD_DIR/a/dstack-$DSTACK_VERSION-uki.tar.gz" \
   "$BUILD_DIR/b/dstack-$DSTACK_VERSION-uki.tar.gz"
