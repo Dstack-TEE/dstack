@@ -91,6 +91,7 @@ jobs:
           cd "$RUNNER_TEMP/mkosi-cross-host/out/prod"
           tar -xOf dstack-0.6.0.tar.gz dstack-0.6.0/sha256sum.txt
           tar -xOf dstack-0.6.0.tar.gz dstack-0.6.0/metadata.json
+          cp dstack-0.6.0/rootfs.img.parted.verity cross-host-rootfs.img
           sha256sum dstack-0.6.0.tar.gz dstack-0.6.0-uki.tar.gz \
             | tee cross-host.sha256
           printf '%s  %s\n' "$BARE_SHA256" dstack-0.6.0.tar.gz \
@@ -103,5 +104,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mkosi-cross-host-sha256
-          path: ${{ runner.temp }}/mkosi-cross-host/out/prod/cross-host.sha256
+          path: |
+            ${{ runner.temp }}/mkosi-cross-host/out/prod/cross-host.sha256
+            ${{ runner.temp }}/mkosi-cross-host/out/prod/cross-host-rootfs.img
           retention-days: 30
