@@ -175,10 +175,14 @@ async fn handle_connection(inbound: TcpStream, state: Proxy) -> Result<()> {
 /// With `reuse_port` every worker binds its own listener on the same port and
 /// the kernel spreads incoming connections across them, so each worker can
 /// accept and serve its connections without any cross-thread handoff.
+/// Accept queue depth. tokio's default is 1024, which is where SYN drops start
+/// under connection bursts; both listen paths use this so they behave alike.
+const LISTEN_BACKLOG: i32 = 4096;
+
 async fn bind_listeners(config: &ProxyConfig, reuse_port: bool) -> Result<Vec<TcpListener>> {
     let mut tcp_listeners = Vec::new();
     for &port in &config.listen_port {
-        let listener = if reuse_port {
+        let listener = {
             let addr = std::net::SocketAddr::from((config.listen_addr, port));
             let socket = socket2::Socket::new(
                 socket2::Domain::IPV4,
@@ -186,21 +190,19 @@ async fn bind_listeners(config: &ProxyConfig, reuse_port: bool) -> Result<Vec<Tc
                 Some(socket2::Protocol::TCP),
             )
             .context("failed to create listening socket")?;
-            socket
-                .set_reuse_port(true)
-                .context("failed to set SO_REUSEPORT")?;
+            if reuse_port {
+                socket
+                    .set_reuse_port(true)
+                    .context("failed to set SO_REUSEPORT")?;
+            }
             socket.set_reuse_address(true).ok();
             socket.set_nonblocking(true).ok();
             socket
                 .bind(&addr.into())
                 .with_context(|| format!("failed to bind {addr}"))?;
-            socket.listen(4096).context("failed to listen")?;
+            socket.listen(LISTEN_BACKLOG).context("failed to listen")?;
             TcpListener::from_std(std::net::TcpListener::from(socket))
                 .context("failed to register listener with tokio")?
-        } else {
-            TcpListener::bind((config.listen_addr, port))
-                .await
-                .with_context(|| format!("failed to bind {}:{}", config.listen_addr, port))?
         };
         info!("tcp bridge listening on {}:{}", config.listen_addr, port);
         tcp_listeners.push(listener);
