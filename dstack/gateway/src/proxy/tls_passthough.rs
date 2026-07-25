@@ -199,6 +199,22 @@ pub(crate) async fn connect_multiple_hosts(
 ) -> Result<(TcpStream, EnteredCounter, String)> {
     check_connection_limit(&addresses, max_connections, app_id)?;
 
+    // Fast path: with a single candidate there is nothing to race, so skip the
+    // JoinSet and the task spawn it needs. That allocation and scheduling
+    // happened on every connection, and single-address apps are the common
+    // case.
+    if addresses.len() == 1 {
+        let addr = addresses.into_iter().next().expect("one address");
+        let counter = addr.counter.enter();
+        let ip = addr.ip;
+        debug!("connecting to {ip}:{port}");
+        let connection = TcpStream::connect((ip, port))
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to connect to app@{ip}:{port}: {e}"))?;
+        let _ = connection.set_nodelay(true);
+        return Ok((connection, counter, addr.instance_id));
+    }
+
     let mut join_set = JoinSet::new();
     for addr in addresses {
         let counter = addr.counter.enter();
