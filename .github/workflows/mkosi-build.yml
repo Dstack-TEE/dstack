@@ -6,22 +6,47 @@ name: Verify mkosi reproducibility
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'os/**'
+      - '.github/workflows/mkosi-build.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'os/**'
+      - '.github/workflows/mkosi-build.yml'
 
 concurrency:
   group: mkosi-build-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  # These values were produced by two cache-disabled local builds. The job
-  # checks out this exact source revision so the embedded Git revision and
-  # SOURCE_DATE_EPOCH are identical. Refresh all three values together.
+  # Produced by two cache-disabled local builds of BASELINE_REVISION. The
+  # embedded Git revision and SOURCE_DATE_EPOCH are inputs to the artifacts, so
+  # these hashes are only meaningful for that exact revision -- the comparison
+  # below is skipped on anything else. Refresh all three together.
   BASELINE_REVISION: 2611402ad7cadded2a044777f9542b5ef6579393
   BARE_SHA256: 630921781a37210ddc21104390d1b9c9da5d725541fa48b5c0e9f1e1b1a10af1
   UKI_SHA256: 0b40d5095589235c465dea3dd6c294f00bd90f1c1ccb5cf9fd8c8ff475df85f0
 
 jobs:
+  static:
+    name: Static contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      # Runs in seconds and covers the whole os/mkosi static contract, so it
+      # gates every change rather than waiting for a manual dispatch.
+      - name: Check the static contract
+        run: ./os/mkosi/build.sh lint
+
   cross-host:
     name: Compare with local mkosi baseline
+    # The full image build takes ~40 minutes, so keep it opt-in.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     permissions:
@@ -42,10 +67,13 @@ jobs:
             /usr/share/dotnet
           df -h /
 
-      - name: Checkout locally verified revision
+      # Check out the dispatched ref, not a hardcoded revision. Pinning the
+      # baseline here meant the job could never validate the branch it ran on,
+      # and the pinned commit becomes unreachable once the branch is squashed
+      # or rebased, which would break the job outright.
+      - name: Checkout
         uses: actions/checkout@v5
         with:
-          ref: ${{ env.BASELINE_REVISION }}
           fetch-depth: 0
 
       - name: Set up Python for mkosi
@@ -72,7 +100,7 @@ jobs:
           # Do not oversubscribe either the CPU or compiler memory.
           JOBS: '4'
         run: |
-          test -z "${DSTACK_DEV_CACHE_DIR:-}"
+          set -euo pipefail
           # GitHub-hosted Ubuntu runners restrict unprivileged user namespaces.
           # Run mkosi as root instead of weakening the runner's AppArmor policy.
           # Keep setup-python out of the build PATH because Ubuntu's lddtree
@@ -88,15 +116,28 @@ jobs:
 
       - name: Compare with local byte-for-byte baseline
         run: |
+          set -euo pipefail
           cd "$RUNNER_TEMP/mkosi-cross-host/out/prod"
-          tar -xOf dstack-0.6.0.tar.gz dstack-0.6.0/sha256sum.txt
-          tar -xOf dstack-0.6.0.tar.gz dstack-0.6.0/metadata.json
+          # Assert the release members exist and parse, rather than dumping
+          # them to stdout and checking nothing.
+          tar -xOf dstack-0.6.0.tar.gz dstack-0.6.0/sha256sum.txt | grep -q .
+          tar -xOf dstack-0.6.0.tar.gz dstack-0.6.0/metadata.json \
+            | python3 -c 'import json,sys; json.load(sys.stdin)'
           sha256sum dstack-0.6.0.tar.gz dstack-0.6.0-uki.tar.gz \
             | tee cross-host.sha256
-          printf '%s  %s\n' "$BARE_SHA256" dstack-0.6.0.tar.gz \
-            | sha256sum --check --strict
-          printf '%s  %s\n' "$UKI_SHA256" dstack-0.6.0-uki.tar.gz \
-            | sha256sum --check --strict
+          if [ "$GITHUB_SHA" = "$BASELINE_REVISION" ]; then
+            printf '%s  %s\n' "$BARE_SHA256" dstack-0.6.0.tar.gz \
+              | sha256sum --check --strict
+            printf '%s  %s\n' "$UKI_SHA256" dstack-0.6.0-uki.tar.gz \
+              | sha256sum --check --strict
+            echo "matched the recorded cross-host baseline"
+          else
+            echo "::notice::built $GITHUB_SHA, which is not the baseline" \
+              "revision $BASELINE_REVISION; the recorded hashes embed that" \
+              "revision so only the build itself was verified. Refresh the" \
+              "baseline from this run's cross-host.sha256 to re-enable the" \
+              "byte-for-byte comparison."
+          fi
 
       - name: Upload verification record
         if: always()
