@@ -6,8 +6,11 @@ COMPONENT_ROOTFS_TREES=()
 COMPONENT_KERNEL_TREES=(component-stages/ovmf)
 
 component_cache_key() {
+    key_value "$OVMF_REVISION" "$OVMF_VARIANT"
     key_file "$COMPONENT_PATH/ovmf-build.sh" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-ovmf/dstack-ovmf/0003-Debug-prefix-map.patch" \
       "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-ovmf/dstack-ovmf/0004-Reproduciable.patch" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-ovmf/dstack-ovmf/0005-UefiCpuPkg-CpuExceptionHandlerLib-fix-push-instructi.patch" \
       "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-ovmf/dstack-ovmf/0006-OvmfPkg-AmdSev-drop-embedded-grub.patch"
     key_tools gcc make python3
     key_packages nasm acpica-tools uuid-dev

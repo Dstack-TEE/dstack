@@ -84,9 +84,23 @@ grep -q -- '--mode=g-s' "$D/scripts/make-release-artifacts.sh"
 grep -q 'mksquashfs -.*-tar' "$D/scripts/make-release-artifacts.sh"
 grep -q 'image/assemble.sh' "$D/mkosi.postoutput"
 grep -q 'ovmf-build.sh' "$D/components/ovmf/ovmf.sh"
-grep -q 'fbe0805b2091393406952e84724188f8c1941837' "$D/components/ovmf/ovmf-build.sh"
+# A generic OVMF produces measurement material dstack-mr cannot parse, so the
+# revision must track meta-dstack's SRCREV. Read it from the recipe rather
+# than restating the hash, which would happily pin a stale value.
+ovmf_recipe="$D/../yocto/layers/meta-dstack/recipes-core/dstack-ovmf/dstack-ovmf_git.bb"
+yocto_srcrev=$(sed -n 's/^SRCREV = "\([0-9a-f]\{40\}\)"/\1/p' "$ovmf_recipe")
+[[ $yocto_srcrev =~ ^[0-9a-f]{40}$ ]]
+grep -q "^OVMF_REVISION=$yocto_srcrev\$" "$D/versions.env"
+# 0003 and 0005 are what make the prefix map reach the compiler and let
+# stable202502 assemble with NASM 3.x; both were previously dropped.
+for patch in 0003-Debug-prefix-map 0004-Reproduciable \
+  0005-UefiCpuPkg-CpuExceptionHandlerLib-fix-push-instructi \
+  0006-OvmfPkg-AmdSev-drop-embedded-grub; do
+  grep -q "$patch" "$D/components/ovmf/ovmf-build.sh"
+done
 grep -q 'AmdSev/AmdSevX64.dsc' "$D/components/ovmf/ovmf-build.sh"
 grep -q '0006-OvmfPkg-AmdSev-drop-embedded-grub.patch' "$D/components/ovmf/ovmf.sh"
+grep -q '0005-UefiCpuPkg' "$D/components/ovmf/ovmf.sh"
 grep -q 'objcopy --strip-debug' "$D/mkosi.build"
 grep -q 'depmod -b.*KERNEL_VERSION-dstack' "$D/mkosi.build"
 grep -q '^CleanPackageMetadata=yes$' "$D/mkosi.conf"
