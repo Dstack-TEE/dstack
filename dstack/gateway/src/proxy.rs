@@ -43,6 +43,7 @@ pub(crate) struct AddressInfo {
 pub(crate) type AddressGroup = smallvec::SmallVec<[AddressInfo; 4]>;
 
 mod adaptive_ktls;
+mod balance;
 mod io_bridge;
 pub(crate) mod port_policy;
 mod reuseport;
@@ -214,7 +215,7 @@ async fn bind_listeners(config: &ProxyConfig, reuse_port: bool) -> Result<Vec<Tc
 #[inline(never)]
 pub async fn proxy_main(rt: &Runtime, config: &ProxyConfig, proxy: Proxy) -> Result<()> {
     let tcp_listeners = bind_listeners(config, false).await?;
-    accept_loop(tcp_listeners, proxy, Some(rt)).await
+    accept_loop(tcp_listeners, proxy, Some(rt), None).await
 }
 
 /// The per-connection task: everything a single proxied connection does.
@@ -242,11 +243,13 @@ fn conn_task(
     inbound: TcpStream,
     from: std::net::SocketAddr,
     proxy: Proxy,
+    slot: Option<balance::CoreSlot>,
 ) -> impl std::future::Future<Output = ()> + Send + 'static {
     let span = debug_span!("conn", id = next_connection_id());
     let conn_entered = EnteredCounter::new(&NUM_CONNECTIONS);
     async move {
         let _conn_entered = conn_entered;
+        let _slot = slot;
         debug!(%from, "new connection");
         let timeouts = &proxy.config.proxy.timeouts;
         match timeout(timeouts.total, handle_connection(inbound, proxy)).await {
@@ -269,6 +272,10 @@ async fn accept_loop(
     tcp_listeners: Vec<TcpListener>,
     proxy: Proxy,
     rt: Option<&Runtime>,
+    mut balance: Option<(
+        balance::Balancer,
+        tokio::sync::mpsc::UnboundedReceiver<balance::Handoff>,
+    )>,
 ) -> Result<()> {
     if tcp_listeners.is_empty() {
         bail!("no tcp listen ports configured");
@@ -278,29 +285,52 @@ async fn accept_loop(
         // Accept from any TCP listener via round-robin poll.
         let poll_start = poll_counter.fetch_add(1, Ordering::Relaxed);
         let n = tcp_listeners.len();
-        let accepted: std::io::Result<(TcpStream, std::net::SocketAddr)> =
-            std::future::poll_fn(|cx| {
-                for j in 0..n {
-                    let i = (poll_start + j) % n;
-                    if let Poll::Ready(result) = tcp_listeners[i].poll_accept(cx) {
-                        return Poll::Ready(result);
+        let accept_next = std::future::poll_fn(|cx| {
+            for j in 0..n {
+                let i = (poll_start + j) % n;
+                if let Poll::Ready(result) = tcp_listeners[i].poll_accept(cx) {
+                    return Poll::Ready(result);
+                }
+            }
+            Poll::Pending
+        });
+        // Also take connections other cores decided to give us.
+        let accepted: std::io::Result<(TcpStream, std::net::SocketAddr)> = match balance.as_mut() {
+            Some((b, rx)) => {
+                tokio::select! {
+                    r = accept_next => r,
+                    Some((stream, from, slot)) = rx.recv() => {
+                        let task = conn_task(stream, from, proxy.clone(), Some(slot));
+                        tokio::spawn(task);
+                        let _ = b;
+                        continue;
                     }
                 }
-                Poll::Pending
-            })
-            .await;
+            }
+            None => accept_next.await,
+        };
         match accepted {
             Ok((inbound, from)) => {
                 // Disable Nagle: this is a latency-sensitive proxy and small
                 // request/response traffic otherwise stalls on delayed ACKs.
                 let _ = inbound.set_nodelay(true);
-                let task = conn_task(inbound, from, proxy.clone());
-                match rt {
-                    Some(rt) => {
-                        rt.spawn(task);
-                    }
-                    None => {
-                        tokio::spawn(task);
+                // In thread-per-core mode, hand the connection to a less loaded
+                // core when this one is running ahead; SO_REUSEPORT's hash can
+                // leave a core starved and it cannot be fixed later.
+                let placed: Option<(TcpStream, Option<balance::CoreSlot>)> = match balance.as_ref()
+                {
+                    Some((b, _)) => b.place(inbound, from).map(|(s, slot)| (s, Some(slot))),
+                    None => Some((inbound, None)),
+                };
+                if let Some((inbound, slot)) = placed {
+                    let task = conn_task(inbound, from, proxy.clone(), slot);
+                    match rt {
+                        Some(rt) => {
+                            rt.spawn(task);
+                        }
+                        None => {
+                            tokio::spawn(task);
+                        }
                     }
                 }
             }
@@ -408,8 +438,28 @@ fn start_thread_per_core(config: ProxyConfig, app_state: Proxy) -> Result<()> {
         }
     }
 
+    // Per-core balancers share the connection counts; each core also gets the
+    // receiving end of its handoff channel.
+    let (balancers, receivers) = if config.connection_rebalance {
+        let (b, r) = balance::Balancer::build(workers);
+        (
+            b.into_iter().map(Some).collect(),
+            r.into_iter().map(Some).collect(),
+        )
+    } else {
+        (
+            (0..workers).map(|_| None).collect::<Vec<_>>(),
+            (0..workers).map(|_| None).collect::<Vec<_>>(),
+        )
+    };
+
     let config = Arc::new(config);
-    for (i, std_listeners) in per_worker.into_iter().enumerate() {
+    for (i, ((std_listeners, balancer), receiver)) in per_worker
+        .into_iter()
+        .zip(balancers)
+        .zip(receivers)
+        .enumerate()
+    {
         let config = config.clone();
         let app_state = app_state.clone();
         std::thread::Builder::new()
@@ -427,7 +477,8 @@ fn start_thread_per_core(config: ProxyConfig, app_state: Proxy) -> Result<()> {
                                 .context("failed to register listener with tokio")?,
                         );
                     }
-                    accept_loop(listeners, app_state, None).await
+                    let bal = balancer.zip(receiver);
+                    accept_loop(listeners, app_state, None, bal).await
                 });
                 if let Err(err) = result {
                     error!(

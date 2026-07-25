@@ -125,6 +125,28 @@ pub struct ProxyConfig {
     /// measures ~0. Linux-only (needs SO_REUSEPORT).
     #[serde(default)]
     pub thread_per_core: bool,
+    /// Hand a freshly accepted connection to a less loaded core when the
+    /// accepting one is running ahead.
+    ///
+    /// `SO_REUSEPORT` picks a listener by hashing the connection's 4-tuple and
+    /// thread-per-core cannot move a connection afterwards, so a core can sit
+    /// starved: measured at 16 connections over 4 cores, utilisation came out
+    /// `[99, 42, 101, 101]`. Rebalancing costs one channel send per *rebalanced
+    /// connection*, never per request. Requires `thread_per_core`.
+    ///
+    /// The trade, measured over 6 restarts per arm on a 4-core gateway:
+    ///
+    /// | connections | off | on |
+    /// |---|---|---|
+    /// | 16 (hash skews) | 236 110 rps, worst core 72% | 251 840 rps, worst core 85% |
+    /// | 50 (hash even) | 291 932 rps | 287 440 rps |
+    ///
+    /// So it trades ~1.5% at high connection counts, where the hash is already
+    /// even and the balancer only costs its bookkeeping, for ~6.7% where the
+    /// hash skews -- and it lifts the worst case far more than the average, from
+    /// a core at 47% to none below 76%.
+    #[serde(default)]
+    pub connection_rebalance: bool,
     #[serde(default)]
     pub base_domain: Option<String>,
     #[serde(default)]
