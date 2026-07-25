@@ -40,11 +40,81 @@ fn errno_to_io(e: nix::errno::Errno) -> std::io::Error {
     std::io::Error::from_raw_os_error(e as i32)
 }
 
+/// Per-thread cache of splice pipes.
+///
+/// Creating a pipe per direction per connection costs two `pipe2` calls plus
+/// four descriptor closes, which is pure overhead for short connections: it
+/// measurably raised passthrough connection-setup CPU (134 -> 142 us per
+/// connection) while HAProxy, which pools its pipes, went the other way.
+/// Reusing them keeps the bulk-transfer win without paying setup per
+/// connection. Thread-local, so no locking -- and with thread-per-core a
+/// connection stays on the thread that took the pipe.
+const PIPE_POOL_MAX: usize = 64;
+
+thread_local! {
+    static PIPE_POOL: std::cell::RefCell<Vec<(OwnedFd, OwnedFd)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// A splice pipe borrowed from the thread-local pool.
+///
+/// Returned to the pool on drop, but only if the transfer drained it: a pipe
+/// still holding bytes would corrupt the next connection that used it.
+struct PooledPipe {
+    rd: Option<OwnedFd>,
+    wr: Option<OwnedFd>,
+    drained: bool,
+}
+
+impl PooledPipe {
+    fn get() -> Result<Self> {
+        if let Some((rd, wr)) = PIPE_POOL.with(|p| p.borrow_mut().pop()) {
+            return Ok(Self {
+                rd: Some(rd),
+                wr: Some(wr),
+                drained: false,
+            });
+        }
+        let (rd, wr) = pipe().context("failed to create splice pipe")?;
+        set_pipe_capacity(&wr, PIPE_CAPACITY);
+        Ok(Self {
+            rd: Some(rd),
+            wr: Some(wr),
+            drained: false,
+        })
+    }
+
+    fn rd(&self) -> &OwnedFd {
+        self.rd.as_ref().expect("pipe read end present")
+    }
+
+    fn wr(&self) -> &OwnedFd {
+        self.wr.as_ref().expect("pipe write end present")
+    }
+}
+
+impl Drop for PooledPipe {
+    fn drop(&mut self) {
+        let (Some(rd), Some(wr)) = (self.rd.take(), self.wr.take()) else {
+            return;
+        };
+        if !self.drained {
+            // Unknown residue: close instead of poisoning the pool.
+            return;
+        }
+        PIPE_POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if pool.len() < PIPE_POOL_MAX {
+                pool.push((rd, wr));
+            }
+        });
+    }
+}
+
 /// Copy one direction (`src` -> `dst`) with splice until EOF, then half-close
 /// the destination's write side.
 async fn splice_one(src: Arc<TcpStream>, dst: Arc<TcpStream>) -> Result<()> {
-    let (rd, wr) = pipe().context("failed to create splice pipe")?;
-    set_pipe_capacity(&wr, PIPE_CAPACITY);
+    let mut pipe = PooledPipe::get()?;
 
     loop {
         // Move a chunk from the source socket into the pipe.
@@ -54,7 +124,7 @@ async fn splice_one(src: Arc<TcpStream>, dst: Arc<TcpStream>) -> Result<()> {
                 splice(
                     src.as_ref(),
                     None,
-                    &wr,
+                    pipe.wr(),
                     None,
                     PIPE_CAPACITY,
                     SpliceFFlags::SPLICE_F_MOVE | SpliceFFlags::SPLICE_F_NONBLOCK,
@@ -67,7 +137,10 @@ async fn splice_one(src: Arc<TcpStream>, dst: Arc<TcpStream>) -> Result<()> {
             }
         };
         if n == 0 {
-            break; // EOF on source
+            // Source is at EOF and every chunk was fully drained below, so the
+            // pipe is empty and safe to reuse.
+            pipe.drained = true;
+            break;
         }
 
         // Drain the pipe fully into the destination socket.
@@ -76,7 +149,7 @@ async fn splice_one(src: Arc<TcpStream>, dst: Arc<TcpStream>) -> Result<()> {
             dst.writable().await.context("writable error")?;
             match dst.try_io(Interest::WRITABLE, || {
                 splice(
-                    &rd,
+                    pipe.rd(),
                     None,
                     dst.as_ref(),
                     None,
