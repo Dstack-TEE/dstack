@@ -153,6 +153,16 @@ pub struct ProxyConfig {
     /// for request/response passthrough workloads.
     #[serde(default)]
     pub tcp_splice_enabled: bool,
+    /// Bytes a passthrough connection must transfer before splice takes over.
+    ///
+    /// splice costs ~17 syscalls per connection to move a small response (fill
+    /// pipe, drain pipe, readiness retries) where a read/write pair needs two;
+    /// its benefit is per byte but its cost is per connection. With a non-zero
+    /// threshold short request/response connections never touch a pipe while
+    /// bulk transfers still get zero-copy. Requires `tcp_splice_enabled`.
+    /// 0 keeps the previous behaviour (splice from the first byte).
+    #[serde(default)]
+    pub tcp_splice_after_bytes: u64,
     /// Offload TLS record encryption to the kernel (kTLS) on the
     /// TLS-terminate path. The handshake still runs in rustls; only the
     /// symmetric crypto moves into the kernel afterwards. Linux-only.

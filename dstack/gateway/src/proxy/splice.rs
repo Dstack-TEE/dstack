@@ -19,7 +19,7 @@ use anyhow::{Context, Result};
 use nix::fcntl::{fcntl, splice, FcntlArg, SpliceFFlags};
 use nix::sys::socket::{shutdown, Shutdown};
 use nix::unistd::pipe;
-use tokio::io::Interest;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, Interest};
 use tokio::net::TcpStream;
 
 /// Bytes moved per `splice` syscall. Also the target pipe capacity so a full
@@ -184,4 +184,127 @@ pub(crate) async fn splice_bidirectional(a: TcpStream, b: TcpStream) -> Result<(
     let b2a = splice_one(b, a);
     tokio::try_join!(a2b, b2a)?;
     Ok(())
+}
+
+/// Per-thread cache of relay buffers, for the same reason as the pipe pool:
+/// a pair of `buffer_size` allocations per connection is a real cost when the
+/// connection only carries a few hundred bytes.
+const BUF_POOL_MAX: usize = 32;
+/// Phase 1 only runs until the splice threshold, so it does not need the full
+/// `buffer_size` used for bulk copying.
+const RELAY_BUF_SIZE: usize = 16 * 1024;
+
+thread_local! {
+    static BUF_POOL: std::cell::RefCell<Vec<(Vec<u8>, Vec<u8>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+struct PooledBufs {
+    a: Vec<u8>,
+    b: Vec<u8>,
+}
+
+impl PooledBufs {
+    fn get(buf_size: usize) -> Self {
+        let size = buf_size.min(RELAY_BUF_SIZE).max(4096);
+        if let Some((a, b)) = BUF_POOL.with(|p| p.borrow_mut().pop()) {
+            return Self { a, b };
+        }
+        Self {
+            a: vec![0u8; size],
+            b: vec![0u8; size],
+        }
+    }
+
+    fn pair(&mut self) -> (&mut [u8], &mut [u8]) {
+        (&mut self.a, &mut self.b)
+    }
+}
+
+impl Drop for PooledBufs {
+    fn drop(&mut self) {
+        let a = std::mem::take(&mut self.a);
+        let b = std::mem::take(&mut self.b);
+        BUF_POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if pool.len() < BUF_POOL_MAX {
+                pool.push((a, b));
+            }
+        });
+    }
+}
+
+/// Relay both directions with plain reads/writes until `threshold` bytes have
+/// moved, then report whether splice should take over.
+///
+/// Returns `true` if the threshold was reached and both sockets are still open,
+/// `false` if the connection finished first (in which case it is fully done).
+async fn relay_until(
+    a: &mut TcpStream,
+    b: &mut TcpStream,
+    threshold: u64,
+    buf_size: usize,
+) -> Result<bool> {
+    let (mut ar, mut aw) = a.split();
+    let (mut br, mut bw) = b.split();
+    // Buffers come from a thread-local pool: allocating two of them per
+    // connection cost more than the pipe setup this phase exists to avoid.
+    let mut bufs = PooledBufs::get(buf_size);
+    let mut moved: u64 = 0;
+
+    loop {
+        // `finish_one` drains a half-closed connection without splice: once one
+        // side is done there is no long-lived stream left to optimise.
+        macro_rules! finish_one {
+            ($r:expr, $w:expr, $buf:expr) => {{
+                $w.shutdown().await.ok();
+                loop {
+                    let n = $r.read(&mut $buf).await.context("read error")?;
+                    if n == 0 {
+                        break;
+                    }
+                    $w.write_all(&$buf[..n]).await.context("write error")?;
+                }
+                return Ok(false);
+            }};
+        }
+        tokio::select! {
+            r = ar.read(&mut bufs.a) => {
+                let n = r.context("read from client failed")?;
+                if n == 0 { finish_one!(br, aw, bufs.b); }
+                bw.write_all(&bufs.a[..n]).await.context("write to app failed")?;
+                moved += n as u64;
+            }
+            r = br.read(&mut bufs.b) => {
+                let n = r.context("read from app failed")?;
+                if n == 0 { finish_one!(ar, bw, bufs.a); }
+                aw.write_all(&bufs.b[..n]).await.context("write to client failed")?;
+                moved += n as u64;
+            }
+        }
+        if moved >= threshold {
+            return Ok(true);
+        }
+    }
+}
+
+/// Bidirectional relay that only switches to splice once the connection has
+/// proven itself worth the syscalls.
+///
+/// splice moves ~17 syscalls per connection to shift a small response (fill the
+/// pipe, drain the pipe, plus readiness retries), where a read/write pair needs
+/// two. Its benefit is per byte, its cost is per connection -- the same shape as
+/// kTLS. Short request/response connections therefore never touch a pipe, while
+/// bulk transfers still get zero-copy.
+pub(crate) async fn splice_bidirectional_after(
+    mut a: TcpStream,
+    mut b: TcpStream,
+    threshold: u64,
+    buf_size: usize,
+) -> Result<()> {
+    if relay_until(&mut a, &mut b, threshold, buf_size).await? {
+        splice_bidirectional(a, b).await
+    } else {
+        Ok(())
+    }
 }

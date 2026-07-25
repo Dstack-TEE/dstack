@@ -95,6 +95,8 @@ inbound_pp_enabled = false
 # Bulk throughput +~12%, but small-request latency regresses. Enable only for
 # passthrough traffic dominated by large transfers.
 tcp_splice_enabled = false
+# Bytes a passthrough connection must move before splice engages (0 = immediately).
+tcp_splice_after_bytes = 0
 # Offload TLS record crypto to the kernel (kTLS) on the terminate path.
 # Hands session keys to the kernel; see config.rs for the security note.
 ktls_enabled = false

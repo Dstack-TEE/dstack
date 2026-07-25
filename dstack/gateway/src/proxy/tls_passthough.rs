@@ -280,9 +280,17 @@ pub(crate) async fn proxy_to_app(
         .context("failed to write to app")?;
     if state.config.proxy.tcp_splice_enabled {
         // Passthrough is a pure TCP relay: move bytes kernel-side with splice.
-        super::splice::splice_bidirectional(inbound, outbound)
-            .await
-            .context("failed to splice between inbound and outbound")?;
+        let threshold = state.config.proxy.tcp_splice_after_bytes;
+        let buf_size = state.config.proxy.buffer_size;
+        if threshold > 0 {
+            super::splice::splice_bidirectional_after(inbound, outbound, threshold, buf_size)
+                .await
+                .context("failed to relay between inbound and outbound")?;
+        } else {
+            super::splice::splice_bidirectional(inbound, outbound)
+                .await
+                .context("failed to splice between inbound and outbound")?;
+        }
     } else {
         bridge(inbound, outbound, &state.config.proxy)
             .await
