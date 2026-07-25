@@ -44,7 +44,13 @@ impl Drop for CoreSlot {
 }
 
 /// A connection handed over from another core.
-pub(crate) type Handoff = (TcpStream, SocketAddr, CoreSlot);
+///
+/// Carried as a `std::net::TcpStream`, deliberately: a tokio `TcpStream` stays
+/// registered with the reactor that accepted it, so moving the object to another
+/// core would leave its readiness handling behind and cost a cross-core hop on
+/// every read and write for the life of the connection. Handing over the plain
+/// socket lets the target core register it with its own reactor.
+pub(crate) type Handoff = (std::net::TcpStream, SocketAddr, CoreSlot);
 
 /// Per-core view of the shared connection counts and handoff channels.
 pub(crate) struct Balancer {
@@ -122,12 +128,18 @@ impl Balancer {
         if target == self.me {
             return Some((stream, slot));
         }
-        match self.senders[target].send((stream, from, slot)) {
+        // Drop this core's reactor registration before handing the socket over.
+        let raw = match stream.into_std() {
+            Ok(raw) => raw,
+            // Cannot deregister: keep it here rather than lose the connection.
+            Err(_) => return None,
+        };
+        match self.senders[target].send((raw, from, slot)) {
             Ok(()) => None,
             // The target core is gone; keep the connection rather than drop it.
-            Err(mpsc::error::SendError((stream, _, _))) => {
-                Some((stream, CoreSlot::claim(self.counts.clone(), self.me)))
-            }
+            Err(mpsc::error::SendError((raw, _, _))) => TcpStream::from_std(raw)
+                .ok()
+                .map(|s| (s, CoreSlot::claim(self.counts.clone(), self.me))),
         }
     }
 

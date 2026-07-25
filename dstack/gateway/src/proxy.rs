@@ -299,9 +299,15 @@ async fn accept_loop(
             Some((b, rx)) => {
                 tokio::select! {
                     r = accept_next => r,
-                    Some((stream, from, slot)) = rx.recv() => {
-                        let task = conn_task(stream, from, proxy.clone(), Some(slot));
-                        tokio::spawn(task);
+                    Some((raw, from, slot)) = rx.recv() => {
+                        // Register the handed-over socket with *this* core's reactor.
+                        match TcpStream::from_std(raw) {
+                            Ok(stream) => {
+                                let task = conn_task(stream, from, proxy.clone(), Some(slot));
+                                tokio::spawn(task);
+                            }
+                            Err(e) => error!("failed to adopt handed-over connection: {e}"),
+                        }
                         let _ = b;
                         continue;
                     }
