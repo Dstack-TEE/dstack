@@ -22,7 +22,10 @@ actual=$(mkosi --version | awk '{print $2}' | cut -d. -f1)
 }
 export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --format=%ct)}
 revision=$(git -C "$ROOT" rev-parse HEAD)
-export DSTACK_GIT_REVISION=${DSTACK_GIT_REVISION:-git:${revision:0:20}}
+# Distinct from the Yocto backend's DSTACK_GIT_REVISION, which is a bare SHA
+# used for release metadata. This one is compiled into the binaries by
+# dstack-build-info and must carry the "git:" display prefix.
+export DSTACK_BUILD_GIT_REVISION=${DSTACK_BUILD_GIT_REVISION:-git:${revision:0:20}}
 export TZ=UTC LC_ALL=C
 # A production invocation reconstructs the tools tree once from the immutable
 # snapshot, then shares that read-only environment across all requested flavors
@@ -41,7 +44,7 @@ build_one() {
     --profile="$flavor"
     --source-date-epoch="$SOURCE_DATE_EPOCH"
     --environment="DSTACK_COMPONENT_CACHE=$([[ $action == dev-image ]] && echo 1 || echo 0)"
-    --environment="DSTACK_GIT_REVISION=$DSTACK_GIT_REVISION"
+    --environment="DSTACK_BUILD_GIT_REVISION=$DSTACK_BUILD_GIT_REVISION"
     --environment="DSTACK_SOURCE_REVISION=$revision"
     --environment="JOBS=${JOBS:-$(nproc)}"
   )
