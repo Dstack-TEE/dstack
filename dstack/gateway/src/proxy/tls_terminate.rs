@@ -288,6 +288,33 @@ impl Proxy {
         Ok(tls_stream)
     }
 
+    /// Accept a TLS connection keeping the `CorkStream` wrapper, so the
+    /// connection can be handed to the kernel later without re-wrapping.
+    async fn tls_accept_corked(
+        &self,
+        inbound: TcpStream,
+        buffer: Vec<u8>,
+        h2: bool,
+    ) -> Result<TlsStream<ktls::CorkStream<MergedStream>>> {
+        let stream = ktls::CorkStream::new(MergedStream {
+            buffer,
+            buffer_cursor: 0,
+            inbound,
+        });
+        let acceptor = if h2 {
+            &self.h2_acceptor
+        } else {
+            &self.acceptor
+        };
+        timeout(
+            self.config.proxy.timeouts.handshake,
+            acceptor.accept(stream),
+        )
+        .await
+        .context("handshake timeout")?
+        .context("failed to accept tls connection")
+    }
+
     /// Accept a TLS connection and hand the socket over to kernel TLS.
     ///
     /// The handshake still runs in rustls; afterwards the negotiated keys are
@@ -344,6 +371,20 @@ impl Proxy {
         let addresses = filter_allowed_addresses(self, addresses, app_id, port)?;
         debug!("selected top n hosts: {addresses:?}");
         if self.config.proxy.ktls_enabled {
+            let threshold = self.config.proxy.ktls_offload_after_bytes;
+            if threshold > 0 && self.config.proxy.tcp_splice_enabled {
+                // Adaptive: stay in userspace rustls until the connection proves
+                // itself a bulk transfer, then hand it to the kernel.
+                let tls_stream = self.tls_accept_corked(inbound, buffer, h2).await?;
+                let (mut outbound, _counter, instance_id) =
+                    self.connect_upstream(addresses, port, app_id).await?;
+                self.send_pp_header(&mut outbound, &instance_id, port, pp_header)
+                    .await?;
+                return super::adaptive_ktls::relay_with_adaptive_offload(
+                    tls_stream, outbound, threshold,
+                )
+                .await;
+            }
             let tls_stream = self.tls_accept_ktls(inbound, buffer, h2).await?;
             if self.config.proxy.tcp_splice_enabled {
                 // With kTLS the socket carries plaintext from userspace's point
@@ -479,6 +520,14 @@ impl MergedStream {
     fn into_parts(self) -> (Vec<u8>, TcpStream) {
         let remaining = self.buffer[self.buffer_cursor.min(self.buffer.len())..].to_vec();
         (remaining, self.inbound)
+    }
+}
+
+impl From<MergedStream> for TcpStream {
+    /// Only valid once the handshake has consumed the sniff buffer, which is
+    /// the case wherever this conversion is used (kTLS handover).
+    fn from(s: MergedStream) -> Self {
+        s.into_parts().1
     }
 }
 

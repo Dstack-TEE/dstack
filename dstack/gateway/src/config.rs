@@ -153,6 +153,16 @@ pub struct ProxyConfig {
     /// but on a non-TEE host this widens key exposure. Off by default.
     #[serde(default)]
     pub ktls_enabled: bool,
+    /// Bytes a connection must transfer before it is handed over to kTLS.
+    ///
+    /// kTLS costs ~30% of connection setup rate but wins ~25% on bulk
+    /// throughput, so paying the setup cost up front is wrong for short
+    /// request/response connections. With a non-zero threshold the connection
+    /// starts in userspace rustls and is switched to kTLS + splice only once it
+    /// has proven to be a bulk transfer. Requires `ktls_enabled`.
+    /// 0 disables the adaptive path (offload immediately after the handshake).
+    #[serde(default)]
+    pub ktls_offload_after_bytes: u64,
     /// Background lazy-fetch behaviour for `port_policy` (legacy CVMs).
     pub port_policy_fetch: PortPolicyFetchConfig,
 }
