@@ -142,6 +142,7 @@ safe-write = "0.1.2"
 rustix = { version = "0.38", features = ["fs"] }
 nix = "0.29.0"
 ktls = "6.0.2"
+socket2 = { version = "0.5", features = ["all"] }
 sd-notify = "0.4.5"
 listenfd = "1.0"
 jemallocator = "0.5.4"

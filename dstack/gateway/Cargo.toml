@@ -69,6 +69,7 @@ cached-cell.workspace = true
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["resource", "fs", "socket", "zerocopy"] }
 ktls.workspace = true
+socket2.workspace = true
 
 [[bin]]
 name = "gen_debug_key"

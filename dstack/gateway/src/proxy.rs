@@ -170,20 +170,85 @@ async fn handle_connection(inbound: TcpStream, state: Proxy) -> Result<()> {
     }
 }
 
-#[inline(never)]
-pub async fn proxy_main(rt: &Runtime, config: &ProxyConfig, proxy: Proxy) -> Result<()> {
+/// Bind one listener per configured port.
+///
+/// With `reuse_port` every worker binds its own listener on the same port and
+/// the kernel spreads incoming connections across them, so each worker can
+/// accept and serve its connections without any cross-thread handoff.
+async fn bind_listeners(config: &ProxyConfig, reuse_port: bool) -> Result<Vec<TcpListener>> {
     let mut tcp_listeners = Vec::new();
     for &port in &config.listen_port {
-        let listener = TcpListener::bind((config.listen_addr, port))
-            .await
-            .with_context(|| format!("failed to bind {}:{}", config.listen_addr, port))?;
+        let listener = if reuse_port {
+            let addr = std::net::SocketAddr::from((config.listen_addr, port));
+            let socket = socket2::Socket::new(
+                socket2::Domain::IPV4,
+                socket2::Type::STREAM,
+                Some(socket2::Protocol::TCP),
+            )
+            .context("failed to create listening socket")?;
+            socket
+                .set_reuse_port(true)
+                .context("failed to set SO_REUSEPORT")?;
+            socket.set_reuse_address(true).ok();
+            socket.set_nonblocking(true).ok();
+            socket
+                .bind(&addr.into())
+                .with_context(|| format!("failed to bind {addr}"))?;
+            socket.listen(4096).context("failed to listen")?;
+            TcpListener::from_std(std::net::TcpListener::from(socket))
+                .context("failed to register listener with tokio")?
+        } else {
+            TcpListener::bind((config.listen_addr, port))
+                .await
+                .with_context(|| format!("failed to bind {}:{}", config.listen_addr, port))?
+        };
         info!("tcp bridge listening on {}:{}", config.listen_addr, port);
         tcp_listeners.push(listener);
     }
+    Ok(tcp_listeners)
+}
+
+#[inline(never)]
+pub async fn proxy_main(rt: &Runtime, config: &ProxyConfig, proxy: Proxy) -> Result<()> {
+    let tcp_listeners = bind_listeners(config, false).await?;
+    accept_loop(tcp_listeners, proxy, Some(rt)).await
+}
+
+/// The per-connection task: everything a single proxied connection does.
+fn conn_task(
+    inbound: TcpStream,
+    from: std::net::SocketAddr,
+    proxy: Proxy,
+) -> impl std::future::Future<Output = ()> + Send + 'static {
+    let span = debug_span!("conn", id = next_connection_id());
+    let conn_entered = EnteredCounter::new(&NUM_CONNECTIONS);
+    async move {
+        let _conn_entered = conn_entered;
+        debug!(%from, "new connection");
+        let timeouts = &proxy.config.proxy.timeouts;
+        match timeout(timeouts.total, handle_connection(inbound, proxy)).await {
+            Ok(Ok(_)) => debug!("connection closed"),
+            Ok(Err(e)) => error!("connection error: {e:#}"),
+            Err(_) => error!("connection kept too long, force closing"),
+        }
+    }
+    .instrument(span)
+}
+
+/// Accept connections forever.
+///
+/// `rt` selects where connections run: `Some(worker_rt)` hands them to a shared
+/// multi-threaded runtime, `None` keeps them on the calling thread's own
+/// runtime (thread-per-core), which avoids the cross-thread handoff and the
+/// work-stealing migrations that come with it.
+async fn accept_loop(
+    tcp_listeners: Vec<TcpListener>,
+    proxy: Proxy,
+    rt: Option<&Runtime>,
+) -> Result<()> {
     if tcp_listeners.is_empty() {
         bail!("no tcp listen ports configured");
     }
-
     let poll_counter = AtomicUsize::new(0);
     loop {
         // Accept from any TCP listener via round-robin poll.
@@ -205,32 +270,15 @@ pub async fn proxy_main(rt: &Runtime, config: &ProxyConfig, proxy: Proxy) -> Res
                 // Disable Nagle: this is a latency-sensitive proxy and small
                 // request/response traffic otherwise stalls on delayed ACKs.
                 let _ = inbound.set_nodelay(true);
-                let span = debug_span!("conn", id = next_connection_id());
-                let _enter = span.enter();
-                let conn_entered = EnteredCounter::new(&NUM_CONNECTIONS);
-
-                debug!(%from, "new connection");
-                let proxy = proxy.clone();
-                rt.spawn(
-                    async move {
-                        let _conn_entered = conn_entered;
-                        let timeouts = &proxy.config.proxy.timeouts;
-                        let result =
-                            timeout(timeouts.total, handle_connection(inbound, proxy)).await;
-                        match result {
-                            Ok(Ok(_)) => {
-                                debug!("connection closed");
-                            }
-                            Ok(Err(e)) => {
-                                error!("connection error: {e:#}");
-                            }
-                            Err(_) => {
-                                error!("connection kept too long, force closing");
-                            }
-                        }
+                let task = conn_task(inbound, from, proxy.clone());
+                match rt {
+                    Some(rt) => {
+                        rt.spawn(task);
                     }
-                    .in_current_span(),
-                );
+                    None => {
+                        tokio::spawn(task);
+                    }
+                }
             }
             Err(e) => {
                 error!("failed to accept connection: {e:?}");
@@ -245,6 +293,9 @@ fn next_connection_id() -> usize {
 }
 
 pub fn start(config: ProxyConfig, app_state: Proxy) -> Result<()> {
+    if config.thread_per_core {
+        return start_thread_per_core(config, app_state);
+    }
     std::thread::Builder::new()
         .name("proxy-main".to_string())
         .spawn(move || {
@@ -270,6 +321,43 @@ pub fn start(config: ProxyConfig, app_state: Proxy) -> Result<()> {
             }
         })
         .context("Failed to spawn proxy-main thread")?;
+    Ok(())
+}
+
+/// Thread-per-core proxy: `workers` threads, each with its own single-threaded
+/// runtime and its own `SO_REUSEPORT` listener.
+///
+/// The kernel load-balances new connections across the listeners, and a
+/// connection is accepted and served entirely on one thread. That removes the
+/// accept-thread -> worker handoff and the work-stealing scheduler's task
+/// migrations, which together accounted for ~0.6 context switches per request
+/// in the default model.
+fn start_thread_per_core(config: ProxyConfig, app_state: Proxy) -> Result<()> {
+    let workers = config.workers.max(1);
+    let config = Arc::new(config);
+    for i in 0..workers {
+        let config = config.clone();
+        let app_state = app_state.clone();
+        std::thread::Builder::new()
+            .name(format!("proxy-core-{i}"))
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .or_panic("Failed to build Tokio runtime");
+                let result = rt.block_on(async {
+                    let listeners = bind_listeners(&config, true).await?;
+                    accept_loop(listeners, app_state, None).await
+                });
+                if let Err(err) = result {
+                    error!(
+                        "proxy core {i} error on {}:{:?}: {err:?}",
+                        config.listen_addr, config.listen_port
+                    );
+                }
+            })
+            .with_context(|| format!("Failed to spawn proxy-core-{i} thread"))?;
+    }
     Ok(())
 }
 

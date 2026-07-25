@@ -115,6 +115,16 @@ pub struct ProxyConfig {
     pub connect_top_n: usize,
     pub localhost_enabled: bool,
     pub workers: usize,
+    /// Run one single-threaded runtime per worker, each with its own
+    /// `SO_REUSEPORT` listener, instead of one accept thread feeding a shared
+    /// work-stealing runtime.
+    ///
+    /// A connection is then accepted and served entirely on one thread. The
+    /// default model costs ~0.6 context switches per request (accept-thread
+    /// handoff plus work-stealing migrations); HAProxy's thread-per-core design
+    /// measures ~0. Linux-only (needs SO_REUSEPORT).
+    #[serde(default)]
+    pub thread_per_core: bool,
     #[serde(default)]
     pub base_domain: Option<String>,
     #[serde(default)]
