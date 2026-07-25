@@ -20,8 +20,10 @@ production does not also carry.
 
 ## Reproducibility model
 
-`versions.env` pins the stable 7.x kernel, Rust 1.92.0 and Go 1.22.2
-archives by SHA-256 and selects an immutable Debian snapshot. All components
+`versions.env` pins the stable kernel, Rust and Go archives by SHA-256 and
+selects an immutable Debian snapshot. `GOTOOLCHAIN=local` keeps the go command
+from replacing the pinned compiler when a module's `go.mod` names a newer
+release. All components
 are compiled by `mkosi.build` inside mkosi's build-package overlay; host
 Rust/Go/GCC binaries are never used. C/C++ compilers, linkers, headers and
 build systems come from that snapshot, while the Rust and Go distributions are
@@ -98,15 +100,22 @@ completely.
 
 On a 16-job development host, a clean production work directory takes about
 27 minutes with warm package downloads; allow 30--45 minutes with cold network
-caches. `repro-check` performs two such builds sequentially.
+caches. `repro-check` performs two such builds sequentially, deliberately with
+different job counts as well as different build paths, so output that depends
+on parallelism is caught rather than reproduced identically twice.
 
-Acceptance means: the static contract passes; a disk with systemd-boot/UKI
-boots on x86_64 QEMU; `/proc/config.gz` contains the checked TDX/SNP, TPM,
-ACPI, dm-verity/crypt, virtio, container and hardening options; dstack services
-are enabled; and two clean builds compare byte-for-byte. The backend exports
+Acceptance is currently split. `build.sh lint` enforces the static contract
+and runs on every change touching `os/`; it is a source-level check, not a
+statement about a built image. The image-level criteria -- a UKI disk booting
+on x86_64 QEMU, `/proc/config.gz` carrying the checked TDX/SNP, TPM, ACPI,
+dm-verity/crypt, virtio, container and hardening options, dstack services
+enabled, and two clean builds comparing byte-for-byte -- are verified by
+`repro-check` and by hand today; only the byte-for-byte comparison is
+automated, behind a manual workflow dispatch. The backend exports
 artifact-manifest schema v1 and delegates final assembly to
 `os/image/assemble.sh`, exactly like Yocto. Its output contains the same
-`dstack-0.6.0/` directory, bare-metal and UKI tarballs, partitioned combined
+`dstack-<version>/` directory (`dstack-dev-<version>/` for the dev flavor,
+matching Yocto), bare-metal and UKI tarballs, partitioned combined
 squashfs/dm-verity image, metadata, measurements, checksums, kernel, initramfs,
 OVMF and UKI. Debian supplies the base userspace while the parity checker
 requires the Yocto-visible binaries, services, configuration, kernel modules
