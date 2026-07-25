@@ -8,8 +8,15 @@ for component in dstack-rust image-tools container-stack sysbox nvattest kernel 
 done
 # shellcheck source=/dev/null
 source "$D/versions.env"
-[[ $KERNEL_VERSION == 7.* && $KERNEL_VERSION != *-rc* ]]
+[[ $KERNEL_VERSION != *-rc* ]]
 [[ $KERNEL_SHA256 =~ ^[0-9a-f]{64}$ ]]
+# The guest kernel must track the same series as the production Yocto backend.
+# A different major/minor reintroduces the out-of-tree NVIDIA and ZFS
+# compatibility patches that parity with Yocto exists to avoid.
+yocto_series=$(sed -n 's/^PREFERRED_VERSION_linux-yocto ?= "\([0-9.]*\)%".*/\1/p' \
+  "$D/../yocto/layers/meta-dstack/conf/distro/dstack.conf")
+[[ -n $yocto_series ]]
+[[ $KERNEL_VERSION == "$yocto_series".* ]]
 grep -q "^Snapshot=$DEBIAN_SNAPSHOT" "$D/mkosi.conf"
 grep -q '^Format=tar$' "$D/mkosi.conf"
 grep -q '^Output=dstack-0.6.0$' "$D/mkosi.conf"
@@ -57,15 +64,16 @@ grep -q -- '--fuzz=0' "$D/components/nvattest/nvattest-build.sh"
 grep -q '0001-pin-fetchcontent-inputs.patch' "$D/components/nvattest/nvattest-build.sh"
 grep -q 'COMPONENT_PATH/patches/0001-pin-fetchcontent-inputs.patch' "$D/components/nvattest/nvattest.sh"
 grep -q '^NVATTEST_REVISION=9d12801cea8a198ea0f29640dfaf8a4017c841c5$' "$D/versions.env"
-grep -q '0001-linux-7.1-drop-legacy-of-gpio-api.patch' "$D/components/nvidia/nvidia-build.sh"
 grep -q '^NVIDIA_VERSION=595.58.03$' "$D/versions.env"
 grep -q '^STARGZ_VERSION=0.18.2$' "$D/versions.env"
 grep -q '^NERDCTL_VERSION=2.2.1$' "$D/versions.env"
 grep -q '^[[:space:]]*docker-cli$' "$D/mkosi.conf"
 grep -q '^SYSBOX_VERSION=0.6.7$' "$D/versions.env"
 grep -q '^ZFS_VERSION=2.4.0$' "$D/versions.env"
-grep -q '0001-linux-6.19-7.1-compat.patch' "$D/components/zfs/zfs-build.sh"
 grep -q -- '--fuzz=0' "$D/components/zfs/zfs-build.sh"
+# ZFS 2.4.0 declares Linux-Maximum 6.18; no out-of-tree compat patch is carried.
+test ! -e "$D/components/zfs/patches"
+test ! -e "$D/components/nvidia/patches"
 python3 -m json.tool "$D/parity.json" >/dev/null
 grep -q 'rootfs.img.parted.verity' "$D/../image/assemble.sh"
 bash -n "$D"/*.sh "$D"/mkosi.build "$D"/mkosi.clean "$D"/mkosi.finalize \

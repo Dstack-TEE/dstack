@@ -9,8 +9,7 @@ component_cache_key() {
     key_dependency kernel
     key_value "$NVIDIA_VERSION" "$NVIDIA_RUN_SHA256" \
       "$NVIDIA_FABRICMANAGER_SHA256" "$NVIDIA_NSCQ_SHA256"
-    key_file "$COMPONENT_PATH/nvidia-build.sh" \
-      "$COMPONENT_PATH/patches/0001-linux-7.1-drop-legacy-of-gpio-api.patch"
+    key_file "$COMPONENT_PATH/nvidia-build.sh"
     key_tree os/yocto/layers/meta-nvidia/recipes-graphics/nvidia
     key_tools gcc make
 }

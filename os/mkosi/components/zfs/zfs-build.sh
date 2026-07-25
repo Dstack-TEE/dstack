@@ -21,7 +21,6 @@ git -C "$src" fetch -q --depth=1 origin "$ZFS_REVISION"
 git -C "$src" checkout -q --detach FETCH_HEAD
 git -C "$src" reset -q --hard "$ZFS_REVISION"
 git -C "$src" clean -qfdx
-patch -d "$src" -p1 --fuzz=0 < "$SELF/components/zfs/patches/0001-linux-6.19-7.1-compat.patch"
 patch -d "$src" -p1 --fuzz=0 < "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-zfs/dstack-zfs/0001-Define-strndupa-if-it-does-not-exist.patch"
 (cd "$src" && ./autogen.sh)
 mkdir -p "$B/build"
@@ -29,9 +28,9 @@ mkdir -p "$B/build"
   --with-linux-obj="$KERNEL_BUILD" --with-config=all --enable-systemd \
   --disable-pyzfs --without-dracutdir --with-udevdir=/usr/lib/udev \
   --with-systemdunitdir=/usr/lib/systemd/system)
-# Linux 7.1 drives pahole 1.25's nondeterministic optimized encoder for
-# external modules. Kernel/in-tree BTF remains enabled; omit only ZFS module
-# BTF, as is also required for NVIDIA's external modules on this toolchain.
+# External-module BTF goes through pahole 1.25's optimized encoder, whose
+# output order is unstable. Kernel/in-tree BTF remains enabled; omit only ZFS
+# module BTF, as is also done for NVIDIA's external modules.
 make -C "$B/build" -j"${JOBS:-$(nproc)}" CONFIG_DEBUG_INFO_BTF_MODULES=
 make -C "$B/build" CONFIG_DEBUG_INFO_BTF_MODULES= DESTDIR="$ROOT_STAGE" install
 # ZFS installs kernel modules below DESTDIR/lib; merge them into usr-merge.

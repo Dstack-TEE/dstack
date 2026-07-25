@@ -41,7 +41,7 @@ chmod 0755 "$pahole_wrapper"
 tarball="$BUILD_DIR/downloads/linux-$KERNEL_VERSION.tar.xz"
 if [[ ! -f $tarball ]]; then
     curl --fail --location --retry 3 -o "$tarball.tmp" \
-      "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$KERNEL_VERSION.tar.xz"
+      "https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_VERSION%%.*}.x/linux-$KERNEL_VERSION.tar.xz"
     mv "$tarball.tmp" "$tarball"
 fi
 echo "$KERNEL_SHA256  $tarball" | sha256sum --check --status || {
