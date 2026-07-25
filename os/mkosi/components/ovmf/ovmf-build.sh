@@ -21,11 +21,19 @@ if [[ ! -d $src/.git ]]; then
 fi
 git -C "$src" fetch -q --depth=1 origin "$REV"
 git -C "$src" checkout -q --detach FETCH_HEAD
+# --force so a shallow submodule whose working tree ended up ahead of the
+# pinned commit is checked out anyway. Without it a partially completed update
+# leaves the submodule dirty, and every later attempt fails with "local changes
+# would be overwritten by checkout" instead of retrying the original error.
 for attempt in 1 2 3; do
-  if git -C "$src" submodule update --init --recursive --depth=1; then
+  if git -C "$src" submodule update --init --recursive --depth=1 --force; then
     break
   fi
   (( attempt < 3 )) || { echo 'failed to fetch OVMF submodules' >&2; exit 1; }
+  # Discard whatever the failed attempt left behind so the retry starts from a
+  # known state rather than inheriting the previous failure.
+  git -C "$src" submodule foreach --recursive --quiet \
+    'git reset -q --hard; git clean -qfdx' || true
   git -C "$src" submodule sync --recursive
   sleep $((attempt * 5))
 done
