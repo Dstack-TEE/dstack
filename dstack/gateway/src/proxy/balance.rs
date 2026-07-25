@@ -131,8 +131,4 @@ impl Balancer {
         }
     }
 
-    /// Account a connection that arrived from another core.
-    pub(crate) fn slot_for_self(&self) -> CoreSlot {
-        CoreSlot::claim(self.counts.clone(), self.me)
-    }
 }

@@ -229,9 +229,6 @@ impl PooledBufs {
         }
     }
 
-    fn pair(&mut self) -> (&mut [u8], &mut [u8]) {
-        (&mut self.a, &mut self.b)
-    }
 }
 
 impl Drop for PooledBufs {
