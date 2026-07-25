@@ -23,8 +23,11 @@ mkdir -p "$HOME" "$CARGO_HOME" "$GOCACHE" "$GOMODCACHE" "$XDG_CACHE_HOME"
 
 cache_enabled=${DSTACK_COMPONENT_CACHE:-0}
 if [[ $cache_enabled == 1 ]]; then
-    export DSTACK_DEV_CACHE_DIR="$SRCDIR/component-cache/components"
-    toolchain_downloads="$SRCDIR/component-cache/toolchains"
+    # BUILDDIR is the only mount mkosi gives a build script that is both
+    # writable and preserved across runs; source mounts are ephemeral overlays.
+    : "${BUILDDIR:?dev component cache requires mkosi BuildDirectory}"
+    export DSTACK_DEV_CACHE_DIR="$BUILDDIR/components"
+    toolchain_downloads="$BUILDDIR/toolchains"
 else
     toolchain_downloads=/var/tmp/dstack-toolchain-downloads
 fi

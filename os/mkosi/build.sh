@@ -50,10 +50,17 @@ build_one() {
   )
   if [[ $action == dev-image ]]; then
     cache_root=${DSTACK_DEV_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dstack/mkosi-dev}
-    mkdir -p "$cache_root"
+    # The component cache must go through BuildDirectory, which mkosi
+    # bind-mounts read-write and preserves between runs. A BuildSources mount
+    # cannot hold it: BuildSourcesEphemeral=yes gives every source an overlay
+    # whose upper layer is a temporary directory, so cache writes would be
+    # discarded when the build script exits. The manifest is a read-only input
+    # regenerated on each run, so an ephemeral source mount suits it fine.
+    mkdir -p "$cache_root/build" "$cache_root/manifest"
     "$SELF/scripts/write-source-manifest.py" "$ROOT" \
-      "$cache_root/source-manifest"
-    mkosi_args+=(--build-sources="$cache_root:component-cache")
+      "$cache_root/manifest/source-manifest"
+    mkosi_args+=(--build-directory="$cache_root/build")
+    mkosi_args+=(--build-sources="$cache_root/manifest:component-cache")
     mkosi_args+=(--environment="DSTACK_SOURCE_MANIFEST=/work/src/component-cache/source-manifest")
   fi
   mkosi "${mkosi_args[@]}" build

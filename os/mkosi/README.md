@@ -81,13 +81,20 @@ detection. `image` and `repro-check` never calculate, read or write component
 cache keys. Release artifacts, Debian rootfs, dm-verity data and measurements
 are never cached.
 
+The cache is stored in mkosi's `BuildDirectory=`, which is the only mount a
+build script gets that is both writable and preserved between runs. It must not
+live on a `BuildSources=` mount: `BuildSourcesEphemeral=yes` gives every source
+an overlay whose upper layer is a temporary directory, so anything written
+there is discarded when the build script exits.
+
 mkosi's `Incremental=`, `CacheDirectory=` and `BuildDirectory=` cover
-whole-image/rootfs and persistent-work-directory reuse; they do not provide
-independently keyed output trees for components or reject file collisions when
-those trees are installed. The small component layer only supplies those two
-missing policies. Source download, build, cache-key inputs and output ownership
-remain together under `components/<name>/`; production builds bypass the layer's
-archive cache completely.
+whole-image/rootfs and persistent-work-directory reuse; none of them provides
+independently keyed output trees for components or rejects file collisions when
+those trees are installed. The small component layer supplies only those two
+missing policies, on top of `BuildDirectory=` for storage. Source download,
+build, cache-key inputs and output ownership remain together under
+`components/<name>/`; production builds bypass the layer's archive cache
+completely.
 
 On a 16-job development host, a clean production work directory takes about
 27 minutes with warm package downloads; allow 30--45 minutes with cold network
@@ -126,9 +133,10 @@ Only four project-specific mechanisms remain:
    measurements and archive member contract. mkosi's repart/UKI formats would
    change that external interface.
 2. The development-only component cache provides independently keyed output
-   trees. mkosi's `Incremental=`, `BuildDirectory=` and
-   `BuildSourcesEphemeral=buildcache` cache a whole image or mutable build tree,
-   not isolated component install outputs.
+   trees. mkosi's `Incremental=` and `BuildSourcesEphemeral=buildcache` cache a
+   whole image or a mutable build tree, not isolated component install outputs.
+   Only the keying and collision policies are ours; the storage is mkosi's
+   `BuildDirectory=`.
 3. `merge-component-trees.py` rejects conflicting component-owned rootfs paths;
    mkosi's normal tree overlays intentionally use last-writer-wins semantics.
 4. `normalize-skeleton-modes.sh` maps regular skeleton files to Git's two

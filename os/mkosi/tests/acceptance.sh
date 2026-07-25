@@ -1,6 +1,9 @@
 #!/bin/bash
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
+# Most checks below are bare test/grep assertions. Without this they abort the
+# run with no output at all, which says nothing about what regressed.
+trap 'echo "acceptance check failed at line $LINENO: $BASH_COMMAND" >&2' ERR
 D=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 for component in dstack-rust image-tools container-stack sysbox nvattest kernel nvidia zfs ovmf; do
   test -f "$D/components/$component/$component.sh"
@@ -47,6 +50,16 @@ grep -q -- '--fuzz=0' "$D/components/kernel/kernel-build.sh"
 for service in dstack-guest-agent dstack-prepare app-compose wg-checker; do
   grep -q "$service" "$D/mkosi.skeleton/usr/lib/systemd/system-preset/80-dstack.preset"
 done
+# The dev component cache must be stored in mkosi's BuildDirectory. A
+# BuildSources mount is an ephemeral overlay under BuildSourcesEphemeral=yes,
+# so a cache placed there is silently discarded on every run.
+grep -q 'DSTACK_DEV_CACHE_DIR="\$BUILDDIR/components"' "$D/mkosi.build"
+grep -q 'toolchain_downloads="\$BUILDDIR/toolchains"' "$D/mkosi.build"
+grep -q -- '--build-directory=' "$D/build.sh"
+if grep -Fq 'DSTACK_DEV_CACHE_DIR="$SRCDIR' "$D/mkosi.build"; then
+  echo 'dev cache must not live on an ephemeral source mount' >&2
+  exit 1
+fi
 grep -q 'artifact-manifest.json' "$D/scripts/make-release-artifacts.sh"
 grep -q -- '--hard-dereference' "$D/scripts/make-release-artifacts.sh"
 grep -q -- '--mode=g-s' "$D/scripts/make-release-artifacts.sh"
