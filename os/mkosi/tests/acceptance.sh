@@ -108,6 +108,9 @@ grep -q '0001-pin-fetchcontent-inputs.patch' "$D/components/nvattest/nvattest-bu
 grep -q 'COMPONENT_PATH/patches/0001-pin-fetchcontent-inputs.patch' "$D/components/nvattest/nvattest.sh"
 grep -q '^NVATTEST_REVISION=9d12801cea8a198ea0f29640dfaf8a4017c841c5$' "$D/versions.env"
 grep -q '^NVIDIA_VERSION=595.58.03$' "$D/versions.env"
+# GOTOOLCHAIN=local keeps the go command from downloading an unpinned
+# toolchain when a module's go.mod names a newer release.
+grep -q '^export GOTOOLCHAIN=local$' "$D/mkosi.build"
 grep -q '^STARGZ_VERSION=0.18.2$' "$D/versions.env"
 grep -q '^NERDCTL_VERSION=2.2.1$' "$D/versions.env"
 grep -q '^[[:space:]]*docker-cli$' "$D/mkosi.conf"
@@ -135,7 +138,10 @@ grep -q '^Snapshot=20260721T000000Z$' "$D/mkosi.tools.conf"
 grep -q 'clean -f' "$D/build.sh"
 grep -q 'install-toolchains.sh' "$D/mkosi.build"
 grep -q '^RUST_TOOLCHAIN_VERSION=1.92.0$' "$D/versions.env"
-grep -q '^GO_TOOLCHAIN_VERSION=1.22.2$' "$D/versions.env"
+# Must stay >= the highest 'go' directive among the pinned Go components;
+# nvidia-container-toolkit currently declares go 1.25.0. GOTOOLCHAIN=local
+# turns a violation into a build failure rather than a silent download.
+grep -q '^GO_TOOLCHAIN_VERSION=1.25.12$' "$D/versions.env"
 for component in dstack-rust image-tools container-stack sysbox nvattest kernel nvidia zfs ovmf; do
   definition="$D/components/$component/$component.sh"
   grep -q "^COMPONENT_NAME=$component$" "$definition"

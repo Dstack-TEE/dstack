@@ -10,13 +10,24 @@ mkdir -p "$DOWNLOADS" "$PREFIX"
 
 fetch() {
     local url=$1 sha=$2 output=$3
+    # Verify before publishing the cached name. Renaming first meant a
+    # truncated-but-non-empty transfer was cached under the final name, and
+    # since the mismatch path did not remove it, every later build failed with
+    # the same checksum error and no hint that the fix is to delete the file.
     if [[ ! -f $output ]]; then
         curl --fail --location --retry 3 --retry-all-errors \
           --connect-timeout 30 --max-time 600 -o "$output.tmp" "$url"
+        echo "$sha  $output.tmp" | sha256sum --check --status || {
+            rm -f "$output.tmp"
+            echo "toolchain checksum mismatch after download: $url" >&2
+            exit 1
+        }
         mv "$output.tmp" "$output"
     fi
     echo "$sha  $output" | sha256sum --check --status || {
-        echo "toolchain checksum mismatch: $output" >&2
+        rm -f "$output"
+        echo "cached toolchain archive was corrupt and has been removed: $output" >&2
+        echo "re-run the build to download it again" >&2
         exit 1
     }
 }

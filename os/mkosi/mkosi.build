@@ -17,6 +17,11 @@ export HOME=/var/tmp/dstack-home
 export CARGO_HOME=/var/tmp/dstack-cargo-home
 export GOCACHE=/var/tmp/dstack-go-cache
 export GOMODCACHE=/var/tmp/dstack-go-mod-cache
+# Without this, a module whose go.mod names a newer release makes the go
+# command download that toolchain from proxy.golang.org mid-build. The
+# compiler that produced the binaries would then be neither covered by
+# GO_TOOLCHAIN_SHA256 nor recorded in any component cache key.
+export GOTOOLCHAIN=local
 export XDG_CACHE_HOME=/var/tmp/dstack-xdg-cache
 export TAR_OPTIONS="${TAR_OPTIONS:-} --no-same-owner"
 mkdir -p "$HOME" "$CARGO_HOME" "$GOCACHE" "$GOMODCACHE" "$XDG_CACHE_HOME"
