@@ -49,6 +49,12 @@ fn errno_to_io(e: nix::errno::Errno) -> std::io::Error {
 /// Reusing them keeps the bulk-transfer win without paying setup per
 /// connection. Thread-local, so no locking -- and with thread-per-core a
 /// connection stays on the thread that took the pipe.
+/// Per thread. Each pooled pipe holds two descriptors, so the cap costs
+/// `PIPE_POOL_MAX * 2 * workers` file descriptors at steady state -- 512 for the
+/// 4-worker bench, ~4096 for a 32-worker gateway. That is fine given
+/// `set_ulimit` raises RLIMIT_NOFILE to the hard limit, but it is why the number
+/// is not larger. A 40-minute soak confirmed the pool fills to the cap and then
+/// stops (fds 487 -> 543 -> flat, RSS flat at ~44 MB).
 const PIPE_POOL_MAX: usize = 64;
 
 thread_local! {

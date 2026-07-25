@@ -22,7 +22,7 @@ use tokio::{
     runtime::Runtime,
     time::timeout,
 };
-use tracing::{debug, debug_span, error, info, Instrument};
+use tracing::{debug, debug_span, error, info, warn, Instrument};
 
 use crate::{
     config::ProxyConfig,
@@ -217,6 +217,26 @@ pub async fn proxy_main(rt: &Runtime, config: &ProxyConfig, proxy: Proxy) -> Res
 }
 
 /// The per-connection task: everything a single proxied connection does.
+/// Was this failure just the peer hanging up?
+///
+/// Clients disconnecting mid-connection is routine -- a browser navigating away,
+/// a mobile network dropping, a load generator ending its run. Logging those at
+/// error level buries the failures that are actually the gateway's fault: a 40
+/// minute soak produced 379 such lines and no real errors.
+fn is_peer_disconnect(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
+            matches!(
+                io.kind(),
+                std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::ConnectionAborted
+            )
+        })
+    })
+}
+
 fn conn_task(
     inbound: TcpStream,
     from: std::net::SocketAddr,
@@ -230,6 +250,7 @@ fn conn_task(
         let timeouts = &proxy.config.proxy.timeouts;
         match timeout(timeouts.total, handle_connection(inbound, proxy)).await {
             Ok(Ok(_)) => debug!("connection closed"),
+            Ok(Err(e)) if is_peer_disconnect(&e) => debug!("peer disconnected: {e:#}"),
             Ok(Err(e)) => error!("connection error: {e:#}"),
             Err(_) => error!("connection kept too long, force closing"),
         }
@@ -296,7 +317,16 @@ fn next_connection_id() -> usize {
 
 pub fn start(config: ProxyConfig, app_state: Proxy) -> Result<()> {
     if config.thread_per_core {
-        return start_thread_per_core(config, app_state);
+        // Probe SO_REUSEPORT before committing: it is the one prerequisite the
+        // thread-per-core model cannot work without, and failing to serve at all
+        // is far worse than losing the optimisation.
+        match probe_reuse_port(&config) {
+            Ok(()) => return start_thread_per_core(config, app_state),
+            Err(err) => warn!(
+                "thread_per_core requested but SO_REUSEPORT is unavailable ({err:#}); \
+                 falling back to the shared-runtime proxy"
+            ),
+        }
     }
     std::thread::Builder::new()
         .name("proxy-main".to_string())
@@ -323,6 +353,29 @@ pub fn start(config: ProxyConfig, app_state: Proxy) -> Result<()> {
             }
         })
         .context("Failed to spawn proxy-main thread")?;
+    Ok(())
+}
+
+/// Check that a `SO_REUSEPORT` listener can actually be created and bound.
+fn probe_reuse_port(config: &ProxyConfig) -> Result<()> {
+    let port = *config
+        .listen_port
+        .first()
+        .context("no tcp listen ports configured")?;
+    let addr = std::net::SocketAddr::from((config.listen_addr, port));
+    let socket = socket2::Socket::new(
+        socket2::Domain::IPV4,
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )
+    .context("failed to create probe socket")?;
+    socket
+        .set_reuse_port(true)
+        .context("SO_REUSEPORT not supported")?;
+    socket.set_reuse_address(true).ok();
+    socket
+        .bind(&addr.into())
+        .with_context(|| format!("failed to bind {addr} with SO_REUSEPORT"))?;
     Ok(())
 }
 
