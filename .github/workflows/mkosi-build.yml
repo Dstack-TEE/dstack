@@ -15,9 +15,9 @@ env:
   # These values were produced by two cache-disabled local builds. The job
   # checks out this exact source revision so the embedded Git revision and
   # SOURCE_DATE_EPOCH are identical. Refresh all three values together.
-  BASELINE_REVISION: 558a1bd426f84003ade1d37f3b1800e10f881e8e
-  BARE_SHA256: eb39bd4a447abb30be3a06839ffa5e6eb4cc54e4a75f672158d53d98236519cd
-  UKI_SHA256: 3126d09038a6f231b41218a65a250e05ac51da13f8629dac5607989434e220c3
+  BASELINE_REVISION: 2611402ad7cadded2a044777f9542b5ef6579393
+  BARE_SHA256: 630921781a37210ddc21104390d1b9c9da5d725541fa48b5c0e9f1e1b1a10af1
+  UKI_SHA256: 0b40d5095589235c465dea3dd6c294f00bd90f1c1ccb5cf9fd8c8ff475df85f0
 
 jobs:
   cross-host:
@@ -91,7 +91,6 @@ jobs:
           cd "$RUNNER_TEMP/mkosi-cross-host/out/prod"
           tar -xOf dstack-0.6.0.tar.gz dstack-0.6.0/sha256sum.txt
           tar -xOf dstack-0.6.0.tar.gz dstack-0.6.0/metadata.json
-          cp dstack-0.6.0/rootfs.img.parted.verity cross-host-rootfs.img
           sha256sum dstack-0.6.0.tar.gz dstack-0.6.0-uki.tar.gz \
             | tee cross-host.sha256
           printf '%s  %s\n' "$BARE_SHA256" dstack-0.6.0.tar.gz \
@@ -104,7 +103,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mkosi-cross-host-sha256
-          path: |
-            ${{ runner.temp }}/mkosi-cross-host/out/prod/cross-host.sha256
-            ${{ runner.temp }}/mkosi-cross-host/out/prod/cross-host-rootfs.img
+          path: ${{ runner.temp }}/mkosi-cross-host/out/prod/cross-host.sha256
           retention-days: 30
