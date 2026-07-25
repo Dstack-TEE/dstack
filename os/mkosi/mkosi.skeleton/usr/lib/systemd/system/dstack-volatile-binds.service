@@ -12,4 +12,9 @@ ExecStart=/usr/bin/dstack-volatile-binds.sh
 RemainAfterExit=yes
 
 [Install]
-WantedBy=local-fs.target
+# RequiredBy, not WantedBy: if the overlays are not established the boot must
+# stop rather than continue with /var/log and /var/lib still read-only. A CVM
+# that attests successfully and then silently misbehaves is the worse outcome,
+# and systemd-resolved and systemd-networkd-persistent-storage already declare
+# Requires= on this unit.
+RequiredBy=local-fs.target
