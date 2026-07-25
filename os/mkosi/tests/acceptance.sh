@@ -29,6 +29,8 @@ for service in dstack-guest-agent dstack-prepare app-compose wg-checker; do
   grep -q "$service" "$D/mkosi.skeleton/usr/lib/systemd/system-preset/80-dstack.preset"
 done
 grep -q 'artifact-manifest.json' "$D/scripts/make-release-artifacts.sh"
+grep -q -- '--hard-dereference' "$D/scripts/make-release-artifacts.sh"
+grep -q 'mksquashfs -.*-tar' "$D/scripts/make-release-artifacts.sh"
 grep -q 'image/assemble.sh' "$D/mkosi.postoutput"
 grep -q 'ovmf-build.sh' "$D/components/ovmf/ovmf.sh"
 grep -q 'fbe0805b2091393406952e84724188f8c1941837' "$D/components/ovmf/ovmf-build.sh"
