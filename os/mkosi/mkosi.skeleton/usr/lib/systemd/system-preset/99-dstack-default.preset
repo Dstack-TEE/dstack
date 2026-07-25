@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Terminal preset rule. systemd's built-in fallback policy for a unit that
+# matches no rule is "enable", so without this every package pulled in by
+# Packages= -- directly or as a dependency -- would be started at boot inside
+# the CVM, with no diff to 80-dstack.preset and nothing for a reviewer to see.
+#
+# This inverts that to opt-in, matching the Yocto backend, where a service is
+# only started if a recipe sets SYSTEMD_SERVICE/SYSTEMD_AUTO_ENABLE. Anything
+# that must run in the guest belongs in 80-dstack.preset, which is ordered
+# before this file and therefore wins.
+disable *

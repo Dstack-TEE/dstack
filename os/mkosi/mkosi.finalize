@@ -10,7 +10,7 @@ WORK="$OUTPUTDIR/.dstack-$FLAVOR"
 KSTAGE="$WORK/kernel-stage"
 ARTIFACTS="$WORK/artifacts"
 
-"$SELF/scripts/normalize-skeleton-modes.sh" "$TREE"
+"$SELF/scripts/normalize-skeleton-modes.sh" "$TREE" "$FLAVOR"
 mkdir -p "$KSTAGE/usr/lib" "$OUTPUTDIR/.image-tools"
 cp -a "$TREE/usr/lib/modules" "$KSTAGE/usr/lib/"
 install -m0644 "$TREE/usr/lib/dstack/firmware/ovmf.fd" "$KSTAGE/ovmf.fd"

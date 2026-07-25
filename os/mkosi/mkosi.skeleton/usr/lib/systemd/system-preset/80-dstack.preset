@@ -17,4 +17,3 @@ enable containerd-stargz-grpc.service
 enable sysbox.service
 enable sysbox-fs.service
 enable sysbox-mgr.service
-enable dstack-tee-simulator.service

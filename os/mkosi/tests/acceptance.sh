@@ -50,6 +50,24 @@ grep -q -- '--fuzz=0' "$D/components/kernel/kernel-build.sh"
 for service in dstack-guest-agent dstack-prepare app-compose wg-checker; do
   grep -q "$service" "$D/mkosi.skeleton/usr/lib/systemd/system-preset/80-dstack.preset"
 done
+# systemd enables any unit that matches no preset rule, so the enable list is
+# only meaningful with a terminal disable. Without it, every package pulled in
+# by Packages= would start at boot with no diff to 80-dstack.preset.
+grep -q '^disable \*$' "$D/mkosi.skeleton/usr/lib/systemd/system-preset/99-dstack-default.preset"
+# The TEE simulator serves synthetic quotes; its preset must not ship in prod.
+if grep -rq 'dstack-tee-simulator' "$D/mkosi.skeleton/"; then
+  echo 'simulator preset must live in the dev profile skeleton' >&2
+  exit 1
+fi
+grep -q '^enable dstack-tee-simulator\.service$' \
+  "$D/mkosi.profiles/dev/mkosi.skeleton/usr/lib/systemd/system-preset/85-dstack-dev.preset"
+# Production must not retain the login stack that meta-dstack's disable_login()
+# deletes; /etc masks alone are runtime-mutable via the dstack-prepare overlay.
+for path in /usr/bin/login /usr/sbin/agetty /usr/lib/systemd/system/getty@.service \
+  /usr/lib/systemd/system-generators/systemd-getty-generator; do
+  grep -qF "        $path" "$D/mkosi.profiles/prod/mkosi.conf" || {
+    echo "prod profile does not remove $path"; exit 1; }
+done
 # The dev component cache must be stored in mkosi's BuildDirectory. A
 # BuildSources mount is an ephemeral overlay under BuildSourcesEphemeral=yes,
 # so a cache placed there is silently discarded on every run.
