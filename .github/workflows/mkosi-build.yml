@@ -15,9 +15,9 @@ env:
   # These values were produced by two cache-disabled local builds. The job
   # checks out this exact source revision so the embedded Git revision and
   # SOURCE_DATE_EPOCH are identical. Refresh all three values together.
-  BASELINE_REVISION: 98df4d5403db271b72cfaae3be742a577f1a2668
-  BARE_SHA256: d36fb8862ba8ebe5c99e0481e4e3e67ffc12240950ad28ba8c24dd5c2be5756e
-  UKI_SHA256: ad07b150fa7541134984ae3de8a320506bc2e5a07893441d3ccb95f3ab5db0f2
+  BASELINE_REVISION: 9af3d0441544775f1b70885b45032ffa12458d03
+  BARE_SHA256: 2b794097b61ec61cd47bae6d38d8a4b08a043b764c945742d0097d4ded40ca93
+  UKI_SHA256: 328ae1466f0e5c229dc4b0d984b2a7ec73f137541600cc0ae5671edf2f870d14
 
 jobs:
   cross-host:
@@ -91,16 +91,6 @@ jobs:
           cd "$RUNNER_TEMP/mkosi-cross-host/out/prod"
           tar -xOf dstack-0.6.0.tar.gz dstack-0.6.0/sha256sum.txt
           tar -xOf dstack-0.6.0.tar.gz dstack-0.6.0/metadata.json
-          mkdir "$RUNNER_TEMP/rootfs-inspect"
-          sudo unsquashfs -d "$RUNNER_TEMP/rootfs-inspect" -o 1048576 \
-            dstack-0.6.0/rootfs.img.parted.verity >/dev/null
-          sudo chown -R "$USER:$USER" "$RUNNER_TEMP/rootfs-inspect"
-          (cd "$RUNNER_TEMP/rootfs-inspect" && \
-            find . -type f -print0 | sort -z | xargs -0 sha256sum) \
-            > rootfs-files.sha256
-          (cd "$RUNNER_TEMP/rootfs-inspect" && \
-            find . -printf '%y %m %u:%g %p -> %l\n' | sort) \
-            > rootfs-tree.txt
           sha256sum dstack-0.6.0.tar.gz dstack-0.6.0-uki.tar.gz \
             | tee cross-host.sha256
           printf '%s  %s\n' "$BARE_SHA256" dstack-0.6.0.tar.gz \
@@ -113,8 +103,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mkosi-cross-host-sha256
-          path: |
-            ${{ runner.temp }}/mkosi-cross-host/out/prod/cross-host.sha256
-            ${{ runner.temp }}/mkosi-cross-host/out/prod/rootfs-files.sha256
-            ${{ runner.temp }}/mkosi-cross-host/out/prod/rootfs-tree.txt
+          path: ${{ runner.temp }}/mkosi-cross-host/out/prod/cross-host.sha256
           retention-days: 30
