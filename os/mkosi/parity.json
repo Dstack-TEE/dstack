@@ -78,7 +78,9 @@
     "usr/bin/dstack-tee-simulator",
     "usr/bin/strace",
     "usr/bin/gdb",
-    "usr/sbin/sshd"
+    "usr/sbin/sshd",
+    "usr/bin/tcpdump",
+    "usr/bin/vim.basic"
   ],
   "required_rootfs_globs": {
     "nvidia-firmware": [
@@ -124,9 +126,20 @@
   ],
   "prod_forbidden_paths": [
     "usr/bin/dstack-tee-simulator",
-    "usr/sbin/sshd",
+    "usr/bin/strace",
     "usr/bin/gdb",
-    "usr/bin/strace"
+    "usr/sbin/sshd",
+    "usr/bin/tcpdump",
+    "usr/bin/vim.basic",
+    "usr/bin/gdbserver",
+    "usr/bin/login",
+    "usr/bin/loginctl",
+    "usr/sbin/agetty",
+    "usr/lib/systemd/system-generators/systemd-getty-generator",
+    "usr/lib/systemd/system/getty@.service",
+    "usr/lib/systemd/system/serial-getty@.service",
+    "usr/lib/systemd/system/debug-shell.service",
+    "usr/lib/systemd/system/systemd-logind.service"
   ],
   "runtime_link_paths": [
     "usr/bin/nvattest",
