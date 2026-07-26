@@ -363,6 +363,26 @@ mod tests {
         assert_eq!(response.eth_rpc_url, "https://rpc.example");
         assert_eq!(response.kms_contract_address, "0x1234");
     }
+
+    #[test]
+    fn onboarding_domain_accepts_dns_name() {
+        validate_onboarding_domain("kms.example.com").unwrap();
+    }
+
+    #[test]
+    fn onboarding_domain_rejects_empty_overlong_and_invalid_labels() {
+        let overlong = "a".repeat(254);
+        for domain in [
+            "",
+            overlong.as_str(),
+            "-kms.example.com",
+            "kms-.example.com",
+            "kms..example.com",
+            "kms_example.com",
+        ] {
+            assert!(validate_onboarding_domain(domain).is_err(), "{domain:?}");
+        }
+    }
 }
 
 struct Keys {
@@ -647,28 +667,4 @@ async fn gen_ra_cert(ca_cert_pem: String, ca_key_pem: String) -> Result<(String,
         .build();
     let cert = ca.sign(req).context("Failed to sign certificate")?;
     Ok((cert.pem(), key.serialize_pem()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::validate_onboarding_domain;
-
-    #[test]
-    fn onboarding_domain_accepts_dns_name() {
-        validate_onboarding_domain("kms.example.com").unwrap();
-    }
-
-    #[test]
-    fn onboarding_domain_rejects_empty_overlong_and_invalid_labels() {
-        for domain in [
-            "",
-            &"a".repeat(254),
-            "-kms.example.com",
-            "kms-.example.com",
-            "kms..example.com",
-            "kms_example.com",
-        ] {
-            assert!(validate_onboarding_domain(domain).is_err(), "{domain:?}");
-        }
-    }
 }
