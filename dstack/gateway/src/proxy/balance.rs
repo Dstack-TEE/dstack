@@ -158,5 +158,4 @@ impl Balancer {
                 .map(|s| (s, CoreSlot::claim(self.counts.clone(), self.me))),
         }
     }
-
 }

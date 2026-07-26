@@ -14,6 +14,7 @@
 
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use nix::fcntl::{fcntl, splice, FcntlArg, SpliceFFlags};
@@ -21,6 +22,8 @@ use nix::sys::socket::{shutdown, Shutdown};
 use nix::unistd::pipe;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, Interest};
 use tokio::net::TcpStream;
+
+use crate::config::EngageAfter;
 
 /// Bytes moved per `splice` syscall. Also the target pipe capacity so a full
 /// read can be buffered kernel-side before draining to the destination.
@@ -228,7 +231,6 @@ impl PooledBufs {
             b: vec![0u8; size],
         }
     }
-
 }
 
 impl Drop for PooledBufs {
@@ -244,15 +246,23 @@ impl Drop for PooledBufs {
     }
 }
 
-/// Relay both directions with plain reads/writes until `threshold` bytes have
-/// moved, then report whether splice should take over.
+/// Relay both directions with plain reads/writes until `gate` is reached, then
+/// report whether splice should take over.
 ///
-/// Returns `true` if the threshold was reached and both sockets are still open,
+/// Returns `true` if the gate was reached and both sockets are still open,
 /// `false` if the connection finished first (in which case it is fully done).
+///
+/// The gate is only tested at the tail of the loop, which is the one point
+/// where both directions are quiescent: the `select!` arms each finish their
+/// `write_all` before falling through, so nothing is buffered in userspace and
+/// the sockets can be handed to the kernel safely. A timer arm inside the
+/// `select!` would also be safe, but it would promote connections that are
+/// merely idle -- allocating a pipe for a stream with nothing to move -- so
+/// checking the clock on activity is both cheaper and better behaved.
 async fn relay_until(
     a: &mut TcpStream,
     b: &mut TcpStream,
-    threshold: u64,
+    gate: &EngageAfter,
     buf_size: usize,
 ) -> Result<bool> {
     let (mut ar, mut aw) = a.split();
@@ -261,6 +271,7 @@ async fn relay_until(
     // connection cost more than the pipe setup this phase exists to avoid.
     let mut bufs = PooledBufs::get(buf_size);
     let mut moved: u64 = 0;
+    let start = Instant::now();
 
     loop {
         // `finish_one` drains a half-closed connection without splice: once one
@@ -292,7 +303,7 @@ async fn relay_until(
                 moved += n as u64;
             }
         }
-        if moved >= threshold {
+        if gate.reached(moved, start) {
             return Ok(true);
         }
     }
@@ -305,14 +316,14 @@ async fn relay_until(
 /// pipe, drain the pipe, plus readiness retries), where a read/write pair needs
 /// two. Its benefit is per byte, its cost is per connection -- the same shape as
 /// kTLS. Short request/response connections therefore never touch a pipe, while
-/// bulk transfers still get zero-copy.
+/// connections that trip either gate still get zero-copy.
 pub(crate) async fn splice_bidirectional_after(
     mut a: TcpStream,
     mut b: TcpStream,
-    threshold: u64,
+    gate: &EngageAfter,
     buf_size: usize,
 ) -> Result<()> {
-    if relay_until(&mut a, &mut b, threshold, buf_size).await? {
+    if relay_until(&mut a, &mut b, gate, buf_size).await? {
         splice_bidirectional(a, b).await
     } else {
         Ok(())

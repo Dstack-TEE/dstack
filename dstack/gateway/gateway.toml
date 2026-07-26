@@ -93,17 +93,24 @@ external_port = 443
 max_connections_per_app = 2000
 # Whether to read PROXY protocol from inbound connections (e.g. from Cloudflare).
 inbound_pp_enabled = false
-# Use splice(2) zero-copy relaying for the TLS-passthrough path (Linux only).
-# Bulk throughput +~12%, but small-request latency regresses. Enable only for
-# passthrough traffic dominated by large transfers.
-tcp_splice_enabled = false
-# Bytes a passthrough connection must move before splice engages (0 = immediately).
-tcp_splice_after_bytes = 0
-# Offload TLS record crypto to the kernel (kTLS) on the terminate path.
-# Hands session keys to the kernel; see config.rs for the security note.
-ktls_enabled = false
-# Bytes transferred before a connection is offloaded to kTLS (0 = immediately).
-ktls_offload_after_bytes = 0
+# splice(2) zero-copy relaying for the TLS-passthrough path (Linux only), and
+# kernel TLS offload for the terminate path, are both configured by an optional
+# section. Omitting the section disables the optimisation; an empty section
+# engages it from the first byte; `after_bytes` / `after_duration` are two
+# independent gates and whichever fires first engages it.
+#
+# [core.proxy.tcp_splice]
+# # Bulk transfers trip this within milliseconds.
+# after_bytes = 65536
+# # Long-lived low-rate streams (e.g. LLM token streaming) never accumulate
+# # bytes fast enough for the gate above, so they need this one instead.
+# after_duration = "5s"
+#
+# kTLS hands session keys to the kernel; see config.rs for the security note.
+# Gated offload also requires [core.proxy.tcp_splice].
+#
+# [core.proxy.ktls]
+# after_bytes = 65536
 
 [core.proxy.port_policy_fetch]
 # Background lazy-fetch of port_policy from legacy CVM agents.

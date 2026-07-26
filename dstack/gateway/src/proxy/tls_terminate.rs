@@ -138,8 +138,8 @@ pub(crate) fn create_acceptor_with_cert_resolver(
 
     // kTLS needs the negotiated traffic secrets so it can install them into
     // the kernel's TLS ULP. This is opt-in because it moves session keys
-    // outside rustls' control (see `ktls_enabled` docs).
-    if proxy_config.ktls_enabled {
+    // outside rustls' control (see the `ktls` config docs).
+    if proxy_config.ktls.is_some() {
         config.enable_secret_extraction = true;
     }
 
@@ -370,23 +370,22 @@ impl Proxy {
             .with_context(|| format!("app <{app_id}> not found"))?;
         let addresses = filter_allowed_addresses(self, addresses, app_id, port)?;
         debug!("selected top n hosts: {addresses:?}");
-        if self.config.proxy.ktls_enabled {
-            let threshold = self.config.proxy.ktls_offload_after_bytes;
-            if threshold > 0 && self.config.proxy.tcp_splice_enabled {
+        if let Some(gate) = &self.config.proxy.ktls {
+            if !gate.is_immediate() && self.config.proxy.tcp_splice.is_some() {
                 // Adaptive: stay in userspace rustls until the connection proves
-                // itself a bulk transfer, then hand it to the kernel.
+                // itself worth the offload, then hand it to the kernel.
                 let tls_stream = self.tls_accept_corked(inbound, buffer, h2).await?;
                 let (mut outbound, _counter, instance_id) =
                     self.connect_upstream(addresses, port, app_id).await?;
                 self.send_pp_header(&mut outbound, &instance_id, port, pp_header)
                     .await?;
                 return super::adaptive_ktls::relay_with_adaptive_offload(
-                    tls_stream, outbound, threshold,
+                    tls_stream, outbound, gate,
                 )
                 .await;
             }
             let tls_stream = self.tls_accept_ktls(inbound, buffer, h2).await?;
-            if self.config.proxy.tcp_splice_enabled {
+            if self.config.proxy.tcp_splice.is_some() {
                 // With kTLS the socket carries plaintext from userspace's point
                 // of view, so the payload can be relayed with splice and never
                 // enters this process at all.

@@ -11,7 +11,7 @@ use rocket::figment::Figment;
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::info;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -180,45 +180,87 @@ pub struct ProxyConfig {
     /// sides are raw TCP there, so payload never needs to enter userspace.
     /// Linux-only; ignored for the TLS-terminate path.
     ///
+    /// Absent disables splice entirely; see [`EngageAfter`] for what a present
+    /// section means.
+    ///
     /// Tradeoff (measured on a 4-core gateway): bulk passthrough throughput
     /// +~12% with a lower tail latency under load, but small-request latency
-    /// regresses (each tiny message pays an extra pipe hop). Enable it for
-    /// passthrough traffic dominated by large transfers; leave it off (default)
-    /// for request/response passthrough workloads.
+    /// regresses (each tiny message pays an extra pipe hop). splice costs ~17
+    /// syscalls per connection to move a small response (fill pipe, drain pipe,
+    /// readiness retries) where a read/write pair needs two: its benefit is per
+    /// byte, its cost is per connection, which is what the gates amortise.
     #[serde(default)]
-    pub tcp_splice_enabled: bool,
-    /// Bytes a passthrough connection must transfer before splice takes over.
-    ///
-    /// splice costs ~17 syscalls per connection to move a small response (fill
-    /// pipe, drain pipe, readiness retries) where a read/write pair needs two;
-    /// its benefit is per byte but its cost is per connection. With a non-zero
-    /// threshold short request/response connections never touch a pipe while
-    /// bulk transfers still get zero-copy. Requires `tcp_splice_enabled`.
-    /// 0 keeps the previous behaviour (splice from the first byte).
-    #[serde(default)]
-    pub tcp_splice_after_bytes: u64,
+    pub tcp_splice: Option<EngageAfter>,
     /// Offload TLS record encryption to the kernel (kTLS) on the
     /// TLS-terminate path. The handshake still runs in rustls; only the
     /// symmetric crypto moves into the kernel afterwards. Linux-only.
+    ///
+    /// Absent disables kTLS entirely; see [`EngageAfter`] for what a present
+    /// section means. Gated offload additionally requires `tcp_splice`, since
+    /// the point of handing the socket to the kernel is to then splice it.
+    ///
+    /// kTLS costs ~30% of connection setup rate but wins ~25% on bulk
+    /// throughput, so paying the setup cost up front is wrong for short
+    /// request/response connections.
     ///
     /// Security note: enabling this hands the negotiated session keys to the
     /// kernel via `dangerous_extract_secrets`, so the keys live outside
     /// rustls' control. Inside a CVM the kernel is part of the measured TCB,
     /// but on a non-TEE host this widens key exposure. Off by default.
     #[serde(default)]
-    pub ktls_enabled: bool,
-    /// Bytes a connection must transfer before it is handed over to kTLS.
-    ///
-    /// kTLS costs ~30% of connection setup rate but wins ~25% on bulk
-    /// throughput, so paying the setup cost up front is wrong for short
-    /// request/response connections. With a non-zero threshold the connection
-    /// starts in userspace rustls and is switched to kTLS + splice only once it
-    /// has proven to be a bulk transfer. Requires `ktls_enabled`.
-    /// 0 disables the adaptive path (offload immediately after the handshake).
-    #[serde(default)]
-    pub ktls_offload_after_bytes: u64,
+    pub ktls: Option<EngageAfter>,
     /// Background lazy-fetch behaviour for `port_policy` (legacy CVMs).
     pub port_policy_fetch: PortPolicyFetchConfig,
+}
+
+/// When an adaptive optimisation should engage on a connection.
+///
+/// Both gates are optional and independent, and the optimisation engages as
+/// soon as *either* fires. They catch different traffic and neither subsumes
+/// the other:
+///
+/// - `after_bytes` catches high-rate connections almost immediately -- a bulk
+///   transfer trips a 64 KiB gate within milliseconds -- but is blind to
+///   long-lived low-rate streams. LLM token streaming at 40 tok/s of ~64 B
+///   records needs ~25 s of wall time to move 64 KiB, so a byte gate leaves the
+///   whole early phase of every stream on the copy path, and never promotes
+///   short conversations at all.
+/// - `after_duration` catches exactly those long-lived low-rate streams, but is
+///   blind to short high-rate ones, which finish before it fires.
+///
+/// With neither gate set there is nothing to wait for, so the optimisation
+/// engages from the first byte. "Never engage" is expressed by omitting the
+/// whole section rather than by a sentinel value here, so every state has
+/// exactly one representation.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct EngageAfter {
+    /// Bytes the connection must transfer first. Absent = this gate never
+    /// fires.
+    #[serde(default)]
+    pub after_bytes: Option<u64>,
+    /// Wall time the connection must stay alive first, measured from the point
+    /// the relay starts (upstream already connected). Absent = this gate never
+    /// fires.
+    #[serde(default, with = "serde_duration::option")]
+    pub after_duration: Option<Duration>,
+}
+
+impl EngageAfter {
+    /// No gate configured, so there is nothing to wait for.
+    pub fn is_immediate(&self) -> bool {
+        self.after_bytes.is_none() && self.after_duration.is_none()
+    }
+
+    /// Whether either gate has been reached.
+    ///
+    /// `start` is only read when the duration gate is configured, so a
+    /// bytes-only config pays no clock read per message.
+    pub fn reached(&self, moved: u64, start: Instant) -> bool {
+        self.after_bytes.is_some_and(|bytes| moved >= bytes)
+            || self
+                .after_duration
+                .is_some_and(|limit| start.elapsed() >= limit)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -515,5 +557,72 @@ mod tests {
             result.unwrap_err().to_string(),
             "Client IP range is not in the network"
         );
+    }
+
+    fn engage_after(toml: &str) -> EngageAfter {
+        Figment::from(Toml::string(toml))
+            .extract()
+            .expect("valid EngageAfter")
+    }
+
+    #[test]
+    fn no_gate_engages_immediately() {
+        let gate = engage_after("");
+        assert!(gate.is_immediate());
+        assert!(gate.after_bytes.is_none());
+        assert!(gate.after_duration.is_none());
+    }
+
+    #[test]
+    fn a_configured_gate_is_not_immediate() {
+        assert!(!engage_after("after_bytes = 65536").is_immediate());
+        assert!(!engage_after("after_duration = \"5s\"").is_immediate());
+    }
+
+    #[test]
+    fn byte_gate_ignores_elapsed_time() {
+        let gate = engage_after("after_bytes = 1024");
+        let long_ago = Instant::now() - Duration::from_secs(3600);
+        assert!(!gate.reached(1023, long_ago));
+        assert!(gate.reached(1024, long_ago));
+    }
+
+    #[test]
+    fn duration_gate_ignores_bytes() {
+        let gate = engage_after("after_duration = \"5s\"");
+        assert!(!gate.reached(u64::MAX, Instant::now()));
+        assert!(gate.reached(0, Instant::now() - Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn gates_are_independent_and_either_fires() {
+        // The case the byte gate alone cannot express: a low-rate stream that
+        // stays well under `after_bytes` but outlives `after_duration`.
+        let gate = engage_after("after_bytes = 65536\nafter_duration = \"5s\"");
+        let just_started = Instant::now();
+        assert!(!gate.reached(64, just_started));
+        assert!(gate.reached(65536, just_started));
+        assert!(gate.reached(64, Instant::now() - Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn splice_section_is_optional() {
+        #[derive(Deserialize)]
+        struct Holder {
+            #[serde(default)]
+            tcp_splice: Option<EngageAfter>,
+        }
+        let absent: Holder = Figment::from(Toml::string("")).extract().unwrap();
+        assert!(
+            absent.tcp_splice.is_none(),
+            "absent section disables splice"
+        );
+
+        let present: Holder = Figment::from(Toml::string("[tcp_splice]\nafter_duration = \"5s\""))
+            .extract()
+            .unwrap();
+        let gate = present.tcp_splice.expect("section present");
+        assert_eq!(gate.after_duration, Some(Duration::from_secs(5)));
+        assert!(gate.after_bytes.is_none());
     }
 }

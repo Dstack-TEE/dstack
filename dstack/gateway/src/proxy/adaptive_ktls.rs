@@ -11,13 +11,15 @@
 //! setup cost and never earn it back.
 //!
 //! This module keeps the connection in userspace rustls after the handshake and
-//! only hands it to the kernel once it has proven itself: after
-//! `offload_after_bytes` have been relayed, the stream is drained at a TLS
-//! record boundary and switched to kTLS + splice for the remainder.
+//! only hands it to the kernel once it has proven itself: once the configured
+//! [`EngageAfter`] gate fires, the stream is drained at a TLS record boundary
+//! and switched to kTLS + splice for the remainder.
 //!
 //! Handing over mid-stream is sound because the secrets rustls exports carry
 //! the current record sequence numbers, and `CorkStream` exists precisely to
 //! stop reads at a record boundary so nothing is left half-parsed.
+
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use ktls::CorkStream;
@@ -27,18 +29,18 @@ use tokio_rustls::server::TlsStream;
 use tracing::debug;
 
 use super::splice::splice_bidirectional;
+use crate::config::EngageAfter;
 
 /// Why the userspace relay phase stopped.
 enum Phase {
-    /// Enough bytes moved to justify the offload.
-    Threshold,
-    /// One side closed before the threshold was reached.
+    /// The connection proved itself worth the offload.
+    Gated,
+    /// One side closed before the gate fired.
     Eof,
 }
 
-/// Relay both directions in userspace until either side closes or `threshold`
-/// bytes have been transferred in total.
-async fn relay_until<S>(tls: &mut S, upstream: &mut TcpStream, threshold: u64) -> Result<Phase>
+/// Relay both directions in userspace until either side closes or `gate` fires.
+async fn relay_until<S>(tls: &mut S, upstream: &mut TcpStream, gate: &EngageAfter) -> Result<Phase>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -47,6 +49,7 @@ where
     let mut down = vec![0u8; 32 * 1024];
     let mut up = vec![0u8; 32 * 1024];
     let mut moved: u64 = 0;
+    let start = Instant::now();
 
     let phase = loop {
         tokio::select! {
@@ -63,32 +66,32 @@ where
                 moved += n as u64;
             }
         }
-        if moved >= threshold {
+        if gate.reached(moved, start) {
             // Flush before handing the socket to the kernel so no plaintext is
             // still sitting in a rustls write buffer.
             tw.flush().await.context("flush before offload failed")?;
-            break Phase::Threshold;
+            break Phase::Gated;
         }
     };
     Ok(phase)
 }
 
 /// Relay a freshly accepted TLS connection, upgrading it to kTLS + splice once
-/// it has moved `threshold` bytes.
+/// `gate` fires.
 pub(crate) async fn relay_with_adaptive_offload<IO>(
     mut tls: TlsStream<CorkStream<IO>>,
     mut upstream: TcpStream,
-    threshold: u64,
+    gate: &EngageAfter,
 ) -> Result<()>
 where
     IO: AsyncRead + AsyncWrite + Unpin + std::os::fd::AsRawFd + ktls::AsyncReadReady,
     IO: Into<TcpStream>,
 {
-    match relay_until(&mut tls, &mut upstream, threshold).await? {
+    match relay_until(&mut tls, &mut upstream, gate).await? {
         Phase::Eof => return Ok(()),
-        Phase::Threshold => {}
+        Phase::Gated => {}
     }
-    debug!("offloading connection to kTLS after {threshold} bytes");
+    debug!("offloading connection to kTLS after {gate:?}");
 
     // config_ktls_server corks the stream, drains rustls to a record boundary
     // and installs the current traffic secrets into the kernel.
