@@ -190,7 +190,7 @@ pub struct ProxyConfig {
     /// readiness retries) where a read/write pair needs two: its benefit is per
     /// byte, its cost is per connection, which is what the gates amortise.
     #[serde(default)]
-    pub tcp_splice: Option<EngageAfter>,
+    pub tcp_splice: Option<SpliceConfig>,
     /// Offload TLS record encryption to the kernel (kTLS) on the
     /// TLS-terminate path. The handshake still runs in rustls; only the
     /// symmetric crypto moves into the kernel afterwards. Linux-only.
@@ -211,6 +211,34 @@ pub struct ProxyConfig {
     pub ktls: Option<EngageAfter>,
     /// Background lazy-fetch behaviour for `port_policy` (legacy CVMs).
     pub port_policy_fetch: PortPolicyFetchConfig,
+}
+
+/// Configuration for `splice(2)` relaying on the TLS-passthrough path.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SpliceConfig {
+    /// When splice should take over from the buffered relay.
+    #[serde(flatten)]
+    pub engage: EngageAfter,
+    /// Return a splice pipe to the thread-local pool while waiting for the
+    /// next chunk, instead of holding it for the connection's lifetime.
+    ///
+    /// A relay holds one pipe per direction, so a spliced connection pins four
+    /// descriptors. Held for the connection's lifetime that is proportional to
+    /// *connections*: 50k streaming connections need 300k descriptors. Released
+    /// while idle it is proportional to *chunks actually in flight*, which for
+    /// bursty traffic is far smaller -- LLM token streaming moves a ~64 B record
+    /// every 25 ms and spends over 99% of the connection idle.
+    ///
+    /// The pipe is provably empty at the point it is released: the relay only
+    /// waits for readability after the previous chunk has been fully drained
+    /// into the destination, so nothing is left to corrupt the next borrower.
+    ///
+    /// The cost is a pool pop and push per idle-to-active transition, both
+    /// `Vec` operations on a thread-local. Pipes are only created when the pool
+    /// is empty, so the live pipe count converges on the peak number of
+    /// concurrent in-flight chunks rather than churning `pipe2`/`close`.
+    #[serde(default)]
+    pub release_idle_pipes: bool,
 }
 
 /// When an adaptive optimisation should engage on a connection.

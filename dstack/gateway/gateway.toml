@@ -105,6 +105,10 @@ inbound_pp_enabled = false
 # # Long-lived low-rate streams (e.g. LLM token streaming) never accumulate
 # # bytes fast enough for the gate above, so they need this one instead.
 # after_duration = "5s"
+# # Park a relay's pipe in the pool while it waits for the next chunk. A spliced
+# # connection otherwise pins 4 descriptors for its whole lifetime, so bursty
+# # traffic (a token every 25 ms) holds them >99% idle.
+# release_idle_pipes = true
 #
 # kTLS hands session keys to the kernel; see config.rs for the security note.
 # Gated offload also requires [core.proxy.tcp_splice].

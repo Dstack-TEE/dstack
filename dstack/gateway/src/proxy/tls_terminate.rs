@@ -370,8 +370,11 @@ impl Proxy {
             .with_context(|| format!("app <{app_id}> not found"))?;
         let addresses = filter_allowed_addresses(self, addresses, app_id, port)?;
         debug!("selected top n hosts: {addresses:?}");
-        if let Some(gate) = &self.config.proxy.ktls {
-            if !gate.is_immediate() && self.config.proxy.tcp_splice.is_some() {
+        if let Some(ktls) = &self.config.proxy.ktls {
+            let splice = self.config.proxy.tcp_splice.as_ref();
+            // A gated offload only pays off if the socket is spliced afterwards,
+            // so it needs both sections configured.
+            if let Some(splice) = splice.filter(|_| !ktls.is_immediate()) {
                 // Adaptive: stay in userspace rustls until the connection proves
                 // itself worth the offload, then hand it to the kernel.
                 let tls_stream = self.tls_accept_corked(inbound, buffer, h2).await?;
@@ -380,12 +383,12 @@ impl Proxy {
                 self.send_pp_header(&mut outbound, &instance_id, port, pp_header)
                     .await?;
                 return super::adaptive_ktls::relay_with_adaptive_offload(
-                    tls_stream, outbound, gate,
+                    tls_stream, outbound, ktls, splice,
                 )
                 .await;
             }
             let tls_stream = self.tls_accept_ktls(inbound, buffer, h2).await?;
-            if self.config.proxy.tcp_splice.is_some() {
+            if let Some(splice) = splice {
                 // With kTLS the socket carries plaintext from userspace's point
                 // of view, so the payload can be relayed with splice and never
                 // enters this process at all.
@@ -405,9 +408,13 @@ impl Proxy {
                             .context("failed to flush drained data to app")?;
                     }
                 }
-                return super::splice::splice_bidirectional(tcp, outbound)
-                    .await
-                    .context("ktls splice error");
+                return super::splice::splice_bidirectional(
+                    tcp,
+                    outbound,
+                    splice.release_idle_pipes,
+                )
+                .await
+                .context("ktls splice error");
             }
             self.relay_to_app(tls_stream, addresses, port, app_id, pp_header)
                 .await

@@ -29,7 +29,7 @@ use tokio_rustls::server::TlsStream;
 use tracing::debug;
 
 use super::splice::splice_bidirectional;
-use crate::config::EngageAfter;
+use crate::config::{EngageAfter, SpliceConfig};
 
 /// Why the userspace relay phase stopped.
 enum Phase {
@@ -77,21 +77,22 @@ where
 }
 
 /// Relay a freshly accepted TLS connection, upgrading it to kTLS + splice once
-/// `gate` fires.
+/// the kTLS gate fires. `splice` supplies the relay settings used afterwards.
 pub(crate) async fn relay_with_adaptive_offload<IO>(
     mut tls: TlsStream<CorkStream<IO>>,
     mut upstream: TcpStream,
-    gate: &EngageAfter,
+    ktls: &EngageAfter,
+    splice: &SpliceConfig,
 ) -> Result<()>
 where
     IO: AsyncRead + AsyncWrite + Unpin + std::os::fd::AsRawFd + ktls::AsyncReadReady,
     IO: Into<TcpStream>,
 {
-    match relay_until(&mut tls, &mut upstream, gate).await? {
+    match relay_until(&mut tls, &mut upstream, ktls).await? {
         Phase::Eof => return Ok(()),
         Phase::Gated => {}
     }
-    debug!("offloading connection to kTLS after {gate:?}");
+    debug!("offloading connection to kTLS after {ktls:?}");
 
     // config_ktls_server corks the stream, drains rustls to a record boundary
     // and installs the current traffic secrets into the kernel.
@@ -107,7 +108,7 @@ where
                 .context("failed to flush drained data to app")?;
         }
     }
-    splice_bidirectional(io.into(), upstream)
+    splice_bidirectional(io.into(), upstream, splice.release_idle_pipes)
         .await
         .context("splice after kTLS offload failed")
 }

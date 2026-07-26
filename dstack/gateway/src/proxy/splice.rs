@@ -23,7 +23,7 @@ use nix::unistd::pipe;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, Interest};
 use tokio::net::TcpStream;
 
-use crate::config::EngageAfter;
+use crate::config::{EngageAfter, SpliceConfig};
 
 /// Bytes moved per `splice` syscall. Also the target pipe capacity so a full
 /// read can be buffered kernel-side before draining to the destination.
@@ -58,11 +58,24 @@ fn errno_to_io(e: nix::errno::Errno) -> std::io::Error {
 /// `set_ulimit` raises RLIMIT_NOFILE to the hard limit, but it is why the number
 /// is not larger. A 40-minute soak confirmed the pool fills to the cap and then
 /// stops (fds 487 -> 543 -> flat, RSS flat at ~44 MB).
+///
+/// With `SpliceConfig::release_idle_pipes` this cap stops being just a cache
+/// size and becomes the actual descriptor bound: idle connections park their
+/// pipes here instead of holding them, so steady-state use is
+/// `2 * PIPE_POOL_MAX * workers` plus the pipes carrying data, rather than
+/// `4 * connections`. Note that parking does not close anything -- the saving
+/// comes from connections sharing a bounded set of pipes, not from idle
+/// connections costing zero.
 const PIPE_POOL_MAX: usize = 64;
 
 thread_local! {
     static PIPE_POOL: std::cell::RefCell<Vec<(OwnedFd, OwnedFd)>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    /// Pipes currently checked out of the pool. Test-only bookkeeping: together
+    /// with `PIPE_POOL.len()` it gives this thread's live pipe count exactly,
+    /// where counting `/proc/self/fd` would race with tests on other threads.
+    #[cfg(test)]
+    static PIPES_BORROWED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A splice pipe borrowed from the thread-local pool.
@@ -77,6 +90,8 @@ struct PooledPipe {
 
 impl PooledPipe {
     fn get() -> Result<Self> {
+        #[cfg(test)]
+        PIPES_BORROWED.with(|n| n.set(n.get() + 1));
         if let Some((rd, wr)) = PIPE_POOL.with(|p| p.borrow_mut().pop()) {
             return Ok(Self {
                 rd: Some(rd),
@@ -107,6 +122,8 @@ impl Drop for PooledPipe {
         let (Some(rd), Some(wr)) = (self.rd.take(), self.wr.take()) else {
             return;
         };
+        #[cfg(test)]
+        PIPES_BORROWED.with(|n| n.set(n.get() - 1));
         if !self.drained {
             // Unknown residue: close instead of poisoning the pool.
             return;
@@ -122,7 +139,16 @@ impl Drop for PooledPipe {
 
 /// Copy one direction (`src` -> `dst`) with splice until EOF, then half-close
 /// the destination's write side.
-async fn splice_one(src: Arc<TcpStream>, dst: Arc<TcpStream>) -> Result<()> {
+///
+/// With `release_idle_pipes` the pipe is handed back to the pool whenever the
+/// source runs dry, so a connection only pins descriptors while it actually has
+/// bytes in flight. See `SpliceConfig::release_idle_pipes` for why that is safe
+/// and what it costs.
+async fn splice_one(
+    src: Arc<TcpStream>,
+    dst: Arc<TcpStream>,
+    release_idle_pipes: bool,
+) -> Result<()> {
     let mut pipe = PooledPipe::get()?;
 
     loop {
@@ -146,7 +172,17 @@ async fn splice_one(src: Arc<TcpStream>, dst: Arc<TcpStream>) -> Result<()> {
             }) {
                 Ok(n) => break n,
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    src.readable().await.context("readable error")?;
+                    // The pipe is empty on every path that reaches here: it was
+                    // either just taken from the pool, or the drain below ran to
+                    // completion, and a `WouldBlock` from the fill above added
+                    // nothing. So it can be parked while the source is idle.
+                    if release_idle_pipes {
+                        drop(pipe);
+                        src.readable().await.context("readable error")?;
+                        pipe = PooledPipe::get()?;
+                    } else {
+                        src.readable().await.context("readable error")?;
+                    }
                 }
                 Err(e) => return Err(e).context("splice src->pipe failed"),
             }
@@ -193,11 +229,15 @@ async fn splice_one(src: Arc<TcpStream>, dst: Arc<TcpStream>) -> Result<()> {
 }
 
 /// Bidirectional zero-copy relay between two TCP streams.
-pub(crate) async fn splice_bidirectional(a: TcpStream, b: TcpStream) -> Result<()> {
+pub(crate) async fn splice_bidirectional(
+    a: TcpStream,
+    b: TcpStream,
+    release_idle_pipes: bool,
+) -> Result<()> {
     let a = Arc::new(a);
     let b = Arc::new(b);
-    let a2b = splice_one(a.clone(), b.clone());
-    let b2a = splice_one(b, a);
+    let a2b = splice_one(a.clone(), b.clone(), release_idle_pipes);
+    let b2a = splice_one(b, a, release_idle_pipes);
     tokio::try_join!(a2b, b2a)?;
     Ok(())
 }
@@ -320,12 +360,187 @@ async fn relay_until(
 pub(crate) async fn splice_bidirectional_after(
     mut a: TcpStream,
     mut b: TcpStream,
-    gate: &EngageAfter,
+    config: &SpliceConfig,
     buf_size: usize,
 ) -> Result<()> {
-    if relay_until(&mut a, &mut b, gate, buf_size).await? {
-        splice_bidirectional(a, b).await
+    if relay_until(&mut a, &mut b, &config.engage, buf_size).await? {
+        splice_bidirectional(a, b, config.release_idle_pipes).await
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::net::TcpListener;
+
+    fn pool_len() -> usize {
+        PIPE_POOL.with(|pool| pool.borrow().len())
+    }
+
+    /// Descriptors this thread currently holds on a pipe: two per live pipe,
+    /// whether the pipe is parked in the pool or checked out by a relay.
+    ///
+    /// This is the number capacity planning cares about, so the tests assert on
+    /// it directly rather than trusting the pool alone as a proxy.
+    fn pipe_fds() -> usize {
+        2 * (pool_len() + PIPES_BORROWED.with(|n| n.get()))
+    }
+
+    async fn connected_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = TcpStream::connect(addr).await.unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        (client, server)
+    }
+
+    /// Wire up `client <-> relay <-> backend` and start the relay.
+    ///
+    /// The relay runs on the same thread as the test (a `#[tokio::test]`
+    /// runtime is single-threaded), so it shares the thread-local pipe pool and
+    /// the test can observe what the relay parks there.
+    async fn start_relay(release_idle_pipes: bool) -> (TcpStream, TcpStream) {
+        let (client, inbound) = connected_pair().await;
+        let (outbound, backend) = connected_pair().await;
+        tokio::spawn(splice_bidirectional(inbound, outbound, release_idle_pipes));
+        (client, backend)
+    }
+
+    fn clear_pool() {
+        PIPE_POOL.with(|pool| pool.borrow_mut().clear());
+    }
+
+    /// Let the relay reach its next idle wait.
+    async fn settle() {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    async fn expect(stream: &mut TcpStream, want: &[u8]) {
+        let mut got = vec![0u8; want.len()];
+        stream.read_exact(&mut got).await.unwrap();
+        assert_eq!(got, want);
+    }
+
+    #[tokio::test]
+    async fn an_idle_relay_owns_no_pipe_when_release_is_on() {
+        clear_pool();
+        let (mut client, mut backend) = start_relay(true).await;
+        client.write_all(b"ping").await.unwrap();
+        expect(&mut backend, b"ping").await;
+        settle().await;
+
+        // Only one pipe is ever created: each direction hands its pipe back
+        // before the other one asks for it, so an idle bidirectional relay
+        // converges on a single pipe shared through the pool -- and owns none
+        // of its own.
+        assert_eq!(pool_len(), 1, "the relay parked everything it borrowed");
+    }
+
+    #[tokio::test]
+    async fn an_idle_relay_pins_two_pipes_when_release_is_off() {
+        clear_pool();
+        let (mut client, mut backend) = start_relay(false).await;
+        client.write_all(b"ping").await.unwrap();
+        expect(&mut backend, b"ping").await;
+        settle().await;
+
+        assert_eq!(pool_len(), 0, "both pipes stay pinned to the connection");
+    }
+
+    /// The headline claim: with release on, descriptor use tracks pipes that
+    /// are actually carrying data, not open connections.
+    ///
+    /// Note what this does *not* say. Released pipes stay open in the pool, so
+    /// the saving is not "idle connections cost nothing" but "idle connections
+    /// share": the steady-state bound moves from `4 * connections` to
+    /// `2 * PIPE_POOL_MAX * workers` plus whatever is in flight.
+    #[tokio::test]
+    async fn idle_connections_share_pipes_instead_of_each_pinning_four() {
+        clear_pool();
+        assert_eq!(pipe_fds(), 0, "test starts with no pipes on this thread");
+        let mut ends = Vec::new();
+        for _ in 0..8 {
+            let (mut client, mut backend) = start_relay(true).await;
+            client.write_all(b"ping").await.unwrap();
+            expect(&mut backend, b"ping").await;
+            // Without this the previous relay has not yet been polled back to
+            // its idle wait, so it still owns its pipe when the next one asks
+            // for one -- which is the in-flight case, not the idle case.
+            settle().await;
+            ends.push((client, backend));
+        }
+
+        // Held for the connection's lifetime this would be 8 * 4 = 32.
+        assert_eq!(pipe_fds(), 2, "8 idle connections share one pooled pipe");
+        drop(ends);
+    }
+
+    #[tokio::test]
+    async fn idle_connections_each_cost_four_descriptors_when_release_is_off() {
+        clear_pool();
+        assert_eq!(pipe_fds(), 0, "test starts with no pipes on this thread");
+        let mut ends = Vec::new();
+        for _ in 0..8 {
+            let (mut client, mut backend) = start_relay(false).await;
+            client.write_all(b"ping").await.unwrap();
+            expect(&mut backend, b"ping").await;
+            ends.push((client, backend));
+        }
+        settle().await;
+
+        assert_eq!(pipe_fds(), 8 * 4, "two pipes pinned per relay");
+        drop(ends);
+    }
+
+    #[tokio::test]
+    async fn data_survives_repeated_park_and_reacquire() {
+        clear_pool();
+        let (mut client, mut backend) = start_relay(true).await;
+
+        // Each gap forces the relay to park its pipe and take a fresh one from
+        // the pool, which is where a stale or half-drained pipe would corrupt
+        // the stream.
+        for i in 0..5u8 {
+            let up = [b'a' + i; 16];
+            client.write_all(&up).await.unwrap();
+            expect(&mut backend, &up).await;
+            settle().await;
+
+            let down = [b'A' + i; 16];
+            backend.write_all(&down).await.unwrap();
+            expect(&mut client, &down).await;
+            settle().await;
+        }
+
+        assert_eq!(pool_len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_payload_larger_than_one_splice_still_arrives_intact() {
+        let (mut client, mut backend) = start_relay(true).await;
+        let payload: Vec<u8> = (0..512 * 1024).map(|i| (i % 251) as u8).collect();
+        let sender = tokio::spawn({
+            let payload = payload.clone();
+            async move {
+                client.write_all(&payload).await.unwrap();
+                client
+            }
+        });
+        let mut got = vec![0u8; payload.len()];
+        backend.read_exact(&mut got).await.unwrap();
+        assert_eq!(got, payload);
+        drop(sender.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn eof_propagates_with_release_enabled() {
+        let (client, mut backend) = start_relay(true).await;
+        drop(client);
+        let mut got = Vec::new();
+        backend.read_to_end(&mut got).await.unwrap();
+        assert!(got.is_empty());
     }
 }
