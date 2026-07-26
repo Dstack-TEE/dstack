@@ -203,6 +203,23 @@ pub struct ProxyConfig {
     /// throughput, so paying the setup cost up front is wrong for short
     /// request/response connections.
     ///
+    /// On token-streaming traffic the throughput win does not materialise, but
+    /// a memory win does. Measured on the terminate path, 10k connections with
+    /// 2k streaming a 64 B record every 25 ms, 2 runs per arm:
+    ///
+    /// | | userspace rustls | kTLS |
+    /// |---|---|---|
+    /// | latency p50 | 0.174 / 0.181 ms | 0.180 / 0.174 ms |
+    /// | latency p99 | 0.602 / 0.526 ms | 0.859 / 0.537 ms |
+    /// | **RSS** | **349 MB** | **206 MB** |
+    ///
+    /// Latency is unchanged, as expected: at 64 B per record the per-record
+    /// overhead dominates and there is almost no symmetric crypto to move into
+    /// the kernel. The 41% RSS drop is the real effect and was not predicted --
+    /// with kTLS the payload is spliced without ever entering this process, so
+    /// the per-connection userspace relay buffers disappear (~14 KB/connection
+    /// here). Weigh that against handing session keys to the kernel.
+    ///
     /// Security note: enabling this hands the negotiated session keys to the
     /// kernel via `dangerous_extract_secrets`, so the keys live outside
     /// rustls' control. Inside a CVM the kernel is part of the measured TCB,
@@ -238,22 +255,28 @@ pub struct SpliceConfig {
     /// is empty, so the live pipe count converges on the peak number of
     /// concurrent in-flight chunks rather than churning `pipe2`/`close`.
     ///
-    /// Measured on a 4-core gateway, 2000 spliced connections each streaming a
-    /// 64 B record every 25 ms, 3 runs per arm:
+    /// Measured on a 4-core gateway streaming a 64 B record every 25 ms per
+    /// connection, 2 runs per arm at each scale:
     ///
     /// | | off | on |
     /// |---|---|---|
-    /// | pipe descriptors | 8 000 (4/connection) | **8** |
-    /// | added latency p50 | 0.191 / 0.138 / 0.191 ms | 0.150 / 0.145 / 0.144 ms |
-    /// | added latency p99 | 0.727 / 0.314 / 0.769 ms | 0.370 / 0.382 / 0.383 ms |
-    /// | RSS | 69 MB | 69 MB |
+    /// | pipe fds, 2k connections | 8 000 | **8** |
+    /// | pipe fds, 50k conns / 10k streams | 53 864 / 55 212 | **8** |
+    /// | RSS, 50k connections | 1 203 MB | 1 202 / 1 204 MB |
+    /// | latency p50, 50k | 20.9 / 20.3 ms | 21.6 / 21.7 ms |
+    /// | latency p999, 50k | 111 / 113 ms | 68 / 79 ms |
     ///
-    /// The descriptor result is exact and reproduced every run: 8 descriptors is
-    /// four pipes, one per worker thread, for the whole gateway. Latency shows
-    /// no consistent difference -- the fastest single run of all seven was an
-    /// `off` run -- but `off` is bimodal across repeats while `on` holds within
-    /// 4% on p50 and 4% on p99. So this buys descriptors and steadier tails, not
-    /// throughput.
+    /// The descriptor result is the point, and it is flat in the connection
+    /// count: 8 descriptors is four pipes, one per worker thread, for the whole
+    /// gateway, at 2k connections and at 50k alike. That is the bound this knob
+    /// exists to impose.
+    ///
+    /// Latency is close to a wash and should not be used to justify the knob. At
+    /// 2k connections there was no consistent difference at all (the single
+    /// fastest run of seven was an `off` run). At 50k, where the box is
+    /// saturated, `on` costs ~1 ms on p50 and saves ~40 ms on p999; the p999
+    /// gain is consistent across repeats but comes from a regime that is already
+    /// over budget. RSS is unchanged either way.
     #[serde(default)]
     pub release_idle_pipes: bool,
 }
