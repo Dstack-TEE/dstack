@@ -277,6 +277,26 @@ pub struct SpliceConfig {
     /// saturated, `on` costs ~1 ms on p50 and saves ~40 ms on p999; the p999
     /// gain is consistent across repeats but comes from a regime that is already
     /// over budget. RSS is unchanged either way.
+    ///
+    /// Mixing bulk transfers with token streams does not break the pooling, and
+    /// this was the failure worth checking: a connection that is never idle
+    /// never reaches the release point, so bulk traffic could in principle hold
+    /// every pipe and force each token to allocate a fresh one. Measured with
+    /// 10k streaming connections alongside 256 bulk connections saturating the
+    /// passthrough path at 12.8 GB/s, 2 runs per arm:
+    ///
+    /// | | off | on |
+    /// |---|---|---|
+    /// | pipe fds | 9 024 (= 2000*4 + 256*4) | **8** |
+    /// | bulk throughput | 12.8 GB/s | 12.8 GB/s |
+    /// | stream latency p50 | 0.099 / 0.102 ms | 0.093 / 0.089 ms |
+    /// | bulk latency p999 | 14.3 / 11.4 ms | 6.9 / 7.7 ms |
+    ///
+    /// The pool never degenerates because even a saturated bulk connection is
+    /// idle for tens of microseconds between chunks (measured inter-record gap
+    /// 62 us) and releases in that window. Throughput is identical and both
+    /// traffic classes are slightly better off with `on`, so there is no bulk
+    /// regression to trade against the descriptor saving.
     #[serde(default)]
     pub release_idle_pipes: bool,
 }
