@@ -91,6 +91,29 @@ impl SevSnpFs {
             _ => None,
         }
     }
+
+    fn update_report(&mut self, offset: i64, data: &[u8]) -> Result<usize, i32> {
+        if offset != 0 || data.len() != 64 {
+            return Err(libc::EINVAL);
+        }
+        let report_data = data.try_into().map_err(|_| libc::EINVAL)?;
+        let measurement = self
+            .report
+            .get(0x90..0xc0)
+            .ok_or(libc::EIO)?
+            .try_into()
+            .map_err(|_| libc::EIO)?;
+        let evidence = self
+            .generator
+            .attest_with_measurement(report_data, self.host_data, measurement)
+            .map_err(|_| libc::EIO)?;
+        let certs = encode_cert_table(&evidence.cert_chain).map_err(|_| libc::EIO)?;
+        // Commit the two correlated outputs together only after both have
+        // been generated successfully.
+        self.report = evidence.report;
+        self.certs = certs;
+        Ok(data.len())
+    }
 }
 
 impl Filesystem for SevSnpFs {
@@ -232,34 +255,13 @@ impl Filesystem for SevSnpFs {
         _lock: Option<u64>,
         reply: ReplyWrite,
     ) {
-        if ino != INBLOB || offset != 0 || data.len() != 64 {
+        if ino != INBLOB {
             reply.error(libc::EINVAL);
             return;
         }
-        let Ok(report_data) = data.try_into() else {
-            reply.error(libc::EINVAL);
-            return;
-        };
-        let Ok(measurement) = self.report[0x90..0xc0].try_into() else {
-            reply.error(libc::EIO);
-            return;
-        };
-        match self
-            .generator
-            .attest_with_measurement(report_data, self.host_data, measurement)
-        {
-            Ok(evidence) => {
-                self.report = evidence.report;
-                self.certs = match encode_cert_table(&evidence.cert_chain) {
-                    Ok(certs) => certs,
-                    Err(_) => {
-                        reply.error(libc::EIO);
-                        return;
-                    }
-                };
-                reply.written(data.len() as u32);
-            }
-            Err(_) => reply.error(libc::EIO),
+        match self.update_report(offset, data) {
+            Ok(written) => reply.written(written as u32),
+            Err(errno) => reply.error(errno),
         }
     }
 }
@@ -333,5 +335,79 @@ impl TeeBackend for SevSnpBackend {
     }
     fn real_tee_available() -> bool {
         Path::new("/dev/sev-guest").exists()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture() -> (SevSnpFs, Vec<u8>) {
+        let generator = Arc::new(SevSnpGenerator::from_seed([0x61; 32]).unwrap());
+        let root = generator.root_ca_pem().into_bytes();
+        (
+            SevSnpFs::new(generator, [0x22; 32], [0x33; 48]).unwrap(),
+            root,
+        )
+    }
+
+    #[test]
+    fn report_update_is_verified_and_failure_atomic() {
+        let (mut fs, root) = fixture();
+        let original_report = fs.report.clone();
+        let original_certs = fs.certs.clone();
+        for (offset, input) in [
+            (1, vec![0x41; 64]),
+            (0, vec![0x41; 63]),
+            (0, vec![0x41; 65]),
+        ] {
+            assert_eq!(fs.update_report(offset, &input), Err(libc::EINVAL));
+            assert_eq!(fs.report, original_report);
+            assert_eq!(fs.certs, original_certs);
+        }
+
+        let report_data = [0x42; 64];
+        assert_eq!(fs.update_report(0, &report_data), Ok(64));
+        assert_ne!(fs.report, original_report);
+        sev_snp_qvl::QuoteVerifier::new_with_root(sev_snp_qvl::AmdSnpProduct::Milan, root)
+            .verify(&fs.report, &[fs.certs.clone()], &report_data)
+            .unwrap();
+
+        let second = [0x43; 64];
+        assert_eq!(fs.update_report(0, &second), Ok(64));
+        sev_snp_qvl::QuoteVerifier::new_with_root(
+            sev_snp_qvl::AmdSnpProduct::Milan,
+            fs.generator.root_ca_pem().into_bytes(),
+        )
+        .verify(&fs.report, &[fs.certs.clone()], &second)
+        .unwrap();
+    }
+
+    #[test]
+    fn filesystem_aliases_and_permissions_are_bounded() {
+        let (fs, _) = fixture();
+        for name in ["inblob", "reportdata", "report_data"] {
+            assert_eq!(SevSnpFs::child(ENTRY, OsStr::new(name)), Some(INBLOB));
+        }
+        for name in ["outblob", "report"] {
+            assert_eq!(SevSnpFs::child(ENTRY, OsStr::new(name)), Some(OUTBLOB));
+        }
+        for name in ["certs", "cert_chain", "auxblob"] {
+            assert_eq!(SevSnpFs::child(ENTRY, OsStr::new(name)), Some(CERTS));
+        }
+        assert_eq!(SevSnpFs::child(ENTRY, OsStr::new("unknown")), None);
+        assert_eq!(fs.attr(INBLOB).unwrap().perm, 0o200);
+        assert_eq!(fs.attr(OUTBLOB).unwrap().perm, 0o400);
+        assert_eq!(fs.attr(CERTS).unwrap().perm, 0o400);
+        assert_eq!(fs.attr(PROVIDER).unwrap().perm, 0o444);
+        assert!(fs.attr(u64::MAX).is_none());
+    }
+
+    #[test]
+    fn malformed_certificate_chains_fail_closed() {
+        assert!(encode_cert_table(&[]).is_err());
+        assert!(encode_cert_table(&[b"one".to_vec()]).is_err());
+        assert!(encode_cert_table(&[b"one".to_vec(), b"two".to_vec(), b"three".to_vec()]).is_err());
+        assert!(encode_cert_table(&[b"not pem".to_vec(), b"also not pem".to_vec()]).is_err());
     }
 }
