@@ -437,20 +437,27 @@ impl RpcHandler {
             if disk_size < manifest.disk_size {
                 bail!("Cannot shrink disk size");
             }
-            manifest.disk_size = disk_size;
-
-            info!("Resizing disk to {}GB", disk_size);
-            let hda_path = vm_work_dir.hda_path();
-            let new_size_str = format!("{}G", disk_size);
-            let output = std::process::Command::new("qemu-img")
-                .args(["resize", &hda_path.display().to_string(), &new_size_str])
-                .output()
-                .context("Failed to resize disk")?;
-            if !output.status.success() {
-                bail!(
-                    "Failed to resize disk: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
+            if disk_size > manifest.disk_size {
+                let hda_path = vm_work_dir.hda_path();
+                if hda_path.exists() {
+                    info!("Resizing disk to {}GB", disk_size);
+                    let new_size_str = format!("{}G", disk_size);
+                    let output = std::process::Command::new("qemu-img")
+                        .args(["resize", &hda_path.display().to_string(), &new_size_str])
+                        .output()
+                        .context("Failed to resize disk")?;
+                    if !output.status.success() {
+                        bail!(
+                            "Failed to resize disk: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
+                } else {
+                    // A never-started stopped VM has no data disk yet. Its
+                    // first launch creates hda.img from manifest.disk_size.
+                    info!("Recording {}GB disk size for uninitialized VM", disk_size);
+                }
+                manifest.disk_size = disk_size;
             }
         }
 
