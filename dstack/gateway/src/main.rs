@@ -347,15 +347,19 @@ async fn main() -> Result<()> {
             } else {
                 tracing::info!("admin server authentication enabled");
             }
-            rocket::custom(admin_figment)
+            let admin_rocket = rocket::custom(admin_figment)
                 .attach(auth_fairing)
                 .mount("/", admin_auth::routes())
                 .mount("/", web_routes::routes())
                 .mount("/", prpc!(Proxy, AdminRpcHandler, trim: "Admin."))
                 .mount("/prpc", prpc!(Proxy, AdminRpcHandler, trim: "Admin."))
-                .manage(admin_state)
-                .launch()
-                .await
+                .manage(admin_state.clone())
+                .ignite()
+                .await?;
+            admin_state
+                .lock()
+                .set_admin_shutdown(admin_rocket.shutdown());
+            admin_rocket.launch().await
         } else {
             std::future::pending().await
         }

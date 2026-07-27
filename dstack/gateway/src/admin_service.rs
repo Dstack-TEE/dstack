@@ -10,7 +10,7 @@ use dstack_gateway_rpc::{
     admin_server::{AdminRpc, AdminServer},
     CertAttestationInfo, CertbotConfigResponse, ClearInstancePortPolicyRequest,
     CreateDnsCredentialRequest, DeleteDnsCredentialRequest, DeleteZtDomainRequest,
-    DnsCredentialInfo, ForceReleaseCertLockRequest, GetDefaultDnsCredentialResponse,
+    DnsCredentialInfo, ExitRequest, ForceReleaseCertLockRequest, GetDefaultDnsCredentialResponse,
     GetDnsCredentialRequest, GetInfoRequest, GetInfoResponse, GetInstanceHandshakesRequest,
     GetInstanceHandshakesResponse, GetInstancePortPolicyRequest, GetInstancePortPolicyResponse,
     GetMetaResponse, GetNodeStatusesResponse, GetZtDomainRequest, GlobalConnectionsStats,
@@ -82,8 +82,8 @@ impl AdminRpcHandler {
 }
 
 impl AdminRpc for AdminRpcHandler {
-    async fn exit(self) -> Result<()> {
-        self.state.lock().exit();
+    async fn exit(self, request: ExitRequest) -> Result<()> {
+        self.state.lock().exit(request.force)
     }
 
     async fn renew_cert(self) -> Result<RenewCertResponse> {
