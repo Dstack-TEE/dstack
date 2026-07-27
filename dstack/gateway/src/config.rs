@@ -199,6 +199,10 @@ pub struct ProxyConfig {
     /// section means. Gated offload additionally requires `tcp_splice`, since
     /// the point of handing the socket to the kernel is to then splice it.
     ///
+    /// A kernel built without `CONFIG_TLS` cannot honour this, so startup
+    /// probes for the TLS ULP and clears this section with a warning if it is
+    /// missing, rather than letting every connection discover it at the gate.
+    ///
     /// kTLS costs ~30% of connection setup rate but wins ~25% on bulk
     /// throughput, so paying the setup cost up front is wrong for short
     /// request/response connections.

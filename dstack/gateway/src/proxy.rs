@@ -416,6 +416,77 @@ fn probe_reuse_port(config: &ProxyConfig) -> Result<()> {
     Ok(())
 }
 
+/// Turn kTLS off when the kernel cannot provide it.
+///
+/// Without the TLS ULP an immediate offload fails every handshake, which is at
+/// least loud. A gated offload is worse: the connection is served from
+/// userspace up to the threshold and only then fails, so the client gets a
+/// successful response truncated at exactly the gate. Both are worse than never
+/// offloading, and whether the ULP is there is not something the config can
+/// know -- so ask the kernel once, at startup, before the acceptor is built
+/// (that is also what decides whether rustls extracts session secrets at all).
+///
+/// This only establishes that the ULP exists. A cipher suite the kernel does
+/// not implement still fails per connection, at offload time.
+pub fn disable_ktls_if_unsupported(config: &mut ProxyConfig) {
+    if config.ktls.is_none() {
+        return;
+    }
+    if let Err(err) = probe_ktls() {
+        warn!(
+            "kTLS is configured but unavailable ({err:#}); \
+             falling back to userspace TLS record encryption"
+        );
+        config.ktls = None;
+    }
+}
+
+/// Check that the kernel exposes the TLS upper-layer protocol.
+///
+/// `TCP_ULP` is only accepted on an established socket, so this sets up a
+/// throwaway loopback connection instead of probing a fresh one, which would
+/// fail with `ENOTCONN` whether or not the ULP exists.
+#[cfg(target_os = "linux")]
+fn probe_ktls() -> Result<()> {
+    use std::net::{Ipv4Addr, TcpListener, TcpStream};
+    use std::os::fd::AsRawFd;
+
+    /// `include/uapi/linux/tcp.h`; not exposed by the `libc` crate.
+    const TCP_ULP: libc::c_int = 31;
+
+    let listener =
+        TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).context("failed to bind the probe listener")?;
+    let addr = listener
+        .local_addr()
+        .context("failed to read the probe listener address")?;
+    let client = TcpStream::connect(addr).context("failed to connect the probe socket")?;
+    let _server = listener
+        .accept()
+        .context("failed to accept the probe socket")?;
+
+    let name = c"tls";
+    // SAFETY: `name` outlives the call and `len` matches it, NUL included.
+    let rc = unsafe {
+        libc::setsockopt(
+            client.as_raw_fd(),
+            libc::IPPROTO_TCP,
+            TCP_ULP,
+            name.as_ptr().cast(),
+            name.to_bytes_with_nul().len() as libc::socklen_t,
+        )
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("kernel rejected the TLS ULP (is CONFIG_TLS enabled?)");
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn probe_ktls() -> Result<()> {
+    bail!("kernel TLS is only available on Linux")
+}
+
 /// Thread-per-core proxy: `workers` threads, each with its own single-threaded
 /// runtime and its own `SO_REUSEPORT` listener.
 ///
@@ -501,6 +572,32 @@ fn start_thread_per_core(config: ProxyConfig, app_state: Proxy) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn default_proxy_config() -> ProxyConfig {
+        crate::config::load_config_figment(None)
+            .focus("core.proxy")
+            .extract()
+            .expect("the shipped default config should parse")
+    }
+
+    #[test]
+    fn ktls_probe_leaves_an_unconfigured_gateway_alone() {
+        let mut config = default_proxy_config();
+        config.ktls = None;
+        disable_ktls_if_unsupported(&mut config);
+        assert!(config.ktls.is_none());
+    }
+
+    #[test]
+    fn ktls_survives_the_probe_only_when_the_kernel_supports_it() {
+        let mut config = default_proxy_config();
+        config.ktls = Some(crate::config::EngageAfter::default());
+        disable_ktls_if_unsupported(&mut config);
+        // Whichever way this kernel answers, the config must agree with it:
+        // keeping kTLS on a kernel without the ULP is what truncates responses
+        // at the gate.
+        assert_eq!(config.ktls.is_some(), probe_ktls().is_ok());
+    }
 
     #[test]
     fn test_parse_destination() {
