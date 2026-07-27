@@ -11,15 +11,15 @@
 repo = "https://github.com/pre-commit/pre-commit-hooks"
 rev = "v5.0.0"
 hooks = [
-    { id = "trailing-whitespace", args = ["--markdown-linebreak-ext=md"], exclude = '^(os/yocto/|tools/(dev-stack\.sh|vm-runner/)|dstack/(dstack-util/tests/fixtures/key-provider-docker-compose\.yaml|gateway/src/main_service/snapshots/.*))' },
-    { id = "end-of-file-fixer", exclude = "^(os/yocto/|tools/(dev-stack\\.sh|vm-runner/))" },
+    { id = "trailing-whitespace", args = ["--markdown-linebreak-ext=md"], exclude = '^(os/yocto/|os/mkosi/(patches/|components/[^/]+/patches/)|tools/(dev-stack\.sh|vm-runner/)|dstack/(dstack-util/tests/fixtures/key-provider-docker-compose\.yaml|gateway/src/main_service/snapshots/.*))' },
+    { id = "end-of-file-fixer", exclude = "^(os/yocto/|os/mkosi/(patches/|components/[^/]+/patches/)|tools/(dev-stack\\.sh|vm-runner/))" },
     { id = "check-yaml", args = ["--allow-multiple-documents"], exclude = "dstack/gateway/templates/" },
     { id = "check-toml" },
     { id = "check-json" },
     { id = "check-merge-conflict" },
     { id = "check-added-large-files", args = ["--maxkb=500"] },
     { id = "check-symlinks" },
-    { id = "mixed-line-ending", args = ["--fix=lf"], exclude = "^(os/yocto/|tools/(dev-stack\\.sh|vm-runner/))" },
+    { id = "mixed-line-ending", args = ["--fix=lf"], exclude = "^(os/yocto/|os/mkosi/(patches/|components/[^/]+/patches/)|tools/(dev-stack\\.sh|vm-runner/))" },
 ]
 
 # --- Rust: rustfmt ---

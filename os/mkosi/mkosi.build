@@ -1,0 +1,86 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+
+# Enter the mkosi build root so every compiler and build dependency comes from
+# the pinned Debian snapshot rather than from the host.
+if [[ ${container:-} != mkosi ]]; then
+    exec mkosi-chroot "$CHROOT_SCRIPT" "$@"
+fi
+
+ROOT="$SRCDIR/dstack"
+SELF="$ROOT/os/mkosi"
+# shellcheck source=/dev/null
+source "$SELF/versions.env"
+
+export HOME=/var/tmp/dstack-home
+export CARGO_HOME=/var/tmp/dstack-cargo-home
+export GOCACHE=/var/tmp/dstack-go-cache
+export GOMODCACHE=/var/tmp/dstack-go-mod-cache
+# Without this, a module whose go.mod names a newer release makes the go
+# command download that toolchain from proxy.golang.org mid-build. The
+# compiler that produced the binaries would then be neither covered by
+# GO_TOOLCHAIN_SHA256 nor recorded in any component cache key.
+export GOTOOLCHAIN=local
+export XDG_CACHE_HOME=/var/tmp/dstack-xdg-cache
+export TAR_OPTIONS="${TAR_OPTIONS:-} --no-same-owner"
+mkdir -p "$HOME" "$CARGO_HOME" "$GOCACHE" "$GOMODCACHE" "$XDG_CACHE_HOME"
+
+cache_enabled=${DSTACK_COMPONENT_CACHE:-0}
+if [[ $cache_enabled == 1 ]]; then
+    # BUILDDIR is the only mount mkosi gives a build script that is both
+    # writable and preserved across runs; source mounts are ephemeral overlays.
+    : "${BUILDDIR:?dev component cache requires mkosi BuildDirectory}"
+    export DSTACK_DEV_CACHE_DIR="$BUILDDIR/components"
+    toolchain_downloads="$BUILDDIR/toolchains"
+else
+    toolchain_downloads=/var/tmp/dstack-toolchain-downloads
+fi
+export PATH="/opt/dstack-toolchains/rust/bin:/opt/dstack-toolchains/go/bin:$PATH"
+"$SELF/scripts/install-toolchains.sh" "$toolchain_downloads"
+printf 'gcc: '; gcc --version | head -1
+printf 'g++: '; g++ --version | head -1
+printf 'ld: '; ld --version | head -1
+printf 'cmake: '; cmake --version | head -1
+dpkg-query -W -f='build-package: ${binary:Package}=${Version}\n' \
+  gcc g++ binutils cmake make ninja-build dwarves
+
+work=/var/tmp/dstack-component-work
+kernel_stage=/var/tmp/dstack-kernel-stage
+mkdir -p "$work" "$kernel_stage"
+args=()
+[[ $cache_enabled == 1 ]] && args+=(--dev-cache)
+"$SELF/scripts/build-components.sh" "${args[@]}" \
+  "$work" "$DESTDIR" "$kernel_stage" "${DSTACK_BUILD_FLAVOR:?}"
+
+# Normalize any legacy physical directories before mkosi copies DESTDIR over
+# Debian's usr-merged root. Use the same strict merger so this cannot overwrite
+# a component-owned path silently.
+for legacy in bin sbin lib lib64; do
+    if [[ -d $DESTDIR/$legacy && ! -L $DESTDIR/$legacy ]]; then
+        mkdir -p "$DESTDIR/usr/$legacy"
+        "$SELF/scripts/merge-component-trees.py" "$DESTDIR/usr/$legacy" \
+          "legacy-$legacy=$DESTDIR/$legacy"
+        rm -rf "${DESTDIR:?}/$legacy"
+    fi
+done
+
+# Merge kernel/firmware outputs into the build install tree. mkosi copies
+# DESTDIR into the final image after removing the build-package overlay.
+"$SELF/scripts/merge-component-trees.py" "$DESTDIR" \
+  "kernel=$kernel_stage"
+ln -sfn usr/lib "$DESTDIR/lib"
+# Run depmod ourselves and then normalize mtimes below. mkosi's own run_depmod
+# is nondeterministic, and it skips a kernel directory only when all four
+# outputs exist and every *.ko* mtime is <= modules.dep's. The normalization
+# is what keeps that condition true, so it is load-bearing for repro-check: if
+# a future mkosi tightens the comparison, its depmod fires again and two
+# otherwise identical builds stop matching.
+depmod -b "$DESTDIR" "$KERNEL_VERSION-dstack"
+rm -f "$DESTDIR/lib"
+if [[ $DSTACK_BUILD_FLAVOR == prod ]]; then
+    find "$DESTDIR/usr/lib/modules" -type f -name '*.ko' \
+      -exec objcopy --strip-debug {} \;
+fi
+find "$DESTDIR" -print0 | xargs -0r touch --no-dereference \
+  --date="@${SOURCE_DATE_EPOCH:?}"

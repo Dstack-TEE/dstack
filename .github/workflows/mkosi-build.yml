@@ -1,0 +1,366 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Build Guest Images (mkosi)
+
+# Publishing is bound to the tag, not to a workflow input: pushing
+# mkosi-os-v<version> is the only event that creates a GitHub Release. Every
+# other trigger builds and reports the hashes without publishing anything, so a
+# dry run can never be mistaken for a release.
+on:
+  workflow_dispatch:
+    inputs:
+      repro_check:
+        description: 'Build twice with different job counts and compare byte-for-byte (roughly doubles the run time)'
+        required: false
+        default: false
+        type: boolean
+  pull_request:
+    paths:
+      - 'os/**'
+      - '.github/workflows/mkosi-build.yml'
+  # No paths filter here on purpose. GitHub ANDs the path filter with the ref
+  # filter, so a release tag placed on a commit that happens not to touch os/**
+  # would be silently dropped. The static job costs seconds and the image build
+  # is gated by its own `if`, so an unfiltered push trigger is cheap.
+  push:
+    branches: [master]
+    tags: ['mkosi-os-v*']
+
+concurrency:
+  group: mkosi-build-${{ github.ref }}
+  # A release build must never be cancelled by a later push.
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  static:
+    name: Static contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      # Runs in seconds and covers the whole os/mkosi static contract, so it
+      # gates every change rather than waiting for a manual dispatch.
+      - name: Check the static contract
+        run: ./os/mkosi/build.sh lint
+
+  build:
+    name: Build guest images
+    # The full image build takes ~40 minutes, so keep it off the PR path.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.ref, 'refs/tags/mkosi-os-v')
+    needs: static
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.hashes.outputs.version }}
+      os_image_hash: ${{ steps.hashes.outputs.os_image_hash }}
+      bare_sha256: ${{ steps.hashes.outputs.bare_sha256 }}
+      uki_sha256: ${{ steps.hashes.outputs.uki_sha256 }}
+
+    steps:
+      # GitHub-hosted runners have enough CPU and memory for this build, but
+      # their preinstalled SDKs consume most of the available disk. Remove only
+      # those unused SDKs before checkout; the OS build itself remains hermetic.
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/.ghcup \
+            /usr/local/lib/android \
+            /usr/local/share/boost \
+            /usr/share/dotnet
+          df -h /
+
+      # Check out the dispatched ref, not a hardcoded revision. Pinning a
+      # revision here meant the job could never validate the branch it ran on,
+      # and the pinned commit becomes unreachable once the branch is squashed
+      # or rebased, which would break the job outright.
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python for mkosi
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install pinned mkosi
+        run: |
+          python3 -m venv "$RUNNER_TEMP/mkosi-venv"
+          "$RUNNER_TEMP/mkosi-venv/bin/pip" install --disable-pip-version-check \
+            'mkosi @ git+https://github.com/systemd/mkosi.git@84af20892b61c8e177e391f997ded8b4cb5514f2'
+          echo "$RUNNER_TEMP/mkosi-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Install mkosi host dependencies
+        run: |
+          mapfile -t dependencies < <(mkosi --directory os/mkosi dependencies)
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends "${dependencies[@]}"
+
+      - name: Build guest images
+        id: build
+        env:
+          # ubuntu-latest currently provides four vCPUs and 16 GiB of RAM.
+          # Do not oversubscribe either the CPU or compiler memory.
+          JOBS: '4'
+          REPRO_CHECK: ${{ inputs.repro_check }}
+        run: |
+          set -euo pipefail
+          # GitHub-hosted Ubuntu runners restrict unprivileged user namespaces.
+          # Run mkosi as root instead of weakening the runner's AppArmor policy.
+          # Keep setup-python out of the build PATH because Ubuntu's lddtree
+          # expects the distro Python and its python3-pyelftools module.
+          ci_bin="$RUNNER_TEMP/mkosi-ci-bin"
+          mkdir -p "$ci_bin"
+          ln -s "$(command -v mkosi)" "$ci_bin/mkosi"
+          build_dir="$RUNNER_TEMP/mkosi-build"
+          if [ "$REPRO_CHECK" = "true" ]; then
+            # repro-check builds prod twice with different job counts and
+            # compares the release tarballs byte for byte. It leaves leg a in
+            # $build_dir/a, which is the same release contract as `image`.
+            action=repro-check
+            dist_dir="$build_dir/a"
+          else
+            action=image
+            dist_dir="$build_dir/out/prod"
+          fi
+          sudo --set-home env \
+            "PATH=$ci_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+            "JOBS=$JOBS" \
+            ./os/mkosi/build.sh "$action" "$build_dir"
+          sudo chown -R "$USER:$USER" "$build_dir"
+          echo "dist_dir=$dist_dir" >> "$GITHUB_OUTPUT"
+          df -h /
+
+      - name: Build dstack-mr
+        # Only needed to decode the measurement CBOR for the report below. The
+        # image build produces its own copy under a scratch directory that
+        # mkosi.postoutput deletes, and this target directory stays outside the
+        # work tree so it cannot perturb a later source-tree build.
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/dstack-mr-target
+        run: |
+          set -euo pipefail
+          # Take the toolchain from versions.env rather than pinning it again
+          # here, so this stays the same rustc the image build itself used.
+          # shellcheck source=/dev/null
+          source os/mkosi/versions.env
+          rustup toolchain install "$RUST_TOOLCHAIN_VERSION" --profile minimal
+          cargo "+$RUST_TOOLCHAIN_VERSION" build --release --locked \
+            --manifest-path dstack/Cargo.toml -p dstack-mr
+
+      - name: Report image hashes
+        id: hashes
+        env:
+          DIST_DIR: ${{ steps.build.outputs.dist_dir }}
+          DSTACK_MR: ${{ runner.temp }}/dstack-mr-target/release/dstack-mr
+        run: |
+          set -euo pipefail
+          # shellcheck source=/dev/null
+          source os/mkosi/versions.env
+          version="$DSTACK_VERSION"
+          bare="$DIST_DIR/dstack-$version.tar.gz"
+          uki="$DIST_DIR/dstack-$version-uki.tar.gz"
+          test -f "$bare"
+          test -f "$uki"
+
+          # Read the identity out of the published tarball rather than the
+          # staging tree beside it, so the reported hashes describe exactly what
+          # ships.
+          work=$(mktemp -d)
+          tar -xzf "$bare" -C "$work"
+          img="$work/dstack-$version"
+          os_image_hash=$(cat "$img/digest.txt")
+
+          # digest.txt is the release's claim; recompute it. os_image_hash is
+          # sha256(sha256sum.txt), the identity registered on chain and enforced
+          # by dstack-kms, so a mismatch here is a corrupt release.
+          computed=$(sha256sum "$img/sha256sum.txt" | awk '{print $1}')
+          if [ "$os_image_hash" != "$computed" ]; then
+            echo "::error::digest.txt says $os_image_hash but sha256sum.txt hashes to $computed"
+            exit 1
+          fi
+          # Both packages describe one image and must carry one identity.
+          uki_digest=$(tar -xOf "$uki" "dstack-$version/digest.txt")
+          if [ "$uki_digest" != "$os_image_hash" ]; then
+            echo "::error::UKI package digest $uki_digest does not match bare-metal $os_image_hash"
+            exit 1
+          fi
+
+          bare_sha256=$(sha256sum "$bare" | awk '{print $1}')
+          uki_sha256=$(sha256sum "$uki" | awk '{print $1}')
+          git_revision=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["git_revision"])' "$img/metadata.json")
+          mrtd=$("$DSTACK_MR" inspect-measurement "$img/measurement.tdx.cbor" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["tdvf"]["mrtd"]["single_pass"])')
+          uki_auth=$("$DSTACK_MR" inspect-measurement "$img/measurement.gcp.cbor" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["uki_auth"])')
+          aws_pcr=$("$DSTACK_MR" inspect-measurement "$img/measurement.aws.cbor" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["boot_pcr_digest"])')
+
+          {
+            echo "version=$version"
+            echo "os_image_hash=$os_image_hash"
+            echo "bare_sha256=$bare_sha256"
+            echo "uki_sha256=$uki_sha256"
+          } >> "$GITHUB_OUTPUT"
+
+          # os_image_hash is the value operators need most, so surface it in the
+          # log, in the job summary, and as a downloadable record.
+          echo "::notice title=os_image_hash::$os_image_hash"
+          {
+            echo "### dstack guest OS \`$version\` (mkosi backend)"
+            echo
+            echo '| Field | Value |'
+            echo '| --- | --- |'
+            echo "| \`os_image_hash\` | \`$os_image_hash\` |"
+            echo "| Git revision | \`$git_revision\` |"
+            echo "| TDX \`MRTD\` | \`$mrtd\` |"
+            echo "| GCP \`uki_auth\` | \`$uki_auth\` |"
+            echo "| AWS \`boot_pcr_digest\` | \`$aws_pcr\` |"
+            echo "| \`dstack-$version.tar.gz\` | \`$bare_sha256\` |"
+            echo "| \`dstack-$version-uki.tar.gz\` | \`$uki_sha256\` |"
+            echo
+            echo '<details><summary>sha256sum.txt (os_image_hash preimage)</summary>'
+            echo
+            echo '```'
+            cat "$img/sha256sum.txt"
+            echo '```'
+            echo
+            echo '</details>'
+            echo
+            echo '<details><summary>metadata.json</summary>'
+            echo
+            echo '```json'
+            cat "$img/metadata.json"
+            echo '```'
+            echo
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "os_image_hash    $os_image_hash"
+            echo "git_revision     $git_revision"
+            echo "tdx_mrtd         $mrtd"
+            echo "gcp_uki_auth     $uki_auth"
+            echo "aws_boot_pcr     $aws_pcr"
+            echo "$bare_sha256  dstack-$version.tar.gz"
+            echo "$uki_sha256  dstack-$version-uki.tar.gz"
+          } | tee "$DIST_DIR/image-hashes.txt"
+
+      - name: Upload guest images
+        uses: actions/upload-artifact@v4
+        with:
+          name: mkosi-guest-images
+          path: |
+            ${{ steps.build.outputs.dist_dir }}/dstack-*.tar.gz
+            ${{ steps.build.outputs.dist_dir }}/image-hashes.txt
+          retention-days: 30
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    # The tag is the publish decision. Nothing else reaches this job.
+    if: startsWith(github.ref, 'refs/tags/mkosi-os-v')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download guest images
+        uses: actions/download-artifact@v4
+        with:
+          name: mkosi-guest-images
+          path: dist
+
+      - name: Validate the release tag against the built image
+        env:
+          TAG: ${{ github.ref_name }}
+          OS_IMAGE_HASH: ${{ needs.build.outputs.os_image_hash }}
+        run: |
+          set -euo pipefail
+          echo "$TAG" | grep -Eq '^mkosi-os-v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'
+          version="${TAG#mkosi-os-v}"
+          # shellcheck source=/dev/null
+          source os/mkosi/versions.env
+          if [ "$version" != "$DSTACK_VERSION" ]; then
+            echo "::error::tag $TAG does not match DSTACK_VERSION=$DSTACK_VERSION in os/mkosi/versions.env"
+            exit 1
+          fi
+          bare="dist/dstack-$version.tar.gz"
+          uki="dist/dstack-$version-uki.tar.gz"
+          test -f "$bare"
+          test -f "$uki"
+
+          read -r image_version image_revision < <(
+            tar -xOf "$bare" "dstack-$version/metadata.json" |
+              python3 -c 'import json, sys; d=json.load(sys.stdin); print(d["version"], d["git_revision"])'
+          )
+          test "$image_version" = "$version"
+          # A release must be reproducible from the tagged tree, so the revision
+          # baked into the measured metadata.json has to be the tagged commit.
+          # build.sh appends -modified when it builds a dirty work tree, which
+          # this equality also rejects.
+          if [ "$image_revision" != "$GITHUB_SHA" ]; then
+            echo "::error::image was built from $image_revision but the tag points at $GITHUB_SHA"
+            exit 1
+          fi
+          # The UKI package is the GCP/AWS delivery path; assert its payload.
+          tar -tzf "$uki" | grep -Fx "dstack-$version/disk.raw"
+          test "$(tar -xOf "$bare" "dstack-$version/digest.txt")" = "$OS_IMAGE_HASH"
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+          OS_IMAGE_HASH: ${{ needs.build.outputs.os_image_hash }}
+          BARE_SHA256: ${{ needs.build.outputs.bare_sha256 }}
+          UKI_SHA256: ${{ needs.build.outputs.uki_sha256 }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Guest OS image \`$VERSION\`, built by the experimental Debian/mkosi backend."
+            echo
+            echo "Register \`os_image_hash\` on chain to authorize this image; see"
+            echo "[docs/onchain-governance.md](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/docs/onchain-governance.md)."
+            echo
+            echo '| Field | Value |'
+            echo '| --- | --- |'
+            echo "| \`os_image_hash\` | \`$OS_IMAGE_HASH\` |"
+            echo "| Git revision | \`$GITHUB_SHA\` |"
+            echo "| \`dstack-$VERSION.tar.gz\` | \`$BARE_SHA256\` |"
+            echo "| \`dstack-$VERSION-uki.tar.gz\` | \`$UKI_SHA256\` |"
+            echo
+            echo "\`image-hashes.txt\` additionally records the TDX \`MRTD\`, the GCP"
+            echo "\`uki_auth\` hash and the AWS \`boot_pcr_digest\` for this image."
+          } > release-notes.md
+          # --verify-tag: the tag is the publish trigger, so it must already
+          # exist. This job never creates one.
+          #
+          # --prerelease tracks the backend's own status: os/mkosi is still
+          # experimental, and its packages are Debian rather than Yocto even
+          # though the release contract is shared. Drop the flag once the
+          # backend is declared stable.
+          gh release create "$TAG" \
+            "dist/dstack-$VERSION.tar.gz" \
+            "dist/dstack-$VERSION-uki.tar.gz" \
+            dist/image-hashes.txt \
+            --title "$TAG" \
+            --notes-file release-notes.md \
+            --verify-tag \
+            --prerelease

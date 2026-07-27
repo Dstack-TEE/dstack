@@ -306,11 +306,29 @@ build_uki_disk_image() {
         tmp_dir=$(mktemp -d)
         trap 'rm -rf "$tmp_dir"' EXIT
 
-        # Create EFI filesystem with UKI as bootloader
+        # Fix both the FAT volume metadata and directory entry timestamps.
+        # mmd stamps new directories with wall-clock time, so populate the
+        # filesystem recursively from a normalized host-side tree instead.
         local efi_img=${tmp_dir}/efi.img
-        mkfs.vfat -F 32 -n DSTACKEFI -C "$efi_img" $((efi_size_aligned / 1024)) >/dev/null
-        mmd -i "$efi_img" ::EFI ::EFI/BOOT
-        mcopy -i "$efi_img" "$uki_file" ::EFI/BOOT/BOOTX64.EFI
+        local efi_tree=${tmp_dir}/tree
+        mkdir -p "$efi_tree/EFI/BOOT"
+        cp "$uki_file" "$efi_tree/EFI/BOOT/BOOTX64.EFI"
+        # FAT stores local time and mtools converts using TZ, so the image
+        # would otherwise differ between builders in different time zones.
+        export TZ=UTC
+        # FAT timestamps start at 1980-01-01, so a Unix epoch of 0 does not
+        # round-trip: it wraps and every directory entry is dated 2107. No
+        # backend entrypoint exports SOURCE_DATE_EPOCH today, so clamp rather
+        # than fall back to 0.
+        local fat_epoch=${SOURCE_DATE_EPOCH:-0}
+        if [ "$fat_epoch" -lt 315532800 ]; then
+            fat_epoch=315532800
+        fi
+        find "$efi_tree" -print0 | xargs -0r touch --no-dereference \
+          --date="@${fat_epoch}"
+        mkfs.vfat --invariant -F 32 -n DSTACKEFI -C "$efi_img" \
+          $((efi_size_aligned / 1024)) >/dev/null
+        mcopy -smp -i "$efi_img" "$efi_tree/EFI" ::
 
         dd if="$efi_img" of="$disk_img" bs=$align seek=$((efi_start / align)) conv=notrunc status=none
         dd if="$rootfs_img" of="$disk_img" bs=$align seek=$((rootfs_start / align)) conv=notrunc status=none
@@ -361,15 +379,18 @@ create_partitioned_rootfs "$ROOTFS_IMAGE" "${OUTPUT_DIR}/rootfs.img.parted.verit
 
 echo "Generating metadata.json to ${OUTPUT_DIR}/metadata.json (ovmf_variant=$OVMF_VARIANT)"
 
-KARG0="console=ttyS0 init=/init panic=1 net.ifnames=0 biosdevname=0"
-KARG1="mce=off oops=panic pci=noearly pci=nommconf random.trust_cpu=y random.trust_bootloader=n tsc=reliable no-kvmclock"
-KARG2="dstack.rootfs_hash=$ROOT_HASH dstack.rootfs_size=$DATA_SIZE"
+# shellcheck source=kernel-cmdline.sh
+# The prek hook runs shellcheck without -x, so the path above documents the
+# target but cannot be followed; SC1091 is noise rather than a finding.
+# shellcheck disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/kernel-cmdline.sh"
+KERNEL_CMDLINE=$(dstack_kernel_cmdline "$ROOT_HASH" "$DATA_SIZE")
 
 cat <<EOF > "${OUTPUT_DIR}/metadata.json"
 {
     "bios": "ovmf.fd",${BIOS_SEV_JSON}
     "kernel": "bzImage",
-    "cmdline": "$KARG0 $KARG1 $KARG2",
+    "cmdline": "$KERNEL_CMDLINE",
     "initrd": "initramfs.cpio.gz",
     "rootfs": "rootfs.img.parted.verity",
     "version": "$DSTACK_VERSION",
@@ -399,13 +420,12 @@ if [ "$ENABLE_UKI_IMAGE" = "1" ]; then
         echo "Skipping UKI disk image creation because the backend did not export a UKI" >&2
     elif command -v sgdisk >/dev/null && \
          command -v mkfs.vfat >/dev/null && \
-         command -v mcopy >/dev/null && \
-         command -v mmd >/dev/null; then
+         command -v mcopy >/dev/null; then
         create_uki_artifacts "${OUTPUT_DIR}"
         UKI_CREATED=1
     else
         echo "Error: cannot create UKI disk image because required tools are missing" >&2
-        echo "Missing tools are among: sgdisk (gdisk), mkfs.vfat (dosfstools), mcopy/mmd (mtools)" >&2
+        echo "Missing tools are among: sgdisk (gdisk), mkfs.vfat (dosfstools), mcopy (mtools)" >&2
         echo "Install them (e.g. apt-get install -y gdisk dosfstools mtools) or set ENABLE_UKI_IMAGE=0" >&2
         exit 1
     fi

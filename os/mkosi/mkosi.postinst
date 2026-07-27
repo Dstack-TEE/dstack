@@ -1,0 +1,7 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+
+B=${BUILDROOT:?}
+rm -f "$B/etc/machine-id" "$B/var/lib/dbus/machine-id"
+: > "$B/etc/machine-id"

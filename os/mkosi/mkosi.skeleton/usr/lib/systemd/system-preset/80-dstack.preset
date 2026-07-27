@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+enable systemd-networkd.service
+enable systemd-resolved.service
+enable chrony.service
+enable docker.service
+enable var-volatile.mount
+enable dstack-volatile-binds.service
+enable dstack-firstboot.service
+enable dstack-prepare.service
+enable dstack-guest-agent.socket
+enable dstack-guest-agent.service
+enable app-compose.service
+enable wg-checker.service
+enable nvidia-persistenced.service
+enable nvidia-fabricmanager.service
+enable containerd-stargz-grpc.service
+enable sysbox.service
+enable sysbox-fs.service
+enable sysbox-mgr.service

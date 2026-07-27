@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Development-only units. The TEE simulator serves synthetic TDX quotes, so a
+# production image that ever gained the unit must not also carry a preset line
+# enabling it: dstack-rust-build.sh installing the unit and parity.json
+# forbidding the binary are both independent of the preset.
+enable dstack-tee-simulator.service

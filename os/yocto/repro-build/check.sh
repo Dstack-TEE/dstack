@@ -40,6 +40,10 @@ COMPARE_IMAGE_WHITELIST=(
     "auth_hash.txt"
     "aws-pcrs.json"
     "gcp/efi-root/EFI/BOOT/BOOTX64.EFI"
+    # The ESP is now built from a normalized tree with a fixed FAT volume id
+    # and a clamped, UTC-interpreted timestamp, so the whole disk image is
+    # reproducible and no longer has to be excluded.
+    "disk.raw"
 )
 
 is_whitelisted_image() {

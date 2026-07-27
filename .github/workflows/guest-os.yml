@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-name: Build Guest Images
+name: Build Guest Images (Yocto)
 
 on:
   workflow_dispatch:
