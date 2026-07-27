@@ -160,6 +160,31 @@ pub fn resolve_gpus(gpu_cfg: &rpc::GpuConfig) -> Result<GpuConfig> {
     }
 }
 
+fn port_mappings_conflict(left: &PortMapping, right: &PortMapping) -> bool {
+    left.protocol.as_str() == right.protocol.as_str()
+        && left.from == right.from
+        && (left.address == right.address
+            || left.address.is_unspecified()
+            || right.address.is_unspecified())
+}
+
+fn validate_unique_port_mappings(mappings: &[PortMapping]) -> Result<()> {
+    for (index, mapping) in mappings.iter().enumerate() {
+        if mappings[..index]
+            .iter()
+            .any(|other| port_mappings_conflict(mapping, other))
+        {
+            bail!(
+                "duplicate host port mapping: {} {}:{}",
+                mapping.protocol.as_str(),
+                mapping.address,
+                mapping.from
+            );
+        }
+    }
+    Ok(())
+}
+
 // Shared function to create manifest from VM configuration
 pub fn create_manifest_from_vm_config(
     request: VmConfiguration,
@@ -194,6 +219,7 @@ pub fn create_manifest_from_vm_config(
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    validate_unique_port_mappings(&port_map)?;
 
     let app_id = match &request.app_id {
         Some(id) => id.strip_prefix("0x").unwrap_or(id).to_lowercase(),
@@ -421,6 +447,38 @@ fn validate_resize_request(request: &ResizeVmRequest) -> Result<()> {
 }
 
 impl RpcHandler {
+    fn validate_port_mapping_conflicts(
+        &self,
+        vm_id: Option<&str>,
+        mappings: &[PortMapping],
+    ) -> Result<()> {
+        validate_unique_port_mappings(mappings)?;
+        let state = self.app.lock();
+        for vm in state.iter_vms() {
+            if vm_id == Some(vm.config.manifest.id.as_str()) {
+                continue;
+            }
+            for mapping in mappings {
+                if vm
+                    .config
+                    .manifest
+                    .port_map
+                    .iter()
+                    .any(|existing| port_mappings_conflict(mapping, existing))
+                {
+                    bail!(
+                        "host port mapping conflicts with VM {}: {} {}:{}",
+                        vm.config.manifest.id,
+                        mapping.protocol.as_str(),
+                        mapping.address,
+                        mapping.from
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn resolve_gpus(&self, gpu_cfg: &rpc::GpuConfig) -> Result<GpuConfig> {
         resolve_gpus_with_config(gpu_cfg, &self.app.config.cvm)
     }
@@ -491,6 +549,7 @@ impl RpcHandler {
 impl VmmRpc for RpcHandler {
     async fn create_vm(self, request: VmConfiguration) -> Result<Id> {
         let manifest = create_manifest_from_vm_config(request.clone(), &self.app.config.cvm)?;
+        self.validate_port_mapping_conflicts(None, &manifest.port_map)?;
         let id = manifest.id.clone();
         let app_id = manifest.app_id.clone();
         let vm_work_dir = self.app.work_dir(&id);
@@ -620,7 +679,7 @@ impl VmmRpc for RpcHandler {
             manifest.no_tee = no_tee;
         }
         if request.update_ports {
-            manifest.port_map = request
+            let port_map = request
                 .ports
                 .iter()
                 .map(|p| {
@@ -632,6 +691,8 @@ impl VmmRpc for RpcHandler {
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
+            self.validate_port_mapping_conflicts(Some(&request.id), &port_map)?;
+            manifest.port_map = port_map;
         }
         if request.update_kms_urls {
             manifest.kms_urls = request.kms_urls.clone();
@@ -1035,6 +1096,33 @@ mod tests {
             create_manifest_from_vm_config(test_vm_configuration(), &test_cvm_config()).unwrap();
 
         assert!(manifest.networks.is_empty());
+    }
+
+    #[test]
+    fn port_mapping_conflicts_respect_protocol_and_wildcard_addresses() {
+        let mapping = |protocol: Protocol, address: &str, from| PortMapping {
+            protocol,
+            address: address.parse().unwrap(),
+            from,
+            to: 8080,
+        };
+        let tcp_local = mapping(Protocol::Tcp, "127.0.0.1", 18080);
+        assert!(port_mappings_conflict(
+            &tcp_local,
+            &mapping(Protocol::Tcp, "127.0.0.1", 18080)
+        ));
+        assert!(port_mappings_conflict(
+            &tcp_local,
+            &mapping(Protocol::Tcp, "0.0.0.0", 18080)
+        ));
+        assert!(!port_mappings_conflict(
+            &tcp_local,
+            &mapping(Protocol::Udp, "127.0.0.1", 18080)
+        ));
+        assert!(!port_mappings_conflict(
+            &tcp_local,
+            &mapping(Protocol::Tcp, "127.0.0.1", 18081)
+        ));
     }
 
     #[test]
