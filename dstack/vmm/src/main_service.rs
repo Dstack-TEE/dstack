@@ -1014,23 +1014,40 @@ mod tests {
     }
 
     #[test]
-    fn simulated_tee_is_selected_per_instance_and_implies_no_tee() {
-        let mut request = test_vm_configuration();
-        request.simulated_tee = Some("dstack-amd-sev-snp".into());
+    fn simulated_tee_is_selected_and_isolated_per_instance() {
+        use dstack_types::TeeVariant;
+
+        let cases = [
+            ("dstack-tdx", TeeVariant::DstackTdx),
+            ("dstack-gcp-tdx", TeeVariant::DstackGcpTdx),
+            ("dstack-nitro-enclave", TeeVariant::DstackNitroEnclave),
+            ("dstack-amd-sev-snp", TeeVariant::DstackAmdSevSnp),
+            ("dstack-aws-nitro-tpm", TeeVariant::DstackAwsNitroTpm),
+        ];
         let mut config = test_cvm_config();
         config.tee_simulator = Some(dstack_types::TeeSimulatorConfig {
             mock_attestation_seed: Some("11".repeat(32)),
             ..Default::default()
         });
 
-        let manifest = create_manifest_from_vm_config(request, &config).unwrap();
+        for (name, expected) in cases {
+            let mut request = test_vm_configuration();
+            request.simulated_tee = Some(name.into());
+            let manifest = create_manifest_from_vm_config(request, &config).unwrap();
+            assert_eq!(manifest.simulated_tee, Some(expected));
+            assert!(manifest.no_tee);
+        }
 
-        assert_eq!(
-            manifest.simulated_tee,
-            Some(dstack_types::TeeVariant::DstackAmdSevSnp)
-        );
-        assert!(manifest.no_tee);
-        assert!(!manifest.swtpm);
+        let control = create_manifest_from_vm_config(test_vm_configuration(), &config).unwrap();
+        assert_eq!(control.simulated_tee, None);
+        assert!(!control.no_tee);
+
+        for invalid in ["", "not-a-platform"] {
+            let mut request = test_vm_configuration();
+            request.simulated_tee = Some(invalid.into());
+            let error = create_manifest_from_vm_config(request, &config).unwrap_err();
+            assert!(error.to_string().contains("unsupported TEE variant"));
+        }
     }
 
     #[test]
