@@ -42,6 +42,14 @@ pub struct RpcResponse {
     body: Vec<u8>,
 }
 
+fn normalize_json_response_body(is_json: bool, body: Vec<u8>) -> Vec<u8> {
+    if is_json && body.as_slice() == b"null" {
+        Vec::new()
+    } else {
+        body
+    }
+}
+
 impl<'r> Responder<'r, 'static> for RpcResponse {
     fn respond_to(self, request: &'r Request<'_>) -> rocket::response::Result<'static> {
         use rocket::http::ContentType;
@@ -50,10 +58,35 @@ impl<'r> Responder<'r, 'static> for RpcResponse {
         } else {
             ContentType::Binary
         };
-        let response = Custom(self.status, self.body).respond_to(request)?;
+        // prpc maps google.protobuf.Empty / Rust unit to JSON `null`. Case
+        // contracts and many clients expect an empty success body instead.
+        let body = normalize_json_response_body(self.is_json, self.body);
+        let response = Custom(self.status, body).respond_to(request)?;
         rocket::Response::build_from(response)
             .header(content_type)
             .ok()
+    }
+}
+
+#[cfg(test)]
+mod response_tests {
+    use super::normalize_json_response_body;
+
+    #[test]
+    fn json_unit_response_has_an_empty_body() {
+        assert!(normalize_json_response_body(true, b"null".to_vec()).is_empty());
+    }
+
+    #[test]
+    fn non_unit_and_binary_responses_are_unchanged() {
+        assert_eq!(
+            normalize_json_response_body(true, br#"{"value":null}"#.to_vec()),
+            br#"{"value":null}"#
+        );
+        assert_eq!(
+            normalize_json_response_body(false, b"null".to_vec()),
+            b"null"
+        );
     }
 }
 
