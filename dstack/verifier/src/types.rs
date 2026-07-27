@@ -78,6 +78,8 @@ impl PolicyBootInfo {
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct VerificationDetails {
+    /// True when verification used explicitly opted-in development trust roots.
+    pub simulated: bool,
     pub quote_verified: bool,
     /// Indicates that the event log was verified against the quote.
     ///

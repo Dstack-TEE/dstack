@@ -62,3 +62,5 @@ quote = [
 futures = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 dstack-mr = { workspace = true }
+mock-attestation = { path = "../crates/mock-attestation" }
+tempfile = { workspace = true }
