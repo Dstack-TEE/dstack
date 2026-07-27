@@ -314,6 +314,7 @@ mod tests {
     #[test]
     fn trusted_uds_accepts_owner_only_socket() {
         let directory = tempfile::tempdir().unwrap();
+        fs_err::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let path = directory.path().join("supervisor.sock");
         let _listener = UnixListener::bind(&path).unwrap();
         fs_err::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
