@@ -2,7 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::{Arc, Mutex};
+use std::{
+    io::Write,
+    os::unix::fs::OpenOptionsExt,
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::{bail, Context, Result};
 use dstack_kms_rpc::{
@@ -73,6 +78,26 @@ impl RpcCall<OnboardState> for OnboardHandler {
             state: context.state.clone(),
         })
     }
+}
+
+fn safe_write_private(path: &Path, content: impl AsRef<[u8]>) -> Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let temporary = path.with_extension("private-tmp");
+    if temporary.exists() {
+        fs::remove_file(&temporary)?;
+    }
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)?;
+    file.write_all(content.as_ref())?;
+    file.flush()?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(temporary, path)?;
+    Ok(())
 }
 
 fn validate_onboarding_domain(domain: &str) -> Result<()> {
@@ -372,6 +397,16 @@ mod tests {
     }
 
     #[test]
+    fn private_write_is_atomic_and_owner_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("private.key");
+        safe_write_private(&path, b"private material").unwrap();
+        let metadata = path.metadata().unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert_eq!(fs::read(path).unwrap(), b"private material");
+    }
+
+    #[test]
     fn onboarding_domain_accepts_dns_name() {
         validate_onboarding_domain("kms.example.com").unwrap();
     }
@@ -572,10 +607,10 @@ impl Keys {
     }
 
     fn store_keys(&self, cfg: &KmsConfig) -> Result<()> {
-        safe_write(cfg.tmp_ca_key(), self.tmp_ca_key.serialize_pem())?;
-        safe_write(cfg.root_ca_key(), self.ca_key.serialize_pem())?;
-        safe_write(cfg.rpc_key(), self.rpc_key.serialize_pem())?;
-        safe_write(cfg.k256_key(), self.k256_key.to_bytes())?;
+        safe_write_private(&cfg.tmp_ca_key(), self.tmp_ca_key.serialize_pem())?;
+        safe_write_private(&cfg.root_ca_key(), self.ca_key.serialize_pem())?;
+        safe_write_private(&cfg.rpc_key(), self.rpc_key.serialize_pem())?;
+        safe_write_private(&cfg.k256_key(), self.k256_key.to_bytes())?;
         Ok(())
     }
 
