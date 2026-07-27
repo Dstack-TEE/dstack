@@ -3,7 +3,8 @@
   "required_rootfs_paths": {
     "dstack-guest": [
       "usr/bin/dstack-guest-agent",
-      "usr/bin/dstack-util"
+      "usr/bin/dstack-util",
+      "usr/bin/dstack-volume"
     ],
     "container": [
       "usr/bin/docker",
