@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use dstack_types::EventLogVersion;
 use scale::{Decode, Encode};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha384 as Sha384Digest};
 
 use crate::{
     runtime_events::{RuntimeEvent, DSTACK_RUNTIME_EVENT_TYPE},
@@ -166,6 +167,37 @@ pub fn fill_v2_preimages(events: &mut [TdxEvent]) {
     }
 }
 
+/// Validate the externally supplied digest preimage of every V2 runtime event.
+///
+/// The preimage must be present, valid hex, hash to the advertised digest, and
+/// equal the canonical representation reconstructed from the public event
+/// fields. This binds RTMR replay and displayed fields to the same bytes.
+pub fn validate_v2_preimages(events: &[TdxEvent]) -> Result<()> {
+    for (index, event) in events.iter().enumerate() {
+        if !event.is_runtime_event() || !matches!(event.version, EventLogVersion::V2) {
+            continue;
+        }
+        let supplied_hex = event
+            .preimage
+            .as_deref()
+            .with_context(|| format!("V2 runtime event {index} is missing its digest preimage"))?;
+        let supplied = hex::decode(supplied_hex)
+            .with_context(|| format!("V2 runtime event {index} has a malformed digest preimage"))?;
+        let advertised = Sha384Digest::digest(&supplied);
+        if advertised.as_slice() != event.digest.as_slice() {
+            bail!("V2 runtime event {index} digest does not match its preimage");
+        }
+        let canonical = event
+            .to_runtime_event()
+            .expect("runtime event was checked above")
+            .preimage();
+        if supplied != canonical {
+            bail!("V2 runtime event {index} preimage is not the canonical event representation");
+        }
+    }
+    Ok(())
+}
+
 pub fn is_tdx_acpi_data_event(event: &TdxEvent) -> bool {
     event.imr == 0
         && event.event_type == TDX_ACPI_DATA_EVENT_TYPE
@@ -207,7 +239,7 @@ pub fn read_event_log() -> Result<Vec<TdxEvent>> {
 mod tests {
     use super::*;
     use ez_hash::{Hasher, Sha384};
-    use sha2::{Digest as _, Sha384 as Sha384Hasher};
+    use sha2::Sha384 as Sha384Hasher;
 
     fn acpi_data_event(digest_byte: u8) -> TdxEvent {
         TdxEvent {
@@ -316,5 +348,47 @@ mod tests {
         let tdx: TdxEvent = runtime.into();
         let json = serde_json::to_string(&tdx).unwrap();
         assert!(!json.contains("preimage"));
+    }
+
+    fn v2_event() -> TdxEvent {
+        let mut event = TdxEvent::from(RuntimeEvent::new(
+            "app-id".into(),
+            b"fixture".to_vec(),
+            EventLogVersion::V2,
+        ));
+        event.fill_preimage();
+        event
+    }
+
+    #[test]
+    fn validates_v2_digest_preimage_before_use() {
+        validate_v2_preimages(&[v2_event()]).expect("valid V2 preimage");
+    }
+
+    #[test]
+    fn rejects_missing_or_malformed_v2_preimage() {
+        let mut missing = v2_event();
+        missing.preimage = None;
+        assert!(validate_v2_preimages(&[missing]).is_err());
+
+        let mut malformed = v2_event();
+        malformed.preimage = Some("not-hex".into());
+        assert!(validate_v2_preimages(&[malformed]).is_err());
+    }
+
+    #[test]
+    fn rejects_v2_preimage_digest_mismatch() {
+        let mut event = v2_event();
+        event.digest[0] ^= 1;
+        assert!(validate_v2_preimages(&[event]).is_err());
+    }
+
+    #[test]
+    fn rejects_noncanonical_v2_preimage_with_matching_digest() {
+        let mut event = v2_event();
+        let supplied = br#"{"type":134217729,"name":"app-id","payload":"66697874757265"}"#;
+        event.preimage = Some(hex::encode(supplied));
+        event.digest = Sha384Hasher::digest(supplied).to_vec();
+        assert!(validate_v2_preimages(&[event]).is_err());
     }
 }
