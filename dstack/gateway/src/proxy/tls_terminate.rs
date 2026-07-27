@@ -510,6 +510,17 @@ impl Proxy {
     }
 }
 
+/// Give up the raw socket *and* anything still buffered in front of it.
+///
+/// Deliberately not `Into<TcpStream>`: that conversion existed, and it dropped
+/// the remainder silently. Whatever is left here is raw ciphertext from the SNI
+/// sniff, which cannot be forwarded to an app expecting plaintext and cannot be
+/// pushed back once the socket belongs to the kernel -- so the only safe thing
+/// is to make every caller look at it.
+pub(crate) trait SocketParts {
+    fn into_socket_parts(self) -> (Vec<u8>, TcpStream);
+}
+
 #[pin_project::pin_project]
 struct MergedStream {
     buffer: Vec<u8>,
@@ -551,11 +562,9 @@ impl MergedStream {
     }
 }
 
-impl From<MergedStream> for TcpStream {
-    /// Only valid once the handshake has consumed the sniff buffer, which is
-    /// the case wherever this conversion is used (kTLS handover).
-    fn from(s: MergedStream) -> Self {
-        s.into_parts().1
+impl SocketParts for MergedStream {
+    fn into_socket_parts(self) -> (Vec<u8>, TcpStream) {
+        self.into_parts()
     }
 }
 
@@ -606,5 +615,48 @@ impl AsyncWrite for MergedStream {
 
     fn is_write_vectored(&self) -> bool {
         self.inbound.is_write_vectored()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncReadExt as _;
+    use tokio::net::TcpListener;
+
+    async fn merged_with(buffer: Vec<u8>) -> MergedStream {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let client = TcpStream::connect(addr).await.expect("connect");
+        drop(client);
+        let (inbound, _) = listener.accept().await.expect("accept");
+        MergedStream {
+            buffer,
+            buffer_cursor: 0,
+            inbound,
+        }
+    }
+
+    /// The kTLS handover reads the remainder through this, and forwarding raw
+    /// ciphertext to an app expecting plaintext is the failure it guards
+    /// against -- so an unconsumed sniff buffer has to be visible, not silently
+    /// swallowed by the unwrap.
+    #[tokio::test]
+    async fn an_unconsumed_sniff_buffer_is_surfaced_not_dropped() {
+        let stream = merged_with(b"leftover ciphertext".to_vec()).await;
+        let (remainder, _socket) = stream.into_socket_parts();
+        assert_eq!(remainder, b"leftover ciphertext");
+    }
+
+    /// The normal case: rustls drains the sniff buffer during the handshake, so
+    /// the handover sees nothing left and proceeds.
+    #[tokio::test]
+    async fn a_consumed_sniff_buffer_leaves_no_remainder() {
+        let mut stream = merged_with(b"clienthello".to_vec()).await;
+        let mut sink = vec![0u8; 11];
+        stream.read_exact(&mut sink).await.expect("read");
+        assert_eq!(&sink, b"clienthello");
+        let (remainder, _socket) = stream.into_socket_parts();
+        assert!(remainder.is_empty(), "got {remainder:?}");
     }
 }

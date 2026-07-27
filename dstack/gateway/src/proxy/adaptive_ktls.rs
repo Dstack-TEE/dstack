@@ -30,6 +30,7 @@ use tracing::debug;
 
 use super::idle::IdleWatchdog;
 use super::splice::{splice_bidirectional, CloseKind};
+use super::tls_terminate::SocketParts;
 use crate::config::{EngageAfter, SpliceConfig};
 
 /// Why the userspace relay phase stopped.
@@ -129,7 +130,7 @@ pub(crate) async fn relay_with_adaptive_offload<IO>(
 ) -> Result<()>
 where
     IO: AsyncRead + AsyncWrite + Unpin + std::os::fd::AsRawFd + ktls::AsyncReadReady,
-    IO: Into<TcpStream>,
+    IO: SocketParts,
 {
     match relay_until(&mut tls, &mut upstream, ktls, idle).await? {
         Phase::Eof => return Ok(()),
@@ -150,9 +151,21 @@ where
                 .context("failed to flush drained data to app")?;
         }
     }
+    // Same rule as the immediate offload path: the sniff remainder is raw
+    // ciphertext, so it can neither be forwarded to the app nor pushed back
+    // into a socket the kernel now owns. A completed handshake always consumes
+    // it, so this is unreachable -- refuse rather than corrupt a stream if it
+    // ever is not.
+    let (buffered, tcp) = io.into_socket_parts();
+    if !buffered.is_empty() {
+        bail!(
+            "{} bytes of unconsumed ciphertext at kTLS handover",
+            buffered.len()
+        );
+    }
     // The client side is now a kTLS socket, so its close needs a close_notify.
     splice_bidirectional(
-        io.into(),
+        tcp,
         upstream,
         splice.release_idle_pipes,
         idle,
