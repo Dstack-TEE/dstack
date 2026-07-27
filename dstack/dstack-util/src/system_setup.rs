@@ -6,9 +6,10 @@ use std::sync::Arc;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Display,
+    io::Write as _,
     ops::Deref,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     str::FromStr,
     time::Duration,
 };
@@ -2492,19 +2493,39 @@ impl<'a> Stage0<'a> {
     fn luks_setup(&self, disk_crypt_key: &str, name: &str) -> Result<()> {
         let root_hd = &self.args.device;
         let sector_offset = PAYLOAD_OFFSET / 512;
-        cmd! {
-            info "Formatting encrypted disk";
-            echo -n $disk_crypt_key |
-                cryptsetup luksFormat
-                    --type luks2
-                    --offset $sector_offset
-                    --cipher aes-xts-plain64
-                    --pbkdf pbkdf2
-                    -d-
-                    $root_hd
-                    $name;
+        info!("Formatting encrypted disk");
+        let sector_offset = sector_offset.to_string();
+        let mut child = Command::new("cryptsetup")
+            .args([
+                "luksFormat",
+                "--type",
+                "luks2",
+                "--offset",
+                &sector_offset,
+                "--cipher",
+                "aes-xts-plain64",
+                "--pbkdf",
+                "pbkdf2",
+                "-d-",
+            ])
+            .arg(root_hd)
+            .arg(name)
+            .stdin(Stdio::piped())
+            .spawn()
+            .context("Failed to start cryptsetup luksFormat")?;
+        child
+            .stdin
+            .take()
+            .context("cryptsetup stdin is unavailable")?
+            .write_all(disk_crypt_key.as_bytes())
+            .context("Failed to send key to cryptsetup luksFormat")?;
+        if !child
+            .wait()
+            .context("Failed to wait for cryptsetup luksFormat")?
+            .success()
+        {
+            bail!("Failed to setup luks volume");
         }
-        .or(Err(anyhow!("Failed to setup luks volume")))?;
         self.open_encrypted_volume(disk_crypt_key, name)
     }
 
@@ -2535,11 +2556,29 @@ impl<'a> Stage0<'a> {
         let hdr_file = fs::File::open(&in_mem_hdr).context("Failed to open LUKS2 header")?;
         validate_luks2_headers(hdr_file).context("Failed to validate LUKS2 header")?;
 
-        cmd! {
-            info "Opening the device";
-            echo -n $disk_crypt_key | cryptsetup luksOpen --type luks2 --header $in_mem_hdr -d- $root_hd $name;
+        info!("Opening the device");
+        let mut child = Command::new("cryptsetup")
+            .args(["luksOpen", "--type", "luks2", "--header"])
+            .arg(&in_mem_hdr)
+            .arg("-d-")
+            .arg(root_hd)
+            .arg(name)
+            .stdin(Stdio::piped())
+            .spawn()
+            .context("Failed to start cryptsetup luksOpen")?;
+        child
+            .stdin
+            .take()
+            .context("cryptsetup stdin is unavailable")?
+            .write_all(disk_crypt_key.as_bytes())
+            .context("Failed to send key to cryptsetup luksOpen")?;
+        if !child
+            .wait()
+            .context("Failed to wait for cryptsetup luksOpen")?
+            .success()
+        {
+            bail!("Failed to open encrypted data disk");
         }
-        .or(Err(anyhow!("Failed to open encrypted data disk")))?;
 
         // Wait for device mapper to create the device
         let dm_path = format!("/dev/mapper/{name}");
