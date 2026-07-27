@@ -34,5 +34,8 @@ futures.workspace = true
 supervisor.workspace = true
 http-client.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [features]
 cli = ["dep:clap", "tokio/full"]

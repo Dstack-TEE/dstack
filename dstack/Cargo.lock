@@ -7395,6 +7395,7 @@ dependencies = [
  "serde",
  "serde_json",
  "supervisor",
+ "tempfile",
  "tokio",
  "tracing-subscriber",
 ]
