@@ -275,7 +275,7 @@ async fn accept_loop(
     rt: Option<&Runtime>,
     mut balance: Option<(
         balance::Balancer,
-        tokio::sync::mpsc::UnboundedReceiver<balance::Handoff>,
+        tokio::sync::mpsc::Receiver<balance::Handoff>,
     )>,
 ) -> Result<()> {
     if tcp_listeners.is_empty() {
@@ -297,7 +297,7 @@ async fn accept_loop(
         });
         // Also take connections other cores decided to give us.
         let accepted: std::io::Result<(TcpStream, std::net::SocketAddr)> = match balance.as_mut() {
-            Some((b, rx)) => {
+            Some((_, rx)) => {
                 tokio::select! {
                     r = accept_next => r,
                     Some((raw, from, slot)) = rx.recv() => {
@@ -309,7 +309,6 @@ async fn accept_loop(
                             }
                             Err(e) => error!("failed to adopt handed-over connection: {e}"),
                         }
-                        let _ = b;
                         continue;
                     }
                 }
@@ -500,8 +499,11 @@ fn probe_ktls() -> Result<()> {
 fn start_thread_per_core(config: ProxyConfig, app_state: Proxy) -> Result<()> {
     let workers = config.workers.max(1);
     // Bind every listener here, in order, rather than letting each thread bind
-    // its own: the reuseport steering program selects a socket by its position
-    // in the group, so the order has to be ours to control.
+    // its own. The CBPF steering program that originally needed a known group
+    // order is gone (see `super::reuseport`), but binding in one place is kept:
+    // it keeps listener-to-core assignment deterministic across restarts, and it
+    // fails startup as a whole if any bind fails, instead of leaving some cores
+    // serving and others dead.
     let mut per_worker: Vec<Vec<std::net::TcpListener>> =
         (0..workers).map(|_| Vec::new()).collect();
     for &port in &config.listen_port {

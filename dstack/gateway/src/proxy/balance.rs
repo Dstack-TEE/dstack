@@ -33,6 +33,7 @@ use std::sync::Arc;
 
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
+use tracing::{debug, warn};
 
 /// A connection accounted to one core, released when the connection ends.
 pub(crate) struct CoreSlot {
@@ -65,9 +66,21 @@ pub(crate) type Handoff = (std::net::TcpStream, SocketAddr, CoreSlot);
 /// Per-core view of the shared connection counts and handoff channels.
 pub(crate) struct Balancer {
     counts: Arc<Vec<AtomicUsize>>,
-    senders: Arc<Vec<mpsc::UnboundedSender<Handoff>>>,
+    senders: Arc<Vec<mpsc::Sender<Handoff>>>,
     me: usize,
 }
+
+/// Handoffs a core may have waiting before others stop offering it work.
+///
+/// The queue is bounded on purpose. A core only receives connections while it
+/// is the *least* loaded, so in steady state this never fills. What it protects
+/// against is a core that stops draining -- wedged or gone: with an unbounded
+/// queue the others keep succeeding at `send`, and every connection they hand
+/// over sits unserved until `timeouts.total` while its `CoreSlot` keeps the
+/// core looking busier, so the queue and the memory behind it only grow. Full
+/// means "this core is not actually taking work", and the sender keeps the
+/// connection instead.
+const HANDOFF_QUEUE: usize = 1024;
 
 /// How far above the least loaded core this one has to be before handing a
 /// connection over.
@@ -83,7 +96,7 @@ fn migration_threshold(least: usize) -> usize {
 
 impl Balancer {
     /// Build one balancer per core, plus the receiver each core listens on.
-    pub(crate) fn build(workers: usize) -> (Vec<Self>, Vec<mpsc::UnboundedReceiver<Handoff>>) {
+    pub(crate) fn build(workers: usize) -> (Vec<Self>, Vec<mpsc::Receiver<Handoff>>) {
         let counts = Arc::new(
             (0..workers)
                 .map(|_| AtomicUsize::new(0))
@@ -92,7 +105,7 @@ impl Balancer {
         let mut senders = Vec::with_capacity(workers);
         let mut receivers = Vec::with_capacity(workers);
         for _ in 0..workers {
-            let (tx, rx) = mpsc::unbounded_channel();
+            let (tx, rx) = mpsc::channel(HANDOFF_QUEUE);
             senders.push(tx);
             receivers.push(rx);
         }
@@ -134,28 +147,59 @@ impl Balancer {
     ///
     /// Returns the slot to keep alongside the connection when it stays here, or
     /// `None` once the connection has been handed away.
+    ///
+    /// Handing over is best-effort: every failure path falls back to serving the
+    /// connection on this core, because a connection served by a busier core is
+    /// strictly better than one that is dropped. The one exception is
+    /// [`TcpStream::into_std`], which consumes the stream and closes the socket
+    /// when it fails -- there is nothing left to fall back to, so that case is
+    /// logged rather than silently counted as a handover.
     pub(crate) fn place(
         &self,
         stream: TcpStream,
         from: SocketAddr,
     ) -> Option<(TcpStream, CoreSlot)> {
         let target = self.target();
-        let slot = CoreSlot::claim(self.counts.clone(), target);
         if target == self.me {
+            let slot = CoreSlot::claim(self.counts.clone(), self.me);
             return Some((stream, slot));
         }
         // Drop this core's reactor registration before handing the socket over.
         let raw = match stream.into_std() {
             Ok(raw) => raw,
-            // Cannot deregister: keep it here rather than lose the connection.
-            Err(_) => return None,
+            Err(err) => {
+                // `into_std` took ownership, so the socket is already closed.
+                warn!("dropping connection from {from}: failed to deregister for handover: {err}");
+                return None;
+            }
         };
-        match self.senders[target].send((raw, from, slot)) {
-            Ok(()) => None,
-            // The target core is gone; keep the connection rather than drop it.
-            Err(mpsc::error::SendError((raw, _, _))) => TcpStream::from_std(raw)
-                .ok()
-                .map(|s| (s, CoreSlot::claim(self.counts.clone(), self.me))),
+        let slot = CoreSlot::claim(self.counts.clone(), target);
+        // `try_send`, not `send`: this runs on the accept path and must not wait
+        // on a core that is not draining. See `HANDOFF_QUEUE`.
+        let raw = match self.senders[target].try_send((raw, from, slot)) {
+            Ok(()) => return None,
+            Err(mpsc::error::TrySendError::Full((raw, _, _))) => {
+                debug!(
+                    "core {target} handoff queue is full; keeping connection on core {}",
+                    self.me
+                );
+                raw
+            }
+            Err(mpsc::error::TrySendError::Closed((raw, _, _))) => {
+                debug!(
+                    "core {target} is gone; keeping connection on core {}",
+                    self.me
+                );
+                raw
+            }
+        };
+        match TcpStream::from_std(raw) {
+            Ok(stream) => Some((stream, CoreSlot::claim(self.counts.clone(), self.me))),
+            Err(err) => {
+                // Same as above: `from_std` consumed the socket.
+                warn!("dropping connection from {from}: failed to re-adopt after handover: {err}");
+                None
+            }
         }
     }
 }
