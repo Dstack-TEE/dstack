@@ -164,6 +164,7 @@ async fn splice_one(
     dst: Arc<TcpStream>,
     release_idle_pipes: bool,
     progress: &AtomicU64,
+    src_kind: CloseKind,
     dst_close: CloseKind,
 ) -> Result<()> {
     let mut pipe = PooledPipe::get()?;
@@ -200,6 +201,19 @@ async fn splice_one(
                     } else {
                         src.readable().await.context("readable error")?;
                     }
+                }
+                // A kTLS socket refuses to splice a record that is not
+                // application data, and reports it as EINVAL. For a byte relay
+                // that is the end of the data stream, not a failure: it is how
+                // the client's close_notify arrives once the socket belongs to
+                // the kernel. Treating it as fatal took down the *other*
+                // direction too, so a client closing its request discarded the
+                // response the app had already written.
+                Err(ref e)
+                    if matches!(src_kind, CloseKind::KernelTls)
+                        && e.raw_os_error() == Some(libc::EINVAL) =>
+                {
+                    break 0;
                 }
                 Err(e) => return Err(e).context("splice src->pipe failed"),
             }
@@ -260,8 +274,9 @@ async fn splice_one(
 
 /// Bidirectional zero-copy relay between two TCP streams.
 ///
-/// `a` is the client side, `b` the app side; `a_close` says how `a`'s write
-/// side has to be closed, which is the only thing this needs to know about kTLS.
+/// `a` is the client side, `b` the app side; `a_close` describes what kind of
+/// socket `a` is, which decides both how its write side is closed and how a
+/// non-data record from it is interpreted.
 /// `idle` is `None` when data timeouts are disabled.
 pub(crate) async fn splice_bidirectional(
     a: TcpStream,
@@ -277,14 +292,17 @@ pub(crate) async fn splice_bidirectional(
     let b = Arc::new(b);
     let progress = AtomicU64::new(0);
     let relay = async {
+        // `a` is the client side: it is the one that may be a kTLS socket, so
+        // it is the source kind for a2b and the destination kind for b2a.
         let a2b = splice_one(
             a.clone(),
             b.clone(),
             release_idle_pipes,
             &progress,
+            a_close,
             CloseKind::Tcp,
         );
-        let b2a = splice_one(b, a, release_idle_pipes, &progress, a_close);
+        let b2a = splice_one(b, a, release_idle_pipes, &progress, CloseKind::Tcp, a_close);
         tokio::try_join!(a2b, b2a)?;
         Ok(())
     };

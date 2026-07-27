@@ -245,22 +245,24 @@ test_data_path() {
   done
 }
 
-# Half-close is deliberately *not* tested here.
-#
-# The relay-level behaviour -- a client that finishes its request still gets the
-# reply -- is covered by unit tests that drive `relay_until` over raw sockets:
-#
-#   proxy::splice::tests::response_survives_a_client_half_close_before_the_gate
-#   proxy::splice::tests::request_survives_a_backend_half_close_before_the_gate
-#   proxy::adaptive_ktls::tests::response_survives_a_client_half_close_before_the_gate
-#   proxy::adaptive_ktls::tests::request_survives_an_app_half_close_before_the_gate
-#
-# End to end it is not expressible: every client of this gateway speaks TLS
-# (both paths need a ClientHello to route on SNI), and a TCP half-close mid-TLS
-# is a truncation, not an orderly one. Verified by pointing the same probe at
-# the origin with no gateway in the path -- it fails there too. A faithful test
-# would have to emit a close_notify without waiting for the peer's, which needs
-# a memory-BIO TLS client; if that is ever written, this is the place for it.
+test_half_close() {
+  group "half-close: a client that finishes its request still gets the reply"
+  # Needs a TLS client that can send close_notify without waiting for the
+  # peer's, which `ssl.SSLSocket` cannot express -- see `proxy/tlsclient.py`.
+  # This found a bug `shutdown(SHUT_WR)` could not: after kTLS offload, splice
+  # reports the client's close_notify as EINVAL, which used to be fatal and
+  # took the app's in-flight response down with it.
+  local arm name cfg
+  for arm in "${ARMS[@]}"; do
+    name="${arm%%|*}"; cfg="${arm#*|}"
+    # shellcheck disable=SC2086  # $cfg is a list of gwconfig arguments
+    start_gateway "halfclose-$name" $cfg || { FAIL=$((FAIL+1)); continue; }
+    check "$name / terminate" \
+      probe halfclose --port "$PROXY_PORT" --sni "$SNI_TERMINATE"
+    check "$name / passthrough" \
+      probe halfclose --port "$PROXY_PORT" --sni "$SNI_PASSTHROUGH"
+  done
+}
 
 test_close_notify() {
   group "close: the app closing reaches the client as an orderly TLS shutdown"
@@ -421,6 +423,7 @@ say "gateway:  $GATEWAY_BIN"
 say "work dir: $WORK"
 
 test_data_path
+test_half_close
 test_close_notify
 test_idle_timeout
 test_ktls_engages

@@ -21,6 +21,7 @@ import sys
 import time
 
 import origin
+from tlsclient import HalfCloseTlsClient
 
 
 def tls_context() -> ssl.SSLContext:
@@ -100,25 +101,18 @@ def probe_fetch(args):
 def probe_halfclose(args):
     """Check a client that half-closes its request still gets the response.
 
-    Not wired into `test_proxy.sh`, and cannot be until it emits a real
-    `close_notify`: `shutdown(SHUT_WR)` sends a bare FIN, which mid-TLS is a
-    truncation rather than an orderly half-close, so the peer is right to
-    abandon the connection. Verified by running this against the origin with no
-    gateway in the path -- it fails there too. Doing it properly needs an
-    `ssl.SSLObject` on memory BIOs, so the close_notify can be sent without
-    waiting for the peer's. The relay-level behaviour is covered by unit tests
-    in the meantime; see the note in `test_proxy.sh`.
+    Regression test for the gated relays shutting down the wrong half and
+    returning an empty, successful response. Needs a client that can send
+    `close_notify` without waiting for the peer's -- see `tlsclient`.
     """
-    sock = connect(args)
-    request(sock, "/halfclose", args.sni)
+    client = HalfCloseTlsClient(args.host, args.port, args.sni, args.timeout)
     try:
-        sock.shutdown(socket.SHUT_WR)
-    except OSError as exc:
-        print(f"verdict=FAIL could not half-close: {exc}")
-        return False
-    body, how = read_response(sock)
-    sock.close()
-    ok = len(body) == 4096 and how in ("complete", "clean_eof")
+        client.send(f"GET /halfclose HTTP/1.1\r\nHost: {args.sni}\r\n\r\n".encode())
+        client.close_write()
+        body, how = client.read_http_response()
+    finally:
+        client.close()
+    ok = len(body) == 4096 and how == "complete"
     print(f"verdict={'pass' if ok else 'FAIL'} bytes={len(body)} want=4096 end={how}")
     return ok
 

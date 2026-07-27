@@ -216,9 +216,15 @@ What it covers:
 | kTLS engagement | offload happens, and only once the gate fires; no TLS decrypt errors |
 | capability fallbacks | a kernel without the TLS ULP warns and keeps serving untruncated; an inert `connection_rebalance` warns |
 | runtime modes | every `thread_per_core` / `connection_rebalance` combination serves traffic |
+| half-close | a client that finishes its request still gets the reply, on both paths and every arm |
 | Status RPC | the accel counters reflect the traffic that ran |
 
 The suite adapts to the host: groups that need a capability the kernel or the
 privileges do not provide are reported as `SKIP` with the reason, never silently
-passed. Half-close is deliberately not covered here -- see the comment in the
-script for why it is only expressible as a unit test.
+passed.
+
+Half-close needs a TLS client that can send `close_notify` without waiting for
+the peer's, which `ssl.SSLSocket` cannot express: its only shutdown is
+bidirectional, and dropping to `shutdown(SHUT_WR)` sends a bare FIN, which
+mid-TLS is a truncation the peer is right to reject. `proxy/tlsclient.py`
+drives the TLS state machine over memory BIOs to do it properly.
