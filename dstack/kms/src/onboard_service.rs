@@ -4,7 +4,6 @@
 
 use std::{
     io::Write,
-    os::unix::fs::OpenOptionsExt,
     path::Path,
     sync::{Arc, Mutex},
 };
@@ -16,7 +15,7 @@ use dstack_kms_rpc::{
     AttestationInfoResponse, BootstrapRequest, BootstrapResponse, GetKmsKeyRequest, OnboardRequest,
     OnboardResponse,
 };
-use fs_err as fs;
+use fs_err::{self as fs, os::unix::fs::OpenOptionsExt};
 use k256::ecdsa::SigningKey;
 use ra_rpc::{
     client::{CertInfo, RaClient, RaClientConfig},
@@ -253,6 +252,8 @@ fn build_attestation_info_response(
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use super::*;
     use crate::main_service::amd_attest::{
         compute_expected_measurement, MeasurementInput, OvmfSectionParam,
