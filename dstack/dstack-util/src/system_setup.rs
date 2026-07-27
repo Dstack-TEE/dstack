@@ -2243,7 +2243,7 @@ impl<'a> Stage0<'a> {
                     .replace("\\134", "\\"),
             );
             if active_path == swap_path
-                || fs::canonicalize(&active_path).as_deref() == Ok(canonical_swap_path.as_path())
+                || fs::canonicalize(&active_path).is_ok_and(|path| path == canonical_swap_path)
             {
                 return Ok(Some(active_path));
             }
