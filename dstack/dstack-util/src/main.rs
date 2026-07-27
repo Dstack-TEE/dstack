@@ -699,7 +699,7 @@ fn cmd_rand(rand_args: RandArgs) -> Result<()> {
         data = hex::encode(data).into_bytes();
     }
     if let Some(output) = rand_args.output {
-        use std::os::unix::fs::OpenOptionsExt;
+        use fs_err::os::unix::fs::OpenOptionsExt;
 
         let mut file = fs_err::OpenOptions::new()
             .write(true)
