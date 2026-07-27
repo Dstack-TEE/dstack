@@ -156,7 +156,9 @@ impl RaClient {
                         .into_v1()
                         .verify_with_ra_pubkey(cert.public_key().raw, &self.attestation_verifier)
                         .await
-                        .context("Failed to verify the attestation report")?;
+                        .context(
+                            "failed to verify the attestation report presented by the server",
+                        )?;
                     Some(verified_attestation)
                 }
             }
@@ -187,9 +189,17 @@ impl RequestClient for RaClient {
             .await
             .context("Failed to send request")?;
 
+        // Name the direction explicitly: this validates the *server's* attestation,
+        // not the client's own quote. Without it the error chain reads as if the
+        // remote end rejected us.
         self.try_validate_attestation(&response)
             .await
-            .context("Failed to validate attestation")?;
+            .with_context(|| {
+                format!(
+                    "failed to validate the server attestation of {}",
+                    self.remote_uri
+                )
+            })?;
 
         let status = response.status();
         if !status.is_success() {
