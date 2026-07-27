@@ -2031,6 +2031,8 @@ impl<'a> Stage0<'a> {
         let cert_pair = generate_ra_cert(tmp_ca.temp_ca_cert.clone(), tmp_ca.temp_ca_key.clone())?;
         let collateral_urls = self.shared.sys_config.collateral_urls();
         let attestation_verifier = Arc::new(AttestationVerifier::new_prod(Some(&collateral_urls))?);
+        let verified_kms_measurement = Arc::new(std::sync::Mutex::new(None::<Vec<u8>>));
+        let captured_kms_measurement = verified_kms_measurement.clone();
         let ra_client = RaClientConfig::builder()
             .tls_no_check(false)
             .tls_built_in_root_certs(false)
@@ -2051,8 +2053,12 @@ impl<'a> Stage0<'a> {
                 }
                 if let Some(att) = &cert.attestation {
                     match att.decode_app_info(false) {
-                        Ok(kms_info) => emit_runtime_event("mr-kms", &kms_info.mr_aggregated)
-                            .context("failed to extend mr-kms to the launch measurement")?,
+                        Ok(kms_info) => {
+                            *captured_kms_measurement
+                                .lock()
+                                .map_err(|_| anyhow!("KMS measurement capture lock poisoned"))? =
+                                Some(kms_info.mr_aggregated);
+                        }
                         Err(err) if is_unsupported_app_info_quote(&err) => {
                             warn!("Skipping mr-kms runtime event for unsupported attestation quote: {err:#}");
                         }
@@ -2073,6 +2079,14 @@ impl<'a> Stage0<'a> {
             .await
             .context("Failed to get app key")?;
 
+        let kms_measurement = verified_kms_measurement
+            .lock()
+            .map_err(|_| anyhow!("KMS measurement capture lock poisoned"))?
+            .take();
+        if let Some(kms_measurement) = kms_measurement {
+            emit_runtime_event("mr-kms", &kms_measurement)
+                .context("failed to extend mr-kms to the launch measurement")?;
+        }
         emit_runtime_event("os-image-hash", &response.os_image_hash)
             .context("failed to extend os-image-hash to the launch measurement")?;
 
