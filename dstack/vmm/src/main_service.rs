@@ -1056,6 +1056,7 @@ impl RpcCall<App> for RpcHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Protocol;
     use rocket::figment::Figment;
 
     fn test_cvm_config() -> CvmConfig {
