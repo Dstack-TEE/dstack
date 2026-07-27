@@ -2031,7 +2031,7 @@ impl<'a> Stage0<'a> {
         let cert_pair = generate_ra_cert(tmp_ca.temp_ca_cert.clone(), tmp_ca.temp_ca_key.clone())?;
         let collateral_urls = self.shared.sys_config.collateral_urls();
         let attestation_verifier = Arc::new(AttestationVerifier::new_prod(Some(&collateral_urls))?);
-        let verified_kms_measurement = Arc::new(std::sync::Mutex::new(None::<Vec<u8>>));
+        let verified_kms_measurement = Arc::new(std::sync::Mutex::new(None::<[u8; 32]>));
         let captured_kms_measurement = verified_kms_measurement.clone();
         let ra_client = RaClientConfig::builder()
             .tls_no_check(false)
