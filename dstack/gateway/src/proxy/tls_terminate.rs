@@ -344,8 +344,7 @@ impl Proxy {
         .await
         .context("handshake timeout")?
         .context("failed to accept tls connection")?;
-        ktls::config_ktls_server(tls_stream)
-            .await
+        super::stats::record_ktls_offload(ktls::config_ktls_server(tls_stream).await)
             .context("failed to enable kernel TLS")
     }
 

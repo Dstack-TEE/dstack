@@ -49,6 +49,7 @@ pub(crate) mod port_policy;
 mod reuseport;
 mod sni;
 mod splice;
+pub(crate) mod stats;
 mod tls_passthough;
 mod tls_terminate;
 
@@ -438,6 +439,7 @@ pub fn disable_ktls_if_unsupported(config: &mut ProxyConfig) {
              falling back to userspace TLS record encryption"
         );
         config.ktls = None;
+        stats::mark_ktls_unsupported();
     }
 }
 

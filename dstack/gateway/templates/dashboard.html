@@ -452,6 +452,39 @@ SPDX-License-Identifier: Apache-2.0
         </tr>
     </table>
 
+    <table>
+        <tr>
+            <th colspan="3">Data Path</th>
+        </tr>
+        <tr>
+            <td>kTLS</td>
+            <td>{{ accel.ktls_mode }}</td>
+            <td>Record encryption in the kernel. Cleared at startup if the
+                kernel has no TLS ULP.</td>
+        </tr>
+        <tr>
+            <td>Splice</td>
+            <td>{{ accel.splice_mode }}</td>
+            <td>Zero-copy relaying, once a connection trips the gate.</td>
+        </tr>
+        <tr>
+            <td>kTLS Offloads</td>
+            <td>{{ accel.ktls_offloaded }}</td>
+            <td>Connections handed to the kernel since start.</td>
+        </tr>
+        <tr>
+            <td>kTLS Offload Failures</td>
+            <td>{{ accel.ktls_offload_failed }}</td>
+            <td>Non-zero means connections are failing at the handover, not
+                merely running unaccelerated.</td>
+        </tr>
+        <tr>
+            <td>Splice Engagements</td>
+            <td>{{ accel.splice_engaged }}</td>
+            <td>Connections that entered a zero-copy relay, on either path.</td>
+        </tr>
+    </table>
+
     <h2>Global Connections</h2>
     <div id="global-connections">
         <p>Loading global connection statistics...</p>

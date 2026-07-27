@@ -96,8 +96,7 @@ where
 
     // config_ktls_server corks the stream, drains rustls to a record boundary
     // and installs the current traffic secrets into the kernel.
-    let ktls_stream = ktls::config_ktls_server(tls)
-        .await
+    let ktls_stream = super::stats::record_ktls_offload(ktls::config_ktls_server(tls).await)
         .context("failed to switch connection to kernel TLS")?;
     let (drained, io) = ktls_stream.into_raw();
     if let Some(drained) = drained {

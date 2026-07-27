@@ -359,6 +359,35 @@ impl EngageAfter {
     }
 }
 
+/// Rendered for the dashboard and the `Status` RPC, so it reads as the answer to
+/// "when does this engage?" rather than as a struct dump.
+impl std::fmt::Display for EngageAfter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.after_bytes, self.after_duration) {
+            (None, None) => write!(f, "immediate"),
+            (Some(bytes), None) => write!(f, "after {}", DisplayBytes(bytes)),
+            (None, Some(after)) => write!(f, "after {after:?}"),
+            (Some(bytes), Some(after)) => write!(f, "after {} or {after:?}", DisplayBytes(bytes)),
+        }
+    }
+}
+
+/// A byte threshold in the units the config file writes it in: binary units
+/// when they divide evenly, raw bytes otherwise.
+struct DisplayBytes(u64);
+
+impl std::fmt::Display for DisplayBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        const KIB: u64 = 1 << 10;
+        const MIB: u64 = 1 << 20;
+        match self.0 {
+            bytes if bytes >= MIB && bytes % MIB == 0 => write!(f, "{} MiB", bytes / MIB),
+            bytes if bytes >= KIB && bytes % KIB == 0 => write!(f, "{} KiB", bytes / KIB),
+            bytes => write!(f, "{bytes} B"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct PortPolicyFetchConfig {
     /// Timeout for a single `Info()` RPC attempt.

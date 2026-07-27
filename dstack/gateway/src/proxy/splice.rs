@@ -234,6 +234,9 @@ pub(crate) async fn splice_bidirectional(
     b: TcpStream,
     release_idle_pipes: bool,
 ) -> Result<()> {
+    // The single funnel for zero-copy relaying, so counting here covers both the
+    // passthrough gate and the post-kTLS handover.
+    super::stats::record_splice_engaged();
     let a = Arc::new(a);
     let b = Arc::new(b);
     let a2b = splice_one(a.clone(), b.clone(), release_idle_pipes);
