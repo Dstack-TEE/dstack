@@ -70,6 +70,7 @@ members = [
     "crates/api-auth",
     "crates/build-info",
     "crates/mock-attestation",
+    "vendor/ktls",
 ]
 resolver = "2"
 
@@ -141,7 +142,8 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 safe-write = "0.1.2"
 rustix = { version = "0.38", features = ["fs"] }
 nix = "0.29.0"
-ktls = "6.0.2"
+# Vendored: 6.0.2 does not build for musl. See vendor/README.md.
+ktls = { path = "vendor/ktls" }
 socket2 = { version = "0.5", features = ["all"] }
 sd-notify = "0.4.5"
 listenfd = "1.0"

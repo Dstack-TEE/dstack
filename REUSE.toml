@@ -181,6 +181,13 @@ SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "Apache-2.0"
 precedence = "override"
 
+# ktls 6.0.2 plus rustls/ktls#70; see dstack/vendor/README.md.
+[[annotations]]
+path = "dstack/vendor/ktls/**"
+SPDX-FileCopyrightText = "Copyright (c) 2022 Amos Wenger <amos@bearcove.net>"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+precedence = "override"
+
 # Generated files
 
 [[annotations]]
