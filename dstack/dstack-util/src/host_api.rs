@@ -17,6 +17,9 @@ use ra_tls::attestation::validate_tcb;
 use sodiumbox::{generate_keypair, open_sealed_box, PUBLICKEYBYTES};
 use tracing::warn;
 
+const HOST_API_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const PCCS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub(crate) struct KeyProvision {
     pub sk: [u8; 32],
     pub mr: [u8; 32],
@@ -65,12 +68,15 @@ impl HostApi {
         let Some(client) = &self.client else {
             return Ok(());
         };
-        client
-            .notify(Notification {
+        tokio::time::timeout(
+            HOST_API_TIMEOUT,
+            client.notify(Notification {
                 event: event.to_string(),
                 payload: payload.to_string(),
-            })
-            .await?;
+            }),
+        )
+        .await
+        .context("Timed out notifying Host API")??;
         Ok(())
     }
 
@@ -88,12 +94,15 @@ impl HostApi {
         let Some(client) = &self.client else {
             return Err(anyhow!("Host API client not initialized"));
         };
-        let provision = client
-            .get_sealing_key(host_api::GetSealingKeyRequest {
+        let provision = tokio::time::timeout(
+            HOST_API_TIMEOUT,
+            client.get_sealing_key(host_api::GetSealingKeyRequest {
                 quote: quote.to_vec(),
-            })
-            .await
-            .map_err(|err| anyhow!("Failed to get sealing key: {err:?}"))?;
+            }),
+        )
+        .await
+        .context("Timed out requesting sealing key from Host API")?
+        .map_err(|err| anyhow!("Failed to get sealing key: {err:?}"))?;
 
         // verify the key provider quote
         let pccs_url = self
@@ -102,10 +111,14 @@ impl HostApi {
             .map(str::trim)
             .filter(|url| !url.is_empty())
             .unwrap_or(PHALA_PCCS_URL);
-        let verified_report = CollateralClient::with_default_http(pccs_url)?
-            .fetch_and_verify(&provision.provider_quote)
-            .await
-            .context("Failed to get quote collateral")?;
+        let collateral_client = CollateralClient::with_default_http(pccs_url)?;
+        let verified_report = tokio::time::timeout(
+            PCCS_TIMEOUT,
+            collateral_client.fetch_and_verify(&provision.provider_quote),
+        )
+        .await
+        .context("Timed out fetching sealing-key quote collateral")?
+        .context("Failed to get quote collateral")?;
         validate_tcb(&verified_report)?;
         let sgx_report = verified_report
             .report
