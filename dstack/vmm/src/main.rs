@@ -88,7 +88,6 @@ async fn run_external_api(app: App, figment: Figment, api_auth: Authenticator) -
     let external_api = rocket::custom(figment)
         .mount("/", main_routes::routes())
         .mount("/guest", ra_rpc::prpc_routes!(App, GuestApiHandler))
-        .mount("/api", ra_rpc::prpc_routes!(App, HostApiHandler))
         .mount(
             "/prpc",
             ra_rpc::prpc_routes!(App, RpcHandler, trim: "Teepod."),
