@@ -814,6 +814,11 @@ impl VmmRpc for RpcHandler {
         // the VM-aware stop path so the launcher can reap those children; the
         // same helper preserves generic Supervisor stop semantics for every
         // other process type.
+        self.app
+            .supervisor
+            .info(&request.id)
+            .await?
+            .context("Supervisor process not found")?;
         self.app.stop_vm_process(&request.id).await
     }
 
