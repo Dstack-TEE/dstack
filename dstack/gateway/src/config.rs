@@ -424,6 +424,13 @@ pub struct Timeouts {
     pub data_timeout_enabled: bool,
     #[serde(with = "serde_duration")]
     pub idle: Duration,
+    /// No longer read. The per-operation write timer was replaced by the
+    /// connection-level progress watchdog in `io_bridge`, which catches a
+    /// stalled write through `idle` instead: a write that makes no progress
+    /// stops bumping the direction's progress counter, and the watchdog fires.
+    /// The key is still accepted so existing configs -- and the CVM app
+    /// entrypoint's `TIMEOUT_WRITE` -- keep parsing.
+    #[allow(dead_code)]
     #[serde(with = "serde_duration")]
     pub write: Duration,
     #[serde(with = "serde_duration")]

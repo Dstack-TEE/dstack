@@ -20,6 +20,7 @@ use anyhow::{Context, Result};
 use nix::fcntl::{fcntl, splice, FcntlArg, SpliceFFlags};
 use nix::sys::socket::{shutdown, Shutdown};
 use nix::unistd::pipe;
+use or_panic::OptionOrPanic;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, Interest};
 use tokio::net::TcpStream;
 
@@ -108,12 +109,14 @@ impl PooledPipe {
         })
     }
 
+    /// The ends are `Option` only so `Drop` can move them into the pool, and
+    /// `Drop` is the last thing that runs, so both are always present here.
     fn rd(&self) -> &OwnedFd {
-        self.rd.as_ref().expect("pipe read end present")
+        self.rd.as_ref().or_panic("pipe read end present")
     }
 
     fn wr(&self) -> &OwnedFd {
-        self.wr.as_ref().expect("pipe write end present")
+        self.wr.as_ref().or_panic("pipe write end present")
     }
 }
 
@@ -265,7 +268,7 @@ struct PooledBufs {
 
 impl PooledBufs {
     fn get(buf_size: usize) -> Self {
-        let size = buf_size.min(RELAY_BUF_SIZE).max(4096);
+        let size = buf_size.clamp(4096, RELAY_BUF_SIZE);
         if let Some((a, b)) = BUF_POOL.with(|p| p.borrow_mut().pop()) {
             return Self { a, b };
         }

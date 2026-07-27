@@ -199,12 +199,17 @@ pub(crate) async fn connect_multiple_hosts(
 ) -> Result<(TcpStream, EnteredCounter, String)> {
     check_connection_limit(&addresses, max_connections, app_id)?;
 
+    let mut candidates = addresses.into_iter();
+    let Some(first) = candidates.next() else {
+        bail!("no addresses to connect to app <{app_id}>");
+    };
+
     // Fast path: with a single candidate there is nothing to race, so skip the
     // JoinSet and the task spawn it needs. That allocation and scheduling
     // happened on every connection, and single-address apps are the common
     // case.
-    if addresses.len() == 1 {
-        let addr = addresses.into_iter().next().expect("one address");
+    if candidates.as_slice().is_empty() {
+        let addr = first;
         let counter = addr.counter.enter();
         let ip = addr.ip;
         debug!("connecting to {ip}:{port}");
@@ -216,7 +221,7 @@ pub(crate) async fn connect_multiple_hosts(
     }
 
     let mut join_set = JoinSet::new();
-    for addr in addresses {
+    for addr in std::iter::once(first).chain(candidates) {
         let counter = addr.counter.enter();
         let ip = addr.ip;
         let instance_id = addr.instance_id;
