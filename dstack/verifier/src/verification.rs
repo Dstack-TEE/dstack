@@ -4,7 +4,6 @@
 
 use std::{
     collections::HashSet,
-    ffi::OsStr,
     io::Read,
     path::{Component, Path, PathBuf},
     sync::Arc,
@@ -30,7 +29,7 @@ use ra_tls::attestation::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use tokio::{io::AsyncWriteExt, process::Command};
+use tokio::io::AsyncWriteExt;
 use tracing::{debug, info, warn};
 
 use crate::types::{
@@ -1514,7 +1513,8 @@ mod tests {
     #[test]
     fn image_cache_pruning_keeps_checksum_identity() {
         let dir = tempfile::tempdir().expect("temp image directory");
-        let files_doc = "00  metadata.json\n";
+        let files_doc =
+            "0000000000000000000000000000000000000000000000000000000000000000  metadata.json\n";
         fs_err::write(dir.path().join("sha256sum.txt"), files_doc).unwrap();
         fs_err::write(dir.path().join("metadata.json"), "{}").unwrap();
         fs_err::write(dir.path().join("unmeasured"), "remove me").unwrap();
