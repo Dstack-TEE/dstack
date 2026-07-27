@@ -679,7 +679,7 @@ impl<'a> GatewayContext<'a> {
 
 #[test]
 fn private_gateway_write_is_atomic_and_owner_only() {
-    use fs::os::unix::fs::PermissionsExt as _;
+    use std::os::unix::fs::PermissionsExt as _;
 
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("gateway-cache.json");
