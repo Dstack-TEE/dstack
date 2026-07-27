@@ -12,7 +12,8 @@ OS_YOCTO_SUBMODULES := \
 	os/yocto/deps/meta-rust-bin \
 	os/yocto/deps/meta-security
 
-.PHONY: help core core-check core-test sdk-test os os-yocto os-deps os-image os-repro-check
+.PHONY: help core core-check core-test sdk-test os os-yocto os-deps os-image os-repro-check \
+	os-image-mkosi os-repro-check-mkosi
 
 help:
 	@echo "dstack monorepo targets:"
@@ -25,6 +26,8 @@ help:
 	@echo "  os-deps     initialize only the Yocto dependency submodules"
 	@echo "  os-image    build one production guest image in the pinned container"
 	@echo "  os-repro-check  build twice and compare reproducible outputs"
+	@echo "  os-image-mkosi  build one production guest image with the mkosi backend"
+	@echo "  os-repro-check-mkosi  build twice with mkosi and compare outputs"
 
 core:
 	cargo build --manifest-path dstack/Cargo.toml
@@ -52,3 +55,10 @@ os-image: os-deps
 
 os-repro-check: os-deps
 	cd os/yocto/repro-build && ./repro-build.sh
+
+# The mkosi backend vendors no submodules, so these do not depend on os-deps.
+os-image-mkosi:
+	./os/mkosi/repro-build/repro-build.sh
+
+os-repro-check-mkosi:
+	./os/mkosi/repro-build/repro-build.sh -c
