@@ -107,13 +107,14 @@ impl SupervisorClient {
         }
         let supervisor_path = supervisor_path.as_ref().to_path_buf();
         let uds = uds.to_path_buf();
+        let supervisor_uds = uds.clone();
         let pid_file = pid_file.as_ref().to_path_buf();
         let log_file = log_file.as_ref().to_path_buf();
         std::thread::spawn(move || {
             // start supervisor
             let result = std::process::Command::new(supervisor_path)
                 .arg("--uds")
-                .arg(uds)
+                .arg(supervisor_uds)
                 .arg("--pid-file")
                 .arg(pid_file)
                 .arg("--log-file")
