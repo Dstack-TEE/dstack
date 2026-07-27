@@ -2381,7 +2381,7 @@ impl<'a> Stage0<'a> {
                 FsType::Zfs => {
                     info!("Creating ZFS filesystem");
                     cmd! {
-                        zpool create -o autoexpand=on -o cachefile=none dstack $fs_dev;
+                        zpool create -o autoexpand=on dstack $fs_dev;
                         zfs create -o mountpoint=$mount_point -o atime=off -o checksum=blake3 dstack/data;
                     }
                     .context("Failed to create zpool")?;
