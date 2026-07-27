@@ -112,9 +112,9 @@ impl NsmState {
                     .collect::<BTreeMap<_, _>>();
                 generator
                     .attest_with_claims(
-                        user_data.as_deref(),
-                        nonce.as_deref(),
-                        public_key.as_deref(),
+                        user_data.as_ref().map(|value| value.as_slice()),
+                        nonce.as_ref().map(|value| value.as_slice()),
+                        public_key.as_ref().map(|value| value.as_slice()),
                         pcrs,
                     )
                     .map(|document| Response::Attestation { document })
@@ -431,7 +431,6 @@ pub fn run(config: &TeeSimulatorConfig) -> Result<()> {
 mod tests {
     use super::*;
     use aws_nitro_enclaves_nsm_api::api::Request;
-    use serde_bytes::ByteBuf;
 
     fn response_kind(response: &Response) -> &'static str {
         match response {
@@ -443,6 +442,7 @@ mod tests {
             Response::Attestation { .. } => "Attestation",
             Response::GetRandom { .. } => "GetRandom",
             Response::Error(_) => "Error",
+            _ => "Unknown",
         }
     }
 
@@ -521,17 +521,17 @@ mod tests {
         let response = state.handle(
             &generator,
             Request::Attestation {
-                user_data: Some(ByteBuf::from(b"user".to_vec())),
-                nonce: Some(ByteBuf::from(b"nonce".to_vec())),
-                public_key: Some(ByteBuf::from(b"public".to_vec())),
+                user_data: Some(b"user".to_vec().into()),
+                nonce: Some(b"nonce".to_vec().into()),
+                public_key: Some(b"public".to_vec().into()),
             },
         );
         let Response::Attestation { document } = response else {
             panic!("unexpected {}", response_kind(&response));
         };
-        let verified = verifier
-            .verify(&document, Some(b"nonce"), Some(b"user"))
-            .unwrap();
+        let verified = verifier.verify(&document, None, None).unwrap();
+        assert_eq!(verified.user_data.as_deref(), Some(b"user".as_slice()));
+        assert_eq!(verified.nonce.as_deref(), Some(b"nonce".as_slice()));
         assert_eq!(verified.public_key.as_deref(), Some(b"public".as_slice()));
         assert_eq!(
             verified.pcrs.get(&2).map(Vec::as_slice),
