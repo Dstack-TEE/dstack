@@ -1122,10 +1122,12 @@ fn cmd_vtpm_attest(args: VtpmAttestArgs) -> Result<()> {
             if let Some(error) = &result.error {
                 println!("Error: {}", error);
             }
-            anyhow::bail!("attestation failed");
         }
     }
 
+    if !result.success {
+        anyhow::bail!("attestation failed");
+    }
     Ok(())
 }
 
