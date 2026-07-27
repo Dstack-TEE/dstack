@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 
+
 def resolves_in_rootfs(root: str, path: str, depth: int = 0) -> bool:
     """Return whether a path exists in the image and its symlinks resolve.
 

@@ -90,9 +90,14 @@ done
 # The dev component cache must be stored in mkosi's BuildDirectory. A
 # BuildSources mount is an ephemeral overlay under BuildSourcesEphemeral=yes,
 # so a cache placed there is silently discarded on every run.
+# The single quotes are deliberate: these are grep patterns matching a literal
+# $BUILDDIR/$SRCDIR in the generated script, not shell expansions.
+# shellcheck disable=SC2016
 grep -q 'DSTACK_DEV_CACHE_DIR="\$BUILDDIR/components"' "$D/mkosi.build"
+# shellcheck disable=SC2016
 grep -q 'toolchain_downloads="\$BUILDDIR/toolchains"' "$D/mkosi.build"
 grep -q -- '--build-directory=' "$D/build.sh"
+# shellcheck disable=SC2016
 if grep -Fq 'DSTACK_DEV_CACHE_DIR="$SRCDIR' "$D/mkosi.build"; then
   echo 'dev cache must not live on an ephemeral source mount' >&2
   exit 1

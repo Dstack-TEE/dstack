@@ -106,6 +106,9 @@ install -m0644 "$ovmf_sev" "$OUT/files/ovmf-sev.fd"
 # Same definition assemble.sh records in metadata.json; the UKI and the
 # measurement inputs must describe the same command line.
 # shellcheck source=../../image/kernel-cmdline.sh
+# The prek hook runs shellcheck without -x, so the path above documents the
+# target but cannot be followed; SC1091 is noise rather than a finding.
+# shellcheck disable=SC1091
 source "$ROOT/os/image/kernel-cmdline.sh"
 cmdline=$(dstack_kernel_cmdline "$root_hash" "$data_size")
 ukify build --efi-arch=x64 --stub="$stub" --linux="$kernel" \

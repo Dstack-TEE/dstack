@@ -380,6 +380,9 @@ create_partitioned_rootfs "$ROOTFS_IMAGE" "${OUTPUT_DIR}/rootfs.img.parted.verit
 echo "Generating metadata.json to ${OUTPUT_DIR}/metadata.json (ovmf_variant=$OVMF_VARIANT)"
 
 # shellcheck source=kernel-cmdline.sh
+# The prek hook runs shellcheck without -x, so the path above documents the
+# target but cannot be followed; SC1091 is noise rather than a finding.
+# shellcheck disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/kernel-cmdline.sh"
 KERNEL_CMDLINE=$(dstack_kernel_cmdline "$ROOT_HASH" "$DATA_SIZE")
 
