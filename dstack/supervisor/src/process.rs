@@ -289,8 +289,19 @@ impl Process {
             if is_running {
                 bail!("Missing kill tx for process");
             }
+            state.status = ProcessStatus::Stopped;
+            state.stopped_at = Some(SystemTime::now());
             return Ok(());
         };
+        if !is_running {
+            // A process may exit cleanly just before an explicit stop reaches
+            // Supervisor (VM launchers do this after reaping their children).
+            // The requested persistent state is nevertheless stopped, not a
+            // stale natural-exit observation.
+            state.status = ProcessStatus::Stopped;
+            state.stopped_at = Some(SystemTime::now());
+            return Ok(());
+        }
         match stop_tx.send(()) {
             Ok(()) => Ok(()),
             Err(()) => match is_running {
