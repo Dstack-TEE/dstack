@@ -457,6 +457,25 @@ impl Proxy {
         })
     }
 
+    /// Parse and validate a WireGuard Curve25519 public key (base64, 32 raw bytes).
+    fn parse_wireguard_public_key(client_public_key: &str) -> Result<()> {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let key = client_public_key.trim();
+        if key.is_empty() {
+            bail!("client public key is empty");
+        }
+        let decoded = STANDARD.decode(key).map_err(|err| {
+            anyhow::anyhow!("invalid WireGuard client public key encoding: {err}")
+        })?;
+        if decoded.len() != 32 {
+            bail!(
+                "invalid WireGuard client public key length: expected 32 bytes, got {}",
+                decoded.len()
+            );
+        }
+        Ok(())
+    }
+
     /// Register a CVM with the given app_id, instance_id and client_public_key.
     ///
     /// `port_policy = None` means the CVM didn't report any policy (legacy
@@ -489,6 +508,8 @@ impl Proxy {
         if client_public_key.is_empty() {
             bail!("[{instance_id}] client public key is empty");
         }
+        Self::parse_wireguard_public_key(client_public_key)
+            .with_context(|| format!("[{instance_id}] invalid WireGuard client public key"))?;
         let client_info = state
             .new_client_by_id(
                 instance_id,
