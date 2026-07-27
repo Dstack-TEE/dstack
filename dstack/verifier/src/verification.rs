@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
+    collections::HashSet,
     ffi::OsStr,
-    path::{Path, PathBuf},
+    io::Read,
+    path::{Component, Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
@@ -415,26 +417,158 @@ impl CvmVerifier {
             .is_some_and(|digest| digest == expected))
     }
 
-    fn prune_unlisted_image_files(extracted_dir: &Path, files_doc: &str) -> Result<()> {
-        let listed_files: Vec<&OsStr> = files_doc
-            .lines()
-            .flat_map(|line| line.split_whitespace().nth(1))
-            .map(|s| s.as_ref())
-            .collect();
-        let files = fs_err::read_dir(extracted_dir).context("Failed to read directory")?;
-        for file in files {
-            let file = file.context("Failed to read directory entry")?;
-            let filename = file.file_name();
-            // sha256sum.txt is the content-addressed OS identity and is needed
-            // again when a legacy TDX quote is verified from the cache.
-            if filename != OsStr::new("sha256sum.txt")
-                && !listed_files.contains(&filename.as_os_str())
+    fn parse_image_manifest(files_doc: &str) -> Result<Vec<(PathBuf, [u8; 32])>> {
+        let mut entries = Vec::new();
+        let mut seen = HashSet::new();
+        for (line_index, line) in files_doc.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let mut fields = line.split_whitespace();
+            let digest = fields
+                .next()
+                .context("image manifest entry is missing a digest")?;
+            let name = fields
+                .next()
+                .context("image manifest entry is missing a path")?;
+            if fields.next().is_some() {
+                bail!("image manifest line {} has extra fields", line_index + 1);
+            }
+            let path = PathBuf::from(name);
+            if path.as_os_str().is_empty()
+                || path
+                    .components()
+                    .any(|part| !matches!(part, Component::Normal(_)))
             {
-                if file.path().is_dir() {
-                    fs_err::remove_dir_all(file.path()).context("Failed to remove directory")?;
-                } else {
-                    fs_err::remove_file(file.path()).context("Failed to remove file")?;
+                bail!("image manifest line {} has an unsafe path", line_index + 1);
+            }
+            if path == Path::new("sha256sum.txt") {
+                bail!("image manifest must not recursively list sha256sum.txt");
+            }
+            if !seen.insert(path.clone()) {
+                bail!("image manifest contains duplicate path {}", path.display());
+            }
+            let digest: [u8; 32] = hex::decode(digest)
+                .context("image manifest digest is not hexadecimal")?
+                .try_into()
+                .map_err(|_| anyhow!("image manifest digest is not SHA-256"))?;
+            entries.push((path, digest));
+        }
+        if entries.is_empty() {
+            bail!("image manifest contains no artifacts");
+        }
+        Ok(entries)
+    }
+
+    fn extract_image_archive(tarball_path: &Path, extracted_dir: &Path) -> Result<()> {
+        let file = fs_err::File::open(tarball_path).context("Failed to open image archive")?;
+        let decoder = flate2::read::GzDecoder::new(file);
+        let mut archive = tar::Archive::new(decoder);
+        for entry in archive.entries().context("Failed to read image archive")? {
+            let mut entry = entry.context("Failed to read image archive entry")?;
+            let path = entry
+                .path()
+                .context("Failed to decode image archive path")?;
+            if path.as_os_str().is_empty()
+                || path
+                    .components()
+                    .any(|part| !matches!(part, Component::Normal(_)))
+            {
+                bail!("image archive contains unsafe path {}", path.display());
+            }
+            let kind = entry.header().entry_type();
+            if !(kind.is_file() || kind.is_dir()) {
+                bail!(
+                    "image archive contains unsupported entry {}",
+                    path.display()
+                );
+            }
+            if !entry
+                .unpack_in(extracted_dir)
+                .context("Failed to extract image archive entry")?
+            {
+                bail!("image archive entry escaped the extraction root");
+            }
+        }
+        Ok(())
+    }
+
+    fn verify_image_manifest(extracted_dir: &Path, entries: &[(PathBuf, [u8; 32])]) -> Result<()> {
+        for (path, expected) in entries {
+            let artifact = extracted_dir.join(path);
+            let metadata = fs_err::symlink_metadata(&artifact)
+                .with_context(|| format!("manifest artifact is missing: {}", path.display()))?;
+            if !metadata.file_type().is_file() {
+                bail!(
+                    "manifest artifact is not a regular file: {}",
+                    path.display()
+                );
+            }
+            let mut file = fs_err::File::open(&artifact)
+                .with_context(|| format!("failed to open manifest artifact {}", path.display()))?;
+            let mut hasher = Sha256::new();
+            let mut buffer = [0u8; 64 * 1024];
+            loop {
+                let read = file.read(&mut buffer).with_context(|| {
+                    format!("failed to read manifest artifact {}", path.display())
+                })?;
+                if read == 0 {
+                    break;
                 }
+                hasher.update(&buffer[..read]);
+            }
+            if hasher.finalize().as_slice() != expected {
+                bail!("checksum mismatch for manifest artifact {}", path.display());
+            }
+        }
+        Ok(())
+    }
+
+    fn prune_unlisted_image_files(
+        extracted_dir: &Path,
+        entries: &[(PathBuf, [u8; 32])],
+    ) -> Result<()> {
+        let listed = entries
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect::<HashSet<_>>();
+        let mut allowed_dirs = HashSet::new();
+        for path in &listed {
+            let mut parent = path.parent();
+            while let Some(path) = parent {
+                if path.as_os_str().is_empty() {
+                    break;
+                }
+                allowed_dirs.insert(path.to_path_buf());
+                parent = path.parent();
+            }
+        }
+        let mut pending = vec![extracted_dir.to_path_buf()];
+        let mut directories = Vec::new();
+        while let Some(directory) = pending.pop() {
+            for entry in fs_err::read_dir(&directory).context("Failed to read image directory")? {
+                let entry = entry.context("Failed to read image directory entry")?;
+                let path = entry.path();
+                let relative = path
+                    .strip_prefix(extracted_dir)
+                    .context("image cache path escaped its root")?
+                    .to_path_buf();
+                let kind = entry
+                    .file_type()
+                    .context("Failed to inspect image cache entry")?;
+                if kind.is_dir() {
+                    pending.push(path.clone());
+                    directories.push((path, relative));
+                } else if relative != Path::new("sha256sum.txt") && !listed.contains(&relative) {
+                    fs_err::remove_file(&path).context("Failed to remove unlisted image file")?;
+                }
+            }
+        }
+        directories.sort_by_key(|(path, _)| std::cmp::Reverse(path.components().count()));
+        for (path, relative) in directories {
+            if !allowed_dirs.contains(&relative) {
+                fs_err::remove_dir_all(path)
+                    .context("Failed to remove unlisted image directory")?;
             }
         }
         Ok(())
@@ -1166,43 +1300,18 @@ impl CvmVerifier {
         let extracted_dir = tmp_dir.join("extracted");
         fs_err::create_dir_all(&extracted_dir).context("Failed to create extraction directory")?;
 
-        // Extract the tarball
-        let output = Command::new("tar")
-            .arg("xzf")
-            .arg(&tarball_path)
-            .current_dir(&extracted_dir)
-            .output()
+        file.flush()
             .await
-            .context("Failed to extract tarball")?;
+            .context("Failed to flush image archive")?;
+        drop(file);
+        Self::extract_image_archive(&tarball_path, &extracted_dir)?;
 
-        if !output.status.success() {
-            bail!(
-                "Failed to extract tarball: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-
-        // Verify checksum
-        let output = Command::new("sha256sum")
-            .arg("-c")
-            .arg("sha256sum.txt")
-            .current_dir(&extracted_dir)
-            .output()
-            .await
-            .context("Failed to verify checksum")?;
-
-        if !output.status.success() {
-            bail!(
-                "Checksum verification failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-
-        // Remove the files that are not listed in sha256sum.txt
         let sha256sum_path = extracted_dir.join("sha256sum.txt");
         let files_doc =
             fs_err::read_to_string(&sha256sum_path).context("Failed to read sha256sum.txt")?;
-        Self::prune_unlisted_image_files(&extracted_dir, &files_doc)?;
+        let manifest = Self::parse_image_manifest(&files_doc)?;
+        Self::verify_image_manifest(&extracted_dir, &manifest)?;
+        Self::prune_unlisted_image_files(&extracted_dir, &manifest)?;
 
         // All image modes are addressed by sha256(sha256sum.txt). Extra
         // measurement CBOR files are ordinary sha256sum.txt entries and do not
@@ -1410,11 +1519,78 @@ mod tests {
         fs_err::write(dir.path().join("metadata.json"), "{}").unwrap();
         fs_err::write(dir.path().join("unmeasured"), "remove me").unwrap();
 
-        CvmVerifier::prune_unlisted_image_files(dir.path(), files_doc).unwrap();
+        let manifest = CvmVerifier::parse_image_manifest(files_doc).unwrap();
+        CvmVerifier::prune_unlisted_image_files(dir.path(), &manifest).unwrap();
 
         assert!(dir.path().join("sha256sum.txt").exists());
         assert!(dir.path().join("metadata.json").exists());
         assert!(!dir.path().join("unmeasured").exists());
+    }
+
+    #[test]
+    fn image_manifest_rejects_unsafe_duplicate_and_invalid_entries() {
+        for document in [
+            "00  ../escape\n",
+            "00  /absolute\n",
+            "00  nested/../escape\n",
+            &format!(
+                "{}  artifact\n{}  artifact\n",
+                "00".repeat(32),
+                "00".repeat(32)
+            ),
+            "not-a-digest  artifact\n",
+            "",
+        ] {
+            assert!(
+                CvmVerifier::parse_image_manifest(document).is_err(),
+                "{document:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn image_archive_rejects_links_and_accepts_valid_nested_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let valid = directory.path().join("valid.tar.gz");
+        {
+            let file = fs_err::File::create(&valid).unwrap();
+            let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+            let mut archive = tar::Builder::new(encoder);
+            let payload = b"artifact";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(payload.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, "nested/artifact", &payload[..])
+                .unwrap();
+            archive.finish().unwrap();
+        }
+        let output = directory.path().join("valid-output");
+        fs_err::create_dir(&output).unwrap();
+        CvmVerifier::extract_image_archive(&valid, &output).unwrap();
+        assert_eq!(
+            fs_err::read(output.join("nested/artifact")).unwrap(),
+            b"artifact"
+        );
+
+        let linked = directory.path().join("linked.tar.gz");
+        {
+            let file = fs_err::File::create(&linked).unwrap();
+            let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+            let mut archive = tar::Builder::new(encoder);
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_size(0);
+            header.set_mode(0o777);
+            header.set_link_name("../outside").unwrap();
+            header.set_cksum();
+            archive.append_data(&mut header, "link", &[][..]).unwrap();
+            archive.finish().unwrap();
+        }
+        let output = directory.path().join("linked-output");
+        fs_err::create_dir(&output).unwrap();
+        assert!(CvmVerifier::extract_image_archive(&linked, &output).is_err());
     }
 
     #[tokio::test]
