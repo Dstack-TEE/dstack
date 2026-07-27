@@ -397,6 +397,29 @@ fn networks_from_vm_config(
     }
 }
 
+fn validate_resize_request(request: &ResizeVmRequest) -> Result<()> {
+    if request.vcpu.is_none()
+        && request.memory.is_none()
+        && request.disk_size.is_none()
+        && request.image.is_none()
+    {
+        bail!("resize request contains no updates");
+    }
+    if request.vcpu == Some(0) {
+        bail!("vcpu must be greater than zero");
+    }
+    if request.memory == Some(0) {
+        bail!("memory must be greater than zero");
+    }
+    if request.disk_size == Some(0) {
+        bail!("disk_size must be greater than zero");
+    }
+    if request.image.as_deref() == Some("") {
+        bail!("image must not be empty");
+    }
+    Ok(())
+}
+
 impl RpcHandler {
     fn resolve_gpus(&self, gpu_cfg: &rpc::GpuConfig) -> Result<GpuConfig> {
         resolve_gpus_with_config(gpu_cfg, &self.app.config.cvm)
@@ -683,6 +706,7 @@ impl VmmRpc for RpcHandler {
     #[tracing::instrument(skip(self, request), fields(id = request.id))]
     async fn resize_vm(self, request: ResizeVmRequest) -> Result<()> {
         info!("Resizing VM: {:?}", request);
+        validate_resize_request(&request)?;
         let vm_work_dir = self.app.work_dir(&request.id);
         let mut manifest = vm_work_dir.manifest().context("failed to read manifest")?;
         self.apply_resource_updates(
@@ -1011,6 +1035,30 @@ mod tests {
             create_manifest_from_vm_config(test_vm_configuration(), &test_cvm_config()).unwrap();
 
         assert!(manifest.networks.is_empty());
+    }
+
+    #[test]
+    fn resize_request_rejects_empty_zero_and_empty_image_updates() {
+        let mut request = ResizeVmRequest {
+            id: "vm-1".into(),
+            ..Default::default()
+        };
+        assert!(validate_resize_request(&request).is_err());
+
+        request.vcpu = Some(0);
+        assert!(validate_resize_request(&request).is_err());
+        request.vcpu = Some(1);
+        assert!(validate_resize_request(&request).is_ok());
+
+        request.vcpu = None;
+        request.memory = Some(0);
+        assert!(validate_resize_request(&request).is_err());
+        request.memory = None;
+        request.disk_size = Some(0);
+        assert!(validate_resize_request(&request).is_err());
+        request.disk_size = None;
+        request.image = Some(String::new());
+        assert!(validate_resize_request(&request).is_err());
     }
 
     #[test]
