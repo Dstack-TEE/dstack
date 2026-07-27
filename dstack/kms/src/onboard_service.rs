@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use anyhow::{bail, Context, Result};
 use dstack_kms_rpc::{
@@ -199,7 +202,11 @@ impl OnboardRpc for OnboardHandler {
     }
 
     async fn finish(self) -> anyhow::Result<()> {
-        std::process::exit(0);
+        tokio::spawn(async {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            std::process::exit(0);
+        });
+        Ok(())
     }
 }
 
