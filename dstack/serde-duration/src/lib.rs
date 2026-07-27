@@ -30,16 +30,29 @@ fn parse(s: &str) -> Result<Duration, String> {
     if s == "never" {
         return Ok(Duration::MAX);
     }
-    let (value, unit) = s.split_at(s.len() - 1);
+    // Split on the last *character*, not the last byte: `split_at(len - 1)`
+    // panics inside `core::str` when the unit is multi-byte, and a config file
+    // is exactly the place where a typo should be reported, not panicked on.
+    let unit_start = s
+        .char_indices()
+        .next_back()
+        .map(|(i, _)| i)
+        .ok_or_else(|| "Duration string cannot be empty".to_string())?;
+    let (value, unit) = s.split_at(unit_start);
     let value = value.parse::<u64>().map_err(|e| e.to_string())?;
 
-    let seconds = match unit {
-        "s" => value,
-        "m" => value * 60,
-        "h" => value * 3600,
-        "d" => value * 24 * 3600,
+    let multiplier = match unit {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3600,
+        "d" => 24 * 3600,
         _ => return Err("Invalid time unit. Use s, m, h, or d".to_string()),
     };
+    // Checked: `18446744073709551615d` would otherwise wrap to a short duration
+    // in release builds, i.e. a timeout far tighter than the operator asked for.
+    let seconds = value
+        .checked_mul(multiplier)
+        .ok_or_else(|| format!("Duration {s} is too large"))?;
 
     Ok(Duration::from_secs(seconds))
 }
@@ -149,5 +162,23 @@ mod tests {
         let text = serde_json::to_string(&v).unwrap();
         assert_eq!(text, r#"{"d":"5m"}"#);
         assert_eq!(serde_json::from_str::<Opt>(&text).unwrap(), v);
+    }
+
+    /// A bad unit is a config typo, so it has to come back as an error --
+    /// including when the typo is not ASCII, where splitting on the last byte
+    /// used to panic inside `core::str`.
+    #[test]
+    fn a_bad_unit_is_an_error_not_a_panic() {
+        assert!(parse("5\u{5206}").is_err());
+        assert!(parse("5x").is_err());
+        assert!(parse("\u{5206}").is_err());
+        assert!(parse("s").is_err());
+    }
+
+    /// Overflow would silently wrap to a much shorter timeout than asked for.
+    #[test]
+    fn an_oversized_duration_is_rejected() {
+        assert!(parse(&format!("{}d", u64::MAX)).is_err());
+        assert_eq!(parse("5m").unwrap(), Duration::from_secs(300));
     }
 }
