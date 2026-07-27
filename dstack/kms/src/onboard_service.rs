@@ -4,7 +4,6 @@
 
 use std::{
     sync::{Arc, Mutex},
-    time::Duration,
 };
 
 use anyhow::{bail, Context, Result};
@@ -48,6 +47,7 @@ pub struct OnboardState {
     config: KmsConfig,
     attestation_verifier: Arc<AttestationVerifier>,
     bootstrap_lock: Arc<AsyncMutex<()>>,
+    shutdown: Arc<Mutex<Option<rocket::Shutdown>>>,
 }
 
 impl OnboardState {
@@ -60,7 +60,16 @@ impl OnboardState {
             config,
             attestation_verifier,
             bootstrap_lock: Arc::new(AsyncMutex::new(())),
+            shutdown: Arc::new(Mutex::new(None)),
         })
+    }
+
+    pub fn set_shutdown(&self, shutdown: rocket::Shutdown) -> Result<()> {
+        *self
+            .shutdown
+            .lock()
+            .map_err(|_| anyhow::anyhow!("onboard shutdown lock poisoned"))? = Some(shutdown);
+        Ok(())
     }
 }
 
@@ -202,10 +211,14 @@ impl OnboardRpc for OnboardHandler {
     }
 
     async fn finish(self) -> anyhow::Result<()> {
-        tokio::spawn(async {
-            tokio::time::sleep(Duration::from_millis(250)).await;
-            std::process::exit(0);
-        });
+        let shutdown = self
+            .state
+            .shutdown
+            .lock()
+            .map_err(|_| anyhow::anyhow!("onboard shutdown lock poisoned"))?
+            .clone()
+            .context("onboard shutdown handle is unavailable")?;
+        shutdown.notify();
         Ok(())
     }
 }
