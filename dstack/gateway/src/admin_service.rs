@@ -340,7 +340,14 @@ impl AdminRpc for AdminRpcHandler {
         let now = now_secs();
         let id = generate_cred_id();
         let dns_txt_ttl = request.dns_txt_ttl.unwrap_or(60);
-        let max_dns_wait = Duration::from_secs(request.max_dns_wait.unwrap_or(60 * 5).into());
+        let max_dns_wait_secs = request.max_dns_wait.unwrap_or(60 * 5);
+        if dns_txt_ttl == 0 {
+            bail!("dns_txt_ttl must be greater than zero");
+        }
+        if max_dns_wait_secs == 0 {
+            bail!("max_dns_wait must be greater than zero");
+        }
+        let max_dns_wait = Duration::from_secs(max_dns_wait_secs.into());
         let cred = DnsCredential {
             id: id.clone(),
             name: request.name,
