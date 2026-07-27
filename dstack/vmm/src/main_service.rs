@@ -1056,6 +1056,8 @@ mod tests {
             (None, "tpm", true),
             (Some("dstack-tdx"), "tpm", true),
             (Some("dstack-gcp-tdx"), "tpm", false),
+            (Some("dstack-nitro-enclave"), "tpm", true),
+            (Some("dstack-amd-sev-snp"), "tpm", true),
             (Some("dstack-aws-nitro-tpm"), "tpm", false),
             (Some("dstack-tdx"), "kms", false),
         ];
