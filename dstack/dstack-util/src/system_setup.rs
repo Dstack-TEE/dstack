@@ -2041,7 +2041,7 @@ impl<'a> Stage0<'a> {
             .tls_client_key(cert_pair.key_pem)
             .tls_ca_cert(tmp_ca.ca_cert.clone())
             .attestation_verifier(attestation_verifier)
-            .cert_validator(Box::new(|cert| {
+            .cert_validator(Box::new(move |cert| {
                 let Some(cert) = cert else {
                     bail!("Missing server cert");
                 };
