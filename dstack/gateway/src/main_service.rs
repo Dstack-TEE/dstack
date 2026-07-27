@@ -1345,8 +1345,11 @@ impl ProxyState {
         Ok(())
     }
 
-    pub(crate) fn exit(&mut self) -> ! {
-        std::process::exit(0);
+    pub(crate) fn exit(&mut self) {
+        tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            std::process::exit(0);
+        });
     }
 
     pub(crate) fn refresh_state(&mut self) -> Result<()> {

@@ -84,6 +84,7 @@ impl AdminRpcHandler {
 impl AdminRpc for AdminRpcHandler {
     async fn exit(self) -> Result<()> {
         self.state.lock().exit();
+        Ok(())
     }
 
     async fn renew_cert(self) -> Result<RenewCertResponse> {
