@@ -6,6 +6,7 @@ use std::{
     io::Write,
     path::Path,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use anyhow::{bail, Context, Result};
@@ -223,7 +224,11 @@ impl OnboardRpc for OnboardHandler {
     }
 
     async fn finish(self) -> anyhow::Result<()> {
-        std::process::exit(0);
+        tokio::spawn(async {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            std::process::exit(0);
+        });
+        Ok(())
     }
 }
 
