@@ -397,15 +397,30 @@ impl Proxy {
                     .await?;
                 let (drained, stream) = tls_stream.into_raw();
                 let (buffered, tcp) = stream.into_parts();
-                // Anything already read during handshake drain must reach the
-                // app before the kernel starts moving bytes directly.
-                for chunk in [drained.unwrap_or_default(), buffered] {
-                    if !chunk.is_empty() {
-                        outbound
-                            .write_all(&chunk)
-                            .await
-                            .context("failed to flush drained data to app")?;
-                    }
+                // These two are not the same kind of data and must not be
+                // treated as interchangeable: `drained` is plaintext rustls
+                // decrypted past the handshake and owes to the app, while
+                // `buffered` is whatever raw *ciphertext* was left in the SNI
+                // sniff buffer. Forwarding the latter would hand the app TLS
+                // records to interpret as application data.
+                //
+                // A completed handshake always consumes the sniff buffer, so
+                // this is unreachable rather than merely unlikely -- but it is
+                // cheap to refuse instead of finding out by corrupting a stream.
+                if !buffered.is_empty() {
+                    bail!(
+                        "{} bytes of unconsumed ciphertext at kTLS handover",
+                        buffered.len()
+                    );
+                }
+                // Plaintext rustls already decrypted has to reach the app before
+                // the kernel starts moving bytes directly.
+                let drained = drained.unwrap_or_default();
+                if !drained.is_empty() {
+                    outbound
+                        .write_all(&drained)
+                        .await
+                        .context("failed to flush drained data to app")?;
                 }
                 return super::splice::splice_bidirectional(
                     tcp,

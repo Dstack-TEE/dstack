@@ -115,6 +115,18 @@ pub struct ProxyConfig {
     #[serde(deserialize_with = "deserialize_port_range")]
     pub listen_port: Vec<u16>,
     pub timeouts: Timeouts,
+    /// Relay buffer size, per direction, for connections that copy through
+    /// userspace -- TLS terminate, and passthrough before the splice gate.
+    ///
+    /// Costs `2 * buffer_size` of address space per such connection, of which
+    /// only the pages actually touched become resident: measured at 2 000
+    /// concurrent streaming connections, the userspace relay path sat at ~52 KB
+    /// RSS per connection. Budget for it before raising this on a gateway that
+    /// fronts many idle-ish connections; the same measurement with kTLS, where
+    /// the payload is spliced and never enters the process, was ~12 KB.
+    ///
+    /// 64 KiB is the bulk-throughput sweet spot: it is large enough to keep a
+    /// 1 MiB pipe fed without the syscall rate 8 KiB imposed.
     pub buffer_size: usize,
     pub connect_top_n: usize,
     pub localhost_enabled: bool,
