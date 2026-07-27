@@ -1,0 +1,78 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Gateway proxy tests
+
+# The gateway's proxy data path has two opt-in optimisations (`tcp_splice`,
+# `ktls`) whose behaviour depends on kernel capabilities and on a per-connection
+# gate. Unit tests cover the relay functions; this runs a real gateway process
+# and asserts on what actually reaches the wire.
+on:
+  push:
+    branches: [ master, next, dev-* ]
+    paths:
+      - 'dstack/gateway/**'
+      - 'dstack/vendor/ktls/**'
+      - '.github/workflows/gateway-proxy-tests.yml'
+  pull_request:
+    branches: [ master, next, dev-* ]
+    paths:
+      - 'dstack/gateway/**'
+      - 'dstack/vendor/ktls/**'
+      - '.github/workflows/gateway-proxy-tests.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  proxy-integration:
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    # Each of the ~25 arms restarts the gateway, and the idle-timeout arms wait
+    # out a real timeout, so this is minutes rather than seconds.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.92.0
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            dstack/target
+          key: gateway-proxy-${{ runner.os }}-${{ hashFiles('dstack/Cargo.lock') }}
+          restore-keys: gateway-proxy-${{ runner.os }}-
+
+      - name: Build the gateway
+        working-directory: dstack
+        run: cargo build --release -p dstack-gateway
+
+      - name: Record kernel capabilities
+        # The suite adapts to what the kernel offers, so the log needs to say
+        # what it had: a run that skipped kTLS looks the same as one that
+        # covered it otherwise.
+        run: |
+          echo "kernel: $(uname -r)"
+          sudo modprobe tls 2>&1 || echo "no TLS ULP available"
+          echo "tls module loaded: $(lsmod | grep -c '^tls ' || true)"
+          grep -B2 -A3 'gcm(aes)' /proc/crypto | grep -E '^(driver|priority)' \
+            | paste - - | sort -u || true
+
+      - name: Proxy integration tests
+        working-directory: dstack/gateway/test-run
+        env:
+          GATEWAY_BIN: ${{ github.workspace }}/dstack/target/release/dstack-gateway
+        run: ./test_proxy.sh
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-proxy-test-logs
+          path: /tmp/dstack-gw-proxy-test.*/logs/
+          if-no-files-found: ignore
+          retention-days: 7

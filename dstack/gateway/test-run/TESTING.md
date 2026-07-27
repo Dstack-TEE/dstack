@@ -189,3 +189,36 @@ gh pr checks <PR_NUMBER> --repo Dstack-TEE/dstack --watch=false
 
 Expected result: all required checks pass, including `gateway`, `rust-checks`,
 `prek`, `reuse-lint`, and CodeQL.
+
+## Proxy data-path integration tests
+
+`test_proxy.sh` runs a real gateway process and asserts on what reaches the
+wire, across every combination of the two gated optimisations and both proxy
+paths. It runs in CI (`.github/workflows/gateway-proxy-tests.yml`); unlike
+`test_suite.sh` it needs no root for the gateway itself, only one `sudo ip link
+add` for the link the gateway expects at startup.
+
+```bash
+cd gateway/test-run
+./test_proxy.sh                                   # builds the gateway if needed
+GATEWAY_BIN=../../target/release/dstack-gateway ./test_proxy.sh
+BASE_PORT=39000 ./test_proxy.sh                   # if the default range is busy
+KEEP_LOGS=1 ./test_proxy.sh                       # keep the work dir on success
+```
+
+What it covers:
+
+| group | asserts |
+|---|---|
+| data path | payloads survive byte-for-byte on both paths, under and over each gate, and under concurrency |
+| close | the app closing reaches the client as an orderly TLS shutdown, including after kTLS offload |
+| `timeouts.idle` | the idle watchdog reaps on every relay path -- buffered, spliced, kTLS -- and `data_timeout_enabled = false` still opts out |
+| kTLS engagement | offload happens, and only once the gate fires; no TLS decrypt errors |
+| capability fallbacks | a kernel without the TLS ULP warns and keeps serving untruncated; an inert `connection_rebalance` warns |
+| runtime modes | every `thread_per_core` / `connection_rebalance` combination serves traffic |
+| Status RPC | the accel counters reflect the traffic that ran |
+
+The suite adapts to the host: groups that need a capability the kernel or the
+privileges do not provide are reported as `SKIP` with the reason, never silently
+passed. Half-close is deliberately not covered here -- see the comment in the
+script for why it is only expressible as a unit test.
