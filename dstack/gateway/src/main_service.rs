@@ -1492,22 +1492,27 @@ impl GatewayRpc for RpcHandler {
         let app_id = hex::encode(&app_info.app_id);
         let instance_id = hex::encode(&app_info.instance_id);
         let compose_hash = hex::encode(&app_info.compose_hash);
-        let port_policy = request.port_policy.map(|p| {
-            let ports = p
-                .ports
-                .into_iter()
-                .filter_map(|attr| {
-                    // Wire format is uint32 to avoid varint shenanigans, but valid TCP
-                    // ports fit in u16. Drop out-of-range entries instead of truncating.
-                    let port = u16::try_from(attr.port).ok()?;
-                    Some((port, crate::kv::PortFlags { pp: attr.pp }))
+        let port_policy = request
+            .port_policy
+            .map(|policy| -> Result<PortPolicy> {
+                let ports = policy
+                    .ports
+                    .into_iter()
+                    .map(|attr| {
+                        let port = u16::try_from(attr.port)
+                            .with_context(|| format!("port {} out of u16 range", attr.port))?;
+                        if port == 0 {
+                            bail!("port must be between 1 and 65535");
+                        }
+                        Ok((port, crate::kv::PortFlags { pp: attr.pp }))
+                    })
+                    .collect::<Result<_>>()?;
+                Ok(PortPolicy {
+                    ports,
+                    restrict_mode: policy.restrict_mode,
                 })
-                .collect();
-            PortPolicy {
-                ports,
-                restrict_mode: p.restrict_mode,
-            }
-        });
+            })
+            .transpose()?;
         self.state.do_register_cvm(
             &app_id,
             &instance_id,
