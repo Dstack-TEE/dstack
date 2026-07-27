@@ -31,7 +31,7 @@ use crate::{
     kv::{DnsCredential, DnsProvider, NodeStatus, PortFlags, PortPolicy, ZtDomainConfig},
     main_service::Proxy,
     models::PortPolicyView,
-    proxy::NUM_CONNECTIONS,
+    proxy::{stats::accel_status, NUM_CONNECTIONS},
 };
 
 pub struct AdminRpcHandler {
@@ -74,6 +74,9 @@ impl AdminRpcHandler {
             nodes: state.get_all_nodes(),
             hosts,
             num_connections: NUM_CONNECTIONS.load(Ordering::Relaxed),
+            // Reads the post-probe config, so this is what the data path is
+            // running rather than what the file asked for.
+            accel: Some(accel_status(&state.config.proxy)),
         })
     }
 }

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use dstack_gateway_rpc::{AcmeInfoResponse, StatusResponse};
+use dstack_gateway_rpc::{AcmeInfoResponse, ProxyAccelStatus, StatusResponse};
 use rinja::Template;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -168,4 +168,7 @@ pub struct WgConf<'a> {
 pub struct Dashboard {
     pub status: StatusResponse,
     pub acme_info: AcmeInfoResponse,
+    /// Lifted out of `status` so the template does not have to unwrap the
+    /// proto's optional message on every field.
+    pub accel: ProxyAccelStatus,
 }

@@ -71,6 +71,11 @@ members = [
     "crates/build-info",
     "crates/mock-attestation",
 ]
+# Vendored third-party crates are path dependencies but deliberately not members:
+# `--all-features` applies to members, and ktls declares its `ring` and
+# `aws_lc_rs` features mutually exclusive, so membership makes
+# `cargo test --all-features` fail to compile.
+exclude = ["vendor/ktls"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -141,6 +146,9 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 safe-write = "0.1.2"
 rustix = { version = "0.38", features = ["fs"] }
 nix = "0.29.0"
+# Vendored: 6.0.2 does not build for musl. See vendor/README.md.
+ktls = { path = "vendor/ktls" }
+socket2 = { version = "0.5", features = ["all"] }
 sd-notify = "0.4.5"
 listenfd = "1.0"
 jemallocator = "0.5.4"

@@ -240,11 +240,14 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let figment = config::load_config_figment(args.config.as_deref());
 
-    let config = figment.focus("core").extract::<Config>()?;
+    let mut config = figment.focus("core").extract::<Config>()?;
     // Validate node_id
     if config.sync.enabled && config.sync.node_id == 0 {
         anyhow::bail!("node_id must be greater than 0");
     }
+    // Before anything reads `proxy.ktls`: the acceptor built later decides
+    // whether to extract session secrets from it.
+    proxy::disable_ktls_if_unsupported(&mut config.proxy);
 
     config::setup_wireguard(&config.wg)?;
 

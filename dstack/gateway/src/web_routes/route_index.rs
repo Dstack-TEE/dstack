@@ -23,7 +23,12 @@ pub async fn index(state: &State<Proxy>) -> anyhow::Result<Html<String>> {
         .acme_info()
         .await
         .context("Failed to get ACME info")?;
-    let model = Dashboard { status, acme_info };
+    let accel = status.accel.clone().unwrap_or_default();
+    let model = Dashboard {
+        status,
+        acme_info,
+        accel,
+    };
     let html = model.render().context("Failed to render template")?;
     Ok(Html(html))
 }

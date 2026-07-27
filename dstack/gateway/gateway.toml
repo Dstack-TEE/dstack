@@ -77,18 +77,44 @@ tls_versions = ["1.2"]
 listen_addr = "0.0.0.0"
 listen_port = 8443
 agent_port = 8090
-buffer_size = 8192
+buffer_size = 65536
 # number of hosts to try to connect to
 connect_top_n = 3
 localhost_enabled = false
 app_address_ns_prefix = "_dstack-app-address"
 app_address_ns_compat = true
 workers = 32
+# One runtime + SO_REUSEPORT listener per worker (thread-per-core). Linux only.
+thread_per_core = true
+# Hand new connections to a less loaded core when SO_REUSEPORT skews them.
+connection_rebalance = true
 external_port = 443
 # Maximum concurrent connections per app. 0 means unlimited.
 max_connections_per_app = 2000
 # Whether to read PROXY protocol from inbound connections (e.g. from Cloudflare).
 inbound_pp_enabled = false
+# splice(2) zero-copy relaying for the TLS-passthrough path (Linux only), and
+# kernel TLS offload for the terminate path, are both configured by an optional
+# section. Omitting the section disables the optimisation; an empty section
+# engages it from the first byte; `after_bytes` / `after_duration` are two
+# independent gates and whichever fires first engages it.
+#
+# [core.proxy.tcp_splice]
+# # Bulk transfers trip this within milliseconds.
+# after_bytes = 65536
+# # Long-lived low-rate streams (e.g. LLM token streaming) never accumulate
+# # bytes fast enough for the gate above, so they need this one instead.
+# after_duration = "5s"
+# # Park a relay's pipe in the pool while it waits for the next chunk. A spliced
+# # connection otherwise pins 4 descriptors for its whole lifetime, so bursty
+# # traffic (a token every 25 ms) holds them >99% idle.
+# release_idle_pipes = true
+#
+# kTLS hands session keys to the kernel; see config.rs for the security note.
+# Gated offload also requires [core.proxy.tcp_splice].
+#
+# [core.proxy.ktls]
+# after_bytes = 65536
 
 [core.proxy.port_policy_fetch]
 # Background lazy-fetch of port_policy from legacy CVM agents.

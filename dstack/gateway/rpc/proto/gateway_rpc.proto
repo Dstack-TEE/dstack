@@ -104,6 +104,28 @@ message StatusResponse {
   repeated GatewayNodeInfo nodes = 6;
   // Peer uuid
   bytes uuid = 7;
+  // What the data path is actually doing with kTLS and splice.
+  ProxyAccelStatus accel = 8;
+}
+
+// Effective state of the data-path acceleration options.
+//
+// The configured value does not say what is running: the startup probe can turn
+// kTLS off on a kernel without the TLS ULP, and both options engage per
+// connection only once their gate fires. These are reported so an operator can
+// tell the difference without reading the startup log.
+message ProxyAccelStatus {
+  // Effective kTLS mode: "off", "immediate", "after 64 KiB or 5s", or
+  // "disabled (kernel has no TLS ULP)" when the startup probe cleared it.
+  string ktls_mode = 1;
+  // Effective splice mode, same encoding minus the probe case.
+  string splice_mode = 2;
+  // Connections handed to the kernel's TLS ULP since start.
+  uint64 ktls_offloaded = 3;
+  // Connections whose handover to the kernel failed.
+  uint64 ktls_offload_failed = 4;
+  // Connections that entered a zero-copy splice relay, on either path.
+  uint64 splice_engaged = 5;
 }
 
 // HostInfo is the information of a host.

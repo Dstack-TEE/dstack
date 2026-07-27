@@ -22,7 +22,7 @@ use tokio::{
     runtime::Runtime,
     time::timeout,
 };
-use tracing::{debug, error, info, info_span, Instrument};
+use tracing::{debug, debug_span, error, info, warn, Instrument};
 
 use crate::{
     config::ProxyConfig,
@@ -42,9 +42,15 @@ pub(crate) struct AddressInfo {
 
 pub(crate) type AddressGroup = smallvec::SmallVec<[AddressInfo; 4]>;
 
+mod adaptive_ktls;
+mod balance;
+mod idle;
 mod io_bridge;
 pub(crate) mod port_policy;
+mod reuseport;
 mod sni;
+mod splice;
+pub(crate) mod stats;
 mod tls_passthough;
 mod tls_terminate;
 
@@ -141,7 +147,7 @@ async fn handle_connection(inbound: TcpStream, state: Proxy) -> Result<()> {
         .await
         .context("proxy protocol header timeout")?
         .context("failed to read proxy protocol header")?;
-    info!("client address: {}", DisplayAddr(&pp_header));
+    debug!("client address: {}", DisplayAddr(&pp_header));
 
     let (sni, buffer) = timeout(timeouts.handshake, take_sni(&mut inbound))
         .await
@@ -168,64 +174,172 @@ async fn handle_connection(inbound: TcpStream, state: Proxy) -> Result<()> {
     }
 }
 
-#[inline(never)]
-pub async fn proxy_main(rt: &Runtime, config: &ProxyConfig, proxy: Proxy) -> Result<()> {
+/// Bind one listener per configured port.
+///
+/// With `reuse_port` every worker binds its own listener on the same port and
+/// the kernel spreads incoming connections across them, so each worker can
+/// accept and serve its connections without any cross-thread handoff.
+/// Accept queue depth. tokio's default is 1024, which is where SYN drops start
+/// under connection bursts; both listen paths use this so they behave alike.
+const LISTEN_BACKLOG: i32 = 4096;
+
+async fn bind_listeners(config: &ProxyConfig, reuse_port: bool) -> Result<Vec<TcpListener>> {
     let mut tcp_listeners = Vec::new();
     for &port in &config.listen_port {
-        let listener = TcpListener::bind((config.listen_addr, port))
-            .await
-            .with_context(|| format!("failed to bind {}:{}", config.listen_addr, port))?;
+        let listener = {
+            let addr = std::net::SocketAddr::from((config.listen_addr, port));
+            let socket = socket2::Socket::new(
+                socket2::Domain::IPV4,
+                socket2::Type::STREAM,
+                Some(socket2::Protocol::TCP),
+            )
+            .context("failed to create listening socket")?;
+            if reuse_port {
+                socket
+                    .set_reuse_port(true)
+                    .context("failed to set SO_REUSEPORT")?;
+            }
+            socket.set_reuse_address(true).ok();
+            socket.set_nonblocking(true).ok();
+            socket
+                .bind(&addr.into())
+                .with_context(|| format!("failed to bind {addr}"))?;
+            socket.listen(LISTEN_BACKLOG).context("failed to listen")?;
+            TcpListener::from_std(std::net::TcpListener::from(socket))
+                .context("failed to register listener with tokio")?
+        };
         info!("tcp bridge listening on {}:{}", config.listen_addr, port);
         tcp_listeners.push(listener);
     }
+    Ok(tcp_listeners)
+}
+
+#[inline(never)]
+pub async fn proxy_main(rt: &Runtime, config: &ProxyConfig, proxy: Proxy) -> Result<()> {
+    let tcp_listeners = bind_listeners(config, false).await?;
+    accept_loop(tcp_listeners, proxy, Some(rt), None).await
+}
+
+/// The per-connection task: everything a single proxied connection does.
+/// Was this failure just the peer hanging up?
+///
+/// Clients disconnecting mid-connection is routine -- a browser navigating away,
+/// a mobile network dropping, a load generator ending its run. Logging those at
+/// error level buries the failures that are actually the gateway's fault: a 40
+/// minute soak produced 379 such lines and no real errors.
+fn is_peer_disconnect(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
+            matches!(
+                io.kind(),
+                std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::ConnectionAborted
+            )
+        })
+    })
+}
+
+fn conn_task(
+    inbound: TcpStream,
+    from: std::net::SocketAddr,
+    proxy: Proxy,
+    slot: Option<balance::CoreSlot>,
+) -> impl std::future::Future<Output = ()> + Send + 'static {
+    let span = debug_span!("conn", id = next_connection_id());
+    let conn_entered = EnteredCounter::new(&NUM_CONNECTIONS);
+    async move {
+        let _conn_entered = conn_entered;
+        let _slot = slot;
+        debug!(%from, "new connection");
+        let timeouts = &proxy.config.proxy.timeouts;
+        match timeout(timeouts.total, handle_connection(inbound, proxy)).await {
+            Ok(Ok(_)) => debug!("connection closed"),
+            Ok(Err(e)) if is_peer_disconnect(&e) => debug!("peer disconnected: {e:#}"),
+            Ok(Err(e)) => error!("connection error: {e:#}"),
+            Err(_) => error!("connection kept too long, force closing"),
+        }
+    }
+    .instrument(span)
+}
+
+/// Accept connections forever.
+///
+/// `rt` selects where connections run: `Some(worker_rt)` hands them to a shared
+/// multi-threaded runtime, `None` keeps them on the calling thread's own
+/// runtime (thread-per-core), which avoids the cross-thread handoff and the
+/// work-stealing migrations that come with it.
+async fn accept_loop(
+    tcp_listeners: Vec<TcpListener>,
+    proxy: Proxy,
+    rt: Option<&Runtime>,
+    mut balance: Option<(
+        balance::Balancer,
+        tokio::sync::mpsc::Receiver<balance::Handoff>,
+    )>,
+) -> Result<()> {
     if tcp_listeners.is_empty() {
         bail!("no tcp listen ports configured");
     }
-
     let poll_counter = AtomicUsize::new(0);
     loop {
         // Accept from any TCP listener via round-robin poll.
         let poll_start = poll_counter.fetch_add(1, Ordering::Relaxed);
         let n = tcp_listeners.len();
-        let accepted: std::io::Result<(TcpStream, std::net::SocketAddr)> =
-            std::future::poll_fn(|cx| {
-                for j in 0..n {
-                    let i = (poll_start + j) % n;
-                    if let Poll::Ready(result) = tcp_listeners[i].poll_accept(cx) {
-                        return Poll::Ready(result);
+        let accept_next = std::future::poll_fn(|cx| {
+            for j in 0..n {
+                let i = (poll_start + j) % n;
+                if let Poll::Ready(result) = tcp_listeners[i].poll_accept(cx) {
+                    return Poll::Ready(result);
+                }
+            }
+            Poll::Pending
+        });
+        // Also take connections other cores decided to give us.
+        let accepted: std::io::Result<(TcpStream, std::net::SocketAddr)> = match balance.as_mut() {
+            Some((_, rx)) => {
+                tokio::select! {
+                    r = accept_next => r,
+                    Some((raw, from, slot)) = rx.recv() => {
+                        // Register the handed-over socket with *this* core's reactor.
+                        match TcpStream::from_std(raw) {
+                            Ok(stream) => {
+                                let task = conn_task(stream, from, proxy.clone(), Some(slot));
+                                tokio::spawn(task);
+                            }
+                            Err(e) => error!("failed to adopt handed-over connection: {e}"),
+                        }
+                        continue;
                     }
                 }
-                Poll::Pending
-            })
-            .await;
+            }
+            None => accept_next.await,
+        };
         match accepted {
             Ok((inbound, from)) => {
-                let span = info_span!("conn", id = next_connection_id());
-                let _enter = span.enter();
-                let conn_entered = EnteredCounter::new(&NUM_CONNECTIONS);
-
-                info!(%from, "new connection");
-                let proxy = proxy.clone();
-                rt.spawn(
-                    async move {
-                        let _conn_entered = conn_entered;
-                        let timeouts = &proxy.config.proxy.timeouts;
-                        let result =
-                            timeout(timeouts.total, handle_connection(inbound, proxy)).await;
-                        match result {
-                            Ok(Ok(_)) => {
-                                info!("connection closed");
-                            }
-                            Ok(Err(e)) => {
-                                error!("connection error: {e:#}");
-                            }
-                            Err(_) => {
-                                error!("connection kept too long, force closing");
-                            }
+                // Disable Nagle: this is a latency-sensitive proxy and small
+                // request/response traffic otherwise stalls on delayed ACKs.
+                let _ = inbound.set_nodelay(true);
+                // In thread-per-core mode, hand the connection to a less loaded
+                // core when this one is running ahead; SO_REUSEPORT's hash can
+                // leave a core starved and it cannot be fixed later.
+                let placed: Option<(TcpStream, Option<balance::CoreSlot>)> = match balance.as_ref()
+                {
+                    Some((b, _)) => b.place(inbound, from).map(|(s, slot)| (s, Some(slot))),
+                    None => Some((inbound, None)),
+                };
+                if let Some((inbound, slot)) = placed {
+                    let task = conn_task(inbound, from, proxy.clone(), slot);
+                    match rt {
+                        Some(rt) => {
+                            rt.spawn(task);
+                        }
+                        None => {
+                            tokio::spawn(task);
                         }
                     }
-                    .in_current_span(),
-                );
+                }
             }
             Err(e) => {
                 error!("failed to accept connection: {e:?}");
@@ -240,6 +354,26 @@ fn next_connection_id() -> usize {
 }
 
 pub fn start(config: ProxyConfig, app_state: Proxy) -> Result<()> {
+    if config.thread_per_core {
+        // Probe SO_REUSEPORT before committing: it is the one prerequisite the
+        // thread-per-core model cannot work without, and failing to serve at all
+        // is far worse than losing the optimisation.
+        match probe_reuse_port(&config) {
+            Ok(()) => return start_thread_per_core(config, app_state),
+            Err(err) => warn!(
+                "thread_per_core requested but SO_REUSEPORT is unavailable ({err:#}); \
+                 falling back to the shared-runtime proxy"
+            ),
+        }
+    }
+    if config.connection_rebalance {
+        // It is only wired up by the thread-per-core path: there is nothing to
+        // rebalance between when every connection lands on a shared runtime.
+        warn!(
+            "connection_rebalance is set but has no effect without thread_per_core; \
+             the shared-runtime proxy balances connections through its scheduler"
+        );
+    }
     std::thread::Builder::new()
         .name("proxy-main".to_string())
         .spawn(move || {
@@ -268,9 +402,215 @@ pub fn start(config: ProxyConfig, app_state: Proxy) -> Result<()> {
     Ok(())
 }
 
+/// Check that a `SO_REUSEPORT` listener can actually be created and bound.
+fn probe_reuse_port(config: &ProxyConfig) -> Result<()> {
+    let port = *config
+        .listen_port
+        .first()
+        .context("no tcp listen ports configured")?;
+    let addr = std::net::SocketAddr::from((config.listen_addr, port));
+    let socket = socket2::Socket::new(
+        socket2::Domain::IPV4,
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )
+    .context("failed to create probe socket")?;
+    socket
+        .set_reuse_port(true)
+        .context("SO_REUSEPORT not supported")?;
+    socket.set_reuse_address(true).ok();
+    socket
+        .bind(&addr.into())
+        .with_context(|| format!("failed to bind {addr} with SO_REUSEPORT"))?;
+    Ok(())
+}
+
+/// Turn kTLS off when the kernel cannot provide it.
+///
+/// Without the TLS ULP an immediate offload fails every handshake, which is at
+/// least loud. A gated offload is worse: the connection is served from
+/// userspace up to the threshold and only then fails, so the client gets a
+/// successful response truncated at exactly the gate. Both are worse than never
+/// offloading, and whether the ULP is there is not something the config can
+/// know -- so ask the kernel once, at startup, before the acceptor is built
+/// (that is also what decides whether rustls extracts session secrets at all).
+///
+/// This only establishes that the ULP exists. A cipher suite the kernel does
+/// not implement still fails per connection, at offload time.
+pub fn disable_ktls_if_unsupported(config: &mut ProxyConfig) {
+    if config.ktls.is_none() {
+        return;
+    }
+    if let Err(err) = probe_ktls() {
+        warn!(
+            "kTLS is configured but unavailable ({err:#}); \
+             falling back to userspace TLS record encryption"
+        );
+        config.ktls = None;
+        stats::mark_ktls_unsupported();
+    }
+}
+
+/// Check that the kernel exposes the TLS upper-layer protocol.
+///
+/// `TCP_ULP` is only accepted on an established socket, so this sets up a
+/// throwaway loopback connection instead of probing a fresh one, which would
+/// fail with `ENOTCONN` whether or not the ULP exists.
+#[cfg(target_os = "linux")]
+fn probe_ktls() -> Result<()> {
+    use std::net::{Ipv4Addr, TcpListener, TcpStream};
+    use std::os::fd::AsRawFd;
+
+    /// `include/uapi/linux/tcp.h`; not exposed by the `libc` crate.
+    const TCP_ULP: libc::c_int = 31;
+
+    let listener =
+        TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).context("failed to bind the probe listener")?;
+    let addr = listener
+        .local_addr()
+        .context("failed to read the probe listener address")?;
+    let client = TcpStream::connect(addr).context("failed to connect the probe socket")?;
+    let _server = listener
+        .accept()
+        .context("failed to accept the probe socket")?;
+
+    let name = c"tls";
+    // SAFETY: `name` outlives the call and `len` matches it, NUL included.
+    let rc = unsafe {
+        libc::setsockopt(
+            client.as_raw_fd(),
+            libc::IPPROTO_TCP,
+            TCP_ULP,
+            name.as_ptr().cast(),
+            name.to_bytes_with_nul().len() as libc::socklen_t,
+        )
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("kernel rejected the TLS ULP (is CONFIG_TLS enabled?)");
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn probe_ktls() -> Result<()> {
+    bail!("kernel TLS is only available on Linux")
+}
+
+/// Thread-per-core proxy: `workers` threads, each with its own single-threaded
+/// runtime and its own `SO_REUSEPORT` listener.
+///
+/// The kernel load-balances new connections across the listeners, and a
+/// connection is accepted and served entirely on one thread. That removes the
+/// accept-thread -> worker handoff and the work-stealing scheduler's task
+/// migrations, which together accounted for ~0.6 context switches per request
+/// in the default model.
+fn start_thread_per_core(config: ProxyConfig, app_state: Proxy) -> Result<()> {
+    let workers = config.workers.max(1);
+    // Bind every listener here, in order, rather than letting each thread bind
+    // its own. The CBPF steering program that originally needed a known group
+    // order is gone (see `super::reuseport`), but binding in one place is kept:
+    // it keeps listener-to-core assignment deterministic across restarts, and it
+    // fails startup as a whole if any bind fails, instead of leaving some cores
+    // serving and others dead.
+    let mut per_worker: Vec<Vec<std::net::TcpListener>> =
+        (0..workers).map(|_| Vec::new()).collect();
+    for &port in &config.listen_port {
+        let addr = std::net::SocketAddr::from((config.listen_addr, port));
+        let group = reuseport::bind_group(addr, workers, LISTEN_BACKLOG)
+            .with_context(|| format!("failed to bind reuseport group on {addr}"))?;
+        info!(
+            "tcp bridge listening on {}:{} across {} listeners",
+            config.listen_addr, port, workers
+        );
+        for (i, l) in group.into_iter().enumerate() {
+            per_worker[i].push(l);
+        }
+    }
+
+    // Per-core balancers share the connection counts; each core also gets the
+    // receiving end of its handoff channel.
+    let (balancers, receivers) = if config.connection_rebalance {
+        let (b, r) = balance::Balancer::build(workers);
+        (
+            b.into_iter().map(Some).collect(),
+            r.into_iter().map(Some).collect(),
+        )
+    } else {
+        (
+            (0..workers).map(|_| None).collect::<Vec<_>>(),
+            (0..workers).map(|_| None).collect::<Vec<_>>(),
+        )
+    };
+
+    let config = Arc::new(config);
+    for (i, ((std_listeners, balancer), receiver)) in per_worker
+        .into_iter()
+        .zip(balancers)
+        .zip(receivers)
+        .enumerate()
+    {
+        let config = config.clone();
+        let app_state = app_state.clone();
+        std::thread::Builder::new()
+            .name(format!("proxy-core-{i}"))
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .or_panic("Failed to build Tokio runtime");
+                let result = rt.block_on(async {
+                    let mut listeners = Vec::with_capacity(std_listeners.len());
+                    for l in std_listeners {
+                        listeners.push(
+                            TcpListener::from_std(l)
+                                .context("failed to register listener with tokio")?,
+                        );
+                    }
+                    let bal = balancer.zip(receiver);
+                    accept_loop(listeners, app_state, None, bal).await
+                });
+                if let Err(err) = result {
+                    error!(
+                        "proxy core {i} error on {}:{:?}: {err:?}",
+                        config.listen_addr, config.listen_port
+                    );
+                }
+            })
+            .with_context(|| format!("Failed to spawn proxy-core-{i} thread"))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn default_proxy_config() -> ProxyConfig {
+        crate::config::load_config_figment(None)
+            .focus("core.proxy")
+            .extract()
+            .expect("the shipped default config should parse")
+    }
+
+    #[test]
+    fn ktls_probe_leaves_an_unconfigured_gateway_alone() {
+        let mut config = default_proxy_config();
+        config.ktls = None;
+        disable_ktls_if_unsupported(&mut config);
+        assert!(config.ktls.is_none());
+    }
+
+    #[test]
+    fn ktls_survives_the_probe_only_when_the_kernel_supports_it() {
+        let mut config = default_proxy_config();
+        config.ktls = Some(crate::config::EngageAfter::default());
+        disable_ktls_if_unsupported(&mut config);
+        // Whichever way this kernel answers, the config must agree with it:
+        // keeping kTLS on a kernel without the ULP is what truncates responses
+        // at the gate.
+        assert_eq!(config.ktls.is_some(), probe_ktls().is_ok());
+    }
 
     #[test]
     fn test_parse_destination() {

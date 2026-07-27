@@ -11,7 +11,7 @@ use rocket::figment::Figment;
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::info;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -103,6 +103,10 @@ where
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProxyConfig {
     pub tls_crypto_provider: CryptoProvider,
@@ -111,10 +115,62 @@ pub struct ProxyConfig {
     #[serde(deserialize_with = "deserialize_port_range")]
     pub listen_port: Vec<u16>,
     pub timeouts: Timeouts,
+    /// Relay buffer size, per direction, for connections that copy through
+    /// userspace -- TLS terminate, and passthrough before the splice gate.
+    ///
+    /// Costs `2 * buffer_size` of address space per such connection, of which
+    /// only the pages actually touched become resident: measured at 2 000
+    /// concurrent streaming connections, the userspace relay path sat at ~52 KB
+    /// RSS per connection. Budget for it before raising this on a gateway that
+    /// fronts many idle-ish connections; the same measurement with kTLS, where
+    /// the payload is spliced and never enters the process, was ~12 KB.
+    ///
+    /// 64 KiB is the bulk-throughput sweet spot: it is large enough to keep a
+    /// 1 MiB pipe fed without the syscall rate 8 KiB imposed.
     pub buffer_size: usize,
     pub connect_top_n: usize,
     pub localhost_enabled: bool,
     pub workers: usize,
+    /// Run one single-threaded runtime per worker, each with its own
+    /// `SO_REUSEPORT` listener, instead of one accept thread feeding a shared
+    /// work-stealing runtime.
+    ///
+    /// A connection is then accepted and served entirely on one thread. The
+    /// default model costs ~0.6 context switches per request (accept-thread
+    /// handoff plus work-stealing migrations); HAProxy's thread-per-core design
+    /// measures ~0. Linux-only (needs SO_REUSEPORT).
+    #[serde(default)]
+    pub thread_per_core: bool,
+    /// Hand a freshly accepted connection to a less loaded core when the
+    /// accepting one is running ahead.
+    ///
+    /// `SO_REUSEPORT` picks a listener by hashing the connection's 4-tuple and
+    /// thread-per-core cannot move a connection afterwards, so a core can sit
+    /// starved: measured at 16 connections over 4 cores, utilisation came out
+    /// `[99, 42, 101, 101]`. Rebalancing costs one channel send per *rebalanced
+    /// connection*, never per request. Requires `thread_per_core`.
+    ///
+    /// On by default. It used to be opt-in, because handing a connection over
+    /// cost 2-3% wherever the hash was already even -- that turned out to be a
+    /// bug (the migrated socket kept its registration on the accepting core's
+    /// reactor), and with it fixed the trade is one-sided. Measured on a 4-core
+    /// gateway, 3-5 runs per arm after warmup:
+    ///
+    /// | workload | off | on | |
+    /// |---|---|---|---|
+    /// | passthrough small-request, 8 conns | 113 350 | 143 341 | **+26.5%** |
+    /// | passthrough small-request, 16 conns | 231 043 | 258 787 | **+12.0%** |
+    /// | passthrough small-request, 50 conns | 294 937 | 295 311 | +0.1% |
+    /// | TLS terminate small-request, 50 conns | 244 304 | 246 228 | +0.8% |
+    /// | TLS terminate, connections/s | 41 024 | 43 019 | +4.9% |
+    /// | passthrough, connections/s | 17 431 | 17 319 | -0.6% |
+    /// | passthrough, bulk throughput | 12.10 GB/s | 12.16 GB/s | +0.5% |
+    ///
+    /// The gain is largest where the hash has fewest connections to spread and
+    /// the worst-loaded core would otherwise starve: at 16 connections the
+    /// quietest core goes from 63% to 97% busy.
+    #[serde(default = "default_true")]
+    pub connection_rebalance: bool,
     #[serde(default)]
     pub base_domain: Option<String>,
     #[serde(default)]
@@ -132,8 +188,227 @@ pub struct ProxyConfig {
     /// (e.g. when behind a PP-aware load balancer like Cloudflare).
     #[serde(default)]
     pub inbound_pp_enabled: bool,
+    /// Use `splice(2)` zero-copy relaying for the TLS-passthrough path. Both
+    /// sides are raw TCP there, so payload never needs to enter userspace.
+    /// Linux-only; ignored for the TLS-terminate path.
+    ///
+    /// Absent disables splice entirely; see [`EngageAfter`] for what a present
+    /// section means.
+    ///
+    /// Tradeoff (measured on a 4-core gateway): bulk passthrough throughput
+    /// +~12% with a lower tail latency under load, but small-request latency
+    /// regresses (each tiny message pays an extra pipe hop). splice costs ~17
+    /// syscalls per connection to move a small response (fill pipe, drain pipe,
+    /// readiness retries) where a read/write pair needs two: its benefit is per
+    /// byte, its cost is per connection, which is what the gates amortise.
+    #[serde(default)]
+    pub tcp_splice: Option<SpliceConfig>,
+    /// Offload TLS record encryption to the kernel (kTLS) on the
+    /// TLS-terminate path. The handshake still runs in rustls; only the
+    /// symmetric crypto moves into the kernel afterwards. Linux-only.
+    ///
+    /// Absent disables kTLS entirely; see [`EngageAfter`] for what a present
+    /// section means. Gated offload additionally requires `tcp_splice`, since
+    /// the point of handing the socket to the kernel is to then splice it.
+    ///
+    /// A kernel built without `CONFIG_TLS` cannot honour this, so startup
+    /// probes for the TLS ULP and clears this section with a warning if it is
+    /// missing, rather than letting every connection discover it at the gate.
+    ///
+    /// kTLS costs ~30% of connection setup rate but wins ~25% on bulk
+    /// throughput, so paying the setup cost up front is wrong for short
+    /// request/response connections.
+    ///
+    /// On token-streaming traffic the throughput win does not materialise, but
+    /// a memory win does. Measured on the terminate path, 10k connections with
+    /// 2k streaming a 64 B record every 25 ms, 2 runs per arm:
+    ///
+    /// | | userspace rustls | kTLS |
+    /// |---|---|---|
+    /// | latency p50 | 0.174 / 0.181 ms | 0.180 / 0.174 ms |
+    /// | latency p99 | 0.602 / 0.526 ms | 0.859 / 0.537 ms |
+    /// | **RSS** | **349 MB** | **206 MB** |
+    ///
+    /// Latency is unchanged, as expected: at 64 B per record the per-record
+    /// overhead dominates and there is almost no symmetric crypto to move into
+    /// the kernel. The 41% RSS drop is the real effect and was not predicted --
+    /// with kTLS the payload is spliced without ever entering this process, so
+    /// the per-connection userspace relay buffers disappear (~14 KB/connection
+    /// here). Weigh that against handing session keys to the kernel.
+    ///
+    /// Security note: enabling this hands the negotiated session keys to the
+    /// kernel via `dangerous_extract_secrets`, so the keys live outside
+    /// rustls' control. Inside a CVM the kernel is part of the measured TCB,
+    /// but on a non-TEE host this widens key exposure. Off by default.
+    #[serde(default)]
+    pub ktls: Option<EngageAfter>,
     /// Background lazy-fetch behaviour for `port_policy` (legacy CVMs).
     pub port_policy_fetch: PortPolicyFetchConfig,
+}
+
+impl ProxyConfig {
+    /// The idle window every relay enforces, or `None` when data timeouts are
+    /// off. Computed in one place so the buffered bridge and the gated fast
+    /// paths cannot end up enforcing different things.
+    pub fn idle_timeout(&self) -> Option<Duration> {
+        self.timeouts
+            .data_timeout_enabled
+            .then_some(self.timeouts.idle)
+    }
+}
+
+/// Configuration for `splice(2)` relaying on the TLS-passthrough path.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SpliceConfig {
+    /// When splice should take over from the buffered relay.
+    #[serde(flatten)]
+    pub engage: EngageAfter,
+    /// Return a splice pipe to the thread-local pool while waiting for the
+    /// next chunk, instead of holding it for the connection's lifetime.
+    ///
+    /// A relay holds one pipe per direction, so a spliced connection pins four
+    /// descriptors. Held for the connection's lifetime that is proportional to
+    /// *connections*: 50k streaming connections need 300k descriptors. Released
+    /// while idle it is proportional to *chunks actually in flight*, which for
+    /// bursty traffic is far smaller -- LLM token streaming moves a ~64 B record
+    /// every 25 ms and spends over 99% of the connection idle.
+    ///
+    /// The pipe is provably empty at the point it is released: the relay only
+    /// waits for readability after the previous chunk has been fully drained
+    /// into the destination, so nothing is left to corrupt the next borrower.
+    ///
+    /// The cost is a pool pop and push per idle-to-active transition, both
+    /// `Vec` operations on a thread-local. Pipes are only created when the pool
+    /// is empty, so the live pipe count converges on the peak number of
+    /// concurrent in-flight chunks rather than churning `pipe2`/`close`.
+    ///
+    /// Measured on a 4-core gateway streaming a 64 B record every 25 ms per
+    /// connection, 2 runs per arm at each scale:
+    ///
+    /// | | off | on |
+    /// |---|---|---|
+    /// | pipe fds, 2k connections | 8 000 | **8** |
+    /// | pipe fds, 50k conns / 10k streams | 53 864 / 55 212 | **8** |
+    /// | RSS, 50k connections | 1 203 MB | 1 202 / 1 204 MB |
+    /// | latency p50, 50k | 20.9 / 20.3 ms | 21.6 / 21.7 ms |
+    /// | latency p999, 50k | 111 / 113 ms | 68 / 79 ms |
+    ///
+    /// The descriptor result is the point, and it is flat in the connection
+    /// count: 8 descriptors is four pipes, one per worker thread, for the whole
+    /// gateway, at 2k connections and at 50k alike. That is the bound this knob
+    /// exists to impose.
+    ///
+    /// Latency is close to a wash and should not be used to justify the knob. At
+    /// 2k connections there was no consistent difference at all (the single
+    /// fastest run of seven was an `off` run). At 50k, where the box is
+    /// saturated, `on` costs ~1 ms on p50 and saves ~40 ms on p999; the p999
+    /// gain is consistent across repeats but comes from a regime that is already
+    /// over budget. RSS is unchanged either way.
+    ///
+    /// Mixing bulk transfers with token streams does not break the pooling, and
+    /// this was the failure worth checking: a connection that is never idle
+    /// never reaches the release point, so bulk traffic could in principle hold
+    /// every pipe and force each token to allocate a fresh one. Measured with
+    /// 10k streaming connections alongside 256 bulk connections saturating the
+    /// passthrough path at 12.8 GB/s, 2 runs per arm:
+    ///
+    /// | | off | on |
+    /// |---|---|---|
+    /// | pipe fds | 9 024 (= 2000*4 + 256*4) | **8** |
+    /// | bulk throughput | 12.8 GB/s | 12.8 GB/s |
+    /// | stream latency p50 | 0.099 / 0.102 ms | 0.093 / 0.089 ms |
+    /// | bulk latency p999 | 14.3 / 11.4 ms | 6.9 / 7.7 ms |
+    ///
+    /// The pool never degenerates because even a saturated bulk connection is
+    /// idle for tens of microseconds between chunks (measured inter-record gap
+    /// 62 us) and releases in that window. Throughput is identical and both
+    /// traffic classes are slightly better off with `on`, so there is no bulk
+    /// regression to trade against the descriptor saving.
+    #[serde(default)]
+    pub release_idle_pipes: bool,
+}
+
+/// When an adaptive optimisation should engage on a connection.
+///
+/// Both gates are optional and independent, and the optimisation engages as
+/// soon as *either* fires. They catch different traffic and neither subsumes
+/// the other:
+///
+/// - `after_bytes` catches high-rate connections almost immediately -- a bulk
+///   transfer trips a 64 KiB gate within milliseconds -- but is blind to
+///   long-lived low-rate streams. LLM token streaming at 40 tok/s of ~64 B
+///   records needs ~25 s of wall time to move 64 KiB, so a byte gate leaves the
+///   whole early phase of every stream on the copy path, and never promotes
+///   short conversations at all.
+///   Measured: with a 64 KiB byte gate alone, connections streaming a 64 B
+///   record every 25 ms promoted 25 s after they started streaming, matching
+///   `65536 / (64 B * 40/s)`. Adding `after_duration = "5s"` moved that to 5 s,
+///   a 5x earlier handover, with no change in added latency or RSS.
+/// - `after_duration` catches exactly those long-lived low-rate streams, but is
+///   blind to short high-rate ones, which finish before it fires.
+///
+/// With neither gate set there is nothing to wait for, so the optimisation
+/// engages from the first byte. "Never engage" is expressed by omitting the
+/// whole section rather than by a sentinel value here, so every state has
+/// exactly one representation.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct EngageAfter {
+    /// Bytes the connection must transfer first. Absent = this gate never
+    /// fires.
+    #[serde(default)]
+    pub after_bytes: Option<u64>,
+    /// Wall time the connection must stay alive first, measured from the point
+    /// the relay starts (upstream already connected). Absent = this gate never
+    /// fires.
+    #[serde(default, with = "serde_duration::option")]
+    pub after_duration: Option<Duration>,
+}
+
+impl EngageAfter {
+    /// No gate configured, so there is nothing to wait for.
+    pub fn is_immediate(&self) -> bool {
+        self.after_bytes.is_none() && self.after_duration.is_none()
+    }
+
+    /// Whether either gate has been reached.
+    ///
+    /// `start` is only read when the duration gate is configured, so a
+    /// bytes-only config pays no clock read per message.
+    pub fn reached(&self, moved: u64, start: Instant) -> bool {
+        self.after_bytes.is_some_and(|bytes| moved >= bytes)
+            || self
+                .after_duration
+                .is_some_and(|limit| start.elapsed() >= limit)
+    }
+}
+
+/// Rendered for the dashboard and the `Status` RPC, so it reads as the answer to
+/// "when does this engage?" rather than as a struct dump.
+impl std::fmt::Display for EngageAfter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.after_bytes, self.after_duration) {
+            (None, None) => write!(f, "immediate"),
+            (Some(bytes), None) => write!(f, "after {}", DisplayBytes(bytes)),
+            (None, Some(after)) => write!(f, "after {after:?}"),
+            (Some(bytes), Some(after)) => write!(f, "after {} or {after:?}", DisplayBytes(bytes)),
+        }
+    }
+}
+
+/// A byte threshold in the units the config file writes it in: binary units
+/// when they divide evenly, raw bytes otherwise.
+struct DisplayBytes(u64);
+
+impl std::fmt::Display for DisplayBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        const KIB: u64 = 1 << 10;
+        const MIB: u64 = 1 << 20;
+        match self.0 {
+            bytes if bytes >= MIB && bytes % MIB == 0 => write!(f, "{} MiB", bytes / MIB),
+            bytes if bytes >= KIB && bytes % KIB == 0 => write!(f, "{} KiB", bytes / KIB),
+            bytes => write!(f, "{bytes} B"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -172,6 +447,13 @@ pub struct Timeouts {
     pub data_timeout_enabled: bool,
     #[serde(with = "serde_duration")]
     pub idle: Duration,
+    /// No longer read. The per-operation write timer was replaced by the
+    /// connection-level progress watchdog in `io_bridge`, which catches a
+    /// stalled write through `idle` instead: a write that makes no progress
+    /// stops bumping the direction's progress counter, and the watchdog fires.
+    /// The key is still accepted so existing configs -- and the CVM app
+    /// entrypoint's `TIMEOUT_WRITE` -- keep parsing.
+    #[allow(dead_code)]
     #[serde(with = "serde_duration")]
     pub write: Duration,
     #[serde(with = "serde_duration")]
@@ -430,5 +712,72 @@ mod tests {
             result.unwrap_err().to_string(),
             "Client IP range is not in the network"
         );
+    }
+
+    fn engage_after(toml: &str) -> EngageAfter {
+        Figment::from(Toml::string(toml))
+            .extract()
+            .expect("valid EngageAfter")
+    }
+
+    #[test]
+    fn no_gate_engages_immediately() {
+        let gate = engage_after("");
+        assert!(gate.is_immediate());
+        assert!(gate.after_bytes.is_none());
+        assert!(gate.after_duration.is_none());
+    }
+
+    #[test]
+    fn a_configured_gate_is_not_immediate() {
+        assert!(!engage_after("after_bytes = 65536").is_immediate());
+        assert!(!engage_after("after_duration = \"5s\"").is_immediate());
+    }
+
+    #[test]
+    fn byte_gate_ignores_elapsed_time() {
+        let gate = engage_after("after_bytes = 1024");
+        let long_ago = Instant::now() - Duration::from_secs(3600);
+        assert!(!gate.reached(1023, long_ago));
+        assert!(gate.reached(1024, long_ago));
+    }
+
+    #[test]
+    fn duration_gate_ignores_bytes() {
+        let gate = engage_after("after_duration = \"5s\"");
+        assert!(!gate.reached(u64::MAX, Instant::now()));
+        assert!(gate.reached(0, Instant::now() - Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn gates_are_independent_and_either_fires() {
+        // The case the byte gate alone cannot express: a low-rate stream that
+        // stays well under `after_bytes` but outlives `after_duration`.
+        let gate = engage_after("after_bytes = 65536\nafter_duration = \"5s\"");
+        let just_started = Instant::now();
+        assert!(!gate.reached(64, just_started));
+        assert!(gate.reached(65536, just_started));
+        assert!(gate.reached(64, Instant::now() - Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn splice_section_is_optional() {
+        #[derive(Deserialize)]
+        struct Holder {
+            #[serde(default)]
+            tcp_splice: Option<EngageAfter>,
+        }
+        let absent: Holder = Figment::from(Toml::string("")).extract().unwrap();
+        assert!(
+            absent.tcp_splice.is_none(),
+            "absent section disables splice"
+        );
+
+        let present: Holder = Figment::from(Toml::string("[tcp_splice]\nafter_duration = \"5s\""))
+            .extract()
+            .unwrap();
+        let gate = present.tcp_splice.expect("section present");
+        assert_eq!(gate.after_duration, Some(Duration::from_secs(5)));
+        assert!(gate.after_bytes.is_none());
     }
 }

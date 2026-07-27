@@ -20,7 +20,7 @@ use crate::{
 };
 
 use super::{
-    io_bridge::bridge,
+    io_bridge::bridge_tcp,
     port_policy::{filter_allowed_addresses, should_send_pp},
     AddressGroup,
 };
@@ -199,8 +199,29 @@ pub(crate) async fn connect_multiple_hosts(
 ) -> Result<(TcpStream, EnteredCounter, String)> {
     check_connection_limit(&addresses, max_connections, app_id)?;
 
+    let mut candidates = addresses.into_iter();
+    let Some(first) = candidates.next() else {
+        bail!("no addresses to connect to app <{app_id}>");
+    };
+
+    // Fast path: with a single candidate there is nothing to race, so skip the
+    // JoinSet and the task spawn it needs. That allocation and scheduling
+    // happened on every connection, and single-address apps are the common
+    // case.
+    if candidates.as_slice().is_empty() {
+        let addr = first;
+        let counter = addr.counter.enter();
+        let ip = addr.ip;
+        debug!("connecting to {ip}:{port}");
+        let connection = TcpStream::connect((ip, port))
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to connect to app@{ip}:{port}: {e}"))?;
+        let _ = connection.set_nodelay(true);
+        return Ok((connection, counter, addr.instance_id));
+    }
+
     let mut join_set = JoinSet::new();
-    for addr in addresses {
+    for addr in std::iter::once(first).chain(candidates) {
         let counter = addr.counter.enter();
         let ip = addr.ip;
         let instance_id = addr.instance_id;
@@ -228,6 +249,9 @@ pub(crate) async fn connect_multiple_hosts(
             }
         }
     };
+    // Disable Nagle on the upstream socket for the same reason as the inbound
+    // side: avoid delayed-ACK stalls on small proxied messages.
+    let _ = connection.set_nodelay(true);
     debug!("connected to {:?}", connection.peer_addr());
     Ok((connection, counter, instance_id))
 }
@@ -259,9 +283,31 @@ pub(crate) async fn proxy_to_app(
         .write_all(&buffer)
         .await
         .context("failed to write to app")?;
-    bridge(inbound, outbound, &state.config.proxy)
-        .await
-        .context("failed to copy between inbound and outbound")?;
+    if let Some(gate) = &state.config.proxy.tcp_splice {
+        // Passthrough is a pure TCP relay: move bytes kernel-side with splice.
+        // Both ends are plain sockets here, so a FIN is the whole close.
+        let idle = state.config.proxy.idle_timeout();
+        if gate.engage.is_immediate() {
+            super::splice::splice_bidirectional(
+                inbound,
+                outbound,
+                gate.release_idle_pipes,
+                idle,
+                super::splice::CloseKind::Tcp,
+            )
+            .await
+            .context("failed to splice between inbound and outbound")?;
+        } else {
+            let buf_size = state.config.proxy.buffer_size;
+            super::splice::splice_bidirectional_after(inbound, outbound, gate, buf_size, idle)
+                .await
+                .context("failed to relay between inbound and outbound")?;
+        }
+    } else {
+        bridge_tcp(inbound, outbound, &state.config.proxy)
+            .await
+            .context("failed to copy between inbound and outbound")?;
+    }
     Ok(())
 }
 
