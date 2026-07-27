@@ -27,6 +27,7 @@ class HalfCloseTlsClient:
     """A TLS connection whose write side can be closed independently."""
 
     def __init__(self, host: str, port: int, sni: str, timeout: float = 30.0):
+        """Connect and complete the TLS handshake over memory BIOs."""
         self.sock = socket.create_connection((host, port), timeout=timeout)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self._incoming = ssl.MemoryBIO()
@@ -96,6 +97,7 @@ class HalfCloseTlsClient:
     # --- ordinary I/O -------------------------------------------------------
 
     def send(self, data: bytes) -> None:
+        """Write application data."""
         self._run(lambda: self._tls.write(data))
 
     def recv(self, size: int = 65536) -> bytes:
@@ -135,6 +137,7 @@ class HalfCloseTlsClient:
         return body, "complete"
 
     def close(self) -> None:
+        """Drop the connection."""
         try:
             self.sock.close()
         except OSError:
