@@ -2211,6 +2211,31 @@ impl<'a> Stage0<'a> {
         }
     }
 
+    fn active_swap_path(swap_path: &Path) -> Result<Option<PathBuf>> {
+        let canonical_swap_path = fs::canonicalize(swap_path)
+            .with_context(|| format!("Failed to resolve swap path {}", swap_path.display()))?;
+        let swaps = fs::read_to_string("/proc/swaps").context("Failed to read /proc/swaps")?;
+
+        for line in swaps.lines().skip(1) {
+            let Some(encoded_path) = line.split_whitespace().next() else {
+                continue;
+            };
+            let active_path = PathBuf::from(
+                encoded_path
+                    .replace("\\040", " ")
+                    .replace("\\011", "\t")
+                    .replace("\\012", "\n")
+                    .replace("\\134", "\\"),
+            );
+            if active_path == swap_path
+                || fs::canonicalize(&active_path).as_deref() == Ok(canonical_swap_path.as_path())
+            {
+                return Ok(Some(active_path));
+            }
+        }
+        Ok(None)
+    }
+
     async fn setup_swap(&self, swap_size: u64, opts: &DstackOptions) -> Result<()> {
         match opts.storage_fs {
             FsType::Zfs => self.setup_swap_zvol(swap_size).await,
@@ -2221,6 +2246,14 @@ impl<'a> Stage0<'a> {
     async fn setup_swapfile(&self, swap_size: u64) -> Result<()> {
         let swapfile = self.args.mount_point.join("swapfile");
         if swapfile.exists() {
+            if let Some(active_path) = Self::active_swap_path(&swapfile)? {
+                let active_path = active_path.display().to_string();
+                info!("Disabling active swapfile {active_path}");
+                cmd! {
+                    swapoff $active_path;
+                }
+                .context("Failed to disable existing swapfile")?;
+            }
             fs::remove_file(&swapfile).context("Failed to remove swapfile")?;
             info!("Removed existing swapfile");
         }
@@ -2246,6 +2279,15 @@ impl<'a> Stage0<'a> {
         let swapvol_device_path = format!("/dev/zvol/{swapvol_path}");
 
         if Path::new(&swapvol_device_path).exists() {
+            let swapvol_device = Path::new(&swapvol_device_path);
+            if let Some(active_path) = Self::active_swap_path(swapvol_device)? {
+                let active_path = active_path.display().to_string();
+                info!("Disabling active swap zvol {active_path}");
+                cmd! {
+                    swapoff $active_path;
+                }
+                .context("Failed to disable existing swap zvol")?;
+            }
             cmd! {
                 zfs set volmode=none $swapvol_path;
                 zfs destroy $swapvol_path;
