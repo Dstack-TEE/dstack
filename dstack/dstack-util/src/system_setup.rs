@@ -2381,7 +2381,7 @@ impl<'a> Stage0<'a> {
                 FsType::Zfs => {
                     info!("Creating ZFS filesystem");
                     let output = Command::new("zpool")
-                        .args(["create", "-o", "autoexpand=on", "dstack"])
+                        .args(["create", "-o", "autoexpand=on", "-m", "none", "dstack"])
                         .arg(&fs_dev)
                         .output()
                         .context("Failed to run zpool create")?;
