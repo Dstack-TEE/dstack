@@ -325,6 +325,7 @@ async fn main() -> Result<()> {
     let mut rocket = rocket::custom(figment)
         .mount("/prpc", prpc!(Proxy, RpcHandler, trim: "Tproxy."))
         .mount("/", web_routes::health_routes())
+        .mount("/", web_routes::dashboard_alias_routes())
         // Mount WaveKV sync endpoint (requires mTLS gateway auth)
         .mount("/", web_routes::wavekv_sync_routes())
         .attach(AdHoc::on_response("Add app version header", |_req, res| {
@@ -351,6 +352,8 @@ async fn main() -> Result<()> {
                 .attach(auth_fairing)
                 .mount("/", admin_auth::routes())
                 .mount("/", web_routes::routes())
+                .mount("/", web_routes::health_routes())
+                .mount("/", web_routes::dashboard_alias_routes())
                 .mount("/", prpc!(Proxy, AdminRpcHandler, trim: "Admin."))
                 .mount("/prpc", prpc!(Proxy, AdminRpcHandler, trim: "Admin."))
                 .manage(admin_state)
@@ -365,6 +368,7 @@ async fn main() -> Result<()> {
             rocket::custom(debug_figment)
                 .mount("/prpc", prpc!(Proxy, DebugRpcHandler, trim: "Debug."))
                 .mount("/", web_routes::health_routes())
+                .mount("/", web_routes::dashboard_alias_routes())
                 .manage(debug_state)
                 .launch()
                 .await
