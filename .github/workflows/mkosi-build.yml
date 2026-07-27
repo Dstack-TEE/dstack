@@ -95,9 +95,14 @@ jobs:
 
       - name: Install pinned mkosi
         run: |
+          set -euo pipefail
+          # Take the revision from versions.env so CI and the container builder
+          # in os/mkosi/repro-build cannot drift onto different mkosi builds.
+          # shellcheck source=/dev/null
+          source os/mkosi/versions.env
           python3 -m venv "$RUNNER_TEMP/mkosi-venv"
           "$RUNNER_TEMP/mkosi-venv/bin/pip" install --disable-pip-version-check \
-            'mkosi @ git+https://github.com/systemd/mkosi.git@84af20892b61c8e177e391f997ded8b4cb5514f2'
+            "mkosi @ git+https://github.com/systemd/mkosi.git@${MKOSI_REVISION}"
           echo "$RUNNER_TEMP/mkosi-venv/bin" >> "$GITHUB_PATH"
 
       - name: Install mkosi host dependencies

@@ -53,6 +53,18 @@ headers. Its minimized `misc` tools-tree profile plus explicit packages supplies
 The host needs mkosi's own dependencies and root privileges (or a working user
 namespace), but no Rust, Go, C or C++ compiler.
 
+The container path in `repro-build/` reduces that to Docker plus the privileges
+mkosi needs for loop devices, device-mapper and mounts. It pins the last layer
+the backend itself does not: mkosi and the host tools it drives.
+
+```sh
+make os-image-mkosi          # single production build
+make os-repro-check-mkosi    # build twice, compare byte for byte
+./os/mkosi/repro-build/repro-build.sh -o /path/to/build-dir
+```
+
+The native interface remains available when those host tools are present:
+
 ```sh
 ./os/mkosi/build.sh lint
 ./os/build.sh --backend mkosi --build-dir "$PWD/os/mkosi/build"
