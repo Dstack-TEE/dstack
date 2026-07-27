@@ -2380,11 +2380,20 @@ impl<'a> Stage0<'a> {
             match opts.storage_fs {
                 FsType::Zfs => {
                     info!("Creating ZFS filesystem");
-                    cmd! {
-                        zpool create -o autoexpand=on dstack $fs_dev;
-                        zfs create -o mountpoint=$mount_point -o atime=off -o checksum=blake3 dstack/data;
+                    let output = Command::new("zpool")
+                        .args(["create", "-o", "autoexpand=on", "dstack"])
+                        .arg(&fs_dev)
+                        .output()
+                        .context("Failed to run zpool create")?;
+                    if !output.status.success() {
+                        bail!(
+                            "Failed to create zpool ({}): {}",
+                            output.status,
+                            String::from_utf8_lossy(&output.stderr).trim()
+                        );
                     }
-                    .context("Failed to create zpool")?;
+                    cmd!(zfs create -o mountpoint=$mount_point -o atime=off -o checksum=blake3 dstack/data)
+                        .context("Failed to create ZFS dataset")?;
                 }
                 FsType::Ext4 => {
                     info!("Creating ext4 filesystem");
