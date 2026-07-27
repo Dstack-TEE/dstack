@@ -31,6 +31,11 @@ fn sibling(path: &Path, suffix: &str) -> PathBuf {
 /// durable across a power loss. `tmp` and `path` are in the same directory so
 /// the rename is atomic.
 pub fn write_atomic(path: &Path, contents: &str) -> Result<()> {
+    write_atomic_bytes(path, contents.as_bytes())
+}
+
+/// Atomically replace the destination with arbitrary bytes.
+pub fn write_atomic_bytes(path: &Path, contents: &[u8]) -> Result<()> {
     write_atomic_inner(path, contents, None)
 }
 
@@ -40,10 +45,15 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<()> {
 /// between the rename and a follow-up `chmod`. Use for credential files
 /// (`0o600`). The final file keeps `mode` because `rename` preserves it.
 pub fn write_atomic_mode(path: &Path, contents: &str, mode: u32) -> Result<()> {
+    write_atomic_bytes_mode(path, contents.as_bytes(), mode)
+}
+
+/// Atomically replace the destination with arbitrary bytes using the requested mode.
+pub fn write_atomic_bytes_mode(path: &Path, contents: &[u8], mode: u32) -> Result<()> {
     write_atomic_inner(path, contents, Some(mode))
 }
 
-fn write_atomic_inner(path: &Path, contents: &str, mode: Option<u32>) -> Result<()> {
+fn write_atomic_inner(path: &Path, contents: &[u8], mode: Option<u32>) -> Result<()> {
     let tmp = sibling(path, ".tmp");
     let mut opts = OpenOptions::new();
     opts.write(true).create(true).truncate(true);
@@ -63,7 +73,7 @@ fn write_atomic_inner(path: &Path, contents: &str, mode: Option<u32>) -> Result<
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))
             .with_context(|| format!("setting mode on {}", tmp.display()))?;
     }
-    f.write_all(contents.as_bytes())
+    f.write_all(contents)
         .with_context(|| format!("writing {}", tmp.display()))?;
     f.sync_all()
         .with_context(|| format!("syncing {}", tmp.display()))?;
@@ -110,6 +120,8 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "one");
         write_atomic(&p, "two").unwrap();
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "two");
+        write_atomic_bytes(&p, &[0, 0xff, 1]).unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), [0, 0xff, 1]);
         // no temp file left behind.
         assert!(!sibling(&p, ".tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
