@@ -2208,6 +2208,7 @@ dependencies = [
  "curve25519-dalek",
  "dcap-qvl",
  "dstack-attest",
+ "dstack-cli-core",
  "dstack-gateway-rpc",
  "dstack-kms-rpc",
  "dstack-types",
