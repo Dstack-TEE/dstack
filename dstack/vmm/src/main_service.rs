@@ -810,8 +810,12 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn sv_stop(self, request: Id) -> Result<()> {
-        self.app.supervisor.stop(&request.id).await?;
-        Ok(())
+        // VM launcher processes own a QEMU child. Stopping the supervisor
+        // record directly can terminate the launcher before it reaps QEMU,
+        // leaving the guest CID occupied. Use the VM-aware stop path, which
+        // gracefully signals launchers and retains the generic supervisor
+        // behaviour for every other process type.
+        self.app.stop_vm_process(&request.id).await
     }
 
     async fn sv_remove(self, request: Id) -> Result<()> {
