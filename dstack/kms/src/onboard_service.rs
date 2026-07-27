@@ -27,6 +27,7 @@ use ra_tls::{
 };
 use safe_write::safe_write;
 use sha2::Digest;
+use tokio::sync::Mutex as AsyncMutex;
 use tracing::info;
 
 use crate::{
@@ -43,6 +44,7 @@ use crate::{
 pub struct OnboardState {
     config: KmsConfig,
     attestation_verifier: Arc<AttestationVerifier>,
+    bootstrap_lock: Arc<AsyncMutex<()>>,
 }
 
 impl OnboardState {
@@ -54,6 +56,7 @@ impl OnboardState {
         Ok(Self {
             config,
             attestation_verifier,
+            bootstrap_lock: Arc::new(AsyncMutex::new(())),
         })
     }
 }
@@ -94,7 +97,12 @@ fn validate_onboarding_domain(domain: &str) -> Result<()> {
 impl OnboardRpc for OnboardHandler {
     async fn bootstrap(self, request: BootstrapRequest) -> Result<BootstrapResponse> {
         validate_onboarding_domain(&request.domain)?;
-        ensure_self_kms_allowed(&self.state.config, &self.state.attestation_verifier)
+        let _bootstrap_guard = self.state.bootstrap_lock.lock().await;
+        let cfg = &self.state.config;
+        if cfg.bootstrap_info().exists() || cfg.root_ca_key().exists() || cfg.k256_key().exists() {
+            bail!("KMS has already been bootstrapped");
+        }
+        ensure_self_kms_allowed(cfg, &self.state.attestation_verifier)
             .await
             .context("KMS is not allowed to bootstrap")?;
         let keys = Keys::generate(&request.domain, self.state.config.attest_rpc_cert)
@@ -105,7 +113,6 @@ impl OnboardRpc for OnboardHandler {
         let ca_pubkey = keys.ca_key.public_key_der();
         let attestation = attest_keys(&ca_pubkey, &k256_pubkey).await?;
 
-        let cfg = &self.state.config;
         let response = BootstrapResponse {
             ca_pubkey,
             k256_pubkey,
