@@ -366,6 +366,14 @@ pub fn start(config: ProxyConfig, app_state: Proxy) -> Result<()> {
             ),
         }
     }
+    if config.connection_rebalance {
+        // It is only wired up by the thread-per-core path: there is nothing to
+        // rebalance between when every connection lands on a shared runtime.
+        warn!(
+            "connection_rebalance is set but has no effect without thread_per_core; \
+             the shared-runtime proxy balances connections through its scheduler"
+        );
+    }
     std::thread::Builder::new()
         .name("proxy-main".to_string())
         .spawn(move || {
