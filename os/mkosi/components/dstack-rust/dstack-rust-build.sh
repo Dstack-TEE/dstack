@@ -42,8 +42,11 @@ if [[ ${DSTACK_SKIP_RUST:-0} != 1 ]]; then
     install -m0755 "$CARGO_TARGET_DIR/release/dstack-tee-simulator" "$DEST/usr/bin/"
     install -Dm0644 "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-tee-simulator/files/dstack-tee-simulator.service" \
       "$DEST/usr/lib/systemd/system/dstack-tee-simulator.service"
+    # meta-dstack installs this as a dstack-prepare.service drop-in. Anywhere
+    # else systemd never reads it and dstack-prepare loses its ordering against
+    # the simulator that has to publish the TEE ABI first.
     install -Dm0644 "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-tee-simulator/files/tee-simulator.conf" \
-      "$DEST/etc/tee-simulator.conf"
+      "$DEST/etc/systemd/system/dstack-prepare.service.d/tee-simulator.conf"
   fi
 fi
 find "$DEST" -print0 | xargs -0r touch --no-dereference --date="@${SOURCE_DATE_EPOCH:?}"
