@@ -93,8 +93,36 @@ where
                     if n == 0 {
                         break;
                     }
-                    $w.write_all(&$buf[..n]).await.context("write error")?;
-                    moved += n as u64;
+                    // Not `write_all`: it is not cancel-safe, so it cannot sit
+                    // in a `select!`, and leaving it outside meant a client
+                    // that stopped reading blocked the drain in its write with
+                    // the watchdog unpolled -- the mirror of the silent-backend
+                    // stall, and just as good for holding a connection to
+                    // `timeouts.total`. Single `write` calls are cancel-safe
+                    // (nothing is written when the other branch wins), so the
+                    // partial-write loop is ours to drive.
+                    let mut written = 0usize;
+                    while written < n {
+                        let count = tokio::select! {
+                            () = async { match watchdog.as_mut() {
+                                Some(w) => w.tick().await,
+                                None => std::future::pending().await,
+                            } } => {
+                                if watchdog.as_mut().is_some_and(|w| w.stalled(moved)) {
+                                    bail!("idle timeout");
+                                }
+                                continue;
+                            }
+                            r = $w.write(&$buf[written..n]) => r.context("write error")?,
+                        };
+                        if count == 0 {
+                            bail!("write accepted no bytes");
+                        }
+                        written += count;
+                        // Per partial write, so a peer draining slowly still
+                        // counts as progress and is not reaped for being slow.
+                        moved += count as u64;
+                    }
                 }
                 $w.shutdown().await.ok();
                 break Phase::Eof;

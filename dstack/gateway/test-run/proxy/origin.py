@@ -16,6 +16,9 @@ Endpoints:
   /blackhole   waits for the client's EOF and then never replies, holding the
                connection open -- what a half-closed request looks like to the
                relay's drain phase
+  /flood/<n>   waits for the client's EOF and then sends `n` bytes as fast as
+               it can -- the drain phase with the *write* side blocked, if the
+               client has stopped reading
   /trickle/<n> `n` small records spaced out in time, i.e. token streaming
   /health      "ok"
 
@@ -108,6 +111,30 @@ def handle(conn):
                 except (OSError, ssl.SSLError):
                     pass
                 time.sleep(600)
+                return
+            elif path.startswith("/flood/"):
+                # Drain the client's half, then push far more than the sockets
+                # in between can buffer. If the client is not reading, the
+                # relay's drain blocks in its *write*, which is a different
+                # stall from /blackhole and has to be watched too.
+                size = int(path.rsplit("/", 1)[1])
+                conn.settimeout(600)
+                try:
+                    while conn.recv(65536):
+                        pass
+                except (OSError, ssl.SSLError):
+                    pass
+                try:
+                    conn.sendall(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % size
+                    )
+                    chunk = payload(262144)
+                    sent = 0
+                    while sent < size:
+                        conn.sendall(chunk[: min(len(chunk), size - sent)])
+                        sent += len(chunk)
+                except (OSError, ssl.SSLError):
+                    pass
                 return
             elif path.startswith("/trickle/"):
                 count = int(path.rsplit("/", 1)[1])

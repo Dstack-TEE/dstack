@@ -311,8 +311,14 @@ test_idle_timeout() {
     local c2="${r2%%|*}" s2="${r2##*|}"
     # shellcheck disable=SC2086  # $c2 is a list of gwconfig arguments
     start_gateway "stalled-${n2// /-}" $c2 $common || { FAIL=$((FAIL+1)); continue; }
-    check "reaped after half-close: $n2" \
+    check "reaped after half-close, backend silent: $n2" \
       probe stalled-halfclose --port "$PROXY_PORT" --sni "$s2" --wait 20
+    # The mirror: the backend floods and *this* side stops reading, so the
+    # relay stalls in its write instead of its read. Watching only the read
+    # half left this one running to `timeouts.total`.
+    check "reaped after half-close, client not reading: $n2" \
+      probe stalled-write-halfclose --port "$PROXY_PORT" --sni "$s2" \
+        --size 67108864 --wait 15 --timeout 90
   done
 
   start_gateway "idle-disabled" splice=immediate ktls=immediate idle=3s data_timeout=false \

@@ -193,6 +193,49 @@ def probe_stalled_after_halfclose(args):
     return reaped
 
 
+def probe_stalled_write_after_halfclose(args):
+    """Check a half-closed request is reaped when the *client* stops reading.
+
+    The mirror of `stalled-halfclose`: there the backend goes silent and the
+    relay blocks in `read`, here the backend floods and the relay blocks in
+    `write` because this client never drains it. Watching only the read half
+    leaves this one running until `timeouts.total`.
+    """
+    client = HalfCloseTlsClient(args.host, args.port, args.sni, args.timeout)
+    started = time.monotonic()
+    try:
+        client.send(
+            f"GET /flood/{args.size} HTTP/1.1\r\nHost: {args.sni}\r\n\r\n".encode()
+        )
+        client.close_write()
+        # Deliberately read nothing: let every buffer between here and the
+        # backend fill, so the relay is stuck in its write.
+        time.sleep(args.wait)
+        # Now drain. A reaped connection ends after whatever was buffered; a
+        # live one keeps feeding us the whole flood.
+        client.sock.settimeout(10)
+        drained = 0
+        reaped = False
+        while drained < args.size:
+            try:
+                chunk = client.recv()
+            except Exception:
+                reaped = True
+                break
+            if not chunk:
+                reaped = True
+                break
+            drained += len(chunk)
+    finally:
+        client.close()
+    waited = time.monotonic() - started
+    print(
+        f"verdict={'pass' if reaped else 'FAIL'} "
+        f"{'reaped' if reaped else 'still open'} after {waited:.1f}s, drained {drained}B"
+    )
+    return reaped
+
+
 def probe_concurrent(args):
     """Check many simultaneous transfers all arrive intact.
 
@@ -230,6 +273,7 @@ PROBES = {
     "close-notify": probe_close_notify,
     "idle": probe_idle,
     "stalled-halfclose": probe_stalled_after_halfclose,
+    "stalled-write-halfclose": probe_stalled_write_after_halfclose,
     "concurrent": probe_concurrent,
 }
 
