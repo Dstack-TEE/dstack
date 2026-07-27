@@ -5,12 +5,13 @@
 //! CUSE implementation of the AWS Nitro Security Module ioctl ABI.
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     ffi::CString,
     mem,
     os::raw::{c_int, c_uint, c_void},
     path::Path,
     ptr,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     thread,
     time::Duration,
 };
@@ -20,9 +21,112 @@ use aws_nitro_enclaves_nsm_api::api::{Digest, ErrorCode, Request, Response};
 use dstack_types::TeeSimulatorConfig;
 use libc::{iovec, size_t};
 use mock_attestation::{nsm::NsmGenerator, parse_seed};
+use sha2::{Digest as _, Sha384};
 
 static GENERATOR: OnceLock<Arc<NsmGenerator>> = OnceLock::new();
+static STATE: OnceLock<Mutex<NsmState>> = OnceLock::new();
 static CUSE: OnceLock<CuseApi> = OnceLock::new();
+
+const PCR_COUNT: u16 = 32;
+const PCR_SIZE: usize = 48;
+const MAX_EXTEND_SIZE: usize = 1024;
+
+struct NsmState {
+    pcrs: Vec<[u8; PCR_SIZE]>,
+    locked: BTreeSet<u16>,
+}
+
+impl Default for NsmState {
+    fn default() -> Self {
+        Self {
+            pcrs: vec![[0; PCR_SIZE]; PCR_COUNT.into()],
+            locked: BTreeSet::new(),
+        }
+    }
+}
+
+impl NsmState {
+    fn handle(&mut self, generator: &NsmGenerator, request: Request) -> Response {
+        match request {
+            Request::DescribePCR { index } => {
+                let Some(value) = self.pcrs.get(usize::from(index)) else {
+                    return Response::Error(ErrorCode::InvalidIndex);
+                };
+                Response::DescribePCR {
+                    lock: self.locked.contains(&index),
+                    data: value.to_vec(),
+                }
+            }
+            Request::ExtendPCR { index, data } => {
+                if data.len() > MAX_EXTEND_SIZE {
+                    return Response::Error(ErrorCode::InputTooLarge);
+                }
+                let Some(value) = self.pcrs.get_mut(usize::from(index)) else {
+                    return Response::Error(ErrorCode::InvalidIndex);
+                };
+                if self.locked.contains(&index) {
+                    return Response::Error(ErrorCode::ReadOnlyIndex);
+                }
+                let digest = Sha384::new()
+                    .chain_update(value.as_slice())
+                    .chain_update(data)
+                    .finalize();
+                value.copy_from_slice(&digest);
+                Response::ExtendPCR {
+                    data: value.to_vec(),
+                }
+            }
+            Request::LockPCR { index } => {
+                if index >= PCR_COUNT {
+                    return Response::Error(ErrorCode::InvalidIndex);
+                }
+                self.locked.insert(index);
+                Response::LockPCR
+            }
+            Request::LockPCRs { range } => {
+                if range > PCR_COUNT {
+                    return Response::Error(ErrorCode::InvalidIndex);
+                }
+                self.locked.extend(0..range);
+                Response::LockPCRs
+            }
+            Request::DescribeNSM => Response::DescribeNSM {
+                version_major: 1,
+                version_minor: 0,
+                version_patch: 0,
+                module_id: "dstack-tee-simulator".into(),
+                max_pcrs: PCR_COUNT,
+                locked_pcrs: self.locked.clone(),
+                digest: Digest::SHA384,
+            },
+            Request::Attestation {
+                user_data,
+                nonce,
+                public_key,
+            } => {
+                let pcrs = self
+                    .pcrs
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| (index as u16, value.to_vec()))
+                    .collect::<BTreeMap<_, _>>();
+                generator
+                    .attest_with_claims(
+                        user_data.as_deref(),
+                        nonce.as_deref(),
+                        public_key.as_deref(),
+                        pcrs,
+                    )
+                    .map(|document| Response::Attestation { document })
+                    .unwrap_or(Response::Error(ErrorCode::InternalError))
+            }
+            Request::GetRandom => Response::GetRandom {
+                random: vec![0x42; 32],
+            },
+            _ => Response::Error(ErrorCode::InvalidOperation),
+        }
+    }
+}
 
 type FuseReq = *mut c_void;
 
@@ -250,32 +354,16 @@ unsafe extern "C" fn ioctl(
 }
 
 fn handle(request: Request) -> Response {
-    match request {
-        Request::Attestation { user_data, .. } => GENERATOR
-            .get()
-            .and_then(|generator| {
-                let user_data = user_data
-                    .as_ref()
-                    .map(|data| data.as_slice())
-                    .unwrap_or_default();
-                generator.attest(user_data).ok()
-            })
-            .map(|document| Response::Attestation { document })
-            .unwrap_or(Response::Error(ErrorCode::InternalError)),
-        Request::DescribeNSM => Response::DescribeNSM {
-            version_major: 1,
-            version_minor: 0,
-            version_patch: 0,
-            module_id: "dstack-tee-simulator".into(),
-            max_pcrs: 32,
-            locked_pcrs: Default::default(),
-            digest: Digest::SHA384,
-        },
-        Request::GetRandom => Response::GetRandom {
-            random: vec![0x42; 32],
-        },
-        _ => Response::Error(ErrorCode::InvalidOperation),
-    }
+    let Some(generator) = GENERATOR.get() else {
+        return Response::Error(ErrorCode::InternalError);
+    };
+    let Some(state) = STATE.get() else {
+        return Response::Error(ErrorCode::InternalError);
+    };
+    state
+        .lock()
+        .map(|mut state| state.handle(generator, request))
+        .unwrap_or(Response::Error(ErrorCode::InternalError))
 }
 
 pub fn run(config: &TeeSimulatorConfig) -> Result<()> {
@@ -292,6 +380,9 @@ pub fn run(config: &TeeSimulatorConfig) -> Result<()> {
     GENERATOR
         .set(Arc::new(NsmGenerator::from_seed(parse_seed(seed)?)?))
         .map_err(|_| anyhow::anyhow!("NSM simulator was already initialized"))?;
+    STATE
+        .set(Mutex::new(NsmState::default()))
+        .map_err(|_| anyhow::anyhow!("NSM simulator state was already initialized"))?;
 
     let device_name = CString::new("DEVNAME=nsm")?;
     let mut device_args = [device_name.as_ptr(), ptr::null()];
@@ -334,4 +425,117 @@ pub fn run(config: &TeeSimulatorConfig) -> Result<()> {
     };
     anyhow::ensure!(result == 0, "CUSE NSM session failed with status {result}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aws_nitro_enclaves_nsm_api::api::Request;
+    use serde_bytes::ByteBuf;
+
+    fn response_kind(response: &Response) -> &'static str {
+        match response {
+            Response::DescribePCR { .. } => "DescribePCR",
+            Response::ExtendPCR { .. } => "ExtendPCR",
+            Response::LockPCR => "LockPCR",
+            Response::LockPCRs => "LockPCRs",
+            Response::DescribeNSM { .. } => "DescribeNSM",
+            Response::Attestation { .. } => "Attestation",
+            Response::GetRandom { .. } => "GetRandom",
+            Response::Error(_) => "Error",
+        }
+    }
+
+    #[test]
+    fn pcr_lifecycle_matches_nsm_semantics() {
+        let generator = NsmGenerator::from_seed([0x51; 32]).unwrap();
+        let mut state = NsmState::default();
+        match state.handle(&generator, Request::DescribePCR { index: 0 }) {
+            Response::DescribePCR { lock, data } => {
+                assert!(!lock);
+                assert_eq!(data, vec![0; PCR_SIZE]);
+            }
+            response => panic!("unexpected {}", response_kind(&response)),
+        }
+        let input = b"measurement".to_vec();
+        let expected = Sha384::new()
+            .chain_update([0; PCR_SIZE])
+            .chain_update(&input)
+            .finalize()
+            .to_vec();
+        match state.handle(
+            &generator,
+            Request::ExtendPCR {
+                index: 0,
+                data: input,
+            },
+        ) {
+            Response::ExtendPCR { data } => assert_eq!(data, expected),
+            response => panic!("unexpected {}", response_kind(&response)),
+        }
+        assert!(matches!(
+            state.handle(&generator, Request::LockPCR { index: 0 }),
+            Response::LockPCR
+        ));
+        assert!(matches!(
+            state.handle(
+                &generator,
+                Request::ExtendPCR {
+                    index: 0,
+                    data: vec![1],
+                },
+            ),
+            Response::Error(ErrorCode::ReadOnlyIndex)
+        ));
+        assert!(matches!(
+            state.handle(&generator, Request::DescribePCR { index: PCR_COUNT }),
+            Response::Error(ErrorCode::InvalidIndex)
+        ));
+        assert!(matches!(
+            state.handle(
+                &generator,
+                Request::ExtendPCR {
+                    index: 1,
+                    data: vec![0; MAX_EXTEND_SIZE + 1],
+                },
+            ),
+            Response::Error(ErrorCode::InputTooLarge)
+        ));
+    }
+
+    #[test]
+    fn attestation_binds_claims_and_current_pcrs() {
+        let generator = NsmGenerator::from_seed([0x52; 32]).unwrap();
+        let verifier = nsm_qvl::QuoteVerifier::new(generator.root_ca_pem());
+        let mut state = NsmState::default();
+        assert!(matches!(
+            state.handle(
+                &generator,
+                Request::ExtendPCR {
+                    index: 2,
+                    data: b"app".to_vec(),
+                },
+            ),
+            Response::ExtendPCR { .. }
+        ));
+        let response = state.handle(
+            &generator,
+            Request::Attestation {
+                user_data: Some(ByteBuf::from(b"user".to_vec())),
+                nonce: Some(ByteBuf::from(b"nonce".to_vec())),
+                public_key: Some(ByteBuf::from(b"public".to_vec())),
+            },
+        );
+        let Response::Attestation { document } = response else {
+            panic!("unexpected {}", response_kind(&response));
+        };
+        let verified = verifier
+            .verify(&document, Some(b"nonce"), Some(b"user"))
+            .unwrap();
+        assert_eq!(verified.public_key.as_deref(), Some(b"public".as_slice()));
+        assert_eq!(
+            verified.pcrs.get(&2).map(Vec::as_slice),
+            Some(state.pcrs[2].as_slice())
+        );
+    }
 }
