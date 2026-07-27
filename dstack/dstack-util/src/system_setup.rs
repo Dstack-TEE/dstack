@@ -317,6 +317,28 @@ impl HostShared {
 
 const GATEWAY_CACHE_PATH: &str = "/run/dstack/gateway-cache.json";
 const WG_CONFIG_PATH: &str = "/etc/wireguard/dstack-wg0.conf";
+
+fn safe_write_private(path: &Path, content: impl AsRef<[u8]>) -> Result<()> {
+    use fs::os::unix::fs::OpenOptionsExt as _;
+
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let temporary = path.with_extension("private-tmp");
+    if temporary.exists() {
+        fs::remove_file(&temporary)?;
+    }
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)?;
+    file.write_all(content.as_ref())?;
+    file.flush()?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(temporary, path)?;
+    Ok(())
+}
 /// Certificate validity period in seconds (10 days)
 const CERT_VALIDITY_SECS: u64 = 10 * 24 * 3600;
 const MAX_SUPPORTED_MANIFEST_VERSION: u32 = 3;
@@ -346,7 +368,8 @@ impl GatewayKeyStore {
 
     fn save(&self) -> Result<()> {
         let content = serde_json::to_string(self).context("Failed to serialize gateway cache")?;
-        safe_write(GATEWAY_CACHE_PATH, &content).context("Failed to write gateway cache")?;
+        safe_write_private(Path::new(GATEWAY_CACHE_PATH), &content)
+            .context("Failed to write gateway cache")?;
         Ok(())
     }
 
@@ -615,11 +638,11 @@ impl<'a> GatewayContext<'a> {
         }
 
         let wg_dir = Path::new("/etc/wireguard");
-        fs::create_dir_all(wg_dir)?;
-        fs::write(wg_dir.join("dstack-wg0.conf"), &new_config)?;
+        let wg_config_path = wg_dir.join("dstack-wg0.conf");
+        safe_write_private(&wg_config_path, &new_config)
+            .context("Failed to write WireGuard config")?;
 
         cmd! {
-            chmod 600 $wg_dir/dstack-wg0.conf;
             ignore wg-quick down dstack-wg0;
         }?;
 
@@ -652,6 +675,21 @@ impl<'a> GatewayContext<'a> {
         cmd!(wg-quick up dstack-wg0)?;
         Ok(())
     }
+}
+
+#[test]
+fn private_gateway_write_is_atomic_and_owner_only() {
+    use fs::os::unix::fs::PermissionsExt as _;
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("gateway-cache.json");
+    safe_write_private(&path, b"private material").unwrap();
+    assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(fs::read(&path).unwrap(), b"private material");
+
+    safe_write_private(&path, b"replacement").unwrap();
+    assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(fs::read(path).unwrap(), b"replacement");
 }
 
 fn truncate(s: &[u8], len: usize) -> &[u8] {
