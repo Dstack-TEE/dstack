@@ -164,6 +164,35 @@ def probe_idle(args):
     return ok
 
 
+def probe_stalled_after_halfclose(args):
+    """Check a half-closed request whose backend never replies is still reaped.
+
+    Regression test: the relays dropped out of their watchdog once one
+    direction hit EOF and drained the other with bare reads, so a client could
+    hold a connection open until `timeouts.total` -- five hours by default --
+    by half-closing against a backend that accepts and stays silent.
+    """
+    client = HalfCloseTlsClient(args.host, args.port, args.sni, args.timeout)
+    started = time.monotonic()
+    try:
+        client.send(f"GET /blackhole HTTP/1.1\r\nHost: {args.sni}\r\n\r\n".encode())
+        client.close_write()
+        client.sock.settimeout(args.wait)
+        try:
+            client.recv()
+            reaped = True
+        except Exception:
+            reaped = False
+    finally:
+        client.close()
+    waited = time.monotonic() - started
+    print(
+        f"verdict={'pass' if reaped else 'FAIL'} "
+        f"{'reaped' if reaped else 'still open'} after {waited:.1f}s"
+    )
+    return reaped
+
+
 def probe_concurrent(args):
     """Check many simultaneous transfers all arrive intact.
 
@@ -200,6 +229,7 @@ PROBES = {
     "halfclose": probe_halfclose,
     "close-notify": probe_close_notify,
     "idle": probe_idle,
+    "stalled-halfclose": probe_stalled_after_halfclose,
     "concurrent": probe_concurrent,
 }
 

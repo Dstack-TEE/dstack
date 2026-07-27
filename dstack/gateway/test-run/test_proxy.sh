@@ -297,6 +297,24 @@ test_idle_timeout() {
       probe idle --port "$PROXY_PORT" --sni "$sni" --size "$size" --wait 12 --expect reaped
   done
 
+  # A half-closed request whose backend never answers must still be reaped:
+  # the drain phase runs outside the main relay loop, so it needs the watchdog
+  # of its own that it did not originally have.
+  local arm2
+  for arm2 in \
+    "buffered|splice=off ktls=off|$SNI_TERMINATE" \
+    "splice engaged|splice=immediate ktls=off|$SNI_PASSTHROUGH" \
+    "splice gated|splice=after:1048576 ktls=off|$SNI_PASSTHROUGH" \
+    "ktls gated|splice=after:1048576 ktls=after:1048576|$SNI_TERMINATE"
+  do
+    local n2="${arm2%%|*}" r2="${arm2#*|}"
+    local c2="${r2%%|*}" s2="${r2##*|}"
+    # shellcheck disable=SC2086  # $c2 is a list of gwconfig arguments
+    start_gateway "stalled-${n2// /-}" $c2 $common || { FAIL=$((FAIL+1)); continue; }
+    check "reaped after half-close: $n2" \
+      probe stalled-halfclose --port "$PROXY_PORT" --sni "$s2" --wait 20
+  done
+
   start_gateway "idle-disabled" splice=immediate ktls=immediate idle=3s data_timeout=false \
     || { FAIL=$((FAIL+1)); return; }
   check "kept: data_timeout_enabled = false" \

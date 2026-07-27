@@ -13,6 +13,9 @@ Endpoints:
   /close/<n>   the same, then close the connection (no keep-alive)
   /halfclose   reads the request, waits for the client's EOF, *then* replies --
                the shape that used to lose its response before the splice gate
+  /blackhole   waits for the client's EOF and then never replies, holding the
+               connection open -- what a half-closed request looks like to the
+               relay's drain phase
   /trickle/<n> `n` small records spaced out in time, i.e. token streaming
   /health      "ok"
 
@@ -92,6 +95,19 @@ def handle(conn):
                 except (OSError, ssl.SSLError):
                     pass
                 _respond(conn, payload(4096), close=True)
+                return
+            elif path == "/blackhole":
+                # Drain the client's half of the conversation, then hold the
+                # connection open without answering. The relay is now in its
+                # post-EOF drain, waiting on us; whether it ever gives up is
+                # what `timeouts.idle` is supposed to decide.
+                conn.settimeout(600)
+                try:
+                    while conn.recv(65536):
+                        pass
+                except (OSError, ssl.SSLError):
+                    pass
+                time.sleep(600)
                 return
             elif path.startswith("/trickle/"):
                 count = int(path.rsplit("/", 1)[1])

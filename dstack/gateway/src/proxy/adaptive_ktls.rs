@@ -75,11 +75,26 @@ where
             ($closing:expr, $r:expr, $w:expr, $buf:expr) => {{
                 $closing.shutdown().await.ok();
                 loop {
-                    let n = $r.read(&mut $buf).await.context("read error")?;
+                    let n = tokio::select! {
+                        () = async { match watchdog.as_mut() {
+                            Some(w) => w.tick().await,
+                            None => std::future::pending().await,
+                        } } => {
+                            // The drain is watched too: a backend that accepts the
+                            // request and then never answers would otherwise hold
+                            // the connection until `timeouts.total`.
+                            if watchdog.as_mut().is_some_and(|w| w.stalled(moved)) {
+                                bail!("idle timeout");
+                            }
+                            continue;
+                        }
+                        r = $r.read(&mut $buf) => r.context("read error")?,
+                    };
                     if n == 0 {
                         break;
                     }
                     $w.write_all(&$buf[..n]).await.context("write error")?;
+                    moved += n as u64;
                 }
                 $w.shutdown().await.ok();
                 break Phase::Eof;

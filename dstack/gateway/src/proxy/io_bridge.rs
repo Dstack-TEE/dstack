@@ -175,6 +175,11 @@ where
     watchdog.tick().await; // the first tick completes immediately
 
     let mut rest;
+    // Progress of the direction that finishes first, frozen at that point. The
+    // watchdog samples a monotonic counter, so the drain phase has to keep
+    // adding it rather than restart from the surviving direction alone.
+    // Assigned on every path that leaves the loop, like `rest`.
+    let finished: u64;
     // Transfer data between a and b bidirectionally.
     loop {
         tokio::select! {
@@ -186,6 +191,7 @@ where
             done = a2b.step() => {
                 if done? {
                     // a to b is EOF, switch to b to a only
+                    finished = a2b.progress;
                     rest = Rest::B2a(b2a);
                     drop(a2b);
                     break;
@@ -194,6 +200,7 @@ where
             done = b2a.step() => {
                 if done? {
                     // b to a is EOF, switch to a to b only
+                    finished = b2a.progress;
                     rest = Rest::A2b(a2b);
                     drop(b2a);
                     break;
@@ -202,18 +209,39 @@ where
         }
     }
 
-    // One of the direction is closed, copy the other direction.
+    // One direction is closed; drain the other -- still watched. Half-close is
+    // not a licence to hang: before the watchdog existed each read carried its
+    // own `idle` timeout, so this phase was covered, and leaving it bare let a
+    // client hold a connection open until `timeouts.total` (5h) by
+    // half-closing against a backend that never replies.
     match &mut rest {
-        Rest::A2b(a2b) => loop {
-            if a2b.step().await? {
-                break;
-            }
-        },
-        Rest::B2a(b2a) => loop {
-            if b2a.step().await? {
-                break;
-            }
-        },
+        Rest::A2b(a2b) => drain(a2b, &mut watchdog, finished).await,
+        Rest::B2a(b2a) => drain(b2a, &mut watchdog, finished).await,
     }
-    Ok(())
+}
+
+/// Pump the surviving direction to EOF, giving up if it stalls for `idle`.
+async fn drain<R, W>(
+    dir: &mut OneDirection<'_, R, W>,
+    watchdog: &mut IdleWatchdog,
+    finished: u64,
+) -> Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    loop {
+        tokio::select! {
+            _ = watchdog.tick() => {
+                if watchdog.stalled(finished + dir.progress) {
+                    bail!("idle timeout");
+                }
+            }
+            done = dir.step() => {
+                if done? {
+                    return Ok(());
+                }
+            }
+        }
+    }
 }
