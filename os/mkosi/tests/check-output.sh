@@ -12,9 +12,10 @@ grep -q 'dstack-rootfs' < <(sgdisk -p "$out/rootfs.img.parted.verity")
 python3 - "$out/metadata.json" "$flavor" <<'PY'
 import json,sys
 d=json.load(open(sys.argv[1]))
-for k in ("bios","bios-sev","kernel","cmdline","initrd","rootfs","version","git_revision","is_dev","ovmf_variant"):
+for k in ("bios","bios-sev","kernel","cmdline","initrd","rootfs","version","backend","git_revision","is_dev","ovmf_variant"):
     assert k in d, k
 assert d["bios-sev"] == "ovmf-sev.fd"
+assert d["backend"] == "mkosi"
 assert d["is_dev"] == (sys.argv[2] == "dev")
 PY
 echo "Yocto-compatible release format accepted: $out"

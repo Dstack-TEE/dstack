@@ -394,6 +394,7 @@ cat <<EOF > "${OUTPUT_DIR}/metadata.json"
     "initrd": "initramfs.cpio.gz",
     "rootfs": "rootfs.img.parted.verity",
     "version": "$DSTACK_VERSION",
+    "backend": "$BACKEND",
     "git_revision": "$GIT_REVISION",
     "shared_ro": true,
     "is_dev": ${IS_DEV},
