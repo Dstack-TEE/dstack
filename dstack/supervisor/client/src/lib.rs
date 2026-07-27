@@ -317,7 +317,7 @@ mod tests {
         let path = directory.path().join("supervisor.sock");
         let _listener = UnixListener::bind(&path).unwrap();
         fs_err::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        assert!(trusted_uds_identity(&path).is_ok());
+        trusted_uds_identity(&path).expect("owner-only socket should be trusted");
     }
 
     #[test]
