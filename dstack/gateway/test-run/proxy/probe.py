@@ -12,6 +12,7 @@ Deliberately uses raw sockets and `ssl` rather than an HTTP client: three of the
 behaviours under test (half-close, TLS close_notify, idle reaping) are invisible
 to a client that hides connection lifecycle from you.
 """
+
 import argparse
 import hashlib
 import socket
@@ -23,6 +24,7 @@ import origin
 
 
 def tls_context() -> ssl.SSLContext:
+    """Build a client context that hides nothing about how a connection ended."""
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -34,6 +36,7 @@ def tls_context() -> ssl.SSLContext:
 
 
 def connect(args):
+    """Open one TLS connection to the gateway, routed by SNI."""
     raw = socket.create_connection((args.host, args.port), timeout=args.timeout)
     return tls_context().wrap_socket(
         raw, server_hostname=args.sni, suppress_ragged_eofs=False
@@ -41,6 +44,7 @@ def connect(args):
 
 
 def request(sock, path: str, sni: str, close: bool = False):
+    """Send one HTTP request."""
     extra = "Connection: close\r\n" if close else ""
     sock.sendall(f"GET {path} HTTP/1.1\r\nHost: {sni}\r\n{extra}\r\n".encode())
 
@@ -80,26 +84,33 @@ def read_response(sock) -> tuple[bytes, str]:
 
 
 def probe_fetch(args):
-    """The payload survives the proxy byte for byte."""
+    """Check the payload survives the proxy byte for byte."""
     sock = connect(args)
     request(sock, f"/bytes/{args.size}", args.sni)
     body, how = read_response(sock)
     sock.close()
     got = hashlib.sha256(body).hexdigest()
     ok = got == origin.digest(args.size) and how == "complete"
-    print(f"verdict={'pass' if ok else 'FAIL'} bytes={len(body)} want={args.size} end={how}")
+    print(
+        f"verdict={'pass' if ok else 'FAIL'} bytes={len(body)} want={args.size} end={how}"
+    )
     return ok
 
 
 def probe_halfclose(args):
-    """A client that half-closes its request still gets the response.
+    """Check a client that half-closes its request still gets the response.
 
-    Regression test: the gated relays used to shut down the wrong half and
-    return an empty, successful response.
+    Not wired into `test_proxy.sh`, and cannot be until it emits a real
+    `close_notify`: `shutdown(SHUT_WR)` sends a bare FIN, which mid-TLS is a
+    truncation rather than an orderly half-close, so the peer is right to
+    abandon the connection. Verified by running this against the origin with no
+    gateway in the path -- it fails there too. Doing it properly needs an
+    `ssl.SSLObject` on memory BIOs, so the close_notify can be sent without
+    waiting for the peer's. The relay-level behaviour is covered by unit tests
+    in the meantime; see the note in `test_proxy.sh`.
     """
     sock = connect(args)
     request(sock, "/halfclose", args.sni)
-    # Send the TLS close_notify and the TCP FIN, but keep reading.
     try:
         sock.shutdown(socket.SHUT_WR)
     except OSError as exc:
@@ -113,7 +124,7 @@ def probe_halfclose(args):
 
 
 def probe_close_notify(args):
-    """The app closing first reaches the client as an orderly TLS shutdown.
+    """Check the app closing first reaches the client as an orderly TLS shutdown.
 
     Regression test: after kTLS offload the gateway used to close with a bare
     FIN, which a strict client cannot tell from a truncation attack.
@@ -128,8 +139,7 @@ def probe_close_notify(args):
 
 
 def probe_idle(args):
-    """`timeouts.idle` reaps a connection that goes quiet -- or does not, when
-    the test expects it kept.
+    """Check whether a connection that goes quiet is reaped, as configured.
 
     Regression test: configuring splice or kTLS used to bypass the watchdog
     entirely, leaving `timeouts.total` (5h) as the only bound.
@@ -161,7 +171,7 @@ def probe_idle(args):
 
 
 def probe_concurrent(args):
-    """Many simultaneous transfers all arrive intact.
+    """Check many simultaneous transfers all arrive intact.
 
     Exercises the parts a single-connection test cannot: the pipe pool, the
     per-core balancer, and whatever the gate does under real concurrency.
@@ -174,7 +184,10 @@ def probe_concurrent(args):
             request(sock, f"/bytes/{args.size}", args.sni)
             body, how = read_response(sock)
             sock.close()
-            return hashlib.sha256(body).hexdigest() == origin.digest(args.size) and how == "complete"
+            return (
+                hashlib.sha256(body).hexdigest() == origin.digest(args.size)
+                and how == "complete"
+            )
         except Exception:
             return False
 
@@ -198,6 +211,7 @@ PROBES = {
 
 
 def main():
+    """Run one probe and exit non-zero if it failed."""
     ap = argparse.ArgumentParser()
     ap.add_argument("probe", choices=sorted(PROBES))
     ap.add_argument("--host", default="127.0.0.1")

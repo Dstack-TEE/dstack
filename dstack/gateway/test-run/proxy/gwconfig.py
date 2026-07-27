@@ -18,11 +18,12 @@ Usage: gwconfig.py DIR [key=value ...]
   data_timeout=true|false timeouts.data_timeout_enabled
   workers=<n>
 """
+
 import sys
 
 
 def gate_section(name: str, spec: str, extra: str = "") -> str:
-    """`[core.proxy.<name>]` for one of the two gated optimisations.
+    """Render `[core.proxy.<name>]` for one of the two gated optimisations.
 
     Absent section = off, empty section = engage immediately, keys = gated;
     the same three states the config documents.
@@ -40,12 +41,13 @@ def gate_section(name: str, spec: str, extra: str = "") -> str:
 
 
 def main():
+    """Write one arm's config to stdout."""
     d = sys.argv[1].rstrip("/")
     o = dict(a.split("=", 1) for a in sys.argv[2:] if "=" in a)
 
     cert, key = f"{d}/certs/cert.pem", f"{d}/certs/key.pem"
     cfg = f"""workers = 2
-address = "127.0.0.1:{o['rpc_port']}"
+address = "127.0.0.1:{o["rpc_port"]}"
 [tls]
 key = "{key}"
 certs = "{cert}"
@@ -60,8 +62,8 @@ insecure_skip_attestation = true
 insecure_enable_debug_rpc = false
 [core.admin]
 enabled = true
-address = "127.0.0.1:{o['admin_port']}"
-auth_token = "{o['admin_token']}"
+address = "127.0.0.1:{o["admin_port"]}"
+auth_token = "{o["admin_token"]}"
 [core.sync]
 enabled = false
 node_id = 1
@@ -69,30 +71,30 @@ data_dir = "{d}/data"
 [core.wg]
 public_key = ""
 private_key = ""
-listen_port = {o['wg_port']}
+listen_port = {o["wg_port"]}
 ip = "10.90.0.1/24"
 reserved_net = ["10.90.0.1/32"]
 client_ip_range = "10.90.0.0/25"
 config_path = "{d}/wg.conf"
-interface = "{o['wg_iface']}"
-endpoint = "10.90.0.1:{o['wg_port']}"
+interface = "{o["wg_iface"]}"
+endpoint = "10.90.0.1:{o["wg_port"]}"
 [core.proxy]
 listen_addr = "127.0.0.1"
-listen_port = {o['proxy_port']}
+listen_port = {o["proxy_port"]}
 localhost_enabled = true
-base_domain = "{o['base_domain']}"
+base_domain = "{o["base_domain"]}"
 cert_chain = "{cert}"
 cert_key = "{key}"
-workers = {o.get('workers', '2')}
+workers = {o.get("workers", "2")}
 max_connections_per_app = 0
 buffer_size = 65536
 tls_versions = ["1.2"]
-thread_per_core = {o.get('tpc', 'true')}
-connection_rebalance = {o.get('rebalance', 'true')}
+thread_per_core = {o.get("tpc", "true")}
+connection_rebalance = {o.get("rebalance", "true")}
 
 [core.proxy.timeouts]
-idle = "{o.get('idle', '10m')}"
-data_timeout_enabled = {o.get('data_timeout', 'true')}
+idle = "{o.get("idle", "10m")}"
+data_timeout_enabled = {o.get("data_timeout", "true")}
 """
     cfg += gate_section(
         "tcp_splice", o.get("splice", "off"), extra="release_idle_pipes = true\n"

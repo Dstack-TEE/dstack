@@ -64,7 +64,7 @@ check() {
     FAIL=$((FAIL + 1))
     FAILED_NAMES+=("$name")
     printf '  \033[31mFAIL\033[0m %-52s %s\n' "$name" "$(tail -1 <<<"$out")"
-    sed 's/^/        /' <<<"$out" | tail -12
+    printf '        %s\n' "${out//$'\n'/$'\n'        }" | tail -12
   fi
 }
 
@@ -229,6 +229,7 @@ test_data_path() {
   local arm name cfg
   for arm in "${ARMS[@]}"; do
     name="${arm%%|*}"; cfg="${arm#*|}"
+    # shellcheck disable=SC2086  # $cfg is a list of gwconfig arguments
     start_gateway "$name" $cfg || { FAIL=$((FAIL+1)); FAILED_NAMES+=("$name: startup"); continue; }
     # Under the gate and over it, so both halves of each arm are exercised.
     check "$name / terminate 1 KiB" \
@@ -266,6 +267,7 @@ test_close_notify() {
   local arm name cfg
   for arm in "${ARMS[@]}"; do
     name="${arm%%|*}"; cfg="${arm#*|}"
+    # shellcheck disable=SC2086  # $cfg is a list of gwconfig arguments
     start_gateway "close-$name" $cfg || { FAIL=$((FAIL+1)); continue; }
     check "$name / terminate 1 MiB" \
       probe close-notify --port "$PROXY_PORT" --sni "$SNI_TERMINATE" --size 1048576
@@ -287,6 +289,7 @@ test_idle_timeout() {
     local name="${arm%%|*}" rest="${arm#*|}"
     local cfg="${rest%%|*}" rest2="${rest#*|}"
     local sni="${rest2%%|*}" size="${rest2##*|}"
+    # shellcheck disable=SC2086  # both are lists of gwconfig arguments
     start_gateway "idle-${name// /-}" $cfg $common || { FAIL=$((FAIL+1)); continue; }
     check "reaped: $name" \
       probe idle --port "$PROXY_PORT" --sni "$sni" --size "$size" --wait 12 --expect reaped
@@ -376,6 +379,7 @@ test_runtime_modes() {
   local mode
   for mode in "tpc=true rebalance=true" "tpc=true rebalance=false" \
               "tpc=false rebalance=false"; do
+    # shellcheck disable=SC2086  # $mode is a pair of gwconfig arguments
     start_gateway "mode-${mode// /-}" splice=off ktls=off $mode \
       || { FAIL=$((FAIL+1)); FAILED_NAMES+=("$mode: startup"); continue; }
     check "$mode" \

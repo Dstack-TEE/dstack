@@ -20,6 +20,7 @@ Deterministic payloads mean a test can assert on a digest without a second
 fetch, and the pattern is not all-zeroes so a truncated or misaligned relay
 cannot accidentally look correct.
 """
+
 import hashlib
 import os
 import socket
@@ -32,11 +33,13 @@ PATTERN = b"dstack-gateway-proxy-test-0123456789abcdef"
 
 
 def payload(n: int) -> bytes:
+    """Return `n` bytes of the deterministic pattern."""
     reps = n // len(PATTERN) + 1
     return (PATTERN * reps)[:n]
 
 
 def digest(n: int) -> str:
+    """Return the sha256 of what `payload(n)` returns."""
     return hashlib.sha256(payload(n)).hexdigest()
 
 
@@ -64,6 +67,7 @@ def _read_request(conn) -> bytes | None:
 
 
 def handle(conn):
+    """Serve one connection until it closes."""
     try:
         while True:
             req = _read_request(conn)
@@ -91,9 +95,7 @@ def handle(conn):
                 return
             elif path.startswith("/trickle/"):
                 count = int(path.rsplit("/", 1)[1])
-                conn.sendall(
-                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
-                )
+                conn.sendall(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
                 for _ in range(count):
                     conn.sendall(b"40\r\n" + payload(64) + b"\r\n")
                     time.sleep(0.05)
@@ -112,6 +114,7 @@ def handle(conn):
 
 
 def serve(port: int, ctx: ssl.SSLContext | None):
+    """Accept forever on `port`, wrapping in TLS when `ctx` is given."""
     srv = socket.socket()
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(("127.0.0.1", port))
@@ -129,6 +132,7 @@ def serve(port: int, ctx: ssl.SSLContext | None):
 
 
 def main():
+    """Start the configured listeners and idle."""
     plain = int(os.environ.get("PLAIN_PORT", "0"))
     tls = int(os.environ.get("TLS_PORT", "0"))
     cert, key = os.environ["CERT"], os.environ["KEY"]
