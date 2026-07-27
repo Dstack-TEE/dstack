@@ -698,9 +698,24 @@ fn cmd_rand(rand_args: RandArgs) -> Result<()> {
     if rand_args.hex {
         data = hex::encode(data).into_bytes();
     }
-    io::stdout()
-        .write_all(&data)
-        .context("Failed to write random data")?;
+    if let Some(output) = rand_args.output {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let mut file = fs_err::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&output)
+            .with_context(|| format!("Failed to create random output {output}"))?;
+        file.write_all(&data)
+            .with_context(|| format!("Failed to write random output {output}"))?;
+        file.sync_all()
+            .with_context(|| format!("Failed to sync random output {output}"))?;
+    } else {
+        io::stdout()
+            .write_all(&data)
+            .context("Failed to write random data")?;
+    }
     Ok(())
 }
 
