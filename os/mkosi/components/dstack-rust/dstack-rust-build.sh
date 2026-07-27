@@ -65,7 +65,8 @@ if [[ ${DSTACK_SKIP_RUST:-0} != 1 ]]; then
   cargo build --locked --release --manifest-path "$ROOT/dstack/Cargo.toml" \
     -p dstack-guest-agent -p dstack-util -p dstack-volume
   install -m0755 "$CARGO_TARGET_DIR/release/dstack-guest-agent" \
-    "$CARGO_TARGET_DIR/release/dstack-util" "$DEST/usr/bin/"
+    "$CARGO_TARGET_DIR/release/dstack-util" \
+    "$CARGO_TARGET_DIR/release/dstack-volume" "$DEST/usr/bin/"
   if [[ $FLAVOR == dev ]]; then
     cargo build --locked --release --manifest-path "$ROOT/dstack/Cargo.toml" \
       -p dstack-tee-simulator
