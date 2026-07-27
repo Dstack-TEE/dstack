@@ -22,6 +22,9 @@ on:
       - 'dstack/vendor/ktls/**'
       - '.github/workflows/gateway-proxy-tests.yml'
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
