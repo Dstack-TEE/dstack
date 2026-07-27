@@ -72,7 +72,7 @@ fn health() -> Json<serde_json::Value> {
     }))
 }
 
-async fn run_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()> {
+async fn run_oneshot(file_path: &str, config: &Config) -> anyhow::Result<bool> {
     use std::fs;
 
     info!("Running in oneshot mode for file: {}", file_path);
@@ -110,52 +110,9 @@ async fn run_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()> {
     })?;
     info!("Stored verification result at {}", output_path);
 
-    // Output results
-    println!("\n=== Verification Results ===");
-    println!("Valid: {}", response.is_valid);
-    println!("Quote verified: {}", response.details.quote_verified);
-    println!(
-        "Event log verified: {}",
-        response.details.event_log_verified
-    );
-    println!(
-        "OS image hash verified: {}",
-        response.details.os_image_hash_verified
-    );
-    println!(
-        "ACPI tables verified: {}",
-        response.details.acpi_tables_verified
-    );
-
-    if let Some(tcb_status) = &response.details.tcb_status {
-        println!("TCB status: {}", tcb_status);
-    }
-
-    if !response.details.advisory_ids.is_empty() {
-        println!("Advisory IDs: {:?}", response.details.advisory_ids);
-    }
-
-    if let Some(reason) = &response.reason {
-        println!("Reason: {}", reason);
-    }
-
-    if let Some(report_data) = &response.details.report_data {
-        println!("Report data: {}", report_data);
-    }
-
-    if let Some(app_info) = &response.details.app_info {
-        println!("\n=== App Info ===");
-        println!("App ID: {}", hex::encode(&app_info.app_id));
-        println!("Instance ID: {}", hex::encode(&app_info.instance_id));
-        println!("Compose hash: {}", hex::encode(&app_info.compose_hash));
-    }
-
-    // Exit with appropriate code
-    if !response.is_valid {
-        std::process::exit(1);
-    }
-
-    Ok(())
+    // Emit exactly one machine-readable document on stdout.
+    println!("{}", serde_json::to_string(&response)?);
+    Ok(response.is_valid)
 }
 
 async fn run_cert_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()> {
@@ -277,11 +234,24 @@ async fn main() -> Result<()> {
     let config: Config = figment.extract().context("Failed to load configuration")?;
     // Check for oneshot modes
     if let Some(file_path) = cli.verify {
-        if let Err(e) = run_oneshot(&file_path, &config).await {
-            error!("Oneshot verification failed: {:#}", e);
-            std::process::exit(1);
+        let (response, exit_code) = match run_oneshot(&file_path, &config).await {
+            Ok(is_valid) => (None, if is_valid { 0 } else { 1 }),
+            Err(error) => {
+                error!("Oneshot verification failed: {error:#}");
+                (
+                    Some(VerificationResponse {
+                        is_valid: false,
+                        details: VerificationDetails::default(),
+                        reason: Some(format!("Internal error: {error:#}")),
+                    }),
+                    1,
+                )
+            }
+        };
+        if let Some(response) = response {
+            println!("{}", serde_json::to_string(&response)?);
         }
-        std::process::exit(0);
+        std::process::exit(exit_code);
     }
     if let Some(file_path) = cli.verify_cert {
         if let Err(e) = run_cert_oneshot(&file_path, &config).await {
