@@ -46,6 +46,7 @@ toml.workspace = true
 dcap-qvl.workspace = true
 k256 = { workspace = true, features = ["ecdsa"] }
 dstack-types.workspace = true
+dstack-cli-core.workspace = true
 rand.workspace = true
 regorus.workspace = true
 sha3.workspace = true

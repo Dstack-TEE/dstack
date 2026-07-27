@@ -793,8 +793,10 @@ fn cmd_gen_ra_cert(args: GenRaCertArgs) -> Result<()> {
     let ca_cert = fs::read_to_string(args.ca_cert)?;
     let ca_key = fs::read_to_string(args.ca_key)?;
     let cert_pair = generate_ra_cert(ca_cert, ca_key)?;
-    fs::write(&args.cert_path, cert_pair.cert_pem).context("Failed to write certificate")?;
-    fs::write(&args.key_path, cert_pair.key_pem).context("Failed to write private key")?;
+    dstack_cli_core::fsutil::write_atomic(&args.cert_path, &cert_pair.cert_pem)
+        .context("Failed to write certificate")?;
+    dstack_cli_core::fsutil::write_atomic_mode(&args.key_path, &cert_pair.key_pem, 0o600)
+        .context("Failed to write private key")?;
     Ok(())
 }
 
@@ -819,8 +821,10 @@ fn cmd_gen_ca_cert(args: GenCaCertArgs) -> Result<()> {
     let cert = req
         .self_signed()
         .context("Failed to self-sign certificate")?;
-    fs::write(&args.cert, cert.pem()).context("Failed to write certificate")?;
-    fs::write(&args.key, key.serialize_pem()).context("Failed to write private key")?;
+    dstack_cli_core::fsutil::write_atomic(&args.cert, &cert.pem())
+        .context("Failed to write certificate")?;
+    dstack_cli_core::fsutil::write_atomic_mode(&args.key, &key.serialize_pem(), 0o600)
+        .context("Failed to write private key")?;
     Ok(())
 }
 
@@ -835,7 +839,8 @@ fn cmd_gen_app_keys(args: GenAppKeysArgs) -> Result<()> {
     };
     let app_keys = make_app_keys(&key, &disk_key, &k256_key, args.ca_level, key_provider)?;
     let app_keys = serde_json::to_string(&app_keys).context("Failed to serialize app keys")?;
-    fs::write(&args.output, app_keys).context("Failed to write app keys")?;
+    dstack_cli_core::fsutil::write_atomic_mode(&args.output, &app_keys, 0o600)
+        .context("Failed to write app keys")?;
     Ok(())
 }
 
