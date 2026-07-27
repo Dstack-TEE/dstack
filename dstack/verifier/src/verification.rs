@@ -222,10 +222,18 @@ impl CvmVerifier {
             .join(format!("{cache_key}.json"))
     }
 
-    fn vm_config_cache_key(vm_config: &VmConfig) -> Result<String> {
+    fn measurement_cache_key_for_version(vm_config: &VmConfig, version: u32) -> Result<String> {
         let serialized = serde_json::to_vec(vm_config)
             .context("Failed to serialize VM config for cache key computation")?;
-        Ok(hex::encode(Sha256::digest(&serialized)))
+        let mut hasher = Sha256::new();
+        hasher.update(b"dstack-verifier-measurement-cache");
+        hasher.update(version.to_le_bytes());
+        hasher.update(serialized);
+        Ok(hex::encode(hasher.finalize()))
+    }
+
+    fn vm_config_cache_key(vm_config: &VmConfig) -> Result<String> {
+        Self::measurement_cache_key_for_version(vm_config, MEASUREMENT_CACHE_VERSION)
     }
 
     fn load_measurements_from_cache(&self, cache_key: &str) -> Result<Option<TdxMeasurements>> {
@@ -1508,6 +1516,114 @@ mod tests {
         // empty/malformed must degrade to None, not fail the verify.
         assert!(decode_key_provider_info(b"").is_none());
         assert!(decode_key_provider_info(b"not json").is_none());
+    }
+
+    fn sample_measurements(byte: u8) -> TdxMeasurements {
+        TdxMeasurements {
+            mrtd: vec![byte; 48],
+            rtmr0: vec![byte.wrapping_add(1); 48],
+            rtmr1: vec![byte.wrapping_add(2); 48],
+            rtmr2: vec![byte.wrapping_add(3); 48],
+        }
+    }
+
+    #[test]
+    fn measurement_cache_key_binds_config_and_algorithm_version() {
+        let base: VmConfig = serde_json::from_str("{}").unwrap();
+        let base_key = CvmVerifier::vm_config_cache_key(&base).unwrap();
+        assert_eq!(base_key, CvmVerifier::vm_config_cache_key(&base).unwrap());
+
+        let mut changed = base.clone();
+        changed.cpu_count = 2;
+        assert_ne!(
+            base_key,
+            CvmVerifier::vm_config_cache_key(&changed).unwrap()
+        );
+        changed = base.clone();
+        changed.os_image_hash = vec![0x42; 32];
+        assert_ne!(
+            base_key,
+            CvmVerifier::vm_config_cache_key(&changed).unwrap()
+        );
+        changed = base.clone();
+        changed.swtpm = true;
+        assert_ne!(
+            base_key,
+            CvmVerifier::vm_config_cache_key(&changed).unwrap()
+        );
+        assert_ne!(
+            base_key,
+            CvmVerifier::measurement_cache_key_for_version(&base, MEASUREMENT_CACHE_VERSION + 1,)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn measurement_cache_rejects_corrupt_and_stale_entries() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut verifier = test_verifier();
+        verifier.image_cache_dir = directory.path().display().to_string();
+        let config: VmConfig = serde_json::from_str("{}").unwrap();
+        let key = CvmVerifier::vm_config_cache_key(&config).unwrap();
+        let path = verifier.measurement_cache_path(&key);
+        fs_err::create_dir_all(path.parent().unwrap()).unwrap();
+
+        fs_err::write(&path, b"{not json").unwrap();
+        assert!(verifier
+            .load_measurements_from_cache(&key)
+            .unwrap()
+            .is_none());
+        fs_err::write(
+            &path,
+            serde_json::to_vec(&CachedMeasurement {
+                version: MEASUREMENT_CACHE_VERSION + 1,
+                measurements: sample_measurements(1),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(verifier
+            .load_measurements_from_cache(&key)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn concurrent_measurement_cache_writes_are_atomic() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut verifier = test_verifier();
+        verifier.image_cache_dir = directory.path().display().to_string();
+        let config: VmConfig = serde_json::from_str("{}").unwrap();
+        let key = CvmVerifier::vm_config_cache_key(&config).unwrap();
+        let first = sample_measurements(0x11);
+        let second = sample_measurements(0x22);
+
+        std::thread::scope(|scope| {
+            for index in 0..16 {
+                let verifier = &verifier;
+                let key = &key;
+                let measurements = if index % 2 == 0 { &first } else { &second };
+                scope.spawn(move || {
+                    verifier
+                        .store_measurements_in_cache(key, measurements)
+                        .unwrap();
+                });
+            }
+        });
+        let cached = verifier
+            .load_measurements_from_cache(&key)
+            .unwrap()
+            .expect("one complete cache entry");
+        let encoded = serde_json::to_vec(&cached).unwrap();
+        assert!(
+            encoded == serde_json::to_vec(&first).unwrap()
+                || encoded == serde_json::to_vec(&second).unwrap()
+        );
+        let entries = fs_err::read_dir(verifier.measurement_cache_dir())
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(entries.len(), 1, "temporary cache files must not survive");
     }
 
     #[test]
