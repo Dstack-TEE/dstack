@@ -34,6 +34,10 @@ use tokio::{
 
 mod ffi;
 pub use crate::ffi::CryptoInfo;
+// dstack patch: the offload path splices the bare descriptor rather than going
+// through `KtlsStream`, so it has to send the TLS close itself; upstream only
+// calls this from `KtlsStream::poll_shutdown` and keeps it private.
+pub use crate::ffi::send_close_notify;
 
 mod async_read_ready;
 pub use async_read_ready::AsyncReadReady;

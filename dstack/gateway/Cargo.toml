@@ -79,3 +79,6 @@ path = "src/gen_debug_key.rs"
 [dev-dependencies]
 insta.workspace = true
 tempfile.workspace = true
+# `test-util` gives the idle-watchdog tests a paused clock, so they assert on
+# the window without waiting for it in wall-clock time.
+tokio = { workspace = true, features = ["test-util"] }

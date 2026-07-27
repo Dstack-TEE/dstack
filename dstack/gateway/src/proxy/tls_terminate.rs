@@ -382,7 +382,11 @@ impl Proxy {
                 self.send_pp_header(&mut outbound, &instance_id, port, pp_header)
                     .await?;
                 return super::adaptive_ktls::relay_with_adaptive_offload(
-                    tls_stream, outbound, ktls, splice,
+                    tls_stream,
+                    outbound,
+                    ktls,
+                    splice,
+                    self.config.proxy.idle_timeout(),
                 )
                 .await;
             }
@@ -422,10 +426,14 @@ impl Proxy {
                         .await
                         .context("failed to flush drained data to app")?;
                 }
+                // `tcp` is now a kernel-TLS socket, so closing it needs a
+                // close_notify and not just a FIN.
                 return super::splice::splice_bidirectional(
                     tcp,
                     outbound,
                     splice.release_idle_pipes,
+                    self.config.proxy.idle_timeout(),
+                    super::splice::CloseKind::KernelTls,
                 )
                 .await
                 .context("ktls splice error");

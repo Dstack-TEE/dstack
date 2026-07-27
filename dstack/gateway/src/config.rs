@@ -246,6 +246,17 @@ pub struct ProxyConfig {
     pub port_policy_fetch: PortPolicyFetchConfig,
 }
 
+impl ProxyConfig {
+    /// The idle window every relay enforces, or `None` when data timeouts are
+    /// off. Computed in one place so the buffered bridge and the gated fast
+    /// paths cannot end up enforcing different things.
+    pub fn idle_timeout(&self) -> Option<Duration> {
+        self.timeouts
+            .data_timeout_enabled
+            .then_some(self.timeouts.idle)
+    }
+}
+
 /// Configuration for `splice(2)` relaying on the TLS-passthrough path.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SpliceConfig {

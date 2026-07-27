@@ -19,16 +19,17 @@
 //! the current record sequence numbers, and `CorkStream` exists precisely to
 //! stop reads at a record boundary so nothing is left half-parsed.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use ktls::CorkStream;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::server::TlsStream;
 use tracing::debug;
 
-use super::splice::splice_bidirectional;
+use super::idle::IdleWatchdog;
+use super::splice::{splice_bidirectional, CloseKind};
 use crate::config::{EngageAfter, SpliceConfig};
 
 /// Why the userspace relay phase stopped.
@@ -40,7 +41,12 @@ enum Phase {
 }
 
 /// Relay both directions in userspace until either side closes or `gate` fires.
-async fn relay_until<S>(tls: &mut S, upstream: &mut TcpStream, gate: &EngageAfter) -> Result<Phase>
+async fn relay_until<S>(
+    tls: &mut S,
+    upstream: &mut TcpStream,
+    gate: &EngageAfter,
+    idle: Option<Duration>,
+) -> Result<Phase>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -50,6 +56,14 @@ where
     let mut up = vec![0u8; 32 * 1024];
     let mut moved: u64 = 0;
     let start = Instant::now();
+    let mut watchdog: Option<IdleWatchdog> = match idle {
+        Some(idle) => {
+            let mut w = IdleWatchdog::new(idle);
+            w.tick().await; // the first tick completes immediately
+            Some(w)
+        }
+        None => None,
+    };
 
     let phase = loop {
         // One side closing is not the end of the connection: a client that ends
@@ -71,6 +85,16 @@ where
             }};
         }
         tokio::select! {
+            () = async { match watchdog.as_mut() {
+                Some(w) => w.tick().await,
+                // No idle timeout configured: this arm must never win.
+                None => std::future::pending().await,
+            } } => {
+                if watchdog.as_mut().is_some_and(|w| w.stalled(moved)) {
+                    bail!("idle timeout");
+                }
+                continue;
+            }
             r = tr.read(&mut down) => {
                 let n = r.context("read from client failed")?;
                 if n == 0 { finish_one!(uw, ur, tw, up); }
@@ -101,12 +125,13 @@ pub(crate) async fn relay_with_adaptive_offload<IO>(
     mut upstream: TcpStream,
     ktls: &EngageAfter,
     splice: &SpliceConfig,
+    idle: Option<Duration>,
 ) -> Result<()>
 where
     IO: AsyncRead + AsyncWrite + Unpin + std::os::fd::AsRawFd + ktls::AsyncReadReady,
     IO: Into<TcpStream>,
 {
-    match relay_until(&mut tls, &mut upstream, ktls).await? {
+    match relay_until(&mut tls, &mut upstream, ktls, idle).await? {
         Phase::Eof => return Ok(()),
         Phase::Gated => {}
     }
@@ -125,9 +150,16 @@ where
                 .context("failed to flush drained data to app")?;
         }
     }
-    splice_bidirectional(io.into(), upstream, splice.release_idle_pipes)
-        .await
-        .context("splice after kTLS offload failed")
+    // The client side is now a kTLS socket, so its close needs a close_notify.
+    splice_bidirectional(
+        io.into(),
+        upstream,
+        splice.release_idle_pipes,
+        idle,
+        CloseKind::KernelTls,
+    )
+    .await
+    .context("splice after kTLS offload failed")
 }
 
 #[cfg(test)]
@@ -158,10 +190,9 @@ mod tests {
     async fn response_survives_a_client_half_close_before_the_gate() {
         let (mut client, mut tls_side) = connected_pair().await;
         let (mut upstream, mut backend) = connected_pair().await;
-        let relay =
-            tokio::spawn(
-                async move { relay_until(&mut tls_side, &mut upstream, &ungated()).await },
-            );
+        let relay = tokio::spawn(async move {
+            relay_until(&mut tls_side, &mut upstream, &ungated(), None).await
+        });
 
         client.write_all(b"ping").await.unwrap();
         client.shutdown().await.unwrap();
@@ -185,10 +216,9 @@ mod tests {
     async fn request_survives_an_app_half_close_before_the_gate() {
         let (mut client, mut tls_side) = connected_pair().await;
         let (mut upstream, mut backend) = connected_pair().await;
-        let relay =
-            tokio::spawn(
-                async move { relay_until(&mut tls_side, &mut upstream, &ungated()).await },
-            );
+        let relay = tokio::spawn(async move {
+            relay_until(&mut tls_side, &mut upstream, &ungated(), None).await
+        });
 
         backend.write_all(b"early").await.unwrap();
         backend.shutdown().await.unwrap();

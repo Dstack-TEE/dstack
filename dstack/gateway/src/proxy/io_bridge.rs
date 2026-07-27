@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use super::idle::IdleWatchdog;
 use crate::config::ProxyConfig;
 use anyhow::{bail, Context, Result};
 use bytes::BytesMut;
-use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
@@ -168,33 +168,19 @@ where
         progress: 0,
     };
 
-    // One watchdog for the whole connection replaces the per-operation timeouts.
-    // It samples the progress counters; if neither direction has moved for
-    // `idle`, the connection is stalled. Ticking a few times per idle window
-    // costs one timer per window instead of three per request.
-    let idle = config.timeouts.idle;
-    let tick = (idle / 4).max(Duration::from_millis(500));
-    let mut watchdog = tokio::time::interval(tick);
-    watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // One watchdog for the whole connection replaces the per-operation timeouts:
+    // it samples both directions' progress counters, so a connection only dies
+    // when neither has moved. See `super::idle`.
+    let mut watchdog = IdleWatchdog::new(config.timeouts.idle);
     watchdog.tick().await; // the first tick completes immediately
-    let mut last_seen = (0u64, 0u64);
-    let mut idle_ticks = 0u32;
-    let max_idle_ticks = (idle.as_millis() / tick.as_millis()).max(1) as u32;
 
     let mut rest;
     // Transfer data between a and b bidirectionally.
     loop {
         tokio::select! {
             _ = watchdog.tick() => {
-                let seen = (a2b.progress, b2a.progress);
-                if seen == last_seen {
-                    idle_ticks += 1;
-                    if idle_ticks >= max_idle_ticks {
-                        bail!("idle timeout");
-                    }
-                } else {
-                    idle_ticks = 0;
-                    last_seen = seen;
+                if watchdog.stalled(a2b.progress + b2a.progress) {
+                    bail!("idle timeout");
                 }
             }
             done = a2b.step() => {

@@ -13,10 +13,11 @@
 //! uses the buffered bridge because one side is a decrypted rustls stream.
 
 use std::os::fd::{AsRawFd, OwnedFd};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use nix::fcntl::{fcntl, splice, FcntlArg, SpliceFFlags};
 use nix::sys::socket::{shutdown, Shutdown};
 use nix::unistd::pipe;
@@ -24,7 +25,18 @@ use or_panic::OptionOrPanic;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, Interest};
 use tokio::net::TcpStream;
 
+use super::idle::IdleWatchdog;
 use crate::config::{EngageAfter, SpliceConfig};
+
+/// How a relay endpoint's write side has to be closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CloseKind {
+    /// Plain socket: a FIN says everything there is to say.
+    Tcp,
+    /// Kernel TLS: the peer also needs a `close_notify` alert, or it cannot
+    /// tell an orderly close from a truncated stream.
+    KernelTls,
+}
 
 /// Bytes moved per `splice` syscall. Also the target pipe capacity so a full
 /// read can be buffered kernel-side before draining to the destination.
@@ -151,6 +163,8 @@ async fn splice_one(
     src: Arc<TcpStream>,
     dst: Arc<TcpStream>,
     release_idle_pipes: bool,
+    progress: &AtomicU64,
+    dst_close: CloseKind,
 ) -> Result<()> {
     let mut pipe = PooledPipe::get()?;
 
@@ -193,6 +207,10 @@ async fn splice_one(
         if n == 0 {
             break; // EOF on source; the pipe was left empty by the last drain
         }
+        // One relaxed increment per chunk -- not per byte, and dwarfed by the
+        // splice syscall it accompanies -- is what lets the idle watchdog see
+        // this connection without a timer per operation.
+        progress.fetch_add(1, Ordering::Relaxed);
         // A chunk is in the pipe now: not safe to recycle until fully drained.
         pipe.drained = false;
 
@@ -227,25 +245,58 @@ async fn splice_one(
     }
 
     // Propagate EOF: half-close the write side so the peer sees the close.
+    //
+    // A kTLS socket needs the TLS-level close first. `KtlsStream::poll_shutdown`
+    // would have sent it, but the offload path hands the bare descriptor to
+    // splice and never goes through that type again, so a plain shutdown here
+    // reaches the client as a FIN with no close_notify -- indistinguishable from
+    // a truncation attack to a client that checks.
+    if matches!(dst_close, CloseKind::KernelTls) {
+        let _ = ktls::send_close_notify(dst.as_raw_fd());
+    }
     let _ = shutdown(dst.as_raw_fd(), Shutdown::Write);
     Ok(())
 }
 
 /// Bidirectional zero-copy relay between two TCP streams.
+///
+/// `a` is the client side, `b` the app side; `a_close` says how `a`'s write
+/// side has to be closed, which is the only thing this needs to know about kTLS.
+/// `idle` is `None` when data timeouts are disabled.
 pub(crate) async fn splice_bidirectional(
     a: TcpStream,
     b: TcpStream,
     release_idle_pipes: bool,
+    idle: Option<Duration>,
+    a_close: CloseKind,
 ) -> Result<()> {
     // The single funnel for zero-copy relaying, so counting here covers both the
     // passthrough gate and the post-kTLS handover.
     super::stats::record_splice_engaged();
     let a = Arc::new(a);
     let b = Arc::new(b);
-    let a2b = splice_one(a.clone(), b.clone(), release_idle_pipes);
-    let b2a = splice_one(b, a, release_idle_pipes);
-    tokio::try_join!(a2b, b2a)?;
-    Ok(())
+    let progress = AtomicU64::new(0);
+    let relay = async {
+        let a2b = splice_one(
+            a.clone(),
+            b.clone(),
+            release_idle_pipes,
+            &progress,
+            CloseKind::Tcp,
+        );
+        let b2a = splice_one(b, a, release_idle_pipes, &progress, a_close);
+        tokio::try_join!(a2b, b2a)?;
+        Ok(())
+    };
+    let Some(idle) = idle else {
+        return relay.await;
+    };
+    // Spliced bytes never enter this process, so there is no read to hang a
+    // timeout on; the watchdog races the transfer instead.
+    tokio::select! {
+        result = relay => result,
+        () = IdleWatchdog::new(idle).wait_until_stalled(&progress) => bail!("idle timeout"),
+    }
 }
 
 /// Per-thread cache of relay buffers, for the same reason as the pipe pool:
@@ -310,6 +361,7 @@ async fn relay_until(
     b: &mut TcpStream,
     gate: &EngageAfter,
     buf_size: usize,
+    idle: Option<Duration>,
 ) -> Result<bool> {
     let (mut ar, mut aw) = a.split();
     let (mut br, mut bw) = b.split();
@@ -318,6 +370,16 @@ async fn relay_until(
     let mut bufs = PooledBufs::get(buf_size);
     let mut moved: u64 = 0;
     let start = Instant::now();
+    // `moved` doubles as the progress counter: it only advances when a transfer
+    // happened, which is exactly what the watchdog samples for.
+    let mut watchdog: Option<IdleWatchdog> = match idle {
+        Some(idle) => {
+            let mut w = IdleWatchdog::new(idle);
+            w.tick().await; // the first tick completes immediately
+            Some(w)
+        }
+        None => None,
+    };
 
     loop {
         // `finish_one` drains a half-closed connection without splice: once one
@@ -345,6 +407,16 @@ async fn relay_until(
             }};
         }
         tokio::select! {
+            () = async { match watchdog.as_mut() {
+                Some(w) => w.tick().await,
+                // No idle timeout configured: this arm must never win.
+                None => std::future::pending().await,
+            } } => {
+                if watchdog.as_mut().is_some_and(|w| w.stalled(moved)) {
+                    bail!("idle timeout");
+                }
+                continue;
+            }
             r = ar.read(&mut bufs.a) => {
                 let n = r.context("read from client failed")?;
                 // Client is done sending: tell the app, keep relaying its reply.
@@ -379,9 +451,10 @@ pub(crate) async fn splice_bidirectional_after(
     mut b: TcpStream,
     config: &SpliceConfig,
     buf_size: usize,
+    idle: Option<Duration>,
 ) -> Result<()> {
-    if relay_until(&mut a, &mut b, &config.engage, buf_size).await? {
-        splice_bidirectional(a, b, config.release_idle_pipes).await
+    if relay_until(&mut a, &mut b, &config.engage, buf_size, idle).await? {
+        splice_bidirectional(a, b, config.release_idle_pipes, idle, CloseKind::Tcp).await
     } else {
         Ok(())
     }
@@ -422,7 +495,13 @@ mod tests {
     async fn start_relay(release_idle_pipes: bool) -> (TcpStream, TcpStream) {
         let (client, inbound) = connected_pair().await;
         let (outbound, backend) = connected_pair().await;
-        tokio::spawn(splice_bidirectional(inbound, outbound, release_idle_pipes));
+        tokio::spawn(splice_bidirectional(
+            inbound,
+            outbound,
+            release_idle_pipes,
+            None,
+            CloseKind::Tcp,
+        ));
         (client, backend)
     }
 
@@ -577,7 +656,7 @@ mod tests {
         let (client, inbound) = connected_pair().await;
         let (outbound, backend) = connected_pair().await;
         tokio::spawn(async move {
-            splice_bidirectional_after(inbound, outbound, &ungated(), 16 * 1024).await
+            splice_bidirectional_after(inbound, outbound, &ungated(), 16 * 1024, None).await
         });
         (client, backend)
     }
