@@ -607,4 +607,54 @@ mod tests {
         assert!(rtmrs[..2].iter().all(|rtmr| *rtmr != [0u8; 48]));
         assert_eq!(rtmrs[3], [0u8; 48]);
     }
+
+    #[test]
+    fn filesystem_boundaries_are_failure_atomic() {
+        let generator = Arc::new(TdxGenerator::from_seed([0x6d; 32]).unwrap());
+        let mut fs = TdxSimulatorFs::new(generator).unwrap();
+        for (parent, name, expected) in [
+            (ROOT_INO, PROVIDER_NAME, PROVIDER_DIR_INO),
+            (PROVIDER_DIR_INO, "provider", PROVIDER_INO),
+            (PROVIDER_DIR_INO, "inblob", INBLOB_INO),
+            (PROVIDER_DIR_INO, "outblob", OUTBLOB_INO),
+            (PROVIDER_DIR_INO, "generation", GENERATION_INO),
+            (PROVIDER_DIR_INO, "measurements", MEASUREMENTS_DIR_INO),
+            (PROVIDER_DIR_INO, "ccel", CCEL_INO),
+            (MEASUREMENTS_DIR_INO, "rtmr3:sha384", RTMR0_INO + 3),
+        ] {
+            assert_eq!(
+                TdxSimulatorFs::lookup_ino(parent, OsStr::new(name)),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            TdxSimulatorFs::lookup_ino(PROVIDER_DIR_INO, OsStr::new("unknown")),
+            None
+        );
+        assert_eq!(fs.attr(INBLOB_INO).unwrap().perm, 0o200);
+        assert_eq!(fs.attr(OUTBLOB_INO).unwrap().perm, 0o400);
+        assert_eq!(fs.attr(RTMR0_INO).unwrap().perm, 0o600);
+        assert!(fs.attr(u64::MAX).is_none());
+
+        let report = fs.state.outblob.clone();
+        let generation = fs.state.generation;
+        for size in [0, 63, 65, 4096] {
+            assert!(fs.state.request_quote(&vec![0x42; size]).is_err());
+            assert_eq!(fs.state.outblob, report);
+            assert_eq!(fs.state.generation, generation);
+        }
+
+        let rtmr = fs.state.rtmrs[3];
+        assert!(fs.state.extend_rtmr(3, &[0x41; 47]).is_err());
+        assert_eq!(fs.state.rtmrs[3], rtmr);
+        assert!(fs.state.extend_rtmr(3, &[0x41; 49]).is_err());
+        assert_eq!(fs.state.rtmrs[3], rtmr);
+        assert!(fs.state.extend_rtmr(1, &[0x41; 48]).is_err());
+        assert_eq!(fs.state.rtmrs[3], rtmr);
+
+        assert!(fs.state.request_quote(&[0x43; 64]).is_ok());
+        assert_eq!(fs.state.generation, generation + 1);
+        assert!(fs.state.extend_rtmr(3, &[0x44; 48]).is_ok());
+        assert_ne!(fs.state.rtmrs[3], rtmr);
+    }
 }
