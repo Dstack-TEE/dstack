@@ -52,16 +52,34 @@ where
     let start = Instant::now();
 
     let phase = loop {
+        // One side closing is not the end of the connection: a client that ends
+        // its request with close_notify still expects the response. Propagate
+        // the EOF to that direction's peer, then drain the other direction
+        // before giving up on the connection.
+        macro_rules! finish_one {
+            ($closing:expr, $r:expr, $w:expr, $buf:expr) => {{
+                $closing.shutdown().await.ok();
+                loop {
+                    let n = $r.read(&mut $buf).await.context("read error")?;
+                    if n == 0 {
+                        break;
+                    }
+                    $w.write_all(&$buf[..n]).await.context("write error")?;
+                }
+                $w.shutdown().await.ok();
+                break Phase::Eof;
+            }};
+        }
         tokio::select! {
             r = tr.read(&mut down) => {
                 let n = r.context("read from client failed")?;
-                if n == 0 { break Phase::Eof; }
+                if n == 0 { finish_one!(uw, ur, tw, up); }
                 uw.write_all(&down[..n]).await.context("write to app failed")?;
                 moved += n as u64;
             }
             r = ur.read(&mut up) => {
                 let n = r.context("read from app failed")?;
-                if n == 0 { break Phase::Eof; }
+                if n == 0 { finish_one!(tw, tr, uw, down); }
                 tw.write_all(&up[..n]).await.context("write to client failed")?;
                 moved += n as u64;
             }
@@ -110,4 +128,81 @@ where
     splice_bidirectional(io.into(), upstream, splice.release_idle_pipes)
         .await
         .context("splice after kTLS offload failed")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    async fn connected_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = TcpStream::connect(addr).await.unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        (client, server)
+    }
+
+    /// A gate no test connection reaches, so the relay stays in the userspace
+    /// phase for the whole exchange. `relay_until` is generic over the client
+    /// stream, so a plain socket stands in for the TLS one and the half-close
+    /// handling is exercised without a handshake.
+    fn ungated() -> EngageAfter {
+        EngageAfter {
+            after_bytes: Some(1 << 30),
+            after_duration: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn response_survives_a_client_half_close_before_the_gate() {
+        let (mut client, mut tls_side) = connected_pair().await;
+        let (mut upstream, mut backend) = connected_pair().await;
+        let relay =
+            tokio::spawn(
+                async move { relay_until(&mut tls_side, &mut upstream, &ungated()).await },
+            );
+
+        client.write_all(b"ping").await.unwrap();
+        client.shutdown().await.unwrap();
+
+        let mut req = vec![0u8; 4];
+        backend.read_exact(&mut req).await.unwrap();
+        assert_eq!(&req, b"ping");
+        let mut trailing = Vec::new();
+        backend.read_to_end(&mut trailing).await.unwrap();
+        assert!(trailing.is_empty());
+        backend.write_all(b"pong").await.unwrap();
+        drop(backend);
+
+        let mut resp = Vec::new();
+        client.read_to_end(&mut resp).await.unwrap();
+        assert_eq!(resp, b"pong", "client lost the response after half-closing");
+        assert!(matches!(relay.await.unwrap().unwrap(), Phase::Eof));
+    }
+
+    #[tokio::test]
+    async fn request_survives_an_app_half_close_before_the_gate() {
+        let (mut client, mut tls_side) = connected_pair().await;
+        let (mut upstream, mut backend) = connected_pair().await;
+        let relay =
+            tokio::spawn(
+                async move { relay_until(&mut tls_side, &mut upstream, &ungated()).await },
+            );
+
+        backend.write_all(b"early").await.unwrap();
+        backend.shutdown().await.unwrap();
+
+        let mut resp = vec![0u8; 5];
+        client.read_exact(&mut resp).await.unwrap();
+        assert_eq!(&resp, b"early");
+
+        client.write_all(b"late").await.unwrap();
+        drop(client);
+
+        let mut got = Vec::new();
+        backend.read_to_end(&mut got).await.unwrap();
+        assert_eq!(got, b"late", "app lost the request after half-closing");
+        assert!(matches!(relay.await.unwrap().unwrap(), Phase::Eof));
+    }
 }

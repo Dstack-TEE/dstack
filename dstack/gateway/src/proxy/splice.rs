@@ -322,9 +322,16 @@ async fn relay_until(
     loop {
         // `finish_one` drains a half-closed connection without splice: once one
         // side is done there is no long-lived stream left to optimise.
+        //
+        // Half-close is not end-of-connection. A client that finishes its
+        // request with `shutdown(SHUT_WR)` still expects the response, so the
+        // EOF is propagated to the *peer of the direction that ended*
+        // (`$closing`) and the opposite direction is pumped to completion.
+        // Shutting down the writer we are about to pump into instead would
+        // deliver the peer's EOF and drop everything still in flight.
         macro_rules! finish_one {
-            ($r:expr, $w:expr, $buf:expr) => {{
-                $w.shutdown().await.ok();
+            ($closing:expr, $r:expr, $w:expr, $buf:expr) => {{
+                $closing.shutdown().await.ok();
                 loop {
                     let n = $r.read(&mut $buf).await.context("read error")?;
                     if n == 0 {
@@ -332,19 +339,23 @@ async fn relay_until(
                     }
                     $w.write_all(&$buf[..n]).await.context("write error")?;
                 }
+                // Both directions are drained now; let the other peer see EOF.
+                $w.shutdown().await.ok();
                 return Ok(false);
             }};
         }
         tokio::select! {
             r = ar.read(&mut bufs.a) => {
                 let n = r.context("read from client failed")?;
-                if n == 0 { finish_one!(br, aw, bufs.b); }
+                // Client is done sending: tell the app, keep relaying its reply.
+                if n == 0 { finish_one!(bw, br, aw, bufs.b); }
                 bw.write_all(&bufs.a[..n]).await.context("write to app failed")?;
                 moved += n as u64;
             }
             r = br.read(&mut bufs.b) => {
                 let n = r.context("read from app failed")?;
-                if n == 0 { finish_one!(ar, bw, bufs.a); }
+                // App is done replying: tell the client, keep relaying its input.
+                if n == 0 { finish_one!(aw, ar, bw, bufs.a); }
                 aw.write_all(&bufs.b[..n]).await.context("write to client failed")?;
                 moved += n as u64;
             }
@@ -548,5 +559,71 @@ mod tests {
         let mut got = Vec::new();
         backend.read_to_end(&mut got).await.unwrap();
         assert!(got.is_empty());
+    }
+
+    /// A gate that no test connection will ever reach, so the relay stays in
+    /// the pre-splice phase for the whole exchange.
+    fn ungated() -> SpliceConfig {
+        SpliceConfig {
+            engage: EngageAfter {
+                after_bytes: Some(1 << 30),
+                after_duration: None,
+            },
+            release_idle_pipes: false,
+        }
+    }
+
+    async fn start_gated_relay() -> (TcpStream, TcpStream) {
+        let (client, inbound) = connected_pair().await;
+        let (outbound, backend) = connected_pair().await;
+        tokio::spawn(async move {
+            splice_bidirectional_after(inbound, outbound, &ungated(), 16 * 1024).await
+        });
+        (client, backend)
+    }
+
+    /// Half-closing a request must not cost the response: the client shuts down
+    /// its write side, and the backend replies afterwards.
+    #[tokio::test]
+    async fn response_survives_a_client_half_close_before_the_gate() {
+        let (mut client, mut backend) = start_gated_relay().await;
+
+        client.write_all(b"ping").await.unwrap();
+        client.shutdown().await.unwrap();
+
+        let mut req = vec![0u8; 4];
+        backend.read_exact(&mut req).await.unwrap();
+        assert_eq!(&req, b"ping");
+        // The app sees the client's EOF but is still free to answer.
+        let mut trailing = Vec::new();
+        backend.read_to_end(&mut trailing).await.unwrap();
+        assert!(trailing.is_empty());
+        backend.write_all(b"pong").await.unwrap();
+        drop(backend);
+
+        let mut resp = Vec::new();
+        client.read_to_end(&mut resp).await.unwrap();
+        assert_eq!(resp, b"pong", "client lost the response after half-closing");
+    }
+
+    /// The mirror image: the backend finishes first and the client is still
+    /// sending. Its remaining bytes have to reach the app.
+    #[tokio::test]
+    async fn request_survives_a_backend_half_close_before_the_gate() {
+        let (mut client, mut backend) = start_gated_relay().await;
+
+        backend.write_all(b"early").await.unwrap();
+        backend.shutdown().await.unwrap();
+
+        let mut resp = vec![0u8; 5];
+        client.read_exact(&mut resp).await.unwrap();
+        assert_eq!(&resp, b"early");
+
+        client.write_all(b"late").await.unwrap();
+        drop(client);
+
+        let mut got = Vec::new();
+        backend.read_to_end(&mut got).await.unwrap();
+        assert_eq!(got, b"late", "app lost the request after half-closing");
     }
 }
