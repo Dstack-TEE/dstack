@@ -475,3 +475,39 @@ fn find_acpi_table(tables: &[u8], signature: &str) -> Result<(u32, u32, u32)> {
 
     bail!("table not found: {signature}");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::OvmfVariant;
+
+    #[test]
+    fn rejects_swtpm_before_external_acpi_generation() {
+        let machine = Machine {
+            cpu_count: 1,
+            memory_size: 1024 * 1024 * 1024,
+            firmware: "/missing/firmware",
+            kernel: "/missing/kernel",
+            initrd: "/missing/initrd",
+            kernel_cmdline: "",
+            two_pass_add_pages: None,
+            pic: None,
+            qemu_version: None,
+            smm: false,
+            pci_hole64_size: None,
+            hugepages: false,
+            num_gpus: 0,
+            num_nvswitches: 0,
+            num_nics: 1,
+            num_verity_volumes: 0,
+            swtpm: true,
+            hotplug_off: false,
+            root_verity: false,
+            host_share_mode: String::new(),
+            ovmf_variant: OvmfVariant::default(),
+        };
+
+        let error = machine.create_tables().unwrap_err();
+        assert_eq!(error.to_string(), "swtpm measurement is not supported");
+    }
+}
