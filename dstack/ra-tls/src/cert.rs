@@ -45,6 +45,13 @@ impl CaCert {
     /// Instantiate a new CA certificate with a given private key and pem cert.
     pub fn new(pem_cert: String, pem_key: String) -> Result<Self> {
         let key = KeyPair::from_pem(&pem_key).context("Failed to parse key")?;
+        let (_, parsed_pem) = x509_parser::pem::parse_x509_pem(pem_cert.as_bytes())
+            .context("Failed to parse cert PEM")?;
+        let parsed_cert = parsed_pem.parse_x509().context("Failed to parse cert DER")?;
+        anyhow::ensure!(
+            parsed_cert.public_key().raw == key.public_key_der(),
+            "CA certificate does not match private key"
+        );
         let cert =
             CertificateParams::from_ca_cert_pem(&pem_cert).context("Failed to parse cert")?;
         // TODO: load the cert from the file directly, blocked by https://github.com/rustls/rcgen/issues/274
