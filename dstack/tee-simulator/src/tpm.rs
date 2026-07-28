@@ -270,10 +270,19 @@ fn install_fixture_event_log() -> Result<()> {
 }
 
 fn create_tpm_device_node() -> Result<()> {
-    if Path::new("/dev/tpm0").exists() {
+    create_device_node("/dev/tpm0", "/sys/class/tpm/tpm0/dev")?;
+    // Minimal mkosi guests do not run a udev rule that publishes the kernel's
+    // TPM resource-manager node.  Without it, every consumer falls back to the
+    // single-open raw device and concurrent quote/PCR clients receive EBUSY.
+    create_device_node("/dev/tpmrm0", "/sys/class/tpmrm/tpmrm0/dev")
+}
+
+fn create_device_node(device_path: &str, sysfs_path: &str) -> Result<()> {
+    let device_path = Path::new(device_path);
+    if device_path.exists() {
         return Ok(());
     }
-    let sys_dev = Path::new("/sys/class/tpm/tpm0/dev");
+    let sys_dev = Path::new(sysfs_path);
     if !sys_dev.exists() {
         return Ok(());
     }
@@ -281,11 +290,12 @@ fn create_tpm_device_node() -> Result<()> {
     let (major, minor) = device
         .trim()
         .split_once(':')
-        .context("invalid /sys/class/tpm/tpm0/dev")?;
-    if let Err(error) = command("mknod", &["/dev/tpm0", "c", major, minor]) {
+        .with_context(|| format!("invalid {sysfs_path}"))?;
+    let path = device_path.to_str().context("invalid TPM device path")?;
+    if let Err(error) = command("mknod", &[path, "c", major, minor]) {
         // udev can create the node between the existence check above and
         // mknod. In that case the requested device is already available.
-        if !Path::new("/dev/tpm0").exists() {
+        if !device_path.exists() {
             return Err(error);
         }
     }
@@ -383,6 +393,7 @@ pub fn run_nitro_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
             return Err(error);
         }
     }
+    create_device_node("/dev/tpmrm0", "/sys/class/tpmrm/tpmrm0/dev")?;
     sd_notify::notify(true, &[sd_notify::NotifyState::Ready])?;
     let result = proxy_thread
         .join()
