@@ -130,6 +130,11 @@ impl TpmGenerator {
     pub fn intermediate_der(&self) -> Vec<u8> {
         self.intermediate.der().to_vec()
     }
+
+    /// Return the deterministic leaf certificate for simulator TPM fixtures.
+    pub fn leaf_cert_der(&self) -> Vec<u8> {
+        self.ak.der().to_vec()
+    }
     pub fn intermediate_crl_der(&self) -> Vec<u8> {
         self.intermediate_crl.clone()
     }

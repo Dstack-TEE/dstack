@@ -24,6 +24,7 @@ use dstack_types::TeeSimulatorConfig;
 use mock_attestation::{nsm::NsmGenerator, parse_seed, server::MockCollateralState};
 
 const AK_ECC_CERT: &str = "0x01c10002";
+const EK_CERT: &str = "0x01c00002";
 const AK_ECC_TEMPLATE: &str = "0x01c10003";
 const TPM2_CC_NV_WRITE: u32 = 0x0000_0137;
 const TPM2_CC_NV_DEFINE_SPACE: u32 = 0x0000_012a;
@@ -218,6 +219,9 @@ pub fn start_gcp_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
     )?;
     provision_nv(AK_ECC_TEMPLATE, &template)?;
     provision_nv(AK_ECC_CERT, &ak_cert)?;
+    let ek_cert = state_dir.join("ek-cert.der");
+    fs_err::write(&ek_cert, state.tpm.leaf_cert_der())?;
+    provision_nv(EK_CERT, &ek_cert)?;
     command("tpm2_flushcontext", &["-t"])?;
     Ok(())
 }
