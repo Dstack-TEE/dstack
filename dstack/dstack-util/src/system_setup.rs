@@ -66,6 +66,23 @@ use serde_human_bytes as hex_bytes;
 use serde_json::Value;
 use tpm_attest::{self as tpm, TpmContext};
 
+fn attestation_verifier(sys_config: &SysConfig) -> Result<Arc<AttestationVerifier>> {
+    let collateral_urls = sys_config.collateral_urls();
+    let Some(root_ca) = sys_config.tdx_attestation_root_ca.as_deref() else {
+        return Ok(Arc::new(AttestationVerifier::new_prod(Some(
+            &collateral_urls,
+        ))?));
+    };
+    anyhow::ensure!(
+        sys_config.insecure_allow_external_attestation_trust_anchor,
+        "external TDX attestation trust root requires explicit insecure opt-in"
+    );
+    Ok(Arc::new(AttestationVerifier::new_with_tdx_root(
+        Some(&collateral_urls),
+        root_ca.as_bytes(),
+    )?))
+}
+
 async fn sign_cert_request(
     cert_client: &CertRequestClient,
     key: &KeyPair,
@@ -502,8 +519,7 @@ impl<'a> GatewayContext<'a> {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let cert_not_after = now + CERT_VALIDITY_SECS;
-        let collateral_urls = self.shared.sys_config.collateral_urls();
-        let verifier = Arc::new(AttestationVerifier::new_prod(Some(&collateral_urls))?);
+        let verifier = attestation_verifier(&self.shared.sys_config)?;
         let cert_client = CertRequestClient::create(
             self.keys,
             verifier,
@@ -2068,8 +2084,7 @@ impl<'a> Stage0<'a> {
                 .context("Failed to get temp ca cert")?
         };
         let cert_pair = generate_ra_cert(tmp_ca.temp_ca_cert.clone(), tmp_ca.temp_ca_key.clone())?;
-        let collateral_urls = self.shared.sys_config.collateral_urls();
-        let attestation_verifier = Arc::new(AttestationVerifier::new_prod(Some(&collateral_urls))?);
+        let attestation_verifier = attestation_verifier(&self.shared.sys_config)?;
         let verified_kms_measurement = Arc::new(std::sync::Mutex::new(None::<[u8; 32]>));
         let captured_kms_measurement = verified_kms_measurement.clone();
         let ra_client = RaClientConfig::builder()

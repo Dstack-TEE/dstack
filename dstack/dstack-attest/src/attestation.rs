@@ -179,6 +179,21 @@ impl AttestationVerifier {
         })
     }
 
+    /// Construct a verifier with a development-only external TDX trust root.
+    ///
+    /// Callers must require an explicit insecure opt-in and surface the result
+    /// as simulated evidence; production verification must use `new_prod`.
+    pub fn new_with_tdx_root(
+        collateral_urls: Option<&CollateralUrls>,
+        root_ca: &[u8],
+    ) -> Result<Self> {
+        validate_x509_certificate(root_ca, "TDX")?;
+        let mut verifier = Self::new_prod(collateral_urls)?;
+        verifier.tdx = dcap_qvl::verify::QuoteVerifier::new(tdx_root_der(root_ca.to_vec())?);
+        verifier.external_trust_anchors = true;
+        Ok(verifier)
+    }
+
     /// Whether this verifier accepts development-only external trust roots.
     ///
     /// A true value must be surfaced as simulated evidence by every caller;
@@ -2748,7 +2763,10 @@ mod tests {
         let content = b"test content";
 
         let report_data = content_type.to_report_data(content);
-        assert_eq!(hex::encode(report_data), "7ea0b744ed5e9c0c83ff9f575668e1697652cd349f2027cdf26f918d4c53e8cd50b5ea9b449b4c3d50e20ae00ec29688d5a214e8daff8a10041f5d624dae8a01");
+        assert_eq!(
+            hex::encode(report_data),
+            "7ea0b744ed5e9c0c83ff9f575668e1697652cd349f2027cdf26f918d4c53e8cd50b5ea9b449b4c3d50e20ae00ec29688d5a214e8daff8a10041f5d624dae8a01"
+        );
 
         // Test SHA-256
         let result = content_type

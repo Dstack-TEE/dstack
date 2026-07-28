@@ -1343,6 +1343,25 @@ pub(crate) fn make_sys_config(
         "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
         "vm_config": serde_json::to_string(&vm_config)?,
     });
+    if manifest.simulated_tee == Some(dstack_types::TeeVariant::DstackTdx) {
+        let simulator = cfg
+            .cvm
+            .tee_simulator
+            .as_ref()
+            .context("TEE simulator credentials are unavailable")?;
+        let seed = simulator
+            .mock_attestation_seed
+            .as_deref()
+            .context("TEE simulator seed is unavailable")?;
+        let seed: [u8; 32] = hex::decode(seed)
+            .context("invalid TEE simulator seed")?
+            .try_into()
+            .map_err(|_| anyhow!("TEE simulator seed must contain 32 bytes"))?;
+        let root_ca = mock_attestation::tdx::TdxGenerator::from_seed(seed)?.root_ca_pem();
+        sys_config["insecure_allow_external_attestation_trust_anchor"] =
+            serde_json::Value::Bool(true);
+        sys_config["tdx_attestation_root_ca"] = serde_json::Value::String(root_ca);
+    }
     if let Some(mr_config) = mr_config {
         MrConfigV3::from_document(&mr_config).context("Invalid mr_config document")?;
         sys_config["mr_config"] = serde_json::to_value(mr_config)?;
