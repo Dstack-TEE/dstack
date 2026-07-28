@@ -18,7 +18,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use aws_nitro_enclaves_nsm_api::api::{Request as NsmRequest, Response as NsmResponse};
 use dstack_types::TeeSimulatorConfig;
 use mock_attestation::{nsm::NsmGenerator, parse_seed, server::MockCollateralState};
@@ -393,18 +393,7 @@ pub fn run_nitro_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
             return Err(error);
         }
     }
-    let rm_sys_dev = format!("/sys/class/tpmrm/tpmrm{tpm_num}/dev");
-    for _ in 0..100 {
-        if Path::new(&rm_sys_dev).exists() {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    anyhow::ensure!(
-        Path::new(&rm_sys_dev).exists(),
-        "vTPM resource manager was not registered"
-    );
-    create_device_node("/dev/tpmrm0", &rm_sys_dev)?;
+    create_device_node("/dev/tpmrm0", "/sys/class/tpmrm/tpmrm0/dev")?;
     sd_notify::notify(true, &[sd_notify::NotifyState::Ready])?;
     let result = proxy_thread
         .join()
