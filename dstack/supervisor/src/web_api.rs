@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use or_panic::ResultOrPanic;
 use rocket::figment::Figment;
 use rocket::serde::json::Json;
-use rocket::{delete, get, post, routes, Build, Rocket, State};
+use rocket::{Build, Rocket, Shutdown, State, delete, get, post, routes};
 use serde::{Deserialize, Serialize};
 use tokio::signal;
 use tracing::info;
@@ -81,8 +81,12 @@ fn clear(supervisor: &State<Supervisor>) -> Json<Response<()>> {
 }
 
 #[post("/shutdown")]
-async fn shutdown(supervisor: &State<Supervisor>) -> Json<Response<()>> {
-    to_json(perform_shutdown(supervisor, false).await)
+async fn shutdown(supervisor: &State<Supervisor>, shutdown: Shutdown) -> Json<Response<()>> {
+    let result = supervisor.shutdown().await;
+    if result.is_ok() {
+        shutdown.notify();
+    }
+    to_json(result)
 }
 
 async fn perform_shutdown(supervisor: &Supervisor, force: bool) -> Result<()> {
@@ -99,7 +103,9 @@ pub fn rocket(figment: Figment) -> Rocket<Build> {
     let supervisor = Supervisor::new();
     let rocket = rocket::custom(figment).manage(supervisor.clone()).mount(
         "/",
-        routes![deploy, start, stop, remove, list, info, ping, clear, shutdown],
+        routes![
+            deploy, start, stop, remove, list, info, ping, clear, shutdown
+        ],
     );
     tokio::spawn(handle_shutdown_signals(supervisor));
     rocket
