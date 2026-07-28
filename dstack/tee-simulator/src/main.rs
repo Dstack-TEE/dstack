@@ -72,6 +72,13 @@ fn run_backend<B: TeeBackend>(
             B::PLATFORM
         );
     }
+    if is_mounted(mountpoint)? {
+        bail!(
+            "refusing to mount the {} simulator over an existing mount at {}",
+            B::PLATFORM,
+            mountpoint.display()
+        );
+    }
     B::prepare_mountpoint(mountpoint)?;
 
     let fs = B::create_filesystem(config)?;
@@ -97,6 +104,31 @@ fn run_backend<B: TeeBackend>(
         .context("failed to notify systemd")?;
     session.run().context("fuse session failed")?;
     Ok(())
+}
+
+fn is_mounted(path: &Path) -> Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    let target = path
+        .canonicalize()
+        .with_context(|| format!("failed to resolve mountpoint {}", path.display()))?;
+    let mountinfo = fs_err::read_to_string("/proc/self/mountinfo")
+        .context("failed to read process mount table")?;
+    Ok(mountinfo.lines().any(|line| {
+        line.split_whitespace()
+            .nth(4)
+            .map(decode_mountinfo_path)
+            .is_some_and(|mounted| Path::new(&mounted) == target)
+    }))
+}
+
+fn decode_mountinfo_path(value: &str) -> String {
+    value
+        .replace(r"\134", "\\")
+        .replace(r"\040", " ")
+        .replace(r"\011", "\t")
+        .replace(r"\012", "\n")
 }
 
 fn main() -> Result<()> {
