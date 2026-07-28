@@ -79,6 +79,77 @@ fn write_atomic_inner(path: &Path, contents: &str, mode: Option<u32>) -> Result<
     Ok(())
 }
 
+
+/// Stage two related files completely before committing either destination.
+///
+/// This prevents a predictable second-output failure (for example, an invalid
+/// private-key directory) from leaving a certificate without its matching key.
+pub fn write_atomic_pair(
+    first_path: &Path,
+    first_contents: &[u8],
+    first_mode: Option<u32>,
+    second_path: &Path,
+    second_contents: &[u8],
+    second_mode: Option<u32>,
+) -> Result<()> {
+    anyhow::ensure!(first_path != second_path, "paired output paths must differ");
+    let first_tmp = stage_atomic(first_path, first_contents, first_mode)?;
+    let second_tmp = match stage_atomic(second_path, second_contents, second_mode) {
+        Ok(path) => path,
+        Err(error) => {
+            let _ = std::fs::remove_file(&first_tmp);
+            return Err(error);
+        }
+    };
+    if let Err(error) = std::fs::rename(&first_tmp, first_path)
+        .with_context(|| format!("renaming {} -> {}", first_tmp.display(), first_path.display()))
+    {
+        let _ = std::fs::remove_file(&first_tmp);
+        let _ = std::fs::remove_file(&second_tmp);
+        return Err(error);
+    }
+    std::fs::rename(&second_tmp, second_path)
+        .with_context(|| format!("renaming {} -> {}", second_tmp.display(), second_path.display()))?;
+    sync_parent(first_path);
+    if first_path.parent() != second_path.parent() {
+        sync_parent(second_path);
+    }
+    Ok(())
+}
+
+fn stage_atomic(path: &Path, contents: &[u8], mode: Option<u32>) -> Result<PathBuf> {
+    let tmp = sibling(path, ".tmp");
+    let mut opts = OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    if let Some(mode) = mode {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(mode);
+    }
+    let mut file = opts
+        .open(&tmp)
+        .with_context(|| format!("creating temp file {}", tmp.display()))?;
+    #[cfg(unix)]
+    if let Some(mode) = mode {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))
+            .with_context(|| format!("setting mode on {}", tmp.display()))?;
+    }
+    file.write_all(contents)
+        .with_context(|| format!("writing {}", tmp.display()))?;
+    file.sync_all()
+        .with_context(|| format!("syncing {}", tmp.display()))?;
+    Ok(tmp)
+}
+
+fn sync_parent(path: &Path) {
+    if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+        if let Ok(dir) = File::open(dir) {
+            let _ = dir.sync_all();
+        }
+    }
+}
+
 /// acquire an exclusive advisory lock tied to `path` (held on a sibling
 /// `.lock` file). The lock releases when the returned guard is dropped —
 /// including on process exit, so a crash never leaves a stale lock. Hold it
