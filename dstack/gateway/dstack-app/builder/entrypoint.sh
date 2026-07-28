@@ -114,7 +114,6 @@ tls_versions = ["1.2"]
 listen_addr = "0.0.0.0"
 listen_port = "${PROXY_LISTEN_PORT:-443}"
 connect_top_n = 3
-localhost_enabled = false
 app_address_ns_compat = true
 workers = ${PROXY_WORKERS:-32}
 max_connections_per_app = ${MAX_CONNECTIONS_PER_APP:-0}

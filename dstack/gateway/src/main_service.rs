@@ -1143,7 +1143,7 @@ impl ProxyState {
     }
 
     pub(crate) fn select_top_n_hosts(&mut self, id: &str) -> Result<AddressGroup> {
-        if self.config.proxy.localhost_enabled && id == "localhost" {
+        if self.config.debug.insecure_localhost_backend && id == "localhost" {
             return Ok(smallvec![AddressInfo {
                 ip: Ipv4Addr::new(127, 0, 0, 1),
                 counter: Default::default(),

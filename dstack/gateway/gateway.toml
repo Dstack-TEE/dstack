@@ -56,6 +56,11 @@ insecure_no_auth = false
 
 [core.debug]
 insecure_enable_debug_rpc = false
+# Route the app address "localhost" to 127.0.0.1 on the gateway host. Off by
+# default: the app address also comes from the _dstack-app-address TXT record of
+# arbitrary custom domains, so enabling this lets any DNS zone owner reach the
+# gateway's own loopback on a port of their choosing, bypassing port_policy.
+insecure_localhost_backend = false
 insecure_skip_attestation = false
 key_file = "debug_key.json"
 address = "127.0.0.1:8012"
@@ -80,7 +85,6 @@ agent_port = 8090
 buffer_size = 65536
 # number of hosts to try to connect to
 connect_top_n = 3
-localhost_enabled = false
 app_address_ns_prefix = "_dstack-app-address"
 app_address_ns_compat = true
 workers = 32
