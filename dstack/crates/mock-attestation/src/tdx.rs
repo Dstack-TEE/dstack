@@ -18,7 +18,10 @@ use rcgen::{
 use scale::Encode;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use time::{Duration, OffsetDateTime};
+use time::OffsetDateTime;
+
+const MOCK_PKI_NOT_BEFORE: i64 = 1_577_836_800; // 2020-01-01T00:00:00Z
+const MOCK_PKI_NOT_AFTER: i64 = 4_102_444_800; // 2100-01-01T00:00:00Z
 
 const INTEL_QE_VENDOR_ID: [u8; 16] = [
     0x93, 0x9a, 0x72, 0x33, 0xf7, 0x9c, 0x4c, 0xa9, 0x94, 0x0a, 0x0d, 0xb3, 0x95, 0x7f, 0x06, 0x07,
@@ -75,10 +78,9 @@ impl TdxGenerator {
             &root_key,
             false,
         )?;
-        let now = OffsetDateTime::now_utc();
         let root_crl = CertificateRevocationListParams {
-            this_update: now - Duration::days(1),
-            next_update: now + Duration::days(30),
+            this_update: fixed_time(MOCK_PKI_NOT_BEFORE)?,
+            next_update: fixed_time(MOCK_PKI_NOT_AFTER)?,
             crl_number: SerialNumber::from(1u64),
             issuing_distribution_point: None,
             revoked_certs: Vec::new(),
@@ -301,10 +303,13 @@ fn cert_params(name: &str) -> Result<CertificateParams> {
     let mut params = CertificateParams::new(vec!["mock.dstack.invalid".into()])?;
     params.distinguished_name.push(DnType::CommonName, name);
     params.serial_number = Some(SerialNumber::from(42u64));
-    let now = OffsetDateTime::now_utc();
-    params.not_before = now - Duration::days(1);
-    params.not_after = now + Duration::days(30);
+    params.not_before = fixed_time(MOCK_PKI_NOT_BEFORE)?;
+    params.not_after = fixed_time(MOCK_PKI_NOT_AFTER)?;
     Ok(params)
+}
+
+fn fixed_time(timestamp: i64) -> Result<OffsetDateTime> {
+    Ok(OffsetDateTime::from_unix_timestamp(timestamp)?)
 }
 
 fn pck_extension() -> CustomExtension {
