@@ -5,3 +5,9 @@ set -euo pipefail
 B=${BUILDROOT:?}
 rm -f "$B/etc/machine-id" "$B/var/lib/dbus/machine-id"
 : > "$B/etc/machine-id"
+
+# Package-manager logs contain wall-clock timestamps from image assembly.
+# They are build diagnostics, not guest runtime state, so omit them from the
+# measured image to keep clean builds reproducible.
+rm -f "$B/var/log/alternatives.log" "$B/var/log/dpkg.log"
+rm -rf "$B/var/log/apt"
