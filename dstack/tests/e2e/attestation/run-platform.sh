@@ -220,4 +220,33 @@ jq -e '.details.quote_verified == true' "$WORK/request.json.verification.json" >
 jq -e '.is_valid == true' "$WORK/request.json.verification.json" >/dev/null
 jq -e '.details.os_image_hash_verified == true' "$WORK/request.json.verification.json" >/dev/null
 jq -e '.details.event_log_verified == true' "$WORK/request.json.verification.json" >/dev/null
-echo "[$TEE_PLATFORM${TDX_ATTESTATION_VARIANT:+/$TDX_ATTESTATION_VARIANT}] dstack-util -> verifier full E2E passed"
+jq -e '.details.simulated == true' "$WORK/request.json.verification.json" >/dev/null
+
+# Keeping the development roots while removing the explicit opt-in models
+# production policy. It must fail before a verification decision is created.
+grep -v '^insecure_allow_external_trust_anchors = true$' \
+  "$WORK/verifier.toml" > "$WORK/production-verifier.toml"
+set +e
+dstack-verifier --config "$WORK/production-verifier.toml" --verify "$WORK/request.json" \
+  >"$WORK/production-policy.log" 2>&1
+PRODUCTION_RC=$?
+set -e
+if (( PRODUCTION_RC == 0 )); then
+  echo "production policy accepted development trust roots" >&2
+  cat "$WORK/production-policy.log" >&2
+  exit 1
+fi
+if ! grep -qiE 'external trust|insecure_allow_external_trust_anchors|custom root' \
+  "$WORK/production-policy.log"; then
+  echo "production policy rejection did not identify the development trust-root gate" >&2
+  cat "$WORK/production-policy.log" >&2
+  exit 1
+fi
+
+jq -n \
+  --arg platform "$TEE_PLATFORM" \
+  --arg variant "${TDX_ATTESTATION_VARIANT:-}" \
+  --argjson development "$(cat "$WORK/request.json.verification.json")" \
+  --argjson production_rc "$PRODUCTION_RC" \
+  '{platform:$platform,variant:$variant,development:$development,production:{accepted:false,returncode:$production_rc}}'
+echo "[$TEE_PLATFORM${TDX_ATTESTATION_VARIANT:+/$TDX_ATTESTATION_VARIANT}] development policy labeled simulated evidence and production policy rejected it"
