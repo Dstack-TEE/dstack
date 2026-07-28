@@ -46,6 +46,15 @@ impl Default for NsmState {
 }
 
 impl NsmState {
+    fn measured() -> Self {
+        let mut state = Self::default();
+        for index in 0..=2 {
+            let digest = Sha384::digest(format!("dstack-tee-simulator/nsm/pcr/{index}").as_bytes());
+            state.pcrs[index].copy_from_slice(&digest);
+        }
+        state
+    }
+
     fn handle(&mut self, generator: &NsmGenerator, request: Request) -> Response {
         match request {
             Request::DescribePCR { index } => {
@@ -381,7 +390,7 @@ pub fn run(config: &TeeSimulatorConfig) -> Result<()> {
         .set(Arc::new(NsmGenerator::from_seed(parse_seed(seed)?)?))
         .map_err(|_| anyhow::anyhow!("NSM simulator was already initialized"))?;
     STATE
-        .set(Mutex::new(NsmState::default()))
+        .set(Mutex::new(NsmState::measured()))
         .map_err(|_| anyhow::anyhow!("NSM simulator state was already initialized"))?;
 
     let device_name = CString::new("DEVNAME=nsm")?;
@@ -444,6 +453,17 @@ mod tests {
             Response::Error(_) => "Error",
             _ => "Unknown",
         }
+    }
+
+    #[test]
+    fn measured_state_models_a_production_enclave() {
+        let state = NsmState::measured();
+        assert!(state.pcrs[..=2]
+            .iter()
+            .all(|value| value.iter().any(|byte| *byte != 0)));
+        assert!(state.pcrs[3..]
+            .iter()
+            .all(|value| value.iter().all(|byte| *byte == 0)));
     }
 
     #[test]
