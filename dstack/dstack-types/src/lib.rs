@@ -940,6 +940,9 @@ pub struct TeeSimulatorConfig {
     /// Base URL used in mock collateral certificates (AIA/CRL).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collateral_base_url: Option<String>,
+    /// Exact public PEM root shared with verifiers of simulated TDX evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tdx_root_ca: Option<String>,
     /// MrConfigV3 document used to generate mock platform evidence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mr_config: Option<String>,
