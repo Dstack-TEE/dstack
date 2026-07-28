@@ -155,7 +155,8 @@ impl SupervisorClient {
         let log_file = log_file.as_ref().to_path_buf();
         std::thread::spawn(move || {
             // start supervisor
-            let result = std::process::Command::new(supervisor_path)
+            let mut command = std::process::Command::new(supervisor_path);
+            command
                 .arg("--uds")
                 .arg(supervisor_uds)
                 .arg("--pid-file")
@@ -163,8 +164,19 @@ impl SupervisorClient {
                 .arg("--log-file")
                 .arg(log_file)
                 .args(if detached { &["--detach"][..] } else { &[] })
-                .env("RUST_LOG", "info,rocket=warn")
-                .output();
+                .env("RUST_LOG", "info,rocket=warn");
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt as _;
+
+                unsafe {
+                    command.pre_exec(|| {
+                        libc::umask(0o077);
+                        Ok(())
+                    });
+                }
+            }
+            let result = command.output();
             let output = match result {
                 Ok(output) => output,
                 Err(err) => {
