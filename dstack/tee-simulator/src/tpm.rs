@@ -91,6 +91,7 @@ pub fn start_gcp_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
         .as_deref()
         .unwrap_or("http://127.0.0.1:8088");
     let state = Arc::new(MockCollateralState::from_seed(parse_seed(seed)?, base_url)?);
+    state.write_roots(&runtime_dir.join("mock-roots"))?;
     start_collateral_server(base_url, state.clone())?;
     // Keep swtpm state outside /run: swtpm drops privileges to `tss`, and some
     // distributions reject its lock file when a parent runtime directory is
