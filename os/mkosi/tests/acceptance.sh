@@ -182,8 +182,8 @@ fi
 grep -q 'Archiving UKI image' "$D/../image/assemble.sh"
 grep -Fq "FLAVORS=\${FLAVORS:-prod}" "$D/build.sh"
 # A cache hit must never be able to answer the question repro-check asks.
-grep -Fq 'if [[ $action == repro-check ]]; then cache=0; fi' "$D/build.sh"
-grep -Fq -e '--environment="DSTACK_COMPONENT_CACHE=$cache"' "$D/build.sh"
+grep -Fq "if [[ \$action == repro-check ]]; then cache=0; fi" "$D/build.sh"
+grep -Fq -e "--environment=\"DSTACK_COMPONENT_CACHE=\$cache\"" "$D/build.sh"
 grep -q 'write-source-manifest.py' "$D/build.sh"
 grep -q 'DSTACK_SOURCE_REVISION.*revision' "$D/build.sh"
 grep -q 'DSTACK_SOURCE_REVISION:?' "$D/scripts/make-release-artifacts.sh"
