@@ -47,5 +47,8 @@ cd "$SRC"
 # Deliberately not exec: exec replaces this shell and the EXIT trap above would
 # never run, leaving a root-owned build directory the caller cannot even delete.
 status=0
-./os/mkosi/build.sh "$ACTION" "$OUT" || status=$?
+# The container path exists to produce reproducible artifacts, and its cache
+# directory would be discarded with the container anyway, so it always takes
+# the cold path rather than the cached default of a local `build.sh image`.
+./os/mkosi/build.sh --no-cache "$ACTION" "$OUT" || status=$?
 exit "$status"

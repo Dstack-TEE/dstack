@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: Apache-2.0
-# Local archive mechanics for dev-image. Component definitions own their keys
-# and output boundaries; this file only validates, restores and stores them.
+# Local archive mechanics for a cached build. Component definitions own their
+# keys and output boundaries; this file only validates, restores and stores them.
 
 DEV_CACHE_ENABLED=0
 

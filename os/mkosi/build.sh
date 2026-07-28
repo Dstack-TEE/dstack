@@ -7,13 +7,39 @@ ROOT=$(cd "$SELF/../.." && pwd)
 # shellcheck source=/dev/null
 source "$SELF/versions.env"
 FLAVORS=${FLAVORS:-prod}
-action=${1:-image}
-BUILD_DIR=${2:-$SELF/build}
-BUILD_DIR=$(realpath -m "$BUILD_DIR")
+usage="Usage: $0 [--no-cache] {image|repro-check|lint} [build-dir]"
+# The component cache is keyed on every declared input of each component, so a
+# hit reproduces the same output a cold build would have produced. Reusing it is
+# therefore the sensible default; --no-cache forces the cold path for a release
+# build or when the key itself is what needs auditing. repro-check ignores both
+# and always builds cold, because a cache hit would answer the wrong question.
+cache=${DSTACK_COMPONENT_CACHE:-1}
+action=
+BUILD_DIR=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-cache) cache=0 ;;
+    -h|--help) echo "$usage"; exit 0 ;;
+    -*) echo "Unknown option: $1" >&2; echo "$usage" >&2; exit 2 ;;
+    *)
+      if [[ -z $action ]]; then action=$1
+      elif [[ -z $BUILD_DIR ]]; then BUILD_DIR=$1
+      else echo "Unexpected argument: $1" >&2; echo "$usage" >&2; exit 2
+      fi
+      ;;
+  esac
+  shift
+done
+action=${action:-image}
+BUILD_DIR=$(realpath -m "${BUILD_DIR:-$SELF/build}")
 case "$action" in
-  image|dev-image|repro-check|lint) ;;
-  *) echo "Usage: $0 {image|dev-image|repro-check|lint} [build-dir]" >&2; exit 2 ;;
+  image|repro-check|lint) ;;
+  *) echo "$usage" >&2; exit 2 ;;
 esac
+if [[ $action == repro-check ]]; then cache=0; fi
+[[ $cache == 1 || $cache == 0 ]] || {
+  echo "DSTACK_COMPONENT_CACHE must be 0 or 1, got: $cache" >&2; exit 2;
+}
 if [[ $action == lint ]]; then exec "$SELF/tests/acceptance.sh"; fi
 command -v mkosi >/dev/null || { echo "mkosi $MKOSI_VERSION is required" >&2; exit 1; }
 actual=$(mkosi --version | awk '{print $2}' | cut -d. -f1)
@@ -43,10 +69,11 @@ fi
 export DSTACK_BUILD_GIT_REVISION=${DSTACK_BUILD_GIT_REVISION:-git:${revision:0:20}$dirty}
 revision="$revision$dirty"
 export TZ=UTC LC_ALL=C
-# A production invocation reconstructs the tools tree once from the immutable
+# A cold invocation reconstructs the tools tree once from the immutable
 # snapshot, then shares that read-only environment across all requested flavors
-# or both legs of repro-check.
-if [[ $action != dev-image ]]; then
+# or both legs of repro-check. A cached invocation keeps it, because rebuilding
+# the tools overlay every run is exactly the cost the cache exists to avoid.
+if [[ $cache == 0 ]]; then
   # --directory only chdirs, and no OutputDirectory= is configured, so without
   # the same --output-directory the build uses, mkosi.clean would run its
   # removal against os/mkosi/ instead of the build tree.
@@ -63,12 +90,12 @@ build_one() {
     --output-directory="$out"
     --profile="$flavor"
     --source-date-epoch="$SOURCE_DATE_EPOCH"
-    --environment="DSTACK_COMPONENT_CACHE=$([[ $action == dev-image ]] && echo 1 || echo 0)"
+    --environment="DSTACK_COMPONENT_CACHE=$cache"
     --environment="DSTACK_BUILD_GIT_REVISION=$DSTACK_BUILD_GIT_REVISION"
     --environment="DSTACK_SOURCE_REVISION=$revision"
     --environment="JOBS=$jobs"
   )
-  if [[ $action == dev-image ]]; then
+  if [[ $cache == 1 ]]; then
     cache_root=${DSTACK_DEV_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dstack/mkosi-dev}
     # The component cache must go through BuildDirectory, which mkosi
     # bind-mounts read-write and preserves between runs. A BuildSources mount
@@ -92,7 +119,7 @@ build_one() {
         "$out/dstack-$DSTACK_VERSION-rootfs"
 }
 
-if [[ $action == image || $action == dev-image ]]; then
+if [[ $action == image ]]; then
   for flavor in $FLAVORS; do build_one "$BUILD_DIR/out/$flavor" "$flavor"; done
   exit
 fi

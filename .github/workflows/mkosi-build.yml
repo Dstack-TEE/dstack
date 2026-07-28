@@ -138,10 +138,13 @@ jobs:
             action=image
             dist_dir="$build_dir/out/prod"
           fi
+          # A release build never reuses the component cache. The runner is
+          # fresh, so this costs nothing here, but it keeps the published
+          # artifacts a product of the cold path the repro check verifies.
           sudo --set-home env \
             "PATH=$ci_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
             "JOBS=$JOBS" \
-            ./os/mkosi/build.sh "$action" "$build_dir"
+            ./os/mkosi/build.sh --no-cache "$action" "$build_dir"
           sudo chown -R "$USER:$USER" "$build_dir"
           echo "dist_dir=$dist_dir" >> "$GITHUB_OUTPUT"
           df -h /
