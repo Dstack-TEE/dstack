@@ -659,10 +659,19 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
 }
 
 fn cmd_quote() -> Result<()> {
-    let mut report_data = [0; 64];
+    let mut input = Vec::with_capacity(65);
     io::stdin()
-        .read_exact(&mut report_data)
+        .take(65)
+        .read_to_end(&mut input)
         .context("Failed to read report data")?;
+    anyhow::ensure!(
+        input.len() == 64,
+        "report data must be exactly 64 bytes (received {})",
+        input.len()
+    );
+    let report_data: [u8; 64] = input
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("invalid report data length"))?;
     // Platform-adaptive: detect the running TEE and emit its raw hardware quote
     // (the TDX DCAP quote, or the AMD SEV-SNP report). For a verifier-ready,
     // platform-agnostic payload (with event log / mr_config), use `quote-report`.
