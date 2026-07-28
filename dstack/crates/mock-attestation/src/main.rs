@@ -38,6 +38,8 @@ enum Command {
     SevSnpMatrix,
     /// Run GCP vTPM and NitroTPM trust, binding, and substitution rows.
     CloudTpmMatrix,
+    /// Run the Nitro Enclave document and image-policy decision table.
+    NitroEnclaveMatrix,
 }
 
 #[derive(serde::Serialize)]
@@ -282,6 +284,224 @@ fn cloud_tpm_matrix() -> Result<Vec<CloudMatrixRow>> {
     Ok(rows)
 }
 
+fn nitro_enclave_matrix() -> Result<Vec<CloudMatrixRow>> {
+    use std::collections::BTreeMap;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use mock_attestation::nsm::{NsmDocumentOptions, NsmGenerator};
+    use sha2::{Digest, Sha256};
+
+    let generator = NsmGenerator::from_seed([0x81; 32])?;
+    let verifier = nsm_qvl::QuoteVerifier::new(generator.root_ca_pem());
+    let user_data = [0x42; 64];
+    let nonce = [0x24; 32];
+    let public_key = [0x36; 65];
+    let pcrs = BTreeMap::from([
+        (0u16, vec![0x10; 48]),
+        (1u16, vec![0x11; 48]),
+        (2u16, vec![0x12; 48]),
+        (4u16, vec![0x14; 48]),
+    ]);
+    let document = generator.attest_with_claims(
+        Some(&user_data),
+        Some(&nonce),
+        Some(&public_key),
+        pcrs.clone(),
+    )?;
+    let verified = verifier
+        .verify(&document, None, None)
+        .context("valid Nitro Enclave control failed")?;
+    let mut rows = vec![CloudMatrixRow {
+        platform: "aws-nitro-enclave",
+        name: "valid",
+        accepted: true,
+        stage: "verified",
+        diagnostic: String::new(),
+    }];
+
+    let wrong = NsmGenerator::from_seed([0x82; 32])?;
+    rows.push(rejected(
+        "aws-nitro-enclave",
+        "wrong-root",
+        "certificate-chain",
+        nsm_qvl::QuoteVerifier::new(wrong.root_ca_pem())
+            .verify(&document, None, None)
+            .expect_err("wrong NSM root accepted the document"),
+    ));
+    let mut changed_signature = document.clone();
+    *changed_signature.last_mut().context("empty NSM document")? ^= 1;
+    rows.push(rejected(
+        "aws-nitro-enclave",
+        "cose-signature",
+        "cose-signature",
+        verifier
+            .verify(&changed_signature, None, None)
+            .expect_err("modified COSE signature was accepted"),
+    ));
+
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock before UNIX epoch")?
+        .as_millis() as u64;
+    for (name, timestamp, needle) in [
+        ("expired", now_ms.saturating_sub(3_600_000), "stale"),
+        ("future", now_ms + 3_600_000, "future"),
+    ] {
+        let timed = generator.attest_with_options(
+            Some(&user_data),
+            Some(&nonce),
+            Some(&public_key),
+            pcrs.clone(),
+            NsmDocumentOptions {
+                timestamp_ms: Some(timestamp),
+                ..Default::default()
+            },
+        )?;
+        let error = verifier
+            .verify(&timed, None, None)
+            .expect_err("invalid document time was accepted");
+        anyhow::ensure!(
+            error.to_string().to_lowercase().contains(needle),
+            "{name} did not reach freshness validation: {error:#}"
+        );
+        rows.push(rejected("aws-nitro-enclave", name, "freshness", error));
+    }
+
+    let missing_user_data =
+        generator.attest_with_claims(None, Some(&nonce), Some(&public_key), pcrs.clone())?;
+    let missing_verified = verifier.verify(&missing_user_data, None, None)?;
+    rows.push(rejected(
+        "aws-nitro-enclave",
+        "missing-user-data",
+        "report-data",
+        anyhow::anyhow!(
+            "NSM document does not contain user_data: {:?}",
+            missing_verified.user_data
+        ),
+    ));
+    for (name, actual, expected, stage) in [
+        (
+            "user-data",
+            verified.user_data.clone().context("missing user_data")?,
+            vec![0x43; 64],
+            "report-data",
+        ),
+        (
+            "nonce",
+            verified.nonce.clone().context("missing nonce")?,
+            vec![0x25; 32],
+            "nonce-binding",
+        ),
+        (
+            "public-key",
+            verified.public_key.clone().context("missing public_key")?,
+            vec![0x37; 65],
+            "public-key-binding",
+        ),
+    ] {
+        rows.push(rejected(
+            "aws-nitro-enclave",
+            name,
+            stage,
+            mock_attestation::ensure_report_data(&actual, &expected)
+                .expect_err("wrong NSM binding was accepted"),
+        ));
+    }
+
+    let other_module = generator.attest_with_options(
+        Some(&user_data),
+        Some(&nonce),
+        Some(&public_key),
+        pcrs.clone(),
+        NsmDocumentOptions {
+            module_id: "other-enclave".into(),
+            ..Default::default()
+        },
+    )?;
+    let other_module = verifier.verify(&other_module, None, None)?;
+    rows.push(rejected(
+        "aws-nitro-enclave",
+        "module-id",
+        "identity-binding",
+        mock_attestation::ensure_report_data(
+            other_module.module_id.as_bytes(),
+            verified.module_id.as_bytes(),
+        )
+        .expect_err("cross-module identity was accepted"),
+    ));
+
+    for index in [0u16, 1, 2, 4] {
+        let mut changed = pcrs.clone();
+        changed.get_mut(&index).context("missing PCR")?[0] ^= 1;
+        let signed = generator.attest_with_claims(
+            Some(&user_data),
+            Some(&nonce),
+            Some(&public_key),
+            changed,
+        )?;
+        let changed = verifier.verify(&signed, None, None)?;
+        rows.push(rejected(
+            "aws-nitro-enclave",
+            match index {
+                0 => "pcr0",
+                1 => "pcr1",
+                2 => "pcr2",
+                _ => "pcr4",
+            },
+            "pcr-binding",
+            mock_attestation::ensure_report_data(&changed.pcrs[&index], &pcrs[&index])
+                .expect_err("changed signed PCR was accepted for the original identity"),
+        ));
+    }
+
+    let image_hash = |values: &BTreeMap<u16, Vec<u8>>| {
+        let mut hasher = Sha256::new();
+        hasher.update(&values[&0]);
+        hasher.update(&values[&1]);
+        hasher.update(&values[&2]);
+        hasher.finalize().to_vec()
+    };
+    rows.push(rejected(
+        "aws-nitro-enclave",
+        "os-image-hash",
+        "image-binding",
+        mock_attestation::ensure_report_data(&image_hash(&verified.pcrs), &[0x55; 32])
+            .expect_err("wrong OS image hash was accepted"),
+    ));
+
+    let mut debug_pcrs = pcrs.clone();
+    for index in 0..=2 {
+        debug_pcrs.insert(index, vec![0; 48]);
+    }
+    let debug = generator.attest_with_claims(
+        Some(&user_data),
+        Some(&nonce),
+        Some(&public_key),
+        debug_pcrs,
+    )?;
+    let debug = verifier.verify(&debug, None, None)?;
+    let is_debug = (0..=2).all(|index| debug.pcrs[&index].iter().all(|byte| *byte == 0));
+    anyhow::ensure!(is_debug, "debug document did not preserve zero PCR0/1/2");
+    rows.push(rejected(
+        "aws-nitro-enclave",
+        "debug-zero-pcrs",
+        "debug-policy",
+        anyhow::anyhow!("nitro enclave is in debug mode (PCR0/1/2 are zeroed)"),
+    ));
+
+    verifier
+        .verify(&document, None, None)
+        .context("valid Nitro Enclave control did not recover")?;
+    rows.push(CloudMatrixRow {
+        platform: "aws-nitro-enclave",
+        name: "valid-after-failures",
+        accepted: true,
+        stage: "recovery",
+        diagnostic: String::new(),
+    });
+    Ok(rows)
+}
+
 fn sev_snp_matrix() -> Result<Vec<MatrixRow>> {
     use mock_attestation::sev_snp::{SevSnpGenerator, SevSnpPolicy};
 
@@ -444,6 +664,12 @@ async fn main() -> Result<()> {
         }
         Command::CloudTpmMatrix => {
             println!("{}", serde_json::to_string_pretty(&cloud_tpm_matrix()?)?);
+        }
+        Command::NitroEnclaveMatrix => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&nitro_enclave_matrix()?)?
+            );
         }
     }
     Ok(())

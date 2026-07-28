@@ -38,6 +38,23 @@ struct Document {
     nonce: Option<Vec<u8>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct NsmDocumentOptions {
+    pub module_id: String,
+    pub digest: String,
+    pub timestamp_ms: Option<u64>,
+}
+
+impl Default for NsmDocumentOptions {
+    fn default() -> Self {
+        Self {
+            module_id: "mock-nsm".into(),
+            digest: "SHA384".into(),
+            timestamp_ms: None,
+        }
+    }
+}
+
 impl NsmGenerator {
     pub fn new() -> Result<Self> {
         Self::from_seed(rand::random())
@@ -96,14 +113,32 @@ impl NsmGenerator {
         public_key: Option<&[u8]>,
         pcrs: BTreeMap<u16, Vec<u8>>,
     ) -> Result<Vec<u8>> {
-        let timestamp = SystemTime::now()
+        self.attest_with_options(
+            user_data,
+            nonce,
+            public_key,
+            pcrs,
+            NsmDocumentOptions::default(),
+        )
+    }
+
+    /// Sign a document with explicit claims used by policy and time tests.
+    pub fn attest_with_options(
+        &self,
+        user_data: Option<&[u8]>,
+        nonce: Option<&[u8]>,
+        public_key: Option<&[u8]>,
+        pcrs: BTreeMap<u16, Vec<u8>>,
+        options: NsmDocumentOptions,
+    ) -> Result<Vec<u8>> {
+        let current_timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .context("system clock before UNIX epoch")?
             .as_millis() as u64;
         let document = Document {
-            module_id: "mock-nsm".into(),
-            digest: "SHA384".into(),
-            timestamp,
+            module_id: options.module_id,
+            digest: options.digest,
+            timestamp: options.timestamp_ms.unwrap_or(current_timestamp),
             pcrs,
             certificate: self.leaf.der().to_vec(),
             cabundle: vec![self.root.der().to_vec()],
