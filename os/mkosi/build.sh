@@ -7,18 +7,26 @@ ROOT=$(cd "$SELF/../.." && pwd)
 # shellcheck source=/dev/null
 source "$SELF/versions.env"
 FLAVORS=${FLAVORS:-prod}
-usage="Usage: $0 [--no-cache] {image|repro-check|lint} [build-dir]"
+usage="Usage: $0 [--no-cache] [--archive] {image|repro-check|lint} [build-dir]"
 # The component cache is keyed on every declared input of each component, so a
 # hit reproduces the same output a cold build would have produced. Reusing it is
 # therefore the sensible default; --no-cache forces the cold path for a release
 # build or when the key itself is what needs auditing. repro-check ignores both
 # and always builds cold, because a cache hit would answer the wrong question.
 cache=${DSTACK_COMPONENT_CACHE:-1}
+# The two release tarballs are ~58 s of gzip over artifacts that already exist
+# unpacked beside them. A cached build is an iteration build, and iterating on
+# the guest wants disk.raw and the measurements, not a redistributable archive
+# -- so a cached build skips them and a cold build still produces them. Pass
+# --archive to get them out of a cached build anyway. Left unset here so the
+# default can be derived from the final value of $cache below.
+archive=${DSTACK_TAR_RELEASE:-}
 action=
 BUILD_DIR=
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-cache) cache=0 ;;
+    --archive) archive=1 ;;
     -h|--help) echo "$usage"; exit 0 ;;
     -*) echo "Unknown option: $1" >&2; echo "$usage" >&2; exit 2 ;;
     *)
@@ -39,6 +47,18 @@ esac
 if [[ $action == repro-check ]]; then cache=0; fi
 [[ $cache == 1 || $cache == 0 ]] || {
   echo "DSTACK_COMPONENT_CACHE must be 0 or 1, got: $cache" >&2; exit 2;
+}
+# Derived after repro-check has forced the cold path, so repro-check always
+# archives: it compares the two release tarballs, and skipping them would leave
+# it comparing nothing and passing vacuously.
+archive=${archive:-$(( cache == 1 ? 0 : 1 ))}
+# Not merely defaulted: forced. repro-check compares the two release tarballs,
+# so an environment that switched archiving off would leave it comparing files
+# that do not exist -- a check that fails for the wrong reason, or worse, is
+# read as "no difference found".
+if [[ $action == repro-check ]]; then archive=1; fi
+[[ $archive == 1 || $archive == 0 ]] || {
+  echo "DSTACK_TAR_RELEASE must be 0 or 1, got: $archive" >&2; exit 2;
 }
 if [[ $action == lint ]]; then exec "$SELF/tests/acceptance.sh"; fi
 command -v mkosi >/dev/null || { echo "mkosi $MKOSI_VERSION is required" >&2; exit 1; }
@@ -91,6 +111,7 @@ build_one() {
     --profile="$flavor"
     --source-date-epoch="$SOURCE_DATE_EPOCH"
     --environment="DSTACK_COMPONENT_CACHE=$cache"
+    --environment="DSTACK_TAR_RELEASE=$archive"
     --environment="DSTACK_BUILD_GIT_REVISION=$DSTACK_BUILD_GIT_REVISION"
     --environment="DSTACK_SOURCE_REVISION=$revision"
     --environment="JOBS=$jobs"

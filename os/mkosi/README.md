@@ -88,6 +88,13 @@ DSTACK_DEV_CACHE_DIR="$HOME/.cache/dstack/mkosi-dev" \
 ./os/mkosi/build.sh --no-cache image "$PWD/os/mkosi/build"
 ```
 
+A cached build also skips the two release tarballs, which are roughly a minute
+of gzip over artifacts that already sit unpacked beside them. `disk.raw`, the
+measurements and `metadata.json` are still produced, so QEMU smoke-testing and
+measurement inspection are unaffected; `--archive` asks a cached build for the
+tarballs anyway. A cold build always archives, and `repro-check` archives
+unconditionally because the tarballs are what it compares.
+
 The cache covers dstack Rust, image tools, the container stack, Sysbox, nvattest, the
 kernel build tree, NVIDIA, ZFS and both OVMF variants. Its key conservatively
 includes the inputs, tools, packages and component dependencies declared by
