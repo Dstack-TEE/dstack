@@ -3,17 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
+use dcap_qvl::QuoteCollateralV3;
 use dcap_qvl::quote::{
     AuthData, AuthDataV4, CertificationData, Data, EnclaveReport, Header,
     QEReportCertificationData, Quote, Report, TDReport10,
 };
-use dcap_qvl::QuoteCollateralV3;
-use p256::ecdsa::{signature::Signer, Signature, SigningKey};
-use p256::pkcs8::DecodePrivateKey;
+use p256::ecdsa::{Signature, SigningKey, signature::Signer};
+use p256::pkcs8::{DecodePrivateKey, EncodePrivateKey};
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, CertificateRevocationListParams,
     CertifiedKey, CustomExtension, DnType, ExtendedKeyUsagePurpose, IsCa, KeyIdMethod, KeyPair,
-    KeyUsagePurpose, SerialNumber,
+    KeyUsagePurpose, PKCS_ECDSA_P256_SHA256, RemoteKeyPair, SerialNumber, SignatureAlgorithm,
 };
 use scale::Encode;
 use serde_json::json;
@@ -30,13 +30,45 @@ const INTEL_QE_VENDOR_ID: [u8; 16] = [
 pub struct TdxGenerator {
     root: Certificate,
     root_key: KeyPair,
+    root_signing_key: SigningKey,
     pck: Certificate,
-    pck_key: KeyPair,
+    pck_key: SigningKey,
     tcb_signer: Certificate,
-    tcb_signer_key: KeyPair,
+    tcb_signer_key: SigningKey,
     qe_signer: Certificate,
-    qe_signer_key: KeyPair,
+    qe_signer_key: SigningKey,
     root_crl: Vec<u8>,
+}
+
+struct DeterministicP256KeyPair {
+    key: SigningKey,
+    public_key: Vec<u8>,
+}
+
+impl DeterministicP256KeyPair {
+    fn new(key: SigningKey) -> Self {
+        let public_key = key
+            .verifying_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec();
+        Self { key, public_key }
+    }
+}
+
+impl RemoteKeyPair for DeterministicP256KeyPair {
+    fn public_key(&self) -> &[u8] {
+        &self.public_key
+    }
+
+    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, rcgen::Error> {
+        let signature: Signature = self.key.sign(message);
+        Ok(signature.to_der().as_bytes().to_vec())
+    }
+
+    fn algorithm(&self) -> &'static SignatureAlgorithm {
+        &PKCS_ECDSA_P256_SHA256
+    }
 }
 
 pub struct TdxEvidence {
@@ -50,10 +82,13 @@ impl TdxGenerator {
     }
 
     pub fn from_seed(seed: [u8; 32]) -> Result<Self> {
-        let CertifiedKey {
-            cert: root,
-            key_pair: root_key,
-        } = make_root(&seed)?;
+        let (
+            CertifiedKey {
+                cert: root,
+                key_pair: root_key,
+            },
+            root_signing_key,
+        ) = make_root(&seed)?;
         let (pck, pck_key) = make_leaf(
             "Mock Intel SGX PCK Certificate",
             "tdx-pck",
@@ -92,6 +127,7 @@ impl TdxGenerator {
         Ok(Self {
             root,
             root_key,
+            root_signing_key,
             pck,
             pck_key,
             tcb_signer,
@@ -109,7 +145,10 @@ impl TdxGenerator {
         self.root.pem()
     }
     pub fn root_key_pem(&self) -> String {
-        self.root_key.serialize_pem()
+        self.root_signing_key
+            .to_pkcs8_pem(Default::default())
+            .expect("P-256 key serialization")
+            .to_string()
     }
 
     pub fn sample_collateral(&self) -> Result<QuoteCollateralV3> {
@@ -168,8 +207,7 @@ impl TdxGenerator {
             .encode()
             .try_into()
             .map_err(|bytes: Vec<u8>| anyhow::anyhow!("invalid QE report size {}", bytes.len()))?;
-        let pck_key = signing_key(&self.pck_key)?;
-        let qe_sig: Signature = pck_key.sign(&qe_report_bytes);
+        let qe_sig: Signature = self.pck_key.sign(&qe_report_bytes);
 
         let pck_chain = format!("{}{}", self.pck.pem(), self.root.pem()).into_bytes();
         let qe_certification = QEReportCertificationData {
@@ -265,8 +303,16 @@ impl TdxGenerator {
     }
 }
 
-fn make_root(seed: &[u8; 32]) -> Result<CertifiedKey> {
-    let key_pair = crate::p256_key(seed, "tdx-root")?;
+fn deterministic_key_pair(seed: &[u8; 32], label: &str) -> Result<(KeyPair, SigningKey)> {
+    let serialized = crate::p256_key(seed, label)?;
+    let signing_key = SigningKey::from_pkcs8_pem(&serialized.serialize_pem())?;
+    let key_pair =
+        KeyPair::from_remote(Box::new(DeterministicP256KeyPair::new(signing_key.clone())))?;
+    Ok((key_pair, signing_key))
+}
+
+fn make_root(seed: &[u8; 32]) -> Result<(CertifiedKey, SigningKey)> {
+    let (key_pair, signing_key) = deterministic_key_pair(seed, "tdx-root")?;
     let mut params = cert_params("Mock Intel SGX Root CA")?;
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     params.key_usages.extend([
@@ -275,7 +321,7 @@ fn make_root(seed: &[u8; 32]) -> Result<CertifiedKey> {
         KeyUsagePurpose::CrlSign,
     ]);
     let cert = params.self_signed(&key_pair)?;
-    Ok(CertifiedKey { cert, key_pair })
+    Ok((CertifiedKey { cert, key_pair }, signing_key))
 }
 
 fn make_leaf(
@@ -285,8 +331,8 @@ fn make_leaf(
     root: &Certificate,
     root_key: &KeyPair,
     pck: bool,
-) -> Result<(Certificate, KeyPair)> {
-    let key = crate::p256_key(seed, label)?;
+) -> Result<(Certificate, SigningKey)> {
+    let (key, signing_key) = deterministic_key_pair(seed, label)?;
     let mut params = cert_params(name)?;
     params.key_usages.push(KeyUsagePurpose::DigitalSignature);
     params
@@ -296,7 +342,7 @@ fn make_leaf(
         params.custom_extensions.push(pck_extension());
     }
     let cert = params.signed_by(&key, root, root_key)?;
-    Ok((cert, key))
+    Ok((cert, signing_key))
 }
 
 fn cert_params(name: &str) -> Result<CertificateParams> {
@@ -352,11 +398,8 @@ fn pck_extension() -> CustomExtension {
     CustomExtension::from_oid_content(&[1, 2, 840, 113741, 1, 13, 1], der)
 }
 
-fn signing_key(key: &KeyPair) -> Result<SigningKey> {
-    Ok(SigningKey::from_pkcs8_pem(&key.serialize_pem())?)
-}
-fn sign_raw(key: &KeyPair, message: &[u8]) -> Result<Vec<u8>> {
-    let sig: Signature = signing_key(key)?.sign(message);
+fn sign_raw(key: &SigningKey, message: &[u8]) -> Result<Vec<u8>> {
+    let sig: Signature = key.sign(message);
     Ok(sig.to_bytes().to_vec())
 }
 
@@ -385,13 +428,14 @@ mod tests {
         );
         let mut tampered = evidence.quote.clone();
         tampered[100] ^= 1;
-        assert!(verifier
-            .verify(&tampered, &evidence.collateral, now)
-            .is_err());
-        assert!(crate::ensure_report_data(
-            &verified.report.as_td10().unwrap().report_data,
-            &[0x24; 64]
-        )
-        .is_err());
+        assert!(
+            verifier
+                .verify(&tampered, &evidence.collateral, now)
+                .is_err()
+        );
+        assert!(
+            crate::ensure_report_data(&verified.report.as_td10().unwrap().report_data, &[0x24; 64])
+                .is_err()
+        );
     }
 }
