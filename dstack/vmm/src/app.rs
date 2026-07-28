@@ -4,7 +4,7 @@
 
 use crate::config::{Config, Networking, ProcessAnnotation, Protocol};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use bon::Builder;
 use dstack_kms_rpc::kms_client::KmsClient;
 use dstack_types::mr_config::MrConfigV3;
