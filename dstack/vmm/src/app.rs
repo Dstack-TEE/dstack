@@ -1342,7 +1342,10 @@ pub(crate) fn make_sys_config(
             .context("invalid TEE simulator seed")?
             .try_into()
             .map_err(|_| anyhow!("TEE simulator seed must contain 32 bytes"))?;
-        let root_ca = mock_attestation::tdx::TdxGenerator::from_seed(seed)?.root_ca_pem();
+        let root_ca = match simulator.tdx_root_ca.as_deref() {
+            Some(root_ca) => root_ca.to_string(),
+            None => mock_attestation::tdx::TdxGenerator::from_seed(seed)?.root_ca_pem(),
+        };
         sys_config["insecure_allow_external_attestation_trust_anchor"] =
             serde_json::Value::Bool(true);
         sys_config["tdx_attestation_root_ca"] = serde_json::Value::String(root_ca);
