@@ -9,11 +9,13 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::Parser;
 use dstack_guest_agent::{
+    AppState,
     backend::PlatformBackend,
     config::{self, Config},
-    run_server, AppState,
+    run_server,
 };
 use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
+use mock_attestation::tdx::TdxGenerator;
 use ra_tls::attestation::VersionedAttestation;
 use serde::Deserialize;
 use tracing::warn;
@@ -37,6 +39,8 @@ struct SimulatorSettings {
     attestation_file: String,
     #[serde(default = "default_patch_report_data")]
     patch_report_data: bool,
+    #[serde(default)]
+    mock_attestation_seed: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -49,14 +53,25 @@ struct SimulatorCoreConfig {
 struct SimulatorPlatform {
     attestation: VersionedAttestation,
     patch_report_data: bool,
+    generator: Option<TdxGenerator>,
 }
 
 impl SimulatorPlatform {
-    fn new(attestation: VersionedAttestation, patch_report_data: bool) -> Self {
-        Self {
+    fn new(
+        attestation: VersionedAttestation,
+        patch_report_data: bool,
+        mock_attestation_seed: Option<&str>,
+    ) -> Result<Self> {
+        let generator = mock_attestation_seed
+            .map(mock_attestation::parse_seed)
+            .transpose()?
+            .map(TdxGenerator::from_seed)
+            .transpose()?;
+        Ok(Self {
             attestation,
             patch_report_data,
-        }
+            generator,
+        })
     }
 }
 
@@ -74,6 +89,7 @@ impl PlatformBackend for SimulatorPlatform {
             &self.attestation,
             pubkey,
             self.patch_report_data,
+            self.generator.as_ref(),
         )
     }
 
@@ -83,18 +99,24 @@ impl PlatformBackend for SimulatorPlatform {
             report_data,
             vm_config,
             self.patch_report_data,
+            self.generator.as_ref(),
         )
     }
 
     fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
-        simulator::simulated_attest_response(&self.attestation, report_data, self.patch_report_data)
+        simulator::simulated_attest_response(
+            &self.attestation,
+            report_data,
+            self.patch_report_data,
+            self.generator.as_ref(),
+        )
     }
 }
 
 #[rocket::main]
 async fn main() -> Result<()> {
     {
-        use tracing_subscriber::{fmt, EnvFilter};
+        use tracing_subscriber::{EnvFilter, fmt};
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
         fmt().with_env_filter(filter).with_ansi(false).init();
     }
@@ -107,12 +129,17 @@ async fn main() -> Result<()> {
     warn!(
         attestation_file = %sim_config.simulator.attestation_file,
         patch_report_data = sim_config.simulator.patch_report_data,
+        signed_quotes = sim_config.simulator.mock_attestation_seed.is_some(),
         "starting dstack guest-agent simulator"
     );
     if sim_config.simulator.patch_report_data {
-        warn!("simulator will rewrite report_data to match requests; quote verification may fail against the original fixture signature");
+        warn!(
+            "simulator will rewrite report_data to match requests; quote verification may fail against the original fixture signature"
+        );
     } else {
-        warn!("simulator will preserve fixture report_data; cert/key binding and requested report_data may not match");
+        warn!(
+            "simulator will preserve fixture report_data; cert/key binding and requested report_data may not match"
+        );
     }
     let attestation =
         simulator::load_versioned_attestation(&sim_config.simulator.attestation_file)?;
@@ -121,7 +148,8 @@ async fn main() -> Result<()> {
         Arc::new(SimulatorPlatform::new(
             attestation,
             sim_config.simulator.patch_report_data,
-        )),
+            sim_config.simulator.mock_attestation_seed.as_deref(),
+        )?),
     )
     .await
     .context("Failed to create simulator app state")?;
@@ -138,7 +166,7 @@ mod tests {
                 .join("../guest-agent/fixtures/attestation.bin"),
         )
         .expect("fixture attestation should load");
-        SimulatorPlatform::new(fixture, true)
+        SimulatorPlatform::new(fixture, true, None).unwrap()
     }
 
     #[test]
@@ -163,6 +191,34 @@ mod tests {
     }
 
     #[test]
+    fn seeded_simulator_resigns_certificate_attestation() {
+        let fixture = simulator::load_versioned_attestation(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../guest-agent/fixtures/attestation.bin"),
+        )
+        .unwrap();
+        let seed = [0x5a; 32];
+        let platform = SimulatorPlatform::new(fixture, true, Some(&hex::encode(seed))).unwrap();
+        let attestation = platform
+            .certificate_attestation(b"test-public-key")
+            .unwrap()
+            .into_v1();
+        let quote = attestation.tdx_quote_bytes().unwrap();
+        let generator = TdxGenerator::from_seed(seed).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        dcap_qvl::verify::QuoteVerifier::new(generator.root_ca_der())
+            .verify(&quote, &generator.sample_collateral().unwrap(), now)
+            .unwrap();
+        assert_eq!(
+            attestation.report_data().unwrap(),
+            ra_tls::attestation::QuoteContentType::RaTlsCert.to_report_data(b"test-public-key")
+        );
+    }
+
+    #[test]
     fn simulator_can_preserve_fixture_report_data() {
         let fixture = simulator::load_versioned_attestation(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -170,7 +226,7 @@ mod tests {
         )
         .expect("fixture attestation should load");
         let original = fixture.clone().into_v1().report_data().unwrap();
-        let platform = SimulatorPlatform::new(fixture, false);
+        let platform = SimulatorPlatform::new(fixture, false, None).unwrap();
         let report_data = [0x5a; 64];
         let response = platform.attest_response(report_data).unwrap();
         let patched = VersionedAttestation::from_bytes(&response.attestation)

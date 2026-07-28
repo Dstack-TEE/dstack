@@ -27,3 +27,6 @@ dstack-guest-agent = { path = "../guest-agent" }
 dstack-guest-agent-rpc.workspace = true
 dstack-types.workspace = true
 cc-eventlog.workspace = true
+dcap-qvl.workspace = true
+hex.workspace = true
+mock-attestation = { path = "../crates/mock-attestation" }
