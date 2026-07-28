@@ -159,6 +159,7 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ra_tls::attestation::TdxAttestationExt;
 
     fn load_fixture_platform() -> SimulatorPlatform {
         let fixture = simulator::load_versioned_attestation(
