@@ -269,8 +269,18 @@ pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
     })
 }
 
+fn validate_cert_validity(not_before: Option<u64>, not_after: Option<u64>) -> Result<()> {
+    if let (Some(not_before), Some(not_after)) = (not_before, not_after) {
+        if not_before >= not_after {
+            anyhow::bail!("not_before must be earlier than not_after");
+        }
+    }
+    Ok(())
+}
+
 impl DstackGuestRpc for InternalRpcHandler {
     async fn get_tls_key(self, request: GetTlsKeyArgs) -> anyhow::Result<GetTlsKeyResponse> {
+        validate_cert_validity(request.not_before, request.not_after)?;
         let mut seed = [0u8; 32];
         SystemRandom::new()
             .fill(&mut seed)
@@ -1248,6 +1258,19 @@ pNs85uhOZE8z2jr8Pg==
 
         // Empty algorithm should default to secp256k1
         assert_eq!(resp_default.key, resp_secp.key);
+    }
+
+    #[test]
+    fn test_tls_certificate_validity_order() {
+        assert!(validate_cert_validity(None, None).is_ok());
+        assert!(validate_cert_validity(Some(10), Some(11)).is_ok());
+        assert_eq!(
+            validate_cert_validity(Some(11), Some(11))
+                .unwrap_err()
+                .to_string(),
+            "not_before must be earlier than not_after"
+        );
+        assert!(validate_cert_validity(Some(12), Some(11)).is_err());
     }
 
     #[tokio::test]
