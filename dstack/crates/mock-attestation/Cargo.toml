@@ -27,6 +27,7 @@ sev.workspace = true
 sev-snp-qvl.workspace = true
 tpm-types.workspace = true
 tpm-qvl.workspace = true
+nsm-qvl.workspace = true
 dstack-types.workspace = true
 dcap-qvl.workspace = true
 scale.workspace = true
@@ -44,4 +45,3 @@ time.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-nsm-qvl.workspace = true

@@ -36,6 +36,8 @@ enum Command {
     },
     /// Run the deterministic SEV-SNP trust and mutation decision table.
     SevSnpMatrix,
+    /// Run GCP vTPM and NitroTPM trust, binding, and substitution rows.
+    CloudTpmMatrix,
 }
 
 #[derive(serde::Serialize)]
@@ -44,6 +46,226 @@ struct MatrixRow {
     accepted: bool,
     stage: &'static str,
     diagnostic: String,
+}
+
+#[derive(serde::Serialize)]
+struct CloudMatrixRow {
+    platform: &'static str,
+    name: &'static str,
+    accepted: bool,
+    stage: &'static str,
+    diagnostic: String,
+}
+
+fn rejected(
+    platform: &'static str,
+    name: &'static str,
+    stage: &'static str,
+    error: anyhow::Error,
+) -> CloudMatrixRow {
+    CloudMatrixRow {
+        platform,
+        name,
+        accepted: false,
+        stage,
+        diagnostic: format!("{error:#}"),
+    }
+}
+
+fn cloud_tpm_matrix() -> Result<Vec<CloudMatrixRow>> {
+    use std::collections::BTreeMap;
+
+    use mock_attestation::{nsm::NsmGenerator, tpm::TpmGenerator};
+
+    let challenge = [0x42; 32];
+    let report_data = [0x42; 64];
+    let nonce = [0x24; 32];
+    let public_key = [0x36; 65];
+    let tpm = TpmGenerator::from_seed([0x71; 32], "http://127.0.0.1:8088")?;
+    let tpm_verifier = tpm_qvl::QuoteVerifier::new(tpm.root_ca_pem());
+    let quote = tpm.attest(&challenge)?;
+    let verified_tpm = tpm_verifier
+        .verify(&quote, &tpm.collateral())
+        .context("valid GCP vTPM control failed")?;
+    let mut rows = vec![CloudMatrixRow {
+        platform: "gcp-tdx",
+        name: "valid-vtpm",
+        accepted: true,
+        stage: "verified",
+        diagnostic: String::new(),
+    }];
+
+    let wrong_tpm = TpmGenerator::from_seed([0x72; 32], "http://127.0.0.1:8088")?;
+    rows.push(rejected(
+        "gcp-tdx",
+        "wrong-ak-root",
+        "certificate-chain",
+        tpm_qvl::QuoteVerifier::new(wrong_tpm.root_ca_pem())
+            .verify(&quote, &tpm.collateral())
+            .expect_err("wrong TPM root accepted the quote"),
+    ));
+    for (name, mutate, stage) in [
+        ("quote-message", 0usize, "quote-signature"),
+        ("quote-signature", 1usize, "quote-signature"),
+    ] {
+        let mut changed = quote.clone();
+        if mutate == 0 {
+            changed.message[10] ^= 1;
+        } else {
+            *changed
+                .signature
+                .last_mut()
+                .context("empty TPM signature")? ^= 1;
+        }
+        rows.push(rejected(
+            "gcp-tdx",
+            name,
+            stage,
+            tpm_verifier
+                .verify(&changed, &tpm.collateral())
+                .expect_err("modified TPM quote was accepted"),
+        ));
+    }
+    let mut changed_pcr = quote.clone();
+    changed_pcr.pcr_values[0].value[0] ^= 1;
+    rows.push(rejected(
+        "gcp-tdx",
+        "pcr-value",
+        "pcr-replay",
+        tpm_verifier
+            .verify(&changed_pcr, &tpm.collateral())
+            .expect_err("TPM PCR substitution was accepted"),
+    ));
+    rows.push(rejected(
+        "gcp-tdx",
+        "qualifying-data",
+        "nonce-binding",
+        mock_attestation::ensure_report_data(&verified_tpm.attest.qualified_data, &[0x25; 32])
+            .expect_err("wrong TPM qualifying data was accepted"),
+    ));
+
+    let nsm = NsmGenerator::from_seed([0x73; 32])?;
+    let pcrs = BTreeMap::from([
+        (0u16, vec![0x10; 48]),
+        (1u16, vec![0x11; 48]),
+        (2u16, vec![0x12; 48]),
+        (4u16, vec![0x14; 48]),
+        (7u16, vec![0x17; 48]),
+        (12u16, vec![0x1c; 48]),
+        (14u16, vec![0x1e; 48]),
+    ]);
+    let document = nsm.attest_with_claims(
+        Some(&report_data),
+        Some(&nonce),
+        Some(&public_key),
+        pcrs.clone(),
+    )?;
+    let nsm_verifier = nsm_qvl::QuoteVerifier::new(nsm.root_ca_pem());
+    let verified_nsm = nsm_verifier
+        .verify(&document, None, None)
+        .context("valid NitroTPM NSM control failed")?;
+    rows.push(CloudMatrixRow {
+        platform: "aws-nitro-tpm",
+        name: "valid-nsm",
+        accepted: true,
+        stage: "verified",
+        diagnostic: String::new(),
+    });
+
+    let wrong_nsm = NsmGenerator::from_seed([0x74; 32])?;
+    rows.push(rejected(
+        "aws-nitro-tpm",
+        "wrong-nsm-root",
+        "certificate-chain",
+        nsm_qvl::QuoteVerifier::new(wrong_nsm.root_ca_pem())
+            .verify(&document, None, None)
+            .expect_err("wrong NSM root accepted the document"),
+    ));
+    let mut changed_document = document.clone();
+    *changed_document.last_mut().context("empty NSM document")? ^= 1;
+    rows.push(rejected(
+        "aws-nitro-tpm",
+        "cose-signature",
+        "cose-signature",
+        nsm_verifier
+            .verify(&changed_document, None, None)
+            .expect_err("modified NSM document was accepted"),
+    ));
+    for (name, actual, expected, stage) in [
+        (
+            "user-data",
+            verified_nsm
+                .user_data
+                .clone()
+                .context("missing user_data")?,
+            vec![0x43; 64],
+            "report-data",
+        ),
+        (
+            "nonce",
+            verified_nsm.nonce.clone().context("missing nonce")?,
+            vec![0x25; 32],
+            "nonce-binding",
+        ),
+        (
+            "public-key",
+            verified_nsm
+                .public_key
+                .clone()
+                .context("missing public_key")?,
+            vec![0x37; 65],
+            "public-key-binding",
+        ),
+    ] {
+        rows.push(rejected(
+            "aws-nitro-tpm",
+            name,
+            stage,
+            mock_attestation::ensure_report_data(&actual, &expected)
+                .expect_err("wrong NSM binding value was accepted"),
+        ));
+    }
+    let mut changed_pcrs = verified_nsm.pcrs.clone();
+    changed_pcrs.get_mut(&14).context("missing PCR14")?[0] ^= 1;
+    rows.push(rejected(
+        "aws-nitro-tpm",
+        "pcr14-event-replay",
+        "event-log-replay",
+        mock_attestation::ensure_report_data(&changed_pcrs[&14], &pcrs[&14])
+            .expect_err("wrong NitroTPM PCR14 was accepted"),
+    ));
+
+    rows.push(rejected(
+        "cross-cloud",
+        "tpm-root-for-nsm",
+        "platform-root-routing",
+        nsm_qvl::QuoteVerifier::new(tpm.root_ca_pem())
+            .verify(&document, None, None)
+            .expect_err("TPM root accepted NSM evidence"),
+    ));
+    rows.push(rejected(
+        "cross-cloud",
+        "nsm-root-for-tpm",
+        "platform-root-routing",
+        tpm_qvl::QuoteVerifier::new(nsm.root_ca_pem())
+            .verify(&quote, &tpm.collateral())
+            .expect_err("NSM root accepted TPM evidence"),
+    ));
+
+    tpm_verifier
+        .verify(&quote, &tpm.collateral())
+        .context("GCP vTPM control did not recover")?;
+    nsm_verifier
+        .verify(&document, None, None)
+        .context("NitroTPM NSM control did not recover")?;
+    rows.push(CloudMatrixRow {
+        platform: "cross-cloud",
+        name: "valid-after-failures",
+        accepted: true,
+        stage: "recovery",
+        diagnostic: String::new(),
+    });
+    Ok(rows)
 }
 
 fn sev_snp_matrix() -> Result<Vec<MatrixRow>> {
@@ -205,6 +427,9 @@ async fn main() -> Result<()> {
         }
         Command::SevSnpMatrix => {
             println!("{}", serde_json::to_string_pretty(&sev_snp_matrix()?)?);
+        }
+        Command::CloudTpmMatrix => {
+            println!("{}", serde_json::to_string_pretty(&cloud_tpm_matrix()?)?);
         }
     }
     Ok(())
