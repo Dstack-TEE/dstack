@@ -134,6 +134,12 @@ async fn main() -> Result<()> {
 
     info!("Updating certs");
     if let Err(err) = onboard_service::update_certs(&config).await {
+        if config.attest_rpc_cert {
+            return Err(err).context(
+                "Failed to reissue the attested KMS RPC certificate; refusing to start with a \
+                 potentially unattested certificate",
+            );
+        }
         warn!("Failed to update certs: {err}");
     };
 

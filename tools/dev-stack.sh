@@ -182,6 +182,7 @@ mandatory = false
 [core]
 cert_dir = "$CERTS_DIR"
 attest_rpc_cert = false
+enforce_self_authorization = false
 
 [core.gpu]
 enabled = $VMM_ENABLE_GPU
