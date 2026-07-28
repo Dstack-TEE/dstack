@@ -12,7 +12,9 @@ use std::{
         fd::{AsRawFd, FromRawFd},
         unix::net::UnixStream,
     },
+    net::{SocketAddr, TcpListener},
     path::Path,
+    sync::Arc,
     process::{Command, Stdio},
     thread,
     time::Duration,
@@ -88,7 +90,8 @@ pub fn start_gcp_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
         .collateral_base_url
         .as_deref()
         .unwrap_or("http://127.0.0.1:8088");
-    let state = MockCollateralState::from_seed(parse_seed(seed)?, base_url)?;
+    let state = Arc::new(MockCollateralState::from_seed(parse_seed(seed)?, base_url)?);
+    start_collateral_server(base_url, state.clone())?;
     // Keep swtpm state outside /run: swtpm drops privileges to `tss`, and some
     // distributions reject its lock file when a parent runtime directory is
     // owned by root even if the immediate state directory is writable.
@@ -223,6 +226,35 @@ pub fn start_gcp_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
     fs_err::write(&ek_cert, state.tpm.leaf_cert_der())?;
     provision_nv(EK_CERT, &ek_cert)?;
     command("tpm2_flushcontext", &["-t"])?;
+    Ok(())
+}
+
+fn start_collateral_server(base_url: &str, state: Arc<MockCollateralState>) -> Result<()> {
+    let listen: SocketAddr = base_url
+        .strip_prefix("http://")
+        .context("TPM simulator collateral URL must use http")?
+        .parse()
+        .context("TPM simulator collateral URL must contain only a socket address")?;
+    anyhow::ensure!(
+        listen.ip().is_loopback(),
+        "TPM simulator collateral server must listen on loopback"
+    );
+    let listener = TcpListener::bind(listen)
+        .with_context(|| format!("failed to bind TPM collateral server at {listen}"))?;
+    listener.set_nonblocking(true)?;
+    thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to create TPM collateral runtime");
+        runtime.block_on(async move {
+            let listener = tokio::net::TcpListener::from_std(listener)
+                .expect("failed to adopt TPM collateral listener");
+            mock_attestation::server::serve_listener(listener, state)
+                .await
+                .expect("TPM collateral server failed");
+        });
+    });
     Ok(())
 }
 
