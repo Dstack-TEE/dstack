@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -34,6 +34,131 @@ enum Command {
         #[arg(long)]
         config: Option<PathBuf>,
     },
+    /// Run the deterministic SEV-SNP trust and mutation decision table.
+    SevSnpMatrix,
+}
+
+#[derive(serde::Serialize)]
+struct MatrixRow {
+    name: &'static str,
+    accepted: bool,
+    stage: &'static str,
+    diagnostic: String,
+}
+
+fn sev_snp_matrix() -> Result<Vec<MatrixRow>> {
+    use mock_attestation::sev_snp::{SevSnpGenerator, SevSnpPolicy};
+
+    let generator = SevSnpGenerator::from_seed([0x71; 32])?;
+    let report_data = [0x42; 64];
+    let valid = generator.attest(report_data)?;
+    let verifier = sev_snp_qvl::QuoteVerifier::new(
+        generator.root_ca_pem().into_bytes(),
+        generator.root_ca_pem().into_bytes(),
+        generator.root_ca_pem().into_bytes(),
+    );
+    let mut rows = Vec::new();
+
+    verifier
+        .verify(&valid.report, &valid.cert_chain, &report_data)
+        .context("valid SEV-SNP control failed")?;
+    rows.push(MatrixRow {
+        name: "valid",
+        accepted: true,
+        stage: "verified",
+        diagnostic: String::new(),
+    });
+
+    let wrong = SevSnpGenerator::from_seed([0x72; 32])?;
+    let wrong_verifier = sev_snp_qvl::QuoteVerifier::new(
+        wrong.root_ca_pem().into_bytes(),
+        wrong.root_ca_pem().into_bytes(),
+        wrong.root_ca_pem().into_bytes(),
+    );
+    let error = wrong_verifier
+        .verify(&valid.report, &valid.cert_chain, &report_data)
+        .expect_err("wrong root accepted SEV-SNP evidence");
+    rows.push(MatrixRow {
+        name: "wrong-root",
+        accepted: false,
+        stage: "certificate-chain",
+        diagnostic: error.to_string(),
+    });
+
+    for (name, offset, stage) in [
+        ("measurement", 0x90usize, "report-signature"),
+        ("host-data", 0xc0, "report-signature"),
+        ("reported-tcb", 0x180, "report-signature"),
+        ("chip-id", 0x1a0, "report-signature"),
+        ("signature", 0x2a0, "report-signature"),
+    ] {
+        let mut report = valid.report.clone();
+        report[offset] ^= 1;
+        let error = verifier
+            .verify(&report, &valid.cert_chain, &report_data)
+            .expect_err("unsigned field mutation was accepted");
+        rows.push(MatrixRow {
+            name,
+            accepted: false,
+            stage,
+            diagnostic: error.to_string(),
+        });
+    }
+
+    let error = verifier
+        .verify(&valid.report, &valid.cert_chain, &[0x24; 64])
+        .expect_err("wrong report data was accepted");
+    rows.push(MatrixRow {
+        name: "report-data-binding",
+        accepted: false,
+        stage: "report-data",
+        diagnostic: error.to_string(),
+    });
+
+    for (name, policy, needle) in [
+        (
+            "debug-policy",
+            SevSnpPolicy {
+                debug_allowed: true,
+                ..Default::default()
+            },
+            "debug",
+        ),
+        (
+            "migration-policy",
+            SevSnpPolicy {
+                migration_agent_allowed: true,
+                ..Default::default()
+            },
+            "migration",
+        ),
+    ] {
+        let evidence = generator.attest_with_policy(report_data, [0x22; 32], [0x33; 48], policy)?;
+        let error = verifier
+            .verify(&evidence.report, &evidence.cert_chain, &report_data)
+            .expect_err("unsafe signed guest policy was accepted");
+        anyhow::ensure!(
+            error.to_string().contains(needle),
+            "{name} did not reach its policy check: {error:#}"
+        );
+        rows.push(MatrixRow {
+            name,
+            accepted: false,
+            stage: "guest-policy",
+            diagnostic: error.to_string(),
+        });
+    }
+
+    verifier
+        .verify(&valid.report, &valid.cert_chain, &report_data)
+        .context("valid SEV-SNP control did not recover")?;
+    rows.push(MatrixRow {
+        name: "valid-after-failures",
+        accepted: true,
+        stage: "recovery",
+        diagnostic: String::new(),
+    });
+    Ok(rows)
 }
 
 #[tokio::main]
@@ -77,6 +202,9 @@ async fn main() -> Result<()> {
                 state.write_roots(&output)?;
             }
             mock_attestation::server::serve(listen, state).await?;
+        }
+        Command::SevSnpMatrix => {
+            println!("{}", serde_json::to_string_pretty(&sev_snp_matrix()?)?);
         }
     }
     Ok(())

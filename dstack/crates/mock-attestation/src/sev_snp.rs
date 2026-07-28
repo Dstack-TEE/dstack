@@ -27,6 +27,12 @@ pub struct SevSnpEvidence {
     pub cert_chain: Vec<Vec<u8>>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SevSnpPolicy {
+    pub debug_allowed: bool,
+    pub migration_agent_allowed: bool,
+}
+
 impl SevSnpGenerator {
     pub fn new() -> Result<Self> {
         Self::from_seed(rand::random())
@@ -93,10 +99,34 @@ impl SevSnpGenerator {
         host_data: [u8; 32],
         measurement: [u8; 48],
     ) -> Result<SevSnpEvidence> {
+        self.attest_with_policy(report_data, host_data, measurement, SevSnpPolicy::default())
+    }
+
+    /// Generate a correctly signed report with the selected guest policy.
+    ///
+    /// Non-default policies exist only for negative tests. They let callers
+    /// prove that the verifier reaches policy validation after certificate and
+    /// report-signature validation, rather than rejecting an unsigned edit at
+    /// an earlier stage.
+    pub fn attest_with_policy(
+        &self,
+        report_data: [u8; 64],
+        host_data: [u8; 32],
+        measurement: [u8; 48],
+        policy: SevSnpPolicy,
+    ) -> Result<SevSnpEvidence> {
         let mut encoded = Vec::new();
         AttestationReport::default().write_bytes(&mut encoded)?;
         encoded[0..4].copy_from_slice(&2u32.to_le_bytes());
         encoded[52..56].copy_from_slice(&1u32.to_le_bytes());
+        let mut policy_bits = 1u64 << 17;
+        if policy.migration_agent_allowed {
+            policy_bits |= 1u64 << 18;
+        }
+        if policy.debug_allowed {
+            policy_bits |= 1u64 << 19;
+        }
+        encoded[8..16].copy_from_slice(&policy_bits.to_le_bytes());
         encoded[0x50..0x90].copy_from_slice(&report_data);
         encoded[0x90..0xc0].copy_from_slice(&measurement);
         encoded[0xc0..0xe0].copy_from_slice(&host_data);
@@ -187,5 +217,43 @@ mod tests {
         assert!(verifier
             .verify(&evidence.report, &evidence.cert_chain, &[0x24; 64])
             .is_err());
+    }
+
+    #[test]
+    fn correctly_signed_unsafe_policies_reach_policy_rejection() {
+        let generator = SevSnpGenerator::new().unwrap();
+        let report_data = [0x42; 64];
+        let verifier = sev_snp_qvl::QuoteVerifier::new(
+            generator.root_ca_pem().into_bytes(),
+            generator.root_ca_pem().into_bytes(),
+            generator.root_ca_pem().into_bytes(),
+        );
+        for (policy, expected) in [
+            (
+                SevSnpPolicy {
+                    debug_allowed: true,
+                    ..Default::default()
+                },
+                "debug",
+            ),
+            (
+                SevSnpPolicy {
+                    migration_agent_allowed: true,
+                    ..Default::default()
+                },
+                "migration",
+            ),
+        ] {
+            let evidence = generator
+                .attest_with_policy(report_data, [0x22; 32], [0x33; 48], policy)
+                .unwrap();
+            let error = verifier
+                .verify(&evidence.report, &evidence.cert_chain, &report_data)
+                .unwrap_err();
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected error: {error:#}"
+            );
+        }
     }
 }
