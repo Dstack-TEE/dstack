@@ -67,6 +67,7 @@ The native interface remains available when those host tools are present:
 
 ```sh
 ./os/mkosi/build.sh lint
+./os/mkosi/build.sh image "$PWD/os/mkosi/build"
 ./os/build.sh --backend mkosi --build-dir "$PWD/os/mkosi/build"
 ./os/mkosi/build.sh repro-check "$PWD/os/mkosi/repro"
 # QEMU smoke-test the assembled UKI disk (host OVMF path is distro-specific)
@@ -75,11 +76,16 @@ qemu-system-x86_64 -machine q35 -m 2G -nographic \
   -drive if=virtio,format=raw,file=os/mkosi/build/out/prod/dstack-0.6.0/disk.raw
 ```
 
-For local iteration only, `dev-image` enables a component-output cache:
+`image` reuses a component-output cache, which is what makes local iteration
+affordable. `--no-cache` forces the cold path; the release workflow and the
+container path above both pass it, and `repro-check` never consults the cache at
+all. `DSTACK_COMPONENT_CACHE=0` in the environment changes the default for
+callers that cannot pass a flag, such as `os/build.sh`.
 
 ```sh
 DSTACK_DEV_CACHE_DIR="$HOME/.cache/dstack/mkosi-dev" \
-  ./os/mkosi/build.sh dev-image "$PWD/os/mkosi/build-dev"
+  ./os/mkosi/build.sh image "$PWD/os/mkosi/build-dev"
+./os/mkosi/build.sh --no-cache image "$PWD/os/mkosi/build"
 ```
 
 The cache covers dstack Rust, image tools, the container stack, Sysbox, nvattest, the
@@ -91,9 +97,9 @@ untracked source path inventory on the host, while file contents are hashed in
 the mkosi build root; Git metadata is never mounted into the sandbox.
 `build-components.sh` is intentionally only the ordered component list.
 Component install trees are merged with strict non-directory conflict
-detection. `image` and `repro-check` never calculate, read or write component
-cache keys. Release artifacts, Debian rootfs, dm-verity data and measurements
-are never cached.
+detection. A cold build never calculates, reads or writes component cache keys.
+Release artifacts, Debian rootfs, dm-verity data and measurements are never
+cached.
 
 The cache is stored in mkosi's `BuildDirectory=`, which is the only mount a
 build script gets that is both writable and preserved between runs. It must not

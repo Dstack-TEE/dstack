@@ -46,7 +46,7 @@ done
 install -Dm0644 "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-sysbox/files/99-sysbox-sysctl.conf" "$STAGE/etc/sysctl.d/99-sysbox-sysctl.conf"
 install -Dm0644 "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-sysbox/files/50-sysbox-mod.conf" "$STAGE/etc/modules-load.d/50-sysbox-mod.conf"
 mkdir -p "$STAGE/var/lib/sysbox" "$STAGE/etc"
-# Truncating, not appending: the staging tree is reused across dev-image runs,
+# Truncating, not appending: the staging tree is reused across cached runs,
 # and duplicate entries here are a fatal parse error for some userns tooling.
 printf 'sysbox:100000:65536\n' > "$STAGE/etc/subuid"
 printf 'sysbox:100000:65536\n' > "$STAGE/etc/subgid"
