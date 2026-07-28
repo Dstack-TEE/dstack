@@ -29,7 +29,6 @@ const INTEL_QE_VENDOR_ID: [u8; 16] = [
 
 pub struct TdxGenerator {
     root: Certificate,
-    root_key: KeyPair,
     root_signing_key: SigningKey,
     pck: Certificate,
     pck_key: SigningKey,
@@ -126,7 +125,6 @@ impl TdxGenerator {
         .to_vec();
         Ok(Self {
             root,
-            root_key,
             root_signing_key,
             pck,
             pck_key,
