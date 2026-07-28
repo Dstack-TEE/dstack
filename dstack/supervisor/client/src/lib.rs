@@ -63,6 +63,37 @@ fn trusted_uds_identity(path: &Path) -> Result<SocketIdentity> {
     })
 }
 
+#[cfg(unix)]
+fn acquire_uds_start_lock(uds: &Path) -> Result<std::fs::File> {
+    use std::fs::OpenOptions;
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+
+    let lock_path = uds.with_extension("lock");
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(&lock_path)
+        .with_context(|| {
+            format!(
+                "Failed to open Supervisor start lock {}",
+                lock_path.display()
+            )
+        })?;
+    let metadata = lock.metadata()?;
+    let effective_uid = unsafe { libc::geteuid() };
+    if metadata.uid() != effective_uid || metadata.mode() & 0o077 != 0 {
+        anyhow::bail!("Supervisor start lock is not owner-only");
+    }
+    let result = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&lock), libc::LOCK_EX) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error()).context("Failed to lock Supervisor startup");
+    }
+    Ok(lock)
+}
+
 #[derive(Debug, Clone)]
 pub struct SupervisorClient {
     base_url: Arc<String>,
@@ -99,6 +130,18 @@ impl SupervisorClient {
             anyhow::bail!("Failed to connect to supervisor at {uri}");
         }
         info!("Failed to connect to supervisor at {uri}, trying to start supervisor");
+        let _start_lock = acquire_uds_start_lock(uds)?;
+        // Another process may have completed startup while this process waited
+        // for the lock. Re-probe before treating the endpoint as stale.
+        if fs_err::symlink_metadata(uds).is_ok() {
+            let identity = trusted_uds_identity(uds)?;
+            if client.probe(Duration::from_millis(500)).await.is_ok()
+                && trusted_uds_identity(uds)? == identity
+            {
+                info!("Connected to supervisor at {uri} after waiting for startup lock");
+                return Ok(client);
+            }
+        }
         if fs_err::symlink_metadata(uds).is_ok() {
             // Validate again immediately before removing a stale endpoint. Never
             // delete a path that is not a trusted socket owned by this user.
@@ -226,6 +269,37 @@ impl SupervisorClient {
     pub async fn shutdown(&self) -> Result<()> {
         self.http_request("POST", "/shutdown", ()).await
     }
+}
+
+#[cfg(unix)]
+fn acquire_uds_start_lock(uds: &Path) -> Result<std::fs::File> {
+    use std::fs::OpenOptions;
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+
+    let lock_path = uds.with_extension("lock");
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(&lock_path)
+        .with_context(|| {
+            format!(
+                "Failed to open Supervisor start lock {}",
+                lock_path.display()
+            )
+        })?;
+    let metadata = lock.metadata()?;
+    let effective_uid = unsafe { libc::geteuid() };
+    if metadata.uid() != effective_uid || metadata.mode() & 0o077 != 0 {
+        anyhow::bail!("Supervisor start lock is not owner-only");
+    }
+    let result = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&lock), libc::LOCK_EX) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error()).context("Failed to lock Supervisor startup");
+    }
+    Ok(lock)
 }
 
 #[derive(Debug, Clone)]
