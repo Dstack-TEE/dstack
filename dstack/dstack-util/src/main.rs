@@ -382,7 +382,11 @@ fn cmd_quote_report(args: QuoteReportArgs) -> Result<()> {
         }
         None => [0u8; 64],
     };
-    let attestation = Attestation::quote(&report_data).context("Failed to get attestation")?;
+    if args.debug {
+        eprintln!("debug: quote diagnostics enabled; attestation policy is unchanged");
+    }
+    let attestation = Attestation::quote_with_sys_config(&report_data, &args.sys_config)
+        .context("Failed to get attestation")?;
     let request = VerificationRequestJson {
         attestation: hex::encode(attestation.into_versioned().to_scale()?),
     };
