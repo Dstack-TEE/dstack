@@ -72,6 +72,16 @@ fn rejected(
     }
 }
 
+fn expect_tpm_error(
+    result: Result<tpm_qvl::verify::VerifiedReport, tpm_qvl::VerificationError>,
+    message: &str,
+) -> anyhow::Error {
+    match result {
+        Ok(_) => panic!("{message}"),
+        Err(error) => error.into(),
+    }
+}
+
 fn cloud_tpm_matrix() -> Result<Vec<CloudMatrixRow>> {
     use std::collections::BTreeMap;
 
@@ -100,9 +110,10 @@ fn cloud_tpm_matrix() -> Result<Vec<CloudMatrixRow>> {
         "gcp-tdx",
         "wrong-ak-root",
         "certificate-chain",
-        tpm_qvl::QuoteVerifier::new(wrong_tpm.root_ca_pem())
-            .verify(&quote, &tpm.collateral())
-            .expect_err("wrong TPM root accepted the quote"),
+        expect_tpm_error(
+            tpm_qvl::QuoteVerifier::new(wrong_tpm.root_ca_pem()).verify(&quote, &tpm.collateral()),
+            "wrong TPM root accepted the quote",
+        ),
     ));
     for (name, mutate, stage) in [
         ("quote-message", 0usize, "quote-signature"),
@@ -121,9 +132,10 @@ fn cloud_tpm_matrix() -> Result<Vec<CloudMatrixRow>> {
             "gcp-tdx",
             name,
             stage,
-            tpm_verifier
-                .verify(&changed, &tpm.collateral())
-                .expect_err("modified TPM quote was accepted"),
+            expect_tpm_error(
+                tpm_verifier.verify(&changed, &tpm.collateral()),
+                "modified TPM quote was accepted",
+            ),
         ));
     }
     let mut changed_pcr = quote.clone();
@@ -132,9 +144,10 @@ fn cloud_tpm_matrix() -> Result<Vec<CloudMatrixRow>> {
         "gcp-tdx",
         "pcr-value",
         "pcr-replay",
-        tpm_verifier
-            .verify(&changed_pcr, &tpm.collateral())
-            .expect_err("TPM PCR substitution was accepted"),
+        expect_tpm_error(
+            tpm_verifier.verify(&changed_pcr, &tpm.collateral()),
+            "TPM PCR substitution was accepted",
+        ),
     ));
     rows.push(rejected(
         "gcp-tdx",
@@ -247,9 +260,10 @@ fn cloud_tpm_matrix() -> Result<Vec<CloudMatrixRow>> {
         "cross-cloud",
         "nsm-root-for-tpm",
         "platform-root-routing",
-        tpm_qvl::QuoteVerifier::new(nsm.root_ca_pem())
-            .verify(&quote, &tpm.collateral())
-            .expect_err("NSM root accepted TPM evidence"),
+        expect_tpm_error(
+            tpm_qvl::QuoteVerifier::new(nsm.root_ca_pem()).verify(&quote, &tpm.collateral()),
+            "NSM root accepted TPM evidence",
+        ),
     ));
 
     tpm_verifier
