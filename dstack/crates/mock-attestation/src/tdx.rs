@@ -408,6 +408,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn seeded_hierarchies_are_cross_process_compatible() {
+        let first = TdxGenerator::from_seed([0x31; 32]).unwrap();
+        let second = TdxGenerator::from_seed([0x31; 32]).unwrap();
+        assert_eq!(first.root_ca_der(), second.root_ca_der());
+        assert_eq!(first.root_crl_der(), second.root_crl_der());
+
+        let evidence = first.attest([0x42; 64]).unwrap();
+        let collateral = second.sample_collateral().unwrap();
+        assert_eq!(evidence.collateral, collateral);
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        dcap_qvl::verify::QuoteVerifier::new(second.root_ca_der())
+            .verify(&evidence.quote, &collateral, now)
+            .unwrap();
+    }
+
+    #[test]
     fn generated_quote_passes_real_qvl_and_negative_cases_fail() {
         let generator = TdxGenerator::new().unwrap();
         let report_data = [0x42; 64];
