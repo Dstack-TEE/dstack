@@ -252,8 +252,9 @@ static QUOTE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Read vm_config from sys-config.json
 #[cfg(feature = "quote")]
-fn read_vm_config() -> Result<String> {
-    let content = match fs_err::read_to_string(sys_config_path()) {
+fn read_vm_config(path: Option<&std::path::Path>) -> Result<String> {
+    let path = path.map_or_else(sys_config_path, std::path::Path::to_path_buf);
+    let content = match fs_err::read_to_string(path) {
         Ok(content) => content,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
         Err(err) => return Err(err).context("Failed to read sys-config"),
@@ -269,8 +270,9 @@ fn read_vm_config() -> Result<String> {
 /// where `mr_config` lives (top-level field, falling back to the one embedded
 /// in `vm_config`).
 #[cfg(feature = "quote")]
-fn read_mr_config_document() -> Result<Option<String>> {
-    let content = match fs_err::read_to_string(sys_config_path()) {
+fn read_mr_config_document(path: Option<&std::path::Path>) -> Result<Option<String>> {
+    let path = path.map_or_else(sys_config_path, std::path::Path::to_path_buf);
+    let content = match fs_err::read_to_string(path) {
         Ok(content) => content,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err).context("Failed to read sys-config"),
@@ -2093,6 +2095,22 @@ impl Attestation {
     }
 
     pub fn quote_with_app_id(report_data: &[u8; 64], app_id: Option<[u8; 20]>) -> Result<Self> {
+        Self::quote_with_app_id_and_sys_config(report_data, app_id, None)
+    }
+
+    /// Create an attestation using an explicit sys-config path.
+    pub fn quote_with_sys_config(
+        report_data: &[u8; 64],
+        sys_config: &std::path::Path,
+    ) -> Result<Self> {
+        Self::quote_with_app_id_and_sys_config(report_data, None, Some(sys_config))
+    }
+
+    fn quote_with_app_id_and_sys_config(
+        report_data: &[u8; 64],
+        app_id: Option<[u8; 20]>,
+        sys_config: Option<&std::path::Path>,
+    ) -> Result<Self> {
         // Lock to prevent concurrent quote generation (TDX driver doesn't support it)
         let _guard = QUOTE_LOCK
             .lock()
@@ -2106,7 +2124,7 @@ impl Attestation {
             // AWS prefers host-shared vm_config because it carries the
             // aws_measurement and unified os_image_hash validated below.
             | TeeVariant::DstackAwsNitroTpm => {
-                read_vm_config().context("Failed to read vm config")?
+                read_vm_config(sys_config).context("Failed to read vm config")?
             }
             // NitroEnclave derives config from the signed image hash below.
             TeeVariant::DstackNitroEnclave => String::new(),
@@ -2216,7 +2234,7 @@ impl Attestation {
         };
         if let AttestationQuote::DstackAmdSevSnp(quote) = &mut quote {
             quote.mr_config =
-                read_mr_config_document()?.context("amd sev-snp mr_config is missing")?;
+                read_mr_config_document(sys_config)?.context("amd sev-snp mr_config is missing")?;
         }
 
         Ok(Self {
