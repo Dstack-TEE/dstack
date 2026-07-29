@@ -32,7 +32,7 @@ use ra_tls::{
 use safe_write::safe_write;
 use sha2::Digest;
 use tokio::sync::Mutex as AsyncMutex;
-use tracing::info;
+use tracing::warn;
 
 use crate::{
     config::KmsConfig,
@@ -139,7 +139,7 @@ impl OnboardRpc for OnboardHandler {
         ensure_self_kms_allowed(cfg, &self.state.attestation_verifier)
             .await
             .context("KMS is not allowed to bootstrap")?;
-        let keys = Keys::generate(&request.domain, self.state.config.attest_rpc_cert)
+        let keys = Keys::generate(&request.domain, !cfg.insecure_disable_rpc_attestation)
             .await
             .context("Failed to generate keys")?;
 
@@ -462,7 +462,7 @@ struct Keys {
 }
 
 impl Keys {
-    async fn generate(domain: &str, attest_rpc_cert: bool) -> Result<Self> {
+    async fn generate(domain: &str, include_rpc_attestation: bool) -> Result<Self> {
         let tmp_ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
         let ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
         let rpc_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
@@ -473,7 +473,7 @@ impl Keys {
             rpc_key,
             k256_key,
             domain,
-            attest_rpc_cert,
+            include_rpc_attestation,
         )
         .await
     }
@@ -484,7 +484,7 @@ impl Keys {
         rpc_key: KeyPair,
         k256_key: SigningKey,
         domain: &str,
-        attest_rpc_cert: bool,
+        include_rpc_attestation: bool,
     ) -> Result<Self> {
         let tmp_ca_cert = CertRequest::builder()
             .org_name("Dstack")
@@ -502,23 +502,20 @@ impl Keys {
             .key(&ca_key)
             .build()
             .self_signed()?;
-        // The only place the KMS embeds its own attestation. Skipping it lets
-        // the KMS run outside a TEE for development; it does not affect the
-        // verification of quotes presented *to* the KMS, which is a separate
-        // path (main_service::ensure_app_attestation_allowed) and stays on.
-        let attestation = if attest_rpc_cert {
+        let attestation = if include_rpc_attestation {
             let pubkey = rpc_key.public_key_der();
             let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
-            let response = app_attest(report_data.to_vec()).await.context(
-                "failed to get a quote for the KMS RPC certificate. The KMS attests \
-                     itself through the dstack guest agent, so it must run inside a dstack \
-                     CVM. For local development set attest_rpc_cert = false",
-            )?;
+            let response = app_attest(report_data.to_vec())
+                .await
+                .context("Failed to get quote")?;
             Some(
                 VersionedAttestation::from_bytes(&response.attestation)
                     .context("Invalid attestation")?,
             )
         } else {
+            warn!(
+                "KMS RPC certificate platform attestation is disabled; this is unsafe outside compatibility testing"
+            );
             None
         };
 
@@ -617,7 +614,7 @@ impl Keys {
             rpc_key,
             ecdsa_key,
             domain,
-            cfg.attest_rpc_cert,
+            !cfg.insecure_disable_rpc_attestation,
         )
         .await
     }
@@ -669,16 +666,13 @@ pub(crate) async fn update_certs(cfg: &KmsConfig) -> Result<()> {
         rpc_key,
         k256_key,
         domain,
-        cfg.attest_rpc_cert,
+        !cfg.insecure_disable_rpc_attestation,
     )
     .await
     .context("Failed to regenerate certificates")?;
 
-    // Write the new certificates to files. This runs on every start, so a
-    // hand-placed certificate is replaced -- say so, because the old silence
-    // made that look like the file had survived.
+    // Write the new certificates to files
     keys.store_certs(cfg)?;
-    info!("Reissued the KMS RPC certificate for {domain}");
 
     Ok(())
 }
@@ -688,9 +682,12 @@ pub(crate) async fn bootstrap_keys(cfg: &KmsConfig, verifier: &AttestationVerifi
     ensure_self_kms_allowed(cfg, verifier)
         .await
         .context("KMS is not allowed to auto-bootstrap")?;
-    let keys = Keys::generate(&cfg.onboard.auto_bootstrap_domain, cfg.attest_rpc_cert)
-        .await
-        .context("Failed to generate keys")?;
+    let keys = Keys::generate(
+        &cfg.onboard.auto_bootstrap_domain,
+        !cfg.insecure_disable_rpc_attestation,
+    )
+    .await
+    .context("Failed to generate keys")?;
     keys.store(cfg)?;
     Ok(())
 }

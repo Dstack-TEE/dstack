@@ -73,6 +73,11 @@ pub(crate) struct KmsConfig {
     /// agent socket.
     #[serde(default = "default_true")]
     pub enforce_self_authorization: bool,
+    /// Development-only compatibility switch that omits platform evidence from
+    /// the KMS RPC certificate. The TLS chain and KMS usage extension are
+    /// retained. Never enable this for production key release.
+    #[serde(default)]
+    pub insecure_disable_rpc_attestation: bool,
     pub metrics: MetricsConfig,
     /// Admin API listener + authentication. The admin RPCs (e.g.
     /// `ClearImageCache`) are served here, behind the shared HTTP authenticator.
