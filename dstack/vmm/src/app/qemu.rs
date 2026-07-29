@@ -1243,7 +1243,7 @@ mod tests {
             .filter(|arg| arg.contains("virtio-net-pci,netdev="))
             .collect::<Vec<_>>();
         assert_eq!(macs.len(), 2);
-        assert!(macs[0].contains("mac=02:ab:cd:96:b1:d8"));
+        assert!(macs[0].contains("mac=02:ab:cd:2d:62:b0"));
         assert_ne!(macs[0], macs[1]);
 
         prepared.networks[1].netdev =
