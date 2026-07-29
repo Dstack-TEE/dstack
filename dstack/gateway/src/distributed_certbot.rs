@@ -82,6 +82,22 @@ impl DistributedCertBot {
         self.request_new_cert(domain).await
     }
 
+    /// Set CAA records for every configured ZT domain.
+    pub async fn set_caa_all(&self) -> Result<()> {
+        for config in self.kv_store.list_zt_domain_configs() {
+            let domain = config.domain.clone();
+            let acme_client = self
+                .get_or_create_acme_client(&domain, &config)
+                .await
+                .with_context(|| format!("failed to initialize CAA client for {domain}"))?;
+            acme_client
+                .set_caa_records(std::slice::from_ref(&domain))
+                .await
+                .with_context(|| format!("failed to set CAA records for {domain}"))?;
+        }
+        Ok(())
+    }
+
     /// Try to renew all ZT-Domain certificates
     pub async fn try_renew_all(&self) -> Result<()> {
         let configs = self.kv_store.list_zt_domain_configs();

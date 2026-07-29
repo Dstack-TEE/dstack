@@ -94,9 +94,7 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn set_caa(self) -> Result<()> {
-        // TODO: Implement CAA setting for multi-domain certificates
-        // This requires iterating over all domain configurations and setting CAA records
-        bail!("set_caa is not implemented for multi-domain certificates yet");
+        self.state.certbot.set_caa_all().await
     }
 
     async fn reload_cert(self) -> Result<()> {
