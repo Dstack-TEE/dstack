@@ -60,6 +60,18 @@ describe('Server', () => {
       expect(mockCheckBoot).toHaveBeenCalledWith(mockBootInfo, false);
     });
 
+    it('should reject oversized and non-hex measurements before backend use', async () => {
+      for (const mrAggregated of ['0x' + 'ab'.repeat(33), 'not-hex']) {
+        const response = await app.inject({
+          method: 'POST',
+          url: '/bootAuth/app',
+          payload: { ...mockBootInfo, mrAggregated }
+        });
+        expect(response.statusCode).toBe(400);
+      }
+      expect(app.ethereum.checkBoot).not.toHaveBeenCalled();
+    });
+
     it('should return 400 for invalid boot info', async () => {
       const response = await app.inject({
         method: 'POST',
@@ -111,7 +123,7 @@ describe('Server', () => {
       expect(response.statusCode).toBe(200);
       const result = JSON.parse(response.payload);
       expect(result.isAllowed).toBe(false);
-      expect(result.reason).toMatch(/Test backend error/);
+      expect(result.reason).toBe('authorization backend unavailable');
     });
   });
 });
