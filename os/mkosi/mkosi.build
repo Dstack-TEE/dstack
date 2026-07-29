@@ -68,15 +68,25 @@ dpkg-query -W -f='build-package: ${binary:Package}=${Version}\n' \
 # The kernel staging tree is not a cache either. component_assemble merges into
 # it on every build, cache hit or not, under strict conflict detection, so a
 # persisted one collides with the previous build's merged files.
+#
+# downloads/ and image-tools-target/ are kept for the same reason: the first is
+# fetched tarballs and submodules, the second a cargo target directory, and
+# neither holds git or make state that a rerun could trip over. Everything else
+# is scratch and is deleted by exclusion, so a directory added later is dropped
+# until it is named here deliberately.
+work_keep=(component-stages downloads image-tools-target)
 if [[ $cache_enabled == 1 ]]; then
     work="$BUILDDIR/component-work"
-    mkdir -p "$work/component-stages"
-    # Everything except the staging trees is build scratch and must start
-    # empty. Deleting by exclusion rather than symlinking component-stages
-    # elsewhere: tar replaces a symlink standing where it wants a directory,
-    # so the staging tree would silently stop being the persisted one.
-    find "$work" -mindepth 1 -maxdepth 1 ! -name component-stages \
-      -exec rm -rf {} +
+    mkdir -p "$work"
+    prune=(-mindepth 1 -maxdepth 1)
+    for keep in "${work_keep[@]}"; do
+        mkdir -p "$work/$keep"
+        prune+=(! -name "$keep")
+    done
+    # Deleting by exclusion rather than symlinking the kept directories
+    # elsewhere: tar replaces a symlink standing where it wants a directory, so
+    # a staging tree would silently stop being the persisted one.
+    find "$work" "${prune[@]}" -exec rm -rf {} +
 else
     work=/var/tmp/dstack-component-work
 fi
