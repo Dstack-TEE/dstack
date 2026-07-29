@@ -1730,10 +1730,8 @@ mod tests {
                 .collect::<String>();
             let mut encoded = Vec::new();
             {
-                let encoder = flate2::write::GzEncoder::new(
-                    &mut encoded,
-                    flate2::Compression::default(),
-                );
+                let encoder =
+                    flate2::write::GzEncoder::new(&mut encoded, flate2::Compression::default());
                 let mut tar = tar::Builder::new(encoder);
                 for (name, data) in artifacts {
                     let mut header = tar::Header::new_gnu();
@@ -1753,7 +1751,8 @@ mod tests {
                 header.set_size(unlisted.len() as u64);
                 header.set_mode(0o644);
                 header.set_cksum();
-                tar.append_data(&mut header, "unlisted", &unlisted[..]).unwrap();
+                tar.append_data(&mut header, "unlisted", &unlisted[..])
+                    .unwrap();
                 if link {
                     let mut header = tar::Header::new_gnu();
                     header.set_entry_type(tar::EntryType::Symlink);
@@ -1761,7 +1760,8 @@ mod tests {
                     header.set_mode(0o777);
                     header.set_link_name("../outside").unwrap();
                     header.set_cksum();
-                    tar.append_data(&mut header, "nested/link", &[][..]).unwrap();
+                    tar.append_data(&mut header, "nested/link", &[][..])
+                        .unwrap();
                 }
                 tar.finish().unwrap();
                 tar.into_inner().unwrap().finish().unwrap();
@@ -1784,7 +1784,13 @@ mod tests {
                     let _ = stream.read(&mut request).await.unwrap();
                     observed.fetch_add(1, Ordering::SeqCst);
                     tokio::time::sleep(delay).await;
-                    let reason = if status == 200 { "OK" } else if status == 302 { "Found" } else { "Error" };
+                    let reason = if status == 200 {
+                        "OK"
+                    } else if status == 302 {
+                        "Found"
+                    } else {
+                        "Error"
+                    };
                     let mut response = format!(
                         "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n",
                         body.len()
@@ -1812,13 +1818,7 @@ mod tests {
         let (valid, hash) = archive(false);
         let cache = tempfile::tempdir().unwrap();
         let destination = cache.path().join("images").join(&hash);
-        let (url, task, count) = server(vec![(
-            200,
-            vec![],
-            valid.clone(),
-            Duration::ZERO,
-        )])
-        .await;
+        let (url, task, count) = server(vec![(200, vec![], valid.clone(), Duration::ZERO)]).await;
         verifier(&url, cache.path(), Duration::from_secs(1))
             .download_image(&hash, &destination)
             .await
@@ -1839,7 +1839,8 @@ mod tests {
         assert!(!wrong_destination.exists());
 
         let truncated_destination = cache.path().join("images/truncated");
-        let (url, task, _) = server(vec![(200, vec![], b"truncated".to_vec(), Duration::ZERO)]).await;
+        let (url, task, _) =
+            server(vec![(200, vec![], b"truncated".to_vec(), Duration::ZERO)]).await;
         assert!(verifier(&url, cache.path(), Duration::from_secs(1))
             .download_image("truncated", &truncated_destination)
             .await
