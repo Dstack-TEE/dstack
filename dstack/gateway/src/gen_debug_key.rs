@@ -165,7 +165,8 @@ mod tests {
         barrier.wait();
         let successes = workers
             .into_iter()
-            .filter(|worker| worker.join().unwrap())
+            .map(|worker| worker.join().unwrap())
+            .filter(|succeeded| *succeeded)
             .count();
         assert_eq!(successes, 1);
         assert!(fs::read_to_string(&concurrent).unwrap().starts_with("row-"));
