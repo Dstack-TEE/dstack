@@ -1406,6 +1406,20 @@ mod tests {
             .iter()
             .any(|arg| arg.contains("vfio-pci,host=0000:01:00.0")));
         println!("DSTACK_PLATFORM_ROW gpu-command");
+        assert!(process.args.iter().any(|arg| {
+            arg.contains("mount_tag=host-shared") && arg.contains("security_model=mapped")
+        }));
+        println!("DSTACK_PLATFORM_ROW host-share-measurement");
+        let repeated = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &gpu,
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert_eq!(process.args, repeated.args);
+        println!("DSTACK_PLATFORM_ROW restart-determinism");
         println!("DSTACK_PLATFORM_ROW network-matrix");
         println!("DSTACK_PLATFORM_ROW invalid-custom-recovery");
     }
