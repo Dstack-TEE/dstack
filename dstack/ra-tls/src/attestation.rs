@@ -205,9 +205,9 @@ mod tests {
         let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
         let report_data = QuoteContentType::RaTlsCert.to_report_data(&key.public_key_der());
         let events = vec![
-            RuntimeEvent::new("app-id".into(), vec![0x11; 20], EventLogVersion::V2),
-            RuntimeEvent::new("compose-hash".into(), vec![0x22; 32], EventLogVersion::V2),
-            RuntimeEvent::new("instance-id".into(), vec![0x33; 20], EventLogVersion::V2),
+            RuntimeEvent::new("app-id".into(), vec![0x11; 20], EventLogVersion::V1),
+            RuntimeEvent::new("compose-hash".into(), vec![0x22; 32], EventLogVersion::V1),
+            RuntimeEvent::new("instance-id".into(), vec![0x33; 20], EventLogVersion::V1),
             RuntimeEvent::new(
                 "key-provider".into(),
                 b"fixture-provider".to_vec(),
@@ -289,12 +289,17 @@ mod tests {
             .unwrap();
         assert!(format!("{error:#}").contains("app-id extension does not match"));
 
-        let mut changed_quote = attestation.clone().into_v1();
-        let AttestationQuote::DstackTdx(tdx_quote) = &mut changed_quote.quote else {
+        let mut changed_quote = attestation.clone();
+        let VersionedAttestation::V0 {
+            attestation: changed,
+        } = &mut changed_quote
+        else {
+            unreachable!("V1 runtime events must use the legacy-compatible container")
+        };
+        let AttestationQuote::DstackTdx(tdx_quote) = &mut changed.quote else {
             unreachable!()
         };
         tdx_quote.quote[100] ^= 1;
-        let changed_quote = changed_quote.into_versioned();
         let cert = CertRequest::builder()
             .key(&key)
             .subject("guest.example")
