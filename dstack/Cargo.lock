@@ -1864,6 +1864,7 @@ dependencies = [
 name = "dstack-gateway"
 version = "0.6.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "arc-swap",
  "base64 0.22.1",
