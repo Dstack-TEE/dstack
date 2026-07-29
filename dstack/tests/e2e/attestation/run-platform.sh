@@ -91,11 +91,18 @@ cat > "$SYS_CONFIG" <<JSON
 }
 JSON
 
+SIM_COLLATERAL_URL=http://127.0.0.1:18088
+if [[ "$TEE_PLATFORM" == dstack-gcp-tdx ]]; then
+  # The GCP vTPM owns a collateral listener because its generated AK/EK
+  # certificates carry AIA URLs. Keep it distinct from the shared collateral
+  # fixture used to prepare the other platform roots.
+  SIM_COLLATERAL_URL=http://127.0.0.1:18089
+fi
 cat > "$SIM_CONFIG" <<JSON
 {
   "platform": "$TEE_PLATFORM",
   "mock_attestation_seed": "$SEED",
-  "collateral_base_url": "http://127.0.0.1:18088",
+  "collateral_base_url": "$SIM_COLLATERAL_URL",
   "mr_config": $(jq -Rn --arg value "$MR_CONFIG" '$value'),
   "vm_config": $(jq -Rn --arg value "$VM_CONFIG" '$value')
 }
