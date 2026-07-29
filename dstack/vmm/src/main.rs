@@ -185,6 +185,11 @@ async fn main() -> Result<()> {
         .host_api
         .validate()
         .context("Invalid host_api configuration")?;
+    config
+        .cvm
+        .auto_restart
+        .validate()
+        .context("Invalid cvm.auto_restart configuration")?;
 
     // Handle commands
     match args.command.unwrap_or_default() {
