@@ -60,6 +60,10 @@ pub fn router(state: Arc<MockCollateralState>) -> Router {
     Router::new()
         .route("/sgx/certification/v4/pckcrl", get(pck_crl))
         .route("/sgx/certification/v4/rootcacrl", get(pccs_root_crl))
+        // Older guest images use the SGX PCS prefix for shared DCAP collateral.
+        // Serve both spellings so simulated TDX evidence remains compatible.
+        .route("/sgx/certification/v4/tcb", get(tcb_info))
+        .route("/sgx/certification/v4/qe/identity", get(qe_identity))
         .route("/tdx/certification/v4/tcb", get(tcb_info))
         .route("/tdx/certification/v4/qe/identity", get(qe_identity))
         .route("/vcek/v1/Milan/cert_chain", get(sev_ca_chain))
