@@ -136,6 +136,11 @@ impl OnboardRpc for OnboardHandler {
 
     async fn onboard(self, request: OnboardRequest) -> Result<OnboardResponse> {
         validate_onboarding_domain(&request.domain)?;
+        let _bootstrap_guard = self.state.bootstrap_lock.lock().await;
+        let cfg = &self.state.config;
+        if cfg.root_ca_key().exists() || cfg.k256_key().exists() {
+            bail!("KMS has already been onboarded");
+        }
         let source_url = request.source_url.trim_end_matches('/').to_string();
         let source_url = if source_url.ends_with("/prpc") {
             source_url
@@ -143,7 +148,7 @@ impl OnboardRpc for OnboardHandler {
             format!("{source_url}/prpc")
         };
         let keys = Keys::onboard(
-            &self.state.config,
+            cfg,
             &source_url,
             &request.domain,
             self.state.attestation_verifier.clone(),
@@ -151,8 +156,7 @@ impl OnboardRpc for OnboardHandler {
         .await
         .context("Failed to onboard")?;
         let k256_pubkey = keys.k256_key.verifying_key().to_sec1_bytes().to_vec();
-        keys.store(&self.state.config)
-            .context("Failed to store keys")?;
+        keys.store(cfg).context("Failed to store keys")?;
         Ok(OnboardResponse { k256_pubkey })
     }
 
