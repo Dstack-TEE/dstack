@@ -116,6 +116,14 @@ async fn main() -> Result<()> {
     let figment = config::load_config_figment(args.config.as_deref());
     let config: KmsConfig = figment.focus("core").extract()?;
 
+    if !config.attest_rpc_cert {
+        warn!(
+            "attest_rpc_cert = false; the KMS RPC certificate carries no attestation, so \
+             guests cannot verify which KMS they are talking to and will not extend \
+             mr-kms. Intended for local development only"
+        );
+    }
+
     if config.onboard.enabled && !config.keys_exists() {
         info!("Onboarding");
         run_onboard_service(config.clone(), figment.clone()).await?;
@@ -126,6 +134,12 @@ async fn main() -> Result<()> {
 
     info!("Updating certs");
     if let Err(err) = onboard_service::update_certs(&config).await {
+        if config.attest_rpc_cert {
+            return Err(err).context(
+                "Failed to reissue the attested KMS RPC certificate; refusing to start with a \
+                 potentially unattested certificate",
+            );
+        }
         warn!("Failed to update certs: {err}");
     };
 

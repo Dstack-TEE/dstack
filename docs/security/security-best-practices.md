@@ -84,7 +84,7 @@ Example app-compose.json:
 
 Development settings are intentionally easy to audit, but they are not production-safe. A production deployment should satisfy all of the following:
 
-- KMS quote verification remains enabled. Do not deploy production KMS with `quote_enabled = false`.
+- The KMS attests its own RPC certificate. Do not deploy production KMS with `attest_rpc_cert = false`.
 - KMS authorization uses webhook/on-chain policy. Do not use `auth_api.type = "dev"` with real key material.
 - The KMS contract pins a concrete gateway app id. Do not use `gateway_app_id = "any"` for production traffic.
 - TEE quotes are evaluated by deployment policy, including TCB status and expected OS/application measurements.

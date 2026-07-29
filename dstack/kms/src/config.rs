@@ -55,6 +55,18 @@ pub(crate) struct KmsConfig {
     pub aws_nitro_tpm_key_release: bool,
     #[serde(default)]
     pub site_name: String,
+    /// Whether the KMS embeds an attestation in its own RPC certificate.
+    /// Defaults to `true`. Set `false` only for local dev/testing where the KMS
+    /// runs outside a TEE and cannot reach a guest agent socket.
+    ///
+    /// This narrows what the KMS asserts about itself; it relaxes no
+    /// verification anywhere. Quotes presented *to* the KMS are still fully
+    /// checked, so key release stays gated, and relying parties keep their own
+    /// policy: a guest accepts an unattested KMS certificate but then does not
+    /// extend `mr-kms`, so a remote verifier can still tell, and another KMS
+    /// refuses to onboard from one.
+    #[serde(default = "default_true")]
+    pub attest_rpc_cert: bool,
     /// Whether trusted RPCs require the KMS to first attest itself to its
     /// own auth API. Defaults to `true` (strict). Set `false` only for local
     /// dev/testing where the KMS runs outside a TEE and cannot reach a guest
@@ -183,6 +195,7 @@ pub(crate) struct OnboardConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocket::figment::providers::{Format, Toml};
 
     #[test]
     fn default_config_parses_with_admin_disabled_and_no_hash() {
@@ -197,5 +210,33 @@ mod tests {
             "default admin token must be empty (fail-closed)"
         );
         assert!(!config.admin.insecure_no_auth);
+    }
+
+    #[test]
+    fn rpc_cert_is_attested_by_default() {
+        let figment = load_config_figment(None);
+        let config: KmsConfig = figment
+            .focus("core")
+            .extract()
+            .expect("kms.toml must parse into KmsConfig");
+        assert!(
+            config.attest_rpc_cert,
+            "the KMS must attest its own RPC certificate unless explicitly told not to"
+        );
+    }
+
+    #[test]
+    fn omitting_the_key_keeps_the_attested_default() {
+        // Configs written before this key existed must keep working, and must
+        // land on the attested side.
+        #[derive(Deserialize)]
+        struct Probe {
+            #[serde(default = "default_true")]
+            attest_rpc_cert: bool,
+        }
+        let probe: Probe = Figment::from(Toml::string(""))
+            .extract()
+            .expect("an absent attest_rpc_cert must parse");
+        assert!(probe.attest_rpc_cert);
     }
 }
