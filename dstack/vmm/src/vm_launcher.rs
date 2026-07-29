@@ -290,4 +290,80 @@ mod tests {
             .unwrap();
         assert!(process_is_gone(pid));
     }
+
+    #[tokio::test]
+    async fn startup_timeout_stops_swtpm_and_removes_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("swtpm.sock");
+        let swtpm_pid = dir.path().join("swtpm.pid");
+        let spec = LaunchSpec {
+            qemu: shell("exit 0".into()),
+            swtpm: shell(format!("echo $$ > {}; sleep 30", swtpm_pid.display())),
+            swtpm_socket: socket.clone(),
+            startup_timeout_ms: 100,
+            shutdown_timeout_ms: 500,
+        };
+        let spec_path = dir.path().join("spec.json");
+        fs_err::write(&spec_path, serde_json::to_vec(&spec).unwrap()).unwrap();
+
+        assert!(run(&spec_path).await.is_err());
+        let pid: libc::pid_t = fs_err::read_to_string(swtpm_pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(process_is_gone(pid));
+        assert!(!socket.exists());
+    }
+
+    #[tokio::test]
+    async fn successful_qemu_exit_stops_swtpm_and_cleans_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("swtpm.sock");
+        let swtpm_pid = dir.path().join("swtpm.pid");
+        let spec = LaunchSpec {
+            qemu: shell("sleep 0.1; exit 0".into()),
+            swtpm: shell(format!("echo $$ > {}; sleep 30", swtpm_pid.display())),
+            swtpm_socket: socket.clone(),
+            startup_timeout_ms: 2_000,
+            shutdown_timeout_ms: 500,
+        };
+        let spec_path = dir.path().join("spec.json");
+        fs_err::write(&spec_path, serde_json::to_vec(&spec).unwrap()).unwrap();
+        tokio::spawn(create_fake_socket(socket.clone()));
+
+        assert!(run(&spec_path).await.is_ok());
+        let pid: libc::pid_t = fs_err::read_to_string(swtpm_pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(process_is_gone(pid));
+        assert!(!socket.exists());
+    }
+
+    #[tokio::test]
+    async fn swtpm_spawn_failure_removes_stale_socket_without_starting_qemu() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("swtpm.sock");
+        fs_err::write(&socket, b"stale").unwrap();
+        let qemu_marker = dir.path().join("qemu-started");
+        let spec = LaunchSpec {
+            qemu: shell(format!("touch {}", qemu_marker.display())),
+            swtpm: ChildCommand {
+                command: dir.path().join("missing-swtpm").display().to_string(),
+                args: vec![],
+            },
+            swtpm_socket: socket.clone(),
+            startup_timeout_ms: 100,
+            shutdown_timeout_ms: 100,
+        };
+        let spec_path = dir.path().join("spec.json");
+        fs_err::write(&spec_path, serde_json::to_vec(&spec).unwrap()).unwrap();
+
+        assert!(run(&spec_path).await.is_err());
+        assert!(!socket.exists());
+        assert!(!qemu_marker.exists());
+    }
+
 }
