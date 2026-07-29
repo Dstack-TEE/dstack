@@ -11,3 +11,7 @@ rm -f "$B/etc/machine-id" "$B/var/lib/dbus/machine-id"
 # measured image to keep clean builds reproducible.
 rm -f "$B/var/log/alternatives.log" "$B/var/log/dpkg.log"
 rm -rf "$B/var/log/apt"
+
+# Host keys must be unique per booted development VM, never shared by all
+# guests built from one image. OpenSSH generates them on first boot.
+rm -f "$B"/etc/ssh/ssh_host_*_key "$B"/etc/ssh/ssh_host_*_key.pub
