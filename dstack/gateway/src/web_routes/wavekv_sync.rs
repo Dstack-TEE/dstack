@@ -84,23 +84,19 @@ fn verify_gateway_peer(state: &Proxy, cert: Option<Certificate<'_>>) -> Result<(
     };
 
     let cert = RocketCert(&cert);
-    let remote_app_id = cert
-        .get_app_id()
-        .map_err(|e| {
-            warn!("WaveKV sync: failed to extract app_id from certificate: {e}");
-            Status::Unauthorized
-        })?
-        .or_else(|| {
-            cert.get_app_info()
-                .map_err(|e| {
-                    warn!("WaveKV sync: failed to extract app_info from certificate: {e}");
-                    Status::Unauthorized
-                })
-                .transpose()
-                .ok()
-                .flatten()
-                .map(|info| info.app_id)
-        });
+    let remote_app_id = match cert.get_app_id().map_err(|e| {
+        warn!("WaveKV sync: failed to extract app_id from certificate: {e}");
+        Status::Unauthorized
+    })? {
+        Some(app_id) => Some(app_id),
+        None => cert
+            .get_app_info()
+            .map_err(|e| {
+                warn!("WaveKV sync: failed to extract app_info from certificate: {e}");
+                Status::Unauthorized
+            })?
+            .map(|info| info.app_id),
+    };
 
     let Some(remote_app_id) = remote_app_id else {
         warn!("WaveKV sync: certificate does not contain app identity");
