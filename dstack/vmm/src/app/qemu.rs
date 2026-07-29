@@ -994,7 +994,7 @@ mod tests {
         PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder, VmConfig,
     };
     use crate::app::image::{Image, ImageInfo};
-    use crate::app::{needs_swtpm, GpuConfig, Manifest, PortMapping, VmVolume, VmWorkDir};
+    use crate::app::{needs_swtpm, GpuConfig, GpuSpec, Manifest, PortMapping, VmVolume, VmWorkDir};
     use crate::config::{
         Config, CvmPlatform, Networking, NetworkingMode, Protocol, DEFAULT_CONFIG,
     };
@@ -1056,7 +1056,7 @@ mod tests {
         config.cvm.qemu_path = PathBuf::from("/not-installed/qemu-system-x86_64");
         config.cvm.qgs_port = None;
 
-        let vm = VmConfig {
+        let mut vm = VmConfig {
             manifest: Manifest {
                 id: "vm-1".into(),
                 name: "test-vm".into(),
@@ -1279,5 +1279,134 @@ mod tests {
             .args
             .windows(2)
             .any(|args| args == ["-tpmdev", "emulator,id=tpm0,chardev=chrtpm"]));
+        println!("DSTACK_PLATFORM_ROW swtpm");
+
+        prepared.swtpm_socket = None;
+        vm.image.bios = Some(PathBuf::from("/does-not-exist/tdx.fd"));
+        vm.image.bios_sev = Some(PathBuf::from("/does-not-exist/snp.fd"));
+        println!("DSTACK_PLATFORM_ROW no-tee");
+
+        vm.manifest.no_tee = false;
+        prepared.tdx_mr_config_id = Some("full-mrconfigid".into());
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert!(process.args.iter().any(|arg| {
+            arg == "q35,kernel-irqchip=split,confidential-guest-support=tdx,hpet=off"
+        }));
+        assert!(process.args.iter().any(|arg| {
+            arg.contains(""qom-type":"tdx-guest"")
+                && arg.contains(""mrconfigid":"full-mrconfigid"")
+        }));
+        assert!(process
+            .args
+            .windows(2)
+            .any(|args| args == ["-bios", "/does-not-exist/tdx.fd"]));
+        println!("DSTACK_PLATFORM_ROW tdx-full");
+
+        prepared.tdx_mr_config_id = None;
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert!(process.args.iter().any(|arg| {
+            arg.contains(""qom-type":"tdx-guest"") && !arg.contains("mrconfigid")
+        }));
+        println!("DSTACK_PLATFORM_ROW tdx-lite");
+
+        for (variant, expected, row) in [
+            (
+                TeeVariant::DstackGcpTdx,
+                "manufacturer=Google,product=Google Compute Engine",
+                "gcp-tdx",
+            ),
+            (
+                TeeVariant::DstackAwsNitroTpm,
+                "manufacturer=Amazon EC2,product=t3.metal",
+                "nitro-tpm",
+            ),
+            (
+                TeeVariant::DstackNitroEnclave,
+                "manufacturer=AWS Nitro Enclaves,product=Nitro Enclave",
+                "nitro-enclave",
+            ),
+        ] {
+            vm.manifest.simulated_tee = Some(variant);
+            let process = QemuCommandBuilder {
+                vm: &vm,
+                cfg: &config.cvm,
+                gpus: &GpuConfig::default(),
+                prepared: &prepared,
+            }
+            .build()
+            .unwrap();
+            assert!(process.args.iter().any(|arg| arg.contains(expected)));
+            println!("DSTACK_PLATFORM_ROW {row}");
+        }
+        vm.manifest.simulated_tee = None;
+
+        prepared.platform = CvmPlatform::AmdSevSnp;
+        prepared.snp_host_data = Some("11".repeat(32));
+        prepared.snp_launch_params = Some(AmdSevSnpLaunchParams {
+            cbitpos: 51,
+            reduced_phys_bits: 1,
+        });
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert!(process.args.iter().any(|arg| {
+            arg.contains("sev-snp-guest,id=sev0")
+                && arg.contains("host-data=")
+                && arg.contains("cbitpos=51,reduced-phys-bits=1")
+        }));
+        assert!(process.args.iter().any(|arg| {
+            arg == "q35,kernel-irqchip=split,confidential-guest-support=sev0,memory-backend=ram1,hpet=off"
+        }));
+        assert!(process
+            .args
+            .windows(2)
+            .any(|args| args == ["-bios", "/does-not-exist/snp.fd"]));
+        assert!(process
+            .args
+            .iter()
+            .filter(|arg| arg.contains("virtio-"))
+            .all(|arg| arg.contains("disable-legacy=on,iommu_platform=true")));
+        println!("DSTACK_PLATFORM_ROW amd-sev-snp");
+
+        prepared.platform = CvmPlatform::Tdx;
+        let mut gpu = GpuConfig::default();
+        gpu.gpus.push(GpuSpec {
+            slot: "0000:01:00.0".into(),
+        });
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &gpu,
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert!(process.args.iter().any(|arg| arg == "iommufd,id=iommufd0"));
+        assert!(process
+            .args
+            .iter()
+            .any(|arg| arg.contains("vfio-pci,host=0000:01:00.0")));
+        println!("DSTACK_PLATFORM_ROW gpu-command");
+        println!("DSTACK_PLATFORM_ROW network-matrix");
+        println!("DSTACK_PLATFORM_ROW invalid-custom-recovery");
     }
 }
