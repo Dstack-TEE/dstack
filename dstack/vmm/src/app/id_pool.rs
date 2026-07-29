@@ -37,6 +37,9 @@ impl<T: Number> IdPool<T> {
     }
 
     pub fn occupy(&mut self, id: T) -> anyhow::Result<()> {
+        if id < self.start || id >= self.end {
+            bail!("id outside pool range");
+        }
         if self.allocated.insert(id) {
             Ok(())
         } else {
@@ -46,17 +49,16 @@ impl<T: Number> IdPool<T> {
 
     pub fn allocate(&mut self) -> Option<T> {
         let mut id = self.start.clone();
-        while let Some(next) = id.next() {
-            if next >= self.end {
+        loop {
+            if id >= self.end {
                 return None;
             }
-            if !self.allocated.contains(&next) {
-                self.allocated.insert(next.clone());
-                return Some(next);
+            if !self.allocated.contains(&id) {
+                self.allocated.insert(id.clone());
+                return Some(id);
             }
-            id = next;
+            id = id.next()?;
         }
-        None
     }
 
     pub fn free(&mut self, id: T) {
@@ -65,5 +67,41 @@ impl<T: Number> IdPool<T> {
 
     pub fn clear(&mut self) {
         self.allocated.clear();
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::IdPool;
+
+    #[test]
+    fn allocation_is_start_inclusive_and_end_exclusive() {
+        let mut pool = IdPool::new(10_u8, 13);
+        assert_eq!(pool.allocate(), Some(10));
+        assert_eq!(pool.allocate(), Some(11));
+        assert_eq!(pool.allocate(), Some(12));
+        assert_eq!(pool.allocate(), None);
+    }
+
+    #[test]
+    fn occupied_ids_are_unique_range_bounded_and_reusable() {
+        let mut pool = IdPool::new(10_u8, 13);
+        assert!(pool.occupy(9).is_err());
+        assert!(pool.occupy(13).is_err());
+        pool.occupy(10).unwrap();
+        assert!(pool.occupy(10).is_err());
+        assert_eq!(pool.allocate(), Some(11));
+        pool.free(10);
+        assert_eq!(pool.allocate(), Some(10));
+        pool.clear();
+        assert_eq!(pool.allocate(), Some(10));
+    }
+
+    #[test]
+    fn maximum_numeric_boundary_does_not_wrap() {
+        let mut pool = IdPool::new(u8::MAX, u8::MAX);
+        assert_eq!(pool.allocate(), None);
+        assert!(pool.occupy(u8::MAX).is_err());
     }
 }
