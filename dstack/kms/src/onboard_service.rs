@@ -640,10 +640,11 @@ pub(crate) async fn update_certs(cfg: &KmsConfig) -> Result<()> {
     .await
     .context("Failed to regenerate certificates")?;
 
-    // Write the new certificates to files. This runs on every start, so a
-    // hand-placed certificate is replaced -- say so, because the old silence
-    // made that look like the file had survived.
-    keys.store_certs(cfg)?;
+// Root and temporary CA certificates are persistent trust anchors. A normal
+    // service restart must not replace them merely because their private keys
+    // were loaded again. Only the RPC leaf depends on the refreshed domain and
+    // platform attestation.
+    safe_write(cfg.rpc_cert(), keys.rpc_cert.pem())?;
     info!("Reissued the KMS RPC certificate for {domain}");
 
     Ok(())
