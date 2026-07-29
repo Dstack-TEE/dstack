@@ -481,6 +481,85 @@ mod tests {
     use super::*;
     use crate::OvmfVariant;
 
+    fn test_machine(swtpm: bool, qemu_version: Option<&str>) -> Machine<'static> {
+        Machine {
+            cpu_count: 1,
+            memory_size: 1024 * 1024 * 1024,
+            firmware: "/missing/firmware",
+            kernel: "/missing/kernel",
+            initrd: "/missing/initrd",
+            kernel_cmdline: "",
+            two_pass_add_pages: None,
+            pic: None,
+            qemu_version: qemu_version.map(str::to_string),
+            smm: false,
+            pci_hole64_size: None,
+            hugepages: false,
+            num_gpus: 0,
+            num_nvswitches: 0,
+            num_nics: 1,
+            num_verity_volumes: 0,
+            swtpm,
+            hotplug_off: false,
+            root_verity: false,
+            host_share_mode: String::new(),
+            ovmf_variant: OvmfVariant::default(),
+        }
+    }
+
+    #[test]
+    fn acpi_swtpm_and_qemu_version_policy_matrix() {
+        let error = test_machine(true, Some("8.2.2"))
+            .create_tables()
+            .unwrap_err();
+        assert_eq!(error.to_string(), "swtpm measurement is not supported");
+
+        for (version, expected_pic, expected_two_pass) in [
+            ("8.0.0", true, true),
+            ("8.2.2", true, true),
+            ("9.0.0", false, false),
+            ("9.1.0", false, false),
+            ("10.0.1", false, false),
+        ] {
+            let options = test_machine(false, Some(version))
+                .versioned_options()
+                .unwrap();
+            assert_eq!(options.pic, expected_pic, "PIC policy for {version}");
+            assert_eq!(
+                options.two_pass_add_pages, expected_two_pass,
+                "two-pass policy for {version}"
+            );
+        }
+        assert!(test_machine(false, Some("7.2.0"))
+            .versioned_options()
+            .unwrap_err()
+            .to_string()
+            .contains("Unsupported QEMU version"));
+        assert!(test_machine(false, Some("9.1"))
+            .versioned_options()
+            .unwrap_err()
+            .to_string()
+            .contains("exactly 3 parts"));
+
+        let mut tables = Vec::new();
+        for signature in ["DSDT", "FACP", "APIC", "MCFG", "WAET", "RSDT"] {
+            tables.extend_from_slice(signature.as_bytes());
+            tables.extend_from_slice(&12u32.to_le_bytes());
+            tables.extend_from_slice(&[0u8; 4]);
+        }
+        for (index, signature) in ["DSDT", "FACP", "APIC", "MCFG", "WAET", "RSDT"]
+            .iter()
+            .enumerate()
+        {
+            assert_eq!(
+                find_acpi_table(&tables, signature).unwrap(),
+                ((index * 12) as u32, (index * 12 + 9) as u32, 12)
+            );
+        }
+        assert!(find_acpi_table(&tables, "BAD").is_err());
+        assert!(find_acpi_table(&tables[..10], "RSDT").is_err());
+    }
+
     #[test]
     fn rejects_swtpm_before_external_acpi_generation() {
         let machine = Machine {

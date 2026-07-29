@@ -1469,9 +1469,14 @@ mod tests {
         };
         let legacy: VmConfig = serde_json::from_value(serde_json::json!({})).unwrap();
         let lite: VmConfig = serde_json::from_value(serde_json::json!({
-            "tdx_attestation_variant": "lite"
+            "tdx_attestation_variant": "lite",
+            "swtpm": true
         }))
         .unwrap();
+        assert!(
+            lite.swtpm,
+            "matching swtpm evidence must retain its launch policy"
+        );
         let gcp = AttestationQuote::DstackGcpTdx(DstackGcpTdxQuote {
             tdx_quote: TdxQuote {
                 quote: Vec::new(),
