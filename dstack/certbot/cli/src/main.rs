@@ -66,7 +66,7 @@ struct Config {
     #[serde(default)]
     cf_api_url: Option<String>,
     /// TTL for DNS TXT challenge records in seconds
-    #[serde(default = default_dns_txt_ttl)]
+    #[serde(default = "default_dns_txt_ttl")]
     dns_txt_ttl: u32,
     /// Auto set CAA record
     auto_set_caa: bool,
@@ -91,6 +91,8 @@ impl Default for Config {
             workdir: ".".into(),
             acme_url: "https://acme-staging-v02.api.letsencrypt.org/directory".into(),
             cf_api_token: "".into(),
+            cf_api_url: None,
+            dns_txt_ttl: default_dns_txt_ttl(),
             auto_set_caa: true,
             domains: vec!["example.com".into()],
             renew_interval: 3600,
