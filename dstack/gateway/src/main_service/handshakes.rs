@@ -46,6 +46,11 @@ impl LatestHandshakesCache {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_for_test(&self, timestamps: HandshakeTimestamps) {
+        self.cell.set(timestamps);
+    }
+
     pub(crate) fn latest(&self, stale_timeout: Option<Duration>) -> Result<HandshakesWithAge> {
         let snapshot = self.cell.get()?;
         add_elapsed_time(snapshot.value(), stale_timeout)
