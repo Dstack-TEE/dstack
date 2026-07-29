@@ -161,9 +161,11 @@ mod tests {
     #[tokio::test]
     async fn verify_der_rejects_missing_attestation_extension() {
         let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let alt_names = vec!["missing-attestation.example".to_string()];
         let cert = CertRequest::builder()
             .key(&key)
             .subject("missing-attestation.example")
+            .alt_names(&alt_names)
             .usage_server_auth(true)
             .build()
             .self_signed()
@@ -180,9 +182,11 @@ mod tests {
     async fn verify_der_rejects_attestation_not_bound_to_cert_key() {
         let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
         let attestation = fake_tdx_attestation([0u8; 64]);
+        let alt_names = vec!["mismatched-attestation.example".to_string()];
         let cert = CertRequest::builder()
             .key(&key)
             .subject("mismatched-attestation.example")
+            .alt_names(&alt_names)
             .usage_server_auth(true)
             .attestation(&attestation)
             .build()
