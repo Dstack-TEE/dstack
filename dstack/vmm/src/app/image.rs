@@ -222,12 +222,12 @@ impl Image {
 fn resolve_artifact(base_path: &Path, value: &str, label: &str) -> Result<PathBuf> {
     let candidate = base_path.join(value);
     let resolved = candidate.canonicalize()
-        .with_context(|| format!({label} does not exist: {}, candidate.display()))?;
+        .with_context(|| format!("{label} does not exist: {}", candidate.display()))?;
     if !resolved.starts_with(base_path) {
-        bail!({label} escapes image directory: {}, candidate.display());
+        bail!("{label} escapes image directory: {}", candidate.display());
     }
     if !resolved.is_file() {
-        bail!({label} is not a file: {}, candidate.display());
+        bail!("{label} is not a file: {}", candidate.display());
     }
     Ok(resolved)
 }
