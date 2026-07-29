@@ -94,8 +94,11 @@ async fn pccs_root_crl(State(state): State<Arc<MockCollateralState>>) -> impl In
 
 async fn pck_crl(State(state): State<Arc<MockCollateralState>>) -> impl IntoResponse {
     binary(
-        state.tdx.root_crl_der(),
-        Some(("SGX-PCK-CRL-Issuer-Chain", state.tdx.root_ca_pem())),
+        state.tdx.pck_crl_der(),
+        Some((
+            "SGX-PCK-CRL-Issuer-Chain",
+            state.tdx.sample_collateral().unwrap().pck_crl_issuer_chain,
+        )),
     )
 }
 

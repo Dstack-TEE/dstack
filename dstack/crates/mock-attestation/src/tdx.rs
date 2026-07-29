@@ -179,6 +179,10 @@ impl TdxGenerator {
         self.root_crl.clone()
     }
 
+    pub fn pck_crl_der(&self) -> Vec<u8> {
+        self.pck_crl.clone()
+    }
+
     pub fn attest(&self, report_data: [u8; 64]) -> Result<TdxEvidence> {
         self.attest_with_rtmrs(
             report_data,
