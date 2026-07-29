@@ -69,6 +69,7 @@ describe('Server', () => {
           payload: { ...mockBootInfo, mrAggregated }
         });
         expect(response.statusCode).toBe(400);
+        expect(JSON.parse(response.payload)).toEqual({ isAllowed: false, reason: 'invalid authorization request', gatewayAppId: '' });
       }
       expect(app.ethereum.checkBoot).not.toHaveBeenCalled();
     });

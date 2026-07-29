@@ -208,6 +208,7 @@ describe('API Compatibility Tests', () => {
         }));
 
         expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({ isAllowed: false, reason: 'invalid authorization request', gatewayAppId: '' });
       }
       expect(mockReadContract).not.toHaveBeenCalled();
     });
