@@ -213,73 +213,31 @@ struct DiagnoseConfig {
 
 /// Semantic label for each RTMR0 event log entry. Indices match
 /// `tdvf::rtmr0_log` (see dstack-mr/src/tdvf.rs).
-fn rtmr0_labels(variant: OvmfVariant) -> &'static [(&'static str, &'static str)] {
-    match variant {
-        OvmfVariant::Pre202505 => &[
-            (
-                "td_hob",
-                "varies-with: memory_size, firmware section layout",
-            ),
-            ("cfv_image", "fixed: hardcoded constant"),
-            ("efi:SecureBoot", "fixed: TDX EFI variable"),
-            ("efi:PK", "fixed: TDX EFI variable"),
-            ("efi:KEK", "fixed: TDX EFI variable"),
-            ("efi:db", "fixed: TDX EFI variable"),
-            ("efi:dbx", "fixed: TDX EFI variable"),
-            ("separator", "fixed: sha384(0x00000000)"),
-            (
-                "acpi_loader",
-                "varies-with: cpu_count, pic, smm, hpet, hotplug_off, pci_hole64, root_verity, host_share_mode, num_gpus, num_nvswitches, hugepages, qemu_version",
-            ),
-            ("acpi_rsdp", "same as acpi_loader"),
-            ("acpi_tables", "same as acpi_loader"),
-            (
-                "boot_order",
-                "fixed: sha384(0x0000) — raw 2 bytes in legacy OVMF",
-            ),
-            ("Boot0000", "fixed: legacy OVMF UiApp constant"),
-        ],
-        OvmfVariant::Stable202505 => &[
-            (
-                "td_hob",
-                "varies-with: memory_size, firmware section layout",
-            ),
-            ("cfv_image", "fixed: hardcoded constant"),
-            (
-                "fwcfg:BootMenu",
-                "fixed: sha384(0x0000) — dstack never sets -boot menu=on",
-            ),
-            (
-                "fwcfg:bootorder",
-                "fixed: sha384 of /rom@genroms/linuxboot_dma.bin (q35 + -kernel)",
-            ),
-            ("efi:SecureBoot", "fixed: TDX EFI variable"),
-            ("efi:PK", "fixed: TDX EFI variable"),
-            ("efi:KEK", "fixed: TDX EFI variable"),
-            ("efi:db", "fixed: TDX EFI variable"),
-            ("efi:dbx", "fixed: TDX EFI variable"),
-            ("separator", "fixed: sha384(0x00000000)"),
-            (
-                "acpi_loader",
-                "varies-with: cpu_count, pic, smm, hpet, hotplug_off, pci_hole64, root_verity, host_share_mode, num_gpus, num_nvswitches, hugepages, qemu_version",
-            ),
-            ("acpi_rsdp", "same as acpi_loader"),
-            ("acpi_tables", "same as acpi_loader"),
-            (
-                "variable_authority",
-                "fixed: signer cert constant (edk2-stable202505 build)",
-            ),
-            (
-                "boot_order_var",
-                "fixed: sha384 of UEFI_VARIABLE_DATA for [Boot0000,Boot0001]",
-            ),
-            ("Boot0000", "fixed: BootManagerMenuApp (OVMF FV)"),
-            (
-                "Boot0001",
-                "fixed: EFI Firmware Setup / FrontPage (OVMF FV)",
-            ),
-        ],
-    }
+fn rtmr0_labels(_variant: OvmfVariant) -> &'static [(&'static str, &'static str)] {
+    &[
+        (
+            "td_hob",
+            "varies-with: memory_size, firmware section layout",
+        ),
+        ("cfv_image", "fixed: hardcoded constant"),
+        ("efi:SecureBoot", "fixed: TDX EFI variable"),
+        ("efi:PK", "fixed: TDX EFI variable"),
+        ("efi:KEK", "fixed: TDX EFI variable"),
+        ("efi:db", "fixed: TDX EFI variable"),
+        ("efi:dbx", "fixed: TDX EFI variable"),
+        ("separator", "fixed: sha384(0x00000000)"),
+        (
+            "acpi_loader",
+            "varies-with: cpu_count, pic, smm, hpet, hotplug_off, pci_hole64, root_verity, host_share_mode, num_gpus, num_nvswitches, hugepages, qemu_version",
+        ),
+        ("acpi_rsdp", "same as acpi_loader"),
+        ("acpi_tables", "same as acpi_loader"),
+        (
+            "boot_order",
+            "fixed: sha384(0x0000) — raw 2 bytes in legacy OVMF",
+        ),
+        ("Boot0000", "fixed: legacy OVMF UiApp constant"),
+    ]
 }
 
 fn resolve_image_dir(config: &DiagnoseConfig, vm: &VmConfig) -> Result<PathBuf> {
