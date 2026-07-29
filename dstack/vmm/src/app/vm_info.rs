@@ -324,7 +324,11 @@ mod tests {
             let networking = Networking {
                 mode,
                 bridge: "br-case".into(),
-                ..Default::default()
+                mac_prefix: String::new(),
+                net: String::new(),
+                dhcp_start: String::new(),
+                restrict: false,
+                netdev: String::new(),
             };
             assert_eq!(networking_mode_name(mode), name);
             assert_eq!(networking_backend_name(mode), backend);
