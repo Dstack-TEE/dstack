@@ -264,6 +264,22 @@ impl CertStoreBuilder {
         Ok(())
     }
 
+    /// Add an exact-name certificate to the builder.
+    pub fn add_exact_cert(&mut self, domain: &str, data: &CertData) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .context("system time is before Unix epoch")?
+            .as_secs();
+        anyhow::ensure!(data.not_after > now, "certificate is expired");
+
+        let certified_key = parse_certified_key(&data.cert_pem, &data.key_pem)
+            .with_context(|| format!("failed to parse certificate for {}", domain))?;
+        self.exact_certs
+            .insert(domain.to_string(), Arc::new(certified_key));
+        self.cert_data.insert(domain.to_string(), data.clone());
+        Ok(())
+    }
+
     /// Build the immutable CertStore
     pub fn build(self) -> CertStore {
         CertStore {
