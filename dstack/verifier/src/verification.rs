@@ -37,8 +37,22 @@ use crate::types::{
 };
 
 /// Return the canonical TCB status and advisory list used by auth policy.
+///
+/// Matched exhaustively on purpose: adding a `DstackVerifiedReport` variant must
+/// fail the build here rather than silently inherit another platform's TCB
+/// semantics through a catch-all arm.
 pub fn policy_tcb_fields(attestation: &VerifiedAttestation) -> (String, Vec<String>) {
     match &attestation.report {
+        DstackVerifiedReport::DstackTdx(report) => {
+            (report.status.clone(), report.advisory_ids.clone())
+        }
+        // GCP binds a TPM quote next to the TDX quote, but only the TDX report
+        // carries a TCB surface, so the TPM report contributes nothing here.
+        DstackVerifiedReport::DstackGcpTdx { tdx_report, .. } => {
+            (tdx_report.status.clone(), tdx_report.advisory_ids.clone())
+        }
+        // SNP has no upstream status string; it is derived by comparing the
+        // report's TCB versions, so read it from `tcb_info` rather than a field.
         DstackVerifiedReport::DstackAmdSevSnp(report) => (
             report.tcb_info.tcb_status().to_string(),
             report.advisory_ids.clone(),
@@ -46,13 +60,10 @@ pub fn policy_tcb_fields(attestation: &VerifiedAttestation) -> (String, Vec<Stri
         // AWS NitroTPM has no TDX/SNP-style TCB surface; a verified attestation
         // is normalized to "UpToDate" so the verifier's policy boot info matches
         // the KMS bootAuth payload and passes the shared "UpToDate" auth gate.
-        // Other no-TCB platforms (e.g. nitro enclave) stay empty and fail-closed.
         DstackVerifiedReport::DstackAwsNitroTpm(_) => ("UpToDate".to_string(), Vec::new()),
-        _ => attestation
-            .report
-            .tdx_report()
-            .map(|report| (report.status.clone(), report.advisory_ids.clone()))
-            .unwrap_or_default(),
+        // Other no-TCB platforms (currently Nitro Enclave) stay empty so a
+        // relying party's UpToDate requirement fails closed.
+        DstackVerifiedReport::DstackNitroEnclave(_) => (String::new(), Vec::new()),
     }
 }
 
@@ -1363,6 +1374,19 @@ mod tests {
 
     use super::*;
 
+    // Kept inside `mod tests` so the non-test build stays free of unused imports.
+    use dcap_qvl::{
+        quote::{Report as DcapReport, TDReport10},
+        tcb_info::{TcbStatus, TcbStatusWithAdvisory},
+        verify::VerifiedReport as DcapVerifiedReport,
+    };
+    use dstack_attest::amd_sev_snp::{AmdSnpTcbInfo, VerifiedAmdSnpReport};
+    use ra_tls::attestation::{
+        AwsNitroTpmVerifiedReport, DstackAwsNitroTpmQuote, DstackGcpTdxQuote, DstackNitroQuote,
+        NitroVerifiedReport, SnpQuote, TdxQuote,
+    };
+    use tpm_qvl::verify::{ClockInfo, QuoteInfo, TpmAttest, VerifiedReport as TpmVerifiedReport};
+
     fn aws_boot_pcrs(pcr4: u8) -> BTreeMap<u16, Vec<u8>> {
         BTreeMap::from([
             (4, vec![pcr4; 48]),
@@ -1403,6 +1427,244 @@ mod tests {
 
     fn test_attestation_verifier() -> Arc<AttestationVerifier> {
         Arc::new(AttestationVerifier::new_prod(None).unwrap())
+    }
+
+    /// Build a TDX verified report carrying `status`/`advisory_ids`. Everything
+    /// else is zeroed: `policy_tcb_fields` reads only those two fields.
+    fn tdx_report(status: &str, advisory_ids: &[&str]) -> DcapVerifiedReport {
+        DcapVerifiedReport {
+            status: status.to_string(),
+            advisory_ids: advisory_ids.iter().map(|id| id.to_string()).collect(),
+            report: DcapReport::TD10(TDReport10 {
+                tee_tcb_svn: [0; 16],
+                mr_seam: [0; 48],
+                mr_signer_seam: [0; 48],
+                seam_attributes: [0; 8],
+                td_attributes: [0; 8],
+                xfam: [0; 8],
+                mr_td: [0; 48],
+                mr_config_id: [0; 48],
+                mr_owner: [0; 48],
+                mr_owner_config: [0; 48],
+                rt_mr0: [0; 48],
+                rt_mr1: [0; 48],
+                rt_mr2: [0; 48],
+                rt_mr3: [0; 48],
+                report_data: [0; 64],
+            }),
+            ppid: Vec::new(),
+            qe_status: TcbStatusWithAdvisory::new(TcbStatus::UpToDate, Vec::new()),
+            platform_status: TcbStatusWithAdvisory::new(TcbStatus::UpToDate, Vec::new()),
+        }
+    }
+
+    fn snp_report(tcb_info: AmdSnpTcbInfo, advisory_ids: &[&str]) -> VerifiedAmdSnpReport {
+        VerifiedAmdSnpReport {
+            measurement: [0; 48],
+            report_data: [0; 64],
+            host_data: [0; 32],
+            chip_id: [0; 64],
+            tcb_info,
+            advisory_ids: advisory_ids.iter().map(|id| id.to_string()).collect(),
+        }
+    }
+
+    fn tpm_report_for_gcp() -> TpmVerifiedReport {
+        TpmVerifiedReport {
+            attest: TpmAttest {
+                magic: 0,
+                type_: 0,
+                qualified_signer: Vec::new(),
+                qualified_data: Vec::new(),
+                clock_info: ClockInfo {
+                    clock: 0,
+                    reset_count: 0,
+                    restart_count: 0,
+                    safe: 0,
+                },
+                firmware_version: 0,
+                attested_quote_info: QuoteInfo {
+                    pcr_selections: Vec::new(),
+                    pcr_digest: Vec::new(),
+                },
+            },
+            platform: dstack_types::Platform::Gcp,
+            pcr_values: Vec::new(),
+        }
+    }
+
+    /// `policy_tcb_fields` ignores the quote, but pair each report with its own
+    /// platform's quote so the rows stay readable as real attestations.
+    fn verified_attestation(
+        quote: AttestationQuote,
+        report: DstackVerifiedReport,
+    ) -> VerifiedAttestation {
+        Attestation {
+            quote,
+            runtime_events: Vec::new(),
+            report_data: [0; 64],
+            config: String::new(),
+            report,
+        }
+    }
+
+    fn empty_tdx_quote() -> AttestationQuote {
+        AttestationQuote::DstackTdx(TdxQuote {
+            quote: Vec::new(),
+            event_log: Vec::new(),
+        })
+    }
+
+    /// Exercises the report-to-policy mapping itself, which is where a wrong
+    /// source can silently downgrade the auth gate (e.g. reading the wrong
+    /// report on GCP, or letting a no-TCB platform report "UpToDate").
+    #[test]
+    fn tcb_policy_fields_map_each_platform_to_its_own_tcb_source() {
+        let advisories = ["INTEL-SA-00001", "INTEL-SA-00002"];
+        let expected_advisories: Vec<String> = advisories.iter().map(|id| id.to_string()).collect();
+
+        // SNP derives its status by comparing TCB versions rather than reading
+        // a field, so cover both the equal (UpToDate) and unequal (OutOfDate)
+        // shapes.
+        let snp_up_to_date = AmdSnpTcbInfo::default();
+        let mut snp_out_of_date = AmdSnpTcbInfo::default();
+        snp_out_of_date.current.microcode = 1;
+
+        let rows: [(&str, VerifiedAttestation, &str, Vec<String>); 7] = [
+            (
+                "tdx-up-to-date",
+                verified_attestation(
+                    empty_tdx_quote(),
+                    DstackVerifiedReport::DstackTdx(tdx_report("UpToDate", &[])),
+                ),
+                "UpToDate",
+                Vec::new(),
+            ),
+            (
+                "tdx-out-of-date-carries-advisories",
+                verified_attestation(
+                    empty_tdx_quote(),
+                    DstackVerifiedReport::DstackTdx(tdx_report("OutOfDate", &advisories)),
+                ),
+                "OutOfDate",
+                expected_advisories.clone(),
+            ),
+            (
+                "tdx-revoked",
+                verified_attestation(
+                    empty_tdx_quote(),
+                    DstackVerifiedReport::DstackTdx(tdx_report("Revoked", &advisories)),
+                ),
+                "Revoked",
+                expected_advisories.clone(),
+            ),
+            (
+                // The bundled TPM report has no TCB surface: the TDX report must
+                // still drive policy, and must not be flattened to empty.
+                "gcp-tdx-reads-the-tdx-report-not-the-tpm-report",
+                verified_attestation(
+                    AttestationQuote::DstackGcpTdx(DstackGcpTdxQuote {
+                        tdx_quote: TdxQuote {
+                            quote: Vec::new(),
+                            event_log: Vec::new(),
+                        },
+                        tpm_quote: TpmQuote {
+                            message: Vec::new(),
+                            signature: Vec::new(),
+                            pcr_values: Vec::new(),
+                            ak_cert: Vec::new(),
+                            platform: dstack_types::Platform::Gcp,
+                            event_log: Vec::new(),
+                        },
+                    }),
+                    DstackVerifiedReport::DstackGcpTdx {
+                        tdx_report: tdx_report("OutOfDate", &advisories),
+                        tpm_report: tpm_report_for_gcp(),
+                    },
+                ),
+                "OutOfDate",
+                expected_advisories.clone(),
+            ),
+            (
+                "sev-snp-matching-tcb-versions-are-up-to-date",
+                verified_attestation(
+                    AttestationQuote::DstackAmdSevSnp(SnpQuote {
+                        report: Vec::new(),
+                        cert_chain: Vec::new(),
+                        mr_config: String::new(),
+                    }),
+                    DstackVerifiedReport::DstackAmdSevSnp(snp_report(snp_up_to_date, &[])),
+                ),
+                "UpToDate",
+                Vec::new(),
+            ),
+            (
+                "sev-snp-mismatched-tcb-versions-are-out-of-date",
+                verified_attestation(
+                    AttestationQuote::DstackAmdSevSnp(SnpQuote {
+                        report: Vec::new(),
+                        cert_chain: Vec::new(),
+                        mr_config: String::new(),
+                    }),
+                    DstackVerifiedReport::DstackAmdSevSnp(snp_report(snp_out_of_date, &advisories)),
+                ),
+                "OutOfDate",
+                expected_advisories.clone(),
+            ),
+            (
+                // No TCB surface, but normalized to UpToDate so the verifier's
+                // policy boot info matches the KMS bootAuth payload.
+                "aws-nitro-tpm-is-normalized-to-up-to-date",
+                verified_attestation(
+                    AttestationQuote::DstackAwsNitroTpm(DstackAwsNitroTpmQuote {
+                        attestation_doc: Vec::new(),
+                    }),
+                    DstackVerifiedReport::DstackAwsNitroTpm(AwsNitroTpmVerifiedReport {
+                        module_id: String::new(),
+                        pcrs: BTreeMap::new(),
+                        public_key: None,
+                        user_data: Vec::new(),
+                        nonce: None,
+                        timestamp: 0,
+                    }),
+                ),
+                "UpToDate",
+                Vec::new(),
+            ),
+        ];
+
+        for (name, attestation, expected_status, expected_advisory_ids) in rows {
+            let (status, advisory_ids) = policy_tcb_fields(&attestation);
+            assert_eq!(status, expected_status, "{name}");
+            assert_eq!(advisory_ids, expected_advisory_ids, "{name}");
+        }
+    }
+
+    /// Split out from the table above because it asserts the opposite property:
+    /// Nitro Enclave must stay empty so a relying party's "UpToDate" gate fails
+    /// closed rather than accepting a platform with no TCB surface.
+    #[test]
+    fn nitro_enclave_reports_no_tcb_status_and_fails_an_up_to_date_gate() {
+        let attestation = verified_attestation(
+            AttestationQuote::DstackNitroEnclave(DstackNitroQuote {
+                nsm_quote: Vec::new(),
+            }),
+            DstackVerifiedReport::DstackNitroEnclave(NitroVerifiedReport {
+                module_id: String::new(),
+                pcrs: NitroPcrs {
+                    pcr0: vec![0x10; 48],
+                    pcr1: vec![0x11; 48],
+                    pcr2: vec![0x12; 48],
+                },
+                user_data: Vec::new(),
+                timestamp: 0,
+            }),
+        );
+
+        let (status, advisory_ids) = policy_tcb_fields(&attestation);
+        assert_eq!(status, "");
+        assert_ne!(status, "UpToDate");
+        assert!(advisory_ids.is_empty());
     }
 
     #[test]
