@@ -32,20 +32,20 @@ mod https_client;
 mod sync_service;
 
 pub use https_client::{AppIdValidator, HttpsClientConfig};
-pub use sync_service::{fetch_peers_from_bootnode, WaveKvSyncService};
+pub use sync_service::{WaveKvSyncService, fetch_peers_from_bootnode};
 use tracing::warn;
 
 use std::{collections::BTreeMap, net::Ipv4Addr, path::Path, time::Duration};
 
 use aes_gcm::{
-    aead::{Aead, Payload},
     Aes256Gcm, KeyInit, Nonce,
+    aead::{Aead, Payload},
 };
 use anyhow::{Context, Result};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
-use wavekv::{node::NodeState, types::NodeId, Node};
+use wavekv::{Node, node::NodeState, types::NodeId};
 
 /// Per-port flags applied by the gateway when proxying to a CVM port.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -698,6 +698,8 @@ impl KvStore {
     /// This stores the URL in KvStore (for address lookup) and also adds the node
     /// to the wavekv peer list (so SyncManager knows to sync with it).
     pub fn register_peer_url(&self, node_id: NodeId, url: &str) -> Result<()> {
+        validate_peer_url(url)?;
+
         // Store URL in persistent KvStore
         self.persistent
             .write()
@@ -1100,5 +1102,41 @@ impl KvStore {
     /// Watch for certificate data changes (any domain)
     pub fn watch_all_certs(&self) -> watch::Receiver<()> {
         self.persistent.watch_prefix(keys::CERT_PREFIX)
+    }
+}
+
+fn validate_peer_url(url: &str) -> Result<()> {
+    let parsed = reqwest::Url::parse(url).context("invalid peer URL")?;
+    anyhow::ensure!(
+        matches!(parsed.scheme(), "http" | "https"),
+        "peer URL scheme must be http or https"
+    );
+    anyhow::ensure!(parsed.host_str().is_some(), "peer URL must include a host");
+    anyhow::ensure!(
+        parsed.username().is_empty() && parsed.password().is_none(),
+        "peer URL must not contain credentials"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod peer_url_tests {
+    use super::validate_peer_url;
+
+    #[test]
+    fn accepts_http_sync_urls() {
+        assert!(validate_peer_url("https://gateway.example:8011/sync").is_ok());
+        assert!(validate_peer_url("http://127.0.0.1:8011").is_ok());
+    }
+
+    #[test]
+    fn rejects_malformed_or_unsafe_sync_urls() {
+        for url in [
+            "not-a-sync-url",
+            "ftp://gateway.example/sync",
+            "https://user:secret@gateway.example/sync",
+        ] {
+            assert!(validate_peer_url(url).is_err(), "accepted {url}");
+        }
     }
 }
