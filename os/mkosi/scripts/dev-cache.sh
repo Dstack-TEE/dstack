@@ -27,10 +27,12 @@ dev_cache_run() {
     checksum="$archive.sha256"
     mkdir -p "$dir" "$base"
 
-    # Records which key the staging tree currently holds. Only meaningful when
-    # the tree outlives the build, which it does once mkosi.build points the
-    # work directory at BUILDDIR.
-    local stamp="$base/.dstack-staged.$component"
+    # Records which key the staging tree currently holds. It lives beside the
+    # archive rather than in the staging tree's parent: mkosi.build wipes
+    # everything in that parent except the staging trees themselves, so a stamp
+    # kept there is deleted before every build and the tree is then always
+    # re-extracted -- the persistence buys nothing and the wipe costs extra.
+    local stamp="$dir/staged"
 
     # Anything staged under a different key -- or under no key we can account
     # for -- is removed before it can be reused. Skipping this is how files
@@ -42,11 +44,23 @@ dev_cache_run() {
         rm -f "$stamp"
     }
 
+    staged_outputs_present() {
+        local out
+        for out in "${outputs[@]}"; do
+            [[ -e $base/$out ]] || return 1
+        done
+    }
+
     (
         flock 9
         if [[ -f $archive && -f $checksum ]] &&
            (cd "$dir" && sha256sum --check --status "${checksum##*/}"); then
-            if [[ -f $stamp && $(cat "$stamp") == "$key" ]]; then
+            # The stamp alone is not enough. It outlives the staging tree, so
+            # anything that removes the tree without clearing it -- a manual
+            # wipe, a pruned build directory -- would make this skip an
+            # extraction whose output is not there, and the component would be
+            # silently missing from the image.
+            if [[ -f $stamp && $(cat "$stamp") == "$key" ]] && staged_outputs_present; then
                 echo "development cache hit (already staged): $component"
                 exit
             fi

@@ -59,4 +59,11 @@ dev_cache_run component key-s2 "$base" stage -- build_output s2
 [[ $(cat "$base/stage/file") == payload:s2 ]]
 [[ ! -e $base/stage/only-in-s1 ]] || { echo 'stale staged file survived' >&2; exit 1; }
 
+# The stamp now outlives the staging tree, so a tree removed behind its back
+# must not be treated as staged: that would skip the extraction and leave the
+# component silently missing from the image.
+rm -rf "$base/stage"
+dev_cache_run component key-s2 "$base" stage -- build_output must-not-run-either
+[[ $(cat "$base/stage/file") == payload:s2 ]] || { echo 'staging tree not restored' >&2; exit 1; }
+
 echo 'development cache tests passed'
