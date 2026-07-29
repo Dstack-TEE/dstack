@@ -24,7 +24,8 @@ use dstack_mr::{
 use dstack_types::VmConfig;
 use hex_literal::hex;
 use ra_tls::attestation::{
-    AppInfo, Attestation, AttestationQuote, AttestationVerifier, DstackVerifiedReport, NitroPcrs,
+    AppInfo, Attestation, AttestationQuote, AttestationVerifier, DstackAwsNitroTpmQuote,
+    DstackGcpTdxQuote, DstackNitroQuote, DstackVerifiedReport, NitroPcrs, SnpQuote, TdxQuote,
     TpmQuote, VerifiedAttestation, VersionedAttestation,
 };
 use serde::{Deserialize, Serialize};
@@ -1456,6 +1457,77 @@ mod tests {
 
     fn test_attestation_verifier() -> Arc<AttestationVerifier> {
         Arc::new(AttestationVerifier::new_prod(None).unwrap())
+    }
+
+    #[test]
+    fn platform_image_strategy_decision_table_is_exhaustive() {
+        let tdx = || {
+            AttestationQuote::DstackTdx(TdxQuote {
+                quote: Vec::new(),
+                event_log: Vec::new(),
+            })
+        };
+        let legacy: VmConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+        let lite: VmConfig = serde_json::from_value(serde_json::json!({
+            "tdx_attestation_variant": "lite"
+        }))
+        .unwrap();
+        let gcp = AttestationQuote::DstackGcpTdx(DstackGcpTdxQuote {
+            tdx_quote: TdxQuote {
+                quote: Vec::new(),
+                event_log: Vec::new(),
+            },
+            tpm_quote: TpmQuote {
+                message: Vec::new(),
+                signature: Vec::new(),
+                pcr_values: Vec::new(),
+                ak_cert: Vec::new(),
+                platform: dstack_types::Platform::Gcp,
+                event_log: Vec::new(),
+            },
+        });
+        let rows = [
+            (
+                tdx(),
+                legacy.clone(),
+                OsImageVerificationStrategy::TdxFullDownload,
+            ),
+            (tdx(), lite, OsImageVerificationStrategy::TdxLiteMeasurement),
+            (
+                AttestationQuote::DstackAmdSevSnp(SnpQuote {
+                    report: Vec::new(),
+                    cert_chain: Vec::new(),
+                    mr_config: String::new(),
+                }),
+                legacy.clone(),
+                OsImageVerificationStrategy::SevSnpMeasurement,
+            ),
+            (
+                gcp,
+                legacy.clone(),
+                OsImageVerificationStrategy::GcpTdxMeasurement,
+            ),
+            (
+                AttestationQuote::DstackNitroEnclave(DstackNitroQuote {
+                    nsm_quote: Vec::new(),
+                }),
+                legacy.clone(),
+                OsImageVerificationStrategy::NitroEnclavePcrs,
+            ),
+            (
+                AttestationQuote::DstackAwsNitroTpm(DstackAwsNitroTpmQuote {
+                    attestation_doc: Vec::new(),
+                }),
+                legacy,
+                OsImageVerificationStrategy::AwsNitroTpmPcrs,
+            ),
+        ];
+        for (quote, vm_config, expected) in rows {
+            assert_eq!(
+                OsImageVerificationStrategy::select(&quote, &vm_config),
+                expected
+            );
+        }
     }
 
     #[test]
