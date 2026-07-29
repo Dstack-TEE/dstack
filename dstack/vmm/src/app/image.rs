@@ -266,3 +266,81 @@ fn guess_version(base_path: &Path) -> Option<String> {
     };
     Some(version.to_string())
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::{Image, ImageInfo};
+    use std::{fs, sync::Arc, thread};
+    use tempfile::TempDir;
+
+    fn fixture(name: &str, kernel: &str) -> (TempDir, std::path::PathBuf) {
+        let root = TempDir::new().unwrap();
+        let image = root.path().join(name);
+        fs::create_dir(&image).unwrap();
+        let metadata = format!(
+            r#"{{"cmdline":null,"kernel":"{kernel}","initrd":"initrd","hda":null,"rootfs":null,"bios":null}}"#
+        );
+        fs::write(image.join("metadata.json"), metadata).unwrap();
+        fs::write(image.join("initrd"), b"initrd").unwrap();
+        (root, image)
+    }
+
+    #[test]
+    fn loads_minimal_metadata_and_guesses_legacy_version() {
+        let (_root, image) = fixture("dstack-dev-1.2.3", "vmlinuz");
+        fs::write(image.join("vmlinuz"), b"kernel").unwrap();
+        let loaded = Image::load(&image).unwrap();
+        assert_eq!(loaded.info.version, "1.2.3");
+        assert_eq!(loaded.info.version_tuple(), Some((1, 2, 3)));
+        assert!(!loaded.info.shared_ro);
+    }
+
+    #[test]
+    fn parses_version_boundaries_and_rejects_missing_artifact() {
+        for (version, expected) in [
+            ("0.0.0", Some((0, 0, 0))),
+            ("65535.1.2", Some((u16::MAX, 1, 2))),
+            ("1.2", None),
+            ("1.2.invalid", None),
+            ("65536.1.2", None),
+        ] {
+            let json = format!(
+                r#"{{"cmdline":null,"kernel":"k","initrd":"i","hda":null,"rootfs":null,"bios":null,"version":"{version}"}}"#
+            );
+            let info: ImageInfo = serde_json::from_str(&json).unwrap();
+            assert_eq!(info.version_tuple(), expected);
+        }
+        let (_root, image) = fixture("missing", "missing");
+        assert!(Image::load(image).is_err());
+    }
+
+    #[test]
+    fn rejects_parent_traversal_artifact() {
+        let (root, image) = fixture("escaped", "../outside");
+        fs::write(root.path().join("outside"), b"outside").unwrap();
+        assert!(Image::load(image).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_escape_and_concurrent_reads_converge() {
+        use std::os::unix::fs::symlink;
+        let (root, image) = fixture("candidate", "kernel-link");
+        fs::write(root.path().join("outside"), b"outside").unwrap();
+        symlink(root.path().join("outside"), image.join("kernel-link")).unwrap();
+        assert!(Image::load(&image).is_err());
+        fs::remove_file(image.join("kernel-link")).unwrap();
+        fs::write(image.join("kernel-link"), b"kernel").unwrap();
+        let image = Arc::new(image);
+        let workers: Vec<_> = (0..4)
+            .map(|_| {
+                let image = Arc::clone(&image);
+                thread::spawn(move || Image::load(image.as_path()).unwrap().info.version)
+            })
+            .collect();
+        for worker in workers {
+            assert_eq!(worker.join().unwrap(), "");
+        }
+    }
+}
