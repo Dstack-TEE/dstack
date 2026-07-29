@@ -25,14 +25,19 @@ truncate -s 0 "$rootfs"
 # Privileged mkosi runs can inherit host default ACLs from their workspace.
 # The guest rootfs does not rely on xattrs, so exclude this host-only metadata.
 # A sorted tar stream also removes backing-filesystem directory/inode order and
-# hardlink topology from the input. A single compressor worker then avoids
-# host-CPU-dependent fragment ordering.
+# hardlink topology from the input, which is what makes the compressor's worker
+# count irrelevant to the output: with -no-tailends and -no-hardlinks there are
+# no cross-file fragments left for workers to pack in a racy order. The worker
+# count therefore tracks the build's job count, and repro-check is what proves
+# it: its two legs deliberately run with different job counts, so a worker-count
+# dependency in this output fails the check rather than hiding in it.
+# Serializing it instead costs ~285 s of a ~500 s incremental build.
 (cd "$TREE" && tar --sort=name --format=gnu \
   --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
   --mode=g-s --hard-dereference -cf - .) | \
   env -u SOURCE_DATE_EPOCH mksquashfs - "$rootfs" -tar \
     -noappend -all-root -no-progress -exports -no-hardlinks -no-tailends \
-    -no-xattrs -processors 1 -comp zstd -mkfs-time "$SOURCE_DATE_EPOCH" \
+    -no-xattrs -processors "${JOBS:-1}" -comp zstd -mkfs-time "$SOURCE_DATE_EPOCH" \
     -all-time "$SOURCE_DATE_EPOCH" >/dev/null
 data_size=$(stat -c %s "$rootfs")
 data_size=$(( (data_size + 4095) / 4096 * 4096 ))

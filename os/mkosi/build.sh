@@ -7,18 +7,26 @@ ROOT=$(cd "$SELF/../.." && pwd)
 # shellcheck source=/dev/null
 source "$SELF/versions.env"
 FLAVORS=${FLAVORS:-prod}
-usage="Usage: $0 [--no-cache] {image|repro-check|lint} [build-dir]"
+usage="Usage: $0 [--no-cache] [--archive] {image|repro-check|lint} [build-dir]"
 # The component cache is keyed on every declared input of each component, so a
 # hit reproduces the same output a cold build would have produced. Reusing it is
 # therefore the sensible default; --no-cache forces the cold path for a release
 # build or when the key itself is what needs auditing. repro-check ignores both
 # and always builds cold, because a cache hit would answer the wrong question.
 cache=${DSTACK_COMPONENT_CACHE:-1}
+# The two release tarballs are ~58 s of gzip over artifacts that already exist
+# unpacked beside them. A cached build is an iteration build, and iterating on
+# the guest wants disk.raw and the measurements, not a redistributable archive
+# -- so a cached build skips them and a cold build still produces them. Pass
+# --archive to get them out of a cached build anyway. Left unset here so the
+# default can be derived from the final value of $cache below.
+archive=${DSTACK_TAR_RELEASE:-}
 action=
 BUILD_DIR=
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-cache) cache=0 ;;
+    --archive) archive=1 ;;
     -h|--help) echo "$usage"; exit 0 ;;
     -*) echo "Unknown option: $1" >&2; echo "$usage" >&2; exit 2 ;;
     *)
@@ -39,6 +47,18 @@ esac
 if [[ $action == repro-check ]]; then cache=0; fi
 [[ $cache == 1 || $cache == 0 ]] || {
   echo "DSTACK_COMPONENT_CACHE must be 0 or 1, got: $cache" >&2; exit 2;
+}
+# Derived after repro-check has forced the cold path, so repro-check always
+# archives: it compares the two release tarballs, and skipping them would leave
+# it comparing nothing and passing vacuously.
+archive=${archive:-$(( cache == 1 ? 0 : 1 ))}
+# Not merely defaulted: forced. repro-check compares the two release tarballs,
+# so an environment that switched archiving off would leave it comparing files
+# that do not exist -- a check that fails for the wrong reason, or worse, is
+# read as "no difference found".
+if [[ $action == repro-check ]]; then archive=1; fi
+[[ $archive == 1 || $archive == 0 ]] || {
+  echo "DSTACK_TAR_RELEASE must be 0 or 1, got: $archive" >&2; exit 2;
 }
 if [[ $action == lint ]]; then exec "$SELF/tests/acceptance.sh"; fi
 command -v mkosi >/dev/null || { echo "mkosi $MKOSI_VERSION is required" >&2; exit 1; }
@@ -81,6 +101,39 @@ if [[ $cache == 0 ]]; then
   mkosi --directory "$SELF" --output-directory="$BUILD_DIR/out" clean -f
 fi
 
+# Digest of every input that determines the incrementally cached tree: the
+# package lists and distribution pins in the configs, and the skeleton files
+# copied in before packages are installed. Deliberately not the dstack sources
+# or the component definitions -- those are consumed by the build script, which
+# runs after the cache is restored, and folding them in would defeat the cache
+# on every source edit. Sorted for a stable digest, and the file list itself is
+# hashed too so that deleting a skeleton file also moves the key.
+base_inputs_digest() {
+  local flavor=$1 skeleton
+  local skeletons=("$SELF/mkosi.skeleton")
+  if [[ -d $SELF/mkosi.profiles/$flavor/mkosi.skeleton ]]; then
+    skeletons+=("$SELF/mkosi.profiles/$flavor/mkosi.skeleton")
+  fi
+  {
+    # Hash relative names, types and modes as well as contents. Relative names
+    # let worktrees share a cache; types and modes cover inputs that sha256sum
+    # alone cannot distinguish.
+    for skeleton in "${skeletons[@]}"; do
+      echo "-- skeleton ${skeleton#"$SELF"/}"
+      (cd "$skeleton" && find . -mindepth 1 -printf '%P %y %m\n' | sort)
+      (cd "$skeleton" && find . -type f -print0 | sort -z | xargs -0 -r sha256sum)
+      (cd "$skeleton" && find . -type l -print0 | sort -z | \
+        while IFS= read -r -d '' link; do
+          printf '%s -> %s\n' "${link#./}" "$(readlink "$link")"
+        done)
+    done
+    echo "-- mkosi.conf"
+    cat "$SELF/mkosi.conf" "$SELF/mkosi.tools.conf"
+    echo "-- profile/$flavor/mkosi.conf"
+    cat "$SELF/mkosi.profiles/$flavor/mkosi.conf"
+  } | sha256sum | cut -c1-32
+}
+
 build_one() {
   local out=$1 flavor=$2 jobs=${3:-${JOBS:-$(nproc)}}
   mkdir -p "$out"
@@ -91,6 +144,7 @@ build_one() {
     --profile="$flavor"
     --source-date-epoch="$SOURCE_DATE_EPOCH"
     --environment="DSTACK_COMPONENT_CACHE=$cache"
+    --environment="DSTACK_TAR_RELEASE=$archive"
     --environment="DSTACK_BUILD_GIT_REVISION=$DSTACK_BUILD_GIT_REVISION"
     --environment="DSTACK_SOURCE_REVISION=$revision"
     --environment="JOBS=$jobs"
@@ -109,6 +163,25 @@ build_one() {
     mkosi_args+=(--build-directory="$cache_root/build")
     mkosi_args+=(--build-sources="$cache_root/manifest:component-cache")
     mkosi_args+=(--environment="DSTACK_SOURCE_MANIFEST=/work/src/component-cache/source-manifest")
+    # mkosi's incremental cache captures the tree after the distribution and
+    # build packages are installed and before any build script runs, which is
+    # exactly the ~70 s this build otherwise repeats verbatim every time.
+    #
+    # It cannot be enabled as-is. mkosi keys the cache on CacheKey=, whose
+    # default is &d~&r~&a~&I -- distribution, release, architecture, image id --
+    # and whose specifier set contains no digest of the inputs that actually
+    # determine that tree. Editing Packages= in mkosi.conf, or any file under
+    # mkosi.skeleton/, leaves the key untouched, so mkosi would restore the
+    # stale tree and the change would silently not be in the image. Mixing the
+    # digest below into the key restores the invalidation mkosi does not do.
+    base_digest=$(base_inputs_digest "$flavor")
+    mkosi_args+=(--incremental=yes)
+    mkosi_args+=(--cache-directory="$cache_root/incremental")
+    mkosi_args+=(--cache-key="&d~&r~&a~&I~$base_digest")
+    # Package downloads are content-addressed by the pinned Snapshot=, so this
+    # only avoids refetching identical files. Release builds still take the
+    # cold path and fetch from the snapshot themselves.
+    mkosi_args+=(--package-cache-directory="$cache_root/packages")
   fi
   mkosi "${mkosi_args[@]}" build
   # mkosi's own output is a plain Debian rootfs: unmeasured, not part of the

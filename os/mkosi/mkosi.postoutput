@@ -12,6 +12,7 @@ WORK="$OUTPUTDIR/.dstack-$FLAVOR"
 DSTACK_MR_BIN="$OUTPUTDIR/.image-tools/dstack-mr" \
 NITRO_TPM_PCR_COMPUTE_BIN="$OUTPUTDIR/.image-tools/nitro-tpm-pcr-compute" \
 DIST_DIR="$OUTPUTDIR" \
+DSTACK_TAR_RELEASE="${DSTACK_TAR_RELEASE:-1}" \
 TAR_OPTIONS="--sort=name --mtime=@$SOURCE_DATE_EPOCH --owner=0 --group=0 --numeric-owner" \
   "$ROOT/os/image/assemble.sh" --manifest "$WORK/artifacts/artifact-manifest.json"
 

@@ -33,6 +33,14 @@ if [[ $cache_enabled == 1 ]]; then
     : "${BUILDDIR:?dev component cache requires mkosi BuildDirectory}"
     export DSTACK_DEV_CACHE_DIR="$BUILDDIR/components"
     toolchain_downloads="$BUILDDIR/toolchains"
+    # A source edit misses the dstack-rust component cache by design, and the
+    # rebuild that follows was recompiling the entire workspace -- every
+    # dependency crate, and re-downloading the registry -- because both the
+    # target directory and CARGO_HOME lived in the per-build sandbox. Keeping
+    # them here leaves only the touched crates to rebuild. Release builds still
+    # get the throwaway layout below.
+    export DSTACK_CARGO_TARGET_DIR="$BUILDDIR/cargo-target"
+    export DSTACK_CARGO_HOME="$BUILDDIR/cargo-home"
 else
     toolchain_downloads=/var/tmp/dstack-toolchain-downloads
 fi
@@ -45,8 +53,45 @@ printf 'cmake: '; cmake --version | head -1
 dpkg-query -W -f='build-package: ${binary:Package}=${Version}\n' \
   gcc g++ binutils cmake make ninja-build dwarves
 
-work=/var/tmp/dstack-component-work
+# component-stages/ is where cached component archives get extracted. Keeping
+# it in the per-build sandbox means every cache hit still pays a full
+# decompression -- the kernel archive alone unpacks 6.4 GiB and costs ~12 s --
+# so a cached build persists it and dev-cache.sh skips extracting a tree that
+# is already staged under the same key.
+#
+# Only that subdirectory. The rest of the work directory holds source checkouts
+# and object trees, and the component scripts assume those start empty: sysbox
+# runs `git submodule update` there and fails outright on a leftover tree.
+# Persisting the staging trees buys the decompression; persisting the build
+# scratch buys nothing and breaks the builds.
+#
+# The kernel staging tree is not a cache either. component_assemble merges into
+# it on every build, cache hit or not, under strict conflict detection, so a
+# persisted one collides with the previous build's merged files.
+#
+# downloads/ and image-tools-target/ are kept for the same reason: the first is
+# fetched tarballs and submodules, the second a cargo target directory, and
+# neither holds git or make state that a rerun could trip over. Everything else
+# is scratch and is deleted by exclusion, so a directory added later is dropped
+# until it is named here deliberately.
+work_keep=(component-stages downloads image-tools-target)
+if [[ $cache_enabled == 1 ]]; then
+    work="$BUILDDIR/component-work"
+    mkdir -p "$work"
+    prune=(-mindepth 1 -maxdepth 1)
+    for keep in "${work_keep[@]}"; do
+        mkdir -p "$work/$keep"
+        prune+=(! -name "$keep")
+    done
+    # Deleting by exclusion rather than symlinking the kept directories
+    # elsewhere: tar replaces a symlink standing where it wants a directory, so
+    # a staging tree would silently stop being the persisted one.
+    find "$work" "${prune[@]}" -exec rm -rf {} +
+else
+    work=/var/tmp/dstack-component-work
+fi
 kernel_stage=/var/tmp/dstack-kernel-stage
+rm -rf "$kernel_stage"
 mkdir -p "$work" "$kernel_stage"
 args=()
 [[ $cache_enabled == 1 ]] && args+=(--dev-cache)

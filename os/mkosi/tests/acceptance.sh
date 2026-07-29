@@ -183,6 +183,11 @@ grep -q 'Archiving UKI image' "$D/../image/assemble.sh"
 grep -Fq "FLAVORS=\${FLAVORS:-prod}" "$D/build.sh"
 # A cache hit must never be able to answer the question repro-check asks.
 grep -Fq "if [[ \$action == repro-check ]]; then cache=0; fi" "$D/build.sh"
+# repro-check compares the release tarballs, so it must archive unconditionally
+# -- otherwise it compares absent files and reports no difference.
+grep -Fq "if [[ \$action == repro-check ]]; then archive=1; fi" "$D/build.sh"
+grep -Fq -e "--environment=\"DSTACK_TAR_RELEASE=\$archive\"" "$D/build.sh"
+grep -Fq "DSTACK_TAR_RELEASE=\"\${DSTACK_TAR_RELEASE:-1}\"" "$D/mkosi.postoutput"
 grep -Fq -e "--environment=\"DSTACK_COMPONENT_CACHE=\$cache\"" "$D/build.sh"
 grep -q 'write-source-manifest.py' "$D/build.sh"
 grep -q 'DSTACK_SOURCE_REVISION.*revision' "$D/build.sh"
