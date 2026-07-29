@@ -2158,6 +2158,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn verifier_accepts_matching_swtpm_tdx_lite_evidence() {
+        let request: VerificationRequest =
+            serde_json::from_str(include_str!("../fixtures/tdx-lite-attestation.json"))
+                .expect("TDX lite verifier fixture parses");
+        let encoded = request.attestation.expect("self-contained attestation");
+        let attestation = VersionedAttestation::from_bytes(&encoded)
+            .unwrap()
+            .into_v1();
+        let verified = attestation
+            .verify(&test_attestation_verifier())
+            .await
+            .unwrap();
+        let mut vm_config = verified.decode_vm_config("").unwrap();
+        vm_config.swtpm = true;
+        let explicit_config = serde_json::to_string(&vm_config).unwrap();
+        let mut details = VerificationDetails::default();
+        let cache = tempfile::tempdir().unwrap();
+        let verifier = CvmVerifier::new(
+            cache.path().display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".into(),
+            Duration::from_millis(20),
+            test_attestation_verifier(),
+        );
+        let accepted = verifier
+            .verify_os_image_hash(explicit_config, &verified, false, &mut details)
+            .await
+            .unwrap();
+        assert!(accepted.swtpm);
+        assert!(
+            !cache.path().join("images").exists(),
+            "matching swtpm TDX-lite evidence must not invoke offline ACPI generation or download"
+        );
+    }
+
+    #[tokio::test]
     async fn verifies_tdx_lite_fixture_without_acpi_table_verification() {
         let request: VerificationRequest =
             serde_json::from_str(include_str!("../fixtures/tdx-lite-attestation.json"))
