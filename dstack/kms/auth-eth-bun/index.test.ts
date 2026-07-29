@@ -85,7 +85,7 @@ describe('API Compatibility Tests', () => {
       expect(response.status).toBe(500);
       expect(data).toMatchObject({
         status: 'error',
-        message: expect.any(String),
+        message: 'authorization backend unavailable',
       });
     });
   });
@@ -180,7 +180,7 @@ describe('API Compatibility Tests', () => {
       expect(data).toMatchObject({
         isAllowed: false,
         gatewayAppId: '',
-        reason: 'contract call failed',
+        reason: 'authorization backend unavailable',
       });
     });
 
@@ -291,7 +291,7 @@ describe('API Compatibility Tests', () => {
 
       expect(response.status).toBe(200);
       expect(data.isAllowed).toBe(false);
-      expect(data.reason).toBe('Test backend error');
+      expect(data.reason).toBe('authorization backend unavailable');
 
       // Verify that console.error was not called for test errors
       expect(consoleSpy).not.toHaveBeenCalled();
@@ -314,7 +314,7 @@ describe('API Compatibility Tests', () => {
 
       expect(response.status).toBe(200);
       expect(data.isAllowed).toBe(false);
-      expect(data.reason).toBe('real error');
+      expect(data.reason).toBe('authorization backend unavailable');
 
       // Verify that console.error was called for real errors
       expect(consoleSpy).toHaveBeenCalledWith('error in KMS boot auth:', expect.any(Error));
