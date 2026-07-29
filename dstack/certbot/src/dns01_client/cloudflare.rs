@@ -324,8 +324,6 @@ impl Dns01Api for CloudflareClient {
 
 #[cfg(test)]
 mod tests {
-    #![cfg(not(test))]
-
     use super::*;
 
     impl CloudflareClient {
