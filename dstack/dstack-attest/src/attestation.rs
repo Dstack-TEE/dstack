@@ -2739,6 +2739,8 @@ mod tests {
 
     #[tokio::test]
     async fn tdx_v2_event_log_rtmr3_failure_and_recovery_matrix() {
+        use std::sync::Arc;
+
         use mock_attestation::server::{serve_listener, MockCollateralState};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2801,7 +2803,12 @@ mod tests {
         cc_eventlog::tdx::fill_v2_preimages(&mut tdx_events);
         let encoded = serde_json::to_vec(&tdx_events).unwrap();
         let parsed = Attestation::from_tdx_quote(evidence.quote.clone(), &encoded).unwrap();
-        assert_eq!(parsed.runtime_events, events);
+        assert_eq!(parsed.runtime_events.len(), events.len());
+        for (parsed, expected) in parsed.runtime_events.iter().zip(&events) {
+            assert_eq!(parsed.event, expected.event);
+            assert_eq!(parsed.payload, expected.payload);
+            assert_eq!(parsed.version, expected.version);
+        }
 
         let mut missing = tdx_events.clone();
         missing[0].preimage = None;
@@ -2809,7 +2816,8 @@ mod tests {
             evidence.quote.clone(),
             &serde_json::to_vec(&missing).unwrap(),
         )
-        .unwrap_err();
+        .err()
+        .expect("missing preimage must fail");
         assert!(format!("{error:#}").contains("missing its digest preimage"));
 
         let mut malformed = tdx_events.clone();
@@ -2818,7 +2826,8 @@ mod tests {
             evidence.quote.clone(),
             &serde_json::to_vec(&malformed).unwrap(),
         )
-        .unwrap_err();
+        .err()
+        .expect("malformed preimage must fail");
         assert!(format!("{error:#}").contains("malformed digest preimage"));
 
         let mut mismatched = tdx_events;
@@ -2827,7 +2836,8 @@ mod tests {
             evidence.quote.clone(),
             &serde_json::to_vec(&mismatched).unwrap(),
         )
-        .unwrap_err();
+        .err()
+        .expect("mismatched preimage must fail");
         assert!(format!("{error:#}").contains("digest does not match its preimage"));
 
         assert!(Attestation::from_tdx_quote(evidence.quote.clone(), b"not-json").is_err());
