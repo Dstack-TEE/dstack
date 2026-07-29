@@ -195,6 +195,18 @@ const fn default_auto_restart_reset_window() -> u64 {
     300
 }
 
+impl AutoRestartConfig {
+    pub fn validate(&self) -> Result<()> {
+        if self.enabled && self.interval == 0 {
+            bail!("cvm.auto_restart.interval must be greater than zero when enabled");
+        }
+        if self.initial_backoff > self.max_backoff {
+            bail!("cvm.auto_restart.initial_backoff must not exceed max_backoff");
+        }
+        Ok(())
+    }
+}
+
 impl PortMappingConfig {
     pub fn is_allowed(&self, protocol: &str, port: u16) -> bool {
         if !self.enabled {
@@ -717,6 +729,32 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_restart_config_rejects_hot_loop_and_inverted_backoff() {
+        let mut config = AutoRestartConfig {
+            enabled: true,
+            interval: 0,
+            max_retries: 3,
+            initial_backoff: 2,
+            max_backoff: 5,
+            reset_window: 10,
+        };
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("interval"));
+        config.interval = 1;
+        config.initial_backoff = 6;
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("max_backoff"));
+        config.max_backoff = 6;
+        assert!(config.validate().is_ok());
+    }
 
     #[test]
     fn test_parse_qemu_version_debian_format() {
