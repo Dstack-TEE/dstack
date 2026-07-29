@@ -24,6 +24,12 @@ const K256_KEY: &str = "root-k256.key";
 const BOOTSTRAP_INFO: &str = "bootstrap-info.json";
 
 #[derive(Debug, Clone, Deserialize)]
+pub(crate) struct HistoricalKeyConfig {
+    pub ca_key: PathBuf,
+    pub k256_key: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ImageConfig {
     pub verify: bool,
     pub cache_dir: PathBuf,
@@ -35,6 +41,10 @@ pub(crate) struct ImageConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct KmsConfig {
     pub cert_dir: PathBuf,
+    /// Previous root-key pairs returned after the current pair during an
+    /// authorized KMS handover. Configuration order is rotation order.
+    #[serde(default)]
+    pub historical_keys: Vec<HistoricalKeyConfig>,
     #[serde(default)]
     pub attestation: AttestationVerifierConfig,
     pub auth_api: AuthApi,
