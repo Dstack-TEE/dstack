@@ -43,14 +43,14 @@ pub(super) fn create_shared_disk(
         let format_opts = FormatVolumeOptions::new()
             .fat_type(fatfs::FatType::Fat32)
             .volume_label(label_bytes);
-        fatfs::format_volume(&mut image, format_opts).context("failed to format disk as FAT32")?;
+        fatfs::format_volume(&mut *image, format_opts).context("failed to format disk as FAT32")?;
     }
 
     image
         .seek(SeekFrom::Start(0))
         .context("failed to seek to start")?;
     let filesystem =
-        FileSystem::new(&mut image, FsOptions::new()).context("failed to open FAT32 filesystem")?;
+        FileSystem::new(&mut *image, FsOptions::new()).context("failed to open FAT32 filesystem")?;
     let root_dir = filesystem.root_dir();
 
     for entry in fs::read_dir(shared_dir).context("failed to read shared directory")? {
@@ -92,7 +92,7 @@ mod tests {
 
     fn read_file(disk: &std::path::Path, name: &str) -> Vec<u8> {
         let mut image = fs::OpenOptions::new().read(true).write(true).open(disk).unwrap();
-        let filesystem = FileSystem::new(&mut image, FsOptions::new()).unwrap();
+        let filesystem = FileSystem::new(&mut *image, FsOptions::new()).unwrap();
         let mut file = filesystem.root_dir().open_file(name).unwrap();
         let mut contents = Vec::new();
         file.read_to_end(&mut contents).unwrap();
@@ -142,7 +142,7 @@ mod tests {
         create_shared_disk(&disk, &shared).unwrap();
         assert_eq!(read_file(&disk, "regular"), b"regular");
         let mut image = fs::OpenOptions::new().read(true).write(true).open(disk).unwrap();
-        let filesystem = FileSystem::new(&mut image, FsOptions::new()).unwrap();
+        let filesystem = FileSystem::new(&mut *image, FsOptions::new()).unwrap();
         assert!(filesystem.root_dir().open_file("escape").is_err());
     }
 
