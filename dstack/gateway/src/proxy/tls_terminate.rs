@@ -16,7 +16,7 @@ use hyper_util::rt::tokio::TokioIo;
 use proxy_protocol::ProxyHeader;
 use rustls::version::{TLS12, TLS13};
 use serde::Serialize;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt as _, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
