@@ -33,6 +33,7 @@ const DEFAULT_ACME_URL: &str = "https://acme-v02.api.letsencrypt.org/directory";
 pub struct DistributedCertBot {
     kv_store: Arc<KvStore>,
     cert_resolver: Arc<CertResolver>,
+    caa_lock: tokio::sync::Mutex<()>,
 }
 
 impl DistributedCertBot {
@@ -40,6 +41,7 @@ impl DistributedCertBot {
         Self {
             kv_store,
             cert_resolver,
+            caa_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -84,6 +86,7 @@ impl DistributedCertBot {
 
     /// Set CAA records for every configured ZT domain.
     pub async fn set_caa_all(&self) -> Result<()> {
+        let _guard = self.caa_lock.lock().await;
         for config in self.kv_store.list_zt_domain_configs() {
             let domain = config.domain.clone();
             let acme_client = self
