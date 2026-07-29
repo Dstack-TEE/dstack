@@ -46,6 +46,11 @@ impl LatestHandshakesCache {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_for_test(&self, timestamps: HandshakeTimestamps) {
+        self.cell.set(timestamps);
+    }
+
     pub(crate) fn latest(&self, stale_timeout: Option<Duration>) -> Result<HandshakesWithAge> {
         // Admin/public status paths call this synchronously. On fixture hosts the
         // first successful `wg show` may not have completed yet (or the interface

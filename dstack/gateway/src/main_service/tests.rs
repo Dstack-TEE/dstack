@@ -264,3 +264,86 @@ async fn test_config() {
     let wg_config = state.lock().generate_wg_config().unwrap();
     insta::assert_snapshot!(wg_config);
 }
+
+
+#[tokio::test]
+async fn gateway_top_n_batch_007_cache_health_and_invalidation() {
+    let state = create_test_state().await;
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    {
+        let mut proxy = state.lock();
+        for index in 0..4 {
+            proxy
+                .new_client_by_id(
+                    &format!("top-instance-{index}"),
+                    "top-app",
+                    &format!("top-key-{index}"),
+                    "",
+                    Some(policy(false, &[])),
+                )
+                .unwrap();
+        }
+        proxy.handshake_cache.set_for_test(BTreeMap::from([
+            ("top-key-0".to_string(), now),
+            ("top-key-1".to_string(), now - 1),
+            ("top-key-2".to_string(), now - 2),
+            ("top-key-3".to_string(), now - 600),
+        ]));
+        let selected = proxy.select_top_n_hosts("top-app").unwrap();
+        let selected_ids = selected
+            .iter()
+            .map(|row| row.instance_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            selected_ids,
+            vec!["top-instance-0", "top-instance-1", "top-instance-2"]
+        );
+        assert_eq!(proxy.state.top_n.len(), 1);
+
+        proxy.handshake_cache.set_for_test(BTreeMap::from([
+            ("top-key-0".to_string(), now - 600),
+            ("top-key-1".to_string(), now - 600),
+            ("top-key-2".to_string(), now - 600),
+            ("top-key-3".to_string(), now),
+        ]));
+        let cached = proxy.select_top_n_hosts("top-app").unwrap();
+        assert_eq!(
+            cached
+                .iter()
+                .map(|row| row.instance_id.as_str())
+                .collect::<Vec<_>>(),
+            selected_ids
+        );
+
+        proxy
+            .new_client_by_id(
+                "top-instance-4",
+                "top-app",
+                "top-key-4",
+                "",
+                Some(policy(false, &[])),
+            )
+            .unwrap();
+        assert!(proxy.state.top_n.is_empty());
+        proxy.handshake_cache.set_for_test(BTreeMap::from([
+            ("top-key-0".to_string(), now - 600),
+            ("top-key-1".to_string(), now - 600),
+            ("top-key-2".to_string(), now - 600),
+            ("top-key-3".to_string(), now),
+            ("top-key-4".to_string(), now - 1),
+        ]));
+        let refreshed = proxy.select_top_n_hosts("top-app").unwrap();
+        assert_eq!(refreshed.len(), 2);
+        assert!(refreshed.iter().any(|row| row.instance_id == "top-instance-4"));
+
+        proxy.remove_instance("top-instance-4").unwrap();
+        assert!(proxy.state.top_n.is_empty());
+        let direct = proxy.select_top_n_hosts("top-instance-3").unwrap();
+        assert_eq!(direct.len(), 1);
+        assert_eq!(direct[0].instance_id, "top-instance-3");
+        assert!(proxy.select_top_n_hosts("other-app").is_err());
+    }
+}
