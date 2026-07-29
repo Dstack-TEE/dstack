@@ -592,7 +592,6 @@ fn extract_account_uri(credentials_json: &str) -> Option<String> {
         .filter(|c| !c.account_id.is_empty())
         .map(|c| c.account_id)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -607,7 +606,6 @@ mod tests {
     async fn set_caa_all_succeeds_without_configured_domains() {
         let data_dir = tempfile::tempdir().expect("failed to create temp dir");
         let certbot = test_certbot(data_dir.path());
-        // No ZT-Domain configured: nothing to reconcile and no DNS provider is contacted.
         certbot
             .set_caa_all()
             .await
@@ -626,6 +624,23 @@ mod tests {
         assert!(
             err.to_string().contains("already in progress"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn corrupt_acme_credentials_fail_closed() {
+        assert!(acme_url_matches("not-json", "https://acme.test/directory").is_err());
+        assert!(acme_url_matches("{}", "https://acme.test/directory").is_err());
+    }
+
+    #[test]
+    fn valid_acme_credentials_distinguish_directory() {
+        let credentials = r#"{"acme_url":"https://acme.test/directory"}"#;
+        assert!(acme_url_matches(credentials, "https://acme.test/directory")
+            .expect("valid credentials rejected"));
+        assert!(
+            !acme_url_matches(credentials, "https://other.test/directory")
+                .expect("valid credentials rejected")
         );
     }
 }
