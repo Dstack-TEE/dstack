@@ -191,6 +191,36 @@ struct ImagePaths {
     version: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OsImageVerificationStrategy {
+    TdxFullDownload,
+    TdxLiteMeasurement,
+    SevSnpMeasurement,
+    GcpTdxMeasurement,
+    NitroEnclavePcrs,
+    AwsNitroTpmPcrs,
+}
+
+impl OsImageVerificationStrategy {
+    fn select(quote: &AttestationQuote, vm_config: &VmConfig) -> Self {
+        match quote {
+            AttestationQuote::DstackTdx(_) => {
+                if vm_config.tdx_attestation_variant.is_lite()
+                    || vm_config.tdx_measurement.is_some()
+                {
+                    Self::TdxLiteMeasurement
+                } else {
+                    Self::TdxFullDownload
+                }
+            }
+            AttestationQuote::DstackAmdSevSnp(_) => Self::SevSnpMeasurement,
+            AttestationQuote::DstackGcpTdx(_) => Self::GcpTdxMeasurement,
+            AttestationQuote::DstackNitroEnclave(_) => Self::NitroEnclavePcrs,
+            AttestationQuote::DstackAwsNitroTpm(_) => Self::AwsNitroTpmPcrs,
+        }
+    }
+}
+
 pub struct CvmVerifier {
     pub image_cache_dir: String,
     pub download_url: String,
@@ -820,48 +850,39 @@ impl CvmVerifier {
         let mut vm_config = attestation
             .decode_vm_config(&vm_config)
             .context("Failed to decode VM config")?;
-        match &attestation.quote {
-            AttestationQuote::DstackGcpTdx(quote) => {
+        match OsImageVerificationStrategy::select(&attestation.quote, &vm_config) {
+            OsImageVerificationStrategy::GcpTdxMeasurement => {
+                let AttestationQuote::DstackGcpTdx(quote) = &attestation.quote else {
+                    unreachable!("strategy selector returned the wrong GCP TDX branch")
+                };
                 self.verify_os_image_hash_for_gcp_tdx(&vm_config, &quote.tpm_quote)?;
             }
-            AttestationQuote::DstackTdx(_) => {
-                // New images carry a self-contained measurement document even
-                // when the boot kept the legacy attestation selector. Prefer
-                // that signed-MR-bound material; retain image download only
-                // for old legacy images which do not provide it.
-                if vm_config.tdx_attestation_variant.is_lite()
-                    || vm_config.tdx_measurement.is_some()
-                {
-                    self.verify_os_image_hash_for_dstack_tdx_lite(
-                        &vm_config,
-                        attestation,
-                        debug,
-                        details,
-                    )
-                    .await?;
-                } else {
-                    self.verify_os_image_hash_for_dstack_tdx(
-                        &vm_config,
-                        attestation,
-                        debug,
-                        details,
-                    )
-                    .await?;
-                }
+            OsImageVerificationStrategy::TdxLiteMeasurement => {
+                self.verify_os_image_hash_for_dstack_tdx_lite(
+                    &vm_config,
+                    attestation,
+                    debug,
+                    details,
+                )
+                .await?;
             }
-            AttestationQuote::DstackNitroEnclave(_) => {
+            OsImageVerificationStrategy::TdxFullDownload => {
+                self.verify_os_image_hash_for_dstack_tdx(&vm_config, attestation, debug, details)
+                    .await?;
+            }
+            OsImageVerificationStrategy::NitroEnclavePcrs => {
                 let DstackVerifiedReport::DstackNitroEnclave(report) = &attestation.report else {
                     bail!("internal error: nitro quote without a verified nitro report");
                 };
                 self.verify_os_image_hash_for_nitro_enclave(&vm_config, &report.pcrs)?;
             }
-            AttestationQuote::DstackAwsNitroTpm(_) => {
+            OsImageVerificationStrategy::AwsNitroTpmPcrs => {
                 let DstackVerifiedReport::DstackAwsNitroTpm(report) = &attestation.report else {
                     bail!("internal error: NitroTPM quote without a verified NitroTPM report");
                 };
                 self.verify_os_image_hash_for_aws_nitro_tpm(&vm_config, &report.pcrs)?;
             }
-            AttestationQuote::DstackAmdSevSnp(_) => {
+            OsImageVerificationStrategy::SevSnpMeasurement => {
                 self.verify_os_image_hash_for_dstack_sev(
                     attestation,
                     &raw_config,
