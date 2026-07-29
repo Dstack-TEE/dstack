@@ -1140,3 +1140,174 @@ mod peer_url_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod kv_lifecycle_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+    use tempfile::TempDir;
+
+    fn instance(app: &str, octet: u8) -> InstanceData {
+        InstanceData {
+            app_id: app.to_string(),
+            ip: Ipv4Addr::new(10, 0, 0, octet),
+            public_key: format!("public-key-{octet}"),
+            reg_time: octet.into(),
+            port_policy: Some(PortPolicy::default()),
+            port_policy_hash: format!("hash-{octet}"),
+            admin_port_policy: None,
+        }
+    }
+
+    fn node(id: u8) -> NodeData {
+        NodeData {
+            uuid: vec![id; 16],
+            url: format!("https://node-{id}.example.test"),
+            wg_public_key: format!("node-key-{id}"),
+            wg_endpoint: format!("node-{id}.example.test:51820"),
+            wg_ip: format!("10.1.0.{id}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn gateway_kv_batch_009_encoding_persistence_watch_and_corruption() {
+        let temp = TempDir::new().unwrap();
+        let encryption_key = [7u8; 32];
+        let store = KvStore::new(1, vec![2], temp.path(), encryption_key).unwrap();
+        let mut instance_watch = store.watch_instances();
+        let mut cert_watch = store.watch_all_certs();
+
+        let generated_keys = BTreeSet::from([
+            keys::inst("same"),
+            keys::node_info(1),
+            keys::node_status(1),
+            keys::conn("same", 1),
+            keys::handshake("same", 1),
+            keys::last_seen_node(1, 2),
+            keys::peer_addr(1),
+            keys::dns_cred("same"),
+            keys::zt_domain_config("same.example.test"),
+            keys::cert_data("same.example.test"),
+            keys::cert_lock("same.example.test"),
+            keys::cert_attestation_latest("same.example.test"),
+            keys::cert_attestation_history("same.example.test", 1),
+        ]);
+        assert_eq!(generated_keys.len(), 13);
+        assert_eq!(keys::parse_inst_key(&keys::inst("instance-a")), Some("instance-a"));
+        assert_eq!(keys::parse_node_info_key(&keys::node_info(9)), Some(9));
+        assert_eq!(
+            keys::parse_cert_domain(&keys::cert_data("app.example.test")),
+            Some("app.example.test")
+        );
+
+        store.sync_instance("instance-a", &instance("app-a", 10)).unwrap();
+        instance_watch.changed().await.unwrap();
+        store.sync_instance("instance-a", &instance("app-b", 11)).unwrap();
+        store.sync_instance("instance-b", &instance("app-b", 12)).unwrap();
+        instance_watch.changed().await.unwrap();
+        assert_eq!(store.load_all_instances()["instance-a"].app_id, "app-b");
+
+        store.sync_node(2, &node(2)).unwrap();
+        store.set_node_status(2, NodeStatus::Down).unwrap();
+        store.sync_connections("instance-a", 4).unwrap();
+        store.sync_instance_handshake("instance-a", 100).unwrap();
+        store.sync_instance_handshake("instance-a", 101).unwrap();
+        store.sync_node_last_seen(2, 200).unwrap();
+        store.register_peer_url(2, "https://node-2.example.test/sync").unwrap();
+        assert_eq!(store.get_instance_latest_handshake("instance-a"), Some(101));
+        assert_eq!(store.get_node_latest_last_seen(2), Some(200));
+        assert_eq!(store.get_node_status(2), NodeStatus::Down);
+
+        let credential = DnsCredential {
+            id: "credential-a".into(),
+            name: "Test credential".into(),
+            provider: DnsProvider::Cloudflare {
+                api_token: "non-secret-test-token".into(),
+                api_url: Some("http://127.0.0.1:1".into()),
+            },
+            max_dns_wait: Duration::from_secs(3),
+            dns_txt_ttl: 30,
+            created_at: 1,
+            updated_at: 2,
+        };
+        store.save_dns_credential(&credential).unwrap();
+        store.set_default_dns_credential_id(&credential.id).unwrap();
+        assert_eq!(store.get_default_dns_credential().unwrap().id, credential.id);
+
+        let domain = "app.example.test";
+        let domain_config = ZtDomainConfig {
+            domain: domain.into(),
+            dns_cred_id: Some(credential.id.clone()),
+            port: 443,
+            node: Some(1),
+            priority: 5,
+        };
+        store.save_zt_domain_config(&domain_config).unwrap();
+        cert_watch.changed().await.unwrap();
+        let cert = CertData {
+            cert_pem: "test-cert".into(),
+            key_pem: "test-key".into(),
+            not_after: 20,
+            issued_by: 1,
+            issued_at: 10,
+        };
+        store.save_cert_data(domain, &cert).unwrap();
+        let older = CertAttestation {
+            generated_at: 10,
+            generated_by: 1,
+            ..Default::default()
+        };
+        let newer = CertAttestation {
+            generated_at: 20,
+            generated_by: 2,
+            ..Default::default()
+        };
+        store.save_cert_attestation(domain, &older).unwrap();
+        store.save_cert_attestation(domain, &newer).unwrap();
+        store.save_cert_attestation(domain, &newer).unwrap();
+        assert_eq!(
+            store
+                .list_cert_attestations(domain)
+                .iter()
+                .map(|row| row.generated_at)
+                .collect::<Vec<_>>(),
+            vec![20, 10]
+        );
+        assert!(store.try_acquire_cert_lock(domain, 60));
+        assert!(!store.try_acquire_cert_lock(domain, 60));
+        store.release_cert_lock(domain).unwrap();
+        assert!(store.try_acquire_cert_lock(domain, 60));
+
+        store
+            .persistent()
+            .write()
+            .put(keys::inst("corrupt"), b"not-cbor".to_vec())
+            .unwrap();
+        store
+            .persistent()
+            .write()
+            .put(keys::cert_data("corrupt.example.test"), vec![0xff, 0x00])
+            .unwrap();
+        assert!(!store.load_all_instances().contains_key("corrupt"));
+        assert!(store.get_cert_data("corrupt.example.test").is_none());
+        assert!(store.persist_if_dirty().unwrap());
+        drop(store);
+
+        let restarted = KvStore::new(1, vec![2], temp.path(), encryption_key).unwrap();
+        assert_eq!(restarted.load_all_instances().len(), 2);
+        assert_eq!(restarted.load_all_nodes()[&2], node(2));
+        assert_eq!(restarted.get_node_status(2), NodeStatus::Down);
+        assert_eq!(restarted.get_zt_domain_config(domain).unwrap().port, 443);
+        assert_eq!(restarted.get_cert_data(domain).unwrap().issued_at, 10);
+        assert_eq!(restarted.get_default_dns_credential().unwrap().id, "credential-a");
+        assert!(restarted.get_instance_handshakes("instance-a").is_empty());
+        assert!(restarted.get_node_last_seen_by_all(2).is_empty());
+
+        restarted.sync_delete_instance("instance-a").unwrap();
+        assert!(restarted.persist_if_dirty().unwrap());
+        drop(restarted);
+        let final_store = KvStore::new(1, vec![2], temp.path(), encryption_key).unwrap();
+        assert!(!final_store.load_all_instances().contains_key("instance-a"));
+        assert!(final_store.load_all_instances().contains_key("instance-b"));
+    }
+}
