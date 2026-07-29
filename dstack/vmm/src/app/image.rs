@@ -219,6 +219,23 @@ impl Image {
     }
 }
 
+fn resolve_artifact(base_path: &Path, value: &str, label: &str) -> Result<PathBuf> {
+    let candidate = base_path.join(value);
+    let resolved = candidate.canonicalize()
+        .with_context(|| format!({label} does not exist: {}, candidate.display()))?;
+    if !resolved.starts_with(base_path) {
+        bail!({label} escapes image directory: {}, candidate.display());
+    }
+    if !resolved.is_file() {
+        bail!({label} is not a file: {}, candidate.display());
+    }
+    Ok(resolved)
+}
+
+fn resolve_optional_artifact(base_path: &Path, value: Option<&str>, label: &str) -> Result<Option<PathBuf>> {
+    value.map(|value| resolve_artifact(base_path, value, label)).transpose()
+}
+
 fn load_measurement_document<T>(
     base_path: &Path,
     checksum_file: &Option<Vec<u8>>,
