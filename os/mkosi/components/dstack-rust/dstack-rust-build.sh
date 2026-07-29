@@ -43,12 +43,22 @@ if [[ ${DSTACK_SKIP_RUST:-0} != 1 ]]; then
   else
     export CARGO_TARGET_DIR="$ephemeral_target"
   fi
+  # CARGO_HOME needs the same treatment as the target directory, and for a
+  # sharper reason: it holds the git checkouts of dependencies, and rustc
+  # embeds their source paths in the binary (panic locations, tracing call
+  # sites). Moving it without remapping made a cached build's binaries differ
+  # from a cold build's -- the rootfs hash and every measurement downstream
+  # with them -- while every path that was remapped looked identical.
   # Not `[[ ... ]] && export ...`: under set -e a false test makes the whole
   # list non-zero and kills the build on the cold path, where this is unset.
   if [[ -n ${DSTACK_CARGO_HOME:-} ]]; then export CARGO_HOME="$DSTACK_CARGO_HOME"; fi
+  # Remapped unconditionally, not only when it moved: both layouts have to land
+  # on the same string for their binaries to match, so the inherited path needs
+  # the rule as much as the persisted one does.
+  home_remap="--remap-path-prefix=${CARGO_HOME:?}=/usr/src/dstack-cargo-home"
   # A single codegen unit avoids LLVM partition/scheduling differences across
   # hosts with different CPU counts while retaining parallel crate builds.
-  export RUSTFLAGS="${RUSTFLAGS:-} $target_remap --remap-path-prefix=$ROOT=/usr/src/dstack --remap-path-prefix=$build_root=/usr/src/dstack-build -C codegen-units=1 -C strip=debuginfo"
+  export RUSTFLAGS="${RUSTFLAGS:-} $target_remap $home_remap --remap-path-prefix=$ROOT=/usr/src/dstack --remap-path-prefix=$build_root=/usr/src/dstack-build -C codegen-units=1 -C strip=debuginfo"
   cargo build --locked --release --manifest-path "$ROOT/dstack/Cargo.toml" \
     -p dstack-guest-agent -p dstack-util
   install -m0755 "$CARGO_TARGET_DIR/release/dstack-guest-agent" \
