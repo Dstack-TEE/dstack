@@ -27,6 +27,7 @@ use rand::seq::IteratorRandom;
 use rinja::Template as _;
 use safe_write::safe_write;
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use smallvec::{smallvec, SmallVec};
 use tokio::sync::{
     mpsc::{unbounded_channel, UnboundedSender},
@@ -151,9 +152,22 @@ impl ProxyInner {
         let config = Arc::new(config);
 
         // Initialize WaveKV store without peers (peers will be added dynamically from bootnode)
+        let dns_credential_key = sha2::Sha256::digest(
+            [
+                b"dstack-gateway:dns-credential:v1\0".as_slice(),
+                config.admin.auth_token.as_bytes(),
+            ]
+            .concat(),
+        )
+        .into();
         let kv_store = Arc::new(
-            KvStore::new(config.sync.node_id, vec![], &config.sync.data_dir)
-                .context("failed to initialize WaveKV store")?,
+            KvStore::new(
+                config.sync.node_id,
+                vec![],
+                &config.sync.data_dir,
+                dns_credential_key,
+            )
+            .context("failed to initialize WaveKV store")?,
         );
         info!(
             "WaveKV store initialized: node_id={}, sync_enabled={}",
