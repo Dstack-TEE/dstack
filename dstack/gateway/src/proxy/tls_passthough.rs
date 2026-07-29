@@ -315,6 +315,7 @@ pub(crate) async fn proxy_to_app(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proxy::AddressInfo;
 
     #[tokio::test]
     async fn gateway_proxy_batch_003_bounded_multi_host_failover() -> Result<()> {
