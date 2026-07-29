@@ -471,6 +471,79 @@ mod tests {
             .unwrap();
     }
 
+    #[tokio::test]
+    async fn tdx_quote_collateral_and_tcb_matrix() {
+        use dcap_qvl::collateral::CollateralClient;
+        use dcap_qvl::tcb_info::TcbStatus;
+
+        fn set_tcb_status(
+            generator: &TdxGenerator,
+            collateral: &mut QuoteCollateralV3,
+            status: &str,
+        ) {
+            let mut document: serde_json::Value =
+                serde_json::from_str(&collateral.tcb_info).unwrap();
+            document["tcbLevels"][0]["tcbStatus"] = status.into();
+            collateral.tcb_info = document.to_string();
+            collateral.tcb_info_signature =
+                sign_raw(&generator.tcb_signer_key, collateral.tcb_info.as_bytes()).unwrap();
+        }
+
+        let generator = TdxGenerator::from_seed([0x72; 32]).unwrap();
+        let evidence = generator.attest([0x42; 64]).unwrap();
+        let verifier = dcap_qvl::verify::QuoteVerifier::new(generator.root_ca_der());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let current = verifier
+            .verify(&evidence.quote, &evidence.collateral, now)
+            .unwrap();
+        assert_eq!(current.platform_status.status, TcbStatus::UpToDate);
+        assert_eq!(current.qe_status.status, TcbStatus::UpToDate);
+
+        let mut outdated = evidence.collateral.clone();
+        set_tcb_status(&generator, &mut outdated, "OutOfDate");
+        let outdated = verifier.verify(&evidence.quote, &outdated, now).unwrap();
+        assert_eq!(outdated.platform_status.status, TcbStatus::OutOfDate);
+
+        let mut revoked = evidence.collateral.clone();
+        set_tcb_status(&generator, &mut revoked, "Revoked");
+        assert!(verifier.verify(&evidence.quote, &revoked, now).is_err());
+
+        let after_expiry = now + 32 * 24 * 60 * 60;
+        assert!(verifier
+            .verify(&evidence.quote, &evidence.collateral, after_expiry)
+            .is_err());
+
+        let mut bad_signature = evidence.collateral.clone();
+        bad_signature.tcb_info_signature[0] ^= 1;
+        assert!(verifier
+            .verify(&evidence.quote, &bad_signature, now)
+            .is_err());
+
+        let mut malformed = evidence.collateral.clone();
+        malformed.tcb_info = "{".into();
+        malformed.tcb_info_signature =
+            sign_raw(&generator.tcb_signer_key, malformed.tcb_info.as_bytes()).unwrap();
+        assert!(verifier.verify(&evidence.quote, &malformed, now).is_err());
+
+        let mut tampered_quote = evidence.quote.clone();
+        tampered_quote[100] ^= 1;
+        assert!(verifier
+            .verify(&tampered_quote, &evidence.collateral, now)
+            .is_err());
+
+        let unavailable = CollateralClient::with_default_http("http://127.0.0.1:9").unwrap();
+        assert!(unavailable.fetch(&evidence.quote).await.is_err());
+
+        let recovered = verifier
+            .verify(&evidence.quote, &evidence.collateral, now)
+            .unwrap();
+        assert_eq!(recovered.platform_status.status, TcbStatus::UpToDate);
+    }
+
     #[test]
     fn generated_quote_passes_real_qvl_and_negative_cases_fail() {
         let generator = TdxGenerator::new().unwrap();
