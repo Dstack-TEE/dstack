@@ -81,3 +81,89 @@ pub(super) fn create_shared_disk(
         .with_context(|| format!("failed to publish disk image at {}", disk_path.display()))?;
     Ok(())
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::create_shared_disk;
+    use fatfs::{FileSystem, FsOptions};
+    use std::{fs, io::Read, sync::Arc, thread};
+    use tempfile::TempDir;
+
+    fn read_file(disk: &std::path::Path, name: &str) -> Vec<u8> {
+        let mut image = fs::OpenOptions::new().read(true).write(true).open(disk).unwrap();
+        let filesystem = FileSystem::new(&mut image, FsOptions::new()).unwrap();
+        let mut file = filesystem.root_dir().open_file(name).unwrap();
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents).unwrap();
+        contents
+    }
+
+    #[test]
+    fn creates_fixed_size_disk_with_exact_regular_file_contents() {
+        let root = TempDir::new().unwrap();
+        let shared = root.path().join("shared");
+        fs::create_dir(&shared).unwrap();
+        fs::write(shared.join("app-compose.json"), b"compose").unwrap();
+        fs::create_dir(shared.join("ignored-directory")).unwrap();
+        let disk = root.path().join("host-shared.img");
+        create_shared_disk(&disk, &shared).unwrap();
+        assert_eq!(fs::metadata(&disk).unwrap().len(), 128 * 1024 * 1024);
+        assert_eq!(read_file(&disk, "app-compose.json"), b"compose");
+    }
+
+    #[test]
+    fn missing_or_oversized_sources_never_publish_partial_disk() {
+        let root = TempDir::new().unwrap();
+        let missing_disk = root.path().join("missing.img");
+        assert!(create_shared_disk(&missing_disk, root.path().join("absent")).is_err());
+        assert!(!missing_disk.exists());
+
+        let shared = root.path().join("oversized");
+        fs::create_dir(&shared).unwrap();
+        let source = fs::File::create(shared.join("too-large")).unwrap();
+        source.set_len(129 * 1024 * 1024).unwrap();
+        let oversized_disk = root.path().join("oversized.img");
+        assert!(create_shared_disk(&oversized_disk, &shared).is_err());
+        assert!(!oversized_disk.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_sources_cannot_escape_shared_root() {
+        use std::os::unix::fs::symlink;
+        let root = TempDir::new().unwrap();
+        let shared = root.path().join("shared");
+        fs::create_dir(&shared).unwrap();
+        fs::write(root.path().join("outside-secret"), b"must-not-copy").unwrap();
+        fs::write(shared.join("regular"), b"regular").unwrap();
+        symlink(root.path().join("outside-secret"), shared.join("escape")).unwrap();
+        let disk = root.path().join("host-shared.img");
+        create_shared_disk(&disk, &shared).unwrap();
+        assert_eq!(read_file(&disk, "regular"), b"regular");
+        let mut image = fs::OpenOptions::new().read(true).write(true).open(disk).unwrap();
+        let filesystem = FileSystem::new(&mut image, FsOptions::new()).unwrap();
+        assert!(filesystem.root_dir().open_file("escape").is_err());
+    }
+
+    #[test]
+    fn concurrent_publication_never_exposes_partial_image() {
+        let root = TempDir::new().unwrap();
+        let shared = root.path().join("shared");
+        fs::create_dir(&shared).unwrap();
+        fs::write(shared.join("payload"), vec![7_u8; 1024 * 1024]).unwrap();
+        let disk = Arc::new(root.path().join("host-shared.img"));
+        let shared = Arc::new(shared);
+        let workers: Vec<_> = (0..2)
+            .map(|_| {
+                let disk = Arc::clone(&disk);
+                let shared = Arc::clone(&shared);
+                thread::spawn(move || create_shared_disk(disk.as_path(), shared.as_path()))
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+        assert_eq!(read_file(&disk, "payload"), vec![7_u8; 1024 * 1024]);
+    }
+}
