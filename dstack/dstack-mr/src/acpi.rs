@@ -536,12 +536,11 @@ mod tests {
             .expect("QEMU 7 must be rejected")
             .to_string()
             .contains("Unsupported QEMU version"));
-        assert!(test_machine(false, Some("9.1"))
+        let error = test_machine(false, Some("9.1"))
             .versioned_options()
             .err()
-            .expect("incomplete version must be rejected")
-            .to_string()
-            .contains("exactly 3 parts"));
+            .expect("incomplete version must be rejected");
+        assert!(format!("{error:#}").contains("exactly 3 parts"));
 
         let mut tables = Vec::new();
         for signature in ["DSDT", "FACP", "APIC", "MCFG", "WAET", "RSDT"] {
