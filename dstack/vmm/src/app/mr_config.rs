@@ -125,3 +125,128 @@ impl VmWorkDir {
         .to_canonical_json())
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::{snp_host_data, tdx_mr_config_id};
+    use crate::app::VmWorkDir;
+    use base64::prelude::*;
+    use dstack_types::{
+        mr_config::MrConfigV3, shared_filenames::SYS_CONFIG, AppCompose, KeyProviderKind,
+    };
+    use fs_err as fs;
+    use tempfile::TempDir;
+
+    fn compose(no_instance_id: bool, gpu_policy: Option<&str>) -> (String, AppCompose) {
+        let requirements = gpu_policy
+            .map(|policy| format!(r#","requirements":{{"gpu_policy":{policy}}}"#))
+            .unwrap_or_default();
+        let raw = format!(
+            r#"{{"manifest_version":"3","name":"case","runner":"docker-compose","gateway_enabled":false,"key_provider":"none","no_instance_id":{no_instance_id}{requirements}}}"#
+        );
+        let parsed = serde_json::from_str(&raw).unwrap();
+        (raw, parsed)
+    }
+
+    fn workdir(raw_compose: &str) -> (TempDir, VmWorkDir) {
+        let temp = TempDir::new().unwrap();
+        let workdir = VmWorkDir::new(temp.path().join("vm"));
+        fs::create_dir_all(workdir.shared_dir()).unwrap();
+        fs::write(workdir.app_compose_path(), raw_compose).unwrap();
+        (temp, workdir)
+    }
+
+    fn write_document(workdir: &VmWorkDir, document: Option<&str>) {
+        let value = serde_json::json!({
+            "docker_registry": null,
+            "host_api_url": null,
+            "mr_config": document,
+            "vm_config": "{}"
+        });
+        fs::write(
+            workdir.shared_dir().join(SYS_CONFIG),
+            serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn document(app_byte: u8) -> String {
+        MrConfigV3::new(
+            vec![app_byte; 20],
+            vec![2; 32],
+            None,
+            KeyProviderKind::None,
+            vec![],
+            vec![3; 20],
+        )
+        .to_canonical_json()
+    }
+
+    #[test]
+    fn platform_carriers_match_v3_document_and_bind_mutations() {
+        let (raw, app) = compose(true, None);
+        let (_temp, workdir) = workdir(&raw);
+        let first = document(1);
+        write_document(&workdir, Some(&first));
+        let tdx_first = tdx_mr_config_id(&workdir, &app).unwrap();
+        let snp_first = snp_host_data(&workdir).unwrap();
+        assert_eq!(
+            tdx_first,
+            BASE64_STANDARD.encode(MrConfigV3::tdx_mr_config_id_from_document(&first))
+        );
+        assert_eq!(
+            snp_first,
+            BASE64_STANDARD.encode(MrConfigV3::snp_host_data_from_document(&first))
+        );
+
+        let second = document(9);
+        write_document(&workdir, Some(&second));
+        assert_ne!(tdx_mr_config_id(&workdir, &app).unwrap(), tdx_first);
+        assert_ne!(snp_host_data(&workdir).unwrap(), snp_first);
+    }
+
+    #[test]
+    fn malformed_and_missing_documents_fail_closed() {
+        let (raw, app) = compose(true, None);
+        let (_temp, workdir) = workdir(&raw);
+        write_document(&workdir, Some("{invalid"));
+        assert!(tdx_mr_config_id(&workdir, &app).is_err());
+        assert!(snp_host_data(&workdir).is_err());
+        write_document(&workdir, None);
+        assert!(snp_host_data(&workdir).is_err());
+    }
+
+    #[test]
+    fn prepared_document_is_deterministic_and_binds_compose() {
+        let (raw, app) = compose(true, None);
+        let (_temp, workdir) = workdir(&raw);
+        let first = workdir.prepare_mr_config_v3(&app, false).unwrap();
+        let repeated = workdir.prepare_mr_config_v3(&app, false).unwrap();
+        assert_eq!(first, repeated);
+        let parsed = MrConfigV3::from_document(&first).unwrap();
+        assert!(parsed.instance_id.is_empty());
+
+        let (changed_raw, changed_app) = compose(true, Some(r#"{"allow_debug":true}"#));
+        fs::write(workdir.app_compose_path(), changed_raw).unwrap();
+        assert_ne!(
+            workdir.prepare_mr_config_v3(&changed_app, false).unwrap(),
+            first
+        );
+    }
+
+    #[test]
+    fn gpu_policy_changes_are_measured() {
+        let (raw, app) = compose(true, Some("{}"));
+        let (_temp, workdir) = workdir(&raw);
+        let baseline = workdir.prepare_mr_config_v3(&app, true).unwrap();
+        let (changed_raw, changed_app) = compose(true, Some(r#"{"allow_debug":true}"#));
+        fs::write(workdir.app_compose_path(), changed_raw).unwrap();
+        let changed = workdir.prepare_mr_config_v3(&changed_app, true).unwrap();
+        assert_ne!(baseline, changed);
+        assert_ne!(
+            MrConfigV3::from_document(&baseline).unwrap().gpu_policy_hash,
+            MrConfigV3::from_document(&changed).unwrap().gpu_policy_hash
+        );
+    }
+}
