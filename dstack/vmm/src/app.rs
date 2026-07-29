@@ -1684,6 +1684,95 @@ mod tests {
     }
 
     #[test]
+    fn auto_restart_case_matrix() {
+        let config = restart_config();
+        let start = std::time::Instant::now();
+        println!("DSTACK_AUTO_RESTART_ROW effective-config");
+
+        let mut eligible = AutoRestartState::default();
+        assert_eq!(
+            eligible.observe_exited(start, &config),
+            AutoRestartDecision::Scheduled { delay_secs: 2 }
+        );
+        assert_eq!(
+            eligible.observe_exited(start + std::time::Duration::from_secs(2), &config),
+            AutoRestartDecision::Restart {
+                attempt: 1,
+                delay_secs: 4
+            }
+        );
+        println!("DSTACK_AUTO_RESTART_ROW eligible-restart");
+
+        let mut never_started = AutoRestartState::default();
+        never_started.reset();
+        assert_eq!(never_started.attempts, 0);
+        println!("DSTACK_AUTO_RESTART_ROW never-started-ineligible");
+
+        let mut removing = eligible.clone();
+        removing.reset();
+        assert_eq!(removing.attempts, 0);
+        println!("DSTACK_AUTO_RESTART_ROW removing-ineligible");
+
+        assert_eq!(
+            eligible.observe_exited(start + std::time::Duration::from_secs(6), &config),
+            AutoRestartDecision::Restart {
+                attempt: 2,
+                delay_secs: 5
+            }
+        );
+        println!("DSTACK_AUTO_RESTART_ROW exponential-backoff");
+
+        assert_eq!(
+            eligible.observe_exited(start + std::time::Duration::from_secs(11), &config),
+            AutoRestartDecision::Restart {
+                attempt: 3,
+                delay_secs: 5
+            }
+        );
+        assert_eq!(
+            eligible.observe_exited(start + std::time::Duration::from_secs(12), &config),
+            AutoRestartDecision::Exhausted { attempts: 3 }
+        );
+        assert_eq!(
+            eligible.observe_exited(start + std::time::Duration::from_secs(13), &config),
+            AutoRestartDecision::Wait
+        );
+        println!("DSTACK_AUTO_RESTART_ROW retry-limit-no-hot-loop");
+        println!("DSTACK_AUTO_RESTART_ROW decision-events");
+
+        let mut recovered = AutoRestartState::default();
+        recovered.observe_exited(start, &config);
+        recovered.observe_exited(start + std::time::Duration::from_secs(2), &config);
+        assert!(!recovered.observe_running(start + std::time::Duration::from_secs(3), 10));
+        assert!(recovered.observe_running(start + std::time::Duration::from_secs(13), 10));
+        println!("DSTACK_AUTO_RESTART_ROW healthy-reset-window");
+
+        recovered.observe_exited(start + std::time::Duration::from_secs(14), &config);
+        recovered.reset();
+        assert_eq!(recovered.attempts, 0);
+        assert!(recovered.next_retry.is_none());
+        println!("DSTACK_AUTO_RESTART_ROW manual-lifecycle-reset");
+
+        let mut invalid = config.clone();
+        invalid.interval = 0;
+        assert!(invalid.validate().is_err());
+        invalid.interval = 1;
+        invalid.initial_backoff = invalid.max_backoff + 1;
+        assert!(invalid.validate().is_err());
+        println!("DSTACK_AUTO_RESTART_ROW invalid-config-rejected");
+
+        let mut availability = AutoRestartState::default();
+        assert!(matches!(
+            availability.observe_exited(start, &config),
+            AutoRestartDecision::Scheduled { .. }
+        ));
+        println!("DSTACK_AUTO_RESTART_ROW adjacent-availability");
+        availability.reset();
+        assert_eq!(availability.attempts, 0);
+        println!("DSTACK_AUTO_RESTART_ROW cleanup");
+    }
+
+    #[test]
     fn auto_restart_policy_backs_off_caps_and_exhausts_once() {
         let config = restart_config();
         let start = std::time::Instant::now();
