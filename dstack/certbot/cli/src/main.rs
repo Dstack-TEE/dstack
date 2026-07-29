@@ -152,7 +152,7 @@ async fn renew(config: &PathBuf, once: bool, force: bool) -> Result<()> {
         .await
         .context("Failed to build bot")?;
     if once {
-        bot.renew(force).await?;
+        bot.renew_and_run_hook(force).await?;
     } else {
         bot.run().await;
     }
@@ -162,7 +162,7 @@ async fn renew(config: &PathBuf, once: bool, force: bool) -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     {
-        use tracing_subscriber::{fmt, EnvFilter};
+        use tracing_subscriber::{EnvFilter, fmt};
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
         fmt().with_env_filter(filter).with_ansi(false).init();
     }
