@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
-    fs::OpenOptions,
     io::{ErrorKind, Write},
     path::{Path, PathBuf},
 };
