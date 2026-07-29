@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::fmt::Debug;
+use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -10,6 +11,8 @@ use anyhow::{bail, Context, Result};
 use hickory_resolver::lookup::Lookup;
 use hickory_resolver::proto::rr::RData;
 use hickory_resolver::TokioResolver;
+use hickory_resolver::config::{NameServerConfig, ResolverConfig};
+use hickory_resolver::name_server::TokioConnectionProvider;
 use proxy_protocol::ProxyHeader;
 use tokio::{io::AsyncWriteExt, net::TcpStream, task::JoinSet, time::timeout};
 use tracing::{debug, info, warn};
@@ -60,11 +63,15 @@ pub(crate) struct AppAddressResolver {
 }
 
 impl AppAddressResolver {
-    pub(crate) fn new(prefix: String, compat: bool) -> Result<Self> {
+    pub(crate) fn new(
+        prefix: String,
+        compat: bool,
+        dns_server: Option<SocketAddr>,
+    ) -> Result<Self> {
         Ok(Self {
             prefix,
             compat,
-            resolver: app_address_tokio_resolver_from_system_conf()?,
+            resolver: app_address_tokio_resolver(dns_server)?,
         })
     }
 
@@ -73,8 +80,19 @@ impl AppAddressResolver {
     }
 }
 
-fn app_address_tokio_resolver_from_system_conf() -> Result<TokioResolver> {
-    let mut builder = TokioResolver::builder_tokio().context("failed to read system dns config")?;
+fn app_address_tokio_resolver(dns_server: Option<SocketAddr>) -> Result<TokioResolver> {
+    let mut builder = if let Some(dns_server) = dns_server {
+        let mut name_server = NameServerConfig::udp_and_tcp(dns_server.ip());
+        for connection in &mut name_server.connections {
+            connection.port = dns_server.port();
+        }
+        TokioResolver::builder_with_config(
+            ResolverConfig::from_parts(None, Vec::new(), vec![name_server]),
+            TokioConnectionProvider::default(),
+        )
+    } else {
+        TokioResolver::builder_tokio().context("failed to read system dns config")?
+    };
 
     // App-address records may appear shortly after a CVM/app is registered.
     // Reusing one resolver enables positive TXT caching, but we do not want a
@@ -346,7 +364,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_app_address() -> Result<()> {
-        let resolver = AppAddressResolver::new("_dstack-app-address".to_string(), false)?;
+        let resolver = AppAddressResolver::new("_dstack-app-address".to_string(), false, None)?;
         let app_addr = resolver
             .resolve("3327603e03f5bd1f830812ca4a789277fc31f577.app.dstack.org")
             .await?;
