@@ -234,21 +234,22 @@ async fn fetch_port_policy(ip: Ipv4Addr, agent_port: u16) -> Result<PortPolicy, 
         .context("agent Info() rpc failed")
         .map_err(FetchError::Transient)?;
 
-    // Anything below this point is the agent telling us something we can't
-    // turn into port_policy — treat as permanent.
-    if info.tcb_info.is_empty() {
-        // Legacy CVM with public_tcbinfo=false; we cannot inspect app-compose
-        // remotely. Cache the default (open) policy so we don't keep retrying.
-        // Apps that need restrict_mode must run a CVM that reports policy at
-        // registration time — they cannot rely on lazy fetch.
+    parse_info_port_policy(&info.tcb_info)
+}
+
+fn parse_info_port_policy(tcb_info: &str) -> Result<PortPolicy, FetchError> {
+    // Legacy CVM with public_tcbinfo=false; we cannot inspect app-compose
+    // remotely. Cache the default (open) policy so we don't keep retrying.
+    // Apps that need restrict_mode must report policy during registration.
+    if tcb_info.is_empty() {
         return Ok(PortPolicy::default());
     }
-    let tcb: serde_json::Value = serde_json::from_str(&info.tcb_info)
+    let tcb: serde_json::Value = serde_json::from_str(tcb_info)
         .context("invalid tcb_info json")
         .map_err(FetchError::Permanent)?;
     let raw = tcb
         .get("app_compose")
-        .and_then(|v| v.as_str())
+        .and_then(|value| value.as_str())
         .ok_or_else(|| FetchError::Permanent(anyhow::anyhow!("tcb_info missing app_compose")))?;
     let app_compose: AppCompose = serde_json::from_str(raw)
         .context("failed to parse app_compose from tcb_info")
@@ -257,7 +258,7 @@ async fn fetch_port_policy(ip: Ipv4Addr, agent_port: u16) -> Result<PortPolicy, 
         .port_policy
         .ports
         .into_iter()
-        .map(|p| (p.port, PortFlags { pp: p.pp }))
+        .map(|port| (port.port, PortFlags { pp: port.pp }))
         .collect();
     Ok(PortPolicy {
         ports,
