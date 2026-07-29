@@ -197,7 +197,21 @@ describe('API Compatibility Tests', () => {
 
       expect(response.status).toBe(400);
     });
-  });
+
+
+    it('should reject oversized and non-hex measurements before backend use', async () => {
+      for (const mrAggregated of ['0x' + 'ab'.repeat(33), 'not-hex']) {
+        const response = await appFetch(new Request('http://localhost:3001/bootAuth/app', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...validBootInfo, mrAggregated }),
+        }));
+
+        expect(response.status).toBe(400);
+      }
+      expect(mockReadContract).not.toHaveBeenCalled();
+    });
+});
 
   describe('POST /bootAuth/kms', () => {
     const validBootInfo = {
