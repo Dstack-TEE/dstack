@@ -538,3 +538,25 @@ fn extract_account_uri(credentials_json: &str) -> Option<String> {
         .filter(|c| !c.account_id.is_empty())
         .map(|c| c.account_id)
 }
+
+#[cfg(test)]
+mod credential_tests {
+    use super::acme_url_matches;
+
+    #[test]
+    fn corrupt_acme_credentials_fail_closed() {
+        assert!(acme_url_matches("not-json", "https://acme.test/directory").is_err());
+        assert!(acme_url_matches("{}", "https://acme.test/directory").is_err());
+    }
+
+    #[test]
+    fn valid_acme_credentials_distinguish_directory() {
+        let credentials = r#"{"acme_url":"https://acme.test/directory"}"#;
+        assert!(acme_url_matches(credentials, "https://acme.test/directory")
+            .expect("valid credentials rejected"));
+        assert!(
+            !acme_url_matches(credentials, "https://other.test/directory")
+                .expect("valid credentials rejected")
+        );
+    }
+}
