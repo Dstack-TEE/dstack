@@ -232,3 +232,21 @@ The `SignCert` RPC is used by the dstack app to sign a TLS certificate. In this 
 - Verify the CSR signature
 - Query the smart contract to check if the app is authorized
 - If authorized, sign the CSR with the CA root key and return the certificate chain to the app
+
+## Cold backup and recovery
+
+KMS root material is backed up as a complete, offline copy of `core.cert_dir`.
+There is no online backup RPC. Stop the KMS before taking or restoring a copy,
+preserve file modes and ownership, and protect the backup with the same controls
+as the live private keys. Do not copy only one key: the root CA, root K256 key,
+temporary CA, RPC identity, domain, and public certificates form one identity
+set.
+
+A supported recovery restores the complete directory while KMS is stopped,
+verifies that every private-key file remains owner-only (`0600`), and then
+starts KMS with the unchanged configuration. Compare `KMS.GetMeta` before the
+backup and after recovery: `ca_cert` and `k256_pubkey` must match exactly. KMS
+must fail closed when a required key is missing or malformed; never generate a
+new identity to repair a partial restore. Orphaned `*.private-tmp` files from an
+interrupted atomic write are not trust anchors and may be removed only after the
+final key file has been verified.
