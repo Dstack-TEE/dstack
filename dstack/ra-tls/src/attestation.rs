@@ -102,6 +102,29 @@ async fn verify_cert(
         .verify_with_ra_pubkey(&public_key_der, verifier)
         .await
         .context("RA-TLS attestation verification failed")?;
+    if app_id.is_some() || app_info.is_some() {
+        let attested = attestation
+            .decode_app_info(false)
+            .context("certificate identity extensions require attested app info")?;
+        if let Some(extension) = &app_id {
+            if extension != &attested.app_id {
+                bail!("certificate app-id extension does not match attested app id");
+            }
+        }
+        if let Some(extension) = &app_info {
+            let matches = extension.app_id == attested.app_id
+                && extension.compose_hash == attested.compose_hash
+                && extension.instance_id == attested.instance_id
+                && extension.device_id == attested.device_id
+                && extension.mr_system == attested.mr_system
+                && extension.mr_aggregated == attested.mr_aggregated
+                && extension.os_image_hash == attested.os_image_hash
+                && extension.key_provider_info == attested.key_provider_info;
+            if !matches {
+                bail!("certificate app-info extension does not match attested app info");
+            }
+        }
+    }
     Ok(VerifiedRaTlsCert {
         public_key_der,
         attestation,
