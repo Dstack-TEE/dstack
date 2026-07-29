@@ -55,6 +55,8 @@ enum Command {
     /// Start the VMM server (default mode)
     #[default]
     Serve,
+    /// Validate the effective server configuration without starting services.
+    CheckConfig,
     /// One-shot VM execution mode for debugging
     Run(RunArgs),
     /// Internal per-VM QEMU/swtpm launcher.
@@ -188,6 +190,10 @@ async fn main() -> Result<()> {
     // Handle commands
     match args.command.unwrap_or_default() {
         Command::VmLauncher(_) => unreachable!("launcher mode handled before config loading"),
+        Command::CheckConfig => {
+            println!("configuration is valid");
+            return Ok(());
+        }
         Command::Run(run_args) => {
             // One-shot VM execution mode
             return one_shot::run_one_shot(
