@@ -238,6 +238,12 @@ impl CertStoreBuilder {
     /// The domain is the base domain (e.g., "example.com").
     /// All gateway certificates are wildcard certs for "*.{domain}".
     pub fn add_cert(&mut self, domain: &str, data: &CertData) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .context("system time is before Unix epoch")?
+            .as_secs();
+        anyhow::ensure!(data.not_after > now, "certificate is expired");
+
         let certified_key = parse_certified_key(&data.cert_pem, &data.key_pem)
             .with_context(|| format!("failed to parse certificate for {}", domain))?;
 
