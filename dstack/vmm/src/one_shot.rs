@@ -325,9 +325,6 @@ Compose file content (first 200 chars):
     } else {
         println!("# Executing QEMU...");
 
-        // Change working directory to match supervisor process behavior
-        std::env::set_current_dir(&workdir_path).context("Failed to change working directory")?;
-
         let mut cmd = std::process::Command::new(&process_config.command);
         cmd.args(&process_config.args);
 
@@ -378,7 +375,7 @@ Compose file content (first 200 chars):
             }
 
             eprintln!("# Try running with --dry-run to check the generated command");
-            std::process::exit(status.code().unwrap_or(1));
+            anyhow::bail!("QEMU exited with status: {status}");
         }
     }
 
