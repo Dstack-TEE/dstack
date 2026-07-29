@@ -109,19 +109,28 @@ fi
 # on every source edit. Sorted for a stable digest, and the file list itself is
 # hashed too so that deleting a skeleton file also moves the key.
 base_inputs_digest() {
+  local flavor=$1 skeleton
+  local skeletons=("$SELF/mkosi.skeleton")
+  if [[ -d $SELF/mkosi.profiles/$flavor/mkosi.skeleton ]]; then
+    skeletons+=("$SELF/mkosi.profiles/$flavor/mkosi.skeleton")
+  fi
   {
-    find "$SELF/mkosi.skeleton" -type f -o -type l | sort
-    echo "--"
-    cat "$SELF/mkosi.conf" "$SELF/mkosi.tools.conf"
-    for f in "$SELF"/mkosi.profiles/*/mkosi.conf; do
-      echo "-- $f"
-      cat "$f"
+    # Hash relative names, types and modes as well as contents. Relative names
+    # let worktrees share a cache; types and modes cover inputs that sha256sum
+    # alone cannot distinguish.
+    for skeleton in "${skeletons[@]}"; do
+      echo "-- skeleton ${skeleton#"$SELF"/}"
+      (cd "$skeleton" && find . -mindepth 1 -printf '%P %y %m\n' | sort)
+      (cd "$skeleton" && find . -type f -print0 | sort -z | xargs -0 -r sha256sum)
+      (cd "$skeleton" && find . -type l -print0 | sort -z | \
+        while IFS= read -r -d '' link; do
+          printf '%s -> %s\n' "${link#./}" "$(readlink "$link")"
+        done)
     done
-    find "$SELF/mkosi.skeleton" -type f -print0 | sort -z | xargs -0 -r sha256sum
-    find "$SELF/mkosi.skeleton" -type l -print0 | sort -z | \
-      while IFS= read -r -d '' link; do
-        printf '%s -> %s\n' "$link" "$(readlink "$link")"
-      done
+    echo "-- mkosi.conf"
+    cat "$SELF/mkosi.conf" "$SELF/mkosi.tools.conf"
+    echo "-- profile/$flavor/mkosi.conf"
+    cat "$SELF/mkosi.profiles/$flavor/mkosi.conf"
   } | sha256sum | cut -c1-32
 }
 
@@ -165,7 +174,7 @@ build_one() {
     # mkosi.skeleton/, leaves the key untouched, so mkosi would restore the
     # stale tree and the change would silently not be in the image. Mixing the
     # digest below into the key restores the invalidation mkosi does not do.
-    base_digest=$(base_inputs_digest)
+    base_digest=$(base_inputs_digest "$flavor")
     mkosi_args+=(--incremental=yes)
     mkosi_args+=(--cache-directory="$cache_root/incremental")
     mkosi_args+=(--cache-key="&d~&r~&a~&I~$base_digest")
