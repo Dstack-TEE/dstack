@@ -991,7 +991,7 @@ mod tests {
 
     use super::{
         amd_sev_snp_memory_backend_arg, parse_amd_sev_snp_qmp_capabilities, virtio_pci_device,
-        PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder, VmConfig,
+        AmdSevSnpLaunchParams, PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder, VmConfig,
     };
     use crate::app::image::{Image, ImageInfo};
     use crate::app::{needs_swtpm, GpuConfig, GpuSpec, Manifest, PortMapping, VmVolume, VmWorkDir};
@@ -1300,8 +1300,8 @@ mod tests {
             arg == "q35,kernel-irqchip=split,confidential-guest-support=tdx,hpet=off"
         }));
         assert!(process.args.iter().any(|arg| {
-            arg.contains(""qom-type":"tdx-guest"")
-                && arg.contains(""mrconfigid":"full-mrconfigid"")
+            arg.contains(r#""qom-type":"tdx-guest""#)
+                && arg.contains(r#""mrconfigid":"full-mrconfigid""#)
         }));
         assert!(process
             .args
@@ -1319,7 +1319,7 @@ mod tests {
         .build()
         .unwrap();
         assert!(process.args.iter().any(|arg| {
-            arg.contains(""qom-type":"tdx-guest"") && !arg.contains("mrconfigid")
+            arg.contains(r#""qom-type":"tdx-guest""#) && !arg.contains("mrconfigid")
         }));
         println!("DSTACK_PLATFORM_ROW tdx-lite");
 
