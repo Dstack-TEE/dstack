@@ -383,7 +383,7 @@ image_download_timeout_secs = 7
             ),
             (
                 "invalid-scheme",
-                valid_config("").replace("http://", "file://"),
+                valid_config("").replace("http://127.0.0.1:18081", "file:///tmp"),
                 "must use http or https",
             ),
             (
