@@ -1661,6 +1661,52 @@ mod tests {
     }
 
     #[test]
+    fn serial_rotation_case_matrix() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let workdir = VmWorkDir::new(temp.path());
+
+        fs::write(workdir.serial_file(), b"boot-one-line\n")?;
+        rotate_serial_log(&workdir, 4096);
+        fs::write(workdir.serial_file(), b"boot-two-line\n")?;
+        rotate_serial_log(&workdir, 4096);
+        let ordered = fs::read(workdir.serial_history_file())?;
+        let ordered_text = String::from_utf8_lossy(&ordered);
+        assert!(
+            ordered_text.find("boot-one-line").unwrap()
+                < ordered_text.find("boot-two-line").unwrap()
+        );
+        assert_eq!(ordered_text.matches("boot-one-line").count(), 1);
+        assert_eq!(ordered_text.matches("boot-two-line").count(), 1);
+        assert_eq!(ordered_text.matches("===== boot @").count(), 2);
+        println!("DSTACK_SERIAL_ROW history-ordering");
+        println!("DSTACK_SERIAL_ROW separator-once");
+
+        let binary = b"partial-prefix\x1b[31mansi\x1b[0m\xff\xfe-tail";
+        fs::write(workdir.serial_file(), binary)?;
+        rotate_serial_log(&workdir, 4096);
+        let preserved = fs::read(workdir.serial_history_file())?;
+        assert!(preserved
+            .windows(binary.len())
+            .any(|window| window == binary));
+        println!("DSTACK_SERIAL_ROW ansi-binary-preserved");
+        println!("DSTACK_SERIAL_ROW partial-line-preserved");
+
+        fs::write(workdir.serial_file(), vec![b'x'; 8192])?;
+        rotate_serial_log(&workdir, 4096);
+        assert!(fs::metadata(workdir.serial_history_file())?.len() <= 4096);
+        assert_eq!(fs::read(workdir.serial_file())?.len(), 8192);
+        println!("DSTACK_SERIAL_ROW history-byte-limit");
+        println!("DSTACK_SERIAL_ROW current-log-unchanged");
+
+        rotate_serial_log(&workdir, 0);
+        assert_eq!(fs::metadata(workdir.serial_history_file())?.len(), 0);
+        assert_eq!(default_serial_history_max_bytes(), 4 * 1024 * 1024);
+        println!("DSTACK_SERIAL_ROW zero-limit");
+        println!("DSTACK_SERIAL_ROW historical-default");
+        Ok(())
+    }
+
+    #[test]
     fn auto_restart_case_matrix() {
         let config = restart_config();
         let start = std::time::Instant::now();
