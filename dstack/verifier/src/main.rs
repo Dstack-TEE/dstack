@@ -77,7 +77,14 @@ impl Config {
     }
 }
 
-fn config_figment(config_path: &Path) -> Figment {
+fn verifier_config_figment(config_path: &Path) -> Figment {
+    Figment::new()
+        .merge(Toml::string(include_str!("../dstack-verifier.toml")))
+        .merge(Toml::file(config_path))
+        .merge(Env::prefixed("DSTACK_VERIFIER_").split("__"))
+}
+
+fn rocket_figment(config_path: &Path) -> Figment {
     Figment::from(rocket::Config::default())
         .merge(Toml::string(include_str!("../dstack-verifier.toml")))
         .merge(Toml::file(config_path))
@@ -85,7 +92,7 @@ fn config_figment(config_path: &Path) -> Figment {
 }
 
 fn load_config(config_path: &Path) -> Result<Config> {
-    let config: Config = config_figment(config_path)
+    let config: Config = verifier_config_figment(config_path)
         .extract()
         .context("Failed to load configuration")?;
     config.validate()?;
@@ -275,7 +282,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let config_path = Path::new(&cli.config);
-    let figment = config_figment(config_path);
+    let figment = rocket_figment(config_path);
     let config = load_config(config_path)?;
     // Check for oneshot modes
     if let Some(file_path) = cli.verify {
