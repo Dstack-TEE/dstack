@@ -410,7 +410,7 @@ mod route_tests {
     fn paths(routes: Vec<rocket::Route>) -> BTreeSet<String> {
         routes
             .into_iter()
-            .map(|route| route.uri.to_string())
+            .map(|route| route.uri.path().as_str().to_string())
             .collect()
     }
 
