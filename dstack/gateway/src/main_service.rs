@@ -1097,6 +1097,7 @@ impl ProxyState {
     }
 
     fn add_instance(&mut self, info: InstanceInfo) {
+        self.state.top_n.remove(&info.app_id);
         // Sync to KvStore
         let data = InstanceData {
             app_id: info.app_id.clone(),
@@ -1163,12 +1164,10 @@ impl ProxyState {
             // fallback to random selection
             return Ok(self.random_select_a_host(id).unwrap_or_default());
         }
-        let (top_n, insert_time) = self
-            .state
-            .top_n
-            .entry(id.to_string())
-            .or_insert((SmallVec::new(), Instant::now()));
-        if !top_n.is_empty() && insert_time.elapsed() < self.config.proxy.timeouts.cache_top_n {
+        if let Some((top_n, insert_time)) = self.state.top_n.get(id)
+            && !top_n.is_empty()
+            && insert_time.elapsed() < self.config.proxy.timeouts.cache_top_n
+        {
             return Ok(top_n.clone());
         }
 
@@ -1183,7 +1182,7 @@ impl ProxyState {
                 .filter_map(|instance_id| {
                     let instance = self.state.instances.get(instance_id)?;
                     let (_, elapsed) = handshakes.get(&instance.public_key)?;
-                    Some((
+                    (*elapsed < Duration::from_secs(300)).then(|| (
                         instance.ip,
                         *elapsed,
                         instance.connections.clone(),
@@ -1194,14 +1193,18 @@ impl ProxyState {
         };
         instances.sort_by(|a, b| a.1.cmp(&b.1));
         instances.truncate(n);
-        Ok(instances
+        let selected = instances
             .into_iter()
             .map(|(ip, _, counter, instance_id)| AddressInfo {
                 ip,
                 counter,
                 instance_id,
             })
-            .collect())
+            .collect();
+        self.state
+            .top_n
+            .insert(id.to_string(), (selected.clone(), Instant::now()));
+        Ok(selected)
     }
 
     fn random_select_a_host(&self, id: &str) -> Option<AddressGroup> {
@@ -1265,6 +1268,7 @@ impl ProxyState {
         }
 
         self.state.allocated_addresses.remove(&info.ip);
+        self.state.top_n.remove(&info.app_id);
         if let Some(app_instances) = self.state.apps.get_mut(&info.app_id) {
             app_instances.remove(id);
             if app_instances.is_empty() {
