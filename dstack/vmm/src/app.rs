@@ -1700,7 +1700,10 @@ mod tests {
 
         rotate_serial_log(&workdir, 0);
         assert_eq!(fs::metadata(workdir.serial_history_file())?.len(), 0);
-        assert_eq!(default_serial_history_max_bytes(), 4 * 1024 * 1024);
+        assert_eq!(
+            test_tdx_config()?.cvm.serial_history_max_bytes,
+            4 * 1024 * 1024
+        );
         println!("DSTACK_SERIAL_ROW zero-limit");
         println!("DSTACK_SERIAL_ROW historical-default");
         Ok(())
