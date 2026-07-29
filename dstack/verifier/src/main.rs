@@ -63,7 +63,7 @@ impl Config {
         );
         anyhow::ensure!(
             self.image_download_url.contains("{OS_IMAGE_HASH}"),
-            "image_download_url must contain {OS_IMAGE_HASH}"
+            "image_download_url must contain {{OS_IMAGE_HASH}}"
         );
         let probe_url = self
             .image_download_url
