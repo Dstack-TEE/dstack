@@ -211,7 +211,7 @@ mod tests {
             RuntimeEvent::new(
                 "key-provider".into(),
                 b"fixture-provider".to_vec(),
-                EventLogVersion::V2,
+                EventLogVersion::V1,
             ),
         ];
         let replayed = cc_eventlog::replay_events::<ez_hash::Sha384>(&events, None);
