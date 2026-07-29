@@ -218,6 +218,7 @@ const publicRpcEndpoint = (value: string): string => {
 };
 
 const backendUnavailable = 'authorization backend unavailable';
+const invalidRequest = { isAllowed: false, reason: 'invalid authorization request', gatewayAppId: '' };
 
 // health check and info endpoint
 app.get('/', async (c) => {
@@ -249,7 +250,9 @@ app.get('/', async (c) => {
 
 // app boot authentication
 app.post('/bootAuth/app',
-  zValidator('json', BootInfoSchema),
+  zValidator('json', BootInfoSchema, (result, c) => {
+    if (!result.success) return c.json(invalidRequest, 400);
+  }),
   async (c) => {
     try {
       const bootInfo = c.req.valid('json');
@@ -268,7 +271,9 @@ app.post('/bootAuth/app',
 
 // KMS boot authentication
 app.post('/bootAuth/kms',
-  zValidator('json', BootInfoSchema),
+  zValidator('json', BootInfoSchema, (result, c) => {
+    if (!result.success) return c.json(invalidRequest, 400);
+  }),
   async (c) => {
     try {
       const bootInfo = c.req.valid('json');
