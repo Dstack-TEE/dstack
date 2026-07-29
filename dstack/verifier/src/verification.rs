@@ -1710,6 +1710,198 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn image_download_digest_redirect_timeout_and_retry_matrix() {
+        use std::io::Write as _;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt as _};
+        use tokio::net::TcpListener;
+
+        fn archive(link: bool) -> (Vec<u8>, String) {
+            let metadata = br#"{"bios":"nested/firmware","kernel":"nested/kernel","initrd":"nested/initrd","cmdline":"console=ttyS0","is_dev":true,"version":"test"}"#;
+            let artifacts = [
+                ("metadata.json", metadata.as_slice()),
+                ("nested/firmware", b"firmware".as_slice()),
+                ("nested/kernel", b"kernel".as_slice()),
+                ("nested/initrd", b"initrd".as_slice()),
+            ];
+            let files_doc = artifacts
+                .iter()
+                .map(|(name, data)| format!("{}  {name}\n", hex::encode(Sha256::digest(data))))
+                .collect::<String>();
+            let mut encoded = Vec::new();
+            {
+                let encoder = flate2::write::GzEncoder::new(
+                    &mut encoded,
+                    flate2::Compression::default(),
+                );
+                let mut tar = tar::Builder::new(encoder);
+                for (name, data) in artifacts {
+                    let mut header = tar::Header::new_gnu();
+                    header.set_size(data.len() as u64);
+                    header.set_mode(0o644);
+                    header.set_cksum();
+                    tar.append_data(&mut header, name, data).unwrap();
+                }
+                let mut header = tar::Header::new_gnu();
+                header.set_size(files_doc.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                tar.append_data(&mut header, "sha256sum.txt", files_doc.as_bytes())
+                    .unwrap();
+                let unlisted = b"must be pruned";
+                let mut header = tar::Header::new_gnu();
+                header.set_size(unlisted.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                tar.append_data(&mut header, "unlisted", &unlisted[..]).unwrap();
+                if link {
+                    let mut header = tar::Header::new_gnu();
+                    header.set_entry_type(tar::EntryType::Symlink);
+                    header.set_size(0);
+                    header.set_mode(0o777);
+                    header.set_link_name("../outside").unwrap();
+                    header.set_cksum();
+                    tar.append_data(&mut header, "nested/link", &[][..]).unwrap();
+                }
+                tar.finish().unwrap();
+                tar.into_inner().unwrap().finish().unwrap();
+            }
+            let hash = hex::encode(Sha256::digest(files_doc.as_bytes()));
+            (encoded, hash)
+        }
+
+        async fn server(
+            responses: Vec<(u16, Vec<(String, String)>, Vec<u8>, Duration)>,
+        ) -> (String, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let count = Arc::new(AtomicUsize::new(0));
+            let observed = count.clone();
+            let task = tokio::spawn(async move {
+                for (status, headers, body, delay) in responses {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let mut request = vec![0u8; 4096];
+                    let _ = stream.read(&mut request).await.unwrap();
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(delay).await;
+                    let reason = if status == 200 { "OK" } else if status == 302 { "Found" } else { "Error" };
+                    let mut response = format!(
+                        "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n",
+                        body.len()
+                    );
+                    for (name, value) in headers {
+                        writeln!(&mut response, "{name}: {value}\r").unwrap();
+                    }
+                    response.push_str("\r\n");
+                    stream.write_all(response.as_bytes()).await.unwrap();
+                    stream.write_all(&body).await.unwrap();
+                }
+            });
+            (format!("http://{address}"), task, count)
+        }
+
+        fn verifier(url: &str, cache: &Path, timeout: Duration) -> CvmVerifier {
+            CvmVerifier::new(
+                format!("{url}/{{OS_IMAGE_HASH}}.tar.gz"),
+                cache.display().to_string(),
+                timeout,
+                test_attestation_verifier(),
+            )
+        }
+
+        let (valid, hash) = archive(false);
+        let cache = tempfile::tempdir().unwrap();
+        let destination = cache.path().join("images").join(&hash);
+        let (url, task, count) = server(vec![(
+            200,
+            vec![],
+            valid.clone(),
+            Duration::ZERO,
+        )])
+        .await;
+        verifier(&url, cache.path(), Duration::from_secs(1))
+            .download_image(&hash, &destination)
+            .await
+            .unwrap();
+        task.await.unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert!(destination.join("metadata.json").is_file());
+        assert!(!destination.join("unlisted").exists());
+
+        let wrong = "00".repeat(32);
+        let wrong_destination = cache.path().join("images").join(&wrong);
+        let (url, task, _) = server(vec![(200, vec![], valid.clone(), Duration::ZERO)]).await;
+        assert!(verifier(&url, cache.path(), Duration::from_secs(1))
+            .download_image(&wrong, &wrong_destination)
+            .await
+            .is_err());
+        task.await.unwrap();
+        assert!(!wrong_destination.exists());
+
+        let truncated_destination = cache.path().join("images/truncated");
+        let (url, task, _) = server(vec![(200, vec![], b"truncated".to_vec(), Duration::ZERO)]).await;
+        assert!(verifier(&url, cache.path(), Duration::from_secs(1))
+            .download_image("truncated", &truncated_destination)
+            .await
+            .is_err());
+        task.await.unwrap();
+        assert!(!truncated_destination.exists());
+
+        let (linked, linked_hash) = archive(true);
+        let linked_destination = cache.path().join("images").join(&linked_hash);
+        let (url, task, _) = server(vec![(200, vec![], linked, Duration::ZERO)]).await;
+        assert!(verifier(&url, cache.path(), Duration::from_secs(1))
+            .download_image(&linked_hash, &linked_destination)
+            .await
+            .is_err());
+        task.await.unwrap();
+        assert!(!linked_destination.exists());
+
+        let redirect_destination = cache.path().join("images/redirect");
+        let (url, task, count) = server(vec![
+            (
+                302,
+                vec![("Location".into(), format!("/actual/{hash}.tar.gz"))],
+                vec![],
+                Duration::ZERO,
+            ),
+            (200, vec![], valid.clone(), Duration::ZERO),
+        ])
+        .await;
+        verifier(&url, cache.path(), Duration::from_secs(1))
+            .download_image(&hash, &redirect_destination)
+            .await
+            .unwrap();
+        task.await.unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+
+        let timeout_cache = tempfile::tempdir().unwrap();
+        let (url, task, _) = server(vec![(
+            200,
+            vec![],
+            valid.clone(),
+            Duration::from_millis(150),
+        )])
+        .await;
+        let timed = verifier(&url, timeout_cache.path(), Duration::from_millis(20));
+        let vm_config: VmConfig = serde_json::from_value(serde_json::json!({
+            "os_image_hash": hash,
+        }))
+        .unwrap();
+        assert!(timed.ensure_image_downloaded(&vm_config).await.is_err());
+        task.abort();
+        assert!(!timeout_cache.path().join("images").join(&hash).exists());
+
+        let (url, task, _) = server(vec![(200, vec![], valid, Duration::ZERO)]).await;
+        verifier(&url, timeout_cache.path(), Duration::from_secs(1))
+            .ensure_image_downloaded(&vm_config)
+            .await
+            .unwrap();
+        task.await.unwrap();
+        assert!(timeout_cache.path().join("images").join(&hash).is_dir());
+    }
+
+    #[tokio::test]
     async fn verifies_sev_snp_attestation_fixture_without_image_download() {
         let request: VerificationRequest =
             serde_json::from_str(include_str!("../fixtures/sev-snp-attestation.json"))
