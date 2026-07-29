@@ -5709,6 +5709,7 @@ dependencies = [
  "hex",
  "hex_fmt",
  "hkdf",
+ "mock-attestation",
  "or-panic",
  "p256",
  "parity-scale-codec",
