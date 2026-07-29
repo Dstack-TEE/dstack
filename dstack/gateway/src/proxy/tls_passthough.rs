@@ -12,7 +12,7 @@ use hickory_resolver::lookup::Lookup;
 use hickory_resolver::proto::rr::RData;
 use hickory_resolver::TokioResolver;
 use hickory_resolver::config::{NameServerConfig, ResolverConfig};
-use hickory_resolver::name_server::TokioConnectionProvider;
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use proxy_protocol::ProxyHeader;
 use tokio::{io::AsyncWriteExt, net::TcpStream, task::JoinSet, time::timeout};
 use tracing::{debug, info, warn};
@@ -87,7 +87,7 @@ fn app_address_tokio_resolver(dns_server: Option<SocketAddr>) -> Result<TokioRes
         }
         TokioResolver::builder_with_config(
             ResolverConfig::from_parts(None, Vec::new(), vec![name_server]),
-            TokioConnectionProvider::default(),
+            TokioRuntimeProvider::default(),
         )
     } else {
         TokioResolver::builder_tokio().context("failed to read system dns config")?
