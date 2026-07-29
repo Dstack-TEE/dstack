@@ -1211,11 +1211,12 @@ impl ProxyState {
             // fallback to random selection
             return Ok(self.random_select_a_host(id).unwrap_or_default());
         }
-        if let Some((top_n, insert_time)) = self.state.top_n.get(id)
-            && !top_n.is_empty()
-            && insert_time.elapsed() < self.config.proxy.timeouts.cache_top_n
-        {
-            return Ok(top_n.clone());
+        if let Some((top_n, insert_time)) = self.state.top_n.get(id) {
+            if !top_n.is_empty()
+                && insert_time.elapsed() < self.config.proxy.timeouts.cache_top_n
+            {
+                return Ok(top_n.clone());
+            }
         }
 
         let handshakes = self.latest_handshakes(None);
@@ -1240,7 +1241,7 @@ impl ProxyState {
         };
         instances.sort_by(|a, b| a.1.cmp(&b.1));
         instances.truncate(n);
-        let selected = instances
+        let selected: AddressGroup = instances
             .into_iter()
             .map(|(ip, _, counter, instance_id)| AddressInfo {
                 ip,
