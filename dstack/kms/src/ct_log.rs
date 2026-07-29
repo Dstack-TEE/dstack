@@ -73,17 +73,18 @@ fn is_ct_log_filename(path: &Path) -> bool {
     let Some((source, index)) = stem.rsplit_once('.') else {
         return false;
     };
-    let Some((timestamp, app_id)) = source.split_once('-') else {
-        return false;
-    };
-    timestamp.len() == 15
-        && timestamp.as_bytes().get(8) == Some(&b'-')
-        && timestamp
-            .bytes()
+    let source_bytes = source.as_bytes();
+    let timestamp_is_valid = source_bytes.len() > 16
+        && source_bytes.get(8) == Some(&45)
+        && source_bytes.get(15) == Some(&45)
+        && source_bytes[..15]
+            .iter()
             .enumerate()
-            .all(|(position, byte)| position == 8 || byte.is_ascii_digit())
+            .all(|(position, byte)| position == 8 || byte.is_ascii_digit());
+    let app_id = source.get(16..).unwrap_or_default();
+    timestamp_is_valid
         && !app_id.is_empty()
-        && !app_id.contains('.')
+        && !app_id.as_bytes().contains(&46)
         && index
             .parse::<usize>()
             .is_ok_and(|value| value <= MAX_COLLISION_INDEX)
