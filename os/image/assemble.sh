@@ -16,7 +16,7 @@ DSTACK_EFI_PART_GUID=${DSTACK_EFI_PART_GUID:-d5acc000-0000-4000-8000-00000000000
 
 usage() {
     cat <<EOF
-Usage: ${0##*/} --manifest PATH
+Usage: ${0##*/} --manifest PATH [--validate-only]
 
 Assemble a release image from the backend-neutral OS artifact manifest.
 
@@ -29,15 +29,21 @@ Environment:
   NITRO_TPM_PCR_COMPUTE_BIN  Pinned host nitro-tpm-pcr-compute (required for
                          UKI AWS PCRs; overrides PATH lookup)
   NITRO_TPM_PCR_PK/KEK/DB    Optional Secure Boot ESL paths for PCR7
+  --validate-only          Validate the manifest and referenced artifacts only
 EOF
 }
 
 MANIFEST=
+VALIDATE_ONLY=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --manifest)
             MANIFEST=$2
             shift 2
+            ;;
+        --validate-only)
+            VALIDATE_ONLY=1
+            shift
             ;;
         -h|--help)
             usage
@@ -75,10 +81,61 @@ with open(manifest_path, encoding="utf-8") as file:
 
 if data.get("schema_version") != 1:
     raise SystemExit("unsupported artifact manifest schema_version")
-if not isinstance(data.get("image", {}).get("is_dev"), bool):
-    raise SystemExit("image.is_dev must be a boolean")
-
 base = os.path.dirname(manifest_path)
+
+def exact_keys(obj, path, required_keys, optional_keys=()):
+    if not isinstance(obj, dict):
+        raise SystemExit(f"manifest field must be an object: {path}")
+    required_keys = set(required_keys)
+    allowed_keys = required_keys | set(optional_keys)
+    missing = sorted(required_keys - set(obj))
+    extra = sorted(set(obj) - allowed_keys)
+    if missing:
+        raise SystemExit(f"missing manifest field: {path}." + missing[0])
+    if extra:
+        raise SystemExit(f"unknown manifest field: {path}." + extra[0])
+
+exact_keys(
+    data,
+    "manifest",
+    ("schema_version", "backend", "image", "source", "boot", "verity", "artifacts"),
+    ("backend_metadata",),
+)
+exact_keys(data["image"], "image", ("name", "version", "flavor", "is_dev"))
+exact_keys(data["source"], "source", ("git_revision",))
+exact_keys(data["boot"], "boot", ("ovmf_variant",))
+exact_keys(data["verity"], "verity", ("root_hash", "data_size"))
+exact_keys(
+    data["artifacts"],
+    "artifacts",
+    ("initramfs", "kernel", "firmware", "rootfs_verity", "firmware_sev", "uki"),
+)
+if "backend_metadata" in data and not isinstance(data["backend_metadata"], dict):
+    raise SystemExit("manifest field must be an object: backend_metadata")
+
+def nonempty_string(value, path):
+    if not isinstance(value, str) or not value:
+        raise SystemExit(f"manifest field must be a non-empty string: {path}")
+    return value
+
+for path, value in (
+    ("backend", data["backend"]),
+    ("image.name", data["image"]["name"]),
+    ("image.version", data["image"]["version"]),
+    ("image.flavor", data["image"]["flavor"]),
+    ("source.git_revision", data["source"]["git_revision"]),
+    ("boot.ovmf_variant", data["boot"]["ovmf_variant"]),
+    ("verity.root_hash", data["verity"]["root_hash"]),
+):
+    nonempty_string(value, path)
+if not isinstance(data["image"]["is_dev"], bool):
+    raise SystemExit("image.is_dev must be a boolean")
+data_size = data["verity"]["data_size"]
+if isinstance(data_size, bool) or not (
+    isinstance(data_size, int) and data_size >= 1
+    or isinstance(data_size, str) and data_size.isdigit() and not data_size.startswith("0")
+):
+    raise SystemExit("verity.data_size must be a positive integer")
 
 def required(obj, *keys):
     value = obj
@@ -133,6 +190,10 @@ PYMANIFEST
 if [ "${#MANIFEST_VALUES[@]}" -ne 15 ]; then
     echo "Error: failed to read artifact manifest: $MANIFEST" >&2
     exit 1
+fi
+if [ "$VALIDATE_ONLY" -eq 1 ]; then
+    echo "Artifact manifest is valid: $MANIFEST"
+    exit 0
 fi
 
 BACKEND=${MANIFEST_VALUES[0]}
