@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
+use std::{net::IpAddr, path::Path, sync::Arc};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -36,6 +36,7 @@ struct Cli {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     pub address: String,
     pub port: u16,
@@ -44,6 +45,51 @@ pub struct Config {
     pub attestation: AttestationVerifierConfig,
     pub image_download_url: String,
     pub image_download_timeout_secs: u64,
+}
+
+impl Config {
+    fn validate(&self) -> Result<()> {
+        self.address
+            .parse::<IpAddr>()
+            .with_context(|| format!("invalid verifier address: {}", self.address))?;
+        anyhow::ensure!(self.port != 0, "verifier port must not be zero");
+        anyhow::ensure!(
+            !self.image_cache_dir.trim().is_empty(),
+            "image_cache_dir must not be empty"
+        );
+        anyhow::ensure!(
+            self.image_download_timeout_secs > 0,
+            "image_download_timeout_secs must be greater than zero"
+        );
+        anyhow::ensure!(
+            self.image_download_url.contains("{OS_IMAGE_HASH}"),
+            "image_download_url must contain {OS_IMAGE_HASH}"
+        );
+        let probe_url = self
+            .image_download_url
+            .replace("{OS_IMAGE_HASH}", &"00".repeat(32));
+        let parsed = reqwest::Url::parse(&probe_url).context("invalid image_download_url")?;
+        anyhow::ensure!(
+            matches!(parsed.scheme(), "http" | "https"),
+            "image_download_url must use http or https"
+        );
+        Ok(())
+    }
+}
+
+fn config_figment(config_path: &Path) -> Figment {
+    Figment::from(rocket::Config::default())
+        .merge(Toml::string(include_str!("../dstack-verifier.toml")))
+        .merge(Toml::file(config_path))
+        .merge(Env::prefixed("DSTACK_VERIFIER_").split("__"))
+}
+
+fn load_config(config_path: &Path) -> Result<Config> {
+    let config: Config = config_figment(config_path)
+        .extract()
+        .context("Failed to load configuration")?;
+    config.validate()?;
+    Ok(config)
 }
 
 #[post("/verify", data = "<request>")]
@@ -267,14 +313,9 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    let default_config_str = include_str!("../dstack-verifier.toml");
-
-    let figment = Figment::from(rocket::Config::default())
-        .merge(Toml::string(default_config_str))
-        .merge(Toml::file(&cli.config))
-        .merge(Env::prefixed("DSTACK_VERIFIER_"));
-
-    let config: Config = figment.extract().context("Failed to load configuration")?;
+    let config_path = Path::new(&cli.config);
+    let figment = config_figment(config_path);
+    let config = load_config(config_path)?;
     // Check for oneshot modes
     if let Some(file_path) = cli.verify {
         if let Err(e) = run_oneshot(&file_path, &config).await {
@@ -310,4 +351,72 @@ async fn main() -> Result<()> {
         .await
         .map_err(|err| anyhow::anyhow!("launch rocket failed: {err:?}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    fn valid_config(extra: &str) -> String {
+        format!(
+            r#"address = "127.0.0.1"
+port = 18080
+image_cache_dir = "/tmp/dstack-verifier-config-test"
+image_download_url = "http://127.0.0.1:18081/{{OS_IMAGE_HASH}}.tar.gz"
+image_download_timeout_secs = 7
+{extra}
+"#
+        )
+    }
+
+    #[test]
+    fn config_file_precedence_validation_and_unknown_field_matrix() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("verifier.toml");
+        std::fs::write(&path, valid_config("")).unwrap();
+        let loaded = load_config(&path).unwrap();
+        assert_eq!(loaded.address, "127.0.0.1");
+        assert_eq!(loaded.port, 18080);
+        assert_eq!(loaded.image_download_timeout_secs, 7);
+
+        for (name, body, expected) in [
+            (
+                "zero-port",
+                valid_config("").replace("port = 18080", "port = 0"),
+                "port must not be zero",
+            ),
+            (
+                "empty-cache",
+                valid_config("").replace("/tmp/dstack-verifier-config-test", ""),
+                "image_cache_dir must not be empty",
+            ),
+            (
+                "zero-timeout",
+                valid_config("").replace("timeout_secs = 7", "timeout_secs = 0"),
+                "must be greater than zero",
+            ),
+            (
+                "missing-placeholder",
+                valid_config("").replace("/{OS_IMAGE_HASH}.tar.gz", "/image.tar.gz"),
+                "must contain {OS_IMAGE_HASH}",
+            ),
+            (
+                "invalid-scheme",
+                valid_config("").replace("http://", "file://"),
+                "must use http or https",
+            ),
+            (
+                "unknown-field",
+                valid_config("unknown_policy = true"),
+                "unknown field",
+            ),
+        ] {
+            std::fs::write(&path, body).unwrap();
+            let error = load_config(&path).expect_err(name);
+            assert!(format!("{error:#}").contains(expected), "{name}: {error:#}");
+        }
+
+        std::fs::write(&path, valid_config("")).unwrap();
+        assert_eq!(load_config(&path).unwrap().port, 18080);
+    }
 }
