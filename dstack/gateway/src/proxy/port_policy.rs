@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use dstack_guest_agent_rpc::dstack_guest_client::DstackGuestClient;
 use dstack_types::AppCompose;
 use http_client::prpc::PrpcClient;
@@ -43,7 +43,7 @@ enum FetchError {
 }
 
 /// Reason a port was denied. Used only for log messages.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DenyReason {
     /// `restrict_mode` is enabled and the port isn't in the allowed list.
     PortNotAllowed,
@@ -65,24 +65,34 @@ pub(crate) fn is_port_allowed(
     port: u16,
 ) -> Result<(), DenyReason> {
     let guard = state.lock();
-    let Some(policy) = guard.instance_port_policy(instance_id) else {
-        // Two cases land here:
-        //   1) `instance_id` isn't a registered CVM (e.g. `localhost`): no
-        //      policy applies, allow.
-        //   2) Registered CVM but no policy reported yet: fail-close, schedule
-        //      a fetch.
-        let known = guard.instance_ip(instance_id).is_some();
-        drop(guard);
-        if !known {
-            return Ok(());
-        }
+    let known_instance = guard.instance_ip(instance_id).is_some();
+    let decision = evaluate_port_policy(
+        guard.instance_port_policy(instance_id),
+        known_instance,
+        port,
+    );
+    drop(guard);
+    if decision == Err(DenyReason::PolicyUnknown) {
         let _ = state.port_policy_tx.send(instance_id.to_string());
-        return Err(DenyReason::PolicyUnknown);
-    };
-    if !policy.restrict_mode {
-        return Ok(());
     }
-    if policy.ports.contains_key(&port) {
+    decision
+}
+
+fn evaluate_port_policy(
+    policy: Option<&PortPolicy>,
+    known_instance: bool,
+    port: u16,
+) -> Result<(), DenyReason> {
+    let Some(policy) = policy else {
+        // Unregistered shortcuts have no policy. Registered legacy instances
+        // fail closed until the background fetch commits a complete policy.
+        return if known_instance {
+            Err(DenyReason::PolicyUnknown)
+        } else {
+            Ok(())
+        };
+    };
+    if !policy.restrict_mode || policy.ports.contains_key(&port) {
         Ok(())
     } else {
         Err(DenyReason::PortNotAllowed)
@@ -128,12 +138,18 @@ pub(crate) fn filter_allowed_addresses(
 /// cache is normally populated. The default-false fallback is conservative
 /// because a missing PP header is safer than a forged one.
 pub(crate) fn should_send_pp(state: &Proxy, instance_id: &str, port: u16) -> bool {
-    state
-        .lock()
-        .instance_port_policy(instance_id)
-        .and_then(|p| p.ports.get(&port))
-        .map(|f| f.pp)
-        .unwrap_or(false)
+    let guard = state.lock();
+    policy_sends_pp(guard.instance_port_policy(instance_id), port)
+}
+
+fn policy_sends_pp(policy: Option<&PortPolicy>, port: u16) -> bool {
+    policy
+        .and_then(|policy| policy.ports.get(&port))
+        .is_some_and(|flags| flags.pp)
+}
+
+fn next_backoff(current: std::time::Duration, maximum: std::time::Duration) -> std::time::Duration {
+    (current * 2).min(maximum)
 }
 
 /// Spawn the background lazy-fetch worker. Should be called once at startup.
@@ -205,7 +221,7 @@ async fn fetch_with_retry(state: &Proxy, instance_id: &str) {
         }
         tokio::time::sleep(backoff).await;
         attempt += 1;
-        backoff = (backoff * 2).min(cfg.backoff_max);
+        backoff = next_backoff(backoff, cfg.backoff_max);
     }
 }
 
@@ -269,7 +285,12 @@ fn parse_info_port_policy(tcb_info: &str) -> Result<PortPolicy, FetchError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_info_port_policy, FetchError};
+    use super::{
+        DenyReason, FetchError, evaluate_port_policy, next_backoff, parse_info_port_policy,
+        policy_sends_pp,
+    };
+    use crate::kv::{PortFlags, PortPolicy};
+    use std::{collections::BTreeMap, time::Duration};
 
     #[test]
     fn legacy_empty_info_uses_bounded_open_compatibility_policy() {
@@ -312,5 +333,51 @@ mod tests {
                 Err(FetchError::Permanent(_))
             ));
         }
+    }
+
+    #[test]
+    fn gateway_internal_batch_006_policy_decision_matrix() {
+        let open = PortPolicy::default();
+        let restricted = PortPolicy {
+            ports: BTreeMap::from([
+                (443, PortFlags { pp: true }),
+                (8443, PortFlags { pp: false }),
+            ]),
+            restrict_mode: true,
+        };
+
+        assert_eq!(evaluate_port_policy(None, false, 443), Ok(()));
+        assert_eq!(
+            evaluate_port_policy(None, true, 443),
+            Err(DenyReason::PolicyUnknown)
+        );
+        assert_eq!(evaluate_port_policy(Some(&open), true, 1), Ok(()));
+        assert_eq!(evaluate_port_policy(Some(&restricted), true, 443), Ok(()));
+        assert_eq!(
+            evaluate_port_policy(Some(&restricted), true, 80),
+            Err(DenyReason::PortNotAllowed)
+        );
+        assert!(policy_sends_pp(Some(&restricted), 443));
+        assert!(!policy_sends_pp(Some(&restricted), 8443));
+        assert!(!policy_sends_pp(Some(&restricted), 80));
+        assert!(!policy_sends_pp(None, 443));
+
+        let mut backoff = Duration::from_millis(25);
+        let maximum = Duration::from_millis(80);
+        let mut observed = Vec::new();
+        for _ in 0..5 {
+            observed.push(backoff);
+            backoff = next_backoff(backoff, maximum);
+        }
+        assert_eq!(
+            observed,
+            vec![
+                Duration::from_millis(25),
+                Duration::from_millis(50),
+                Duration::from_millis(80),
+                Duration::from_millis(80),
+                Duration::from_millis(80),
+            ]
+        );
     }
 }
