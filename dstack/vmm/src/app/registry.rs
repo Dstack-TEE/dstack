@@ -5,7 +5,7 @@
 //! OCI Distribution API client for pulling dstack guest images directly from
 //! a container registry without requiring a local Docker daemon.
 
-use std::path::Path;
+use std::{io::Read, path::Path};
 
 use anyhow::{bail, Context, Result};
 use flate2::read::GzDecoder;
@@ -283,14 +283,10 @@ fn extract_layer(data: &[u8], media_type: &str, dest: &Path) -> Result<()> {
     if is_gzip {
         let decoder = GzDecoder::new(data);
         let mut archive = tar::Archive::new(decoder);
-        archive
-            .unpack(dest)
-            .context("failed to extract gzipped tar layer")?;
+        unpack_archive(&mut archive, dest).context("failed to extract gzipped tar layer")?;
     } else {
         let mut archive = tar::Archive::new(data);
-        archive
-            .unpack(dest)
-            .context("failed to extract tar layer")?;
+        unpack_archive(&mut archive, dest).context("failed to extract tar layer")?;
     }
 
     // Remove docker/OCI artifact directories that may appear in layers
@@ -301,6 +297,19 @@ fn extract_layer(data: &[u8], media_type: &str, dest: &Path) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn unpack_archive<R: Read>(archive: &mut tar::Archive<R>, dest: &Path) -> Result<()> {
+    for entry in archive.entries().context("failed to read tar entries")? {
+        let mut entry = entry.context("failed to read tar entry")?;
+        if !entry
+            .unpack_in(dest)
+            .context("failed to unpack tar entry")?
+        {
+            bail!("archive entry escapes destination");
+        }
+    }
     Ok(())
 }
 
