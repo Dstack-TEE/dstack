@@ -291,7 +291,11 @@ fn parse_certified_key(cert_pem: &str, key_pem: &str) -> Result<CertifiedKey> {
     let signing_key = rustls::crypto::aws_lc_rs::sign::any_supported_type(&key)
         .map_err(|e| anyhow::anyhow!("failed to create signing key: {:?}", e))?;
 
-    Ok(CertifiedKey::new(certs, signing_key))
+    let certified_key = CertifiedKey::new(certs, signing_key);
+    certified_key
+        .keys_match()
+        .context("certificate and private key do not match")?;
+    Ok(certified_key)
 }
 
 /// Format expiry timestamp as human-readable string
