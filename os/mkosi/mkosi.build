@@ -53,22 +53,30 @@ printf 'cmake: '; cmake --version | head -1
 dpkg-query -W -f='build-package: ${binary:Package}=${Version}\n' \
   gcc g++ binutils cmake make ninja-build dwarves
 
-# The staging trees are where cached component archives get extracted. Keeping
-# them in the per-build sandbox means every cache hit still pays a full
-# decompression -- the kernel archive alone unpacks 6.4 GiB and costs ~12 s.
-# Persisting them lets a hit that is already staged skip extraction entirely.
+# component-stages/ is where cached component archives get extracted. Keeping
+# it in the per-build sandbox means every cache hit still pays a full
+# decompression -- the kernel archive alone unpacks 6.4 GiB and costs ~12 s --
+# so a cached build persists it and dev-cache.sh skips extracting a tree that
+# is already staged under the same key.
 #
-# Correctness rests on dev-cache.sh removing a stale tree before it extracts,
-# and on it treating "already staged under this key" as the only skip
-# condition. A tree left over from a different key must never be reused: that
-# is how a previous build's files end up in a later image.
+# Only that subdirectory. The rest of the work directory holds source checkouts
+# and object trees, and the component scripts assume those start empty: sysbox
+# runs `git submodule update` there and fails outright on a leftover tree.
+# Persisting the staging trees buys the decompression; persisting the build
+# scratch buys nothing and breaks the builds.
 #
-# Only the work directory. The kernel staging tree is not a cache: it is where
-# component_assemble merges the kernel trees on every build, cache hit or not,
-# under strict conflict detection. Persisting it makes the second build collide
-# with the first build's merged files.
+# The kernel staging tree is not a cache either. component_assemble merges into
+# it on every build, cache hit or not, under strict conflict detection, so a
+# persisted one collides with the previous build's merged files.
 if [[ $cache_enabled == 1 ]]; then
     work="$BUILDDIR/component-work"
+    mkdir -p "$work/component-stages"
+    # Everything except the staging trees is build scratch and must start
+    # empty. Deleting by exclusion rather than symlinking component-stages
+    # elsewhere: tar replaces a symlink standing where it wants a directory,
+    # so the staging tree would silently stop being the persisted one.
+    find "$work" -mindepth 1 -maxdepth 1 ! -name component-stages \
+      -exec rm -rf {} +
 else
     work=/var/tmp/dstack-component-work
 fi
