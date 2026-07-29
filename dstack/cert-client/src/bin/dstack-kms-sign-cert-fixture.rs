@@ -2,9 +2,10 @@
 //! Generate a v2 KMS CSR whose key is bound to fresh guest attestation.
 
 use anyhow::{Context, Result};
-use ra_rpc::Attestation;
+use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, RawQuoteArgs};
+use http_client::prpc::PrpcClient;
 use ra_tls::{
-    attestation::QuoteContentType,
+    attestation::{QuoteContentType, VersionedAttestation},
     cert::{CertConfigV2, CertSigningRequestV2, Csr},
     rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256},
 };
@@ -20,14 +21,22 @@ fn hex(bytes: &[u8]) -> String {
     output
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
         .context("failed to generate the case-scoped certificate key")?;
     let pubkey = key.public_key_der();
     let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
-    let attestation = Attestation::quote(&report_data)
-        .context("failed to obtain key-bound guest attestation")?
-        .into_versioned();
+    let address = dstack_types::dstack_agent_address();
+    let client = DstackGuestClient::new(PrpcClient::new(address));
+    let response = client
+        .attest(RawQuoteArgs {
+            report_data: report_data.to_vec(),
+        })
+        .await
+        .context("failed to obtain key-bound guest attestation")?;
+    let attestation = VersionedAttestation::from_bytes(&response.attestation)
+        .context("failed to decode key-bound guest attestation")?;
     let csr = CertSigningRequestV2 {
         confirm: "please sign cert:".to_string(),
         pubkey: pubkey.clone(),
