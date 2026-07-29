@@ -398,6 +398,19 @@ impl App {
     }
 
     pub async fn start_vm(&self, id: &str) -> Result<()> {
+        self.start_vm_with_restart_policy(id, true).await
+    }
+
+    async fn start_vm_with_restart_policy(
+        &self,
+        id: &str,
+        reset_restart_policy: bool,
+    ) -> Result<()> {
+        if reset_restart_policy {
+            if let Some(vm) = self.lock().get_mut(id) {
+                vm.state.auto_restart.reset();
+            }
+        }
         {
             let state = self.lock();
             if let Some(vm) = state.get(id) {
@@ -477,6 +490,9 @@ impl App {
     }
 
     pub async fn stop_vm(&self, id: &str) -> Result<()> {
+        if let Some(vm) = self.lock().get_mut(id) {
+            vm.state.auto_restart.reset();
+        }
         self.set_started(id, false)?;
         self.stop_vm_process(id).await?;
         Ok(())
@@ -1186,22 +1202,62 @@ impl App {
             .filter(|v| v.state.status.is_running())
             .map(|v| v.config.id.clone())
             .collect::<BTreeSet<_>>();
-        let exited_vms = self
-            .lock()
-            .iter_vms()
-            .filter(|vm| {
+        let now = std::time::Instant::now();
+        let mut restart_vms = Vec::new();
+        {
+            let mut state = self.lock();
+            for vm in state.vms.values_mut() {
+                let id = &vm.config.manifest.id;
                 if vm.state.removing {
-                    return false;
+                    vm.state.auto_restart.reset();
+                    continue;
                 }
-                let workdir = self.work_dir(&vm.config.manifest.id);
-                let started = workdir.started().unwrap_or(false);
-                started && !running_vms.contains(&vm.config.manifest.id)
-            })
-            .map(|vm| vm.config.manifest.id.clone())
-            .collect::<Vec<_>>();
-        for id in exited_vms {
-            info!("Restarting VM {id}");
-            self.start_vm(&id).await?;
+                if running_vms.contains(id) {
+                    if vm
+                        .state
+                        .auto_restart
+                        .observe_running(now, self.config.cvm.auto_restart.reset_window)
+                    {
+                        info!(
+                            id,
+                            "automatic restart retry budget reset after healthy window"
+                        );
+                    }
+                    continue;
+                }
+                let started = VmWorkDir::new(self.config.run_path.join(id))
+                    .started()
+                    .unwrap_or(false);
+                if !started {
+                    vm.state.auto_restart.reset();
+                    continue;
+                }
+                match vm
+                    .state
+                    .auto_restart
+                    .observe_exited(now, &self.config.cvm.auto_restart)
+                {
+                    AutoRestartDecision::Scheduled { delay_secs } => {
+                        info!(id, delay_secs, "automatic restart scheduled");
+                    }
+                    AutoRestartDecision::Restart {
+                        attempt,
+                        delay_secs,
+                    } => {
+                        info!(id, attempt, delay_secs, "automatic restart attempt");
+                        restart_vms.push(id.clone());
+                    }
+                    AutoRestartDecision::Exhausted { attempts } => {
+                        warn!(id, attempts, "automatic restart retry limit exhausted");
+                    }
+                    AutoRestartDecision::Wait => {}
+                }
+            }
+        }
+        for id in restart_vms {
+            if let Err(error) = self.start_vm_with_restart_policy(&id, false).await {
+                warn!(id, %error, "automatic restart attempt failed");
+            }
         }
         Ok(())
     }
@@ -1592,6 +1648,77 @@ mod tests {
 
     fn hex_of(byte: u8, len: usize) -> String {
         hex::encode(vec![byte; len])
+    }
+    fn restart_config() -> crate::config::AutoRestartConfig {
+        crate::config::AutoRestartConfig {
+            enabled: true,
+            interval: 1,
+            max_retries: 3,
+            initial_backoff: 2,
+            max_backoff: 5,
+            reset_window: 10,
+        }
+    }
+
+    #[test]
+    fn auto_restart_policy_backs_off_caps_and_exhausts_once() {
+        let config = restart_config();
+        let start = std::time::Instant::now();
+        let mut state = AutoRestartState::default();
+        assert_eq!(
+            state.observe_exited(start, &config),
+            AutoRestartDecision::Scheduled { delay_secs: 2 }
+        );
+        assert_eq!(
+            state.observe_exited(start + std::time::Duration::from_secs(1), &config),
+            AutoRestartDecision::Wait
+        );
+        assert_eq!(
+            state.observe_exited(start + std::time::Duration::from_secs(2), &config),
+            AutoRestartDecision::Restart {
+                attempt: 1,
+                delay_secs: 4
+            }
+        );
+        assert_eq!(
+            state.observe_exited(start + std::time::Duration::from_secs(6), &config),
+            AutoRestartDecision::Restart {
+                attempt: 2,
+                delay_secs: 5
+            }
+        );
+        assert_eq!(
+            state.observe_exited(start + std::time::Duration::from_secs(11), &config),
+            AutoRestartDecision::Restart {
+                attempt: 3,
+                delay_secs: 5
+            }
+        );
+        assert_eq!(
+            state.observe_exited(start + std::time::Duration::from_secs(12), &config),
+            AutoRestartDecision::Exhausted { attempts: 3 }
+        );
+        assert_eq!(
+            state.observe_exited(start + std::time::Duration::from_secs(20), &config),
+            AutoRestartDecision::Wait
+        );
+    }
+
+    #[test]
+    fn auto_restart_policy_resets_only_after_healthy_window() {
+        let config = restart_config();
+        let start = std::time::Instant::now();
+        let mut state = AutoRestartState::default();
+        state.observe_exited(start, &config);
+        state.observe_exited(start + std::time::Duration::from_secs(2), &config);
+        assert!(!state.observe_running(start + std::time::Duration::from_secs(3), 10));
+        assert!(!state.observe_running(start + std::time::Duration::from_secs(12), 10));
+        assert!(state.observe_running(start + std::time::Duration::from_secs(13), 10));
+        assert_eq!(state.attempts, 0);
+        assert_eq!(
+            state.observe_exited(start + std::time::Duration::from_secs(14), &config),
+            AutoRestartDecision::Scheduled { delay_secs: 2 }
+        );
     }
 
     #[test]
@@ -2095,8 +2222,6 @@ mod tests {
         Ok(())
     }
 
-
-
     #[test]
     fn tdx_historical_versions_follow_capability_not_version_string() -> Result<()> {
         let config = test_tdx_config()?;
@@ -2338,6 +2463,76 @@ pub struct VmState {
 }
 
 #[derive(Debug, Clone, Default)]
+struct AutoRestartState {
+    attempts: u32,
+    next_retry: Option<std::time::Instant>,
+    healthy_since: Option<std::time::Instant>,
+    exhausted_reported: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutoRestartDecision {
+    Wait,
+    Scheduled { delay_secs: u64 },
+    Restart { attempt: u32, delay_secs: u64 },
+    Exhausted { attempts: u32 },
+}
+
+impl AutoRestartState {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    fn observe_running(&mut self, now: std::time::Instant, reset_window: u64) -> bool {
+        let healthy_since = self.healthy_since.get_or_insert(now);
+        if self.attempts > 0
+            && now.duration_since(*healthy_since) >= std::time::Duration::from_secs(reset_window)
+        {
+            self.reset();
+            return true;
+        }
+        false
+    }
+
+    fn observe_exited(
+        &mut self,
+        now: std::time::Instant,
+        config: &crate::config::AutoRestartConfig,
+    ) -> AutoRestartDecision {
+        self.healthy_since = None;
+        if self.attempts >= config.max_retries {
+            if self.exhausted_reported {
+                return AutoRestartDecision::Wait;
+            }
+            self.exhausted_reported = true;
+            return AutoRestartDecision::Exhausted {
+                attempts: self.attempts,
+            };
+        }
+        let Some(next_retry) = self.next_retry else {
+            self.next_retry = Some(now + std::time::Duration::from_secs(config.initial_backoff));
+            return AutoRestartDecision::Scheduled {
+                delay_secs: config.initial_backoff,
+            };
+        };
+        if now < next_retry {
+            return AutoRestartDecision::Wait;
+        }
+        self.attempts += 1;
+        let shift = self.attempts.min(63);
+        let delay_secs = config
+            .initial_backoff
+            .saturating_mul(1u64 << shift)
+            .min(config.max_backoff);
+        self.next_retry = Some(now + std::time::Duration::from_secs(delay_secs));
+        AutoRestartDecision::Restart {
+            attempt: self.attempts,
+            delay_secs,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 struct VmStateMut {
     boot_progress: String,
     boot_error: String,
@@ -2345,6 +2540,7 @@ struct VmStateMut {
     runtime_networks: Vec<Networking>,
     devices: GpuConfig,
     events: VecDeque<pb::GuestEvent>,
+    auto_restart: AutoRestartState,
     /// True when the VM is being removed (cleanup in progress).
     removing: bool,
 }

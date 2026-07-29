@@ -153,11 +153,11 @@ async fn auto_restart_task(app: App) {
     let mut interval =
         tokio::time::interval(Duration::from_secs(app.config.cvm.auto_restart.interval));
     loop {
+        interval.tick().await;
         info!("Checking for exited VMs");
         if let Err(err) = app.try_restart_exited_vms().await {
             error!("Failed to restart exited VMs: {err:?}");
         }
-        interval.tick().await;
     }
 }
 
