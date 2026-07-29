@@ -391,7 +391,9 @@ impl DistributedCertBot {
 
         // Try to load global ACME credentials from KvStore
         if let Some(creds) = self.kv_store.get_acme_credentials() {
-            if acme_url_matches(&creds.acme_credentials, acme_url) {
+            if acme_url_matches(&creds.acme_credentials, acme_url)
+                .context("invalid ACME credentials in KvStore")?
+            {
                 info!("loaded global ACME account credentials from KvStore");
                 return AcmeClient::load(
                     dns01_client,
@@ -568,15 +570,14 @@ fn get_cert_expiry(cert_pem: &str) -> Option<u64> {
     Some(cert.validity().not_after.timestamp() as u64)
 }
 
-fn acme_url_matches(credentials_json: &str, expected_url: &str) -> bool {
+fn acme_url_matches(credentials_json: &str, expected_url: &str) -> Result<bool> {
     #[derive(serde::Deserialize)]
     struct Creds {
-        #[serde(default)]
         acme_url: String,
     }
-    serde_json::from_str::<Creds>(credentials_json)
-        .map(|c| c.acme_url == expected_url)
-        .unwrap_or(false)
+    let credentials = serde_json::from_str::<Creds>(credentials_json)
+        .context("failed to decode ACME credentials")?;
+    Ok(credentials.acme_url == expected_url)
 }
 
 /// Extract account_id (URI) from ACME credentials JSON
