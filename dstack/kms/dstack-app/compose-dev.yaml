@@ -8,17 +8,17 @@ services:
     build:
       context: .
       dockerfile_inline: |
-        FROM node:18-alpine@sha256:06f7bbbcec00dd10c21a3a0962609600159601b5004d84aff142977b449168e9
+        FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0
         WORKDIR /app
 
-        RUN apk add --no-cache git
+        RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
         RUN git clone ${GIT_REPOSITORY} && \
             cd dstack && \
             git checkout ${GIT_REV}
         WORKDIR /app/dstack/dstack/kms/auth-eth
-        RUN npm install
-        RUN npx tsc --project tsconfig.json
-        CMD node dist/src/main.js
+        RUN npm ci
+        RUN npm run build
+        CMD node dist/main.js
     environment:
       - HOST=0.0.0.0
       - PORT=8000
