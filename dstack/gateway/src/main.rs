@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{anyhow, Context, Result};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use anyhow::{Context, Result, anyhow};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use clap::Parser;
 use config::{Config, TlsConfig};
-use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, GetTlsKeyArgs};
+use dstack_guest_agent_rpc::{GetTlsKeyArgs, dstack_guest_client::DstackGuestClient};
 use dstack_kms_rpc::SignCertRequest;
 use http_client::prpc::PrpcClient;
 use ra_rpc::{client::RaClient, prpc_routes as prpc, rocket_helper::QuoteVerifier};
@@ -17,7 +17,7 @@ use ra_tls::{
 };
 use rocket::{
     fairing::AdHoc,
-    figment::{providers::Serialized, Figment},
+    figment::{Figment, providers::Serialized},
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -70,7 +70,7 @@ struct Args {
 
 #[cfg(unix)]
 fn set_max_ulimit() -> Result<()> {
-    use nix::sys::resource::{getrlimit, setrlimit, Resource};
+    use nix::sys::resource::{Resource, getrlimit, setrlimit};
     let (soft, hard) = getrlimit(Resource::RLIMIT_NOFILE)?;
     if soft < hard {
         setrlimit(Resource::RLIMIT_NOFILE, hard, hard)?;
@@ -228,9 +228,21 @@ fn write_cert(path: &str, cert: &str) -> Result<()> {
 }
 
 #[rocket::main]
+fn public_rpc_routes() -> Vec<rocket::Route> {
+    prpc!(Proxy, RpcHandler, trim: "Gateway.")
+}
+
+fn admin_rpc_routes() -> Vec<rocket::Route> {
+    prpc!(Proxy, AdminRpcHandler, trim: "Admin.")
+}
+
+fn debug_rpc_routes() -> Vec<rocket::Route> {
+    prpc!(Proxy, DebugRpcHandler, trim: "Debug.")
+}
+
 async fn main() -> Result<()> {
     {
-        use tracing_subscriber::{fmt, EnvFilter};
+        use tracing_subscriber::{EnvFilter, fmt};
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
         fmt().with_env_filter(filter).with_ansi(false).init();
     }
@@ -323,7 +335,7 @@ async fn main() -> Result<()> {
         .merge(Serialized::defaults(debug_value));
 
     let mut rocket = rocket::custom(figment)
-        .mount("/prpc", prpc!(Proxy, RpcHandler, trim: "Gateway."))
+        .mount("/prpc", public_rpc_routes())
         .mount("/", web_routes::health_routes())
         .mount("/", web_routes::dashboard_alias_routes())
         // Mount WaveKV sync endpoint (requires mTLS gateway auth)
@@ -354,8 +366,8 @@ async fn main() -> Result<()> {
                 .mount("/", web_routes::routes())
                 .mount("/", web_routes::health_routes())
                 .mount("/", web_routes::dashboard_alias_routes())
-                .mount("/", prpc!(Proxy, AdminRpcHandler, trim: "Admin."))
-                .mount("/prpc", prpc!(Proxy, AdminRpcHandler, trim: "Admin."))
+                .mount("/", admin_rpc_routes())
+                .mount("/prpc", admin_rpc_routes())
                 .manage(admin_state)
                 .launch()
                 .await
@@ -366,7 +378,7 @@ async fn main() -> Result<()> {
     let debug_srv = async move {
         if debug_config.insecure_enable_debug_rpc {
             rocket::custom(debug_figment)
-                .mount("/prpc", prpc!(Proxy, DebugRpcHandler, trim: "Debug."))
+                .mount("/prpc", debug_rpc_routes())
                 .mount("/", web_routes::health_routes())
                 .mount("/", web_routes::dashboard_alias_routes())
                 .manage(debug_state)
@@ -388,4 +400,59 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::{admin_rpc_routes, debug_rpc_routes, public_rpc_routes};
+    use std::collections::BTreeSet;
+
+    fn paths(routes: Vec<rocket::Route>) -> BTreeSet<String> {
+        routes
+            .into_iter()
+            .map(|route| route.uri.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn gateway_internal_batch_008_rpc_route_exposure_matrix() {
+        let public = paths(public_rpc_routes());
+        let admin = paths(admin_rpc_routes());
+        let debug = paths(debug_rpc_routes());
+
+        for expected in ["/RegisterCvm", "/AcmeInfo", "/Info", "/GetPeers"] {
+            assert!(public.contains(expected), "missing public route {expected}");
+        }
+        for forbidden in [
+            "/Status",
+            "/Exit",
+            "/SetNodeStatus",
+            "/SetInstancePortPolicy",
+            "/ClearInstancePortPolicy",
+        ] {
+            assert!(
+                !public.contains(forbidden),
+                "admin route exposed publicly: {forbidden}"
+            );
+            assert!(
+                admin.contains(forbidden),
+                "admin route missing: {forbidden}"
+            );
+        }
+        for forbidden in ["/GetSyncData", "/GetProxyState"] {
+            assert!(
+                !public.contains(forbidden),
+                "debug route exposed publicly: {forbidden}"
+            );
+            assert!(
+                debug.contains(forbidden),
+                "debug route missing: {forbidden}"
+            );
+        }
+        assert!(public.is_disjoint(&admin));
+        assert!(
+            !public.is_disjoint(&debug),
+            "shared Info/RegisterCvm routes expected"
+        );
+    }
 }
