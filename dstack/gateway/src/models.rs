@@ -182,7 +182,7 @@ mod tests {
     use std::{
         collections::BTreeMap,
         sync::{
-            Arc,
+            Arc, Barrier,
             atomic::{AtomicU64, Ordering},
         },
     };
@@ -198,6 +198,28 @@ mod tests {
                 assert_eq!(connections.load(Ordering::Relaxed), 2);
             }
             assert_eq!(connections.load(Ordering::Relaxed), 1);
+        }
+        assert_eq!(connections.load(Ordering::Relaxed), 0);
+
+        let entered = Arc::new(Barrier::new(9));
+        let release = Arc::new(Barrier::new(9));
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let counter = connections.clone();
+                let entered = entered.clone();
+                let release = release.clone();
+                std::thread::spawn(move || {
+                    let _guard = counter.enter();
+                    entered.wait();
+                    release.wait();
+                })
+            })
+            .collect();
+        entered.wait();
+        assert_eq!(connections.load(Ordering::Relaxed), 8);
+        release.wait();
+        for worker in workers {
+            worker.join().expect("counter worker must exit cleanly");
         }
         assert_eq!(connections.load(Ordering::Relaxed), 0);
 
