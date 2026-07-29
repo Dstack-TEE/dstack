@@ -227,6 +227,7 @@ fn write_cert(path: &str, cert: &str) -> Result<()> {
     Ok(())
 }
 
+#[rocket::main]
 fn public_rpc_routes() -> Vec<rocket::Route> {
     prpc!(Proxy, RpcHandler, trim: "Gateway.")
 }
@@ -239,7 +240,6 @@ fn debug_rpc_routes() -> Vec<rocket::Route> {
     prpc!(Proxy, DebugRpcHandler, trim: "Debug.")
 }
 
-#[rocket::main]
 async fn main() -> Result<()> {
     {
         use tracing_subscriber::{EnvFilter, fmt};
