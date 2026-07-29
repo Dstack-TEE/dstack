@@ -10,14 +10,13 @@ use crate::{
     kv::{decode, encode},
     main_service::Proxy,
 };
-use flate2::{Compression, read::GzDecoder, write::GzEncoder};
+use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use ra_tls::traits::CertExt;
 use rocket::{
-    State,
     data::{Data, ToByteUnit},
     http::{ContentType, Status},
-    mtls::{Certificate, oid::Oid},
-    post,
+    mtls::{oid::Oid, Certificate},
+    post, State,
 };
 use std::io::{Read, Write};
 use tracing::warn;
@@ -84,23 +83,19 @@ fn verify_gateway_peer(state: &Proxy, cert: Option<Certificate<'_>>) -> Result<(
     };
 
     let cert = RocketCert(&cert);
-    let remote_app_id = cert
-        .get_app_id()
-        .map_err(|e| {
-            warn!("WaveKV sync: failed to extract app_id from certificate: {e}");
-            Status::Unauthorized
-        })?
-        .or_else(|| {
-            cert.get_app_info()
-                .map_err(|e| {
-                    warn!("WaveKV sync: failed to extract app_info from certificate: {e}");
-                    Status::Unauthorized
-                })
-                .transpose()
-                .ok()
-                .flatten()
-                .map(|info| info.app_id)
-        });
+    let remote_app_id = match cert.get_app_id().map_err(|e| {
+        warn!("WaveKV sync: failed to extract app_id from certificate: {e}");
+        Status::Unauthorized
+    })? {
+        Some(app_id) => Some(app_id),
+        None => cert
+            .get_app_info()
+            .map_err(|e| {
+                warn!("WaveKV sync: failed to extract app_info from certificate: {e}");
+                Status::Unauthorized
+            })?
+            .map(|info| info.app_id),
+    };
 
     let Some(remote_app_id) = remote_app_id else {
         warn!("WaveKV sync: certificate does not contain app identity");
