@@ -41,18 +41,35 @@ pub(crate) fn ct_log_write_cert(app_id: &str, cert: &str, log_dir: &str) -> Resu
 }
 
 fn write_new_cert(dir: &Path, base_filename: &str, cert: &[u8]) -> Result<()> {
+    let mut staged =
+        tempfile::NamedTempFile::new_in(dir).context("failed to create staged ct log cert")?;
+    staged
+        .write_all(cert)
+        .context("failed to write staged ct log cert")?;
+    staged
+        .as_file()
+        .sync_all()
+        .context("failed to sync staged ct log cert")?;
+
     for index in 0..=MAX_COLLISION_INDEX {
         let path = dir.join(format!("{base_filename}.{index}.cert"));
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                file.write_all(cert)
-                    .with_context(|| format!("failed to write ct log cert: {}", path.display()))?;
+        match staged.persist_noclobber(&path) {
+            Ok(file) => {
+                file.sync_all()
+                    .with_context(|| format!("failed to sync ct log cert: {}", path.display()))?;
+                std::fs::File::open(dir)
+                    .and_then(|directory| directory.sync_all())
+                    .with_context(|| {
+                        format!("failed to sync ct log directory: {}", dir.display())
+                    })?;
                 return Ok(());
             }
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) if error.error.kind() == ErrorKind::AlreadyExists => {
+                staged = error.file;
+            }
             Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("failed to create ct log cert: {}", path.display()));
+                return Err(error.error)
+                    .with_context(|| format!("failed to commit ct log cert: {}", path.display()));
             }
         }
     }
@@ -173,6 +190,10 @@ mod tests {
         assert_eq!(
             fs::read_to_string(temp.path().join(format!("{base}.0.cert"))).unwrap(),
             "existing"
+        );
+        assert_eq!(
+            fs::read_dir(temp.path()).unwrap().count(),
+            MAX_COLLISION_INDEX + 1
         );
     }
 
