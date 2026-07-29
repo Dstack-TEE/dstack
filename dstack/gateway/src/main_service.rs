@@ -944,7 +944,18 @@ impl ProxyState {
         if public_key.is_empty() {
             bail!("public_key is empty");
         }
+        if self
+            .state
+            .instances
+            .values()
+            .any(|instance| instance.id != id && instance.public_key == public_key)
+        {
+            bail!("WireGuard public key is already registered to another instance");
+        }
         if let Some(existing) = self.state.instances.get_mut(id) {
+            if existing.app_id != app_id {
+                bail!("instance_id is already registered to a different app");
+            }
             let pubkey_changed = existing.public_key != public_key;
             if pubkey_changed {
                 info!("public key changed for instance {id}, new key: {public_key}");
