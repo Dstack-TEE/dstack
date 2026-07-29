@@ -610,6 +610,68 @@ mod tests {
     use cc_eventlog::RuntimeEvent;
     use sha2::{Digest, Sha256, Sha384};
 
+    fn historical_key_fixture(
+        directory: &Path,
+        name: &str,
+        scalar: u8,
+    ) -> (HistoricalKeyConfig, String, Vec<u8>) {
+        let key_dir = directory.join(name);
+        fs::create_dir_all(&key_dir).unwrap();
+        let ca_key = ra_tls::rcgen::KeyPair::generate_for(&ra_tls::rcgen::PKCS_ECDSA_P256_SHA256)
+            .unwrap()
+            .serialize_pem();
+        let k256_key = SigningKey::from_slice(&[scalar; 32])
+            .unwrap()
+            .to_bytes()
+            .to_vec();
+        let ca_path = key_dir.join("root-ca.key");
+        let k256_path = key_dir.join("root-k256.key");
+        fs::write(&ca_path, &ca_key).unwrap();
+        fs::write(&k256_path, &k256_key).unwrap();
+        (
+            HistoricalKeyConfig {
+                ca_key: ca_path,
+                k256_key: k256_path,
+            },
+            ca_key,
+            k256_key,
+        )
+    }
+
+    #[test]
+    fn historical_root_keys_preserve_configured_rotation_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let (newer, newer_ca, newer_k256) = historical_key_fixture(directory.path(), "newer", 0x21);
+        let (older, older_ca, older_k256) = historical_key_fixture(directory.path(), "older", 0x22);
+        let loaded = load_historical_keys(&[newer, older]).unwrap();
+
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].ca_key, newer_ca);
+        assert_eq!(loaded[0].k256_key, newer_k256);
+        assert_eq!(loaded[1].ca_key, older_ca);
+        assert_eq!(loaded[1].k256_key, older_k256);
+    }
+
+    #[test]
+    fn historical_root_keys_fail_closed_on_missing_or_malformed_material() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = HistoricalKeyConfig {
+            ca_key: directory.path().join("missing-ca.key"),
+            k256_key: directory.path().join("missing-k256.key"),
+        };
+        assert!(load_historical_keys(&[missing]).is_err());
+
+        let ca_path = directory.path().join("bad-ca.key");
+        let k256_path = directory.path().join("bad-k256.key");
+        fs::write(&ca_path, "not a PEM key").unwrap();
+        fs::write(&k256_path, [0u8; 31]).unwrap();
+        let malformed = HistoricalKeyConfig {
+            ca_key: ca_path,
+            k256_key: k256_path,
+        };
+        assert!(load_historical_keys(&[malformed]).is_err());
+    }
+
     #[test]
     fn remove_cache_only_deletes_the_named_hex_entry() {
         let dir = tempfile::tempdir().unwrap();
