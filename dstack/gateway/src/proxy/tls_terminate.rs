@@ -660,3 +660,70 @@ mod tests {
         assert!(remainder.is_empty(), "got {remainder:?}");
     }
 }
+
+#[cfg(test)]
+mod local_response_tests {
+    use super::{IgnoreUnexpectedEofStream, empty_response, json_response};
+    use hyper::StatusCode;
+    use std::{
+        io,
+        pin::Pin,
+        task::{Context, Poll},
+    };
+    use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
+
+    struct ErrorReader(io::ErrorKind);
+
+    impl AsyncRead for ErrorReader {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Ready(Err(io::Error::from(self.0)))
+        }
+    }
+
+    #[tokio::test]
+    async fn gateway_internal_batch_005_local_response_and_stream_matrix() {
+        let json = json_response(&serde_json::json!({
+            "type": "dstack gateway",
+            "paths": ["/index", "/app-info", "/acme-info"],
+        }))
+        .expect("bounded JSON response must build");
+        assert_eq!(json.status(), StatusCode::OK);
+        assert_eq!(
+            json.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
+            Some("application/json")
+        );
+        let parsed: serde_json::Value =
+            serde_json::from_str(json.body()).expect("response body must be exact JSON");
+        assert_eq!(parsed["type"], "dstack gateway");
+        assert_eq!(parsed["paths"].as_array().map(Vec::len), Some(3));
+
+        for status in [
+            StatusCode::OK,
+            StatusCode::NOT_FOUND,
+            StatusCode::METHOD_NOT_ALLOWED,
+        ] {
+            let response = empty_response(status).expect("empty response must build");
+            assert_eq!(response.status(), status);
+            assert!(response.body().is_empty());
+        }
+
+        let mut expected_eof =
+            IgnoreUnexpectedEofStream::new(ErrorReader(io::ErrorKind::UnexpectedEof));
+        let mut byte = [0_u8; 1];
+        assert_eq!(expected_eof.read(&mut byte).await.unwrap(), 0);
+
+        let mut unexpected_error =
+            IgnoreUnexpectedEofStream::new(ErrorReader(io::ErrorKind::ConnectionReset));
+        let error = unexpected_error
+            .read(&mut byte)
+            .await
+            .expect_err("non-EOF transport errors must stay visible");
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionReset);
+    }
+}
