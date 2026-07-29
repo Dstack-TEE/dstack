@@ -517,4 +517,77 @@ mod tests {
         );
         assert!(resolver.get().has_cert_for_sni("app.example.com"));
     }
+
+    #[test]
+    fn exact_certificate_precedes_parent_wildcard() {
+        let wildcard = make_test_cert_data();
+        let exact = make_test_cert_data();
+        let mut builder = CertStoreBuilder::new();
+        builder
+            .add_cert("example.com", &wildcard)
+            .expect("failed to add wildcard certificate");
+        builder
+            .add_exact_cert("api.example.com", &exact)
+            .expect("failed to add exact certificate");
+        let store = builder.build();
+
+        let exact_selected = store
+            .resolve_cert("api.example.com")
+            .expect("exact certificate not selected");
+        let wildcard_selected = store
+            .resolve_cert("www.example.com")
+            .expect("wildcard certificate not selected");
+        assert!(Arc::ptr_eq(
+            &exact_selected,
+            store
+                .exact_certs
+                .get("api.example.com")
+                .expect("exact certificate missing")
+        ));
+        assert!(Arc::ptr_eq(
+            &wildcard_selected,
+            store
+                .wildcard_certs
+                .get("example.com")
+                .expect("wildcard certificate missing")
+        ));
+        assert!(store.resolve_cert("deep.www.example.com").is_none());
+    }
+
+    #[test]
+    fn concurrent_reads_never_observe_empty_during_reload() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let resolver = Arc::new(CertResolver::new());
+        resolver
+            .update_cert("example.com", &make_test_cert_data())
+            .expect("failed to install initial certificate");
+        let finished = Arc::new(AtomicBool::new(false));
+        let misses = Arc::new(AtomicUsize::new(0));
+        let readers = (0..4)
+            .map(|_| {
+                let resolver = resolver.clone();
+                let finished = finished.clone();
+                let misses = misses.clone();
+                std::thread::spawn(move || {
+                    while !finished.load(Ordering::Acquire) {
+                        if resolver.get().resolve_cert("app.example.com").is_none() {
+                            misses.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for _ in 0..20 {
+            resolver
+                .update_cert("example.com", &make_test_cert_data())
+                .expect("hot reload failed");
+        }
+        finished.store(true, Ordering::Release);
+        for reader in readers {
+            reader.join().expect("reader thread failed");
+        }
+        assert_eq!(misses.load(Ordering::Relaxed), 0);
+    }
 }
