@@ -38,24 +38,67 @@ use crate::types::{
     VerificationRequest, VerificationResponse,
 };
 
-/// Return the canonical TCB status and advisory list used by auth policy.
-pub fn policy_tcb_fields(attestation: &VerifiedAttestation) -> (String, Vec<String>) {
-    match &attestation.report {
-        DstackVerifiedReport::DstackAmdSevSnp(report) => (
-            report.tcb_info.tcb_status().to_string(),
-            report.advisory_ids.clone(),
-        ),
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TcbPolicySource {
+    Tdx {
+        status: String,
+        advisory_ids: Vec<String>,
+    },
+    GcpTdx {
+        status: String,
+        advisory_ids: Vec<String>,
+    },
+    SevSnp {
+        status: String,
+        advisory_ids: Vec<String>,
+    },
+    AwsNitroTpm,
+    NoTcb,
+}
+
+fn canonical_tcb_fields(source: TcbPolicySource) -> (String, Vec<String>) {
+    match source {
+        TcbPolicySource::Tdx {
+            status,
+            advisory_ids,
+        }
+        | TcbPolicySource::GcpTdx {
+            status,
+            advisory_ids,
+        }
+        | TcbPolicySource::SevSnp {
+            status,
+            advisory_ids,
+        } => (status, advisory_ids),
         // AWS NitroTPM has no TDX/SNP-style TCB surface; a verified attestation
         // is normalized to "UpToDate" so the verifier's policy boot info matches
         // the KMS bootAuth payload and passes the shared "UpToDate" auth gate.
-        // Other no-TCB platforms (e.g. nitro enclave) stay empty and fail-closed.
-        DstackVerifiedReport::DstackAwsNitroTpm(_) => ("UpToDate".to_string(), Vec::new()),
-        _ => attestation
-            .report
-            .tdx_report()
-            .map(|report| (report.status.clone(), report.advisory_ids.clone()))
-            .unwrap_or_default(),
+        TcbPolicySource::AwsNitroTpm => ("UpToDate".to_string(), Vec::new()),
+        // Other no-TCB platforms (currently Nitro Enclave) stay empty so a
+        // relying party's UpToDate requirement fails closed.
+        TcbPolicySource::NoTcb => (String::new(), Vec::new()),
     }
+}
+
+/// Return the canonical TCB status and advisory list used by auth policy.
+pub fn policy_tcb_fields(attestation: &VerifiedAttestation) -> (String, Vec<String>) {
+    let source = match &attestation.report {
+        DstackVerifiedReport::DstackTdx(report) => TcbPolicySource::Tdx {
+            status: report.status.clone(),
+            advisory_ids: report.advisory_ids.clone(),
+        },
+        DstackVerifiedReport::DstackGcpTdx { tdx_report, .. } => TcbPolicySource::GcpTdx {
+            status: tdx_report.status.clone(),
+            advisory_ids: tdx_report.advisory_ids.clone(),
+        },
+        DstackVerifiedReport::DstackAmdSevSnp(report) => TcbPolicySource::SevSnp {
+            status: report.tcb_info.tcb_status().to_string(),
+            advisory_ids: report.advisory_ids.clone(),
+        },
+        DstackVerifiedReport::DstackAwsNitroTpm(_) => TcbPolicySource::AwsNitroTpm,
+        DstackVerifiedReport::DstackNitroEnclave(_) => TcbPolicySource::NoTcb,
+    };
+    canonical_tcb_fields(source)
 }
 
 fn policy_boot_info_from_verified_app_info(
@@ -1457,6 +1500,76 @@ mod tests {
 
     fn test_attestation_verifier() -> Arc<AttestationVerifier> {
         Arc::new(AttestationVerifier::new_prod(None).unwrap())
+    }
+
+    #[test]
+    fn five_platform_tcb_policy_decision_table_is_exhaustive() {
+        let advisories = vec!["INTEL-SA-00001".to_string(), "INTEL-SA-00002".to_string()];
+        let rows = [
+            (
+                "tdx-current",
+                TcbPolicySource::Tdx {
+                    status: "UpToDate".to_string(),
+                    advisory_ids: Vec::new(),
+                },
+                "UpToDate",
+                Vec::new(),
+            ),
+            (
+                "tdx-out-of-date",
+                TcbPolicySource::Tdx {
+                    status: "OutOfDate".to_string(),
+                    advisory_ids: advisories.clone(),
+                },
+                "OutOfDate",
+                advisories.clone(),
+            ),
+            (
+                "tdx-revoked",
+                TcbPolicySource::Tdx {
+                    status: "Revoked".to_string(),
+                    advisory_ids: advisories.clone(),
+                },
+                "Revoked",
+                advisories.clone(),
+            ),
+            (
+                "gcp-tdx",
+                TcbPolicySource::GcpTdx {
+                    status: "OutOfDate".to_string(),
+                    advisory_ids: advisories.clone(),
+                },
+                "OutOfDate",
+                advisories.clone(),
+            ),
+            (
+                "sev-snp",
+                TcbPolicySource::SevSnp {
+                    status: "Revoked".to_string(),
+                    advisory_ids: advisories.clone(),
+                },
+                "Revoked",
+                advisories.clone(),
+            ),
+            (
+                "aws-nitro-tpm",
+                TcbPolicySource::AwsNitroTpm,
+                "UpToDate",
+                Vec::new(),
+            ),
+            (
+                "nitro-enclave-no-tcb",
+                TcbPolicySource::NoTcb,
+                "",
+                Vec::new(),
+            ),
+        ];
+
+        for (name, source, expected_status, expected_advisories) in rows {
+            let (status, advisory_ids) = canonical_tcb_fields(source);
+            assert_eq!(status, expected_status, "{name}");
+            assert_eq!(advisory_ids, expected_advisories, "{name}");
+        }
     }
 
     #[test]
