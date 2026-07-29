@@ -84,5 +84,8 @@ dev_cache_run() {
         # Written last: a stamp is a claim that the tree matches the archive,
         # so it must not exist if any step above failed.
         printf '%s' "$key" > "$stamp"
-    ) 9>"$dir/$key.lock"
+    # The staged tree and its stamp are shared by every key for this component.
+    # Lock the component, not an individual archive: otherwise two builds with
+    # different keys can concurrently delete and extract the same outputs.
+    ) 9>"$dir/staging.lock"
 }

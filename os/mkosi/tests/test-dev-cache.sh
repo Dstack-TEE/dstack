@@ -66,4 +66,18 @@ rm -rf "$base/stage"
 dev_cache_run component key-s2 "$base" stage -- build_output must-not-run-either
 [[ $(cat "$base/stage/file") == payload:s2 ]] || { echo 'staging tree not restored' >&2; exit 1; }
 
+# Different keys still share one staging tree, so they must share one lock.
+# Hold that lock externally and prove a build under a new key cannot start.
+mkdir -p "$DSTACK_DEV_CACHE_DIR/serialized"
+exec 8>"$DSTACK_DEV_CACHE_DIR/serialized/staging.lock"
+flock 8
+before=$(cat "$count")
+dev_cache_run serialized key-a "$base" stage -- build_output serialized &
+pid=$!
+sleep 0.1
+[[ $(cat "$count") == "$before" ]] || { echo 'different cache keys did not serialize' >&2; exit 1; }
+flock -u 8
+wait "$pid"
+[[ $(cat "$base/stage/file") == payload:serialized ]]
+
 echo 'development cache tests passed'
