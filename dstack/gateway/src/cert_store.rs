@@ -590,4 +590,28 @@ mod tests {
         }
         assert_eq!(misses.load(Ordering::Relaxed), 0);
     }
+
+    #[test]
+    fn corrupt_update_retains_previous_certificate() {
+        let original = make_test_cert_data();
+        let mut corrupt = make_test_cert_data();
+        corrupt.cert_pem = "not a certificate".to_string();
+
+        let resolver = CertResolver::new();
+        resolver
+            .update_cert("example.com", &original)
+            .expect("failed to install original certificate");
+        resolver
+            .update_cert("example.com", &corrupt)
+            .expect_err("corrupt certificate must be rejected");
+        assert_eq!(
+            resolver
+                .get()
+                .get_cert_data("example.com")
+                .expect("original certificate was lost")
+                .not_after,
+            original.not_after
+        );
+        assert!(resolver.get().has_cert_for_sni("app.example.com"));
+    }
 }
