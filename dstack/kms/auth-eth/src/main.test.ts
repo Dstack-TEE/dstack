@@ -61,6 +61,7 @@ describe('Server', () => {
     });
 
     it('should reject oversized and non-hex measurements before backend use', async () => {
+      jest.clearAllMocks();
       for (const mrAggregated of ['0x' + 'ab'.repeat(33), 'not-hex']) {
         const response = await app.inject({
           method: 'POST',
