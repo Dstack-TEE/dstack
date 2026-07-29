@@ -327,6 +327,17 @@ impl AdminRpc for AdminRpcHandler {
     ) -> Result<DnsCredentialInfo> {
         let kv_store = self.state.kv_store();
 
+        validate_dns_credential_name(&request.name)?;
+        validate_cloudflare_secret(&request.cf_api_token)?;
+        validate_cloudflare_api_url(request.cf_api_url.as_deref())?;
+        if kv_store
+            .list_dns_credentials()
+            .iter()
+            .any(|credential| credential.name == request.name)
+        {
+            bail!("DNS credential name already exists");
+        }
+
         // Validate provider type
         let provider = match request.provider_type.as_str() {
             "cloudflare" => DnsProvider::Cloudflare {
@@ -379,18 +390,28 @@ impl AdminRpc for AdminRpcHandler {
             .get_dns_credential(&request.id)
             .context("dns credential not found")?;
 
-        // Update name if provided
+        // Update name if provided.
         if let Some(name) = request.name {
+            validate_dns_credential_name(&name)?;
+            if kv_store
+                .list_dns_credentials()
+                .iter()
+                .any(|credential| credential.id != request.id && credential.name == name)
+            {
+                bail!("DNS credential name already exists");
+            }
             cred.name = name;
         }
 
-        // Update provider fields if provided
+        // Update provider fields if provided.
         match &mut cred.provider {
             DnsProvider::Cloudflare { api_token, api_url } => {
                 if let Some(new_token) = request.cf_api_token {
+                    validate_cloudflare_secret(&new_token)?;
                     *api_token = new_token;
                 }
                 if let Some(new_url) = request.cf_api_url {
+                    validate_cloudflare_api_url(Some(&new_url))?;
                     *api_url = Some(new_url);
                 }
             }
@@ -787,6 +808,32 @@ fn dns_cred_to_proto(cred: DnsCredential) -> DnsCredentialInfo {
         dns_txt_ttl: Some(cred.dns_txt_ttl),
         max_dns_wait: Some(cred.max_dns_wait.as_secs() as u32),
     }
+}
+
+fn validate_dns_credential_name(name: &str) -> Result<()> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 128 {
+        bail!("DNS credential name must be between 1 and 128 bytes");
+    }
+    Ok(())
+}
+
+fn validate_cloudflare_secret(token: &str) -> Result<()> {
+    if token.trim().is_empty() {
+        bail!("Cloudflare API token must not be empty");
+    }
+    Ok(())
+}
+
+fn validate_cloudflare_api_url(api_url: Option<&str>) -> Result<()> {
+    let Some(api_url) = api_url else {
+        return Ok(());
+    };
+    let parsed = reqwest::Url::parse(api_url).context("invalid Cloudflare API URL")?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        bail!("Cloudflare API URL must use HTTP or HTTPS and include a host");
+    }
+    Ok(())
 }
 
 fn redact_token(token: &str) -> String {
