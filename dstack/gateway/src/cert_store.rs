@@ -439,4 +439,35 @@ mod tests {
         // Should not resolve different domain
         assert!(!store.has_cert_for_sni("example.org"));
     }
+
+    #[test]
+    fn mismatched_key_update_retains_previous_certificate() {
+        let original = make_test_cert_data();
+        let mut mismatched = make_test_cert_data();
+        mismatched.cert_pem = original.cert_pem.clone();
+
+        let resolver = CertResolver::new();
+        resolver
+            .update_cert("example.com", &original)
+            .expect("failed to install original certificate");
+        let original_not_after = resolver
+            .get()
+            .get_cert_data("example.com")
+            .expect("original certificate missing")
+            .not_after;
+
+        let error = resolver
+            .update_cert("example.com", &mismatched)
+            .expect_err("mismatched key must be rejected");
+        assert!(error.to_string().contains("failed to parse certificate"));
+        assert_eq!(
+            resolver
+                .get()
+                .get_cert_data("example.com")
+                .expect("original certificate was lost")
+                .not_after,
+            original_not_after
+        );
+        assert!(resolver.get().has_cert_for_sni("app.example.com"));
+    }
 }
