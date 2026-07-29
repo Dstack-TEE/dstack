@@ -62,13 +62,18 @@ dpkg-query -W -f='build-package: ${binary:Package}=${Version}\n' \
 # and on it treating "already staged under this key" as the only skip
 # condition. A tree left over from a different key must never be reused: that
 # is how a previous build's files end up in a later image.
+#
+# Only the work directory. The kernel staging tree is not a cache: it is where
+# component_assemble merges the kernel trees on every build, cache hit or not,
+# under strict conflict detection. Persisting it makes the second build collide
+# with the first build's merged files.
 if [[ $cache_enabled == 1 ]]; then
     work="$BUILDDIR/component-work"
-    kernel_stage="$BUILDDIR/kernel-stage"
 else
     work=/var/tmp/dstack-component-work
-    kernel_stage=/var/tmp/dstack-kernel-stage
 fi
+kernel_stage=/var/tmp/dstack-kernel-stage
+rm -rf "$kernel_stage"
 mkdir -p "$work" "$kernel_stage"
 args=()
 [[ $cache_enabled == 1 ]] && args+=(--dev-cache)
