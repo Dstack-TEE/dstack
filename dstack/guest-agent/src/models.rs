@@ -32,6 +32,12 @@ mod filters {
     pub fn hex(s: &[u8]) -> Result<String, rinja::Error> {
         Ok(hex::encode(s))
     }
+
+    pub fn prometheus_label(s: &str) -> Result<String, rinja::Error> {
+        Ok(s.replace('\\', "\\\\")
+            .replace('\n', "\\n")
+            .replace('"', "\\\""))
+    }
 }
 
 #[derive(Template)]
