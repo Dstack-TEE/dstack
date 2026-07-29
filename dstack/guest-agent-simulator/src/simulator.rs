@@ -83,19 +83,23 @@ pub fn simulated_info_attestation(attestation: &VersionedAttestation) -> Version
 }
 
 pub fn simulated_certificate_attestation(
-    attestation: &VersionedAttestation,
+    source: &VersionedAttestation,
     pubkey: &[u8],
     patch_report_data: bool,
     generator: Option<&TdxGenerator>,
 ) -> Result<VersionedAttestation> {
+    let preserve_legacy = matches!(source, VersionedAttestation::V0 { .. });
     let report_data = QuoteContentType::RaTlsCert.to_report_data(pubkey);
     let attestation = prepare_attestation(
-        attestation,
+        source,
         report_data,
         patch_report_data,
         generator,
         "certificate_attestation",
     )?;
+    if preserve_legacy {
+        return Ok(attestation.try_into_legacy()?.into_versioned());
+    }
     Ok(VersionedAttestation::V1 { attestation })
 }
 
