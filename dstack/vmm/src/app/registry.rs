@@ -11,6 +11,7 @@ use anyhow::{bail, Context, Result};
 use flate2::read::GzDecoder;
 use reqwest::Client;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use tracing::info;
 
 fn build_client() -> Result<Client> {
@@ -250,6 +251,22 @@ async fn download_and_extract_layers(
         }
 
         let bytes = response.bytes().await.context("failed to read blob body")?;
+        if bytes.len() as u64 != layer.size {
+            bail!(
+                "blob {} size mismatch: expected {}, received {}",
+                layer.digest,
+                layer.size,
+                bytes.len()
+            );
+        }
+        let actual_digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+        if actual_digest != layer.digest {
+            bail!(
+                "blob digest mismatch: expected {}, received {}",
+                layer.digest,
+                actual_digest
+            );
+        }
         extract_layer(&bytes, &layer.media_type, dest)?;
     }
 
