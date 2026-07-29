@@ -33,6 +33,14 @@ if [[ $cache_enabled == 1 ]]; then
     : "${BUILDDIR:?dev component cache requires mkosi BuildDirectory}"
     export DSTACK_DEV_CACHE_DIR="$BUILDDIR/components"
     toolchain_downloads="$BUILDDIR/toolchains"
+    # A source edit misses the dstack-rust component cache by design, and the
+    # rebuild that follows was recompiling the entire workspace -- every
+    # dependency crate, and re-downloading the registry -- because both the
+    # target directory and CARGO_HOME lived in the per-build sandbox. Keeping
+    # them here leaves only the touched crates to rebuild. Release builds still
+    # get the throwaway layout below.
+    export DSTACK_CARGO_TARGET_DIR="$BUILDDIR/cargo-target"
+    export DSTACK_CARGO_HOME="$BUILDDIR/cargo-home"
 else
     toolchain_downloads=/var/tmp/dstack-toolchain-downloads
 fi
