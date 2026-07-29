@@ -265,3 +265,51 @@ fn parse_info_port_policy(tcb_info: &str) -> Result<PortPolicy, FetchError> {
         restrict_mode: app_compose.port_policy.restrict_mode,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_info_port_policy, FetchError};
+
+    #[test]
+    fn legacy_empty_info_uses_bounded_open_compatibility_policy() {
+        let policy = parse_info_port_policy("").expect("legacy empty info rejected");
+        assert!(!policy.restrict_mode);
+        assert!(policy.ports.is_empty());
+    }
+
+    #[test]
+    fn reported_policy_wins_and_preserves_proxy_protocol_flags() {
+        let compose = serde_json::json!({
+            "manifest_version": "3",
+            "name": "port-policy-fixture",
+            "runner": "docker-compose",
+            "gateway_enabled": true,
+            "port_policy": {
+                "restrict_mode": true,
+                "ports": [
+                    {"port": 443, "pp": true},
+                    {"port": 8080, "pp": false}
+                ]
+            }
+        });
+        let tcb = serde_json::json!({"app_compose": compose.to_string()}).to_string();
+        let policy = parse_info_port_policy(&tcb).expect("reported policy rejected");
+        assert!(policy.restrict_mode);
+        assert!(policy.ports.get(&443).expect("443 missing").pp);
+        assert!(!policy.ports.get(&8080).expect("8080 missing").pp);
+    }
+
+    #[test]
+    fn malformed_or_missing_compose_is_permanent_failure() {
+        for value in [
+            "not-json",
+            r#"{"other":"value"}"#,
+            r#"{"app_compose":"bad"}"#,
+        ] {
+            assert!(matches!(
+                parse_info_port_policy(value),
+                Err(FetchError::Permanent(_))
+            ));
+        }
+    }
+}
