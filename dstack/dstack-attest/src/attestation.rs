@@ -870,6 +870,40 @@ impl TdxAttestationExt for AttestationV1 {
 }
 
 impl AttestationV1 {
+    /// Convert a V1 dstack attestation back to the legacy SCALE schema.
+    ///
+    /// This is only lossless for the original dstack stack with V1 runtime
+    /// events. Pod payloads and newer event encodings must remain on the V1
+    /// msgpack wire format.
+    pub fn try_into_legacy(self) -> Result<Attestation> {
+        let Self {
+            platform, stack, ..
+        } = self;
+        let StackEvidence::Dstack {
+            report_data,
+            runtime_events,
+            config,
+        } = stack
+        else {
+            bail!("dstack-pod attestation cannot be represented by the legacy schema");
+        };
+        if runtime_events
+            .iter()
+            .any(|event| !matches!(event.version, EventLogVersion::V1))
+        {
+            bail!("non-V1 runtime events cannot be represented by the legacy schema");
+        }
+        Ok(Attestation {
+            quote: platform_into_legacy_quote(platform),
+            runtime_events,
+            report_data: report_data
+                .try_into()
+                .map_err(|_| anyhow!("stack.report_data must be 64 bytes"))?,
+            config,
+            report: (),
+        })
+    }
+
     /// Decode the VM config from the external or embedded config.
     pub fn decode_vm_config<'a>(&'a self, config: &'a str) -> Result<VmConfig> {
         decode_vm_config_with_fallback(config, self.stack.config())
@@ -2817,6 +2851,40 @@ mod tests {
         let upgraded = dummy_tdx_attestation([3u8; 64]).into_v1();
         assert!(matches!(upgraded.platform, PlatformEvidence::Tdx { .. }));
         assert!(matches!(upgraded.stack, StackEvidence::Dstack { .. }));
+    }
+
+    #[test]
+    fn v1_dstack_with_v1_events_converts_losslessly_to_legacy() {
+        let mut legacy = dummy_tdx_attestation([0x5a; 64]);
+        legacy.runtime_events.push(cc_eventlog::RuntimeEvent::new(
+            "legacy-event".into(),
+            vec![1, 2, 3],
+            cc_eventlog::EventLogVersion::V1,
+        ));
+        let converted = legacy.clone().into_v1().try_into_legacy().unwrap();
+        assert_eq!(converted.report_data, legacy.report_data);
+        assert_eq!(converted.runtime_events.len(), 1);
+        assert!(matches!(
+            converted.into_versioned(),
+            VersionedAttestation::V0 { .. }
+        ));
+    }
+
+    #[test]
+    fn v1_conversion_rejects_lossy_legacy_projection() {
+        let pod = dummy_tdx_attestation([0x5b; 64])
+            .into_v1()
+            .into_dstack_pod("payload".into());
+        assert!(pod.try_into_legacy().is_err());
+        let mut v2 = dummy_tdx_attestation([0x5c; 64]).into_v1();
+        if let StackEvidence::Dstack { runtime_events, .. } = &mut v2.stack {
+            runtime_events.push(cc_eventlog::RuntimeEvent::new(
+                "v2-event".into(),
+                vec![4, 5, 6],
+                cc_eventlog::EventLogVersion::V2,
+            ));
+        }
+        assert!(v2.try_into_legacy().is_err());
     }
 
     #[test]
