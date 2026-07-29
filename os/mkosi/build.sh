@@ -101,6 +101,30 @@ if [[ $cache == 0 ]]; then
   mkosi --directory "$SELF" --output-directory="$BUILD_DIR/out" clean -f
 fi
 
+# Digest of every input that determines the incrementally cached tree: the
+# package lists and distribution pins in the configs, and the skeleton files
+# copied in before packages are installed. Deliberately not the dstack sources
+# or the component definitions -- those are consumed by the build script, which
+# runs after the cache is restored, and folding them in would defeat the cache
+# on every source edit. Sorted for a stable digest, and the file list itself is
+# hashed too so that deleting a skeleton file also moves the key.
+base_inputs_digest() {
+  {
+    find "$SELF/mkosi.skeleton" -type f -o -type l | sort
+    echo "--"
+    cat "$SELF/mkosi.conf" "$SELF/mkosi.tools.conf"
+    for f in "$SELF"/mkosi.profiles/*/mkosi.conf; do
+      echo "-- $f"
+      cat "$f"
+    done
+    find "$SELF/mkosi.skeleton" -type f -print0 | sort -z | xargs -0 -r sha256sum
+    find "$SELF/mkosi.skeleton" -type l -print0 | sort -z | \
+      while IFS= read -r -d '' link; do
+        printf '%s -> %s\n' "$link" "$(readlink "$link")"
+      done
+  } | sha256sum | cut -c1-32
+}
+
 build_one() {
   local out=$1 flavor=$2 jobs=${3:-${JOBS:-$(nproc)}}
   mkdir -p "$out"
@@ -130,6 +154,25 @@ build_one() {
     mkosi_args+=(--build-directory="$cache_root/build")
     mkosi_args+=(--build-sources="$cache_root/manifest:component-cache")
     mkosi_args+=(--environment="DSTACK_SOURCE_MANIFEST=/work/src/component-cache/source-manifest")
+    # mkosi's incremental cache captures the tree after the distribution and
+    # build packages are installed and before any build script runs, which is
+    # exactly the ~70 s this build otherwise repeats verbatim every time.
+    #
+    # It cannot be enabled as-is. mkosi keys the cache on CacheKey=, whose
+    # default is &d~&r~&a~&I -- distribution, release, architecture, image id --
+    # and whose specifier set contains no digest of the inputs that actually
+    # determine that tree. Editing Packages= in mkosi.conf, or any file under
+    # mkosi.skeleton/, leaves the key untouched, so mkosi would restore the
+    # stale tree and the change would silently not be in the image. Mixing the
+    # digest below into the key restores the invalidation mkosi does not do.
+    base_digest=$(base_inputs_digest)
+    mkosi_args+=(--incremental=yes)
+    mkosi_args+=(--cache-directory="$cache_root/incremental")
+    mkosi_args+=(--cache-key="&d~&r~&a~&I~$base_digest")
+    # Package downloads are content-addressed by the pinned Snapshot=, so this
+    # only avoids refetching identical files. Release builds still take the
+    # cold path and fetch from the snapshot themselves.
+    mkosi_args+=(--package-cache-directory="$cache_root/packages")
   fi
   mkosi "${mkosi_args[@]}" build
   # mkosi's own output is a plain Debian rootfs: unmeasured, not part of the
