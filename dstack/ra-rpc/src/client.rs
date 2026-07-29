@@ -173,6 +173,34 @@ impl RaClient {
     }
 }
 
+fn normalize_json_response_body(body: &[u8]) -> &[u8] {
+    if body.is_empty() {
+        b"null"
+    } else {
+        body
+    }
+}
+
+#[cfg(test)]
+mod response_tests {
+    use super::normalize_json_response_body;
+
+    #[test]
+    fn empty_json_response_decodes_as_unit() {
+        let value: () = serde_json::from_slice(normalize_json_response_body(b""))
+            .expect("empty response should decode as unit");
+        assert_eq!(value, ());
+    }
+
+    #[test]
+    fn non_empty_json_response_is_unchanged() {
+        assert_eq!(
+            normalize_json_response_body(br#"{"value":1}"#),
+            br#"{"value":1}"#
+        );
+    }
+}
+
 impl RequestClient for RaClient {
     async fn request<T, R>(&self, path: &str, body: T) -> Result<R, Error>
     where
@@ -211,7 +239,8 @@ impl RequestClient for RaClient {
             .await
             .context("Failed to read response")?
             .to_vec();
-        let response = serde_json::from_slice(&body).context("Failed to deserialize response")?;
+        let response = serde_json::from_slice(normalize_json_response_body(&body))
+            .context("Failed to deserialize response")?;
         Ok(response)
     }
 }
