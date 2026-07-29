@@ -1391,6 +1391,7 @@ impl Mrs {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::fmt::Write as _;
 
     use super::*;
 
