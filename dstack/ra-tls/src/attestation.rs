@@ -270,6 +270,42 @@ mod tests {
             .unwrap();
         assert!(format!("{error:#}").contains("app-info extension does not match"));
 
+        let mut changed_app_id = app_info.app_id.clone();
+        changed_app_id[0] ^= 1;
+        let cert = CertRequest::builder()
+            .key(&key)
+            .subject("guest.example")
+            .alt_names(&alt_names)
+            .usage_server_auth(true)
+            .app_id(&changed_app_id)
+            .app_info(&app_info)
+            .attestation(&attestation)
+            .build()
+            .self_signed()
+            .unwrap();
+        let error = verify_der(cert.der().as_ref(), &verifier)
+            .await
+            .err()
+            .unwrap();
+        assert!(format!("{error:#}").contains("app-id extension does not match"));
+
+        let mut changed_quote = attestation.clone().into_v1();
+        let AttestationQuote::DstackTdx(tdx_quote) = &mut changed_quote.quote else {
+            unreachable!()
+        };
+        tdx_quote.quote[100] ^= 1;
+        let changed_quote = changed_quote.into_versioned();
+        let cert = CertRequest::builder()
+            .key(&key)
+            .subject("guest.example")
+            .alt_names(&alt_names)
+            .usage_server_auth(true)
+            .attestation(&changed_quote)
+            .build()
+            .self_signed()
+            .unwrap();
+        assert!(verify_der(cert.der().as_ref(), &verifier).await.is_err());
+
         let wrong_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
         let cert = CertRequest::builder()
             .key(&wrong_key)
@@ -322,6 +358,19 @@ mod tests {
                 .unwrap()
         )
         .contains("extended key usage extension missing"));
+
+        let profile_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let mut params = rcgen::CertificateParams::new(alt_names.clone()).unwrap();
+        params.key_usages = vec![rcgen::KeyUsagePurpose::KeyEncipherment];
+        params
+            .extended_key_usages
+            .push(rcgen::ExtendedKeyUsagePurpose::ServerAuth);
+        let bad_usage = params.self_signed(&profile_key).unwrap();
+        let (_, parsed) = x509_parser::parse_x509_certificate(bad_usage.der()).unwrap();
+        assert!(verify_certificate_profile(&parsed)
+            .unwrap_err()
+            .to_string()
+            .contains("does not permit digital signatures"));
 
         let now = std::time::SystemTime::now();
         let expired = CertRequest::builder()
