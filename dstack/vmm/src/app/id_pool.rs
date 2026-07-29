@@ -99,6 +99,35 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_allocation_and_restart_reconstruction_preserve_uniqueness() {
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+
+        let pool = Arc::new(Mutex::new(IdPool::new(20_u8, 28)));
+        let mut workers = Vec::new();
+        for _ in 0..8 {
+            let pool = Arc::clone(&pool);
+            workers.push(thread::spawn(move || pool.lock().unwrap().allocate().unwrap()));
+        }
+        let mut allocated: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        allocated.sort_unstable();
+        assert_eq!(allocated, (20_u8..28).collect::<Vec<_>>());
+        assert_eq!(pool.lock().unwrap().allocate(), None);
+
+        let mut reconstructed = IdPool::new(20_u8, 28);
+        for id in allocated {
+            reconstructed.occupy(id).unwrap();
+        }
+        assert_eq!(reconstructed.allocate(), None);
+        assert!(reconstructed.occupy(20).is_err());
+        reconstructed.free(23);
+        assert_eq!(reconstructed.allocate(), Some(23));
+    }
+
+    #[test]
     fn maximum_numeric_boundary_does_not_wrap() {
         let mut pool = IdPool::new(u8::MAX, u8::MAX);
         assert_eq!(pool.allocate(), None);
