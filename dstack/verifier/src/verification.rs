@@ -1849,9 +1849,10 @@ mod tests {
         assert!(!truncated_destination.exists());
 
         let (linked, linked_hash) = archive(true);
-        let linked_destination = cache.path().join("images").join(&linked_hash);
+        let linked_cache = tempfile::tempdir().unwrap();
+        let linked_destination = linked_cache.path().join("images").join(&linked_hash);
         let (url, task, _) = server(vec![(200, vec![], linked, Duration::ZERO)]).await;
-        assert!(verifier(&url, cache.path(), Duration::from_secs(1))
+        assert!(verifier(&url, linked_cache.path(), Duration::from_secs(1))
             .download_image(&linked_hash, &linked_destination)
             .await
             .is_err());
