@@ -222,6 +222,35 @@ jq -e '.details.os_image_hash_verified == true' "$WORK/request.json.verification
 jq -e '.details.event_log_verified == true' "$WORK/request.json.verification.json" >/dev/null
 jq -e '.details.simulated == true' "$WORK/request.json.verification.json" >/dev/null
 
+# Flip one authenticated byte while preserving the versioned envelope and JSON
+# shape. Every platform must reject the mutation and must not leave an accepted
+# verification decision behind.
+ORIGINAL_ATTESTATION=$(jq -r .attestation "$WORK/request.json")
+PREFIX=${ORIGINAL_ATTESTATION:0:2}
+if [[ "$PREFIX" == "00" ]]; then
+  MUTATED_PREFIX=01
+else
+  MUTATED_PREFIX=00
+fi
+jq --arg attestation "${MUTATED_PREFIX}${ORIGINAL_ATTESTATION:2}" \
+  '.attestation = $attestation' "$WORK/request.json" > "$WORK/mutated-request.json"
+set +e
+dstack-verifier --config "$WORK/verifier.toml" --verify "$WORK/mutated-request.json" \
+  >"$WORK/mutation-policy.log" 2>&1
+MUTATION_RC=$?
+set -e
+if (( MUTATION_RC == 0 )); then
+  echo "tampered $TEE_PLATFORM evidence was accepted" >&2
+  cat "$WORK/mutation-policy.log" >&2
+  exit 1
+fi
+if [[ -s "$WORK/mutated-request.json.verification.json" ]] &&
+   jq -e '.is_valid == true' "$WORK/mutated-request.json.verification.json" >/dev/null 2>&1; then
+  echo "tampered $TEE_PLATFORM evidence left an accepted decision" >&2
+  cat "$WORK/mutated-request.json.verification.json" >&2
+  exit 1
+fi
+
 # Keeping the development roots while removing the explicit opt-in models
 # production policy. It must fail before a verification decision is created.
 grep -v '^insecure_allow_external_trust_anchors = true$' \

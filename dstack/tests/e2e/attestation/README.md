@@ -31,6 +31,11 @@ event_log_verified=true
 os_image_hash_verified=true
 ```
 
+After the valid row, the suite flips one authenticated byte in the versioned
+evidence. The normal verifier path must reject it and must not persist an
+accepted verification decision. This mutation check runs independently for
+every platform service.
+
 ## Requirements
 
 - Linux host
