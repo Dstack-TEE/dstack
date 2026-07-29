@@ -317,6 +317,33 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn gateway_proxy_batch_003_bounded_multi_host_failover() -> Result<()> {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+        let port = listener.local_addr()?.port();
+        let accepted = tokio::spawn(async move { listener.accept().await });
+        let addresses = smallvec::smallvec![
+            AddressInfo {
+                ip: "127.0.0.2".parse()?,
+                counter: Default::default(),
+                instance_id: "offline-instance".to_string(),
+            },
+            AddressInfo {
+                ip: "127.0.0.1".parse()?,
+                counter: Default::default(),
+                instance_id: "online-instance".to_string(),
+            },
+        ];
+
+        let (stream, _counter, instance_id) =
+            connect_multiple_hosts(addresses, port, 0, "case-owned-app").await?;
+        assert_eq!(instance_id, "online-instance");
+        assert_eq!(stream.peer_addr()?.ip(), "127.0.0.1".parse::<std::net::IpAddr>()?);
+        drop(stream);
+        let (_accepted, _) = accepted.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_resolve_app_address() -> Result<()> {
         let resolver = AppAddressResolver::new("_dstack-app-address".to_string(), false)?;
         let app_addr = resolver
