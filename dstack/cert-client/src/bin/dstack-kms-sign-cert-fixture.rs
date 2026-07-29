@@ -9,6 +9,7 @@ use ra_tls::{
     cert::{CertConfig, CertConfigV2, CertSigningRequestV1, CertSigningRequestV2, Csr},
     rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256},
 };
+use scale::Encode;
 use serde_json::json;
 
 fn hex(bytes: &[u8]) -> String {
@@ -70,7 +71,8 @@ async fn main() -> Result<()> {
             ext_quote: true,
         },
         quote,
-        event_log,
+        event_log: serde_json::to_vec(&event_log)
+            .context("failed to encode the legacy TDX event log")?,
     };
     let signature_v1 = csr_v1
         .signed_by(&key)
@@ -81,7 +83,7 @@ async fn main() -> Result<()> {
             "api_version": 2,
             "csr": hex(&csr.to_vec()),
             "signature": hex(&signature),
-            "csr_v1": hex(&csr_v1.to_vec()),
+            "csr_v1": hex(&csr_v1.encode()),
             "signature_v1": hex(&signature_v1),
             "public_key": hex(&pubkey),
             "subject": "kms-sign-cert.test",
