@@ -1046,7 +1046,7 @@ mod tests {
     }
 
     #[test]
-    fn qemu_command_builder_does_not_require_prepared_paths_to_exist() {
+    fn volume_qemu_command_is_readonly_ordered_and_does_not_require_paths() {
         let mut config: Config = Figment::from(Toml::string(DEFAULT_CONFIG))
             .extract()
             .unwrap();

@@ -1257,6 +1257,38 @@ mod tests {
     }
 
     #[test]
+    fn volume_validation_rejects_relative_target_bad_hash_and_duplicate_target() -> Result<()> {
+        let relative = serde_json::json!({
+            "verity_volumes": [{
+                "source": "volume.img",
+                "verity_root": "11".repeat(32),
+                "target": "relative"
+            }]
+        });
+        assert!(extract_verity_volumes(&relative.to_string()).is_err());
+
+        let bad_hash = serde_json::json!({
+            "verity_volumes": [{
+                "source": "volume.img",
+                "verity_root": "11",
+                "target": "/run/volume"
+            }]
+        });
+        assert!(extract_verity_volumes(&bad_hash.to_string()).is_err());
+
+        let duplicate = serde_json::json!({
+            "verity_volumes": [
+                {"source": "a.img", "verity_root": "11".repeat(32), "target": "/run/volume"},
+                {"source": "b.img", "verity_root": "22".repeat(32), "target": "/run/volume"}
+            ]
+        });
+        let volumes = extract_verity_volumes(&duplicate.to_string())?;
+        assert!(dstack_types::validate_verity_volumes(&volumes).is_err());
+        assert!(extract_verity_volumes(r#"{"verity_volumes":[]}"#)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn explicit_user_networking_is_resolved_before_persist() {
         let mut request = test_vm_configuration();
         request.networks = vec![rpc::NetworkingConfig {
