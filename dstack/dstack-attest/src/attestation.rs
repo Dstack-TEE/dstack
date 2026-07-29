@@ -2737,6 +2737,106 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn tdx_v2_event_log_rtmr3_failure_and_recovery_matrix() {
+        use mock_attestation::server::{serve_listener, MockCollateralState};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let pccs = format!("http://{address}");
+        let state = Arc::new(MockCollateralState::from_seed([0x73; 32], &pccs).unwrap());
+        let server = tokio::spawn(serve_listener(listener, state.clone()));
+        let verifier = AttestationVerifier::new_with_tdx_root(
+            Some(&CollateralUrls {
+                pccs: Some(pccs),
+                ..Default::default()
+            }),
+            state.tdx.root_ca_pem().as_bytes(),
+        )
+        .unwrap();
+
+        let events = vec![
+            RuntimeEvent::new("app-id".into(), vec![0x11; 20], EventLogVersion::V2),
+            RuntimeEvent::new("compose-hash".into(), vec![0x22; 32], EventLogVersion::V2),
+            RuntimeEvent::new("instance-id".into(), vec![0x33; 20], EventLogVersion::V2),
+        ];
+        let replayed = replay_runtime_events::<Sha384>(&events, None);
+        let mut rtmrs = [[0u8; 48]; 4];
+        rtmrs[3].copy_from_slice(&replayed);
+        let report_data = [0x42; 64];
+        let evidence = state.tdx.attest_with_rtmrs(report_data, rtmrs).unwrap();
+
+        verify_tdx_quote_with_events(&verifier, &evidence.quote, &events, &report_data)
+            .await
+            .unwrap();
+
+        for mut changed in [
+            vec![events[1].clone(), events[0].clone(), events[2].clone()],
+            vec![events[0].clone(), events[2].clone()],
+            vec![
+                events[0].clone(),
+                events[1].clone(),
+                events[1].clone(),
+                events[2].clone(),
+            ],
+            vec![
+                events[0].clone(),
+                RuntimeEvent::new("compose-hash".into(), vec![0x24; 32], EventLogVersion::V2),
+                events[2].clone(),
+            ],
+        ] {
+            let error =
+                verify_tdx_quote_with_events(&verifier, &evidence.quote, &changed, &report_data)
+                    .await
+                    .unwrap_err();
+            assert!(format!("{error:#}").contains("RTMR3 mismatch"));
+            changed.clear();
+        }
+
+        let mut tdx_events = events
+            .iter()
+            .cloned()
+            .map(TdxEvent::from)
+            .collect::<Vec<_>>();
+        cc_eventlog::tdx::fill_v2_preimages(&mut tdx_events);
+        let encoded = serde_json::to_vec(&tdx_events).unwrap();
+        let parsed = Attestation::from_tdx_quote(evidence.quote.clone(), &encoded).unwrap();
+        assert_eq!(parsed.runtime_events, events);
+
+        let mut missing = tdx_events.clone();
+        missing[0].preimage = None;
+        let error = Attestation::from_tdx_quote(
+            evidence.quote.clone(),
+            &serde_json::to_vec(&missing).unwrap(),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("missing its digest preimage"));
+
+        let mut malformed = tdx_events.clone();
+        malformed[0].preimage = Some("not-hex".into());
+        let error = Attestation::from_tdx_quote(
+            evidence.quote.clone(),
+            &serde_json::to_vec(&malformed).unwrap(),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("malformed digest preimage"));
+
+        let mut mismatched = tdx_events;
+        mismatched[0].digest[0] ^= 1;
+        let error = Attestation::from_tdx_quote(
+            evidence.quote.clone(),
+            &serde_json::to_vec(&mismatched).unwrap(),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("digest does not match its preimage"));
+
+        assert!(Attestation::from_tdx_quote(evidence.quote.clone(), b"not-json").is_err());
+        verify_tdx_quote_with_events(&verifier, &evidence.quote, &events, &report_data)
+            .await
+            .unwrap();
+        server.abort();
+    }
+
     #[test]
     fn get_quote_event_log_keeps_acpi_data_payloads() {
         let mut attestation = dummy_tdx_attestation([0u8; 64]);
