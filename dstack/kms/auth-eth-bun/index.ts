@@ -208,6 +208,17 @@ const client = createPublicClient({
 });
 const ethereum = new EthereumBackend(client, kmsContractAddr);
 
+const publicRpcEndpoint = (value: string): string => {
+  try {
+    const endpoint = new URL(value);
+    return `${endpoint.protocol}//${endpoint.host}`;
+  } catch {
+    return 'configured';
+  }
+};
+
+const backendUnavailable = 'authorization backend unavailable';
+
 // health check and info endpoint
 app.get('/', async (c) => {
   try {
@@ -221,17 +232,17 @@ app.get('/', async (c) => {
     return c.json({
       status: 'ok',
       kmsContractAddr: kmsContractAddr,
-      ethRpcUrl: rpcUrl,
+      ethRpcUrl: publicRpcEndpoint(rpcUrl),
       gatewayAppId: batch[0],
       chainId: batch[1],
       appAuthImplementation: batch[2], // NOTE: for backward compatibility
       appImplementation: batch[2],
     });
   } catch (error) {
-    console.error('error in health check:', error);
+    console.error('authorization backend health check failed');
     return c.json({
       status: 'error',
-      message: error instanceof Error ? error.message : String(error)
+      message: backendUnavailable
     }, 500);
   }
 });
@@ -245,11 +256,11 @@ app.post('/bootAuth/app',
       const result = await ethereum.checkBoot(bootInfo, false);
       return c.json(result);
     } catch (error) {
-      console.error('error in app boot auth:', error);
+      console.error('application authorization backend failed');
       return c.json({
         isAllowed: false,
         gatewayAppId: '',
-        reason: error instanceof Error ? error.message : String(error)
+        reason: backendUnavailable
       });
     }
   }
@@ -266,12 +277,12 @@ app.post('/bootAuth/kms',
     } catch (error) {
       // don't log test backend errors
       if (!(error instanceof Error && "Test backend error" === error.message)) {
-        console.error('error in KMS boot auth:', error);
+        console.error('KMS authorization backend failed');
       }
       return c.json({
         isAllowed: false,
         gatewayAppId: '',
-        reason: error instanceof Error ? error.message : String(error)
+        reason: backendUnavailable
       });
     }
   }
