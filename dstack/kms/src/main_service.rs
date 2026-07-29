@@ -32,7 +32,7 @@ use tracing::{info, warn};
 use upgrade_authority::{build_boot_info, ensure_app_id_len, local_kms_boot_info, BootInfo};
 
 use crate::{
-    config::KmsConfig,
+    config::{HistoricalKeyConfig, KmsConfig},
     crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
 };
 
@@ -56,6 +56,7 @@ pub struct KmsStateInner {
     config: KmsConfig,
     root_ca: CaCert,
     k256_key: SigningKey,
+    historical_keys: Vec<KmsKeys>,
     temp_ca_cert: String,
     temp_ca_key: String,
     verifier: CvmVerifier,
@@ -120,6 +121,24 @@ fn remove_cache(parent_dir: &Path, sub_dir: &str) -> Result<()> {
     Ok(())
 }
 
+fn load_historical_keys(configs: &[HistoricalKeyConfig]) -> Result<Vec<KmsKeys>> {
+    configs
+        .iter()
+        .enumerate()
+        .map(|(index, config)| {
+            let ca_key = fs::read_to_string(&config.ca_key)
+                .with_context(|| format!("Failed to read historical CA key {index}"))?;
+            ra_tls::rcgen::KeyPair::from_pem(&ca_key)
+                .with_context(|| format!("Failed to parse historical CA key {index}"))?;
+            let k256_key = fs::read(&config.k256_key)
+                .with_context(|| format!("Failed to read historical ECDSA key {index}"))?;
+            SigningKey::from_slice(&k256_key)
+                .with_context(|| format!("Failed to parse historical ECDSA key {index}"))?;
+            Ok(KmsKeys { ca_key, k256_key })
+        })
+        .collect()
+}
+
 impl KmsState {
     /// clear cached image and measurement material for the given hashes. Used by
     /// the admin `ClearImageCache` RPC; authorization is enforced by the admin
@@ -139,6 +158,8 @@ impl KmsState {
         let key_bytes = fs::read(config.k256_key()).context("Failed to read ECDSA root key")?;
         let k256_key =
             SigningKey::from_slice(&key_bytes).context("Failed to load ECDSA root key")?;
+        let historical_keys = load_historical_keys(&config.historical_keys)
+            .context("Failed to load historical root keys")?;
         let temp_ca_key =
             fs::read_to_string(config.tmp_ca_key()).context("Faeild to read temp ca key")?;
         let temp_ca_cert =
@@ -163,6 +184,7 @@ impl KmsState {
                 config,
                 root_ca,
                 k256_key,
+                historical_keys,
                 temp_ca_cert,
                 temp_ca_key,
                 verifier,
@@ -485,12 +507,15 @@ impl KmsRpc for RpcHandler {
             self.state.config.sev_snp_key_release,
             self.state.config.aws_nitro_tpm_key_release,
         )?;
+        let mut keys = Vec::with_capacity(1 + self.state.inner.historical_keys.len());
+        keys.push(KmsKeys {
+            ca_key: self.state.inner.root_ca.key.serialize_pem(),
+            k256_key: self.state.inner.k256_key.to_bytes().to_vec(),
+        });
+        keys.extend(self.state.inner.historical_keys.iter().cloned());
         Ok(KmsKeyResponse {
             temp_ca_key: self.state.inner.temp_ca_key.clone(),
-            keys: vec![KmsKeys {
-                ca_key: self.state.inner.root_ca.key.serialize_pem(),
-                k256_key: self.state.inner.k256_key.to_bytes().to_vec(),
-            }],
+            keys,
         })
     }
 

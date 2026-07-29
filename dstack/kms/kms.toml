@@ -24,6 +24,10 @@ mandatory = false
 
 [core]
 cert_dir = "/etc/kms/certs"
+# Previous root-key pairs for authorized handover, ordered newest to oldest:
+# [[core.historical_keys]]
+# ca_key = "/etc/kms/history/previous/root-ca.key"
+# k256_key = "/etc/kms/history/previous/root-k256.key"
 subject_postfix = ".dstack"
 site_name = ""
 # Whether trusted RPCs require the KMS to first attest itself to its own
