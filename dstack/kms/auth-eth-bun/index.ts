@@ -10,8 +10,11 @@ import { createPublicClient, http, type Address, type Hex } from 'viem';
 // zod schemas for validation - compatible with original fastify implementation
 const boundedHex = (bytes: number, description: string) =>
   z.string()
-    .regex(/^0x[0-9a-fA-F]*$/, `${description} must be hexadecimal`)
-    .max(2 + bytes * 2, `${description} exceeds ${bytes} bytes`);
+    .regex(/^(?:0x)?[0-9a-fA-F]*$/, `${description} must be hexadecimal`)
+    .refine(
+      (value) => value.replace(/^0x/, '').length <= bytes * 2,
+      `${description} exceeds ${bytes} bytes`,
+    );
 
 const BootInfoSchema = z.object({
   // Short hexadecimal values remain compatible with the original backend,
