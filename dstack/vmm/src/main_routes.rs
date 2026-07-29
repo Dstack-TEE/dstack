@@ -106,20 +106,29 @@ fn vm_logs(
     ansi: bool,
     lines: Option<usize>,
     ch: Option<&str>,
-) -> TextStream![String] {
+) -> Result<TextStream![String], Custom<String>> {
+    // Resolve only an inventory-owned VM before deriving a filesystem path.
+    // This keeps arbitrary IDs (including traversal strings) outside run_path.
+    if app.lock().get(&id).is_none() {
+        return Err(Custom(
+            rocket::http::Status::NotFound,
+            "VM not found".to_string(),
+        ));
+    }
     let workdir = app.work_dir(&id);
-    let ch = ch.unwrap_or("serial").to_string();
-    TextStream! {
-        let log_file = match ch.as_str() {
-            "serial" => workdir.serial_file(),
-            "stdout" => workdir.stdout_file(),
-            "stderr" => workdir.stderr_file(),
-            _ => {
-                yield format!("Unknown channel {ch}");
-                return;
-            }
-        };
+    let log_file = match ch.unwrap_or("serial") {
+        "serial" => workdir.serial_file(),
+        "stdout" => workdir.stdout_file(),
+        "stderr" => workdir.stderr_file(),
+        channel => {
+            return Err(Custom(
+                rocket::http::Status::BadRequest,
+                format!("Unknown channel {channel}"),
+            ));
+        }
+    };
 
+    Ok(TextStream! {
         let counter = StreamCounter::new();
 
         const DEFAULT_TAIL_LINES: usize = 10000;
@@ -163,16 +172,14 @@ fn vm_logs(
                         yield strip_ansi_escapes::strip_str(&line_str);
                     }
                 }
-                Ok(None) => {
-                    break;
-                }
+                Ok(None) => break,
                 Err(err) => {
                     yield format!("<failed to read line: {err}>");
                     break;
                 }
             }
         }
-    }
+    })
 }
 
 pub fn routes() -> Vec<Route> {
