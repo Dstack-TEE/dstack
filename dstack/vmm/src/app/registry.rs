@@ -92,6 +92,7 @@ async fn list_tags_with_token(client: &Client, registry: &str, repo: &str) -> Re
 /// Fetches the OCI manifest, downloads each layer blob, and extracts
 /// the tar (gzipped) contents into a flat directory.
 pub async fn pull_and_extract(image_ref: &str, tag: &str, image_path: &Path) -> Result<()> {
+    validate_registry_tag(tag)?;
     let (registry, repo) = parse_image_ref(image_ref)?;
     let client = build_client()?;
 
@@ -370,6 +371,21 @@ fn parse_www_authenticate(header: &str) -> (String, String) {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
+fn validate_registry_tag(tag: &str) -> Result<()> {
+    if tag.is_empty()
+        || tag == "."
+        || tag == ".."
+        || tag.contains('/')
+        || tag.contains('\\')
+        || !tag
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        bail!("invalid registry tag");
+    }
+    Ok(())
+}
+
 fn determine_output_dir(tag: &str, image_path: &Path) -> std::path::PathBuf {
     let dir_name = if tag.starts_with("dstack-") {
         tag.to_string()
@@ -457,6 +473,26 @@ struct OciIndexEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registry_tag_is_confined_to_one_image_store_entry() {
+        for valid in ["v0.6.0", "dstack-fixture_1", "sha256-deadbeef"] {
+            validate_registry_tag(valid).unwrap();
+        }
+        for invalid in [
+            "",
+            ".",
+            "..",
+            "../escape",
+            "dstack-../../escape",
+            "nested/tag",
+            r"nested\tag",
+            "tag,option",
+            "tag=value",
+        ] {
+            assert!(validate_registry_tag(invalid).is_err(), "{invalid}");
+        }
+    }
 
     #[test]
     fn test_parse_image_ref_private_registry() {
