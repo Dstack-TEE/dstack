@@ -129,7 +129,6 @@ pub struct ProxyConfig {
     /// 1 MiB pipe fed without the syscall rate 8 KiB imposed.
     pub buffer_size: usize,
     pub connect_top_n: usize,
-    pub localhost_enabled: bool,
     pub workers: usize,
     /// Run one single-threaded runtime per worker, each with its own
     /// `SO_REUSEPORT` listener, instead of one accept thread feeding a shared
@@ -522,6 +521,19 @@ pub struct DebugConfig {
     pub insecure_enable_debug_rpc: bool,
     #[serde(default)]
     pub insecure_skip_attestation: bool,
+    /// Let the app-address `localhost` resolve to 127.0.0.1, so a hostname can
+    /// be routed to a service on the gateway host itself.
+    ///
+    /// This lives under `debug` and carries the `insecure_` prefix because the
+    /// app address is not only read from the platform's own `<id>.<base_domain>`
+    /// grammar: it also comes from the `_dstack-app-address` TXT record of an
+    /// arbitrary custom domain. With this on, anyone who controls any DNS zone
+    /// can point the gateway at its own loopback -- where the admin and debug
+    /// listeners bind precisely because being unreachable is their access
+    /// control -- and pick the port, since the `localhost` shortcut is not a
+    /// registered instance and so bypasses `port_policy` entirely.
+    #[serde(default)]
+    pub insecure_localhost_backend: bool,
     /// Path to pre-generated debug key data file (JSON format containing key, quote, event_log, and vm_config)
     #[serde(default)]
     pub key_file: String,

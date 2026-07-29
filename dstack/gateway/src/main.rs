@@ -21,7 +21,7 @@ use rocket::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 
 use admin_service::AdminRpcHandler;
 use main_service::{Proxy, ProxyOptions, RpcHandler};
@@ -244,6 +244,15 @@ async fn main() -> Result<()> {
     // Validate node_id
     if config.sync.enabled && config.sync.node_id == 0 {
         anyhow::bail!("node_id must be greater than 0");
+    }
+    if config.debug.insecure_localhost_backend {
+        warn!(
+            "core.debug.insecure_localhost_backend = true; the app address \"localhost\" now \
+             resolves to 127.0.0.1 on this host. App addresses also come from the \
+             _dstack-app-address TXT record of arbitrary custom domains, so any DNS zone owner \
+             can reach this host's loopback on a port of their choosing, bypassing port_policy. \
+             Never use this outside local development"
+        );
     }
     // Before anything reads `proxy.ktls`: the acceptor built later decides
     // whether to extract session secrets from it.

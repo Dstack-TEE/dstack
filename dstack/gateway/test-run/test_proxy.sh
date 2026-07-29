@@ -35,8 +35,8 @@ ORIGIN_PLAIN=$((BASE_PORT + 4))
 ORIGIN_TLS=$((BASE_PORT + 5))
 
 BASE_DOMAIN="gwtest.local"
-# `localhost_enabled` routes `localhost-<port>[s]` to 127.0.0.1:<port>, which is
-# what lets these tests run without registering a CVM.
+# `insecure_localhost_backend` routes `localhost-<port>[s]` to 127.0.0.1:<port>,
+# which is what lets these tests run without registering a CVM.
 SNI_TERMINATE="localhost-$ORIGIN_PLAIN.$BASE_DOMAIN"
 SNI_PASSTHROUGH="localhost-${ORIGIN_TLS}s.$BASE_DOMAIN"
 ADMIN_TOKEN="proxy-integration-test"
