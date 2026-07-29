@@ -16,6 +16,7 @@ rocket = { workspace = true, features = ["mtls", "json"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
+aes-gcm.workspace = true
 serde = { workspace = true, features = ["derive"] }
 ipnet = { workspace = true, features = ["serde"] }
 fs-err.workspace = true

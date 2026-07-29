@@ -37,7 +37,12 @@ use tracing::warn;
 
 use std::{collections::BTreeMap, net::Ipv4Addr, path::Path, time::Duration};
 
+use aes_gcm::{
+    aead::{Aead, Payload},
+    Aes256Gcm, KeyInit, Nonce,
+};
 use anyhow::{Context, Result};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use wavekv::{node::NodeState, types::NodeId, Node};
@@ -187,6 +192,13 @@ pub struct DnsCredential {
     pub created_at: u64,
     /// Last update timestamp
     pub updated_at: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct EncryptedDnsCredential {
+    version: u8,
+    nonce: [u8; 12],
+    ciphertext: Vec<u8>,
 }
 
 /// DNS provider configuration
@@ -450,6 +462,8 @@ pub struct KvStore {
     ephemeral: Node,
     /// This gateway's node ID
     my_node_id: NodeId,
+    /// Cluster-shared key used only for DNS credential envelopes.
+    dns_credential_key: [u8; 32],
 }
 
 impl KvStore {
@@ -458,6 +472,7 @@ impl KvStore {
         my_node_id: NodeId,
         peer_ids: Vec<NodeId>,
         data_dir: impl AsRef<Path>,
+        dns_credential_key: [u8; 32],
     ) -> Result<Self> {
         let persistent =
             Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir.as_ref())
@@ -479,6 +494,7 @@ impl KvStore {
             persistent,
             ephemeral,
             my_node_id,
+            dns_credential_key,
         })
     }
 
@@ -727,16 +743,68 @@ impl KvStore {
 
     // ==================== DNS Credential Management ====================
 
-    /// Get a DNS credential by ID
-    pub fn get_dns_credential(&self, cred_id: &str) -> Option<DnsCredential> {
-        self.persistent.read().decode(&keys::dns_cred(cred_id))
+    fn decrypt_dns_credential(&self, key: &str, bytes: &[u8]) -> Option<DnsCredential> {
+        if let Ok(envelope) = decode::<EncryptedDnsCredential>(bytes) {
+            if envelope.version != 1 {
+                warn!("unsupported DNS credential envelope version for key {key}");
+                return None;
+            }
+            let cipher = Aes256Gcm::new_from_slice(&self.dns_credential_key).ok()?;
+            let plaintext = cipher
+                .decrypt(
+                    Nonce::from_slice(&envelope.nonce),
+                    Payload {
+                        msg: &envelope.ciphertext,
+                        aad: key.as_bytes(),
+                    },
+                )
+                .map_err(|_| warn!("failed to decrypt DNS credential for key {key}"))
+                .ok()?;
+            return decode(&plaintext)
+                .map_err(|error| warn!("failed to decode DNS credential for key {key}: {error:?}"))
+                .ok();
+        }
+
+        // Compatibility with credentials written before envelope encryption.
+        // The next successful update rewrites the value using the encrypted format.
+        decode(bytes)
+            .map_err(|error| {
+                warn!("failed to decode legacy DNS credential for key {key}: {error:?}")
+            })
+            .ok()
     }
 
-    /// Save a DNS credential
+    /// Get a DNS credential by ID.
+    pub fn get_dns_credential(&self, cred_id: &str) -> Option<DnsCredential> {
+        let key = keys::dns_cred(cred_id);
+        let state = self.persistent.read();
+        let entry = state.get(&key)?;
+        self.decrypt_dns_credential(&key, entry.value.as_deref()?)
+    }
+
+    /// Save a DNS credential in an authenticated encrypted envelope.
     pub fn save_dns_credential(&self, cred: &DnsCredential) -> Result<()> {
-        self.persistent
-            .write()
-            .put_encoded(keys::dns_cred(&cred.id), cred)?;
+        let key = keys::dns_cred(&cred.id);
+        let plaintext = encode(cred)?;
+        let cipher = Aes256Gcm::new_from_slice(&self.dns_credential_key)
+            .context("invalid DNS credential encryption key")?;
+        let mut nonce = [0u8; 12];
+        rand::thread_rng().fill_bytes(&mut nonce);
+        let ciphertext = cipher
+            .encrypt(
+                Nonce::from_slice(&nonce),
+                Payload {
+                    msg: &plaintext,
+                    aad: key.as_bytes(),
+                },
+            )
+            .map_err(|_| anyhow::anyhow!("failed to encrypt DNS credential"))?;
+        let envelope = EncryptedDnsCredential {
+            version: 1,
+            nonce,
+            ciphertext,
+        };
+        self.persistent.write().put_encoded(key, &envelope)?;
         Ok(())
     }
 
@@ -748,9 +816,10 @@ impl KvStore {
 
     /// List all DNS credentials
     pub fn list_dns_credentials(&self) -> Vec<DnsCredential> {
-        self.persistent
-            .read()
-            .iter_decoded_values(keys::DNS_CRED_PREFIX)
+        let state = self.persistent.read();
+        state
+            .iter_by_prefix(keys::DNS_CRED_PREFIX)
+            .filter_map(|(key, entry)| self.decrypt_dns_credential(key, entry.value.as_deref()?))
             .collect()
     }
 
