@@ -71,7 +71,9 @@ export async function build(): Promise<FastifyInstance> {
   const invalidRequest = { isAllowed: false, reason: 'invalid authorization request', gatewayAppId: '' };
 
   server.setErrorHandler((error, request, reply) => {
-    if (error.validation) return reply.code(400).send(invalidRequest);
+    if (typeof error === 'object' && error !== null && 'validation' in error) {
+      return reply.code(400).send(invalidRequest);
+    }
     request.log.error('authorization request failed');
     return reply.code(500).send({ status: 'error', message: backendUnavailable });
   });
