@@ -258,7 +258,7 @@ mod tests {
         };
         let rendered = dashboard.render().expect("dashboard must render");
         assert!(!rendered.contains(hostile));
-        assert!(rendered.contains("&lt;script&gt;dashboard-sentinel&lt;/script&gt;"));
+        assert!(rendered.contains("&#60;script&#62;dashboard-sentinel&#60;/script&#62;"));
         assert!(rendered.contains(benign));
     }
 }
