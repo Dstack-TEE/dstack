@@ -103,14 +103,19 @@ impl Image {
 
 impl Image {
     pub fn load(base_path: impl AsRef<Path>) -> Result<Self> {
-        let base_path = base_path.as_ref().absolutize()?;
+        let base_path = base_path
+            .as_ref()
+            .absolutize()?
+            .canonicalize()
+            .context("failed to resolve image directory")?;
         let mut info = ImageInfo::load(base_path.join("metadata.json"))?;
-        let initrd = base_path.join(&info.initrd);
-        let kernel = base_path.join(&info.kernel);
-        let hda = info.hda.as_ref().map(|hda| base_path.join(hda));
-        let rootfs = info.rootfs.as_ref().map(|rootfs| base_path.join(rootfs));
-        let bios = info.bios.as_ref().map(|bios| base_path.join(bios));
-        let bios_sev = info.bios_sev.as_ref().map(|bios| base_path.join(bios));
+        let initrd = resolve_artifact(&base_path, &info.initrd, "Initrd")?;
+        let kernel = resolve_artifact(&base_path, &info.kernel, "Kernel")?;
+        let hda = resolve_optional_artifact(&base_path, info.hda.as_deref(), "Hda")?;
+        let rootfs = resolve_optional_artifact(&base_path, info.rootfs.as_deref(), "Rootfs")?;
+        let bios = resolve_optional_artifact(&base_path, info.bios.as_deref(), "Bios")?;
+        let bios_sev =
+            resolve_optional_artifact(&base_path, info.bios_sev.as_deref(), "SEV bios")?;
         let digest = fs::read_to_string(base_path.join("digest.txt"))
             .ok()
             .map(|s| s.trim().to_string());
