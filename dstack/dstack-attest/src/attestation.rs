@@ -33,6 +33,7 @@ use tpm_qvl::verify::VerifiedReport as TpmVerifiedReport;
 /// File paths for attestation trust anchors. Empty fields retain the vendor
 /// production roots. Paths are read by the verifier, never by the attester.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RootCaPaths {
     pub tdx: Option<std::path::PathBuf>,
     pub gcp_tpm: Option<std::path::PathBuf>,
@@ -44,6 +45,7 @@ pub struct RootCaPaths {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AttestationVerifierConfig {
     #[serde(default)]
     pub insecure_allow_external_trust_anchors: bool,

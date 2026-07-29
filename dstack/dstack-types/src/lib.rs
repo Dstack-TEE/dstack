@@ -911,6 +911,7 @@ pub struct SysConfig {
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct CollateralUrls {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pccs: Option<String>,
