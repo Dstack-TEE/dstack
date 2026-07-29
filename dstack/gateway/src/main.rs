@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{anyhow, Context, Result};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use anyhow::{Context, Result, anyhow};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use clap::Parser;
 use config::{Config, TlsConfig};
-use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, GetTlsKeyArgs};
+use dstack_guest_agent_rpc::{GetTlsKeyArgs, dstack_guest_client::DstackGuestClient};
 use dstack_kms_rpc::SignCertRequest;
 use http_client::prpc::PrpcClient;
 use ra_rpc::{client::RaClient, prpc_routes as prpc, rocket_helper::QuoteVerifier};
@@ -17,7 +17,7 @@ use ra_tls::{
 };
 use rocket::{
     fairing::AdHoc,
-    figment::{providers::Serialized, Figment},
+    figment::{Figment, providers::Serialized},
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -43,6 +43,8 @@ mod web_routes;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DebugKeyData {
+    /// This artifact is accepted only by the explicit insecure debug path.
+    debug_only: bool,
     /// Private key in PEM format
     key_pem: String,
     /// TDX quote in base64 format
@@ -70,7 +72,7 @@ struct Args {
 
 #[cfg(unix)]
 fn set_max_ulimit() -> Result<()> {
-    use nix::sys::resource::{getrlimit, setrlimit, Resource};
+    use nix::sys::resource::{Resource, getrlimit, setrlimit};
     let (soft, hard) = getrlimit(Resource::RLIMIT_NOFILE)?;
     if soft < hard {
         setrlimit(Resource::RLIMIT_NOFILE, hard, hard)?;
@@ -157,6 +159,10 @@ async fn gen_debug_certs(
     let json_content = fs_err::read_to_string(&config.debug.key_file).context(ctx)?;
     let debug_data: DebugKeyData =
         serde_json::from_str(&json_content).context("Failed to parse debug key JSON")?;
+    anyhow::ensure!(
+        debug_data.debug_only,
+        "Refusing to consume an artifact that is not explicitly labeled debug_only"
+    );
 
     let key_pem = debug_data.key_pem;
     let quote_bin = STANDARD
@@ -230,7 +236,7 @@ fn write_cert(path: &str, cert: &str) -> Result<()> {
 #[rocket::main]
 async fn main() -> Result<()> {
     {
-        use tracing_subscriber::{fmt, EnvFilter};
+        use tracing_subscriber::{EnvFilter, fmt};
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
         fmt().with_env_filter(filter).with_ansi(false).init();
     }
