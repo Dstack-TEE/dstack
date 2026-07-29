@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
             not_before: None,
             not_after: None,
         },
-        attestation,
+        attestation: attestation.clone(),
     };
     let signature = csr.signed_by(&key).context("failed to sign the v2 CSR")?;
     let (quote, event_log) = match attestation.clone().into_v1().platform {
