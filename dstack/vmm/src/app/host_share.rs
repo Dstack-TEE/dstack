@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use dstack_types::shared_filenames::HOST_SHARED_DISK_LABEL;
 use fatfs::{FileSystem, FormatVolumeOptions, FsOptions};
 use fs_err as fs;
+use tempfile::NamedTempFile;
 
 /// Creates a FAT32 disk image containing the files in `shared_dir`.
 pub(super) fn create_shared_disk(
@@ -19,6 +20,9 @@ pub(super) fn create_shared_disk(
 ) -> Result<()> {
     let disk_path = disk_path.as_ref();
     let shared_dir = shared_dir.as_ref();
+    let parent = disk_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temporary = NamedTempFile::new_in(parent)
+        .with_context(|| format!("failed to create temporary disk image in {}", parent.display()))?;
 
     // Must be large enough to hold all host-shared files (app-compose.json and
     // .user-config can each be up to 50 MiB, see HostShared::copy) plus FAT32 overhead.
@@ -26,13 +30,7 @@ pub(super) fn create_shared_disk(
 
     // Back the image by a file (sparse until written) and stream files into it so
     // peak memory stays bounded regardless of DISK_SIZE or input file sizes.
-    let mut image = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(disk_path)
-        .with_context(|| format!("failed to create disk image at {}", disk_path.display()))?;
+    let image = temporary.as_file_mut();
     image
         .set_len(DISK_SIZE)
         .context("failed to size disk image")?;
@@ -58,7 +56,8 @@ pub(super) fn create_shared_disk(
     for entry in fs::read_dir(shared_dir).context("failed to read shared directory")? {
         let entry = entry.context("failed to read directory entry")?;
         let path = entry.path();
-        if !path.is_file() {
+        let file_type = entry.file_type().context("failed to inspect shared entry")?;
+        if !file_type.is_file() {
             continue;
         }
 
@@ -74,5 +73,11 @@ pub(super) fn create_shared_disk(
         destination.flush().context("failed to flush FAT32 file")?;
     }
 
+    drop(root_dir);
+    drop(filesystem);
+    temporary
+        .persist(disk_path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("failed to publish disk image at {}", disk_path.display()))?;
     Ok(())
 }
