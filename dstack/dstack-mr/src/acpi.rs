@@ -532,12 +532,14 @@ mod tests {
         }
         assert!(test_machine(false, Some("7.2.0"))
             .versioned_options()
-            .unwrap_err()
+            .err()
+            .expect("QEMU 7 must be rejected")
             .to_string()
             .contains("Unsupported QEMU version"));
         assert!(test_machine(false, Some("9.1"))
             .versioned_options()
-            .unwrap_err()
+            .err()
+            .expect("incomplete version must be rejected")
             .to_string()
             .contains("exactly 3 parts"));
 
