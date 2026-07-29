@@ -495,8 +495,9 @@ impl AdminRpc for AdminRpcHandler {
         let kv_store = self.state.kv_store();
         let cert_resolver = &self.state.cert_resolver;
 
+        let domain = normalize_zt_domain(&request.domain)?;
         let config = kv_store
-            .get_zt_domain_config(&request.domain)
+            .get_zt_domain_config(&domain)
             .context("ZT-Domain config not found")?;
 
         Ok(zt_domain_to_proto(config, kv_store, cert_resolver))
@@ -506,12 +507,13 @@ impl AdminRpc for AdminRpcHandler {
         let kv_store = self.state.kv_store();
         let cert_resolver = &self.state.cert_resolver;
 
-        // Check if domain already exists
-        if kv_store.get_zt_domain_config(&request.domain).is_some() {
-            bail!("ZT-Domain config already exists: {}", request.domain);
-        }
-
         let config = proto_to_zt_domain_config(&request, kv_store)?;
+
+        // Uniqueness is checked after normalization so wildcard, case, and a
+        // trailing root dot cannot silently overwrite the same DNS name.
+        if kv_store.get_zt_domain_config(&config.domain).is_some() {
+            bail!("ZT-Domain config already exists: {}", config.domain);
+        }
 
         kv_store.save_zt_domain_config(&config)?;
         info!("Added ZT-Domain config: {}", config.domain);
@@ -523,12 +525,12 @@ impl AdminRpc for AdminRpcHandler {
         let kv_store = self.state.kv_store();
         let cert_resolver = &self.state.cert_resolver;
 
-        // Check if config exists
-        kv_store
-            .get_zt_domain_config(&request.domain)
-            .context("ZT-Domain config not found")?;
-
         let config = proto_to_zt_domain_config(&request, kv_store)?;
+
+        // Check the normalized key rather than the caller's presentation.
+        kv_store
+            .get_zt_domain_config(&config.domain)
+            .context("ZT-Domain config not found")?;
 
         kv_store.save_zt_domain_config(&config)?;
         info!("Updated ZT-Domain config: {}", config.domain);
@@ -539,14 +541,14 @@ impl AdminRpc for AdminRpcHandler {
     async fn delete_zt_domain(self, request: DeleteZtDomainRequest) -> Result<()> {
         let kv_store = self.state.kv_store();
 
-        // Check if config exists
+        let domain = normalize_zt_domain(&request.domain)?;
         kv_store
-            .get_zt_domain_config(&request.domain)
+            .get_zt_domain_config(&domain)
             .context("ZT-Domain config not found")?;
 
         // Delete config (cert data, acme, attestations are kept for historical purposes)
-        kv_store.delete_zt_domain_config(&request.domain)?;
-        info!("Deleted ZT-Domain config: {}", request.domain);
+        kv_store.delete_zt_domain_config(&domain)?;
+        info!("Deleted ZT-Domain config: {domain}");
         Ok(())
     }
 
@@ -845,6 +847,16 @@ fn redact_token(token: &str) -> String {
     }
 }
 
+fn normalize_zt_domain(domain: &str) -> Result<String> {
+    let domain = domain.trim().trim_end_matches('.');
+    let domain = domain
+        .strip_prefix("*.")
+        .unwrap_or(domain)
+        .to_ascii_lowercase();
+    validate_zt_domain(&domain)?;
+    Ok(domain)
+}
+
 fn validate_zt_domain(domain: &str) -> Result<()> {
     if domain.is_empty() || domain.len() > 253 || !domain.is_ascii() {
         bail!("domain must be a non-empty ASCII DNS name of at most 253 bytes");
@@ -883,13 +895,7 @@ fn proto_to_zt_domain_config(
             .context("specified dns credential not found")?;
     }
 
-    // Strip wildcard prefix if user entered it
-    let domain = proto
-        .domain
-        .strip_prefix("*.")
-        .unwrap_or(&proto.domain)
-        .to_string();
-    validate_zt_domain(&domain)?;
+    let domain = normalize_zt_domain(&proto.domain)?;
     if proto.port == 0 {
         bail!("port must be between 1 and 65535");
     }
