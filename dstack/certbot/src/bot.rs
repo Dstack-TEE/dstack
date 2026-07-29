@@ -259,6 +259,7 @@ pub fn list_certs(workdir: impl AsRef<Path>) -> Result<Vec<PathBuf>> {
             certs.push(cert_path);
         }
     }
+    certs.sort();
     Ok(certs)
 }
 
