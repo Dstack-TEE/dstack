@@ -1315,7 +1315,36 @@ fn rotate_serial_log(work_dir: &VmWorkDir, max_bytes: u64) {
                     .position(|&b| b == b'\n')
                     .map(|p| skip + p + 1)
                     .unwrap_or(skip);
-                let _ = fs::write(&history, &data[start..]);
+                let mut retained = data[start..].to_vec();
+                // When one boot alone exceeds the cap, a plain front trim can
+                // discard every boot delimiter. Preserve the newest delimiter
+                // and spend the remaining budget on the tail of that boot.
+                const BOOT_MARKER: &[u8] = b"\n===== boot @ ";
+                let has_marker = retained
+                    .windows(BOOT_MARKER.len())
+                    .any(|window| window == BOOT_MARKER);
+                if max_bytes > 0 && !has_marker {
+                    if let Some(marker_start) = data
+                        .windows(BOOT_MARKER.len())
+                        .rposition(|window| window == BOOT_MARKER)
+                    {
+                        let header_end = data[marker_start..]
+                            .windows(2)
+                            .position(|window| window == b"\n\n")
+                            .map(|position| marker_start + position + 2);
+                        if let Some(header_end) = header_end {
+                            let header = &data[marker_start..header_end];
+                            if header.len() <= max_bytes as usize {
+                                let budget = max_bytes as usize - header.len();
+                                let tail_start = data.len().saturating_sub(budget);
+                                retained.clear();
+                                retained.extend_from_slice(header);
+                                retained.extend_from_slice(&data[tail_start..]);
+                            }
+                        }
+                    }
+                }
+                let _ = fs::write(&history, retained);
             }
         }
     }
@@ -1694,6 +1723,9 @@ mod tests {
         fs::write(workdir.serial_file(), vec![b'x'; 8192])?;
         rotate_serial_log(&workdir, 4096);
         assert!(fs::metadata(workdir.serial_history_file())?.len() <= 4096);
+        assert!(fs::read(workdir.serial_history_file())?
+            .windows(b"===== boot @".len())
+            .any(|window| window == b"===== boot @"));
         assert_eq!(fs::read(workdir.serial_file())?.len(), 8192);
         println!("DSTACK_SERIAL_ROW history-byte-limit");
         println!("DSTACK_SERIAL_ROW current-log-unchanged");
