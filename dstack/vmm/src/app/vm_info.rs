@@ -272,7 +272,11 @@ impl VmState {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_optional;
+    use super::{
+        app_url, networking_backend_name, networking_mode_name, networking_to_proto,
+        sanitize_optional,
+    };
+    use crate::config::{GatewayConfig, Networking, NetworkingMode};
 
     #[test]
     fn sanitize_optional_filters_empty_owned_values() {
@@ -282,6 +286,52 @@ mod tests {
             sanitize_optional(Some("instance-123".to_string())),
             Some("instance-123".to_string())
         );
+    }
+
+    #[test]
+    fn app_urls_preserve_default_custom_and_nonstandard_ports() {
+        let default = GatewayConfig {
+            base_domain: "gateway.test".into(),
+            port: 443,
+            agent_port: 8090,
+        };
+        assert_eq!(
+            app_url("instance", &[], &default),
+            "https://instance-8090.gateway.test"
+        );
+        assert_eq!(
+            app_url("instance", &["https://custom.test:9443".into()], &default),
+            "https://instance-8090.custom.test:9443"
+        );
+        assert_eq!(
+            app_url("instance", &["not a url".into()], &default),
+            "https://instance-8090.gateway.test"
+        );
+        let nonstandard = GatewayConfig { port: 8443, ..default };
+        assert_eq!(
+            app_url("instance", &[], &nonstandard),
+            "https://instance-8090.gateway.test:8443"
+        );
+    }
+
+    #[test]
+    fn networking_modes_project_stable_public_names() {
+        for (mode, name, backend, bridge) in [
+            (NetworkingMode::Bridge, "bridge", "tap_bridge", "br-case"),
+            (NetworkingMode::User, "user", "slirp", ""),
+            (NetworkingMode::Custom, "custom", "custom", ""),
+        ] {
+            let networking = Networking {
+                mode,
+                bridge: "br-case".into(),
+                ..Default::default()
+            };
+            assert_eq!(networking_mode_name(mode), name);
+            assert_eq!(networking_backend_name(mode), backend);
+            let projected = networking_to_proto(&networking);
+            assert_eq!(projected.mode, name);
+            assert_eq!(projected.bridge_name, bridge);
+        }
     }
 
     #[test]
