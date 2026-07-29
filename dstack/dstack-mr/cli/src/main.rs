@@ -206,6 +206,10 @@ struct DiagnoseConfig {
     #[arg(long)]
     actual_rtmr2: Option<String>,
 
+    /// Actual quote event log JSON used to identify the first divergent RTMR0 event.
+    #[arg(long)]
+    actual_event_log: Option<PathBuf>,
+
     /// Output JSON
     #[arg(long)]
     json: bool,
@@ -277,6 +281,48 @@ fn check(label: &str, expected: &[u8], actual_hex: &Option<String>) -> Option<bo
             }
         }
     })
+}
+
+fn compare_rtmr0_event_log(
+    expected: &[Vec<u8>],
+    actual_path: &PathBuf,
+    labels: &[(&str, &str)],
+) -> Result<bool> {
+    let raw = fs::read_to_string(actual_path).context("failed to read --actual-event-log")?;
+    let events: Vec<serde_json::Value> =
+        serde_json::from_str(&raw).context("failed to parse actual event log JSON")?;
+    let actual: Vec<Vec<u8>> = events
+        .iter()
+        .filter(|event| event.get("imr").and_then(serde_json::Value::as_u64) == Some(0))
+        .map(|event| {
+            let digest = event
+                .get("digest")
+                .and_then(serde_json::Value::as_str)
+                .context("RTMR0 event has no digest")?;
+            hex::decode(digest).context("RTMR0 event digest is not hex")
+        })
+        .collect::<Result<_>>()?;
+    let count = expected.len().max(actual.len());
+    for index in 0..count {
+        if expected.get(index) == actual.get(index) {
+            continue;
+        }
+        let (label, _) = labels.get(index).copied().unwrap_or(("(unlabelled)", ""));
+        println!(
+            "  FIRST DIVERGENT RTMR0 EVENT: index={index} label={label}\n    expected: {}\n    actual:   {}",
+            expected
+                .get(index)
+                .map(hex::encode)
+                .unwrap_or_else(|| "<missing>".to_string()),
+            actual
+                .get(index)
+                .map(hex::encode)
+                .unwrap_or_else(|| "<missing>".to_string()),
+        );
+        return Ok(false);
+    }
+    println!("  RTMR0 EVENT LOG: MATCH");
+    Ok(true)
 }
 
 fn run_diagnose(config: &DiagnoseConfig) -> Result<()> {
@@ -397,10 +443,14 @@ fn run_diagnose(config: &DiagnoseConfig) -> Result<()> {
     let want_compare = config.actual_mrtd.is_some()
         || config.actual_rtmr0.is_some()
         || config.actual_rtmr1.is_some()
-        || config.actual_rtmr2.is_some();
+        || config.actual_rtmr2.is_some()
+        || config.actual_event_log.is_some();
     if want_compare {
         println!("\n=== comparison ===");
         let mut all_ok = true;
+        if let Some(actual_event_log) = &config.actual_event_log {
+            all_ok &= compare_rtmr0_event_log(&details.rtmr_logs[0], actual_event_log, labels)?;
+        }
         for (label, expected, actual) in [
             ("MRTD ", &details.measurements.mrtd, &config.actual_mrtd),
             ("RTMR0", &details.measurements.rtmr0, &config.actual_rtmr0),
