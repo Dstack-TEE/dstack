@@ -5,8 +5,8 @@ use anyhow::{Context, Result};
 use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, RawQuoteArgs};
 use http_client::prpc::PrpcClient;
 use ra_tls::{
-    attestation::{QuoteContentType, VersionedAttestation},
-    cert::{CertConfigV2, CertSigningRequestV2, Csr},
+    attestation::{PlatformEvidence, QuoteContentType, VersionedAttestation},
+    cert::{CertConfig, CertConfigV2, CertSigningRequestV1, CertSigningRequestV2, Csr},
     rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256},
 };
 use serde_json::json;
@@ -54,12 +54,35 @@ async fn main() -> Result<()> {
         attestation,
     };
     let signature = csr.signed_by(&key).context("failed to sign the v2 CSR")?;
+    let (quote, event_log) = match attestation.clone().into_v1().platform {
+        PlatformEvidence::Tdx { quote, event_log } => (quote, event_log),
+        _ => anyhow::bail!("legacy v1 CSR fixture requires TDX evidence"),
+    };
+    let csr_v1 = CertSigningRequestV1 {
+        confirm: "please sign cert:".to_string(),
+        pubkey: pubkey.clone(),
+        config: CertConfig {
+            org_name: Some("Dstack Test".to_string()),
+            subject: "kms-sign-cert.test".to_string(),
+            subject_alt_names: vec!["kms-sign-cert.test".to_string()],
+            usage_server_auth: true,
+            usage_client_auth: true,
+            ext_quote: true,
+        },
+        quote,
+        event_log,
+    };
+    let signature_v1 = csr_v1
+        .signed_by(&key)
+        .context("failed to sign the v1 CSR")?;
     println!(
         "{}",
         json!({
             "api_version": 2,
             "csr": hex(&csr.to_vec()),
             "signature": hex(&signature),
+            "csr_v1": hex(&csr_v1.to_vec()),
+            "signature_v1": hex(&signature_v1),
             "public_key": hex(&pubkey),
             "subject": "kms-sign-cert.test",
             "alt_name": "kms-sign-cert.test"
