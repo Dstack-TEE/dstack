@@ -6,11 +6,11 @@ use dstack_gateway_rpc::{AcmeInfoResponse, ProxyAccelStatus, StatusResponse};
 use rinja::Template;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{btree_map::Iter, BTreeMap},
+    collections::{BTreeMap, btree_map::Iter},
     net::Ipv4Addr,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     time::SystemTime,
 };
@@ -171,4 +171,94 @@ pub struct Dashboard {
     /// Lifted out of `status` so the template does not have to unwrap the
     /// proto's optional message on every field.
     pub accel: ProxyAccelStatus,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Counting as _, Dashboard, MapValues, PortPolicyView};
+    use crate::kv::{PortFlags, PortPolicy};
+    use dstack_gateway_rpc::{AcmeInfoResponse, HostInfo, StatusResponse};
+    use rinja::Template as _;
+    use std::{
+        collections::BTreeMap,
+        sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        },
+    };
+
+    #[test]
+    fn internal_models_matrix() {
+        let connections = Arc::new(AtomicU64::new(0));
+        {
+            let _outer = connections.clone().enter();
+            assert_eq!(connections.load(Ordering::Relaxed), 1);
+            {
+                let _inner = connections.clone().enter();
+                assert_eq!(connections.load(Ordering::Relaxed), 2);
+            }
+            assert_eq!(connections.load(Ordering::Relaxed), 1);
+        }
+        assert_eq!(connections.load(Ordering::Relaxed), 0);
+
+        let unwind_counter = connections.clone();
+        let result = std::panic::catch_unwind(move || {
+            let _guard = unwind_counter.enter();
+            panic!("exercise unwind cleanup");
+        });
+        assert!(result.is_err());
+        assert_eq!(connections.load(Ordering::Relaxed), 0);
+
+        let instance_policy = PortPolicy {
+            ports: BTreeMap::from([(443, PortFlags { pp: false })]),
+            restrict_mode: false,
+        };
+        let admin_policy = PortPolicy {
+            ports: BTreeMap::from([(8443, PortFlags { pp: true })]),
+            restrict_mode: true,
+        };
+        let view = PortPolicyView {
+            instance_reported: Some(instance_policy.clone()),
+            admin_override: Some(admin_policy.clone()),
+        };
+        assert_eq!(view.effective(), Some(&admin_policy));
+        assert_eq!(view.source(), "admin");
+
+        let instance_only = PortPolicyView {
+            instance_reported: Some(instance_policy.clone()),
+            admin_override: None,
+        };
+        assert_eq!(instance_only.effective(), Some(&instance_policy));
+        assert_eq!(instance_only.source(), "instance");
+
+        let no_policy = PortPolicyView {
+            instance_reported: None,
+            admin_override: None,
+        };
+        assert_eq!(no_policy.effective(), None);
+        assert_eq!(no_policy.source(), "none");
+
+        let ordered = BTreeMap::from([("charlie", 3_u8), ("alpha", 1_u8), ("bravo", 2_u8)]);
+        let values: Vec<_> = MapValues::from(&ordered).into_iter().copied().collect();
+        assert_eq!(values, vec![1, 2, 3]);
+
+        let hostile = "<script>dashboard-sentinel</script>";
+        let benign = "dashboard-benign-app";
+        let dashboard = Dashboard {
+            status: StatusResponse {
+                url: hostile.into(),
+                hosts: vec![HostInfo {
+                    instance_id: hostile.into(),
+                    app_id: benign.into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            acme_info: AcmeInfoResponse::default(),
+        };
+        let rendered = dashboard.render().expect("dashboard must render");
+        assert!(!rendered.contains(hostile));
+        assert!(rendered.contains("&lt;script&gt;dashboard-sentinel&lt;/script&gt;"));
+        assert!(rendered.contains(benign));
+    }
 }
