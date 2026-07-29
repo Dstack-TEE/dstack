@@ -55,7 +55,10 @@ if [[ ${DSTACK_SKIP_RUST:-0} != 1 ]]; then
   # Remapped unconditionally, not only when it moved: both layouts have to land
   # on the same string for their binaries to match, so the inherited path needs
   # the rule as much as the persisted one does.
-  home_remap="--remap-path-prefix=${CARGO_HOME:?}=/usr/src/dstack-cargo-home"
+  # Keep the cold build's historical canonical path. Cached builds map their
+  # persisted CARGO_HOME onto it, preserving both warm/cold parity and release
+  # artifact bytes from before the cache optimization.
+  home_remap="--remap-path-prefix=${CARGO_HOME:?}=/var/tmp/dstack-cargo-home"
   # A single codegen unit avoids LLVM partition/scheduling differences across
   # hosts with different CPU counts while retaining parallel crate builds.
   export RUSTFLAGS="${RUSTFLAGS:-} $target_remap $home_remap --remap-path-prefix=$ROOT=/usr/src/dstack --remap-path-prefix=$build_root=/usr/src/dstack-build -C codegen-units=1 -C strip=debuginfo"
