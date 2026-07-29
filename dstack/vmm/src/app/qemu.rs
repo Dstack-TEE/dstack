@@ -995,7 +995,9 @@ mod tests {
     };
     use crate::app::image::{Image, ImageInfo};
     use crate::app::{needs_swtpm, GpuConfig, Manifest, PortMapping, VmVolume, VmWorkDir};
-    use crate::config::{Config, CvmPlatform, Protocol, DEFAULT_CONFIG};
+    use crate::config::{
+        Config, CvmPlatform, Networking, NetworkingMode, Protocol, DEFAULT_CONFIG,
+    };
     use dstack_types::{KeyProviderKind, TeeVariant};
 
     #[test]
@@ -1193,6 +1195,68 @@ mod tests {
             .args
             .iter()
             .any(|arg| arg.contains("virtio-net-pci,netdev=net1")));
+
+        prepared.networks = vec![
+            Networking {
+                mode: NetworkingMode::Bridge,
+                bridge: "test-bridge0".into(),
+                mac_prefix: "02:ab:cd".into(),
+                net: String::new(),
+                dhcp_start: String::new(),
+                restrict: false,
+                netdev: String::new(),
+            },
+            Networking {
+                mode: NetworkingMode::Custom,
+                bridge: String::new(),
+                mac_prefix: String::new(),
+                net: String::new(),
+                dhcp_start: String::new(),
+                restrict: false,
+                netdev: "tap,id=net1,ifname=test-tap0,script=no,downscript=no".into(),
+            },
+        ];
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        let netdevs = process
+            .args
+            .windows(2)
+            .filter(|args| args[0] == "-netdev")
+            .map(|args| args[1].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            netdevs,
+            [
+                "bridge,id=net0,br=test-bridge0",
+                "tap,id=net1,ifname=test-tap0,script=no,downscript=no",
+            ]
+        );
+        let macs = process
+            .args
+            .iter()
+            .filter(|arg| arg.contains("virtio-net-pci,netdev="))
+            .collect::<Vec<_>>();
+        assert_eq!(macs.len(), 2);
+        assert!(macs[0].contains("mac=02:ab:cd:96:b1:d8"));
+        assert_ne!(macs[0], macs[1]);
+
+        prepared.networks[1].netdev =
+            "tap,id=wrong,ifname=test-tap0,script=no,downscript=no".into();
+        let error = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap_err();
+        assert!(error.to_string().contains("must contain id=net1"));
 
         prepared.swtpm_socket = Some(PathBuf::from("/does-not-exist/vm-1/swtpm/swtpm.sock"));
         let process = QemuCommandBuilder {
