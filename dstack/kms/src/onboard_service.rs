@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::{
+    sync::{Arc, Mutex, OnceLock},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use anyhow::{bail, Context, Result};
 use dstack_kms_rpc::{
@@ -412,6 +415,30 @@ mod tests {
             assert!(validate_onboarding_domain(domain).is_err(), "{domain:?}");
         }
     }
+
+    fn ca_cert_expiring_at(not_after: SystemTime) -> Vec<u8> {
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        CertRequest::builder()
+            .subject("Test CA")
+            .ca_level(0)
+            .not_after(not_after)
+            .key(&key)
+            .build()
+            .self_signed()
+            .unwrap()
+            .pem()
+            .into_bytes()
+    }
+
+    #[test]
+    fn ca_certificate_is_renewed_only_within_the_renewal_window() {
+        let now = UNIX_EPOCH + Duration::from_secs(2_000_000_000);
+        let inside_window = ca_cert_expiring_at(now + CA_RENEWAL_WINDOW - Duration::from_secs(1));
+        let outside_window = ca_cert_expiring_at(now + CA_RENEWAL_WINDOW + Duration::from_secs(1));
+
+        assert!(ca_cert_expires_within(&inside_window, now, CA_RENEWAL_WINDOW).unwrap());
+        assert!(!ca_cert_expires_within(&outside_window, now, CA_RENEWAL_WINDOW).unwrap());
+    }
 }
 
 struct Keys {
@@ -638,13 +665,54 @@ pub(crate) async fn update_certs(cfg: &KmsConfig) -> Result<()> {
     .await
     .context("Failed to regenerate certificates")?;
 
-    // Write the new certificates to files. This runs on every start, so a
-    // hand-placed certificate is replaced -- say so, because the old silence
-    // made that look like the file had survived.
-    keys.store_certs(cfg)?;
+    renew_ca_cert_if_expiring(
+        cfg.root_ca_cert(),
+        keys.ca_cert.pem(),
+        "KMS root CA certificate",
+    )?;
+    renew_ca_cert_if_expiring(
+        cfg.tmp_ca_cert(),
+        keys.tmp_ca_cert.pem(),
+        "temporary client CA certificate",
+    )?;
+
+    // The RPC leaf depends on the refreshed domain and platform attestation, so
+    // it is reissued on every startup.
+    safe_write(cfg.rpc_cert(), keys.rpc_cert.pem())?;
     info!("Reissued the KMS RPC certificate for {domain}");
 
     Ok(())
+}
+
+const CA_RENEWAL_WINDOW: Duration = Duration::from_secs(365 * 24 * 60 * 60);
+
+fn renew_ca_cert_if_expiring(
+    path: impl AsRef<std::path::Path>,
+    renewed_pem: String,
+    description: &str,
+) -> Result<()> {
+    let path = path.as_ref();
+    let current_pem = fs::read(path)
+        .with_context(|| format!("Failed to read {description} from {}", path.display()))?;
+    if !ca_cert_expires_within(&current_pem, SystemTime::now(), CA_RENEWAL_WINDOW)? {
+        return Ok(());
+    }
+    safe_write(path, renewed_pem)?;
+    info!("Renewed {description}");
+    Ok(())
+}
+
+fn ca_cert_expires_within(cert_pem: &[u8], now: SystemTime, window: Duration) -> Result<bool> {
+    let (_, pem) =
+        x509_parser::pem::parse_x509_pem(cert_pem).context("Failed to parse CA certificate PEM")?;
+    let cert = pem.parse_x509().context("Failed to parse CA certificate")?;
+    let now = now
+        .duration_since(UNIX_EPOCH)
+        .context("System time is before the Unix epoch")?
+        .as_secs();
+    let renewal_deadline = now.saturating_add(window.as_secs());
+    let not_after = u64::try_from(cert.validity().not_after.timestamp()).unwrap_or(0);
+    Ok(not_after <= renewal_deadline)
 }
 
 pub(crate) async fn bootstrap_keys(cfg: &KmsConfig, verifier: &AttestationVerifier) -> Result<()> {
