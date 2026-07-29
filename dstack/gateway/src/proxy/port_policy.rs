@@ -32,6 +32,7 @@ use crate::{
 };
 
 /// Outcome of a single fetch attempt, distinguishing what we can usefully retry.
+#[derive(Debug)]
 enum FetchError {
     /// Transient: connection failed, RPC timed out, agent returned 5xx, etc.
     /// The CVM might just be warming up — retry with backoff.
