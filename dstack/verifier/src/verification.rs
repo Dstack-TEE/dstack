@@ -1712,7 +1712,6 @@ mod tests {
 
     #[tokio::test]
     async fn image_download_digest_redirect_timeout_and_retry_matrix() {
-        use std::io::Write as _;
         use std::sync::atomic::{AtomicUsize, Ordering};
         use tokio::io::{AsyncReadExt, AsyncWriteExt as _};
         use tokio::net::TcpListener;
@@ -1809,8 +1808,8 @@ mod tests {
 
         fn verifier(url: &str, cache: &Path, timeout: Duration) -> CvmVerifier {
             CvmVerifier::new(
-                format!("{url}/{{OS_IMAGE_HASH}}.tar.gz"),
                 cache.display().to_string(),
+                format!("{url}/{{OS_IMAGE_HASH}}.tar.gz"),
                 timeout,
                 test_attestation_verifier(),
             )
