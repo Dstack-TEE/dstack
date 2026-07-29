@@ -49,4 +49,5 @@ rmp-serde.workspace = true
 quote = ["dstack-attest/quote"]
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["full"] }
+mock-attestation = { path = "../crates/mock-attestation" }

@@ -182,6 +182,198 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ra_certificate_profile_quote_key_and_app_mutation_matrix() {
+        use std::{sync::Arc, time::Duration};
+
+        use cc_eventlog::{EventLogVersion, RuntimeEvent};
+        use mock_attestation::server::{serve_listener, MockCollateralState};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let pccs = format!("http://{address}");
+        let state = Arc::new(MockCollateralState::from_seed([0x74; 32], &pccs).unwrap());
+        let server = tokio::spawn(serve_listener(listener, state.clone()));
+        let verifier = AttestationVerifier::new_with_tdx_root(
+            Some(&dstack_types::CollateralUrls {
+                pccs: Some(pccs),
+                ..Default::default()
+            }),
+            state.tdx.root_ca_pem().as_bytes(),
+        )
+        .unwrap();
+
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let report_data = QuoteContentType::RaTlsCert.to_report_data(&key.public_key_der());
+        let events = vec![
+            RuntimeEvent::new("app-id".into(), vec![0x11; 20], EventLogVersion::V2),
+            RuntimeEvent::new("compose-hash".into(), vec![0x22; 32], EventLogVersion::V2),
+            RuntimeEvent::new("instance-id".into(), vec![0x33; 20], EventLogVersion::V2),
+            RuntimeEvent::new(
+                "key-provider".into(),
+                b"fixture-provider".to_vec(),
+                EventLogVersion::V2,
+            ),
+        ];
+        let replayed = cc_eventlog::replay_events::<ez_hash::Sha384>(&events, None);
+        let mut rtmrs = [[0u8; 48]; 4];
+        rtmrs[3].copy_from_slice(&replayed);
+        let evidence = state.tdx.attest_with_rtmrs(report_data, rtmrs).unwrap();
+        let attestation = Attestation {
+            quote: AttestationQuote::DstackTdx(TdxQuote {
+                quote: evidence.quote,
+                event_log: events.iter().cloned().map(Into::into).collect(),
+            }),
+            runtime_events: events,
+            report_data,
+            config: format!(r#"{{"os_image_hash":"{}"}}"#, "44".repeat(32)),
+            report: (),
+        }
+        .into_versioned();
+        let verified_attestation = attestation
+            .clone()
+            .into_v1()
+            .verify(&verifier)
+            .await
+            .unwrap();
+        let app_info = verified_attestation.decode_app_info(false).unwrap();
+        let alt_names = vec!["guest.example".to_string()];
+        let cert = CertRequest::builder()
+            .key(&key)
+            .subject("guest.example")
+            .alt_names(&alt_names)
+            .usage_server_auth(true)
+            .app_id(&app_info.app_id)
+            .app_info(&app_info)
+            .attestation(&attestation)
+            .build()
+            .self_signed()
+            .unwrap();
+        let valid = verify_der(cert.der().as_ref(), &verifier).await.unwrap();
+        assert_eq!(valid.app_id.as_deref(), Some(app_info.app_id.as_slice()));
+
+        let mut changed_app_info = app_info.clone();
+        changed_app_info.os_image_hash[0] ^= 1;
+        let cert = CertRequest::builder()
+            .key(&key)
+            .subject("guest.example")
+            .alt_names(&alt_names)
+            .usage_server_auth(true)
+            .app_id(&app_info.app_id)
+            .app_info(&changed_app_info)
+            .attestation(&attestation)
+            .build()
+            .self_signed()
+            .unwrap();
+        let error = verify_der(cert.der().as_ref(), &verifier)
+            .await
+            .err()
+            .unwrap();
+        assert!(format!("{error:#}").contains("app-info extension does not match"));
+
+        let wrong_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let cert = CertRequest::builder()
+            .key(&wrong_key)
+            .subject("guest.example")
+            .alt_names(&alt_names)
+            .usage_server_auth(true)
+            .attestation(&attestation)
+            .build()
+            .self_signed()
+            .unwrap();
+        assert!(format!(
+            "{:#}",
+            verify_der(cert.der().as_ref(), &verifier)
+                .await
+                .err()
+                .unwrap()
+        )
+        .contains("report data mismatch"));
+
+        let no_san = CertRequest::builder()
+            .key(&key)
+            .subject("guest.example")
+            .usage_server_auth(true)
+            .attestation(&attestation)
+            .build()
+            .self_signed()
+            .unwrap();
+        assert!(format!(
+            "{:#}",
+            verify_der(no_san.der().as_ref(), &verifier)
+                .await
+                .err()
+                .unwrap()
+        )
+        .contains("SAN extension missing"));
+
+        let no_eku = CertRequest::builder()
+            .key(&key)
+            .subject("guest.example")
+            .alt_names(&alt_names)
+            .attestation(&attestation)
+            .build()
+            .self_signed()
+            .unwrap();
+        assert!(format!(
+            "{:#}",
+            verify_der(no_eku.der().as_ref(), &verifier)
+                .await
+                .err()
+                .unwrap()
+        )
+        .contains("extended key usage extension missing"));
+
+        let now = std::time::SystemTime::now();
+        let expired = CertRequest::builder()
+            .key(&key)
+            .subject("guest.example")
+            .alt_names(&alt_names)
+            .usage_server_auth(true)
+            .not_before(now - Duration::from_secs(2 * 86400))
+            .not_after(now - Duration::from_secs(86400))
+            .attestation(&attestation)
+            .build()
+            .self_signed()
+            .unwrap();
+        assert!(format!(
+            "{:#}",
+            verify_der(expired.der().as_ref(), &verifier)
+                .await
+                .err()
+                .unwrap()
+        )
+        .contains("outside its validity period"));
+
+        let mut bad_signature = valid_cert_bytes(&key, &alt_names, &attestation);
+        let last = bad_signature.len() - 1;
+        bad_signature[last] ^= 1;
+        assert!(format!(
+            "{:#}",
+            verify_der(&bad_signature, &verifier).await.err().unwrap()
+        )
+        .contains("self-signature verification failed"));
+        server.abort();
+    }
+
+    fn valid_cert_bytes(
+        key: &KeyPair,
+        alt_names: &[String],
+        attestation: &VersionedAttestation,
+    ) -> Vec<u8> {
+        CertRequest::builder()
+            .key(key)
+            .subject("guest.example")
+            .alt_names(alt_names)
+            .usage_server_auth(true)
+            .attestation(attestation)
+            .build()
+            .self_signed()
+            .unwrap()
+            .der()
+            .to_vec()
+    }
+
+    #[tokio::test]
     async fn verify_der_rejects_missing_attestation_extension() {
         let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
         let alt_names = vec!["missing-attestation.example".to_string()];
