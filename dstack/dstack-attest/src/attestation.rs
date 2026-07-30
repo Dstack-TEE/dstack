@@ -3296,7 +3296,10 @@ mod tests {
     #[test]
     fn versioned_wire_formats_reject_malformed_boundaries() {
         assert!(VersionedAttestation::from_bytes(&[]).is_err());
-        let unknown = VersionedAttestation::from_bytes(&[0xff]).unwrap_err();
+        let unknown = match VersionedAttestation::from_bytes(&[0xff]) {
+            Ok(_) => panic!("unknown required version was accepted"),
+            Err(error) => error,
+        };
         assert!(
             unknown.to_string().contains("Unknown attestation wire format"),
             "unknown required versions must fail with an actionable diagnostic: {unknown:#}"
