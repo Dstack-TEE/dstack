@@ -403,3 +403,81 @@ describe('Hex Decoding Compatibility', () => {
     expect(response.status).toBe(200);
   });
 });
+
+describe('Authorization freshness and domain binding', () => {
+  const requestBody = {
+    mrAggregated: '0x' + '11'.repeat(32),
+    osImageHash: '0x' + '22'.repeat(32),
+    appId: '0x' + '33'.repeat(20),
+    composeHash: '0x' + '44'.repeat(32),
+    instanceId: '0x' + '55'.repeat(20),
+    deviceId: '0x' + '66'.repeat(32),
+  };
+
+  const postApp = (body = requestBody) => appFetch(new Request(
+    'http://localhost:3001/bootAuth/app',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  ));
+
+  it('re-evaluates replayed payloads instead of caching an earlier allow', async () => {
+    let decisions = 0;
+    mockReadContract.mockImplementation((params) => {
+      expect(params.address).toBe('0x1234567890123456789012345678901234567890');
+      if (params.functionName === 'isAppAllowed') {
+        decisions += 1;
+        return decisions === 1 ? [true, 'initial allow'] : [false, 'policy changed'];
+      }
+      if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      throw new Error(`unexpected function ${params.functionName}`);
+    });
+
+    const first = await postApp();
+    const replay = await postApp();
+
+    expect(await first.json()).toMatchObject({ isAllowed: true, reason: 'initial allow' });
+    expect(await replay.json()).toMatchObject({ isAllowed: false, reason: 'policy changed' });
+    expect(decisions).toBe(2);
+  });
+
+  it('binds changed measurements and identities into distinct contract arguments', async () => {
+    const calls: unknown[] = [];
+    mockReadContract.mockImplementation((params) => {
+      if (params.functionName === 'isAppAllowed') {
+        calls.push(params.args[0]);
+        return [true, 'allowed'];
+      }
+      if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      throw new Error(`unexpected function ${params.functionName}`);
+    });
+
+    await postApp();
+    await postApp({ ...requestBody, composeHash: '0x' + '77'.repeat(32) });
+    await postApp({ ...requestBody, appId: '0x' + '88'.repeat(20) });
+
+    expect(calls).toHaveLength(3);
+    expect(calls[0]).not.toEqual(calls[1]);
+    expect(calls[0]).not.toEqual(calls[2]);
+  });
+
+  it('fails closed during backend interruption and succeeds after recovery', async () => {
+    mockReadContract.mockRejectedValueOnce(new Error('backend unavailable'));
+    const interrupted = await postApp();
+    expect(await interrupted.json()).toEqual({
+      isAllowed: false,
+      gatewayAppId: '',
+      reason: 'authorization backend unavailable',
+    });
+
+    mockReadContract.mockImplementation((params) => {
+      if (params.functionName === 'isAppAllowed') return [true, 'recovered'];
+      if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      throw new Error(`unexpected function ${params.functionName}`);
+    });
+    const recovered = await postApp();
+    expect(await recovered.json()).toMatchObject({ isAllowed: true, reason: 'recovered' });
+  });
+});
