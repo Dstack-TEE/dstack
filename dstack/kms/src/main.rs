@@ -223,15 +223,13 @@ async fn main() -> Result<()> {
         );
     }
 
-    if config.onboard.enabled
-        && !(config.mpc.enabled && config.genesis_transport_exists())
-        && !config.keys_exists()
-    {
+    if config.mpc.enabled && !config.genesis_transport_exists() {
+        bail!("MPC requires operator-provisioned attested transport material; legacy root-key onboarding is disabled");
+    }
+    if config.onboard.enabled && !config.mpc.enabled && !config.keys_exists() {
         info!("Onboarding");
         run_onboard_service(config.clone(), figment.clone()).await?;
-        if config.mpc.enabled && !config.genesis_transport_exists()
-            || !config.mpc.enabled && !config.keys_exists()
-        {
+        if !config.keys_exists() {
             bail!("Failed to onboard");
         }
     }

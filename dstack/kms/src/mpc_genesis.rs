@@ -1346,6 +1346,13 @@ fn persist_bundle_files(config: &KmsConfig, bundle: &GenesisBundle) -> Result<()
     )?;
     safe_write::safe_write(config.root_ca_cert(), bundle.root_ca_pem.as_bytes())?;
     safe_write::safe_write(config.rpc_cert(), rpc_pem.as_bytes())?;
+    // A directory converted from legacy mode must not retain exportable root
+    // keys after MPC genesis has established the threshold identity.
+    for legacy_secret in [config.root_ca_key(), config.k256_key()] {
+        if legacy_secret.exists() {
+            fs_err::remove_file(legacy_secret)?;
+        }
+    }
     safe_write::safe_write(
         &config.mpc.manifest_file,
         &serde_jcs::to_vec(&bundle.signed_manifest)?,
