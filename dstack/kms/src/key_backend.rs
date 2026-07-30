@@ -444,7 +444,7 @@ impl KeyBackend for MpcKeyBackend {
                 &BlockingHttpTransport::new(transport, tokio::runtime::Handle::current()),
                 context,
             )??;
-            let mut encoded = vec![0u8; signature.serialized_len()];
+            let mut encoded = vec![0u8; cggmp21::Signature::<Secp256k1>::serialized_len()];
             signature.write_to_slice(&mut encoded);
             Ok(encoded)
         })
