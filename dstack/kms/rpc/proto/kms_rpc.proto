@@ -46,6 +46,9 @@ message AppKeyResponse {
   string gateway_app_id = 7;
   // OS Image hash
   bytes os_image_hash = 8;
+  // Stable identity of the key provider. Empty means legacy behavior, where
+  // clients use the root CA public key as the provider identity.
+  bytes key_provider_id = 9;
 }
 
 message GetMetaResponse {
@@ -58,6 +61,8 @@ message GetMetaResponse {
   optional string kms_contract_address = 7;
   optional uint64 chain_id = 8;
   optional string app_auth_implementation = 9;
+  bytes key_provider_id = 10;
+  optional string mpc_cluster_identity = 11;
 }
 
 message GetKmsKeyRequest {

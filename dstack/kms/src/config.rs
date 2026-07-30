@@ -74,10 +74,31 @@ pub(crate) struct KmsConfig {
     #[serde(default = "default_true")]
     pub enforce_self_authorization: bool,
     pub metrics: MetricsConfig,
+    /// Optional stable identity for an MPC-backed KMS. Cryptographic MPC
+    /// operations are provided by the key backend; this section defines the
+    /// identity that applications pin independently of cluster membership.
+    #[serde(default)]
+    pub mpc: MpcConfig,
     /// Admin API listener + authentication. The admin RPCs (e.g.
     /// `ClearImageCache`) are served here, behind the shared HTTP authenticator.
     #[serde(default)]
     pub admin: AdminConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct MpcConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub protocol_version: u16,
+    #[serde(default)]
+    pub cluster_id: String,
+    #[serde(default)]
+    pub p256_group_pubkey: String,
+    #[serde(default)]
+    pub k256_group_pubkey: String,
+    #[serde(default)]
+    pub derivation_group_pubkey: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

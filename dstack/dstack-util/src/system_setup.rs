@@ -2090,7 +2090,11 @@ impl<'a> Stage0<'a> {
             gateway_app_id: response.gateway_app_id,
             key_provider: KeyProvider::Kms {
                 url: kms_url,
-                pubkey: root_pubkey,
+                pubkey: if response.key_provider_id.is_empty() {
+                    root_pubkey
+                } else {
+                    response.key_provider_id
+                },
                 tmp_ca_key: tmp_ca.temp_ca_key,
                 tmp_ca_cert: tmp_ca.temp_ca_cert,
             },

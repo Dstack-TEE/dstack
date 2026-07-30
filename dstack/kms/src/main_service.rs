@@ -25,6 +25,7 @@ use ra_tls::{
     attestation::{AttestationVerifier, TeeVariant, VerifiedAttestation},
     cert::{CaCert, CertRequest, CertSigningRequestV1, CertSigningRequestV2, Csr},
     kdf,
+    rcgen::PublicKeyData as _,
 };
 use scale::Decode;
 use tokio::sync::OnceCell;
@@ -34,6 +35,7 @@ use upgrade_authority::{build_boot_info, ensure_app_id_len, local_kms_boot_info,
 use crate::{
     config::KmsConfig,
     crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
+    mpc_identity::{decode_hex, ClusterIdentity},
 };
 
 pub(crate) mod amd_attest;
@@ -62,6 +64,7 @@ pub struct KmsStateInner {
     attestation_verifier: Arc<AttestationVerifier>,
     self_boot_info: OnceCell<BootInfo>,
     metrics: KmsMetrics,
+    mpc_identity: Option<ClusterIdentity>,
 }
 
 #[derive(Default)]
@@ -139,6 +142,32 @@ impl KmsState {
         let key_bytes = fs::read(config.k256_key()).context("Failed to read ECDSA root key")?;
         let k256_key =
             SigningKey::from_slice(&key_bytes).context("Failed to load ECDSA root key")?;
+        let mpc_identity = if config.mpc.enabled {
+            let identity = ClusterIdentity::new(
+                config.mpc.protocol_version,
+                config.mpc.cluster_id.clone(),
+                decode_hex("mpc.p256_group_pubkey", &config.mpc.p256_group_pubkey)?,
+                decode_hex("mpc.k256_group_pubkey", &config.mpc.k256_group_pubkey)?,
+                decode_hex(
+                    "mpc.derivation_group_pubkey",
+                    &config.mpc.derivation_group_pubkey,
+                )?,
+            )?;
+            // Identity v1 still uses the local backend. Fail closed if config
+            // claims group keys different from the keys actually serving RPCs.
+            anyhow::ensure!(
+                identity.p256_group_pubkey == root_ca.key.public_key_der(),
+                "MPC P-256 group public key does not match the active root CA"
+            );
+            anyhow::ensure!(
+                identity.k256_group_pubkey
+                    == k256_key.verifying_key().to_sec1_bytes().as_ref(),
+                "MPC K-256 group public key does not match the active signing key"
+            );
+            Some(identity)
+        } else {
+            None
+        };
         let temp_ca_key =
             fs::read_to_string(config.tmp_ca_key()).context("Faeild to read temp ca key")?;
         let temp_ca_cert =
@@ -169,8 +198,16 @@ impl KmsState {
                 attestation_verifier,
                 self_boot_info: OnceCell::new(),
                 metrics: KmsMetrics::default(),
+                mpc_identity,
             }),
         })
+    }
+
+    fn key_provider_id(&self) -> Vec<u8> {
+        self.mpc_identity
+            .as_ref()
+            .map(|identity| identity.provider_id().to_vec())
+            .unwrap_or_default()
     }
 
     pub(crate) fn metrics(&self) -> &KmsMetrics {
@@ -402,6 +439,7 @@ impl KmsRpc for RpcHandler {
             tproxy_app_id: gateway_app_id.clone(),
             gateway_app_id,
             os_image_hash,
+            key_provider_id: self.state.key_provider_id(),
         })
     }
 
@@ -472,6 +510,14 @@ impl KmsRpc for RpcHandler {
             chain_id: info.chain_id,
             gateway_app_id: info.gateway_app_id,
             app_auth_implementation: info.app_implementation,
+            key_provider_id: self.state.key_provider_id(),
+            mpc_cluster_identity: self
+                .state
+                .mpc_identity
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .context("failed to encode MPC cluster identity")?,
         })
     }
 

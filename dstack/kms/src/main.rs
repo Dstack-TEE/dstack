@@ -21,6 +21,7 @@ mod admin_service;
 mod config;
 // mod ct_log;
 mod crypto;
+mod mpc_identity;
 mod main_service;
 mod onboard_service;
 
