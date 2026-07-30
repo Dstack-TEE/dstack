@@ -63,6 +63,8 @@ message GetMetaResponse {
   optional string app_auth_implementation = 9;
   bytes key_provider_id = 10;
   optional string mpc_cluster_identity = 11;
+  // Canonical threshold-signed active epoch manifest JSON.
+  optional string mpc_epoch_manifest = 12;
 }
 
 message GetKmsKeyRequest {

@@ -62,6 +62,7 @@ pub struct KmsStateInner {
     self_boot_info: OnceCell<BootInfo>,
     metrics: KmsMetrics,
     mpc_identity: Option<ClusterIdentity>,
+    signed_manifest: Option<SignedEpochManifest>,
     key_backend: Arc<dyn KeyBackend>,
     mpc_router: Option<Arc<SessionRouter>>,
 }
@@ -291,6 +292,7 @@ impl KmsState {
                 self_boot_info: OnceCell::new(),
                 metrics: KmsMetrics::default(),
                 mpc_identity,
+                signed_manifest,
                 key_backend,
                 mpc_router,
             }),
@@ -586,6 +588,16 @@ impl KmsRpc for RpcHandler {
                 .map(serde_json::to_string)
                 .transpose()
                 .context("failed to encode MPC cluster identity")?,
+            mpc_epoch_manifest: self
+                .state
+                .signed_manifest
+                .as_ref()
+                .map(|manifest| {
+                    String::from_utf8(serde_jcs::to_vec(manifest)?)
+                        .context("signed manifest JSON is not UTF-8")
+                })
+                .transpose()
+                .context("failed to encode signed MPC epoch manifest")?,
         })
     }
 
