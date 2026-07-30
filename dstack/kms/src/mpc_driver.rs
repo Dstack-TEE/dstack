@@ -656,6 +656,11 @@ mod tests {
         .unwrap();
         let p256_digest: [u8; 32] = sha2::Sha256::digest(external.tbs_der()).into();
         let p256_session = [41; 32];
+        let p256_expires_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 30;
         let p256_eid = execution_id("test-cluster", 1, CggmpCurve::P256, &p256_session);
         let p256_sign = |protocol_index: u16, keygen_index: usize| {
             let local = participants[usize::from(protocol_index)].clone();
@@ -666,7 +671,7 @@ mod tests {
                 request_hash: [42; 32],
                 local_node_id: local.clone(),
                 participants: participants.clone(),
-                expires_at: expires_at + 60,
+                expires_at: p256_expires_at,
                 poll_interval: Duration::from_millis(1),
             };
             let transport = MemoryTransport {
