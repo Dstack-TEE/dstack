@@ -3605,8 +3605,8 @@ fn test_unquote_os_release_value_handles_quoting_styles() {
 #[cfg(test)]
 mod kms_provider_failover_tests {
     use super::{kms_rpc_url, request_first_available_kms, validate_key_provider_inputs};
-    use dstack_types::KeyProviderKind;
     use anyhow::{anyhow, Result};
+    use dstack_types::KeyProviderKind;
     use std::sync::{Arc, Mutex};
 
     #[test]
