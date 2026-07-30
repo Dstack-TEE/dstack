@@ -608,14 +608,12 @@ impl<'a> GatewayContext<'a> {
         }
 
         // Read config and make the API call against the first healthy gateway.
-        let response = register_first_available_gateway(
-            &self.shared.sys_config.gateway_urls,
-            |gateway_url| {
+        let response =
+            register_first_available_gateway(&self.shared.sys_config.gateway_urls, |gateway_url| {
                 let key_store = key_store.clone();
                 async move { self.register_cvm(&gateway_url, &key_store).await }
-            },
-        )
-        .await?;
+            })
+            .await?;
         let mut wg_info = response.wg.context("Missing wg info")?;
 
         let client_ip = &wg_info.client_ip;
