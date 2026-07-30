@@ -17,7 +17,11 @@ use std::{
 use anyhow::{bail, ensure, Context, Result};
 use async_trait::async_trait;
 use cggmp21::key_share::AnyKeyShare as _;
-use cggmp21::{generic_ec::Scalar, supported_curves::Secp256k1, DataToSign, ExecutionId};
+use cggmp21::{
+    generic_ec::Scalar,
+    supported_curves::{Secp256k1, Secp256r1},
+    DataToSign, ExecutionId,
+};
 use futures::future::join_all;
 use k256::ecdsa::{RecoveryId, Signature as K256Signature, SigningKey, VerifyingKey};
 use ra_tls::{
@@ -383,6 +387,7 @@ impl MpcKeyBackend {
             .context("invalid MPC group public key")?;
         let digest = match &operation.payload {
             MpcOperationPayload::SignK256(payload) => payload.digest(),
+            MpcOperationPayload::Derive(_) => bail!("derivation result is not a signature"),
         };
         for recovery_id in 0u8..4 {
             let recovery_id = RecoveryId::try_from(recovery_id).context("invalid recovery ID")?;
@@ -464,11 +469,8 @@ impl MpcKeyBackend {
                     usize::from(self.derivation_share.core.i) == own_index,
                     "derivation share index does not match manifest ordering"
                 );
-                let secret: [u8; 32] = self
-                    .derivation_share
-                    .core
-                    .x
-                    .as_ref()
+                let secret_scalar: &Scalar<Secp256r1> = self.derivation_share.core.x.as_ref();
+                let secret: [u8; 32] = secret_scalar
                     .to_be_bytes()
                     .as_bytes()
                     .try_into()
@@ -498,7 +500,9 @@ impl MpcKeyBackend {
     }
 
     async fn execute_k256(&self, operation: MpcOperation) -> Result<Vec<u8>> {
-        let MpcOperationPayload::SignK256(payload) = &operation.payload;
+        let MpcOperationPayload::SignK256(payload) = &operation.payload else {
+            bail!("K-256 executor received a different MPC operation")
+        };
         let digest = payload.digest();
         let local_protocol_index: u16 = operation
             .participants
