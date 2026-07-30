@@ -24,6 +24,7 @@ mod crypto;
 mod key_backend;
 mod main_service;
 mod mpc_identity;
+mod mpc_session;
 mod onboard_service;
 
 fn app_version() -> String {

@@ -138,6 +138,12 @@ impl EpochManifest {
         let references: Vec<&[u8]> = fields.iter().map(Vec::as_slice).collect();
         Ok(hash_fields(MANIFEST_DOMAIN, &references))
     }
+
+    pub(crate) fn contains_member(&self, node_id: &str) -> bool {
+        self.members
+            .binary_search_by_key(&node_id, |member| member.node_id.as_str())
+            .is_ok()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
