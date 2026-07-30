@@ -99,6 +99,22 @@ pub(crate) struct MpcConfig {
     pub k256_group_pubkey: String,
     #[serde(default)]
     pub derivation_group_pubkey: String,
+    #[serde(default)]
+    pub node_id: String,
+    #[serde(default)]
+    pub manifest_file: PathBuf,
+    #[serde(default = "default_mpc_max_sessions")]
+    pub max_sessions: usize,
+    #[serde(default = "default_mpc_session_ttl", with = "serde_duration")]
+    pub session_ttl: Duration,
+}
+
+fn default_mpc_max_sessions() -> usize {
+    128
+}
+
+fn default_mpc_session_ttl() -> Duration {
+    Duration::from_secs(300)
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -32,7 +32,9 @@ use upgrade_authority::{build_boot_info, ensure_app_id_len, local_kms_boot_info,
 use crate::{
     config::KmsConfig,
     key_backend::{KeyBackend, LocalKeyBackend},
+    mpc_identity::EpochManifest,
     mpc_identity::{decode_hex, ClusterIdentity},
+    mpc_session::SessionRouter,
 };
 
 pub(crate) mod amd_attest;
@@ -62,6 +64,7 @@ pub struct KmsStateInner {
     metrics: KmsMetrics,
     mpc_identity: Option<ClusterIdentity>,
     key_backend: Arc<dyn KeyBackend>,
+    _mpc_router: Option<Arc<SessionRouter>>,
 }
 
 #[derive(Default)]
@@ -141,7 +144,7 @@ impl KmsState {
             &fs::read_to_string(config.root_ca_key())?,
             &key_bytes,
         )?);
-        let mpc_identity = if config.mpc.enabled {
+        let (mpc_identity, mpc_router) = if config.mpc.enabled {
             let identity = ClusterIdentity::new(
                 config.mpc.protocol_version,
                 config.mpc.cluster_id.clone(),
@@ -162,9 +165,31 @@ impl KmsState {
                 identity.k256_group_pubkey == key_backend.k256_public_key(),
                 "MPC K-256 group public key does not match the active signing key"
             );
-            Some(identity)
+            anyhow::ensure!(
+                !config.mpc.node_id.is_empty(),
+                "MPC node_id must not be empty"
+            );
+            anyhow::ensure!(
+                !config.mpc.manifest_file.as_os_str().is_empty(),
+                "MPC manifest_file must not be empty"
+            );
+            let manifest: EpochManifest = serde_json::from_slice(
+                &fs::read(&config.mpc.manifest_file).context("failed to read MPC manifest")?,
+            )
+            .context("failed to parse MPC manifest")?;
+            anyhow::ensure!(
+                manifest.provider_id == identity.provider_id(),
+                "MPC manifest provider ID does not match cluster identity"
+            );
+            anyhow::ensure!(
+                manifest.contains_member(&config.mpc.node_id),
+                "local node is not a member of the MPC epoch"
+            );
+            let router =
+                SessionRouter::new(manifest, config.mpc.max_sessions, config.mpc.session_ttl)?;
+            (Some(identity), Some(Arc::new(router)))
         } else {
-            None
+            (None, None)
         };
         let temp_ca_key =
             fs::read_to_string(config.tmp_ca_key()).context("Faeild to read temp ca key")?;
@@ -197,6 +222,7 @@ impl KmsState {
                 metrics: KmsMetrics::default(),
                 mpc_identity,
                 key_backend,
+                _mpc_router: mpc_router,
             }),
         })
     }
