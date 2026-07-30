@@ -216,4 +216,42 @@ mod tests {
         )
         .is_err());
     }
+
+    #[test]
+    fn cggmp_p256_threshold_dkg_roundtrips_validated_share() {
+        let n = 3;
+        let threshold = 2;
+        let eid = execution_id("test-cluster", 1, CggmpCurve::P256, &[8; 32]);
+        let outputs = round_based::sim::run(n, |i, party| async move {
+            cggmp21::keygen::<Secp256r1>(ExecutionId::new(&eid), i, n)
+                .set_threshold(threshold)
+                .start(&mut OsRng, party)
+                .await
+        })
+        .unwrap()
+        .expect_ok()
+        .into_vec();
+        let public_key = serde_json::to_vec(&outputs[0].shared_public_key()).unwrap();
+        assert!(outputs.iter().all(|share| {
+            serde_json::to_vec(&share.shared_public_key()).unwrap() == public_key
+        }));
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("p256-share.json");
+        store_share(
+            &path,
+            "test-cluster",
+            1,
+            "kms-1",
+            CggmpCurve::P256,
+            &outputs[0],
+        )
+        .unwrap();
+        let loaded: P256IncompleteShare =
+            load_share(&path, "test-cluster", 1, "kms-1", CggmpCurve::P256).unwrap();
+        assert_eq!(
+            serde_json::to_vec(&loaded.shared_public_key()).unwrap(),
+            public_key
+        );
+    }
 }
