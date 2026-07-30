@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 
 const ID_DOMAIN: &[u8] = b"dstack-mpc-kms-provider-id-v1";
 const NODE_EVIDENCE_DOMAIN: &[u8] = b"dstack-mpc-kms-node-evidence-v1";
+const MANIFEST_DOMAIN: &[u8] = b"dstack-mpc-kms-epoch-manifest-v1";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ClusterIdentity {
@@ -70,6 +71,72 @@ impl ClusterIdentity {
                 &self.derivation_group_pubkey,
             ],
         )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct EpochMember {
+    pub node_id: String,
+    #[serde(with = "hex_bytes")]
+    pub attestation_pubkey: Vec<u8>,
+    #[serde(with = "hex_bytes")]
+    pub share_commitment: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct EpochManifest {
+    #[serde(with = "hex_bytes")]
+    pub provider_id: Vec<u8>,
+    pub epoch: u64,
+    pub threshold: u16,
+    #[serde(with = "hex_bytes")]
+    pub previous_manifest_hash: Vec<u8>,
+    pub members: Vec<EpochMember>,
+}
+
+impl EpochManifest {
+    pub(crate) fn manifest_hash(&self) -> Result<[u8; 32]> {
+        ensure!(self.provider_id.len() == 32, "provider_id must be 32 bytes");
+        ensure!(self.epoch > 0, "epoch must be greater than zero");
+        ensure!(
+            self.previous_manifest_hash.is_empty() || self.previous_manifest_hash.len() == 32,
+            "previous_manifest_hash must be empty or 32 bytes"
+        );
+        ensure!(
+            self.threshold > 0 && usize::from(self.threshold) <= self.members.len(),
+            "threshold must be between one and the member count"
+        );
+        let mut fields: Vec<Vec<u8>> = vec![
+            self.provider_id.clone(),
+            self.epoch.to_be_bytes().to_vec(),
+            self.threshold.to_be_bytes().to_vec(),
+            self.previous_manifest_hash.clone(),
+        ];
+        let mut previous_node_id: Option<&str> = None;
+        for member in &self.members {
+            ensure!(
+                !member.node_id.is_empty(),
+                "member node_id must not be empty"
+            );
+            ensure!(
+                previous_node_id.is_none_or(|previous| previous < member.node_id.as_str()),
+                "members must be sorted by unique node_id"
+            );
+            ensure!(
+                !member.attestation_pubkey.is_empty(),
+                "missing member attestation public key"
+            );
+            ensure!(
+                !member.share_commitment.is_empty(),
+                "missing member share commitment"
+            );
+            fields.push(member.node_id.as_bytes().to_vec());
+            fields.push(member.attestation_pubkey.clone());
+            fields.push(member.share_commitment.clone());
+            previous_node_id = Some(&member.node_id);
+        }
+        let references: Vec<&[u8]> = fields.iter().map(Vec::as_slice).collect();
+        Ok(hash_fields(MANIFEST_DOMAIN, &references))
     }
 }
 
@@ -194,5 +261,27 @@ mod tests {
         let mut next = evidence;
         next.epoch += 1;
         assert_ne!(hash, next.report_data_hash().unwrap());
+    }
+
+    #[test]
+    fn manifest_hash_binds_threshold_and_requires_canonical_members() {
+        let member = |node_id: &str| EpochMember {
+            node_id: node_id.into(),
+            attestation_pubkey: vec![6; 32],
+            share_commitment: vec![7; 33],
+        };
+        let manifest = EpochManifest {
+            provider_id: identity().provider_id().to_vec(),
+            epoch: 1,
+            threshold: 2,
+            previous_manifest_hash: vec![],
+            members: vec![member("kms-1"), member("kms-2"), member("kms-3")],
+        };
+        let hash = manifest.manifest_hash().unwrap();
+        let mut other = manifest.clone();
+        other.threshold = 3;
+        assert_ne!(hash, other.manifest_hash().unwrap());
+        other.members.swap(0, 1);
+        assert!(other.manifest_hash().is_err());
     }
 }
