@@ -123,6 +123,7 @@ wavekv = "1.0.0"
 
 # Core dependencies
 anyhow = { version = "1.0.97", default-features = false }
+async-trait = "0.1.89"
 binrw = { version = "0.15.1", default-features = false, features = ["std"] }
 arc-swap = "1"
 errify = { version = "0.3.0", features = ["anyhow"] }
