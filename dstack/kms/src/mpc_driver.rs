@@ -17,7 +17,6 @@ use serde::{de::DeserializeOwned, Serialize};
 use dstack_kms_rpc::{mpc_transport_client::MpcTransportClient, MpcPushRequest};
 use ra_rpc::client::{RaClient, RaClientConfig};
 use ra_tls::attestation::AttestationVerifier;
-use x509_parser::prelude::FromDer as _;
 
 use crate::{
     mpc_identity::EpochManifest,
