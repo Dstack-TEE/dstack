@@ -41,7 +41,7 @@ use crate::{
         MpcHttpTransport,
     },
     mpc_identity::{ClusterIdentity, EpochManifest, SignedEpochManifest},
-    mpc_lifecycle::{activate_pending_epoch, EpochPaths, ResharePlan},
+    mpc_lifecycle::{activate_pending_epoch, EpochPaths, ResharePlan, SignedResharePlan},
     mpc_operation::{
         DerivePayload, DerivePurpose, K256SignPayload, ManifestSignaturePayload, MpcOperation,
         MpcOperationPayload, P256CertificatePayload,
@@ -78,6 +78,7 @@ pub(crate) trait KeyBackend: Send + Sync {
     async fn sign_epoch_manifest(&self, manifest: EpochManifest) -> Result<SignedEpochManifest>;
     async fn prepare_reshare(&self, plan: ResharePlan) -> Result<BTreeMap<String, Vec<u8>>>;
     async fn activate_epoch(&self, signed: SignedEpochManifest) -> Result<bool>;
+    async fn authorize_reshare(&self, plan: ResharePlan) -> Result<SignedResharePlan>;
     async fn run_mpc_operation(
         &self,
         operation: crate::mpc_operation::MpcOperation,
@@ -192,6 +193,10 @@ impl KeyBackend for LocalKeyBackend {
 
     async fn activate_epoch(&self, _signed: SignedEpochManifest) -> Result<bool> {
         bail!("epoch activation is unavailable on the local key backend")
+    }
+
+    async fn authorize_reshare(&self, _plan: ResharePlan) -> Result<SignedResharePlan> {
+        bail!("reshare authorization is unavailable on the local key backend")
     }
 
     async fn export_root_keys(&self) -> Result<(String, Vec<u8>)> {
@@ -593,6 +598,51 @@ impl MpcKeyBackend {
         })
     }
 
+    async fn coordinate_reshare_authorization(
+        &self,
+        plan: ResharePlan,
+    ) -> Result<SignedResharePlan> {
+        plan.validate_transition(&self.manifest)?;
+        let mut session_id = [0u8; 32];
+        OsRng.fill_bytes(&mut session_id);
+        let operation = MpcOperation::new_reshare_authorization(
+            session_id,
+            self.manifest.epoch,
+            self.participants().await?,
+            unix_time()?
+                .checked_add(60)
+                .context("MPC expiry overflow")?,
+            plan.clone(),
+        )?;
+        operation.validate(&self.manifest, &self.node_id)?;
+        let remote = operation
+            .participants
+            .iter()
+            .filter(|node| *node != &self.node_id)
+            .map(|node| self.transport.start_operation(node, &operation));
+        let (local, remote) = tokio::join!(
+            self.run_mpc_operation(operation.clone(), &self.node_id),
+            join_all(remote),
+        );
+        let local = local?;
+        ensure!(
+            local.len() == 64,
+            "invalid reshare authorization signature length"
+        );
+        for result in remote {
+            ensure!(
+                result? == local,
+                "MPC participants returned different reshare authorization signatures"
+            );
+        }
+        let signed = SignedResharePlan {
+            plan,
+            signature: local,
+        };
+        signed.verify(&self.identity, &self.manifest)?;
+        Ok(signed)
+    }
+
     async fn coordinate_reshare(&self, plan: ResharePlan) -> Result<BTreeMap<String, Vec<u8>>> {
         plan.validate_subset(&self.manifest)?;
         let dealers = self.participants().await?;
@@ -819,9 +869,9 @@ impl MpcKeyBackend {
 
     async fn execute_operation(&self, operation: MpcOperation) -> Result<Vec<u8>> {
         match &operation.payload {
-            MpcOperationPayload::SignK256(_) | MpcOperationPayload::SignManifest(_) => {
-                self.execute_k256(operation).await
-            }
+            MpcOperationPayload::SignK256(_)
+            | MpcOperationPayload::SignManifest(_)
+            | MpcOperationPayload::AuthorizeReshare(_) => self.execute_k256(operation).await,
             MpcOperationPayload::SignP256Certificate(payload) => {
                 self.validate_p256_certificate(payload)?;
                 self.execute_p256(operation).await
@@ -1130,6 +1180,7 @@ impl MpcKeyBackend {
         let digest = match &operation.payload {
             MpcOperationPayload::SignK256(payload) => payload.digest(),
             MpcOperationPayload::SignManifest(payload) => payload.digest()?,
+            MpcOperationPayload::AuthorizeReshare(plan) => plan.authorization_hash()?,
             _ => bail!("K-256 executor received a different MPC operation"),
         };
         let local_protocol_index: u16 = operation
@@ -1465,6 +1516,10 @@ impl KeyBackend for MpcKeyBackend {
             &self.cluster_id,
             &self.node_id,
         )
+    }
+
+    async fn authorize_reshare(&self, plan: ResharePlan) -> Result<SignedResharePlan> {
+        self.coordinate_reshare_authorization(plan).await
     }
 
     async fn run_mpc_operation(&self, operation: MpcOperation, initiator: &str) -> Result<Vec<u8>> {

@@ -10,8 +10,9 @@
 use anyhow::{Context, Result};
 use dstack_kms_rpc::{
     admin_server::{AdminRpc, AdminServer},
-    ActivateEpochRequest, ActivateEpochResponse, ClearImageCacheRequest, PrepareReshareRequest,
-    PrepareReshareResponse, SignEpochManifestRequest, SignEpochManifestResponse,
+    ActivateEpochRequest, ActivateEpochResponse, AuthorizeReshareRequest, AuthorizeReshareResponse,
+    ClearImageCacheRequest, PrepareReshareRequest, PrepareReshareResponse,
+    SignEpochManifestRequest, SignEpochManifestResponse,
 };
 use ra_rpc::{CallContext, RpcCall};
 
@@ -63,6 +64,19 @@ impl AdminRpc for AdminRpcHandler {
         let retained = self.state.key_backend().activate_epoch(signed).await?;
         self.state.request_restart();
         Ok(ActivateEpochResponse { retained })
+    }
+
+    async fn authorize_reshare(
+        self,
+        request: AuthorizeReshareRequest,
+    ) -> Result<AuthorizeReshareResponse> {
+        let plan =
+            serde_json::from_slice(&request.plan_json).context("invalid reshare plan JSON")?;
+        let signed = self.state.key_backend().authorize_reshare(plan).await?;
+        Ok(AuthorizeReshareResponse {
+            signed_plan_json: serde_jcs::to_vec(&signed)
+                .context("failed to encode signed reshare authorization")?,
+        })
     }
 }
 

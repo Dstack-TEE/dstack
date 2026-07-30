@@ -12,7 +12,9 @@ use std::{
 
 use anyhow::{ensure, Context, Result};
 use fs_err as fs;
+use k256::ecdsa::{signature::hazmat::PrehashVerifier, Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::{
     cggmp_engine::{
@@ -62,8 +64,17 @@ pub(crate) struct ResharePlan {
     pub members: Vec<ReshareMember>,
 }
 
+const RESHARE_AUTH_DOMAIN: &[u8] = b"dstack-mpc-reshare-authorization-v1";
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct SignedResharePlan {
+    pub plan: ResharePlan,
+    #[serde(with = "hex_bytes")]
+    pub signature: Vec<u8>,
+}
+
 impl ResharePlan {
-    pub(crate) fn validate_subset(
+    pub(crate) fn validate_transition(
         &self,
         active: &crate::mpc_identity::EpochManifest,
     ) -> Result<()> {
@@ -85,6 +96,57 @@ impl ResharePlan {
                 previous.is_none_or(|value| value < member.node_id.as_str()),
                 "reshare members must be unique and ordered"
             );
+            if let Some(current) = active
+                .members
+                .iter()
+                .find(|current| current.node_id == member.node_id)
+            {
+                ensure!(
+                    current.endpoint == member.endpoint
+                        && current.attestation_pubkey == member.attestation_pubkey,
+                    "existing member identity changed during reshare"
+                );
+            }
+            previous = Some(&member.node_id);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn authorization_hash(&self) -> Result<[u8; 32]> {
+        self.validate_encoding()?;
+        let encoded = serde_jcs::to_vec(self)?;
+        let mut hash = Sha256::new();
+        hash.update((RESHARE_AUTH_DOMAIN.len() as u32).to_be_bytes());
+        hash.update(RESHARE_AUTH_DOMAIN);
+        hash.update((encoded.len() as u32).to_be_bytes());
+        hash.update(encoded);
+        Ok(hash.finalize().into())
+    }
+
+    fn validate_encoding(&self) -> Result<()> {
+        ensure!(self.epoch > 1, "reshare epoch is invalid");
+        ensure!(
+            self.previous_manifest_hash.len() == 32,
+            "reshare predecessor hash is invalid"
+        );
+        ensure!(
+            self.threshold >= 2 && usize::from(self.threshold) <= self.members.len(),
+            "invalid reshare threshold"
+        );
+        Ok(())
+    }
+
+    pub(crate) fn validate_subset(
+        &self,
+        active: &crate::mpc_identity::EpochManifest,
+    ) -> Result<()> {
+        self.validate_transition(active)?;
+        let mut previous: Option<&str> = None;
+        for member in &self.members {
+            ensure!(
+                previous.is_none_or(|value| value < member.node_id.as_str()),
+                "reshare members must be unique and ordered"
+            );
             let active_member = active
                 .members
                 .iter()
@@ -98,6 +160,18 @@ impl ResharePlan {
             previous = Some(&member.node_id);
         }
         Ok(())
+    }
+}
+
+impl SignedResharePlan {
+    pub(crate) fn verify(&self, identity: &ClusterIdentity, active: &EpochManifest) -> Result<()> {
+        self.plan.validate_transition(active)?;
+        let key = VerifyingKey::from_sec1_bytes(&identity.k256_group_pubkey)
+            .context("invalid reshare authorization key")?;
+        let signature = Signature::from_slice(&self.signature)
+            .context("invalid reshare authorization signature")?;
+        key.verify_prehash(&self.plan.authorization_hash()?, &signature)
+            .context("invalid threshold reshare authorization")
     }
 }
 

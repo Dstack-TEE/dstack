@@ -164,6 +164,7 @@ pub(crate) enum MpcOperationPayload {
     SignP256Certificate(P256CertificatePayload),
     Derive(DerivePayload),
     Reshare(ResharePlan),
+    AuthorizeReshare(ResharePlan),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -284,6 +285,25 @@ impl MpcOperation {
         Ok(operation)
     }
 
+    pub(crate) fn new_reshare_authorization(
+        session_id: [u8; 32],
+        epoch: u64,
+        participants: Vec<String>,
+        expires_at: u64,
+        plan: ResharePlan,
+    ) -> Result<Self> {
+        let mut operation = Self {
+            session_id: session_id.to_vec(),
+            epoch,
+            participants,
+            expires_at,
+            payload: MpcOperationPayload::AuthorizeReshare(plan),
+            request_hash: vec![],
+        };
+        operation.request_hash = operation.compute_request_hash()?.to_vec();
+        Ok(operation)
+    }
+
     pub(crate) fn validate(&self, manifest: &EpochManifest, initiator: &str) -> Result<()> {
         ensure!(
             self.session_id.len() == 32,
@@ -343,6 +363,7 @@ impl MpcOperation {
             MpcOperationPayload::SignP256Certificate(payload) => payload.validate()?,
             MpcOperationPayload::Derive(payload) => payload.validate()?,
             MpcOperationPayload::Reshare(plan) => plan.validate_subset(manifest)?,
+            MpcOperationPayload::AuthorizeReshare(plan) => plan.validate_transition(manifest)?,
         }
         ensure!(
             self.request_hash == self.compute_request_hash()?,

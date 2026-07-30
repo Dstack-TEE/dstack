@@ -175,6 +175,7 @@ service Admin {
   // Prepare threshold shares for a revoke/subset epoch transition.
   rpc PrepareReshare(PrepareReshareRequest) returns (PrepareReshareResponse);
   rpc ActivateEpoch(ActivateEpochRequest) returns (ActivateEpochResponse);
+  rpc AuthorizeReshare(AuthorizeReshareRequest) returns (AuthorizeReshareResponse);
 }
 
 message ClearImageCacheRequest {
@@ -201,6 +202,8 @@ message PrepareReshareResponse {
 
 message ActivateEpochRequest { bytes signed_manifest_json = 1; }
 message ActivateEpochResponse { bool retained = 1; }
+message AuthorizeReshareRequest { bytes plan_json = 1; }
+message AuthorizeReshareResponse { bytes signed_plan_json = 1; }
 
 message BootstrapRequest {
   string domain = 1;
