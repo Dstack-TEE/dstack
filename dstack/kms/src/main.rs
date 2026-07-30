@@ -28,6 +28,7 @@ mod mpc_driver;
 mod mpc_identity;
 mod mpc_lifecycle;
 mod mpc_operation;
+mod mpc_reshare;
 mod mpc_service;
 mod mpc_session;
 mod onboard_service;
