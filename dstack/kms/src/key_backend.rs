@@ -217,6 +217,12 @@ impl MpcKeyBackend {
         rpc_key: String,
         attestation_verifier: std::sync::Arc<ra_tls::attestation::AttestationVerifier>,
     ) -> Result<Self> {
+        let (_, root_pem) = x509_parser::pem::parse_x509_pem(root_ca_cert.as_bytes())
+            .context("invalid MPC root CA PEM")?;
+        let root_certificate = root_pem
+            .parse_x509()
+            .context("invalid MPC root CA certificate")?;
+        ensure!(root_certificate.is_ca(), "MPC root certificate is not a CA");
         let transport = MpcHttpTransport::new(
             manifest,
             node_id,
@@ -226,7 +232,7 @@ impl MpcKeyBackend {
             root_ca_cert.clone(),
             attestation_verifier,
         )?;
-        Ok(Self {
+        let backend = Self {
             root_ca_cert,
             p256_share: load_share(
                 p256_share_file,
@@ -254,7 +260,17 @@ impl MpcKeyBackend {
             cluster_id: cluster_id.into(),
             node_id: node_id.into(),
             operations: Mutex::new(BTreeMap::new()),
-        })
+        };
+        ensure!(
+            root_certificate
+                .public_key()
+                .subject_public_key
+                .data
+                .as_ref()
+                == backend.p256_public_key(),
+            "MPC root certificate public key does not match the P-256 group key"
+        );
+        Ok(backend)
     }
 
     fn participants(&self) -> Result<Vec<String>> {
