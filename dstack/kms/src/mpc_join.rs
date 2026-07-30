@@ -910,7 +910,10 @@ impl JoinState {
         .to_vec())
     }
 
-    fn validate_rpc_certificate_tbs(&self, payload: &JoinRpcCertificatePayload) -> Result<()> {
+    async fn validate_rpc_certificate_tbs(
+        &self,
+        payload: &JoinRpcCertificatePayload,
+    ) -> Result<()> {
         use ra_tls::oids::{PHALA_RATLS_ATTESTATION, PHALA_RATLS_CERT_USAGE};
         use x509_parser::{
             certificate::TbsCertificate, der_parser::oid::Oid, prelude::FromDer as _,
@@ -951,10 +954,18 @@ impl JoinState {
         );
         let attestation_oid = Oid::from(PHALA_RATLS_ATTESTATION)
             .map_err(|error| anyhow::anyhow!("invalid attestation OID: {error:?}"))?;
-        ensure!(
-            tbs.get_extension_unique(&attestation_oid)?.is_some(),
-            "join RPC certificate lacks attestation"
-        );
+        let extension = tbs
+            .get_extension_unique(&attestation_oid)?
+            .context("join RPC certificate lacks attestation")?;
+        let encoded = yasna::parse_der(extension.value, |reader| reader.read_bytes())?;
+        let attestation = ra_tls::attestation::VersionedAttestation::from_bytes(&encoded)
+            .context("invalid joined RPC certificate attestation")?;
+        let public_key = tbs.public_key().raw.to_vec();
+        attestation
+            .into_v1()
+            .verify_with_ra_pubkey(&public_key, &self.0.verifier)
+            .await
+            .context("joined RPC certificate attestation is not bound to its key")?;
         Ok(())
     }
 
@@ -969,7 +980,7 @@ impl JoinState {
             "only old dealers sign joined RPC certificates"
         );
         let payload: JoinRpcCertificatePayload = serde_json::from_slice(&operation.payload)?;
-        self.validate_rpc_certificate_tbs(&payload)?;
+        self.validate_rpc_certificate_tbs(&payload).await?;
         let digest: [u8; 32] = Sha256::digest(&payload.tbs_der).into();
         let dealers = self.0.authorization.plan.dealers.clone();
         let local: u16 = dealers

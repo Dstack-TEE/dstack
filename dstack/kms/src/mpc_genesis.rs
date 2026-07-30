@@ -606,7 +606,10 @@ impl GenesisState {
         Ok(external.tbs_der().to_vec())
     }
 
-    fn validate_rpc_certificate_tbs(&self, payload: &RpcCertificateSigningPayload) -> Result<()> {
+    async fn validate_rpc_certificate_tbs(
+        &self,
+        payload: &RpcCertificateSigningPayload,
+    ) -> Result<()> {
         use ra_tls::oids::{PHALA_RATLS_ATTESTATION, PHALA_RATLS_CERT_USAGE};
         use x509_parser::{
             certificate::TbsCertificate, der_parser::oid::Oid, prelude::FromDer as _,
@@ -656,10 +659,18 @@ impl GenesisState {
         );
         let attestation_oid = Oid::from(PHALA_RATLS_ATTESTATION)
             .map_err(|error| anyhow::anyhow!("invalid attestation OID: {error:?}"))?;
-        ensure!(
-            tbs.get_extension_unique(&attestation_oid)?.is_some(),
-            "RPC certificate lacks attestation"
-        );
+        let extension = tbs
+            .get_extension_unique(&attestation_oid)?
+            .context("RPC certificate lacks attestation")?;
+        let encoded = yasna::parse_der(extension.value, |reader| reader.read_bytes())?;
+        let attestation = ra_tls::attestation::VersionedAttestation::from_bytes(&encoded)
+            .context("invalid RPC certificate attestation")?;
+        let public_key = tbs.public_key().raw.to_vec();
+        attestation
+            .into_v1()
+            .verify_with_ra_pubkey(&public_key, &self.0.verifier)
+            .await
+            .context("RPC certificate attestation is not bound to its key")?;
         Ok(())
     }
 
@@ -903,7 +914,7 @@ impl GenesisState {
                         let payload: RpcCertificateSigningPayload =
                             serde_json::from_slice(&operation.payload)
                                 .context("invalid RPC certificate signing payload")?;
-                        self.validate_rpc_certificate_tbs(&payload)?;
+                        self.validate_rpc_certificate_tbs(&payload).await?;
                         Sha256::digest(&payload.tbs_der).into()
                     }
                     _ => unreachable!(),
