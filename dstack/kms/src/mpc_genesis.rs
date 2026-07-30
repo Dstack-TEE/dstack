@@ -22,7 +22,6 @@ use dstack_kms_rpc::{
     mpc_genesis_server::{MpcGenesisRpc, MpcGenesisServer},
     MpcGenesisFinalizeRequest, MpcGenesisStartRequest, MpcGenesisStartResponse, MpcPushRequest,
 };
-use prost_types::Empty;
 use ra_rpc::{
     client::{RaClient, RaClientConfig},
     CallContext, RpcCall,
@@ -277,7 +276,7 @@ impl GenesisTransport {
         loop {
             let probes = self.clients.iter().map(|(node, client)| async move {
                 client
-                    .ping(Empty {})
+                    .ping()
                     .await
                     .with_context(|| format!("genesis peer {node} is unavailable"))
             });
