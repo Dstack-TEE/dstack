@@ -1953,12 +1953,13 @@ mod tests {
         verifier
             .store_measurements_in_cache(&active_key, &fresh)
             .unwrap();
+        let loaded = verifier
+            .load_measurements_from_cache(&active_key)
+            .unwrap()
+            .unwrap();
         assert_eq!(
-            verifier
-                .load_measurements_from_cache(&active_key)
-                .unwrap()
-                .unwrap(),
-            fresh
+            serde_json::to_value(loaded).unwrap(),
+            serde_json::to_value(fresh).unwrap()
         );
         assert!(old_path.is_file());
         assert!(verifier
