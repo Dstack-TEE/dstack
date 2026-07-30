@@ -6,6 +6,7 @@
 
 use std::{
     fs::Permissions,
+    io::Write,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
@@ -45,6 +46,53 @@ pub(crate) fn pending_share_path(path: &Path, epoch: u64) -> PathBuf {
 
 fn activation_journal_path(manifest: &Path) -> PathBuf {
     manifest.with_extension("activation-journal")
+}
+
+/// Persist a single consensus proposal per policy and epoch using an atomic
+/// create, rejecting concurrent or post-restart forks.
+pub(crate) fn record_epoch_authorization(
+    manifest_path: &Path,
+    label: &str,
+    epoch: u64,
+    digest: &[u8; 32],
+) -> Result<()> {
+    let path = manifest_path.with_extension(format!("epoch-{epoch}.{label}.authorized"));
+    let validate_existing = || -> Result<()> {
+        let metadata = fs::symlink_metadata(&path)?;
+        ensure!(
+            metadata.file_type().is_file(),
+            "MPC policy authorization record is not a file"
+        );
+        ensure!(
+            metadata.permissions().mode() & 0o077 == 0,
+            "MPC policy authorization permissions are too broad"
+        );
+        ensure!(
+            fs::read(&path)? == digest,
+            "conflicting threshold authorization for epoch {epoch}"
+        );
+        Ok(())
+    };
+    if path.exists() {
+        return validate_existing();
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(mut file) => {
+            file.set_permissions(Permissions::from_mode(0o600))?;
+            file.write_all(digest)?;
+            file.sync_all()?;
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => validate_existing(),
+        Err(error) => Err(error.into()),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

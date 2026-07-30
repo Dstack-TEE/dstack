@@ -48,8 +48,8 @@ use crate::{
     },
     mpc_identity::{ClusterIdentity, EpochManifest, EpochMember, SignedEpochManifest},
     mpc_lifecycle::{
-        activate_pending_epoch, initialize_join_checkpoint, pending_share_path, EpochPaths,
-        SignedResharePlan,
+        activate_pending_epoch, initialize_join_checkpoint, pending_share_path,
+        record_epoch_authorization, EpochPaths, SignedResharePlan,
     },
     mpc_reshare::{self, PrivateContribution, PublicContribution},
     mpc_session::{MpcEnvelope, MpcProtocol, SessionRouter},
@@ -840,6 +840,12 @@ impl JoinState {
             serde_json::from_slice(&operation.payload).context("invalid target manifest")?;
         self.validate_target_manifest(&manifest)?;
         let digest = manifest.manifest_hash()?;
+        record_epoch_authorization(
+            &self.0.config.mpc.manifest_file,
+            "manifest",
+            manifest.epoch,
+            &digest,
+        )?;
         let dealers = self.0.authorization.plan.dealers.clone();
         let local: u16 = dealers
             .iter()

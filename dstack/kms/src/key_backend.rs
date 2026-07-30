@@ -10,8 +10,6 @@
 
 use std::{
     collections::BTreeMap,
-    io::Write,
-    os::unix::fs::PermissionsExt,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -43,7 +41,10 @@ use crate::{
         MpcHttpTransport,
     },
     mpc_identity::{ClusterIdentity, EpochManifest, SignedEpochManifest},
-    mpc_lifecycle::{activate_pending_epoch, EpochPaths, ResharePlan, SignedResharePlan},
+    mpc_lifecycle::{
+        activate_pending_epoch, record_epoch_authorization, EpochPaths, ResharePlan,
+        SignedResharePlan,
+    },
     mpc_operation::{
         DerivePayload, DerivePurpose, K256SignPayload, ManifestSignaturePayload, MpcOperation,
         MpcOperationPayload, P256CertificatePayload,
@@ -1293,45 +1294,7 @@ impl MpcKeyBackend {
     }
 
     fn authorize_policy_once(&self, label: &str, epoch: u64, digest: &[u8; 32]) -> Result<()> {
-        let path = self
-            .manifest_file
-            .with_extension(format!("epoch-{epoch}.{label}.authorized"));
-        let validate_existing = || -> Result<()> {
-            let metadata = fs_err::symlink_metadata(&path)?;
-            ensure!(
-                metadata.file_type().is_file(),
-                "MPC policy authorization record is not a file"
-            );
-            ensure!(
-                metadata.permissions().mode() & 0o077 == 0,
-                "MPC policy authorization permissions are too broad"
-            );
-            ensure!(
-                fs_err::read(&path)? == digest,
-                "conflicting threshold authorization for epoch {epoch}"
-            );
-            Ok(())
-        };
-        if path.exists() {
-            return validate_existing();
-        }
-        if let Some(parent) = path.parent() {
-            fs_err::create_dir_all(parent)?;
-        }
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(mut file) => {
-                file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-                file.write_all(digest)?;
-                file.sync_all()?;
-                Ok(())
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => validate_existing(),
-            Err(error) => Err(error.into()),
-        }
+        record_epoch_authorization(&self.manifest_file, label, epoch, digest)
     }
 
     async fn execute_p256(&self, operation: MpcOperation) -> Result<Vec<u8>> {
