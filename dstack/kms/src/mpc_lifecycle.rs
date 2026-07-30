@@ -473,4 +473,52 @@ mod tests {
         join.members[1].node_id = "kms-new".into();
         assert!(join.validate_subset(&active).is_err());
     }
+
+    #[test]
+    fn startup_recovers_journaled_revocation() {
+        let key = SigningKey::from_slice(&[8; 32]).unwrap();
+        let identity = identity(&key);
+        let directory = tempfile::tempdir().unwrap();
+        let manifest_path = directory.path().join("manifest.json");
+        let checkpoint_path = directory.path().join("checkpoint.json");
+        let p256 = directory.path().join("p256.share");
+        let k256 = directory.path().join("k256.share");
+        let derivation = directory.path().join("derivation.share");
+        let paths = EpochPaths {
+            manifest: &manifest_path,
+            checkpoint: &checkpoint_path,
+            p256_share: &p256,
+            k256_share: &k256,
+            derivation_share: &derivation,
+        };
+        let active = signed(&key, &identity, 1, vec![]);
+        validate_and_checkpoint(paths.checkpoint, &active, &identity).unwrap();
+        let mut next = signed(
+            &key,
+            &identity,
+            2,
+            active.manifest.manifest_hash().unwrap().to_vec(),
+        );
+        next.manifest.members.remove(0);
+        let signature: Signature = key
+            .sign_prehash(&next.manifest.manifest_hash().unwrap())
+            .unwrap();
+        next.signature = signature.to_bytes().to_vec();
+        let journal_path = activation_journal_path(paths.manifest);
+        safe_write::safe_write(
+            &journal_path,
+            &serde_jcs::to_vec(&ActivationJournal {
+                version: 1,
+                signed_manifest: next.clone(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        fs::set_permissions(&journal_path, Permissions::from_mode(0o600)).unwrap();
+        assert!(recover_pending_activation(&paths, &identity, "cluster", "kms-1").unwrap());
+        let installed: SignedEpochManifest =
+            serde_json::from_slice(&fs::read(paths.manifest).unwrap()).unwrap();
+        assert_eq!(installed, next);
+        assert!(!journal_path.exists());
+    }
 }
