@@ -246,4 +246,28 @@ mod tests {
         let fork = signed(&key, &identity, 3, vec![9; 32]);
         assert!(validate_and_checkpoint(&checkpoint, &fork, &identity).is_err());
     }
+
+    #[test]
+    fn subset_reshare_plan_rejects_unapproved_joiners() {
+        let key = SigningKey::from_slice(&[7; 32]).unwrap();
+        let identity = identity(&key);
+        let active = signed(&key, &identity, 1, vec![]).manifest;
+        let plan = ResharePlan {
+            epoch: 2,
+            previous_manifest_hash: active.manifest_hash().unwrap().to_vec(),
+            threshold: 2,
+            members: active.members[..2]
+                .iter()
+                .map(|member| ReshareMember {
+                    node_id: member.node_id.clone(),
+                    endpoint: member.endpoint.clone(),
+                    attestation_pubkey: member.attestation_pubkey.clone(),
+                })
+                .collect(),
+        };
+        plan.validate_subset(&active).unwrap();
+        let mut join = plan;
+        join.members[1].node_id = "kms-new".into();
+        assert!(join.validate_subset(&active).is_err());
+    }
 }
