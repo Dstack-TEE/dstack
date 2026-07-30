@@ -7,10 +7,10 @@
 //! htpasswd via `Authorization`/`X-Admin-Token`, so the handlers do no token
 //! checks of their own.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use dstack_kms_rpc::{
     admin_server::{AdminRpc, AdminServer},
-    ClearImageCacheRequest,
+    ClearImageCacheRequest, SignEpochManifestRequest, SignEpochManifestResponse,
 };
 use ra_rpc::{CallContext, RpcCall};
 
@@ -24,6 +24,23 @@ impl AdminRpc for AdminRpcHandler {
     async fn clear_image_cache(self, request: ClearImageCacheRequest) -> Result<()> {
         self.state
             .clear_image_cache(&request.image_hash, &request.config_hash)
+    }
+
+    async fn sign_epoch_manifest(
+        self,
+        request: SignEpochManifestRequest,
+    ) -> Result<SignEpochManifestResponse> {
+        let manifest = serde_json::from_slice(&request.manifest_json)
+            .context("invalid epoch manifest JSON")?;
+        let signed = self
+            .state
+            .key_backend()
+            .sign_epoch_manifest(manifest)
+            .await?;
+        Ok(SignEpochManifestResponse {
+            signed_manifest_json: serde_jcs::to_vec(&signed)
+                .context("failed to encode signed epoch manifest")?,
+        })
     }
 }
 

@@ -147,11 +147,21 @@ service MpcTransport {
 service Admin {
   // Clear the image cache
   rpc ClearImageCache(ClearImageCacheRequest) returns (google.protobuf.Empty);
+  // Ask the active threshold committee to authorize the next epoch manifest.
+  rpc SignEpochManifest(SignEpochManifestRequest) returns (SignEpochManifestResponse);
 }
 
 message ClearImageCacheRequest {
   string image_hash = 1;
   string config_hash = 2;
+}
+
+message SignEpochManifestRequest {
+  bytes manifest_json = 1;
+}
+
+message SignEpochManifestResponse {
+  bytes signed_manifest_json = 1;
 }
 
 message BootstrapRequest {
