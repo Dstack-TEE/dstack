@@ -3594,7 +3594,6 @@ fn test_unquote_os_release_value_handles_quoting_styles() {
     assert_eq!(unquote_os_release_value("\"a"), "\"a");
 }
 
-
 #[cfg(test)]
 mod kms_provider_failover_tests {
     use super::{kms_rpc_url, request_first_available_kms};
@@ -3605,14 +3604,20 @@ mod kms_provider_failover_tests {
     fn normalizes_kms_rpc_urls_once() {
         assert_eq!(kms_rpc_url("https://kms.test"), "https://kms.test/prpc");
         assert_eq!(kms_rpc_url("https://kms.test/"), "https://kms.test/prpc");
-        assert_eq!(kms_rpc_url("https://kms.test/prpc"), "https://kms.test/prpc");
-        assert_eq!(kms_rpc_url("https://kms.test/prpc/"), "https://kms.test/prpc");
+        assert_eq!(
+            kms_rpc_url("https://kms.test/prpc"),
+            "https://kms.test/prpc"
+        );
+        assert_eq!(
+            kms_rpc_url("https://kms.test/prpc/"),
+            "https://kms.test/prpc"
+        );
     }
 
     #[tokio::test]
     async fn ordered_failover_skips_timeout_wrong_cert_and_denial() {
-        let urls = ["timeout", "wrong-cert", "deny", "healthy"]
-            .map(|name| format!("https://{name}.test"));
+        let urls =
+            ["timeout", "wrong-cert", "deny", "healthy"].map(|name| format!("https://{name}.test"));
         let attempted = Arc::new(Mutex::new(Vec::new()));
         let observed = attempted.clone();
         let value = request_first_available_kms(&urls, move |url| {
@@ -3624,7 +3629,9 @@ mod kms_provider_failover_tests {
                     Err(anyhow!("injected endpoint failure"))
                 }
             }
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         assert_eq!(value, "stable-app-identity");
         assert_eq!(attempted.lock().unwrap().len(), 4);
     }
@@ -3637,8 +3644,13 @@ mod kms_provider_failover_tests {
         request_first_available_kms(&urls, move |url| {
             observed.lock().unwrap().push(url.clone());
             async move { Ok::<_, anyhow::Error>(url) }
-        }).await.unwrap();
-        assert_eq!(attempted.lock().unwrap().as_slice(), &["https://healthy.test/prpc"]);
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            attempted.lock().unwrap().as_slice(),
+            &["https://healthy.test/prpc"]
+        );
     }
 
     #[tokio::test]
@@ -3646,12 +3658,19 @@ mod kms_provider_failover_tests {
         let urls = ["first", "second"].map(|name| format!("https://{name}.test"));
         let error = request_first_available_kms::<(), _, _>(&urls, |url| async move {
             Err(anyhow!("failure at {url}"))
-        }).await.unwrap_err();
+        })
+        .await
+        .unwrap_err();
         assert!(format!("{error:#}").contains("failure at https://first.test/prpc"));
         let recovered = request_first_available_kms(&urls, |url| async move {
-            if url.contains("first") { Err(anyhow!("dependency remains unavailable")) }
-            else { Ok("recovered-once") }
-        }).await.unwrap();
+            if url.contains("first") {
+                Err(anyhow!("dependency remains unavailable"))
+            } else {
+                Ok("recovered-once")
+            }
+        })
+        .await
+        .unwrap();
         assert_eq!(recovered, "recovered-once");
     }
 
@@ -3660,8 +3679,13 @@ mod kms_provider_failover_tests {
         let urls = ["down".to_string(), "healthy".to_string()];
         let run = || async {
             request_first_available_kms(&urls, |url| async move {
-                if url.contains("healthy") { Ok(url) } else { Err(anyhow!("down")) }
-            }).await
+                if url.contains("healthy") {
+                    Ok(url)
+                } else {
+                    Err(anyhow!("down"))
+                }
+            })
+            .await
         };
         let (left, right) = tokio::join!(run(), run());
         assert_eq!(left?, "healthy/prpc");
@@ -3675,7 +3699,9 @@ mod kms_provider_failover_tests {
             panic!("request must not run for an empty KMS list");
             #[allow(unreachable_code)]
             Ok(())
-        }).await.unwrap_err();
+        })
+        .await
+        .unwrap_err();
         assert!(error.to_string().contains("No KMS URLs are set"));
     }
 }
