@@ -1,0 +1,241 @@
+// SPDX-FileCopyrightText: © 2024-2026 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use anyhow::{ensure, Context, Result};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use sha3::Keccak256;
+
+use crate::mpc_identity::EpochManifest;
+
+const REQUEST_DOMAIN: &[u8] = b"dstack-mpc-operation-v1";
+const MAX_SIGN_MESSAGE_BYTES: usize = 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct K256SignPayload {
+    #[serde(with = "hex_bytes")]
+    pub prefix: Vec<u8>,
+    #[serde(with = "hex_bytes")]
+    pub app_id: Vec<u8>,
+    pub timestamp: Option<u64>,
+    #[serde(with = "hex_bytes")]
+    pub message: Vec<u8>,
+}
+
+impl K256SignPayload {
+    pub(crate) fn digest(&self) -> [u8; 32] {
+        let mut digest = Keccak256::new();
+        digest.update(&self.prefix);
+        digest.update(b":");
+        digest.update(&self.app_id);
+        if let Some(timestamp) = self.timestamp {
+            digest.update(timestamp.to_be_bytes());
+        }
+        digest.update(&self.message);
+        digest.finalize().into()
+    }
+
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            matches!(
+                self.prefix.as_slice(),
+                b"dstack-env-encrypt-pubkey" | b"dstack-kms-issued"
+            ),
+            "MPC K-256 signing domain is not allowed"
+        );
+        ensure!(
+            self.app_id.len() == 20,
+            "MPC signing app_id must be 20 bytes"
+        );
+        ensure!(
+            !self.message.is_empty() && self.message.len() <= MAX_SIGN_MESSAGE_BYTES,
+            "MPC signing message length is invalid"
+        );
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum MpcOperationPayload {
+    SignK256(K256SignPayload),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct MpcOperation {
+    #[serde(with = "hex_bytes")]
+    pub session_id: Vec<u8>,
+    pub epoch: u64,
+    pub participants: Vec<String>,
+    pub expires_at: u64,
+    pub payload: MpcOperationPayload,
+    #[serde(with = "hex_bytes")]
+    pub request_hash: Vec<u8>,
+}
+
+#[derive(Serialize)]
+struct RequestPreimage<'a> {
+    #[serde(with = "hex_bytes")]
+    session_id: &'a [u8],
+    epoch: u64,
+    participants: &'a [String],
+    expires_at: u64,
+    payload: &'a MpcOperationPayload,
+}
+
+impl MpcOperation {
+    pub(crate) fn new_k256(
+        session_id: [u8; 32],
+        epoch: u64,
+        participants: Vec<String>,
+        expires_at: u64,
+        payload: K256SignPayload,
+    ) -> Result<Self> {
+        let mut operation = Self {
+            session_id: session_id.to_vec(),
+            epoch,
+            participants,
+            expires_at,
+            payload: MpcOperationPayload::SignK256(payload),
+            request_hash: vec![],
+        };
+        operation.request_hash = operation.compute_request_hash()?.to_vec();
+        Ok(operation)
+    }
+
+    pub(crate) fn validate(&self, manifest: &EpochManifest, initiator: &str) -> Result<()> {
+        ensure!(
+            self.session_id.len() == 32,
+            "MPC operation session ID must be 32 bytes"
+        );
+        ensure!(self.epoch == manifest.epoch, "MPC operation epoch mismatch");
+        ensure!(
+            self.participants.len() == usize::from(manifest.threshold),
+            "MPC operation must use exactly threshold participants"
+        );
+        ensure!(
+            self.participants.iter().any(|node| node == initiator),
+            "MPC operation initiator is not a participant"
+        );
+        let indexes = self
+            .participants
+            .iter()
+            .map(|node| {
+                manifest
+                    .members
+                    .binary_search_by_key(&node.as_str(), |member| member.node_id.as_str())
+                    .context("MPC operation contains a non-member")
+            })
+            .collect::<Result<Vec<_>>>()?;
+        ensure!(
+            indexes.windows(2).all(|pair| pair[0] < pair[1]),
+            "MPC participants must be unique and in manifest order"
+        );
+        ensure!(self.expires_at >= unix_time()?, "MPC operation expired");
+        match &self.payload {
+            MpcOperationPayload::SignK256(payload) => payload.validate()?,
+        }
+        ensure!(
+            self.request_hash == self.compute_request_hash()?,
+            "MPC operation request hash mismatch"
+        );
+        Ok(())
+    }
+
+    pub(crate) fn compute_request_hash(&self) -> Result<[u8; 32]> {
+        let encoded = serde_jcs::to_vec(&RequestPreimage {
+            session_id: &self.session_id,
+            epoch: self.epoch,
+            participants: &self.participants,
+            expires_at: self.expires_at,
+            payload: &self.payload,
+        })
+        .context("failed to encode MPC operation")?;
+        let mut digest = Sha256::new();
+        digest.update((REQUEST_DOMAIN.len() as u32).to_be_bytes());
+        digest.update(REQUEST_DOMAIN);
+        digest.update((encoded.len() as u32).to_be_bytes());
+        digest.update(encoded);
+        Ok(digest.finalize().into())
+    }
+}
+
+fn unix_time() -> Result<u64> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system time before UNIX epoch")?
+        .as_secs())
+}
+
+mod hex_bytes {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&hex::encode(value))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        hex::decode(value.strip_prefix("0x").unwrap_or(&value)).map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mpc_identity::{EpochManifest, EpochMember};
+
+    fn manifest() -> EpochManifest {
+        EpochManifest {
+            provider_id: vec![1; 32],
+            epoch: 3,
+            threshold: 2,
+            previous_manifest_hash: vec![],
+            members: ["kms-1", "kms-2", "kms-3"]
+                .into_iter()
+                .map(|node_id| EpochMember {
+                    node_id: node_id.into(),
+                    endpoint: format!("https://{node_id}/prpc"),
+                    attestation_pubkey: vec![2; 32],
+                    share_commitment: vec![3; 33],
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn operation_hash_binds_semantics_and_canonical_quorum() {
+        let operation = MpcOperation::new_k256(
+            [4; 32],
+            3,
+            vec!["kms-1".into(), "kms-2".into()],
+            unix_time().unwrap() + 30,
+            K256SignPayload {
+                prefix: b"dstack-env-encrypt-pubkey".to_vec(),
+                app_id: vec![5; 20],
+                timestamp: Some(7),
+                message: vec![6; 32],
+            },
+        )
+        .unwrap();
+        operation.validate(&manifest(), "kms-1").unwrap();
+        let mut tampered = operation.clone();
+        if let MpcOperationPayload::SignK256(payload) = &mut tampered.payload {
+            payload.message[0] ^= 1;
+        }
+        assert!(tampered.validate(&manifest(), "kms-1").is_err());
+        let mut reordered = operation;
+        reordered.participants.swap(0, 1);
+        reordered.request_hash = reordered.compute_request_hash().unwrap().to_vec();
+        assert!(reordered.validate(&manifest(), "kms-1").is_err());
+    }
+}
