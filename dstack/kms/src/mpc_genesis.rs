@@ -10,12 +10,13 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use async_trait::async_trait;
 use cggmp21::{
+    generic_ec::Scalar,
     key_share::AnyKeyShare as _,
     supported_curves::{Secp256k1, Secp256r1},
-    ExecutionId, KeyShare,
+    DataToSign, ExecutionId, KeyShare,
 };
 use dstack_kms_rpc::{
     mpc_genesis_client::MpcGenesisClient,
@@ -27,17 +28,24 @@ use ra_rpc::{
     CallContext, RpcCall,
 };
 use ra_tls::attestation::AttestationVerifier;
+use ra_tls::{
+    cert::{prepare_external_self_signed, CertRequest},
+    rcgen::SubjectPublicKeyInfo,
+};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    cggmp_engine::{execution_id, store_share, CggmpCurve, K256KeyShare, P256KeyShare},
+    cggmp_engine::{
+        execution_id, share_commitment, store_share, CggmpCurve, K256KeyShare, P256KeyShare,
+    },
     config::KmsConfig,
     mpc_driver::{
         drive_state_machine_blocking, BlockingTransport, DriverContext, EnvelopeTransport,
     },
-    mpc_identity::{EpochManifest, EpochMember},
+    mpc_identity::{ClusterIdentity, EpochManifest, EpochMember, SignedEpochManifest},
+    mpc_lifecycle::validate_and_checkpoint,
     mpc_session::{MpcEnvelope, MpcProtocol, SessionRouter},
 };
 
@@ -135,6 +143,9 @@ enum GenesisKind {
     DkgP256,
     DkgK256,
     DkgDerivation,
+    Commitments,
+    SignRoot,
+    SignManifest,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -142,6 +153,8 @@ struct GenesisOperation {
     #[serde(with = "hex_bytes")]
     session_id: Vec<u8>,
     kind: GenesisKind,
+    #[serde(with = "hex_bytes")]
+    payload: Vec<u8>,
     expires_at: u64,
     #[serde(with = "hex_bytes")]
     request_hash: Vec<u8>,
@@ -152,16 +165,19 @@ struct GenesisOperationPreimage<'a> {
     #[serde(with = "hex_bytes")]
     session_id: &'a [u8],
     kind: GenesisKind,
+    #[serde(with = "hex_bytes")]
+    payload: &'a [u8],
     expires_at: u64,
 }
 
 impl GenesisOperation {
-    fn new(kind: GenesisKind) -> Result<Self> {
+    fn new(kind: GenesisKind, payload: Vec<u8>) -> Result<Self> {
         let mut session = [0u8; 32];
         OsRng.fill_bytes(&mut session);
         let mut operation = Self {
             session_id: session.to_vec(),
             kind,
+            payload,
             expires_at: unix_time()?
                 .checked_add(GENESIS_TTL.as_secs())
                 .context("expiry overflow")?,
@@ -175,6 +191,7 @@ impl GenesisOperation {
         let encoded = serde_jcs::to_vec(&GenesisOperationPreimage {
             session_id: &self.session_id,
             kind: self.kind,
+            payload: &self.payload,
             expires_at: self.expires_at,
         })?;
         Ok(Sha256::digest(encoded).into())
@@ -202,6 +219,18 @@ struct GenesisArtifacts {
     p256: Option<P256KeyShare>,
     k256: Option<K256KeyShare>,
     derivation: Option<P256KeyShare>,
+}
+
+enum GenesisSigningShare {
+    P256(P256KeyShare),
+    K256(K256KeyShare),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct GenesisBundle {
+    identity: ClusterIdentity,
+    root_ca_pem: String,
+    signed_manifest: SignedEpochManifest,
 }
 
 struct GenesisTransport {
@@ -394,6 +423,116 @@ impl GenesisState {
             .context("attested peer is not in genesis plan")
     }
 
+    fn identity_from_artifacts(&self) -> Result<ClusterIdentity> {
+        let artifacts = self.0.artifacts.lock().expect("genesis mutex poisoned");
+        ClusterIdentity::new(
+            self.0.plan.protocol_version,
+            self.0.plan.cluster_id.clone(),
+            artifacts
+                .p256
+                .as_ref()
+                .context("missing P-256 genesis share")?
+                .shared_public_key()
+                .to_bytes(false)
+                .as_bytes()
+                .to_vec(),
+            artifacts
+                .k256
+                .as_ref()
+                .context("missing K-256 genesis share")?
+                .shared_public_key()
+                .to_bytes(true)
+                .as_bytes()
+                .to_vec(),
+            artifacts
+                .derivation
+                .as_ref()
+                .context("missing derivation genesis share")?
+                .shared_public_key()
+                .to_bytes(false)
+                .as_bytes()
+                .to_vec(),
+        )
+    }
+
+    fn validate_root_tbs(&self, tbs_der: &[u8]) -> Result<()> {
+        use x509_parser::{certificate::TbsCertificate, prelude::FromDer as _};
+        let (remaining, tbs) = TbsCertificate::from_der(tbs_der)
+            .map_err(|error| anyhow::anyhow!("invalid genesis root TBS: {error}"))?;
+        ensure!(remaining.is_empty(), "genesis root TBS has trailing bytes");
+        ensure!(
+            tbs.subject() == tbs.issuer(),
+            "genesis root is not self-issued"
+        );
+        ensure!(tbs.is_ca(), "genesis root is not a CA");
+        ensure!(
+            tbs.signature.algorithm.to_id_string() == "1.2.840.10045.4.3.2",
+            "genesis root does not use ECDSA/SHA-256"
+        );
+        ensure!(
+            tbs.public_key().subject_public_key.data.as_ref()
+                == self.identity_from_artifacts()?.p256_group_pubkey,
+            "genesis root public key does not match DKG"
+        );
+        Ok(())
+    }
+
+    fn validate_genesis_manifest(&self, manifest: &EpochManifest) -> Result<()> {
+        let identity = self.identity_from_artifacts()?;
+        ensure!(
+            manifest.provider_id == identity.provider_id(),
+            "wrong genesis provider ID"
+        );
+        ensure!(
+            manifest.epoch == 1 && manifest.previous_manifest_hash.is_empty(),
+            "invalid genesis epoch chain"
+        );
+        ensure!(
+            manifest.threshold == self.0.plan.threshold,
+            "wrong genesis threshold"
+        );
+        ensure!(
+            manifest.members.len() == self.0.plan.members.len(),
+            "wrong genesis member count"
+        );
+        for (member, planned) in manifest.members.iter().zip(&self.0.plan.members) {
+            ensure!(
+                member.node_id == planned.node_id
+                    && member.endpoint == planned.endpoint
+                    && member.attestation_pubkey == planned.attestation_pubkey,
+                "genesis member differs from operator plan"
+            );
+        }
+        let local_index = self
+            .0
+            .plan
+            .members
+            .iter()
+            .position(|member| member.node_id == self.0.config.mpc.node_id)
+            .context("local genesis member missing")?;
+        let artifacts = self.0.artifacts.lock().expect("genesis mutex poisoned");
+        let expected = local_share_commitment(
+            artifacts
+                .p256
+                .as_ref()
+                .context("missing P-256 genesis share")?,
+            artifacts
+                .k256
+                .as_ref()
+                .context("missing K-256 genesis share")?,
+            artifacts
+                .derivation
+                .as_ref()
+                .context("missing derivation genesis share")?,
+            local_index,
+        )?;
+        ensure!(
+            manifest.members[local_index].share_commitment == expected,
+            "wrong local genesis share commitment"
+        );
+        Ok(())
+    }
+
     async fn execute(&self, operation: GenesisOperation, initiator: &str) -> Result<Vec<u8>> {
         operation.validate()?;
         ensure!(
@@ -420,6 +559,9 @@ impl GenesisState {
             GenesisKind::DkgP256 => MpcProtocol::DkgP256,
             GenesisKind::DkgK256 => MpcProtocol::DkgK256,
             GenesisKind::DkgDerivation => MpcProtocol::DkgDerivation,
+            GenesisKind::Commitments => MpcProtocol::SignK256,
+            GenesisKind::SignRoot => MpcProtocol::SignP256,
+            GenesisKind::SignManifest => MpcProtocol::SignK256,
         };
         let context = DriverContext {
             session_id: operation.session_id.as_slice().try_into()?,
@@ -538,6 +680,119 @@ impl GenesisState {
                     .k256 = Some(share);
                 Ok(public)
             }
+            GenesisKind::Commitments => {
+                let artifacts = self.0.artifacts.lock().expect("genesis mutex poisoned");
+                let p256 = artifacts
+                    .p256
+                    .as_ref()
+                    .context("missing P-256 genesis share")?;
+                let k256 = artifacts
+                    .k256
+                    .as_ref()
+                    .context("missing K-256 genesis share")?;
+                let derivation = artifacts
+                    .derivation
+                    .as_ref()
+                    .context("missing derivation genesis share")?;
+                Ok(
+                    local_share_commitment(p256, k256, derivation, usize::from(local_index))?
+                        .to_vec(),
+                )
+            }
+            GenesisKind::SignRoot | GenesisKind::SignManifest => {
+                ensure!(
+                    operation.payload.len() <= 64 * 1024,
+                    "genesis signing payload is too large"
+                );
+                let digest: [u8; 32] = match operation.kind {
+                    GenesisKind::SignRoot => {
+                        self.validate_root_tbs(&operation.payload)?;
+                        Sha256::digest(&operation.payload).into()
+                    }
+                    GenesisKind::SignManifest => {
+                        let manifest: EpochManifest = serde_json::from_slice(&operation.payload)
+                            .context("invalid genesis manifest")?;
+                        self.validate_genesis_manifest(&manifest)?;
+                        manifest.manifest_hash()?
+                    }
+                    _ => unreachable!(),
+                };
+                let artifacts = self.0.artifacts.lock().expect("genesis mutex poisoned");
+                let keygen_indexes = (0..n).collect::<Vec<_>>();
+                let local_protocol_index = local_index;
+                let (curve, share) = match operation.kind {
+                    GenesisKind::SignRoot => (
+                        CggmpCurve::P256,
+                        GenesisSigningShare::P256(
+                            artifacts
+                                .p256
+                                .clone()
+                                .context("missing P-256 genesis share")?,
+                        ),
+                    ),
+                    GenesisKind::SignManifest => (
+                        CggmpCurve::K256,
+                        GenesisSigningShare::K256(
+                            artifacts
+                                .k256
+                                .clone()
+                                .context("missing K-256 genesis share")?,
+                        ),
+                    ),
+                    _ => unreachable!(),
+                };
+                drop(artifacts);
+                tokio::task::spawn_blocking(move || {
+                    let mut rng = OsRng;
+                    let eid = execution_id(&cluster, 1, curve, &nonce);
+                    match share {
+                        GenesisSigningShare::P256(share) => {
+                            let data = DataToSign::from_scalar(
+                                Scalar::<Secp256r1>::from_be_bytes_mod_order(digest),
+                            );
+                            let state = cggmp21::signing(
+                                ExecutionId::new(&eid),
+                                local_protocol_index,
+                                &keygen_indexes,
+                                &share,
+                            )
+                            .sign_sync(&mut rng, data);
+                            let signature = drive_state_machine_blocking(
+                                state,
+                                &BlockingTransport::new(transport, runtime),
+                                context,
+                            )??;
+                            let mut encoded =
+                                vec![0; cggmp21::Signature::<Secp256r1>::serialized_len()];
+                            signature.write_to_slice(&mut encoded);
+                            Ok(encoded)
+                        }
+                        GenesisSigningShare::K256(share) => {
+                            let data = DataToSign::from_scalar(
+                                Scalar::<Secp256k1>::from_be_bytes_mod_order(digest),
+                            );
+                            let state = cggmp21::signing(
+                                ExecutionId::new(&eid),
+                                local_protocol_index,
+                                &keygen_indexes,
+                                &share,
+                            )
+                            .sign_sync(&mut rng, data);
+                            let signature = drive_state_machine_blocking(
+                                state,
+                                &BlockingTransport::new(transport, runtime),
+                                context,
+                            )??;
+                            let mut encoded =
+                                vec![0; cggmp21::Signature::<Secp256k1>::serialized_len()];
+                            signature.write_to_slice(&mut encoded);
+                            Ok(encoded)
+                        }
+                    }
+                })
+                .await
+                .context("genesis signing worker panicked")?
+            }
         }
     }
 
@@ -553,27 +808,181 @@ impl GenesisState {
             GenesisKind::DkgK256,
             GenesisKind::DkgDerivation,
         ] {
-            let operation = GenesisOperation::new(kind)?;
-            let remote = self
+            let results = self
+                .coordinate_operation(GenesisOperation::new(kind, vec![])?)
+                .await?;
+            let first = results
+                .values()
+                .next()
+                .context("genesis has no participants")?;
+            ensure!(
+                results.values().all(|value| value == first),
+                "genesis group public keys differ across nodes"
+            );
+        }
+        let commitments = self
+            .coordinate_operation(GenesisOperation::new(GenesisKind::Commitments, vec![])?)
+            .await?;
+        let identity = self.identity_from_artifacts()?;
+        let manifest = EpochManifest {
+            provider_id: identity.provider_id().to_vec(),
+            epoch: 1,
+            threshold: self.0.plan.threshold,
+            previous_manifest_hash: vec![],
+            members: self
                 .0
                 .plan
                 .members
                 .iter()
-                .filter(|member| member.node_id != self.0.config.mpc.node_id)
-                .map(|member| self.0.transport.start(&member.node_id, &operation));
-            let (local, remote) = tokio::join!(
-                self.execute(operation.clone(), &self.0.plan.coordinator),
-                futures::future::join_all(remote)
-            );
-            let local = local?;
-            for result in remote {
-                ensure!(
-                    result? == local,
-                    "genesis group public keys differ across nodes"
-                );
-            }
+                .map(|member| EpochMember {
+                    node_id: member.node_id.clone(),
+                    endpoint: member.endpoint.clone(),
+                    attestation_pubkey: member.attestation_pubkey.clone(),
+                    share_commitment: commitments
+                        .get(&member.node_id)
+                        .cloned()
+                        .unwrap_or_default(),
+                })
+                .collect(),
+        };
+        manifest.manifest_hash()?;
+
+        let public_key = p256_subject_public_key(&identity.p256_group_pubkey)?;
+        let external_root = prepare_external_self_signed(
+            CertRequest::builder()
+                .key(&public_key)
+                .org_name("Dstack")
+                .subject("Dstack Threshold Root CA")
+                .ca_level(1)
+                .build(),
+        )?;
+        let root_signatures = self
+            .coordinate_operation(GenesisOperation::new(
+                GenesisKind::SignRoot,
+                external_root.tbs_der().to_vec(),
+            ))
+            .await?;
+        let root_signature = identical_result(&root_signatures, "root signatures")?;
+        let root_ca_pem = external_root.finish(root_signature)?;
+
+        let manifest_json = serde_jcs::to_vec(&manifest)?;
+        let manifest_signatures = self
+            .coordinate_operation(GenesisOperation::new(
+                GenesisKind::SignManifest,
+                manifest_json,
+            ))
+            .await?;
+        let signature = identical_result(&manifest_signatures, "manifest signatures")?.to_vec();
+        let bundle = GenesisBundle {
+            identity,
+            root_ca_pem,
+            signed_manifest: SignedEpochManifest {
+                manifest,
+                signature,
+            },
+        };
+        let bundle_json = serde_jcs::to_vec(&bundle)?;
+        let finalizations = self
+            .0
+            .plan
+            .members
+            .iter()
+            .filter(|member| member.node_id != self.0.config.mpc.node_id)
+            .map(|member| async {
+                self.0
+                    .transport
+                    .clients
+                    .get(&member.node_id)
+                    .context("missing genesis client")?
+                    .finalize(MpcGenesisFinalizeRequest {
+                        bundle_json: bundle_json.clone(),
+                    })
+                    .await
+                    .with_context(|| format!("failed to finalize genesis peer {}", member.node_id))
+            });
+        for result in futures::future::join_all(finalizations).await {
+            result?;
         }
-        self.persist_shares()
+        self.finalize_bundle(bundle)
+    }
+
+    async fn coordinate_operation(
+        &self,
+        operation: GenesisOperation,
+    ) -> Result<BTreeMap<String, Vec<u8>>> {
+        let remote = self
+            .0
+            .plan
+            .members
+            .iter()
+            .filter(|member| member.node_id != self.0.config.mpc.node_id)
+            .map(|member| async {
+                Ok::<_, anyhow::Error>((
+                    member.node_id.clone(),
+                    self.0.transport.start(&member.node_id, &operation).await?,
+                ))
+            });
+        let (local, remote) = tokio::join!(
+            self.execute(operation, &self.0.plan.coordinator),
+            futures::future::join_all(remote),
+        );
+        let mut results = BTreeMap::new();
+        results.insert(self.0.config.mpc.node_id.clone(), local?);
+        for result in remote {
+            let (node, value) = result?;
+            results.insert(node, value);
+        }
+        Ok(results)
+    }
+
+    fn finalize_bundle(&self, bundle: GenesisBundle) -> Result<()> {
+        ensure!(
+            bundle.identity == self.identity_from_artifacts()?,
+            "genesis identity differs from local DKG"
+        );
+        bundle.signed_manifest.verify(&bundle.identity)?;
+        self.validate_genesis_manifest(&bundle.signed_manifest.manifest)?;
+        let (_, pem) = x509_parser::pem::parse_x509_pem(bundle.root_ca_pem.as_bytes())
+            .context("invalid genesis root PEM")?;
+        let certificate = pem
+            .parse_x509()
+            .context("invalid genesis root certificate")?;
+        ensure!(
+            certificate.subject() == certificate.issuer(),
+            "genesis root is not self-signed"
+        );
+        ensure!(
+            certificate.public_key().subject_public_key.data.as_ref()
+                == bundle.identity.p256_group_pubkey,
+            "wrong genesis root public key"
+        );
+        certificate
+            .verify_signature(None)
+            .context("invalid genesis root threshold signature")?;
+        self.persist_shares()?;
+        ensure!(
+            !self.0.config.mpc.identity_file.as_os_str().is_empty(),
+            "missing MPC identity file"
+        );
+        ensure!(
+            !self.0.config.mpc.manifest_file.as_os_str().is_empty(),
+            "missing MPC manifest file"
+        );
+        safe_write::safe_write(
+            &self.0.config.mpc.identity_file,
+            serde_jcs::to_vec(&bundle.identity)?,
+        )?;
+        safe_write::safe_write(self.0.config.root_ca_cert(), bundle.root_ca_pem.as_bytes())?;
+        safe_write::safe_write(
+            &self.0.config.mpc.manifest_file,
+            serde_jcs::to_vec(&bundle.signed_manifest)?,
+        )?;
+        validate_and_checkpoint(
+            &self.0.config.mpc.checkpoint_file,
+            &bundle.signed_manifest,
+            &bundle.identity,
+        )?;
+        Ok(())
     }
 
     fn persist_shares(&self) -> Result<()> {
@@ -652,8 +1061,15 @@ impl MpcGenesisRpc for GenesisHandler {
         let envelope = serde_json::from_slice(&request.envelope_json)?;
         self.state.0.router.push(&sender, envelope)
     }
-    async fn finalize(self, _request: MpcGenesisFinalizeRequest) -> Result<()> {
-        bail!("genesis finalization has not been authorized")
+    async fn finalize(self, request: MpcGenesisFinalizeRequest) -> Result<()> {
+        let initiator = self.state.authenticated_node(&self.peer_key)?;
+        ensure!(
+            initiator == self.state.0.plan.coordinator,
+            "only genesis coordinator may finalize"
+        );
+        let bundle =
+            serde_json::from_slice(&request.bundle_json).context("invalid genesis bundle")?;
+        self.state.finalize_bundle(bundle)
     }
 }
 
@@ -665,6 +1081,68 @@ fn unix_time() -> Result<u64> {
     Ok(std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs())
+}
+
+fn local_share_commitment(
+    p256: &P256KeyShare,
+    k256: &K256KeyShare,
+    derivation: &P256KeyShare,
+    index: usize,
+) -> Result<[u8; 32]> {
+    let p256 = p256
+        .core
+        .key_info
+        .public_shares
+        .get(index)
+        .context("missing P-256 public share")?
+        .to_bytes(false);
+    let k256 = k256
+        .core
+        .key_info
+        .public_shares
+        .get(index)
+        .context("missing K-256 public share")?
+        .to_bytes(true);
+    let derivation = derivation
+        .core
+        .key_info
+        .public_shares
+        .get(index)
+        .context("missing derivation public share")?
+        .to_bytes(false);
+    Ok(share_commitment(
+        p256.as_bytes(),
+        k256.as_bytes(),
+        derivation.as_bytes(),
+    ))
+}
+
+fn identical_result<'a>(results: &'a BTreeMap<String, Vec<u8>>, label: &str) -> Result<&'a [u8]> {
+    let first = results
+        .values()
+        .next()
+        .context("genesis operation has no results")?;
+    ensure!(
+        results.values().all(|value| value == first),
+        "genesis {label} differ across nodes"
+    );
+    Ok(first)
+}
+
+fn p256_subject_public_key(raw: &[u8]) -> Result<SubjectPublicKeyInfo> {
+    ensure!(
+        raw.len() == 65 && raw[0] == 4,
+        "invalid P-256 genesis public key"
+    );
+    // SubjectPublicKeyInfo for id-ecPublicKey / prime256v1 followed by the
+    // uncompressed SEC1 point.
+    const PREFIX: &[u8] = &[
+        0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08,
+        0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00,
+    ];
+    let mut der = PREFIX.to_vec();
+    der.extend_from_slice(raw);
+    SubjectPublicKeyInfo::from_der(&der).context("failed to construct genesis root public key")
 }
 
 mod hex_bytes {
