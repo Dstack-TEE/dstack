@@ -204,6 +204,8 @@ struct OperationRecord {
     finished: tokio::sync::Notify,
 }
 
+const MAX_ACTIVE_OPERATIONS: usize = 128;
+
 impl MpcKeyBackend {
     pub(crate) fn load(
         root_ca_cert: String,
@@ -590,6 +592,10 @@ impl MpcKeyBackend {
                 );
                 (record.clone(), false)
             } else {
+                ensure!(
+                    operations.len() < MAX_ACTIVE_OPERATIONS,
+                    "too many active MPC operations"
+                );
                 let record = Arc::new(OperationRecord {
                     request_hash: operation.request_hash.clone(),
                     initiator: initiator.into(),
