@@ -99,6 +99,10 @@ pub(crate) struct MpcConfig {
     pub genesis_plan_file: PathBuf,
     #[serde(default)]
     pub genesis_tls_ca_cert: PathBuf,
+    /// Threshold-signed transition authorization. When present, the process
+    /// enters maintenance join mode until the target epoch is activated.
+    #[serde(default)]
+    pub join_authorization_file: PathBuf,
     #[serde(default)]
     pub p256_group_pubkey: String,
     #[serde(default)]

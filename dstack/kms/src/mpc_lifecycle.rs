@@ -297,6 +297,38 @@ pub(crate) fn validate_and_checkpoint(
     Ok(())
 }
 
+/// Seed a newly authorized joiner with the currently signed checkpoint. This
+/// is only valid when the signed transition explicitly names that exact
+/// manifest hash as its predecessor.
+pub(crate) fn initialize_join_checkpoint(
+    path: &Path,
+    active: &SignedEpochManifest,
+    authorization: &SignedResharePlan,
+    identity: &ClusterIdentity,
+) -> Result<()> {
+    let hash = active.verify(identity)?;
+    authorization.verify(identity, &active.manifest)?;
+    ensure!(
+        authorization.plan.previous_manifest_hash == hash,
+        "join authorization predecessor mismatch"
+    );
+    if path.exists() {
+        return validate_and_checkpoint(path, active, identity);
+    }
+    let checkpoint = EpochCheckpoint {
+        version: 1,
+        provider_id: identity.provider_id().to_vec(),
+        epoch: active.manifest.epoch,
+        manifest_hash: hash.to_vec(),
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    safe_write::safe_write(path, &serde_jcs::to_vec(&checkpoint)?)?;
+    fs::set_permissions(path, Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
 /// Durably install a threshold-authorized next epoch. A journal is written
 /// before any active file changes, so startup can finish an interrupted
 /// activation instead of observing a mixed manifest/share generation.

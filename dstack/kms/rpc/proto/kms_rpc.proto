@@ -163,6 +163,14 @@ service MpcGenesis {
   rpc Finalize(MpcGenesisFinalizeRequest) returns (google.protobuf.Empty);
 }
 
+// Maintenance-mode protocol for threshold-authorized membership transitions.
+service MpcJoin {
+  rpc Ping(google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Start(MpcGenesisStartRequest) returns (MpcGenesisStartResponse);
+  rpc Push(MpcPushRequest) returns (google.protobuf.Empty);
+  rpc Finalize(MpcGenesisFinalizeRequest) returns (google.protobuf.Empty);
+}
+
 // The KMS admin RPC service. Served on a separate admin listener
 // (`[core.admin]`) behind the shared HTTP authenticator, so the credential
 // travels in the `Authorization`/`X-Admin-Token` header rather than the

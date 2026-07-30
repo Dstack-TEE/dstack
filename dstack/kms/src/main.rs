@@ -27,6 +27,7 @@ mod main_service;
 mod mpc_driver;
 mod mpc_genesis;
 mod mpc_identity;
+mod mpc_join;
 mod mpc_lifecycle;
 mod mpc_operation;
 mod mpc_reshare;
@@ -132,6 +133,48 @@ async fn run_mpc_genesis_service(kms_config: KmsConfig, figment: Figment) -> Res
     Ok(())
 }
 
+async fn run_mpc_join_service(kms_config: KmsConfig, figment: Figment) -> Result<()> {
+    use mpc_join::{JoinHandler, JoinState};
+    let state = JoinState::new(kms_config)?;
+    let quote_verifier = QuoteVerifier::new(state.verifier());
+    info!("Starting threshold-authorized MPC join service");
+    for method in mpc_join::rpc_methods() {
+        info!("  /prpc/{method}");
+    }
+    let figment = figment
+        .clone()
+        .merge(Serialized::defaults(figment.find_value("rpc")?));
+    let rocket = rocket::custom(figment)
+        .mount(
+            "/prpc",
+            ra_rpc::prpc_routes!(JoinState, JoinHandler, trim: "MpcJoin."),
+        )
+        .manage(state.clone())
+        .manage(quote_verifier)
+        .ignite()
+        .await
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let shutdown = rocket.shutdown();
+    let completed = state.clone();
+    tokio::spawn(async move {
+        completed.wait_finalized().await;
+        shutdown.notify();
+    });
+    let coordinator = state.clone();
+    if coordinator.is_coordinator() {
+        tokio::spawn(async move {
+            if let Err(error) = coordinator.coordinate().await {
+                tracing::error!("MPC join failed: {error:#}");
+            }
+        });
+    }
+    rocket
+        .launch()
+        .await
+        .map_err(|error| anyhow!(error.to_string()))?;
+    Ok(())
+}
+
 #[rocket::get("/metrics")]
 fn metrics(state: &State<KmsState>) -> RawText<String> {
     RawText(state.metrics().render_prometheus())
@@ -191,6 +234,13 @@ async fn main() -> Result<()> {
         {
             bail!("Failed to onboard");
         }
+    }
+
+    if config.mpc.enabled
+        && !config.mpc.join_authorization_file.as_os_str().is_empty()
+        && config.mpc.join_authorization_file.exists()
+    {
+        return run_mpc_join_service(config, figment).await;
     }
 
     if config.mpc.enabled && !config.keys_exists() {
