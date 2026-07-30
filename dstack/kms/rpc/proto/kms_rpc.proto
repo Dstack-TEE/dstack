@@ -46,6 +46,9 @@ message AppKeyResponse {
   string gateway_app_id = 7;
   // OS Image hash
   bytes os_image_hash = 8;
+  // Stable identity of the key provider. Empty means legacy behavior, where
+  // clients use the root CA public key as the provider identity.
+  bytes key_provider_id = 9;
 }
 
 message GetMetaResponse {
@@ -58,6 +61,13 @@ message GetMetaResponse {
   optional string kms_contract_address = 7;
   optional uint64 chain_id = 8;
   optional string app_auth_implementation = 9;
+  bytes key_provider_id = 10;
+  optional string mpc_cluster_identity = 11;
+  // Canonical threshold-signed active epoch manifest JSON.
+  optional string mpc_epoch_manifest = 12;
+  // Local node evidence. Its attestation key is simultaneously bound by the
+  // RA-TLS quote and by the threshold-signed epoch manifest.
+  optional string mpc_node_evidence = 13;
 }
 
 message GetKmsKeyRequest {
@@ -107,6 +117,63 @@ service KMS {
   rpc SignCert(SignCertRequest) returns (SignCertResponse);
 }
 
+message MpcPushRequest {
+  bytes envelope_json = 1;
+}
+
+message MpcPollRequest {
+  bytes session_id = 1;
+}
+
+message MpcPollResponse {
+  repeated bytes envelope_json = 1;
+}
+
+message MpcStartRequest {
+  bytes operation_json = 1;
+}
+
+message MpcStartResponse {
+  bytes result = 1;
+}
+
+// Internal interactive-protocol transport. Every method requires an
+// attested RA-TLS client certificate belonging to the active epoch manifest.
+service MpcTransport {
+  rpc Ping(google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Start(MpcStartRequest) returns (MpcStartResponse);
+  rpc Push(MpcPushRequest) returns (google.protobuf.Empty);
+}
+
+message MpcGenesisStartRequest {
+  bytes operation_json = 1;
+}
+
+message MpcGenesisStartResponse {
+  bytes result_json = 1;
+}
+
+message MpcGenesisFinalizeRequest {
+  bytes bundle_json = 1;
+}
+
+// One-time DKG service used before root material exists. Peers are authorized
+// by quote-bound certificate keys in the operator-provisioned genesis plan.
+service MpcGenesis {
+  rpc Ping(google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Start(MpcGenesisStartRequest) returns (MpcGenesisStartResponse);
+  rpc Push(MpcPushRequest) returns (google.protobuf.Empty);
+  rpc Finalize(MpcGenesisFinalizeRequest) returns (google.protobuf.Empty);
+}
+
+// Maintenance-mode protocol for threshold-authorized membership transitions.
+service MpcJoin {
+  rpc Ping(google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Start(MpcGenesisStartRequest) returns (MpcGenesisStartResponse);
+  rpc Push(MpcPushRequest) returns (google.protobuf.Empty);
+  rpc Finalize(MpcGenesisFinalizeRequest) returns (google.protobuf.Empty);
+}
+
 // The KMS admin RPC service. Served on a separate admin listener
 // (`[core.admin]`) behind the shared HTTP authenticator, so the credential
 // travels in the `Authorization`/`X-Admin-Token` header rather than the
@@ -114,12 +181,40 @@ service KMS {
 service Admin {
   // Clear the image cache
   rpc ClearImageCache(ClearImageCacheRequest) returns (google.protobuf.Empty);
+  // Ask the active threshold committee to authorize the next epoch manifest.
+  rpc SignEpochManifest(SignEpochManifestRequest) returns (SignEpochManifestResponse);
+  // Prepare threshold shares for a revoke/subset epoch transition.
+  rpc PrepareReshare(PrepareReshareRequest) returns (PrepareReshareResponse);
+  rpc ActivateEpoch(ActivateEpochRequest) returns (ActivateEpochResponse);
+  rpc AuthorizeReshare(AuthorizeReshareRequest) returns (AuthorizeReshareResponse);
 }
 
 message ClearImageCacheRequest {
   string image_hash = 1;
   string config_hash = 2;
 }
+
+message SignEpochManifestRequest {
+  bytes manifest_json = 1;
+}
+
+message SignEpochManifestResponse {
+  bytes signed_manifest_json = 1;
+}
+
+message PrepareReshareRequest {
+  bytes plan_json = 1;
+}
+
+message PrepareReshareResponse {
+  // Canonical JSON map from node ID to its new 32-byte share commitment.
+  bytes commitments_json = 1;
+}
+
+message ActivateEpochRequest { bytes signed_manifest_json = 1; }
+message ActivateEpochResponse { bool retained = 1; }
+message AuthorizeReshareRequest { bytes plan_json = 1; }
+message AuthorizeReshareResponse { bytes signed_plan_json = 1; }
 
 message BootstrapRequest {
   string domain = 1;

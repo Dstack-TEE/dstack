@@ -232,3 +232,8 @@ The `SignCert` RPC is used by the dstack app to sign a TLS certificate. In this 
 - Verify the CSR signature
 - Query the smart contract to check if the app is authorized
 - If authorized, sign the CSR with the CA root key and return the certificate chain to the app
+
+## Multi-instance MPC mode
+
+See [docs/mpc.md](docs/mpc.md) for the identity chain, genesis, membership
+lifecycle, crash recovery, deployment procedure, and migration constraints.

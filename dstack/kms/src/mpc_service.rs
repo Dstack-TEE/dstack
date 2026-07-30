@@ -1,0 +1,73 @@
+// SPDX-FileCopyrightText: © 2024-2026 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
+use anyhow::{Context, Result};
+use dstack_kms_rpc::{
+    mpc_transport_server::{MpcTransportRpc, MpcTransportServer},
+    MpcPushRequest, MpcStartRequest, MpcStartResponse,
+};
+use ra_rpc::{CallContext, RpcCall};
+
+use crate::{main_service::KmsState, mpc_session::MpcEnvelope};
+
+pub(crate) struct MpcHandler {
+    state: KmsState,
+    peer_public_key: Vec<u8>,
+}
+
+impl RpcCall<KmsState> for MpcHandler {
+    type PrpcService = MpcTransportServer<Self>;
+
+    fn construct(context: CallContext<'_, KmsState>) -> Result<Self> {
+        context
+            .attestation
+            .context("MPC transport requires an attested RA-TLS peer")?;
+        let peer_public_key = context
+            .remote_public_key
+            .context("MPC transport peer certificate is missing")?;
+        Ok(Self {
+            state: context.state.clone(),
+            peer_public_key,
+        })
+    }
+}
+
+impl MpcHandler {
+    fn peer_and_router(&self) -> Result<(&str, &crate::mpc_session::SessionRouter)> {
+        let router = self.state.mpc_router().context("MPC mode is not enabled")?;
+        let node_id = router.authenticated_node_id(&self.peer_public_key)?;
+        Ok((node_id, router))
+    }
+}
+
+impl MpcTransportRpc for MpcHandler {
+    async fn ping(self) -> Result<()> {
+        self.peer_and_router()?;
+        Ok(())
+    }
+
+    async fn start(self, request: MpcStartRequest) -> Result<MpcStartResponse> {
+        let operation = serde_json::from_slice(&request.operation_json)
+            .context("invalid MPC operation encoding")?;
+        let (node_id, _) = self.peer_and_router()?;
+        let node_id = node_id.to_owned();
+        let result = self
+            .state
+            .key_backend()
+            .run_mpc_operation(operation, &node_id)
+            .await?;
+        Ok(MpcStartResponse { result })
+    }
+
+    async fn push(self, request: MpcPushRequest) -> Result<()> {
+        let envelope: MpcEnvelope = serde_json::from_slice(&request.envelope_json)
+            .context("invalid MPC envelope encoding")?;
+        let (node_id, router) = self.peer_and_router()?;
+        router.push(node_id, envelope)
+    }
+}
+
+pub(crate) fn rpc_methods() -> &'static [&'static str] {
+    <MpcTransportServer<MpcHandler>>::supported_methods()
+}

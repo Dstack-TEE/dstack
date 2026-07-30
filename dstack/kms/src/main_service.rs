@@ -5,7 +5,7 @@
 use std::{
     path::Path,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
 };
@@ -19,12 +19,10 @@ use dstack_kms_rpc::{
 };
 use dstack_verifier::{CvmVerifier, VerificationDetails};
 use fs_err as fs;
-use k256::ecdsa::SigningKey;
 use ra_rpc::{CallContext, RpcCall};
 use ra_tls::{
     attestation::{AttestationVerifier, TeeVariant, VerifiedAttestation},
-    cert::{CaCert, CertRequest, CertSigningRequestV1, CertSigningRequestV2, Csr},
-    kdf,
+    cert::{CertSigningRequestV1, CertSigningRequestV2, Csr},
 };
 use scale::Decode;
 use tokio::sync::OnceCell;
@@ -33,7 +31,10 @@ use upgrade_authority::{build_boot_info, ensure_app_id_len, local_kms_boot_info,
 
 use crate::{
     config::KmsConfig,
-    crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
+    key_backend::{KeyBackend, LocalKeyBackend, MpcKeyBackend},
+    mpc_identity::{decode_hex, ClusterIdentity, EpochManifest, NodeEvidence, SignedEpochManifest},
+    mpc_lifecycle,
+    mpc_session::SessionRouter,
 };
 
 pub(crate) mod amd_attest;
@@ -54,14 +55,18 @@ impl std::ops::Deref for KmsState {
 
 pub struct KmsStateInner {
     config: KmsConfig,
-    root_ca: CaCert,
-    k256_key: SigningKey,
     temp_ca_cert: String,
     temp_ca_key: String,
     verifier: CvmVerifier,
     attestation_verifier: Arc<AttestationVerifier>,
     self_boot_info: OnceCell<BootInfo>,
     metrics: KmsMetrics,
+    mpc_identity: Option<ClusterIdentity>,
+    signed_manifest: Option<SignedEpochManifest>,
+    key_backend: Arc<dyn KeyBackend>,
+    mpc_router: Option<Arc<SessionRouter>>,
+    restart_requested: AtomicBool,
+    restart_notify: tokio::sync::Notify,
 }
 
 #[derive(Default)]
@@ -134,19 +139,183 @@ impl KmsState {
     }
 
     pub fn new(config: KmsConfig) -> Result<Self> {
-        let root_ca = CaCert::load(config.root_ca_cert(), config.root_ca_key())
+        let root_ca_cert = fs::read_to_string(config.root_ca_cert())
             .context("Failed to load root CA certificate")?;
-        let key_bytes = fs::read(config.k256_key()).context("Failed to read ECDSA root key")?;
-        let k256_key =
-            SigningKey::from_slice(&key_bytes).context("Failed to load ECDSA root key")?;
-        let temp_ca_key =
-            fs::read_to_string(config.tmp_ca_key()).context("Faeild to read temp ca key")?;
-        let temp_ca_cert =
-            fs::read_to_string(config.tmp_ca_cert()).context("Faeild to read temp ca cert")?;
         let attestation_verifier = Arc::new(
             AttestationVerifier::load(&config.attestation)
                 .context("failed to load attestation verifier")?,
         );
+        let configured_identity = if config.mpc.enabled {
+            Some(if config.mpc.identity_file.as_os_str().is_empty() {
+                ClusterIdentity::new(
+                    config.mpc.protocol_version,
+                    config.mpc.cluster_id.clone(),
+                    decode_hex("mpc.p256_group_pubkey", &config.mpc.p256_group_pubkey)?,
+                    decode_hex("mpc.k256_group_pubkey", &config.mpc.k256_group_pubkey)?,
+                    decode_hex(
+                        "mpc.derivation_group_pubkey",
+                        &config.mpc.derivation_group_pubkey,
+                    )?,
+                )?
+            } else {
+                serde_json::from_slice(
+                    &fs::read(&config.mpc.identity_file)
+                        .context("failed to read MPC identity file")?,
+                )
+                .context("failed to parse MPC identity file")?
+            })
+        } else {
+            None
+        };
+        if let Some(identity) = &configured_identity {
+            identity.validate()?;
+            crate::mpc_lifecycle::recover_pending_activation(
+                &crate::mpc_lifecycle::EpochPaths {
+                    manifest: &config.mpc.manifest_file,
+                    checkpoint: &config.mpc.checkpoint_file,
+                    p256_share: &config.mpc.p256_share_file,
+                    k256_share: &config.mpc.k256_share_file,
+                    derivation_share: &config.mpc.derivation_share_file,
+                },
+                identity,
+                &identity.cluster_id,
+                &config.mpc.node_id,
+            )?;
+        }
+        let mut signed_manifest: Option<SignedEpochManifest> = None;
+        let manifest: Option<EpochManifest> = if config.mpc.enabled {
+            anyhow::ensure!(
+                !config.mpc.manifest_file.as_os_str().is_empty(),
+                "MPC manifest_file must not be empty"
+            );
+            let encoded =
+                fs::read(&config.mpc.manifest_file).context("failed to read MPC manifest")?;
+            match serde_json::from_slice::<SignedEpochManifest>(&encoded) {
+                Ok(signed) => {
+                    signed.verify(
+                        configured_identity
+                            .as_ref()
+                            .context("MPC identity is missing")?,
+                    )?;
+                    let manifest = signed.manifest.clone();
+                    signed_manifest = Some(signed);
+                    Some(manifest)
+                }
+                Err(signed_error) => {
+                    anyhow::ensure!(
+                        config.mpc.allow_unsigned_manifest,
+                        "MPC manifest must carry a valid threshold signature: {signed_error}"
+                    );
+                    Some(
+                        serde_json::from_slice(&encoded)
+                            .context("failed to parse unsigned MPC manifest")?,
+                    )
+                }
+            }
+        } else {
+            None
+        };
+        let mpc_router = manifest
+            .as_ref()
+            .map(|manifest| {
+                SessionRouter::new(
+                    manifest.clone(),
+                    config.mpc.max_sessions,
+                    config.mpc.session_ttl,
+                )
+                .map(Arc::new)
+            })
+            .transpose()?;
+        if let Some(manifest) = &manifest {
+            let local = manifest
+                .members
+                .iter()
+                .find(|member| member.node_id == config.mpc.node_id)
+                .context("local MPC member is absent from manifest")?;
+            for path in [config.rpc_cert(), config.mpc.client_cert_file.clone()] {
+                let (_, pem) = x509_parser::pem::parse_x509_pem(&fs::read(path)?)?;
+                anyhow::ensure!(
+                    pem.parse_x509()?.public_key().raw == local.attestation_pubkey,
+                    "local MPC server/client certificate key differs from manifest"
+                );
+            }
+        }
+        let key_backend: Arc<dyn KeyBackend> = if config.mpc.enabled {
+            let manifest = manifest.as_ref().context("MPC manifest is missing")?;
+            Arc::new(MpcKeyBackend::load(
+                root_ca_cert,
+                configured_identity
+                    .as_ref()
+                    .context("MPC identity is missing")?,
+                manifest.epoch,
+                &config.mpc.node_id,
+                &config.mpc.p256_share_file,
+                &config.mpc.k256_share_file,
+                &config.mpc.derivation_share_file,
+                &config.mpc.manifest_file,
+                &config.mpc.checkpoint_file,
+                manifest,
+                mpc_router.clone().context("MPC router is missing")?,
+                fs::read_to_string(&config.mpc.client_cert_file)
+                    .context("failed to read MPC client cert")?,
+                fs::read_to_string(&config.mpc.client_key_file)
+                    .context("failed to read MPC client key")?,
+                attestation_verifier.clone(),
+            )?)
+        } else {
+            let key_bytes = fs::read(config.k256_key()).context("Failed to read ECDSA root key")?;
+            Arc::new(LocalKeyBackend::from_pem_and_bytes(
+                root_ca_cert,
+                fs::read_to_string(config.root_ca_key())?,
+                &key_bytes,
+            )?)
+        };
+        let mpc_identity = if config.mpc.enabled {
+            let identity = configured_identity.context("MPC identity is missing")?;
+            anyhow::ensure!(
+                identity.p256_group_pubkey == key_backend.p256_public_key(),
+                "MPC P-256 group public key does not match the active root CA"
+            );
+            anyhow::ensure!(
+                identity.k256_group_pubkey == key_backend.k256_public_key(),
+                "MPC K-256 group public key does not match the active signing key"
+            );
+            anyhow::ensure!(
+                identity.derivation_group_pubkey == key_backend.derivation_public_key(),
+                "MPC derivation group public key does not match the active derivation share"
+            );
+            anyhow::ensure!(
+                !config.mpc.node_id.is_empty(),
+                "MPC node_id must not be empty"
+            );
+            let manifest = manifest.as_ref().context("MPC manifest is missing")?;
+            anyhow::ensure!(
+                manifest.provider_id == identity.provider_id(),
+                "MPC manifest provider ID does not match cluster identity"
+            );
+            anyhow::ensure!(
+                manifest.contains_member(&config.mpc.node_id),
+                "local node is not a member of the MPC epoch"
+            );
+            if let Some(signed) = &signed_manifest {
+                anyhow::ensure!(
+                    !config.mpc.checkpoint_file.as_os_str().is_empty(),
+                    "MPC checkpoint_file must not be empty for signed manifests"
+                );
+                mpc_lifecycle::validate_and_checkpoint(
+                    &config.mpc.checkpoint_file,
+                    signed,
+                    &identity,
+                )?;
+            }
+            Some(identity)
+        } else {
+            None
+        };
+        let temp_ca_key =
+            fs::read_to_string(config.tmp_ca_key()).context("Faeild to read temp ca key")?;
+        let temp_ca_cert =
+            fs::read_to_string(config.tmp_ca_cert()).context("Faeild to read temp ca cert")?;
         let verifier = CvmVerifier::new(
             config.image.cache_dir.display().to_string(),
             config.image.download_url.clone(),
@@ -161,24 +330,58 @@ impl KmsState {
         Ok(Self {
             inner: Arc::new(KmsStateInner {
                 config,
-                root_ca,
-                k256_key,
                 temp_ca_cert,
                 temp_ca_key,
                 verifier,
                 attestation_verifier,
                 self_boot_info: OnceCell::new(),
                 metrics: KmsMetrics::default(),
+                mpc_identity,
+                signed_manifest,
+                key_backend,
+                mpc_router,
+                restart_requested: AtomicBool::new(false),
+                restart_notify: tokio::sync::Notify::new(),
             }),
         })
+    }
+
+    fn key_provider_id(&self) -> Vec<u8> {
+        self.mpc_identity
+            .as_ref()
+            .map(|identity| identity.provider_id().to_vec())
+            .unwrap_or_default()
     }
 
     pub(crate) fn metrics(&self) -> &KmsMetrics {
         &self.inner.metrics
     }
 
+    pub(crate) fn request_restart(&self) {
+        self.restart_requested.store(true, Ordering::Release);
+        self.restart_notify.notify_waiters();
+    }
+
+    pub(crate) async fn wait_restart_requested(&self) {
+        loop {
+            let notified = self.restart_notify.notified();
+            if self.restart_requested.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
     pub(crate) fn attestation_verifier(&self) -> Arc<AttestationVerifier> {
         self.inner.attestation_verifier.clone()
+    }
+
+    pub(crate) fn mpc_router(&self) -> Option<&SessionRouter> {
+        self.inner.mpc_router.as_deref()
+    }
+
+    pub(crate) fn key_backend(&self) -> &dyn KeyBackend {
+        self.inner.key_backend.as_ref()
     }
 }
 
@@ -330,26 +533,6 @@ impl RpcHandler {
             gateway_app_id: response.gateway_app_id,
         })
     }
-
-    fn derive_app_ca(&self, app_id: &[u8]) -> Result<CaCert> {
-        let context_data = vec![app_id, b"app-ca"];
-        let app_key = kdf::derive_p256_key_pair(&self.state.root_ca.key, &context_data)
-            .context("Failed to derive app disk key")?;
-        let req = CertRequest::builder()
-            .key(&app_key)
-            .org_name("Dstack")
-            .subject("Dstack App CA")
-            .ca_level(0)
-            .app_id(app_id)
-            .special_usage("app:ca")
-            .build();
-        let app_ca = self
-            .state
-            .root_ca
-            .sign(req)
-            .context("Failed to sign App CA")?;
-        Ok(CaCert::from_parts(app_key, app_ca))
-    }
 }
 
 impl KmsRpc for RpcHandler {
@@ -376,32 +559,23 @@ impl KmsRpc for RpcHandler {
         let instance_id = boot_info.instance_id;
         let os_image_hash = boot_info.os_image_hash;
 
-        let context_data = vec![&app_id[..], &instance_id[..], b"app-disk-crypt-key"];
-        let app_disk_key = kdf::derive_dh_secret(&self.state.root_ca.key, &context_data)
-            .context("Failed to derive app disk key")?;
-        let env_crypt_key = {
-            let secret =
-                kdf::derive_dh_secret(&self.state.root_ca.key, &[&app_id[..], b"env-encrypt-key"])
-                    .context("Failed to derive env encrypt key")?;
-            let secret = x25519_dalek::StaticSecret::from(secret);
-            secret.to_bytes()
-        };
-
-        let (k256_key, k256_signature) = {
-            let (k256_app_key, signature) = derive_k256_key(&self.state.k256_key, &app_id)
-                .context("Failed to derive app ecdsa key")?;
-            (k256_app_key.to_bytes().to_vec(), signature)
-        };
+        let derived = self
+            .state
+            .key_backend
+            .derive_app_keys(&app_id, &instance_id)
+            .await
+            .context("Failed to derive app keys")?;
 
         Ok(AppKeyResponse {
-            ca_cert: self.state.root_ca.pem_cert.clone(),
-            disk_crypt_key: app_disk_key.to_vec(),
-            env_crypt_key: env_crypt_key.to_vec(),
-            k256_key,
-            k256_signature,
+            ca_cert: self.state.key_backend.root_ca_cert().to_string(),
+            disk_crypt_key: derived.disk_key.to_vec(),
+            env_crypt_key: derived.env_key.to_vec(),
+            k256_key: derived.k256_key,
+            k256_signature: derived.k256_signature,
             tproxy_app_id: gateway_app_id.clone(),
             gateway_app_id,
             os_image_hash,
+            key_provider_id: self.state.key_provider_id(),
         })
     }
 
@@ -410,11 +584,11 @@ impl KmsRpc for RpcHandler {
             .await
             .context("KMS self authorization failed")?;
         ensure_app_id_len(&request.app_id)?;
-        let secret = kdf::derive_dh_secret(
-            &self.state.root_ca.key,
-            &[&request.app_id[..], "env-encrypt-key".as_bytes()],
-        )
-        .context("Failed to derive env encrypt key")?;
+        let secret = self
+            .state
+            .key_backend
+            .derive_env_key(&request.app_id)
+            .await?;
         let secret = x25519_dalek::StaticSecret::from(secret);
         let pubkey = x25519_dalek::PublicKey::from(&secret);
 
@@ -425,23 +599,25 @@ impl KmsRpc for RpcHandler {
             .as_secs();
 
         // Legacy signature (without timestamp) for backward compatibility
-        let signature = sign_message(
-            &self.state.k256_key,
-            b"dstack-env-encrypt-pubkey",
-            &request.app_id,
-            &public_key,
-        )
-        .context("Failed to sign the public key")?;
+        let signature = self
+            .state
+            .key_backend
+            .sign_k256(b"dstack-env-encrypt-pubkey", &request.app_id, &public_key)
+            .await
+            .context("Failed to sign the public key")?;
 
         // New signature with timestamp to prevent replay attacks
-        let signature_v1 = sign_message_with_timestamp(
-            &self.state.k256_key,
-            b"dstack-env-encrypt-pubkey",
-            &request.app_id,
-            timestamp,
-            &public_key,
-        )
-        .context("Failed to sign the public key with timestamp")?;
+        let signature_v1 = self
+            .state
+            .key_backend
+            .sign_k256_timestamped(
+                b"dstack-env-encrypt-pubkey",
+                &request.app_id,
+                timestamp,
+                &public_key,
+            )
+            .await
+            .context("Failed to sign the public key with timestamp")?;
 
         Ok(PublicKeyResponse {
             public_key,
@@ -457,21 +633,54 @@ impl KmsRpc for RpcHandler {
             .and_then(|s| serde_json::from_str(&s).ok());
         let info = self.state.config.auth_api.get_info().await?;
         Ok(GetMetaResponse {
-            ca_cert: self.state.inner.root_ca.pem_cert.clone(),
+            ca_cert: self.state.key_backend.root_ca_cert().to_string(),
             allow_any_upgrade: self.state.inner.config.auth_api.is_dev(),
-            k256_pubkey: self
-                .state
-                .inner
-                .k256_key
-                .verifying_key()
-                .to_sec1_bytes()
-                .to_vec(),
+            k256_pubkey: self.state.key_backend.k256_public_key(),
             bootstrap_info,
             is_dev: self.state.config.auth_api.is_dev(),
             kms_contract_address: info.kms_contract_address,
             chain_id: info.chain_id,
             gateway_app_id: info.gateway_app_id,
             app_auth_implementation: info.app_implementation,
+            key_provider_id: self.state.key_provider_id(),
+            mpc_cluster_identity: self
+                .state
+                .mpc_identity
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .context("failed to encode MPC cluster identity")?,
+            mpc_epoch_manifest: self
+                .state
+                .signed_manifest
+                .as_ref()
+                .map(|manifest| {
+                    String::from_utf8(serde_jcs::to_vec(manifest)?)
+                        .context("signed manifest JSON is not UTF-8")
+                })
+                .transpose()
+                .context("failed to encode signed MPC epoch manifest")?,
+            mpc_node_evidence: match (&self.state.mpc_identity, &self.state.signed_manifest) {
+                (Some(identity), Some(signed)) => {
+                    let member = signed
+                        .manifest
+                        .members
+                        .iter()
+                        .find(|member| member.node_id == self.state.config.mpc.node_id)
+                        .context("local node is absent from active MPC manifest")?;
+                    let evidence = NodeEvidence {
+                        provider_id: identity.provider_id().to_vec(),
+                        epoch: signed.manifest.epoch,
+                        manifest_hash: signed.manifest.manifest_hash()?.to_vec(),
+                        node_id: member.node_id.clone(),
+                        attestation_pubkey: member.attestation_pubkey.clone(),
+                        share_commitment: member.share_commitment.clone(),
+                    };
+                    evidence.report_data_hash()?;
+                    Some(String::from_utf8(serde_jcs::to_vec(&evidence)?)?)
+                }
+                _ => None,
+            },
         })
     }
 
@@ -485,12 +694,15 @@ impl KmsRpc for RpcHandler {
             self.state.config.sev_snp_key_release,
             self.state.config.aws_nitro_tpm_key_release,
         )?;
+        let (ca_key, k256_key) = self
+            .state
+            .key_backend
+            .export_root_keys()
+            .await
+            .context("key backend does not permit root key export")?;
         Ok(KmsKeyResponse {
             temp_ca_key: self.state.inner.temp_ca_key.clone(),
-            keys: vec![KmsKeys {
-                ca_key: self.state.inner.root_ca.key.serialize_pem(),
-                k256_key: self.state.inner.k256_key.to_bytes().to_vec(),
-            }],
+            keys: vec![KmsKeys { ca_key, k256_key }],
         })
     }
 
@@ -507,7 +719,7 @@ impl KmsRpc for RpcHandler {
         Ok(GetTempCaCertResponse {
             temp_ca_cert: self.state.inner.temp_ca_cert.clone(),
             temp_ca_key: self.state.inner.temp_ca_key.clone(),
-            ca_cert: self.state.inner.root_ca.pem_cert.clone(),
+            ca_cert: self.state.key_backend.root_ca_cert().to_string(),
         })
     }
 
@@ -547,7 +759,11 @@ impl KmsRpc for RpcHandler {
             self.state.config.sev_snp_key_release,
             self.state.config.aws_nitro_tpm_key_release,
         )?;
-        let app_ca = self.derive_app_ca(&app_info.boot_info.app_id)?;
+        let app_ca = self
+            .state
+            .key_backend
+            .derive_app_ca(&app_info.boot_info.app_id)
+            .await?;
         let cert = app_ca
             .sign_csr(&csr, Some(&app_info.boot_info.app_id), "app:custom")
             .context("Failed to sign certificate")?;
@@ -555,7 +771,7 @@ impl KmsRpc for RpcHandler {
             certificate_chain: vec![
                 cert.pem(),
                 app_ca.pem_cert.clone(),
-                self.state.root_ca.pem_cert.clone(),
+                self.state.key_backend.root_ca_cert().to_string(),
             ],
         })
     }

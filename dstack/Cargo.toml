@@ -123,6 +123,7 @@ wavekv = "1.0.0"
 
 # Core dependencies
 anyhow = { version = "1.0.97", default-features = false }
+async-trait = "0.1.89"
 binrw = { version = "0.15.1", default-features = false, features = ["std"] }
 arc-swap = "1"
 errify = { version = "0.3.0", features = ["anyhow"] }
@@ -185,6 +186,8 @@ object = "0.36.4"
 fatfs = "0.3.6"
 fscommon = "0.1.1"
 ciborium = "0.2"
+cggmp21 = { version = "0.6.3", features = ["curve-secp256k1", "curve-secp256r1", "state-machine"] }
+round-based = { version = "0.4.1", features = ["state-machine"] }
 
 # Networking/HTTP
 bollard = "0.18.1"

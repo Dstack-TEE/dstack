@@ -18,11 +18,23 @@ use tracing::{info, warn};
 
 mod admin_auth;
 mod admin_service;
+mod cggmp_engine;
 mod config;
 // mod ct_log;
 mod crypto;
+mod key_backend;
 mod main_service;
+mod mpc_driver;
+mod mpc_genesis;
+mod mpc_identity;
+mod mpc_join;
+mod mpc_lifecycle;
+mod mpc_operation;
+mod mpc_reshare;
+mod mpc_service;
+mod mpc_session;
 mod onboard_service;
+mod threshold_prf;
 
 fn app_version() -> String {
     dstack_build_info::app_version!()
@@ -69,10 +81,97 @@ async fn run_onboard_service(kms_config: KmsConfig, figment: Figment) -> Result<
             "/prpc",
             ra_rpc::prpc_routes!(OnboardState, OnboardHandler, trim: "Onboard."),
         )
-        .manage(state)
+        .manage(state.clone())
         .launch()
         .await
         .map_err(|err| anyhow!(err.to_string()))?;
+    Ok(())
+}
+
+async fn run_mpc_genesis_service(kms_config: KmsConfig, figment: Figment) -> Result<()> {
+    use mpc_genesis::{GenesisHandler, GenesisState};
+
+    let state = GenesisState::new(kms_config)?;
+    let quote_verifier = QuoteVerifier::new(state.verifier());
+    info!("Starting attested MPC genesis service");
+    for method in mpc_genesis::rpc_methods() {
+        info!("  /prpc/{method}");
+    }
+    let figment = figment
+        .clone()
+        .merge(Serialized::defaults(figment.find_value("rpc")?));
+    let rocket = rocket::custom(figment)
+        .mount(
+            "/prpc",
+            ra_rpc::prpc_routes!(GenesisState, GenesisHandler, trim: "MpcGenesis."),
+        )
+        .manage(state.clone())
+        .manage(quote_verifier);
+    let rocket = rocket
+        .ignite()
+        .await
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let shutdown = rocket.shutdown();
+    let finalized = state.clone();
+    tokio::spawn(async move {
+        finalized.wait_finalized().await;
+        info!("MPC genesis finalized; shutting down for normal-mode restart");
+        shutdown.notify();
+    });
+    let coordinator = state.clone();
+    if coordinator.is_coordinator() {
+        tokio::spawn(async move {
+            if let Err(error) = coordinator.coordinate_dkg().await {
+                tracing::error!("MPC genesis failed: {error:#}");
+            }
+        });
+    }
+    rocket
+        .launch()
+        .await
+        .map_err(|error| anyhow!(error.to_string()))?;
+    Ok(())
+}
+
+async fn run_mpc_join_service(kms_config: KmsConfig, figment: Figment) -> Result<()> {
+    use mpc_join::{JoinHandler, JoinState};
+    let state = JoinState::new(kms_config)?;
+    let quote_verifier = QuoteVerifier::new(state.verifier());
+    info!("Starting threshold-authorized MPC join service");
+    for method in mpc_join::rpc_methods() {
+        info!("  /prpc/{method}");
+    }
+    let figment = figment
+        .clone()
+        .merge(Serialized::defaults(figment.find_value("rpc")?));
+    let rocket = rocket::custom(figment)
+        .mount(
+            "/prpc",
+            ra_rpc::prpc_routes!(JoinState, JoinHandler, trim: "MpcJoin."),
+        )
+        .manage(state.clone())
+        .manage(quote_verifier)
+        .ignite()
+        .await
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let shutdown = rocket.shutdown();
+    let completed = state.clone();
+    tokio::spawn(async move {
+        completed.wait_finalized().await;
+        shutdown.notify();
+    });
+    let coordinator = state.clone();
+    if coordinator.is_coordinator() {
+        tokio::spawn(async move {
+            if let Err(error) = coordinator.coordinate().await {
+                tracing::error!("MPC join failed: {error:#}");
+            }
+        });
+    }
+    rocket
+        .launch()
+        .await
+        .map_err(|error| anyhow!(error.to_string()))?;
     Ok(())
 }
 
@@ -124,7 +223,10 @@ async fn main() -> Result<()> {
         );
     }
 
-    if config.onboard.enabled && !config.keys_exists() {
+    if config.mpc.enabled && !config.genesis_transport_exists() {
+        bail!("MPC requires operator-provisioned attested transport material; legacy root-key onboarding is disabled");
+    }
+    if config.onboard.enabled && !config.mpc.enabled && !config.keys_exists() {
         info!("Onboarding");
         run_onboard_service(config.clone(), figment.clone()).await?;
         if !config.keys_exists() {
@@ -132,20 +234,48 @@ async fn main() -> Result<()> {
         }
     }
 
-    info!("Updating certs");
-    if let Err(err) = onboard_service::update_certs(&config).await {
-        if config.attest_rpc_cert {
-            return Err(err).context(
-                "Failed to reissue the attested KMS RPC certificate; refusing to start with a \
-                 potentially unattested certificate",
-            );
+    if config.mpc.enabled && mpc_genesis::recover_if_needed(&config)? {
+        info!("Recovered interrupted MPC genesis commit");
+    }
+    if config.mpc.enabled && mpc_join::recover_if_needed(&config)? {
+        info!("Recovered interrupted MPC membership activation");
+    }
+
+    if config.mpc.enabled
+        && !config.mpc.join_authorization_file.as_os_str().is_empty()
+        && config.mpc.join_authorization_file.exists()
+    {
+        return run_mpc_join_service(config, figment).await;
+    }
+
+    if config.mpc.enabled && !config.keys_exists() {
+        if !config.genesis_transport_exists() {
+            bail!("MPC genesis requires onboarded RPC transport certificates");
         }
-        warn!("Failed to update certs: {err}");
-    };
+        return run_mpc_genesis_service(config, figment).await;
+    }
+
+    if config.mpc.enabled {
+        info!("Using threshold-issued MPC RPC certificate");
+    } else {
+        info!("Updating certs");
+        if let Err(err) = onboard_service::update_certs(&config).await {
+            if config.attest_rpc_cert {
+                return Err(err).context(
+                    "Failed to reissue the attested KMS RPC certificate; refusing to start with a \
+                     potentially unattested certificate",
+                );
+            }
+            warn!("Failed to update certs: {err}");
+        };
+    }
 
     info!("Starting KMS");
     info!("Supported methods:");
     for method in main_service::rpc_methods() {
+        info!("  /prpc/{method}");
+    }
+    for method in mpc_service::rpc_methods() {
         info!("  /prpc/{method}");
     }
 
@@ -180,6 +310,10 @@ async fn main() -> Result<()> {
             "/prpc",
             ra_rpc::prpc_routes!(KmsState, RpcHandler, trim: "KMS."),
         )
+        .mount(
+            "/prpc",
+            ra_rpc::prpc_routes!(KmsState, mpc_service::MpcHandler, trim: "MpcTransport."),
+        )
         .manage(state.clone());
 
     if metrics_enabled {
@@ -194,6 +328,11 @@ async fn main() -> Result<()> {
 
     rocket = rocket.manage(quote_verifier);
 
+    let rocket = rocket
+        .ignite()
+        .await
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let main_shutdown = rocket.shutdown();
     let main_srv = rocket.launch();
     match admin_setup {
         Some((admin_figment, admin_fairing)) => {
@@ -204,21 +343,37 @@ async fn main() -> Result<()> {
             } else {
                 info!("admin API authentication enabled");
             }
-            let admin_srv = rocket::custom(admin_figment)
+            let admin_rocket = rocket::custom(admin_figment)
                 .attach(admin_fairing)
                 .mount("/", admin_auth::routes())
                 .mount(
                     "/prpc",
                     ra_rpc::prpc_routes!(KmsState, admin_service::AdminRpcHandler, trim: "Admin."),
                 )
-                .manage(state)
-                .launch();
+                .manage(state.clone())
+                .ignite()
+                .await
+                .map_err(|error| anyhow!(error.to_string()))?;
+            let admin_shutdown = admin_rocket.shutdown();
+            let restart_state = state.clone();
+            tokio::spawn(async move {
+                restart_state.wait_restart_requested().await;
+                info!("MPC epoch activated; shutting down for epoch restart");
+                main_shutdown.notify();
+                admin_shutdown.notify();
+            });
+            let admin_srv = admin_rocket.launch();
             tokio::try_join!(
                 async { main_srv.await.map_err(|err| anyhow!(err.to_string())) },
                 async { admin_srv.await.map_err(|err| anyhow!(err.to_string())) },
             )?;
         }
         None => {
+            let restart_state = state.clone();
+            tokio::spawn(async move {
+                restart_state.wait_restart_requested().await;
+                main_shutdown.notify();
+            });
             main_srv.await.map_err(|err| anyhow!(err.to_string()))?;
         }
     }

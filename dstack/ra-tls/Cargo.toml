@@ -11,6 +11,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+base64.workspace = true
 bon.workspace = true
 dcap-qvl.workspace = true
 elliptic-curve.workspace = true

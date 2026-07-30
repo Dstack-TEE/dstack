@@ -11,9 +11,11 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
 chrono.workspace = true
 clap.workspace = true
 fs-err.workspace = true
+futures.workspace = true
 dstack-build-info.workspace = true
 hex.workspace = true
 hex_fmt.workspace = true
@@ -33,6 +35,7 @@ reqwest = { workspace = true, features = ["json"] }
 sha2.workspace = true
 sha3.workspace = true
 k256.workspace = true
+p256 = { workspace = true, features = ["hash2curve"] }
 rand.workspace = true
 dstack-guest-agent-rpc.workspace = true
 http-client = { workspace = true, features = ["prpc"] }
@@ -41,6 +44,7 @@ x509-parser = { workspace = true, features = ["verify"] }
 ring.workspace = true
 safe-write.workspace = true
 serde_json.workspace = true
+serde_jcs.workspace = true
 dstack-types.workspace = true
 tokio = { workspace = true, features = ["process"] }
 tempfile.workspace = true
@@ -49,9 +53,14 @@ dstack-verifier = { workspace = true, default-features = false }
 dstack-mr.workspace = true
 dstack-attest.workspace = true
 dstack-api-auth.workspace = true
+cggmp21.workspace = true
+round-based.workspace = true
 
 [dev-dependencies]
 cc-eventlog.workspace = true
+cggmp21 = { workspace = true, features = ["spof"] }
+round-based = { workspace = true, features = ["sim"] }
+key-share = { version = "0.6.1", features = ["spof"] }
 
 [features]
 default = []

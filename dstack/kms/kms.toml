@@ -97,6 +97,32 @@ insecure_no_auth = false
 # or another access-control layer.
 enabled = true
 
+# MPC cluster identity preview. When enabled, applications pin a stable hash of
+# the group public keys rather than one KMS node. The local keys must match the
+# configured signing group keys until the threshold key backend is enabled.
+[core.mpc]
+enabled = false
+protocol_version = 1
+cluster_id = ""
+identity_file = ""
+genesis_plan_file = ""
+genesis_tls_ca_cert = ""
+join_authorization_file = ""
+client_cert_file = ""
+client_key_file = ""
+p256_group_pubkey = ""
+k256_group_pubkey = ""
+derivation_group_pubkey = ""
+node_id = ""
+manifest_file = ""
+checkpoint_file = ""
+allow_unsigned_manifest = false
+max_sessions = 128
+session_ttl = "5m"
+p256_share_file = ""
+k256_share_file = ""
+derivation_share_file = ""
+
 [core.auth_api]
 type = "webhook"
 

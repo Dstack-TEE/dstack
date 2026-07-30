@@ -57,6 +57,10 @@ pub struct CallContext<'a, State> {
     pub remote_endpoint: Option<RemoteEndpoint>,
     pub remote_app_id: Option<Vec<u8>>,
     pub remote_app_info: Option<AppInfo>,
+    /// SubjectPublicKeyInfo bytes from the authenticated peer certificate.
+    /// When attestation is present, quote verification has bound this key to
+    /// the report data.
+    pub remote_public_key: Option<Vec<u8>>,
 }
 
 pub trait RpcCall<State>: Sized {

@@ -74,10 +74,74 @@ pub(crate) struct KmsConfig {
     #[serde(default = "default_true")]
     pub enforce_self_authorization: bool,
     pub metrics: MetricsConfig,
+    /// Optional stable identity for an MPC-backed KMS. Cryptographic MPC
+    /// operations are provided by the key backend; this section defines the
+    /// identity that applications pin independently of cluster membership.
+    #[serde(default)]
+    pub mpc: MpcConfig,
     /// Admin API listener + authentication. The admin RPCs (e.g.
     /// `ClearImageCache`) are served here, behind the shared HTTP authenticator.
     #[serde(default)]
     pub admin: AdminConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct MpcConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub protocol_version: u16,
+    #[serde(default)]
+    pub cluster_id: String,
+    #[serde(default)]
+    pub identity_file: PathBuf,
+    #[serde(default)]
+    pub genesis_plan_file: PathBuf,
+    #[serde(default)]
+    pub genesis_tls_ca_cert: PathBuf,
+    /// Threshold-signed transition authorization. When present, the process
+    /// enters maintenance join mode until the target epoch is activated.
+    #[serde(default)]
+    pub join_authorization_file: PathBuf,
+    /// RA-TLS client identity signed by the Rocket mutual-TLS CA. It should
+    /// use the same quote-bound key as the server RPC certificate.
+    #[serde(default)]
+    pub client_cert_file: PathBuf,
+    #[serde(default)]
+    pub client_key_file: PathBuf,
+    #[serde(default)]
+    pub p256_group_pubkey: String,
+    #[serde(default)]
+    pub k256_group_pubkey: String,
+    #[serde(default)]
+    pub derivation_group_pubkey: String,
+    #[serde(default)]
+    pub node_id: String,
+    #[serde(default)]
+    pub manifest_file: PathBuf,
+    #[serde(default)]
+    pub checkpoint_file: PathBuf,
+    /// Development-only compatibility escape hatch for unsigned manifests.
+    #[serde(default)]
+    pub allow_unsigned_manifest: bool,
+    #[serde(default = "default_mpc_max_sessions")]
+    pub max_sessions: usize,
+    #[serde(default = "default_mpc_session_ttl", with = "serde_duration")]
+    pub session_ttl: Duration,
+    #[serde(default)]
+    pub p256_share_file: PathBuf,
+    #[serde(default)]
+    pub k256_share_file: PathBuf,
+    #[serde(default)]
+    pub derivation_share_file: PathBuf,
+}
+
+fn default_mpc_max_sessions() -> usize {
+    128
+}
+
+fn default_mpc_session_ttl() -> Duration {
+    Duration::from_secs(300)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -114,7 +178,34 @@ fn default_true() -> bool {
 }
 
 impl KmsConfig {
+    /// Transport identity required to run attested MPC genesis. Unlike
+    /// `keys_exists`, this deliberately does not require threshold shares or
+    /// the final root certificate.
+    pub fn genesis_transport_exists(&self) -> bool {
+        self.tmp_ca_cert().exists()
+            && self.tmp_ca_key().exists()
+            && self.rpc_cert().exists()
+            && self.rpc_key().exists()
+            && self.mpc.client_cert_file.exists()
+            && self.mpc.client_key_file.exists()
+    }
+
     pub fn keys_exists(&self) -> bool {
+        if self.mpc.enabled {
+            return self.tmp_ca_cert().exists()
+                && self.tmp_ca_key().exists()
+                && self.root_ca_cert().exists()
+                && self.rpc_cert().exists()
+                && self.rpc_key().exists()
+                && self.mpc.client_cert_file.exists()
+                && self.mpc.client_key_file.exists()
+                && self.mpc.p256_share_file.exists()
+                && self.mpc.k256_share_file.exists()
+                && self.mpc.derivation_share_file.exists()
+                && self.mpc.identity_file.exists()
+                && self.mpc.manifest_file.exists()
+                && self.mpc.checkpoint_file.exists();
+        }
         self.tmp_ca_cert().exists()
             && self.tmp_ca_key().exists()
             && self.root_ca_cert().exists()
