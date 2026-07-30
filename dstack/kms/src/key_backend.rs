@@ -645,7 +645,18 @@ impl MpcKeyBackend {
 
     async fn coordinate_reshare(&self, plan: ResharePlan) -> Result<BTreeMap<String, Vec<u8>>> {
         plan.validate_subset(&self.manifest)?;
-        let dealers = self.participants().await?;
+        let dealers = if plan.dealers.is_empty() {
+            self.participants().await?
+        } else {
+            let reachable = self.transport.reachable_nodes().await;
+            ensure!(
+                plan.dealers
+                    .iter()
+                    .all(|node| node == &self.node_id || reachable.contains(node)),
+                "an authorized reshare dealer is unavailable"
+            );
+            plan.dealers.clone()
+        };
         let mut session_id = [0u8; 32];
         OsRng.fill_bytes(&mut session_id);
         let operation = MpcOperation::new_reshare(

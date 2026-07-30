@@ -61,6 +61,11 @@ pub(crate) struct ResharePlan {
     #[serde(with = "hex_bytes")]
     pub previous_manifest_hash: Vec<u8>,
     pub threshold: u16,
+    /// Exact old-epoch threshold that deals the transition. Required when the
+    /// target contains joining members; subset-only transitions may leave it
+    /// empty and select a live quorum at execution time.
+    #[serde(default)]
+    pub dealers: Vec<String>,
     pub members: Vec<ReshareMember>,
 }
 
@@ -109,6 +114,34 @@ impl ResharePlan {
             }
             previous = Some(&member.node_id);
         }
+        if !self.dealers.is_empty() {
+            ensure!(
+                self.dealers.len() == usize::from(active.threshold),
+                "reshare authorization must bind exactly the old threshold of dealers"
+            );
+            let indexes = self
+                .dealers
+                .iter()
+                .map(|dealer| {
+                    active
+                        .members
+                        .binary_search_by_key(&dealer.as_str(), |member| member.node_id.as_str())
+                        .map_err(|_| anyhow::anyhow!("reshare dealer is not active"))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            ensure!(
+                indexes.windows(2).all(|pair| pair[0] < pair[1]),
+                "reshare dealers must be unique and in active manifest order"
+            );
+        }
+        let has_joiner = self
+            .members
+            .iter()
+            .any(|member| !active.contains_member(&member.node_id));
+        ensure!(
+            !has_joiner || !self.dealers.is_empty(),
+            "join transition must bind its old-epoch dealers"
+        );
         Ok(())
     }
 
@@ -533,6 +566,7 @@ mod tests {
             epoch: 2,
             previous_manifest_hash: active.manifest_hash().unwrap().to_vec(),
             threshold: 2,
+            dealers: vec![],
             members: active.members[..2]
                 .iter()
                 .map(|member| ReshareMember {
@@ -571,6 +605,10 @@ mod tests {
             epoch: 2,
             previous_manifest_hash: active.manifest_hash().unwrap().to_vec(),
             threshold: 3,
+            dealers: active.members[..2]
+                .iter()
+                .map(|member| member.node_id.clone())
+                .collect(),
             members,
         };
         let signature: Signature = key
