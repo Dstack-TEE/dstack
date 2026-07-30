@@ -444,6 +444,23 @@ mod tests {
         }
     }
 
+    fn five_member_manifest() -> EpochManifest {
+        EpochManifest {
+            provider_id: vec![3; 32],
+            epoch: 1,
+            threshold: 3,
+            previous_manifest_hash: vec![],
+            members: (1..=5)
+                .map(|index| EpochMember {
+                    node_id: format!("kms-{index}"),
+                    endpoint: format!("https://kms-{index}:8443/prpc"),
+                    attestation_pubkey: vec![index as u8; 32],
+                    share_commitment: vec![2; 33],
+                })
+                .collect(),
+        }
+    }
+
     async fn dkg_party(
         index: u16,
         transport: MemoryTransport,
@@ -524,11 +541,11 @@ mod tests {
         use cggmp21::{generic_ec::Scalar, security_level::SecurityLevel128, DataToSign};
         use k256::ecdsa::{signature::hazmat::PrehashVerifier, Signature, VerifyingKey};
 
-        let shares = cggmp21::trusted_dealer::builder::<Secp256k1, SecurityLevel128>(3)
-            .set_threshold(Some(2))
+        let shares = cggmp21::trusted_dealer::builder::<Secp256k1, SecurityLevel128>(5)
+            .set_threshold(Some(3))
             .generate_shares(&mut OsRng)
             .unwrap();
-        let manifest = manifest();
+        let manifest = five_member_manifest();
         let routers: Arc<BTreeMap<String, Arc<SessionRouter>>> = Arc::new(
             manifest
                 .members
@@ -544,7 +561,12 @@ mod tests {
                 })
                 .collect(),
         );
-        let participants = vec!["kms-1".to_string(), "kms-3".to_string()];
+        // kms-2 and kms-4 are deliberately offline.
+        let participants = vec![
+            "kms-1".to_string(),
+            "kms-3".to_string(),
+            "kms-5".to_string(),
+        ];
         let session_id = [31; 32];
         let request_hash = [32; 32];
         let expires_at = std::time::SystemTime::now()
@@ -575,7 +597,7 @@ mod tests {
                 let mut rng = OsRng;
                 let data =
                     DataToSign::from_scalar(Scalar::<Secp256k1>::from_be_bytes_mod_order(digest));
-                let keygen_indexes = [0, 2];
+                let keygen_indexes = [0, 2, 4];
                 let state = cggmp21::signing(
                     ExecutionId::new(&eid),
                     protocol_index,
@@ -589,8 +611,9 @@ mod tests {
                     .unwrap()
             }
         };
-        let (first, second) = tokio::join!(sign(0, 0), sign(1, 2));
+        let (first, second, third) = tokio::join!(sign(0, 0), sign(1, 2), sign(2, 4));
         assert_eq!(first, second);
+        assert_eq!(first, third);
         let mut encoded = [0u8; 64];
         first.write_to_slice(&mut encoded);
         let signature = Signature::from_slice(&encoded).unwrap();
