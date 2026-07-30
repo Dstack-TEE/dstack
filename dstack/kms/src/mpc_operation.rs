@@ -127,7 +127,7 @@ impl MpcOperation {
                 manifest
                     .members
                     .binary_search_by_key(&node.as_str(), |member| member.node_id.as_str())
-                    .context("MPC operation contains a non-member")
+                    .map_err(|_| anyhow::anyhow!("MPC operation contains a non-member"))
             })
             .collect::<Result<Vec<_>>>()?;
         ensure!(

@@ -48,6 +48,11 @@ pub(crate) trait KeyBackend: Send + Sync {
     fn p256_public_key(&self) -> Vec<u8>;
     fn root_ca_cert(&self) -> &str;
     async fn derive_app_ca(&self, app_id: &[u8]) -> Result<CaCert>;
+    async fn run_mpc_operation(
+        &self,
+        operation: crate::mpc_operation::MpcOperation,
+        initiator: &str,
+    ) -> Result<Vec<u8>>;
     /// Legacy KMS-to-KMS migration. MPC backends must reject this operation.
     async fn export_root_keys(&self) -> Result<(String, Vec<u8>)>;
 }
@@ -140,6 +145,14 @@ impl KeyBackend for LocalKeyBackend {
             self.k256_key.to_bytes().to_vec(),
         ))
     }
+
+    async fn run_mpc_operation(
+        &self,
+        _operation: crate::mpc_operation::MpcOperation,
+        _initiator: &str,
+    ) -> Result<Vec<u8>> {
+        bail!("MPC operations are unavailable on the local key backend")
+    }
 }
 
 /// MPC backend containing only validated threshold shares. No complete root
@@ -150,6 +163,7 @@ pub(crate) struct MpcKeyBackend {
     k256_share: K256KeyShare,
     #[allow(dead_code)]
     transport: MpcHttpTransport,
+    manifest: EpochManifest,
 }
 
 impl MpcKeyBackend {
@@ -192,6 +206,7 @@ impl MpcKeyBackend {
                 CggmpCurve::K256,
             )?,
             transport,
+            manifest: manifest.clone(),
         })
     }
 }
@@ -242,6 +257,15 @@ impl KeyBackend for MpcKeyBackend {
 
     async fn derive_app_ca(&self, _app_id: &[u8]) -> Result<CaCert> {
         bail!("legacy app CA derivation is unavailable in MPC mode")
+    }
+
+    async fn run_mpc_operation(
+        &self,
+        operation: crate::mpc_operation::MpcOperation,
+        initiator: &str,
+    ) -> Result<Vec<u8>> {
+        operation.validate(&self.manifest, initiator)?;
+        bail!("MPC signing protocol is unavailable")
     }
 
     async fn export_root_keys(&self) -> Result<(String, Vec<u8>)> {

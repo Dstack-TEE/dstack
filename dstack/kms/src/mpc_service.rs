@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use dstack_kms_rpc::{
     mpc_transport_server::{MpcTransportRpc, MpcTransportServer},
-    MpcPollRequest, MpcPollResponse, MpcPushRequest,
+    MpcPollRequest, MpcPollResponse, MpcPushRequest, MpcStartRequest, MpcStartResponse,
 };
 use ra_rpc::{CallContext, RpcCall};
 
@@ -42,6 +42,19 @@ impl MpcHandler {
 }
 
 impl MpcTransportRpc for MpcHandler {
+    async fn start(self, request: MpcStartRequest) -> Result<MpcStartResponse> {
+        let operation = serde_json::from_slice(&request.operation_json)
+            .context("invalid MPC operation encoding")?;
+        let (node_id, _) = self.peer_and_router()?;
+        let node_id = node_id.to_owned();
+        let result = self
+            .state
+            .key_backend()
+            .run_mpc_operation(operation, &node_id)
+            .await?;
+        Ok(MpcStartResponse { result })
+    }
+
     async fn push(self, request: MpcPushRequest) -> Result<()> {
         let envelope: MpcEnvelope = serde_json::from_slice(&request.envelope_json)
             .context("invalid MPC envelope encoding")?;

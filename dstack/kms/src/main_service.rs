@@ -277,6 +277,10 @@ impl KmsState {
     pub(crate) fn mpc_router(&self) -> Option<&SessionRouter> {
         self.inner.mpc_router.as_deref()
     }
+
+    pub(crate) fn key_backend(&self) -> &dyn KeyBackend {
+        self.inner.key_backend.as_ref()
+    }
 }
 
 pub struct RpcHandler {
