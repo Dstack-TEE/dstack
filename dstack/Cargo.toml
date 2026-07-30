@@ -185,6 +185,8 @@ object = "0.36.4"
 fatfs = "0.3.6"
 fscommon = "0.1.1"
 ciborium = "0.2"
+cggmp21 = { version = "0.6.3", features = ["curve-secp256k1", "curve-secp256r1", "state-machine"] }
+round-based = { version = "0.4.1", features = ["state-machine"] }
 
 # Networking/HTTP
 bollard = "0.18.1"
