@@ -13,7 +13,7 @@ use anyhow::{ensure, Context, Result};
 use async_trait::async_trait;
 use cggmp21::{
     generic_ec::Scalar,
-    key_share::{AnyKeyShare as _, DirtyKeyInfo},
+    key_share::{AnyKeyShare as _, DirtyKeyInfo, Valid},
     supported_curves::{Secp256k1, Secp256r1},
     DataToSign, ExecutionId, KeyShare,
 };
@@ -501,22 +501,28 @@ impl JoinState {
                 .old_derivation
                 .as_ref()
                 .context("dealer lacks old derivation share")?;
+            let p_core = Valid::validate(p.core.clone())
+                .map_err(|error| anyhow::anyhow!("invalid old P-256 share: {error}"))?;
+            let k_core = Valid::validate(k.core.clone())
+                .map_err(|error| anyhow::anyhow!("invalid old K-256 share: {error}"))?;
+            let d_core = Valid::validate(d.core.clone())
+                .map_err(|error| anyhow::anyhow!("invalid old derivation share: {error}"))?;
             let (pp, ps) = mpc_reshare::create_contribution(
-                &p.core,
+                &p_core,
                 &dealer_indexes,
                 plan.members.len().try_into()?,
                 plan.threshold,
                 &mut OsRng,
             )?;
             let (kp, ks) = mpc_reshare::create_contribution(
-                &k.core,
+                &k_core,
                 &dealer_indexes,
                 plan.members.len().try_into()?,
                 plan.threshold,
                 &mut OsRng,
             )?;
             let (dp, ds) = mpc_reshare::create_contribution(
-                &d.core,
+                &d_core,
                 &dealer_indexes,
                 plan.members.len().try_into()?,
                 plan.threshold,
@@ -524,13 +530,13 @@ impl JoinState {
             )?;
             for (index, member) in plan.members.iter().enumerate() {
                 let wire = JoinWire {
-                    p256_reference: p.core.key_info.clone(),
+                    p256_reference: p_core.key_info.clone(),
                     p256_public: pp.clone(),
                     p256_private: ps[index].clone(),
-                    k256_reference: k.core.key_info.clone(),
+                    k256_reference: k_core.key_info.clone(),
                     k256_public: kp.clone(),
                     k256_private: ks[index].clone(),
-                    derivation_reference: d.core.key_info.clone(),
+                    derivation_reference: d_core.key_info.clone(),
                     derivation_public: dp.clone(),
                     derivation_private: ds[index].clone(),
                 };
@@ -913,9 +919,10 @@ impl JoinState {
                     self.0.transport.start(&member.node_id, &operation).await?,
                 ))
             });
+        let local_operation = operation.clone();
         let (local, remote) = tokio::join!(
             self.execute(
-                operation,
+                local_operation,
                 self.0.authorization.plan.dealers.first().unwrap()
             ),
             futures::future::join_all(calls)
@@ -944,9 +951,10 @@ impl JoinState {
                     self.0.transport.start(node, &operation).await?,
                 ))
             });
+        let local_operation = operation.clone();
         let (local, remote) = tokio::join!(
             self.execute(
-                operation,
+                local_operation,
                 self.0.authorization.plan.dealers.first().unwrap()
             ),
             futures::future::join_all(calls)
