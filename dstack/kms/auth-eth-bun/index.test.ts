@@ -323,8 +323,9 @@ describe('API Compatibility Tests', () => {
       expect(data.isAllowed).toBe(false);
       expect(data.reason).toBe('authorization backend unavailable');
 
-      // Verify that console.error was called for real errors
-      expect(consoleSpy).toHaveBeenCalledWith('error in KMS boot auth:', expect.any(Error));
+      // Diagnostics identify the failing boundary without retaining backend details.
+      expect(consoleSpy).toHaveBeenCalledWith('KMS authorization backend failed');
+      expect(JSON.stringify(consoleSpy.mock.calls)).not.toContain('real error');
 
       consoleSpy.mockRestore();
     });
