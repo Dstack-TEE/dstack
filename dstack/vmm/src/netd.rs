@@ -279,12 +279,12 @@ impl Server {
                 mac,
             } => self.prepare(&vm_id, nic_index, &bridge, &mac).map(Some),
             Request::Remove { attachment } => {
-                self.validate_attachment(&attachment)?;
+                self.validate_attachment_identity(&attachment)?;
                 self.remove_owned(&attachment)?;
                 Ok(None)
             }
             Request::Check { attachment } => {
-                self.validate_attachment(&attachment)?;
+                self.validate_attachment_policy(&attachment)?;
                 self.check(&attachment)?;
                 Ok(None)
             }
@@ -312,7 +312,7 @@ impl Server {
             tap: tap_name(vm_id, nic_index)?,
             mac: mac.to_ascii_lowercase(),
         };
-        self.validate_attachment(&attachment)?;
+        self.validate_attachment_identity(&attachment)?;
 
         if Path::new("/sys/class/net").join(&attachment.tap).exists() {
             self.verify_alias(&attachment)?;
@@ -464,12 +464,17 @@ impl Server {
         Ok(())
     }
 
-    fn validate_attachment(&self, attachment: &NicAttachment) -> Result<()> {
+    fn validate_attachment_identity(&self, attachment: &NicAttachment) -> Result<()> {
         validate_vm_id(&attachment.vm_id)?;
         validate_mac(&attachment.mac)?;
         if attachment.tap != tap_name(&attachment.vm_id, attachment.nic_index)? {
             bail!("attachment TAP name does not match its VM identity");
         }
+        Ok(())
+    }
+
+    fn validate_attachment_policy(&self, attachment: &NicAttachment) -> Result<()> {
+        self.validate_attachment_identity(attachment)?;
         let mut networking = self.cfg.networking.clone();
         networking.mode = NetworkingMode::Bridge;
         networking.bridge = attachment.bridge.clone();
