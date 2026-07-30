@@ -6,7 +6,7 @@
 
 use std::{
     collections::BTreeMap,
-    fs::Permissions,
+    fs::{File, OpenOptions, Permissions},
     io::Write as _,
     os::{
         fd::AsRawFd,
@@ -33,6 +33,7 @@ use crate::config::NetdConfig;
 const MAX_MESSAGE_SIZE: u64 = 64 * 1024;
 const IP_PATH: &str = "/usr/sbin/ip";
 const VIRSH_PATH: &str = "/usr/bin/virsh";
+const LOCK_PATH: &str = "/run/lock/dstack-netd.lock";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterfaceIdentity {
@@ -138,9 +139,12 @@ pub async fn serve(config: NetdConfig) -> Result<()> {
     }
     require_executable(IP_PATH)?;
     require_executable(VIRSH_PATH)?;
-    prepare_socket_path(&config.socket)?;
-    let listener = UnixListener::bind(&config.socket)
-        .with_context(|| format!("failed to bind netd socket {}", config.socket.display()))?;
+    let listener = {
+        let _lock = OperationLock::acquire()?;
+        prepare_socket_path(&config.socket)?;
+        UnixListener::bind(&config.socket)
+            .with_context(|| format!("failed to bind netd socket {}", config.socket.display()))?
+    };
     // Access control is based on SO_PEERCRED rather than filesystem groups so
     // one shared service can authorize VMM instances running under different
     // UIDs and development mode needs no system group setup.
@@ -196,6 +200,7 @@ async fn read_request(stream: &mut UnixStream) -> Result<Request> {
 }
 
 fn handle_request(libvirt_uri: &str, request: Request) -> Result<String> {
+    let _lock = OperationLock::acquire()?;
     match request {
         Request::Prepare(request) => prepare_interface(libvirt_uri, &request),
         Request::Remove { identity } => {
@@ -212,6 +217,34 @@ fn handle_request(libvirt_uri: &str, request: Request) -> Result<String> {
             }
             virsh(libvirt_uri, &["nwfilter-binding-dumpxml", &tap], None)?;
             Ok(tap)
+        }
+    }
+}
+
+struct OperationLock(File);
+
+impl OperationLock {
+    fn acquire() -> Result<Self> {
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(LOCK_PATH)
+            .with_context(|| format!("failed to open {LOCK_PATH}"))?;
+        // SAFETY: flock only acts on the valid file descriptor owned by file.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(std::io::Error::last_os_error()).context("failed to lock netd operations");
+        }
+        Ok(Self(file))
+    }
+}
+
+impl Drop for OperationLock {
+    fn drop(&mut self) {
+        // SAFETY: the file remains alive until after Drop returns.
+        unsafe {
+            libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
         }
     }
 }
@@ -248,12 +281,30 @@ fn remove_interface(libvirt_uri: &str, tap: &str) -> Result<()> {
     if Path::new("/sys/class/net").join(tap).exists() {
         let _ = ip(&["link", "set", "dev", tap, "down"]);
     }
-    let _ = virsh(libvirt_uri, &["nwfilter-binding-delete", tap], None);
+    delete_binding(libvirt_uri, tap)?;
     if Path::new("/sys/class/net").join(tap).exists() {
         ip(&["link", "delete", "dev", tap])?;
         info!(%tap, "removed filtered TAP");
     }
     Ok(())
+}
+
+fn delete_binding(uri: &str, tap: &str) -> Result<()> {
+    let output = Command::new(VIRSH_PATH)
+        .args(["--connect", uri, "nwfilter-binding-delete", tap])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("failed to execute virsh")?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let error = String::from_utf8_lossy(&output.stderr);
+    if error.contains("Network filter binding not found") {
+        return Ok(());
+    }
+    bail!("virsh failed to delete binding {tap}: {}", error.trim())
 }
 
 fn binding_xml(request: &PrepareRequest, tap: &str) -> String {
