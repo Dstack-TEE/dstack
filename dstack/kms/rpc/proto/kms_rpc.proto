@@ -65,6 +65,9 @@ message GetMetaResponse {
   optional string mpc_cluster_identity = 11;
   // Canonical threshold-signed active epoch manifest JSON.
   optional string mpc_epoch_manifest = 12;
+  // Local node evidence. Its attestation key is simultaneously bound by the
+  // RA-TLS quote and by the threshold-signed epoch manifest.
+  optional string mpc_node_evidence = 13;
 }
 
 message GetKmsKeyRequest {

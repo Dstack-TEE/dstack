@@ -32,7 +32,7 @@ use upgrade_authority::{build_boot_info, ensure_app_id_len, local_kms_boot_info,
 use crate::{
     config::KmsConfig,
     key_backend::{KeyBackend, LocalKeyBackend, MpcKeyBackend},
-    mpc_identity::{decode_hex, ClusterIdentity, EpochManifest, SignedEpochManifest},
+    mpc_identity::{decode_hex, ClusterIdentity, EpochManifest, NodeEvidence, SignedEpochManifest},
     mpc_lifecycle,
     mpc_session::SessionRouter,
 };
@@ -644,6 +644,27 @@ impl KmsRpc for RpcHandler {
                 })
                 .transpose()
                 .context("failed to encode signed MPC epoch manifest")?,
+            mpc_node_evidence: match (&self.state.mpc_identity, &self.state.signed_manifest) {
+                (Some(identity), Some(signed)) => {
+                    let member = signed
+                        .manifest
+                        .members
+                        .iter()
+                        .find(|member| member.node_id == self.state.config.mpc.node_id)
+                        .context("local node is absent from active MPC manifest")?;
+                    let evidence = NodeEvidence {
+                        provider_id: identity.provider_id().to_vec(),
+                        epoch: signed.manifest.epoch,
+                        manifest_hash: signed.manifest.manifest_hash()?.to_vec(),
+                        node_id: member.node_id.clone(),
+                        attestation_pubkey: member.attestation_pubkey.clone(),
+                        share_commitment: member.share_commitment.clone(),
+                    };
+                    evidence.report_data_hash()?;
+                    Some(String::from_utf8(serde_jcs::to_vec(&evidence)?)?)
+                }
+                _ => None,
+            },
         })
     }
 
