@@ -516,13 +516,30 @@ pub fn prepare_external_self_signed<Key: PublicKeyData>(
 ) -> Result<ExternalCertificate> {
     let public_key = request.key;
     let params = request.into_cert_params()?;
-    let mut key_id = Sha256::new();
-    key_id.update(public_key.public_key_der());
+    let subject_public_key_info = yasna::construct_der(|writer| {
+        writer.write_sequence(|writer| {
+            writer.next().write_sequence(|writer| {
+                writer
+                    .next()
+                    .write_oid(&yasna::models::ObjectIdentifier::from_slice(&[
+                        1, 2, 840, 10045, 2, 1,
+                    ]));
+                writer
+                    .next()
+                    .write_oid(&yasna::models::ObjectIdentifier::from_slice(&[
+                        1, 2, 840, 10045, 3, 1, 7,
+                    ]));
+            });
+            writer
+                .next()
+                .write_bitvec_bytes(public_key.der_bytes(), public_key.der_bytes().len() * 8);
+        });
+    });
+    let key_id = Sha256::digest(subject_public_key_info);
     let mut issuer_params = CertificateParams::default();
     issuer_params.distinguished_name = params.distinguished_name.clone();
     issuer_params.key_usages = params.key_usages.clone();
-    issuer_params.key_identifier_method =
-        rcgen::KeyIdMethod::PreSpecified(key_id.finalize().to_vec());
+    issuer_params.key_identifier_method = rcgen::KeyIdMethod::PreSpecified(key_id[..20].to_vec());
     issuer_params.is_ca = params.is_ca.clone();
     let placeholder_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
         .context("failed to create self-signed certificate serialization key")?;
