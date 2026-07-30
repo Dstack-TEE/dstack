@@ -152,6 +152,16 @@ impl MpcHttpTransport {
             .with_context(|| format!("MPC operation failed on participant {node_id}"))
             .map(|response| response.result)
     }
+
+    pub(crate) async fn reachable_nodes(&self) -> Vec<String> {
+        futures::future::join_all(self.clients.iter().map(|(node_id, client)| async move {
+            client.ping().await.ok().map(|_| node_id.clone())
+        }))
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
+    }
 }
 
 #[async_trait]

@@ -135,6 +135,7 @@ message MpcStartResponse {
 // Internal interactive-protocol transport. Every method requires an
 // attested RA-TLS client certificate belonging to the active epoch manifest.
 service MpcTransport {
+  rpc Ping(google.protobuf.Empty) returns (google.protobuf.Empty);
   rpc Start(MpcStartRequest) returns (MpcStartResponse);
   rpc Push(MpcPushRequest) returns (google.protobuf.Empty);
   rpc Poll(MpcPollRequest) returns (MpcPollResponse);

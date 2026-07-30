@@ -42,6 +42,11 @@ impl MpcHandler {
 }
 
 impl MpcTransportRpc for MpcHandler {
+    async fn ping(self) -> Result<()> {
+        self.peer_and_router()?;
+        Ok(())
+    }
+
     async fn start(self, request: MpcStartRequest) -> Result<MpcStartResponse> {
         let operation = serde_json::from_slice(&request.operation_json)
             .context("invalid MPC operation encoding")?;

@@ -316,8 +316,9 @@ impl MpcKeyBackend {
         Ok(backend)
     }
 
-    fn participants(&self) -> Result<Vec<String>> {
+    async fn participants(&self) -> Result<Vec<String>> {
         let threshold = usize::from(self.manifest.threshold);
+        let reachable = self.transport.reachable_nodes().await;
         let mut selected: Vec<_> = self
             .manifest
             .members
@@ -329,7 +330,9 @@ impl MpcKeyBackend {
             self.manifest
                 .members
                 .iter()
-                .filter(|member| member.node_id != self.node_id)
+                .filter(|member| {
+                    member.node_id != self.node_id && reachable.contains(&member.node_id)
+                })
                 .take(threshold.saturating_sub(1))
                 .map(|member| member.node_id.clone()),
         );
@@ -350,7 +353,7 @@ impl MpcKeyBackend {
         let operation = MpcOperation::new_k256(
             session_id,
             self.manifest.epoch,
-            self.participants()?,
+            self.participants().await?,
             unix_time()?
                 .checked_add(60)
                 .context("MPC expiry overflow")?,
@@ -383,7 +386,7 @@ impl MpcKeyBackend {
         let operation = MpcOperation::new_derivation(
             session_id,
             self.manifest.epoch,
-            self.participants()?,
+            self.participants().await?,
             unix_time()?
                 .checked_add(60)
                 .context("MPC expiry overflow")?,
@@ -447,7 +450,7 @@ impl MpcKeyBackend {
         let operation = MpcOperation::new_p256_certificate(
             session_id,
             self.manifest.epoch,
-            self.participants()?,
+            self.participants().await?,
             unix_time()?
                 .checked_add(60)
                 .context("MPC expiry overflow")?,
