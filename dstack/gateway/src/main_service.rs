@@ -12,6 +12,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use auth_client::AuthClient;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use crate::distributed_certbot::DistributedCertBot;
 use cmd_lib::run_cmd as cmd;
@@ -50,6 +51,16 @@ mod auth_client;
 mod handshakes;
 
 use handshakes::LatestHandshakesCache;
+
+fn validate_wireguard_public_key(public_key: &str) -> Result<()> {
+    let decoded = STANDARD
+        .decode(public_key)
+        .context("invalid WireGuard public key encoding")?;
+    if decoded.len() != 32 {
+        bail!("WireGuard public key must decode to 32 bytes");
+    }
+    Ok(())
+}
 
 #[derive(Clone)]
 pub struct Proxy {
@@ -488,9 +499,8 @@ impl Proxy {
         if instance_id.is_empty() {
             bail!("[{instance_id}] instance id is empty");
         }
-        if client_public_key.is_empty() {
-            bail!("[{instance_id}] client public key is empty");
-        }
+        validate_wireguard_public_key(client_public_key)
+            .with_context(|| format!("[{instance_id}] invalid client public key"))?;
         let client_info = state
             .new_client_by_id(
                 instance_id,

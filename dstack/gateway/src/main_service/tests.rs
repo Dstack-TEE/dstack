@@ -98,6 +98,22 @@ fn policy(restrict: bool, ports: &[u16]) -> PortPolicy {
     }
 }
 
+#[test]
+fn test_validate_wireguard_public_key() {
+    assert!(validate_wireguard_public_key("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").is_ok());
+    assert!(validate_wireguard_public_key("not-a-wireguard-key").is_err());
+    assert!(validate_wireguard_public_key("AQID").is_err());
+}
+
+#[tokio::test]
+async fn test_invalid_wireguard_public_key_does_not_register() {
+    let state = create_test_state().await;
+    let result = state.do_register_cvm("app", "instance", "invalid", "compose", None);
+
+    assert!(result.is_err());
+    assert!(!state.lock().state.instances.contains_key("instance"));
+}
+
 #[tokio::test]
 async fn test_port_policy_restrict_mode_allows_listed_only() {
     let state = create_test_state().await;
