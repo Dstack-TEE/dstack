@@ -10,7 +10,11 @@
 
 use anyhow::{Context, Result};
 use k256::ecdsa::SigningKey;
-use ra_tls::{kdf, rcgen::KeyPair};
+use ra_tls::{
+    cert::{CaCert, CertRequest},
+    kdf,
+    rcgen::{KeyPair, PublicKeyData as _},
+};
 
 use crate::crypto::{derive_k256_key, sign_message, sign_message_with_timestamp};
 
@@ -33,6 +37,10 @@ pub(crate) trait KeyBackend: Send + Sync {
         message: &[u8],
     ) -> Result<Vec<u8>>;
     fn k256_public_key(&self) -> Vec<u8>;
+    fn p256_public_key(&self) -> Vec<u8>;
+    fn derive_app_ca(&self, root_ca: &CaCert, app_id: &[u8]) -> Result<CaCert>;
+    /// Legacy KMS-to-KMS migration. MPC backends must reject this operation.
+    fn export_root_keys(&self) -> Result<(String, Vec<u8>)>;
 }
 
 pub(crate) struct LocalKeyBackend {
@@ -85,5 +93,30 @@ impl KeyBackend for LocalKeyBackend {
 
     fn k256_public_key(&self) -> Vec<u8> {
         self.k256_key.verifying_key().to_sec1_bytes().to_vec()
+    }
+
+    fn p256_public_key(&self) -> Vec<u8> {
+        self.root_ca_key.public_key_der()
+    }
+
+    fn derive_app_ca(&self, root_ca: &CaCert, app_id: &[u8]) -> Result<CaCert> {
+        let app_key = kdf::derive_p256_key_pair(&self.root_ca_key, &[app_id, b"app-ca"])?;
+        let request = CertRequest::builder()
+            .key(&app_key)
+            .org_name("Dstack")
+            .subject("Dstack App CA")
+            .ca_level(0)
+            .app_id(app_id)
+            .special_usage("app:ca")
+            .build();
+        let certificate = root_ca.sign(request).context("failed to sign app CA")?;
+        Ok(CaCert::from_parts(app_key, certificate))
+    }
+
+    fn export_root_keys(&self) -> Result<(String, Vec<u8>)> {
+        Ok((
+            self.root_ca_key.serialize_pem(),
+            self.k256_key.to_bytes().to_vec(),
+        ))
     }
 }

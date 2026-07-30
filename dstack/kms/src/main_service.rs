@@ -56,7 +56,6 @@ impl std::ops::Deref for KmsState {
 pub struct KmsStateInner {
     config: KmsConfig,
     root_ca: CaCert,
-    k256_key: SigningKey,
     temp_ca_cert: String,
     temp_ca_key: String,
     verifier: CvmVerifier,
@@ -160,11 +159,11 @@ impl KmsState {
             // Identity v1 still uses the local backend. Fail closed if config
             // claims group keys different from the keys actually serving RPCs.
             anyhow::ensure!(
-                identity.p256_group_pubkey == root_ca.key.public_key_der(),
+                identity.p256_group_pubkey == key_backend.p256_public_key(),
                 "MPC P-256 group public key does not match the active root CA"
             );
             anyhow::ensure!(
-                identity.k256_group_pubkey == k256_key.verifying_key().to_sec1_bytes().as_ref(),
+                identity.k256_group_pubkey == key_backend.k256_public_key(),
                 "MPC K-256 group public key does not match the active signing key"
             );
             Some(identity)
@@ -194,7 +193,6 @@ impl KmsState {
             inner: Arc::new(KmsStateInner {
                 config,
                 root_ca,
-                k256_key,
                 temp_ca_cert,
                 temp_ca_key,
                 verifier,
@@ -371,26 +369,6 @@ impl RpcHandler {
             gateway_app_id: response.gateway_app_id,
         })
     }
-
-    fn derive_app_ca(&self, app_id: &[u8]) -> Result<CaCert> {
-        let context_data = vec![app_id, b"app-ca"];
-        let app_key = kdf::derive_p256_key_pair(&self.state.root_ca.key, &context_data)
-            .context("Failed to derive app disk key")?;
-        let req = CertRequest::builder()
-            .key(&app_key)
-            .org_name("Dstack")
-            .subject("Dstack App CA")
-            .ca_level(0)
-            .app_id(app_id)
-            .special_usage("app:ca")
-            .build();
-        let app_ca = self
-            .state
-            .root_ca
-            .sign(req)
-            .context("Failed to sign App CA")?;
-        Ok(CaCert::from_parts(app_key, app_ca))
-    }
 }
 
 impl KmsRpc for RpcHandler {
@@ -514,12 +492,14 @@ impl KmsRpc for RpcHandler {
             self.state.config.sev_snp_key_release,
             self.state.config.aws_nitro_tpm_key_release,
         )?;
+        let (ca_key, k256_key) = self
+            .state
+            .key_backend
+            .export_root_keys()
+            .context("key backend does not permit root key export")?;
         Ok(KmsKeyResponse {
             temp_ca_key: self.state.inner.temp_ca_key.clone(),
-            keys: vec![KmsKeys {
-                ca_key: self.state.inner.root_ca.key.serialize_pem(),
-                k256_key: self.state.inner.k256_key.to_bytes().to_vec(),
-            }],
+            keys: vec![KmsKeys { ca_key, k256_key }],
         })
     }
 
@@ -576,7 +556,10 @@ impl KmsRpc for RpcHandler {
             self.state.config.sev_snp_key_release,
             self.state.config.aws_nitro_tpm_key_release,
         )?;
-        let app_ca = self.derive_app_ca(&app_info.boot_info.app_id)?;
+        let app_ca = self
+            .state
+            .key_backend
+            .derive_app_ca(&self.state.root_ca, &app_info.boot_info.app_id)?;
         let cert = app_ca
             .sign_csr(&csr, Some(&app_info.boot_info.app_id), "app:custom")
             .context("Failed to sign certificate")?;
