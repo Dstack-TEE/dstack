@@ -572,7 +572,8 @@ mod tests {
                 expires_at,
                 poll_interval: Duration::from_millis(1),
             };
-            async {
+            let share = shares[keygen_index].clone();
+            async move {
                 let mut rng = OsRng;
                 let data =
                     DataToSign::from_scalar(Scalar::<Secp256k1>::from_be_bytes_mod_order(digest));
@@ -581,7 +582,7 @@ mod tests {
                     ExecutionId::new(&eid),
                     protocol_index,
                     &keygen_indexes,
-                    &shares[keygen_index],
+                    &share,
                 )
                 .sign_sync(&mut rng, data);
                 drive_state_machine(state, &transport, context)
