@@ -9,6 +9,7 @@
 //! replace it without making root key material available to request handlers.
 
 use anyhow::{bail, Context, Result};
+use cggmp21::key_share::AnyKeyShare as _;
 use k256::ecdsa::SigningKey;
 use ra_tls::{
     cert::{CaCert, CertRequest},
