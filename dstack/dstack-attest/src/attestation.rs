@@ -3296,7 +3296,11 @@ mod tests {
     #[test]
     fn versioned_wire_formats_reject_malformed_boundaries() {
         assert!(VersionedAttestation::from_bytes(&[]).is_err());
-        assert!(VersionedAttestation::from_bytes(&[0xff]).is_err());
+        let unknown = VersionedAttestation::from_bytes(&[0xff]).unwrap_err();
+        assert!(
+            unknown.to_string().contains("Unknown attestation wire format"),
+            "unknown required versions must fail with an actionable diagnostic: {unknown:#}"
+        );
         assert!(VersionedAttestation::from_bytes(&vec![0xff; MAX_ATTESTATION_BYTES + 1]).is_err());
 
         let legacy = dummy_tdx_attestation([0x31; 64]).into_versioned();
