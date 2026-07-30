@@ -13,7 +13,6 @@ use std::{
 use anyhow::{bail, ensure, Context, Result};
 use async_trait::async_trait;
 use cggmp21::{
-    key_share::{AnyKeyShare as _, ValidateFromParts as _},
     supported_curves::{Secp256k1, Secp256r1},
     ExecutionId, KeyShare,
 };
@@ -420,7 +419,7 @@ impl GenesisState {
                         &BlockingTransport::new(transport, runtime),
                         context,
                     )?
-                    .map_err(Into::into)
+                    .map_err(|error| anyhow::anyhow!("genesis auxiliary protocol failed: {error}"))
                 })
                 .await
                 .context("auxiliary worker panicked")??;
@@ -453,7 +452,9 @@ impl GenesisState {
                         &BlockingTransport::new(transport, runtime),
                         context,
                     )??;
-                    KeyShare::from_parts((core, aux)).map_err(Into::into)
+                    KeyShare::from_parts((core, aux)).map_err(|error| {
+                        anyhow::anyhow!("failed to complete P-256 genesis share: {error}")
+                    })
                 })
                 .await
                 .context("P-256 DKG worker panicked")??;
@@ -491,7 +492,9 @@ impl GenesisState {
                         &BlockingTransport::new(transport, runtime),
                         context,
                     )??;
-                    KeyShare::from_parts((core, aux)).map_err(Into::into)
+                    KeyShare::from_parts((core, aux)).map_err(|error| {
+                        anyhow::anyhow!("failed to complete K-256 genesis share: {error}")
+                    })
                 })
                 .await
                 .context("K-256 DKG worker panicked")??;
