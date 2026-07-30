@@ -443,6 +443,7 @@ impl KmsRpc for RpcHandler {
             .state
             .key_backend
             .derive_app_keys(&app_id, &instance_id)
+            .await
             .context("Failed to derive app keys")?;
 
         Ok(AppKeyResponse {
@@ -463,7 +464,11 @@ impl KmsRpc for RpcHandler {
             .await
             .context("KMS self authorization failed")?;
         ensure_app_id_len(&request.app_id)?;
-        let secret = self.state.key_backend.derive_env_key(&request.app_id)?;
+        let secret = self
+            .state
+            .key_backend
+            .derive_env_key(&request.app_id)
+            .await?;
         let secret = x25519_dalek::StaticSecret::from(secret);
         let pubkey = x25519_dalek::PublicKey::from(&secret);
 
@@ -478,6 +483,7 @@ impl KmsRpc for RpcHandler {
             .state
             .key_backend
             .sign_k256(b"dstack-env-encrypt-pubkey", &request.app_id, &public_key)
+            .await
             .context("Failed to sign the public key")?;
 
         // New signature with timestamp to prevent replay attacks
@@ -490,6 +496,7 @@ impl KmsRpc for RpcHandler {
                 timestamp,
                 &public_key,
             )
+            .await
             .context("Failed to sign the public key with timestamp")?;
 
         Ok(PublicKeyResponse {
@@ -540,6 +547,7 @@ impl KmsRpc for RpcHandler {
             .state
             .key_backend
             .export_root_keys()
+            .await
             .context("key backend does not permit root key export")?;
         Ok(KmsKeyResponse {
             temp_ca_key: self.state.inner.temp_ca_key.clone(),
@@ -603,7 +611,8 @@ impl KmsRpc for RpcHandler {
         let app_ca = self
             .state
             .key_backend
-            .derive_app_ca(&app_info.boot_info.app_id)?;
+            .derive_app_ca(&app_info.boot_info.app_id)
+            .await?;
         let cert = app_ca
             .sign_csr(&csr, Some(&app_info.boot_info.app_id), "app:custom")
             .context("Failed to sign certificate")?;
