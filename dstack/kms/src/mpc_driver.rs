@@ -395,7 +395,7 @@ fn ensure_not_expired(expires_at: u64) -> Result<()> {
 mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
-    use cggmp21::{supported_curves::Secp256k1, ExecutionId};
+    use cggmp21::{key_share::AnyKeyShare as _, supported_curves::Secp256k1, ExecutionId};
     use rand::rngs::OsRng;
 
     use super::*;
