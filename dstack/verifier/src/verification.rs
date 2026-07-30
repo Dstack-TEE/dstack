@@ -1903,6 +1903,71 @@ mod tests {
     }
 
     #[test]
+    fn measurement_cache_upgrade_boundary_recomputes_without_stale_results() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut verifier = test_verifier();
+        verifier.image_cache_dir = directory.path().display().to_string();
+        let base: VmConfig = serde_json::from_str("{}").unwrap();
+        let mut changed = base.clone();
+        changed.cpu_count = 2;
+        let active_key = CvmVerifier::vm_config_cache_key(&base).unwrap();
+        let old_key =
+            CvmVerifier::measurement_cache_key_for_version(&base, MEASUREMENT_CACHE_VERSION - 1)
+                .unwrap();
+        let changed_key = CvmVerifier::vm_config_cache_key(&changed).unwrap();
+        assert_ne!(active_key, old_key);
+        assert_ne!(active_key, changed_key);
+
+        let stale = sample_measurements(0x11);
+        let fresh = sample_measurements(0x22);
+        let old_path = verifier.measurement_cache_path(&old_key);
+        let active_path = verifier.measurement_cache_path(&active_key);
+        fs_err::create_dir_all(old_path.parent().unwrap()).unwrap();
+        fs_err::write(
+            &old_path,
+            serde_json::to_vec(&CachedMeasurement {
+                version: MEASUREMENT_CACHE_VERSION - 1,
+                measurements: stale.clone(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        fs_err::write(
+            &active_path,
+            serde_json::to_vec(&CachedMeasurement {
+                version: MEASUREMENT_CACHE_VERSION - 1,
+                measurements: stale,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(verifier
+            .load_measurements_from_cache(&active_key)
+            .unwrap()
+            .is_none());
+        assert!(verifier
+            .load_measurements_from_cache(&changed_key)
+            .unwrap()
+            .is_none());
+        verifier
+            .store_measurements_in_cache(&active_key, &fresh)
+            .unwrap();
+        assert_eq!(
+            verifier
+                .load_measurements_from_cache(&active_key)
+                .unwrap()
+                .unwrap(),
+            fresh
+        );
+        assert!(old_path.is_file());
+        assert!(verifier
+            .load_measurements_from_cache(&changed_key)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
     fn concurrent_measurement_cache_writes_are_atomic() {
         let directory = tempfile::tempdir().unwrap();
         let mut verifier = test_verifier();
