@@ -530,7 +530,7 @@ impl App {
             {
                 let mut state = self.lock();
                 let vm_state = state.get_mut(id).context("VM not found")?;
-                vm_state.state.runtime_networks = runtime_networks;
+                vm_state.state.runtime_networks = runtime_networks.clone();
             }
             for process in processes {
                 if let Err(err) = self.supervisor.deploy(&process).await {

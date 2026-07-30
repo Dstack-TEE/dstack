@@ -6,8 +6,8 @@
 
 use std::{
     fs,
-    io::{BufRead, BufReader, Write},
-    os::unix::{fs::PermissionsExt, net::UnixStream as StdUnixStream},
+    io::Write,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -17,13 +17,13 @@ use nix::unistd::{chown, Gid, User};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader as AsyncBufReader},
     net::{UnixListener, UnixStream},
 };
 
 use crate::{
     app::validate_resolved_network,
-    config::{CvmConfig, Networking, NetworkingMode},
+    config::{CvmConfig, NetworkingMode},
 };
 
 const MAX_REQUEST_BYTES: usize = 4096;
