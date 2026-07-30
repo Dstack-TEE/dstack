@@ -13,7 +13,7 @@ use k256::ecdsa::SigningKey;
 use ra_tls::{
     cert::{CaCert, CertRequest},
     kdf,
-    rcgen::{KeyPair, PublicKeyData as _},
+    rcgen::KeyPair,
 };
 
 use crate::crypto::{derive_k256_key, sign_message, sign_message_with_timestamp};

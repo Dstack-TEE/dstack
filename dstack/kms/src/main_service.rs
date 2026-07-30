@@ -19,12 +19,10 @@ use dstack_kms_rpc::{
 };
 use dstack_verifier::{CvmVerifier, VerificationDetails};
 use fs_err as fs;
-use k256::ecdsa::SigningKey;
 use ra_rpc::{CallContext, RpcCall};
 use ra_tls::{
     attestation::{AttestationVerifier, TeeVariant, VerifiedAttestation},
-    cert::{CaCert, CertRequest, CertSigningRequestV1, CertSigningRequestV2, Csr},
-    kdf,
+    cert::{CaCert, CertSigningRequestV1, CertSigningRequestV2, Csr},
 };
 use scale::Decode;
 use tokio::sync::OnceCell;
@@ -139,8 +137,6 @@ impl KmsState {
         let root_ca = CaCert::load(config.root_ca_cert(), config.root_ca_key())
             .context("Failed to load root CA certificate")?;
         let key_bytes = fs::read(config.k256_key()).context("Failed to read ECDSA root key")?;
-        let k256_key =
-            SigningKey::from_slice(&key_bytes).context("Failed to load ECDSA root key")?;
         let key_backend: Arc<dyn KeyBackend> = Arc::new(LocalKeyBackend::from_pem_and_bytes(
             &fs::read_to_string(config.root_ca_key())?,
             &key_bytes,
