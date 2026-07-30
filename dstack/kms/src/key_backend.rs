@@ -37,7 +37,7 @@ use crate::{
     },
     crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
     mpc_driver::{
-        drive_state_machine_blocking, BlockingHttpTransport, DriverContext, EnvelopeTransport,
+        drive_state_machine_blocking, BlockingTransport, DriverContext, EnvelopeTransport,
         MpcHttpTransport,
     },
     mpc_identity::{EpochManifest, SignedEpochManifest},
@@ -1186,7 +1186,7 @@ impl MpcKeyBackend {
             .sign_sync(&mut rng, data);
             let signature = drive_state_machine_blocking(
                 state,
-                &BlockingHttpTransport::new(transport, runtime),
+                &BlockingTransport::new(transport, runtime),
                 context,
             )??;
             let mut encoded = vec![0u8; cggmp21::Signature::<Secp256k1>::serialized_len()];
@@ -1264,7 +1264,7 @@ impl MpcKeyBackend {
             .sign_sync(&mut rng, data);
             let signature = drive_state_machine_blocking(
                 state,
-                &BlockingHttpTransport::new(transport, runtime),
+                &BlockingTransport::new(transport, runtime),
                 context,
             )??;
             let mut encoded = vec![0u8; cggmp21::Signature::<Secp256r1>::serialized_len()];

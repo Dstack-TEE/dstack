@@ -53,16 +53,13 @@ pub(crate) trait EnvelopeTransport: Send + Sync {
     async fn receive(&self, session_id: &[u8; 32]) -> Result<Vec<MpcEnvelope>>;
 }
 
-pub(crate) struct BlockingHttpTransport {
-    inner: std::sync::Arc<MpcHttpTransport>,
+pub(crate) struct BlockingTransport<T> {
+    inner: std::sync::Arc<T>,
     runtime: tokio::runtime::Handle,
 }
 
-impl BlockingHttpTransport {
-    pub(crate) fn new(
-        inner: std::sync::Arc<MpcHttpTransport>,
-        runtime: tokio::runtime::Handle,
-    ) -> Self {
+impl<T: EnvelopeTransport> BlockingTransport<T> {
+    pub(crate) fn new(inner: std::sync::Arc<T>, runtime: tokio::runtime::Handle) -> Self {
         Self { inner, runtime }
     }
 
@@ -290,14 +287,15 @@ where
 /// Executes a non-`Send` round-based state machine on a dedicated blocking
 /// thread while network I/O is serviced by the Tokio runtime. CGGMP's sync
 /// adapter internally uses `Rc`, so it must never be moved between threads.
-pub(crate) fn drive_state_machine_blocking<S>(
+pub(crate) fn drive_state_machine_blocking<S, T>(
     mut state: S,
-    transport: &BlockingHttpTransport,
+    transport: &BlockingTransport<T>,
     context: DriverContext,
 ) -> Result<S::Output>
 where
     S: StateMachine,
     S::Msg: Serialize + DeserializeOwned,
+    T: EnvelopeTransport,
 {
     ensure!(
         context.participants.len() >= 2,
