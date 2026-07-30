@@ -155,7 +155,11 @@ impl MpcHttpTransport {
 
     pub(crate) async fn reachable_nodes(&self) -> Vec<String> {
         futures::future::join_all(self.clients.iter().map(|(node_id, client)| async move {
-            client.ping().await.ok().map(|_| node_id.clone())
+            tokio::time::timeout(Duration::from_secs(3), client.ping())
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .map(|_| node_id.clone())
         }))
         .await
         .into_iter()
