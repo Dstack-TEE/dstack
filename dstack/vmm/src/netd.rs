@@ -7,7 +7,7 @@
 use std::{
     fs,
     io::Write,
-    os::unix::fs::PermissionsExt,
+    os::unix::{fs::PermissionsExt, net::UnixStream as StdUnixStream},
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -168,6 +168,9 @@ pub(crate) async fn serve(cfg: CvmConfig) -> Result<()> {
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     if socket.exists() {
+        if StdUnixStream::connect(socket).is_ok() {
+            bail!("dstack-netd is already listening on {}", socket.display());
+        }
         fs::remove_file(socket)
             .with_context(|| format!("failed to remove stale {}", socket.display()))?;
     }
@@ -236,6 +239,7 @@ struct Server {
     cfg: CvmConfig,
     qemu_uid: u32,
     allowed_uids: Vec<u32>,
+    operation_lock: std::sync::Mutex<()>,
 }
 
 impl Server {
@@ -258,10 +262,15 @@ impl Server {
             cfg,
             qemu_uid,
             allowed_uids,
+            operation_lock: std::sync::Mutex::new(()),
         })
     }
 
     fn handle(&self, request: Request) -> Result<Option<NicAttachment>> {
+        let _guard = self
+            .operation_lock
+            .lock()
+            .map_err(|_| anyhow::anyhow!("dstack-netd operation lock is poisoned"))?;
         match request {
             Request::Prepare {
                 vm_id,
@@ -418,10 +427,40 @@ impl Server {
         if master.file_name().and_then(|name| name.to_str()) != Some(&attachment.bridge) {
             bail!("protected TAP is attached to an unexpected bridge");
         }
-        run(
+        let bridge_state = run_capture(
+            "bridge",
+            &["-details", "link", "show", "dev", &attachment.tap],
+        )?;
+        for required in ["learning off", "locked on", "guard on", "root_block on"] {
+            if !bridge_state.contains(required) {
+                bail!("protected TAP is missing bridge flag '{required}'");
+            }
+        }
+        if self.cfg.networking.isolate_bridge_ports && !bridge_state.contains("isolated on") {
+            bail!("protected TAP is missing bridge isolation");
+        }
+
+        let fdb = run_capture("bridge", &["fdb", "show", "dev", &attachment.tap])?;
+        if !fdb.lines().any(|line| {
+            line.to_ascii_lowercase().starts_with(&attachment.mac)
+                && line.split_ascii_whitespace().any(|field| field == "static")
+        }) {
+            bail!("protected TAP is missing its static MAC entry");
+        }
+
+        let rules = run_capture(
             "nft",
             &["list", "table", "netdev", &nft_table_name(attachment)],
         )?;
+        for required in [
+            format!("device \"{}\"", attachment.tap),
+            format!("ether saddr != {}", attachment.mac),
+            "ether type ip6".to_string(),
+        ] {
+            if !rules.contains(&required) {
+                bail!("protected TAP nftables policy is incomplete");
+            }
+        }
         Ok(())
     }
 
@@ -522,6 +561,10 @@ fn nft_rules(attachment: &NicAttachment) -> String {
 }
 
 fn run(program: &str, args: &[&str]) -> Result<()> {
+    run_capture(program, args).map(|_| ())
+}
+
+fn run_capture(program: &str, args: &[&str]) -> Result<String> {
     let output = Command::new(program)
         .args(args)
         .output()
@@ -534,7 +577,7 @@ fn run(program: &str, args: &[&str]) -> Result<()> {
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    Ok(())
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 fn run_with_stdin(program: &str, args: &[&str], input: &str) -> Result<()> {
