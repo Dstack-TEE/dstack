@@ -633,7 +633,10 @@ mod tests {
         let p256_shares = p256_cores
             .into_iter()
             .zip(shares.iter())
-            .map(|(core, share)| cggmp21::KeyShare::from_parts((core, share.aux.clone())).unwrap())
+            .map(|(core, share)| {
+                let aux = cggmp21::key_share::Valid::validate(share.aux.clone()).unwrap();
+                cggmp21::KeyShare::from_parts((core, aux)).unwrap()
+            })
             .collect::<Vec<_>>();
         let raw_public = p256_shares[0].shared_public_key().to_bytes(false);
         const P256_SPKI_PREFIX: &[u8] = &[
