@@ -10,7 +10,8 @@
 
 use anyhow::{ensure, Context, Result};
 use cggmp21::{
-    generic_ec::{Curve, Point, Scalar},
+    generic_ec::{Curve, NonZero, Point, Scalar, SecretScalar},
+    key_share::{DirtyIncompleteKeyShare, Valid, VssSetup},
     IncompleteKeyShare,
 };
 use rand::{CryptoRng, RngCore};
@@ -33,6 +34,46 @@ pub(crate) struct ResharedMaterial<E: Curve> {
     pub secret_share: Scalar<E>,
     pub public_shares: Vec<Point<E>>,
     pub shared_public_key: Point<E>,
+}
+
+impl<E: Curve> ResharedMaterial<E> {
+    pub(crate) fn into_incomplete_share(
+        self,
+        recipient_index: u16,
+        threshold: u16,
+        template: &IncompleteKeyShare<E>,
+    ) -> Result<IncompleteKeyShare<E>> {
+        ensure!(
+            usize::from(recipient_index) < self.public_shares.len(),
+            "reshared recipient index out of bounds"
+        );
+        let mut key_info = template.key_info.clone();
+        key_info.shared_public_key = NonZero::from_point(self.shared_public_key)
+            .context("reshared group public key is identity")?;
+        key_info.public_shares = self
+            .public_shares
+            .into_iter()
+            .map(|point| NonZero::from_point(point).context("reshared public share is identity"))
+            .collect::<Result<Vec<_>>>()?;
+        key_info.vss_setup = Some(VssSetup {
+            min_signers: threshold,
+            I: (1..=key_info.public_shares.len())
+                .map(|index| {
+                    NonZero::from_scalar(Scalar::from(index as u64))
+                        .expect("positive share index is non-zero")
+                })
+                .collect(),
+        });
+        let mut secret = self.secret_share;
+        let secret = NonZero::from_secret_scalar(SecretScalar::new(&mut secret))
+            .context("reshared secret share is zero")?;
+        Valid::validate(DirtyIncompleteKeyShare {
+            i: recipient_index,
+            key_info,
+            x: secret,
+        })
+        .map_err(|error| anyhow::anyhow!("invalid reshared CGGMP core share: {error}"))
+    }
 }
 
 pub(crate) fn create_contribution<E: Curve, R: RngCore + CryptoRng>(
@@ -290,6 +331,13 @@ mod tests {
             *old[0].shared_public_key()
         );
         assert!(NonZero::from_point(materials[0].shared_public_key).is_some());
+        for (index, material) in materials.into_iter().enumerate() {
+            let share = material
+                .into_incomplete_share(index as u16, 3, &old[0])
+                .unwrap();
+            assert_eq!(share.i, index as u16);
+            assert_eq!(*share.shared_public_key(), *old[0].shared_public_key());
+        }
     }
 
     #[test]
