@@ -18,6 +18,7 @@ use tracing::{info, warn};
 
 mod admin_auth;
 mod admin_service;
+mod cggmp_engine;
 mod config;
 // mod ct_log;
 mod crypto;
