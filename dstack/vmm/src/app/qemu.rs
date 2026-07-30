@@ -14,7 +14,10 @@ use super::{
 };
 use crate::{
     app::Manifest,
-    config::{CvmConfig, CvmPlatform, Networking, NetworkingMode, ProcessAnnotation},
+    config::{
+        CvmConfig, CvmPlatform, NetworkFilterMode, Networking, NetworkingMode, ProcessAnnotation,
+    },
+    netd::{tap_name, InterfaceIdentity},
     vm_launcher::{ChildCommand, LaunchSpec},
 };
 use anyhow::{bail, Context, Result};
@@ -605,7 +608,21 @@ impl QemuCommandBuilder<'_> {
                 }
                 NetworkingMode::Bridge => {
                     tracing::info!("bridge networking: mac={mac} bridge={}", networking.bridge);
-                    format!("bridge,id={net_id},br={}", networking.bridge)
+                    match self.cfg.network_filter.mode {
+                        NetworkFilterMode::None => {
+                            format!("bridge,id={net_id},br={}", networking.bridge)
+                        }
+                        NetworkFilterMode::Libvirt => {
+                            let tap = tap_name(&InterfaceIdentity {
+                                instance_id: self.cfg.instance_id.clone(),
+                                vm_id: self.vm.manifest.id.clone(),
+                                nic_index: index,
+                            });
+                            format!(
+                                "tap,id={net_id},ifname={tap},script=no,downscript=no,vhost=off"
+                            )
+                        }
+                    }
                 }
                 NetworkingMode::Custom => {
                     if !networking.netdev.contains(&format!("id={net_id}")) {

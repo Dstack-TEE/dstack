@@ -12,7 +12,7 @@ use std::{
         fd::AsRawFd,
         unix::{fs::PermissionsExt, net::UnixStream as StdUnixStream},
     },
-    path::{Path, PathBuf},
+    path::Path,
     process::{Command, Stdio},
     time::Duration,
 };

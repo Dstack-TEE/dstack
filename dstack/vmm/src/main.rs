@@ -212,6 +212,7 @@ async fn main() -> Result<()> {
 
     let figment = config::load_config_figment(args.config.as_deref());
     let mut config = Config::extract_or_default(&figment)?.abs_path()?;
+    config.cvm.instance_id = netd::instance_id(&config.cvm.instance_id, config.run_path.as_path());
     if let Some(socket) = args.netd_socket.as_deref() {
         config.netd.socket = socket.into();
     }
