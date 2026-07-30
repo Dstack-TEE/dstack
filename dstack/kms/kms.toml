@@ -113,6 +113,7 @@ max_sessions = 128
 session_ttl = "5m"
 p256_share_file = ""
 k256_share_file = ""
+derivation_share_file = ""
 
 [core.auth_api]
 type = "webhook"

@@ -111,6 +111,8 @@ pub(crate) struct MpcConfig {
     pub p256_share_file: PathBuf,
     #[serde(default)]
     pub k256_share_file: PathBuf,
+    #[serde(default)]
+    pub derivation_share_file: PathBuf,
 }
 
 fn default_mpc_max_sessions() -> usize {
@@ -163,7 +165,8 @@ impl KmsConfig {
                 && self.rpc_cert().exists()
                 && self.rpc_key().exists()
                 && self.mpc.p256_share_file.exists()
-                && self.mpc.k256_share_file.exists();
+                && self.mpc.k256_share_file.exists()
+                && self.mpc.derivation_share_file.exists();
         }
         self.tmp_ca_cert().exists()
             && self.tmp_ca_key().exists()

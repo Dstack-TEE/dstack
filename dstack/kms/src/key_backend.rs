@@ -33,8 +33,11 @@ use crate::{
         drive_state_machine_blocking, BlockingHttpTransport, DriverContext, MpcHttpTransport,
     },
     mpc_identity::EpochManifest,
-    mpc_operation::{K256SignPayload, MpcOperation, MpcOperationPayload},
+    mpc_operation::{
+        DerivePayload, DerivePurpose, K256SignPayload, MpcOperation, MpcOperationPayload,
+    },
     mpc_session::{MpcProtocol, SessionRouter},
+    threshold_prf::{self, PrfPartial},
 };
 
 pub(crate) struct DerivedAppKeys {
@@ -58,6 +61,7 @@ pub(crate) trait KeyBackend: Send + Sync {
     ) -> Result<Vec<u8>>;
     fn k256_public_key(&self) -> Vec<u8>;
     fn p256_public_key(&self) -> Vec<u8>;
+    fn derivation_public_key(&self) -> Vec<u8>;
     fn root_ca_cert(&self) -> &str;
     async fn derive_app_ca(&self, app_id: &[u8]) -> Result<CaCert>;
     async fn run_mpc_operation(
@@ -130,6 +134,10 @@ impl KeyBackend for LocalKeyBackend {
         self.root_ca.key.public_key_raw().to_vec()
     }
 
+    fn derivation_public_key(&self) -> Vec<u8> {
+        self.p256_public_key()
+    }
+
     fn root_ca_cert(&self) -> &str {
         &self.root_ca.pem_cert
     }
@@ -173,6 +181,7 @@ pub(crate) struct MpcKeyBackend {
     root_ca_cert: String,
     p256_share: P256KeyShare,
     k256_share: K256KeyShare,
+    derivation_share: P256KeyShare,
     transport: Arc<MpcHttpTransport>,
     manifest: EpochManifest,
     cluster_id: String,
@@ -196,6 +205,7 @@ impl MpcKeyBackend {
         node_id: &str,
         p256_share_file: &std::path::Path,
         k256_share_file: &std::path::Path,
+        derivation_share_file: &std::path::Path,
         manifest: &EpochManifest,
         router: std::sync::Arc<SessionRouter>,
         rpc_cert: String,
@@ -226,6 +236,13 @@ impl MpcKeyBackend {
                 epoch,
                 node_id,
                 CggmpCurve::K256,
+            )?,
+            derivation_share: load_share(
+                derivation_share_file,
+                cluster_id,
+                epoch,
+                node_id,
+                CggmpCurve::P256,
             )?,
             transport: Arc::new(transport),
             manifest: manifest.clone(),
@@ -296,6 +313,69 @@ impl MpcKeyBackend {
         self.add_recovery_id(&operation, local)
     }
 
+    async fn derive(&self, payload: DerivePayload) -> Result<[u8; 32]> {
+        let mut session_id = [0u8; 32];
+        OsRng.fill_bytes(&mut session_id);
+        let operation = MpcOperation::new_derivation(
+            session_id,
+            self.manifest.epoch,
+            self.participants()?,
+            unix_time()?
+                .checked_add(60)
+                .context("MPC expiry overflow")?,
+            payload.clone(),
+        )?;
+        operation.validate(&self.manifest, &self.node_id)?;
+        let remote = operation
+            .participants
+            .iter()
+            .filter(|node| *node != &self.node_id)
+            .map(|node| async {
+                (
+                    node.clone(),
+                    self.transport.start_operation(node, &operation).await,
+                )
+            });
+        let (local, remote) = tokio::join!(
+            self.run_mpc_operation(operation.clone(), &self.node_id),
+            join_all(remote)
+        );
+        let mut results = vec![(self.node_id.clone(), local?)];
+        for (node, result) in remote {
+            results.push((node, result?));
+        }
+        let input = payload.input()?;
+        let request_hash: [u8; 32] = operation.request_hash.as_slice().try_into()?;
+        let mut evaluations = Vec::with_capacity(results.len());
+        for (node, encoded) in results {
+            let expected_index = self
+                .manifest
+                .members
+                .iter()
+                .position(|member| member.node_id == node)
+                .context("derivation responder is not in manifest")?;
+            let partial: PrfPartial =
+                serde_json::from_slice(&encoded).context("invalid threshold derivation partial")?;
+            ensure!(
+                usize::from(partial.keygen_index) == expected_index,
+                "threshold derivation partial has wrong signer index"
+            );
+            let public_share = self
+                .derivation_share
+                .core
+                .key_info
+                .public_shares
+                .get(expected_index)
+                .context("missing derivation public share")?
+                .to_bytes(false);
+            evaluations.push((
+                partial.keygen_index,
+                threshold_prf::verify(&partial, public_share.as_bytes(), &input, &request_hash)?,
+            ));
+        }
+        threshold_prf::combine(evaluations, &input)
+    }
+
     fn add_recovery_id(&self, operation: &MpcOperation, signature: Vec<u8>) -> Result<Vec<u8>> {
         ensure!(signature.len() == 64, "invalid MPC K-256 signature length");
         let signature = K256Signature::from_slice(&signature).context("invalid MPC signature")?;
@@ -341,7 +421,7 @@ impl MpcKeyBackend {
             }
         };
         if owner {
-            let result = self.execute_k256(operation).await;
+            let result = self.execute_operation(operation).await;
             *record
                 .result
                 .lock()
@@ -365,6 +445,54 @@ impl MpcKeyBackend {
                     return result.map_err(anyhow::Error::msg);
                 }
                 notified.await;
+            }
+        }
+    }
+
+    async fn execute_operation(&self, operation: MpcOperation) -> Result<Vec<u8>> {
+        match &operation.payload {
+            MpcOperationPayload::SignK256(_) => self.execute_k256(operation).await,
+            MpcOperationPayload::Derive(payload) => {
+                let input = payload.input()?;
+                let own_index = self
+                    .manifest
+                    .members
+                    .iter()
+                    .position(|member| member.node_id == self.node_id)
+                    .context("local node is not in manifest")?;
+                ensure!(
+                    usize::from(self.derivation_share.core.i) == own_index,
+                    "derivation share index does not match manifest ordering"
+                );
+                let secret: [u8; 32] = self
+                    .derivation_share
+                    .core
+                    .x
+                    .as_ref()
+                    .to_be_bytes()
+                    .as_bytes()
+                    .try_into()
+                    .context("invalid derivation secret share length")?;
+                let public = self
+                    .derivation_share
+                    .core
+                    .key_info
+                    .public_shares
+                    .get(own_index)
+                    .context("missing local derivation public share")?
+                    .to_bytes(false);
+                let request_hash: [u8; 32] = operation.request_hash.as_slice().try_into()?;
+                let partial = threshold_prf::evaluate(
+                    own_index
+                        .try_into()
+                        .context("derivation share index overflow")?,
+                    &secret,
+                    public.as_bytes(),
+                    &input,
+                    &request_hash,
+                    &mut OsRng,
+                )?;
+                serde_json::to_vec(&partial).context("failed to encode derivation partial")
             }
         }
     }
@@ -460,12 +588,43 @@ fn unix_time() -> Result<u64> {
 
 #[async_trait]
 impl KeyBackend for MpcKeyBackend {
-    async fn derive_app_keys(&self, _app_id: &[u8], _instance_id: &[u8]) -> Result<DerivedAppKeys> {
-        bail!("MPC derivation protocol is unavailable")
+    async fn derive_app_keys(&self, app_id: &[u8], instance_id: &[u8]) -> Result<DerivedAppKeys> {
+        let disk_key = self
+            .derive(DerivePayload {
+                purpose: DerivePurpose::DiskKey,
+                app_id: app_id.to_vec(),
+                instance_id: Some(instance_id.to_vec()),
+            })
+            .await?;
+        let env_key = self.derive_env_key(app_id).await?;
+        let app_seed = self
+            .derive(DerivePayload {
+                purpose: DerivePurpose::AppK256,
+                app_id: app_id.to_vec(),
+                instance_id: None,
+            })
+            .await?;
+        let k256_key = SigningKey::from_slice(&app_seed)
+            .context("threshold derivation produced an invalid K-256 key")?;
+        let public_key = k256_key.verifying_key().to_sec1_bytes();
+        let k256_signature = self
+            .sign_k256(b"dstack-kms-issued", app_id, &public_key)
+            .await?;
+        Ok(DerivedAppKeys {
+            disk_key,
+            env_key,
+            k256_key: k256_key.to_bytes().to_vec(),
+            k256_signature,
+        })
     }
 
-    async fn derive_env_key(&self, _app_id: &[u8]) -> Result<[u8; 32]> {
-        bail!("MPC derivation protocol is unavailable")
+    async fn derive_env_key(&self, app_id: &[u8]) -> Result<[u8; 32]> {
+        self.derive(DerivePayload {
+            purpose: DerivePurpose::EnvKey,
+            app_id: app_id.to_vec(),
+            instance_id: None,
+        })
+        .await
     }
 
     async fn sign_k256(&self, prefix: &[u8], app_id: &[u8], message: &[u8]) -> Result<Vec<u8>> {
@@ -504,6 +663,14 @@ impl KeyBackend for MpcKeyBackend {
 
     fn p256_public_key(&self) -> Vec<u8> {
         self.p256_share
+            .shared_public_key()
+            .to_bytes(false)
+            .as_bytes()
+            .to_vec()
+    }
+
+    fn derivation_public_key(&self) -> Vec<u8> {
+        self.derivation_share
             .shared_public_key()
             .to_bytes(false)
             .as_bytes()

@@ -26,6 +26,54 @@ pub(crate) struct K256SignPayload {
     pub message: Vec<u8>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DerivePurpose {
+    DiskKey,
+    EnvKey,
+    AppK256,
+    AppCa,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct DerivePayload {
+    pub purpose: DerivePurpose,
+    #[serde(with = "hex_bytes")]
+    pub app_id: Vec<u8>,
+    #[serde(default, with = "option_hex_bytes")]
+    pub instance_id: Option<Vec<u8>>,
+}
+
+impl DerivePayload {
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            self.app_id.len() == 20,
+            "MPC derivation app_id must be 20 bytes"
+        );
+        match self.purpose {
+            DerivePurpose::DiskKey => ensure!(
+                self.instance_id
+                    .as_ref()
+                    .is_some_and(|value| value.len() == 20),
+                "disk-key derivation requires a 20-byte instance_id"
+            ),
+            _ => ensure!(
+                self.instance_id.is_none(),
+                "instance_id is only valid for disk-key derivation"
+            ),
+        }
+        Ok(())
+    }
+
+    pub(crate) fn input(&self) -> Result<Vec<u8>> {
+        let encoded = serde_jcs::to_vec(self).context("failed to encode derivation input")?;
+        let mut input = b"dstack-mpc-derivation-v1".to_vec();
+        input.extend_from_slice(&(encoded.len() as u32).to_be_bytes());
+        input.extend_from_slice(&encoded);
+        Ok(input)
+    }
+}
+
 impl K256SignPayload {
     pub(crate) fn digest(&self) -> [u8; 32] {
         let mut digest = Keccak256::new();
@@ -63,6 +111,7 @@ impl K256SignPayload {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum MpcOperationPayload {
     SignK256(K256SignPayload),
+    Derive(DerivePayload),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +156,25 @@ impl MpcOperation {
         Ok(operation)
     }
 
+    pub(crate) fn new_derivation(
+        session_id: [u8; 32],
+        epoch: u64,
+        participants: Vec<String>,
+        expires_at: u64,
+        payload: DerivePayload,
+    ) -> Result<Self> {
+        let mut operation = Self {
+            session_id: session_id.to_vec(),
+            epoch,
+            participants,
+            expires_at,
+            payload: MpcOperationPayload::Derive(payload),
+            request_hash: vec![],
+        };
+        operation.request_hash = operation.compute_request_hash()?.to_vec();
+        Ok(operation)
+    }
+
     pub(crate) fn validate(&self, manifest: &EpochManifest, initiator: &str) -> Result<()> {
         ensure!(
             self.session_id.len() == 32,
@@ -143,6 +211,7 @@ impl MpcOperation {
         );
         match &self.payload {
             MpcOperationPayload::SignK256(payload) => payload.validate()?,
+            MpcOperationPayload::Derive(payload) => payload.validate()?,
         }
         ensure!(
             self.request_hash == self.compute_request_hash()?,
@@ -192,6 +261,27 @@ mod hex_bytes {
     {
         let value = String::deserialize(deserializer)?;
         hex::decode(value.strip_prefix("0x").unwrap_or(&value)).map_err(serde::de::Error::custom)
+    }
+}
+
+mod option_hex_bytes {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(value: &Option<Vec<u8>>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        value.as_ref().map(hex::encode).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Vec<u8>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Option::<String>::deserialize(deserializer)?
+            .map(|value| hex::decode(value.strip_prefix("0x").unwrap_or(&value)))
+            .transpose()
+            .map_err(serde::de::Error::custom)
     }
 }
 

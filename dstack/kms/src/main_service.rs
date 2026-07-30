@@ -176,6 +176,7 @@ impl KmsState {
                 &config.mpc.node_id,
                 &config.mpc.p256_share_file,
                 &config.mpc.k256_share_file,
+                &config.mpc.derivation_share_file,
                 manifest,
                 mpc_router.clone().context("MPC router is missing")?,
                 fs::read_to_string(config.rpc_cert()).context("failed to read MPC RPC cert")?,
@@ -210,6 +211,10 @@ impl KmsState {
             anyhow::ensure!(
                 identity.k256_group_pubkey == key_backend.k256_public_key(),
                 "MPC K-256 group public key does not match the active signing key"
+            );
+            anyhow::ensure!(
+                identity.derivation_group_pubkey == key_backend.derivation_public_key(),
+                "MPC derivation group public key does not match the active derivation share"
             );
             anyhow::ensure!(
                 !config.mpc.node_id.is_empty(),
