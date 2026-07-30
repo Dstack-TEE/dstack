@@ -775,6 +775,34 @@ mod tests {
     }
 
     #[test]
+    fn transported_external_tbs_roundtrip() {
+        let root_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let external = prepare_external_self_signed(
+            CertRequest::builder()
+                .key(&root_key)
+                .subject("Transported Root")
+                .ca_level(1)
+                .build(),
+        )
+        .unwrap();
+        let transported = ExternalCertificate::from_tbs_der(external.tbs_der().to_vec()).unwrap();
+        let signer = EcdsaKeyPair::from_pkcs8(
+            &ECDSA_P256_SHA256_ASN1_SIGNING,
+            &root_key.serialize_der(),
+            &SystemRandom::new(),
+        )
+        .unwrap();
+        let der = signer
+            .sign(&SystemRandom::new(), transported.tbs_der())
+            .unwrap();
+        let signature = p256::ecdsa::Signature::from_der(der.as_ref()).unwrap();
+        let pem = transported.finish(signature.to_bytes().as_slice()).unwrap();
+        let (_, pem) = x509_parser::pem::parse_x509_pem(pem.as_bytes()).unwrap();
+        pem.parse_x509().unwrap().verify_signature(None).unwrap();
+        assert!(ExternalCertificate::from_tbs_der(vec![1, 2, 3]).is_err());
+    }
+
+    #[test]
     fn test_csr_signing_and_verification() {
         let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
         let pubkey = key_pair.public_key_der();
