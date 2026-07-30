@@ -54,6 +54,7 @@ round-based.workspace = true
 
 [dev-dependencies]
 cc-eventlog.workspace = true
+round-based = { workspace = true, features = ["sim"] }
 
 [features]
 default = []
