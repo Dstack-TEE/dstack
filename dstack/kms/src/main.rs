@@ -106,6 +106,10 @@ async fn run_mpc_genesis_service(kms_config: KmsConfig, figment: Figment) -> Res
         )
         .manage(state)
         .manage(quote_verifier);
+    let rocket = rocket
+        .ignite()
+        .await
+        .map_err(|error| anyhow!(error.to_string()))?;
     let shutdown = rocket.shutdown();
     let finalized = state.clone();
     tokio::spawn(async move {
