@@ -540,6 +540,7 @@ mod tests {
     async fn drives_real_threshold_signature_over_authenticated_envelopes() {
         use cggmp21::{generic_ec::Scalar, security_level::SecurityLevel128, DataToSign};
         use k256::ecdsa::{signature::hazmat::PrehashVerifier, Signature, VerifyingKey};
+        use sha2::Digest as _;
 
         let shares = cggmp21::trusted_dealer::builder::<Secp256k1, SecurityLevel128>(5)
             .set_threshold(Some(3))
@@ -621,5 +622,80 @@ mod tests {
             VerifyingKey::from_sec1_bytes(shares[0].shared_public_key().to_bytes(true).as_bytes())
                 .unwrap();
         public_key.verify_prehash(&digest, &signature).unwrap();
+
+        // Reuse the curve-independent auxiliary information to exercise the
+        // P-256 threshold certificate path without another safe-prime setup.
+        use cggmp21::supported_curves::Secp256r1;
+        let p256_cores = cggmp21::trusted_dealer::builder::<Secp256r1, SecurityLevel128>(5)
+            .set_threshold(Some(3))
+            .generate_core_shares(&mut OsRng)
+            .unwrap();
+        let p256_shares = p256_cores
+            .into_iter()
+            .zip(shares.iter())
+            .map(|(core, share)| cggmp21::KeyShare::from_parts((core, share.aux.clone())).unwrap())
+            .collect::<Vec<_>>();
+        let raw_public = p256_shares[0].shared_public_key().to_bytes(false);
+        const P256_SPKI_PREFIX: &[u8] = &[
+            0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06,
+            0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00,
+        ];
+        let mut spki = P256_SPKI_PREFIX.to_vec();
+        spki.extend_from_slice(raw_public.as_bytes());
+        let public = ra_tls::rcgen::SubjectPublicKeyInfo::from_der(&spki).unwrap();
+        let external = ra_tls::cert::prepare_external_self_signed(
+            ra_tls::cert::CertRequest::builder()
+                .key(&public)
+                .subject("Threshold Test Root")
+                .ca_level(1)
+                .build(),
+        )
+        .unwrap();
+        let p256_digest: [u8; 32] = sha2::Sha256::digest(external.tbs_der()).into();
+        let p256_session = [41; 32];
+        let p256_eid = execution_id("test-cluster", 1, CggmpCurve::P256, &p256_session);
+        let p256_sign = |protocol_index: u16, keygen_index: usize| {
+            let local = participants[usize::from(protocol_index)].clone();
+            let context = DriverContext {
+                session_id: p256_session,
+                epoch: 1,
+                protocol: MpcProtocol::SignP256,
+                request_hash: [42; 32],
+                local_node_id: local.clone(),
+                participants: participants.clone(),
+                expires_at: expires_at + 60,
+                poll_interval: Duration::from_millis(1),
+            };
+            let transport = MemoryTransport {
+                local,
+                routers: routers.clone(),
+            };
+            let share = p256_shares[keygen_index].clone();
+            async move {
+                let mut rng = OsRng;
+                let data = DataToSign::from_scalar(Scalar::<Secp256r1>::from_be_bytes_mod_order(
+                    p256_digest,
+                ));
+                let state = cggmp21::signing(
+                    ExecutionId::new(&p256_eid),
+                    protocol_index,
+                    &[0, 2, 4],
+                    &share,
+                )
+                .sign_sync(&mut rng, data);
+                drive_state_machine(state, &transport, context)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            }
+        };
+        let (p1, p2, p3) = tokio::join!(p256_sign(0, 0), p256_sign(1, 2), p256_sign(2, 4));
+        assert_eq!(p1, p2);
+        assert_eq!(p1, p3);
+        let mut encoded = [0u8; 64];
+        p1.write_to_slice(&mut encoded);
+        let pem = external.finish(&encoded).unwrap();
+        let (_, pem) = x509_parser::pem::parse_x509_pem(pem.as_bytes()).unwrap();
+        pem.parse_x509().unwrap().verify_signature(None).unwrap();
     }
 }
