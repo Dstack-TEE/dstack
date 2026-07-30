@@ -375,10 +375,12 @@ mod tests {
             .set_threshold(Some(2))
             .generate_shares(&mut OsRng)
             .unwrap();
-        let dealers = [0, 1];
+        let dealers = [0u16, 1u16];
         let contributions = dealers
             .iter()
-            .map(|index| create_contribution(&old[*index], &dealers, 5, 3, &mut OsRng).unwrap())
+            .map(|index| {
+                create_contribution(&old[usize::from(*index)], &dealers, 5, 3, &mut OsRng).unwrap()
+            })
             .collect::<Vec<_>>();
         let public = contributions
             .iter()
