@@ -467,7 +467,7 @@ impl ExternalCertificate {
                 writer.next().write_der(ECDSA_SHA256_ALGORITHM);
                 writer
                     .next()
-                    .write_bitvec_bytes(signature_der.as_bytes(), 0);
+                    .write_bitvec_bytes(signature_der.as_bytes(), signature_der.len() * 8);
             });
         });
         let encoded = BASE64.encode(der);
