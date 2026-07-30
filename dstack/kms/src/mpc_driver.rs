@@ -52,9 +52,8 @@ pub(crate) async fn drive_state_machine<S, T>(
     context: DriverContext,
 ) -> Result<S::Output>
 where
-    S: StateMachine + Send,
-    S::Msg: Serialize + DeserializeOwned + Send,
-    S::Output: Send,
+    S: StateMachine,
+    S::Msg: Serialize + DeserializeOwned,
     T: EnvelopeTransport,
 {
     ensure!(
@@ -225,7 +224,7 @@ mod tests {
     #[tokio::test]
     async fn drives_real_cggmp_dkg_over_authenticated_envelopes() {
         let manifest = manifest();
-        let routers = Arc::new(
+        let routers: Arc<BTreeMap<String, Arc<SessionRouter>>> = Arc::new(
             manifest
                 .members
                 .iter()
