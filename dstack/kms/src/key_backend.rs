@@ -31,7 +31,9 @@ use ra_tls::{
 use rand::{rngs::OsRng, RngCore};
 
 use crate::{
-    cggmp_engine::{execution_id, load_share, CggmpCurve, K256KeyShare, P256KeyShare},
+    cggmp_engine::{
+        execution_id, load_share, share_commitment, CggmpCurve, K256KeyShare, P256KeyShare,
+    },
     crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
     mpc_driver::{
         drive_state_machine_blocking, BlockingHttpTransport, DriverContext, MpcHttpTransport,
@@ -269,6 +271,47 @@ impl MpcKeyBackend {
                 .as_ref()
                 == backend.p256_public_key(),
             "MPC root certificate public key does not match the P-256 group key"
+        );
+        let member_index = manifest
+            .members
+            .iter()
+            .position(|member| member.node_id == node_id)
+            .context("local MPC member is absent from manifest")?;
+        ensure!(
+            backend.p256_share.core.key_info.public_shares.len() == manifest.members.len()
+                && backend.k256_share.core.key_info.public_shares.len() == manifest.members.len()
+                && backend.derivation_share.core.key_info.public_shares.len()
+                    == manifest.members.len(),
+            "threshold share participant count does not match manifest"
+        );
+        let p256 = backend
+            .p256_share
+            .core
+            .key_info
+            .public_shares
+            .get(member_index)
+            .context("manifest has no matching P-256 public share")?
+            .to_bytes(false);
+        let k256 = backend
+            .k256_share
+            .core
+            .key_info
+            .public_shares
+            .get(member_index)
+            .context("manifest has no matching K-256 public share")?
+            .to_bytes(true);
+        let derivation = backend
+            .derivation_share
+            .core
+            .key_info
+            .public_shares
+            .get(member_index)
+            .context("manifest has no matching derivation public share")?
+            .to_bytes(false);
+        ensure!(
+            manifest.members[member_index].share_commitment
+                == share_commitment(p256.as_bytes(), k256.as_bytes(), derivation.as_bytes()),
+            "local threshold shares do not match the epoch manifest commitment"
         );
         Ok(backend)
     }

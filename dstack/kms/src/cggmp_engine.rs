@@ -22,6 +22,7 @@ pub(crate) type P256KeyShare = KeyShare<Secp256r1>;
 
 const SHARE_FORMAT_VERSION: u16 = 1;
 const EXECUTION_ID_DOMAIN: &[u8] = b"dstack-cggmp21-execution-id-v1";
+const SHARE_COMMITMENT_DOMAIN: &[u8] = b"dstack-mpc-share-commitment-v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -70,6 +71,25 @@ pub(crate) fn execution_id(
     ] {
         hash.update((field.len() as u32).to_be_bytes());
         hash.update(field);
+    }
+    hash.finalize().into()
+}
+
+pub(crate) fn share_commitment(
+    p256_public_share: &[u8],
+    k256_public_share: &[u8],
+    derivation_public_share: &[u8],
+) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update((SHARE_COMMITMENT_DOMAIN.len() as u32).to_be_bytes());
+    hash.update(SHARE_COMMITMENT_DOMAIN);
+    for value in [
+        p256_public_share,
+        k256_public_share,
+        derivation_public_share,
+    ] {
+        hash.update((value.len() as u32).to_be_bytes());
+        hash.update(value);
     }
     hash.finalize().into()
 }
