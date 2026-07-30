@@ -42,6 +42,8 @@ pub(crate) struct DerivePayload {
     pub app_id: Vec<u8>,
     #[serde(default, with = "option_hex_bytes")]
     pub instance_id: Option<Vec<u8>>,
+    #[serde(default)]
+    pub counter: u8,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +97,7 @@ impl DerivePayload {
             self.app_id.len() == 20,
             "MPC derivation app_id must be 20 bytes"
         );
+        ensure!(self.counter <= 16, "MPC derivation counter is too large");
         match self.purpose {
             DerivePurpose::DiskKey => ensure!(
                 self.instance_id

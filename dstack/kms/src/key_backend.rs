@@ -923,18 +923,26 @@ impl KeyBackend for MpcKeyBackend {
                 purpose: DerivePurpose::DiskKey,
                 app_id: app_id.to_vec(),
                 instance_id: Some(instance_id.to_vec()),
+                counter: 0,
             })
             .await?;
         let env_key = self.derive_env_key(app_id).await?;
-        let app_seed = self
-            .derive(DerivePayload {
-                purpose: DerivePurpose::AppK256,
-                app_id: app_id.to_vec(),
-                instance_id: None,
-            })
-            .await?;
-        let k256_key = SigningKey::from_slice(&app_seed)
-            .context("threshold derivation produced an invalid K-256 key")?;
+        let mut k256_key = None;
+        for counter in 0..=16 {
+            let app_seed = self
+                .derive(DerivePayload {
+                    purpose: DerivePurpose::AppK256,
+                    app_id: app_id.to_vec(),
+                    instance_id: None,
+                    counter,
+                })
+                .await?;
+            if let Ok(key) = SigningKey::from_slice(&app_seed) {
+                k256_key = Some(key);
+                break;
+            }
+        }
+        let k256_key = k256_key.context("threshold derivation could not produce a K-256 key")?;
         let public_key = k256_key.verifying_key().to_sec1_bytes();
         let k256_signature = self
             .sign_k256(b"dstack-kms-issued", app_id, &public_key)
@@ -952,6 +960,7 @@ impl KeyBackend for MpcKeyBackend {
             purpose: DerivePurpose::EnvKey,
             app_id: app_id.to_vec(),
             instance_id: None,
+            counter: 0,
         })
         .await
     }
@@ -1011,14 +1020,23 @@ impl KeyBackend for MpcKeyBackend {
     }
 
     async fn derive_app_ca(&self, app_id: &[u8]) -> Result<CaCert> {
-        let seed = self
-            .derive(DerivePayload {
-                purpose: DerivePurpose::AppCa,
-                app_id: app_id.to_vec(),
-                instance_id: None,
-            })
-            .await?;
-        let app_key = kdf::derive_p256_key_pair_from_bytes(&seed, &[app_id, b"app-ca"])?;
+        let mut app_key = None;
+        for counter in 0..=16 {
+            let seed = self
+                .derive(DerivePayload {
+                    purpose: DerivePurpose::AppCa,
+                    app_id: app_id.to_vec(),
+                    instance_id: None,
+                    counter,
+                })
+                .await?;
+            if let Ok(key) = kdf::derive_p256_key_pair_from_bytes(&seed, &[app_id, b"app-ca"]) {
+                app_key = Some(key);
+                break;
+            }
+        }
+        let app_key =
+            app_key.context("threshold derivation could not produce a P-256 app CA key")?;
         let request = CertRequest::builder()
             .key(&app_key)
             .org_name("Dstack")
