@@ -138,6 +138,10 @@ impl KmsState {
     pub fn new(config: KmsConfig) -> Result<Self> {
         let root_ca_cert = fs::read_to_string(config.root_ca_cert())
             .context("Failed to load root CA certificate")?;
+        let attestation_verifier = Arc::new(
+            AttestationVerifier::load(&config.attestation)
+                .context("failed to load attestation verifier")?,
+        );
         let manifest: Option<EpochManifest> = if config.mpc.enabled {
             anyhow::ensure!(
                 !config.mpc.manifest_file.as_os_str().is_empty(),
@@ -152,6 +156,17 @@ impl KmsState {
         } else {
             None
         };
+        let mpc_router = manifest
+            .as_ref()
+            .map(|manifest| {
+                SessionRouter::new(
+                    manifest.clone(),
+                    config.mpc.max_sessions,
+                    config.mpc.session_ttl,
+                )
+                .map(Arc::new)
+            })
+            .transpose()?;
         let key_backend: Arc<dyn KeyBackend> = if config.mpc.enabled {
             let manifest = manifest.as_ref().context("MPC manifest is missing")?;
             Arc::new(MpcKeyBackend::load(
@@ -161,6 +176,11 @@ impl KmsState {
                 &config.mpc.node_id,
                 &config.mpc.p256_share_file,
                 &config.mpc.k256_share_file,
+                manifest,
+                mpc_router.clone().context("MPC router is missing")?,
+                fs::read_to_string(config.rpc_cert()).context("failed to read MPC RPC cert")?,
+                fs::read_to_string(config.rpc_key()).context("failed to read MPC RPC key")?,
+                attestation_verifier.clone(),
             )?)
         } else {
             let key_bytes = fs::read(config.k256_key()).context("Failed to read ECDSA root key")?;
@@ -170,7 +190,7 @@ impl KmsState {
                 &key_bytes,
             )?)
         };
-        let (mpc_identity, mpc_router) = if config.mpc.enabled {
+        let mpc_identity = if config.mpc.enabled {
             let identity = ClusterIdentity::new(
                 config.mpc.protocol_version,
                 config.mpc.cluster_id.clone(),
@@ -195,7 +215,7 @@ impl KmsState {
                 !config.mpc.node_id.is_empty(),
                 "MPC node_id must not be empty"
             );
-            let manifest = manifest.context("MPC manifest is missing")?;
+            let manifest = manifest.as_ref().context("MPC manifest is missing")?;
             anyhow::ensure!(
                 manifest.provider_id == identity.provider_id(),
                 "MPC manifest provider ID does not match cluster identity"
@@ -204,20 +224,14 @@ impl KmsState {
                 manifest.contains_member(&config.mpc.node_id),
                 "local node is not a member of the MPC epoch"
             );
-            let router =
-                SessionRouter::new(manifest, config.mpc.max_sessions, config.mpc.session_ttl)?;
-            (Some(identity), Some(Arc::new(router)))
+            Some(identity)
         } else {
-            (None, None)
+            None
         };
         let temp_ca_key =
             fs::read_to_string(config.tmp_ca_key()).context("Faeild to read temp ca key")?;
         let temp_ca_cert =
             fs::read_to_string(config.tmp_ca_cert()).context("Faeild to read temp ca cert")?;
-        let attestation_verifier = Arc::new(
-            AttestationVerifier::load(&config.attestation)
-                .context("failed to load attestation verifier")?,
-        );
         let verifier = CvmVerifier::new(
             config.image.cache_dir.display().to_string(),
             config.image.download_url.clone(),

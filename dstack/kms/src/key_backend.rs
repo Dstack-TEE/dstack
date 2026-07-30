@@ -20,6 +20,9 @@ use ra_tls::{
 use crate::{
     cggmp_engine::{load_share, CggmpCurve, K256KeyShare, P256KeyShare},
     crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
+    mpc_driver::MpcHttpTransport,
+    mpc_identity::EpochManifest,
+    mpc_session::SessionRouter,
 };
 
 pub(crate) struct DerivedAppKeys {
@@ -145,6 +148,8 @@ pub(crate) struct MpcKeyBackend {
     root_ca_cert: String,
     p256_share: P256KeyShare,
     k256_share: K256KeyShare,
+    #[allow(dead_code)]
+    transport: MpcHttpTransport,
 }
 
 impl MpcKeyBackend {
@@ -155,7 +160,21 @@ impl MpcKeyBackend {
         node_id: &str,
         p256_share_file: &std::path::Path,
         k256_share_file: &std::path::Path,
+        manifest: &EpochManifest,
+        router: std::sync::Arc<SessionRouter>,
+        rpc_cert: String,
+        rpc_key: String,
+        attestation_verifier: std::sync::Arc<ra_tls::attestation::AttestationVerifier>,
     ) -> Result<Self> {
+        let transport = MpcHttpTransport::new(
+            manifest,
+            node_id,
+            router,
+            rpc_cert,
+            rpc_key,
+            root_ca_cert.clone(),
+            attestation_verifier,
+        )?;
         Ok(Self {
             root_ca_cert,
             p256_share: load_share(
@@ -172,6 +191,7 @@ impl MpcKeyBackend {
                 node_id,
                 CggmpCurve::K256,
             )?,
+            transport,
         })
     }
 }

@@ -14,7 +14,15 @@ use round_based::{
 };
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::mpc_session::{MpcEnvelope, MpcProtocol};
+use dstack_kms_rpc::{mpc_transport_client::MpcTransportClient, MpcPushRequest};
+use ra_rpc::client::{RaClient, RaClientConfig};
+use ra_tls::attestation::AttestationVerifier;
+use x509_parser::prelude::FromDer as _;
+
+use crate::{
+    mpc_identity::EpochManifest,
+    mpc_session::{MpcEnvelope, MpcProtocol, SessionRouter},
+};
 
 #[derive(Clone)]
 pub(crate) struct DriverContext {
@@ -44,6 +52,91 @@ impl DriverContext {
 pub(crate) trait EnvelopeTransport: Send + Sync {
     async fn send(&self, envelope: MpcEnvelope) -> Result<()>;
     async fn receive(&self, session_id: &[u8; 32]) -> Result<Vec<MpcEnvelope>>;
+}
+
+pub(crate) struct MpcHttpTransport {
+    local_node_id: String,
+    local_router: std::sync::Arc<SessionRouter>,
+    clients: std::collections::BTreeMap<String, MpcTransportClient<RaClient>>,
+}
+
+impl MpcHttpTransport {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        manifest: &EpochManifest,
+        local_node_id: &str,
+        local_router: std::sync::Arc<SessionRouter>,
+        client_cert: String,
+        client_key: String,
+        ca_cert: String,
+        attestation_verifier: std::sync::Arc<AttestationVerifier>,
+    ) -> Result<Self> {
+        ensure!(
+            manifest.contains_member(local_node_id),
+            "local MPC node is not in the epoch manifest"
+        );
+        let mut clients = std::collections::BTreeMap::new();
+        for member in &manifest.members {
+            if member.node_id == local_node_id {
+                continue;
+            }
+            let expected_public_key = member.attestation_pubkey.clone();
+            let expected_node_id = member.node_id.clone();
+            let client = RaClientConfig::builder()
+                .remote_uri(member.endpoint.clone())
+                .tls_client_cert(client_cert.clone())
+                .tls_client_key(client_key.clone())
+                .tls_ca_cert(ca_cert.clone())
+                .tls_built_in_root_certs(false)
+                .attestation_verifier(attestation_verifier.clone())
+                .cert_validator(Box::new(move |info| {
+                    let info = info.context("MPC peer did not present a certificate")?;
+                    ensure!(
+                        info.attestation.is_some(),
+                        "MPC peer certificate is not attested"
+                    );
+                    let (_, certificate) = x509_parser::parse_x509_certificate(&info.cert_der)
+                        .context("invalid MPC peer certificate")?;
+                    ensure!(
+                        certificate.public_key().raw == expected_public_key,
+                        "MPC peer certificate key does not match manifest member {expected_node_id}"
+                    );
+                    Ok(())
+                }))
+                .build()
+                .into_client()
+                .with_context(|| format!("failed to build MPC client for {}", member.node_id))?;
+            clients.insert(member.node_id.clone(), MpcTransportClient::new(client));
+        }
+        Ok(Self {
+            local_node_id: local_node_id.into(),
+            local_router,
+            clients,
+        })
+    }
+}
+
+#[async_trait]
+impl EnvelopeTransport for MpcHttpTransport {
+    async fn send(&self, envelope: MpcEnvelope) -> Result<()> {
+        ensure!(
+            envelope.sender == self.local_node_id,
+            "outgoing MPC sender does not match local node"
+        );
+        self.clients
+            .get(&envelope.recipient)
+            .context("MPC recipient has no attested client")?
+            .push(MpcPushRequest {
+                envelope_json: serde_json::to_vec(&envelope)
+                    .context("failed to encode MPC envelope")?,
+            })
+            .await
+            .context("failed to deliver MPC envelope")
+    }
+
+    async fn receive(&self, session_id: &[u8; 32]) -> Result<Vec<MpcEnvelope>> {
+        self.local_router.drain(&self.local_node_id, session_id)
+    }
 }
 
 pub(crate) async fn drive_state_machine<S, T>(
