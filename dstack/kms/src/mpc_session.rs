@@ -284,5 +284,15 @@ mod tests {
         changed.sequence = 2;
         changed.request_hash[0] ^= 1;
         assert!(router.push("kms-1", changed).is_err());
+
+        let mut wrong_epoch = message();
+        wrong_epoch.epoch = 3;
+        assert!(router.push("kms-1", wrong_epoch).is_err());
+        let mut forged_sender = message();
+        forged_sender.sender = "kms-3".into();
+        assert!(router.push("kms-1", forged_sender).is_err());
+        let mut unknown_recipient = message();
+        unknown_recipient.recipient = "kms-9".into();
+        assert!(router.push("kms-1", unknown_recipient).is_err());
     }
 }
