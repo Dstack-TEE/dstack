@@ -124,9 +124,18 @@ message MpcPollResponse {
   repeated bytes envelope_json = 1;
 }
 
+message MpcStartRequest {
+  bytes operation_json = 1;
+}
+
+message MpcStartResponse {
+  bytes result = 1;
+}
+
 // Internal interactive-protocol transport. Every method requires an
 // attested RA-TLS client certificate belonging to the active epoch manifest.
 service MpcTransport {
+  rpc Start(MpcStartRequest) returns (MpcStartResponse);
   rpc Push(MpcPushRequest) returns (google.protobuf.Empty);
   rpc Poll(MpcPollRequest) returns (MpcPollResponse);
 }
