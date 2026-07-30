@@ -1003,7 +1003,10 @@ mod tests {
     };
     use crate::app::image::{Image, ImageInfo};
     use crate::app::{needs_swtpm, GpuConfig, Manifest, PortMapping, VmVolume, VmWorkDir};
-    use crate::config::{Config, CvmPlatform, Protocol, DEFAULT_CONFIG};
+    use crate::config::{
+        Config, CvmPlatform, NetworkFilterMode, NetworkingMode, Protocol, DEFAULT_CONFIG,
+    };
+    use crate::netd::{tap_name, InterfaceIdentity};
     use dstack_types::{KeyProviderKind, TeeVariant};
 
     #[test]
