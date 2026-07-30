@@ -647,6 +647,46 @@ mod tests {
     use std::net::IpAddr;
 
     #[test]
+    fn external_certificate_roundtrip_uses_the_real_issuer_key() {
+        let root_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let root = CertRequest::builder()
+            .key(&root_key)
+            .subject("Threshold Root")
+            .ca_level(1)
+            .build()
+            .self_signed()
+            .unwrap();
+        let app_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let request = CertRequest::builder()
+            .key(&app_key)
+            .subject("Dstack App CA")
+            .ca_level(0)
+            .app_id(&[7u8; 20])
+            .special_usage("app:ca")
+            .build();
+        let external = prepare_external_certificate(request, &root.pem()).unwrap();
+        let signer = EcdsaKeyPair::from_pkcs8(
+            &ECDSA_P256_SHA256_ASN1_SIGNING,
+            &root_key.serialize_der(),
+            &SystemRandom::new(),
+        )
+        .unwrap();
+        let der_signature = signer
+            .sign(&SystemRandom::new(), external.tbs_der())
+            .unwrap();
+        let signature = p256::ecdsa::Signature::from_der(der_signature.as_ref()).unwrap();
+        let pem = external.finish(signature.to_bytes().as_slice()).unwrap();
+
+        let (_, root_pem) = x509_parser::pem::parse_x509_pem(root.pem().as_bytes()).unwrap();
+        let root_x509 = root_pem.parse_x509().unwrap();
+        let (_, app_pem) = x509_parser::pem::parse_x509_pem(pem.as_bytes()).unwrap();
+        let app_x509 = app_pem.parse_x509().unwrap();
+        app_x509
+            .verify_signature(Some(root_x509.public_key()))
+            .unwrap();
+    }
+
+    #[test]
     fn test_csr_signing_and_verification() {
         let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
         let pubkey = key_pair.public_key_der();
