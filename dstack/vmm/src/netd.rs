@@ -57,8 +57,14 @@ pub struct PrepareRequest {
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Request {
     Prepare(PrepareRequest),
-    Remove { identity: InterfaceIdentity },
-    Check { identity: InterfaceIdentity },
+    Remove {
+        #[serde(flatten)]
+        identity: InterfaceIdentity,
+    },
+    Check {
+        #[serde(flatten)]
+        identity: InterfaceIdentity,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -492,5 +498,18 @@ mod tests {
         assert!(validate_name("bridge", "br0;id", 15, "_.-").is_err());
         assert!(validate_name("filter", "../../filter", 128, "_.:-").is_err());
         assert!(validate_mac("ff:ff:ff:ff:ff:ff").is_err());
+    }
+
+    #[test]
+    fn remove_protocol_keeps_identity_fields_flat() {
+        let request = Request::Remove {
+            identity: identity("instance", "vm", 2),
+        };
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(value["operation"], "remove");
+        assert_eq!(value["instance_id"], "instance");
+        assert_eq!(value["vm_id"], "vm");
+        assert_eq!(value["nic_index"], 2);
+        assert!(value.get("identity").is_none());
     }
 }
