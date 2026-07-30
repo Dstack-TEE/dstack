@@ -6,6 +6,7 @@
 
 HANDSHAKE_TIMEOUT=180
 REFRESH_INTERVAL=180
+MISSING_CONFIG_RETRY_INTERVAL=30
 LAST_REFRESH=0
 STALE_SINCE=0
 DSTACK_WORK_DIR=${DSTACK_WORK_DIR:-/dstack}
@@ -84,6 +85,10 @@ while true; do
         check_and_refresh
     else
         STALE_SINCE=0
+        now=$(date +%s)
+        if [ "$LAST_REFRESH" -eq 0 ] || [ $((now - LAST_REFRESH)) -ge $MISSING_CONFIG_RETRY_INTERVAL ]; then
+            do_refresh "$now" "WireGuard configuration missing" 1
+        fi
     fi
     sleep 10
 done
