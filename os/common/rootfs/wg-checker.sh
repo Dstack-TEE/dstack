@@ -49,13 +49,9 @@ check_and_refresh() {
 
     now=$(date +%s)
 
-    # Periodic refresh every REFRESH_INTERVAL seconds (not forced)
-    if [ "$LAST_REFRESH" -eq 0 ] || [ $((now - LAST_REFRESH)) -ge $REFRESH_INTERVAL ]; then
-        do_refresh "$now" "Periodic refresh" 0
-        return
-    fi
-
-    # Check handshake staleness (forced refresh)
+    # Check handshake staleness before the periodic refresh. Otherwise equal
+    # handshake and refresh intervals continually reset STALE_SINCE and a peer
+    # with no handshake can never reach the forced-refresh branch.
     latest=$(get_latest_handshake)
     if [ -z "$latest" ]; then
         latest=0
@@ -64,14 +60,22 @@ check_and_refresh() {
     if [ "$latest" -gt 0 ]; then
         if [ $((now - latest)) -ge $HANDSHAKE_TIMEOUT ]; then
             do_refresh "$now" "WireGuard handshake stale" 1 >&2
+            return
         fi
+        STALE_SINCE=0
     else
         if [ "$STALE_SINCE" -eq 0 ]; then
             STALE_SINCE=$now
         fi
         if [ $((now - STALE_SINCE)) -ge $HANDSHAKE_TIMEOUT ]; then
             do_refresh "$now" "WireGuard handshake stale" 1 >&2
+            return
         fi
+    fi
+
+    # Periodic refresh every REFRESH_INTERVAL seconds (not forced).
+    if [ "$LAST_REFRESH" -eq 0 ] || [ $((now - LAST_REFRESH)) -ge $REFRESH_INTERVAL ]; then
+        do_refresh "$now" "Periodic refresh" 0
     fi
 }
 
