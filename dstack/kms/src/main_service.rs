@@ -167,6 +167,18 @@ impl KmsState {
         };
         if let Some(identity) = &configured_identity {
             identity.validate()?;
+            crate::mpc_lifecycle::recover_pending_activation(
+                &crate::mpc_lifecycle::EpochPaths {
+                    manifest: &config.mpc.manifest_file,
+                    checkpoint: &config.mpc.checkpoint_file,
+                    p256_share: &config.mpc.p256_share_file,
+                    k256_share: &config.mpc.k256_share_file,
+                    derivation_share: &config.mpc.derivation_share_file,
+                },
+                identity,
+                &identity.cluster_id,
+                &config.mpc.node_id,
+            )?;
         }
         let mut signed_manifest: Option<SignedEpochManifest> = None;
         let manifest: Option<EpochManifest> = if config.mpc.enabled {
@@ -216,15 +228,16 @@ impl KmsState {
             let manifest = manifest.as_ref().context("MPC manifest is missing")?;
             Arc::new(MpcKeyBackend::load(
                 root_ca_cert,
-                &configured_identity
+                configured_identity
                     .as_ref()
-                    .context("MPC identity is missing")?
-                    .cluster_id,
+                    .context("MPC identity is missing")?,
                 manifest.epoch,
                 &config.mpc.node_id,
                 &config.mpc.p256_share_file,
                 &config.mpc.k256_share_file,
                 &config.mpc.derivation_share_file,
+                &config.mpc.manifest_file,
+                &config.mpc.checkpoint_file,
                 manifest,
                 mpc_router.clone().context("MPC router is missing")?,
                 fs::read_to_string(config.rpc_cert()).context("failed to read MPC RPC cert")?,

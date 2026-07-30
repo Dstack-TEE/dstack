@@ -40,8 +40,8 @@ use crate::{
         drive_state_machine_blocking, BlockingTransport, DriverContext, EnvelopeTransport,
         MpcHttpTransport,
     },
-    mpc_identity::{EpochManifest, SignedEpochManifest},
-    mpc_lifecycle::ResharePlan,
+    mpc_identity::{ClusterIdentity, EpochManifest, SignedEpochManifest},
+    mpc_lifecycle::{activate_pending_epoch, EpochPaths, ResharePlan},
     mpc_operation::{
         DerivePayload, DerivePurpose, K256SignPayload, ManifestSignaturePayload, MpcOperation,
         MpcOperationPayload, P256CertificatePayload,
@@ -77,6 +77,7 @@ pub(crate) trait KeyBackend: Send + Sync {
     async fn derive_app_ca(&self, app_id: &[u8]) -> Result<CaCert>;
     async fn sign_epoch_manifest(&self, manifest: EpochManifest) -> Result<SignedEpochManifest>;
     async fn prepare_reshare(&self, plan: ResharePlan) -> Result<BTreeMap<String, Vec<u8>>>;
+    async fn activate_epoch(&self, signed: SignedEpochManifest) -> Result<bool>;
     async fn run_mpc_operation(
         &self,
         operation: crate::mpc_operation::MpcOperation,
@@ -189,6 +190,10 @@ impl KeyBackend for LocalKeyBackend {
         bail!("resharing is unavailable on the local key backend")
     }
 
+    async fn activate_epoch(&self, _signed: SignedEpochManifest) -> Result<bool> {
+        bail!("epoch activation is unavailable on the local key backend")
+    }
+
     async fn export_root_keys(&self) -> Result<(String, Vec<u8>)> {
         Ok((
             self.root_ca.key.serialize_pem(),
@@ -219,6 +224,9 @@ pub(crate) struct MpcKeyBackend {
     p256_share_file: std::path::PathBuf,
     k256_share_file: std::path::PathBuf,
     derivation_share_file: std::path::PathBuf,
+    manifest_file: std::path::PathBuf,
+    checkpoint_file: std::path::PathBuf,
+    identity: ClusterIdentity,
     operations: Mutex<BTreeMap<Vec<u8>, Arc<OperationRecord>>>,
 }
 
@@ -245,12 +253,14 @@ const MAX_ACTIVE_OPERATIONS: usize = 128;
 impl MpcKeyBackend {
     pub(crate) fn load(
         root_ca_cert: String,
-        cluster_id: &str,
+        identity: &ClusterIdentity,
         epoch: u64,
         node_id: &str,
         p256_share_file: &std::path::Path,
         k256_share_file: &std::path::Path,
         derivation_share_file: &std::path::Path,
+        manifest_file: &std::path::Path,
+        checkpoint_file: &std::path::Path,
         manifest: &EpochManifest,
         router: std::sync::Arc<SessionRouter>,
         rpc_cert: String,
@@ -276,32 +286,35 @@ impl MpcKeyBackend {
             root_ca_cert,
             p256_share: load_share(
                 p256_share_file,
-                cluster_id,
+                &identity.cluster_id,
                 epoch,
                 node_id,
                 CggmpCurve::P256,
             )?,
             k256_share: load_share(
                 k256_share_file,
-                cluster_id,
+                &identity.cluster_id,
                 epoch,
                 node_id,
                 CggmpCurve::K256,
             )?,
             derivation_share: load_share(
                 derivation_share_file,
-                cluster_id,
+                &identity.cluster_id,
                 epoch,
                 node_id,
                 CggmpCurve::P256,
             )?,
             transport: Arc::new(transport),
             manifest: manifest.clone(),
-            cluster_id: cluster_id.into(),
+            cluster_id: identity.cluster_id.clone(),
             node_id: node_id.into(),
             p256_share_file: p256_share_file.into(),
             k256_share_file: k256_share_file.into(),
             derivation_share_file: derivation_share_file.into(),
+            manifest_file: manifest_file.into(),
+            checkpoint_file: checkpoint_file.into(),
+            identity: identity.clone(),
             operations: Mutex::new(BTreeMap::new()),
         };
         ensure!(
@@ -1435,6 +1448,23 @@ impl KeyBackend for MpcKeyBackend {
 
     async fn prepare_reshare(&self, plan: ResharePlan) -> Result<BTreeMap<String, Vec<u8>>> {
         self.coordinate_reshare(plan).await
+    }
+
+    async fn activate_epoch(&self, signed: SignedEpochManifest) -> Result<bool> {
+        activate_pending_epoch(
+            &EpochPaths {
+                manifest: &self.manifest_file,
+                checkpoint: &self.checkpoint_file,
+                p256_share: &self.p256_share_file,
+                k256_share: &self.k256_share_file,
+                derivation_share: &self.derivation_share_file,
+            },
+            &self.identity,
+            &self.manifest,
+            &signed,
+            &self.cluster_id,
+            &self.node_id,
+        )
     }
 
     async fn run_mpc_operation(&self, operation: MpcOperation, initiator: &str) -> Result<Vec<u8>> {

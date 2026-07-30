@@ -4,13 +4,46 @@
 
 //! Durable epoch-chain validation for MPC membership lifecycle changes.
 
-use std::{fs::Permissions, os::unix::fs::PermissionsExt, path::Path};
+use std::{
+    fs::Permissions,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{ensure, Context, Result};
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
 
-use crate::mpc_identity::{ClusterIdentity, SignedEpochManifest};
+use crate::{
+    cggmp_engine::{
+        load_share, share_commitment, validate_share_topology, CggmpCurve, K256KeyShare,
+        P256KeyShare,
+    },
+    mpc_identity::{ClusterIdentity, EpochManifest, SignedEpochManifest},
+};
+
+#[derive(Clone, Debug)]
+pub(crate) struct EpochPaths<'a> {
+    pub manifest: &'a Path,
+    pub checkpoint: &'a Path,
+    pub p256_share: &'a Path,
+    pub k256_share: &'a Path,
+    pub derivation_share: &'a Path,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ActivationJournal {
+    version: u16,
+    signed_manifest: SignedEpochManifest,
+}
+
+pub(crate) fn pending_share_path(path: &Path, epoch: u64) -> PathBuf {
+    path.with_extension(format!("epoch-{epoch}.pending"))
+}
+
+fn activation_journal_path(manifest: &Path) -> PathBuf {
+    manifest.with_extension("activation-journal")
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ReshareMember {
@@ -155,6 +188,176 @@ pub(crate) fn validate_and_checkpoint(
     fs::set_permissions(path, Permissions::from_mode(0o600))
         .context("failed to restrict MPC checkpoint permissions")?;
     Ok(())
+}
+
+/// Durably install a threshold-authorized next epoch. A journal is written
+/// before any active file changes, so startup can finish an interrupted
+/// activation instead of observing a mixed manifest/share generation.
+pub(crate) fn activate_pending_epoch(
+    paths: &EpochPaths<'_>,
+    identity: &ClusterIdentity,
+    active: &EpochManifest,
+    signed: &SignedEpochManifest,
+    cluster_id: &str,
+    node_id: &str,
+) -> Result<bool> {
+    signed.verify(identity)?;
+    ensure!(
+        signed.manifest.epoch == active.epoch + 1,
+        "activation must advance exactly one epoch"
+    );
+    ensure!(
+        signed.manifest.previous_manifest_hash == active.manifest_hash()?,
+        "activation does not extend active epoch"
+    );
+    let journal = ActivationJournal {
+        version: 1,
+        signed_manifest: signed.clone(),
+    };
+    let journal_path = activation_journal_path(paths.manifest);
+    safe_write::safe_write(&journal_path, &serde_jcs::to_vec(&journal)?)
+        .context("failed to persist MPC activation journal")?;
+    fs::set_permissions(&journal_path, Permissions::from_mode(0o600))?;
+    finish_activation(paths, identity, signed, cluster_id, node_id)?;
+    fs::remove_file(&journal_path).context("failed to clear MPC activation journal")?;
+    for path in [paths.p256_share, paths.k256_share, paths.derivation_share] {
+        let pending = pending_share_path(path, signed.manifest.epoch);
+        if pending.exists() {
+            fs::remove_file(pending)?;
+        }
+    }
+    Ok(signed.manifest.contains_member(node_id))
+}
+
+/// Complete a journaled activation before normal KMS state reads either the
+/// manifest or shares.
+pub(crate) fn recover_pending_activation(
+    paths: &EpochPaths<'_>,
+    identity: &ClusterIdentity,
+    cluster_id: &str,
+    node_id: &str,
+) -> Result<bool> {
+    let journal_path = activation_journal_path(paths.manifest);
+    if !journal_path.exists() {
+        return Ok(false);
+    }
+    let metadata = fs::symlink_metadata(&journal_path)?;
+    ensure!(
+        metadata.file_type().is_file(),
+        "MPC activation journal is not a file"
+    );
+    ensure!(
+        metadata.permissions().mode() & 0o077 == 0,
+        "MPC activation journal permissions are too broad"
+    );
+    let journal: ActivationJournal = serde_json::from_slice(&fs::read(&journal_path)?)
+        .context("failed to parse MPC activation journal")?;
+    ensure!(
+        journal.version == 1,
+        "unsupported MPC activation journal version"
+    );
+    finish_activation(
+        paths,
+        identity,
+        &journal.signed_manifest,
+        cluster_id,
+        node_id,
+    )?;
+    fs::remove_file(&journal_path)?;
+    for path in [paths.p256_share, paths.k256_share, paths.derivation_share] {
+        let pending = pending_share_path(path, journal.signed_manifest.manifest.epoch);
+        if pending.exists() {
+            fs::remove_file(pending)?;
+        }
+    }
+    Ok(true)
+}
+
+fn finish_activation(
+    paths: &EpochPaths<'_>,
+    identity: &ClusterIdentity,
+    signed: &SignedEpochManifest,
+    cluster_id: &str,
+    node_id: &str,
+) -> Result<()> {
+    signed.verify(identity)?;
+    if let Some(index) = signed
+        .manifest
+        .members
+        .iter()
+        .position(|member| member.node_id == node_id)
+    {
+        let epoch = signed.manifest.epoch;
+        let p256_pending = pending_share_path(paths.p256_share, epoch);
+        let k256_pending = pending_share_path(paths.k256_share, epoch);
+        let derivation_pending = pending_share_path(paths.derivation_share, epoch);
+        let p256: P256KeyShare =
+            load_share(&p256_pending, cluster_id, epoch, node_id, CggmpCurve::P256)?;
+        let k256: K256KeyShare =
+            load_share(&k256_pending, cluster_id, epoch, node_id, CggmpCurve::K256)?;
+        let derivation: P256KeyShare = load_share(
+            &derivation_pending,
+            cluster_id,
+            epoch,
+            node_id,
+            CggmpCurve::P256,
+        )?;
+        for result in [
+            validate_share_topology(
+                &p256,
+                index,
+                signed.manifest.members.len(),
+                signed.manifest.threshold,
+            ),
+            validate_share_topology(
+                &k256,
+                index,
+                signed.manifest.members.len(),
+                signed.manifest.threshold,
+            ),
+            validate_share_topology(
+                &derivation,
+                index,
+                signed.manifest.members.len(),
+                signed.manifest.threshold,
+            ),
+        ] {
+            result?;
+        }
+        use cggmp21::key_share::AnyKeyShare as _;
+        ensure!(
+            p256.shared_public_key().to_bytes(false).as_bytes() == identity.p256_group_pubkey,
+            "activated P-256 group key changed"
+        );
+        ensure!(
+            k256.shared_public_key().to_bytes(true).as_bytes() == identity.k256_group_pubkey,
+            "activated K-256 group key changed"
+        );
+        ensure!(
+            derivation.shared_public_key().to_bytes(false).as_bytes()
+                == identity.derivation_group_pubkey,
+            "activated derivation group key changed"
+        );
+        let p = p256.core.key_info.public_shares[index].to_bytes(false);
+        let k = k256.core.key_info.public_shares[index].to_bytes(true);
+        let d = derivation.core.key_info.public_shares[index].to_bytes(false);
+        ensure!(
+            signed.manifest.members[index].share_commitment
+                == share_commitment(p.as_bytes(), k.as_bytes(), d.as_bytes()),
+            "pending shares do not match signed manifest"
+        );
+        for (pending, active) in [
+            (&p256_pending, paths.p256_share),
+            (&k256_pending, paths.k256_share),
+            (&derivation_pending, paths.derivation_share),
+        ] {
+            safe_write::safe_write(active, &fs::read(pending)?)?;
+            fs::set_permissions(active, Permissions::from_mode(0o600))?;
+        }
+    }
+    safe_write::safe_write(paths.manifest, &serde_jcs::to_vec(signed)?)?;
+    fs::set_permissions(paths.manifest, Permissions::from_mode(0o600))?;
+    validate_and_checkpoint(paths.checkpoint, signed, identity)
 }
 
 mod hex_bytes {
