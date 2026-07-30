@@ -2048,6 +2048,13 @@ fn kms_rpc_url(base: &str) -> String {
     }
 }
 
+fn validate_key_provider_inputs(kind: KeyProviderKind, kms_urls: &[String]) -> Result<()> {
+    if kind.is_kms() && kms_urls.is_empty() {
+        bail!("No KMS URLs are set");
+    }
+    Ok(())
+}
+
 async fn request_first_available_kms<T, F, Fut>(kms_urls: &[String], mut request: F) -> Result<T>
 where
     F: FnMut(String) -> Fut,
@@ -2277,6 +2284,7 @@ impl<'a> Stage0<'a> {
 
     async fn request_app_keys(&self) -> Result<AppKeys> {
         let key_provider = self.shared.app_compose.key_provider();
+        validate_key_provider_inputs(key_provider, &self.shared.sys_config.kms_urls)?;
         match key_provider {
             KeyProviderKind::Kms => self.request_app_keys_from_kms().await,
             KeyProviderKind::Local => self.get_keys_from_local_key_provider().await,
@@ -3596,7 +3604,8 @@ fn test_unquote_os_release_value_handles_quoting_styles() {
 
 #[cfg(test)]
 mod kms_provider_failover_tests {
-    use super::{kms_rpc_url, request_first_available_kms};
+    use super::{kms_rpc_url, request_first_available_kms, validate_key_provider_inputs};
+    use dstack_types::KeyProviderKind;
     use anyhow::{anyhow, Result};
     use std::sync::{Arc, Mutex};
 
@@ -3691,6 +3700,16 @@ mod kms_provider_failover_tests {
         assert_eq!(left?, "healthy/prpc");
         assert_eq!(right?, "healthy/prpc");
         Ok(())
+    }
+
+    #[test]
+    fn local_tpm_and_ephemeral_routes_are_orthogonal_to_kms_inventory() {
+        let no_urls = Vec::new();
+        assert!(validate_key_provider_inputs(KeyProviderKind::Local, &no_urls).is_ok());
+        assert!(validate_key_provider_inputs(KeyProviderKind::Tpm, &no_urls).is_ok());
+        assert!(validate_key_provider_inputs(KeyProviderKind::None, &no_urls).is_ok());
+        let error = validate_key_provider_inputs(KeyProviderKind::Kms, &no_urls).unwrap_err();
+        assert!(error.to_string().contains("No KMS URLs are set"));
     }
 
     #[tokio::test]
