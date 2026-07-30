@@ -138,7 +138,6 @@ service MpcTransport {
   rpc Ping(google.protobuf.Empty) returns (google.protobuf.Empty);
   rpc Start(MpcStartRequest) returns (MpcStartResponse);
   rpc Push(MpcPushRequest) returns (google.protobuf.Empty);
-  rpc Poll(MpcPollRequest) returns (MpcPollResponse);
 }
 
 // The KMS admin RPC service. Served on a separate admin listener

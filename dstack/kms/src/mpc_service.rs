@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use dstack_kms_rpc::{
     mpc_transport_server::{MpcTransportRpc, MpcTransportServer},
-    MpcPollRequest, MpcPollResponse, MpcPushRequest, MpcStartRequest, MpcStartResponse,
+    MpcPushRequest, MpcStartRequest, MpcStartResponse,
 };
 use ra_rpc::{CallContext, RpcCall};
 
@@ -65,16 +65,6 @@ impl MpcTransportRpc for MpcHandler {
             .context("invalid MPC envelope encoding")?;
         let (node_id, router) = self.peer_and_router()?;
         router.push(node_id, envelope)
-    }
-
-    async fn poll(self, request: MpcPollRequest) -> Result<MpcPollResponse> {
-        let (node_id, router) = self.peer_and_router()?;
-        let envelope_json = router
-            .drain(node_id, &request.session_id)?
-            .into_iter()
-            .map(|envelope| serde_json::to_vec(&envelope).context("failed to encode MPC envelope"))
-            .collect::<Result<Vec<_>>>()?;
-        Ok(MpcPollResponse { envelope_json })
     }
 }
 
