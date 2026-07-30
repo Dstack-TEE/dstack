@@ -33,7 +33,10 @@ use ra_rpc::{
 };
 use ra_tls::attestation::AttestationVerifier;
 use ra_tls::{
-    cert::{prepare_external_self_signed, CertRequest},
+    cert::{
+        prepare_external_certificate, prepare_external_self_signed, CertRequest,
+        ExternalCertificate,
+    },
     rcgen::SubjectPublicKeyInfo,
 };
 use rand::{rngs::OsRng, RngCore};
@@ -151,6 +154,8 @@ enum GenesisKind {
     Commitments,
     SignRoot,
     SignManifest,
+    PrepareRpcCertificate,
+    SignRpcCertificate,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,6 +241,15 @@ struct GenesisBundle {
     identity: ClusterIdentity,
     root_ca_pem: String,
     signed_manifest: SignedEpochManifest,
+    rpc_certificates: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RpcCertificateSigningPayload {
+    node_id: String,
+    root_ca_pem: String,
+    #[serde(with = "hex_bytes")]
+    tbs_der: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -566,6 +580,89 @@ impl GenesisState {
         Ok(())
     }
 
+    fn prepare_rpc_certificate(&self, root_ca_pem: &str) -> Result<Vec<u8>> {
+        let key =
+            ra_tls::rcgen::KeyPair::from_pem(&fs_err::read_to_string(self.0.config.rpc_key())?)
+                .context("invalid genesis RPC key")?;
+        let (_, current_pem) =
+            x509_parser::pem::parse_x509_pem(&fs_err::read(self.0.config.rpc_cert())?)?;
+        let current = current_pem.parse_x509()?;
+        let attestation = ra_tls::attestation::from_cert(&current)?
+            .context("genesis RPC certificate lacks attestation")?;
+        let domain = fs_err::read_to_string(self.0.config.rpc_domain())?;
+        let names = [domain.clone()];
+        let external = prepare_external_certificate(
+            CertRequest::builder()
+                .key(&key)
+                .subject(&domain)
+                .alt_names(&names)
+                .special_usage("kms:rpc")
+                .attestation(&attestation)
+                .usage_server_auth(true)
+                .usage_client_auth(true)
+                .build(),
+            root_ca_pem,
+        )?;
+        Ok(external.tbs_der().to_vec())
+    }
+
+    fn validate_rpc_certificate_tbs(&self, payload: &RpcCertificateSigningPayload) -> Result<()> {
+        use ra_tls::oids::{PHALA_RATLS_ATTESTATION, PHALA_RATLS_CERT_USAGE};
+        use x509_parser::{
+            certificate::TbsCertificate, der_parser::oid::Oid, prelude::FromDer as _,
+        };
+        let member = self
+            .0
+            .plan
+            .members
+            .iter()
+            .find(|member| member.node_id == payload.node_id)
+            .context("RPC certificate target is not in genesis plan")?;
+        let (_, root_pem) = x509_parser::pem::parse_x509_pem(payload.root_ca_pem.as_bytes())?;
+        let root = root_pem.parse_x509()?;
+        root.verify_signature(None)
+            .context("invalid threshold root certificate")?;
+        ensure!(
+            root.public_key().subject_public_key.data.as_ref()
+                == self.identity_from_artifacts()?.p256_group_pubkey,
+            "RPC certificate root differs from DKG"
+        );
+        let (remaining, tbs) = TbsCertificate::from_der(&payload.tbs_der)
+            .map_err(|error| anyhow::anyhow!("invalid RPC certificate TBS: {error}"))?;
+        ensure!(
+            remaining.is_empty(),
+            "RPC certificate TBS has trailing bytes"
+        );
+        ensure!(
+            tbs.issuer() == root.subject(),
+            "RPC certificate has wrong issuer"
+        );
+        ensure!(
+            tbs.public_key().raw == member.attestation_pubkey,
+            "RPC certificate key differs from quote-bound genesis key"
+        );
+        ensure!(
+            tbs.signature.algorithm.to_id_string() == "1.2.840.10045.4.3.2",
+            "RPC certificate does not use ECDSA/SHA-256"
+        );
+        let usage_oid = Oid::from(PHALA_RATLS_CERT_USAGE)
+            .map_err(|error| anyhow::anyhow!("invalid usage OID: {error:?}"))?;
+        let usage = tbs
+            .get_extension_unique(&usage_oid)?
+            .context("RPC certificate lacks usage")?;
+        ensure!(
+            yasna::parse_der(usage.value, |reader| reader.read_bytes())? == b"kms:rpc",
+            "wrong RPC certificate usage"
+        );
+        let attestation_oid = Oid::from(PHALA_RATLS_ATTESTATION)
+            .map_err(|error| anyhow::anyhow!("invalid attestation OID: {error:?}"))?;
+        ensure!(
+            tbs.get_extension_unique(&attestation_oid)?.is_some(),
+            "RPC certificate lacks attestation"
+        );
+        Ok(())
+    }
+
     async fn execute(&self, operation: GenesisOperation, initiator: &str) -> Result<Vec<u8>> {
         operation.validate()?;
         ensure!(
@@ -641,6 +738,9 @@ impl GenesisState {
             GenesisKind::Commitments => MpcProtocol::SignK256,
             GenesisKind::SignRoot => MpcProtocol::SignP256,
             GenesisKind::SignManifest => MpcProtocol::SignK256,
+            GenesisKind::PrepareRpcCertificate | GenesisKind::SignRpcCertificate => {
+                MpcProtocol::SignP256
+            }
         };
         let context = DriverContext {
             session_id: operation.session_id.as_slice().try_into()?,
@@ -778,7 +878,12 @@ impl GenesisState {
                         .to_vec(),
                 )
             }
-            GenesisKind::SignRoot | GenesisKind::SignManifest => {
+            GenesisKind::PrepareRpcCertificate => {
+                let root_ca_pem = std::str::from_utf8(&operation.payload)
+                    .context("invalid genesis root PEM payload")?;
+                self.prepare_rpc_certificate(root_ca_pem)
+            }
+            GenesisKind::SignRoot | GenesisKind::SignManifest | GenesisKind::SignRpcCertificate => {
                 ensure!(
                     operation.payload.len() <= 64 * 1024,
                     "genesis signing payload is too large"
@@ -794,6 +899,13 @@ impl GenesisState {
                         self.validate_genesis_manifest(&manifest)?;
                         manifest.manifest_hash()?
                     }
+                    GenesisKind::SignRpcCertificate => {
+                        let payload: RpcCertificateSigningPayload =
+                            serde_json::from_slice(&operation.payload)
+                                .context("invalid RPC certificate signing payload")?;
+                        self.validate_rpc_certificate_tbs(&payload)?;
+                        Sha256::digest(&payload.tbs_der).into()
+                    }
                     _ => unreachable!(),
                 };
                 let keygen_indexes = (0..n).collect::<Vec<_>>();
@@ -801,7 +913,7 @@ impl GenesisState {
                 let (curve, share) = {
                     let artifacts = self.0.artifacts.lock().expect("genesis mutex poisoned");
                     match operation.kind {
-                        GenesisKind::SignRoot => (
+                        GenesisKind::SignRoot | GenesisKind::SignRpcCertificate => (
                             CggmpCurve::P256,
                             GenesisSigningShare::P256(
                                 artifacts
@@ -945,6 +1057,30 @@ impl GenesisState {
         let root_signature = identical_result(&root_signatures, "root signatures")?;
         let root_ca_pem = external_root.finish(root_signature)?;
 
+        let prepared_rpc_certificates = self
+            .coordinate_operation(GenesisOperation::new(
+                GenesisKind::PrepareRpcCertificate,
+                root_ca_pem.as_bytes().to_vec(),
+            )?)
+            .await?;
+        let mut rpc_certificates = BTreeMap::new();
+        for (node_id, tbs_der) in prepared_rpc_certificates {
+            let payload = RpcCertificateSigningPayload {
+                node_id: node_id.clone(),
+                root_ca_pem: root_ca_pem.clone(),
+                tbs_der: tbs_der.clone(),
+            };
+            let signatures = self
+                .coordinate_operation(GenesisOperation::new(
+                    GenesisKind::SignRpcCertificate,
+                    serde_jcs::to_vec(&payload)?,
+                )?)
+                .await?;
+            let signature = identical_result(&signatures, "RPC certificate signatures")?;
+            let certificate = ExternalCertificate::from_tbs_der(tbs_der)?.finish(signature)?;
+            rpc_certificates.insert(node_id, certificate);
+        }
+
         let manifest_json = serde_jcs::to_vec(&manifest)?;
         let manifest_signatures = self
             .coordinate_operation(GenesisOperation::new(
@@ -960,6 +1096,7 @@ impl GenesisState {
                 manifest,
                 signature,
             },
+            rpc_certificates,
         };
         let bundle_json = serde_jcs::to_vec(&bundle)?;
         let finalizations = self
@@ -1154,10 +1291,40 @@ fn genesis_journal_path(config: &KmsConfig) -> std::path::PathBuf {
 }
 
 fn persist_bundle_files(config: &KmsConfig, bundle: &GenesisBundle) -> Result<()> {
+    use ra_tls::traits::CertExt as _;
     ensure!(
         !config.mpc.identity_file.as_os_str().is_empty(),
         "missing MPC identity file"
     );
+    let rpc_pem = bundle
+        .rpc_certificates
+        .get(&config.mpc.node_id)
+        .context("genesis bundle lacks local RPC certificate")?;
+    let (_, rpc_der) = x509_parser::pem::parse_x509_pem(rpc_pem.as_bytes())?;
+    let rpc = rpc_der.parse_x509()?;
+    let member = bundle
+        .signed_manifest
+        .manifest
+        .members
+        .iter()
+        .find(|member| member.node_id == config.mpc.node_id)
+        .context("local node absent from genesis manifest")?;
+    ensure!(
+        rpc.public_key().raw == member.attestation_pubkey,
+        "genesis RPC certificate key mismatch"
+    );
+    ensure!(
+        rpc.get_special_usage()?.as_deref() == Some("kms:rpc"),
+        "genesis RPC certificate usage mismatch"
+    );
+    ensure!(
+        ra_tls::attestation::from_cert(&rpc)?.is_some(),
+        "genesis RPC certificate lacks attestation"
+    );
+    let (_, root_der) = x509_parser::pem::parse_x509_pem(bundle.root_ca_pem.as_bytes())?;
+    let root = root_der.parse_x509()?;
+    rpc.verify_signature(Some(root.public_key()))
+        .context("invalid threshold RPC certificate signature")?;
     ensure!(
         !config.mpc.manifest_file.as_os_str().is_empty(),
         "missing MPC manifest file"
@@ -1167,6 +1334,7 @@ fn persist_bundle_files(config: &KmsConfig, bundle: &GenesisBundle) -> Result<()
         &serde_jcs::to_vec(&bundle.identity)?,
     )?;
     safe_write::safe_write(config.root_ca_cert(), bundle.root_ca_pem.as_bytes())?;
+    safe_write::safe_write(config.rpc_cert(), rpc_pem.as_bytes())?;
     safe_write::safe_write(
         &config.mpc.manifest_file,
         &serde_jcs::to_vec(&bundle.signed_manifest)?,

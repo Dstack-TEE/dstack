@@ -447,6 +447,19 @@ pub struct ExternalCertificate {
 }
 
 impl ExternalCertificate {
+    /// Recreate an externally signable certificate from previously validated
+    /// TBS bytes. This is used when a coordinator transports a member-created
+    /// TBS body to a threshold signing quorum.
+    pub fn from_tbs_der(tbs_der: Vec<u8>) -> Result<Self> {
+        let (remaining, _) = x509_parser::certificate::TbsCertificate::from_der(&tbs_der)
+            .map_err(|error| anyhow::anyhow!("invalid external certificate TBS: {error}"))?;
+        anyhow::ensure!(
+            remaining.is_empty(),
+            "external certificate TBS has trailing bytes"
+        );
+        Ok(Self { tbs_der })
+    }
+
     /// DER-encoded `TBSCertificate` bytes to hash with SHA-256 and sign.
     pub fn tbs_der(&self) -> &[u8] {
         &self.tbs_der
