@@ -77,6 +77,7 @@ impl ClusterIdentity {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct EpochMember {
     pub node_id: String,
+    pub endpoint: String,
     #[serde(with = "hex_bytes")]
     pub attestation_pubkey: Vec<u8>,
     #[serde(with = "hex_bytes")]
@@ -119,6 +120,10 @@ impl EpochManifest {
                 "member node_id must not be empty"
             );
             ensure!(
+                member.endpoint.starts_with("https://"),
+                "member endpoint must use HTTPS"
+            );
+            ensure!(
                 previous_node_id.is_none_or(|previous| previous < member.node_id.as_str()),
                 "members must be sorted by unique node_id"
             );
@@ -131,6 +136,7 @@ impl EpochManifest {
                 "missing member share commitment"
             );
             fields.push(member.node_id.as_bytes().to_vec());
+            fields.push(member.endpoint.as_bytes().to_vec());
             fields.push(member.attestation_pubkey.clone());
             fields.push(member.share_commitment.clone());
             previous_node_id = Some(&member.node_id);
@@ -279,6 +285,7 @@ mod tests {
     fn manifest_hash_binds_threshold_and_requires_canonical_members() {
         let member = |node_id: &str| EpochMember {
             node_id: node_id.into(),
+            endpoint: format!("https://{node_id}:8443/prpc"),
             attestation_pubkey: vec![6; 32],
             share_commitment: vec![7; 33],
         };

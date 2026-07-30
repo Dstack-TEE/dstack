@@ -44,6 +44,7 @@ pub(crate) struct MpcEnvelope {
     pub expires_at: u64,
     #[serde(with = "hex_bytes")]
     pub payload: Vec<u8>,
+    pub broadcast: bool,
 }
 
 struct Session {
@@ -231,6 +232,7 @@ mod tests {
             .into_iter()
             .map(|node_id| EpochMember {
                 node_id: node_id.into(),
+                endpoint: format!("https://{node_id}:8443/prpc"),
                 attestation_pubkey: vec![1; 32],
                 share_commitment: vec![2; 33],
             })
@@ -260,6 +262,7 @@ mod tests {
             sequence: 1,
             expires_at: unix_time().unwrap() + 30,
             payload: vec![6],
+            broadcast: false,
         }
     }
 
