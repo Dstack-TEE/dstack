@@ -717,31 +717,32 @@ impl GenesisState {
                     }
                     _ => unreachable!(),
                 };
-                let artifacts = self.0.artifacts.lock().expect("genesis mutex poisoned");
                 let keygen_indexes = (0..n).collect::<Vec<_>>();
                 let local_protocol_index = local_index;
-                let (curve, share) = match operation.kind {
-                    GenesisKind::SignRoot => (
-                        CggmpCurve::P256,
-                        GenesisSigningShare::P256(
-                            artifacts
-                                .p256
-                                .clone()
-                                .context("missing P-256 genesis share")?,
+                let (curve, share) = {
+                    let artifacts = self.0.artifacts.lock().expect("genesis mutex poisoned");
+                    match operation.kind {
+                        GenesisKind::SignRoot => (
+                            CggmpCurve::P256,
+                            GenesisSigningShare::P256(
+                                artifacts
+                                    .p256
+                                    .clone()
+                                    .context("missing P-256 genesis share")?,
+                            ),
                         ),
-                    ),
-                    GenesisKind::SignManifest => (
-                        CggmpCurve::K256,
-                        GenesisSigningShare::K256(
-                            artifacts
-                                .k256
-                                .clone()
-                                .context("missing K-256 genesis share")?,
+                        GenesisKind::SignManifest => (
+                            CggmpCurve::K256,
+                            GenesisSigningShare::K256(
+                                artifacts
+                                    .k256
+                                    .clone()
+                                    .context("missing K-256 genesis share")?,
+                            ),
                         ),
-                    ),
-                    _ => unreachable!(),
+                        _ => unreachable!(),
+                    }
                 };
-                drop(artifacts);
                 tokio::task::spawn_blocking(move || {
                     let mut rng = OsRng;
                     let eid = execution_id(&cluster, 1, curve, &nonce);
@@ -860,7 +861,7 @@ impl GenesisState {
             .coordinate_operation(GenesisOperation::new(
                 GenesisKind::SignRoot,
                 external_root.tbs_der().to_vec(),
-            ))
+            )?)
             .await?;
         let root_signature = identical_result(&root_signatures, "root signatures")?;
         let root_ca_pem = external_root.finish(root_signature)?;
@@ -870,7 +871,7 @@ impl GenesisState {
             .coordinate_operation(GenesisOperation::new(
                 GenesisKind::SignManifest,
                 manifest_json,
-            ))
+            )?)
             .await?;
         let signature = identical_result(&manifest_signatures, "manifest signatures")?.to_vec();
         let bundle = GenesisBundle {
@@ -922,8 +923,9 @@ impl GenesisState {
                     self.0.transport.start(&member.node_id, &operation).await?,
                 ))
             });
+        let local_operation = operation.clone();
         let (local, remote) = tokio::join!(
-            self.execute(operation, &self.0.plan.coordinator),
+            self.execute(local_operation, &self.0.plan.coordinator),
             futures::future::join_all(remote),
         );
         let mut results = BTreeMap::new();
