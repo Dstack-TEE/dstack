@@ -114,6 +114,15 @@ restrict = false
 # Additional tenant-selectable bridges. The default bridge above is always
 # allowed; an empty list does not authorize arbitrary host bridges.
 # allowed_bridges = ["dstack-br1"]
+# Enable deterministic TAP creation and host-enforced MAC/L2 filtering. Start
+# the privileged backend with `dstack-vmm --config vmm.toml netd` first.
+anti_spoof = false
+netd_socket = "/run/dstack/netd.sock"
+# Root is authorized when this list is empty. Add the unprivileged VMM UID and
+# set the socket GID when the VMM service does not run as root.
+netd_allowed_uids = []
+# netd_socket_gid = 1000
+isolate_bridge_ports = true
 
 [cvm.port_mapping]
 enabled = false

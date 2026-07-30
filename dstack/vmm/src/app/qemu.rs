@@ -198,13 +198,16 @@ impl PreparedQemuLaunch {
         workdir: impl AsRef<Path>,
         cfg: &CvmConfig,
         gpus: &GpuConfig,
+        prepared_networks: Option<&[Networking]>,
     ) -> Result<Self> {
         let workdir = VmWorkDir::new(workdir);
         prepare_data_disk(vm, &workdir, cfg)?;
         prepare_shared_dir(&workdir)?;
         let app_compose = workdir.app_compose().context("failed to get app compose")?;
         let platform = cfg.resolved_platform();
-        let networks = resolved_networks(&vm.manifest, cfg);
+        let networks = prepared_networks
+            .map(<[Networking]>::to_vec)
+            .unwrap_or_else(|| resolved_networks(&vm.manifest, cfg));
         validate_resolved_networks(&networks, &cfg.networking)?;
         let volumes = vm
             .manifest
@@ -340,7 +343,17 @@ impl VmConfig {
         cfg: &CvmConfig,
         gpus: &GpuConfig,
     ) -> Result<Vec<ProcessConfig>> {
-        let prepared = PreparedQemuLaunch::prepare(self, workdir, cfg, gpus)?;
+        self.config_qemu_with_networks(workdir, cfg, gpus, None)
+    }
+
+    pub fn config_qemu_with_networks(
+        &self,
+        workdir: impl AsRef<Path>,
+        cfg: &CvmConfig,
+        gpus: &GpuConfig,
+        networks: Option<&[Networking]>,
+    ) -> Result<Vec<ProcessConfig>> {
+        let prepared = PreparedQemuLaunch::prepare(self, workdir, cfg, gpus, networks)?;
         let process = QemuCommandBuilder {
             vm: self,
             cfg,
@@ -600,7 +613,17 @@ impl QemuCommandBuilder<'_> {
                 }
                 NetworkingMode::Bridge => {
                     tracing::info!("bridge networking: mac={mac} bridge={}", networking.bridge);
-                    format!("bridge,id={net_id},br={}", networking.bridge)
+                    if networking.anti_spoof {
+                        if networking.tap.is_empty() {
+                            bail!("protected bridge networking is missing a prepared TAP");
+                        }
+                        format!(
+                            "tap,id={net_id},ifname={},script=no,downscript=no,vhost=off",
+                            networking.tap
+                        )
+                    } else {
+                        format!("bridge,id={net_id},br={}", networking.bridge)
+                    }
                 }
                 NetworkingMode::Custom => {
                     if !networking.netdev.contains(&format!("id={net_id}")) {

@@ -19,7 +19,22 @@ allowed_modes = ["user", "bridge"]
 bridge = "virbr0"
 # Optional additional bridges that VM requests may select.
 allowed_bridges = ["dstack-br1"]
+anti_spoof = true
+netd_socket = "/run/dstack/netd.sock"
+isolate_bridge_ports = true
 ```
+
+With `anti_spoof = true`, run the privileged backend before starting the VMM:
+
+```bash
+sudo dstack-vmm --config /etc/dstack/vmm.toml netd
+```
+
+The VMM fails closed if it cannot prepare a protected TAP. The backend creates
+a deterministic TAP, locks bridge learning to the assigned MAC, installs an
+nftables netdev-ingress policy, and returns the TAP name to QEMU. The default
+socket is root-only. For an unprivileged VMM, configure `netd_socket_gid` and
+`netd_allowed_uids`, and run both processes under matching service identities.
 
 ### Per-VM override
 

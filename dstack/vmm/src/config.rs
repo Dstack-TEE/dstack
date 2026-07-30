@@ -523,6 +523,14 @@ pub enum NetworkingMode {
     Custom,
 }
 
+fn default_netd_socket() -> PathBuf {
+    PathBuf::from("/run/dstack/netd.sock")
+}
+
+fn default_true() -> bool {
+    true
+}
+
 /// Flat networking configuration. The `mode` field selects which backend is
 /// active; the remaining fields are only relevant for their respective mode
 /// and carry serde defaults so they can be omitted in the config file.
@@ -544,6 +552,31 @@ pub struct Networking {
     /// configured default `bridge` is always allowed.
     #[serde(default, skip_serializing)]
     pub allowed_bridges: Vec<String>,
+
+    /// Enable host-enforced MAC and L2 filtering through `dstack-netd`.
+    #[serde(default)]
+    pub anti_spoof: bool,
+
+    /// Unix socket exposed by the privileged networking backend.
+    #[serde(default = "default_netd_socket", skip_serializing)]
+    pub netd_socket: PathBuf,
+
+    /// UIDs authorized to call `dstack-netd`. Empty authorizes only root.
+    #[serde(default, skip_serializing)]
+    pub netd_allowed_uids: Vec<u32>,
+
+    /// Optional group owner for the netd socket. When set, the socket mode is
+    /// `0660`; otherwise it remains root-only `0600`.
+    #[serde(default, skip_serializing)]
+    pub netd_socket_gid: Option<u32>,
+
+    /// Prevent forwarding between protected bridge ports.
+    #[serde(default = "default_true")]
+    pub isolate_bridge_ports: bool,
+
+    /// Runtime-only deterministic TAP name returned by `dstack-netd`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tap: String,
 
     // ── MAC prefix ─────────────────────────────────────────────────
     /// Fixed MAC address prefix (0-3 colon-separated hex bytes, e.g. "02:ab:cd").

@@ -28,6 +28,7 @@ mod guest_api_service;
 mod host_api_service;
 mod main_routes;
 mod main_service;
+mod netd;
 mod one_shot;
 mod openapi;
 mod vm_launcher;
@@ -60,6 +61,8 @@ enum Command {
     /// Internal per-VM QEMU/swtpm launcher.
     #[command(hide = true)]
     VmLauncher(VmLauncherArgs),
+    /// Run the privileged bridge networking backend.
+    Netd,
 }
 
 #[derive(ClapArgs)]
@@ -188,6 +191,7 @@ async fn main() -> Result<()> {
     // Handle commands
     match args.command.unwrap_or_default() {
         Command::VmLauncher(_) => unreachable!("launcher mode handled before config loading"),
+        Command::Netd => return netd::serve(config.cvm).await,
         Command::Run(run_args) => {
             // One-shot VM execution mode
             return one_shot::run_one_shot(

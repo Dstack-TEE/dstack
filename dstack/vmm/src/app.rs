@@ -30,6 +30,8 @@ use std::time::SystemTime;
 use supervisor_client::SupervisorClient;
 use tracing::{debug, error, info, warn};
 
+use crate::netd::{Client as NetdClient, NicAttachment};
+
 pub use image::{Image, ImageInfo};
 pub(crate) use network::{
     resolve_networking, resolved_networks, validate_resolved_network, validate_resolved_networks,
@@ -69,6 +71,23 @@ fn signal_pidfd(pid: u32, signal: libc::c_int) -> std::io::Result<()> {
     } else {
         Ok(())
     }
+}
+
+fn protected_attachment(
+    vm_id: &str,
+    networking: &Networking,
+    nic_index: usize,
+) -> Option<NicAttachment> {
+    if !networking.is_bridge() || !networking.anti_spoof || networking.tap.is_empty() {
+        return None;
+    }
+    Some(NicAttachment {
+        vm_id: vm_id.to_string(),
+        nic_index,
+        bridge: networking.bridge.clone(),
+        tap: networking.tap.clone(),
+        mac: network::mac_address_for_vm_index(vm_id, &networking.mac_prefix_bytes(), nic_index),
+    })
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -305,6 +324,71 @@ impl App {
         VmWorkDir::new(self.config.run_path.join(id))
     }
 
+    async fn prepare_protected_networks(
+        &self,
+        vm_id: &str,
+        networks: &mut [Networking],
+    ) -> Result<()> {
+        let client = NetdClient::new(&self.config.cvm.networking.netd_socket);
+        let mut prepared = Vec::new();
+        for (index, networking) in networks.iter_mut().enumerate() {
+            if !networking.is_bridge() || !networking.anti_spoof {
+                continue;
+            }
+            let mac =
+                network::mac_address_for_vm_index(vm_id, &networking.mac_prefix_bytes(), index);
+            match client.prepare(vm_id, index, &networking.bridge, &mac).await {
+                Ok(attachment) => {
+                    networking.tap = attachment.tap.clone();
+                    prepared.push(attachment);
+                }
+                Err(error) => {
+                    for attachment in prepared.iter().rev() {
+                        if let Err(cleanup_error) = client.remove(attachment).await {
+                            warn!(
+                                vm_id,
+                                tap = %attachment.tap,
+                                "failed to roll back protected NIC: {cleanup_error:#}"
+                            );
+                        }
+                    }
+                    return Err(error).context("failed to prepare protected bridge networking");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn remove_protected_networks(&self, vm_id: &str, networks: &[Networking]) {
+        let client = NetdClient::new(&self.config.cvm.networking.netd_socket);
+        for (index, networking) in networks.iter().enumerate().rev() {
+            let Some(attachment) = protected_attachment(vm_id, networking, index) else {
+                continue;
+            };
+            if let Err(error) = client.remove(&attachment).await {
+                warn!(
+                    vm_id = %attachment.vm_id,
+                    tap = %attachment.tap,
+                    "failed to remove protected NIC: {error:#}"
+                );
+            }
+        }
+    }
+
+    async fn check_protected_networks(&self, vm_id: &str, networks: &[Networking]) -> Result<()> {
+        let client = NetdClient::new(&self.config.cvm.networking.netd_socket);
+        for (index, networking) in networks.iter().enumerate() {
+            let Some(attachment) = protected_attachment(vm_id, networking, index) else {
+                continue;
+            };
+            client
+                .check(&attachment)
+                .await
+                .with_context(|| format!("protected NIC {} is not enforced", attachment.tap))?;
+        }
+        Ok(())
+    }
+
     pub fn new(config: Config, supervisor: SupervisorClient) -> Self {
         let cid_start = config.cvm.cid_start;
         let cid_end = cid_start.saturating_add(config.cvm.cid_pool_size);
@@ -424,9 +508,25 @@ impl App {
             append_boot_separator(&work_dir.stderr_file());
 
             let devices = self.try_allocate_gpus(&vm_config.manifest)?;
-            let processes = vm_config.config_qemu(&work_dir, &self.config.cvm, &devices)?;
-            let runtime_networks = resolved_networks(&vm_config.manifest, &self.config.cvm);
-            work_dir.set_runtime_networks(&runtime_networks)?;
+            let mut runtime_networks = resolved_networks(&vm_config.manifest, &self.config.cvm);
+            self.prepare_protected_networks(id, &mut runtime_networks)
+                .await?;
+            let processes = match vm_config.config_qemu_with_networks(
+                &work_dir,
+                &self.config.cvm,
+                &devices,
+                Some(&runtime_networks),
+            ) {
+                Ok(processes) => processes,
+                Err(error) => {
+                    self.remove_protected_networks(id, &runtime_networks).await;
+                    return Err(error);
+                }
+            };
+            if let Err(error) = work_dir.set_runtime_networks(&runtime_networks) {
+                self.remove_protected_networks(id, &runtime_networks).await;
+                return Err(error);
+            }
             {
                 let mut state = self.lock();
                 let vm_state = state.get_mut(id).context("VM not found")?;
@@ -434,6 +534,8 @@ impl App {
             }
             for process in processes {
                 if let Err(err) = self.supervisor.deploy(&process).await {
+                    let _ = self.supervisor.stop(id).await;
+                    self.remove_protected_networks(id, &runtime_networks).await;
                     if let Err(clear_err) = work_dir.clear_runtime_networks() {
                         warn!(
                             id,
@@ -465,6 +567,8 @@ impl App {
     pub async fn stop_vm(&self, id: &str) -> Result<()> {
         self.set_started(id, false)?;
         self.stop_vm_process(id).await?;
+        let networks = self.work_dir(id).runtime_networks();
+        self.remove_protected_networks(id, &networks).await;
         Ok(())
     }
 
@@ -574,6 +678,9 @@ impl App {
             }
         }
 
+        let runtime_networks = self.work_dir(id).runtime_networks();
+        self.remove_protected_networks(id, &runtime_networks).await;
+
         // Only delete the workdir for user-initiated removal or if .removing marker exists.
         // Orphaned supervisor processes without the marker keep their data intact.
         let vm_path = self.work_dir(id);
@@ -669,6 +776,22 @@ impl App {
                         }
                     }
                 }
+            }
+        }
+
+        // A protected guest must never continue running when its host-side
+        // enforcement cannot be proven after VMM restart.
+        for id in occupied_cids.keys() {
+            if !self.lock().vms.contains_key(id) {
+                continue;
+            }
+            let networks = self.work_dir(id).runtime_networks();
+            if let Err(error) = self.check_protected_networks(id, &networks).await {
+                error!(id, "protected networking reconciliation failed: {error:#}");
+                self.stop_vm_process(id)
+                    .await
+                    .with_context(|| format!("failed to quiesce VM {id}"))?;
+                self.remove_protected_networks(id, &networks).await;
             }
         }
 
@@ -1610,6 +1733,12 @@ mod tests {
             allowed_modes: vec![],
             bridge: "dstack-br0".to_string(),
             allowed_bridges: vec![],
+            anti_spoof: false,
+            netd_socket: Default::default(),
+            netd_allowed_uids: vec![],
+            netd_socket_gid: None,
+            isolate_bridge_ports: true,
+            tap: String::new(),
             mac_prefix: String::new(),
             net: String::new(),
             dhcp_start: String::new(),
@@ -1829,6 +1958,12 @@ mod tests {
             allowed_modes: vec![],
             bridge: "dstack-br0".to_string(),
             allowed_bridges: vec![],
+            anti_spoof: false,
+            netd_socket: Default::default(),
+            netd_allowed_uids: vec![],
+            netd_socket_gid: None,
+            isolate_bridge_ports: true,
+            tap: String::new(),
             mac_prefix: "02:aa:bb".to_string(),
             net: String::new(),
             dhcp_start: String::new(),
