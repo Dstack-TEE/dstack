@@ -11,7 +11,7 @@
 use anyhow::{ensure, Context, Result};
 use cggmp21::{
     generic_ec::{Curve, NonZero, Point, Scalar, SecretScalar},
-    key_share::{DirtyIncompleteKeyShare, Valid, VssSetup},
+    key_share::{DirtyIncompleteKeyShare, DirtyKeyInfo, Valid, VssSetup},
     IncompleteKeyShare,
 };
 use rand::{CryptoRng, RngCore};
@@ -47,7 +47,16 @@ impl<E: Curve> ResharedMaterial<E> {
             usize::from(recipient_index) < self.public_shares.len(),
             "reshared recipient index out of bounds"
         );
-        let mut key_info = template.key_info.clone();
+        self.into_incomplete_share_with_key_info(recipient_index, threshold, &template.key_info)
+    }
+
+    pub(crate) fn into_incomplete_share_with_key_info(
+        self,
+        recipient_index: u16,
+        threshold: u16,
+        template: &DirtyKeyInfo<E>,
+    ) -> Result<IncompleteKeyShare<E>> {
+        let mut key_info = template.clone();
         key_info.shared_public_key = NonZero::from_point(self.shared_public_key)
             .context("reshared group public key is identity")?;
         key_info.public_shares = self
@@ -164,6 +173,27 @@ pub(crate) fn verify_and_combine<E: Curve>(
     public: &[PublicContribution],
     private: &[PrivateContribution],
 ) -> Result<ResharedMaterial<E>> {
+    verify_and_combine_with_key_info(
+        &old_reference.key_info,
+        old_dealers,
+        new_member_count,
+        new_threshold,
+        recipient_index,
+        public,
+        private,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn verify_and_combine_with_key_info<E: Curve>(
+    old_key_info: &DirtyKeyInfo<E>,
+    old_dealers: &[u16],
+    new_member_count: u16,
+    new_threshold: u16,
+    recipient_index: u16,
+    public: &[PublicContribution],
+    private: &[PrivateContribution],
+) -> Result<ResharedMaterial<E>> {
     ensure!(
         recipient_index < new_member_count,
         "new recipient index out of bounds"
@@ -176,7 +206,7 @@ pub(crate) fn verify_and_combine<E: Curve>(
         private.len() == old_dealers.len(),
         "missing private resharing contribution"
     );
-    let setup = old_reference
+    let setup = old_key_info
         .vss_setup
         .as_ref()
         .context("resharing requires an old Shamir setup")?;
@@ -208,8 +238,7 @@ pub(crate) fn verify_and_combine<E: Curve>(
             .map(|encoded| Point::<E>::from_bytes(encoded).context("invalid resharing commitment"))
             .collect::<Result<Vec<_>>>()?;
         let lambda = lagrange_at_zero(position, &dealer_points)?;
-        let expected_constant = old_reference
-            .key_info
+        let expected_constant = old_key_info
             .public_shares
             .get(usize::from(*dealer_index))
             .context("missing old dealer public share")?
@@ -236,7 +265,7 @@ pub(crate) fn verify_and_combine<E: Curve>(
         }
     }
     ensure!(
-        aggregate_commitments[0] == *old_reference.shared_public_key(),
+        aggregate_commitments[0] == *old_key_info.shared_public_key,
         "resharing changed the group public key"
     );
     let public_shares = (0..new_member_count)
