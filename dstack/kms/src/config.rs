@@ -191,7 +191,10 @@ impl KmsConfig {
                 && self.rpc_key().exists()
                 && self.mpc.p256_share_file.exists()
                 && self.mpc.k256_share_file.exists()
-                && self.mpc.derivation_share_file.exists();
+                && self.mpc.derivation_share_file.exists()
+                && self.mpc.identity_file.exists()
+                && self.mpc.manifest_file.exists()
+                && self.mpc.checkpoint_file.exists();
         }
         self.tmp_ca_cert().exists()
             && self.tmp_ca_key().exists()

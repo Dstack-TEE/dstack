@@ -6,6 +6,7 @@
 
 use std::{
     collections::BTreeMap,
+    os::unix::fs::PermissionsExt,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -41,7 +42,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     cggmp_engine::{
-        execution_id, share_commitment, store_share, CggmpCurve, K256KeyShare, P256KeyShare,
+        execution_id, load_share, share_commitment, store_share, validate_share_topology,
+        CggmpCurve, K256KeyShare, P256KeyShare,
     },
     config::KmsConfig,
     mpc_driver::{
@@ -234,6 +236,12 @@ struct GenesisBundle {
     identity: ClusterIdentity,
     root_ca_pem: String,
     signed_manifest: SignedEpochManifest,
+}
+
+#[derive(Serialize, Deserialize)]
+struct GenesisJournal {
+    version: u16,
+    bundle: GenesisBundle,
 }
 
 struct GenesisTransport {
@@ -1032,29 +1040,18 @@ impl GenesisState {
         certificate
             .verify_signature(None)
             .context("invalid genesis root threshold signature")?;
+        let journal_path = genesis_journal_path(&self.0.config);
+        safe_write::safe_write(
+            &journal_path,
+            &serde_jcs::to_vec(&GenesisJournal {
+                version: 1,
+                bundle: bundle.clone(),
+            })?,
+        )?;
+        fs_err::set_permissions(&journal_path, std::fs::Permissions::from_mode(0o600))?;
         self.persist_shares()?;
-        ensure!(
-            !self.0.config.mpc.identity_file.as_os_str().is_empty(),
-            "missing MPC identity file"
-        );
-        ensure!(
-            !self.0.config.mpc.manifest_file.as_os_str().is_empty(),
-            "missing MPC manifest file"
-        );
-        safe_write::safe_write(
-            &self.0.config.mpc.identity_file,
-            serde_jcs::to_vec(&bundle.identity)?,
-        )?;
-        safe_write::safe_write(self.0.config.root_ca_cert(), bundle.root_ca_pem.as_bytes())?;
-        safe_write::safe_write(
-            &self.0.config.mpc.manifest_file,
-            serde_jcs::to_vec(&bundle.signed_manifest)?,
-        )?;
-        validate_and_checkpoint(
-            &self.0.config.mpc.checkpoint_file,
-            &bundle.signed_manifest,
-            &bundle.identity,
-        )?;
+        persist_bundle_files(&self.0.config, &bundle)?;
+        fs_err::remove_file(journal_path)?;
         self.0.finalized.store(true, Ordering::Release);
         self.0.finalized_notify.notify_waiters();
         Ok(())
@@ -1150,6 +1147,126 @@ impl MpcGenesisRpc for GenesisHandler {
 
 pub(crate) fn rpc_methods() -> &'static [&'static str] {
     <MpcGenesisServer<GenesisHandler>>::supported_methods()
+}
+
+fn genesis_journal_path(config: &KmsConfig) -> std::path::PathBuf {
+    config.mpc.identity_file.with_extension("genesis-journal")
+}
+
+fn persist_bundle_files(config: &KmsConfig, bundle: &GenesisBundle) -> Result<()> {
+    ensure!(
+        !config.mpc.identity_file.as_os_str().is_empty(),
+        "missing MPC identity file"
+    );
+    ensure!(
+        !config.mpc.manifest_file.as_os_str().is_empty(),
+        "missing MPC manifest file"
+    );
+    safe_write::safe_write(
+        &config.mpc.identity_file,
+        &serde_jcs::to_vec(&bundle.identity)?,
+    )?;
+    safe_write::safe_write(config.root_ca_cert(), bundle.root_ca_pem.as_bytes())?;
+    safe_write::safe_write(
+        &config.mpc.manifest_file,
+        &serde_jcs::to_vec(&bundle.signed_manifest)?,
+    )?;
+    validate_and_checkpoint(
+        &config.mpc.checkpoint_file,
+        &bundle.signed_manifest,
+        &bundle.identity,
+    )
+}
+
+/// Finish a crash-interrupted genesis commit before startup decides whether
+/// to enter genesis or normal mode.
+pub(crate) fn recover_if_needed(config: &KmsConfig) -> Result<bool> {
+    if config.mpc.identity_file.as_os_str().is_empty() {
+        return Ok(false);
+    }
+    let journal_path = genesis_journal_path(config);
+    if !journal_path.exists() {
+        return Ok(false);
+    }
+    let metadata = fs_err::symlink_metadata(&journal_path)?;
+    ensure!(
+        metadata.file_type().is_file(),
+        "MPC genesis journal is not a file"
+    );
+    ensure!(
+        metadata.permissions().mode() & 0o077 == 0,
+        "MPC genesis journal permissions are too broad"
+    );
+    let journal: GenesisJournal = serde_json::from_slice(&fs_err::read(&journal_path)?)
+        .context("failed to parse MPC genesis journal")?;
+    ensure!(
+        journal.version == 1,
+        "unsupported MPC genesis journal version"
+    );
+    let bundle = journal.bundle;
+    bundle.signed_manifest.verify(&bundle.identity)?;
+    ensure!(
+        bundle.signed_manifest.manifest.epoch == 1,
+        "genesis journal contains a non-genesis epoch"
+    );
+    let (_, pem) = x509_parser::pem::parse_x509_pem(bundle.root_ca_pem.as_bytes())?;
+    let certificate = pem.parse_x509()?;
+    ensure!(
+        certificate.public_key().subject_public_key.data.as_ref()
+            == bundle.identity.p256_group_pubkey,
+        "genesis journal root key mismatch"
+    );
+    certificate
+        .verify_signature(None)
+        .context("invalid journaled genesis root signature")?;
+    let manifest = &bundle.signed_manifest.manifest;
+    let index = manifest
+        .members
+        .iter()
+        .position(|member| member.node_id == config.mpc.node_id)
+        .context("local member absent from journaled genesis")?;
+    let p: P256KeyShare = load_share(
+        &config.mpc.p256_share_file,
+        &bundle.identity.cluster_id,
+        1,
+        &config.mpc.node_id,
+        CggmpCurve::P256,
+    )?;
+    let k: K256KeyShare = load_share(
+        &config.mpc.k256_share_file,
+        &bundle.identity.cluster_id,
+        1,
+        &config.mpc.node_id,
+        CggmpCurve::K256,
+    )?;
+    let d: P256KeyShare = load_share(
+        &config.mpc.derivation_share_file,
+        &bundle.identity.cluster_id,
+        1,
+        &config.mpc.node_id,
+        CggmpCurve::P256,
+    )?;
+    validate_share_topology(&p, index, manifest.members.len(), manifest.threshold)?;
+    validate_share_topology(&k, index, manifest.members.len(), manifest.threshold)?;
+    validate_share_topology(&d, index, manifest.members.len(), manifest.threshold)?;
+    ensure!(
+        p.shared_public_key().to_bytes(false).as_bytes() == bundle.identity.p256_group_pubkey
+            && k.shared_public_key().to_bytes(true).as_bytes() == bundle.identity.k256_group_pubkey
+            && d.shared_public_key().to_bytes(false).as_bytes()
+                == bundle.identity.derivation_group_pubkey,
+        "journaled genesis shares changed stable identity"
+    );
+    let pp = p.core.key_info.public_shares[index].to_bytes(false);
+    let kp = k.core.key_info.public_shares[index].to_bytes(true);
+    let dp = d.core.key_info.public_shares[index].to_bytes(false);
+    ensure!(
+        manifest.members[index].share_commitment
+            == share_commitment(pp.as_bytes(), kp.as_bytes(), dp.as_bytes()),
+        "journaled genesis shares do not match manifest"
+    );
+    persist_bundle_files(config, &bundle)?;
+    fs_err::remove_file(journal_path)?;
+    Ok(true)
 }
 
 fn unix_time() -> Result<u64> {
