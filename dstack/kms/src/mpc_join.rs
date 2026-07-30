@@ -5,7 +5,10 @@
 
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -249,6 +252,14 @@ struct JoinInner {
     old_k256: Option<K256KeyShare>,
     old_derivation: Option<P256KeyShare>,
     finalized: tokio::sync::Notify,
+    is_finalized: AtomicBool,
+    operations: Mutex<BTreeMap<Vec<u8>, Arc<JoinOperationRecord>>>,
+}
+
+struct JoinOperationRecord {
+    operation: JoinOperation,
+    result: Mutex<Option<std::result::Result<Vec<u8>, String>>>,
+    finished: tokio::sync::Notify,
 }
 
 #[derive(Clone)]
@@ -361,6 +372,8 @@ impl JoinState {
             old_k256,
             old_derivation,
             finalized: tokio::sync::Notify::new(),
+            is_finalized: AtomicBool::new(false),
+            operations: Mutex::new(BTreeMap::new()),
         })))
     }
     pub(crate) fn verifier(&self) -> Arc<AttestationVerifier> {
@@ -375,7 +388,13 @@ impl JoinState {
             .is_some_and(|node| node == &self.0.config.mpc.node_id)
     }
     pub(crate) async fn wait_finalized(&self) {
-        self.0.finalized.notified().await;
+        loop {
+            let notified = self.0.finalized.notified();
+            if self.0.is_finalized.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
     }
     fn authenticated_node(&self, key: &[u8]) -> Result<&str> {
         self.0
@@ -399,6 +418,47 @@ impl JoinState {
                 .is_some_and(|node| node == initiator),
             "only authorized join coordinator may start"
         );
+        let (record, owner) = {
+            let mut records = self.0.operations.lock().expect("join mutex poisoned");
+            if let Some(record) = records.get(&operation.request_hash) {
+                ensure!(
+                    record.operation == operation,
+                    "conflicting join operation hash"
+                );
+                (record.clone(), false)
+            } else {
+                ensure!(records.len() < 16, "too many join operations");
+                let record = Arc::new(JoinOperationRecord {
+                    operation: operation.clone(),
+                    result: Mutex::new(None),
+                    finished: tokio::sync::Notify::new(),
+                });
+                records.insert(operation.request_hash.clone(), record.clone());
+                (record, true)
+            }
+        };
+        if owner {
+            let result = self.execute_owned(operation).await;
+            *record.result.lock().expect("join mutex poisoned") = Some(
+                result
+                    .as_ref()
+                    .cloned()
+                    .map_err(|error| format!("{error:#}")),
+            );
+            record.finished.notify_waiters();
+            result
+        } else {
+            loop {
+                let notified = record.finished.notified();
+                if let Some(result) = record.result.lock().expect("join mutex poisoned").clone() {
+                    return result.map_err(anyhow::Error::msg);
+                }
+                notified.await;
+            }
+        }
+    }
+
+    async fn execute_owned(&self, operation: JoinOperation) -> Result<Vec<u8>> {
         match operation.kind {
             JoinKind::AuxiliaryInfo => self.execute_aux(operation).await,
             JoinKind::Reshare => self.execute_reshare(operation).await,
@@ -820,6 +880,27 @@ impl JoinState {
                 "target manifest member mismatch"
             );
         }
+        let local_index = manifest
+            .members
+            .iter()
+            .position(|member| member.node_id == self.0.config.mpc.node_id)
+            .context("local member missing from target manifest")?;
+        if let Some((p, k, d)) = &self
+            .0
+            .artifacts
+            .lock()
+            .expect("join mutex poisoned")
+            .pending
+        {
+            let p = p.core.key_info.public_shares[local_index].to_bytes(false);
+            let k = k.core.key_info.public_shares[local_index].to_bytes(true);
+            let d = d.core.key_info.public_shares[local_index].to_bytes(false);
+            ensure!(
+                manifest.members[local_index].share_commitment
+                    == share_commitment(p.as_bytes(), k.as_bytes(), d.as_bytes()),
+                "target manifest does not bind local joined shares"
+            );
+        }
         Ok(())
     }
 
@@ -986,6 +1067,7 @@ impl JoinState {
         if self.0.config.mpc.join_authorization_file.exists() {
             fs_err::remove_file(&self.0.config.mpc.join_authorization_file)?;
         }
+        self.0.is_finalized.store(true, Ordering::Release);
         self.0.finalized.notify_waiters();
         Ok(())
     }

@@ -112,6 +112,18 @@ impl ResharePlan {
                     "existing member identity changed during reshare"
                 );
             }
+            ensure!(
+                !member.node_id.is_empty(),
+                "reshare member node ID is empty"
+            );
+            ensure!(
+                member.endpoint.starts_with("https://"),
+                "reshare member endpoint must use HTTPS"
+            );
+            ensure!(
+                !member.attestation_pubkey.is_empty(),
+                "reshare member attestation key is empty"
+            );
             previous = Some(&member.node_id);
         }
         if !self.dealers.is_empty() {
