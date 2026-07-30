@@ -33,7 +33,7 @@ use upgrade_authority::{build_boot_info, ensure_app_id_len, local_kms_boot_info,
 
 use crate::{
     config::KmsConfig,
-    crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
+    key_backend::{KeyBackend, LocalKeyBackend},
     mpc_identity::{decode_hex, ClusterIdentity},
 };
 
@@ -64,6 +64,7 @@ pub struct KmsStateInner {
     self_boot_info: OnceCell<BootInfo>,
     metrics: KmsMetrics,
     mpc_identity: Option<ClusterIdentity>,
+    key_backend: Arc<dyn KeyBackend>,
 }
 
 #[derive(Default)]
@@ -141,6 +142,10 @@ impl KmsState {
         let key_bytes = fs::read(config.k256_key()).context("Failed to read ECDSA root key")?;
         let k256_key =
             SigningKey::from_slice(&key_bytes).context("Failed to load ECDSA root key")?;
+        let key_backend: Arc<dyn KeyBackend> = Arc::new(LocalKeyBackend::from_pem_and_bytes(
+            &fs::read_to_string(config.root_ca_key())?,
+            &key_bytes,
+        )?);
         let mpc_identity = if config.mpc.enabled {
             let identity = ClusterIdentity::new(
                 config.mpc.protocol_version,
@@ -197,6 +202,7 @@ impl KmsState {
                 self_boot_info: OnceCell::new(),
                 metrics: KmsMetrics::default(),
                 mpc_identity,
+                key_backend,
             }),
         })
     }
@@ -411,29 +417,18 @@ impl KmsRpc for RpcHandler {
         let instance_id = boot_info.instance_id;
         let os_image_hash = boot_info.os_image_hash;
 
-        let context_data = vec![&app_id[..], &instance_id[..], b"app-disk-crypt-key"];
-        let app_disk_key = kdf::derive_dh_secret(&self.state.root_ca.key, &context_data)
-            .context("Failed to derive app disk key")?;
-        let env_crypt_key = {
-            let secret =
-                kdf::derive_dh_secret(&self.state.root_ca.key, &[&app_id[..], b"env-encrypt-key"])
-                    .context("Failed to derive env encrypt key")?;
-            let secret = x25519_dalek::StaticSecret::from(secret);
-            secret.to_bytes()
-        };
-
-        let (k256_key, k256_signature) = {
-            let (k256_app_key, signature) = derive_k256_key(&self.state.k256_key, &app_id)
-                .context("Failed to derive app ecdsa key")?;
-            (k256_app_key.to_bytes().to_vec(), signature)
-        };
+        let derived = self
+            .state
+            .key_backend
+            .derive_app_keys(&app_id, &instance_id)
+            .context("Failed to derive app keys")?;
 
         Ok(AppKeyResponse {
             ca_cert: self.state.root_ca.pem_cert.clone(),
-            disk_crypt_key: app_disk_key.to_vec(),
-            env_crypt_key: env_crypt_key.to_vec(),
-            k256_key,
-            k256_signature,
+            disk_crypt_key: derived.disk_key.to_vec(),
+            env_crypt_key: derived.env_key.to_vec(),
+            k256_key: derived.k256_key,
+            k256_signature: derived.k256_signature,
             tproxy_app_id: gateway_app_id.clone(),
             gateway_app_id,
             os_image_hash,
@@ -446,11 +441,7 @@ impl KmsRpc for RpcHandler {
             .await
             .context("KMS self authorization failed")?;
         ensure_app_id_len(&request.app_id)?;
-        let secret = kdf::derive_dh_secret(
-            &self.state.root_ca.key,
-            &[&request.app_id[..], "env-encrypt-key".as_bytes()],
-        )
-        .context("Failed to derive env encrypt key")?;
+        let secret = self.state.key_backend.derive_env_key(&request.app_id)?;
         let secret = x25519_dalek::StaticSecret::from(secret);
         let pubkey = x25519_dalek::PublicKey::from(&secret);
 
@@ -461,23 +452,23 @@ impl KmsRpc for RpcHandler {
             .as_secs();
 
         // Legacy signature (without timestamp) for backward compatibility
-        let signature = sign_message(
-            &self.state.k256_key,
-            b"dstack-env-encrypt-pubkey",
-            &request.app_id,
-            &public_key,
-        )
-        .context("Failed to sign the public key")?;
+        let signature = self
+            .state
+            .key_backend
+            .sign_k256(b"dstack-env-encrypt-pubkey", &request.app_id, &public_key)
+            .context("Failed to sign the public key")?;
 
         // New signature with timestamp to prevent replay attacks
-        let signature_v1 = sign_message_with_timestamp(
-            &self.state.k256_key,
-            b"dstack-env-encrypt-pubkey",
-            &request.app_id,
-            timestamp,
-            &public_key,
-        )
-        .context("Failed to sign the public key with timestamp")?;
+        let signature_v1 = self
+            .state
+            .key_backend
+            .sign_k256_timestamped(
+                b"dstack-env-encrypt-pubkey",
+                &request.app_id,
+                timestamp,
+                &public_key,
+            )
+            .context("Failed to sign the public key with timestamp")?;
 
         Ok(PublicKeyResponse {
             public_key,
@@ -495,13 +486,7 @@ impl KmsRpc for RpcHandler {
         Ok(GetMetaResponse {
             ca_cert: self.state.inner.root_ca.pem_cert.clone(),
             allow_any_upgrade: self.state.inner.config.auth_api.is_dev(),
-            k256_pubkey: self
-                .state
-                .inner
-                .k256_key
-                .verifying_key()
-                .to_sec1_bytes()
-                .to_vec(),
+            k256_pubkey: self.state.key_backend.k256_public_key(),
             bootstrap_info,
             is_dev: self.state.config.auth_api.is_dev(),
             kms_contract_address: info.kms_contract_address,
