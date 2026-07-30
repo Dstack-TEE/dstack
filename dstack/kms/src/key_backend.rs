@@ -449,7 +449,8 @@ impl MpcKeyBackend {
             constraints.value.ca && constraints.value.path_len_constraint == Some(0),
             "app CA certificate has invalid CA constraints"
         );
-        let app_oid = Oid::from(PHALA_RATLS_APP_ID).context("invalid app ID OID")?;
+        let app_oid = Oid::from(PHALA_RATLS_APP_ID)
+            .map_err(|error| anyhow::anyhow!("invalid app ID OID: {error:?}"))?;
         let app_extension = tbs
             .get_extension_unique(&app_oid)
             .context("duplicate app ID extension")?
@@ -457,7 +458,8 @@ impl MpcKeyBackend {
         let app_id = yasna::parse_der(app_extension.value, |reader| reader.read_bytes())
             .context("invalid app ID extension")?;
         ensure!(app_id == payload.app_id, "certificate app ID mismatch");
-        let usage_oid = Oid::from(PHALA_RATLS_CERT_USAGE).context("invalid usage OID")?;
+        let usage_oid = Oid::from(PHALA_RATLS_CERT_USAGE)
+            .map_err(|error| anyhow::anyhow!("invalid usage OID: {error:?}"))?;
         let usage_extension = tbs
             .get_extension_unique(&usage_oid)
             .context("duplicate certificate usage extension")?
@@ -496,6 +498,9 @@ impl MpcKeyBackend {
             .context("invalid MPC group public key")?;
         let digest = match &operation.payload {
             MpcOperationPayload::SignK256(payload) => payload.digest(),
+            MpcOperationPayload::SignP256Certificate(_) => {
+                bail!("P-256 certificate result does not have a recovery ID")
+            }
             MpcOperationPayload::Derive(_) => bail!("derivation result is not a signature"),
         };
         for recovery_id in 0u8..4 {
