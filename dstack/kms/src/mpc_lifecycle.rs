@@ -583,6 +583,7 @@ mod tests {
     use super::*;
     use crate::mpc_identity::{EpochManifest, EpochMember};
     use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
+    use std::sync::{Arc, Barrier};
 
     fn identity(key: &SigningKey) -> ClusterIdentity {
         ClusterIdentity::new(
@@ -623,6 +624,60 @@ mod tests {
             manifest,
             signature: signature.to_bytes().to_vec(),
         }
+    }
+
+    #[test]
+    fn epoch_authorization_is_idempotent_and_private() {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("manifest.json");
+        let digest = [7; 32];
+
+        record_epoch_authorization(&manifest, "manifest", 2, &digest).unwrap();
+        record_epoch_authorization(&manifest, "manifest", 2, &digest).unwrap();
+
+        let record = manifest.with_extension("epoch-2.manifest.authorized");
+        assert_eq!(fs::read(&record).unwrap(), digest);
+        assert_eq!(
+            fs::metadata(record).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn epoch_authorization_rejects_a_different_digest() {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("manifest.json");
+        record_epoch_authorization(&manifest, "manifest", 2, &[7; 32]).unwrap();
+
+        let error = record_epoch_authorization(&manifest, "manifest", 2, &[8; 32])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("conflicting threshold authorization"));
+    }
+
+    #[test]
+    fn concurrent_epoch_authorization_allows_only_one_fork() {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = Arc::new(directory.path().join("manifest.json"));
+        let barrier = Arc::new(Barrier::new(2));
+        let handles = [7_u8, 8]
+            .into_iter()
+            .map(|byte| {
+                let manifest = manifest.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    record_epoch_authorization(&manifest, "manifest", 2, &[byte; 32])
+                })
+            })
+            .collect::<Vec<_>>();
+        let results = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
     }
 
     #[test]
