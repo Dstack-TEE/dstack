@@ -16,7 +16,7 @@ use std::{
 
 use anyhow::{bail, ensure, Context, Result};
 use async_trait::async_trait;
-use cggmp21::key_share::{AnyKeyShare as _, Valid, ValidateFromParts as _};
+use cggmp21::key_share::{AnyKeyShare as _, Valid};
 use cggmp21::{
     generic_ec::Scalar,
     supported_curves::{Secp256k1, Secp256r1},
@@ -715,6 +715,7 @@ impl MpcKeyBackend {
                 bail!("P-256 certificate result does not have a recovery ID")
             }
             MpcOperationPayload::Derive(_) => bail!("derivation result is not a signature"),
+            MpcOperationPayload::Reshare(_) => bail!("resharing result is not a signature"),
         };
         for recovery_id in 0u8..4 {
             let recovery_id = RecoveryId::try_from(recovery_id).context("invalid recovery ID")?;
