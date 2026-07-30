@@ -13,7 +13,6 @@ use k256::ecdsa::SigningKey;
 use ra_tls::{
     cert::{CaCert, CertRequest},
     kdf,
-    rcgen::KeyPair,
 };
 
 use crate::crypto::{derive_k256_key, sign_message, sign_message_with_timestamp};
@@ -38,20 +37,25 @@ pub(crate) trait KeyBackend: Send + Sync {
     ) -> Result<Vec<u8>>;
     fn k256_public_key(&self) -> Vec<u8>;
     fn p256_public_key(&self) -> Vec<u8>;
-    fn derive_app_ca(&self, root_ca: &CaCert, app_id: &[u8]) -> Result<CaCert>;
+    fn root_ca_cert(&self) -> &str;
+    fn derive_app_ca(&self, app_id: &[u8]) -> Result<CaCert>;
     /// Legacy KMS-to-KMS migration. MPC backends must reject this operation.
     fn export_root_keys(&self) -> Result<(String, Vec<u8>)>;
 }
 
 pub(crate) struct LocalKeyBackend {
-    root_ca_key: KeyPair,
+    root_ca: CaCert,
     k256_key: SigningKey,
 }
 
 impl LocalKeyBackend {
-    pub(crate) fn from_pem_and_bytes(root_ca_key: &str, k256_key: &[u8]) -> Result<Self> {
+    pub(crate) fn from_pem_and_bytes(
+        root_ca_cert: String,
+        root_ca_key: String,
+        k256_key: &[u8],
+    ) -> Result<Self> {
         Ok(Self {
-            root_ca_key: KeyPair::from_pem(root_ca_key).context("invalid root CA key")?,
+            root_ca: CaCert::new(root_ca_cert, root_ca_key).context("invalid root CA")?,
             k256_key: SigningKey::from_slice(k256_key).context("invalid K-256 root key")?,
         })
     }
@@ -60,7 +64,7 @@ impl LocalKeyBackend {
 impl KeyBackend for LocalKeyBackend {
     fn derive_app_keys(&self, app_id: &[u8], instance_id: &[u8]) -> Result<DerivedAppKeys> {
         let disk_key = kdf::derive_dh_secret(
-            &self.root_ca_key,
+            &self.root_ca.key,
             &[app_id, instance_id, b"app-disk-crypt-key"],
         )?;
         let env_key = self.derive_env_key(app_id)?;
@@ -74,7 +78,7 @@ impl KeyBackend for LocalKeyBackend {
     }
 
     fn derive_env_key(&self, app_id: &[u8]) -> Result<[u8; 32]> {
-        kdf::derive_dh_secret(&self.root_ca_key, &[app_id, b"env-encrypt-key"])
+        kdf::derive_dh_secret(&self.root_ca.key, &[app_id, b"env-encrypt-key"])
     }
 
     fn sign_k256(&self, prefix: &[u8], app_id: &[u8], message: &[u8]) -> Result<Vec<u8>> {
@@ -96,11 +100,15 @@ impl KeyBackend for LocalKeyBackend {
     }
 
     fn p256_public_key(&self) -> Vec<u8> {
-        self.root_ca_key.public_key_der()
+        self.root_ca.key.public_key_der()
     }
 
-    fn derive_app_ca(&self, root_ca: &CaCert, app_id: &[u8]) -> Result<CaCert> {
-        let app_key = kdf::derive_p256_key_pair(&self.root_ca_key, &[app_id, b"app-ca"])?;
+    fn root_ca_cert(&self) -> &str {
+        &self.root_ca.pem_cert
+    }
+
+    fn derive_app_ca(&self, app_id: &[u8]) -> Result<CaCert> {
+        let app_key = kdf::derive_p256_key_pair(&self.root_ca.key, &[app_id, b"app-ca"])?;
         let request = CertRequest::builder()
             .key(&app_key)
             .org_name("Dstack")
@@ -109,13 +117,16 @@ impl KeyBackend for LocalKeyBackend {
             .app_id(app_id)
             .special_usage("app:ca")
             .build();
-        let certificate = root_ca.sign(request).context("failed to sign app CA")?;
+        let certificate = self
+            .root_ca
+            .sign(request)
+            .context("failed to sign app CA")?;
         Ok(CaCert::from_parts(app_key, certificate))
     }
 
     fn export_root_keys(&self) -> Result<(String, Vec<u8>)> {
         Ok((
-            self.root_ca_key.serialize_pem(),
+            self.root_ca.key.serialize_pem(),
             self.k256_key.to_bytes().to_vec(),
         ))
     }

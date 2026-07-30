@@ -55,7 +55,6 @@ impl std::ops::Deref for KmsState {
 
 pub struct KmsStateInner {
     config: KmsConfig,
-    root_ca: CaCert,
     temp_ca_cert: String,
     temp_ca_key: String,
     verifier: CvmVerifier,
@@ -137,11 +136,12 @@ impl KmsState {
     }
 
     pub fn new(config: KmsConfig) -> Result<Self> {
-        let root_ca = CaCert::load(config.root_ca_cert(), config.root_ca_key())
+        let root_ca_cert = fs::read_to_string(config.root_ca_cert())
             .context("Failed to load root CA certificate")?;
         let key_bytes = fs::read(config.k256_key()).context("Failed to read ECDSA root key")?;
         let key_backend: Arc<dyn KeyBackend> = Arc::new(LocalKeyBackend::from_pem_and_bytes(
-            &fs::read_to_string(config.root_ca_key())?,
+            root_ca_cert,
+            fs::read_to_string(config.root_ca_key())?,
             &key_bytes,
         )?);
         let (mpc_identity, mpc_router) = if config.mpc.enabled {
@@ -213,7 +213,6 @@ impl KmsState {
         Ok(Self {
             inner: Arc::new(KmsStateInner {
                 config,
-                root_ca,
                 temp_ca_cert,
                 temp_ca_key,
                 verifier,
@@ -428,7 +427,7 @@ impl KmsRpc for RpcHandler {
             .context("Failed to derive app keys")?;
 
         Ok(AppKeyResponse {
-            ca_cert: self.state.root_ca.pem_cert.clone(),
+            ca_cert: self.state.key_backend.root_ca_cert().to_string(),
             disk_crypt_key: derived.disk_key.to_vec(),
             env_crypt_key: derived.env_key.to_vec(),
             k256_key: derived.k256_key,
@@ -488,7 +487,7 @@ impl KmsRpc for RpcHandler {
             .and_then(|s| serde_json::from_str(&s).ok());
         let info = self.state.config.auth_api.get_info().await?;
         Ok(GetMetaResponse {
-            ca_cert: self.state.inner.root_ca.pem_cert.clone(),
+            ca_cert: self.state.key_backend.root_ca_cert().to_string(),
             allow_any_upgrade: self.state.inner.config.auth_api.is_dev(),
             k256_pubkey: self.state.key_backend.k256_public_key(),
             bootstrap_info,
@@ -542,7 +541,7 @@ impl KmsRpc for RpcHandler {
         Ok(GetTempCaCertResponse {
             temp_ca_cert: self.state.inner.temp_ca_cert.clone(),
             temp_ca_key: self.state.inner.temp_ca_key.clone(),
-            ca_cert: self.state.inner.root_ca.pem_cert.clone(),
+            ca_cert: self.state.key_backend.root_ca_cert().to_string(),
         })
     }
 
@@ -585,7 +584,7 @@ impl KmsRpc for RpcHandler {
         let app_ca = self
             .state
             .key_backend
-            .derive_app_ca(&self.state.root_ca, &app_info.boot_info.app_id)?;
+            .derive_app_ca(&app_info.boot_info.app_id)?;
         let cert = app_ca
             .sign_csr(&csr, Some(&app_info.boot_info.app_id), "app:custom")
             .context("Failed to sign certificate")?;
@@ -593,7 +592,7 @@ impl KmsRpc for RpcHandler {
             certificate_chain: vec![
                 cert.pem(),
                 app_ca.pem_cert.clone(),
-                self.state.root_ca.pem_cert.clone(),
+                self.state.key_backend.root_ca_cert().to_string(),
             ],
         })
     }
