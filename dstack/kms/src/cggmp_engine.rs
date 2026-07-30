@@ -9,7 +9,7 @@ use std::{fs::Permissions, os::unix::fs::PermissionsExt, path::Path};
 use anyhow::{ensure, Context, Result};
 use cggmp21::{
     supported_curves::{Secp256k1, Secp256r1},
-    IncompleteKeyShare,
+    IncompleteKeyShare, KeyShare,
 };
 use fs_err as fs;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -17,6 +17,8 @@ use sha2::{Digest, Sha256};
 
 pub(crate) type K256IncompleteShare = IncompleteKeyShare<Secp256k1>;
 pub(crate) type P256IncompleteShare = IncompleteKeyShare<Secp256r1>;
+pub(crate) type K256KeyShare = KeyShare<Secp256k1>;
+pub(crate) type P256KeyShare = KeyShare<Secp256r1>;
 
 const SHARE_FORMAT_VERSION: u16 = 1;
 const EXECUTION_ID_DOMAIN: &[u8] = b"dstack-cggmp21-execution-id-v1";

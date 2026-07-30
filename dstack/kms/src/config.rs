@@ -107,6 +107,10 @@ pub(crate) struct MpcConfig {
     pub max_sessions: usize,
     #[serde(default = "default_mpc_session_ttl", with = "serde_duration")]
     pub session_ttl: Duration,
+    #[serde(default)]
+    pub p256_share_file: PathBuf,
+    #[serde(default)]
+    pub k256_share_file: PathBuf,
 }
 
 fn default_mpc_max_sessions() -> usize {
@@ -152,6 +156,15 @@ fn default_true() -> bool {
 
 impl KmsConfig {
     pub fn keys_exists(&self) -> bool {
+        if self.mpc.enabled {
+            return self.tmp_ca_cert().exists()
+                && self.tmp_ca_key().exists()
+                && self.root_ca_cert().exists()
+                && self.rpc_cert().exists()
+                && self.rpc_key().exists()
+                && self.mpc.p256_share_file.exists()
+                && self.mpc.k256_share_file.exists();
+        }
         self.tmp_ca_cert().exists()
             && self.tmp_ca_key().exists()
             && self.root_ca_cert().exists()

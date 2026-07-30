@@ -8,14 +8,17 @@
 //! implementation preserves the legacy behavior; the MPC implementation can
 //! replace it without making root key material available to request handlers.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use k256::ecdsa::SigningKey;
 use ra_tls::{
     cert::{CaCert, CertRequest},
     kdf,
 };
 
-use crate::crypto::{derive_k256_key, sign_message, sign_message_with_timestamp};
+use crate::{
+    cggmp_engine::{load_share, CggmpCurve, K256KeyShare, P256KeyShare},
+    crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
+};
 
 pub(crate) struct DerivedAppKeys {
     pub disk_key: [u8; 32],
@@ -100,7 +103,7 @@ impl KeyBackend for LocalKeyBackend {
     }
 
     fn p256_public_key(&self) -> Vec<u8> {
-        self.root_ca.key.public_key_der()
+        self.root_ca.key.public_key_raw().to_vec()
     }
 
     fn root_ca_cert(&self) -> &str {
@@ -129,5 +132,94 @@ impl KeyBackend for LocalKeyBackend {
             self.root_ca.key.serialize_pem(),
             self.k256_key.to_bytes().to_vec(),
         ))
+    }
+}
+
+/// MPC backend containing only validated threshold shares. No complete root
+/// private key is loaded or reconstructed by this backend.
+pub(crate) struct MpcKeyBackend {
+    root_ca_cert: String,
+    p256_share: P256KeyShare,
+    k256_share: K256KeyShare,
+}
+
+impl MpcKeyBackend {
+    pub(crate) fn load(
+        root_ca_cert: String,
+        cluster_id: &str,
+        epoch: u64,
+        node_id: &str,
+        p256_share_file: &std::path::Path,
+        k256_share_file: &std::path::Path,
+    ) -> Result<Self> {
+        Ok(Self {
+            root_ca_cert,
+            p256_share: load_share(
+                p256_share_file,
+                cluster_id,
+                epoch,
+                node_id,
+                CggmpCurve::P256,
+            )?,
+            k256_share: load_share(
+                k256_share_file,
+                cluster_id,
+                epoch,
+                node_id,
+                CggmpCurve::K256,
+            )?,
+        })
+    }
+}
+
+impl KeyBackend for MpcKeyBackend {
+    fn derive_app_keys(&self, _app_id: &[u8], _instance_id: &[u8]) -> Result<DerivedAppKeys> {
+        bail!("MPC derivation protocol is unavailable")
+    }
+
+    fn derive_env_key(&self, _app_id: &[u8]) -> Result<[u8; 32]> {
+        bail!("MPC derivation protocol is unavailable")
+    }
+
+    fn sign_k256(&self, _prefix: &[u8], _app_id: &[u8], _message: &[u8]) -> Result<Vec<u8>> {
+        bail!("MPC signing protocol is unavailable")
+    }
+
+    fn sign_k256_timestamped(
+        &self,
+        _prefix: &[u8],
+        _app_id: &[u8],
+        _timestamp: u64,
+        _message: &[u8],
+    ) -> Result<Vec<u8>> {
+        bail!("MPC signing protocol is unavailable")
+    }
+
+    fn k256_public_key(&self) -> Vec<u8> {
+        self.k256_share
+            .shared_public_key()
+            .to_bytes(true)
+            .as_bytes()
+            .to_vec()
+    }
+
+    fn p256_public_key(&self) -> Vec<u8> {
+        self.p256_share
+            .shared_public_key()
+            .to_bytes(false)
+            .as_bytes()
+            .to_vec()
+    }
+
+    fn root_ca_cert(&self) -> &str {
+        &self.root_ca_cert
+    }
+
+    fn derive_app_ca(&self, _app_id: &[u8]) -> Result<CaCert> {
+        bail!("legacy app CA derivation is unavailable in MPC mode")
+    }
+
+    fn export_root_keys(&self) -> Result<(String, Vec<u8>)> {
+        bail!("MPC root shares cannot be exported as root keys")
     }
 }
