@@ -946,6 +946,7 @@ impl MpcKeyBackend {
         operation: &MpcOperation,
         plan: &ResharePlan,
     ) -> Result<Vec<u8>> {
+        self.authorize_policy_once("reshare", plan.epoch, &plan.authorization_hash()?)?;
         let old_dealers = operation
             .participants
             .iter()
