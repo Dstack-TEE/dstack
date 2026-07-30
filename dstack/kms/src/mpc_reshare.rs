@@ -370,6 +370,48 @@ mod tests {
     }
 
     #[test]
+    fn joining_recipient_materializes_from_public_old_topology_only() {
+        let old = trusted_dealer::builder::<Secp256k1>(3)
+            .set_threshold(Some(2))
+            .generate_shares(&mut OsRng)
+            .unwrap();
+        let dealers = [0, 1];
+        let contributions = dealers
+            .iter()
+            .map(|index| create_contribution(&old[*index], &dealers, 5, 3, &mut OsRng).unwrap())
+            .collect::<Vec<_>>();
+        let public = contributions
+            .iter()
+            .map(|item| item.0.clone())
+            .collect::<Vec<_>>();
+        let private = contributions
+            .iter()
+            .map(|item| item.1[4].clone())
+            .collect::<Vec<_>>();
+        // The joining party receives only public old-key topology plus its own
+        // verifiable evaluations; it never receives any old secret share.
+        let material = verify_and_combine_with_key_info(
+            &old[0].key_info,
+            &dealers,
+            5,
+            3,
+            4,
+            &public,
+            &private,
+        )
+        .unwrap();
+        let joined = material
+            .into_incomplete_share_with_key_info(4, 3, &old[0].key_info)
+            .unwrap();
+        assert_eq!(joined.i, 4);
+        assert_eq!(
+            joined.key_info.shared_public_key,
+            old[0].key_info.shared_public_key
+        );
+        assert_eq!(joined.key_info.public_shares.len(), 5);
+    }
+
+    #[test]
     fn rejects_a_dealer_that_changes_the_group_key() {
         let old = trusted_dealer::builder::<Secp256k1>(3)
             .set_threshold(Some(2))
