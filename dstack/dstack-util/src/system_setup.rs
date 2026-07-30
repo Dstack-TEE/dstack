@@ -3607,7 +3607,6 @@ mod kms_provider_inventory_tests {
     }
 }
 
-
 #[cfg(test)]
 mod gateway_registration_refresh_tests {
     use super::{gateway_rpc_url, register_first_available_gateway, GatewayKeyStore};
@@ -3628,10 +3627,22 @@ mod gateway_registration_refresh_tests {
 
     #[test]
     fn gateway_rpc_urls_are_normalized_once() {
-        assert_eq!(gateway_rpc_url("https://gateway.test"), "https://gateway.test/prpc");
-        assert_eq!(gateway_rpc_url("https://gateway.test/"), "https://gateway.test/prpc");
-        assert_eq!(gateway_rpc_url("https://gateway.test/prpc"), "https://gateway.test/prpc");
-        assert_eq!(gateway_rpc_url("https://gateway.test/prpc/"), "https://gateway.test/prpc");
+        assert_eq!(
+            gateway_rpc_url("https://gateway.test"),
+            "https://gateway.test/prpc"
+        );
+        assert_eq!(
+            gateway_rpc_url("https://gateway.test/"),
+            "https://gateway.test/prpc"
+        );
+        assert_eq!(
+            gateway_rpc_url("https://gateway.test/prpc"),
+            "https://gateway.test/prpc"
+        );
+        assert_eq!(
+            gateway_rpc_url("https://gateway.test/prpc/"),
+            "https://gateway.test/prpc"
+        );
     }
 
     #[test]
@@ -3677,10 +3688,15 @@ mod gateway_registration_refresh_tests {
         let response = register_first_available_gateway(&urls, move |url| {
             observed.lock().unwrap().push(url.clone());
             async move {
-                if url.contains("healthy") { Ok("stable-instance") }
-                else { Err(anyhow!("injected registration failure")) }
+                if url.contains("healthy") {
+                    Ok("stable-instance")
+                } else {
+                    Err(anyhow!("injected registration failure"))
+                }
             }
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         assert_eq!(response, "stable-instance");
         assert_eq!(attempts.lock().unwrap().len(), 4);
     }
@@ -3693,13 +3709,17 @@ mod gateway_registration_refresh_tests {
         register_first_available_gateway(&healthy, move |_| {
             *observed.lock().unwrap() += 1;
             async { Ok::<_, anyhow::Error>(()) }
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         assert_eq!(*attempts.lock().unwrap(), 1);
 
         let failed = ["first".to_string(), "second".to_string()];
         let error = register_first_available_gateway::<(), _, _>(&failed, |url| async move {
             Err(anyhow!("failure-at-{url}"))
-        }).await.unwrap_err();
+        })
+        .await
+        .unwrap_err();
         assert!(format!("{error:#}").contains("failure-at-first"));
     }
 
@@ -3708,8 +3728,13 @@ mod gateway_registration_refresh_tests {
         let urls = ["down".to_string(), "healthy".to_string()];
         let refresh = || async {
             register_first_available_gateway(&urls, |url| async move {
-                if url == "healthy" { Ok(url) } else { Err(anyhow!("down")) }
-            }).await
+                if url == "healthy" {
+                    Ok(url)
+                } else {
+                    Err(anyhow!("down"))
+                }
+            })
+            .await
         };
         let (left, right) = tokio::join!(refresh(), refresh());
         assert_eq!(left.unwrap(), "healthy");
@@ -3722,7 +3747,9 @@ mod gateway_registration_refresh_tests {
             panic!("registration must not run");
             #[allow(unreachable_code)]
             Ok(())
-        }).await.unwrap_err();
+        })
+        .await
+        .unwrap_err();
         assert!(error.to_string().contains("Missing gateway urls"));
     }
 }
