@@ -14,7 +14,7 @@ use round_based::{
 };
 use serde::{de::DeserializeOwned, Serialize};
 
-use dstack_kms_rpc::{mpc_transport_client::MpcTransportClient, MpcPushRequest};
+use dstack_kms_rpc::{mpc_transport_client::MpcTransportClient, MpcPushRequest, MpcStartRequest};
 use ra_rpc::client::{RaClient, RaClientConfig};
 use ra_tls::attestation::AttestationVerifier;
 
@@ -134,6 +134,23 @@ impl MpcHttpTransport {
             local_router,
             clients,
         })
+    }
+
+    pub(crate) async fn start_operation(
+        &self,
+        node_id: &str,
+        operation: &crate::mpc_operation::MpcOperation,
+    ) -> Result<Vec<u8>> {
+        self.clients
+            .get(node_id)
+            .context("MPC operation participant has no attested client")?
+            .start(MpcStartRequest {
+                operation_json: serde_json::to_vec(operation)
+                    .context("failed to encode MPC operation")?,
+            })
+            .await
+            .with_context(|| format!("MPC operation failed on participant {node_id}"))
+            .map(|response| response.result)
     }
 }
 
