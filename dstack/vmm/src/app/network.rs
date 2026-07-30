@@ -68,10 +68,7 @@ fn bridge_sysfs_path(name: &str) -> PathBuf {
     Path::new("/sys/class/net").join(name)
 }
 
-pub(crate) fn validate_resolved_network(
-    networking: &Networking,
-    policy: &Networking,
-) -> Result<()> {
+fn validate_network_policy(networking: &Networking, policy: &Networking) -> Result<()> {
     if !policy.allowed_modes.is_empty() && !policy.allowed_modes.contains(&networking.mode) {
         bail!("networking mode '{:?}' is not allowed", networking.mode);
     }
@@ -90,6 +87,18 @@ pub(crate) fn validate_resolved_network(
             "bridge interface '{}' is not allowed by the VMM configuration",
             networking.bridge
         );
+    }
+
+    Ok(())
+}
+
+pub(crate) fn validate_resolved_network(
+    networking: &Networking,
+    policy: &Networking,
+) -> Result<()> {
+    validate_network_policy(networking, policy)?;
+    if networking.mode != NetworkingMode::Bridge {
+        return Ok(());
     }
 
     let sysfs_path = bridge_sysfs_path(&networking.bridge);
@@ -141,7 +150,22 @@ pub(crate) fn mac_address_for_vm_index(vm_id: &str, prefix: &[u8], index: usize)
 
 #[cfg(test)]
 mod tests {
-    use super::{mac_address_for_vm_index, validate_interface_name};
+    use super::{mac_address_for_vm_index, validate_interface_name, validate_network_policy};
+    use crate::config::{Networking, NetworkingMode};
+
+    fn networking(mode: NetworkingMode, bridge: &str) -> Networking {
+        Networking {
+            mode,
+            allowed_modes: vec![],
+            bridge: bridge.to_string(),
+            allowed_bridges: vec![],
+            mac_prefix: String::new(),
+            net: String::new(),
+            dhcp_start: String::new(),
+            restrict: false,
+            netdev: String::new(),
+        }
+    }
 
     #[test]
     fn primary_mac_keeps_legacy_derivation_and_later_nics_are_distinct() {
@@ -171,5 +195,27 @@ mod tests {
         ] {
             assert!(validate_interface_name(invalid).is_err(), "{invalid}");
         }
+    }
+
+    #[test]
+    fn bridge_policy_allows_only_the_default_and_explicit_allowlist() {
+        let mut policy = networking(NetworkingMode::User, "br0");
+        let requested = networking(NetworkingMode::Bridge, "br1");
+        assert!(validate_network_policy(&requested, &policy).is_err());
+
+        policy.allowed_bridges.push("br1".to_string());
+        validate_network_policy(&requested, &policy).unwrap();
+        validate_network_policy(&networking(NetworkingMode::Bridge, "br0"), &policy).unwrap();
+    }
+
+    #[test]
+    fn mode_policy_is_fail_closed_when_configured() {
+        let mut policy = networking(NetworkingMode::User, "br0");
+        policy.allowed_modes.push(NetworkingMode::User);
+
+        validate_network_policy(&networking(NetworkingMode::User, ""), &policy).unwrap();
+        assert!(
+            validate_network_policy(&networking(NetworkingMode::Bridge, "br0"), &policy).is_err()
+        );
     }
 }

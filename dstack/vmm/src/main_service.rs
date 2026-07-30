@@ -373,15 +373,6 @@ fn resolve_requested_networks(
     Ok(resolved)
 }
 
-fn has_host_bridge_interface() -> bool {
-    let Ok(entries) = fs::read_dir("/sys/class/net") else {
-        return false;
-    };
-    entries
-        .filter_map(|entry| entry.ok())
-        .any(|entry| entry.path().join("bridge").exists())
-}
-
 fn networks_from_vm_config(
     request: &VmConfiguration,
     cvm_config: &CvmConfig,
@@ -717,9 +708,7 @@ impl VmmRpc for RpcHandler {
         let default_networking = &self.app.config.cvm.networking;
         let mut bridge_networking = default_networking.clone();
         bridge_networking.mode = NetworkingMode::Bridge;
-        if validate_resolved_network(&bridge_networking, default_networking).is_ok()
-            || (default_networking.allowed_modes.is_empty() && has_host_bridge_interface())
-        {
+        if validate_resolved_network(&bridge_networking, default_networking).is_ok() {
             supported_modes.push("bridge".to_string());
         }
         Ok(GetMetaResponse {

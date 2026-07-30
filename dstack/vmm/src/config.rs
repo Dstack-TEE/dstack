@@ -532,7 +532,7 @@ pub struct Networking {
 
     /// Network modes that tenant requests may select. An empty list preserves
     /// the legacy behavior and allows every typed mode.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing)]
     pub allowed_modes: Vec<NetworkingMode>,
 
     // ── Bridge fields ──────────────────────────────────────────────
@@ -542,7 +542,7 @@ pub struct Networking {
 
     /// Additional bridge interfaces that tenant requests may select. The
     /// configured default `bridge` is always allowed.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing)]
     pub allowed_bridges: Vec<String>,
 
     // ── MAC prefix ─────────────────────────────────────────────────
