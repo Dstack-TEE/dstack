@@ -447,7 +447,7 @@ impl JoinState {
                 );
                 (record.clone(), false)
             } else {
-                ensure!(records.len() < 16, "too many join operations");
+                ensure!(records.len() < 256, "too many join operations");
                 let record = Arc::new(JoinOperationRecord {
                     operation: operation.clone(),
                     result: Mutex::new(None),

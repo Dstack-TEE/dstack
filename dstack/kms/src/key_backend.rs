@@ -835,9 +835,18 @@ impl MpcKeyBackend {
                 (record.clone(), false)
             } else {
                 ensure!(
-                    operations.len() < MAX_ACTIVE_OPERATIONS,
+                    operations
+                        .values()
+                        .filter(|record| record
+                            .result
+                            .lock()
+                            .expect("operation result mutex poisoned")
+                            .is_none())
+                        .count()
+                        < MAX_ACTIVE_OPERATIONS,
                     "too many active MPC operations"
                 );
+                ensure!(operations.len() < 4096, "too many cached MPC operations");
                 let record = Arc::new(OperationRecord {
                     request_hash: operation.request_hash.clone(),
                     initiator: initiator.into(),

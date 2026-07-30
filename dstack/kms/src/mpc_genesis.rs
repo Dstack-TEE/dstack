@@ -689,7 +689,7 @@ impl GenesisState {
                 );
                 (record.clone(), false)
             } else {
-                ensure!(operations.len() < 32, "too many active genesis operations");
+                ensure!(operations.len() < 256, "too many genesis operations");
                 let record = Arc::new(GenesisOperationRecord {
                     operation: operation.clone(),
                     result: Mutex::new(None),
