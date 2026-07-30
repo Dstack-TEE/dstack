@@ -144,6 +144,12 @@ impl EpochManifest {
             .binary_search_by_key(&node_id, |member| member.node_id.as_str())
             .is_ok()
     }
+
+    pub(crate) fn member_for_attestation_key(&self, public_key: &[u8]) -> Option<&EpochMember> {
+        self.members
+            .iter()
+            .find(|member| member.attestation_pubkey == public_key)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

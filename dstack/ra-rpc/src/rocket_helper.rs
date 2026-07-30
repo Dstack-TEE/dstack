@@ -532,6 +532,10 @@ pub async fn handle_prpc_impl<S, Call: RpcCall<S>>(
         .map(|cert| ra_tls::attestation::from_der(cert.as_bytes()))
         .transpose()?
         .flatten();
+    let remote_public_key = request
+        .certificate
+        .as_ref()
+        .map(|certificate| certificate.public_key().raw.to_vec());
     let attestation = match (request.quote_verifier, attestation) {
         (Some(quote_verifier), Some(attestation)) => {
             let pubkey = request
@@ -568,6 +572,7 @@ pub async fn handle_prpc_impl<S, Call: RpcCall<S>>(
         remote_endpoint: request.remote_addr.cloned().map(RemoteEndpoint::from),
         remote_app_id,
         remote_app_info,
+        remote_public_key,
     };
     let call = Call::construct(context).context("failed to construct call")?;
     let (status_code, output) = call

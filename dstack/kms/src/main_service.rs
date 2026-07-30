@@ -64,7 +64,7 @@ pub struct KmsStateInner {
     metrics: KmsMetrics,
     mpc_identity: Option<ClusterIdentity>,
     key_backend: Arc<dyn KeyBackend>,
-    _mpc_router: Option<Arc<SessionRouter>>,
+    mpc_router: Option<Arc<SessionRouter>>,
 }
 
 #[derive(Default)]
@@ -222,7 +222,7 @@ impl KmsState {
                 metrics: KmsMetrics::default(),
                 mpc_identity,
                 key_backend,
-                _mpc_router: mpc_router,
+                mpc_router,
             }),
         })
     }
@@ -240,6 +240,10 @@ impl KmsState {
 
     pub(crate) fn attestation_verifier(&self) -> Arc<AttestationVerifier> {
         self.inner.attestation_verifier.clone()
+    }
+
+    pub(crate) fn mpc_router(&self) -> Option<&SessionRouter> {
+        self.inner.mpc_router.as_deref()
     }
 }
 

@@ -24,6 +24,7 @@ mod crypto;
 mod key_backend;
 mod main_service;
 mod mpc_identity;
+mod mpc_service;
 mod mpc_session;
 mod onboard_service;
 
@@ -151,6 +152,9 @@ async fn main() -> Result<()> {
     for method in main_service::rpc_methods() {
         info!("  /prpc/{method}");
     }
+    for method in mpc_service::rpc_methods() {
+        info!("  /prpc/{method}");
+    }
 
     let metrics_enabled = config.metrics.enabled;
     let admin_config = config.admin.clone();
@@ -182,6 +186,10 @@ async fn main() -> Result<()> {
         .mount(
             "/prpc",
             ra_rpc::prpc_routes!(KmsState, RpcHandler, trim: "KMS."),
+        )
+        .mount(
+            "/prpc",
+            ra_rpc::prpc_routes!(KmsState, mpc_service::MpcHandler, trim: "MpcTransport."),
         )
         .manage(state.clone());
 

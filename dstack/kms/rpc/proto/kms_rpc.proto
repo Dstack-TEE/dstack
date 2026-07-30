@@ -112,6 +112,25 @@ service KMS {
   rpc SignCert(SignCertRequest) returns (SignCertResponse);
 }
 
+message MpcPushRequest {
+  bytes envelope_json = 1;
+}
+
+message MpcPollRequest {
+  bytes session_id = 1;
+}
+
+message MpcPollResponse {
+  repeated bytes envelope_json = 1;
+}
+
+// Internal interactive-protocol transport. Every method requires an
+// attested RA-TLS client certificate belonging to the active epoch manifest.
+service MpcTransport {
+  rpc Push(MpcPushRequest) returns (google.protobuf.Empty);
+  rpc Poll(MpcPollRequest) returns (MpcPollResponse);
+}
+
 // The KMS admin RPC service. Served on a separate admin listener
 // (`[core.admin]`) behind the shared HTTP authenticator, so the credential
 // travels in the `Authorization`/`X-Admin-Token` header rather than the

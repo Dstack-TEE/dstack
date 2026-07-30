@@ -126,6 +126,13 @@ impl SessionRouter {
         Ok(())
     }
 
+    pub(crate) fn authenticated_node_id(&self, attested_public_key: &[u8]) -> Result<&str> {
+        self.manifest
+            .member_for_attestation_key(attested_public_key)
+            .map(|member| member.node_id.as_str())
+            .context("attested RA-TLS key is not an epoch member")
+    }
+
     pub(crate) fn drain(
         &self,
         authenticated_node_id: &str,
