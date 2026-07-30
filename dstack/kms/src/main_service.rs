@@ -5,7 +5,7 @@
 use std::{
     path::Path,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
 };
@@ -65,6 +65,8 @@ pub struct KmsStateInner {
     signed_manifest: Option<SignedEpochManifest>,
     key_backend: Arc<dyn KeyBackend>,
     mpc_router: Option<Arc<SessionRouter>>,
+    restart_requested: AtomicBool,
+    restart_notify: tokio::sync::Notify,
 }
 
 #[derive(Default)]
@@ -322,6 +324,8 @@ impl KmsState {
                 signed_manifest,
                 key_backend,
                 mpc_router,
+                restart_requested: AtomicBool::new(false),
+                restart_notify: tokio::sync::Notify::new(),
             }),
         })
     }
@@ -335,6 +339,21 @@ impl KmsState {
 
     pub(crate) fn metrics(&self) -> &KmsMetrics {
         &self.inner.metrics
+    }
+
+    pub(crate) fn request_restart(&self) {
+        self.restart_requested.store(true, Ordering::Release);
+        self.restart_notify.notify_waiters();
+    }
+
+    pub(crate) async fn wait_restart_requested(&self) {
+        loop {
+            let notified = self.restart_notify.notified();
+            if self.restart_requested.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
     }
 
     pub(crate) fn attestation_verifier(&self) -> Arc<AttestationVerifier> {

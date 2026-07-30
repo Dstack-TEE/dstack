@@ -269,6 +269,11 @@ async fn main() -> Result<()> {
 
     rocket = rocket.manage(quote_verifier);
 
+    let rocket = rocket
+        .ignite()
+        .await
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let main_shutdown = rocket.shutdown();
     let main_srv = rocket.launch();
     match admin_setup {
         Some((admin_figment, admin_fairing)) => {
@@ -279,21 +284,37 @@ async fn main() -> Result<()> {
             } else {
                 info!("admin API authentication enabled");
             }
-            let admin_srv = rocket::custom(admin_figment)
+            let admin_rocket = rocket::custom(admin_figment)
                 .attach(admin_fairing)
                 .mount("/", admin_auth::routes())
                 .mount(
                     "/prpc",
                     ra_rpc::prpc_routes!(KmsState, admin_service::AdminRpcHandler, trim: "Admin."),
                 )
-                .manage(state)
-                .launch();
+                .manage(state.clone())
+                .ignite()
+                .await
+                .map_err(|error| anyhow!(error.to_string()))?;
+            let admin_shutdown = admin_rocket.shutdown();
+            let restart_state = state.clone();
+            tokio::spawn(async move {
+                restart_state.wait_restart_requested().await;
+                info!("MPC epoch activated; shutting down for epoch restart");
+                main_shutdown.notify();
+                admin_shutdown.notify();
+            });
+            let admin_srv = admin_rocket.launch();
             tokio::try_join!(
                 async { main_srv.await.map_err(|err| anyhow!(err.to_string())) },
                 async { admin_srv.await.map_err(|err| anyhow!(err.to_string())) },
             )?;
         }
         None => {
+            let restart_state = state.clone();
+            tokio::spawn(async move {
+                restart_state.wait_restart_requested().await;
+                main_shutdown.notify();
+            });
             main_srv.await.map_err(|err| anyhow!(err.to_string()))?;
         }
     }

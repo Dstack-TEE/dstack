@@ -61,6 +61,7 @@ impl AdminRpc for AdminRpcHandler {
         let signed = serde_json::from_slice(&request.signed_manifest_json)
             .context("invalid signed epoch manifest JSON")?;
         let retained = self.state.key_backend().activate_epoch(signed).await?;
+        self.state.request_restart();
         Ok(ActivateEpochResponse { retained })
     }
 }
