@@ -16,7 +16,7 @@ use std::{
 
 use anyhow::{bail, ensure, Context, Result};
 use async_trait::async_trait;
-use cggmp21::key_share::AnyKeyShare as _;
+use cggmp21::key_share::{AnyKeyShare as _, Valid, ValidateFromParts as _};
 use cggmp21::{
     generic_ec::Scalar,
     supported_curves::{Secp256k1, Secp256r1},
@@ -32,18 +32,22 @@ use rand::{rngs::OsRng, RngCore};
 
 use crate::{
     cggmp_engine::{
-        execution_id, load_share, share_commitment, CggmpCurve, K256KeyShare, P256KeyShare,
+        execution_id, load_share, share_commitment, store_share, CggmpCurve, K256KeyShare,
+        P256KeyShare,
     },
     crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
     mpc_driver::{
-        drive_state_machine_blocking, BlockingHttpTransport, DriverContext, MpcHttpTransport,
+        drive_state_machine_blocking, BlockingHttpTransport, DriverContext, EnvelopeTransport,
+        MpcHttpTransport,
     },
     mpc_identity::{EpochManifest, SignedEpochManifest},
+    mpc_lifecycle::ResharePlan,
     mpc_operation::{
         DerivePayload, DerivePurpose, K256SignPayload, ManifestSignaturePayload, MpcOperation,
         MpcOperationPayload, P256CertificatePayload,
     },
-    mpc_session::{MpcProtocol, SessionRouter},
+    mpc_reshare::{self, PrivateContribution, PublicContribution},
+    mpc_session::{MpcEnvelope, MpcProtocol, SessionRouter},
     threshold_prf::{self, PrfPartial},
 };
 
@@ -72,6 +76,7 @@ pub(crate) trait KeyBackend: Send + Sync {
     fn root_ca_cert(&self) -> &str;
     async fn derive_app_ca(&self, app_id: &[u8]) -> Result<CaCert>;
     async fn sign_epoch_manifest(&self, manifest: EpochManifest) -> Result<SignedEpochManifest>;
+    async fn prepare_reshare(&self, plan: ResharePlan) -> Result<BTreeMap<String, Vec<u8>>>;
     async fn run_mpc_operation(
         &self,
         operation: crate::mpc_operation::MpcOperation,
@@ -180,6 +185,10 @@ impl KeyBackend for LocalKeyBackend {
         })
     }
 
+    async fn prepare_reshare(&self, _plan: ResharePlan) -> Result<BTreeMap<String, Vec<u8>>> {
+        bail!("resharing is unavailable on the local key backend")
+    }
+
     async fn export_root_keys(&self) -> Result<(String, Vec<u8>)> {
         Ok((
             self.root_ca.key.serialize_pem(),
@@ -207,6 +216,9 @@ pub(crate) struct MpcKeyBackend {
     manifest: EpochManifest,
     cluster_id: String,
     node_id: String,
+    p256_share_file: std::path::PathBuf,
+    k256_share_file: std::path::PathBuf,
+    derivation_share_file: std::path::PathBuf,
     operations: Mutex<BTreeMap<Vec<u8>, Arc<OperationRecord>>>,
 }
 
@@ -216,6 +228,16 @@ struct OperationRecord {
     expires_at: u64,
     result: Mutex<Option<Result<Vec<u8>, String>>>,
     finished: tokio::sync::Notify,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ReshareWire {
+    p256_public: PublicContribution,
+    p256_private: PrivateContribution,
+    k256_public: PublicContribution,
+    k256_private: PrivateContribution,
+    derivation_public: PublicContribution,
+    derivation_private: PrivateContribution,
 }
 
 const MAX_ACTIVE_OPERATIONS: usize = 128;
@@ -277,6 +299,9 @@ impl MpcKeyBackend {
             manifest: manifest.clone(),
             cluster_id: cluster_id.into(),
             node_id: node_id.into(),
+            p256_share_file: p256_share_file.into(),
+            k256_share_file: k256_share_file.into(),
+            derivation_share_file: derivation_share_file.into(),
             operations: Mutex::new(BTreeMap::new()),
         };
         ensure!(
@@ -537,6 +562,53 @@ impl MpcKeyBackend {
         })
     }
 
+    async fn coordinate_reshare(&self, plan: ResharePlan) -> Result<BTreeMap<String, Vec<u8>>> {
+        plan.validate_subset(&self.manifest)?;
+        let dealers = self.participants().await?;
+        let mut session_id = [0u8; 32];
+        OsRng.fill_bytes(&mut session_id);
+        let operation = MpcOperation::new_reshare(
+            session_id,
+            self.manifest.epoch,
+            dealers,
+            unix_time()?
+                .checked_add(300)
+                .context("MPC expiry overflow")?,
+            plan.clone(),
+        )?;
+        operation.validate(&self.manifest, &self.node_id)?;
+        let mut executors = operation.participants.clone();
+        executors.extend(plan.members.iter().map(|member| member.node_id.clone()));
+        executors.sort();
+        executors.dedup();
+        let remote = executors
+            .iter()
+            .filter(|node| *node != &self.node_id)
+            .map(|node| async {
+                (
+                    node.clone(),
+                    self.transport.start_operation(node, &operation).await,
+                )
+            });
+        let (local, remote) = tokio::join!(
+            self.run_mpc_operation(operation.clone(), &self.node_id),
+            join_all(remote)
+        );
+        let mut results = BTreeMap::from([(self.node_id.clone(), local?)]);
+        for (node, result) in remote {
+            results.insert(node, result?);
+        }
+        let mut commitments = BTreeMap::new();
+        for member in &plan.members {
+            let commitment = results
+                .remove(&member.node_id)
+                .context("target reshare member did not return a commitment")?;
+            ensure!(commitment.len() == 32, "invalid reshared member commitment");
+            commitments.insert(member.node_id.clone(), commitment);
+        }
+        Ok(commitments)
+    }
+
     fn validate_p256_certificate(&self, payload: &P256CertificatePayload) -> Result<()> {
         use ra_tls::oids::{PHALA_RATLS_APP_ID, PHALA_RATLS_CERT_USAGE};
         use x509_parser::{
@@ -761,7 +833,265 @@ impl MpcKeyBackend {
                 )?;
                 serde_json::to_vec(&partial).context("failed to encode derivation partial")
             }
+            MpcOperationPayload::Reshare(plan) => self.execute_reshare(&operation, plan).await,
         }
+    }
+
+    async fn execute_reshare(
+        &self,
+        operation: &MpcOperation,
+        plan: &ResharePlan,
+    ) -> Result<Vec<u8>> {
+        let old_dealers = operation
+            .participants
+            .iter()
+            .map(|node| {
+                self.manifest
+                    .members
+                    .iter()
+                    .position(|member| &member.node_id == node)
+                    .context("reshare dealer is not in active manifest")?
+                    .try_into()
+                    .context("reshare dealer index overflow")
+            })
+            .collect::<Result<Vec<u16>>>()?;
+        let local_old_index: u16 = self
+            .manifest
+            .members
+            .iter()
+            .position(|member| member.node_id == self.node_id)
+            .context("local node is absent from active manifest")?
+            .try_into()?;
+        let local_new_index = plan
+            .members
+            .iter()
+            .position(|member| member.node_id == self.node_id);
+        let p256_core = Valid::validate(self.p256_share.core.clone())
+            .map_err(|error| anyhow::anyhow!("invalid active P-256 core share: {error}"))?;
+        let k256_core = Valid::validate(self.k256_share.core.clone())
+            .map_err(|error| anyhow::anyhow!("invalid active K-256 core share: {error}"))?;
+        let derivation_core = Valid::validate(self.derivation_share.core.clone())
+            .map_err(|error| anyhow::anyhow!("invalid active derivation core share: {error}"))?;
+        let mut received = BTreeMap::<u16, ReshareWire>::new();
+        if old_dealers.contains(&local_old_index) {
+            let (p256_public, p256_private) = mpc_reshare::create_contribution(
+                &p256_core,
+                &old_dealers,
+                plan.members.len().try_into()?,
+                plan.threshold,
+                &mut OsRng,
+            )?;
+            let (k256_public, k256_private) = mpc_reshare::create_contribution(
+                &k256_core,
+                &old_dealers,
+                plan.members.len().try_into()?,
+                plan.threshold,
+                &mut OsRng,
+            )?;
+            let (derivation_public, derivation_private) = mpc_reshare::create_contribution(
+                &derivation_core,
+                &old_dealers,
+                plan.members.len().try_into()?,
+                plan.threshold,
+                &mut OsRng,
+            )?;
+            for (new_index, member) in plan.members.iter().enumerate() {
+                let wire = ReshareWire {
+                    p256_public: p256_public.clone(),
+                    p256_private: p256_private[new_index].clone(),
+                    k256_public: k256_public.clone(),
+                    k256_private: k256_private[new_index].clone(),
+                    derivation_public: derivation_public.clone(),
+                    derivation_private: derivation_private[new_index].clone(),
+                };
+                if member.node_id == self.node_id {
+                    received.insert(local_old_index, wire);
+                } else {
+                    self.transport
+                        .send(MpcEnvelope {
+                            session_id: operation.session_id.clone(),
+                            epoch: operation.epoch,
+                            protocol: MpcProtocol::Reshare,
+                            request_hash: operation.request_hash.clone(),
+                            sender: self.node_id.clone(),
+                            recipient: member.node_id.clone(),
+                            sequence: u64::from(local_old_index) + 1,
+                            expires_at: operation.expires_at,
+                            payload: serde_json::to_vec(&wire)
+                                .context("failed to encode resharing contribution")?,
+                            broadcast: false,
+                        })
+                        .await?;
+                }
+            }
+        }
+        let Some(local_new_index) = local_new_index else {
+            return Ok(vec![]);
+        };
+        while received.len() < old_dealers.len() {
+            ensure!(
+                unix_time()? <= operation.expires_at,
+                "resharing session expired"
+            );
+            for envelope in self
+                .transport
+                .receive(
+                    operation
+                        .session_id
+                        .as_slice()
+                        .try_into()
+                        .context("invalid session ID")?,
+                )
+                .await?
+            {
+                let sender_index: u16 = self
+                    .manifest
+                    .members
+                    .iter()
+                    .position(|member| member.node_id == envelope.sender)
+                    .context("resharing message sender is not active")?
+                    .try_into()?;
+                ensure!(
+                    old_dealers.contains(&sender_index),
+                    "message sender is not a dealer"
+                );
+                ensure!(
+                    !received.contains_key(&sender_index),
+                    "duplicate dealer contribution"
+                );
+                let wire: ReshareWire = serde_json::from_slice(&envelope.payload)
+                    .context("invalid resharing contribution")?;
+                received.insert(sender_index, wire);
+            }
+            if received.len() < old_dealers.len() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+        let wires = old_dealers
+            .iter()
+            .map(|dealer| received.get(dealer).expect("all dealer messages received"))
+            .collect::<Vec<_>>();
+        let p256 = mpc_reshare::verify_and_combine(
+            &p256_core,
+            &old_dealers,
+            plan.members.len().try_into()?,
+            plan.threshold,
+            local_new_index.try_into()?,
+            &wires
+                .iter()
+                .map(|wire| wire.p256_public.clone())
+                .collect::<Vec<_>>(),
+            &wires
+                .iter()
+                .map(|wire| wire.p256_private.clone())
+                .collect::<Vec<_>>(),
+        )?
+        .into_incomplete_share(local_new_index.try_into()?, plan.threshold, &p256_core)?;
+        let k256 = mpc_reshare::verify_and_combine(
+            &k256_core,
+            &old_dealers,
+            plan.members.len().try_into()?,
+            plan.threshold,
+            local_new_index.try_into()?,
+            &wires
+                .iter()
+                .map(|wire| wire.k256_public.clone())
+                .collect::<Vec<_>>(),
+            &wires
+                .iter()
+                .map(|wire| wire.k256_private.clone())
+                .collect::<Vec<_>>(),
+        )?
+        .into_incomplete_share(local_new_index.try_into()?, plan.threshold, &k256_core)?;
+        let derivation = mpc_reshare::verify_and_combine(
+            &derivation_core,
+            &old_dealers,
+            plan.members.len().try_into()?,
+            plan.threshold,
+            local_new_index.try_into()?,
+            &wires
+                .iter()
+                .map(|wire| wire.derivation_public.clone())
+                .collect::<Vec<_>>(),
+            &wires
+                .iter()
+                .map(|wire| wire.derivation_private.clone())
+                .collect::<Vec<_>>(),
+        )?
+        .into_incomplete_share(
+            local_new_index.try_into()?,
+            plan.threshold,
+            &derivation_core,
+        )?;
+
+        let target_old_indexes = plan
+            .members
+            .iter()
+            .map(|member| {
+                self.manifest
+                    .members
+                    .iter()
+                    .position(|active| active.node_id == member.node_id)
+                    .context("reshare target is not active")
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let filtered_aux = |share: &P256KeyShare| -> Result<_> {
+            let mut aux = share.aux.clone();
+            aux.parties = target_old_indexes
+                .iter()
+                .map(|index| aux.parties[*index].clone())
+                .collect();
+            Valid::validate(aux)
+                .map_err(|error| anyhow::anyhow!("invalid filtered auxiliary share: {error}"))
+        };
+        let p256_complete = cggmp21::KeyShare::from_parts((p256, filtered_aux(&self.p256_share)?))?;
+        let k256_complete = cggmp21::KeyShare::from_parts((k256, {
+            let mut aux = self.k256_share.aux.clone();
+            aux.parties = target_old_indexes
+                .iter()
+                .map(|index| aux.parties[*index].clone())
+                .collect();
+            Valid::validate(aux).map_err(|error| anyhow::anyhow!("invalid K-256 aux: {error}"))?
+        }))?;
+        let derivation_complete =
+            cggmp21::KeyShare::from_parts((derivation, filtered_aux(&self.derivation_share)?))?;
+        let pending =
+            |path: &std::path::Path| path.with_extension(format!("epoch-{}.pending", plan.epoch));
+        store_share(
+            &pending(&self.p256_share_file),
+            &self.cluster_id,
+            plan.epoch,
+            &self.node_id,
+            CggmpCurve::P256,
+            &p256_complete,
+        )?;
+        store_share(
+            &pending(&self.k256_share_file),
+            &self.cluster_id,
+            plan.epoch,
+            &self.node_id,
+            CggmpCurve::K256,
+            &k256_complete,
+        )?;
+        store_share(
+            &pending(&self.derivation_share_file),
+            &self.cluster_id,
+            plan.epoch,
+            &self.node_id,
+            CggmpCurve::P256,
+            &derivation_complete,
+        )?;
+        let p256_public =
+            p256_complete.core.key_info.public_shares[local_new_index].to_bytes(false);
+        let k256_public = k256_complete.core.key_info.public_shares[local_new_index].to_bytes(true);
+        let derivation_public =
+            derivation_complete.core.key_info.public_shares[local_new_index].to_bytes(false);
+        Ok(share_commitment(
+            p256_public.as_bytes(),
+            k256_public.as_bytes(),
+            derivation_public.as_bytes(),
+        )
+        .to_vec())
     }
 
     async fn execute_k256(&self, operation: MpcOperation) -> Result<Vec<u8>> {
@@ -1082,6 +1412,10 @@ impl KeyBackend for MpcKeyBackend {
 
     async fn sign_epoch_manifest(&self, manifest: EpochManifest) -> Result<SignedEpochManifest> {
         self.coordinate_manifest_signature(manifest).await
+    }
+
+    async fn prepare_reshare(&self, plan: ResharePlan) -> Result<BTreeMap<String, Vec<u8>>> {
+        self.coordinate_reshare(plan).await
     }
 
     async fn run_mpc_operation(&self, operation: MpcOperation, initiator: &str) -> Result<Vec<u8>> {

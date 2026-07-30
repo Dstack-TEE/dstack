@@ -12,6 +12,62 @@ use serde::{Deserialize, Serialize};
 
 use crate::mpc_identity::{ClusterIdentity, SignedEpochManifest};
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ReshareMember {
+    pub node_id: String,
+    pub endpoint: String,
+    #[serde(with = "hex_bytes")]
+    pub attestation_pubkey: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ResharePlan {
+    pub epoch: u64,
+    #[serde(with = "hex_bytes")]
+    pub previous_manifest_hash: Vec<u8>,
+    pub threshold: u16,
+    pub members: Vec<ReshareMember>,
+}
+
+impl ResharePlan {
+    pub(crate) fn validate_subset(
+        &self,
+        active: &crate::mpc_identity::EpochManifest,
+    ) -> Result<()> {
+        ensure!(
+            self.epoch == active.epoch + 1,
+            "reshare epoch must advance by one"
+        );
+        ensure!(
+            self.previous_manifest_hash == active.manifest_hash()?,
+            "reshare plan does not extend the active manifest"
+        );
+        ensure!(
+            self.threshold >= 2 && usize::from(self.threshold) <= self.members.len(),
+            "invalid reshare threshold"
+        );
+        let mut previous: Option<&str> = None;
+        for member in &self.members {
+            ensure!(
+                previous.is_none_or(|value| value < member.node_id.as_str()),
+                "reshare members must be unique and ordered"
+            );
+            let active_member = active
+                .members
+                .iter()
+                .find(|active| active.node_id == member.node_id)
+                .context("joining new members requires the join protocol")?;
+            ensure!(
+                active_member.endpoint == member.endpoint
+                    && active_member.attestation_pubkey == member.attestation_pubkey,
+                "reshare member identity differs from active manifest"
+            );
+            previous = Some(&member.node_id);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct EpochCheckpoint {
     version: u16,

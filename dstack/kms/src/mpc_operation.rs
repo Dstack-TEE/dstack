@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use sha3::Keccak256;
 
 use crate::mpc_identity::EpochManifest;
+use crate::mpc_lifecycle::ResharePlan;
 
 const REQUEST_DOMAIN: &[u8] = b"dstack-mpc-operation-v1";
 const MAX_SIGN_MESSAGE_BYTES: usize = 1024 * 1024;
@@ -162,6 +163,7 @@ pub(crate) enum MpcOperationPayload {
     SignManifest(ManifestSignaturePayload),
     SignP256Certificate(P256CertificatePayload),
     Derive(DerivePayload),
+    Reshare(ResharePlan),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -263,6 +265,25 @@ impl MpcOperation {
         Ok(operation)
     }
 
+    pub(crate) fn new_reshare(
+        session_id: [u8; 32],
+        epoch: u64,
+        participants: Vec<String>,
+        expires_at: u64,
+        plan: ResharePlan,
+    ) -> Result<Self> {
+        let mut operation = Self {
+            session_id: session_id.to_vec(),
+            epoch,
+            participants,
+            expires_at,
+            payload: MpcOperationPayload::Reshare(plan),
+            request_hash: vec![],
+        };
+        operation.request_hash = operation.compute_request_hash()?.to_vec();
+        Ok(operation)
+    }
+
     pub(crate) fn validate(&self, manifest: &EpochManifest, initiator: &str) -> Result<()> {
         ensure!(
             self.session_id.len() == 32,
@@ -321,6 +342,7 @@ impl MpcOperation {
             }
             MpcOperationPayload::SignP256Certificate(payload) => payload.validate()?,
             MpcOperationPayload::Derive(payload) => payload.validate()?,
+            MpcOperationPayload::Reshare(plan) => plan.validate_subset(manifest)?,
         }
         ensure!(
             self.request_hash == self.compute_request_hash()?,

@@ -149,6 +149,8 @@ service Admin {
   rpc ClearImageCache(ClearImageCacheRequest) returns (google.protobuf.Empty);
   // Ask the active threshold committee to authorize the next epoch manifest.
   rpc SignEpochManifest(SignEpochManifestRequest) returns (SignEpochManifestResponse);
+  // Prepare threshold shares for a revoke/subset epoch transition.
+  rpc PrepareReshare(PrepareReshareRequest) returns (PrepareReshareResponse);
 }
 
 message ClearImageCacheRequest {
@@ -162,6 +164,15 @@ message SignEpochManifestRequest {
 
 message SignEpochManifestResponse {
   bytes signed_manifest_json = 1;
+}
+
+message PrepareReshareRequest {
+  bytes plan_json = 1;
+}
+
+message PrepareReshareResponse {
+  // Canonical JSON map from node ID to its new 32-byte share commitment.
+  bytes commitments_json = 1;
 }
 
 message BootstrapRequest {
