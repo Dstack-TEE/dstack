@@ -22,6 +22,7 @@ use dstack_kms_rpc::{
     mpc_genesis_server::{MpcGenesisRpc, MpcGenesisServer},
     MpcGenesisFinalizeRequest, MpcGenesisStartRequest, MpcGenesisStartResponse, MpcPushRequest,
 };
+use prost_types::Empty;
 use ra_rpc::{
     client::{RaClient, RaClientConfig},
     CallContext, RpcCall,
@@ -270,6 +271,33 @@ impl GenesisTransport {
             .await?
             .result_json)
     }
+
+    async fn wait_until_ready(&self, timeout: Duration) -> Result<()> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let probes = self.clients.iter().map(|(node, client)| async move {
+                client
+                    .ping(Empty {})
+                    .await
+                    .with_context(|| format!("genesis peer {node} is unavailable"))
+            });
+            let results = futures::future::join_all(probes).await;
+            if results.iter().all(Result::is_ok) {
+                return Ok(());
+            }
+            ensure!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for genesis peers: {}",
+                results
+                    .into_iter()
+                    .filter_map(Result::err)
+                    .map(|error| error.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            );
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
 }
 
 #[async_trait]
@@ -351,6 +379,10 @@ impl GenesisState {
 
     pub(crate) fn verifier(&self) -> Arc<AttestationVerifier> {
         self.0.verifier.clone()
+    }
+
+    pub(crate) fn is_coordinator(&self) -> bool {
+        self.0.config.mpc.node_id == self.0.plan.coordinator
     }
 
     fn authenticated_node(&self, key: &[u8]) -> Result<&str> {
@@ -515,6 +547,7 @@ impl GenesisState {
             self.0.config.mpc.node_id == self.0.plan.coordinator,
             "not genesis coordinator"
         );
+        self.0.transport.wait_until_ready(GENESIS_TTL).await?;
         for kind in [
             GenesisKind::AuxiliaryInfo,
             GenesisKind::DkgP256,

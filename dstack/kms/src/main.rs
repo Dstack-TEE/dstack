@@ -87,6 +87,41 @@ async fn run_onboard_service(kms_config: KmsConfig, figment: Figment) -> Result<
     Ok(())
 }
 
+async fn run_mpc_genesis_service(kms_config: KmsConfig, figment: Figment) -> Result<()> {
+    use mpc_genesis::{GenesisHandler, GenesisState};
+
+    let state = GenesisState::new(kms_config)?;
+    let quote_verifier = QuoteVerifier::new(state.verifier());
+    let coordinator = state.clone();
+    if coordinator.is_coordinator() {
+        tokio::spawn(async move {
+            if let Err(error) = coordinator.coordinate_dkg().await {
+                tracing::error!("MPC genesis DKG failed: {error:#}");
+            } else {
+                info!("MPC genesis DKG completed; waiting for threshold finalization");
+            }
+        });
+    }
+    info!("Starting attested MPC genesis service");
+    for method in mpc_genesis::rpc_methods() {
+        info!("  /prpc/{method}");
+    }
+    let figment = figment
+        .clone()
+        .merge(Serialized::defaults(figment.find_value("rpc")?));
+    rocket::custom(figment)
+        .mount(
+            "/prpc",
+            ra_rpc::prpc_routes!(GenesisState, GenesisHandler, trim: "MpcGenesis."),
+        )
+        .manage(state)
+        .manage(quote_verifier)
+        .launch()
+        .await
+        .map_err(|error| anyhow!(error.to_string()))?;
+    Ok(())
+}
+
 #[rocket::get("/metrics")]
 fn metrics(state: &State<KmsState>) -> RawText<String> {
     RawText(state.metrics().render_prometheus())
@@ -135,12 +170,24 @@ async fn main() -> Result<()> {
         );
     }
 
-    if config.onboard.enabled && !config.keys_exists() {
+    if config.onboard.enabled
+        && !(config.mpc.enabled && config.genesis_transport_exists())
+        && !config.keys_exists()
+    {
         info!("Onboarding");
         run_onboard_service(config.clone(), figment.clone()).await?;
-        if !config.keys_exists() {
+        if config.mpc.enabled && !config.genesis_transport_exists()
+            || !config.mpc.enabled && !config.keys_exists()
+        {
             bail!("Failed to onboard");
         }
+    }
+
+    if config.mpc.enabled && !config.keys_exists() {
+        if !config.genesis_transport_exists() {
+            bail!("MPC genesis requires onboarded RPC transport certificates");
+        }
+        return run_mpc_genesis_service(config, figment).await;
     }
 
     info!("Updating certs");

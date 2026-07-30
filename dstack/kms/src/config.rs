@@ -168,6 +168,16 @@ fn default_true() -> bool {
 }
 
 impl KmsConfig {
+    /// Transport identity required to run attested MPC genesis. Unlike
+    /// `keys_exists`, this deliberately does not require threshold shares or
+    /// the final root certificate.
+    pub fn genesis_transport_exists(&self) -> bool {
+        self.tmp_ca_cert().exists()
+            && self.tmp_ca_key().exists()
+            && self.rpc_cert().exists()
+            && self.rpc_key().exists()
+    }
+
     pub fn keys_exists(&self) -> bool {
         if self.mpc.enabled {
             return self.tmp_ca_cert().exists()
