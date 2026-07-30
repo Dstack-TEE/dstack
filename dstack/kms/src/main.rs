@@ -257,16 +257,20 @@ async fn main() -> Result<()> {
         return run_mpc_genesis_service(config, figment).await;
     }
 
-    info!("Updating certs");
-    if let Err(err) = onboard_service::update_certs(&config).await {
-        if config.attest_rpc_cert {
-            return Err(err).context(
-                "Failed to reissue the attested KMS RPC certificate; refusing to start with a \
-                 potentially unattested certificate",
-            );
-        }
-        warn!("Failed to update certs: {err}");
-    };
+    if config.mpc.enabled {
+        info!("Using threshold-issued MPC RPC certificate");
+    } else {
+        info!("Updating certs");
+        if let Err(err) = onboard_service::update_certs(&config).await {
+            if config.attest_rpc_cert {
+                return Err(err).context(
+                    "Failed to reissue the attested KMS RPC certificate; refusing to start with a \
+                     potentially unattested certificate",
+                );
+            }
+            warn!("Failed to update certs: {err}");
+        };
+    }
 
     info!("Starting KMS");
     info!("Supported methods:");
