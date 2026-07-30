@@ -79,7 +79,8 @@ pub(crate) fn create_contribution<E: Curve, R: RngCore + CryptoRng>(
         .collect::<Result<Vec<_>>>()?;
     let lambda = lagrange_at_zero(dealer_position, &dealer_points)?;
     let mut coefficients = Vec::with_capacity(usize::from(new_threshold));
-    coefficients.push(lambda * old_share.x.as_ref());
+    let old_secret: &Scalar<E> = old_share.x.as_ref();
+    coefficients.push(lambda * old_secret);
     coefficients.extend((1..new_threshold).map(|_| Scalar::<E>::random(rng)));
     let commitments = coefficients
         .iter()
@@ -135,7 +136,6 @@ pub(crate) fn verify_and_combine<E: Curve>(
         "missing private resharing contribution"
     );
     let setup = old_reference
-        .core
         .vss_setup
         .as_ref()
         .context("resharing requires an old Shamir setup")?;
@@ -168,7 +168,6 @@ pub(crate) fn verify_and_combine<E: Curve>(
             .collect::<Result<Vec<_>>>()?;
         let lambda = lagrange_at_zero(position, &dealer_points)?;
         let expected_constant = old_reference
-            .core
             .key_info
             .public_shares
             .get(usize::from(*dealer_index))
@@ -248,7 +247,8 @@ fn evaluate_commitments<E: Curve>(coefficients: &[Point<E>], x: Scalar<E>) -> Po
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cggmp21::{generic_ec::NonZero, key_share::trusted_dealer, supported_curves::Secp256k1};
+    use cggmp21::{generic_ec::NonZero, supported_curves::Secp256k1};
+    use key_share::trusted_dealer;
     use rand::rngs::OsRng;
 
     #[test]
@@ -303,7 +303,7 @@ mod tests {
             create_contribution(&old[0], &dealers, 3, 2, &mut OsRng).unwrap();
         let (second_public, second_private) =
             create_contribution(&old[1], &dealers, 3, 2, &mut OsRng).unwrap();
-        first_public.commitments[0] = Point::<Secp256k1>::generator()
+        first_public.commitments[0] = (Point::<Secp256k1>::generator() * Scalar::one())
             .to_bytes(true)
             .as_bytes()
             .to_vec();
