@@ -338,7 +338,9 @@ fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Result<Option<Network
     }
     Ok(Some(Networking {
         mode,
+        allowed_modes: vec![],
         bridge,
+        allowed_bridges: vec![],
         mac_prefix: String::new(),
         net: String::new(),
         dhcp_start: String::new(),
@@ -356,7 +358,7 @@ fn networks_from_proto(networks: &[rpc::NetworkingConfig]) -> Result<Vec<Network
 }
 
 fn validate_default_network(cvm_config: &CvmConfig) -> Result<()> {
-    validate_resolved_network(&cvm_config.networking)
+    validate_resolved_network(&cvm_config.networking, &cvm_config.networking)
 }
 
 fn resolve_requested_networks(
@@ -367,7 +369,7 @@ fn resolve_requested_networks(
         .iter()
         .map(|networking| resolve_networking(networking, cvm_config))
         .collect::<Vec<_>>();
-    validate_resolved_networks(&resolved)?;
+    validate_resolved_networks(&resolved, &cvm_config.networking)?;
     Ok(resolved)
 }
 
@@ -715,7 +717,9 @@ impl VmmRpc for RpcHandler {
         let default_networking = &self.app.config.cvm.networking;
         let mut bridge_networking = default_networking.clone();
         bridge_networking.mode = NetworkingMode::Bridge;
-        if validate_resolved_network(&bridge_networking).is_ok() || has_host_bridge_interface() {
+        if validate_resolved_network(&bridge_networking, default_networking).is_ok()
+            || (default_networking.allowed_modes.is_empty() && has_host_bridge_interface())
+        {
             supported_modes.push("bridge".to_string());
         }
         Ok(GetMetaResponse {

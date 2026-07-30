@@ -205,7 +205,7 @@ impl PreparedQemuLaunch {
         let app_compose = workdir.app_compose().context("failed to get app compose")?;
         let platform = cfg.resolved_platform();
         let networks = resolved_networks(&vm.manifest, cfg);
-        validate_resolved_networks(&networks)?;
+        validate_resolved_networks(&networks, &cfg.networking)?;
         let volumes = vm
             .manifest
             .volumes

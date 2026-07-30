@@ -530,10 +530,20 @@ pub enum NetworkingMode {
 pub struct Networking {
     pub mode: NetworkingMode,
 
+    /// Network modes that tenant requests may select. An empty list preserves
+    /// the legacy behavior and allows every typed mode.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_modes: Vec<NetworkingMode>,
+
     // ── Bridge fields ──────────────────────────────────────────────
     /// Bridge interface to attach TAP device to (e.g., "virbr0")
     #[serde(default)]
     pub bridge: String,
+
+    /// Additional bridge interfaces that tenant requests may select. The
+    /// configured default `bridge` is always allowed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_bridges: Vec<String>,
 
     // ── MAC prefix ─────────────────────────────────────────────────
     /// Fixed MAC address prefix (0-3 colon-separated hex bytes, e.g. "02:ab:cd").

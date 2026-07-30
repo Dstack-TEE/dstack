@@ -15,7 +15,10 @@ By default, dstack-vmm uses **user** networking (QEMU's built-in SLIRP stack, no
 ```toml
 [cvm.networking]
 mode = "bridge"
+allowed_modes = ["user", "bridge"]
 bridge = "virbr0"
+# Optional additional bridges that VM requests may select.
+allowed_bridges = ["dstack-br1"]
 ```
 
 ### Per-VM override
@@ -25,7 +28,14 @@ Individual VMs can override the global networking mode via:
 - **Web UI**: Networking dropdown in the deploy dialog
 - **API**: `networking: { mode: "bridge" }` in `VmConfiguration`
 
-Only the mode is per-VM; the bridge interface name always comes from the global config.
+Both the mode and bridge can be requested per VM, but the VMM authorizes them
+against this root-owned configuration. An empty `allowed_modes` keeps legacy
+mode behavior. The configured default `bridge` is always allowed; an empty
+`allowed_bridges` does not authorize other host bridges.
+
+Bridge names must be valid Linux interface names, refer to an actual Linux
+bridge, and match either `bridge` or `allowed_bridges`. Never authorize a host
+management or physical uplink bridge for untrusted VMs.
 
 ## Host setup
 

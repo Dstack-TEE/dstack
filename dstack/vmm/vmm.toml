@@ -100,6 +100,9 @@ product_name = "dstack"
 
 [cvm.networking]
 mode = "user"
+# Empty preserves compatibility. Multi-tenant deployments should explicitly
+# authorize only the modes tenants may request, for example ["user", "bridge"].
+allowed_modes = []
 
 # for mode = "user"
 net = "10.0.2.0/24"
@@ -108,6 +111,9 @@ restrict = false
 
 # for mode = "bridge"
 # bridge = "virbr0"
+# Additional tenant-selectable bridges. The default bridge above is always
+# allowed; an empty list does not authorize arbitrary host bridges.
+# allowed_bridges = ["dstack-br1"]
 
 [cvm.port_mapping]
 enabled = false

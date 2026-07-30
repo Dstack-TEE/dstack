@@ -4,7 +4,7 @@
 
 //! VM network resolution, validation, and interface identity.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
 use sha2::{Digest, Sha256};
@@ -46,25 +46,71 @@ pub(crate) fn resolved_networks(manifest: &Manifest, cfg: &CvmConfig) -> Vec<Net
     }
 }
 
-pub(crate) fn validate_resolved_network(networking: &Networking) -> Result<()> {
-    if networking.mode != NetworkingMode::Bridge {
-        return Ok(());
-    }
-    if networking.bridge.is_empty() {
+fn validate_interface_name(name: &str) -> Result<()> {
+    if name.is_empty() {
         bail!("bridge networking requested but no bridge is configured");
     }
-    if !Path::new("/sys/class/net")
-        .join(&networking.bridge)
-        .exists()
-    {
-        bail!("bridge interface '{}' does not exist", networking.bridge);
+    if name.len() > 15 {
+        bail!("invalid bridge interface name '{name}': exceeds IFNAMSIZ");
+    }
+    let mut chars = name.chars();
+    let valid_first = chars
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+    let valid_rest = chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-'));
+    if !valid_first || !valid_rest {
+        bail!("invalid bridge interface name '{name}': expected [A-Za-z0-9_][A-Za-z0-9_.-]*");
     }
     Ok(())
 }
 
-pub(crate) fn validate_resolved_networks(networks: &[Networking]) -> Result<()> {
+fn bridge_sysfs_path(name: &str) -> PathBuf {
+    Path::new("/sys/class/net").join(name)
+}
+
+pub(crate) fn validate_resolved_network(
+    networking: &Networking,
+    policy: &Networking,
+) -> Result<()> {
+    if !policy.allowed_modes.is_empty() && !policy.allowed_modes.contains(&networking.mode) {
+        bail!("networking mode '{:?}' is not allowed", networking.mode);
+    }
+    if networking.mode != NetworkingMode::Bridge {
+        return Ok(());
+    }
+
+    validate_interface_name(&networking.bridge)?;
+    let bridge_allowed = networking.bridge == policy.bridge
+        || policy
+            .allowed_bridges
+            .iter()
+            .any(|bridge| bridge == &networking.bridge);
+    if !bridge_allowed {
+        bail!(
+            "bridge interface '{}' is not allowed by the VMM configuration",
+            networking.bridge
+        );
+    }
+
+    let sysfs_path = bridge_sysfs_path(&networking.bridge);
+    if !sysfs_path.exists() {
+        bail!("bridge interface '{}' does not exist", networking.bridge);
+    }
+    if !sysfs_path.join("bridge").is_dir() {
+        bail!(
+            "network interface '{}' is not a Linux bridge",
+            networking.bridge
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_resolved_networks(
+    networks: &[Networking],
+    policy: &Networking,
+) -> Result<()> {
     for networking in networks {
-        validate_resolved_network(networking)?;
+        validate_resolved_network(networking, policy)?;
     }
     Ok(())
 }
@@ -95,7 +141,7 @@ pub(crate) fn mac_address_for_vm_index(vm_id: &str, prefix: &[u8], index: usize)
 
 #[cfg(test)]
 mod tests {
-    use super::mac_address_for_vm_index;
+    use super::{mac_address_for_vm_index, validate_interface_name};
 
     #[test]
     fn primary_mac_keeps_legacy_derivation_and_later_nics_are_distinct() {
@@ -107,5 +153,23 @@ mod tests {
             mac_address_for_vm_index("vm-123", &[], 1),
             "c6:74:2c:65:14:b9"
         );
+    }
+
+    #[test]
+    fn bridge_interface_names_are_strictly_validated() {
+        for valid in ["br0", "dstack-br0", "bridge.100", "_bridge"] {
+            validate_interface_name(valid).unwrap();
+        }
+        for invalid in [
+            "",
+            "/etc/passwd",
+            "br0,helper=/bin/sh",
+            "br0=bad",
+            "br 0",
+            "-br0",
+            "0123456789abcdef",
+        ] {
+            assert!(validate_interface_name(invalid).is_err(), "{invalid}");
+        }
     }
 }

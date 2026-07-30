@@ -1607,7 +1607,9 @@ mod tests {
         let mut manifest = test_manifest(1024);
         manifest.networks = vec![Networking {
             mode: NetworkingMode::Bridge,
+            allowed_modes: vec![],
             bridge: "dstack-br0".to_string(),
+            allowed_bridges: vec![],
             mac_prefix: String::new(),
             net: String::new(),
             dhcp_start: String::new(),
@@ -1824,7 +1826,9 @@ mod tests {
         let mut bridge_manifest = test_manifest(2048);
         bridge_manifest.networks = vec![Networking {
             mode: NetworkingMode::Bridge,
+            allowed_modes: vec![],
             bridge: "dstack-br0".to_string(),
+            allowed_bridges: vec![],
             mac_prefix: "02:aa:bb".to_string(),
             net: String::new(),
             dhcp_start: String::new(),
