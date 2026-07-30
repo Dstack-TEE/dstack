@@ -25,7 +25,6 @@ use ra_tls::{
     attestation::{AttestationVerifier, TeeVariant, VerifiedAttestation},
     cert::{CaCert, CertRequest, CertSigningRequestV1, CertSigningRequestV2, Csr},
     kdf,
-    rcgen::PublicKeyData as _,
 };
 use scale::Decode;
 use tokio::sync::OnceCell;
