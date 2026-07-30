@@ -13,6 +13,7 @@ use std::{
 use anyhow::{bail, ensure, Context, Result};
 use async_trait::async_trait;
 use cggmp21::{
+    key_share::AnyKeyShare as _,
     supported_curves::{Secp256k1, Secp256r1},
     ExecutionId, KeyShare,
 };
