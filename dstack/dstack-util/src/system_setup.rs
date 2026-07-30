@@ -2775,9 +2775,14 @@ impl Stage1<'_> {
         self.vmm
             .notify_q("boot.progress", "setting up dstack-gateway")
             .await;
-        GatewayContext::new(&self.shared, &self.keys)
+        if let Err(error) = GatewayContext::new(&self.shared, &self.keys)
             .setup(true)
-            .await?;
+            .await
+        {
+            warn!(
+                "dstack-gateway registration is unavailable during boot; continuing without a route: {error:#}"
+            );
+        }
         self.vmm
             .notify_q("boot.progress", "setting up docker")
             .await;
