@@ -239,6 +239,9 @@ async fn main() -> Result<()> {
     if config.mpc.enabled && mpc_genesis::recover_if_needed(&config)? {
         info!("Recovered interrupted MPC genesis commit");
     }
+    if config.mpc.enabled && mpc_join::recover_if_needed(&config)? {
+        info!("Recovered interrupted MPC membership activation");
+    }
 
     if config.mpc.enabled
         && !config.mpc.join_authorization_file.as_os_str().is_empty()

@@ -29,7 +29,10 @@ use ra_rpc::{
     client::{RaClient, RaClientConfig},
     CallContext, RpcCall,
 };
-use ra_tls::attestation::AttestationVerifier;
+use ra_tls::{
+    attestation::AttestationVerifier,
+    cert::{prepare_external_certificate, CertRequest, ExternalCertificate},
+};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -61,6 +64,8 @@ enum JoinKind {
     AuxiliaryInfo,
     Reshare,
     SignManifest,
+    PrepareRpcCertificate,
+    SignRpcCertificate,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +140,19 @@ struct JoinWire {
     derivation_private: PrivateContribution,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+struct JoinRpcCertificatePayload {
+    node_id: String,
+    #[serde(with = "hex_bytes")]
+    tbs_der: Vec<u8>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct JoinFinalBundle {
+    signed_manifest: SignedEpochManifest,
+    rpc_certificates: BTreeMap<String, String>,
+}
+
 #[derive(Default)]
 struct JoinArtifacts {
     aux: Option<cggmp21::key_share::AuxInfo>,
@@ -170,6 +188,8 @@ impl JoinTransport {
                 .tls_client_key(key.clone())
                 .tls_ca_cert(ca.clone())
                 .tls_built_in_root_certs(false)
+                .tls_no_check(true)
+                .tls_no_check_hostname(true)
                 .attestation_verifier(verifier.clone())
                 .cert_validator(Box::new(move |info| {
                     let info = info.context("join peer has no certificate")?;
@@ -463,6 +483,8 @@ impl JoinState {
             JoinKind::AuxiliaryInfo => self.execute_aux(operation).await,
             JoinKind::Reshare => self.execute_reshare(operation).await,
             JoinKind::SignManifest => self.execute_sign_manifest(operation).await,
+            JoinKind::PrepareRpcCertificate => self.prepare_rpc_certificate(operation),
+            JoinKind::SignRpcCertificate => self.execute_sign_rpc_certificate(operation).await,
         }
     }
 
@@ -858,6 +880,150 @@ impl JoinState {
         .context("join manifest signing worker panicked")?
     }
 
+    fn prepare_rpc_certificate(&self, operation: JoinOperation) -> Result<Vec<u8>> {
+        ensure!(
+            operation.payload.is_empty(),
+            "RPC certificate preparation payload must be empty"
+        );
+        let key =
+            ra_tls::rcgen::KeyPair::from_pem(&fs_err::read_to_string(self.0.config.rpc_key())?)?;
+        let (_, current_pem) =
+            x509_parser::pem::parse_x509_pem(&fs_err::read(self.0.config.rpc_cert())?)?;
+        let current = current_pem.parse_x509()?;
+        let attestation = ra_tls::attestation::from_cert(&current)?
+            .context("join RPC certificate lacks attestation")?;
+        let domain = fs_err::read_to_string(self.0.config.rpc_domain())?;
+        let names = [domain.clone()];
+        Ok(prepare_external_certificate(
+            CertRequest::builder()
+                .key(&key)
+                .subject(&domain)
+                .alt_names(&names)
+                .special_usage("kms:rpc")
+                .attestation(&attestation)
+                .usage_server_auth(true)
+                .usage_client_auth(true)
+                .build(),
+            &fs_err::read_to_string(self.0.config.root_ca_cert())?,
+        )?
+        .tbs_der()
+        .to_vec())
+    }
+
+    fn validate_rpc_certificate_tbs(&self, payload: &JoinRpcCertificatePayload) -> Result<()> {
+        use ra_tls::oids::{PHALA_RATLS_ATTESTATION, PHALA_RATLS_CERT_USAGE};
+        use x509_parser::{
+            certificate::TbsCertificate, der_parser::oid::Oid, prelude::FromDer as _,
+        };
+        let member = self
+            .0
+            .authorization
+            .plan
+            .members
+            .iter()
+            .find(|member| member.node_id == payload.node_id)
+            .context("RPC certificate target is absent from join authorization")?;
+        let (_, root_pem) =
+            x509_parser::pem::parse_x509_pem(&fs_err::read(self.0.config.root_ca_cert())?)?;
+        let root = root_pem.parse_x509()?;
+        ensure!(
+            root.public_key().subject_public_key.data.as_ref() == self.0.identity.p256_group_pubkey,
+            "join RPC issuer key mismatch"
+        );
+        let (remaining, tbs) = TbsCertificate::from_der(&payload.tbs_der)
+            .map_err(|error| anyhow::anyhow!("invalid join RPC TBS: {error}"))?;
+        ensure!(
+            remaining.is_empty() && tbs.issuer() == root.subject(),
+            "join RPC certificate issuer mismatch"
+        );
+        ensure!(
+            tbs.public_key().raw == member.attestation_pubkey,
+            "join RPC certificate key is not quote-bound authorization key"
+        );
+        let usage_oid = Oid::from(PHALA_RATLS_CERT_USAGE)
+            .map_err(|error| anyhow::anyhow!("invalid usage OID: {error:?}"))?;
+        let usage = tbs
+            .get_extension_unique(&usage_oid)?
+            .context("join RPC certificate lacks usage")?;
+        ensure!(
+            yasna::parse_der(usage.value, |reader| reader.read_bytes())? == b"kms:rpc",
+            "join RPC certificate usage mismatch"
+        );
+        let attestation_oid = Oid::from(PHALA_RATLS_ATTESTATION)
+            .map_err(|error| anyhow::anyhow!("invalid attestation OID: {error:?}"))?;
+        ensure!(
+            tbs.get_extension_unique(&attestation_oid)?.is_some(),
+            "join RPC certificate lacks attestation"
+        );
+        Ok(())
+    }
+
+    async fn execute_sign_rpc_certificate(&self, operation: JoinOperation) -> Result<Vec<u8>> {
+        ensure!(
+            self.0
+                .authorization
+                .plan
+                .dealers
+                .iter()
+                .any(|node| node == &self.0.config.mpc.node_id),
+            "only old dealers sign joined RPC certificates"
+        );
+        let payload: JoinRpcCertificatePayload = serde_json::from_slice(&operation.payload)?;
+        self.validate_rpc_certificate_tbs(&payload)?;
+        let digest: [u8; 32] = Sha256::digest(&payload.tbs_der).into();
+        let dealers = self.0.authorization.plan.dealers.clone();
+        let local: u16 = dealers
+            .iter()
+            .position(|node| node == &self.0.config.mpc.node_id)
+            .unwrap()
+            .try_into()?;
+        let keygen = dealers
+            .iter()
+            .map(|node| {
+                self.0
+                    .active
+                    .manifest
+                    .members
+                    .iter()
+                    .position(|member| &member.node_id == node)
+                    .context("dealer is not active")?
+                    .try_into()
+                    .context("dealer index overflow")
+            })
+            .collect::<Result<Vec<u16>>>()?;
+        let share = self
+            .0
+            .old_p256
+            .clone()
+            .context("RPC signer lacks old P-256 share")?;
+        let context = self.context(&operation, MpcProtocol::SignP256, dealers)?;
+        let transport = self.0.transport.clone();
+        let runtime = tokio::runtime::Handle::current();
+        let eid = execution_id(
+            &self.0.identity.cluster_id,
+            self.0.active.manifest.epoch,
+            CggmpCurve::P256,
+            operation.session_id.as_slice().try_into()?,
+        );
+        tokio::task::spawn_blocking(move || {
+            let mut rng = OsRng;
+            let data =
+                DataToSign::from_scalar(Scalar::<Secp256r1>::from_be_bytes_mod_order(digest));
+            let state = cggmp21::signing(ExecutionId::new(&eid), local, &keygen, &share)
+                .sign_sync(&mut rng, data);
+            let signature = drive_state_machine_blocking(
+                state,
+                &BlockingTransport::new(transport, runtime),
+                context,
+            )??;
+            let mut encoded = vec![0; cggmp21::Signature::<Secp256r1>::serialized_len()];
+            signature.write_to_slice(&mut encoded);
+            Ok(encoded)
+        })
+        .await
+        .context("join RPC signing worker panicked")?
+    }
+
     fn validate_target_manifest(&self, manifest: &EpochManifest) -> Result<()> {
         let plan = &self.0.authorization.plan;
         ensure!(
@@ -959,7 +1125,35 @@ impl JoinState {
             signature: first.to_vec(),
         };
         signed.verify(&self.0.identity)?;
-        let encoded = serde_jcs::to_vec(&signed)?;
+        let prepared = self
+            .run_targets(
+                JoinOperation::new(JoinKind::PrepareRpcCertificate, vec![])?,
+                false,
+            )
+            .await?;
+        let mut rpc_certificates = BTreeMap::new();
+        for (node_id, tbs_der) in prepared {
+            let payload = JoinRpcCertificatePayload {
+                node_id: node_id.clone(),
+                tbs_der: tbs_der.clone(),
+            };
+            let signatures = self
+                .run_dealers(JoinOperation::new(
+                    JoinKind::SignRpcCertificate,
+                    serde_jcs::to_vec(&payload)?,
+                )?)
+                .await?;
+            let signature = identical(&signatures)?;
+            rpc_certificates.insert(
+                node_id,
+                ExternalCertificate::from_tbs_der(tbs_der)?.finish(signature)?,
+            );
+        }
+        let bundle = JoinFinalBundle {
+            signed_manifest: signed,
+            rpc_certificates,
+        };
+        let encoded = serde_jcs::to_vec(&bundle)?;
         let calls = plan
             .members
             .iter()
@@ -979,7 +1173,7 @@ impl JoinState {
         for result in futures::future::join_all(calls).await {
             result?;
         }
-        self.finalize(signed)
+        self.finalize(bundle)
     }
 
     async fn run_targets(
@@ -1047,9 +1241,34 @@ impl JoinState {
         }
         Ok(out)
     }
-    fn finalize(&self, signed: SignedEpochManifest) -> Result<()> {
+    fn finalize(&self, bundle: JoinFinalBundle) -> Result<()> {
+        use ra_tls::traits::CertExt as _;
+        let signed = &bundle.signed_manifest;
         self.validate_target_manifest(&signed.manifest)?;
         signed.verify(&self.0.identity)?;
+        let rpc_pem = bundle
+            .rpc_certificates
+            .get(&self.0.config.mpc.node_id)
+            .context("join bundle lacks local RPC certificate")?;
+        let (_, rpc_der) = x509_parser::pem::parse_x509_pem(rpc_pem.as_bytes())?;
+        let rpc = rpc_der.parse_x509()?;
+        let member = signed
+            .manifest
+            .members
+            .iter()
+            .find(|member| member.node_id == self.0.config.mpc.node_id)
+            .unwrap();
+        ensure!(
+            rpc.public_key().raw == member.attestation_pubkey
+                && rpc.get_special_usage()?.as_deref() == Some("kms:rpc")
+                && ra_tls::attestation::from_cert(&rpc)?.is_some(),
+            "invalid joined RPC certificate identity"
+        );
+        let (_, root_der) =
+            x509_parser::pem::parse_x509_pem(&fs_err::read(self.0.config.root_ca_cert())?)?;
+        rpc.verify_signature(Some(root_der.parse_x509()?.public_key()))
+            .context("invalid joined RPC certificate signature")?;
+        safe_write::safe_write(self.0.config.rpc_cert(), rpc_pem.as_bytes())?;
         activate_pending_epoch(
             &EpochPaths {
                 manifest: &self.0.config.mpc.manifest_file,
@@ -1060,7 +1279,7 @@ impl JoinState {
             },
             &self.0.identity,
             &self.0.active.manifest,
-            &signed,
+            signed,
             &self.0.identity.cluster_id,
             &self.0.config.mpc.node_id,
         )?;
@@ -1124,6 +1343,45 @@ impl MpcJoinRpc for JoinHandler {
 }
 pub(crate) fn rpc_methods() -> &'static [&'static str] {
     <MpcJoinServer<JoinHandler>>::supported_methods()
+}
+
+/// Finish an interrupted activation before startup chooses maintenance mode.
+pub(crate) fn recover_if_needed(config: &KmsConfig) -> Result<bool> {
+    if config.mpc.join_authorization_file.as_os_str().is_empty()
+        || !config.mpc.join_authorization_file.exists()
+        || !config.mpc.identity_file.exists()
+    {
+        return Ok(false);
+    }
+    let identity: ClusterIdentity =
+        serde_json::from_slice(&fs_err::read(&config.mpc.identity_file)?)?;
+    let recovered = crate::mpc_lifecycle::recover_pending_activation(
+        &EpochPaths {
+            manifest: &config.mpc.manifest_file,
+            checkpoint: &config.mpc.checkpoint_file,
+            p256_share: &config.mpc.p256_share_file,
+            k256_share: &config.mpc.k256_share_file,
+            derivation_share: &config.mpc.derivation_share_file,
+        },
+        &identity,
+        &identity.cluster_id,
+        &config.mpc.node_id,
+    )?;
+    let authorization: SignedResharePlan =
+        serde_json::from_slice(&fs_err::read(&config.mpc.join_authorization_file)?)?;
+    if config.mpc.manifest_file.exists() {
+        let installed: SignedEpochManifest =
+            serde_json::from_slice(&fs_err::read(&config.mpc.manifest_file)?)?;
+        if installed.manifest.epoch == authorization.plan.epoch
+            && installed.manifest.previous_manifest_hash
+                == authorization.plan.previous_manifest_hash
+        {
+            installed.verify(&identity)?;
+            fs_err::remove_file(&config.mpc.join_authorization_file)?;
+            return Ok(true);
+        }
+    }
+    Ok(recovered)
 }
 fn identical(results: &BTreeMap<String, Vec<u8>>) -> Result<&[u8]> {
     let first = results
