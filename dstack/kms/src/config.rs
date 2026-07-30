@@ -94,6 +94,8 @@ pub(crate) struct MpcConfig {
     #[serde(default)]
     pub cluster_id: String,
     #[serde(default)]
+    pub identity_file: PathBuf,
+    #[serde(default)]
     pub p256_group_pubkey: String,
     #[serde(default)]
     pub k256_group_pubkey: String,

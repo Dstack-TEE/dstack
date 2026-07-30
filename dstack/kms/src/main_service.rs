@@ -144,19 +144,30 @@ impl KmsState {
                 .context("failed to load attestation verifier")?,
         );
         let configured_identity = if config.mpc.enabled {
-            Some(ClusterIdentity::new(
-                config.mpc.protocol_version,
-                config.mpc.cluster_id.clone(),
-                decode_hex("mpc.p256_group_pubkey", &config.mpc.p256_group_pubkey)?,
-                decode_hex("mpc.k256_group_pubkey", &config.mpc.k256_group_pubkey)?,
-                decode_hex(
-                    "mpc.derivation_group_pubkey",
-                    &config.mpc.derivation_group_pubkey,
-                )?,
-            )?)
+            Some(if config.mpc.identity_file.as_os_str().is_empty() {
+                ClusterIdentity::new(
+                    config.mpc.protocol_version,
+                    config.mpc.cluster_id.clone(),
+                    decode_hex("mpc.p256_group_pubkey", &config.mpc.p256_group_pubkey)?,
+                    decode_hex("mpc.k256_group_pubkey", &config.mpc.k256_group_pubkey)?,
+                    decode_hex(
+                        "mpc.derivation_group_pubkey",
+                        &config.mpc.derivation_group_pubkey,
+                    )?,
+                )?
+            } else {
+                serde_json::from_slice(
+                    &fs::read(&config.mpc.identity_file)
+                        .context("failed to read MPC identity file")?,
+                )
+                .context("failed to parse MPC identity file")?
+            })
         } else {
             None
         };
+        if let Some(identity) = &configured_identity {
+            identity.validate()?;
+        }
         let mut signed_manifest: Option<SignedEpochManifest> = None;
         let manifest: Option<EpochManifest> = if config.mpc.enabled {
             anyhow::ensure!(
@@ -205,7 +216,10 @@ impl KmsState {
             let manifest = manifest.as_ref().context("MPC manifest is missing")?;
             Arc::new(MpcKeyBackend::load(
                 root_ca_cert,
-                &config.mpc.cluster_id,
+                &configured_identity
+                    .as_ref()
+                    .context("MPC identity is missing")?
+                    .cluster_id,
                 manifest.epoch,
                 &config.mpc.node_id,
                 &config.mpc.p256_share_file,

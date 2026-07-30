@@ -36,28 +36,40 @@ impl ClusterIdentity {
         k256_group_pubkey: Vec<u8>,
         derivation_group_pubkey: Vec<u8>,
     ) -> Result<Self> {
-        ensure!(protocol_version == 1, "unsupported MPC protocol version");
-        ensure!(!cluster_id.is_empty(), "MPC cluster_id must not be empty");
-        ensure!(cluster_id.len() <= 128, "MPC cluster_id is too long");
-        ensure!(
-            !p256_group_pubkey.is_empty(),
-            "missing P-256 group public key"
-        );
-        ensure!(
-            !k256_group_pubkey.is_empty(),
-            "missing K-256 group public key"
-        );
-        ensure!(
-            !derivation_group_pubkey.is_empty(),
-            "missing derivation group public key"
-        );
-        Ok(Self {
+        let identity = Self {
             protocol_version,
             cluster_id,
             p256_group_pubkey,
             k256_group_pubkey,
             derivation_group_pubkey,
-        })
+        };
+        identity.validate()?;
+        Ok(identity)
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
+        ensure!(
+            self.protocol_version == 1,
+            "unsupported MPC protocol version"
+        );
+        ensure!(
+            !self.cluster_id.is_empty(),
+            "MPC cluster_id must not be empty"
+        );
+        ensure!(self.cluster_id.len() <= 128, "MPC cluster_id is too long");
+        ensure!(
+            !self.p256_group_pubkey.is_empty(),
+            "missing P-256 group public key"
+        );
+        ensure!(
+            !self.k256_group_pubkey.is_empty(),
+            "missing K-256 group public key"
+        );
+        ensure!(
+            !self.derivation_group_pubkey.is_empty(),
+            "missing derivation group public key"
+        );
+        Ok(())
     }
 
     /// Stable key-provider ID pinned in app compose and launch measurements.
