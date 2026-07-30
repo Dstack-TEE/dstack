@@ -32,8 +32,8 @@ use upgrade_authority::{build_boot_info, ensure_app_id_len, local_kms_boot_info,
 use crate::{
     config::KmsConfig,
     key_backend::{KeyBackend, LocalKeyBackend, MpcKeyBackend},
-    mpc_identity::EpochManifest,
-    mpc_identity::{decode_hex, ClusterIdentity},
+    mpc_identity::{decode_hex, ClusterIdentity, EpochManifest, SignedEpochManifest},
+    mpc_lifecycle,
     mpc_session::SessionRouter,
 };
 
@@ -142,17 +142,50 @@ impl KmsState {
             AttestationVerifier::load(&config.attestation)
                 .context("failed to load attestation verifier")?,
         );
+        let configured_identity = if config.mpc.enabled {
+            Some(ClusterIdentity::new(
+                config.mpc.protocol_version,
+                config.mpc.cluster_id.clone(),
+                decode_hex("mpc.p256_group_pubkey", &config.mpc.p256_group_pubkey)?,
+                decode_hex("mpc.k256_group_pubkey", &config.mpc.k256_group_pubkey)?,
+                decode_hex(
+                    "mpc.derivation_group_pubkey",
+                    &config.mpc.derivation_group_pubkey,
+                )?,
+            )?)
+        } else {
+            None
+        };
+        let mut signed_manifest: Option<SignedEpochManifest> = None;
         let manifest: Option<EpochManifest> = if config.mpc.enabled {
             anyhow::ensure!(
                 !config.mpc.manifest_file.as_os_str().is_empty(),
                 "MPC manifest_file must not be empty"
             );
-            Some(
-                serde_json::from_slice(
-                    &fs::read(&config.mpc.manifest_file).context("failed to read MPC manifest")?,
-                )
-                .context("failed to parse MPC manifest")?,
-            )
+            let encoded =
+                fs::read(&config.mpc.manifest_file).context("failed to read MPC manifest")?;
+            match serde_json::from_slice::<SignedEpochManifest>(&encoded) {
+                Ok(signed) => {
+                    signed.verify(
+                        configured_identity
+                            .as_ref()
+                            .context("MPC identity is missing")?,
+                    )?;
+                    let manifest = signed.manifest.clone();
+                    signed_manifest = Some(signed);
+                    Some(manifest)
+                }
+                Err(signed_error) => {
+                    anyhow::ensure!(
+                        config.mpc.allow_unsigned_manifest,
+                        "MPC manifest must carry a valid threshold signature: {signed_error}"
+                    );
+                    Some(
+                        serde_json::from_slice(&encoded)
+                            .context("failed to parse unsigned MPC manifest")?,
+                    )
+                }
+            }
         } else {
             None
         };
@@ -192,18 +225,7 @@ impl KmsState {
             )?)
         };
         let mpc_identity = if config.mpc.enabled {
-            let identity = ClusterIdentity::new(
-                config.mpc.protocol_version,
-                config.mpc.cluster_id.clone(),
-                decode_hex("mpc.p256_group_pubkey", &config.mpc.p256_group_pubkey)?,
-                decode_hex("mpc.k256_group_pubkey", &config.mpc.k256_group_pubkey)?,
-                decode_hex(
-                    "mpc.derivation_group_pubkey",
-                    &config.mpc.derivation_group_pubkey,
-                )?,
-            )?;
-            // Identity v1 still uses the local backend. Fail closed if config
-            // claims group keys different from the keys actually serving RPCs.
+            let identity = configured_identity.context("MPC identity is missing")?;
             anyhow::ensure!(
                 identity.p256_group_pubkey == key_backend.p256_public_key(),
                 "MPC P-256 group public key does not match the active root CA"
@@ -229,6 +251,17 @@ impl KmsState {
                 manifest.contains_member(&config.mpc.node_id),
                 "local node is not a member of the MPC epoch"
             );
+            if let Some(signed) = &signed_manifest {
+                anyhow::ensure!(
+                    !config.mpc.checkpoint_file.as_os_str().is_empty(),
+                    "MPC checkpoint_file must not be empty for signed manifests"
+                );
+                mpc_lifecycle::validate_and_checkpoint(
+                    &config.mpc.checkpoint_file,
+                    signed,
+                    &identity,
+                )?;
+            }
             Some(identity)
         } else {
             None

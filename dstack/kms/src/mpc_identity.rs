@@ -8,6 +8,7 @@
 //! This lets a cluster reshare its keys without changing the identity pinned by apps.
 
 use anyhow::{bail, ensure, Context, Result};
+use k256::ecdsa::{signature::hazmat::PrehashVerifier, Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -93,6 +94,30 @@ pub(crate) struct EpochManifest {
     #[serde(with = "hex_bytes")]
     pub previous_manifest_hash: Vec<u8>,
     pub members: Vec<EpochMember>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct SignedEpochManifest {
+    pub manifest: EpochManifest,
+    #[serde(with = "hex_bytes")]
+    pub signature: Vec<u8>,
+}
+
+impl SignedEpochManifest {
+    pub(crate) fn verify(&self, identity: &ClusterIdentity) -> Result<[u8; 32]> {
+        let hash = self.manifest.manifest_hash()?;
+        ensure!(
+            self.manifest.provider_id == identity.provider_id(),
+            "manifest provider ID does not match cluster identity"
+        );
+        let key = VerifyingKey::from_sec1_bytes(&identity.k256_group_pubkey)
+            .context("invalid manifest verification key")?;
+        let signature = Signature::from_slice(&self.signature)
+            .context("invalid epoch manifest signature encoding")?;
+        key.verify_prehash(&hash, &signature)
+            .context("invalid epoch manifest threshold signature")?;
+        Ok(hash)
+    }
 }
 
 impl EpochManifest {

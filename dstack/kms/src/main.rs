@@ -26,6 +26,7 @@ mod key_backend;
 mod main_service;
 mod mpc_driver;
 mod mpc_identity;
+mod mpc_lifecycle;
 mod mpc_operation;
 mod mpc_service;
 mod mpc_session;

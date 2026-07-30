@@ -103,6 +103,11 @@ pub(crate) struct MpcConfig {
     pub node_id: String,
     #[serde(default)]
     pub manifest_file: PathBuf,
+    #[serde(default)]
+    pub checkpoint_file: PathBuf,
+    /// Development-only compatibility escape hatch for unsigned manifests.
+    #[serde(default)]
+    pub allow_unsigned_manifest: bool,
     #[serde(default = "default_mpc_max_sessions")]
     pub max_sessions: usize,
     #[serde(default = "default_mpc_session_ttl", with = "serde_duration")]
