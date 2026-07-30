@@ -2040,6 +2040,13 @@ struct Stage1<'a> {
     keys: AppKeys,
 }
 
+fn validate_key_provider_inputs(kind: KeyProviderKind, kms_urls: &[String]) -> Result<()> {
+    if kind.is_kms() && kms_urls.is_empty() {
+        bail!("No KMS URLs are set");
+    }
+    Ok(())
+}
+
 impl<'a> Stage0<'a> {
     fn host_api(&self) -> HostApi {
         HostApi::new(
@@ -2264,6 +2271,7 @@ impl<'a> Stage0<'a> {
 
     async fn request_app_keys(&self) -> Result<AppKeys> {
         let key_provider = self.shared.app_compose.key_provider();
+        validate_key_provider_inputs(key_provider, &self.shared.sys_config.kms_urls)?;
         match key_provider {
             KeyProviderKind::Kms => self.request_app_keys_from_kms().await,
             KeyProviderKind::Local => self.get_keys_from_local_key_provider().await,
@@ -3571,4 +3579,20 @@ fn test_unquote_os_release_value_handles_quoting_styles() {
     // Unbalanced/degenerate quotes are returned verbatim.
     assert_eq!(unquote_os_release_value("\""), "\"");
     assert_eq!(unquote_os_release_value("\"a"), "\"a");
+}
+
+#[cfg(test)]
+mod kms_provider_inventory_tests {
+    use super::validate_key_provider_inputs;
+    use dstack_types::KeyProviderKind;
+
+    #[test]
+    fn local_key_providers_do_not_require_kms_inventory() {
+        let no_urls = Vec::new();
+        assert!(validate_key_provider_inputs(KeyProviderKind::Local, &no_urls).is_ok());
+        assert!(validate_key_provider_inputs(KeyProviderKind::Tpm, &no_urls).is_ok());
+        assert!(validate_key_provider_inputs(KeyProviderKind::None, &no_urls).is_ok());
+        let error = validate_key_provider_inputs(KeyProviderKind::Kms, &no_urls).unwrap_err();
+        assert!(error.to_string().contains("No KMS URLs are set"));
+    }
 }
