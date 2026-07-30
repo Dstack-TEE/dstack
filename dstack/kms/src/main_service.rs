@@ -226,6 +226,20 @@ impl KmsState {
                 .map(Arc::new)
             })
             .transpose()?;
+        if let Some(manifest) = &manifest {
+            let local = manifest
+                .members
+                .iter()
+                .find(|member| member.node_id == config.mpc.node_id)
+                .context("local MPC member is absent from manifest")?;
+            for path in [config.rpc_cert(), config.mpc.client_cert_file.clone()] {
+                let (_, pem) = x509_parser::pem::parse_x509_pem(&fs::read(path)?)?;
+                anyhow::ensure!(
+                    pem.parse_x509()?.public_key().raw == local.attestation_pubkey,
+                    "local MPC server/client certificate key differs from manifest"
+                );
+            }
+        }
         let key_backend: Arc<dyn KeyBackend> = if config.mpc.enabled {
             let manifest = manifest.as_ref().context("MPC manifest is missing")?;
             Arc::new(MpcKeyBackend::load(
@@ -242,8 +256,10 @@ impl KmsState {
                 &config.mpc.checkpoint_file,
                 manifest,
                 mpc_router.clone().context("MPC router is missing")?,
-                fs::read_to_string(config.rpc_cert()).context("failed to read MPC RPC cert")?,
-                fs::read_to_string(config.rpc_key()).context("failed to read MPC RPC key")?,
+                fs::read_to_string(&config.mpc.client_cert_file)
+                    .context("failed to read MPC client cert")?,
+                fs::read_to_string(&config.mpc.client_key_file)
+                    .context("failed to read MPC client key")?,
                 attestation_verifier.clone(),
             )?)
         } else {

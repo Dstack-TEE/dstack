@@ -48,6 +48,8 @@ identity_file = "/var/lib/dstack-kms/mpc-identity.json"
 genesis_plan_file = "/var/lib/dstack-kms/genesis-plan.json"
 genesis_tls_ca_cert = "/var/lib/dstack-kms/genesis-transport-ca.crt"
 join_authorization_file = "/var/lib/dstack-kms/join-authorization.json"
+client_cert_file = "/var/lib/dstack-kms/mpc-client.crt"
+client_key_file = "/var/lib/dstack-kms/mpc-client.key"
 manifest_file = "/var/lib/dstack-kms/epoch-manifest.json"
 checkpoint_file = "/var/lib/dstack-kms/epoch-checkpoint.json"
 p256_share_file = "/var/lib/dstack-kms/p256.share"
@@ -81,6 +83,12 @@ three keys. It threshold-signs the root CA, reissues each attested RPC
 certificate under that root, signs epoch 1, and distributes the final bundle.
 A durable genesis journal makes every node finish a crash-interrupted commit.
 Processes shut down after commit and must be restarted by their supervisor.
+
+`mpc-client.crt` must be accepted by `[rpc.tls.mutual].ca_certs`, contain a
+valid RA-TLS attestation, and use the same key as `rpc.crt`. The server
+certificate is reissued by the threshold root; the client certificate remains
+under the mutual-TLS CA so Rocket can authenticate peer connections before the
+RPC quote and manifest checks run.
 
 Record and independently compare `key_provider_id` from multiple members before
 placing it in application compose files.

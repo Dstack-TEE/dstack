@@ -303,6 +303,19 @@ impl JoinState {
                 .any(|member| member.node_id == config.mpc.node_id),
             "local node is absent from join target"
         );
+        let local = authorization
+            .plan
+            .members
+            .iter()
+            .find(|member| member.node_id == config.mpc.node_id)
+            .unwrap();
+        for path in [config.rpc_cert(), config.mpc.client_cert_file.clone()] {
+            let (_, pem) = x509_parser::pem::parse_x509_pem(&fs_err::read(path)?)?;
+            ensure!(
+                pem.parse_x509()?.public_key().raw == local.attestation_pubkey,
+                "local join server/client certificate key differs from authorization"
+            );
+        }
         initialize_join_checkpoint(
             &config.mpc.checkpoint_file,
             &active,
@@ -333,8 +346,8 @@ impl JoinState {
             &authorization,
             &config.mpc.node_id,
             router.clone(),
-            fs_err::read_to_string(config.rpc_cert())?,
-            fs_err::read_to_string(config.rpc_key())?,
+            fs_err::read_to_string(&config.mpc.client_cert_file)?,
+            fs_err::read_to_string(&config.mpc.client_key_file)?,
             ca,
             verifier.clone(),
         )?);

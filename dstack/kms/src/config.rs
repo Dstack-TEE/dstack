@@ -103,6 +103,12 @@ pub(crate) struct MpcConfig {
     /// enters maintenance join mode until the target epoch is activated.
     #[serde(default)]
     pub join_authorization_file: PathBuf,
+    /// RA-TLS client identity signed by the Rocket mutual-TLS CA. It should
+    /// use the same quote-bound key as the server RPC certificate.
+    #[serde(default)]
+    pub client_cert_file: PathBuf,
+    #[serde(default)]
+    pub client_key_file: PathBuf,
     #[serde(default)]
     pub p256_group_pubkey: String,
     #[serde(default)]
@@ -180,6 +186,8 @@ impl KmsConfig {
             && self.tmp_ca_key().exists()
             && self.rpc_cert().exists()
             && self.rpc_key().exists()
+            && self.mpc.client_cert_file.exists()
+            && self.mpc.client_key_file.exists()
     }
 
     pub fn keys_exists(&self) -> bool {
@@ -189,6 +197,8 @@ impl KmsConfig {
                 && self.root_ca_cert().exists()
                 && self.rpc_cert().exists()
                 && self.rpc_key().exists()
+                && self.mpc.client_cert_file.exists()
+                && self.mpc.client_key_file.exists()
                 && self.mpc.p256_share_file.exists()
                 && self.mpc.k256_share_file.exists()
                 && self.mpc.derivation_share_file.exists()

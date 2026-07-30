@@ -415,6 +415,18 @@ impl GenesisState {
                 .any(|member| member.node_id == config.mpc.node_id),
             "local node absent from genesis plan"
         );
+        let local = plan
+            .members
+            .iter()
+            .find(|member| member.node_id == config.mpc.node_id)
+            .unwrap();
+        for path in [config.rpc_cert(), config.mpc.client_cert_file.clone()] {
+            let (_, pem) = x509_parser::pem::parse_x509_pem(&fs_err::read(path)?)?;
+            ensure!(
+                pem.parse_x509()?.public_key().raw == local.attestation_pubkey,
+                "local genesis server/client certificate key differs from plan"
+            );
+        }
         let manifest = plan.provisional_manifest()?;
         let router = Arc::new(SessionRouter::new(manifest, 32, GENESIS_TTL)?);
         let verifier = Arc::new(AttestationVerifier::load(&config.attestation)?);
@@ -424,8 +436,8 @@ impl GenesisState {
             &plan,
             &config.mpc.node_id,
             router.clone(),
-            fs_err::read_to_string(config.rpc_cert())?,
-            fs_err::read_to_string(config.rpc_key())?,
+            fs_err::read_to_string(&config.mpc.client_cert_file)?,
+            fs_err::read_to_string(&config.mpc.client_key_file)?,
             ca,
             verifier.clone(),
         )?);
