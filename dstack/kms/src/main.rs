@@ -104,7 +104,7 @@ async fn run_mpc_genesis_service(kms_config: KmsConfig, figment: Figment) -> Res
             "/prpc",
             ra_rpc::prpc_routes!(GenesisState, GenesisHandler, trim: "MpcGenesis."),
         )
-        .manage(state)
+        .manage(state.clone())
         .manage(quote_verifier);
     let rocket = rocket
         .ignite()
