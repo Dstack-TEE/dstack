@@ -6,7 +6,10 @@
 
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -357,6 +360,8 @@ struct GenesisInner {
     transport: Arc<GenesisTransport>,
     artifacts: Mutex<GenesisArtifacts>,
     verifier: Arc<AttestationVerifier>,
+    finalized: AtomicBool,
+    finalized_notify: tokio::sync::Notify,
 }
 
 #[derive(Clone)]
@@ -402,6 +407,8 @@ impl GenesisState {
             transport,
             artifacts: Mutex::new(GenesisArtifacts::default()),
             verifier,
+            finalized: AtomicBool::new(false),
+            finalized_notify: tokio::sync::Notify::new(),
         })))
     }
 
@@ -411,6 +418,16 @@ impl GenesisState {
 
     pub(crate) fn is_coordinator(&self) -> bool {
         self.0.config.mpc.node_id == self.0.plan.coordinator
+    }
+
+    pub(crate) async fn wait_finalized(&self) {
+        loop {
+            let notified = self.0.finalized_notify.notified();
+            if self.0.finalized.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
     }
 
     fn authenticated_node(&self, key: &[u8]) -> Result<&str> {
@@ -984,6 +1001,8 @@ impl GenesisState {
             &bundle.signed_manifest,
             &bundle.identity,
         )?;
+        self.0.finalized.store(true, Ordering::Release);
+        self.0.finalized_notify.notify_waiters();
         Ok(())
     }
 

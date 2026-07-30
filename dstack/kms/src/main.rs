@@ -80,7 +80,7 @@ async fn run_onboard_service(kms_config: KmsConfig, figment: Figment) -> Result<
             "/prpc",
             ra_rpc::prpc_routes!(OnboardState, OnboardHandler, trim: "Onboard."),
         )
-        .manage(state)
+        .manage(state.clone())
         .launch()
         .await
         .map_err(|err| anyhow!(err.to_string()))?;
@@ -92,16 +92,6 @@ async fn run_mpc_genesis_service(kms_config: KmsConfig, figment: Figment) -> Res
 
     let state = GenesisState::new(kms_config)?;
     let quote_verifier = QuoteVerifier::new(state.verifier());
-    let coordinator = state.clone();
-    if coordinator.is_coordinator() {
-        tokio::spawn(async move {
-            if let Err(error) = coordinator.coordinate_dkg().await {
-                tracing::error!("MPC genesis DKG failed: {error:#}");
-            } else {
-                info!("MPC genesis DKG completed; waiting for threshold finalization");
-            }
-        });
-    }
     info!("Starting attested MPC genesis service");
     for method in mpc_genesis::rpc_methods() {
         info!("  /prpc/{method}");
@@ -109,13 +99,29 @@ async fn run_mpc_genesis_service(kms_config: KmsConfig, figment: Figment) -> Res
     let figment = figment
         .clone()
         .merge(Serialized::defaults(figment.find_value("rpc")?));
-    rocket::custom(figment)
+    let rocket = rocket::custom(figment)
         .mount(
             "/prpc",
             ra_rpc::prpc_routes!(GenesisState, GenesisHandler, trim: "MpcGenesis."),
         )
         .manage(state)
-        .manage(quote_verifier)
+        .manage(quote_verifier);
+    let shutdown = rocket.shutdown();
+    let finalized = state.clone();
+    tokio::spawn(async move {
+        finalized.wait_finalized().await;
+        info!("MPC genesis finalized; shutting down for normal-mode restart");
+        shutdown.notify();
+    });
+    let coordinator = state.clone();
+    if coordinator.is_coordinator() {
+        tokio::spawn(async move {
+            if let Err(error) = coordinator.coordinate_dkg().await {
+                tracing::error!("MPC genesis failed: {error:#}");
+            }
+        });
+    }
+    rocket
         .launch()
         .await
         .map_err(|error| anyhow!(error.to_string()))?;
