@@ -135,7 +135,10 @@ pub async fn serve(config: NetdConfig) -> Result<()> {
     prepare_socket_path(&config.socket)?;
     let listener = UnixListener::bind(&config.socket)
         .with_context(|| format!("failed to bind netd socket {}", config.socket.display()))?;
-    std::fs::set_permissions(&config.socket, Permissions::from_mode(0o660))?;
+    // Access control is based on SO_PEERCRED rather than filesystem groups so
+    // one shared service can authorize VMM instances running under different
+    // UIDs and development mode needs no system group setup.
+    std::fs::set_permissions(&config.socket, Permissions::from_mode(0o666))?;
     info!(socket = %config.socket.display(), "netd listening");
     loop {
         let (mut stream, _) = listener.accept().await?;
@@ -263,12 +266,11 @@ fn binding_xml(request: &PrepareRequest, tap: &str) -> String {
     }
     format!(
         "<filterbinding><owner><name>{}</name><uuid>{}</uuid></owner>\
-         <portdev name='{}'/><linkdev name='{}'/><mac address='{}'/>\
+         <portdev name='{}'/><mac address='{}'/>\
          <filterref filter='{}'>{}</filterref></filterbinding>",
         xml_escape(&owner_name),
         owner_uuid,
         xml_escape(tap),
-        xml_escape(&request.bridge),
         xml_escape(&request.mac),
         xml_escape(&request.filter),
         parameters

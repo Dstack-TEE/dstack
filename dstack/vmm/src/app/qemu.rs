@@ -1204,6 +1204,42 @@ mod tests {
             .iter()
             .any(|arg| arg.contains("virtio-net-pci,netdev=net1")));
 
+        for network in &mut prepared.networks {
+            network.mode = NetworkingMode::Bridge;
+            network.bridge = "br0".into();
+        }
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert!(process
+            .args
+            .iter()
+            .any(|arg| arg == "bridge,id=net0,br=br0"));
+
+        config.cvm.instance_id = "vmm-a".into();
+        config.cvm.network_filter.mode = NetworkFilterMode::Libvirt;
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        let expected_tap = tap_name(&InterfaceIdentity {
+            instance_id: "vmm-a".into(),
+            vm_id: "vm-1".into(),
+            nic_index: 0,
+        });
+        assert!(process.args.iter().any(|arg| {
+            arg == &format!("tap,id=net0,ifname={expected_tap},script=no,downscript=no,vhost=off")
+        }));
+
         prepared.swtpm_socket = Some(PathBuf::from("/does-not-exist/vm-1/swtpm/swtpm.sock"));
         let process = QemuCommandBuilder {
             vm: &vm,
