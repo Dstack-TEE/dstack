@@ -118,6 +118,13 @@ app_address_ns_compat = true
 workers = ${PROXY_WORKERS:-32}
 max_connections_per_app = ${MAX_CONNECTIONS_PER_APP:-0}
 inbound_pp_enabled = ${INBOUND_PP_ENABLED:-false}
+$(if [ -n "${PROXY_BASE_DOMAIN:-}" ]; then
+cat <<PROXY_TLS
+base_domain = "$PROXY_BASE_DOMAIN"
+cert_chain = "$CERTS_DIR/gateway-rpc.cert"
+cert_key = "$CERTS_DIR/gateway-rpc.key"
+PROXY_TLS
+fi)
 
 [core.proxy.timeouts]
 connect = "${TIMEOUT_CONNECT:-5s}"
