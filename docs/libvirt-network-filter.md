@@ -67,8 +67,38 @@ validated by libvirt.
 
 ## Deployment modes
 
-Production packages may socket-activate one shared `netd`, but that is only a
-deployment convenience. Development mode is two ordinary commands:
+Production should run one shared service. `netd` reads only the `[netd]`
+section, so its root-owned configuration can be small and independent of every
+VMM instance:
+
+```toml
+# /etc/dstack/netd.toml
+[netd]
+socket = "/run/dstack/netd.sock"
+allowed_uids = [991, 992]
+libvirt_uri = "qemu:///system"
+```
+
+```ini
+# /etc/systemd/system/dstack-netd.service
+[Unit]
+Description=dstack host networking service
+After=libvirtd.service
+
+[Service]
+ExecStart=/usr/bin/dstack-vmm --config /etc/dstack/netd.toml netd
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+All VMM instance configurations point to the same socket and use distinct
+`cvm.instance_id` values. A dedicated netd uses a different socket. A
+host-wide lock serializes mutations made by shared and dedicated netd
+processes.
+
+Development mode is two ordinary commands:
 
 ```bash
 sudo dstack-vmm --config ./vmm.toml netd \

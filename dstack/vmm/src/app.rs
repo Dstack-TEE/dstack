@@ -505,7 +505,7 @@ impl App {
         }
         self.set_started(id, false)?;
         self.stop_vm_process(id).await?;
-        let networks = self.work_dir(id).runtime_networks();
+        let networks = self.work_dir(id)?.runtime_networks();
         self.remove_filtered_networks(id, &networks).await?;
         Ok(())
     }
@@ -696,7 +696,7 @@ impl App {
             }
         }
 
-        let runtime_networks = self.work_dir(id).runtime_networks();
+        let runtime_networks = self.work_dir(id)?.runtime_networks();
         if let Err(error) = self.remove_filtered_networks(id, &runtime_networks).await {
             warn!(id, %error, "failed to remove filtered networking during VM removal");
         }

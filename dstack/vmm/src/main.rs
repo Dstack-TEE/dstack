@@ -7,7 +7,7 @@ use std::{path::Path, time::Duration};
 use anyhow::{anyhow, Context, Result};
 use app::App;
 use clap::{Args as ClapArgs, Parser, Subcommand};
-use config::Config;
+use config::{Config, NetdConfig};
 use dstack_api_auth::{Authenticator, HttpAuthConfig, HttpAuthFairing};
 use guest_api_service::GuestApiHandler;
 use host_api_service::HostApiHandler;
@@ -211,23 +211,28 @@ async fn main() -> Result<()> {
     }
 
     let figment = config::load_config_figment(args.config.as_deref());
+    if let Some(Command::Netd(netd_args)) = &args.command {
+        let mut netd_config: NetdConfig = figment
+            .extract_inner("netd")
+            .context("failed to load [netd] configuration")?;
+        if let Some(socket) = args.netd_socket.as_deref() {
+            netd_config.socket = socket.into();
+        }
+        if let Some(socket) = netd_args.socket.as_deref() {
+            netd_config.socket = socket.into();
+        }
+        netd_config
+            .allowed_uids
+            .extend(netd_args.allow_uids.iter().copied());
+        netd_config.allowed_uids.sort_unstable();
+        netd_config.allowed_uids.dedup();
+        return netd::serve(netd_config).await;
+    }
+
     let mut config = Config::extract_or_default(&figment)?.abs_path()?;
     config.cvm.instance_id = netd::instance_id(&config.cvm.instance_id, config.run_path.as_path());
     if let Some(socket) = args.netd_socket.as_deref() {
         config.netd.socket = socket.into();
-    }
-
-    if let Some(Command::Netd(netd_args)) = &args.command {
-        if let Some(socket) = netd_args.socket.as_deref() {
-            config.netd.socket = socket.into();
-        }
-        config
-            .netd
-            .allowed_uids
-            .extend(netd_args.allow_uids.iter().copied());
-        config.netd.allowed_uids.sort_unstable();
-        config.netd.allowed_uids.dedup();
-        return netd::serve(config.netd).await;
     }
 
     // Preserve the existing startup validation. The broader static checks are
