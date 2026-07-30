@@ -560,6 +560,25 @@ impl MpcKeyBackend {
             tbs.signature.algorithm.to_id_string() == "1.2.840.10045.4.3.2",
             "certificate does not use ECDSA-with-SHA256"
         );
+        let common_names = tbs
+            .subject()
+            .iter_common_name()
+            .map(|value| value.as_str().context("invalid certificate common name"))
+            .collect::<Result<Vec<_>>>()?;
+        ensure!(
+            common_names == ["Dstack App CA"],
+            "app CA certificate has an unexpected subject"
+        );
+        let validity_seconds = tbs
+            .validity()
+            .not_after
+            .timestamp()
+            .checked_sub(tbs.validity().not_before.timestamp())
+            .context("app CA certificate validity is inverted")?;
+        ensure!(
+            validity_seconds <= 10 * 366 * 24 * 60 * 60,
+            "app CA certificate validity exceeds ten years"
+        );
         let constraints = tbs
             .basic_constraints()
             .context("invalid certificate basic constraints")?
