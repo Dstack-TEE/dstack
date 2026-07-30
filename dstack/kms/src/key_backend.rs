@@ -25,7 +25,7 @@ use cggmp21::{
 use futures::future::join_all;
 use k256::ecdsa::{RecoveryId, Signature as K256Signature, SigningKey, VerifyingKey};
 use ra_tls::{
-    cert::{CaCert, CertRequest},
+    cert::{prepare_external_certificate, CaCert, CertRequest},
     kdf,
 };
 use rand::{rngs::OsRng, RngCore};
@@ -39,6 +39,7 @@ use crate::{
     mpc_identity::EpochManifest,
     mpc_operation::{
         DerivePayload, DerivePurpose, K256SignPayload, MpcOperation, MpcOperationPayload,
+        P256CertificatePayload,
     },
     mpc_session::{MpcProtocol, SessionRouter},
     threshold_prf::{self, PrfPartial},
@@ -380,6 +381,114 @@ impl MpcKeyBackend {
         threshold_prf::combine(evaluations, &input)
     }
 
+    async fn sign_p256_certificate(&self, payload: P256CertificatePayload) -> Result<Vec<u8>> {
+        self.validate_p256_certificate(&payload)?;
+        let mut session_id = [0u8; 32];
+        OsRng.fill_bytes(&mut session_id);
+        let operation = MpcOperation::new_p256_certificate(
+            session_id,
+            self.manifest.epoch,
+            self.participants()?,
+            unix_time()?
+                .checked_add(60)
+                .context("MPC expiry overflow")?,
+            payload,
+        )?;
+        operation.validate(&self.manifest, &self.node_id)?;
+        let remote = operation
+            .participants
+            .iter()
+            .filter(|node| *node != &self.node_id)
+            .map(|node| self.transport.start_operation(node, &operation));
+        let (local, remote) = tokio::join!(
+            self.run_mpc_operation(operation.clone(), &self.node_id),
+            join_all(remote)
+        );
+        let local = local?;
+        ensure!(
+            local.len() == 64,
+            "invalid threshold P-256 signature length"
+        );
+        for result in remote {
+            ensure!(
+                result? == local,
+                "MPC participants returned different P-256 signatures"
+            );
+        }
+        Ok(local)
+    }
+
+    fn validate_p256_certificate(&self, payload: &P256CertificatePayload) -> Result<()> {
+        use ra_tls::oids::{PHALA_RATLS_APP_ID, PHALA_RATLS_CERT_USAGE};
+        use x509_parser::{
+            certificate::TbsCertificate,
+            der_parser::oid::Oid,
+            prelude::{FromDer as _, ParsedExtension},
+        };
+        let (_, root_pem) = x509_parser::pem::parse_x509_pem(self.root_ca_cert.as_bytes())
+            .context("invalid root CA PEM")?;
+        let root = root_pem
+            .parse_x509()
+            .context("invalid root CA certificate")?;
+        let (remaining, tbs) = TbsCertificate::from_der(&payload.tbs_der)
+            .map_err(|error| anyhow::anyhow!("invalid certificate TBS: {error}"))?;
+        ensure!(remaining.is_empty(), "certificate TBS has trailing bytes");
+        ensure!(
+            tbs.issuer() == root.subject(),
+            "certificate issuer is not the root CA"
+        );
+        ensure!(
+            tbs.signature.algorithm.to_id_string() == "1.2.840.10045.4.3.2",
+            "certificate does not use ECDSA-with-SHA256"
+        );
+        let constraints = tbs
+            .basic_constraints()
+            .context("invalid certificate basic constraints")?
+            .context("app CA certificate lacks basic constraints")?;
+        ensure!(
+            constraints.value.ca && constraints.value.path_len_constraint == Some(0),
+            "app CA certificate has invalid CA constraints"
+        );
+        let app_oid = Oid::from(PHALA_RATLS_APP_ID).context("invalid app ID OID")?;
+        let app_extension = tbs
+            .get_extension_unique(&app_oid)
+            .context("duplicate app ID extension")?
+            .context("app CA certificate lacks app ID")?;
+        let app_id = yasna::parse_der(app_extension.value, |reader| reader.read_bytes())
+            .context("invalid app ID extension")?;
+        ensure!(app_id == payload.app_id, "certificate app ID mismatch");
+        let usage_oid = Oid::from(PHALA_RATLS_CERT_USAGE).context("invalid usage OID")?;
+        let usage_extension = tbs
+            .get_extension_unique(&usage_oid)
+            .context("duplicate certificate usage extension")?
+            .context("app CA certificate lacks usage extension")?;
+        let usage = yasna::parse_der(usage_extension.value, |reader| reader.read_bytes())
+            .context("invalid certificate usage extension")?;
+        ensure!(usage == b"app:ca", "certificate usage is not app:ca");
+        ensure!(
+            matches!(
+                tbs.public_key().parsed(),
+                Ok(x509_parser::public_key::PublicKey::EC(_))
+            ),
+            "app CA public key is not an EC key"
+        );
+        // Force duplicate/invalid key-usage extensions to fail parsing as well.
+        let usage = tbs.key_usage().context("invalid key usage extension")?;
+        ensure!(
+            usage.is_some_and(|usage| usage.value.key_cert_sign() && usage.value.crl_sign()),
+            "app CA certificate lacks certificate-signing key usage"
+        );
+        for extension in tbs.extensions() {
+            if matches!(
+                extension.parsed_extension(),
+                ParsedExtension::ParseError { .. }
+            ) {
+                bail!("app CA certificate contains a malformed extension")
+            }
+        }
+        Ok(())
+    }
+
     fn add_recovery_id(&self, operation: &MpcOperation, signature: Vec<u8>) -> Result<Vec<u8>> {
         ensure!(signature.len() == 64, "invalid MPC K-256 signature length");
         let signature = K256Signature::from_slice(&signature).context("invalid MPC signature")?;
@@ -457,6 +566,10 @@ impl MpcKeyBackend {
     async fn execute_operation(&self, operation: MpcOperation) -> Result<Vec<u8>> {
         match &operation.payload {
             MpcOperationPayload::SignK256(_) => self.execute_k256(operation).await,
+            MpcOperationPayload::SignP256Certificate(payload) => {
+                self.validate_p256_certificate(payload)?;
+                self.execute_p256(operation).await
+            }
             MpcOperationPayload::Derive(payload) => {
                 let input = payload.input()?;
                 let own_index = self
@@ -581,6 +694,84 @@ impl MpcKeyBackend {
         .await
         .context("MPC signing worker panicked")?
     }
+
+    async fn execute_p256(&self, operation: MpcOperation) -> Result<Vec<u8>> {
+        let MpcOperationPayload::SignP256Certificate(payload) = &operation.payload else {
+            bail!("P-256 executor received a different MPC operation")
+        };
+        let digest = payload.digest();
+        let local_protocol_index: u16 = operation
+            .participants
+            .iter()
+            .position(|node| node == &self.node_id)
+            .context("local node is not an MPC participant")?
+            .try_into()
+            .context("MPC participant index overflow")?;
+        let keygen_indexes = operation
+            .participants
+            .iter()
+            .map(|node| {
+                self.manifest
+                    .members
+                    .iter()
+                    .position(|member| &member.node_id == node)
+                    .context("MPC participant is not in manifest")?
+                    .try_into()
+                    .context("MPC keygen index overflow")
+            })
+            .collect::<Result<Vec<u16>>>()?;
+        let own_keygen_index = self
+            .manifest
+            .members
+            .iter()
+            .position(|member| member.node_id == self.node_id)
+            .context("local node is not in manifest")?;
+        ensure!(
+            usize::from(self.p256_share.core.i) == own_keygen_index,
+            "P-256 share index does not match manifest ordering"
+        );
+        let eid = execution_id(
+            &self.cluster_id,
+            operation.epoch,
+            CggmpCurve::P256,
+            operation.session_id.as_slice().try_into()?,
+        );
+        let context = DriverContext {
+            session_id: operation.session_id.as_slice().try_into()?,
+            epoch: operation.epoch,
+            protocol: MpcProtocol::SignP256,
+            request_hash: operation.request_hash.as_slice().try_into()?,
+            local_node_id: self.node_id.clone(),
+            participants: operation.participants.clone(),
+            expires_at: operation.expires_at,
+            poll_interval: Duration::from_millis(10),
+        };
+        let share = self.p256_share.clone();
+        let transport = self.transport.clone();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            let mut rng = OsRng;
+            let data =
+                DataToSign::from_scalar(Scalar::<Secp256r1>::from_be_bytes_mod_order(digest));
+            let state = cggmp21::signing(
+                ExecutionId::new(&eid),
+                local_protocol_index,
+                &keygen_indexes,
+                &share,
+            )
+            .sign_sync(&mut rng, data);
+            let signature = drive_state_machine_blocking(
+                state,
+                &BlockingHttpTransport::new(transport, runtime),
+                context,
+            )??;
+            let mut encoded = vec![0u8; cggmp21::Signature::<Secp256r1>::serialized_len()];
+            signature.write_to_slice(&mut encoded);
+            Ok(encoded)
+        })
+        .await
+        .context("MPC P-256 signing worker panicked")?
+    }
 }
 
 fn unix_time() -> Result<u64> {
@@ -685,8 +876,34 @@ impl KeyBackend for MpcKeyBackend {
         &self.root_ca_cert
     }
 
-    async fn derive_app_ca(&self, _app_id: &[u8]) -> Result<CaCert> {
-        bail!("legacy app CA derivation is unavailable in MPC mode")
+    async fn derive_app_ca(&self, app_id: &[u8]) -> Result<CaCert> {
+        let seed = self
+            .derive(DerivePayload {
+                purpose: DerivePurpose::AppCa,
+                app_id: app_id.to_vec(),
+                instance_id: None,
+            })
+            .await?;
+        let app_key = kdf::derive_p256_key_pair_from_bytes(&seed, &[app_id, b"app-ca"])?;
+        let request = CertRequest::builder()
+            .key(&app_key)
+            .org_name("Dstack")
+            .subject("Dstack App CA")
+            .ca_level(0)
+            .app_id(app_id)
+            .special_usage("app:ca")
+            .build();
+        let external = prepare_external_certificate(request, &self.root_ca_cert)
+            .context("failed to prepare threshold-signed app CA")?;
+        let signature = self
+            .sign_p256_certificate(P256CertificatePayload {
+                app_id: app_id.to_vec(),
+                tbs_der: external.tbs_der().to_vec(),
+            })
+            .await?;
+        let certificate = external.finish(&signature)?;
+        CaCert::new(certificate, app_key.serialize_pem())
+            .context("failed to construct threshold-signed app CA")
     }
 
     async fn run_mpc_operation(&self, operation: MpcOperation, initiator: &str) -> Result<Vec<u8>> {

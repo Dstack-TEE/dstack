@@ -44,6 +44,36 @@ pub(crate) struct DerivePayload {
     pub instance_id: Option<Vec<u8>>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct P256CertificatePayload {
+    #[serde(with = "hex_bytes")]
+    pub app_id: Vec<u8>,
+    #[serde(with = "hex_bytes")]
+    pub tbs_der: Vec<u8>,
+}
+
+impl P256CertificatePayload {
+    fn validate(&self) -> Result<()> {
+        use x509_parser::{certificate::TbsCertificate, prelude::FromDer as _};
+        ensure!(
+            self.app_id.len() == 20,
+            "certificate app_id must be 20 bytes"
+        );
+        ensure!(
+            !self.tbs_der.is_empty() && self.tbs_der.len() <= 64 * 1024,
+            "certificate TBS length is invalid"
+        );
+        let (remaining, _) = TbsCertificate::from_der(&self.tbs_der)
+            .map_err(|error| anyhow::anyhow!("invalid certificate TBS: {error}"))?;
+        ensure!(remaining.is_empty(), "certificate TBS has trailing bytes");
+        Ok(())
+    }
+
+    pub(crate) fn digest(&self) -> [u8; 32] {
+        Sha256::digest(&self.tbs_der).into()
+    }
+}
+
 impl DerivePayload {
     fn validate(&self) -> Result<()> {
         ensure!(
@@ -111,6 +141,7 @@ impl K256SignPayload {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum MpcOperationPayload {
     SignK256(K256SignPayload),
+    SignP256Certificate(P256CertificatePayload),
     Derive(DerivePayload),
 }
 
@@ -175,6 +206,25 @@ impl MpcOperation {
         Ok(operation)
     }
 
+    pub(crate) fn new_p256_certificate(
+        session_id: [u8; 32],
+        epoch: u64,
+        participants: Vec<String>,
+        expires_at: u64,
+        payload: P256CertificatePayload,
+    ) -> Result<Self> {
+        let mut operation = Self {
+            session_id: session_id.to_vec(),
+            epoch,
+            participants,
+            expires_at,
+            payload: MpcOperationPayload::SignP256Certificate(payload),
+            request_hash: vec![],
+        };
+        operation.request_hash = operation.compute_request_hash()?.to_vec();
+        Ok(operation)
+    }
+
     pub(crate) fn validate(&self, manifest: &EpochManifest, initiator: &str) -> Result<()> {
         ensure!(
             self.session_id.len() == 32,
@@ -211,6 +261,7 @@ impl MpcOperation {
         );
         match &self.payload {
             MpcOperationPayload::SignK256(payload) => payload.validate()?,
+            MpcOperationPayload::SignP256Certificate(payload) => payload.validate()?,
             MpcOperationPayload::Derive(payload) => payload.validate()?,
         }
         ensure!(
