@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{net::IpAddr, path::PathBuf, process::Command, str::FromStr};
+use std::{collections::BTreeMap, net::IpAddr, path::PathBuf, process::Command, str::FromStr};
 
 use anyhow::{bail, Context, Result};
 use load_config::load_config;
@@ -362,6 +362,15 @@ pub struct CvmConfig {
     /// Networking configuration
     pub networking: Networking,
 
+    /// Optional host-side filtering for bridge interfaces.
+    #[serde(default)]
+    pub network_filter: NetworkFilterConfig,
+
+    /// Stable namespace for TAP names when several VMMs share one host.
+    /// An empty value is derived from the absolute run directory.
+    #[serde(default)]
+    pub instance_id: String,
+
     /// Host sharing mode. (9p, vhd, vvfat)
     pub host_share_mode: String,
 
@@ -518,6 +527,10 @@ pub struct Config {
 
     /// CVM configuration
     pub cvm: CvmConfig,
+
+    /// Privileged host networking service configuration.
+    #[serde(default)]
+    pub netd: NetdConfig,
     /// Gateway configuration
     pub gateway: GatewayConfig,
 
@@ -532,6 +545,66 @@ pub struct Config {
 
     /// Key provider configuration
     pub key_provider: KeyProviderConfig,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkFilterMode {
+    #[default]
+    None,
+    Libvirt,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct NetworkFilterConfig {
+    #[serde(default)]
+    pub mode: NetworkFilterMode,
+    #[serde(default = "default_libvirt_filter")]
+    pub filter: String,
+    #[serde(default)]
+    pub parameters: BTreeMap<String, String>,
+}
+
+impl Default for NetworkFilterConfig {
+    fn default() -> Self {
+        Self {
+            mode: NetworkFilterMode::None,
+            filter: default_libvirt_filter(),
+            parameters: BTreeMap::new(),
+        }
+    }
+}
+
+fn default_libvirt_filter() -> String {
+    "clean-traffic".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct NetdConfig {
+    #[serde(default = "default_netd_socket")]
+    pub socket: PathBuf,
+    #[serde(default)]
+    pub allowed_uids: Vec<u32>,
+    #[serde(default = "default_libvirt_uri")]
+    pub libvirt_uri: String,
+}
+
+impl Default for NetdConfig {
+    fn default() -> Self {
+        Self {
+            socket: default_netd_socket(),
+            allowed_uids: Vec::new(),
+            libvirt_uri: default_libvirt_uri(),
+        }
+    }
+}
+
+fn default_netd_socket() -> PathBuf {
+    PathBuf::from("/run/dstack/netd.sock")
+}
+
+fn default_libvirt_uri() -> String {
+    "qemu:///system".to_string()
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]

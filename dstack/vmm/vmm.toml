@@ -44,6 +44,9 @@ max_allocable_memory_in_mb = 100_000 # MB
 qmp_socket = false
 # The user to run the VM as. If empty, the VM will be run as the current user.
 user = ""
+# Unique namespace when multiple dstack-vmm instances share one host. When
+# empty, a stable value is derived from run_path.
+instance_id = ""
 use_mrconfigid = true
 
 # QEMU flags
@@ -108,6 +111,20 @@ restrict = false
 
 # for mode = "bridge"
 # bridge = "virbr0"
+
+# Optional filtering for bridge interfaces. "none" preserves the existing
+# QEMU bridge-helper behavior and has no netd/libvirt dependency.
+[cvm.network_filter]
+mode = "none"
+filter = "clean-traffic"
+parameters = {}
+
+# Shared privileged networking service. Only used when network_filter.mode is
+# "libvirt". An empty allowed_uids list permits root only.
+[netd]
+socket = "/run/dstack/netd.sock"
+allowed_uids = []
+libvirt_uri = "qemu:///system"
 
 [cvm.port_mapping]
 enabled = false

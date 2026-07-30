@@ -1,0 +1,494 @@
+// SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
+//! Small privileged broker for TAP creation and libvirt nwfilter bindings.
+
+use std::{
+    collections::BTreeMap,
+    fs::Permissions,
+    io::Write as _,
+    os::{
+        fd::AsRawFd,
+        unix::{fs::PermissionsExt, net::UnixStream as StdUnixStream},
+    },
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    time::Duration,
+};
+
+use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{UnixListener, UnixStream},
+    time::timeout,
+};
+use tracing::{info, warn};
+use uuid::Uuid;
+
+use crate::config::NetdConfig;
+
+const MAX_MESSAGE_SIZE: u64 = 64 * 1024;
+const IP_PATH: &str = "/usr/sbin/ip";
+const VIRSH_PATH: &str = "/usr/bin/virsh";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterfaceIdentity {
+    pub instance_id: String,
+    pub vm_id: String,
+    pub nic_index: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrepareRequest {
+    #[serde(flatten)]
+    pub identity: InterfaceIdentity,
+    pub bridge: String,
+    pub mac: String,
+    pub qemu_uid: u32,
+    pub filter: String,
+    #[serde(default)]
+    pub parameters: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+pub enum Request {
+    Prepare(PrepareRequest),
+    Remove { identity: InterfaceIdentity },
+    Check { identity: InterfaceIdentity },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Response {
+    ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+pub fn tap_name(identity: &InterfaceIdentity) -> String {
+    let input = format!(
+        "{}\0{}\0{}",
+        identity.instance_id, identity.vm_id, identity.nic_index
+    );
+    let digest = Sha256::digest(input.as_bytes());
+    format!("dt{}", hex::encode(&digest[..6]))
+}
+
+pub fn instance_id(configured: &str, run_path: &Path) -> String {
+    if !configured.trim().is_empty() {
+        return configured.trim().to_string();
+    }
+    let digest = Sha256::digest(run_path.as_os_str().as_encoded_bytes());
+    format!("path-{}", hex::encode(&digest[..8]))
+}
+
+pub async fn request(socket: &Path, request: &Request) -> Result<String> {
+    let operation = match request {
+        Request::Prepare(_) => "prepare",
+        Request::Remove { .. } => "remove",
+        Request::Check { .. } => "check",
+    };
+    let exchange = async {
+        let mut stream = UnixStream::connect(socket)
+            .await
+            .with_context(|| format!("failed to connect to netd at {}", socket.display()))?;
+        let message = serde_json::to_vec(request)?;
+        if message.len() as u64 > MAX_MESSAGE_SIZE {
+            bail!("netd request is too large");
+        }
+        stream.write_all(&message).await?;
+        stream.shutdown().await?;
+        let mut response = Vec::new();
+        stream
+            .take(MAX_MESSAGE_SIZE + 1)
+            .read_to_end(&mut response)
+            .await?;
+        if response.len() as u64 > MAX_MESSAGE_SIZE {
+            bail!("netd response is too large");
+        }
+        let response: Response =
+            serde_json::from_slice(&response).context("failed to decode netd response")?;
+        if !response.ok {
+            bail!(
+                "netd {operation} failed: {}",
+                response.error.as_deref().unwrap_or("unknown error")
+            );
+        }
+        response.tap.context("netd response omitted TAP name")
+    };
+    timeout(Duration::from_secs(30), exchange)
+        .await
+        .context("timed out waiting for netd")?
+}
+
+pub async fn serve(config: NetdConfig) -> Result<()> {
+    if unsafe { libc::geteuid() } != 0 {
+        bail!("netd must run as root");
+    }
+    require_executable(IP_PATH)?;
+    require_executable(VIRSH_PATH)?;
+    prepare_socket_path(&config.socket)?;
+    let listener = UnixListener::bind(&config.socket)
+        .with_context(|| format!("failed to bind netd socket {}", config.socket.display()))?;
+    std::fs::set_permissions(&config.socket, Permissions::from_mode(0o660))?;
+    info!(socket = %config.socket.display(), "netd listening");
+    loop {
+        let (mut stream, _) = listener.accept().await?;
+        let uid = peer_uid(&stream)?;
+        let allowed = uid == 0 || config.allowed_uids.contains(&uid);
+        let response = if allowed {
+            match read_request(&mut stream)
+                .await
+                .and_then(|request| handle_request(&config.libvirt_uri, request))
+            {
+                Ok(tap) => Response {
+                    ok: true,
+                    tap: Some(tap),
+                    error: None,
+                },
+                Err(error) => {
+                    warn!(%uid, %error, "netd request failed");
+                    Response {
+                        ok: false,
+                        tap: None,
+                        error: Some(format!("{error:#}")),
+                    }
+                }
+            }
+        } else {
+            warn!(%uid, "rejected unauthorized netd client");
+            Response {
+                ok: false,
+                tap: None,
+                error: Some("caller UID is not authorized".into()),
+            }
+        };
+        let encoded = serde_json::to_vec(&response)?;
+        stream.write_all(&encoded).await?;
+        stream.shutdown().await?;
+    }
+}
+
+async fn read_request(stream: &mut UnixStream) -> Result<Request> {
+    let mut message = Vec::new();
+    stream
+        .take(MAX_MESSAGE_SIZE + 1)
+        .read_to_end(&mut message)
+        .await?;
+    if message.len() as u64 > MAX_MESSAGE_SIZE {
+        bail!("request exceeds {MAX_MESSAGE_SIZE} bytes");
+    }
+    serde_json::from_slice(&message).context("invalid netd request")
+}
+
+fn handle_request(libvirt_uri: &str, request: Request) -> Result<String> {
+    match request {
+        Request::Prepare(request) => prepare_interface(libvirt_uri, &request),
+        Request::Remove { identity } => {
+            validate_identity(&identity)?;
+            let tap = tap_name(&identity);
+            remove_interface(libvirt_uri, &tap)?;
+            Ok(tap)
+        }
+        Request::Check { identity } => {
+            validate_identity(&identity)?;
+            let tap = tap_name(&identity);
+            if !Path::new("/sys/class/net").join(&tap).exists() {
+                bail!("TAP {tap} does not exist");
+            }
+            virsh(libvirt_uri, &["nwfilter-binding-dumpxml", &tap], None)?;
+            Ok(tap)
+        }
+    }
+}
+
+fn prepare_interface(libvirt_uri: &str, request: &PrepareRequest) -> Result<String> {
+    validate_prepare(request)?;
+    let tap = tap_name(&request.identity);
+    // A failed VMM start may leave a deterministic resource behind. Replacing
+    // it makes prepare idempotent without accepting a caller-selected TAP.
+    remove_interface(libvirt_uri, &tap)?;
+
+    let uid = request.qemu_uid.to_string();
+    ip(&["tuntap", "add", "dev", &tap, "mode", "tap", "user", &uid])?;
+    let result = (|| {
+        ip(&["link", "set", "dev", &tap, "master", &request.bridge])?;
+        let xml = binding_xml(request, &tap);
+        virsh(
+            libvirt_uri,
+            &["nwfilter-binding-create", "--validate", "/dev/stdin"],
+            Some(xml.as_bytes()),
+        )?;
+        ip(&["link", "set", "dev", &tap, "up"])?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let _ = remove_interface(libvirt_uri, &tap);
+        return Err(error);
+    }
+    info!(%tap, bridge = %request.bridge, filter = %request.filter, "prepared filtered TAP");
+    Ok(tap)
+}
+
+fn remove_interface(libvirt_uri: &str, tap: &str) -> Result<()> {
+    if Path::new("/sys/class/net").join(tap).exists() {
+        let _ = ip(&["link", "set", "dev", tap, "down"]);
+    }
+    let _ = virsh(libvirt_uri, &["nwfilter-binding-delete", tap], None);
+    if Path::new("/sys/class/net").join(tap).exists() {
+        ip(&["link", "delete", "dev", tap])?;
+        info!(%tap, "removed filtered TAP");
+    }
+    Ok(())
+}
+
+fn binding_xml(request: &PrepareRequest, tap: &str) -> String {
+    let owner_uuid = stable_uuid(&request.identity);
+    let owner_name = format!(
+        "dstack:{}:{}:{}",
+        request.identity.instance_id, request.identity.vm_id, request.identity.nic_index
+    );
+    let mut parameters = String::new();
+    for (name, value) in &request.parameters {
+        parameters.push_str(&format!(
+            "<parameter name='{}' value='{}'/>",
+            xml_escape(name),
+            xml_escape(value)
+        ));
+    }
+    format!(
+        "<filterbinding><owner><name>{}</name><uuid>{}</uuid></owner>\
+         <portdev name='{}'/><linkdev name='{}'/><mac address='{}'/>\
+         <filterref filter='{}'>{}</filterref></filterbinding>",
+        xml_escape(&owner_name),
+        owner_uuid,
+        xml_escape(tap),
+        xml_escape(&request.bridge),
+        xml_escape(&request.mac),
+        xml_escape(&request.filter),
+        parameters
+    )
+}
+
+fn stable_uuid(identity: &InterfaceIdentity) -> Uuid {
+    let digest = Sha256::digest(
+        format!(
+            "{}\0{}\0{}",
+            identity.instance_id, identity.vm_id, identity.nic_index
+        )
+        .as_bytes(),
+    );
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
+}
+
+fn validate_prepare(request: &PrepareRequest) -> Result<()> {
+    validate_identity(&request.identity)?;
+    validate_name("bridge", &request.bridge, 15, "_.-")?;
+    if !Path::new("/sys/class/net")
+        .join(&request.bridge)
+        .join("bridge")
+        .exists()
+    {
+        bail!("{} is not a host bridge", request.bridge);
+    }
+    validate_mac(&request.mac)?;
+    validate_name("filter", &request.filter, 128, "_.:-")?;
+    if request.parameters.len() > 64 {
+        bail!("too many nwfilter parameters");
+    }
+    for (name, value) in &request.parameters {
+        validate_name("parameter name", name, 64, "_")?;
+        if value.len() > 512 || value.contains('\0') {
+            bail!("invalid nwfilter parameter value");
+        }
+    }
+    Ok(())
+}
+
+fn validate_identity(identity: &InterfaceIdentity) -> Result<()> {
+    for (label, value) in [
+        ("instance ID", identity.instance_id.as_str()),
+        ("VM ID", identity.vm_id.as_str()),
+    ] {
+        if value.is_empty() || value.len() > 128 || value.contains('\0') {
+            bail!("invalid {label}");
+        }
+    }
+    if identity.nic_index > 255 {
+        bail!("NIC index is out of range");
+    }
+    Ok(())
+}
+
+fn validate_name(label: &str, value: &str, max: usize, punctuation: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > max
+        || !value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || punctuation.contains(ch))
+    {
+        bail!("invalid {label}");
+    }
+    Ok(())
+}
+
+fn validate_mac(mac: &str) -> Result<()> {
+    let bytes = mac
+        .split(':')
+        .map(|part| {
+            if part.len() != 2 {
+                bail!("invalid MAC address");
+            }
+            u8::from_str_radix(part, 16).context("invalid MAC address")
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if bytes.len() != 6 || bytes[0] & 1 != 0 {
+        bail!("invalid unicast MAC address");
+    }
+    Ok(())
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('\'', "&apos;")
+        .replace('"', "&quot;")
+}
+
+fn ip(args: &[&str]) -> Result<()> {
+    run_command(IP_PATH, args, None)
+}
+
+fn virsh(uri: &str, args: &[&str], stdin: Option<&[u8]>) -> Result<()> {
+    let mut full_args = vec!["--connect", uri];
+    full_args.extend_from_slice(args);
+    run_command(VIRSH_PATH, &full_args, stdin)
+}
+
+fn run_command(program: &str, args: &[&str], stdin: Option<&[u8]>) -> Result<()> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to execute {program}"))?;
+    if let Some(input) = stdin {
+        child
+            .stdin
+            .take()
+            .context("missing command stdin")?
+            .write_all(input)?;
+    }
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        bail!("{} failed: {}", Path::new(program).display(), error.trim());
+    }
+    Ok(())
+}
+
+fn require_executable(path: &str) -> Result<()> {
+    if !Path::new(path).is_file() {
+        bail!("required executable {path} does not exist");
+    }
+    Ok(())
+}
+
+fn prepare_socket_path(socket: &Path) -> Result<()> {
+    let parent = socket.parent().context("netd socket has no parent")?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create {}", parent.display()))?;
+    if socket.exists() {
+        if StdUnixStream::connect(socket).is_ok() {
+            bail!("another netd is listening at {}", socket.display());
+        }
+        std::fs::remove_file(socket)
+            .with_context(|| format!("failed to remove stale socket {}", socket.display()))?;
+    }
+    Ok(())
+}
+
+fn peer_uid(stream: &UnixStream) -> Result<u32> {
+    let mut credentials = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: credentials and length point to valid writable storage of the
+    // exact size passed to getsockopt, and the stream owns a valid socket FD.
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut credentials as *mut libc::ucred).cast(),
+            &mut length,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error()).context("failed to read peer credentials");
+    }
+    Ok(credentials.uid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn identity(instance: &str, vm: &str, nic_index: usize) -> InterfaceIdentity {
+        InterfaceIdentity {
+            instance_id: instance.into(),
+            vm_id: vm.into(),
+            nic_index,
+        }
+    }
+
+    #[test]
+    fn tap_names_are_stable_bounded_and_namespaced() {
+        let first = tap_name(&identity("one", "vm", 0));
+        assert_eq!(first, tap_name(&identity("one", "vm", 0)));
+        assert_ne!(first, tap_name(&identity("two", "vm", 0)));
+        assert_ne!(first, tap_name(&identity("one", "vm", 1)));
+        assert!(first.len() <= 15);
+    }
+
+    #[test]
+    fn binding_xml_escapes_values() {
+        let request = PrepareRequest {
+            identity: identity("instance<&", "vm", 0),
+            bridge: "br0".into(),
+            mac: "02:00:00:00:00:01".into(),
+            qemu_uid: 1000,
+            filter: "clean-traffic".into(),
+            parameters: BTreeMap::from([("IP".into(), "10.0.0.2<&".into())]),
+        };
+        let xml = binding_xml(&request, "dt123");
+        assert!(xml.contains("instance&lt;&amp;"));
+        assert!(xml.contains("10.0.0.2&lt;&amp;"));
+        assert!(!xml.contains("instance<&"));
+    }
+
+    #[test]
+    fn validation_rejects_injected_host_names() {
+        assert!(validate_name("bridge", "br0;id", 15, "_.-").is_err());
+        assert!(validate_name("filter", "../../filter", 128, "_.:-").is_err());
+        assert!(validate_mac("ff:ff:ff:ff:ff:ff").is_err());
+    }
+}
