@@ -8,6 +8,7 @@ use std::{fs::Permissions, os::unix::fs::PermissionsExt, path::Path};
 
 use anyhow::{ensure, Context, Result};
 use cggmp21::{
+    generic_ec::{Curve, Scalar},
     supported_curves::{Secp256k1, Secp256r1},
     IncompleteKeyShare, KeyShare,
 };
@@ -92,6 +93,43 @@ pub(crate) fn share_commitment(
         hash.update(value);
     }
     hash.finalize().into()
+}
+
+pub(crate) fn validate_share_topology<E: Curve>(
+    share: &KeyShare<E>,
+    expected_index: usize,
+    expected_members: usize,
+    expected_threshold: u16,
+) -> Result<()> {
+    ensure!(
+        usize::from(share.core.i) == expected_index,
+        "CGGMP share index does not match manifest ordering"
+    );
+    ensure!(
+        share.core.key_info.public_shares.len() == expected_members,
+        "CGGMP public-share count does not match manifest"
+    );
+    let setup = share
+        .core
+        .key_info
+        .vss_setup
+        .as_ref()
+        .context("CGGMP share is not a threshold Shamir share")?;
+    ensure!(
+        setup.min_signers == expected_threshold,
+        "CGGMP threshold does not match manifest"
+    );
+    ensure!(
+        setup.I.len() == expected_members,
+        "CGGMP VSS index count mismatch"
+    );
+    for (index, evaluation_point) in setup.I.iter().enumerate() {
+        ensure!(
+            Scalar::from(evaluation_point.clone()) == Scalar::from(index as u64 + 1),
+            "CGGMP VSS indexes must use canonical points 1..=n"
+        );
+    }
+    Ok(())
 }
 
 pub(crate) fn store_share<T: Serialize>(

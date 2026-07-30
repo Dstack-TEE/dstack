@@ -32,8 +32,8 @@ use rand::{rngs::OsRng, RngCore};
 
 use crate::{
     cggmp_engine::{
-        execution_id, load_share, share_commitment, store_share, CggmpCurve, K256KeyShare,
-        P256KeyShare,
+        execution_id, load_share, share_commitment, store_share, validate_share_topology,
+        CggmpCurve, K256KeyShare, P256KeyShare,
     },
     crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
     mpc_driver::{
@@ -318,6 +318,24 @@ impl MpcKeyBackend {
             .iter()
             .position(|member| member.node_id == node_id)
             .context("local MPC member is absent from manifest")?;
+        validate_share_topology(
+            &backend.p256_share,
+            member_index,
+            manifest.members.len(),
+            manifest.threshold,
+        )?;
+        validate_share_topology(
+            &backend.k256_share,
+            member_index,
+            manifest.members.len(),
+            manifest.threshold,
+        )?;
+        validate_share_topology(
+            &backend.derivation_share,
+            member_index,
+            manifest.members.len(),
+            manifest.threshold,
+        )?;
         ensure!(
             backend.p256_share.core.key_info.public_shares.len() == manifest.members.len()
                 && backend.k256_share.core.key_info.public_shares.len() == manifest.members.len()
