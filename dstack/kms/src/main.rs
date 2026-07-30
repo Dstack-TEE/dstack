@@ -21,8 +21,8 @@ mod admin_service;
 mod config;
 // mod ct_log;
 mod crypto;
-mod mpc_identity;
 mod main_service;
+mod mpc_identity;
 mod onboard_service;
 
 fn app_version() -> String {

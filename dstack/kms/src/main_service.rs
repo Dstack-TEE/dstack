@@ -160,8 +160,7 @@ impl KmsState {
                 "MPC P-256 group public key does not match the active root CA"
             );
             anyhow::ensure!(
-                identity.k256_group_pubkey
-                    == k256_key.verifying_key().to_sec1_bytes().as_ref(),
+                identity.k256_group_pubkey == k256_key.verifying_key().to_sec1_bytes().as_ref(),
                 "MPC K-256 group public key does not match the active signing key"
             );
             Some(identity)

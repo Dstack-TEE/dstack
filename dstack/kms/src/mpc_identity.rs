@@ -37,8 +37,14 @@ impl ClusterIdentity {
         ensure!(protocol_version == 1, "unsupported MPC protocol version");
         ensure!(!cluster_id.is_empty(), "MPC cluster_id must not be empty");
         ensure!(cluster_id.len() <= 128, "MPC cluster_id is too long");
-        ensure!(!p256_group_pubkey.is_empty(), "missing P-256 group public key");
-        ensure!(!k256_group_pubkey.is_empty(), "missing K-256 group public key");
+        ensure!(
+            !p256_group_pubkey.is_empty(),
+            "missing P-256 group public key"
+        );
+        ensure!(
+            !k256_group_pubkey.is_empty(),
+            "missing K-256 group public key"
+        );
         ensure!(
             !derivation_group_pubkey.is_empty(),
             "missing derivation group public key"
@@ -85,10 +91,19 @@ impl NodeEvidence {
     /// Value to place in the first 32 bytes of TDX `report_data`.
     pub(crate) fn report_data_hash(&self) -> Result<[u8; 32]> {
         ensure!(self.provider_id.len() == 32, "provider_id must be 32 bytes");
-        ensure!(self.manifest_hash.len() == 32, "manifest_hash must be 32 bytes");
+        ensure!(
+            self.manifest_hash.len() == 32,
+            "manifest_hash must be 32 bytes"
+        );
         ensure!(!self.node_id.is_empty(), "node_id must not be empty");
-        ensure!(!self.attestation_pubkey.is_empty(), "missing attestation public key");
-        ensure!(!self.share_commitment.is_empty(), "missing share commitment");
+        ensure!(
+            !self.attestation_pubkey.is_empty(),
+            "missing attestation public key"
+        );
+        ensure!(
+            !self.share_commitment.is_empty(),
+            "missing share commitment"
+        );
         Ok(hash_fields(
             NODE_EVIDENCE_DOMAIN,
             &[
@@ -146,8 +161,14 @@ mod tests {
     use super::*;
 
     fn identity() -> ClusterIdentity {
-        ClusterIdentity::new(1, "production".into(), vec![2; 33], vec![3; 33], vec![4; 32])
-            .unwrap()
+        ClusterIdentity::new(
+            1,
+            "production".into(),
+            vec![2; 33],
+            vec![3; 33],
+            vec![4; 32],
+        )
+        .unwrap()
     }
 
     #[test]
