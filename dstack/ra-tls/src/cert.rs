@@ -19,6 +19,7 @@ use ring::signature::{
     EcdsaKeyPair, UnparsedPublicKey, ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA256_ASN1_SIGNING,
 };
 use scale::{Decode, Encode};
+use sha2::{Digest as _, Sha256};
 use x509_parser::der_parser::Oid;
 use x509_parser::prelude::{FromDer as _, X509Certificate};
 use x509_parser::public_key::PublicKey;
@@ -508,6 +509,36 @@ pub fn prepare_external_certificate<Key: PublicKeyData>(
     })
 }
 
+/// Prepare a self-signed certificate body whose public key has no locally
+/// available private key. This is used to create a threshold root CA after DKG.
+pub fn prepare_external_self_signed<Key: PublicKeyData>(
+    request: CertRequest<'_, Key>,
+) -> Result<ExternalCertificate> {
+    let public_key = request.key;
+    let params = request.into_cert_params()?;
+    let mut key_id = Sha256::new();
+    key_id.update(public_key.public_key_der());
+    let mut issuer_params = CertificateParams::default();
+    issuer_params.distinguished_name = params.distinguished_name.clone();
+    issuer_params.key_usages = params.key_usages.clone();
+    issuer_params.key_identifier_method =
+        rcgen::KeyIdMethod::PreSpecified(key_id.finalize().to_vec());
+    issuer_params.is_ca = params.is_ca.clone();
+    let placeholder_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+        .context("failed to create self-signed certificate serialization key")?;
+    let issuer = issuer_params
+        .self_signed(&placeholder_key)
+        .context("failed to create self-signed issuer template")?;
+    let placeholder = params
+        .signed_by(public_key, &issuer, &placeholder_key)
+        .context("failed to serialize self-signed external certificate template")?;
+    let (_, parsed) = x509_parser::parse_x509_certificate(placeholder.der())
+        .context("failed to parse self-signed external certificate template")?;
+    Ok(ExternalCertificate {
+        tbs_der: parsed.tbs_certificate.as_ref().to_vec(),
+    })
+}
+
 impl CertExt for Certificate {
     fn get_extension_der(&self, oid: &[u64]) -> Result<Option<Vec<u8>>> {
         let found = self
@@ -684,6 +715,33 @@ mod tests {
         app_x509
             .verify_signature(Some(root_x509.public_key()))
             .unwrap();
+    }
+
+    #[test]
+    fn external_self_signed_root_roundtrip() {
+        let root_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let request = CertRequest::builder()
+            .key(&root_key)
+            .org_name("Dstack")
+            .subject("Dstack Threshold Root CA")
+            .ca_level(1)
+            .build();
+        let external = prepare_external_self_signed(request).unwrap();
+        let signer = EcdsaKeyPair::from_pkcs8(
+            &ECDSA_P256_SHA256_ASN1_SIGNING,
+            &root_key.serialize_der(),
+            &SystemRandom::new(),
+        )
+        .unwrap();
+        let der_signature = signer
+            .sign(&SystemRandom::new(), external.tbs_der())
+            .unwrap();
+        let signature = p256::ecdsa::Signature::from_der(der_signature.as_ref()).unwrap();
+        let pem = external.finish(signature.to_bytes().as_slice()).unwrap();
+        let (_, pem) = x509_parser::pem::parse_x509_pem(pem.as_bytes()).unwrap();
+        let certificate = pem.parse_x509().unwrap();
+        assert_eq!(certificate.subject(), certificate.issuer());
+        certificate.verify_signature(None).unwrap();
     }
 
     #[test]
