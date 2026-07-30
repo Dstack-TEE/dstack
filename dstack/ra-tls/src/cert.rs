@@ -8,10 +8,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::{path::Path, time::Duration};
 
 use anyhow::{anyhow, bail, Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use fs_err as fs;
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, CustomExtension, DistinguishedName, DnType,
-    ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose, PublicKeyData,
+    ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose, PublicKeyData, PKCS_ECDSA_P256_SHA256,
 };
 use ring::rand::SystemRandom;
 use ring::signature::{
@@ -435,6 +436,76 @@ impl<Key: PublicKeyData> CertRequest<'_, Key> {
             .signed_by(key, issuer, issuer_key)?;
         Ok(cert)
     }
+}
+
+/// A certificate body prepared for an external P-256 signer, such as a
+/// threshold signing quorum. The exact TBS bytes are consensus-critical and
+/// must be signed with ECDSA/SHA-256.
+pub struct ExternalCertificate {
+    tbs_der: Vec<u8>,
+}
+
+impl ExternalCertificate {
+    /// DER-encoded `TBSCertificate` bytes to hash with SHA-256 and sign.
+    pub fn tbs_der(&self) -> &[u8] {
+        &self.tbs_der
+    }
+
+    /// Assemble the final PEM certificate from a fixed-width `(r || s)` P-256
+    /// signature returned by a threshold signer.
+    pub fn finish(self, signature: &[u8]) -> Result<String> {
+        let signature = p256::ecdsa::Signature::from_slice(signature)
+            .context("invalid external P-256 signature")?;
+        let signature_der = signature.to_der();
+        // AlgorithmIdentifier { id-ecdsa-with-SHA256, absent parameters }
+        const ECDSA_SHA256_ALGORITHM: &[u8] = &[
+            0x30, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02,
+        ];
+        let der = yasna::construct_der(|writer| {
+            writer.write_sequence(|writer| {
+                writer.next().write_der(&self.tbs_der);
+                writer.next().write_der(ECDSA_SHA256_ALGORITHM);
+                writer
+                    .next()
+                    .write_bitvec_bytes(signature_der.as_bytes(), 0);
+            });
+        });
+        let encoded = BASE64.encode(der);
+        let mut pem = String::from("-----BEGIN CERTIFICATE-----\n");
+        for line in encoded.as_bytes().chunks(64) {
+            pem.push_str(std::str::from_utf8(line).expect("base64 is UTF-8"));
+            pem.push('\n');
+        }
+        pem.push_str("-----END CERTIFICATE-----\n");
+        Ok(pem)
+    }
+}
+
+/// Prepare a certificate request using the issuer identity and extensions from
+/// an existing root certificate, without requiring its private key. A throwaway
+/// key is used only to make rcgen serialize the deterministic TBS structure;
+/// its signature is discarded.
+pub fn prepare_external_certificate<Key: PublicKeyData>(
+    request: CertRequest<'_, Key>,
+    issuer_pem: &str,
+) -> Result<ExternalCertificate> {
+    let issuer_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+        .context("failed to create external-certificate serialization key")?;
+    let issuer_params = CertificateParams::from_ca_cert_pem(issuer_pem)
+        .context("failed to parse external certificate issuer")?;
+    let issuer = issuer_params
+        .self_signed(&issuer_key)
+        .context("failed to create external certificate issuer template")?;
+    let public_key = request.key;
+    let placeholder = request
+        .into_cert_params()?
+        .signed_by(public_key, &issuer, &issuer_key)
+        .context("failed to serialize external certificate template")?;
+    let (_, parsed) = x509_parser::parse_x509_certificate(placeholder.der())
+        .context("failed to parse external certificate template")?;
+    Ok(ExternalCertificate {
+        tbs_der: parsed.tbs_certificate.as_ref().to_vec(),
+    })
 }
 
 impl CertExt for Certificate {
