@@ -286,7 +286,7 @@ mod tests {
                         break position + 4;
                     }
                 };
-                let headers = String::from_utf8_lossy(&request[..header_end]);
+                let headers = String::from_utf8_lossy(&request[..header_end]).into_owned();
                 let content_length = headers
                     .lines()
                     .find_map(|line| {
