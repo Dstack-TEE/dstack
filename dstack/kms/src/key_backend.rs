@@ -789,8 +789,8 @@ impl MpcKeyBackend {
             .context("invalid MPC group public key")?;
         let digest = match &operation.payload {
             MpcOperationPayload::SignK256(payload) => payload.digest(),
-            MpcOperationPayload::SignManifest(_) => {
-                bail!("manifest signatures do not have recovery IDs")
+            MpcOperationPayload::SignManifest(_) | MpcOperationPayload::AuthorizeReshare(_) => {
+                bail!("policy signatures do not have recovery IDs")
             }
             MpcOperationPayload::SignP256Certificate(_) => {
                 bail!("P-256 certificate result does not have a recovery ID")
