@@ -148,7 +148,7 @@ pub(crate) fn combine(
         }
         let inverse = Option::<Scalar>::from(denominator.invert())
             .context("invalid threshold PRF interpolation set")?;
-        combined += evaluation * (numerator * inverse);
+        combined += *evaluation * (numerator * inverse);
     }
     ensure!(
         !bool::from(combined.is_identity()),
