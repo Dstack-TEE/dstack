@@ -302,14 +302,19 @@ impl MpcOperation {
                     payload.manifest.provider_id == manifest.provider_id,
                     "proposed manifest changes provider ID"
                 );
-                ensure!(
-                    payload.manifest.epoch == manifest.epoch + 1,
-                    "proposed manifest must advance exactly one epoch"
-                );
-                ensure!(
-                    payload.manifest.previous_manifest_hash == manifest.manifest_hash()?,
-                    "proposed manifest does not extend active manifest"
-                );
+                let genesis_self_authorization = manifest.epoch == 1
+                    && manifest.previous_manifest_hash.is_empty()
+                    && payload.manifest == *manifest;
+                if !genesis_self_authorization {
+                    ensure!(
+                        payload.manifest.epoch == manifest.epoch + 1,
+                        "proposed manifest must advance exactly one epoch"
+                    );
+                    ensure!(
+                        payload.manifest.previous_manifest_hash == manifest.manifest_hash()?,
+                        "proposed manifest does not extend active manifest"
+                    );
+                }
             }
             MpcOperationPayload::SignP256Certificate(payload) => payload.validate()?,
             MpcOperationPayload::Derive(payload) => payload.validate()?,
