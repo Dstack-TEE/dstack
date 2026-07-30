@@ -1056,6 +1056,7 @@ impl KeyBackend for MpcKeyBackend {
         }
         let app_key =
             app_key.context("threshold derivation could not produce a P-256 app CA key")?;
+        let now = std::time::SystemTime::now();
         let request = CertRequest::builder()
             .key(&app_key)
             .org_name("Dstack")
@@ -1063,6 +1064,8 @@ impl KeyBackend for MpcKeyBackend {
             .ca_level(0)
             .app_id(app_id)
             .special_usage("app:ca")
+            .not_before(now - Duration::from_secs(5 * 60))
+            .not_after(now + Duration::from_secs(10 * 365 * 24 * 60 * 60))
             .build();
         let external = prepare_external_certificate(request, &self.root_ca_cert)
             .context("failed to prepare threshold-signed app CA")?;
