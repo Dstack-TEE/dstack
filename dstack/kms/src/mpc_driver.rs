@@ -53,6 +53,28 @@ pub(crate) trait EnvelopeTransport: Send + Sync {
     async fn receive(&self, session_id: &[u8; 32]) -> Result<Vec<MpcEnvelope>>;
 }
 
+pub(crate) struct BlockingHttpTransport {
+    inner: std::sync::Arc<MpcHttpTransport>,
+    runtime: tokio::runtime::Handle,
+}
+
+impl BlockingHttpTransport {
+    pub(crate) fn new(
+        inner: std::sync::Arc<MpcHttpTransport>,
+        runtime: tokio::runtime::Handle,
+    ) -> Self {
+        Self { inner, runtime }
+    }
+
+    fn send(&self, envelope: MpcEnvelope) -> Result<()> {
+        self.runtime.block_on(self.inner.send(envelope))
+    }
+
+    fn receive(&self, session_id: &[u8; 32]) -> Result<Vec<MpcEnvelope>> {
+        self.runtime.block_on(self.inner.receive(session_id))
+    }
+}
+
 pub(crate) struct MpcHttpTransport {
     local_node_id: String,
     local_router: std::sync::Arc<SessionRouter>,
@@ -228,6 +250,101 @@ where
                     .map_err(|_| anyhow::anyhow!("MPC state machine rejected incoming message"))?;
             }
             ProceedResult::Yielded => tokio::task::yield_now().await,
+            ProceedResult::Output(output) => return Ok(output),
+            ProceedResult::Error(error) => bail!("MPC state machine failed: {error}"),
+        }
+    }
+}
+
+/// Executes a non-`Send` round-based state machine on a dedicated blocking
+/// thread while network I/O is serviced by the Tokio runtime. CGGMP's sync
+/// adapter internally uses `Rc`, so it must never be moved between threads.
+pub(crate) fn drive_state_machine_blocking<S>(
+    mut state: S,
+    transport: &BlockingHttpTransport,
+    context: DriverContext,
+) -> Result<S::Output>
+where
+    S: StateMachine,
+    S::Msg: Serialize + DeserializeOwned,
+{
+    ensure!(
+        context.participants.len() >= 2,
+        "MPC needs at least two participants"
+    );
+    let local_index = context.local_index()?;
+    let mut sequence = 0u64;
+    let mut pending = VecDeque::new();
+    loop {
+        match state.proceed() {
+            ProceedResult::SendMsg(outgoing) => {
+                sequence = sequence.checked_add(1).context("MPC sequence overflow")?;
+                let payload = serde_json::to_vec(&outgoing.msg)
+                    .context("failed to encode MPC protocol message")?;
+                let (recipients, broadcast): (Vec<u16>, bool) = match outgoing.recipient {
+                    MessageDestination::AllParties => (
+                        (0..context.participants.len())
+                            .filter(|index| *index != usize::from(local_index))
+                            .map(|index| u16::try_from(index).expect("participant index overflow"))
+                            .collect(),
+                        true,
+                    ),
+                    MessageDestination::OneParty(index) => (vec![index], false),
+                };
+                for recipient in recipients {
+                    let recipient = context
+                        .participants
+                        .get(usize::from(recipient))
+                        .context("protocol emitted an invalid recipient index")?;
+                    transport.send(MpcEnvelope {
+                        session_id: context.session_id.to_vec(),
+                        epoch: context.epoch,
+                        protocol: context.protocol,
+                        request_hash: context.request_hash.to_vec(),
+                        sender: context.local_node_id.clone(),
+                        recipient: recipient.clone(),
+                        sequence,
+                        expires_at: context.expires_at,
+                        payload: payload.clone(),
+                        broadcast,
+                    })?;
+                }
+            }
+            ProceedResult::NeedsOneMoreMessage => {
+                while pending.is_empty() {
+                    ensure_not_expired(context.expires_at)?;
+                    pending.extend(transport.receive(&context.session_id)?);
+                    if pending.is_empty() {
+                        std::thread::sleep(context.poll_interval);
+                    }
+                }
+                let envelope = pending.pop_front().expect("pending queue is not empty");
+                ensure!(
+                    envelope.recipient == context.local_node_id,
+                    "misrouted MPC message"
+                );
+                let sender: u16 = context
+                    .participants
+                    .iter()
+                    .position(|node| node == &envelope.sender)
+                    .context("message sender is not a protocol participant")?
+                    .try_into()
+                    .context("sender index overflow")?;
+                state
+                    .received_msg(Incoming {
+                        id: envelope.sequence,
+                        sender,
+                        msg_type: if envelope.broadcast {
+                            MessageType::Broadcast
+                        } else {
+                            MessageType::P2P
+                        },
+                        msg: serde_json::from_slice(&envelope.payload)
+                            .context("failed to decode MPC protocol message")?,
+                    })
+                    .map_err(|_| anyhow::anyhow!("MPC state machine rejected incoming message"))?;
+            }
+            ProceedResult::Yielded => std::thread::yield_now(),
             ProceedResult::Output(output) => return Ok(output),
             ProceedResult::Error(error) => bail!("MPC state machine failed: {error}"),
         }
