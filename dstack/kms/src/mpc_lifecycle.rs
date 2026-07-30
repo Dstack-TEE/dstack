@@ -549,6 +549,44 @@ mod tests {
     }
 
     #[test]
+    fn signed_transition_authorizes_quote_bound_joiner() {
+        let key = SigningKey::from_slice(&[9; 32]).unwrap();
+        let identity = identity(&key);
+        let active = signed(&key, &identity, 1, vec![]).manifest;
+        let mut members = active
+            .members
+            .iter()
+            .map(|member| ReshareMember {
+                node_id: member.node_id.clone(),
+                endpoint: member.endpoint.clone(),
+                attestation_pubkey: member.attestation_pubkey.clone(),
+            })
+            .collect::<Vec<_>>();
+        members.push(ReshareMember {
+            node_id: "kms-4".into(),
+            endpoint: "https://kms-4/prpc".into(),
+            attestation_pubkey: vec![8; 32],
+        });
+        let plan = ResharePlan {
+            epoch: 2,
+            previous_manifest_hash: active.manifest_hash().unwrap().to_vec(),
+            threshold: 3,
+            members,
+        };
+        let signature: Signature = key
+            .sign_prehash(&plan.authorization_hash().unwrap())
+            .unwrap();
+        let signed = SignedResharePlan {
+            plan,
+            signature: signature.to_bytes().to_vec(),
+        };
+        signed.verify(&identity, &active).unwrap();
+        let mut forged = signed;
+        forged.plan.members.last_mut().unwrap().attestation_pubkey[0] ^= 1;
+        assert!(forged.verify(&identity, &active).is_err());
+    }
+
+    #[test]
     fn startup_recovers_journaled_revocation() {
         let key = SigningKey::from_slice(&[8; 32]).unwrap();
         let identity = identity(&key);
