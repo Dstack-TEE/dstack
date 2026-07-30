@@ -277,10 +277,10 @@ mod tests {
     #[test]
     fn rejects_replay_and_session_context_changes() {
         let router = router();
-        let message = message();
-        router.push("kms-1", message.clone()).unwrap();
-        assert!(router.push("kms-1", message.clone()).is_err());
-        let mut changed = message;
+        let original = message();
+        router.push("kms-1", original.clone()).unwrap();
+        assert!(router.push("kms-1", original.clone()).is_err());
+        let mut changed = original;
         changed.sequence = 2;
         changed.request_hash[0] ^= 1;
         assert!(router.push("kms-1", changed).is_err());
