@@ -52,6 +52,21 @@ pub(crate) struct P256CertificatePayload {
     pub tbs_der: Vec<u8>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ManifestSignaturePayload {
+    pub manifest: EpochManifest,
+}
+
+impl ManifestSignaturePayload {
+    fn validate(&self) -> Result<()> {
+        self.manifest.manifest_hash().map(|_| ())
+    }
+
+    pub(crate) fn digest(&self) -> Result<[u8; 32]> {
+        self.manifest.manifest_hash()
+    }
+}
+
 impl P256CertificatePayload {
     fn validate(&self) -> Result<()> {
         use x509_parser::{certificate::TbsCertificate, prelude::FromDer as _};
@@ -141,6 +156,7 @@ impl K256SignPayload {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum MpcOperationPayload {
     SignK256(K256SignPayload),
+    SignManifest(ManifestSignaturePayload),
     SignP256Certificate(P256CertificatePayload),
     Derive(DerivePayload),
 }
@@ -225,6 +241,25 @@ impl MpcOperation {
         Ok(operation)
     }
 
+    pub(crate) fn new_manifest_signature(
+        session_id: [u8; 32],
+        epoch: u64,
+        participants: Vec<String>,
+        expires_at: u64,
+        payload: ManifestSignaturePayload,
+    ) -> Result<Self> {
+        let mut operation = Self {
+            session_id: session_id.to_vec(),
+            epoch,
+            participants,
+            expires_at,
+            payload: MpcOperationPayload::SignManifest(payload),
+            request_hash: vec![],
+        };
+        operation.request_hash = operation.compute_request_hash()?.to_vec();
+        Ok(operation)
+    }
+
     pub(crate) fn validate(&self, manifest: &EpochManifest, initiator: &str) -> Result<()> {
         ensure!(
             self.session_id.len() == 32,
@@ -261,6 +296,21 @@ impl MpcOperation {
         );
         match &self.payload {
             MpcOperationPayload::SignK256(payload) => payload.validate()?,
+            MpcOperationPayload::SignManifest(payload) => {
+                payload.validate()?;
+                ensure!(
+                    payload.manifest.provider_id == manifest.provider_id,
+                    "proposed manifest changes provider ID"
+                );
+                ensure!(
+                    payload.manifest.epoch == manifest.epoch + 1,
+                    "proposed manifest must advance exactly one epoch"
+                );
+                ensure!(
+                    payload.manifest.previous_manifest_hash == manifest.manifest_hash()?,
+                    "proposed manifest does not extend active manifest"
+                );
+            }
             MpcOperationPayload::SignP256Certificate(payload) => payload.validate()?,
             MpcOperationPayload::Derive(payload) => payload.validate()?,
         }

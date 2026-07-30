@@ -38,10 +38,10 @@ use crate::{
     mpc_driver::{
         drive_state_machine_blocking, BlockingHttpTransport, DriverContext, MpcHttpTransport,
     },
-    mpc_identity::EpochManifest,
+    mpc_identity::{EpochManifest, SignedEpochManifest},
     mpc_operation::{
-        DerivePayload, DerivePurpose, K256SignPayload, MpcOperation, MpcOperationPayload,
-        P256CertificatePayload,
+        DerivePayload, DerivePurpose, K256SignPayload, ManifestSignaturePayload, MpcOperation,
+        MpcOperationPayload, P256CertificatePayload,
     },
     mpc_session::{MpcProtocol, SessionRouter},
     threshold_prf::{self, PrfPartial},
@@ -71,6 +71,7 @@ pub(crate) trait KeyBackend: Send + Sync {
     fn derivation_public_key(&self) -> Vec<u8>;
     fn root_ca_cert(&self) -> &str;
     async fn derive_app_ca(&self, app_id: &[u8]) -> Result<CaCert>;
+    async fn sign_epoch_manifest(&self, manifest: EpochManifest) -> Result<SignedEpochManifest>;
     async fn run_mpc_operation(
         &self,
         operation: crate::mpc_operation::MpcOperation,
@@ -164,6 +165,19 @@ impl KeyBackend for LocalKeyBackend {
             .sign(request)
             .context("failed to sign app CA")?;
         Ok(CaCert::from_parts(app_key, certificate))
+    }
+
+    async fn sign_epoch_manifest(&self, manifest: EpochManifest) -> Result<SignedEpochManifest> {
+        use k256::ecdsa::signature::hazmat::PrehashSigner as _;
+        let hash = manifest.manifest_hash()?;
+        let signature: K256Signature = self
+            .k256_key
+            .sign_prehash(&hash)
+            .context("failed to sign epoch manifest")?;
+        Ok(SignedEpochManifest {
+            manifest,
+            signature: signature.to_bytes().to_vec(),
+        })
     }
 
     async fn export_root_keys(&self) -> Result<(String, Vec<u8>)> {
@@ -482,6 +496,47 @@ impl MpcKeyBackend {
         Ok(local)
     }
 
+    async fn coordinate_manifest_signature(
+        &self,
+        manifest: EpochManifest,
+    ) -> Result<SignedEpochManifest> {
+        let mut session_id = [0u8; 32];
+        OsRng.fill_bytes(&mut session_id);
+        let operation = MpcOperation::new_manifest_signature(
+            session_id,
+            self.manifest.epoch,
+            self.participants().await?,
+            unix_time()?
+                .checked_add(60)
+                .context("MPC expiry overflow")?,
+            ManifestSignaturePayload {
+                manifest: manifest.clone(),
+            },
+        )?;
+        operation.validate(&self.manifest, &self.node_id)?;
+        let remote = operation
+            .participants
+            .iter()
+            .filter(|node| *node != &self.node_id)
+            .map(|node| self.transport.start_operation(node, &operation));
+        let (local, remote) = tokio::join!(
+            self.run_mpc_operation(operation.clone(), &self.node_id),
+            join_all(remote)
+        );
+        let local = local?;
+        ensure!(local.len() == 64, "invalid manifest signature length");
+        for result in remote {
+            ensure!(
+                result? == local,
+                "MPC participants returned different manifest signatures"
+            );
+        }
+        Ok(SignedEpochManifest {
+            manifest,
+            signature: local,
+        })
+    }
+
     fn validate_p256_certificate(&self, payload: &P256CertificatePayload) -> Result<()> {
         use ra_tls::oids::{PHALA_RATLS_APP_ID, PHALA_RATLS_CERT_USAGE};
         use x509_parser::{
@@ -562,6 +617,9 @@ impl MpcKeyBackend {
             .context("invalid MPC group public key")?;
         let digest = match &operation.payload {
             MpcOperationPayload::SignK256(payload) => payload.digest(),
+            MpcOperationPayload::SignManifest(_) => {
+                bail!("manifest signatures do not have recovery IDs")
+            }
             MpcOperationPayload::SignP256Certificate(_) => {
                 bail!("P-256 certificate result does not have a recovery ID")
             }
@@ -638,7 +696,9 @@ impl MpcKeyBackend {
 
     async fn execute_operation(&self, operation: MpcOperation) -> Result<Vec<u8>> {
         match &operation.payload {
-            MpcOperationPayload::SignK256(_) => self.execute_k256(operation).await,
+            MpcOperationPayload::SignK256(_) | MpcOperationPayload::SignManifest(_) => {
+                self.execute_k256(operation).await
+            }
             MpcOperationPayload::SignP256Certificate(payload) => {
                 self.validate_p256_certificate(payload)?;
                 self.execute_p256(operation).await
@@ -686,10 +746,11 @@ impl MpcKeyBackend {
     }
 
     async fn execute_k256(&self, operation: MpcOperation) -> Result<Vec<u8>> {
-        let MpcOperationPayload::SignK256(payload) = &operation.payload else {
-            bail!("K-256 executor received a different MPC operation")
+        let digest = match &operation.payload {
+            MpcOperationPayload::SignK256(payload) => payload.digest(),
+            MpcOperationPayload::SignManifest(payload) => payload.digest()?,
+            _ => bail!("K-256 executor received a different MPC operation"),
         };
-        let digest = payload.digest();
         let local_protocol_index: u16 = operation
             .participants
             .iter()
@@ -977,6 +1038,10 @@ impl KeyBackend for MpcKeyBackend {
         let certificate = external.finish(&signature)?;
         CaCert::new(certificate, app_key.serialize_pem())
             .context("failed to construct threshold-signed app CA")
+    }
+
+    async fn sign_epoch_manifest(&self, manifest: EpochManifest) -> Result<SignedEpochManifest> {
+        self.coordinate_manifest_signature(manifest).await
     }
 
     async fn run_mpc_operation(&self, operation: MpcOperation, initiator: &str) -> Result<Vec<u8>> {
