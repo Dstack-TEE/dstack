@@ -151,7 +151,7 @@ enum GenesisKind {
     SignManifest,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct GenesisOperation {
     #[serde(with = "hex_bytes")]
     session_id: Vec<u8>,
@@ -362,6 +362,13 @@ struct GenesisInner {
     verifier: Arc<AttestationVerifier>,
     finalized: AtomicBool,
     finalized_notify: tokio::sync::Notify,
+    operations: Mutex<BTreeMap<Vec<u8>, Arc<GenesisOperationRecord>>>,
+}
+
+struct GenesisOperationRecord {
+    operation: GenesisOperation,
+    result: Mutex<Option<std::result::Result<Vec<u8>, String>>>,
+    finished: tokio::sync::Notify,
 }
 
 #[derive(Clone)]
@@ -409,6 +416,7 @@ impl GenesisState {
             verifier,
             finalized: AtomicBool::new(false),
             finalized_notify: tokio::sync::Notify::new(),
+            operations: Mutex::new(BTreeMap::new()),
         })))
     }
 
@@ -556,6 +564,52 @@ impl GenesisState {
             initiator == self.0.plan.coordinator,
             "only genesis coordinator may start DKG"
         );
+        let (record, owner) = {
+            let mut operations = self.0.operations.lock().expect("genesis mutex poisoned");
+            if let Some(record) = operations.get(&operation.request_hash) {
+                ensure!(
+                    record.operation == operation,
+                    "conflicting genesis operation hash"
+                );
+                (record.clone(), false)
+            } else {
+                ensure!(operations.len() < 32, "too many active genesis operations");
+                let record = Arc::new(GenesisOperationRecord {
+                    operation: operation.clone(),
+                    result: Mutex::new(None),
+                    finished: tokio::sync::Notify::new(),
+                });
+                operations.insert(operation.request_hash.clone(), record.clone());
+                (record, true)
+            }
+        };
+        if owner {
+            let result = self.execute_owned(operation).await;
+            *record.result.lock().expect("genesis mutex poisoned") = Some(
+                result
+                    .as_ref()
+                    .cloned()
+                    .map_err(|error| format!("{error:#}")),
+            );
+            record.finished.notify_waiters();
+            result
+        } else {
+            loop {
+                let notified = record.finished.notified();
+                if let Some(result) = record
+                    .result
+                    .lock()
+                    .expect("genesis mutex poisoned")
+                    .clone()
+                {
+                    return result.map_err(anyhow::Error::msg);
+                }
+                notified.await;
+            }
+        }
+    }
+
+    async fn execute_owned(&self, operation: GenesisOperation) -> Result<Vec<u8>> {
         let local_index: u16 = self
             .0
             .plan
