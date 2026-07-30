@@ -40,6 +40,8 @@ contract DstackApp is
     event UpgradesDisabled();
     event AllowAnyDeviceSet(bool allowAny);
     event RequireTcbUpToDateSet(bool requireUpToDate);
+    /// @notice Additive audit event for reconstructing authorization policy.
+    event PolicyChanged(address indexed actor, bytes32 indexed policy, bytes32 indexed value, bool enabled);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -94,12 +96,14 @@ contract DstackApp is
         if (initialDeviceId != bytes32(0)) {
             allowedDeviceIds[initialDeviceId] = true;
             emit DeviceAdded(initialDeviceId);
+            _emitPolicy("device", initialDeviceId, true);
         }
 
         // Add initial compose hash if provided
         if (initialComposeHash != bytes32(0)) {
             allowedComposeHashes[initialComposeHash] = true;
             emit ComposeHashAdded(initialComposeHash);
+            _emitPolicy("compose-hash", initialComposeHash, true);
         }
 
         __Ownable_init(initialOwner);
@@ -130,44 +134,55 @@ contract DstackApp is
     }
 
     // Function to authorize upgrades (required by UUPSUpgradeable)
-    function _authorizeUpgrade(address) internal view override onlyOwner {
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
         require(!_upgradesDisabled, "Upgrades are permanently disabled");
+        _emitPolicy("implementation-upgrade", bytes32(uint256(uint160(newImplementation))), true);
+    }
+
+    function _emitPolicy(string memory policy, bytes32 value, bool enabled) internal {
+        emit PolicyChanged(msg.sender, keccak256(bytes(policy)), value, enabled);
     }
 
     // Add a compose hash to allowed list
     function addComposeHash(bytes32 composeHash) external onlyOwner {
         allowedComposeHashes[composeHash] = true;
         emit ComposeHashAdded(composeHash);
+        _emitPolicy("compose-hash", composeHash, true);
     }
 
     // Remove a compose hash from allowed list
     function removeComposeHash(bytes32 composeHash) external onlyOwner {
         allowedComposeHashes[composeHash] = false;
         emit ComposeHashRemoved(composeHash);
+        _emitPolicy("compose-hash", composeHash, false);
     }
 
     // Set whether any device is allowed to boot this app
     function setAllowAnyDevice(bool _allowAnyDevice) external onlyOwner {
         allowAnyDevice = _allowAnyDevice;
         emit AllowAnyDeviceSet(_allowAnyDevice);
+        _emitPolicy("allow-any-device", bytes32(0), _allowAnyDevice);
     }
 
     // Set whether TCB status must be UpToDate to boot this app
     function setRequireTcbUpToDate(bool _requireUpToDate) external onlyOwner {
         requireTcbUpToDate = _requireUpToDate;
         emit RequireTcbUpToDateSet(_requireUpToDate);
+        _emitPolicy("require-tcb-up-to-date", bytes32(0), _requireUpToDate);
     }
 
     // Add a device ID to allowed list
     function addDevice(bytes32 deviceId) external onlyOwner {
         allowedDeviceIds[deviceId] = true;
         emit DeviceAdded(deviceId);
+        _emitPolicy("device", deviceId, true);
     }
 
     // Remove a device ID from allowed list
     function removeDevice(bytes32 deviceId) external onlyOwner {
         allowedDeviceIds[deviceId] = false;
         emit DeviceRemoved(deviceId);
+        _emitPolicy("device", deviceId, false);
     }
 
     // Check if an app is allowed to boot
@@ -202,6 +217,7 @@ contract DstackApp is
     function disableUpgrades() external onlyOwner {
         _upgradesDisabled = true;
         emit UpgradesDisabled();
+        _emitPolicy("upgrades-disabled", bytes32(0), true);
     }
 
     // Add storage gap for upgradeable contracts

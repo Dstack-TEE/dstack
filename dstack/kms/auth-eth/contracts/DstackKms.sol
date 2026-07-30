@@ -59,6 +59,9 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     // slither-disable-next-line unindexed-event-address
     event AppImplementationSet(address implementation);
     event AppDeployedViaFactory(address indexed appId, address indexed deployer);
+    /// @notice Additive audit event for reconstructing authorization policy.
+    /// @dev `value` is the affected bytes32 value, address, or hash of dynamic public data.
+    event PolicyChanged(address indexed actor, bytes32 indexed policy, bytes32 indexed value, bool enabled);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -75,6 +78,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         if (_appImplementation != address(0)) {
             appImplementation = _appImplementation;
             emit AppImplementationSet(_appImplementation);
+            _emitPolicy("app-implementation", bytes32(uint256(uint160(_appImplementation))), true);
         }
     }
 
@@ -96,12 +100,19 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     // Function to authorize upgrades (required by UUPSUpgradeable)
-    function _authorizeUpgrade(address newImplementation) internal override onlyOwner { }
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
+        _emitPolicy("implementation-upgrade", bytes32(uint256(uint160(newImplementation))), true);
+    }
+
+    function _emitPolicy(string memory policy, bytes32 value, bool enabled) internal {
+        emit PolicyChanged(msg.sender, keccak256(bytes(policy)), value, enabled);
+    }
 
     // Function to set KMS information
     function setKmsInfo(KmsInfo memory info) external onlyOwner {
         kmsInfo = info;
         emit KmsInfoSet(info.k256Pubkey);
+        _emitPolicy("kms-info", keccak256(info.k256Pubkey), true);
     }
 
     // Function to set KMS quote
@@ -118,6 +129,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     function setGatewayAppId(string memory appId) external onlyOwner {
         gatewayAppId = appId;
         emit GatewayAppIdSet(appId);
+        _emitPolicy("gateway-app-id", keccak256(bytes(appId)), true);
     }
 
     /// @notice Register an app address as known to this KMS.
@@ -133,6 +145,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         require(appId != address(0), "Invalid app ID");
         registeredApps[appId] = true;
         emit AppRegistered(appId);
+        _emitPolicy("registered-app", bytes32(uint256(uint160(appId))), true);
     }
 
     // Function to set DstackApp implementation contract address
@@ -140,6 +153,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         require(_implementation != address(0), "Invalid implementation address");
         appImplementation = _implementation;
         emit AppImplementationSet(_implementation);
+        _emitPolicy("app-implementation", bytes32(uint256(uint160(_implementation))), true);
     }
 
     // Factory method: Deploy and register DstackApp in single transaction
@@ -200,36 +214,42 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     function addKmsAggregatedMr(bytes32 mrAggregated) external onlyOwner {
         kmsAllowedAggregatedMrs[mrAggregated] = true;
         emit KmsAggregatedMrAdded(mrAggregated);
+        _emitPolicy("kms-aggregated-mr", mrAggregated, true);
     }
 
     // Function to deregister an aggregated MR measurement
     function removeKmsAggregatedMr(bytes32 mrAggregated) external onlyOwner {
         kmsAllowedAggregatedMrs[mrAggregated] = false;
         emit KmsAggregatedMrRemoved(mrAggregated);
+        _emitPolicy("kms-aggregated-mr", mrAggregated, false);
     }
 
     // Function to register a KMS device ID
     function addKmsDevice(bytes32 deviceId) external onlyOwner {
         kmsAllowedDeviceIds[deviceId] = true;
         emit KmsDeviceAdded(deviceId);
+        _emitPolicy("kms-device", deviceId, true);
     }
 
     // Function to deregister a KMS device ID
     function removeKmsDevice(bytes32 deviceId) external onlyOwner {
         kmsAllowedDeviceIds[deviceId] = false;
         emit KmsDeviceRemoved(deviceId);
+        _emitPolicy("kms-device", deviceId, false);
     }
 
     // Function to register an image measurement
     function addOsImageHash(bytes32 osImageHash) external onlyOwner {
         allowedOsImages[osImageHash] = true;
         emit OsImageHashAdded(osImageHash);
+        _emitPolicy("os-image", osImageHash, true);
     }
 
     // Function to deregister an image measurement
     function removeOsImageHash(bytes32 osImageHash) external onlyOwner {
         allowedOsImages[osImageHash] = false;
         emit OsImageHashRemoved(osImageHash);
+        _emitPolicy("os-image", osImageHash, false);
     }
 
     // Function to check if KMS is allowed to boot
