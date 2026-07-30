@@ -96,6 +96,10 @@ pub(crate) struct MpcConfig {
     #[serde(default)]
     pub identity_file: PathBuf,
     #[serde(default)]
+    pub genesis_plan_file: PathBuf,
+    #[serde(default)]
+    pub genesis_tls_ca_cert: PathBuf,
+    #[serde(default)]
     pub p256_group_pubkey: String,
     #[serde(default)]
     pub k256_group_pubkey: String,

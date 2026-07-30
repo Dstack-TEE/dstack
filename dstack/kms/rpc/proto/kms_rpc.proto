@@ -142,6 +142,27 @@ service MpcTransport {
   rpc Push(MpcPushRequest) returns (google.protobuf.Empty);
 }
 
+message MpcGenesisStartRequest {
+  bytes operation_json = 1;
+}
+
+message MpcGenesisStartResponse {
+  bytes result_json = 1;
+}
+
+message MpcGenesisFinalizeRequest {
+  bytes bundle_json = 1;
+}
+
+// One-time DKG service used before root material exists. Peers are authorized
+// by quote-bound certificate keys in the operator-provisioned genesis plan.
+service MpcGenesis {
+  rpc Ping(google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Start(MpcGenesisStartRequest) returns (MpcGenesisStartResponse);
+  rpc Push(MpcPushRequest) returns (google.protobuf.Empty);
+  rpc Finalize(MpcGenesisFinalizeRequest) returns (google.protobuf.Empty);
+}
+
 // The KMS admin RPC service. Served on a separate admin listener
 // (`[core.admin]`) behind the shared HTTP authenticator, so the credential
 // travels in the `Authorization`/`X-Admin-Token` header rather than the

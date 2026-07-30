@@ -25,6 +25,7 @@ mod crypto;
 mod key_backend;
 mod main_service;
 mod mpc_driver;
+mod mpc_genesis;
 mod mpc_identity;
 mod mpc_lifecycle;
 mod mpc_operation;
