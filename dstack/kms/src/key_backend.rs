@@ -8,7 +8,11 @@
 //! implementation preserves the legacy behavior; the MPC implementation can
 //! replace it without making root key material available to request handlers.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use anyhow::{bail, ensure, Context, Result};
 use async_trait::async_trait;
@@ -173,6 +177,15 @@ pub(crate) struct MpcKeyBackend {
     manifest: EpochManifest,
     cluster_id: String,
     node_id: String,
+    operations: Mutex<BTreeMap<Vec<u8>, Arc<OperationRecord>>>,
+}
+
+struct OperationRecord {
+    request_hash: Vec<u8>,
+    initiator: String,
+    expires_at: u64,
+    result: Mutex<Option<Result<Vec<u8>, String>>>,
+    finished: tokio::sync::Notify,
 }
 
 impl MpcKeyBackend {
@@ -218,6 +231,7 @@ impl MpcKeyBackend {
             manifest: manifest.clone(),
             cluster_id: cluster_id.into(),
             node_id: node_id.into(),
+            operations: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -302,6 +316,139 @@ impl MpcKeyBackend {
         }
         bail!("MPC signature cannot be recovered to the group public key")
     }
+
+    async fn execute_once(&self, operation: MpcOperation, initiator: &str) -> Result<Vec<u8>> {
+        let (record, owner) = {
+            let now = unix_time()?;
+            let mut operations = self.operations.lock().expect("operation mutex poisoned");
+            operations.retain(|_, record| record.expires_at >= now);
+            if let Some(record) = operations.get(&operation.session_id) {
+                ensure!(
+                    record.request_hash == operation.request_hash && record.initiator == initiator,
+                    "MPC session ID was reused with different operation context"
+                );
+                (record.clone(), false)
+            } else {
+                let record = Arc::new(OperationRecord {
+                    request_hash: operation.request_hash.clone(),
+                    initiator: initiator.into(),
+                    expires_at: operation.expires_at,
+                    result: Mutex::new(None),
+                    finished: tokio::sync::Notify::new(),
+                });
+                operations.insert(operation.session_id.clone(), record.clone());
+                (record, true)
+            }
+        };
+        if owner {
+            let result = self.execute_k256(operation).await;
+            *record
+                .result
+                .lock()
+                .expect("operation result mutex poisoned") = Some(
+                result
+                    .as_ref()
+                    .map(|value| value.clone())
+                    .map_err(|error| format!("{error:#}")),
+            );
+            record.finished.notify_waiters();
+            result
+        } else {
+            loop {
+                let notified = record.finished.notified();
+                if let Some(result) = record
+                    .result
+                    .lock()
+                    .expect("operation result mutex poisoned")
+                    .clone()
+                {
+                    return result.map_err(anyhow::Error::msg);
+                }
+                notified.await;
+            }
+        }
+    }
+
+    async fn execute_k256(&self, operation: MpcOperation) -> Result<Vec<u8>> {
+        let MpcOperationPayload::SignK256(payload) = &operation.payload;
+        let digest = payload.digest();
+        let local_protocol_index: u16 = operation
+            .participants
+            .iter()
+            .position(|node| node == &self.node_id)
+            .context("local node is not an MPC participant")?
+            .try_into()
+            .context("MPC participant index overflow")?;
+        let keygen_indexes = operation
+            .participants
+            .iter()
+            .map(|node| {
+                self.manifest
+                    .members
+                    .iter()
+                    .position(|member| &member.node_id == node)
+                    .context("MPC participant is not in manifest")?
+                    .try_into()
+                    .context("MPC keygen index overflow")
+            })
+            .collect::<Result<Vec<u16>>>()?;
+        let own_keygen_index = self
+            .manifest
+            .members
+            .iter()
+            .position(|member| member.node_id == self.node_id)
+            .context("local node is not in manifest")?;
+        ensure!(
+            usize::from(self.k256_share.core.i) == own_keygen_index,
+            "K-256 share index does not match manifest ordering"
+        );
+
+        let eid = execution_id(
+            &self.cluster_id,
+            operation.epoch,
+            CggmpCurve::K256,
+            operation
+                .session_id
+                .as_slice()
+                .try_into()
+                .context("invalid MPC session ID")?,
+        );
+        let context = DriverContext {
+            session_id: operation.session_id.as_slice().try_into()?,
+            epoch: operation.epoch,
+            protocol: MpcProtocol::SignK256,
+            request_hash: operation.request_hash.as_slice().try_into()?,
+            local_node_id: self.node_id.clone(),
+            participants: operation.participants.clone(),
+            expires_at: operation.expires_at,
+            poll_interval: Duration::from_millis(10),
+        };
+        let share = self.k256_share.clone();
+        let transport = self.transport.clone();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            let mut rng = OsRng;
+            let data =
+                DataToSign::from_scalar(Scalar::<Secp256k1>::from_be_bytes_mod_order(digest));
+            let state = cggmp21::signing(
+                ExecutionId::new(&eid),
+                local_protocol_index,
+                &keygen_indexes,
+                &share,
+            )
+            .sign_sync(&mut rng, data);
+            let signature = drive_state_machine_blocking(
+                state,
+                &BlockingHttpTransport::new(transport, runtime),
+                context,
+            )??;
+            let mut encoded = vec![0u8; cggmp21::Signature::<Secp256k1>::serialized_len()];
+            signature.write_to_slice(&mut encoded);
+            Ok(encoded)
+        })
+        .await
+        .context("MPC signing worker panicked")?
+    }
 }
 
 fn unix_time() -> Result<u64> {
@@ -373,83 +520,7 @@ impl KeyBackend for MpcKeyBackend {
 
     async fn run_mpc_operation(&self, operation: MpcOperation, initiator: &str) -> Result<Vec<u8>> {
         operation.validate(&self.manifest, initiator)?;
-        let MpcOperationPayload::SignK256(payload) = &operation.payload;
-        let digest = payload.digest();
-        let local_protocol_index: u16 = operation
-            .participants
-            .iter()
-            .position(|node| node == &self.node_id)
-            .context("local node is not an MPC participant")?
-            .try_into()
-            .context("MPC participant index overflow")?;
-        let keygen_indexes = operation
-            .participants
-            .iter()
-            .map(|node| {
-                self.manifest
-                    .members
-                    .iter()
-                    .position(|member| &member.node_id == node)
-                    .context("MPC participant is not in manifest")?
-                    .try_into()
-                    .context("MPC keygen index overflow")
-            })
-            .collect::<Result<Vec<u16>>>()?;
-        let own_keygen_index = self
-            .manifest
-            .members
-            .iter()
-            .position(|member| member.node_id == self.node_id)
-            .context("local node is not in manifest")?;
-        ensure!(
-            usize::from(self.k256_share.core.i) == own_keygen_index,
-            "K-256 share index does not match manifest ordering"
-        );
-
-        let eid = execution_id(
-            &self.cluster_id,
-            operation.epoch,
-            CggmpCurve::K256,
-            operation
-                .session_id
-                .as_slice()
-                .try_into()
-                .context("invalid MPC session ID")?,
-        );
-        let context = DriverContext {
-            session_id: operation.session_id.as_slice().try_into()?,
-            epoch: operation.epoch,
-            protocol: MpcProtocol::SignK256,
-            request_hash: operation.request_hash.as_slice().try_into()?,
-            local_node_id: self.node_id.clone(),
-            participants: operation.participants.clone(),
-            expires_at: operation.expires_at,
-            poll_interval: Duration::from_millis(10),
-        };
-        let share = self.k256_share.clone();
-        let transport = self.transport.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut rng = OsRng;
-            let data =
-                DataToSign::from_scalar(Scalar::<Secp256k1>::from_be_bytes_mod_order(digest));
-            let state = cggmp21::signing(
-                ExecutionId::new(&eid),
-                local_protocol_index,
-                &keygen_indexes,
-                &share,
-            )
-            .sign_sync(&mut rng, data);
-            let signature = drive_state_machine_blocking(
-                state,
-                &BlockingHttpTransport::new(transport, tokio::runtime::Handle::current()),
-                context,
-            )??;
-            let mut encoded = vec![0u8; cggmp21::Signature::<Secp256k1>::serialized_len()];
-            signature.write_to_slice(&mut encoded);
-            Ok(encoded)
-        })
-        .await
-        .context("MPC signing worker panicked")?
+        self.execute_once(operation, initiator).await
     }
 
     async fn export_root_keys(&self) -> Result<(String, Vec<u8>)> {

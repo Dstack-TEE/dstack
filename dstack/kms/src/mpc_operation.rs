@@ -13,6 +13,7 @@ use crate::mpc_identity::EpochManifest;
 
 const REQUEST_DOMAIN: &[u8] = b"dstack-mpc-operation-v1";
 const MAX_SIGN_MESSAGE_BYTES: usize = 1024 * 1024;
+const MAX_OPERATION_TTL_SECS: u64 = 300;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct K256SignPayload {
@@ -134,7 +135,12 @@ impl MpcOperation {
             indexes.windows(2).all(|pair| pair[0] < pair[1]),
             "MPC participants must be unique and in manifest order"
         );
-        ensure!(self.expires_at >= unix_time()?, "MPC operation expired");
+        let now = unix_time()?;
+        ensure!(self.expires_at >= now, "MPC operation expired");
+        ensure!(
+            self.expires_at - now <= MAX_OPERATION_TTL_SECS,
+            "MPC operation expiration exceeds maximum TTL"
+        );
         match &self.payload {
             MpcOperationPayload::SignK256(payload) => payload.validate()?,
         }
