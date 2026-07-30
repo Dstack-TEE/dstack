@@ -884,10 +884,7 @@ impl App {
                     vm.state = old_state; // Preserve the existing state with statistics
                 }
                 None => {
-                    // This is a new VM, need to occupy its CID if it wasn't allocated
-                    if !cids_assigned.contains_key(&vm_id) {
-                        states.cid_pool.occupy(cid)?;
-                    }
+                    // Assigned CIDs were occupied above, while allocate() reserves a new CID.
                     let mut vm_state = VmState::new(vm_config);
                     vm_state.state.runtime_networks = runtime_networks;
                     states.add(vm_state);
