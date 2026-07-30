@@ -339,16 +339,28 @@ struct GatewayKeyStore {
 }
 
 impl GatewayKeyStore {
-    fn load() -> Option<Self> {
-        let content = fs::read_to_string(GATEWAY_CACHE_PATH).ok()?;
+    fn load_from(path: &Path) -> Option<Self> {
+        let content = fs::read_to_string(path).ok()?;
         serde_json::from_str(&content).ok()
     }
 
-    fn save(&self) -> Result<()> {
+    fn load() -> Option<Self> {
+        Self::load_from(Path::new(GATEWAY_CACHE_PATH))
+    }
+
+    fn save_to(&self, path: &Path) -> Result<()> {
         let content = serde_json::to_string(self).context("Failed to serialize gateway cache")?;
-        safe_write_with_mode(GATEWAY_CACHE_PATH, &content, 0o600)
-            .context("Failed to write gateway cache")?;
+        safe_write_with_mode(path, &content, 0o600).context("Failed to write gateway cache")?;
         Ok(())
+    }
+
+    fn save(&self) -> Result<()> {
+        self.save_to(Path::new(GATEWAY_CACHE_PATH))
+    }
+
+    fn is_cert_valid_at(&self, now: u64) -> bool {
+        // Valid if at least 10 minutes remaining.
+        now.saturating_add(600) < self.cert_not_after
     }
 
     fn is_cert_valid(&self) -> bool {
@@ -356,9 +368,45 @@ impl GatewayKeyStore {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        // Valid if at least 10 minutes remaining
-        now + 600 < self.cert_not_after
+        self.is_cert_valid_at(now)
     }
+}
+
+fn gateway_rpc_url(base: &str) -> String {
+    let base = base.trim_end_matches('/');
+    if base.ends_with("/prpc") {
+        base.to_string()
+    } else {
+        format!("{base}/prpc")
+    }
+}
+
+async fn register_first_available_gateway<T, F, Fut>(
+    gateway_urls: &[String],
+    mut register: F,
+) -> Result<T>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    if gateway_urls.is_empty() {
+        bail!("Missing gateway urls");
+    }
+    let mut first_error = None;
+    for gateway_url in gateway_urls {
+        let gateway_url = gateway_url.trim_end_matches('/').to_string();
+        match register(gateway_url).await {
+            Ok(response) => return Ok(response),
+            Err(err) => {
+                warn!("Failed to register CVM: {err:?}, retrying with next dstack-gateway");
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+            }
+        }
+    }
+    Err(first_error.unwrap_or_else(|| anyhow!("unknown error")))
+        .context("Failed to register CVM, all dstack-gateway urls are down")
 }
 
 struct GatewayContext<'a> {
@@ -378,7 +426,7 @@ impl<'a> GatewayContext<'a> {
         client_key: &str,
         client_cert: &str,
     ) -> Result<GatewayClient<RaClient>> {
-        let url = format!("{}/prpc", gateway_url);
+        let url = gateway_rpc_url(gateway_url);
         let ca_cert = self.keys.ca_cert.clone();
         let cert_validator = AppIdValidator {
             allowed_app_id: self.keys.gateway_app_id.clone(),
@@ -559,28 +607,12 @@ impl<'a> GatewayContext<'a> {
             warn!("failed to save gateway cache: {e:?}");
         }
 
-        if self.shared.sys_config.gateway_urls.is_empty() {
-            bail!("Missing gateway urls");
-        }
-        // Read config and make API call
-        let response = 'out: {
-            let mut error = anyhow!("unknown error");
-            for (i, url) in self.shared.sys_config.gateway_urls.iter().enumerate() {
-                let response = self.register_cvm(url, &key_store).await;
-                match response {
-                    Ok(response) => {
-                        break 'out response;
-                    }
-                    Err(err) => {
-                        warn!("Failed to register CVM: {err:?}, retrying with next dstack-gateway");
-                        if i == 0 {
-                            error = err;
-                        }
-                    }
-                }
-            }
-            return Err(error).context("Failed to register CVM, all dstack-gateway urls are down");
-        };
+        // Read config and make the API call against the first healthy gateway.
+        let response = register_first_available_gateway(
+            &self.shared.sys_config.gateway_urls,
+            |gateway_url| async move { self.register_cvm(&gateway_url, &key_store).await },
+        )
+        .await?;
         let mut wg_info = response.wg.context("Missing wg info")?;
 
         let client_ip = &wg_info.client_ip;
@@ -3572,5 +3604,125 @@ mod kms_provider_inventory_tests {
         assert!(validate_key_provider_inputs(KeyProviderKind::None, &no_urls).is_ok());
         let error = validate_key_provider_inputs(KeyProviderKind::Kms, &no_urls).unwrap_err();
         assert!(error.to_string().contains("No KMS URLs are set"));
+    }
+}
+
+
+#[cfg(test)]
+mod gateway_registration_refresh_tests {
+    use super::{gateway_rpc_url, register_first_available_gateway, GatewayKeyStore};
+    use anyhow::anyhow;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::sync::{Arc, Mutex};
+
+    fn key_store(cert_not_after: u64) -> GatewayKeyStore {
+        GatewayKeyStore {
+            client_cert: "sentinel-client-cert".into(),
+            client_cert_with_quote: "sentinel-quoted-cert".into(),
+            client_key: "sentinel-client-key".into(),
+            cert_not_after,
+            wg_sk: "sentinel-wg-private".into(),
+            wg_pk: "sentinel-wg-public".into(),
+        }
+    }
+
+    #[test]
+    fn gateway_rpc_urls_are_normalized_once() {
+        assert_eq!(gateway_rpc_url("https://gateway.test"), "https://gateway.test/prpc");
+        assert_eq!(gateway_rpc_url("https://gateway.test/"), "https://gateway.test/prpc");
+        assert_eq!(gateway_rpc_url("https://gateway.test/prpc"), "https://gateway.test/prpc");
+        assert_eq!(gateway_rpc_url("https://gateway.test/prpc/"), "https://gateway.test/prpc");
+    }
+
+    #[test]
+    fn key_store_round_trip_is_private_and_stable() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("gateway-cache.json");
+        let original = key_store(10_000);
+        original.save_to(&path).unwrap();
+        assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        let loaded = GatewayKeyStore::load_from(&path).unwrap();
+        assert_eq!(loaded.wg_sk, original.wg_sk);
+        assert_eq!(loaded.wg_pk, original.wg_pk);
+        assert_eq!(loaded.client_key, original.client_key);
+    }
+
+    #[test]
+    fn malformed_replacement_does_not_overwrite_working_cache() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("gateway-cache.json");
+        let original = key_store(10_000);
+        original.save_to(&path).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let invalid_target = directory.path().join("missing-parent/cache.json");
+        assert!(key_store(20_000).save_to(&invalid_target).is_ok());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        std::fs::write(&path, b"not-json").unwrap();
+        assert!(GatewayKeyStore::load_from(&path).is_none());
+    }
+
+    #[test]
+    fn certificate_refresh_boundary_is_strict_and_overflow_safe() {
+        assert!(key_store(1_601).is_cert_valid_at(1_000));
+        assert!(!key_store(1_600).is_cert_valid_at(1_000));
+        assert!(!key_store(u64::MAX).is_cert_valid_at(u64::MAX));
+    }
+
+    #[tokio::test]
+    async fn ordered_outage_wrong_identity_and_malformed_fail_over() {
+        let urls = ["outage", "wrong-identity", "malformed", "healthy"]
+            .map(|name| format!("https://{name}.test/"));
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let observed = attempts.clone();
+        let response = register_first_available_gateway(&urls, move |url| {
+            observed.lock().unwrap().push(url.clone());
+            async move {
+                if url.contains("healthy") { Ok("stable-instance") }
+                else { Err(anyhow!("injected registration failure")) }
+            }
+        }).await.unwrap();
+        assert_eq!(response, "stable-instance");
+        assert_eq!(attempts.lock().unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn first_success_short_circuits_and_all_failed_preserves_first_error() {
+        let healthy = ["first".to_string(), "must-not-run".to_string()];
+        let attempts = Arc::new(Mutex::new(0));
+        let observed = attempts.clone();
+        register_first_available_gateway(&healthy, move |_| {
+            *observed.lock().unwrap() += 1;
+            async { Ok::<_, anyhow::Error>(()) }
+        }).await.unwrap();
+        assert_eq!(*attempts.lock().unwrap(), 1);
+
+        let failed = ["first".to_string(), "second".to_string()];
+        let error = register_first_available_gateway::<(), _, _>(&failed, |url| async move {
+            Err(anyhow!("failure-at-{url}"))
+        }).await.unwrap_err();
+        assert!(format!("{error:#}").contains("failure-at-first"));
+    }
+
+    #[tokio::test]
+    async fn concurrent_refreshes_have_isolated_selection_state() {
+        let urls = ["down".to_string(), "healthy".to_string()];
+        let refresh = || async {
+            register_first_available_gateway(&urls, |url| async move {
+                if url == "healthy" { Ok(url) } else { Err(anyhow!("down")) }
+            }).await
+        };
+        let (left, right) = tokio::join!(refresh(), refresh());
+        assert_eq!(left.unwrap(), "healthy");
+        assert_eq!(right.unwrap(), "healthy");
+    }
+
+    #[tokio::test]
+    async fn empty_gateway_inventory_fails_closed() {
+        let error = register_first_available_gateway::<(), _, _>(&[], |_| async {
+            panic!("registration must not run");
+            #[allow(unreachable_code)]
+            Ok(())
+        }).await.unwrap_err();
+        assert!(error.to_string().contains("Missing gateway urls"));
     }
 }
