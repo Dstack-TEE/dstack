@@ -8,11 +8,13 @@ import openApiSpec from './openapi.json';
 // Mock viem
 const mockReadContract = vi.fn();
 const mockGetChainId = vi.fn();
+const mockGetBlockNumber = vi.fn();
 
 vi.mock('viem', () => ({
   createPublicClient: vi.fn(() => ({
     readContract: mockReadContract,
     getChainId: mockGetChainId,
+    getBlockNumber: mockGetBlockNumber,
   })),
   http: vi.fn(),
   getContract: vi.fn(),
@@ -26,6 +28,8 @@ beforeAll(async () => {
   process.env.ETH_RPC_URL = 'http://localhost:8545';
   process.env.KMS_CONTRACT_ADDR = '0x1234567890123456789012345678901234567890';
   process.env.PORT = '3001';
+  process.env.ETH_CHAIN_ID = '1337';
+  process.env.ETH_FINALITY_CONFIRMATIONS = '2';
 
   // Import the app after mocking
   const indexModule = await import('./index.ts');
@@ -35,6 +39,8 @@ beforeAll(async () => {
 beforeEach(() => {
   // Reset mocks before each test
   vi.clearAllMocks();
+  mockGetChainId.mockResolvedValue(1337);
+  mockGetBlockNumber.mockResolvedValue(100n);
 });
 
 describe('API Compatibility Tests', () => {
@@ -478,6 +484,83 @@ describe('Authorization freshness and domain binding', () => {
       throw new Error(`unexpected function ${params.functionName}`);
     });
     const recovered = await postApp();
+    expect(await recovered.json()).toMatchObject({ isAllowed: true, reason: 'recovered' });
+  });
+});
+
+
+describe('Ethereum finalized snapshot authorization', () => {
+  const requestBody = {
+    mrAggregated: '0x' + '11'.repeat(32),
+    osImageHash: '0x' + '22'.repeat(32),
+    appId: '0x' + '33'.repeat(20),
+    composeHash: '0x' + '44'.repeat(32),
+    instanceId: '0x' + '55'.repeat(20),
+    deviceId: '0x' + '66'.repeat(32),
+  };
+
+  const authorize = () => appFetch(new Request('http://localhost:3001/bootAuth/app', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody),
+  }));
+
+  it('reads the decision and gateway identity from one confirmation-depth snapshot', async () => {
+    mockGetBlockNumber.mockResolvedValue(100n);
+    mockReadContract.mockImplementation((params) => {
+      expect(params.blockNumber).toBe(98n);
+      if (params.functionName === 'isAppAllowed') return [true, 'finalized allow'];
+      if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      throw new Error(`unexpected function ${params.functionName}`);
+    });
+
+    const response = await authorize();
+    expect(await response.json()).toMatchObject({ isAllowed: true, reason: 'finalized allow' });
+    expect(mockGetBlockNumber).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-evaluates the canonical finalized snapshot after a short reorg', async () => {
+    mockGetBlockNumber.mockResolvedValueOnce(100n).mockResolvedValueOnce(101n);
+    let decisions = 0;
+    const observedBlocks: bigint[] = [];
+    mockReadContract.mockImplementation((params) => {
+      if (params.functionName === 'isAppAllowed') {
+        observedBlocks.push(params.blockNumber);
+        decisions += 1;
+        return decisions === 1 ? [true, 'old canonical allow'] : [false, 'new canonical deny'];
+      }
+      if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      throw new Error(`unexpected function ${params.functionName}`);
+    });
+
+    const before = await authorize();
+    const after = await authorize();
+    expect(await before.json()).toMatchObject({ isAllowed: true });
+    expect(await after.json()).toMatchObject({ isAllowed: false, reason: 'new canonical deny' });
+    expect(observedBlocks).toEqual([98n, 99n]);
+  });
+
+  it.each([
+    ['wrong chain', () => mockGetChainId.mockResolvedValue(1)],
+    ['stale head', () => mockGetBlockNumber.mockResolvedValue(1n)],
+    ['head timeout', () => mockGetBlockNumber.mockRejectedValue(new Error('timeout'))],
+  ])('fails closed for %s and recovers without retained decisions', async (_name, inject) => {
+    inject();
+    const failed = await authorize();
+    expect(await failed.json()).toEqual({
+      isAllowed: false,
+      gatewayAppId: '',
+      reason: 'authorization backend unavailable',
+    });
+
+    mockGetChainId.mockResolvedValue(1337);
+    mockGetBlockNumber.mockResolvedValue(102n);
+    mockReadContract.mockImplementation((params) => {
+      if (params.functionName === 'isAppAllowed') return [true, 'recovered'];
+      if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      throw new Error(`unexpected function ${params.functionName}`);
+    });
+    const recovered = await authorize();
     expect(await recovered.json()).toMatchObject({ isAllowed: true, reason: 'recovered' });
   });
 });
