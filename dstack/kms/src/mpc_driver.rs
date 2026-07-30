@@ -520,4 +520,84 @@ mod tests {
             serde_json::to_vec(&share.shared_public_key()).unwrap() == public_key
         }));
     }
+
+    #[tokio::test]
+    async fn drives_real_threshold_signature_over_authenticated_envelopes() {
+        use cggmp21::{generic_ec::Scalar, security_level::SecurityLevel128, DataToSign};
+        use k256::ecdsa::{signature::hazmat::PrehashVerifier, Signature, VerifyingKey};
+
+        let shares = cggmp21::trusted_dealer::builder::<Secp256k1, SecurityLevel128>(3)
+            .set_threshold(Some(2))
+            .generate_shares(&mut OsRng)
+            .unwrap();
+        let manifest = manifest();
+        let routers: Arc<BTreeMap<String, Arc<SessionRouter>>> = Arc::new(
+            manifest
+                .members
+                .iter()
+                .map(|member| {
+                    (
+                        member.node_id.clone(),
+                        Arc::new(
+                            SessionRouter::new(manifest.clone(), 8, Duration::from_secs(30))
+                                .unwrap(),
+                        ),
+                    )
+                })
+                .collect(),
+        );
+        let participants = vec!["kms-1".to_string(), "kms-3".to_string()];
+        let session_id = [31; 32];
+        let request_hash = [32; 32];
+        let expires_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 30;
+        let digest = [33u8; 32];
+        let eid = execution_id("test-cluster", 1, CggmpCurve::K256, &session_id);
+        let sign = |protocol_index: u16, keygen_index: usize| {
+            let local = participants[usize::from(protocol_index)].clone();
+            let transport = MemoryTransport {
+                local: local.clone(),
+                routers: routers.clone(),
+            };
+            let context = DriverContext {
+                session_id,
+                epoch: 1,
+                protocol: MpcProtocol::SignK256,
+                request_hash,
+                local_node_id: local,
+                participants: participants.clone(),
+                expires_at,
+                poll_interval: Duration::from_millis(1),
+            };
+            async {
+                let mut rng = OsRng;
+                let data =
+                    DataToSign::from_scalar(Scalar::<Secp256k1>::from_be_bytes_mod_order(digest));
+                let keygen_indexes = [0, 2];
+                let state = cggmp21::signing(
+                    ExecutionId::new(&eid),
+                    protocol_index,
+                    &keygen_indexes,
+                    &shares[keygen_index],
+                )
+                .sign_sync(&mut rng, data);
+                drive_state_machine(state, &transport, context)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            }
+        };
+        let (first, second) = tokio::join!(sign(0, 0), sign(1, 2));
+        assert_eq!(first, second);
+        let mut encoded = [0u8; 64];
+        first.write_to_slice(&mut encoded);
+        let signature = Signature::from_slice(&encoded).unwrap();
+        let public_key =
+            VerifyingKey::from_sec1_bytes(shares[0].shared_public_key().to_bytes(true).as_bytes())
+                .unwrap();
+        public_key.verify_prehash(&digest, &signature).unwrap();
+    }
 }

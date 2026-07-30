@@ -53,7 +53,7 @@ dstack-verifier = { workspace = true, default-features = false }
 dstack-mr.workspace = true
 dstack-attest.workspace = true
 dstack-api-auth.workspace = true
-cggmp21.workspace = true
+cggmp21 = { workspace = true, features = ["spof"] }
 round-based.workspace = true
 
 [dev-dependencies]
