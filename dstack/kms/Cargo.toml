@@ -35,6 +35,7 @@ reqwest = { workspace = true, features = ["json"] }
 sha2.workspace = true
 sha3.workspace = true
 k256.workspace = true
+p256 = { workspace = true, features = ["hash2curve"] }
 rand.workspace = true
 dstack-guest-agent-rpc.workspace = true
 http-client = { workspace = true, features = ["prpc"] }

@@ -30,6 +30,7 @@ mod mpc_operation;
 mod mpc_service;
 mod mpc_session;
 mod onboard_service;
+mod threshold_prf;
 
 fn app_version() -> String {
     dstack_build_info::app_version!()
