@@ -1,0 +1,12 @@
+{
+  "environment": {
+    "DSTACK_TEST_IMAGE_STORE": "/var/lib/dstack-test/candidate-images",
+    "DSTACK_TEST_SSH_GITHUB_USER": "kvinwang",
+    "DSTACK_TEST_STATE_ROOT": "/home/kvin/.cache/dts",
+    "DSTACK_TEST_GUEST_IMAGE": "dstack-mkosi-8ad941e8b",
+    "DSTACK_TEST_NO_TEE_GUEST_IMAGE": "dstack-dev-mkosi-4b5b3c58d"
+  },
+  "environment_path_prepend": [
+    "/home/kvin/.cargo/bin"
+  ]
+}

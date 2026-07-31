@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0",
+  "reason": "promoted against automation/passed-rpc-case.py without being added to its case table; every rerun raised KeyError",
+  "detected_by": "dstack-test verify-registry",
+  "cases": [
+    {
+      "case_id": "tc-gw-admin-003",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "automation/passed-rpc-case.py",
+      "environment": "ISOLATED",
+      "notes": "Admin.Exit returns Empty then delayed process stop (500ms)"
+    },
+    {
+      "case_id": "tc-gw-admin-015",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "automation/passed-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "Admin.GetDnsCredential multi-step PASS after DNS create path; not empty-RPC harness"
+    },
+    {
+      "case_id": "tc-gw-admin-017",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "automation/passed-rpc-case.py",
+      "environment": "ISOLATED",
+      "notes": "Admin.UpdateDnsCredential upsert + camelCase/snake_case; promoted after batch13 PASS on aliases+upsert binary"
+    },
+    {
+      "case_id": "tc-gw-admin-025",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gw-certificat-003",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "automation/passed-rpc-case.py",
+      "environment": "ISOLATED",
+      "notes": "DNS credential CRUD + default selection PASS"
+    },
+    {
+      "case_id": "tc-gw-cluster-ad-004",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gw-cluster-ad-007",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "automation/passed-rpc-case.py",
+      "environment": "ISOLATED",
+      "notes": "Admin Exit delayed success + dashboard health PASS"
+    },
+    {
+      "case_id": "tc-gw-gateway-001",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-ver-tools-006",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    }
+  ]
+}
