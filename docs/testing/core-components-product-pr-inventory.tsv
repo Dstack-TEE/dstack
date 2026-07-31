@@ -1,6 +1,4 @@
 pr	title	head	base	dependency	url
-842	fix(os): omit built-in FUSE module package	codex/fix-os-fuse-package	master		https://github.com/Dstack-TEE/dstack/pull/842
-843	fix(os): fail multi-flavor builds on first error	codex/fix-os-multiflavor-failure	master		https://github.com/Dstack-TEE/dstack/pull/843
 844	fix(simulator): support current FUSE soname	codex/fix-simulator-fuse-soname	master		https://github.com/Dstack-TEE/dstack/pull/844
 845	fix(simulator): tolerate udev TPM node race	codex/fix-simulator-udev-tpm-race	master		https://github.com/Dstack-TEE/dstack/pull/845
 846	fix(simulator): wait for GCP vTPM readiness	codex/fix-simulator-gcp-vtpm-readiness	master		https://github.com/Dstack-TEE/dstack/pull/846
@@ -128,3 +126,4 @@ pr	title	head	base	dependency	url
 968	fix(vmm): bound automatic restart retries	codex/fix-vmm-restart-policy	master		https://github.com/Dstack-TEE/dstack/pull/968
 969	[STACKED on #845] fix(simulator): publish the TPM resource-manager device	codex/fix-simulator-tpm-resource-manager	codex/fix-simulator-udev-tpm-race	#845	https://github.com/Dstack-TEE/dstack/pull/969
 970	[STACKED on #968] fix(vmm): retain the serial boot delimiter at the cap	codex/fix-vmm-serial-log-cap	codex/fix-vmm-restart-policy	#968	https://github.com/Dstack-TEE/dstack/pull/970
+976	fix(simulator): provide TDX configfs without a kernel provider	codex/fix-simulator-tdx-configfs-shadow	master		https://github.com/Dstack-TEE/dstack/pull/976
