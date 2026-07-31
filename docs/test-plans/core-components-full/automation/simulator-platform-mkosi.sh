@@ -46,7 +46,7 @@ write_config() {
     --arg platform "$1" \
     --arg seed "${2:-$SEED}" \
     --arg mr '{"version":3,"app_id":"","compose_hash":"","key_provider":"none"}' \
-    '{platform:$platform,mock_attestation_seed:$seed,create_tpm_device_node:false,collateral_base_url:"http://127.0.0.1:18088",mr_config:$mr,vm_config:"{}"}' \
+    '{platform:$platform,mock_attestation_seed:$seed,collateral_base_url:"http://127.0.0.1:18088",mr_config:$mr,vm_config:"{}"}' \
     >"$ROOT/config.json"
 }
 start_fuse() {
