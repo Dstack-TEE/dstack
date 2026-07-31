@@ -1,8 +1,8 @@
 pr	state	title	head	base	dependency	url
 842	MERGED	fix(os): omit built-in FUSE module package	codex/fix-os-fuse-package	master		https://github.com/Dstack-TEE/dstack/pull/842
 843	MERGED	fix(os): fail multi-flavor builds on first error	codex/fix-os-multiflavor-failure	master		https://github.com/Dstack-TEE/dstack/pull/843
-844	OPEN	fix(simulator): support current FUSE soname	codex/fix-simulator-fuse-soname	master		https://github.com/Dstack-TEE/dstack/pull/844
-845	OPEN	fix(simulator): tolerate udev TPM node race	codex/fix-simulator-udev-tpm-race	master		https://github.com/Dstack-TEE/dstack/pull/845
+844	MERGED	fix(simulator): support current FUSE soname	codex/fix-simulator-fuse-soname	master		https://github.com/Dstack-TEE/dstack/pull/844
+845	OPEN	fix(simulator): configure TPM device-node ownership	codex/fix-simulator-udev-tpm-race	master		https://github.com/Dstack-TEE/dstack/pull/845
 846	OPEN	fix(simulator): wait for GCP vTPM readiness	codex/fix-simulator-gcp-vtpm-readiness	master		https://github.com/Dstack-TEE/dstack/pull/846
 847	OPEN	fix(os): install TPM device TCTI for simulator	codex/fix-os-simulator-tpm-tcti	master		https://github.com/Dstack-TEE/dstack/pull/847
 848	OPEN	fix(simulator): expose GCP TPM event log	codex/fix-simulator-gcp-event-log	master		https://github.com/Dstack-TEE/dstack/pull/848
