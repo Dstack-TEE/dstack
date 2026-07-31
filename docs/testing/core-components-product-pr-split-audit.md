@@ -6,7 +6,7 @@ This document records the completion gates for replacing monolithic product PR #
 
 The authoritative split-PR inventory is
 [`core-components-product-pr-inventory.tsv`](core-components-product-pr-inventory.tsv).
-It lists 129 product PRs (#842 through #970), including each head branch, GitHub base,
+It lists 130 product PRs (#842 through #970 plus #976), including each head branch, GitHub base,
 and explicit dependency for every stacked PR.
 
 The per-commit inventory is
@@ -17,7 +17,7 @@ It classifies all 332 historical commits from #840.
 
 The final audit applies these gates:
 
-1. Every PR number from #842 through #970 exists and is open.
+1. Every PR from #842 through #970 plus #976 exists and is open.
 2. Every accounting target branch exists remotely and has an open PR.
 3. Every direct PR is based on `master`.
 4. Every non-`master` PR title starts with `[STACKED on #NNN]`, where `#NNN`
