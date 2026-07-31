@@ -2161,6 +2161,7 @@ dependencies = [
  "libc",
  "libloading",
  "mock-attestation",
+ "nix 0.29.0",
  "nsm-qvl",
  "pem",
  "reqwest",

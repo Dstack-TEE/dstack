@@ -132,6 +132,7 @@ pub fn start_gcp_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
         return Err(error).context("GCP vTPM did not become ready");
     }
     replay_fixture_event_log()?;
+    install_fixture_event_log()?;
 
     let template_with_size = state_dir.join("ak.tpm2b-public");
     let generated_public = state_dir.join("ak.public");
@@ -228,6 +229,37 @@ fn replay_fixture_event_log() -> Result<()> {
     Ok(())
 }
 
+fn install_fixture_event_log() -> Result<()> {
+    let security_root = Path::new("/sys/kernel/security");
+    let event_log = security_root.join("tpm0/binary_bios_measurements");
+    if event_log.exists() {
+        return Ok(());
+    }
+    let tpm_dir = event_log.parent().context("TPM event log has no parent")?;
+    // securityfs does not permit userspace to create a synthetic TPM event
+    // log hierarchy. Shadow it in this development-only guest before
+    // publishing the fixture that was replayed into the simulated PCRs.
+    let flags = nix::mount::MsFlags::MS_NOSUID
+        | nix::mount::MsFlags::MS_NODEV
+        | nix::mount::MsFlags::MS_NOEXEC;
+    nix::mount::mount(
+        Some("dstack-tee-simulator"),
+        security_root,
+        Some("tmpfs"),
+        flags,
+        Some("mode=0755"),
+    )
+    .context("failed to mount simulated securityfs shadow")?;
+    fs_err::create_dir_all(tpm_dir)
+        .context("failed to create TPM event-log directory in securityfs shadow")?;
+    fs_err::write(
+        event_log,
+        include_bytes!("../../cc-eventlog/samples/tpm_eventlog.bin"),
+    )
+    .context("failed to install simulated TPM event log")?;
+    Ok(())
+}
+
 fn create_tpm_device_node() -> Result<()> {
     if Path::new("/dev/tpm0").exists() {
         return Ok(());
@@ -276,12 +308,15 @@ pub fn run_nitro_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
     let generator = NsmGenerator::from_seed(parse_seed(seed)?)?;
     let (mut simulator, swtpm_stream) = UnixStream::pair()?;
     let swtpm_fd = swtpm_stream.as_raw_fd();
-    let flags = unsafe { libc::fcntl(swtpm_fd, libc::F_GETFD) };
-    anyhow::ensure!(flags >= 0, "failed to get swtpm socket flags");
-    anyhow::ensure!(
-        unsafe { libc::fcntl(swtpm_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } >= 0,
-        "failed to make swtpm socket inheritable"
+    let flags = nix::fcntl::FdFlag::from_bits_truncate(
+        nix::fcntl::fcntl(swtpm_fd, nix::fcntl::FcntlArg::F_GETFD)
+            .context("failed to get swtpm socket flags")?,
     );
+    nix::fcntl::fcntl(
+        swtpm_fd,
+        nix::fcntl::FcntlArg::F_SETFD(flags - nix::fcntl::FdFlag::FD_CLOEXEC),
+    )
+    .context("failed to make swtpm socket inheritable")?;
 
     let state_dir = std::env::temp_dir().join(format!("dstack-nitro-swtpm-{}", std::process::id()));
     fs_err::create_dir_all(&state_dir)?;
