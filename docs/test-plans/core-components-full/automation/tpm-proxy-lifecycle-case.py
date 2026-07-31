@@ -17,7 +17,14 @@ SIM=$ROOT/dstack-tee-simulator
 UTIL=$ROOT/dstack-util
 SEED1=7171717171717171717171717171717171717171717171717171717171717171
 SEED2=7272727272727272727272727272727272727272727272727272727272727272
-mkdir -p "$ROOT"
+MKNOD=$(command -v mknod)
+mkdir -p "$ROOT/no-mknod"
+cat >"$ROOT/no-mknod/mknod" <<'NOMKNOD'
+#!/bin/sh
+printf 'unexpected mknod: %s\n' "$*" >>/run/dstack-test-tpm/unexpected-mknod.log
+exit 97
+NOMKNOD
+chmod 0755 "$ROOT/no-mknod/mknod"
 cleanup() {
   set +e
   test -s "$ROOT/simulator.pid" && kill "$(cat "$ROOT/simulator.pid")" 2>/dev/null
@@ -47,18 +54,20 @@ reset_tpm() {
   chmod 0666 /dev/vtpmx
 }
 write_config() {
-  printf '{"platform":"%s","mock_attestation_seed":"%s","collateral_base_url":"http://127.0.0.1:18088"}\n' "$1" "$2" > "$ROOT/config.json"
+  printf '{"platform":"%s","mock_attestation_seed":"%s","create_tpm_device_node":%s,"collateral_base_url":"http://127.0.0.1:18088"}\n' "$1" "$2" "$3" > "$ROOT/config.json"
 }
 start_gcp() {
   reset_tpm
-  write_config dstack-gcp-tdx "$1"
-  "$SIM" --config "$ROOT/config.json" --mountpoint "$ROOT/tsm" --runtime-dir "$ROOT/runtime" --dmi-root "$ROOT/dmi" >"$ROOT/simulator.log" 2>&1 &
+  write_config dstack-gcp-tdx "$1" false
+  rm -f "$ROOT/unexpected-mknod.log"
+  PATH="$ROOT/no-mknod:$PATH" "$SIM" --config "$ROOT/config.json" --mountpoint "$ROOT/tsm" --runtime-dir "$ROOT/runtime" --dmi-root "$ROOT/dmi" >"$ROOT/simulator.log" 2>&1 &
   echo $! >"$ROOT/simulator.pid"
   for i in $(seq 1 200); do
     if test -e /dev/tpmrm0 \
       && TPM2TOOLS_TCTI=device:/dev/tpmrm0 tpm2_pcrread sha256:0 >/dev/null 2>&1 \
       && TPM2TOOLS_TCTI=device:/dev/tpmrm0 tpm2_nvreadpublic 0x01c10003 >/dev/null 2>&1 \
       && TPM2TOOLS_TCTI=device:/dev/tpmrm0 tpm2_nvreadpublic 0x01c10002 >/dev/null 2>&1; then
+      test ! -e "$ROOT/unexpected-mknod.log"
       return
     fi
     kill -0 "$(cat "$ROOT/simulator.pid")" 2>/dev/null || { cat "$ROOT/simulator.log" >&2; return 1; }
@@ -127,6 +136,19 @@ test -s "$ROOT/quote-retry.bin"
 start_gcp "$SEED2"
 tpm2_nvread -C o 0x01c10002 -o "$ROOT/ak-cert-adjacent.der"
 ! cmp -s "$ROOT/ak-cert-first.der" "$ROOT/ak-cert-adjacent.der"
+# Explicit simulator ownership must fail closed instead of adopting a node
+# that already exists. This is configuration-driven; no path probe may turn
+# the conflicting node into success.
+reset_tpm
+"$MKNOD" /dev/tpm0 c 1 3
+write_config dstack-gcp-tdx "$SEED1" true
+set +e
+"$SIM" --config "$ROOT/config.json" --mountpoint "$ROOT/tsm" --runtime-dir "$ROOT/runtime" --dmi-root "$ROOT/dmi" >"$ROOT/owner-conflict.log" 2>&1
+OWNER_CONFLICT_RC=$?
+set -e
+test "$OWNER_CONFLICT_RC" -ne 0
+rm -f /dev/tpm0
+
 python3 - <<PYJSON
 import hashlib,json,pathlib
 r=pathlib.Path("$ROOT")
@@ -136,7 +158,9 @@ print(json.dumps({
  "malformed_returncode":$MALFORMED_RC,"oversized_returncode":$OVERSIZED_RC,
  "disconnect_reconnect":True,"persistent_restart":True,"ephemeral_restart":True,
  "dependency_fault_returncode":$FAULT_RC,"concurrent_requests":16,"retry":True,
- "adjacent_identity":True,"pcr_sha256":digest("pcr-first.txt"),
+ "adjacent_identity":True,"system_owned_skipped_mknod":True,
+ "simulator_owned_conflict_returncode":$OWNER_CONFLICT_RC,
+ "pcr_sha256":digest("pcr-first.txt"),
  "quote_sha256":digest("quote-first.bin"),"primary_ak_sha256":digest("ak-cert-first.der"),
  "adjacent_ak_sha256":digest("ak-cert-adjacent.der")
 },sort_keys=True))
