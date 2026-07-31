@@ -1,0 +1,114 @@
+{
+  "candidate_commit": "757e0062e",
+  "cleanup_ok": true,
+  "image": "dstack-mkosi-repro-a-19a0b20cd",
+  "image_metadata_sha256": "ec173190c70f8d7e97387799c3c3b1c50e0621a8eff158370645923d1533e17d",
+  "mkosi_build_tested": false,
+  "rows": [
+    {
+      "diagnostic_tail": "er=dstack,product=dstack -device vhost-vsock-pci,guest-cid=1000 -virtfs local,path=<case-root>/dry-run/work/shared,mount_tag=host-shared,readonly=on,security_model=mapped,id=virtfs0 -machine q35,kernel-irqchip=split,hpet=off -smp 1 -m 1024M -append console=ttyS0 init=/init panic=1 net.ifnames=0 biosdevname=0 mce=off oops=panic pci=noearly pci=nommconf random.trust_cpu=y random.trust_bootloader=n tsc=reliable no-kvmclock dstack.rootfs_hash=605bce0d4d4bed1a8ba622fd14293db924877acee5dc06155d9a6b550961f92d dstack.rootfs_size=713695232\n# Dry run mode - QEMU command not executed\n# To execute, run: --one-shot <case-root>/dry-run/vm.json (without --dry-run)\n",
+      "dry_run": true,
+      "failure_returned_to_caller": false,
+      "generated": [
+        "hda.img",
+        "shared/.instance_info",
+        "shared/.sys-config.json",
+        "shared/app-compose.json",
+        "vm-manifest.json",
+        "vm-state.json"
+      ],
+      "malformed": false,
+      "name": "dry-run",
+      "qemu_command_reported": true,
+      "returncode": 0
+    },
+    {
+      "diagnostic_tail": "ts/one-shot/success/work/hda.img,if=none,id=hd1 -device virtio-blk-pci,drive=hd1 -netdev user,id=net0,net=10.0.2.0/24,dhcpstart=10.0.2.10,restrict=no -device virtio-net-pci,netdev=net0,mac=e6:a9:d7:a1:e7:57 -smbios type=1,manufacturer=dstack,product=dstack -device vhost-vsock-pci,guest-cid=1000 -virtfs local,path=<case-root>/success/work/shared,mount_tag=host-shared,readonly=on,security_model=mapped,id=virtfs0 -machine q35,kernel-irqchip=split,hpet=off -smp 1 -m 1024M -append console=ttyS0 init=/init panic=1 net.ifnames=0 biosdevname=0 mce=off oops=panic pci=noearly pci=nommconf random.trust_cpu=y random.trust_bootloader=n tsc=reliable no-kvmclock dstack.rootfs_hash=605bce0d4d4bed1a8ba622fd14293db924877acee5dc06155d9a6b550961f92d dstack.rootfs_size=713695232\n# Executing QEMU...\n# QEMU execution completed successfully\n",
+      "dry_run": false,
+      "failure_returned_to_caller": false,
+      "generated": [
+        "hda.img",
+        "shared/.instance_info",
+        "shared/.sys-config.json",
+        "shared/app-compose.json",
+        "stderr.log",
+        "stdout.log",
+        "vm-manifest.json",
+        "vm-state.json"
+      ],
+      "malformed": false,
+      "name": "success",
+      "qemu_command_reported": true,
+      "returncode": 0
+    },
+    {
+      "diagnostic_tail": "dhcpstart=10.0.2.10,restrict=no -device virtio-net-pci,netdev=net0,mac=5e:9f:cb:99:85:43 -smbios type=1,manufacturer=dstack,product=dstack -device vhost-vsock-pci,guest-cid=1000 -virtfs local,path=<case-root>/workload-failure/work/shared,mount_tag=host-shared,readonly=on,security_model=mapped,id=virtfs0 -machine q35,kernel-irqchip=split,hpet=off -smp 1 -m 1024M -append console=ttyS0 init=/init panic=1 net.ifnames=0 biosdevname=0 mce=off oops=panic pci=noearly pci=nommconf random.trust_cpu=y random.trust_bootloader=n tsc=reliable no-kvmclock dstack.rootfs_hash=605bce0d4d4bed1a8ba622fd14293db924877acee5dc06155d9a6b550961f92d dstack.rootfs_size=713695232\n# Executing QEMU...\n# QEMU exited with status: exit status: 7\n# Try running with --dry-run to check the generated command\nError: QEMU exited with status: exit status: 7\n",
+      "dry_run": false,
+      "failure_returned_to_caller": true,
+      "generated": [
+        "hda.img",
+        "shared/.instance_info",
+        "shared/.sys-config.json",
+        "shared/app-compose.json",
+        "stderr.log",
+        "stdout.log",
+        "vm-manifest.json",
+        "vm-state.json"
+      ],
+      "malformed": false,
+      "name": "workload-failure",
+      "qemu_command_reported": true,
+      "returncode": 1
+    },
+    {
+      "diagnostic_tail": "2026-07-29T03:15:49.023213Z  INFO dstack_vmm::config: QEMU path: <case-root>/qemu-success\n2026-07-29T03:15:49.024245Z  INFO dstack_vmm::config: Detected QEMU version: 9.2.0\n# Allocated CID: 1000 (found 23 existing QEMU VMs with CIDs: [90001, 1004, 1011, 1002, 1008, 1013, 1006, 1005, 90002, 90008, 90003, 90004, 90005, 90006, 90007, 90009, 80002, 90010, 64211001, 53873001, 36443002, 56937001, 80001])\n# One-shot VM execution mode\n# Configuration: <case-root>/malformed-compose/vm.json\nError: invalid app compose JSON\n\nCaused by:\n    key must be a string at line 1 column 2\n",
+      "dry_run": true,
+      "failure_returned_to_caller": true,
+      "generated": [],
+      "malformed": true,
+      "name": "malformed-compose",
+      "qemu_command_reported": false,
+      "returncode": 1
+    },
+    {
+      "diagnostic_tail": "t/concurrent-a/work/hda.img,if=none,id=hd1 -device virtio-blk-pci,drive=hd1 -netdev user,id=net0,net=10.0.2.0/24,dhcpstart=10.0.2.10,restrict=no -device virtio-net-pci,netdev=net0,mac=b2:75:59:be:81:f1 -smbios type=1,manufacturer=dstack,product=dstack -device vhost-vsock-pci,guest-cid=1000 -virtfs local,path=<case-root>/concurrent-a/work/shared,mount_tag=host-shared,readonly=on,security_model=mapped,id=virtfs0 -machine q35,kernel-irqchip=split,hpet=off -smp 1 -m 1024M -append console=ttyS0 init=/init panic=1 net.ifnames=0 biosdevname=0 mce=off oops=panic pci=noearly pci=nommconf random.trust_cpu=y random.trust_bootloader=n tsc=reliable no-kvmclock dstack.rootfs_hash=605bce0d4d4bed1a8ba622fd14293db924877acee5dc06155d9a6b550961f92d dstack.rootfs_size=713695232\n# Executing QEMU...\n# QEMU execution completed successfully\n",
+      "dry_run": false,
+      "failure_returned_to_caller": false,
+      "generated": [
+        "hda.img",
+        "shared/.instance_info",
+        "shared/.sys-config.json",
+        "shared/app-compose.json",
+        "stderr.log",
+        "stdout.log",
+        "vm-manifest.json",
+        "vm-state.json"
+      ],
+      "malformed": false,
+      "name": "concurrent-a",
+      "qemu_command_reported": true,
+      "returncode": 0
+    },
+    {
+      "diagnostic_tail": "t/concurrent-b/work/hda.img,if=none,id=hd1 -device virtio-blk-pci,drive=hd1 -netdev user,id=net0,net=10.0.2.0/24,dhcpstart=10.0.2.10,restrict=no -device virtio-net-pci,netdev=net0,mac=ee:67:83:b8:a6:89 -smbios type=1,manufacturer=dstack,product=dstack -device vhost-vsock-pci,guest-cid=1000 -virtfs local,path=<case-root>/concurrent-b/work/shared,mount_tag=host-shared,readonly=on,security_model=mapped,id=virtfs0 -machine q35,kernel-irqchip=split,hpet=off -smp 1 -m 1024M -append console=ttyS0 init=/init panic=1 net.ifnames=0 biosdevname=0 mce=off oops=panic pci=noearly pci=nommconf random.trust_cpu=y random.trust_bootloader=n tsc=reliable no-kvmclock dstack.rootfs_hash=605bce0d4d4bed1a8ba622fd14293db924877acee5dc06155d9a6b550961f92d dstack.rootfs_size=713695232\n# Executing QEMU...\n# QEMU execution completed successfully\n",
+      "dry_run": false,
+      "failure_returned_to_caller": false,
+      "generated": [
+        "hda.img",
+        "shared/.instance_info",
+        "shared/.sys-config.json",
+        "shared/app-compose.json",
+        "stderr.log",
+        "stdout.log",
+        "vm-manifest.json",
+        "vm-state.json"
+      ],
+      "malformed": false,
+      "name": "concurrent-b",
+      "qemu_command_reported": true,
+      "returncode": 0
+    }
+  ],
+  "sentinel_unchanged": true,
+  "vm_started": false
+}
