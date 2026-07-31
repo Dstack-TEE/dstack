@@ -1,7 +1,7 @@
 commit	subject	disposition	target
 275031817	fix(os): omit built-in FUSE module package	RETAINED	codex/fix-os-fuse-package
 83ec8739b	fix(os): fail multi-flavor builds on first error	RETAINED	codex/fix-os-multiflavor-failure
-dc549cfaa	fix(simulator): support current FUSE soname	RETAINED	codex/fix-simulator-fuse-soname
+dc549cfaa	fix(simulator): support current FUSE soname	MANUAL	codex/fix-simulator-fuse-soname,codex/fix-simulator-tdx-configfs-shadow
 52befa748	fix(simulator): tolerate udev TPM node race	RETAINED	codex/fix-simulator-tpm-resource-manager,codex/fix-simulator-udev-tpm-race
 450e51b8d	fix(simulator): wait for GCP vTPM readiness	RETAINED	codex/fix-simulator-gcp-vtpm-readiness
 dc0a1cf2e	fix(os): install TPM device TCTI for simulator	RETAINED	codex/fix-os-simulator-tpm-tcti
@@ -26,7 +26,7 @@ d3ce0365f	fix(simulator): notify after NSM registration	RETAINED	codex/fix-simul
 ef923dcee	fix(guest): skip TDX config check on Nitro Enclave	RETAINED	codex/fix-nitro-enclave-platform-detection
 764e798c5	test(fixtures): require mkosi guest images	TEST_ONLY	move/account in test-infrastructure PR
 a85d8bfa0	fix(guest): avoid ZFS cache writes on immutable root	REVERTED	net-zero historical pair
-a7d524d39	Revert "fix(guest): avoid ZFS cache writes on immutable root"	REVERTED	net-zero historical pair
+a7d524d39	"Revert ""fix(guest): avoid ZFS cache writes on immutable root"""	REVERTED	net-zero historical pair
 88466ed3d	fix(guest): report ZFS pool creation errors	RETAINED	codex/fix-guest-zfs-pool-errors,codex/fix-guest-zfs-root-mountpoint
 57f430e76	fix(guest): disable the ZFS pool root mountpoint	RETAINED	codex/fix-guest-zfs-root-mountpoint
 0fc9488c9	fix(os/mkosi): install the volume helper	RETAINED	codex/fix-mkosi-volume-helper
@@ -34,7 +34,7 @@ a30fd23eb	fix(os/mkosi): stage the volume helper	RETAINED	codex/fix-mkosi-volume
 5a895283c	fix(os/mkosi): enable Docker IPv4 NAT modules	RETAINED	codex/fix-mkosi-docker-ipv4-nat
 dbfd6f385	fix(os/mkosi): use current xtables NAT symbols	RETAINED	codex/fix-mkosi-docker-ipv4-nat
 6a06b1a54	fix(vmm): stop VM launchers gracefully through SvStop	REVERTED	net-zero historical pair
-63d402278	Revert "fix(vmm): stop VM launchers gracefully through SvStop"	REVERTED	net-zero historical pair
+63d402278	"Revert ""fix(vmm): stop VM launchers gracefully through SvStop"""	REVERTED	net-zero historical pair
 a72084da2	fix(vmm): reap VM launcher children on SvStop	RETAINED	codex/fix-vmm-svstop-child-reaping
 93fccce42	fix(vmm): keep SvStop unknown IDs rejected	RETAINED	codex/fix-vmm-svstop-child-reaping
 0f1748cd4	fix(vmm): resize uninitialized stopped VM manifests	RETAINED	codex/fix-vmm-resize-validation,codex/fix-vmm-stopped-manifest-resize
@@ -116,7 +116,7 @@ b3376f90a	fix(supervisor): serialize UDS auto-start	RETAINED	codex/feat-supervis
 b81b946de	fix(simulator): publish TPM resource manager device	RETAINED	codex/fix-simulator-tpm-resource-manager
 0b4ba7576	fix(simulator): reject occupied mountpoints	RETAINED	codex/fix-simulator-occupied-mountpoints
 989b0a3a2	fix(simulator): await NitroTPM resource manager	REVERTED	net-zero historical pair
-e60f1295d	Revert "fix(simulator): await NitroTPM resource manager"	REVERTED	net-zero historical pair
+e60f1295d	"Revert ""fix(simulator): await NitroTPM resource manager"""	REVERTED	net-zero historical pair
 106675ecd	fix(attest): commit event log after measurement	RETAINED	codex/fix-attest-event-log-order
 d0df60ecc	fix(util): reject oversized quote input	RETAINED	codex/fix-util-quote-size-limit
 53f415ec7	fix(util): honor quote report sys config	RETAINED	codex/fix-util-quote-report-config
@@ -147,7 +147,7 @@ ea7df8e4f	fix(vmm): enforce configured ID pool bounds	RETAINED	codex/fix-vmm-id-
 f66520780	test(vmm): cover ID pool concurrency and reconstruction	RETAINED	codex/fix-vmm-id-pool-bounds
 57e5a947e	fix(vmm): confine image artifacts to image root	RETAINED	codex/fix-vmm-image-artifact-confinement
 1c3484071	test(vmm): cover image metadata trust boundaries	RETAINED	codex/fix-vmm-image-artifact-confinement
-82e577885	Revert "test(vmm): cover image metadata trust boundaries"	RETAINED	codex/fix-vmm-image-artifact-confinement
+82e577885	"Revert ""test(vmm): cover image metadata trust boundaries"""	RETAINED	codex/fix-vmm-image-artifact-confinement
 4b46ac606	test(vmm): cover image metadata trust boundaries	RETAINED	codex/fix-vmm-image-artifact-confinement
 aab82dcb1	fix(vmm): retain image boundary diagnostics	RETAINED	codex/fix-vmm-image-artifact-confinement
 f90878de7	fix(vmm): enforce image artifact confinement	RETAINED	codex/fix-vmm-image-artifact-confinement
@@ -217,9 +217,9 @@ a2c781b96	test(gateway): exercise concurrent counter guards	TEST_ONLY	move/accou
 2f66441f5	test(gateway): make RPC route separation explicit	REVERTED	net-zero historical pair
 4b588c521	fix(gateway): retain Rocket main entrypoint	REVERTED	net-zero historical pair
 3c770d0bb	fix(test): compare RPC route paths	REVERTED	net-zero historical pair
-50f4bc1a0	Revert "fix(test): compare RPC route paths"	REVERTED	net-zero historical pair
-4cac05854	Revert "fix(gateway): retain Rocket main entrypoint"	REVERTED	net-zero historical pair
-dfe49ef18	Revert "test(gateway): make RPC route separation explicit"	REVERTED	net-zero historical pair
+50f4bc1a0	"Revert ""fix(test): compare RPC route paths"""	REVERTED	net-zero historical pair
+4cac05854	"Revert ""fix(gateway): retain Rocket main entrypoint"""	REVERTED	net-zero historical pair
+dfe49ef18	"Revert ""test(gateway): make RPC route separation explicit"""	REVERTED	net-zero historical pair
 aa66f6713	fix(gateway): publish debug keys safely	RETAINED	codex/fix-gateway-debug-key-publication
 83df122a6	fix(test): consume debug key workers	RETAINED	codex/fix-gateway-debug-key-publication
 d40f42ede	fix(gateway): write TLS material privately	MANUAL	codex/fix-gateway-private-tls-material
