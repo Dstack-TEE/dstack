@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::ffi::{CString, OsStr};
+use std::ffi::OsStr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -207,8 +207,8 @@ impl TdxSimulatorFs {
     fn new(generator: Arc<TdxGenerator>) -> Result<Self> {
         Ok(Self {
             state: SimulatorState::new(generator, CCEL_FIXTURE, None)?,
-            uid: unsafe { libc::geteuid() },
-            gid: unsafe { libc::getegid() },
+            uid: nix::unistd::geteuid().as_raw(),
+            gid: nix::unistd::getegid().as_raw(),
         })
     }
 
@@ -448,24 +448,43 @@ pub(crate) fn ensure_configfs_mount(mountpoint: &Path) -> Result<()> {
     }
 
     if !mountpoint.is_dir() {
-        let source = CString::new("configfs")?;
-        let target = CString::new("/sys/kernel/config")?;
-        let fstype = CString::new("configfs")?;
-        let rc = unsafe {
-            libc::mount(
-                source.as_ptr(),
-                target.as_ptr(),
-                fstype.as_ptr(),
-                libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
-                std::ptr::null(),
-            )
-        };
-        if rc != 0 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::EBUSY) {
+        let flags = nix::mount::MsFlags::MS_NOSUID
+            | nix::mount::MsFlags::MS_NODEV
+            | nix::mount::MsFlags::MS_NOEXEC;
+        if let Err(error) = nix::mount::mount(
+            Some("configfs"),
+            "/sys/kernel/config",
+            Some("configfs"),
+            flags,
+            None::<&str>,
+        ) {
+            if error != nix::errno::Errno::EBUSY {
                 return Err(error).context("failed to mount configfs");
             }
         }
+    }
+    // configfs rejects arbitrary directories when no kernel TSM provider has
+    // registered the `tsm` subsystem. In a no-TEE development guest the
+    // simulator is that provider, so shadow the otherwise-empty configfs with
+    // a private tmpfs and create the userspace ABI hierarchy there.
+    if let Err(error) = std::fs::create_dir_all(mountpoint) {
+        if !matches!(error.raw_os_error(), Some(libc::EPERM) | Some(libc::EACCES)) {
+            return Err(error)
+                .with_context(|| format!("failed to create {}", mountpoint.display()));
+        }
+        let flags = nix::mount::MsFlags::MS_NOSUID
+            | nix::mount::MsFlags::MS_NODEV
+            | nix::mount::MsFlags::MS_NOEXEC;
+        nix::mount::mount(
+            Some("dstack-tee-simulator"),
+            "/sys/kernel/config",
+            Some("tmpfs"),
+            flags,
+            Some("mode=0755"),
+        )
+        .context("failed to mount simulator configfs shadow")?;
+        std::fs::create_dir_all(mountpoint)
+            .with_context(|| format!("failed to create {}", mountpoint.display()))?;
     }
     if !mountpoint.is_dir() {
         bail!(
