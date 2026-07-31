@@ -6,7 +6,7 @@
 //!
 //! Provides low-level communication with TPM devices via /dev/tpmrm0 or /dev/tpm0.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
@@ -95,7 +95,8 @@ impl TpmDevice {
                 stream
                     .read_exact(&mut header)
                     .context("failed to read TPM response header")?;
-                let response_size = u32::from_be_bytes(header[2..6].try_into().unwrap()) as usize;
+                let response_size =
+                    u32::from_be_bytes([header[2], header[3], header[4], header[5]]) as usize;
                 if !(header.len()..=TPM_MAX_COMMAND_SIZE).contains(&response_size) {
                     bail!("invalid TPM response size: {response_size}");
                 }
