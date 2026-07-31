@@ -383,6 +383,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stream_transport_reads_a_framed_response() {
+        use std::os::unix::net::UnixStream;
+        use std::thread;
+
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let command = TpmCommand::new(TpmCc::GetRandom).finalize();
+        let command_len = command.len();
+        let server_thread = thread::spawn(move || {
+            let mut received = vec![0; command_len];
+            server.read_exact(&mut received).unwrap();
+            let response = TpmResponse {
+                tag: TpmSt::NoSessions,
+                response_code: 0,
+                data: vec![0, 0],
+            }
+            .to_bytes();
+            server.write_all(&response[..10]).unwrap();
+            server.write_all(&response[10..]).unwrap();
+        });
+
+        let mut device = TpmDevice::from_stream(client, "test stream");
+        let response = device.execute(&command).unwrap();
+        assert!(response.is_success());
+        assert_eq!(response.data, [0, 0]);
+        server_thread.join().unwrap();
+    }
+
+    #[test]
     fn adds_a_vendor_command_to_command_capabilities() {
         let response = TpmResponse {
             tag: TpmSt::NoSessions,
