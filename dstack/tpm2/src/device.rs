@@ -294,6 +294,17 @@ impl TpmResponse {
         }
     }
 
+    /// Serialize this response back to TPM wire format.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let size = 10 + self.data.len();
+        let mut response = Vec::with_capacity(size);
+        response.extend_from_slice(&self.tag.to_u16().to_be_bytes());
+        response.extend_from_slice(&(size as u32).to_be_bytes());
+        response.extend_from_slice(&self.response_code.to_be_bytes());
+        response.extend_from_slice(&self.data);
+        response
+    }
+
     /// Get a response buffer for parsing the data
     pub fn data_buffer(&self) -> ResponseBuffer<'_> {
         ResponseBuffer::new(&self.data)
@@ -309,9 +320,75 @@ impl TpmResponse {
     }
 }
 
+/// Add a command to a successful TPM_CAP_COMMANDS response.
+///
+/// Responses for other capabilities, TPM errors, and paginated command lists
+/// are returned unchanged.
+pub fn add_command_capability(response: &[u8], command_code: u32) -> Result<Vec<u8>> {
+    let mut response = TpmResponse::parse(response)?;
+    if !response.is_success() {
+        return Ok(response.to_bytes());
+    }
+    let mut buf = response.data_buffer();
+    let more_data = buf.get_u8()? != 0;
+    let capability = buf.get_u32()?;
+    if capability != TpmCap::Commands as u32 || more_data {
+        return Ok(response.to_bytes());
+    }
+    let count = buf.get_u32()? as usize;
+    let mut attributes = Vec::with_capacity(count + 1);
+    for _ in 0..count {
+        attributes.push(buf.get_u32()?);
+    }
+    if attributes.contains(&command_code) {
+        return Ok(response.to_bytes());
+    }
+    const COMMAND_INDEX_AND_VENDOR_MASK: u32 = 0x2000_ffff;
+    let sort_key = command_code & COMMAND_INDEX_AND_VENDOR_MASK;
+    let insertion = attributes
+        .iter()
+        .position(|attributes| attributes & COMMAND_INDEX_AND_VENDOR_MASK > sort_key)
+        .unwrap_or(attributes.len());
+    attributes.insert(insertion, command_code);
+
+    let mut data = Vec::with_capacity(9 + attributes.len() * 4);
+    data.push(u8::from(more_data));
+    data.extend_from_slice(&(TpmCap::Commands as u32).to_be_bytes());
+    data.extend_from_slice(&(attributes.len() as u32).to_be_bytes());
+    for attributes in attributes {
+        data.extend_from_slice(&attributes.to_be_bytes());
+    }
+    response.data = data;
+    Ok(response.to_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adds_a_vendor_command_to_command_capabilities() {
+        let response = TpmResponse {
+            tag: TpmSt::NoSessions,
+            response_code: 0,
+            data: [
+                &[0],
+                &(TpmCap::Commands as u32).to_be_bytes(),
+                &1u32.to_be_bytes(),
+                &0x2000_1000u32.to_be_bytes(),
+            ]
+            .concat(),
+        }
+        .to_bytes();
+        let response = add_command_capability(&response, 0x2000_0001).unwrap();
+        let response = TpmResponse::parse(&response).unwrap();
+        let mut data = response.data_buffer();
+        assert_eq!(data.get_u8().unwrap(), 0);
+        assert_eq!(data.get_u32().unwrap(), TpmCap::Commands as u32);
+        assert_eq!(data.get_u32().unwrap(), 2);
+        assert_eq!(data.get_u32().unwrap(), 0x2000_0001);
+        assert_eq!(data.get_u32().unwrap(), 0x2000_1000);
+    }
 
     #[test]
     fn test_command_builder() {
