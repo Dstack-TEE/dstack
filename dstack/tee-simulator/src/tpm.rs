@@ -6,7 +6,6 @@
 //! template and certificate NV indices consumed by `tpm-attest`.
 
 use std::{
-    ffi::CString,
     io::{Read, Write},
     os::{
         fd::{AsRawFd, FromRawFd},
@@ -225,23 +224,17 @@ fn install_fixture_event_log() -> Result<()> {
     // securityfs does not permit userspace to create a synthetic TPM event
     // log hierarchy. Shadow it in this development-only guest before
     // publishing the fixture that was replayed into the simulated PCRs.
-    let source = CString::new("dstack-tee-simulator")?;
-    let target = CString::new("/sys/kernel/security")?;
-    let fstype = CString::new("tmpfs")?;
-    let data = CString::new("mode=0755")?;
-    let rc = unsafe {
-        libc::mount(
-            source.as_ptr(),
-            target.as_ptr(),
-            fstype.as_ptr(),
-            libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
-            data.as_ptr().cast(),
-        )
-    };
-    if rc != 0 {
-        return Err(std::io::Error::last_os_error())
-            .context("failed to mount simulated securityfs shadow");
-    }
+    let flags = nix::mount::MsFlags::MS_NOSUID
+        | nix::mount::MsFlags::MS_NODEV
+        | nix::mount::MsFlags::MS_NOEXEC;
+    nix::mount::mount(
+        Some("dstack-tee-simulator"),
+        security_root,
+        Some("tmpfs"),
+        flags,
+        Some("mode=0755"),
+    )
+    .context("failed to mount simulated securityfs shadow")?;
     fs_err::create_dir_all(tpm_dir)
         .context("failed to create TPM event-log directory in securityfs shadow")?;
     fs_err::write(
