@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "case_id": "tc-vmm-internal-008",
+  "provisional": false,
+  "status": "PASS",
+  "summary": "5 candidate VMM unit rows passed for QEMU and swtpm readiness, bilateral failure cleanup, deadlines, and socket lifecycle.",
+  "steps": [
+    {
+      "id": "tc-vmm-internal-008-step-01",
+      "status": "PASS",
+      "observed": "5 candidate VMM unit rows passed for QEMU and swtpm readiness, bilateral failure cleanup, deadlines, and socket lifecycle."
+    },
+    {
+      "id": "tc-vmm-internal-008-step-02",
+      "status": "PASS",
+      "observed": "5 candidate VMM unit rows passed for QEMU and swtpm readiness, bilateral failure cleanup, deadlines, and socket lifecycle."
+    },
+    {
+      "id": "tc-vmm-internal-008-step-03",
+      "status": "PASS",
+      "observed": "5 candidate VMM unit rows passed for QEMU and swtpm readiness, bilateral failure cleanup, deadlines, and socket lifecycle."
+    },
+    {
+      "id": "tc-vmm-internal-008-step-04",
+      "status": "PASS",
+      "observed": "5 candidate VMM unit rows passed for QEMU and swtpm readiness, bilateral failure cleanup, deadlines, and socket lifecycle."
+    }
+  ],
+  "evidence": [
+    {
+      "path": "artifacts/vmm-internal-unit.json",
+      "sha256": "9550b704096100d5b813414dca61a77899faf8becfc8663bb60f9be8439696fa"
+    }
+  ],
+  "remarks": "The immutable Cargo target is shared across compatible cases; result state and evidence remain case-scoped. No VM or service was started."
+}
