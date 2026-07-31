@@ -17,11 +17,11 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use aws_nitro_enclaves_nsm_api::api::{Request as NsmRequest, Response as NsmResponse};
 use dstack_types::TeeSimulatorConfig;
 use mock_attestation::{nsm::NsmGenerator, parse_seed, server::MockCollateralState};
-use tpm2::{TpmAlgId, TpmCc, TpmContext, add_command_capability};
+use tpm2::{add_command_capability, TpmAlgId, TpmCc, TpmContext};
 
 const AK_ECC_CERT: &str = "0x01c10002";
 const AK_ECC_TEMPLATE: &str = "0x01c10003";

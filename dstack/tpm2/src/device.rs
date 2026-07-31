@@ -7,7 +7,7 @@
 //! Provides low-level communication with TPM devices via /dev/tpmrm0 or /dev/tpm0.
 
 use anyhow::{Context, Result, bail};
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
 
@@ -22,8 +22,13 @@ trait ReadWrite: Read + Write {}
 
 impl<T: Read + Write> ReadWrite for T {}
 
+enum TpmTransport {
+    Device(File),
+    Stream(Box<dyn ReadWrite>),
+}
+
 pub struct TpmDevice {
-    transport: Box<dyn ReadWrite>,
+    transport: TpmTransport,
     path: String,
 }
 
@@ -40,7 +45,7 @@ impl TpmDevice {
             .with_context(|| format!("failed to open TPM device: {}", device_path))?;
 
         Ok(Self {
-            transport: Box::new(file),
+            transport: TpmTransport::Device(file),
             path: device_path.to_string(),
         })
     }
@@ -48,7 +53,7 @@ impl TpmDevice {
     /// Create a TPM device over an already connected byte stream.
     pub fn from_stream(stream: impl Read + Write + 'static, name: impl Into<String>) -> Self {
         Self {
-            transport: Box::new(stream),
+            transport: TpmTransport::Stream(Box::new(stream)),
             path: name.into(),
         }
     }
@@ -69,29 +74,40 @@ impl TpmDevice {
         &self.path
     }
 
-    /// Send a command to the TPM and receive the response
+    /// Send a command to the TPM and receive the response.
     pub fn transmit(&mut self, command: &[u8]) -> Result<Vec<u8>> {
-        self.transport
-            .write_all(command)
-            .context("failed to write TPM command")?;
-
-        // Read the fixed header first so stream transports cannot return a
-        // partial response and leave bytes for the next transaction.
-        let mut header = [0u8; 10];
-        self.transport
-            .read_exact(&mut header)
-            .context("failed to read TPM response header")?;
-        let response_size = u32::from_be_bytes(header[2..6].try_into().unwrap()) as usize;
-        if !(header.len()..=TPM_MAX_COMMAND_SIZE).contains(&response_size) {
-            bail!("invalid TPM response size: {response_size}");
+        match &mut self.transport {
+            TpmTransport::Device(file) => {
+                file.write_all(command)
+                    .context("failed to write TPM command")?;
+                let mut response = vec![0u8; TPM_MAX_COMMAND_SIZE];
+                let size = file
+                    .read(&mut response)
+                    .context("failed to read TPM response")?;
+                response.truncate(size);
+                Ok(response)
+            }
+            TpmTransport::Stream(stream) => {
+                stream
+                    .write_all(command)
+                    .context("failed to write TPM command")?;
+                let mut header = [0u8; 10];
+                stream
+                    .read_exact(&mut header)
+                    .context("failed to read TPM response header")?;
+                let response_size = u32::from_be_bytes(header[2..6].try_into().unwrap()) as usize;
+                if !(header.len()..=TPM_MAX_COMMAND_SIZE).contains(&response_size) {
+                    bail!("invalid TPM response size: {response_size}");
+                }
+                let mut response = Vec::with_capacity(response_size);
+                response.extend_from_slice(&header);
+                response.resize(response_size, 0);
+                stream
+                    .read_exact(&mut response[header.len()..])
+                    .context("failed to read TPM response body")?;
+                Ok(response)
+            }
         }
-        let mut response = Vec::with_capacity(response_size);
-        response.extend_from_slice(&header);
-        response.resize(response_size, 0);
-        self.transport
-            .read_exact(&mut response[header.len()..])
-            .context("failed to read TPM response body")?;
-        Ok(response)
     }
 
     /// Execute a TPM command and parse the response
