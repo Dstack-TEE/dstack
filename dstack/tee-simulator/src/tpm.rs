@@ -21,13 +21,10 @@ use anyhow::{bail, Context, Result};
 use aws_nitro_enclaves_nsm_api::api::{Request as NsmRequest, Response as NsmResponse};
 use dstack_types::TeeSimulatorConfig;
 use mock_attestation::{nsm::NsmGenerator, parse_seed, server::MockCollateralState};
+use tpm2::{add_command_capability, TpmAlgId, TpmCc, TpmContext};
 
 const AK_ECC_CERT: &str = "0x01c10002";
 const AK_ECC_TEMPLATE: &str = "0x01c10003";
-const TPM2_CC_NV_WRITE: u32 = 0x0000_0137;
-const TPM2_CC_NV_DEFINE_SPACE: u32 = 0x0000_012a;
-const TPM2_CC_NV_READ: u32 = 0x0000_014e;
-const TPM2_CC_NV_READ_PUBLIC: u32 = 0x0000_0169;
 const TPM2_CC_AWS_NSM_REQUEST: u32 = 0x2000_0001;
 const VTPM_PROXY_IOC_NEW_DEV: libc::c_ulong = 0xc014_a100;
 const VTPM_PROXY_FLAG_TPM2: u32 = 1;
@@ -425,14 +422,14 @@ fn proxy_tpm_commands(
             let template = nv_write
                 .as_ref()
                 .context("NitroTPM vendor command without an NV request")?;
-            nsm_response = Some(handle_nsm_vendor_command(generator, template)?);
+            nsm_response = Some(handle_nsm_vendor_command(generator, template, backend)?);
             tpm_success_response()
-        } else if code == TPM2_CC_NV_READ && nsm_response.is_some() {
+        } else if code == TpmCc::NvRead.to_u32() && nsm_response.is_some() {
             nv_read_response(
                 &command,
                 nsm_response.as_deref().context("missing NSM response")?,
             )?
-        } else if code == TPM2_CC_NV_READ_PUBLIC && nsm_response.is_some() {
+        } else if code == TpmCc::NvReadPublic.to_u32() && nsm_response.is_some() {
             let mut response = transact(backend, &command)?;
             set_nv_public_size(
                 &mut response,
@@ -447,21 +444,30 @@ fn proxy_tpm_commands(
             // single NV index at 2 KiB. Define the backing index at that limit;
             // the proxy virtualizes its public size and reads after the vendor
             // command, while swtpm still handles its lifecycle and auth setup.
-            if code == TPM2_CC_NV_DEFINE_SPACE && command.ends_with(&8192u16.to_be_bytes()) {
+            if code == TpmCc::NvDefineSpace.to_u32() && command.ends_with(&8192u16.to_be_bytes()) {
                 let end = command.len();
                 command[end - 2..].copy_from_slice(&2048u16.to_be_bytes());
             }
-            if code == TPM2_CC_NV_WRITE {
+            if code == TpmCc::NvWrite.to_u32() {
                 if let Some(template) = parse_nv_write(&command)? {
                     nv_write = Some(template);
                 }
             }
-            transact(backend, &command)?
+            let mut response = transact(backend, &command)?;
+            advertise_nsm_vendor_command(code, &mut response)?;
+            response
         };
         proxy
             .write_all(&response)
             .context("failed to write vTPM response")?;
     }
+}
+
+fn advertise_nsm_vendor_command(code: u32, response: &mut Vec<u8>) -> Result<()> {
+    if code == TpmCc::GetCapability.to_u32() {
+        *response = add_command_capability(response, TPM2_CC_AWS_NSM_REQUEST)?;
+    }
+    Ok(())
 }
 
 fn parse_nv_write(command: &[u8]) -> Result<Option<NvWriteTemplate>> {
@@ -492,14 +498,21 @@ fn parse_nv_write(command: &[u8]) -> Result<Option<NvWriteTemplate>> {
 fn handle_nsm_vendor_command(
     generator: &NsmGenerator,
     template: &NvWriteTemplate,
+    backend: &mut UnixStream,
 ) -> Result<Vec<u8>> {
     let request: NsmRequest = serde_cbor::from_slice(&template.request)?;
     let response = match request {
         NsmRequest::Attestation { user_data, .. } => {
+            let mut tpm = TpmContext::from_stream(
+                backend
+                    .try_clone()
+                    .context("failed to clone NitroTPM stream")?,
+                "NitroTPM backend",
+            );
             let pcrs = [4u16, 7, 8, 12, 14]
                 .into_iter()
-                .map(|i| (i, vec![0; 48]))
-                .collect();
+                .map(|index| Ok((index, tpm.pcr_read_single(index.into(), TpmAlgId::Sha384)?)))
+                .collect::<Result<_>>()?;
             let document = generator.attest_with_pcrs(
                 user_data.as_ref().map(|v| v.as_slice()).unwrap_or_default(),
                 pcrs,
