@@ -295,15 +295,11 @@ misconfiguration or denial of service, but unvalidated ACPI/AML cannot tamper
 with confidential private memory or extract secrets. That residual availability
 risk is already outside dstack's confidentiality/integrity guarantees.
 
-### TCB status is surfaced, not gated, during verification
+### Out-of-date TCBs have a bounded grace period
 
-dstack's `validate_tcb` does not reject a quote based on its TCB status string (`UpToDate`, `OutOfDate`, `ConfigurationNeeded`, `SWHardeningNeeded`, ...). It only enforces hard invariants: debug mode must be off, and the SEAM/service-TD measurements must be well-formed. The verified report carries the `status` field through to the caller.
+dstack applies `dcap-qvl`'s quote policy after cryptographic verification. `UpToDate` is accepted, while platform and quoting-enclave TCB levels reported as `OutOfDate` are accepted for 15 days after the corresponding TCB level's publication date. Once that grace period expires, verification fails. All other TCB statuses, including `ConfigurationNeeded`, `SWHardeningNeeded`, and `Revoked`, are rejected.
 
-This is deliberate: whether a non-current TCB (e.g. `OutOfDate`) is acceptable is a **policy decision that belongs downstream**, not in the verification primitive. Different deployments have different risk tolerances, so the verifier surfaces the status and lets the consuming policy decide. The "TCB status is up-to-date" item in the verification checklist above is exactly such a downstream policy check.
-
-The one case dstack does not leave to downstream is a genuinely invalid TCB: `dcap-qvl` rejects `Revoked` outright (its `is_valid()` returns false only for `Revoked`), so a revoked TCB never reaches the policy layer in the first place.
-
-> **Future work:** this will be refactored toward a grace-period model, where an out-of-date TCB is accepted for a bounded window after a new TCB level is published rather than being a binary downstream decision.
+`validate_tcb` separately enforces hard invariants: debug mode must be off, and the SEAM/service-TD measurements must be well-formed.
 
 ### Development modes are auditable, not production-safe
 
