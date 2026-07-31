@@ -109,12 +109,20 @@ pub fn start_gcp_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
     fs_err::copy(&pid_file, runtime_dir.join("swtpm.pid"))?;
 
     for _ in 0..100 {
-        create_tpm_device_node()?;
-        if Path::new("/dev/tpmrm0").exists() || Path::new("/dev/tpm0").exists() {
+        if update_tpm_device_node(
+            Path::new("/dev/tpm0"),
+            Path::new("/sys/class/tpm/tpm0/dev"),
+            config.create_tpm_device_node,
+            |major, minor| command("mknod", &["/dev/tpm0", "c", major, minor]),
+        )? {
             break;
         }
         thread::sleep(Duration::from_millis(20));
     }
+    anyhow::ensure!(
+        Path::new("/dev/tpm0").exists(),
+        "configured TPM device-node owner did not publish /dev/tpm0"
+    );
     command("tpm2_startup", &["-c"])?;
     replay_fixture_event_log()?;
 
@@ -213,20 +221,31 @@ fn replay_fixture_event_log() -> Result<()> {
     Ok(())
 }
 
-fn create_tpm_device_node() -> Result<()> {
-    if Path::new("/dev/tpm0").exists() {
-        return Ok(());
-    }
-    let sys_dev = Path::new("/sys/class/tpm/tpm0/dev");
+fn update_tpm_device_node<F>(
+    dev_path: &Path,
+    sys_dev: &Path,
+    create: bool,
+    create_node: F,
+) -> Result<bool>
+where
+    F: FnOnce(&str, &str) -> Result<()>,
+{
     if !sys_dev.exists() {
-        return Ok(());
+        return Ok(false);
+    }
+    if !create {
+        return Ok(dev_path.exists());
     }
     let device = fs_err::read_to_string(sys_dev)?;
     let (major, minor) = device
         .trim()
         .split_once(':')
-        .context("invalid /sys/class/tpm/tpm0/dev")?;
-    command("mknod", &["/dev/tpm0", "c", major, minor])
+        .context("invalid TPM sysfs device number")?;
+    // Configuration assigns node ownership to the simulator. A pre-existing
+    // node or a concurrent system-device-manager creation must fail here;
+    // silently adopting it would cross the configured ownership boundary.
+    create_node(major, minor)?;
+    Ok(true)
 }
 
 fn provision_nv(index: &str, contents: &Path) -> Result<()> {
@@ -303,18 +322,22 @@ pub fn run_nitro_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
         result
     });
     let sys_dev = format!("/sys/class/tpm/tpm{tpm_num}/dev");
+    let sys_dev = Path::new(&sys_dev);
     for _ in 0..100 {
-        if Path::new(&sys_dev).exists() {
+        if update_tpm_device_node(
+            Path::new("/dev/tpm0"),
+            sys_dev,
+            config.create_tpm_device_node,
+            |major, minor| command("mknod", &["/dev/tpm0", "c", major, minor]),
+        )? {
             break;
         }
         thread::sleep(Duration::from_millis(10));
     }
-    let device = fs_err::read_to_string(&sys_dev).context("vTPM was not registered")?;
-    let (major, minor) = device
-        .trim()
-        .split_once(':')
-        .context("invalid vTPM device number")?;
-    command("mknod", &["/dev/tpm0", "c", major, minor])?;
+    anyhow::ensure!(
+        Path::new("/dev/tpm0").exists(),
+        "configured TPM device-node owner did not publish /dev/tpm0"
+    );
     sd_notify::notify(true, &[sd_notify::NotifyState::Ready])?;
     let result = proxy_thread
         .join()
@@ -515,4 +538,54 @@ fn transact(stream: &mut UnixStream, command: &[u8]) -> Result<Vec<u8>> {
 
 fn tpm_success_response() -> Vec<u8> {
     [0x80, 0x01, 0, 0, 0, 10, 0, 0, 0, 0].to_vec()
+}
+
+#[cfg(test)]
+mod device_node_tests {
+    use super::*;
+
+    #[test]
+    fn simulator_owned_node_propagates_a_creation_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let sys_dev = dir.path().join("dev");
+        let dev_path = dir.path().join("tpm0");
+        fs_err::write(&sys_dev, "10:20\n").unwrap();
+        fs_err::write(&dev_path, "competing node").unwrap();
+
+        let error = update_tpm_device_node(&dev_path, &sys_dev, true, |major, minor| {
+            assert_eq!((major, minor), ("10", "20"));
+            anyhow::bail!("mknod collision")
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("mknod collision"));
+    }
+
+    #[test]
+    fn system_owned_node_never_calls_the_creator() {
+        let dir = tempfile::tempdir().unwrap();
+        let sys_dev = dir.path().join("dev");
+        let dev_path = dir.path().join("tpm0");
+        fs_err::write(&sys_dev, "10:20\n").unwrap();
+        fs_err::write(&dev_path, "system node").unwrap();
+
+        let ready = update_tpm_device_node(&dev_path, &sys_dev, false, |_, _| {
+            panic!("system-owned mode must not call mknod")
+        })
+        .unwrap();
+        assert!(ready);
+    }
+
+    #[test]
+    fn system_owned_node_waits_until_the_node_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let sys_dev = dir.path().join("dev");
+        let dev_path = dir.path().join("tpm0");
+        fs_err::write(&sys_dev, "10:20\n").unwrap();
+
+        let ready = update_tpm_device_node(&dev_path, &sys_dev, false, |_, _| {
+            panic!("system-owned mode must not call mknod")
+        })
+        .unwrap();
+        assert!(!ready);
+    }
 }

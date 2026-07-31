@@ -922,7 +922,7 @@ impl SysConfig {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, Default)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct TeeSimulatorConfig {
     /// Platform ABI exposed by dstack-tee-simulator. Defaults to `dstack-tdx`.
     #[serde(default)]
@@ -931,6 +931,10 @@ pub struct TeeSimulatorConfig {
     /// and guest simulator must receive the same seed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mock_attestation_seed: Option<String>,
+    /// Whether the simulator owns creation of `/dev/tpm0`. When false, the
+    /// system device manager must publish the node for the registered vTPM.
+    #[serde(default = "default_true")]
+    pub create_tpm_device_node: bool,
     /// Base URL used in mock collateral certificates (AIA/CRL).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collateral_base_url: Option<String>,
@@ -940,6 +944,19 @@ pub struct TeeSimulatorConfig {
     /// JSON serialized VmConfig used to generate mock platform evidence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vm_config: Option<String>,
+}
+
+impl Default for TeeSimulatorConfig {
+    fn default() -> Self {
+        Self {
+            platform: TeeVariant::default(),
+            mock_attestation_seed: None,
+            create_tpm_device_node: true,
+            collateral_base_url: None,
+            mr_config: None,
+            vm_config: None,
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode)]
