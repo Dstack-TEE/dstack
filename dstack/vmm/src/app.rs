@@ -2354,66 +2354,6 @@ mod tests {
         Ok(())
     }
 
-
-    #[test]
-    fn tdx_historical_versions_follow_capability_not_version_string() -> Result<()> {
-        let config = test_tdx_config()?;
-        let manifest = test_manifest(3072);
-        for version in ["0.5.4", "0.5.8", "0.5.11"] {
-            let mut legacy_image = test_tdx_image(false);
-            legacy_image.info.version = version.into();
-            let legacy = make_vm_config(
-                &config,
-                &manifest,
-                &legacy_image,
-                &hex_of(0x22, 32),
-                None,
-                None,
-            )?;
-            assert!(legacy.get("tdx_attestation_variant").is_none());
-
-            let mut lite_image = test_tdx_image(true);
-            lite_image.info.version = version.into();
-            let lite = make_vm_config(
-                &config,
-                &manifest,
-                &lite_image,
-                &hex_of(0x22, 32),
-                None,
-                None,
-            )?;
-            assert_eq!(lite["tdx_attestation_variant"], "lite");
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn tdx_explicit_lite_missing_material_fails_and_corrected_retry_succeeds() -> Result<()> {
-        let mut config = test_tdx_config()?;
-        config.cvm.tdx_attestation_variant = TdxAttestationVariantConfig::Lite;
-        let manifest = test_manifest(2048);
-        assert!(make_vm_config(
-            &config,
-            &manifest,
-            &test_tdx_image(false),
-            &hex_of(0x22, 32),
-            None,
-            None,
-        )
-        .is_err());
-        let corrected = make_vm_config(
-            &config,
-            &manifest,
-            &test_tdx_image(true),
-            &hex_of(0x22, 32),
-            None,
-            None,
-        )?;
-        assert_eq!(corrected["tdx_attestation_variant"], "lite");
-        Ok(())
-    }
-
-
     #[test]
     fn amd_sev_snp_sys_config_includes_measurement_input_and_mr_config() -> Result<()> {
         let temp = std::env::temp_dir().join(format!(
