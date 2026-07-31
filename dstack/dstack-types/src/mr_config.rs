@@ -121,6 +121,10 @@ pub struct MrConfigV3 {
     pub key_provider_id: Option<Vec<u8>>,
     #[serde(default, with = "hex_bytes")]
     pub instance_id: Option<Vec<u8>>,
+    /// Optional SHA-256 pins for init scripts, in execution order. An omitted
+    /// field disables this check; an empty list requires no init scripts.
+    #[serde(default, with = "crate::init_script_hashes::option")]
+    pub init_script_hashes: Option<Vec<Vec<u8>>>,
 }
 
 impl MrConfigV3 {
@@ -140,7 +144,13 @@ impl MrConfigV3 {
             key_provider,
             key_provider_id: (!key_provider_id.is_empty()).then_some(key_provider_id),
             instance_id: (!instance_id.is_empty()).then_some(instance_id),
+            init_script_hashes: None,
         }
+    }
+
+    pub fn with_init_script_hashes(mut self, init_script_hashes: Vec<Vec<u8>>) -> Self {
+        self.init_script_hashes = Some(init_script_hashes);
+        self
     }
 
     pub fn to_snp_host_data(&self) -> [u8; 32] {
@@ -246,6 +256,29 @@ mod tests {
 
         assert!(config.app_id.is_none());
         assert!(!config.to_canonical_json().contains("app_id"));
+        Ok(())
+    }
+
+    #[test]
+    fn mr_config_v3_binds_ordered_init_script_hashes() -> Result<(), Box<dyn Error>> {
+        let config = MrConfigV3::new(
+            vec![0x11; 20],
+            vec![0x22; 32],
+            None,
+            KeyProviderKind::None,
+            Vec::new(),
+            vec![0x44; 20],
+        )
+        .with_init_script_hashes(vec![vec![0xaa; 32], vec![0xbb; 32]]);
+        let document = config.to_canonical_json();
+        let decoded = MrConfigV3::from_document(&document)?;
+
+        assert_eq!(decoded.init_script_hashes, config.init_script_hashes);
+        let reordered = MrConfigV3 {
+            init_script_hashes: Some(vec![vec![0xbb; 32], vec![0xaa; 32]]),
+            ..config.clone()
+        };
+        assert_ne!(config.to_snp_host_data(), reordered.to_snp_host_data());
         Ok(())
     }
 

@@ -98,6 +98,16 @@ The policy must define the boolean rule `data.policy.nv_match`. Its `input` is t
 
 After measuring `compose-hash`, dstack enters the GPU setup gate and JCS-canonicalizes the original `requirements.gpu_policy` JSON value, then measures its SHA-256 digest in a `gpu-policy-hash` event. When the field is absent—including when `requirements` itself is absent—both parsing and measurement use the default empty object `{}`. Thus an omitted policy and an explicit `{}` have the same digest, while any explicitly present field, including an explicit default value, changes the digest. MrConfigV3 GPU launches also carry this digest as the optional `gpu_policy_hash` field; non-GPU launches omit it for compatibility. When the field is present, the guest compares it with the digest computed from app-compose; when it is absent, the guest skips this MrConfigV3 check. The MrConfigV3 document is bound by TDX `MR_CONFIG_ID` or SEV-SNP `HOST_DATA`, so the host cannot substitute a different GPU policy when this optional binding is present without changing the platform launch identity. The typed policy used for enforcement applies omitted-field defaults and rejects unknown fields. If GPU attestation is enabled and NVIDIA GPUs are present, dstack attests them and applies the basic settings and optional Rego policy before setting the GPU ready state. When no attestation claims are produced—because no GPU is attached or `gpu_policy.attest_gpu` is false—Rego is still evaluated with an empty array as `input` before any ready-state transition. This lets an application reject a launch whose attested GPU count is wrong. A false, undefined, malformed, or non-boolean Rego result stops boot before key provisioning.
 
+Up to five init scripts may be configured. Their ordered SHA-256 digests are
+measured as `init-script-hash` runtime events on platforms with a quoted
+runtime register. MrConfigV3 also carries the ordered digest list; on SEV-SNP,
+the signed report's `HOST_DATA` binds the exact canonical MrConfigV3 document.
+An omitted `init_script_hashes` field disables this check,
+while an explicit empty list requires app-compose to contain no init scripts.
+When present, the guest compares the list with hashes computed from app-compose
+before continuing boot. Current VMMs serialize the field explicitly for
+manifest v3 launches, including `init_script_hashes: []` when the list is empty.
+
 The policy digest is remotely verifiable on each supported platform, but through different carriers:
 
 - **TDX:** `gpu-policy-hash` contains the raw 32-byte digest and is measured into RTMR3. Replay the event log and compare the result with the quote's RTMR3, then compare the event payload with the expected digest. When an MrConfigV3 document includes `gpu_policy_hash`, TDX `MR_CONFIG_ID` additionally binds that field.
@@ -114,6 +124,7 @@ For a successful TDX GPU launch, the GPU-relevant RTMR3 event order is:
 
 ```text
 compose-hash
+init-script-hash (zero or more, in configured order)
 gpu-policy-hash
 gpu-attestation
 instance-id

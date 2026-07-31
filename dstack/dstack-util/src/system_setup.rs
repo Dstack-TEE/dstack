@@ -785,6 +785,11 @@ fn verify_manifest_feature_requirements(app_compose: &AppCompose) -> Result<()> 
             "nerdctl-compose requires manifest_version >= {MANIFEST_VERSION_3}; use string manifest_version \"{MANIFEST_VERSION_3}\" so older guests fail closed"
         );
     }
+    if app_compose.init_script.len() > 1 && manifest_version < MANIFEST_VERSION_3 {
+        bail!(
+            "multiple init scripts require manifest_version >= {MANIFEST_VERSION_3}; use string manifest_version \"{MANIFEST_VERSION_3}\" so older guests fail closed"
+        );
+    }
     if app_compose.runner != "nerdctl-compose" && app_compose.snapshotter.is_some() {
         bail!("snapshotter is only supported by the nerdctl-compose runner");
     }
@@ -1969,6 +1974,7 @@ struct AppInfo {
     instance_info: InstanceInfo,
     compose_hash: [u8; 32],
     gpu_policy_hash: [u8; 32],
+    init_script_hashes: Vec<Vec<u8>>,
 }
 
 struct Stage0<'a> {
@@ -2586,6 +2592,16 @@ impl<'a> Stage0<'a> {
         emit_runtime_event("system-preparing", &[])?;
         emit_runtime_event("app-id", &instance_info.app_id)?;
         emit_runtime_event("compose-hash", &compose_hash)?;
+        let init_script_hashes: Vec<Vec<u8>> = self
+            .shared
+            .app_compose
+            .init_script
+            .iter()
+            .map(|script| sha256(script.as_bytes()).to_vec())
+            .collect();
+        for script_hash in &init_script_hashes {
+            emit_runtime_event("init-script-hash", script_hash)?;
+        }
         let gpu_policy_hash = self
             .measure_gpu()
             .await
@@ -2619,6 +2635,7 @@ impl<'a> Stage0<'a> {
             instance_info,
             compose_hash,
             gpu_policy_hash,
+            init_script_hashes,
         })
     }
 
@@ -2626,6 +2643,7 @@ impl<'a> Stage0<'a> {
         config_id_verifier::verify_mr_config_id(
             &app_info.compose_hash,
             &app_info.gpu_policy_hash,
+            &app_info.init_script_hashes,
             &app_info
                 .instance_info
                 .app_id
@@ -3159,6 +3177,19 @@ fn test_nerdctl_compose_requires_v3_manifest() {
     assert!(err.to_string().contains("nerdctl-compose requires"));
 
     app_compose.manifest_version = "3".to_string();
+    verify_manifest_feature_requirements(&app_compose).unwrap();
+}
+
+#[test]
+fn test_multiple_init_scripts_require_v3_manifest() {
+    let mut app_compose = test_app_compose(serde_json::json!(2), None, None);
+    app_compose.init_script = vec!["echo one".into(), "echo two".into()];
+    let err = verify_manifest_feature_requirements(&app_compose).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("multiple init scripts require manifest_version"));
+
+    app_compose.manifest_version = "3".into();
     verify_manifest_feature_requirements(&app_compose).unwrap();
 }
 
