@@ -17,7 +17,7 @@ It classifies all 332 historical commits from #840.
 
 The final audit applies these gates:
 
-1. Every PR from #842 through #970 plus #976 exists and is open.
+1. Every PR from #842 through #970 plus #976 exists; the inventory records whether it is open or merged.
 2. Every accounting target branch exists remotely and has an open PR.
 3. Every direct PR is based on `master`.
 4. Every non-`master` PR title starts with `[STACKED on #NNN]`, where `#NNN`
