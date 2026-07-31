@@ -40,11 +40,12 @@ Include valid values, empty/minimum/maximum values, malformed input, duplicate i
 <a id="tc-gos-setup-015-step-01"></a>
 ### Step 1: Exercise the complete behavior matrix
 
-Send startup, PCR, quote, random, malformed/oversized commands; disconnect/reconnect proxy and restart simulator with/without persistent TPM state.
+Send startup, PCR, quote, random, malformed/oversized commands; disconnect/reconnect proxy and restart simulator with/without persistent TPM state. Run system-owned device-node mode with a failing `mknod` sentinel, then run simulator-owned mode with a conflicting pre-existing node.
 
 **Expected results:**
 
 - TPM framing and responses match expected ABI, PCR/evidence policy is deterministic, invalid commands cannot hang proxy, and persistence follows configuration.
+- `create_tpm_device_node=false` never invokes `mknod` and waits for the system device manager; `create_tpm_device_node=true` fails closed on a node-creation conflict instead of adopting the existing path.
 
 <a id="tc-gos-setup-015-step-02"></a>
 ### Step 2: Verify failure atomicity and recovery
