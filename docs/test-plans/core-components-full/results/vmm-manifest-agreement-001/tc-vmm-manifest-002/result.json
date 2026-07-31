@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "case_id": "tc-vmm-manifest-002",
+  "provisional": false,
+  "status": "PASS",
+  "summary": "6/6 one-shot outcome rows matched",
+  "steps": [
+    {
+      "id": "tc-vmm-manifest-002-step-01",
+      "status": "PASS",
+      "observed": "6/6 one-shot outcome rows matched"
+    },
+    {
+      "id": "tc-vmm-manifest-002-step-02",
+      "status": "PASS",
+      "observed": "6/6 one-shot outcome rows matched"
+    },
+    {
+      "id": "tc-vmm-manifest-002-step-03",
+      "status": "PASS",
+      "observed": "6/6 one-shot outcome rows matched"
+    },
+    {
+      "id": "tc-vmm-manifest-002-step-04",
+      "status": "PASS",
+      "observed": "6/6 one-shot outcome rows matched"
+    }
+  ],
+  "evidence": [
+    {
+      "path": "artifacts/vmm-one-shot-lifecycle.json",
+      "sha256": "4cb62c9b63de5d96e7681972f324cf06aa76ef03af62ce2eef259708631aa4e1"
+    }
+  ],
+  "remarks": "The existing mkosi image was consumed as runtime input; its build was not tested. Controlled case-owned QEMU stubs exercised one-shot outcome propagation without starting a VM."
+}

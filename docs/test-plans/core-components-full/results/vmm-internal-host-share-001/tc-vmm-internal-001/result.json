@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "case_id": "tc-vmm-internal-001",
+  "provisional": false,
+  "status": "PASS",
+  "summary": "4 candidate VMM unit rows passed for host-share FAT32 contents, capacity failures, symlink confinement, and atomic concurrent publication.",
+  "steps": [
+    {
+      "id": "tc-vmm-internal-001-step-01",
+      "status": "PASS",
+      "observed": "4 candidate VMM unit rows passed for host-share FAT32 contents, capacity failures, symlink confinement, and atomic concurrent publication."
+    },
+    {
+      "id": "tc-vmm-internal-001-step-02",
+      "status": "PASS",
+      "observed": "4 candidate VMM unit rows passed for host-share FAT32 contents, capacity failures, symlink confinement, and atomic concurrent publication."
+    },
+    {
+      "id": "tc-vmm-internal-001-step-03",
+      "status": "PASS",
+      "observed": "4 candidate VMM unit rows passed for host-share FAT32 contents, capacity failures, symlink confinement, and atomic concurrent publication."
+    },
+    {
+      "id": "tc-vmm-internal-001-step-04",
+      "status": "PASS",
+      "observed": "4 candidate VMM unit rows passed for host-share FAT32 contents, capacity failures, symlink confinement, and atomic concurrent publication."
+    }
+  ],
+  "evidence": [
+    {
+      "path": "artifacts/vmm-internal-unit.json",
+      "sha256": "dd9b27ea248dda77ed7005bd6a4377e0b99a217e2d0b44ac3bb99581b11ccaef"
+    }
+  ],
+  "remarks": "The immutable Cargo target is shared across compatible cases; result state and evidence remain case-scoped. No VM or service was started."
+}
