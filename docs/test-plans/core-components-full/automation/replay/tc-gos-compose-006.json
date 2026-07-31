@@ -1,0 +1,72 @@
+{
+  "case_id": "tc-gos-compose-006",
+  "remarks": "The recorded VMM CLI advertised no restart subcommand although the case manifest allowed a restart action; equivalent lease-owned stop/start lifecycle commands were used for restart verification. Execution used simulated dstack-tdx, not physical hardware.",
+  "schema_version": "1.0",
+  "source_run": "central-fixtures-20260724T032131Z",
+  "steps": [
+    {
+      "evidence": "Replays the operations that produced: compose-policy-matrix.py was executed once; candidate system_setup policy rows passed and v0.5.4/v0.5.8/v0.5.11 filtered rows exited 0 with recorded refs and commits.",
+      "id": "tc-gos-compose-006-step-01",
+      "observed": "compose-policy-matrix.py was executed once; candidate system_setup policy rows passed and v0.5.4/v0.5.8/v0.5.11 filtered rows exited 0 with recorded refs and commits.",
+      "ops": [
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "dstack-util",
+            "system_setup",
+            "--",
+            "--nocapture"
+          ],
+          "expect": {},
+          "kind": "argv",
+          "label": "command"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "dstack-util",
+            "system_setup",
+            "--",
+            "--nocapture"
+          ],
+          "expect": {},
+          "kind": "argv",
+          "label": "command"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "dstack-util",
+            "system_setup",
+            "--",
+            "--nocapture"
+          ],
+          "expect": {},
+          "kind": "argv",
+          "label": "command"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "dstack-util",
+            "system_setup",
+            "--",
+            "--nocapture"
+          ],
+          "expect": {},
+          "kind": "argv",
+          "label": "command"
+        }
+      ]
+    }
+  ],
+  "summary": "Compose manifest V3 policy matrix passed across candidate and pinned historical rows; the accepted V3 simulator row deployed, reached boot done, preserved identity across restart, and was cleaned up."
+}

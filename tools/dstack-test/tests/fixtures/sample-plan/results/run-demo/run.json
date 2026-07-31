@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0",
+  "id": "run-demo",
+  "anchor": "run-demo",
+  "plan_id": "plan-sample",
+  "status": "COMPLETED",
+  "started_at": "2026-07-23T08:00:00.000Z",
+  "finished_at": "2026-07-23T08:00:10.000Z",
+  "executors": [
+    {
+      "type": "codex",
+      "model": "sample-model"
+    }
+  ],
+  "software_under_test": {
+    "git_revision": "demo"
+  },
+  "environment": {
+    "level": "INTEGRATION"
+  },
+  "summary": {
+    "total": 1,
+    "completed": 1,
+    "by_status": {
+      "PASS": {
+        "count": 1,
+        "case_refs": [
+          "#result-tc-gw-pp-001"
+        ]
+      },
+      "FAIL": {
+        "count": 0,
+        "case_refs": []
+      },
+      "BLOCKED": {
+        "count": 0,
+        "case_refs": []
+      },
+      "NOT_RUN": {
+        "count": 0,
+        "case_refs": []
+      },
+      "SKIPPED": {
+        "count": 0,
+        "case_refs": []
+      }
+    }
+  },
+  "case_results": [
+    {
+      "id": "tc-gw-pp-001",
+      "anchor": "result-tc-gw-pp-001",
+      "status": "PASS",
+      "result_path": "cases/01-gateway/01-proxy-protocol/tc-gw-pp-001/result.json"
+    }
+  ]
+}

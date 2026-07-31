@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0",
+  "run_id": "run-demo",
+  "case_id": "tc-gw-pp-001",
+  "agent": {"type": "codex", "model": "sample-model"},
+  "session": {"format": "codex-jsonl", "path": "session.jsonl", "events": 7},
+  "prompt_path": "prompt.md",
+  "result_path": "result.json",
+  "started_at": "2026-07-23T08:00:00.000Z",
+  "finished_at": "2026-07-23T08:00:10.000Z",
+  "duration_ms": 10000,
+  "exit_code": 0,
+  "result_valid": true,
+  "result_error": null
+}
