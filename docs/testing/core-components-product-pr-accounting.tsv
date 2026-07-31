@@ -2,7 +2,7 @@ commit	subject	disposition	target
 275031817	fix(os): omit built-in FUSE module package	RETAINED	codex/fix-os-fuse-package
 83ec8739b	fix(os): fail multi-flavor builds on first error	RETAINED	codex/fix-os-multiflavor-failure
 dc549cfaa	fix(simulator): support current FUSE soname	MANUAL	codex/fix-simulator-fuse-soname,codex/fix-simulator-tdx-configfs-shadow
-52befa748	fix(simulator): tolerate udev TPM node race	RETAINED	codex/fix-simulator-tpm-resource-manager,codex/fix-simulator-udev-tpm-race
+52befa748	fix(simulator): tolerate udev TPM node race	MANUAL	codex/fix-simulator-udev-tpm-race
 450e51b8d	fix(simulator): wait for GCP vTPM readiness	RETAINED	codex/fix-simulator-gcp-vtpm-readiness
 dc0a1cf2e	fix(os): install TPM device TCTI for simulator	RETAINED	codex/fix-os-simulator-tpm-tcti
 a83750d83	fix(simulator): expose GCP TPM event log	MANUAL	codex/fix-simulator-gcp-event-log
