@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "case_id": "tc-vmm-internal-005",
+  "provisional": false,
+  "status": "PASS",
+  "summary": "4 candidate VMM unit rows passed for VM info optional values, gateway URLs, ports, fallbacks, and networking projections.",
+  "steps": [
+    {
+      "id": "tc-vmm-internal-005-step-01",
+      "status": "PASS",
+      "observed": "4 candidate VMM unit rows passed for VM info optional values, gateway URLs, ports, fallbacks, and networking projections."
+    },
+    {
+      "id": "tc-vmm-internal-005-step-02",
+      "status": "PASS",
+      "observed": "4 candidate VMM unit rows passed for VM info optional values, gateway URLs, ports, fallbacks, and networking projections."
+    },
+    {
+      "id": "tc-vmm-internal-005-step-03",
+      "status": "PASS",
+      "observed": "4 candidate VMM unit rows passed for VM info optional values, gateway URLs, ports, fallbacks, and networking projections."
+    },
+    {
+      "id": "tc-vmm-internal-005-step-04",
+      "status": "PASS",
+      "observed": "4 candidate VMM unit rows passed for VM info optional values, gateway URLs, ports, fallbacks, and networking projections."
+    }
+  ],
+  "evidence": [
+    {
+      "path": "artifacts/vmm-internal-unit.json",
+      "sha256": "7cdf91fd68e73479b442517af167b8e1c75577c4bd8b6c7a76ad1b484f2b7abe"
+    }
+  ],
+  "remarks": "The immutable Cargo target is shared across compatible cases; result state and evidence remain case-scoped. No VM or service was started."
+}
