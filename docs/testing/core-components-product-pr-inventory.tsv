@@ -1,0 +1,130 @@
+pr	title	head	base	dependency	url
+842	fix(os): omit built-in FUSE module package	codex/fix-os-fuse-package	master		https://github.com/Dstack-TEE/dstack/pull/842
+843	fix(os): fail multi-flavor builds on first error	codex/fix-os-multiflavor-failure	master		https://github.com/Dstack-TEE/dstack/pull/843
+844	fix(simulator): support current FUSE soname	codex/fix-simulator-fuse-soname	master		https://github.com/Dstack-TEE/dstack/pull/844
+845	fix(simulator): tolerate udev TPM node race	codex/fix-simulator-udev-tpm-race	master		https://github.com/Dstack-TEE/dstack/pull/845
+846	fix(simulator): wait for GCP vTPM readiness	codex/fix-simulator-gcp-vtpm-readiness	master		https://github.com/Dstack-TEE/dstack/pull/846
+847	fix(os): install TPM device TCTI for simulator	codex/fix-os-simulator-tpm-tcti	master		https://github.com/Dstack-TEE/dstack/pull/847
+848	fix(simulator): expose GCP TPM event log	codex/fix-simulator-gcp-event-log	master		https://github.com/Dstack-TEE/dstack/pull/848
+849	fix(simulator): report live NitroTPM PCR capabilities	codex/fix-simulator-nitrotpm-pcrs	master		https://github.com/Dstack-TEE/dstack/pull/849
+850	fix(vmm): generate simulated SEV-SNP mr_config	codex/fix-vmm-simulated-snp-mr-config	master		https://github.com/Dstack-TEE/dstack/pull/850
+851	fix(vmm): pass cloud image measurements to guests	codex/fix-vmm-cloud-image-measurements	master		https://github.com/Dstack-TEE/dstack/pull/851
+852	fix(simulator): retry interrupted vTPM reads	codex/fix-simulator-interrupted-vtpm-read	master		https://github.com/Dstack-TEE/dstack/pull/852
+853	fix(simulator): stabilize NSM device readiness	codex/fix-simulator-nsm-readiness	master		https://github.com/Dstack-TEE/dstack/pull/853
+854	fix(simulator): identify simulated Nitro Enclave guests	codex/fix-nitro-enclave-platform-detection	master		https://github.com/Dstack-TEE/dstack/pull/854
+855	fix(guest): report ZFS pool creation errors	codex/fix-guest-zfs-pool-errors	master		https://github.com/Dstack-TEE/dstack/pull/855
+856	fix(mkosi): install and stage the volume helper	codex/fix-mkosi-volume-helper	master		https://github.com/Dstack-TEE/dstack/pull/856
+857	fix(mkosi): enable Docker IPv4 NAT modules	codex/fix-mkosi-docker-ipv4-nat	master		https://github.com/Dstack-TEE/dstack/pull/857
+858	fix(vmm): reap VM launcher children on SvStop	codex/fix-vmm-svstop-child-reaping	master		https://github.com/Dstack-TEE/dstack/pull/858
+859	fix(vmm): resize uninitialized stopped VM manifests	codex/fix-vmm-stopped-manifest-resize	master		https://github.com/Dstack-TEE/dstack/pull/859
+860	[STACKED on #855] fix(guest): disable the ZFS pool root mountpoint	codex/fix-guest-zfs-root-mountpoint	codex/fix-guest-zfs-pool-errors	#855	https://github.com/Dstack-TEE/dstack/pull/860
+861	fix(vmm): keep Host API on the private vsock listener	codex/fix-vmm-private-host-api	master		https://github.com/Dstack-TEE/dstack/pull/861
+862	fix(vmm): reject conflicting host port mappings	codex/fix-vmm-host-port-conflicts	master		https://github.com/Dstack-TEE/dstack/pull/862
+863	fix(kms): validate onboarding domains	codex/fix-kms-onboarding-domains	master		https://github.com/Dstack-TEE/dstack/pull/863
+864	fix(guest-agent): report the effective quote prefix	codex/fix-guest-agent-quote-prefix	master		https://github.com/Dstack-TEE/dstack/pull/864
+865	fix(gateway): tolerate an empty handshake cache	codex/fix-gateway-empty-handshakes	master		https://github.com/Dstack-TEE/dstack/pull/865
+866	fix(gateway): align RPC and health routes	codex/fix-gateway-rpc-health-routes	master		https://github.com/Dstack-TEE/dstack/pull/866
+867	fix(gateway): reject invalid reported ports	codex/fix-gateway-reported-ports	master		https://github.com/Dstack-TEE/dstack/pull/867
+868	fix(gateway): validate ZT domain inputs	codex/fix-gateway-zt-domain-inputs	master		https://github.com/Dstack-TEE/dstack/pull/868
+869	fix(gateway): return Exit response before shutdown	codex/fix-gateway-exit-response-order	master		https://github.com/Dstack-TEE/dstack/pull/869
+870	fix(gateway): reject zero DNS timing values	codex/fix-gateway-dns-timings	master		https://github.com/Dstack-TEE/dstack/pull/870
+871	fix(kms): reject production auth mock startup	codex/fix-kms-production-auth-mock	master		https://github.com/Dstack-TEE/dstack/pull/871
+872	[STACKED on #859] fix(vmm): reject empty and zero ResizeVm updates	codex/fix-vmm-resize-validation	codex/fix-vmm-stopped-manifest-resize	#859	https://github.com/Dstack-TEE/dstack/pull/872
+873	[STACKED on #863] fix(kms): make Bootstrap one-time	codex/fix-kms-bootstrap-once	codex/fix-kms-onboarding-domains	#863	https://github.com/Dstack-TEE/dstack/pull/873
+874	[STACKED on #873] fix(kms): persist private keys owner-only	codex/fix-kms-private-key-permissions	codex/fix-kms-bootstrap-once	#873	https://github.com/Dstack-TEE/dstack/pull/874
+875	[STACKED on #874] fix(kms): return Finish response before shutdown	codex/fix-kms-finish-response-order	codex/fix-kms-private-key-permissions	#874	https://github.com/Dstack-TEE/dstack/pull/875
+876	fix(verifier): keep oneshot output machine-readable	codex/fix-verifier-oneshot-output	master		https://github.com/Dstack-TEE/dstack/pull/876
+877	fix(util): honor the requested random output path	codex/fix-util-random-output-path	master		https://github.com/Dstack-TEE/dstack/pull/877
+878	fix(attestation): reject trailing encoded bytes	codex/fix-attestation-trailing-bytes	master		https://github.com/Dstack-TEE/dstack/pull/878
+879	fix(attestation): validate V2 event preimages	codex/fix-attestation-v2-event-preimages	master		https://github.com/Dstack-TEE/dstack/pull/879
+880	fix(verifier): label development trust evidence	codex/fix-verifier-development-trust-label	master		https://github.com/Dstack-TEE/dstack/pull/880
+881	fix(verifier): confine image archive extraction	codex/fix-verifier-archive-confinement	master		https://github.com/Dstack-TEE/dstack/pull/881
+882	fix(verifier): version measurement cache keys	codex/fix-verifier-cache-key-version	master		https://github.com/Dstack-TEE/dstack/pull/882
+883	fix(guest): write generated credentials atomically	codex/fix-guest-atomic-credentials	master		https://github.com/Dstack-TEE/dstack/pull/883
+884	fix(guest): fail malformed JSON vTPM attestations	codex/fix-guest-vtpm-json-errors	master		https://github.com/Dstack-TEE/dstack/pull/884
+885	fix(guest): defer failed KMS measurements	codex/fix-guest-deferred-kms-measurement	master		https://github.com/Dstack-TEE/dstack/pull/885
+886	fix(guest): keep LUKS keys out of process arguments	codex/fix-guest-luks-key-argv	master		https://github.com/Dstack-TEE/dstack/pull/886
+887	fix(guest): disable active swap before replacement	codex/fix-guest-swap-replacement	master		https://github.com/Dstack-TEE/dstack/pull/887
+888	[STACKED on #853] fix(simulator): implement Nitro PCR state	codex/fix-simulator-nitro-pcr-state	codex/fix-simulator-nsm-readiness	#853	https://github.com/Dstack-TEE/dstack/pull/888
+889	[STACKED on #883] fix(guest): write attestation outputs atomically	codex/fix-guest-atomic-attestation-output	codex/fix-guest-atomic-credentials	#883	https://github.com/Dstack-TEE/dstack/pull/889
+890	[STACKED on #883] fix(guest): protect KMS key output	codex/fix-guest-kms-key-permissions	codex/fix-guest-atomic-credentials	#883	https://github.com/Dstack-TEE/dstack/pull/890
+891	fix(guest): protect gateway private state	codex/fix-guest-gateway-private-state	master		https://github.com/Dstack-TEE/dstack/pull/891
+892	fix(guest): bound Host API operations	codex/fix-guest-host-api-bounds	master		https://github.com/Dstack-TEE/dstack/pull/892
+893	fix(supervisor): reject untrusted client sockets	codex/fix-supervisor-trusted-client-sockets	master		https://github.com/Dstack-TEE/dstack/pull/893
+894	fix(guest-agent): reject inverted certificate validity	codex/fix-guest-agent-cert-validity	master		https://github.com/Dstack-TEE/dstack/pull/894
+895	fix(attest): commit event log after measurement	codex/fix-attest-event-log-order	master		https://github.com/Dstack-TEE/dstack/pull/895
+896	fix(util): reject oversized quote input	codex/fix-util-quote-size-limit	master		https://github.com/Dstack-TEE/dstack/pull/896
+897	fix(util): honor quote report system configuration	codex/fix-util-quote-report-config	master		https://github.com/Dstack-TEE/dstack/pull/897
+898	fix(cert): reject mismatched CA keys	codex/fix-ra-tls-ca-key-match	master		https://github.com/Dstack-TEE/dstack/pull/898
+899	feat(vmm-cli): separate environment encryption KMS URL	codex/fix-vmm-cli-encryption-kms-url	master		https://github.com/Dstack-TEE/dstack/pull/899
+900	fix(os): omit nondeterministic package logs	codex/fix-os-deterministic-package-logs	master		https://github.com/Dstack-TEE/dstack/pull/900
+901	fix(simulator): reject occupied mountpoints	codex/fix-simulator-occupied-mountpoints	master		https://github.com/Dstack-TEE/dstack/pull/901
+902	[STACKED on #883] fix(util): stage certificate and key together	codex/fix-util-atomic-cert-key	codex/fix-guest-atomic-credentials	#883	https://github.com/Dstack-TEE/dstack/pull/902
+903	[STACKED on #900] fix(os): generate SSH host keys per guest	codex/fix-os-guest-ssh-host-keys	codex/fix-os-deterministic-package-logs	#900	https://github.com/Dstack-TEE/dstack/pull/903
+904	[STACKED on #888] fix(simulator): model measured Nitro enclave PCRs	codex/fix-simulator-measured-nitro-pcrs	codex/fix-simulator-nitro-pcr-state	#888	https://github.com/Dstack-TEE/dstack/pull/904
+905	[STACKED on #893] feat(supervisor): expose trusted UDS auto-start	codex/feat-supervisor-trusted-uds-autostart	codex/fix-supervisor-trusted-client-sockets	#893	https://github.com/Dstack-TEE/dstack/pull/905
+906	feat(vmm): add a configuration validation command	codex/feat-vmm-config-validation	master		https://github.com/Dstack-TEE/dstack/pull/906
+907	fix(vmm): enforce configured ID pool bounds	codex/fix-vmm-id-pool-bounds	master		https://github.com/Dstack-TEE/dstack/pull/907
+908	fix(vmm): publish host-share disks atomically	codex/fix-vmm-atomic-host-share-disk	master		https://github.com/Dstack-TEE/dstack/pull/908
+909	fix(vmm): return one-shot launch failures	codex/fix-vmm-one-shot-failures	master		https://github.com/Dstack-TEE/dstack/pull/909
+910	fix(vmm): verify registry layer integrity	codex/fix-vmm-registry-layer-integrity	master		https://github.com/Dstack-TEE/dstack/pull/910
+911	fix(vmm): confine console log requests	codex/fix-vmm-console-log-confinement	master		https://github.com/Dstack-TEE/dstack/pull/911
+912	[STACKED on #851] fix(vmm): confine image artifacts to the image root	codex/fix-vmm-image-artifact-confinement	codex/fix-vmm-cloud-image-measurements	#851	https://github.com/Dstack-TEE/dstack/pull/912
+913	fix(guest): escape Prometheus label values	codex/fix-guest-prometheus-labels	master		https://github.com/Dstack-TEE/dstack/pull/913
+914	fix(gateway): reconcile CAA records for every domain	codex/fix-gateway-caa-reconciliation	master		https://github.com/Dstack-TEE/dstack/pull/914
+915	fix(gateway): encrypt and validate persisted DNS credentials	codex/fix-gateway-dns-credential-storage	master		https://github.com/Dstack-TEE/dstack/pull/915
+916	fix(certbot): preserve unrelated CAA records	codex/fix-certbot-caa-preservation	master		https://github.com/Dstack-TEE/dstack/pull/916
+917	fix(gateway): reject mismatched certificate keys	codex/fix-gateway-cert-key-match	master		https://github.com/Dstack-TEE/dstack/pull/917
+918	refactor(gateway): isolate legacy port-policy parsing	codex/refactor-gateway-port-policy	master		https://github.com/Dstack-TEE/dstack/pull/918
+919	fix(gateway): reject registration identity collisions	codex/fix-gateway-registration-collisions	master		https://github.com/Dstack-TEE/dstack/pull/919
+920	fix(gateway): publish debug keys safely	codex/fix-gateway-debug-key-publication	master		https://github.com/Dstack-TEE/dstack/pull/920
+921	fix(gateway): write TLS material privately	codex/fix-gateway-private-tls-material	master		https://github.com/Dstack-TEE/dstack/pull/921
+922	feat(gateway): configure app-address DNS resolution	codex/feat-gateway-app-address-dns	master		https://github.com/Dstack-TEE/dstack/pull/922
+923	fix(gateway): maintain a healthy Top-N cache	codex/fix-gateway-top-n-cache	master		https://github.com/Dstack-TEE/dstack/pull/923
+924	fix(certbot): pace and stop the daemon cleanly	codex/fix-certbot-daemon-lifecycle	master		https://github.com/Dstack-TEE/dstack/pull/924
+925	feat(certbot): configure the DNS API endpoint	codex/feat-certbot-dns-api-endpoint	master		https://github.com/Dstack-TEE/dstack/pull/925
+926	fix(mkosi): enable the memory cgroup controller	codex/fix-mkosi-memory-cgroup	master		https://github.com/Dstack-TEE/dstack/pull/926
+927	fix(ra-rpc): accept empty JSON unit responses	codex/fix-ra-rpc-empty-json	master		https://github.com/Dstack-TEE/dstack/pull/927
+928	fix(http-client): accept empty JSON unit responses	codex/fix-http-client-empty-json	master		https://github.com/Dstack-TEE/dstack/pull/928
+929	fix(os): enforce the artifact manifest schema	codex/fix-os-artifact-manifest-schema	master		https://github.com/Dstack-TEE/dstack/pull/929
+930	[STACKED on #875] fix(kms): reject repeated onboarding	codex/fix-kms-repeated-onboarding	codex/fix-kms-finish-response-order	#875	https://github.com/Dstack-TEE/dstack/pull/930
+931	[STACKED on #917] fix(gateway): reject expired certificate reloads	codex/fix-gateway-expired-cert-reload	codex/fix-gateway-cert-key-match	#917	https://github.com/Dstack-TEE/dstack/pull/931
+932	[STACKED on #915] fix(gateway): validate peer synchronization URLs	codex/fix-gateway-peer-sync-urls	codex/fix-gateway-dns-credential-storage	#915	https://github.com/Dstack-TEE/dstack/pull/932
+933	[STACKED on #868] fix(gateway): normalize ZT domain CRUD keys	codex/fix-gateway-zt-domain-crud	codex/fix-gateway-zt-domain-inputs	#868	https://github.com/Dstack-TEE/dstack/pull/933
+934	[STACKED on #931] feat(gateway): support exact SNI certificates	codex/feat-gateway-exact-sni-certificates	codex/fix-gateway-expired-cert-reload	#931	https://github.com/Dstack-TEE/dstack/pull/934
+935	[STACKED on #934] fix(gateway): fail closed on corrupt ACME credentials	codex/fix-gateway-corrupt-acme-credentials	codex/feat-gateway-exact-sni-certificates	#934	https://github.com/Dstack-TEE/dstack/pull/935
+936	[STACKED on #932] fix(gateway): accept app-info peer identities	codex/fix-gateway-app-info-peer-identity	codex/fix-gateway-peer-sync-urls	#932	https://github.com/Dstack-TEE/dstack/pull/936
+937	refactor(verifier): make image strategies exhaustive	codex/refactor-verifier-image-strategies	master		https://github.com/Dstack-TEE/dstack/pull/937
+938	[STACKED on #964] fix(ra-tls): validate the certificate security profile	codex/fix-ra-tls-security-profile	codex/feat-simulator-seeded-attestation	#964	https://github.com/Dstack-TEE/dstack/pull/938
+939	fix(measurement): accept historical image versions	codex/fix-measurement-historical-images	master		https://github.com/Dstack-TEE/dstack/pull/939
+940	fix(verifier): validate configuration precedence	codex/fix-verifier-config-precedence	master		https://github.com/Dstack-TEE/dstack/pull/940
+941	fix(kms): synchronize authorization Bun locks	codex/fix-kms-auth-locks	master		https://github.com/Dstack-TEE/dstack/pull/941
+942	fix(kms): commit certificate logs atomically	codex/fix-kms-certificate-logs	master		https://github.com/Dstack-TEE/dstack/pull/942
+943	feat(dstack-mr): restore measurement diagnosis	codex/feat-dstack-mr-diagnosis	master		https://github.com/Dstack-TEE/dstack/pull/943
+944	fix(mkosi): install the Sysbox rsync dependency	codex/fix-mkosi-sysbox-rsync	master		https://github.com/Dstack-TEE/dstack/pull/944
+945	fix(guest): force refresh after a missing handshake	codex/fix-guest-missing-handshake-refresh	master		https://github.com/Dstack-TEE/dstack/pull/945
+946	[STACKED on #891] fix(guest): make KMS failover ordering deterministic	codex/fix-guest-kms-failover-order	codex/fix-guest-gateway-private-state	#891	https://github.com/Dstack-TEE/dstack/pull/946
+947	feat(gateway): allow a static proxy domain from app config	codex/feat-gateway-static-proxy-domain	master		https://github.com/Dstack-TEE/dstack/pull/947
+948	fix(guest): decouple Gateway outage from app boot	codex/fix-guest-gateway-outage-boot	master		https://github.com/Dstack-TEE/dstack/pull/948
+949	fix(vmm): avoid double-reserving reloaded VM CIDs	codex/fix-vmm-reloaded-cids	master		https://github.com/Dstack-TEE/dstack/pull/949
+950	[STACKED on #937] refactor(verifier): make TCB policy sources exhaustive	codex/refactor-verifier-tcb-policy	codex/refactor-verifier-image-strategies	#937	https://github.com/Dstack-TEE/dstack/pull/950
+951	[STACKED on #940] fix(verifier): separate service and Rocket configuration	codex/fix-verifier-service-config	codex/fix-verifier-config-precedence	#940	https://github.com/Dstack-TEE/dstack/pull/951
+952	[STACKED on #930] fix(kms): preserve CA certificates across restart	codex/fix-kms-ca-restart	codex/fix-kms-repeated-onboarding	#930	https://github.com/Dstack-TEE/dstack/pull/952
+953	[STACKED on #941] fix(kms): bound the authorization boot schema	codex/fix-kms-auth-boot-schema	codex/fix-kms-auth-locks	#941	https://github.com/Dstack-TEE/dstack/pull/953
+954	[STACKED on #946] fix(guest): isolate local key providers from KMS inventory	codex/fix-guest-local-provider-inventory	codex/fix-guest-kms-failover-order	#946	https://github.com/Dstack-TEE/dstack/pull/954
+955	[STACKED on #952] feat(kms): return configured historical root keys	codex/feat-kms-historical-root-keys	codex/fix-kms-ca-restart	#952	https://github.com/Dstack-TEE/dstack/pull/955
+956	[STACKED on #953] fix(kms): redact the authorization backend endpoint	codex/fix-kms-auth-endpoint-redaction	codex/fix-kms-auth-boot-schema	#953	https://github.com/Dstack-TEE/dstack/pull/956
+957	[STACKED on #956] fix(kms): align Node authorization safety	codex/fix-kms-node-auth-safety	codex/fix-kms-auth-endpoint-redaction	#956	https://github.com/Dstack-TEE/dstack/pull/957
+958	[STACKED on #957] feat(kms): authorize from finalized Ethereum snapshots	codex/feat-kms-finalized-ethereum-auth	codex/fix-kms-node-auth-safety	#957	https://github.com/Dstack-TEE/dstack/pull/958
+959	[STACKED on #958] feat(kms): emit authorization policy audit events	codex/feat-kms-auth-policy-audit	codex/feat-kms-finalized-ethereum-auth	#958	https://github.com/Dstack-TEE/dstack/pull/959
+960	[STACKED on #851] fix(vmm): align simulated NitroTPM measurement	codex/fix-vmm-simulated-nitrotpm-measurement	codex/fix-vmm-cloud-image-measurements	#851	https://github.com/Dstack-TEE/dstack/pull/960
+961	[STACKED on #883] fix(util): write TPM quotes atomically	codex/fix-util-atomic-tpm-quotes	codex/fix-guest-atomic-credentials	#883	https://github.com/Dstack-TEE/dstack/pull/961
+962	[STACKED on #954] fix(guest): make gateway refresh failover atomic	codex/fix-guest-gateway-refresh-failover	codex/fix-guest-local-provider-inventory	#954	https://github.com/Dstack-TEE/dstack/pull/962
+963	feat(kms): expose a startup health endpoint	codex/feat-kms-startup-health	master		https://github.com/Dstack-TEE/dstack/pull/963
+964	[STACKED on #880] feat(simulator): add deterministic seeded attestations	codex/feat-simulator-seeded-attestation	codex/fix-verifier-development-trust-label	#880	https://github.com/Dstack-TEE/dstack/pull/964
+965	[STACKED on #964] fix(mock-attestation): model complete DCAP collateral	codex/fix-mock-attestation-dcap-collateral	codex/feat-simulator-seeded-attestation	#964	https://github.com/Dstack-TEE/dstack/pull/965
+966	[STACKED on #964] fix(simulator): preserve legacy attestation responses	codex/fix-simulator-legacy-attestation	codex/feat-simulator-seeded-attestation	#964	https://github.com/Dstack-TEE/dstack/pull/966
+967	[STACKED on #938] fix(ra-tls): bind certificate app extensions	codex/fix-ra-tls-app-extensions	codex/fix-ra-tls-security-profile	#938	https://github.com/Dstack-TEE/dstack/pull/967
+968	fix(vmm): bound automatic restart retries	codex/fix-vmm-restart-policy	master		https://github.com/Dstack-TEE/dstack/pull/968
+969	[STACKED on #845] fix(simulator): publish the TPM resource-manager device	codex/fix-simulator-tpm-resource-manager	codex/fix-simulator-udev-tpm-race	#845	https://github.com/Dstack-TEE/dstack/pull/969
+970	[STACKED on #968] fix(vmm): retain the serial boot delimiter at the cap	codex/fix-vmm-serial-log-cap	codex/fix-vmm-restart-policy	#968	https://github.com/Dstack-TEE/dstack/pull/970
