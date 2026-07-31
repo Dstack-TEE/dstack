@@ -1,0 +1,61 @@
+{
+  "case_id": "tc-vmm-vmm-011",
+  "remarks": "vmm-cli status --json returned exit code 2 during prerequisite and final observations, while the public JSON Status route returned HTTP 200 in Step 1; this did not prevent exercising ListImages or proving service availability.",
+  "schema_version": "1.0",
+  "source_run": "central-fixtures-20260724T032131Z",
+  "steps": [
+    {
+      "evidence": "Replays the operations that produced: Case-owned VMM listener was reachable; list_images and list_vms baseline queries completed, with no run-scoped VM objects present and ListImages available before exercise.",
+      "id": "tc-vmm-vmm-011-step-01",
+      "observed": "Case-owned VMM listener was reachable; list_images and list_vms baseline queries completed, with no run-scoped VM objects present and ListImages available before exercise.",
+      "ops": [
+        {
+          "argv": [
+            "${python}",
+            "${repository}/dstack/vmm/src/vmm-cli.py",
+            "--url",
+            "http://127.0.0.1:${ports.rpc}",
+            "status",
+            "--json"
+          ],
+          "expect": {
+            "returncode": 2
+          },
+          "kind": "argv",
+          "label": "argv"
+        },
+        {
+          "argv": [
+            "${python}",
+            "${repository}/dstack/vmm/src/vmm-cli.py",
+            "--url",
+            "http://127.0.0.1:${ports.rpc}",
+            "lsvm",
+            "--json"
+          ],
+          "expect": {
+            "returncode": 0
+          },
+          "kind": "argv",
+          "label": "argv"
+        },
+        {
+          "argv": [
+            "${python}",
+            "${repository}/dstack/vmm/src/vmm-cli.py",
+            "--url",
+            "http://127.0.0.1:${ports.rpc}",
+            "lsimage",
+            "--json"
+          ],
+          "expect": {
+            "returncode": 0
+          },
+          "kind": "argv",
+          "label": "argv"
+        }
+      ]
+    }
+  ],
+  "summary": "Vmm.ListImages returned deterministic successful responses for Empty-compatible inputs, ignored extraneous/malformed bodies as specified, rejected invalid routing, and remained available with unchanged scoped state."
+}

@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"demo","model":"sample-model"}
+{"type":"item.completed","item":{"type":"agent_message","text":"[DSTACK-TEST-STEP-START tc-gw-pp-001-step-01]"}}
+{"type":"item.completed","item":{"type":"command_execution","command":"query-policy","aggregated_output":"{\"port\":8443,\"pp\":true}\n","exit_code":0}}
+{"type":"item.completed","item":{"type":"agent_message","text":"[DSTACK-TEST-STEP-END tc-gw-pp-001-step-01 PASS]"}}
+{"type":"item.completed","item":{"type":"agent_message","text":"[DSTACK-TEST-STEP-START tc-gw-pp-001-step-02]"}}
+{"type":"item.completed","item":{"type":"command_execution","command":"send-request","aggregated_output":"HTTP 200 source=198.51.100.27:45678\n","exit_code":0}}
+{"type":"item.completed","item":{"type":"agent_message","text":"[DSTACK-TEST-STEP-END tc-gw-pp-001-step-02 PASS]"}}
