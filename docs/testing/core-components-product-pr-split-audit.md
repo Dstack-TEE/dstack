@@ -6,7 +6,7 @@ This document records the completion gates for replacing monolithic product PR #
 
 The authoritative split-PR inventory is
 [`core-components-product-pr-inventory.tsv`](core-components-product-pr-inventory.tsv).
-It lists 130 product PRs (#842 through #970 plus #976), including each head branch, GitHub base,
+It lists 129 replacement product PRs (#842 through #970 excluding rejected #845, plus #976), including each head branch, GitHub base,
 and explicit dependency for every stacked PR.
 
 The per-commit inventory is
@@ -17,7 +17,7 @@ It classifies all 332 historical commits from #840.
 
 The final audit applies these gates:
 
-1. Every PR from #842 through #970 plus #976 exists; the inventory records whether it is open or merged.
+1. Every replacement PR from #842 through #970 except rejected #845, plus #976, exists; the inventory records whether it is open or merged.
 2. Every accounting target branch exists remotely and has an open PR.
 3. Every direct PR is based on `master`.
 4. Every non-`master` PR title starts with `[STACKED on #NNN]`, where `#NNN`
@@ -36,7 +36,7 @@ The final audit applies these gates:
 ## Coverage model
 
 Historical commits with no intended standalone product delta are explicitly
-classified as `TEST_ONLY`, `REVERTED`, `EXISTING_PR`, or `SUPERSEDED`; they are
+classified as `TEST_ONLY`, `REVERTED`, `REJECTED`, `EXISTING_PR`, or `SUPERSEDED`; they are
 not silently omitted. `RETAINED` and `MANUAL` rows map to the split product PRs.
 The existing independent WireGuard fix is #839, and compatibility RPC behavior
 is superseded by merged upstream PR #830.
