@@ -3301,7 +3301,9 @@ mod tests {
             Err(error) => error,
         };
         assert!(
-            unknown.to_string().contains("Unknown attestation wire format"),
+            unknown
+                .to_string()
+                .contains("Unknown attestation wire format"),
             "unknown required versions must fail with an actionable diagnostic: {unknown:#}"
         );
         assert!(VersionedAttestation::from_bytes(&vec![0xff; MAX_ATTESTATION_BYTES + 1]).is_err());

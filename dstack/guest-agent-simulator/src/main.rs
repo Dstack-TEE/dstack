@@ -9,10 +9,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::Parser;
 use dstack_guest_agent::{
-    AppState,
     backend::PlatformBackend,
     config::{self, Config},
-    run_server,
+    run_server, AppState,
 };
 use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
 use mock_attestation::tdx::TdxGenerator;
@@ -116,7 +115,7 @@ impl PlatformBackend for SimulatorPlatform {
 #[rocket::main]
 async fn main() -> Result<()> {
     {
-        use tracing_subscriber::{EnvFilter, fmt};
+        use tracing_subscriber::{fmt, EnvFilter};
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
         fmt().with_env_filter(filter).with_ansi(false).init();
     }

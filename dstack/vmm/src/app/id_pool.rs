@@ -70,7 +70,6 @@ impl<T: Number> IdPool<T> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::IdPool;
@@ -107,7 +106,9 @@ mod tests {
         let mut workers = Vec::new();
         for _ in 0..8 {
             let pool = Arc::clone(&pool);
-            workers.push(thread::spawn(move || pool.lock().unwrap().allocate().unwrap()));
+            workers.push(thread::spawn(move || {
+                pool.lock().unwrap().allocate().unwrap()
+            }));
         }
         let mut allocated: Vec<_> = workers
             .into_iter()

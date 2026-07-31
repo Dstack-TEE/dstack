@@ -265,7 +265,6 @@ async fn test_config() {
     insta::assert_snapshot!(wg_config);
 }
 
-
 #[tokio::test]
 async fn gateway_top_n_batch_007_cache_health_and_invalidation() {
     let state = create_test_state().await;
@@ -337,7 +336,9 @@ async fn gateway_top_n_batch_007_cache_health_and_invalidation() {
         ]));
         let refreshed = proxy.select_top_n_hosts("top-app").unwrap();
         assert_eq!(refreshed.len(), 2);
-        assert!(refreshed.iter().any(|row| row.instance_id == "top-instance-4"));
+        assert!(refreshed
+            .iter()
+            .any(|row| row.instance_id == "top-instance-4"));
 
         proxy.remove_instance("top-instance-4").unwrap();
         assert!(proxy.state.top_n.is_empty());

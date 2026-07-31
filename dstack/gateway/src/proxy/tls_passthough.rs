@@ -8,11 +8,11 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use hickory_resolver::config::{NameServerConfig, ResolverConfig};
 use hickory_resolver::lookup::Lookup;
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::proto::rr::RData;
 use hickory_resolver::TokioResolver;
-use hickory_resolver::config::{NameServerConfig, ResolverConfig};
-use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use proxy_protocol::ProxyHeader;
 use tokio::{io::AsyncWriteExt, net::TcpStream, task::JoinSet, time::timeout};
 use tracing::{debug, info, warn};
@@ -356,7 +356,10 @@ mod tests {
         let (stream, _counter, instance_id) =
             connect_multiple_hosts(addresses, port, 0, "case-owned-app").await?;
         assert_eq!(instance_id, "online-instance");
-        assert_eq!(stream.peer_addr()?.ip(), "127.0.0.1".parse::<std::net::IpAddr>()?);
+        assert_eq!(
+            stream.peer_addr()?.ip(),
+            "127.0.0.1".parse::<std::net::IpAddr>()?
+        );
         drop(stream);
         let (_accepted, _) = accepted.await??;
         Ok(())

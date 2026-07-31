@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use dstack_guest_agent_rpc::dstack_guest_client::DstackGuestClient;
 use dstack_types::AppCompose;
 use http_client::prpc::PrpcClient;
@@ -286,8 +286,8 @@ fn parse_info_port_policy(tcb_info: &str) -> Result<PortPolicy, FetchError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DenyReason, FetchError, evaluate_port_policy, next_backoff, parse_info_port_policy,
-        policy_sends_pp,
+        evaluate_port_policy, next_backoff, parse_info_port_policy, policy_sends_pp, DenyReason,
+        FetchError,
     };
     use crate::kv::{PortFlags, PortPolicy};
     use std::{collections::BTreeMap, time::Duration};

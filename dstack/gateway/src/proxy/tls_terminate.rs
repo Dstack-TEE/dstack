@@ -663,7 +663,7 @@ mod tests {
 
 #[cfg(test)]
 mod local_response_tests {
-    use super::{IgnoreUnexpectedEofStream, empty_response, json_response};
+    use super::{empty_response, json_response, IgnoreUnexpectedEofStream};
     use hyper::StatusCode;
     use std::{
         io,

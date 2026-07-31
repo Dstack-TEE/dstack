@@ -6,11 +6,11 @@ use dstack_gateway_rpc::{AcmeInfoResponse, ProxyAccelStatus, StatusResponse};
 use rinja::Template;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, btree_map::Iter},
+    collections::{btree_map::Iter, BTreeMap},
     net::Ipv4Addr,
     sync::{
-        Arc,
         atomic::{AtomicU64, Ordering},
+        Arc,
     },
     time::SystemTime,
 };
@@ -182,8 +182,8 @@ mod tests {
     use std::{
         collections::BTreeMap,
         sync::{
-            Arc, Barrier,
             atomic::{AtomicU64, Ordering},
+            Arc, Barrier,
         },
     };
 

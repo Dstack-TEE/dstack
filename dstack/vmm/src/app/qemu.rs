@@ -1257,8 +1257,7 @@ mod tests {
         .build()
         .unwrap_err();
         assert!(error.to_string().contains("must contain id=net1"));
-        prepared.networks[1].netdev =
-            "tap,id=net1,ifname=test-tap0,script=no,downscript=no".into();
+        prepared.networks[1].netdev = "tap,id=net1,ifname=test-tap0,script=no,downscript=no".into();
 
         prepared.swtpm_socket = Some(PathBuf::from("/does-not-exist/vm-1/swtpm/swtpm.sock"));
         let process = QemuCommandBuilder {

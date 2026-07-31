@@ -6,8 +6,8 @@
 // Example: cargo run --bin gen_debug_key -- https://daee134c3b9f66aa2401c3b5ea64f1d34038f45d-3000.tdxlab.dstack.org:12004
 
 use anyhow::{Context, Result};
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use dstack_guest_agent_rpc::{RawQuoteArgs, dstack_guest_client::DstackGuestClient};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, RawQuoteArgs};
 use http_client::prpc::PrpcClient;
 use ra_tls::attestation::QuoteContentType;
 use ra_tls::rcgen::KeyPair;

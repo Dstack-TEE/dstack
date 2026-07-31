@@ -114,8 +114,7 @@ impl Image {
         let hda = resolve_optional_artifact(&base_path, info.hda.as_deref(), "Hda")?;
         let rootfs = resolve_optional_artifact(&base_path, info.rootfs.as_deref(), "Rootfs")?;
         let bios = resolve_optional_artifact(&base_path, info.bios.as_deref(), "Bios")?;
-        let bios_sev =
-            resolve_optional_artifact(&base_path, info.bios_sev.as_deref(), "SEV bios")?;
+        let bios_sev = resolve_optional_artifact(&base_path, info.bios_sev.as_deref(), "SEV bios")?;
         let digest = fs::read_to_string(base_path.join("digest.txt"))
             .ok()
             .map(|s| s.trim().to_string());
@@ -226,7 +225,8 @@ impl Image {
 
 fn resolve_artifact(base_path: &Path, value: &str, label: &str) -> Result<PathBuf> {
     let candidate = base_path.join(value);
-    let resolved = candidate.canonicalize()
+    let resolved = candidate
+        .canonicalize()
         .with_context(|| format!("{label} does not exist: {}", candidate.display()))?;
     if !resolved.starts_with(base_path) {
         bail!("{label} escapes image directory: {}", candidate.display());
@@ -237,8 +237,14 @@ fn resolve_artifact(base_path: &Path, value: &str, label: &str) -> Result<PathBu
     Ok(resolved)
 }
 
-fn resolve_optional_artifact(base_path: &Path, value: Option<&str>, label: &str) -> Result<Option<PathBuf>> {
-    value.map(|value| resolve_artifact(base_path, value, label)).transpose()
+fn resolve_optional_artifact(
+    base_path: &Path,
+    value: Option<&str>,
+    label: &str,
+) -> Result<Option<PathBuf>> {
+    value
+        .map(|value| resolve_artifact(base_path, value, label))
+        .transpose()
 }
 
 fn load_measurement_document<T>(
@@ -271,7 +277,6 @@ fn guess_version(base_path: &Path) -> Option<String> {
     };
     Some(version.to_string())
 }
-
 
 #[cfg(test)]
 mod tests {

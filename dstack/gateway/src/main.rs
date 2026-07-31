@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{Context, Result, anyhow};
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use anyhow::{anyhow, Context, Result};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use clap::Parser;
 use config::{Config, TlsConfig};
-use dstack_guest_agent_rpc::{GetTlsKeyArgs, dstack_guest_client::DstackGuestClient};
+use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, GetTlsKeyArgs};
 use dstack_kms_rpc::SignCertRequest;
 use http_client::prpc::PrpcClient;
 use ra_rpc::{client::RaClient, prpc_routes as prpc, rocket_helper::QuoteVerifier};
@@ -17,7 +17,7 @@ use ra_tls::{
 };
 use rocket::{
     fairing::AdHoc,
-    figment::{Figment, providers::Serialized},
+    figment::{providers::Serialized, Figment},
 };
 use serde::{Deserialize, Serialize};
 use std::{fs::OpenOptions, io::Write as _, path::Path, sync::Arc};
@@ -72,7 +72,7 @@ struct Args {
 
 #[cfg(unix)]
 fn set_max_ulimit() -> Result<()> {
-    use nix::sys::resource::{Resource, getrlimit, setrlimit};
+    use nix::sys::resource::{getrlimit, setrlimit, Resource};
     let (soft, hard) = getrlimit(Resource::RLIMIT_NOFILE)?;
     if soft < hard {
         setrlimit(Resource::RLIMIT_NOFILE, hard, hard)?;
@@ -269,7 +269,7 @@ fn write_private_file(path: &Path, content: &[u8]) -> Result<()> {
 #[rocket::main]
 async fn main() -> Result<()> {
     {
-        use tracing_subscriber::{EnvFilter, fmt};
+        use tracing_subscriber::{fmt, EnvFilter};
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
         fmt().with_env_filter(filter).with_ansi(false).init();
     }

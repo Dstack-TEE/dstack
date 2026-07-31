@@ -126,7 +126,6 @@ impl VmWorkDir {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{snp_host_data, tdx_mr_config_id};
@@ -245,7 +244,9 @@ mod tests {
         let changed = workdir.prepare_mr_config_v3(&changed_app, true).unwrap();
         assert_ne!(baseline, changed);
         assert_ne!(
-            MrConfigV3::from_document(&baseline).unwrap().gpu_policy_hash,
+            MrConfigV3::from_document(&baseline)
+                .unwrap()
+                .gpu_policy_hash,
             MrConfigV3::from_document(&changed).unwrap().gpu_policy_hash
         );
     }

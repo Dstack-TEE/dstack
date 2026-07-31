@@ -21,8 +21,12 @@ pub(super) fn create_shared_disk(
     let disk_path = disk_path.as_ref();
     let shared_dir = shared_dir.as_ref();
     let parent = disk_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut temporary = NamedTempFile::new_in(parent)
-        .with_context(|| format!("failed to create temporary disk image in {}", parent.display()))?;
+    let mut temporary = NamedTempFile::new_in(parent).with_context(|| {
+        format!(
+            "failed to create temporary disk image in {}",
+            parent.display()
+        )
+    })?;
 
     // Must be large enough to hold all host-shared files (app-compose.json and
     // .user-config can each be up to 50 MiB, see HostShared::copy) plus FAT32 overhead.
@@ -49,14 +53,16 @@ pub(super) fn create_shared_disk(
     image
         .seek(SeekFrom::Start(0))
         .context("failed to seek to start")?;
-    let filesystem =
-        FileSystem::new(&mut *image, FsOptions::new()).context("failed to open FAT32 filesystem")?;
+    let filesystem = FileSystem::new(&mut *image, FsOptions::new())
+        .context("failed to open FAT32 filesystem")?;
     let root_dir = filesystem.root_dir();
 
     for entry in fs::read_dir(shared_dir).context("failed to read shared directory")? {
         let entry = entry.context("failed to read directory entry")?;
         let path = entry.path();
-        let file_type = entry.file_type().context("failed to inspect shared entry")?;
+        let file_type = entry
+            .file_type()
+            .context("failed to inspect shared entry")?;
         if !file_type.is_file() {
             continue;
         }
@@ -82,7 +88,6 @@ pub(super) fn create_shared_disk(
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::create_shared_disk;
@@ -91,7 +96,11 @@ mod tests {
     use tempfile::TempDir;
 
     fn read_file(disk: &std::path::Path, name: &str) -> Vec<u8> {
-        let mut image = fs::OpenOptions::new().read(true).write(true).open(disk).unwrap();
+        let mut image = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(disk)
+            .unwrap();
         let filesystem = FileSystem::new(&mut image, FsOptions::new()).unwrap();
         let mut file = filesystem.root_dir().open_file(name).unwrap();
         let mut contents = Vec::new();
@@ -141,7 +150,11 @@ mod tests {
         let disk = root.path().join("host-shared.img");
         create_shared_disk(&disk, &shared).unwrap();
         assert_eq!(read_file(&disk, "regular"), b"regular");
-        let mut image = fs::OpenOptions::new().read(true).write(true).open(disk).unwrap();
+        let mut image = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(disk)
+            .unwrap();
         let filesystem = FileSystem::new(&mut image, FsOptions::new()).unwrap();
         assert!(filesystem.root_dir().open_file("escape").is_err());
     }

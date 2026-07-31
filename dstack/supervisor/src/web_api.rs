@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use or_panic::ResultOrPanic;
 use rocket::figment::Figment;
 use rocket::serde::json::Json;
-use rocket::{Build, Rocket, Shutdown, State, delete, get, post, routes};
+use rocket::{delete, get, post, routes, Build, Rocket, Shutdown, State};
 use serde::{Deserialize, Serialize};
 use tokio::signal;
 use tracing::info;
@@ -103,9 +103,7 @@ pub fn rocket(figment: Figment) -> Rocket<Build> {
     let supervisor = Supervisor::new();
     let rocket = rocket::custom(figment).manage(supervisor.clone()).mount(
         "/",
-        routes![
-            deploy, start, stop, remove, list, info, ping, clear, shutdown
-        ],
+        routes![deploy, start, stop, remove, list, info, ping, clear, shutdown],
     );
     tokio::spawn(handle_shutdown_signals(supervisor));
     rocket

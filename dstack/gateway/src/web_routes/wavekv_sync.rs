@@ -10,14 +10,13 @@ use crate::{
     kv::{decode, encode},
     main_service::Proxy,
 };
-use flate2::{Compression, read::GzDecoder, write::GzEncoder};
+use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use ra_tls::traits::CertExt;
 use rocket::{
-    State,
     data::{Data, ToByteUnit},
     http::{ContentType, Status},
-    mtls::{Certificate, oid::Oid},
-    post,
+    mtls::{oid::Oid, Certificate},
+    post, State,
 };
 use std::io::{Read, Write};
 use tracing::warn;

@@ -32,20 +32,20 @@ mod https_client;
 mod sync_service;
 
 pub use https_client::{AppIdValidator, HttpsClientConfig};
-pub use sync_service::{WaveKvSyncService, fetch_peers_from_bootnode};
+pub use sync_service::{fetch_peers_from_bootnode, WaveKvSyncService};
 use tracing::warn;
 
 use std::{collections::BTreeMap, net::Ipv4Addr, path::Path, time::Duration};
 
 use aes_gcm::{
-    Aes256Gcm, KeyInit, Nonce,
     aead::{Aead, Payload},
+    Aes256Gcm, KeyInit, Nonce,
 };
 use anyhow::{Context, Result};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
-use wavekv::{Node, node::NodeState, types::NodeId};
+use wavekv::{node::NodeState, types::NodeId, Node};
 
 /// Per-port flags applied by the gateway when proxying to a CVM port.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -1193,17 +1193,26 @@ mod kv_lifecycle_tests {
             keys::cert_attestation_history("same.example.test", 1),
         ]);
         assert_eq!(generated_keys.len(), 13);
-        assert_eq!(keys::parse_inst_key(&keys::inst("instance-a")), Some("instance-a"));
+        assert_eq!(
+            keys::parse_inst_key(&keys::inst("instance-a")),
+            Some("instance-a")
+        );
         assert_eq!(keys::parse_node_info_key(&keys::node_info(9)), Some(9));
         assert_eq!(
             keys::parse_cert_domain(&keys::cert_data("app.example.test")),
             Some("app.example.test")
         );
 
-        store.sync_instance("instance-a", &instance("app-a", 10)).unwrap();
+        store
+            .sync_instance("instance-a", &instance("app-a", 10))
+            .unwrap();
         instance_watch.changed().await.unwrap();
-        store.sync_instance("instance-a", &instance("app-b", 11)).unwrap();
-        store.sync_instance("instance-b", &instance("app-b", 12)).unwrap();
+        store
+            .sync_instance("instance-a", &instance("app-b", 11))
+            .unwrap();
+        store
+            .sync_instance("instance-b", &instance("app-b", 12))
+            .unwrap();
         instance_watch.changed().await.unwrap();
         assert_eq!(store.load_all_instances()["instance-a"].app_id, "app-b");
 
@@ -1213,7 +1222,9 @@ mod kv_lifecycle_tests {
         store.sync_instance_handshake("instance-a", 100).unwrap();
         store.sync_instance_handshake("instance-a", 101).unwrap();
         store.sync_node_last_seen(2, 200).unwrap();
-        store.register_peer_url(2, "https://node-2.example.test/sync").unwrap();
+        store
+            .register_peer_url(2, "https://node-2.example.test/sync")
+            .unwrap();
         assert_eq!(store.get_instance_latest_handshake("instance-a"), Some(101));
         assert_eq!(store.get_node_latest_last_seen(2), Some(200));
         assert_eq!(store.get_node_status(2), NodeStatus::Down);
@@ -1232,7 +1243,10 @@ mod kv_lifecycle_tests {
         };
         store.save_dns_credential(&credential).unwrap();
         store.set_default_dns_credential_id(&credential.id).unwrap();
-        assert_eq!(store.get_default_dns_credential().unwrap().id, credential.id);
+        assert_eq!(
+            store.get_default_dns_credential().unwrap().id,
+            credential.id
+        );
 
         let domain = "app.example.test";
         let domain_config = ZtDomainConfig {
@@ -1299,7 +1313,10 @@ mod kv_lifecycle_tests {
         assert_eq!(restarted.get_node_status(2), NodeStatus::Down);
         assert_eq!(restarted.get_zt_domain_config(domain).unwrap().port, 443);
         assert_eq!(restarted.get_cert_data(domain).unwrap().issued_at, 10);
-        assert_eq!(restarted.get_default_dns_credential().unwrap().id, "credential-a");
+        assert_eq!(
+            restarted.get_default_dns_credential().unwrap().id,
+            "credential-a"
+        );
         assert!(restarted.get_instance_handshakes("instance-a").is_empty());
         assert!(restarted.get_node_last_seen_by_all(2).is_empty());
 

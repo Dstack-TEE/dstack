@@ -89,7 +89,6 @@ fn write_atomic_inner(path: &Path, contents: &[u8], mode: Option<u32>) -> Result
     Ok(())
 }
 
-
 /// Stage two related files completely before committing either destination.
 ///
 /// This prevents a predictable second-output failure (for example, an invalid
@@ -111,15 +110,24 @@ pub fn write_atomic_pair(
             return Err(error);
         }
     };
-    if let Err(error) = std::fs::rename(&first_tmp, first_path)
-        .with_context(|| format!("renaming {} -> {}", first_tmp.display(), first_path.display()))
-    {
+    if let Err(error) = std::fs::rename(&first_tmp, first_path).with_context(|| {
+        format!(
+            "renaming {} -> {}",
+            first_tmp.display(),
+            first_path.display()
+        )
+    }) {
         let _ = std::fs::remove_file(&first_tmp);
         let _ = std::fs::remove_file(&second_tmp);
         return Err(error);
     }
-    std::fs::rename(&second_tmp, second_path)
-        .with_context(|| format!("renaming {} -> {}", second_tmp.display(), second_path.display()))?;
+    std::fs::rename(&second_tmp, second_path).with_context(|| {
+        format!(
+            "renaming {} -> {}",
+            second_tmp.display(),
+            second_path.display()
+        )
+    })?;
     sync_parent(first_path);
     if first_path.parent() != second_path.parent() {
         sync_parent(second_path);

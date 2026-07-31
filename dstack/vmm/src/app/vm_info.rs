@@ -307,7 +307,10 @@ mod tests {
             app_url("instance", &["not a url".into()], &default),
             "https://instance-8090.gateway.test"
         );
-        let nonstandard = GatewayConfig { port: 8443, ..default };
+        let nonstandard = GatewayConfig {
+            port: 8443,
+            ..default
+        };
         assert_eq!(
             app_url("instance", &[], &nonstandard),
             "https://instance-8090.gateway.test:8443"
