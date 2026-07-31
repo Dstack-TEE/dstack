@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0",
+  "case_id": "tc-gos-setup-009",
+  "capability": "gateway-registration-refresh-suite",
+  "reason": "The fixture has one guest but no declared multi-endpoint Gateway registration matrix with controlled outage, malformed response, wrong identity, write faults, request capture, restart, and a second identity.",
+  "expires_when": "the fixture declares the complete Gateway registration refresh suite available, at which point the probe fails and this registration must be replaced by a real harness"
+}
