@@ -277,6 +277,7 @@ mod tests {
                 ..Default::default()
             },
             acme_info: AcmeInfoResponse::default(),
+            accel: Default::default(),
         };
         let rendered = dashboard.render().expect("dashboard must render");
         assert!(!rendered.contains(hostile));

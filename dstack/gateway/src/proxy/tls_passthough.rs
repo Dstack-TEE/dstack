@@ -20,7 +20,6 @@ use tracing::{debug, info, warn};
 use crate::{
     main_service::Proxy,
     models::{Counting, EnteredCounter},
-    pp::write_outbound_pp,
 };
 
 use super::{
