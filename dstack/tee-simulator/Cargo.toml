@@ -21,7 +21,7 @@ dstack-types.workspace = true
 dstack-mr.workspace = true
 fuser.workspace = true
 libc.workspace = true
-nix = { workspace = true, features = ["mount"] }
+nix = { workspace = true, features = ["fs", "mount"] }
 sd-notify.workspace = true
 sha2.workspace = true
 tracing.workspace = true

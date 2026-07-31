@@ -293,12 +293,15 @@ pub fn run_nitro_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
     let generator = NsmGenerator::from_seed(parse_seed(seed)?)?;
     let (mut simulator, swtpm_stream) = UnixStream::pair()?;
     let swtpm_fd = swtpm_stream.as_raw_fd();
-    let flags = unsafe { libc::fcntl(swtpm_fd, libc::F_GETFD) };
-    anyhow::ensure!(flags >= 0, "failed to get swtpm socket flags");
-    anyhow::ensure!(
-        unsafe { libc::fcntl(swtpm_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } >= 0,
-        "failed to make swtpm socket inheritable"
+    let flags = nix::fcntl::FdFlag::from_bits_truncate(
+        nix::fcntl::fcntl(swtpm_fd, nix::fcntl::FcntlArg::F_GETFD)
+            .context("failed to get swtpm socket flags")?,
     );
+    nix::fcntl::fcntl(
+        swtpm_fd,
+        nix::fcntl::FcntlArg::F_SETFD(flags - nix::fcntl::FdFlag::FD_CLOEXEC),
+    )
+    .context("failed to make swtpm socket inheritable")?;
 
     let state_dir = std::env::temp_dir().join(format!("dstack-nitro-swtpm-{}", std::process::id()));
     fs_err::create_dir_all(&state_dir)?;
