@@ -6,7 +6,7 @@
 //!
 //! Provides low-level communication with TPM devices via /dev/tpmrm0 or /dev/tpm0.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -371,13 +371,13 @@ mod tests {
         let response = TpmResponse {
             tag: TpmSt::NoSessions,
             response_code: 0,
-            data: [
-                &[0],
-                &(TpmCap::Commands as u32).to_be_bytes(),
-                &1u32.to_be_bytes(),
-                &0x2000_1000u32.to_be_bytes(),
-            ]
-            .concat(),
+            data: {
+                let mut data = vec![0];
+                data.extend_from_slice(&(TpmCap::Commands as u32).to_be_bytes());
+                data.extend_from_slice(&1u32.to_be_bytes());
+                data.extend_from_slice(&0x2000_1000u32.to_be_bytes());
+                data
+            },
         }
         .to_bytes();
         let response = add_command_capability(&response, 0x2000_0001).unwrap();

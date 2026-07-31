@@ -44,6 +44,6 @@ pub use constants::*;
 pub use types::*;
 
 // Re-export device for advanced usage
-pub use device::{TpmCommand, TpmDevice, TpmResponse};
+pub use device::{TpmCommand, TpmDevice, TpmResponse, add_command_capability};
 pub use marshal::{CommandBuffer, Marshal, ResponseBuffer, Unmarshal};
 pub use session::AuthSession;

@@ -2173,6 +2173,7 @@ dependencies = [
  "tokio",
  "tpm-qvl",
  "tpm-types",
+ "tpm2",
  "tracing",
  "tracing-subscriber",
 ]

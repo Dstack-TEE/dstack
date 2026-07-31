@@ -17,20 +17,15 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use aws_nitro_enclaves_nsm_api::api::{Request as NsmRequest, Response as NsmResponse};
 use dstack_types::TeeSimulatorConfig;
 use mock_attestation::{nsm::NsmGenerator, parse_seed, server::MockCollateralState};
+use tpm2::{TpmAlgId, TpmCc, TpmContext, add_command_capability};
 
 const AK_ECC_CERT: &str = "0x01c10002";
 const AK_ECC_TEMPLATE: &str = "0x01c10003";
-const TPM2_CC_NV_WRITE: u32 = 0x0000_0137;
-const TPM2_CC_NV_DEFINE_SPACE: u32 = 0x0000_012a;
-const TPM2_CC_NV_READ: u32 = 0x0000_014e;
-const TPM2_CC_NV_READ_PUBLIC: u32 = 0x0000_0169;
-const TPM2_CC_GET_CAPABILITY: u32 = 0x0000_017a;
 const TPM2_CC_AWS_NSM_REQUEST: u32 = 0x2000_0001;
-const TPM2_CAP_COMMANDS: u32 = 2;
 const VTPM_PROXY_IOC_NEW_DEV: libc::c_ulong = 0xc014_a100;
 const VTPM_PROXY_FLAG_TPM2: u32 = 1;
 
@@ -379,12 +374,12 @@ fn proxy_tpm_commands(
                 .context("NitroTPM vendor command without an NV request")?;
             nsm_response = Some(handle_nsm_vendor_command(generator, template, backend)?);
             tpm_success_response()
-        } else if code == TPM2_CC_NV_READ && nsm_response.is_some() {
+        } else if code == TpmCc::NvRead.to_u32() && nsm_response.is_some() {
             nv_read_response(
                 &command,
                 nsm_response.as_deref().context("missing NSM response")?,
             )?
-        } else if code == TPM2_CC_NV_READ_PUBLIC && nsm_response.is_some() {
+        } else if code == TpmCc::NvReadPublic.to_u32() && nsm_response.is_some() {
             let mut response = transact(backend, &command)?;
             set_nv_public_size(
                 &mut response,
@@ -399,11 +394,11 @@ fn proxy_tpm_commands(
             // single NV index at 2 KiB. Define the backing index at that limit;
             // the proxy virtualizes its public size and reads after the vendor
             // command, while swtpm still handles its lifecycle and auth setup.
-            if code == TPM2_CC_NV_DEFINE_SPACE && command.ends_with(&8192u16.to_be_bytes()) {
+            if code == TpmCc::NvDefineSpace.to_u32() && command.ends_with(&8192u16.to_be_bytes()) {
                 let end = command.len();
                 command[end - 2..].copy_from_slice(&2048u16.to_be_bytes());
             }
-            if code == TPM2_CC_NV_WRITE {
+            if code == TpmCc::NvWrite.to_u32() {
                 if let Some(template) = parse_nv_write(&command)? {
                     nv_write = Some(template);
                 }
@@ -419,39 +414,9 @@ fn proxy_tpm_commands(
 }
 
 fn advertise_nsm_vendor_command(code: u32, response: &mut Vec<u8>) -> Result<()> {
-    if code != TPM2_CC_GET_CAPABILITY || response.len() < 19 {
-        return Ok(());
+    if code == TpmCc::GetCapability.to_u32() {
+        *response = add_command_capability(response, TPM2_CC_AWS_NSM_REQUEST)?;
     }
-    let response_code = read_be_u32(&response[6..10], "TPM response code")?;
-    let capability = read_be_u32(&response[11..15], "TPM capability")?;
-    if response_code != 0 || capability != TPM2_CAP_COMMANDS || response[10] != 0 {
-        return Ok(());
-    }
-    let count = read_be_u32(&response[15..19], "TPM command attribute count")? as usize;
-    let attributes_end = 19usize
-        .checked_add(count.checked_mul(4).context("TPM command count overflow")?)
-        .context("TPM command attributes overflow")?;
-    anyhow::ensure!(
-        response.len() >= attributes_end,
-        "truncated TPM command attributes"
-    );
-    if response[19..attributes_end].chunks_exact(4).any(|value| {
-        read_be_u32(value, "TPM command attributes")
-            .is_ok_and(|attributes| attributes == TPM2_CC_AWS_NSM_REQUEST)
-    }) {
-        return Ok(());
-    }
-    let insertion = response[19..attributes_end]
-        .chunks_exact(4)
-        .position(|value| {
-            read_be_u32(value, "TPM command attributes")
-                .is_ok_and(|attributes| attributes & 0x2000_ffff > TPM2_CC_AWS_NSM_REQUEST)
-        })
-        .map_or(attributes_end, |index| 19 + index * 4);
-    response.splice(insertion..insertion, TPM2_CC_AWS_NSM_REQUEST.to_be_bytes());
-    response[15..19].copy_from_slice(&((count + 1) as u32).to_be_bytes());
-    let response_size = response.len() as u32;
-    response[2..6].copy_from_slice(&response_size.to_be_bytes());
     Ok(())
 }
 
@@ -488,9 +453,15 @@ fn handle_nsm_vendor_command(
     let request: NsmRequest = serde_cbor::from_slice(&template.request)?;
     let response = match request {
         NsmRequest::Attestation { user_data, .. } => {
+            let mut tpm = TpmContext::from_stream(
+                backend
+                    .try_clone()
+                    .context("failed to clone NitroTPM stream")?,
+                "NitroTPM backend",
+            );
             let pcrs = [4u16, 7, 8, 12, 14]
                 .into_iter()
-                .map(|index| Ok((index, read_sha384_pcr(backend, index)?)))
+                .map(|index| Ok((index, tpm.pcr_read_single(index.into(), TpmAlgId::Sha384)?)))
                 .collect::<Result<_>>()?;
             let document = generator.attest_with_pcrs(
                 user_data.as_ref().map(|v| v.as_slice()).unwrap_or_default(),
@@ -501,35 +472,6 @@ fn handle_nsm_vendor_command(
         _ => anyhow::bail!("unsupported NitroTPM NSM request"),
     };
     Ok(serde_cbor::to_vec(&response)?)
-}
-
-fn read_sha384_pcr(backend: &mut UnixStream, index: u16) -> Result<Vec<u8>> {
-    anyhow::ensure!(index < 24, "invalid PCR index {index}");
-    let mut command = Vec::with_capacity(20);
-    command.extend_from_slice(&0x8001u16.to_be_bytes());
-    command.extend_from_slice(&20u32.to_be_bytes());
-    command.extend_from_slice(&0x0000_017eu32.to_be_bytes());
-    command.extend_from_slice(&1u32.to_be_bytes());
-    command.extend_from_slice(&0x000cu16.to_be_bytes());
-    command.push(3);
-    let mut selection = [0u8; 3];
-    selection[index as usize / 8] = 1 << (index % 8);
-    command.extend_from_slice(&selection);
-
-    let response = transact(backend, &command)?;
-    anyhow::ensure!(response.len() >= 30, "truncated TPM PCR_Read response");
-    anyhow::ensure!(
-        read_be_u32(&response[6..10], "TPM PCR_Read response code")? == 0,
-        "TPM PCR_Read failed"
-    );
-    anyhow::ensure!(
-        read_be_u32(&response[24..28], "TPM PCR digest count")? == 1,
-        "unexpected TPM PCR digest count"
-    );
-    let size = read_be_u16(&response[28..30], "TPM PCR digest size")? as usize;
-    anyhow::ensure!(size == 48, "unexpected SHA-384 PCR size {size}");
-    anyhow::ensure!(response.len() >= 30 + size, "truncated TPM PCR digest");
-    Ok(response[30..30 + size].to_vec())
 }
 
 fn set_nv_public_size(response: &mut [u8], size: usize) -> Result<()> {
@@ -586,34 +528,4 @@ fn transact(stream: &mut UnixStream, command: &[u8]) -> Result<Vec<u8>> {
 
 fn tpm_success_response() -> Vec<u8> {
     [0x80, 0x01, 0, 0, 0, 10, 0, 0, 0, 0].to_vec()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn get_capability_advertises_nsm_vendor_command() {
-        let mut response = Vec::new();
-        response.extend_from_slice(&0x8001u16.to_be_bytes());
-        response.extend_from_slice(&23u32.to_be_bytes());
-        response.extend_from_slice(&0u32.to_be_bytes());
-        response.push(0);
-        response.extend_from_slice(&TPM2_CAP_COMMANDS.to_be_bytes());
-        response.extend_from_slice(&1u32.to_be_bytes());
-        response.extend_from_slice(&0x2000_1000u32.to_be_bytes());
-
-        advertise_nsm_vendor_command(TPM2_CC_GET_CAPABILITY, &mut response).unwrap();
-
-        assert_eq!(read_be_u32(&response[2..6], "size").unwrap(), 27);
-        assert_eq!(read_be_u32(&response[15..19], "count").unwrap(), 2);
-        assert_eq!(
-            read_be_u32(&response[19..23], "vendor command").unwrap(),
-            TPM2_CC_AWS_NSM_REQUEST
-        );
-        assert_eq!(
-            read_be_u32(&response[23..27], "existing command").unwrap(),
-            0x2000_1000
-        );
-    }
 }
