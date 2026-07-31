@@ -242,24 +242,9 @@ Compose file content (first 200 chars):
     let app_compose = vm_work_dir
         .app_compose()
         .context("Failed to get app compose")?;
-    let platform = config.cvm.resolved_platform();
-    let use_mr_config_v3 = !manifest.no_tee
-        && (platform == crate::config::CvmPlatform::AmdSevSnp
-            || (platform == crate::config::CvmPlatform::Tdx
-                && config.cvm.use_mrconfigid
-                && !app_compose.key_provider_id.is_empty()));
-    let mr_config = if use_mr_config_v3 {
-        Some(
-            vm_work_dir
-                .prepare_mr_config_v3(
-                    &app_compose,
-                    manifest.gpus.as_ref().is_some_and(|gpus| gpus.has_gpus()),
-                )
-                .context("Failed to prepare mr_config")?,
-        )
-    } else {
-        None
-    };
+    let mr_config = vm_work_dir
+        .prepare_mr_config(&manifest, &config.cvm, &app_compose)
+        .context("Failed to prepare mr_config")?;
     let sys_config_str = make_sys_config(
         &config,
         &manifest,

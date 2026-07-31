@@ -283,20 +283,6 @@ pub(crate) enum PullStatus {
     Failed(String),
 }
 
-fn needs_mr_config_v3(
-    manifest: &Manifest,
-    platform: crate::config::CvmPlatform,
-    use_mrconfigid: bool,
-    has_key_provider_id: bool,
-) -> bool {
-    manifest.simulated_tee == Some(dstack_types::TeeVariant::DstackAmdSevSnp)
-        || (!manifest.no_tee
-            && (platform == crate::config::CvmPlatform::AmdSevSnp
-                || (platform == crate::config::CvmPlatform::Tdx
-                    && use_mrconfigid
-                    && has_key_provider_id)))
-}
-
 #[derive(Clone)]
 pub struct App {
     pub config: Arc<Config>,
@@ -1097,28 +1083,12 @@ impl App {
         let manifest = work_dir.manifest().context("Failed to read manifest")?;
         let cfg = &self.config;
         let compose_hash = sha256_file(shared_dir.join(APP_COMPOSE))?;
-        let platform = cfg.cvm.resolved_platform();
         let app_compose = work_dir
             .app_compose()
             .context("Failed to get app compose")?;
-        let use_mr_config_v3 = needs_mr_config_v3(
-            &manifest,
-            platform,
-            cfg.cvm.use_mrconfigid,
-            !app_compose.key_provider_id.is_empty(),
-        );
-        let mr_config = if use_mr_config_v3 {
-            Some(
-                work_dir
-                    .prepare_mr_config_v3(
-                        &app_compose,
-                        manifest.gpus.as_ref().is_some_and(GpuConfig::has_gpus),
-                    )
-                    .context("Failed to prepare mr_config")?,
-            )
-        } else {
-            None
-        };
+        let mr_config = work_dir
+            .prepare_mr_config(&manifest, &cfg.cvm, &app_compose)
+            .context("Failed to prepare mr_config")?;
         let sys_config_str = make_sys_config(
             cfg,
             &manifest,
@@ -1517,6 +1487,7 @@ pub(crate) fn needs_swtpm(
 
 #[cfg(test)]
 mod tests {
+    use super::mr_config::{mr_config_version, MrConfigVersion};
     use super::*;
     use crate::config::{
         load_config_figment, CvmPlatform, Networking, NetworkingMode, TdxAttestationVariantConfig,
@@ -1758,11 +1729,44 @@ mod tests {
     }
 
     #[test]
-    fn simulated_sev_snp_requires_mr_config_even_without_tee() {
-        let mut manifest = test_manifest(2048);
-        manifest.no_tee = true;
-        manifest.simulated_tee = Some(dstack_types::TeeVariant::DstackAmdSevSnp);
-        assert!(needs_mr_config_v3(&manifest, CvmPlatform::Tdx, true, false));
+    fn selects_mr_config_version_for_each_tee_mode() -> Result<()> {
+        let manifest = test_manifest(2048);
+        assert_eq!(
+            mr_config_version(&manifest, CvmPlatform::AmdSevSnp, false, false)?,
+            Some(MrConfigVersion::V3)
+        );
+        assert_eq!(
+            mr_config_version(&manifest, CvmPlatform::Tdx, false, false)?,
+            None
+        );
+        assert_eq!(
+            mr_config_version(&manifest, CvmPlatform::Tdx, true, false)?,
+            Some(MrConfigVersion::V1)
+        );
+        assert_eq!(
+            mr_config_version(&manifest, CvmPlatform::Tdx, true, true)?,
+            Some(MrConfigVersion::V3)
+        );
+        assert_eq!(
+            mr_config_version(&manifest, CvmPlatform::Tdx, false, true)
+                .err()
+                .map(|error| error.to_string()),
+            Some("key provider ID requires MrConfigV3, but use_mrconfigid is disabled".to_string())
+        );
+
+        let mut no_tee = manifest.clone();
+        no_tee.no_tee = true;
+        assert_eq!(
+            mr_config_version(&no_tee, CvmPlatform::AmdSevSnp, true, true)?,
+            None
+        );
+
+        no_tee.simulated_tee = Some(dstack_types::TeeVariant::DstackAmdSevSnp);
+        assert_eq!(
+            mr_config_version(&no_tee, CvmPlatform::Tdx, false, false)?,
+            Some(MrConfigVersion::V3)
+        );
+        Ok(())
     }
 
     fn dummy_tdx_measurement_document() -> TdxOsImageMeasurementDocument {
