@@ -25,7 +25,7 @@ use ra_tls::{
     cert::{CaCert, CertRequest},
     rcgen::{Certificate, KeyPair, PKCS_ECDSA_P256_SHA256},
 };
-use safe_write::safe_write;
+use safe_write::{safe_write, safe_write_with_mode};
 use sha2::Digest;
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::info;
@@ -572,10 +572,10 @@ impl Keys {
     }
 
     fn store_keys(&self, cfg: &KmsConfig) -> Result<()> {
-        safe_write(cfg.tmp_ca_key(), self.tmp_ca_key.serialize_pem())?;
-        safe_write(cfg.root_ca_key(), self.ca_key.serialize_pem())?;
-        safe_write(cfg.rpc_key(), self.rpc_key.serialize_pem())?;
-        safe_write(cfg.k256_key(), self.k256_key.to_bytes())?;
+        safe_write_with_mode(cfg.tmp_ca_key(), self.tmp_ca_key.serialize_pem(), 0o600)?;
+        safe_write_with_mode(cfg.root_ca_key(), self.ca_key.serialize_pem(), 0o600)?;
+        safe_write_with_mode(cfg.rpc_key(), self.rpc_key.serialize_pem(), 0o600)?;
+        safe_write_with_mode(cfg.k256_key(), self.k256_key.to_bytes(), 0o600)?;
         Ok(())
     }
 
