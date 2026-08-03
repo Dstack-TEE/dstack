@@ -11,7 +11,37 @@ use dstack_types::{gpu_policy_hash, AppCompose};
 use fs_err as fs;
 use sha2::{Digest, Sha256};
 
-use super::VmWorkDir;
+use super::{GpuConfig, Manifest, VmWorkDir};
+use crate::config::{CvmConfig, CvmPlatform};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MrConfigVersion {
+    V1,
+    V3,
+}
+
+pub(super) fn mr_config_version(
+    manifest: &Manifest,
+    platform: CvmPlatform,
+    use_mrconfigid: bool,
+    has_key_provider_id: bool,
+) -> Result<Option<MrConfigVersion>> {
+    if manifest.simulated_tee == Some(dstack_types::TeeVariant::DstackAmdSevSnp) {
+        return Ok(Some(MrConfigVersion::V3));
+    }
+    if manifest.no_tee {
+        return Ok(None);
+    }
+    match platform {
+        CvmPlatform::AmdSevSnp => Ok(Some(MrConfigVersion::V3)),
+        CvmPlatform::Tdx if has_key_provider_id && !use_mrconfigid => {
+            bail!("key provider ID requires MrConfigV3, but use_mrconfigid is disabled")
+        }
+        CvmPlatform::Tdx if !use_mrconfigid => Ok(None),
+        CvmPlatform::Tdx if has_key_provider_id => Ok(Some(MrConfigVersion::V3)),
+        CvmPlatform::Tdx => Ok(Some(MrConfigVersion::V1)),
+    }
+}
 
 pub(super) fn tdx_mr_config_id(workdir: &VmWorkDir, app_compose: &AppCompose) -> Result<String> {
     if let Some(document) = workdir
@@ -60,7 +90,30 @@ pub(super) fn snp_host_data(workdir: &VmWorkDir) -> Result<String> {
 }
 
 impl VmWorkDir {
-    pub fn prepare_mr_config_v3(&self, app_compose: &AppCompose, has_gpus: bool) -> Result<String> {
+    pub(crate) fn prepare_mr_config(
+        &self,
+        manifest: &Manifest,
+        config: &CvmConfig,
+        app_compose: &AppCompose,
+    ) -> Result<Option<String>> {
+        let version = mr_config_version(
+            manifest,
+            config.resolved_platform(),
+            config.use_mrconfigid,
+            !app_compose.key_provider_id.is_empty(),
+        )?;
+        match version {
+            Some(MrConfigVersion::V3) => self
+                .prepare_mr_config_v3(
+                    app_compose,
+                    manifest.gpus.as_ref().is_some_and(GpuConfig::has_gpus),
+                )
+                .map(Some),
+            Some(MrConfigVersion::V1) | None => Ok(None),
+        }
+    }
+
+    fn prepare_mr_config_v3(&self, app_compose: &AppCompose, has_gpus: bool) -> Result<String> {
         let compose_hash = self
             .app_compose_hash()
             .context("failed to get compose hash")?;

@@ -5,6 +5,7 @@
 use or_panic::ResultOrPanic;
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
+use serde_with::skip_serializing_none;
 use sha2::Sha256;
 use sha3::{Digest, Keccak256};
 use std::{error::Error, fmt};
@@ -100,24 +101,26 @@ impl From<serde_json::Error> for MrConfigDocumentError {
     }
 }
 
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MrConfigV3 {
     #[serde(default = "mr_config_v3_version")]
     pub version: u8,
-    #[serde(with = "hex_bytes")]
-    pub app_id: Vec<u8>,
+    /// Optional application identity pin.
+    #[serde(default, with = "hex_bytes")]
+    pub app_id: Option<Vec<u8>>,
     #[serde(with = "hex_bytes")]
     pub compose_hash: Vec<u8>,
     /// Hash of the raw application GPU policy. GPU launches populate it;
     /// non-GPU and historical v3 launch documents omit it.
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "hex_bytes")]
+    #[serde(default, with = "hex_bytes")]
     pub gpu_policy_hash: Option<Vec<u8>>,
     pub key_provider: KeyProviderKind,
     #[serde(default, with = "hex_bytes")]
-    pub key_provider_id: Vec<u8>,
+    pub key_provider_id: Option<Vec<u8>>,
     #[serde(default, with = "hex_bytes")]
-    pub instance_id: Vec<u8>,
+    pub instance_id: Option<Vec<u8>>,
 }
 
 impl MrConfigV3 {
@@ -131,12 +134,12 @@ impl MrConfigV3 {
     ) -> Self {
         Self {
             version: mr_config_v3_version(),
-            app_id,
+            app_id: (!app_id.is_empty()).then_some(app_id),
             compose_hash,
             gpu_policy_hash,
             key_provider,
-            key_provider_id,
-            instance_id,
+            key_provider_id: (!key_provider_id.is_empty()).then_some(key_provider_id),
+            instance_id: (!instance_id.is_empty()).then_some(instance_id),
         }
     }
 
@@ -203,7 +206,7 @@ mod tests {
             vec![0x44; 20],
         );
         let mut changed = config.clone();
-        changed.app_id[0] ^= 0xff;
+        changed.app_id.as_mut().expect("app_id is set")[0] ^= 0xff;
 
         assert_ne!(config.to_snp_host_data(), changed.to_snp_host_data());
         assert_eq!(config.to_snp_host_data().len(), 32);
@@ -232,6 +235,17 @@ mod tests {
 
         assert!(!document.contains("gpu_policy_hash"));
         assert_eq!(MrConfigV3::from_document(&document)?, config);
+        Ok(())
+    }
+
+    #[test]
+    fn mr_config_v3_defaults_missing_app_id_to_empty() -> Result<(), Box<dyn Error>> {
+        let config = MrConfigV3::from_document(
+            r#"{"compose_hash":"2222222222222222222222222222222222222222222222222222222222222222","key_provider":"none"}"#,
+        )?;
+
+        assert!(config.app_id.is_none());
+        assert!(!config.to_canonical_json().contains("app_id"));
         Ok(())
     }
 
