@@ -49,7 +49,7 @@ Query the relevant health, configuration, and baseline state for health dashboar
 <a id="tc-gw-cluster-ad-007-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Query /health/dashboard during startup, traffic, degraded peers, cert failure, and admin Exit.
+Query the existing Admin dashboard at `/` during startup, traffic, degraded peers, certificate failure, and Admin.Exit; use `/health` only for liveness.
 
 **Expected results:**
 
