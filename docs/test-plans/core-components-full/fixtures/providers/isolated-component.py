@@ -1998,8 +1998,8 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
             node = {
                 "node_id": node_id,
                 "rpc_url": f"https://127.0.0.1:{ports_for_node['rpc']}/prpc",
-                "health_url": f"http://127.0.0.1:{ports_for_node['admin']}/health",
-                "health_dashboard_url": f"http://127.0.0.1:{ports_for_node['admin']}/health/dashboard",
+                "health_url": f"https://127.0.0.1:{ports_for_node['rpc']}/health",
+                "dashboard_url": f"http://127.0.0.1:{ports_for_node['admin']}/",
                 "admin_url": f"http://127.0.0.1:{ports_for_node['admin']}/prpc",
                 "debug_url": f"http://127.0.0.1:{ports_for_node['debug']}/prpc",
                 "proxy_address": f"127.0.0.1:{ports_for_node['proxy']}",

@@ -11,6 +11,7 @@ import json
 import os
 import pathlib
 import signal
+import ssl
 import socket
 import subprocess
 import sys
@@ -63,7 +64,9 @@ def get(url: str, token: str) -> tuple[int, bytes]:
     request = urllib.request.Request(url, method="GET")
     request.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with urllib.request.urlopen(
+            request, timeout=5, context=ssl._create_unverified_context()
+        ) as response:
             return int(response.status), response.read()
     except urllib.error.HTTPError as error:
         return int(error.code), error.read()
@@ -125,7 +128,7 @@ def main() -> int:
                 "client_public_key": base64.b64encode(os.urandom(32)).decode(),
             },
         )
-        dashboard_code, dashboard = get(str(node["health_dashboard_url"]), token)
+        dashboard_code, dashboard = get(str(node["dashboard_url"]), token)
         raw = instance_id.encode()
         escaped = html.escape(instance_id).encode()
         dashboard_lower = dashboard.lower()
