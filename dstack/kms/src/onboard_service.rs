@@ -72,8 +72,28 @@ impl RpcCall<OnboardState> for OnboardHandler {
     }
 }
 
+fn validate_onboarding_domain(domain: &str) -> Result<()> {
+    if domain.is_empty() || domain.len() > 253 || !domain.is_ascii() {
+        bail!("domain must be a non-empty ASCII DNS name of at most 253 bytes");
+    }
+    for label in domain.split('.') {
+        if label.is_empty()
+            || label.len() > 63
+            || label.starts_with('-')
+            || label.ends_with('-')
+            || !label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            bail!("domain contains an invalid DNS label");
+        }
+    }
+    Ok(())
+}
+
 impl OnboardRpc for OnboardHandler {
     async fn bootstrap(self, request: BootstrapRequest) -> Result<BootstrapResponse> {
+        validate_onboarding_domain(&request.domain)?;
         ensure_self_kms_allowed(&self.state.config, &self.state.attestation_verifier)
             .await
             .context("KMS is not allowed to bootstrap")?;
@@ -98,6 +118,7 @@ impl OnboardRpc for OnboardHandler {
     }
 
     async fn onboard(self, request: OnboardRequest) -> Result<OnboardResponse> {
+        validate_onboarding_domain(&request.domain)?;
         let source_url = request.source_url.trim_end_matches('/').to_string();
         let source_url = if source_url.ends_with("/prpc") {
             source_url
@@ -342,6 +363,26 @@ mod tests {
         assert_eq!(response.eth_rpc_url, "https://rpc.example");
         assert_eq!(response.kms_contract_address, "0x1234");
     }
+
+    #[test]
+    fn onboarding_domain_accepts_dns_name() {
+        validate_onboarding_domain("kms.example.com").unwrap();
+    }
+
+    #[test]
+    fn onboarding_domain_rejects_empty_overlong_and_invalid_labels() {
+        let overlong = "a".repeat(254);
+        for domain in [
+            "",
+            overlong.as_str(),
+            "-kms.example.com",
+            "kms-.example.com",
+            "kms..example.com",
+            "kms_example.com",
+        ] {
+            assert!(validate_onboarding_domain(domain).is_err(), "{domain:?}");
+        }
+    }
 }
 
 struct Keys {
@@ -578,6 +619,7 @@ pub(crate) async fn update_certs(cfg: &KmsConfig) -> Result<()> {
 }
 
 pub(crate) async fn bootstrap_keys(cfg: &KmsConfig, verifier: &AttestationVerifier) -> Result<()> {
+    validate_onboarding_domain(&cfg.onboard.auto_bootstrap_domain)?;
     ensure_self_kms_allowed(cfg, verifier)
         .await
         .context("KMS is not allowed to auto-bootstrap")?;
