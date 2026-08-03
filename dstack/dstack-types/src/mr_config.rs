@@ -105,7 +105,8 @@ impl From<serde_json::Error> for MrConfigDocumentError {
 pub struct MrConfigV3 {
     #[serde(default = "mr_config_v3_version")]
     pub version: u8,
-    #[serde(with = "hex_bytes")]
+    /// Optional application identity pin. An empty value leaves app_id unbound.
+    #[serde(default, with = "hex_bytes")]
     pub app_id: Vec<u8>,
     #[serde(with = "hex_bytes")]
     pub compose_hash: Vec<u8>,
@@ -232,6 +233,17 @@ mod tests {
 
         assert!(!document.contains("gpu_policy_hash"));
         assert_eq!(MrConfigV3::from_document(&document)?, config);
+        Ok(())
+    }
+
+    #[test]
+    fn mr_config_v3_defaults_missing_app_id_to_empty() -> Result<(), Box<dyn Error>> {
+        let config = MrConfigV3::from_document(
+            r#"{"compose_hash":"2222222222222222222222222222222222222222222222222222222222222222","key_provider":"none"}"#,
+        )?;
+
+        assert!(config.app_id.is_empty());
+        assert!(config.to_canonical_json().contains(r#""app_id":"""#));
         Ok(())
     }
 

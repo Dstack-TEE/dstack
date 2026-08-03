@@ -911,7 +911,9 @@ pub fn validate_mr_config(mr_config: &MrConfigV3) -> Result<()> {
     if mr_config.version != 3 {
         bail!("mr_config version must be 3");
     }
-    ensure_len("mr_config.app_id", &mr_config.app_id, 20)?;
+    if !mr_config.app_id.is_empty() {
+        ensure_len("mr_config.app_id", &mr_config.app_id, 20)?;
+    }
     ensure_len("mr_config.compose_hash", &mr_config.compose_hash, 32)?;
     if let Some(gpu_policy_hash) = &mr_config.gpu_policy_hash {
         ensure_len("mr_config.gpu_policy_hash", gpu_policy_hash, 32)?;
