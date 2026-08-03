@@ -538,15 +538,15 @@ impl TappdRpc for InternalRpcHandlerV0 {
         } else {
             &request.hash_algorithm
         };
-        let prefix = if hash_algorithm == "raw" {
-            "".into()
-        } else {
-            QuoteContentType::AppData.tag().to_string()
-        };
         let content_type = if request.prefix.is_empty() {
             QuoteContentType::AppData
         } else {
             QuoteContentType::Custom(&request.prefix)
+        };
+        let prefix = if hash_algorithm == "raw" {
+            "".into()
+        } else {
+            content_type.tag().to_string()
         };
         let report_data =
             content_type.to_report_data_with_hash(&request.report_data, &request.hash_algorithm)?;
@@ -1274,6 +1274,33 @@ pNs85uhOZE8z2jr8Pg==
 
         let response = handler.version().await.unwrap();
         assert!(!response.version.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_tdx_quote_reports_effective_prefix() {
+        let (state, _guard) = setup_test_state().await;
+
+        let default = InternalRpcHandlerV0 {
+            state: state.clone(),
+        }
+        .tdx_quote(TdxQuoteArgs {
+            report_data: b"test".to_vec(),
+            hash_algorithm: "sha512".to_string(),
+            prefix: "".to_string(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(default.prefix, "app-data");
+
+        let custom = InternalRpcHandlerV0 { state }
+            .tdx_quote(TdxQuoteArgs {
+                report_data: b"test".to_vec(),
+                hash_algorithm: "sha512".to_string(),
+                prefix: "custom-domain".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(custom.prefix, "custom-domain");
     }
 
     #[tokio::test]
