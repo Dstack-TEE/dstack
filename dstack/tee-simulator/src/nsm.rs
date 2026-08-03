@@ -8,8 +8,11 @@ use std::{
     ffi::CString,
     mem,
     os::raw::{c_int, c_uint, c_void},
+    path::Path,
     ptr,
     sync::{Arc, OnceLock},
+    thread,
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -40,7 +43,7 @@ struct CuseInfo {
 #[repr(C)]
 struct CuseOperations {
     init: *const c_void,
-    init_done: *const c_void,
+    init_done: Option<unsafe extern "C" fn(*mut c_void)>,
     destroy: *const c_void,
     open: Option<unsafe extern "C" fn(FuseReq, *mut FuseFileInfo)>,
     read: *const c_void,
@@ -114,6 +117,62 @@ unsafe extern "C" fn open(req: FuseReq, fi: *mut FuseFileInfo) {
 
 unsafe extern "C" fn release(req: FuseReq, _fi: *mut FuseFileInfo) {
     (cuse().reply_err)(req, 0);
+}
+
+unsafe extern "C" fn init_done(_userdata: *mut c_void) {
+    if let Err(error) = ensure_nsm_device() {
+        tracing::error!(?error, "failed to publish simulated NSM device");
+        return;
+    }
+    if let Err(error) = sd_notify::notify(true, &[sd_notify::NotifyState::Ready]) {
+        tracing::error!(?error, "failed to notify systemd that NSM is ready");
+    }
+}
+
+fn ensure_nsm_device() -> Result<()> {
+    let device_path = Path::new("/dev/nsm");
+    let sysfs_paths = [
+        Path::new("/sys/class/misc/nsm/dev"),
+        Path::new("/sys/devices/virtual/misc/nsm/dev"),
+    ];
+    let mut stable_checks = 0;
+    for _ in 0..100 {
+        if device_path.exists() {
+            stable_checks += 1;
+            if stable_checks >= 10 {
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(20));
+            continue;
+        }
+        stable_checks = 0;
+        if let Some(device) = sysfs_paths
+            .iter()
+            .find_map(|path| fs_err::read_to_string(path).ok())
+        {
+            let (major, minor) = device
+                .trim()
+                .split_once(':')
+                .context("invalid NSM device number")?;
+            let major = major.parse::<u32>().context("invalid NSM major number")?;
+            let minor = minor.parse::<u32>().context("invalid NSM minor number")?;
+            let path = CString::new("/dev/nsm")?;
+            let result = unsafe {
+                libc::mknod(
+                    path.as_ptr(),
+                    libc::S_IFCHR | 0o660,
+                    libc::makedev(major, minor),
+                )
+            };
+            if result == 0 || device_path.exists() {
+                thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+            return Err(std::io::Error::last_os_error()).context("failed to create /dev/nsm");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    anyhow::bail!("CUSE NSM device did not appear in sysfs")
 }
 
 unsafe extern "C" fn ioctl(
@@ -245,7 +304,7 @@ pub fn run(config: &TeeSimulatorConfig) -> Result<()> {
     };
     let operations = CuseOperations {
         init: ptr::null(),
-        init_done: ptr::null(),
+        init_done: Some(init_done),
         destroy: ptr::null(),
         open: Some(open),
         read: ptr::null(),
@@ -256,7 +315,6 @@ pub fn run(config: &TeeSimulatorConfig) -> Result<()> {
         ioctl: Some(ioctl),
         poll: ptr::null(),
     };
-    sd_notify::notify(true, &[sd_notify::NotifyState::Ready])?;
     let program = CString::new("dstack-tee-simulator")?;
     let foreground = CString::new("-f")?;
     let single_threaded = CString::new("-s")?;
