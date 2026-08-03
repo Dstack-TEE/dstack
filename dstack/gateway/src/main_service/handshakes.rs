@@ -47,8 +47,38 @@ impl LatestHandshakesCache {
     }
 
     pub(crate) fn latest(&self, stale_timeout: Option<Duration>) -> Result<HandshakesWithAge> {
-        let snapshot = self.cell.get()?;
-        add_elapsed_time(snapshot.value(), stale_timeout)
+        // Admin/public status paths call this synchronously. On fixture hosts the
+        // first successful `wg show` may not have completed yet (or the interface
+        // may be absent), so a hard Empty error collapses many Admin.* RPCs with
+        // "cached cell is empty". Prefer:
+        // 1) fresh TTL value
+        // 2) stale last-known value
+        // 3) one synchronous producer refresh
+        // 4) empty map so callers can still report registered hosts/meta
+        let timestamps = match self.cell.get() {
+            Ok(snapshot) => snapshot.into_value(),
+            Err(cached_cell::GetError::Expired { .. }) | Err(cached_cell::GetError::Empty) => {
+                match self.cell.get_allow_stale() {
+                    Ok(snapshot) => snapshot.into_value(),
+                    Err(_) => {
+                        let interface = self.interface.clone();
+                        match fetch_latest_handshake_timestamps(&interface) {
+                            Ok(value) => {
+                                self.cell.set(value.clone());
+                                std::sync::Arc::new(value)
+                            }
+                            Err(err) => {
+                                warn!(
+                                    "WireGuard latest-handshakes unavailable; returning empty map: {err}"
+                                );
+                                std::sync::Arc::new(BTreeMap::new())
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        add_elapsed_time(timestamps.as_ref(), stale_timeout)
     }
 }
 
