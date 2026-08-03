@@ -1379,6 +1379,9 @@ fn make_vm_config(
     let platform = cfg.cvm.resolved_platform();
     let is_amd_sev_snp = platform == crate::config::CvmPlatform::AmdSevSnp && !manifest.no_tee;
     let is_tdx = platform == crate::config::CvmPlatform::Tdx && !manifest.no_tee;
+    let is_gcp_tdx = manifest.simulated_tee == Some(dstack_types::TeeVariant::DstackGcpTdx);
+    let is_aws_nitro_tpm =
+        manifest.simulated_tee == Some(dstack_types::TeeVariant::DstackAwsNitroTpm);
     let tdx_attestation_variant = if is_tdx {
         tdx_attestation_variant_from_requirements(requirements).unwrap_or_else(|| {
             cfg.cvm
@@ -1429,6 +1432,24 @@ fn make_vm_config(
     let num_nics = resolved_networks(manifest, &cfg.cvm).len() as u32;
     let num_verity_volumes = manifest.volumes.len() as u32;
     let swtpm = manifest.swtpm;
+    let gcp_measurement = if is_gcp_tdx {
+        Some(
+            image
+                .gcp_measurement
+                .clone()
+                .context("GCP TDX image is missing measurement.gcp.cbor measurement material")?,
+        )
+    } else {
+        None
+    };
+    let aws_measurement =
+        if is_aws_nitro_tpm {
+            Some(image.aws_measurement.clone().context(
+                "AWS NitroTPM image is missing measurement.aws.cbor measurement material",
+            )?)
+        } else {
+            None
+        };
     let mut config = serde_json::to_value(dstack_types::VmConfig {
         os_image_hash,
         cpu_count: effective_vcpus,
@@ -1449,8 +1470,8 @@ fn make_vm_config(
         ovmf_variant: image.info.ovmf_variant,
         tdx_attestation_variant,
         tdx_measurement,
-        gcp_measurement: None,
-        aws_measurement: None,
+        gcp_measurement,
+        aws_measurement,
     })?;
     // For backward compatibility
     config["spec_version"] = serde_json::Value::from(1);
@@ -1821,6 +1842,8 @@ mod tests {
             digest: Some(hex_of(0xaa, 32)),
             tdx_measurement,
             sev_measurement: None,
+            gcp_measurement: None,
+            aws_measurement: None,
         }
     }
 
