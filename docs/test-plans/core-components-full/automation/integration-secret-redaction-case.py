@@ -167,7 +167,7 @@ def main() -> int:
         urls = {
             "kms_metrics": kms["metrics_url"],
             "gateway_health": gateway["health_url"],
-            "gateway_dashboard": gateway["health_dashboard_url"],
+            "gateway_dashboard": gateway["dashboard_url"],
             "gateway_debug": gateway["debug_url"],
         }
         for name, url in urls.items():
