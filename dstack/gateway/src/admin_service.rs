@@ -792,6 +792,25 @@ fn redact_token(token: &str) -> String {
     }
 }
 
+fn validate_zt_domain(domain: &str) -> Result<()> {
+    if domain.is_empty() || domain.len() > 253 || !domain.is_ascii() {
+        bail!("domain must be a non-empty ASCII DNS name of at most 253 bytes");
+    }
+    for label in domain.split('.') {
+        if label.is_empty()
+            || label.len() > 63
+            || label.starts_with('-')
+            || label.ends_with('-')
+            || !label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            bail!("domain contains an invalid DNS label");
+        }
+    }
+    Ok(())
+}
+
 /// Convert proto ZtDomainConfig to internal ZtDomainConfig
 fn proto_to_zt_domain_config(
     proto: &ProtoZtDomainConfig,
@@ -817,6 +836,10 @@ fn proto_to_zt_domain_config(
         .strip_prefix("*.")
         .unwrap_or(&proto.domain)
         .to_string();
+    validate_zt_domain(&domain)?;
+    if proto.port == 0 {
+        bail!("port must be between 1 and 65535");
+    }
 
     Ok(ZtDomainConfig {
         domain,
@@ -854,5 +877,31 @@ fn zt_domain_to_proto(
             priority: config.priority,
         }),
         cert_status,
+    }
+}
+
+#[cfg(test)]
+mod zt_domain_tests {
+    use super::validate_zt_domain;
+
+    #[test]
+    fn accepts_a_dns_domain() {
+        validate_zt_domain("service.example.com").unwrap();
+    }
+
+    #[test]
+    fn rejects_empty_and_invalid_dns_domains() {
+        for domain in [
+            "",
+            ".example.com",
+            "example..com",
+            "-bad.example",
+            "bad-.example",
+        ] {
+            assert!(
+                validate_zt_domain(domain).is_err(),
+                "{domain} should be rejected"
+            );
+        }
     }
 }
