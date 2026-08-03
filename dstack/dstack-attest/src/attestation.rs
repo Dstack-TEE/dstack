@@ -390,6 +390,19 @@ fn find_event_payload(runtime_events: &[RuntimeEvent], event: &str) -> Result<Ve
     find_event(runtime_events, event).map(|event| event.payload)
 }
 
+/// Returns ordered payloads for matching boot-time events.
+///
+/// Events after `system-ready` are application-controlled and intentionally
+/// excluded from system measurements exposed through decoded app info.
+fn find_event_payloads(runtime_events: &[RuntimeEvent], name: &str) -> Vec<Vec<u8>> {
+    runtime_events
+        .iter()
+        .take_while(|event| event.event != "system-ready")
+        .filter(|event| event.event == name)
+        .map(|event| event.payload.clone())
+        .collect()
+}
+
 fn decode_vm_config_with_fallback(config: &str, fallback_config: &str) -> Result<VmConfig> {
     let config = if config.is_empty() {
         fallback_config
@@ -890,6 +903,7 @@ impl AttestationV1 {
                 key_provider_info,
                 os_image_hash,
                 compose_hash,
+                init_script_hashes: Some(find_event_payloads(runtime_events, "init-script-hash")),
             }
         };
 
@@ -1615,6 +1629,7 @@ fn decode_app_info_sev_snp(
         key_provider_info,
         os_image_hash,
         compose_hash: mr_config.compose_hash,
+        init_script_hashes: mr_config.init_script_hashes,
     })
 }
 
@@ -1937,6 +1952,10 @@ impl<T: GetDeviceId> Attestation<T> {
                 key_provider_info,
                 os_image_hash,
                 compose_hash,
+                init_script_hashes: Some(find_event_payloads(
+                    &self.runtime_events,
+                    "init-script-hash",
+                )),
             }
         };
 
@@ -2025,6 +2044,12 @@ impl<T> Attestation<T> {
 
     fn find_event_payload(&self, event: &str) -> Result<Vec<u8>> {
         self.find_event(event).map(|event| event.payload)
+    }
+
+    /// SHA-256 payloads of all measured init scripts, in execution order.
+    /// Application-emitted events after `system-ready` are excluded.
+    pub fn decode_init_script_hashes(&self) -> Vec<Vec<u8>> {
+        find_event_payloads(&self.runtime_events, "init-script-hash")
     }
 
     fn find_event_hex_payload(&self, event: &str) -> Result<String> {
@@ -2491,11 +2516,51 @@ pub struct AppInfo {
     /// Key provider info
     #[serde(with = "hex_bytes")]
     pub key_provider_info: Vec<u8>,
+    /// Optional SHA-256 pins for init scripts, in execution order. `None`
+    /// means the evidence did not bind this field. On SEV-SNP, `Some(vec![])`
+    /// explicitly binds an empty script list. On TDX and Nitro it only means
+    /// that no `init-script-hash` events were measured before `system-ready`;
+    /// pre-0.6.0 images emit no such events even when they run an init script.
+    #[serde(default, with = "dstack_types::init_script_hashes::option")]
+    pub init_script_hashes: Option<Vec<Vec<u8>>>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_info_defaults_missing_init_script_hashes() {
+        let app_info: AppInfo = serde_json::from_value(serde_json::json!({
+            "app_id": "",
+            "compose_hash": "",
+            "instance_id": "",
+            "device_id": "",
+            "mr_system": "0000000000000000000000000000000000000000000000000000000000000000",
+            "mr_aggregated": "0000000000000000000000000000000000000000000000000000000000000000",
+            "os_image_hash": "",
+            "key_provider_info": ""
+        }))
+        .unwrap();
+        assert!(app_info.init_script_hashes.is_none());
+    }
+
+    #[test]
+    fn app_info_preserves_explicit_empty_init_script_hashes() {
+        let app_info: AppInfo = serde_json::from_value(serde_json::json!({
+            "app_id": "",
+            "compose_hash": "",
+            "instance_id": "",
+            "device_id": "",
+            "mr_system": "0000000000000000000000000000000000000000000000000000000000000000",
+            "mr_aggregated": "0000000000000000000000000000000000000000000000000000000000000000",
+            "os_image_hash": "",
+            "key_provider_info": "",
+            "init_script_hashes": []
+        }))
+        .unwrap();
+        assert_eq!(app_info.init_script_hashes, Some(Vec::new()));
+    }
 
     #[test]
     fn external_trust_anchor_requires_explicit_insecure_opt_in() {
@@ -2824,6 +2889,21 @@ mod tests {
     }
     fn v1_event(event: String, payload: Vec<u8>) -> RuntimeEvent {
         RuntimeEvent::new(event, payload, EventLogVersion::V1)
+    }
+
+    #[test]
+    fn init_script_hashes_exclude_application_events_after_system_ready() {
+        let events = vec![
+            v1_event("init-script-hash".into(), vec![0x11; 32]),
+            v1_event("init-script-hash".into(), vec![0x22; 32]),
+            v1_event("system-ready".into(), Vec::new()),
+            v1_event("init-script-hash".into(), vec![0xff; 32]),
+        ];
+
+        assert_eq!(
+            find_event_payloads(&events, "init-script-hash"),
+            vec![vec![0x11; 32], vec![0x22; 32]]
+        );
     }
 
     #[test]

@@ -739,6 +739,7 @@ mod tests {
             runner: String::new(),
             snapshotter: None,
             docker_compose_file: None,
+            init_script: Vec::new(),
             public_logs: false,
             public_sysinfo: false,
             public_tcbinfo: false,

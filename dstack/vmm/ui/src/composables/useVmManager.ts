@@ -31,9 +31,27 @@ type AppCompose = {
   swap_size: number;
   launch_token_hash?: string;
   pre_launch_script?: string;
-  init_script?: string;
+  init_script?: string | string[];
   event_log_version?: number;
 };
+
+function initScriptList(initScript: string | string[] | undefined): string[] {
+  const scripts = Array.isArray(initScript)
+    ? [...initScript]
+    : initScript
+      ? [initScript]
+      : [];
+  return scripts.length > 0 ? scripts : [''];
+}
+
+function nonEmptyInitScripts(initScripts: string[]): string[] {
+  return initScripts.filter((script) => script.trim());
+}
+
+function compatibleInitScripts(initScripts: string[]): string | string[] | undefined {
+  const scripts = nonEmptyInitScripts(initScripts);
+  return scripts.length === 0 ? undefined : scripts.length === 1 ? scripts[0] : scripts;
+}
 
 type KeyProviderKind = 'none' | 'kms' | 'local' | 'tpm';
 type RequirementPlatform =
@@ -100,7 +118,7 @@ type VmFormState = {
   name: string;
   image: string;
   dockerComposeFile: string;
-  initScript: string;
+  initScripts: string[];
   preLaunchScript: string;
   vcpu: number;
   memory: number;
@@ -139,7 +157,7 @@ type UpdateDialogState = {
   vm: VmListItem | null;
   updateCompose: boolean;
   dockerComposeFile: string;
-  initScript: string;
+  initScripts: string[];
   preLaunchScript: string;
   encryptedEnvs: EncryptedEnvEntry[];
   resetSecrets: boolean;
@@ -189,7 +207,7 @@ function createVmFormState(preLaunchScript: string): VmFormState {
     name: '',
     image: '',
     dockerComposeFile: '',
-    initScript: '',
+    initScripts: [''],
     preLaunchScript,
     vcpu: 1,
     memory: 2048,
@@ -230,7 +248,7 @@ function createUpdateDialogState(): UpdateDialogState {
     vm: null,
     updateCompose: false,
     dockerComposeFile: '',
-    initScript: '',
+    initScripts: [''],
     preLaunchScript: '',
     encryptedEnvs: [],
     resetSecrets: false,
@@ -813,6 +831,9 @@ type CreateVmPayloadSource = {
 
   async function makeAppComposeFile() {
     const osVersion = imageVersion(vmForm.value.image);
+    if (nonEmptyInitScripts(vmForm.value.initScripts).length > 1 && (!osVersion || !verGE(osVersion, '0.6.0'))) {
+      throw new Error('Multiple init scripts require a dstack image version 0.6.0 or newer');
+    }
     const appCompose: Record<string, unknown> = {
       manifest_version: appComposeManifestVersion(osVersion),
       name: vmForm.value.name,
@@ -846,8 +867,9 @@ type CreateVmPayloadSource = {
       appCompose.storage_fs = vmForm.value.storage_fs;
     }
 
-    if (vmForm.value.initScript?.trim()) {
-      appCompose.init_script = vmForm.value.initScript;
+    const initScripts = compatibleInitScripts(vmForm.value.initScripts);
+    if (initScripts !== undefined) {
+      appCompose.init_script = initScripts;
     }
 
     if (vmForm.value.preLaunchScript?.trim()) {
@@ -883,6 +905,9 @@ type CreateVmPayloadSource = {
       docker_compose_file: updateDialog.value.dockerComposeFile || currentAppCompose.docker_compose_file,
     };
     const targetManifestVersion = appComposeManifestVersion(imageVersion(updateDialog.value.image));
+    if (nonEmptyInitScripts(updateDialog.value.initScripts).length > 1 && targetManifestVersion !== '3') {
+      throw new Error('Multiple init scripts require a dstack image version 0.6.0 or newer');
+    }
     if (targetManifestVersion === '3') {
       appCompose.manifest_version = targetManifestVersion;
     }
@@ -895,7 +920,7 @@ type CreateVmPayloadSource = {
         appCompose.launch_token_hash = await calcComposeHash(launchToken.value);
       }
     }
-    appCompose.init_script = updateDialog.value.initScript?.trim() || undefined;
+    appCompose.init_script = compatibleInitScripts(updateDialog.value.initScripts);
     appCompose.pre_launch_script = updateDialog.value.preLaunchScript?.trim() || undefined;
 
     const swapBytes = Math.max(0, Math.round(updateDialog.value.swap_size || 0));
@@ -984,7 +1009,7 @@ type CreateVmPayloadSource = {
       vm: detailedVm,
       updateCompose: false,
       dockerComposeFile: detailedVm.appCompose.docker_compose_file || '',
-      initScript: detailedVm.appCompose.init_script || '',
+      initScripts: initScriptList(detailedVm.appCompose.init_script),
       preLaunchScript: detailedVm.appCompose.pre_launch_script || '',
       encryptedEnvs: [],
       resetSecrets: false,
@@ -1108,7 +1133,7 @@ type CreateVmPayloadSource = {
       loadVMList();
     } catch (error) {
       recordError('Error creating VM', error);
-      alert('Failed to create VM');
+      alert(error instanceof Error ? error.message : 'Failed to create VM');
     }
   }
 
@@ -1194,7 +1219,7 @@ type CreateVmPayloadSource = {
       loadVMList();
     } catch (error) {
       recordError('error upgrading VM', error);
-      alert('failed to upgrade VM');
+      alert(error instanceof Error ? error.message : 'Failed to upgrade VM');
     }
   }
 
@@ -1224,7 +1249,7 @@ type CreateVmPayloadSource = {
       name: `${config.name || vm.name}`,
       image: config.image || '',
       dockerComposeFile: theVm.appCompose?.docker_compose_file || '',
-      initScript: theVm.appCompose?.init_script || '',
+      initScripts: initScriptList(theVm.appCompose?.init_script),
       preLaunchScript: theVm.appCompose?.pre_launch_script || '',
       vcpu: config.vcpu || 1,
       memory: config.memory || 0,

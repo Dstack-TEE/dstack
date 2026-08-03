@@ -1,6 +1,6 @@
 ---
 source: dstack-attest/tests/nitro_verify.rs
-assertion_line: 25
+assertion_line: 29
 expression: app_info_str
 ---
 {
@@ -11,5 +11,6 @@ expression: app_info_str
   "mr_system": "1894b0b29e94a9db16e88a2914f0923e52bb16c08bf3bb484df786a147e2eb79",
   "mr_aggregated": "1894b0b29e94a9db16e88a2914f0923e52bb16c08bf3bb484df786a147e2eb79",
   "os_image_hash": "1894b0b29e94a9db16e88a2914f0923e52bb16c08bf3bb484df786a147e2eb79",
-  "key_provider_info": ""
+  "key_provider_info": "",
+  "init_script_hashes": []
 }
