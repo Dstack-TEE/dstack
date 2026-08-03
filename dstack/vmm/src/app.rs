@@ -2139,7 +2139,7 @@ mod tests {
             sys_config["nvidia_attestation_proxy_url"],
             "http://10.0.2.2:8090"
         );
-        assert_eq!(parsed_mr_config.app_id, vec![0x11; 20]);
+        assert_eq!(parsed_mr_config.app_id, Some(vec![0x11; 20]));
         assert_eq!(parsed_mr_config.compose_hash, vec![0x22; 32]);
         assert_eq!(parsed_mr_config.gpu_policy_hash, None);
         assert_eq!(vm_config["mr_config"], sys_config["mr_config"]);

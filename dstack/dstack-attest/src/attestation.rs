@@ -1547,7 +1547,7 @@ struct Mrs {
 fn key_provider_info_from_mr_config(mr_config: &MrConfigV3) -> Result<Vec<u8>> {
     serde_json::to_vec(&KeyProviderInfo::new(
         mr_config.key_provider_name().to_string(),
-        hex::encode(&mr_config.key_provider_id),
+        hex::encode(mr_config.key_provider_id.as_deref().unwrap_or_default()),
     ))
     .context("Failed to serialize key provider info")
 }
@@ -1607,8 +1607,8 @@ fn decode_app_info_sev_snp(
     let mrs = decode_mr_sev_snp(&parsed.measurement, &parsed.host_data);
 
     Ok(AppInfo {
-        app_id: mr_config.app_id,
-        instance_id: mr_config.instance_id,
+        app_id: mr_config.app_id.unwrap_or_default(),
+        instance_id: mr_config.instance_id.unwrap_or_default(),
         device_id: sha256(parsed.chip_id).to_vec(),
         mr_system: mrs.mr_system,
         mr_aggregated: mrs.mr_aggregated,

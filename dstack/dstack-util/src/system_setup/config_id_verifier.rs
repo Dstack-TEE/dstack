@@ -168,17 +168,23 @@ fn verify_mr_config_v3_document(
             bail!("Invalid mr_config gpu_policy_hash");
         }
     }
-    if !mr_config.app_id.is_empty() && mr_config.app_id.as_slice() != local.app_id {
-        bail!("Invalid mr_config app_id");
+    if let Some(app_id) = mr_config.app_id.as_deref() {
+        if app_id != local.app_id {
+            bail!("Invalid mr_config app_id");
+        }
     }
-    if mr_config.instance_id.as_slice() != local.instance_id {
-        bail!("Invalid mr_config instance_id");
+    if let Some(instance_id) = mr_config.instance_id.as_deref() {
+        if instance_id != local.instance_id {
+            bail!("Invalid mr_config instance_id");
+        }
     }
     if mr_config.key_provider != local.key_provider {
         bail!("Invalid mr_config key_provider");
     }
-    if mr_config.key_provider_id.as_slice() != local.key_provider_id {
-        bail!("Invalid mr_config key_provider_id");
+    if let Some(key_provider_id) = mr_config.key_provider_id.as_deref() {
+        if key_provider_id != local.key_provider_id {
+            bail!("Invalid mr_config key_provider_id");
+        }
     }
     Ok(mr_config)
 }
