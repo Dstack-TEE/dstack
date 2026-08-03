@@ -83,6 +83,17 @@ impl ProcessStateRT {
     pub(crate) fn is_started(&self) -> bool {
         self.started
     }
+
+    /// An explicit stop may arrive just after the process exited on its own
+    /// (VM launchers exit cleanly after reaping their children). Report such
+    /// a clean exit as the intended stop, but keep non-zero exit codes and
+    /// errors visible for diagnostics. `stopped_at` recorded by the wait task
+    /// is left untouched.
+    fn normalize_clean_exit(&mut self) {
+        if matches!(self.status, ProcessStatus::Exited(0)) {
+            self.status = ProcessStatus::Stopped;
+        }
+    }
 }
 
 impl ProcessStateRT {
@@ -289,17 +300,11 @@ impl Process {
             if is_running {
                 bail!("Missing kill tx for process");
             }
-            state.status = ProcessStatus::Stopped;
-            state.stopped_at = Some(SystemTime::now());
+            state.normalize_clean_exit();
             return Ok(());
         };
         if !is_running {
-            // A process may exit cleanly just before an explicit stop reaches
-            // Supervisor (VM launchers do this after reaping their children).
-            // The requested persistent state is nevertheless stopped, not a
-            // stale natural-exit observation.
-            state.status = ProcessStatus::Stopped;
-            state.stopped_at = Some(SystemTime::now());
+            state.normalize_clean_exit();
             return Ok(());
         }
         match stop_tx.send(()) {
