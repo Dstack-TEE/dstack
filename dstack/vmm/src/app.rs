@@ -468,7 +468,7 @@ impl App {
         Ok(())
     }
 
-    async fn stop_vm_process(&self, id: &str) -> Result<()> {
+    pub(crate) async fn stop_vm_process(&self, id: &str) -> Result<()> {
         let Some(info) = self.supervisor.info(id).await? else {
             return Ok(());
         };

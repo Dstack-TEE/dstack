@@ -841,8 +841,16 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn sv_stop(self, request: Id) -> Result<()> {
-        self.app.supervisor.stop(&request.id).await?;
-        Ok(())
+        // VM launcher processes own QEMU and swtpm children. Route them through
+        // the VM-aware stop path so the launcher can reap those children; the
+        // same helper preserves generic Supervisor stop semantics for every
+        // other process type.
+        self.app
+            .supervisor
+            .info(&request.id)
+            .await?
+            .context("Supervisor process not found")?;
+        self.app.stop_vm_process(&request.id).await
     }
 
     async fn sv_remove(self, request: Id) -> Result<()> {
