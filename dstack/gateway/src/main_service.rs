@@ -112,6 +112,7 @@ pub(crate) struct ProxyState {
     /// Reference to KvStore for syncing changes
     kv_store: Arc<KvStore>,
     handshake_cache: Arc<LatestHandshakesCache>,
+    admin_shutdown: Option<rocket::Shutdown>,
 }
 
 /// Options for creating a Proxy instance
@@ -244,6 +245,7 @@ impl ProxyInner {
             state,
             kv_store: kv_store.clone(),
             handshake_cache: handshake_cache.clone(),
+            admin_shutdown: None,
         });
         let auth_client = AuthClient::new(config.auth.clone());
         // Bootstrap WaveKV first if sync is enabled, so certbot can load certs from peers
@@ -1324,8 +1326,21 @@ impl ProxyState {
         Ok(())
     }
 
-    pub(crate) fn exit(&mut self) -> ! {
-        std::process::exit(0);
+    pub(crate) fn set_admin_shutdown(&mut self, shutdown: rocket::Shutdown) {
+        self.admin_shutdown = Some(shutdown);
+    }
+
+    pub(crate) fn exit(&self, force: bool) -> Result<()> {
+        if force {
+            std::process::exit(0);
+        }
+
+        let shutdown = self
+            .admin_shutdown
+            .as_ref()
+            .context("admin server shutdown handle is not initialized")?;
+        shutdown.notify();
+        Ok(())
     }
 
     pub(crate) fn refresh_state(&mut self) -> Result<()> {
