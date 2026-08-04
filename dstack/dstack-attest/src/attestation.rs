@@ -61,7 +61,6 @@ pub struct AttestationVerifier {
     aws_nitro_tpm: nsm_qvl::QuoteVerifier,
     sev_snp: sev_snp_qvl::QuoteVerifier,
     amd_kds: AmdKdsClient,
-    external_trust_anchors: bool,
 }
 
 impl AttestationVerifier {
@@ -149,7 +148,6 @@ impl AttestationVerifier {
             aws_nitro_tpm: nsm(aws_nitro_tpm.as_deref(), "AWS NitroTPM")?,
             sev_snp,
             amd_kds: AmdKdsClient::with_base_url(amd_kds)?,
-            external_trust_anchors: external_requested,
         })
     }
 
@@ -175,16 +173,7 @@ impl AttestationVerifier {
                     .filter(|url| !url.trim().is_empty())
                     .unwrap_or(sev_snp_qvl::AMD_KDS_DEFAULT_BASE_URL),
             )?,
-            external_trust_anchors: false,
         })
-    }
-
-    /// Whether this verifier accepts development-only external trust roots.
-    ///
-    /// A true value must be surfaced as simulated evidence by every caller;
-    /// production roots never set this flag.
-    pub fn is_simulated(&self) -> bool {
-        self.external_trust_anchors
     }
 
     async fn verify_tdx_quote(&self, quote: &[u8]) -> Result<TdxVerifiedReport> {
@@ -2526,28 +2515,8 @@ mod tests {
 
     #[test]
     fn production_attestation_verifier_loads_all_safe_defaults() {
-        let verifier = AttestationVerifier::load(&AttestationVerifierConfig::default())
+        AttestationVerifier::load(&AttestationVerifierConfig::default())
             .expect("production roots and URLs must load");
-        assert!(!verifier.is_simulated());
-    }
-
-    #[test]
-    fn opted_in_mock_root_is_labeled_simulated() {
-        let directory = tempfile::tempdir().expect("temporary mock root directory");
-        let root = directory.path().join("tdx-root.pem");
-        let generator =
-            mock_attestation::tdx::TdxGenerator::from_seed([0x31; 32]).expect("mock TDX hierarchy");
-        fs_err::write(&root, generator.root_ca_pem()).expect("write mock root");
-        let verifier = AttestationVerifier::load(&AttestationVerifierConfig {
-            insecure_allow_external_trust_anchors: true,
-            root_ca: RootCaPaths {
-                tdx: Some(root),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .expect("explicit development verifier");
-        assert!(verifier.is_simulated());
     }
 
     #[test]

@@ -585,10 +585,7 @@ impl CvmVerifier {
         } else {
             bail!("Quote is required");
         };
-        let mut details = VerificationDetails {
-            simulated: self.attestation_verifier.is_simulated(),
-            ..Default::default()
-        };
+        let mut details = VerificationDetails::default();
 
         let debug = request.debug.unwrap_or(false);
         let attestation = attestation.into_v1();
