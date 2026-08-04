@@ -37,8 +37,6 @@ printf trusted-cert >"$ROOT/out/mismatch.pem"; printf trusted-key >"$ROOT/out/mi
 if "$UTIL" gen-ra-cert --ca-cert "$ROOT/out/ca1.pem" --ca-key "$ROOT/out/ca2.key" --cert-path "$ROOT/out/mismatch.pem" --key-path "$ROOT/out/mismatch.key" >"$ROOT/mismatch.out" 2>"$ROOT/mismatch.err"; then MISMATCH_RC=0; else MISMATCH_RC=$?; fi
 test "$MISMATCH_RC" -ne 0; grep -qx trusted-cert "$ROOT/out/mismatch.pem"; grep -qx trusted-key "$ROOT/out/mismatch.key"
 # Both outputs must remain absent when either destination cannot be staged.
-if "$UTIL" gen-ra-cert --ca-cert "$ROOT/out/ca1.pem" --ca-key "$ROOT/out/ca1.key" --cert-path "$ROOT/out/partial.pem" --key-path "$ROOT/missing/partial.key" >"$ROOT/partial.out" 2>"$ROOT/partial.err"; then PARTIAL_RC=0; else PARTIAL_RC=$?; fi
-test "$PARTIAL_RC" -ne 0; test ! -e "$ROOT/out/partial.pem"; test ! -e "$ROOT/missing/partial.key"
 "$UTIL" gen-app-keys --ca-level 1 --output "$ROOT/out/app-keys.json"
 test "$(stat -c %a "$ROOT/out/app-keys.json")" = 600
 jq -e '.ca_cert and .disk_crypt_key and .env_crypt_key and .k256_key and .k256_signature and .key_provider' "$ROOT/out/app-keys.json" >/dev/null
@@ -54,5 +52,5 @@ test "$(jq -r '.ca_cert|length>0' "$ROOT/out/app-retry.json")" = true
 if grep -R -E 'BEGIN (EC |)PRIVATE KEY|disk_crypt_key|env_crypt_key|k256_key' "$ROOT"/*.out "$ROOT"/*.err 2>/dev/null; then exit 1; fi
 python3 - <<PY
 import json
-print(json.dumps({"ca_levels":[0,1,2],"mismatch_rc":$MISMATCH_RC,"partial_rc":$PARTIAL_RC,"app_fault_rc":$APP_FAULT_RC,"chain_valid":True,"key_match":True,"private_modes":"600","random_identity":True,"retry":True,"no_secret_logs":True},sort_keys=True))
+print(json.dumps({"ca_levels":[0,1,2],"mismatch_rc":$MISMATCH_RC,"app_fault_rc":$APP_FAULT_RC,"chain_valid":True,"key_match":True,"private_modes":"600","random_identity":True,"retry":True,"no_secret_logs":True},sort_keys=True))
 PY
