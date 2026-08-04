@@ -80,8 +80,8 @@ e11edcd50	fix(verifier): confine image archive extraction	RETAINED	codex/fix-ver
 ec1908a64	chore(verifier): update archive dependency lockfile	RETAINED	codex/fix-verifier-archive-confinement
 6d23260c1	fix(verifier): version measurement cache keys	REJECTED	discarded; embedded cache-entry versions already enforce compatibility
 b316ea22b	test(dstack-mr): cover unsupported swtpm measurement	TEST_ONLY	move/account in test-infrastructure PR
-146cb8d15	fix(guest): write generated credentials atomically	RETAINED	codex/fix-guest-atomic-attestation-output,codex/fix-guest-atomic-credentials,codex/fix-guest-kms-key-permissions,codex/fix-util-atomic-cert-key,codex/fix-util-atomic-tpm-quotes
-5f5885938	build(guest): lock CLI filesystem dependency	RETAINED	codex/fix-guest-atomic-attestation-output,codex/fix-guest-atomic-credentials,codex/fix-guest-kms-key-permissions,codex/fix-util-atomic-cert-key,codex/fix-util-atomic-tpm-quotes
+146cb8d15	fix(guest): write generated credentials atomically	RETAINED	codex/fix-guest-atomic-attestation-output,codex/fix-guest-atomic-credentials,codex/fix-guest-kms-key-permissions,codex/fix-util-atomic-tpm-quotes
+5f5885938	build(guest): lock CLI filesystem dependency	RETAINED	codex/fix-guest-atomic-attestation-output,codex/fix-guest-atomic-credentials,codex/fix-guest-kms-key-permissions,codex/fix-util-atomic-tpm-quotes
 a6ee9b550	fix(guest): fail JSON vTPM attestation errors	RETAINED	codex/fix-guest-vtpm-json-errors
 431751f41	fix(guest): write attestation outputs atomically	RETAINED	codex/fix-guest-atomic-attestation-output
 8b0ace8dc	fix(guest): protect KMS key output	RETAINED	codex/fix-guest-kms-key-permissions
@@ -121,7 +121,7 @@ e60f1295d	"Revert ""fix(simulator): await NitroTPM resource manager"""	REVERTED	
 d0df60ecc	fix(util): reject oversized quote input	RETAINED	codex/fix-util-quote-size-limit
 53f415ec7	fix(util): honor quote report sys config	RETAINED	codex/fix-util-quote-report-config
 297c0e202	fix(cert): reject mismatched CA key	RETAINED	codex/fix-ra-tls-ca-key-match
-e6a2577b2	fix(util): stage certificate and key together	RETAINED	codex/fix-util-atomic-cert-key
+e6a2577b2	fix(util): stage certificate and key together	REJECTED	discarded; sequential renames cannot atomically publish a two-file pair
 c4c09f466	test(simulator): provision legacy EK certificate	TEST_ONLY	move/account in test-infrastructure PR
 3c2a86b16	test(simulator): serve TPM collateral in guest	TEST_ONLY	move/account in test-infrastructure PR
 f727de4c9	test(simulator): publish guest TPM trust root	TEST_ONLY	move/account in test-infrastructure PR

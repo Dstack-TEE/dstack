@@ -117,12 +117,12 @@ def main() -> int:
             or any(matrix.get(key) is not True for key in required_true)
             or any(
                 not isinstance(matrix.get(key), int) or matrix[key] <= 0
-                for key in ("mismatch_rc", "partial_rc", "app_fault_rc")
+                for key in ("mismatch_rc", "app_fault_rc")
             )
         ):
             raise RuntimeError(f"unexpected matrix: {matrix}")
         status = "PASS"
-        summary = "CA, RA certificate, and app-key chain, mismatch, atomicity, permission, randomness, and retry checks passed inside mkosi."
+        summary = "CA, RA certificate, and app-key chain, mismatch, permission, randomness, and retry checks passed inside mkosi."
     except Exception as e:
         summary = f"{type(e).__name__}: {e}"
     finally:
@@ -142,7 +142,7 @@ def main() -> int:
         "path": "artifacts/ra-key-cli-mkosi.json",
         "step_id": f"{CASE_ID}-step-01",
         "name": "mkosi RA/key CLI suite",
-        "description": "Guest provenance and CA/RA/app-key chain, mismatch, atomicity, permissions, randomness, retry, and cleanup evidence.",
+        "description": "Guest provenance and CA/RA/app-key chain, mismatch, permissions, randomness, retry, and cleanup evidence.",
     }
     write_json(artifacts / "manifest.json", {"artifacts": [artifact]})
     observed = (
@@ -167,7 +167,7 @@ def main() -> int:
                 for n in range(1, 4)
             ],
             "artifacts": [artifact],
-            "remarks": "Simulator execution proves certificate/key binding, constraints, errors, atomicity, permissions, and identity; it does not prove physical TDX isolation or vendor-signed evidence.",
+            "remarks": "Simulator execution proves certificate/key binding, constraints, errors, permissions, and identity; it does not prove physical TDX isolation or vendor-signed evidence.",
         },
     )
     return 0

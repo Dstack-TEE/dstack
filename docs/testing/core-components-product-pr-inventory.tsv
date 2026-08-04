@@ -58,7 +58,7 @@ pr	state	title	head	base	dependency	url
 899	OPEN	feat(vmm-cli): separate environment encryption KMS URL	codex/fix-vmm-cli-encryption-kms-url	master		https://github.com/Dstack-TEE/dstack/pull/899
 900	OPEN	fix(os): omit nondeterministic package logs	codex/fix-os-deterministic-package-logs	master		https://github.com/Dstack-TEE/dstack/pull/900
 901	OPEN	fix(simulator): reject occupied mountpoints	codex/fix-simulator-occupied-mountpoints	master		https://github.com/Dstack-TEE/dstack/pull/901
-902	OPEN	[STACKED on #883] fix(util): stage certificate and key together	codex/fix-util-atomic-cert-key	codex/fix-guest-atomic-credentials	#883	https://github.com/Dstack-TEE/dstack/pull/902
+902	CLOSED	fix(util): stage certificate and key together	codex/fix-util-atomic-cert-key	master		https://github.com/Dstack-TEE/dstack/pull/902
 903	OPEN	[STACKED on #900] fix(os): generate SSH host keys per guest	codex/fix-os-guest-ssh-host-keys	codex/fix-os-deterministic-package-logs	#900	https://github.com/Dstack-TEE/dstack/pull/903
 904	OPEN	[STACKED on #888] fix(simulator): model measured Nitro enclave PCRs	codex/fix-simulator-measured-nitro-pcrs	codex/fix-simulator-nitro-pcr-state	#888	https://github.com/Dstack-TEE/dstack/pull/904
 905	OPEN	feat(supervisor): expose UDS auto-start	codex/feat-supervisor-trusted-uds-autostart	master		https://github.com/Dstack-TEE/dstack/pull/905
