@@ -188,9 +188,9 @@ df0d9c59e	fix(kms): reject repeated onboarding	RETAINED	codex/feat-kms-historica
 61951fc7c	fix(guest): escape Prometheus label values	RETAINED	codex/fix-guest-prometheus-labels
 d27991512	fix(gateway): apply CAA records to all domains	RETAINED	codex/fix-gateway-caa-reconciliation
 47fac084f	fix(gateway): serialize CAA reconciliation	RETAINED	codex/fix-gateway-caa-reconciliation
-58dae006b	fix(gateway): encrypt persisted DNS credentials	RETAINED	codex/fix-gateway-app-info-peer-identity,codex/fix-gateway-dns-credential-storage,codex/fix-gateway-peer-sync-urls
-4b1162e5e	fix(gateway): validate DNS credential inputs	RETAINED	codex/fix-gateway-app-info-peer-identity,codex/fix-gateway-dns-credential-storage,codex/fix-gateway-peer-sync-urls
-f7851c483	build(gateway): lock credential encryption dependency	RETAINED	codex/fix-gateway-app-info-peer-identity,codex/fix-gateway-dns-credential-storage,codex/fix-gateway-peer-sync-urls
+58dae006b	fix(gateway): encrypt persisted DNS credentials	REJECTED	discarded; Gateway storage is already inside the CVM trust boundary and admin-token-derived encryption creates unsafe key coupling
+4b1162e5e	fix(gateway): validate DNS credential inputs	REJECTED	discarded; the additional constraints do not justify changing existing credential semantics
+f7851c483	build(gateway): lock credential encryption dependency	REJECTED	discarded with DNS credential envelope encryption
 22c6e32b9	fix(gateway): normalize ZT domain CRUD keys	RETAINED	codex/fix-gateway-zt-domain-crud
 1c76ea0c9	fix(certbot): preserve unrelated CAA records	RETAINED	codex/fix-certbot-caa-preservation
 2b2040abd	fix(gateway): reject mismatched certificate keys	RETAINED	codex/feat-gateway-exact-sni-certificates,codex/fix-gateway-cert-key-match,codex/fix-gateway-corrupt-acme-credentials,codex/fix-gateway-expired-cert-reload
