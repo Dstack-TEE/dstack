@@ -1330,7 +1330,7 @@
       "source_status": "PASS",
       "entrypoint": "automation/ra-key-cli-mkosi-case.py",
       "environment": "SIMULATOR/MKOSI",
-      "notes": "Passed inside lease-owned mkosi development image dstack-dev-0.6.0 at 2d9d296dd: CA levels 0/1/2, independent OpenSSL chain/key validation, CA/key mismatch rejection, staged certificate/private-key failure atomicity, app-key 0600 permissions, random identity separation, output failure/retry, secret-log exclusion, and cleanup. Simulation does not prove physical TDX isolation or vendor-signed evidence."
+      "notes": "Passed inside lease-owned mkosi development image dstack-dev-0.6.0 at 2d9d296dd: CA levels 0/1/2, independent OpenSSL chain/key validation, CA/key mismatch rejection, app-key 0600 permissions, random identity separation, output failure/retry, secret-log exclusion, and cleanup. Simulation does not prove physical TDX isolation or vendor-signed evidence."
     },
     {
       "case_id": "tc-gos-setup-022",
