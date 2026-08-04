@@ -1117,6 +1117,15 @@ impl AttestationV1 {
             }
         };
 
+        match &platform {
+            PlatformEvidence::Tdx { event_log, .. }
+            | PlatformEvidence::GcpTdx { event_log, .. } => {
+                cc_eventlog::tdx::validate_v2_preimages(event_log)
+                    .context("Failed to validate TDX V2 event digest preimages")?;
+            }
+            _ => {}
+        }
+
         Ok(VerifiedAttestation {
             quote: platform_into_legacy_quote(platform),
             runtime_events,
@@ -2323,6 +2332,18 @@ impl Attestation {
                 DstackVerifiedReport::DstackAwsNitroTpm(report)
             }
         };
+
+        match &self.quote {
+            AttestationQuote::DstackTdx(q) => {
+                cc_eventlog::tdx::validate_v2_preimages(&q.event_log)
+                    .context("Failed to validate TDX V2 event digest preimages")?;
+            }
+            AttestationQuote::DstackGcpTdx(q) => {
+                cc_eventlog::tdx::validate_v2_preimages(&q.tdx_quote.event_log)
+                    .context("Failed to validate TDX V2 event digest preimages")?;
+            }
+            _ => {}
+        }
 
         Ok(VerifiedAttestation {
             quote: self.quote,
