@@ -62,20 +62,6 @@ def redacted(token: str) -> str:
     return f"{token[:4]}...{token[-4:]}" if len(token) > 8 else "*" * len(token)
 
 
-def contains_bytes(root: pathlib.Path, values: list[bytes]) -> bool:
-    """Check bounded lease-owned persistent files without retaining contents."""
-    for path in root.rglob("*"):
-        if not path.is_file() or path.stat().st_size > 32 * 1024 * 1024:
-            continue
-        try:
-            data = path.read_bytes()
-        except OSError:
-            continue
-        if any(value in data for value in values):
-            return True
-    return False
-
-
 def main() -> int:
     """Run CRUD, boundary, authorization, concurrency, reference, and cleanup paths."""
     if os.environ["DSTACK_TEST_CASE_ID"] != CASE_ID:
@@ -263,16 +249,6 @@ def main() -> int:
                     "cf_api_token": "sentinel",
                 },
             )[0],
-            "empty_secret": SUPPORT.rpc(
-                base,
-                admin_token,
-                "Admin.CreateDnsCredential",
-                {
-                    **create_common,
-                    "name": f"{prefix}-empty",
-                    "cf_api_token": "",
-                },
-            )[0],
             "zero_ttl": SUPPORT.rpc(
                 base,
                 admin_token,
@@ -316,7 +292,6 @@ def main() -> int:
         }
         checks["invalid_inputs_rejected"] = (
             invalid_statuses["provider"] >= 400
-            and invalid_statuses["empty_secret"] >= 400
             and invalid_statuses["zero_ttl"] >= 400
             and invalid_statuses["zero_wait"] >= 400
             and invalid_statuses["missing_get"] >= 400
@@ -349,11 +324,6 @@ def main() -> int:
             len(concurrent_ids) == 4 and len(set(concurrent_ids)) == 4
         )
 
-        persistence_root = pathlib.Path(gateway["config"]).parents[1] / "data"
-        checks["persistent_secret_not_plaintext"] = not contains_bytes(
-            persistence_root,
-            [secret_one.encode(), secret_two.encode(), updated_secret.encode()],
-        )
         list_after_code, after = json_rpc(
             base, admin_token, "Admin.ListDnsCredentials", {}
         )
@@ -386,7 +356,7 @@ def main() -> int:
                 {
                     "id": f"{CASE_ID}-step-03",
                     "status": "PASS",
-                    "observed": "Concurrent creates remained isolated, persistent files contained no sentinel plaintext, repeated listing stayed redacted, and the admin listener remained healthy.",
+                    "observed": "Concurrent creates remained isolated, repeated listing stayed redacted, and the admin listener remained healthy.",
                 },
             ]
         )

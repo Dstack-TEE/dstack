@@ -179,7 +179,7 @@ def main() -> int:
             {
                 "id": f"{CASE_ID}-step-01",
                 "status": "PASS",
-                "observed": "Lease-owned Gateway, two encrypted DNS credentials, Pebble, and an empty run-scoped domain baseline were healthy.",
+                "observed": "Lease-owned Gateway, two DNS credentials, Pebble, and an empty run-scoped domain baseline were healthy.",
             }
         )
 
