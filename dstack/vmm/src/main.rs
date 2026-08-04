@@ -180,12 +180,13 @@ async fn main() -> Result<()> {
 
     let figment = config::load_config_figment(args.config.as_deref());
     let config = Config::extract_or_default(&figment)?.abs_path()?;
-
-    // Validate host API configuration
-    config
-        .host_api
-        .validate()
-        .context("Invalid host_api configuration")?;
+    config.validate()?;
+    let _: rocket::listener::Endpoint = figment
+        .extract_inner("address")
+        .context("Invalid management API address")?;
+    let _: u16 = figment
+        .extract_inner("port")
+        .context("Invalid management API port")?;
 
     // Handle commands
     match args.command.unwrap_or_default() {

@@ -513,6 +513,118 @@ impl Config {
         self.run_path = self.run_path.absolutize()?.to_path_buf();
         Ok(self)
     }
+
+    /// Validate configuration invariants that do not require starting services
+    /// or modifying host state.
+    pub fn validate(&self) -> Result<()> {
+        self.host_api
+            .validate()
+            .context("Invalid host_api configuration")?;
+
+        anyhow::ensure!(self.cvm.cid_start >= 3, "cvm.cid_start must be at least 3");
+        anyhow::ensure!(
+            self.cvm.cid_pool_size > 0,
+            "cvm.cid_pool_size must be greater than zero"
+        );
+        self.cvm
+            .cid_start
+            .checked_add(self.cvm.cid_pool_size)
+            .context("cvm CID pool overflows u32")?;
+
+        anyhow::ensure!(
+            matches!(self.cvm.host_share_mode.as_str(), "9p" | "vhd" | "vvfat"),
+            "cvm.host_share_mode must be one of: 9p, vhd, vvfat"
+        );
+        if self.cvm.auto_restart.enabled {
+            anyhow::ensure!(
+                self.cvm.auto_restart.interval > 0,
+                "cvm.auto_restart.interval must be greater than zero when enabled"
+            );
+        }
+        for range in &self.cvm.port_mapping.range {
+            anyhow::ensure!(
+                range.from <= range.to,
+                "cvm.port_mapping range start {} exceeds end {}",
+                range.from,
+                range.to
+            );
+        }
+
+        validate_networking(&self.cvm.networking)?;
+        for (name, value) in [
+            ("supervisor.sock", self.supervisor.sock.as_str()),
+            ("supervisor.pid_file", self.supervisor.pid_file.as_str()),
+            ("supervisor.log_file", self.supervisor.log_file.as_str()),
+        ] {
+            anyhow::ensure!(!value.trim().is_empty(), "{name} must not be empty");
+        }
+        if self.supervisor.auto_start {
+            anyhow::ensure!(
+                !self.supervisor.exe.trim().is_empty(),
+                "supervisor.exe must not be empty when auto_start is enabled"
+            );
+        }
+
+        for (name, values) in [
+            ("cvm.kms_urls", self.cvm.kms_urls.as_slice()),
+            ("cvm.gateway_urls", self.cvm.gateway_urls.as_slice()),
+        ] {
+            for value in values {
+                validate_http_url(name, value)?;
+            }
+        }
+        for (name, value) in [
+            ("cvm.pccs_url", Some(self.cvm.pccs_url.as_str())),
+            (
+                "cvm.nvidia_attestation_proxy_url",
+                self.cvm.nvidia_attestation_proxy_url.as_deref(),
+            ),
+        ] {
+            if let Some(value) = value.filter(|value| !value.is_empty()) {
+                validate_http_url(name, value)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_http_url(name: &str, value: &str) -> Result<()> {
+    let url = url::Url::parse(value).with_context(|| format!("{name} contains an invalid URL"))?;
+    anyhow::ensure!(
+        matches!(url.scheme(), "http" | "https"),
+        "{name} URL must use http or https: {value}"
+    );
+    anyhow::ensure!(
+        url.host().is_some(),
+        "{name} URL must include a host: {value}"
+    );
+    Ok(())
+}
+
+fn validate_networking(networking: &Networking) -> Result<()> {
+    let prefix = networking.mac_prefix.as_str();
+    if !prefix.is_empty() {
+        let bytes = prefix.split(':').collect::<Vec<_>>();
+        anyhow::ensure!(
+            bytes.len() <= 3
+                && bytes
+                    .iter()
+                    .all(|byte| byte.len() == 2 && u8::from_str_radix(byte, 16).is_ok()),
+            "cvm.networking.mac_prefix must contain 1 to 3 two-digit hexadecimal bytes"
+        );
+    }
+    match networking.mode {
+        NetworkingMode::Bridge => anyhow::ensure!(
+            !networking.bridge.trim().is_empty(),
+            "cvm.networking.bridge must not be empty in bridge mode"
+        ),
+        NetworkingMode::Custom => anyhow::ensure!(
+            !networking.netdev.trim().is_empty(),
+            "cvm.networking.netdev must not be empty in custom mode"
+        ),
+        NetworkingMode::User => {}
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -583,13 +695,20 @@ impl HostApiConfig {
     /// The host API must only listen on vsock for security reasons.
     /// TCP/Unix socket listening is not supported.
     pub fn validate(&self) -> Result<()> {
-        if !self.address.starts_with("vsock:") {
-            anyhow::bail!(
+        let cid = self.address.strip_prefix("vsock:").with_context(|| {
+            format!(
                 "Host API address must be a vsock address (e.g., 'vsock:2'), got: '{}'. \
-                TCP/Unix socket listening is not supported for the host API.",
+                 TCP/Unix socket listening is not supported for the host API.",
                 self.address
-            );
+            )
+        })?;
+        if let Some(cid) = cid.strip_prefix("0x") {
+            u32::from_str_radix(cid, 16).context("Host API address contains an invalid CID")?;
+        } else {
+            cid.parse::<u32>()
+                .context("Host API address contains an invalid CID")?;
         }
+        anyhow::ensure!(self.port > 0, "Host API port must be greater than zero");
         Ok(())
     }
 }
@@ -792,6 +911,87 @@ mod tests {
             TdxAttestationVariantConfig::Auto.resolve(3072, false),
             Legacy
         );
+    }
+
+    fn default_config() -> Config {
+        use rocket::figment::providers::{Format, Toml};
+
+        Figment::from(Toml::string(DEFAULT_CONFIG))
+            .extract()
+            .expect("default VMM config should parse")
+    }
+
+    #[test]
+    fn config_validation_accepts_defaults() {
+        default_config().validate().unwrap();
+    }
+
+    #[test]
+    fn config_validation_rejects_invalid_static_invariants() {
+        let mut config = default_config();
+        config.cvm.cid_pool_size = 0;
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("cid_pool_size"));
+
+        let mut config = default_config();
+        config.cvm.port_mapping.range[0].from = 200;
+        config.cvm.port_mapping.range[0].to = 100;
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("range start"));
+
+        let mut config = default_config();
+        config.cvm.networking.mac_prefix = "02:not-hex".into();
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("mac_prefix"));
+
+        let mut config = default_config();
+        config.cvm.host_share_mode = "unknown".into();
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("host_share_mode"));
+    }
+
+    #[test]
+    fn config_validation_rejects_invalid_endpoints() {
+        let mut config = default_config();
+        config.cvm.kms_urls = vec!["not a URL".into()];
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("kms_urls"));
+
+        let mut config = default_config();
+        config.supervisor.sock.clear();
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("supervisor.sock"));
+
+        let mut config = default_config();
+        config.cvm.networking.mode = NetworkingMode::Bridge;
+        config.cvm.networking.bridge.clear();
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("networking.bridge"));
+
+        let mut config = default_config();
+        config.host_api.address = "vsock:not-a-cid".into();
+        assert!(format!("{:#}", config.validate().unwrap_err()).contains("invalid CID"));
     }
 
     #[test]
