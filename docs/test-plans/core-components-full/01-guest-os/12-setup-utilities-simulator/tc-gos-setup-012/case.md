@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <a id="tc-gos-setup-012"></a>
-# TC-GOS-SETUP-012: Supervisor client full API and auto-start
+# TC-GOS-SETUP-012: Supervisor client full API lifecycle
 
 ## Metadata
 
@@ -24,7 +24,7 @@
 
 ## Objective
 
-Verify supervisor client full api and auto-start for documented success, boundary, failure, concurrency, and recovery behavior.
+Verify the Supervisor client API, structured output, error handling, and graceful shutdown response.
 
 ## Preconditions
 
@@ -42,11 +42,11 @@ Include valid values, empty/minimum/maximum values, malformed input, duplicate i
 <a id="tc-gos-setup-012-step-01"></a>
 ### Step 1: Exercise the complete behavior matrix
 
-Use async/sync clients to spawn/connect/probe, deploy/start/stop/remove/list/info/clear/shutdown with unknown IDs, daemon delay, and stale-endpoint recovery.
+Start a case-owned Supervisor and use the client to probe, deploy, start, stop, remove, list, inspect, clear, and shut it down with valid and unknown IDs.
 
 **Expected results:**
 
-- Client preserves server response/error and timeout semantics, concurrent auto-start creates one daemon, and a stale endpoint is replaced during recovery.
+- Client preserves server response/error semantics, keeps stdout machine-readable, and receives the shutdown response before the daemon exits.
 
 <a id="tc-gos-setup-012-step-02"></a>
 ### Step 2: Verify failure atomicity and recovery

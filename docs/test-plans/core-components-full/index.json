@@ -3260,7 +3260,7 @@
             },
             {
               "id": "tc-gos-setup-012",
-              "title": "Supervisor client full API and auto-start",
+              "title": "Supervisor client full API lifecycle",
               "order": 12,
               "priority": "P1",
               "path": "01-guest-os/12-setup-utilities-simulator/tc-gos-setup-012",
@@ -3292,7 +3292,7 @@
                 "simulation_allowed": true
               },
               "actions_under_test": [
-                "Supervisor client full API and auto-start"
+                "Supervisor client full API lifecycle"
               ],
               "execution": {
                 "entrypoint": "automation/supervisor-client-lifecycle-case.py",

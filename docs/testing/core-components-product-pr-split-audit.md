@@ -6,7 +6,7 @@ This document records the completion gates for replacing monolithic product PR #
 
 The authoritative split-PR inventory is
 [`core-components-product-pr-inventory.tsv`](core-components-product-pr-inventory.tsv).
-It lists 129 replacement product PRs (#842 through #970 excluding rejected #845, plus #976), including each head branch, GitHub base,
+It lists 131 replacement product PRs (#842 through #970 excluding rejected #845, plus #976, #994, and #995), including each head branch, GitHub base,
 and explicit dependency for every stacked PR.
 
 The per-commit inventory is
