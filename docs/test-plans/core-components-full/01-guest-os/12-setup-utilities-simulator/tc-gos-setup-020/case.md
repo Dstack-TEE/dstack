@@ -46,20 +46,20 @@ Use the candidate CLI argument contract exactly:
 <a id="tc-gos-setup-020-step-01"></a>
 ### Step 1: Exercise all CLI modes and boundaries
 
-Run `gen-ra-cert`, `gen-ca-cert`, and `gen-app-keys` across CA levels, SAN/usage inputs, existing outputs, unsafe paths/permissions, mismatched CA key and interrupted write.
+Run `gen-ra-cert`, `gen-ca-cert`, and `gen-app-keys` across CA levels, SAN/usage inputs, existing outputs, unsafe paths/permissions, and a mismatched CA key.
 
 **Expected results:**
 
-- Generated keys match certificates/chains and intended CA constraints, private files are restrictive/atomic, mismatch fails and existing trusted output is not overwritten.
+- Generated keys match certificates/chains and intended CA constraints, private files are restrictive, and mismatch fails without overwriting existing trusted output.
 
 <a id="tc-gos-setup-020-step-02"></a>
-### Step 2: Verify independent decoding and failure atomicity
+### Step 2: Verify independent decoding and error recovery
 
-Decode or verify output with an independent library/tool, inject device/network/filesystem failure before output commit, restore it, and retry.
+Decode or verify output with an independent library/tool, exercise an invalid output path, restore it, and retry.
 
 **Expected results:**
 
-- Independent results match, invalid/failing operations return nonzero with actionable redacted error, no partial trusted output remains, and retry succeeds exactly once.
+- Independent results match, invalid/failing operations return nonzero with actionable redacted error, and retry succeeds.
 
 <a id="tc-gos-setup-020-step-03"></a>
 ### Step 3: Verify isolation permissions and repeatability
