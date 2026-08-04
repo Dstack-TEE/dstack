@@ -13142,7 +13142,7 @@
             },
             {
               "id": "tc-ver-input-plat-007",
-              "title": "Simulated attestation labeling",
+              "title": "Simulator trust-root isolation",
               "order": 7,
               "priority": "P1",
               "path": "05-verifier/01-input-platform-verification/tc-ver-input-plat-007",
@@ -13174,7 +13174,7 @@
                 "simulation_allowed": true
               },
               "actions_under_test": [
-                "Simulated attestation labeling"
+                "Simulator trust-root isolation"
               ],
               "execution": {
                 "entrypoint": "automation/simulated-attestation-labeling-case.py",
