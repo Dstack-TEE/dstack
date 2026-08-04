@@ -551,18 +551,21 @@ impl Config {
         }
 
         validate_networking(&self.cvm.networking)?;
-        for (name, value) in [
-            ("supervisor.sock", self.supervisor.sock.as_str()),
-            ("supervisor.pid_file", self.supervisor.pid_file.as_str()),
-            ("supervisor.log_file", self.supervisor.log_file.as_str()),
-        ] {
-            anyhow::ensure!(!value.trim().is_empty(), "{name} must not be empty");
-        }
+        anyhow::ensure!(
+            !self.supervisor.sock.trim().is_empty(),
+            "supervisor.sock must not be empty"
+        );
         if self.supervisor.auto_start {
-            anyhow::ensure!(
-                !self.supervisor.exe.trim().is_empty(),
-                "supervisor.exe must not be empty when auto_start is enabled"
-            );
+            for (name, value) in [
+                ("supervisor.exe", self.supervisor.exe.as_str()),
+                ("supervisor.pid_file", self.supervisor.pid_file.as_str()),
+                ("supervisor.log_file", self.supervisor.log_file.as_str()),
+            ] {
+                anyhow::ensure!(
+                    !value.trim().is_empty(),
+                    "{name} must not be empty when supervisor.auto_start is enabled"
+                );
+            }
         }
 
         for (name, values) in [
@@ -992,6 +995,16 @@ mod tests {
         let mut config = default_config();
         config.host_api.address = "vsock:not-a-cid".into();
         assert!(format!("{:#}", config.validate().unwrap_err()).contains("invalid CID"));
+    }
+
+    #[test]
+    fn config_validation_does_not_require_supervisor_startup_paths_when_disabled() {
+        let mut config = default_config();
+        config.supervisor.auto_start = false;
+        config.supervisor.exe.clear();
+        config.supervisor.pid_file.clear();
+        config.supervisor.log_file.clear();
+        config.validate().unwrap();
     }
 
     #[test]
