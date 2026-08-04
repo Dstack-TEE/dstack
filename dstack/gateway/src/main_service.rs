@@ -1134,7 +1134,7 @@ impl ProxyState {
         let wg_config = self.generate_wg_config()?;
         // the rendered config carries the interface's WireGuard private key.
         safe_write_with_mode(&self.config.wg.config_path, wg_config, 0o600)
-            .context("Failed to write wg config")?;
+            .context("failed to write wg config")?;
         // wg setconf <interface_name> <config_path>
         let ifname = &self.config.wg.interface;
         let config_path = &self.config.wg.config_path;
