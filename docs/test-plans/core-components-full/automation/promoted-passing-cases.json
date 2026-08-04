@@ -2389,7 +2389,7 @@
       "source_status": "PASS",
       "entrypoint": "automation/gateway-dns-credential-case.py",
       "promoted_at": "2026-07-28T05:21:54Z",
-      "notes": "lease-owned Gateway DNS credential create/read/update/list/default lifecycle, response redaction, persistent plaintext sentinel check, invalid provider/secret/timing/missing-id and unauthorized rejection, default and active-domain reference integrity, four-way concurrent create, and lease cleanup",
+      "notes": "lease-owned Gateway DNS credential create/read/update/list/default lifecycle, response redaction, invalid provider/timing/missing-id and unauthorized rejection, default and active-domain reference integrity, four-way concurrent create, and lease cleanup",
       "environment": "ISOLATED_COMPONENT"
     },
     {
@@ -2506,7 +2506,7 @@
       "source_status": "PASS",
       "entrypoint": "automation/gateway-kv-lifecycle-case.py",
       "promoted_at": "2026-07-29T11:35:53Z",
-      "notes": "13 WaveKV key families, malformed-value isolation, watch final state, persistence/ephemeral/deletion restart boundaries, encrypted DNS credentials, cert locks/history, three-node visibility, and cleanup"
+      "notes": "13 WaveKV key families, malformed-value isolation, watch final state, persistence/ephemeral/deletion restart boundaries, DNS credential round-trips, cert locks/history, three-node visibility, and cleanup"
     },
     {
       "case_id": "tc-gw-internal-001",

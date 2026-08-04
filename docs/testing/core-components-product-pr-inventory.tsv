@@ -71,7 +71,7 @@ pr	state	title	head	base	dependency	url
 912	OPEN	[STACKED on #851] fix(vmm): confine image artifacts to the image root	codex/fix-vmm-image-artifact-confinement	codex/fix-vmm-cloud-image-measurements	#851	https://github.com/Dstack-TEE/dstack/pull/912
 913	OPEN	fix(guest): escape Prometheus label values	codex/fix-guest-prometheus-labels	master		https://github.com/Dstack-TEE/dstack/pull/913
 914	OPEN	fix(gateway): reconcile CAA records for every domain	codex/fix-gateway-caa-reconciliation	master		https://github.com/Dstack-TEE/dstack/pull/914
-915	OPEN	fix(gateway): encrypt and validate persisted DNS credentials	codex/fix-gateway-dns-credential-storage	master		https://github.com/Dstack-TEE/dstack/pull/915
+915	CLOSED	fix(gateway): encrypt and validate persisted DNS credentials	codex/fix-gateway-dns-credential-storage	master		https://github.com/Dstack-TEE/dstack/pull/915
 916	OPEN	fix(certbot): preserve unrelated CAA records	codex/fix-certbot-caa-preservation	master		https://github.com/Dstack-TEE/dstack/pull/916
 917	OPEN	fix(gateway): reject mismatched certificate keys	codex/fix-gateway-cert-key-match	master		https://github.com/Dstack-TEE/dstack/pull/917
 918	OPEN	refactor(gateway): isolate legacy port-policy parsing	codex/refactor-gateway-port-policy	master		https://github.com/Dstack-TEE/dstack/pull/918
