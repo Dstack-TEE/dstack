@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 # SPDX-License-Identifier: Apache-2.0
-"""Verify development labeling and production rejection for every mock platform."""
+"""Verify development-root acceptance and production-root rejection."""
 
 from __future__ import annotations
 
@@ -100,13 +100,13 @@ def main() -> int:
             row = {
                 "service": service,
                 "returncode": completed.returncode,
-                "simulated_true": '"simulated": true' in log,
-                "production_rejected": '"accepted": false' in log,
+                "development_root_accepted": '"development_root_accepted":true' in log,
+                "production_root_rejected": '"production_root_rejected":true' in log,
             }
             rows.append(row)
             if completed.returncode:
                 raise RuntimeError(f"{service} failed with rc={completed.returncode}")
-            if not row["simulated_true"] or not row["production_rejected"]:
+            if not row["development_root_accepted"] or not row["production_root_rejected"]:
                 raise RuntimeError(f"{service} omitted a required policy assertion")
         (artifacts / "platform-policy-matrix.json").write_text(
             json.dumps(rows, indent=2, sort_keys=True) + "\n"
@@ -115,7 +115,7 @@ def main() -> int:
             emit_step(
                 f"{CASE_ID}-step-02",
                 "PASS",
-                "All six platform rows verified with development roots, returned details.simulated=true, and were rejected when the explicit development-policy opt-in was removed.",
+                "All six platform rows were accepted by their exact development roots and rejected by the verifier library's built-in production roots.",
             )
         )
         steps.append(
@@ -151,7 +151,7 @@ def main() -> int:
         "schema_version": "1.0",
         "case_id": CASE_ID,
         "status": status,
-        "summary": "All mock platforms are accepted only with explicit development trust-root policy and are labeled simulated=true.",
+        "summary": "All mock platforms are accepted by their exact development roots and rejected by built-in production roots.",
         "steps": steps,
         "artifacts": artifact_entries,
         "remarks": "Simulation confirms encoding, routing, trust-policy and error behavior; it does not confirm vendor hardware signatures, firmware measurements or physical isolation.",

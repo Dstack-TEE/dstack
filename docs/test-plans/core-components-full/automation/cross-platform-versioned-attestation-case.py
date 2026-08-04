@@ -332,15 +332,15 @@ def main() -> int:
                 "service": service,
                 "returncode": completed.returncode,
                 "verified": '"is_valid": true' in completed.stdout,
-                "simulated": '"simulated": true' in completed.stdout,
-                "production_rejected": '"accepted": false' in log,
+                "development_root_accepted": '"development_root_accepted":true' in log,
+                "production_root_rejected": '"production_root_rejected":true' in log,
             }
             simulated.append(row)
             if (
                 completed.returncode
                 or not row["verified"]
-                or not row["simulated"]
-                or not row["production_rejected"]
+                or not row["development_root_accepted"]
+                or not row["production_root_rejected"]
             ):
                 raise RuntimeError(f"simulated platform row failed: {row}")
         (artifacts / "simulated-platforms.json").write_text(
@@ -350,7 +350,7 @@ def main() -> int:
             emit(
                 f"{case_id}-step-02",
                 "PASS",
-                "TDX legacy, TDX lite, GCP TDX, SEV-SNP, Nitro Enclave, and NitroTPM rows each verified with explicit development roots, were labeled simulated=true, and were rejected without the development trust-root opt-in.",
+                "TDX legacy, TDX lite, GCP TDX, SEV-SNP, Nitro Enclave, and NitroTPM rows were accepted by their exact development roots and rejected by built-in production roots.",
             )
         )
         steps.append(

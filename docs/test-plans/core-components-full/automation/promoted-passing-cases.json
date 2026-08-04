@@ -886,7 +886,7 @@
       "source_status": "PASS",
       "entrypoint": "automation/simulated-attestation-labeling-case.py",
       "environment": "SIMULATOR",
-      "notes": "six-platform mock-attestation E2E asserts details.simulated=true under explicit development roots and production-policy rejection"
+      "notes": "six-platform mock-attestation E2E asserts exact development-root acceptance and built-in production-root rejection"
     },
     {
       "case_id": "tc-ver-nitro-008",
@@ -2754,7 +2754,7 @@
       "source_status": "PASS",
       "entrypoint": "automation/integration-failure-008-capability-case.py",
       "promoted_at": "2026-07-30T04:07:44Z",
-      "notes": "one physical TDX guest and six simulated platform rows verify challenge binding, explicit simulated labeling, production trust-root rejection, malformed/oversized input rejection, recovery, and hardware-unconfirmed scope without private material",
+      "notes": "one physical TDX guest and six simulated platform rows verify challenge binding, exact development-root acceptance and production-root rejection, malformed/oversized input rejection, recovery, and hardware-unconfirmed scope without private material",
       "environment": "TDXLAB_PHYSICAL_TDX_AND_SIX_PLATFORM_SIMULATION"
     },
     {

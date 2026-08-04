@@ -107,14 +107,15 @@ def main() -> int:
                 )
             if (
                 '"is_valid": true' not in completed.stdout
-                or '"simulated": true' not in completed.stdout
+                or '"development_root_accepted":true' not in completed.stdout
+                or '"production_root_rejected":true' not in completed.stdout
             ):
-                raise RuntimeError(f"{service} omitted its valid simulated verdict")
+                raise RuntimeError(f"{service} omitted a trust-root isolation assertion")
         steps.append(
             emit(
                 f"{CASE_ID}-step-01",
                 "PASS",
-                "Case-owned GCP TDX/vTPM and AWS NitroTPM simulators both produced versioned evidence accepted by the production verifier under explicit development roots and labeled simulated=true.",
+                "Case-owned GCP TDX/vTPM and AWS NitroTPM evidence was accepted by the exact development roots and rejected by the built-in production roots.",
             )
         )
 

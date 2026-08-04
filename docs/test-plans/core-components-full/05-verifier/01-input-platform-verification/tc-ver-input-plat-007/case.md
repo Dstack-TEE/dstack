@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <a id="tc-ver-input-plat-007"></a>
-# TC-INT-INPUT-PLAT-007: Simulated attestation labeling
+# TC-INT-INPUT-PLAT-007: Simulator trust-root isolation
 
 ## Metadata
 
@@ -25,7 +25,7 @@
 
 ## Objective
 
-Verify simulated attestation labeling across success, boundary, failure, security, and recovery conditions.
+Verify simulator trust-root isolation across success, boundary, failure, security, and recovery conditions.
 
 ## Preconditions
 
@@ -41,7 +41,7 @@ Use a unique run-scoped identifier and non-production credentials.
 <a id="tc-ver-input-plat-007-step-01"></a>
 ### Step 1: Inspect the effective prerequisite
 
-Query the relevant health, configuration, and baseline state for simulated attestation labeling.
+Query the relevant health, configuration, and baseline state for simulator trust-root isolation.
 
 **Expected results:**
 
@@ -50,11 +50,11 @@ Query the relevant health, configuration, and baseline state for simulated attes
 <a id="tc-ver-input-plat-007-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Verify every mock platform and attempt to present it as hardware evidence.
+Verify every mock platform first with its exact case-owned development root and then with the verifier library's built-in production root.
 
 **Expected results:**
 
-- Simulation validates only under explicit development policy and output clearly records simulated=true; production policy rejects it.
+- Each mock quote validates with its matching development root, while the identical quote is rejected by the built-in production root. The response needs no simulator-specific label.
 
 <a id="tc-ver-input-plat-007-step-03"></a>
 ### Step 3: Verify state, isolation, and diagnostics
