@@ -61,7 +61,7 @@ pr	state	title	head	base	dependency	url
 902	OPEN	[STACKED on #883] fix(util): stage certificate and key together	codex/fix-util-atomic-cert-key	codex/fix-guest-atomic-credentials	#883	https://github.com/Dstack-TEE/dstack/pull/902
 903	OPEN	[STACKED on #900] fix(os): generate SSH host keys per guest	codex/fix-os-guest-ssh-host-keys	codex/fix-os-deterministic-package-logs	#900	https://github.com/Dstack-TEE/dstack/pull/903
 904	OPEN	[STACKED on #888] fix(simulator): model measured Nitro enclave PCRs	codex/fix-simulator-measured-nitro-pcrs	codex/fix-simulator-nitro-pcr-state	#888	https://github.com/Dstack-TEE/dstack/pull/904
-905	OPEN	[STACKED on #893] feat(supervisor): expose trusted UDS auto-start	codex/feat-supervisor-trusted-uds-autostart	codex/fix-supervisor-trusted-client-sockets	#893	https://github.com/Dstack-TEE/dstack/pull/905
+905	OPEN	feat(supervisor): expose UDS auto-start	codex/feat-supervisor-trusted-uds-autostart	master		https://github.com/Dstack-TEE/dstack/pull/905
 906	OPEN	feat(vmm): add a configuration validation command	codex/feat-vmm-config-validation	master		https://github.com/Dstack-TEE/dstack/pull/906
 907	OPEN	fix(vmm): enforce configured ID pool bounds	codex/fix-vmm-id-pool-bounds	master		https://github.com/Dstack-TEE/dstack/pull/907
 908	OPEN	fix(vmm): publish host-share disks atomically	codex/fix-vmm-atomic-host-share-disk	master		https://github.com/Dstack-TEE/dstack/pull/908
