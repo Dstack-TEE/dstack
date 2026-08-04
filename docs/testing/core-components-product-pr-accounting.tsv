@@ -95,7 +95,7 @@ af2166b33	fix(guest): protect gateway private state	RETAINED	codex/fix-guest-gat
 5777880c3	test(guest): import Unix permission metadata	RETAINED	codex/fix-guest-gateway-private-state,codex/fix-guest-gateway-refresh-failover,codex/fix-guest-kms-failover-order,codex/fix-guest-local-provider-inventory
 6f7f8cecc	fix(guest): bound Host API operations	RETAINED	codex/fix-guest-host-api-bounds
 1eedd9c89	fix(supervisor): reject untrusted client sockets	REJECTED	discarded; normal Unix socket and directory permissions enforce the trust boundary
-dd5bd0c85	build(supervisor): lock client libc dependency	RETAINED	codex/feat-supervisor-trusted-uds-autostart
+dd5bd0c85	build(supervisor): lock client libc dependency	REJECTED	discarded with concurrent UDS auto-start
 367a16db2	fix(supervisor): retain socket path for validation	REJECTED	discarded with client-side socket path validation
 6422f2efc	test(supervisor): add socket fixture dependency	TEST_ONLY	move/account in test-infrastructure PR
 3ccfc4394	test(supervisor): expose trusted socket rejection	TEST_ONLY	move/account in test-infrastructure PR
@@ -107,12 +107,12 @@ adb26ea51	test(attestation): generate signed SNP policy mutations	TEST_ONLY	move
 f8d5b4d46	test(attestation): add cloud TPM mutation matrix	TEST_ONLY	move/account in test-infrastructure PR
 882953826	fix(attestation): extract TPM matrix errors explicitly	TEST_ONLY	move/account in test-infrastructure PR
 eba48b2da	test(attestation): generate Nitro document matrix	TEST_ONLY	move/account in test-infrastructure PR
-32abcf206	feat(supervisor): expose trusted UDS auto-start	RETAINED	codex/feat-supervisor-trusted-uds-autostart
-b3376f90a	fix(supervisor): serialize UDS auto-start	RETAINED	codex/feat-supervisor-trusted-uds-autostart
-2f0ff74be	fix(supervisor): remove duplicate startup lock helper	RETAINED	codex/feat-supervisor-trusted-uds-autostart
-64dc5549d	fix(supervisor): restrict auto-start socket permissions	RETAINED	codex/feat-supervisor-trusted-uds-autostart
-634b3c502	fix(supervisor): keep client JSON output clean	RETAINED	codex/feat-supervisor-trusted-uds-autostart
-624acbbee	fix(supervisor): reply before graceful shutdown	RETAINED	codex/feat-supervisor-trusted-uds-autostart
+32abcf206	feat(supervisor): expose trusted UDS auto-start	REJECTED	discarded; the supported deployment has one VMM owner per runtime directory
+b3376f90a	fix(supervisor): serialize UDS auto-start	REJECTED	discarded with concurrent UDS auto-start
+2f0ff74be	fix(supervisor): remove duplicate startup lock helper	REJECTED	discarded with concurrent UDS auto-start
+64dc5549d	fix(supervisor): restrict auto-start socket permissions	REJECTED	discarded with concurrent UDS auto-start
+634b3c502	fix(supervisor): keep client JSON output clean	RETAINED	codex/fix-supervisor-client-json-output
+624acbbee	fix(supervisor): reply before graceful shutdown	RETAINED	codex/fix-supervisor-shutdown-response
 b81b946de	fix(simulator): publish TPM resource manager device	RETAINED	codex/fix-simulator-tpm-resource-manager
 0b4ba7576	fix(simulator): reject occupied mountpoints	RETAINED	codex/fix-simulator-occupied-mountpoints
 989b0a3a2	fix(simulator): await NitroTPM resource manager	REVERTED	net-zero historical pair

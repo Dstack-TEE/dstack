@@ -61,7 +61,7 @@ pr	state	title	head	base	dependency	url
 902	CLOSED	fix(util): stage certificate and key together	codex/fix-util-atomic-cert-key	master		https://github.com/Dstack-TEE/dstack/pull/902
 903	OPEN	[STACKED on #900] fix(os): generate SSH host keys per guest	codex/fix-os-guest-ssh-host-keys	codex/fix-os-deterministic-package-logs	#900	https://github.com/Dstack-TEE/dstack/pull/903
 904	OPEN	[STACKED on #888] fix(simulator): model measured Nitro enclave PCRs	codex/fix-simulator-measured-nitro-pcrs	codex/fix-simulator-nitro-pcr-state	#888	https://github.com/Dstack-TEE/dstack/pull/904
-905	OPEN	feat(supervisor): expose UDS auto-start	codex/feat-supervisor-trusted-uds-autostart	master		https://github.com/Dstack-TEE/dstack/pull/905
+905	CLOSED	feat(supervisor): expose concurrent UDS auto-start	codex/feat-supervisor-trusted-uds-autostart	master		https://github.com/Dstack-TEE/dstack/pull/905
 906	OPEN	feat(vmm): add a configuration validation command	codex/feat-vmm-config-validation	master		https://github.com/Dstack-TEE/dstack/pull/906
 907	OPEN	fix(vmm): enforce configured ID pool bounds	codex/fix-vmm-id-pool-bounds	master		https://github.com/Dstack-TEE/dstack/pull/907
 908	OPEN	fix(vmm): publish host-share disks atomically	codex/fix-vmm-atomic-host-share-disk	master		https://github.com/Dstack-TEE/dstack/pull/908
@@ -128,3 +128,5 @@ pr	state	title	head	base	dependency	url
 969	OPEN	[STACKED on #845] fix(simulator): publish the TPM resource-manager device	codex/fix-simulator-tpm-resource-manager	codex/fix-simulator-udev-tpm-race	#845	https://github.com/Dstack-TEE/dstack/pull/969
 970	OPEN	[STACKED on #968] fix(vmm): retain the serial boot delimiter at the cap	codex/fix-vmm-serial-log-cap	codex/fix-vmm-restart-policy	#968	https://github.com/Dstack-TEE/dstack/pull/970
 976	OPEN	fix(simulator): provide TDX configfs without a kernel provider	codex/fix-simulator-tdx-configfs-shadow	master		https://github.com/Dstack-TEE/dstack/pull/976
+994	OPEN	fix(supervisor): keep client JSON output clean	codex/fix-supervisor-client-json-output	master		https://github.com/Dstack-TEE/dstack/pull/994
+995	OPEN	fix(supervisor): reply before graceful shutdown	codex/fix-supervisor-shutdown-response	master		https://github.com/Dstack-TEE/dstack/pull/995
