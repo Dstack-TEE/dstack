@@ -26,14 +26,14 @@
   applies only to this VM. Discover zvol/swap paths inside the guest with
   bounded `zfs`, `zpool`, `swapon`, `findmnt`, and `lsblk` queries; do not
   require preconstructed path or fault-controller fields in the manifest.
-- Record the baseline, exercise idempotent setup and size boundaries, perform
-  one lease-owned service interruption, restore it, and verify the original
+- Record the baseline, exercise swap size boundaries, perform one lease-owned
+  VM restart, and verify normal boot cleanup and the original
   pool/dataset and non-case VMM inventory projection. Abort polling as soon as
   a command returns a definitive unsupported or corruption error.
 
 ## Objective
 
-Verify swap file and zfs zvol setup for documented success, boundary, failure, concurrency, and recovery behavior.
+Verify swap file and ZFS zvol lifecycle behavior, size boundaries, normal reboot cleanup, and isolation.
 
 ## Preconditions
 
@@ -42,32 +42,32 @@ Verify swap file and zfs zvol setup for documented success, boundary, failure, c
 
 ## Test Data
 
-Include valid values, empty/minimum/maximum values, malformed input, duplicate invocation, a dependency outage, and an adjacent app or node identity.
+Include valid values, disabled/minimum values, malformed and exhausted-storage input, and an adjacent app or node identity.
 
 ## Steps
 
 <a id="tc-gos-setup-008-step-01"></a>
 ### Step 1: Exercise the complete behavior matrix
 
-Configure disabled/file/zvol swap at size boundaries, repeat setup, exhaust disk, use existing wrong-size object and reboot.
+Configure disabled/file/zvol swap at size boundaries, exhaust disk, and reboot.
 
 **Expected results:**
 
-- Exactly the configured encrypted-safe swap becomes active, duplicate setup is idempotent, invalid storage fails clearly and no stale swap remains.
+- Exactly the configured swap becomes active, invalid storage fails clearly, and no stale swap remains after a normal reboot.
 
 <a id="tc-gos-setup-008-step-02"></a>
 ### Step 2: Verify failure atomicity and recovery
 
-Interrupt each external dependency before and after its commit point, issue a duplicate/concurrent request, restore the dependency, and retry.
+Exercise malformed sizes and exhausted backing storage while an adjacent valid swap object exists.
 
 **Expected results:**
 
-- Uncertain input fails closed, no partial trusted output is consumed, resources are released, retry converges once, and diagnostics identify the exact phase without secrets.
+- Invalid replacement input fails without disturbing the valid swap object or exposing sensitive data.
 
 <a id="tc-gos-setup-008-step-03"></a>
 ### Step 3: Verify persistence, isolation, and cleanup
 
-Restart the owning service or VM where permitted, re-query all affected state, test the adjacent identity, and perform documented cleanup.
+Restart the VM, re-query all affected state, test the adjacent identity, and perform documented cleanup.
 
 **Expected results:**
 

@@ -89,8 +89,8 @@ c5b3f9c69	fix(guest): defer failed KMS measurements	RETAINED	codex/fix-guest-def
 18d1c16ab	fix(guest): type captured KMS measurement	RETAINED	codex/fix-guest-deferred-kms-measurement
 475a37737	fix(guest): own captured KMS measurement	RETAINED	codex/fix-guest-deferred-kms-measurement
 0d38f2087	fix(guest): keep LUKS keys out of argv	RETAINED	codex/fix-guest-luks-key-argv
-12f487758	fix(guest): disable active swap before replacement	RETAINED	codex/fix-guest-swap-replacement
-d39a69efe	fix(guest): compare resolved swap paths safely	RETAINED	codex/fix-guest-swap-replacement
+12f487758	fix(guest): disable active swap before replacement	REJECTED	discarded; normal boot starts with no active swap from the previous boot
+d39a69efe	fix(guest): compare resolved swap paths safely	REJECTED	discarded with the active-swap replacement logic
 af2166b33	fix(guest): protect gateway private state	RETAINED	codex/fix-guest-gateway-private-state,codex/fix-guest-gateway-refresh-failover,codex/fix-guest-kms-failover-order,codex/fix-guest-local-provider-inventory
 5777880c3	test(guest): import Unix permission metadata	RETAINED	codex/fix-guest-gateway-private-state,codex/fix-guest-gateway-refresh-failover,codex/fix-guest-kms-failover-order,codex/fix-guest-local-provider-inventory
 6f7f8cecc	fix(guest): bound Host API operations	RETAINED	codex/fix-guest-host-api-bounds
