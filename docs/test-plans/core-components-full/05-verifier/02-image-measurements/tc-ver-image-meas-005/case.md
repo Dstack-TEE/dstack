@@ -49,11 +49,11 @@ Query the relevant health, configuration, and baseline state for measurement cac
 <a id="tc-ver-image-meas-005-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Verify same/different image/config concurrently, corrupt cache, clear/retry, and change verifier version.
+Exercise a version-mismatched cache entry, replace it with a current entry, inject malformed cache data, and perform concurrent writes.
 
 **Expected results:**
 
-- Cache keys include every measurement input/version; writes are atomic and corruption triggers safe recomputation.
+- The embedded cache-entry version rejects incompatible measurements and permits replacement under the same config-derived key; writes are atomic and corruption is ignored for safe recomputation.
 
 <a id="tc-ver-image-meas-005-step-03"></a>
 ### Step 3: Verify state, isolation, and diagnostics
