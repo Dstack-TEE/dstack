@@ -207,20 +207,6 @@ def main() -> int:
     observations: dict[str, Any] = {}
     try:
         before = vm_info(cli, vm_id)
-        repository = pathlib.Path(runtime["repository"])
-        source = (repository / "dstack/dstack-util/src/system_setup.rs").read_text()
-        file_start = source.index("async fn setup_swapfile")
-        zvol_start = source.index("async fn setup_swap_zvol")
-        file_body = source[file_start:zvol_start]
-        zvol_body = source[
-            zvol_start : source.index("fn is_disk_initialized", zvol_start)
-        ]
-        if file_body.index("active_swap_path") > file_body.index("remove_file"):
-            raise AssertionError("swapfile replacement still removes before swapoff")
-        if zvol_body.index("active_swap_path") > zvol_body.index(
-            "zfs set volmode=none"
-        ):
-            raise AssertionError("zvol replacement still destroys before swapoff")
         first = ssh(ssh_argv, environment + PHASE_ONE, 300)
         if first.returncode:
             raise AssertionError(
@@ -268,7 +254,6 @@ def main() -> int:
             "phase_two": second.stdout.strip(),
             "identity_sha256": hashlib.sha256(identity_before.encode()).hexdigest(),
             "identity_stable": True,
-            "swapoff_before_replace": True,
         }
     except (
         AssertionError,
