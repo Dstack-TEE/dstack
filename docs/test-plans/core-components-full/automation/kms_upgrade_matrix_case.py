@@ -1306,10 +1306,9 @@ configs:
         environment = os.environ.copy()
         environment["CARGO_TARGET_DIR"] = str(runtime["cargo_target_dir"])
         tests = (
-            "measurement_cache_key_binds_config_and_algorithm_version",
-            "measurement_cache_rejects_corrupt_and_stale_entries",
+            "measurement_cache_version_mismatch_is_ignored_and_replaced",
+            "corrupt_measurement_cache_entry_is_ignored",
             "concurrent_measurement_cache_writes_are_atomic",
-            "measurement_cache_upgrade_boundary_recomputes_without_stale_results",
         )
         observations: list[dict[str, Any]] = []
         for test in tests:

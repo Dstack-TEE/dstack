@@ -51,11 +51,11 @@ Capture source/target metadata, allowlists, image availability, `vm_config`, quo
 <a id="tc-kms-upgrade-011-step-02"></a>
 ### Step 2: Execute the compatibility path
 
-Populate caches before each bridge/direct hop, change OVMF/image/config inputs, upgrade verifier cache version, and repeat onboard/app authorization.
+Populate caches before each bridge/direct hop, change OVMF/image/config inputs, present an entry with an older embedded cache version, and repeat onboard/app authorization.
 
 **Expected results:**
 
-- Cache keys/version invalidate incompatible entries, recomputation uses the active release rules, and stale positive or negative results never cross the boundary.
+- The embedded cache-entry version invalidates incompatible measurements, recomputation uses the active release rules, and stale positive or negative results never cross the boundary.
 
 <a id="tc-kms-upgrade-011-step-03"></a>
 ### Step 3: Verify key, CA, application, and service continuity

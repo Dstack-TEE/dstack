@@ -15,8 +15,8 @@ from typing import Any
 
 CASE_ID = "tc-ver-image-meas-005"
 TESTS = (
-    "measurement_cache_key_binds_config_and_algorithm_version",
-    "measurement_cache_rejects_corrupt_and_stale_entries",
+    "measurement_cache_version_mismatch_is_ignored_and_replaced",
+    "corrupt_measurement_cache_entry_is_ignored",
     "concurrent_measurement_cache_writes_are_atomic",
 )
 
@@ -46,7 +46,7 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
     status = "PASS"
     summary = (
-        "Measurement cache keying, corruption recovery, and atomic concurrency passed."
+        "Measurement cache version rejection, corruption recovery, and atomic concurrency passed."
     )
     stage = "baseline"
     try:
@@ -91,15 +91,16 @@ def main() -> int:
         "rows": rows,
         "row_count": len(rows),
         "all_passed": status == "PASS",
-        "cache_key_inputs": ["vm_config", "measurement_cache_version"],
-        "recovery_inputs": ["malformed_json", "stale_version"],
+        "cache_key_inputs": ["vm_config"],
+        "entry_compatibility_guard": "embedded_measurement_cache_version",
+        "recovery_inputs": ["malformed_json", "stale_embedded_version"],
         "concurrency_property": "one complete entry and no temporary files",
     }
     artifact = {
         "path": "artifacts/measurement-cache-matrix.json",
         "step_id": f"{case_id}-step-02",
         "name": "Measurement cache matrix",
-        "description": "Exact source-defined test names, return codes, and hashed output for cache keys, recovery, and atomic writes.",
+        "description": "Exact source-defined test names, return codes, and hashed output for embedded-version rejection, recovery, and atomic writes.",
     }
     atomic_json(result_dir / artifact["path"], observations)
     atomic_json(result_dir / "artifacts/manifest.json", {"artifacts": [artifact]})
@@ -120,7 +121,7 @@ def main() -> int:
                 {
                     "id": f"{case_id}-step-02",
                     "status": status,
-                    "observed": "Config/version cache keys, corrupt/stale recovery, and concurrent atomic writes were exercised.",
+                    "observed": "Embedded-version rejection and replacement, corrupt-entry recovery, and concurrent atomic writes were exercised.",
                 },
                 {
                     "id": f"{case_id}-step-03",
