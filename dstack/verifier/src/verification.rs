@@ -415,11 +415,31 @@ impl CvmVerifier {
             .is_some_and(|digest| digest == expected))
     }
 
-    fn is_safe_relative_path(path: &Path) -> bool {
-        !path.as_os_str().is_empty()
-            && path
-                .components()
-                .all(|component| matches!(component, Component::Normal(_)))
+    /// Mirrors the confinement rule `tar::Entry::unpack_in` applies internally:
+    /// `..` components, absolute paths, and Windows prefixes escape the
+    /// extraction root, while `.` components are stripped and are harmless.
+    ///
+    /// This duplicates the library check on purpose. `Archive::unpack` discards
+    /// the `unpack_in` return value, so an escaping member is silently dropped
+    /// and extraction still reports success; checking here turns that into an
+    /// error and keeps the boundary from widening if the library's behavior
+    /// ever changes. It must not be *stricter* than the library, though:
+    /// rejecting `.` components would reject the `./`-prefixed archives that
+    /// `tar -czf out.tar.gz .` produces, and roughly a third of the images
+    /// published on download.dstack.org are packed that way.
+    fn is_confined_archive_path(path: &Path) -> bool {
+        path.components()
+            .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
+    }
+
+    /// A manifest name must be literally a file name, because
+    /// `prune_unlisted_image_files` matches manifest entries against the
+    /// `file_name()` of each top-level directory entry, and `sha256sum -c`
+    /// resolves them relative to the extraction root.
+    fn is_flat_manifest_name(name: &str) -> bool {
+        Path::new(name)
+            .file_name()
+            .is_some_and(|file_name| file_name == OsStr::new(name))
     }
 
     fn validate_image_manifest_paths(files_doc: &str) -> Result<()> {
@@ -437,11 +457,10 @@ impl CvmVerifier {
             if fields.next().is_some() {
                 bail!("image manifest line {} has extra fields", line_index + 1);
             }
-            let path = Path::new(name);
-            if !Self::is_safe_relative_path(path) || path.components().count() != 1 {
+            if !Self::is_flat_manifest_name(name) {
                 bail!("image manifest line {} has an unsafe path", line_index + 1);
             }
-            if path == Path::new("sha256sum.txt") {
+            if name == "sha256sum.txt" {
                 bail!("image manifest must not recursively list sha256sum.txt");
             }
         }
@@ -450,14 +469,17 @@ impl CvmVerifier {
 
     fn extract_image_archive(tarball_path: &Path, extracted_dir: &Path) -> Result<()> {
         let file = fs_err::File::open(tarball_path).context("Failed to open image archive")?;
-        let decoder = flate2::read::GzDecoder::new(file);
+        // `MultiGzDecoder`, not `GzDecoder`: the latter stops at the first gzip
+        // member and reports clean EOF, so a concatenated-member archive would
+        // extract partially without any error.
+        let decoder = flate2::read::MultiGzDecoder::new(file);
         let mut archive = tar::Archive::new(decoder);
         for entry in archive.entries().context("Failed to read image archive")? {
             let mut entry = entry.context("Failed to read image archive entry")?;
             let path = entry
                 .path()
                 .context("Failed to decode image archive path")?;
-            if !Self::is_safe_relative_path(&path) {
+            if !Self::is_confined_archive_path(&path) {
                 bail!("image archive contains unsafe path {}", path.display());
             }
             let entry_type = entry.header().entry_type();
@@ -1470,24 +1492,38 @@ mod tests {
 
     #[test]
     fn image_paths_must_be_confined_and_manifest_paths_must_be_flat() {
-        for path in ["", ".", "../escape", "/absolute", "nested/../escape"] {
+        for path in ["../escape", "/absolute", "nested/../escape"] {
             assert!(
-                !CvmVerifier::is_safe_relative_path(Path::new(path)),
+                !CvmVerifier::is_confined_archive_path(Path::new(path)),
                 "{path}"
             );
         }
-        assert!(CvmVerifier::is_safe_relative_path(Path::new(
-            "nested/artifact"
-        )));
+        // `.` components are stripped by `unpack_in` and cannot escape, so the
+        // check must accept them: `tar -czf out.tar.gz .` prefixes every member
+        // with `./` and published images are packed that way.
+        for path in ["nested/artifact", "./metadata.json", ".", "./", ""] {
+            assert!(
+                CvmVerifier::is_confined_archive_path(Path::new(path)),
+                "{path}"
+            );
+        }
 
         let digest = "00".repeat(32);
         assert!(
             CvmVerifier::validate_image_manifest_paths(&format!("{digest}  metadata.json\n"))
                 .is_ok()
         );
-        for path in ["../escape", "/absolute", "nested/artifact", "sha256sum.txt"] {
+        for path in [
+            "../escape",
+            "/absolute",
+            "nested/artifact",
+            "./metadata.json",
+            ".",
+            "sha256sum.txt",
+        ] {
             assert!(
-                CvmVerifier::validate_image_manifest_paths(&format!("{digest}  {path}\n")).is_err()
+                CvmVerifier::validate_image_manifest_paths(&format!("{digest}  {path}\n")).is_err(),
+                "{path}"
             );
         }
     }
@@ -1535,6 +1571,81 @@ mod tests {
         let output = directory.path().join("linked-output");
         fs_err::create_dir(&output).unwrap();
         assert!(CvmVerifier::extract_image_archive(&linked, &output).is_err());
+    }
+
+    /// Images published on download.dstack.org come in two shapes: members
+    /// packed from a glob (`bzImage`, ...) and members packed from `.`
+    /// (`./`, `./bzImage`, ...). Both must extract to the same flat layout.
+    #[test]
+    fn image_archive_accepts_dot_prefixed_members() {
+        let directory = tempfile::tempdir().unwrap();
+        let archive_path = directory.path().join("dot-prefixed.tar.gz");
+        {
+            let file = fs_err::File::create(&archive_path).unwrap();
+            let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+            let mut archive = tar::Builder::new(encoder);
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Directory);
+            header.set_size(0);
+            header.set_mode(0o755);
+            header.set_cksum();
+            archive.append_data(&mut header, "./", &[][..]).unwrap();
+            let payload = b"artifact";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(payload.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, "./metadata.json", &payload[..])
+                .unwrap();
+            archive.finish().unwrap();
+        }
+        let output = directory.path().join("dot-prefixed-output");
+        fs_err::create_dir(&output).unwrap();
+        CvmVerifier::extract_image_archive(&archive_path, &output).unwrap();
+        assert_eq!(
+            fs_err::read(output.join("metadata.json")).unwrap(),
+            b"artifact"
+        );
+    }
+
+    /// `GzDecoder` stops at the first member of a concatenated gzip stream and
+    /// reports clean EOF, which would truncate the archive without an error.
+    #[test]
+    fn image_archive_reads_every_gzip_member() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut tarball = tar::Builder::new(Vec::new());
+        let payload = b"artifact";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(payload.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tarball
+            .append_data(&mut header, "metadata.json", &payload[..])
+            .unwrap();
+        let tarball = tarball.into_inner().unwrap();
+
+        let archive_path = directory.path().join("multi-member.tar.gz");
+        {
+            use std::io::Write;
+
+            let mut file = fs_err::File::create(&archive_path).unwrap();
+            // One gzip member per half of the tar stream.
+            for half in tarball.chunks(tarball.len().div_ceil(2)) {
+                let mut encoder =
+                    flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+                encoder.write_all(half).unwrap();
+                file.write_all(&encoder.finish().unwrap()).unwrap();
+            }
+            file.flush().unwrap();
+        }
+        let output = directory.path().join("multi-member-output");
+        fs_err::create_dir(&output).unwrap();
+        CvmVerifier::extract_image_archive(&archive_path, &output).unwrap();
+        assert_eq!(
+            fs_err::read(output.join("metadata.json")).unwrap(),
+            b"artifact"
+        );
     }
 
     #[tokio::test]
