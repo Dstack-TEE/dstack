@@ -734,7 +734,7 @@ impl VersionedAttestation {
             bail!("Empty attestation bytes");
         };
         if first == 0x00 {
-            let mut input = &bytes[..];
+            let mut input = bytes;
             let legacy = LegacyVersionedAttestation::decode(&mut input)
                 .context("Failed to decode legacy VersionedAttestation")?;
             if !input.is_empty() {
