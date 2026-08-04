@@ -77,10 +77,11 @@ def run_control(suite: str, artifact: Path, phase: str) -> None:
         )
     if (
         '"is_valid": true' not in completed.stdout
-        or '"simulated": true' not in completed.stdout
+        or '"development_root_accepted":true' not in completed.stdout
+        or '"production_root_rejected":true' not in completed.stdout
     ):
         raise RuntimeError(
-            f"Nitro Enclave {phase} control omitted its valid simulated verdict"
+            f"Nitro Enclave {phase} control omitted a trust-root isolation assertion"
         )
 
 
@@ -109,7 +110,7 @@ def main() -> int:
             emit(
                 f"{CASE_ID}-step-01",
                 "PASS",
-                "A fresh case-owned Nitro simulator produced measured non-debug evidence that the production verifier accepted with the expected signed-image hash and simulated=true label.",
+                "A fresh case-owned Nitro simulator produced measured non-debug evidence accepted by its development root and rejected by the built-in production root.",
             )
         )
 

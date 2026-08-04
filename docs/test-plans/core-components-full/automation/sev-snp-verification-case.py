@@ -92,16 +92,17 @@ def main() -> int:
             )
         if (
             '"is_valid": true' not in baseline.stdout
-            or '"simulated": true' not in baseline.stdout
+            or '"development_root_accepted":true' not in baseline.stdout
+            or '"production_root_rejected":true' not in baseline.stdout
         ):
             raise RuntimeError(
-                "SEV-SNP verifier control omitted its valid simulated verdict"
+                "SEV-SNP verifier control omitted a trust-root isolation assertion"
             )
         steps.append(
             emit(
                 f"{CASE_ID}-step-01",
                 "PASS",
-                "The case-owned AMD simulator produced a signed SEV-SNP report that the production verifier accepted under explicit development roots and labeled simulated=true.",
+                "The case-owned AMD simulator produced a signed SEV-SNP report accepted by its development root and rejected by the built-in production root.",
             )
         )
 
