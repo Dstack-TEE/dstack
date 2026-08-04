@@ -1399,6 +1399,108 @@ mod tests {
         assert!(decode_key_provider_info(b"not json").is_none());
     }
 
+    fn sample_measurements(byte: u8) -> TdxMeasurements {
+        TdxMeasurements {
+            mrtd: vec![byte; 48],
+            rtmr0: vec![byte.wrapping_add(1); 48],
+            rtmr1: vec![byte.wrapping_add(2); 48],
+            rtmr2: vec![byte.wrapping_add(3); 48],
+        }
+    }
+
+    #[test]
+    fn measurement_cache_version_mismatch_is_ignored_and_replaced() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut verifier = test_verifier();
+        verifier.image_cache_dir = directory.path().display().to_string();
+        let config: VmConfig = serde_json::from_str("{}").unwrap();
+        let key = CvmVerifier::vm_config_cache_key(&config).unwrap();
+        let path = verifier.measurement_cache_path(&key);
+        fs_err::create_dir_all(path.parent().unwrap()).unwrap();
+
+        fs_err::write(
+            &path,
+            serde_json::to_vec(&CachedMeasurement {
+                version: MEASUREMENT_CACHE_VERSION - 1,
+                measurements: sample_measurements(0x11),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(verifier
+            .load_measurements_from_cache(&key)
+            .unwrap()
+            .is_none());
+
+        let current = sample_measurements(0x22);
+        verifier
+            .store_measurements_in_cache(&key, &current)
+            .unwrap();
+        let loaded = verifier
+            .load_measurements_from_cache(&key)
+            .unwrap()
+            .expect("current cache entry");
+        assert_eq!(
+            serde_json::to_vec(&loaded).unwrap(),
+            serde_json::to_vec(&current).unwrap()
+        );
+    }
+
+    #[test]
+    fn corrupt_measurement_cache_entry_is_ignored() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut verifier = test_verifier();
+        verifier.image_cache_dir = directory.path().display().to_string();
+        let config: VmConfig = serde_json::from_str("{}").unwrap();
+        let key = CvmVerifier::vm_config_cache_key(&config).unwrap();
+        let path = verifier.measurement_cache_path(&key);
+        fs_err::create_dir_all(path.parent().unwrap()).unwrap();
+        fs_err::write(path, b"{not json").unwrap();
+
+        assert!(verifier
+            .load_measurements_from_cache(&key)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn concurrent_measurement_cache_writes_are_atomic() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut verifier = test_verifier();
+        verifier.image_cache_dir = directory.path().display().to_string();
+        let config: VmConfig = serde_json::from_str("{}").unwrap();
+        let key = CvmVerifier::vm_config_cache_key(&config).unwrap();
+        let first = sample_measurements(0x11);
+        let second = sample_measurements(0x22);
+
+        std::thread::scope(|scope| {
+            for index in 0..16 {
+                let verifier = &verifier;
+                let key = &key;
+                let measurements = if index % 2 == 0 { &first } else { &second };
+                scope.spawn(move || {
+                    verifier
+                        .store_measurements_in_cache(key, measurements)
+                        .unwrap();
+                });
+            }
+        });
+        let cached = verifier
+            .load_measurements_from_cache(&key)
+            .unwrap()
+            .expect("one complete cache entry");
+        let encoded = serde_json::to_vec(&cached).unwrap();
+        assert!(
+            encoded == serde_json::to_vec(&first).unwrap()
+                || encoded == serde_json::to_vec(&second).unwrap()
+        );
+        let entries = fs_err::read_dir(verifier.measurement_cache_dir())
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(entries.len(), 1, "temporary cache files must not survive");
+    }
+
     #[test]
     fn image_cache_pruning_keeps_checksum_identity() {
         let dir = tempfile::tempdir().expect("temp image directory");
