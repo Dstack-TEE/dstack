@@ -25,6 +25,13 @@ async fn create_test_state() -> TestState {
     let mut config = figment.focus("core").extract::<Config>().unwrap();
     let temp_dir = TempDir::new().expect("failed to create temp dir");
     config.sync.data_dir = temp_dir.path().to_string_lossy().to_string();
+    // the default points at /etc/wireguard/wg0.conf, so anything that calls
+    // `reconfigure` would write to the host's real WireGuard config.
+    config.wg.config_path = temp_dir
+        .path()
+        .join("wg.conf")
+        .to_string_lossy()
+        .into_owned();
     let options = ProxyOptions {
         config,
         my_app_id: None,
@@ -50,6 +57,35 @@ async fn test_empty_config() {
     let state = create_test_state().await;
     let wg_config = state.lock().generate_wg_config().unwrap();
     insta::assert_snapshot!(wg_config);
+}
+
+/// The rendered config contains the interface's WireGuard private key, so the
+/// file must not be readable by anyone else. It used to be written with the
+/// default mode, landing at `0o666 & !umask`.
+#[cfg(unix)]
+#[tokio::test]
+async fn wg_config_is_written_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let state = create_test_state().await;
+    let path = state.lock().config.wg.config_path.clone();
+
+    // `reconfigure` also runs `wg syncconf`, which fails without a real
+    // interface — that failure is logged rather than propagated, so the write
+    // is still exercised here.
+    state.lock().reconfigure().expect("reconfigure failed");
+
+    let rendered = std::fs::read_to_string(&path).expect("wg config was not written");
+    assert!(
+        rendered.contains("PrivateKey"),
+        "test would be vacuous: the config carries no key"
+    );
+
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        mode, 0o600,
+        "wg config holds a private key, got mode {mode:o}"
+    );
 }
 
 fn policy(restrict: bool, ports: &[u16]) -> PortPolicy {
