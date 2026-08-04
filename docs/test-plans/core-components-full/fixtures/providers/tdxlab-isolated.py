@@ -384,8 +384,7 @@ def start_vmm(
         # QEMU unix socket paths are limited to 108 bytes, so the VMM run path
         # is reached through a short symlink rather than the lease workspace.
         RUN_LINK_ROOT.mkdir(parents=True, exist_ok=True)
-        # SupervisorClient rejects a socket parent writable by group/other.
-        # This directory is provider-owned and contains only lease endpoints.
+        # Keep lease-owned Supervisor endpoints isolated from other users.
         RUN_LINK_ROOT.chmod(0o700)
         run_path_link = RUN_LINK_ROOT / f"dv-{lease_id[-12:]}"
         if run_path_link.exists() or run_path_link.is_symlink():
