@@ -180,18 +180,24 @@ async fn main() -> Result<()> {
 
     let figment = config::load_config_figment(args.config.as_deref());
     let config = Config::extract_or_default(&figment)?.abs_path()?;
-    config.validate()?;
-    let _: rocket::listener::Endpoint = figment
-        .extract_inner("address")
-        .context("Invalid management API address")?;
-    let _: u16 = figment
-        .extract_inner("port")
-        .context("Invalid management API port")?;
+    // Preserve the existing startup validation. The broader static checks are
+    // opt-in through `check-config` until they have seen wider deployment use.
+    config
+        .host_api
+        .validate()
+        .context("Invalid host_api configuration")?;
 
     // Handle commands
     match args.command.unwrap_or_default() {
         Command::VmLauncher(_) => unreachable!("launcher mode handled before config loading"),
         Command::CheckConfig => {
+            config.validate()?;
+            let _: rocket::listener::Endpoint = figment
+                .extract_inner("address")
+                .context("Invalid management API address")?;
+            let _: u16 = figment
+                .extract_inner("port")
+                .context("Invalid management API port")?;
             println!("configuration is valid");
             return Ok(());
         }
