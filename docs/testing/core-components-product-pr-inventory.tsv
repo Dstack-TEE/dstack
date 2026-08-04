@@ -36,9 +36,9 @@ pr	state	title	head	base	dependency	url
 877	OPEN	fix(util): honor the requested random output path	codex/fix-util-random-output-path	master		https://github.com/Dstack-TEE/dstack/pull/877
 878	OPEN	fix(attestation): reject trailing encoded bytes	codex/fix-attestation-trailing-bytes	master		https://github.com/Dstack-TEE/dstack/pull/878
 879	OPEN	fix(attestation): validate V2 event preimages	codex/fix-attestation-v2-event-preimages	master		https://github.com/Dstack-TEE/dstack/pull/879
-880	OPEN	fix(verifier): label development trust evidence	codex/fix-verifier-development-trust-label	master		https://github.com/Dstack-TEE/dstack/pull/880
+880	OPEN	test(attestation): verify simulator trust-root isolation	codex/fix-verifier-development-trust-label	master		https://github.com/Dstack-TEE/dstack/pull/880
 881	OPEN	fix(verifier): confine image archive extraction	codex/fix-verifier-archive-confinement	master		https://github.com/Dstack-TEE/dstack/pull/881
-882	OPEN	fix(verifier): version measurement cache keys	codex/fix-verifier-cache-key-version	master		https://github.com/Dstack-TEE/dstack/pull/882
+882	OPEN	test(verifier): cover measurement cache compatibility	codex/fix-verifier-cache-key-version	master		https://github.com/Dstack-TEE/dstack/pull/882
 883	OPEN	fix(guest): write generated credentials atomically	codex/fix-guest-atomic-credentials	master		https://github.com/Dstack-TEE/dstack/pull/883
 884	OPEN	fix(guest): fail malformed JSON vTPM attestations	codex/fix-guest-vtpm-json-errors	master		https://github.com/Dstack-TEE/dstack/pull/884
 885	OPEN	fix(guest): defer failed KMS measurements	codex/fix-guest-deferred-kms-measurement	master		https://github.com/Dstack-TEE/dstack/pull/885

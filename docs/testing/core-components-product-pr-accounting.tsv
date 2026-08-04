@@ -73,12 +73,12 @@ e4d6d4a7b	fix(verifier): keep oneshot stdout machine-readable	RETAINED	codex/fix
 920133fee	fix(attestation): reject trailing legacy bytes	RETAINED	codex/fix-attestation-trailing-bytes
 2f91b0274	fix(attestation): reject trailing msgpack bytes	RETAINED	codex/fix-attestation-trailing-bytes
 3b01e4d47	fix(attestation): validate V2 event preimages	RETAINED	codex/fix-attestation-v2-event-preimages
-8f135661f	fix(verifier): label development trust evidence	RETAINED	codex/feat-simulator-seeded-attestation,codex/fix-mock-attestation-dcap-collateral,codex/fix-ra-tls-app-extensions,codex/fix-ra-tls-security-profile,codex/fix-simulator-legacy-attestation,codex/fix-verifier-development-trust-label
-b6aa008bf	chore(attestation): update development test lockfile	RETAINED	codex/feat-simulator-seeded-attestation,codex/fix-mock-attestation-dcap-collateral,codex/fix-ra-tls-app-extensions,codex/fix-ra-tls-security-profile,codex/fix-simulator-legacy-attestation,codex/fix-verifier-development-trust-label
+8f135661f	fix(verifier): label development trust evidence	REJECTED	discarded; verifier trust roots already separate development and production evidence
+b6aa008bf	chore(attestation): update development test lockfile	TEST_ONLY	move/account in test-infrastructure PR
 e11edcd50	fix(verifier): confine image archive extraction	RETAINED	codex/fix-verifier-archive-confinement
 113c9547d	test(verifier): use valid cache manifest digest	RETAINED	codex/fix-verifier-archive-confinement
 ec1908a64	chore(verifier): update archive dependency lockfile	RETAINED	codex/fix-verifier-archive-confinement
-6d23260c1	fix(verifier): version measurement cache keys	RETAINED	codex/fix-verifier-cache-key-version
+6d23260c1	fix(verifier): version measurement cache keys	REJECTED	discarded; embedded cache-entry versions already enforce compatibility
 b316ea22b	test(dstack-mr): cover unsupported swtpm measurement	TEST_ONLY	move/account in test-infrastructure PR
 146cb8d15	fix(guest): write generated credentials atomically	RETAINED	codex/fix-guest-atomic-attestation-output,codex/fix-guest-atomic-credentials,codex/fix-guest-kms-key-permissions,codex/fix-util-atomic-cert-key,codex/fix-util-atomic-tpm-quotes
 5f5885938	build(guest): lock CLI filesystem dependency	RETAINED	codex/fix-guest-atomic-attestation-output,codex/fix-guest-atomic-credentials,codex/fix-guest-kms-key-permissions,codex/fix-util-atomic-cert-key,codex/fix-util-atomic-tpm-quotes
