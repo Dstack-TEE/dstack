@@ -1379,7 +1379,7 @@
       "source_status": "PASS",
       "entrypoint": "automation/swap-setup-case.py",
       "environment": "HARDWARE",
-      "notes": "lease-owned TDX guest exercised swapfile and ZFS zvol disabled, replacement, size, invalid/exhausted, reboot, identity, and cleanup behavior; active objects were disabled before replacement"
+      "notes": "lease-owned TDX guest exercised swapfile and ZFS zvol disabled, size, invalid/exhausted, reboot, identity, and normal boot cleanup behavior"
     },
     {
       "case_id": "tc-gos-setup-009",
