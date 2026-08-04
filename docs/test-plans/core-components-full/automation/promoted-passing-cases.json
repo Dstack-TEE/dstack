@@ -1405,7 +1405,7 @@
       "source_status": "PASS",
       "entrypoint": "automation/supervisor-client-lifecycle-case.py",
       "environment": "SIMULATOR",
-      "notes": "Passed on candidate commit 18389f996 with mkosi image dstack-mkosi-0753a8c4b: dependency outage, 8 concurrent trusted-UDS auto-start clients, single-daemon convergence, full API lifecycle, negative ID and socket-replacement paths, recovery, and exact cleanup."
+      "notes": "Passed on candidate commit 18389f996 with mkosi image dstack-mkosi-0753a8c4b: dependency outage, 8 concurrent UDS auto-start clients, single-daemon convergence, full API lifecycle, negative ID and stale-endpoint recovery paths, and exact cleanup."
     },
     {
       "case_id": "tc-gos-storage-an-001",
