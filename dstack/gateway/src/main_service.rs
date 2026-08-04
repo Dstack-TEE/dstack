@@ -25,7 +25,7 @@ use ra_rpc::{CallContext, RpcCall, VerifiedAttestation};
 use ra_tls::attestation::AppInfo;
 use rand::seq::IteratorRandom;
 use rinja::Template as _;
-use safe_write::safe_write;
+use safe_write::safe_write_with_mode;
 use serde::{Deserialize, Serialize};
 use smallvec::{smallvec, SmallVec};
 use tokio::sync::{
@@ -1132,7 +1132,9 @@ impl ProxyState {
 
     pub(crate) fn reconfigure(&mut self) -> Result<()> {
         let wg_config = self.generate_wg_config()?;
-        safe_write(&self.config.wg.config_path, wg_config).context("Failed to write wg config")?;
+        // the rendered config carries the interface's WireGuard private key.
+        safe_write_with_mode(&self.config.wg.config_path, wg_config, 0o600)
+            .context("failed to write wg config")?;
         // wg setconf <interface_name> <config_path>
         let ifname = &self.config.wg.interface;
         let config_path = &self.config.wg.config_path;
