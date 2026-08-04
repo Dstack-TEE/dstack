@@ -133,8 +133,8 @@ def main() -> int:
                 "returncode": completed.returncode,
                 "duration_seconds": round(time.monotonic() - row_started, 3),
                 "valid_evidence_accepted": '"is_valid": true' in log,
-                "simulated_labeled": '"simulated": true' in log,
-                "production_policy_rejected": '"accepted": false' in log,
+                "development_root_accepted": '"development_root_accepted":true' in log,
+                "production_root_rejected": '"production_root_rejected":true' in log,
                 "tampered_evidence_rejected": "tampered" not in log.lower(),
             }
             rows.append(row)
@@ -142,8 +142,8 @@ def main() -> int:
                 row[key]
                 for key in (
                     "valid_evidence_accepted",
-                    "simulated_labeled",
-                    "production_policy_rejected",
+                    "development_root_accepted",
+                    "production_root_rejected",
                     "tampered_evidence_rejected",
                 )
             ):
@@ -175,7 +175,7 @@ def main() -> int:
             emit(
                 f"{case_id}-step-02",
                 "PASS",
-                f"{len(spec['services'])} simulated platform row(s) rejected authenticated-byte mutations and production use of development roots; {unit_passed} candidate KMS/verifier policy tests passed.",
+                f"{len(spec['services'])} simulated platform row(s) rejected authenticated-byte mutations and were rejected by built-in production roots; {unit_passed} candidate KMS/verifier policy tests passed.",
             )
         )
         steps.append(
