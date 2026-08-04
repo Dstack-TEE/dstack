@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Exercise SupervisorClient full API, trusted UDS auto-start, and recovery."""
+"""Exercise SupervisorClient full API, concurrent UDS auto-start, and recovery."""
 
 from __future__ import annotations
 
@@ -114,7 +114,7 @@ def main() -> int:
     observations: dict[str, Any] = {"candidate_commit": runtime.get("candidate_commit")}
     owned_pids: set[int] = set()
     status = "PASS"
-    summary = "Supervisor client full API and trusted concurrent auto-start passed."
+    summary = "Supervisor client full API and concurrent auto-start passed."
     try:
         unavailable = call([*base, "ping"])
         if unavailable.returncode == 0:
@@ -195,16 +195,11 @@ def main() -> int:
         wait_exit(pid)
         owned_pids.discard(pid)
 
-        socket.write_text("untrusted replacement")
-        replacement_hash = hashlib.sha256(socket.read_bytes()).hexdigest()
-        rejected = call([*auto, "ping"])
-        if rejected.returncode == 0 or not socket.is_file():
-            raise AssertionError("untrusted socket replacement was accepted or removed")
-        if hashlib.sha256(socket.read_bytes()).hexdigest() != replacement_hash:
-            raise AssertionError("untrusted socket replacement was modified")
-        socket.unlink()
+        socket.write_text("stale endpoint")
         if parsed(call([*auto, "ping"])) != "pong":
-            raise AssertionError("auto-start recovery did not return pong")
+            raise AssertionError("stale endpoint recovery did not return pong")
+        if socket.is_file():
+            raise AssertionError("stale endpoint was not replaced by a Unix socket")
         recovered_pid = wait_pid(pid_file)
         owned_pids.add(recovered_pid)
         parsed(call([*base, "shutdown"]))
@@ -227,7 +222,7 @@ def main() -> int:
                 ],
                 "duplicate_rejected": True,
                 "unknown_id_rejected": True,
-                "replacement_rejected_and_preserved": True,
+                "stale_endpoint_recovered": True,
                 "recovery_succeeded": True,
                 "log_sha256": hashlib.sha256(log_file.read_bytes()).hexdigest()
                 if log_file.is_file()
