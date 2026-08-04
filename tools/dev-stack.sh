@@ -214,11 +214,7 @@ ca_certs = "$CERTS_DIR/gateway-ca.cert"
 mandatory = false
 
 [core]
-kms_url = "https://localhost:$KMS_RPC_LISTEN_PORT"
 rpc_domain = "$GATEWAY_DOMAIN"
-
-[core.debug]
-insecure_skip_attestation = true
 
 [core.sync]
 enabled = false

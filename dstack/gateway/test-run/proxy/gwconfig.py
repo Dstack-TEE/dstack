@@ -54,7 +54,6 @@ certs = "{cert}"
 [tls.mutual]
 ca_certs = "{cert}"
 [core]
-kms_url = ""
 rpc_domain = ""
 set_ulimit = false
 [core.debug]

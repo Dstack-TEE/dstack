@@ -1862,7 +1862,6 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "arc-swap",
- "base64 0.22.1",
  "bytes",
  "cached-cell",
  "certbot",
@@ -1873,7 +1872,6 @@ dependencies = [
  "dstack-build-info",
  "dstack-gateway-rpc",
  "dstack-guest-agent-rpc",
- "dstack-kms-rpc",
  "dstack-types",
  "flate2",
  "fs-err",

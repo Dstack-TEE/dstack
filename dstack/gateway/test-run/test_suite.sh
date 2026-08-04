@@ -88,8 +88,6 @@ ca_certs = "${abs_run_dir}/certs/gateway-ca.cert"
 mandatory = false
 
 [core]
-# Empty kms_url to skip auto-cert generation (we use pre-generated certs)
-kms_url = ""
 rpc_domain = "gateway.tdxlab.dstack.org"
 
 [core.debug]
