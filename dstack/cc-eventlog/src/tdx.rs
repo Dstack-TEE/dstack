@@ -187,10 +187,10 @@ pub fn validate_v2_preimages(events: &[TdxEvent]) -> Result<()> {
         if advertised.as_slice() != event.digest.as_slice() {
             bail!("V2 runtime event {index} digest does not match its preimage");
         }
-        let canonical = event
-            .to_runtime_event()
-            .expect("runtime event was checked above")
-            .preimage();
+        let Some(runtime_event) = event.to_runtime_event() else {
+            continue;
+        };
+        let canonical = runtime_event.preimage();
         if supplied != canonical {
             bail!("V2 runtime event {index} preimage is not the canonical event representation");
         }

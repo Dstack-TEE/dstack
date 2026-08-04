@@ -1096,6 +1096,15 @@ impl AttestationV1 {
             }
         };
 
+        match &platform {
+            PlatformEvidence::Tdx { event_log, .. }
+            | PlatformEvidence::GcpTdx { event_log, .. } => {
+                cc_eventlog::tdx::validate_v2_preimages(event_log)
+                    .context("Failed to validate TDX V2 event digest preimages")?;
+            }
+            _ => {}
+        }
+
         Ok(VerifiedAttestation {
             quote: platform_into_legacy_quote(platform),
             runtime_events,
@@ -2058,8 +2067,6 @@ impl Attestation {
     pub fn from_tdx_quote(quote: Vec<u8>, event_log: &[u8]) -> Result<Self> {
         let tdx_eventlog: Vec<TdxEvent> =
             serde_json::from_slice(event_log).context("Failed to parse tdx_event_log")?;
-        cc_eventlog::tdx::validate_v2_preimages(&tdx_eventlog)
-            .context("Failed to validate TDX V2 event digest preimages")?;
         let runtime_events = tdx_eventlog
             .iter()
             .flat_map(|event| event.to_runtime_event())
@@ -2293,6 +2300,18 @@ impl Attestation {
                 DstackVerifiedReport::DstackAwsNitroTpm(report)
             }
         };
+
+        match &self.quote {
+            AttestationQuote::DstackTdx(q) => {
+                cc_eventlog::tdx::validate_v2_preimages(&q.event_log)
+                    .context("Failed to validate TDX V2 event digest preimages")?;
+            }
+            AttestationQuote::DstackGcpTdx(q) => {
+                cc_eventlog::tdx::validate_v2_preimages(&q.tdx_quote.event_log)
+                    .context("Failed to validate TDX V2 event digest preimages")?;
+            }
+            _ => {}
+        }
 
         Ok(VerifiedAttestation {
             quote: self.quote,
