@@ -43,7 +43,7 @@ pr	state	title	head	base	dependency	url
 884	OPEN	fix(guest): fail malformed JSON vTPM attestations	codex/fix-guest-vtpm-json-errors	master		https://github.com/Dstack-TEE/dstack/pull/884
 885	OPEN	fix(guest): defer failed KMS measurements	codex/fix-guest-deferred-kms-measurement	master		https://github.com/Dstack-TEE/dstack/pull/885
 886	OPEN	fix(guest): keep LUKS keys out of process arguments	codex/fix-guest-luks-key-argv	master		https://github.com/Dstack-TEE/dstack/pull/886
-887	OPEN	fix(guest): disable active swap before replacement	codex/fix-guest-swap-replacement	master		https://github.com/Dstack-TEE/dstack/pull/887
+887	CLOSED	fix(guest): disable active swap before replacement	codex/fix-guest-swap-replacement	master		https://github.com/Dstack-TEE/dstack/pull/887
 888	OPEN	[STACKED on #853] fix(simulator): implement Nitro PCR state	codex/fix-simulator-nitro-pcr-state	codex/fix-simulator-nsm-readiness	#853	https://github.com/Dstack-TEE/dstack/pull/888
 889	OPEN	[STACKED on #883] fix(guest): write attestation outputs atomically	codex/fix-guest-atomic-attestation-output	codex/fix-guest-atomic-credentials	#883	https://github.com/Dstack-TEE/dstack/pull/889
 890	OPEN	[STACKED on #883] fix(guest): protect KMS key output	codex/fix-guest-kms-key-permissions	codex/fix-guest-atomic-credentials	#883	https://github.com/Dstack-TEE/dstack/pull/890
