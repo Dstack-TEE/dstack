@@ -94,12 +94,12 @@ d39a69efe	fix(guest): compare resolved swap paths safely	REJECTED	discarded with
 af2166b33	fix(guest): protect gateway private state	RETAINED	codex/fix-guest-gateway-private-state,codex/fix-guest-gateway-refresh-failover,codex/fix-guest-kms-failover-order,codex/fix-guest-local-provider-inventory
 5777880c3	test(guest): import Unix permission metadata	RETAINED	codex/fix-guest-gateway-private-state,codex/fix-guest-gateway-refresh-failover,codex/fix-guest-kms-failover-order,codex/fix-guest-local-provider-inventory
 6f7f8cecc	fix(guest): bound Host API operations	RETAINED	codex/fix-guest-host-api-bounds
-1eedd9c89	fix(supervisor): reject untrusted client sockets	RETAINED	codex/feat-supervisor-trusted-uds-autostart,codex/fix-supervisor-trusted-client-sockets
-dd5bd0c85	build(supervisor): lock client libc dependency	RETAINED	codex/feat-supervisor-trusted-uds-autostart,codex/fix-supervisor-trusted-client-sockets
-367a16db2	fix(supervisor): retain socket path for validation	RETAINED	codex/feat-supervisor-trusted-uds-autostart,codex/fix-supervisor-trusted-client-sockets
-6422f2efc	test(supervisor): add socket fixture dependency	RETAINED	codex/feat-supervisor-trusted-uds-autostart,codex/fix-supervisor-trusted-client-sockets
-3ccfc4394	test(supervisor): expose trusted socket rejection	RETAINED	codex/feat-supervisor-trusted-uds-autostart,codex/fix-supervisor-trusted-client-sockets
-f10543399	test(supervisor): secure trusted socket directory	RETAINED	codex/feat-supervisor-trusted-uds-autostart,codex/fix-supervisor-trusted-client-sockets
+1eedd9c89	fix(supervisor): reject untrusted client sockets	REJECTED	discarded; normal Unix socket and directory permissions enforce the trust boundary
+dd5bd0c85	build(supervisor): lock client libc dependency	RETAINED	codex/feat-supervisor-trusted-uds-autostart
+367a16db2	fix(supervisor): retain socket path for validation	REJECTED	discarded with client-side socket path validation
+6422f2efc	test(supervisor): add socket fixture dependency	TEST_ONLY	move/account in test-infrastructure PR
+3ccfc4394	test(supervisor): expose trusted socket rejection	TEST_ONLY	move/account in test-infrastructure PR
+f10543399	test(supervisor): secure trusted socket directory	TEST_ONLY	move/account in test-infrastructure PR
 fa58967e9	fix(guest-agent): reject inverted certificate validity	RETAINED	codex/fix-guest-agent-cert-validity
 d02b42fcd	fix(simulator): model measured Nitro enclave PCRs	RETAINED	codex/fix-simulator-measured-nitro-pcrs
 333270fe8	test(attestation): verify simulated trust policy	TEST_ONLY	move/account in test-infrastructure PR
