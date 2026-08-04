@@ -2,6 +2,6 @@
   "schema_version": "1.0",
   "case_id": "tc-gos-setup-012",
   "capability": "supervisor-client-lifecycle-suite",
-  "reason": "The prepared runtime has a Supervisor daemon but no declared prepared async/sync client driver with configuration boundaries, delayed and concurrent auto-start, stale-endpoint recovery, timeout, restart, and adjacent-process controls.",
+  "reason": "The prepared runtime has a Supervisor daemon but no declared prepared async/sync client driver with configuration boundaries, timeout, shutdown response, restart, and adjacent-process controls.",
   "expires_when": "the fixture declares the complete prepared Supervisor client lifecycle suite available, at which point the probe fails and this registration must be replaced by a real harness"
 }

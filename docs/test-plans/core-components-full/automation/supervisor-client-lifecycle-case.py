@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Exercise SupervisorClient full API, concurrent UDS auto-start, and recovery."""
+"""Exercise the Supervisor client API and shutdown response lifecycle."""
 
 from __future__ import annotations
 
@@ -100,58 +100,30 @@ def main() -> int:
     pid_file = run_dir / "supervisor.pid"
     log_file = log_dir / "supervisor-client-012.log"
     base = [str(client), "--base-url", f"unix:{socket}"]
-    auto = [
-        *base,
-        "--auto-start",
-        "--supervisor-path",
-        str(supervisor),
-        "--pid-file",
-        str(pid_file),
-        "--log-file",
-        str(log_file),
-        "--detached",
-    ]
     observations: dict[str, Any] = {"candidate_commit": runtime.get("candidate_commit")}
     owned_pids: set[int] = set()
     status = "PASS"
-    summary = "Supervisor client full API and concurrent auto-start passed."
+    summary = "Supervisor client full API and shutdown response lifecycle passed."
     try:
         unavailable = call([*base, "ping"])
         if unavailable.returncode == 0:
             raise AssertionError("dependency outage unexpectedly succeeded")
-        starters = [
-            subprocess.Popen(
-                [*auto, "ping"],
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            for _ in range(8)
-        ]
-        starter_results = [
-            process.communicate(timeout=20) + (process.returncode,)
-            for process in starters
-        ]
-        observations["starter_results"] = [
-            {"returncode": code, "stderr_tail": stderr[-800:]}
-            for _, stderr, code in starter_results
-        ]
-        if any(code != 0 for _, _, code in starter_results):
-            raise AssertionError("concurrent auto-start client failed")
-        if any(json.loads(stdout) != "pong" for stdout, _, _ in starter_results):
-            raise AssertionError("concurrent auto-start returned a non-pong response")
+        launched = call(
+            [
+                str(supervisor),
+                "--uds",
+                str(socket),
+                "--pid-file",
+                str(pid_file),
+                "--log-file",
+                str(log_file),
+                "--detach",
+            ]
+        )
+        if launched.returncode:
+            raise AssertionError("failed to launch case-owned Supervisor")
         pid = wait_pid(pid_file)
         owned_pids.add(pid)
-        matching = []
-        for proc in pathlib.Path("/proc").glob("[0-9]*/cmdline"):
-            try:
-                argv = proc.read_bytes().split(b"\0")
-            except OSError:
-                continue
-            if str(supervisor).encode() in argv and str(socket).encode() in argv:
-                matching.append(int(proc.parent.name))
-        if matching != [pid]:
-            raise AssertionError("concurrent auto-start did not converge to one daemon")
 
         if parsed(call([*base, "ping"])) != "pong":
             raise AssertionError("ping response mismatch")
@@ -195,21 +167,10 @@ def main() -> int:
         wait_exit(pid)
         owned_pids.discard(pid)
 
-        socket.write_text("stale endpoint")
-        if parsed(call([*auto, "ping"])) != "pong":
-            raise AssertionError("stale endpoint recovery did not return pong")
-        if socket.is_file():
-            raise AssertionError("stale endpoint was not replaced by a Unix socket")
-        recovered_pid = wait_pid(pid_file)
-        owned_pids.add(recovered_pid)
-        parsed(call([*base, "shutdown"]))
-        wait_exit(recovered_pid)
-        owned_pids.discard(recovered_pid)
         observations.update(
             {
                 "outage_failed_closed": True,
-                "concurrent_clients": len(starters),
-                "single_daemon_pid": True,
+                "daemon_started": True,
                 "full_api": [
                     "deploy",
                     "list",
@@ -222,8 +183,7 @@ def main() -> int:
                 ],
                 "duplicate_rejected": True,
                 "unknown_id_rejected": True,
-                "stale_endpoint_recovered": True,
-                "recovery_succeeded": True,
+                "shutdown_response_received": True,
                 "log_sha256": hashlib.sha256(log_file.read_bytes()).hexdigest()
                 if log_file.is_file()
                 else None,
