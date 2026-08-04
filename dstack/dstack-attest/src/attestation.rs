@@ -747,8 +747,15 @@ impl VersionedAttestation {
             bail!("Empty attestation bytes");
         };
         if first == 0x00 {
-            let legacy = LegacyVersionedAttestation::decode(&mut &bytes[..])
+            let mut input = bytes;
+            let legacy = LegacyVersionedAttestation::decode(&mut input)
                 .context("Failed to decode legacy VersionedAttestation")?;
+            if !input.is_empty() {
+                bail!(
+                    "Trailing bytes after legacy VersionedAttestation: {}",
+                    input.len()
+                );
+            }
             return match legacy {
                 LegacyVersionedAttestation::V0 { attestation } => Ok(Self::V0 { attestation }),
             };
@@ -3115,5 +3122,39 @@ mod tests {
             ])
         );
         Ok(())
+    }
+
+    #[test]
+    fn versioned_wire_formats_reject_malformed_boundaries() {
+        assert!(VersionedAttestation::from_bytes(&[]).is_err());
+        assert!(VersionedAttestation::from_bytes(&[0xff]).is_err());
+        assert!(VersionedAttestation::from_bytes(&vec![0xff; MAX_ATTESTATION_BYTES + 1]).is_err());
+
+        let legacy = dummy_tdx_attestation([0x31; 64]).into_versioned();
+        assert!(matches!(legacy, VersionedAttestation::V0 { .. }));
+        let legacy_bytes = legacy.to_bytes().unwrap();
+        let decoded = VersionedAttestation::from_bytes(&legacy_bytes).unwrap();
+        assert_eq!(decoded.into_v1().report_data().unwrap(), [0x31; 64]);
+        assert!(VersionedAttestation::from_bytes(&legacy_bytes[..legacy_bytes.len() - 1]).is_err());
+        assert!(
+            VersionedAttestation::from_bytes(&[legacy_bytes.as_slice(), &[0xaa]].concat()).is_err()
+        );
+
+        let current = dummy_tdx_attestation([0x32; 64])
+            .into_v1()
+            .into_dstack_pod("versioned-boundary".into());
+        let current = VersionedAttestation::V1 {
+            attestation: current,
+        };
+        let current_bytes = current.to_bytes().unwrap();
+        let decoded = VersionedAttestation::from_bytes(&current_bytes).unwrap();
+        assert_eq!(decoded.into_v1().report_data().unwrap(), [0x32; 64]);
+        assert!(
+            VersionedAttestation::from_bytes(&current_bytes[..current_bytes.len() - 1]).is_err()
+        );
+        assert!(
+            VersionedAttestation::from_bytes(&[current_bytes.as_slice(), &[0xaa]].concat())
+                .is_err()
+        );
     }
 }
