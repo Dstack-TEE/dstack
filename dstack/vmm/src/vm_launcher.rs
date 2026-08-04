@@ -365,5 +365,4 @@ mod tests {
         assert!(!socket.exists());
         assert!(!qemu_marker.exists());
     }
-
 }
