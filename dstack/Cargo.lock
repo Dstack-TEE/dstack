@@ -5536,9 +5536,9 @@ dependencies = [
 
 [[package]]
 name = "prpc"
-version = "0.6.0"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd65145222d0e76bf84c71bb0e9abcf45779d032fb0933fe1cceeb11be1f06a9"
+checksum = "56168f524507cff007f4399ca18e645a18960c9c5e84fca98a24d11c56c85687"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5555,9 +5555,9 @@ dependencies = [
 
 [[package]]
 name = "prpc-build"
-version = "0.6.1"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0db191928d08a5e73122ee34e0003b23c5427e40aa0057394d1009f67c3aa5eb"
+checksum = "af89d66c95988e7da1ce83bd9353e1ce7eb22ce6ba6faf5ddc6cc97aa87b3e20"
 dependencies = [
  "either",
  "fs-err",

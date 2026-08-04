@@ -211,7 +211,8 @@ impl RequestClient for RaClient {
             .await
             .context("Failed to read response")?
             .to_vec();
-        let response = serde_json::from_slice(&body).context("Failed to deserialize response")?;
+        let response =
+            prpc::codec::decode_json_from_slice(&body).context("Failed to deserialize response")?;
         Ok(response)
     }
 }

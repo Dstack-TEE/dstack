@@ -261,8 +261,8 @@ x509-parser = "0.16.0"
 pkcs8 = { version = "0.10", default-features = false }
 
 # RPC/Protocol
-prpc = "0.6.0"
-prpc-build = "0.6.1"
+prpc = "0.6.2"
+prpc-build = "0.7.0"
 
 # Development/Testing
 bindgen = "0.71.1"
