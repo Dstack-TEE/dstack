@@ -13,6 +13,26 @@ struct Cli {
     #[arg(long, default_value = "unix:/var/run/supervisor.sock")]
     base_url: String,
 
+    /// Start a missing Supervisor before connecting to a trusted Unix socket.
+    #[arg(long, requires_all = ["supervisor_path", "pid_file", "log_file"])]
+    auto_start: bool,
+
+    /// Supervisor executable used only with --auto-start.
+    #[arg(long)]
+    supervisor_path: Option<std::path::PathBuf>,
+
+    /// PID file passed to an auto-started Supervisor.
+    #[arg(long)]
+    pid_file: Option<std::path::PathBuf>,
+
+    /// Log file passed to an auto-started Supervisor.
+    #[arg(long)]
+    log_file: Option<std::path::PathBuf>,
+
+    /// Detach an auto-started Supervisor process.
+    #[arg(long, requires = "auto_start")]
+    detached: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -50,11 +70,37 @@ async fn main() -> Result<()> {
     {
         use tracing_subscriber::{fmt, EnvFilter};
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-        fmt().with_env_filter(filter).with_ansi(false).init();
+        fmt()
+            .with_env_filter(filter)
+            .with_ansi(false)
+            .with_writer(std::io::stderr)
+            .init();
     }
 
     let cli = Cli::parse();
-    let client = SupervisorClient::new(&cli.base_url);
+    let client = if cli.auto_start {
+        let uds = cli
+            .base_url
+            .strip_prefix("unix:")
+            .ok_or_else(|| anyhow::anyhow!("--auto-start requires a unix: base URL"))?;
+        SupervisorClient::start_and_connect_uds(
+            cli.supervisor_path
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("missing --supervisor-path"))?,
+            uds,
+            cli.pid_file
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("missing --pid-file"))?,
+            cli.log_file
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("missing --log-file"))?,
+            cli.detached,
+            true,
+        )
+        .await?
+    } else {
+        SupervisorClient::new(&cli.base_url)
+    };
 
     match cli.command {
         Commands::Deploy { id, command, args } => {

@@ -27,6 +27,7 @@ serde.workspace = true
 http-body-util.workspace = true
 tracing-subscriber.workspace = true
 log.workspace = true
+libc.workspace = true
 fs-err.workspace = true
 futures.workspace = true
 

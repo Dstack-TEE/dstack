@@ -6,7 +6,7 @@ use anyhow::{anyhow, Result};
 use or_panic::ResultOrPanic;
 use rocket::figment::Figment;
 use rocket::serde::json::Json;
-use rocket::{delete, get, post, routes, Build, Rocket, State};
+use rocket::{delete, get, post, routes, Build, Rocket, Shutdown, State};
 use serde::{Deserialize, Serialize};
 use tokio::signal;
 use tracing::info;
@@ -81,8 +81,12 @@ fn clear(supervisor: &State<Supervisor>) -> Json<Response<()>> {
 }
 
 #[post("/shutdown")]
-async fn shutdown(supervisor: &State<Supervisor>) -> Json<Response<()>> {
-    to_json(perform_shutdown(supervisor, false).await)
+async fn shutdown(supervisor: &State<Supervisor>, shutdown: Shutdown) -> Json<Response<()>> {
+    let result = supervisor.shutdown().await;
+    if result.is_ok() {
+        shutdown.notify();
+    }
+    to_json(result)
 }
 
 async fn perform_shutdown(supervisor: &Supervisor, force: bool) -> Result<()> {
