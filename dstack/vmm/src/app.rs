@@ -22,7 +22,7 @@ use ra_rpc::client::RaClient;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -720,15 +720,18 @@ impl App {
             .flat_map(|(id, p)| p.config.cid.map(|cid| (id.clone(), cid)))
             .collect::<HashMap<_, _>>();
 
-        // Update CID pool with running VMs
+        // Rebuild the CID pool from every CID that is still spoken for
         {
             let mut state = self.lock();
-            // First clear the pool and re-occupy running VM CIDs
+            let reserved = cids_to_reserve(
+                &occupied_cids,
+                state.vms.iter().map(|(id, vm)| (id.clone(), vm.config.cid)),
+            );
             state.cid_pool.clear();
-            for (vm_id, cid) in occupied_cids.iter() {
+            for (cid, vm_id) in reserved {
                 // Same as in reload_vms(): an out-of-range CID from an earlier
                 // configuration is reported, not fatal.
-                if let Err(err) = state.cid_pool.occupy(*cid) {
+                if let Err(err) = state.cid_pool.occupy(cid) {
                     warn!(id = %vm_id, "not tracking cid {cid} in the pool: {err}");
                 }
             }
@@ -1529,6 +1532,55 @@ mod tests {
     use rocket::figment::Figment;
     use std::time::UNIX_EPOCH;
 
+    fn reserve(running: &[(&str, u32)], in_memory: &[(&str, u32)]) -> Vec<(u32, String)> {
+        let running: HashMap<String, u32> = running
+            .iter()
+            .map(|(id, cid)| (id.to_string(), *cid))
+            .collect();
+        cids_to_reserve(
+            &running,
+            in_memory.iter().map(|(id, cid)| (id.to_string(), *cid)),
+        )
+        .into_iter()
+        .collect()
+    }
+
+    #[test]
+    fn stopped_vms_keep_their_cid_reserved_across_a_reload() {
+        // "running" comes from the supervisor, so a stopped VM appears only in
+        // memory. Reserving just the running set would free 1001 and let the
+        // next allocate() hand it to a new VM.
+        let reserved = reserve(
+            &[("running-vm", 1000)],
+            &[("running-vm", 1000), ("stopped-vm", 1001)],
+        );
+        assert_eq!(
+            reserved,
+            vec![
+                (1000, "running-vm".to_string()),
+                (1001, "stopped-vm".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_vm_both_running_and_in_memory_is_reserved_once() {
+        let reserved = reserve(&[("vm-a", 1000)], &[("vm-a", 1000)]);
+        assert_eq!(reserved, vec![(1000, "vm-a".to_string())]);
+    }
+
+    #[test]
+    fn running_state_wins_when_memory_disagrees_about_the_owner() {
+        // The supervisor knows who actually holds the CID right now.
+        let reserved = reserve(&[("live-owner", 1000)], &[("stale-owner", 1000)]);
+        assert_eq!(reserved, vec![(1000, "live-owner".to_string())]);
+    }
+
+    #[test]
+    fn nothing_is_reserved_when_no_vm_holds_a_cid() {
+        assert!(reserve(&[], &[]).is_empty());
+    }
+
     fn hex_of(byte: u8, len: usize) -> String {
         hex::encode(vec![byte; len])
     }
@@ -2213,6 +2265,24 @@ mod tests {
         .map_err(anyhow::Error::msg)?;
         Ok(())
     }
+}
+
+/// CIDs that must survive a pool rebuild, mapped to the VM that owns each one.
+///
+/// Running processes are the authoritative source for CIDs currently on the
+/// wire, but they are not the whole picture: a stopped VM still records its CID
+/// in `vm.config.cid` and keeps it on restart, so it has to stay reserved too.
+/// Reserving only the running set would let `allocate()` hand the same CID to a
+/// new VM, and the two would collide the moment the stopped one starts.
+///
+/// Keyed by CID so a VM that is both running and in memory is reserved once.
+fn cids_to_reserve(
+    running: &HashMap<String, u32>,
+    in_memory: impl Iterator<Item = (String, u32)>,
+) -> BTreeMap<u32, String> {
+    let mut reserved: BTreeMap<u32, String> = in_memory.map(|(id, cid)| (cid, id)).collect();
+    reserved.extend(running.iter().map(|(id, cid)| (*cid, id.clone())));
+    reserved
 }
 
 fn paginate<T>(items: Vec<T>, page: u32, page_size: u32) -> impl Iterator<Item = T> {
