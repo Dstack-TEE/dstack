@@ -98,6 +98,37 @@ fn policy(restrict: bool, ports: &[u16]) -> PortPolicy {
     }
 }
 
+#[test]
+fn test_validate_wireguard_public_key() {
+    assert!(validate_wireguard_public_key("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").is_ok());
+    assert!(validate_wireguard_public_key("not-a-wireguard-key").is_err());
+    assert!(validate_wireguard_public_key("AQID").is_err());
+}
+
+#[tokio::test]
+async fn test_invalid_wireguard_public_key_does_not_register() {
+    let state = create_test_state().await;
+    let result = state.do_register_cvm("app", "instance", "invalid", "compose", None);
+
+    assert!(result.is_err());
+    assert!(!state.lock().state.instances.contains_key("instance"));
+}
+
+#[tokio::test]
+async fn test_wireguard_public_key_cannot_be_reused_by_another_instance() {
+    const PUBLIC_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    let state = create_test_state().await;
+    state
+        .lock()
+        .new_client_by_id("instance-1", "app", PUBLIC_KEY, "compose", None)
+        .unwrap();
+
+    let result = state.do_register_cvm("app", "instance-2", PUBLIC_KEY, "compose", None);
+
+    assert!(result.is_err());
+    assert!(!state.lock().state.instances.contains_key("instance-2"));
+}
+
 #[tokio::test]
 async fn test_port_policy_restrict_mode_allows_listed_only() {
     let state = create_test_state().await;
