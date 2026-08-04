@@ -63,7 +63,10 @@ impl RequestClient for PrpcClient {
         if status != 200 {
             anyhow::bail!("Invalid status code: {status}, path={path}");
         }
-        let response = serde_json::from_slice(&body).context("Failed to deserialize response")?;
+        // Not serde_json::from_slice: a unit response arrives as an empty body, which
+        // is not valid JSON. Every RequestClient impl has to decode through this.
+        let response =
+            prpc::codec::decode_json_from_slice(&body).context("Failed to deserialize response")?;
         Ok(response)
     }
 }
