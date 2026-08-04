@@ -552,7 +552,7 @@ impl VmmRpc for RpcHandler {
         self.validate_port_mapping_conflicts(None, &manifest.port_map)?;
         let id = manifest.id.clone();
         let app_id = manifest.app_id.clone();
-        let vm_work_dir = self.app.work_dir(&id);
+        let vm_work_dir = self.app.work_dir(&id)?;
         vm_work_dir
             .put_manifest(&manifest)
             .context("Failed to write manifest")?;
@@ -639,7 +639,7 @@ impl VmmRpc for RpcHandler {
             // check the compose file is valid
             let _app_compose: AppCompose =
                 serde_json::from_str(&request.compose_file).context("Invalid compose file")?;
-            let compose_file_path = self.compose_file_path(&request.id);
+            let compose_file_path = self.compose_file_path(&request.id)?;
             if !compose_file_path.exists() {
                 bail!("The instance {} not found", request.id);
             }
@@ -651,16 +651,16 @@ impl VmmRpc for RpcHandler {
             Default::default()
         };
         if !request.encrypted_env.is_empty() {
-            let encrypted_env_path = self.encrypted_env_path(&request.id);
+            let encrypted_env_path = self.encrypted_env_path(&request.id)?;
             fs::write(encrypted_env_path, &request.encrypted_env)
                 .context("Failed to write encrypted env")?;
         }
         if !request.user_config.is_empty() {
-            let user_config_path = self.user_config_path(&request.id);
+            let user_config_path = self.user_config_path(&request.id)?;
             fs::write(user_config_path, &request.user_config)
                 .context("Failed to write user config")?;
         }
-        let vm_work_dir = self.app.work_dir(&request.id);
+        let vm_work_dir = self.app.work_dir(&request.id)?;
         let mut manifest = vm_work_dir.manifest().context("Failed to read manifest")?;
         self.apply_resource_updates(
             &request.id,
@@ -768,7 +768,7 @@ impl VmmRpc for RpcHandler {
     async fn resize_vm(self, request: ResizeVmRequest) -> Result<()> {
         info!("Resizing VM: {:?}", request);
         validate_resize_request(&request)?;
-        let vm_work_dir = self.app.work_dir(&request.id);
+        let vm_work_dir = self.app.work_dir(&request.id)?;
         let mut manifest = vm_work_dir.manifest().context("failed to read manifest")?;
         self.apply_resource_updates(
             &request.id,

@@ -115,7 +115,9 @@ fn vm_logs(
             "VM not found".to_string(),
         ));
     }
-    let workdir = app.work_dir(&id);
+    let workdir = app
+        .work_dir(&id)
+        .map_err(|err| Custom(rocket::http::Status::BadRequest, err.to_string()))?;
     let log_file = match ch.unwrap_or("serial") {
         "serial" => workdir.serial_file(),
         "stdout" => workdir.stdout_file(),
