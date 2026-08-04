@@ -15,6 +15,7 @@ use certbot::{AcmeClient, Dns01Client};
 use dstack_guest_agent_rpc::RawQuoteArgs;
 use ra_tls::attestation::QuoteContentType;
 use ra_tls::rcgen::KeyPair;
+use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 use crate::cert_store::CertResolver;
@@ -33,7 +34,12 @@ const DEFAULT_ACME_URL: &str = "https://acme-v02.api.letsencrypt.org/directory";
 pub struct DistributedCertBot {
     kv_store: Arc<KvStore>,
     cert_resolver: Arc<CertResolver>,
-    caa_lock: tokio::sync::Mutex<()>,
+    /// Serializes CAA reconciliation within this process.
+    ///
+    /// This is deliberately not a cluster-wide lock: CAA reconciliation is a rare
+    /// manual operation, so a node-local guard against concurrent admin calls is
+    /// enough and avoids a distributed lock that could be left behind on crash.
+    caa_lock: Mutex<()>,
 }
 
 impl DistributedCertBot {
@@ -41,7 +47,7 @@ impl DistributedCertBot {
         Self {
             kv_store,
             cert_resolver,
-            caa_lock: tokio::sync::Mutex::new(()),
+            caa_lock: Default::default(),
         }
     }
 
@@ -85,20 +91,68 @@ impl DistributedCertBot {
     }
 
     /// Set CAA records for every configured ZT domain.
+    ///
+    /// Reconciliation is per-domain best effort: a failing domain is logged and the
+    /// remaining domains are still reconciled, so one misconfigured domain cannot
+    /// leave the rest unauthorized. Failures are reported together in the returned
+    /// error.
+    ///
+    /// Note that reconciling a domain briefly installs `;` guard CAA records that
+    /// forbid issuance for that name. A failure in the middle of the sequence can
+    /// leave those guards behind, blocking issuance for the domain until a later run
+    /// succeeds. The guard window can also fail an ACME order that is in flight for
+    /// the same domain; the periodic renewal task retries, so that is transient.
     pub async fn set_caa_all(&self) -> Result<()> {
-        let _guard = self.caa_lock.lock().await;
-        for config in self.kv_store.list_zt_domain_configs() {
-            let domain = config.domain.clone();
-            let acme_client = self
-                .get_or_create_acme_client(&domain, &config)
-                .await
-                .with_context(|| format!("failed to initialize CAA client for {domain}"))?;
-            acme_client
-                .set_caa_records(std::slice::from_ref(&domain))
-                .await
-                .with_context(|| format!("failed to set CAA records for {domain}"))?;
+        let Ok(_guard) = self.caa_lock.try_lock() else {
+            bail!("CAA reconciliation is already in progress");
+        };
+        let configs = self.kv_store.list_zt_domain_configs();
+        if configs.is_empty() {
+            warn!("no ZT-Domain configured, no CAA records to set");
+            return Ok(());
         }
+
+        let total = configs.len();
+        let mut failed = Vec::new();
+        for config in configs {
+            let domain = config.domain.clone();
+            match self.set_caa(&domain, &config).await {
+                Ok(()) => info!("cert[{domain}]: CAA records reconciled"),
+                Err(err) => {
+                    error!("cert[{domain}]: failed to set CAA records: {err:?}");
+                    failed.push(domain);
+                }
+            }
+        }
+
+        if !failed.is_empty() {
+            bail!(
+                "failed to set CAA records for {}/{total} domains: {}; \
+                 they may retain guard CAA records that block issuance until a rerun succeeds",
+                failed.len(),
+                failed.join(", ")
+            );
+        }
+        info!("CAA records reconciled for {total} domains");
         Ok(())
+    }
+
+    /// Set CAA records for a single ZT domain.
+    ///
+    /// The domain in the config is the base domain and certificates are issued for
+    /// `*.{domain}`, which the CAA lookup covers by climbing to the base domain.
+    ///
+    /// The written CAA value pins `accounturi` to the global ACME account, so this
+    /// reuses the account from the KV store and registers one if none exists yet.
+    async fn set_caa(&self, domain: &str, config: &ZtDomainConfig) -> Result<()> {
+        let acme_client = self
+            .get_or_create_acme_client(domain, config)
+            .await
+            .context("failed to initialize ACME client")?;
+        acme_client
+            .set_caa_records(&[domain.to_string()])
+            .await
+            .context("failed to set CAA records")
     }
 
     /// Try to renew all ZT-Domain certificates
@@ -536,4 +590,41 @@ fn extract_account_uri(credentials_json: &str) -> Option<String> {
         .ok()
         .filter(|c| !c.account_id.is_empty())
         .map(|c| c.account_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_certbot(data_dir: &std::path::Path) -> DistributedCertBot {
+        let kv_store =
+            Arc::new(KvStore::new(1, vec![], data_dir).expect("failed to create kv store"));
+        DistributedCertBot::new(kv_store, Arc::new(CertResolver::new()))
+    }
+
+    #[tokio::test]
+    async fn set_caa_all_succeeds_without_configured_domains() {
+        let data_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let certbot = test_certbot(data_dir.path());
+        // No ZT-Domain configured: nothing to reconcile and no DNS provider is contacted.
+        certbot
+            .set_caa_all()
+            .await
+            .expect("set_caa_all should succeed without domains");
+    }
+
+    #[tokio::test]
+    async fn set_caa_all_rejects_concurrent_runs() {
+        let data_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let certbot = test_certbot(data_dir.path());
+        let _guard = certbot.caa_lock.lock().await;
+        let err = certbot
+            .set_caa_all()
+            .await
+            .expect_err("a concurrent run should be rejected");
+        assert!(
+            err.to_string().contains("already in progress"),
+            "unexpected error: {err}"
+        );
+    }
 }
