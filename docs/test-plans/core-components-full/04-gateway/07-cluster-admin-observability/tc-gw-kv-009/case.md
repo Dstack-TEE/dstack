@@ -53,7 +53,7 @@ Reopen the isolated store after persistence, compare each persistent family, ver
 
 **Expected results:**
 
-- Reopened state matches the last committed persistent values, corrupted neighbors remain isolated, encrypted DNS credentials round-trip, and deleted instances do not resurrect.
+- Reopened state matches the last committed persistent values, corrupted neighbors remain isolated, DNS credentials round-trip, and deleted instances do not resurrect.
 
 <a id="tc-gw-kv-009-step-03"></a>
 ### Step 3: Verify outage, restart, and cross-identity isolation
