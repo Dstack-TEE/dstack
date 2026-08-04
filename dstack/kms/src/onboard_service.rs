@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{bail, Context, Result};
 use dstack_kms_rpc::{
@@ -45,6 +45,7 @@ pub struct OnboardState {
     config: KmsConfig,
     attestation_verifier: Arc<AttestationVerifier>,
     bootstrap_lock: Arc<AsyncMutex<()>>,
+    shutdown: Arc<OnceLock<rocket::Shutdown>>,
 }
 
 impl OnboardState {
@@ -57,7 +58,16 @@ impl OnboardState {
             config,
             attestation_verifier,
             bootstrap_lock: Arc::new(AsyncMutex::new(())),
+            shutdown: Arc::new(OnceLock::new()),
         })
+    }
+
+    /// Hand the Rocket shutdown handle to the service so `finish` can stop the
+    /// server after its response has been sent.
+    pub fn set_shutdown(&self, shutdown: rocket::Shutdown) -> Result<()> {
+        self.shutdown
+            .set(shutdown)
+            .map_err(|_| anyhow::anyhow!("onboard shutdown handle is already set"))
     }
 }
 
@@ -199,7 +209,15 @@ impl OnboardRpc for OnboardHandler {
     }
 
     async fn finish(self) -> anyhow::Result<()> {
-        std::process::exit(0);
+        let shutdown = self
+            .state
+            .shutdown
+            .get()
+            .context("onboard shutdown handle is unavailable")?;
+        // Graceful shutdown lets Rocket finish sending this response before the
+        // server stops, so the client learns that onboarding succeeded.
+        shutdown.clone().notify();
+        Ok(())
     }
 }
 
