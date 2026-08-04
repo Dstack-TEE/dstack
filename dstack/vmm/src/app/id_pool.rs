@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::BTreeSet;
+use std::fmt::Display;
 
 use anyhow::bail;
 
@@ -15,12 +16,15 @@ macro_rules! impl_numbers {
         })*
     };
 }
-pub trait Number: Ord + Sized + Clone {
+pub trait Number: Ord + Sized + Clone + Display {
     fn next(&self) -> Option<Self>;
 }
 impl_numbers!(u8, u16, u32, u64, u128);
 impl_numbers!(i8, i16, i32, i64, i128);
 
+/// A pool of ids over the half-open interval `[start, end)`.
+///
+/// `start >= end` is a valid but permanently empty pool.
 pub struct IdPool<T: Ord = u32> {
     start: T,
     end: T,
@@ -36,15 +40,20 @@ impl<T: Number> IdPool<T> {
         }
     }
 
+    /// Mark `id` as in use. Fails if `id` falls outside `[start, end)` or is
+    /// already taken.
+    ///
+    /// Callers reconstructing state from ids this pool did not hand out (e.g.
+    /// CIDs of processes started under an earlier configuration) should treat
+    /// the out-of-range error as a warning rather than a hard failure.
     pub fn occupy(&mut self, id: T) -> anyhow::Result<()> {
         if id < self.start || id >= self.end {
-            bail!("id outside pool range");
+            bail!("id {id} outside pool range [{}, {})", self.start, self.end);
         }
-        if self.allocated.insert(id) {
-            Ok(())
-        } else {
-            bail!("id already occupied")
+        if !self.allocated.insert(id.clone()) {
+            bail!("id {id} already occupied");
         }
+        Ok(())
     }
 
     pub fn allocate(&mut self) -> Option<T> {
@@ -69,7 +78,6 @@ impl<T: Number> IdPool<T> {
         self.allocated.clear();
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -99,38 +107,49 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_allocation_and_restart_reconstruction_preserve_uniqueness() {
-        use std::sync::{Arc, Mutex};
-        use std::thread;
-
-        let pool = Arc::new(Mutex::new(IdPool::new(20_u8, 28)));
-        let mut workers = Vec::new();
-        for _ in 0..8 {
-            let pool = Arc::clone(&pool);
-            workers.push(thread::spawn(move || pool.lock().unwrap().allocate().unwrap()));
-        }
-        let mut allocated: Vec<_> = workers
-            .into_iter()
-            .map(|worker| worker.join().unwrap())
-            .collect();
+    fn repeated_allocation_never_hands_out_a_duplicate() {
+        let mut pool = IdPool::new(20_u8, 28);
+        let mut allocated: Vec<_> = std::iter::from_fn(|| pool.allocate()).collect();
+        assert_eq!(pool.allocate(), None);
         allocated.sort_unstable();
         assert_eq!(allocated, (20_u8..28).collect::<Vec<_>>());
-        assert_eq!(pool.lock().unwrap().allocate(), None);
-
-        let mut reconstructed = IdPool::new(20_u8, 28);
-        for id in allocated {
-            reconstructed.occupy(id).unwrap();
-        }
-        assert_eq!(reconstructed.allocate(), None);
-        assert!(reconstructed.occupy(20).is_err());
-        reconstructed.free(23);
-        assert_eq!(reconstructed.allocate(), Some(23));
     }
 
     #[test]
-    fn maximum_numeric_boundary_does_not_wrap() {
+    fn reconstruction_from_occupied_ids_preserves_uniqueness() {
+        // mirrors reload_vms(): rebuild the pool from the ids of processes
+        // already running, then keep allocating from what is left.
+        let mut pool = IdPool::new(20_u8, 28);
+        for id in 20_u8..28 {
+            pool.occupy(id).unwrap();
+        }
+        assert_eq!(pool.allocate(), None);
+        assert!(pool.occupy(20).is_err());
+        pool.free(23);
+        assert_eq!(pool.allocate(), Some(23));
+    }
+
+    #[test]
+    fn exhaustion_at_the_numeric_maximum_returns_none() {
+        // end == T::MAX, so the last allocatable id is MAX - 1 and the walk
+        // stops on the range check before `next()` can overflow.
+        let mut pool = IdPool::new(u8::MAX - 1, u8::MAX);
+        assert_eq!(pool.allocate(), Some(u8::MAX - 1));
+        assert_eq!(pool.allocate(), None);
+        assert!(pool.occupy(u8::MAX).is_err());
+    }
+
+    #[test]
+    fn an_empty_range_allocates_nothing() {
         let mut pool = IdPool::new(u8::MAX, u8::MAX);
         assert_eq!(pool.allocate(), None);
         assert!(pool.occupy(u8::MAX).is_err());
+    }
+
+    #[test]
+    fn out_of_range_error_names_the_id_and_the_bounds() {
+        let mut pool = IdPool::new(10_u8, 13);
+        let err = pool.occupy(13).unwrap_err().to_string();
+        assert_eq!(err, "id 13 outside pool range [10, 13)");
     }
 }
