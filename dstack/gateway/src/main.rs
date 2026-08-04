@@ -20,7 +20,7 @@ use rocket::{
     figment::{providers::Serialized, Figment},
 };
 use serde::{Deserialize, Serialize};
-use std::{fs::OpenOptions, io::Write as _, path::Path, sync::Arc};
+use std::sync::Arc;
 use tracing::{info, warn};
 
 use admin_service::AdminRpcHandler;
@@ -223,41 +223,8 @@ async fn gen_debug_certs(
 
 fn write_cert(path: &str, cert: &str) -> Result<()> {
     info!("Writing cert to file: {path}");
-    write_private_file(Path::new(path), cert.as_bytes())
-}
-
-fn write_private_file(path: &Path, content: &[u8]) -> Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    fs_err::create_dir_all(parent).context("Failed to create private output directory")?;
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .context("Private output path has no UTF-8 file name")?;
-    let temporary = parent.join(format!(".{name}.{}.tmp", uuid::Uuid::new_v4()));
-    #[cfg(unix)]
-    use std::os::unix::fs::OpenOptionsExt as _;
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    let result = (|| -> Result<()> {
-        let mut output = options
-            .open(&temporary)
-            .context("Failed to create private temporary file")?;
-        output
-            .write_all(content)
-            .context("Failed to write private temporary file")?;
-        output
-            .sync_all()
-            .context("Failed to sync private temporary file")?;
-        drop(output);
-        fs_err::rename(&temporary, path).context("Failed to atomically publish private file")?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs_err::remove_file(&temporary);
-    }
-    result
+    safe_write::safe_write_with_mode(path, cert, 0o600)?;
+    Ok(())
 }
 
 #[rocket::main]
@@ -425,14 +392,14 @@ async fn main() -> Result<()> {
 
 #[cfg(test)]
 mod startup_tests {
-    use super::write_private_file;
+    use super::write_cert;
     use std::fs;
 
     #[test]
     fn gateway_startup_private_file_matrix() {
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("gateway.key");
-        write_private_file(&output, b"first").unwrap();
+        write_cert(output.to_str().unwrap(), "first").unwrap();
         assert_eq!(fs::read(&output).unwrap(), b"first");
         #[cfg(unix)]
         {
@@ -442,7 +409,7 @@ mod startup_tests {
                 0o600
             );
         }
-        write_private_file(&output, b"second").unwrap();
+        write_cert(output.to_str().unwrap(), "second").unwrap();
         assert_eq!(fs::read(&output).unwrap(), b"second");
         assert!(fs::read_dir(directory.path()).unwrap().all(|entry| {
             !entry
