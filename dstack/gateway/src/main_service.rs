@@ -25,7 +25,7 @@ use ra_rpc::{CallContext, RpcCall, VerifiedAttestation};
 use ra_tls::attestation::AppInfo;
 use rand::seq::IteratorRandom;
 use rinja::Template as _;
-use safe_write::safe_write;
+use safe_write::safe_write_with_mode;
 use serde::{Deserialize, Serialize};
 use smallvec::{smallvec, SmallVec};
 use tokio::sync::{
@@ -112,6 +112,7 @@ pub(crate) struct ProxyState {
     /// Reference to KvStore for syncing changes
     kv_store: Arc<KvStore>,
     handshake_cache: Arc<LatestHandshakesCache>,
+    admin_shutdown: Option<rocket::Shutdown>,
 }
 
 /// Options for creating a Proxy instance
@@ -244,6 +245,7 @@ impl ProxyInner {
             state,
             kv_store: kv_store.clone(),
             handshake_cache: handshake_cache.clone(),
+            admin_shutdown: None,
         });
         let auth_client = AuthClient::new(config.auth.clone());
         // Bootstrap WaveKV first if sync is enabled, so certbot can load certs from peers
@@ -944,7 +946,18 @@ impl ProxyState {
         if public_key.is_empty() {
             bail!("public_key is empty");
         }
+        if self
+            .state
+            .instances
+            .values()
+            .any(|instance| instance.id != id && instance.public_key == public_key)
+        {
+            bail!("WireGuard public key is already registered to another instance");
+        }
         if let Some(existing) = self.state.instances.get_mut(id) {
+            if existing.app_id != app_id {
+                bail!("instance_id is already registered to a different app");
+            }
             let pubkey_changed = existing.public_key != public_key;
             if pubkey_changed {
                 info!("public key changed for instance {id}, new key: {public_key}");
@@ -1130,7 +1143,9 @@ impl ProxyState {
 
     pub(crate) fn reconfigure(&mut self) -> Result<()> {
         let wg_config = self.generate_wg_config()?;
-        safe_write(&self.config.wg.config_path, wg_config).context("Failed to write wg config")?;
+        // the rendered config carries the interface's WireGuard private key.
+        safe_write_with_mode(&self.config.wg.config_path, wg_config, 0o600)
+            .context("failed to write wg config")?;
         // wg setconf <interface_name> <config_path>
         let ifname = &self.config.wg.interface;
         let config_path = &self.config.wg.config_path;
@@ -1324,8 +1339,21 @@ impl ProxyState {
         Ok(())
     }
 
-    pub(crate) fn exit(&mut self) -> ! {
-        std::process::exit(0);
+    pub(crate) fn set_admin_shutdown(&mut self, shutdown: rocket::Shutdown) {
+        self.admin_shutdown = Some(shutdown);
+    }
+
+    pub(crate) fn exit(&self, force: bool) -> Result<()> {
+        if force {
+            std::process::exit(0);
+        }
+
+        let shutdown = self
+            .admin_shutdown
+            .as_ref()
+            .context("admin server shutdown handle is not initialized")?;
+        shutdown.notify();
+        Ok(())
     }
 
     pub(crate) fn refresh_state(&mut self) -> Result<()> {
@@ -1471,22 +1499,27 @@ impl GatewayRpc for RpcHandler {
         let app_id = hex::encode(&app_info.app_id);
         let instance_id = hex::encode(&app_info.instance_id);
         let compose_hash = hex::encode(&app_info.compose_hash);
-        let port_policy = request.port_policy.map(|p| {
-            let ports = p
-                .ports
-                .into_iter()
-                .filter_map(|attr| {
-                    // Wire format is uint32 to avoid varint shenanigans, but valid TCP
-                    // ports fit in u16. Drop out-of-range entries instead of truncating.
-                    let port = u16::try_from(attr.port).ok()?;
-                    Some((port, crate::kv::PortFlags { pp: attr.pp }))
+        let port_policy = request
+            .port_policy
+            .map(|policy| -> Result<PortPolicy> {
+                let ports = policy
+                    .ports
+                    .into_iter()
+                    .map(|attr| {
+                        let port = u16::try_from(attr.port)
+                            .with_context(|| format!("port {} out of u16 range", attr.port))?;
+                        if port == 0 {
+                            bail!("port must be between 1 and 65535");
+                        }
+                        Ok((port, crate::kv::PortFlags { pp: attr.pp }))
+                    })
+                    .collect::<Result<_>>()?;
+                Ok(PortPolicy {
+                    ports,
+                    restrict_mode: policy.restrict_mode,
                 })
-                .collect();
-            PortPolicy {
-                ports,
-                restrict_mode: p.restrict_mode,
-            }
-        });
+            })
+            .transpose()?;
         self.state.do_register_cvm(
             &app_id,
             &instance_id,

@@ -468,7 +468,7 @@ impl App {
         Ok(())
     }
 
-    async fn stop_vm_process(&self, id: &str) -> Result<()> {
+    pub(crate) async fn stop_vm_process(&self, id: &str) -> Result<()> {
         let Some(info) = self.supervisor.info(id).await? else {
             return Ok(());
         };
@@ -643,8 +643,13 @@ impl App {
             .collect::<HashMap<_, _>>();
         {
             let mut state = self.lock();
-            for cid in occupied_cids.values() {
-                state.cid_pool.occupy(*cid)?;
+            for (vm_id, cid) in occupied_cids.iter() {
+                // These CIDs come from processes that are already running, not
+                // from the pool, so a CID left over from an earlier cid_start /
+                // cid_pool_size must not stop the VMM from starting.
+                if let Err(err) = state.cid_pool.occupy(*cid) {
+                    warn!(id = %vm_id, "not tracking cid {cid} in the pool: {err}");
+                }
             }
         }
 
@@ -720,8 +725,12 @@ impl App {
             let mut state = self.lock();
             // First clear the pool and re-occupy running VM CIDs
             state.cid_pool.clear();
-            for cid in occupied_cids.values() {
-                state.cid_pool.occupy(*cid)?;
+            for (vm_id, cid) in occupied_cids.iter() {
+                // Same as in reload_vms(): an out-of-range CID from an earlier
+                // configuration is reported, not fatal.
+                if let Err(err) = state.cid_pool.occupy(*cid) {
+                    warn!(id = %vm_id, "not tracking cid {cid} in the pool: {err}");
+                }
             }
         }
 
@@ -1083,27 +1092,12 @@ impl App {
         let manifest = work_dir.manifest().context("Failed to read manifest")?;
         let cfg = &self.config;
         let compose_hash = sha256_file(shared_dir.join(APP_COMPOSE))?;
-        let platform = cfg.cvm.resolved_platform();
         let app_compose = work_dir
             .app_compose()
             .context("Failed to get app compose")?;
-        let use_mr_config_v3 = !manifest.no_tee
-            && (platform == crate::config::CvmPlatform::AmdSevSnp
-                || (platform == crate::config::CvmPlatform::Tdx
-                    && cfg.cvm.use_mrconfigid
-                    && !app_compose.key_provider_id.is_empty()));
-        let mr_config = if use_mr_config_v3 {
-            Some(
-                work_dir
-                    .prepare_mr_config_v3(
-                        &app_compose,
-                        manifest.gpus.as_ref().is_some_and(GpuConfig::has_gpus),
-                    )
-                    .context("Failed to prepare mr_config")?,
-            )
-        } else {
-            None
-        };
+        let mr_config = work_dir
+            .prepare_mr_config(&manifest, &cfg.cvm, &app_compose)
+            .context("Failed to prepare mr_config")?;
         let sys_config_str = make_sys_config(
             cfg,
             &manifest,
@@ -1394,6 +1388,9 @@ fn make_vm_config(
     let platform = cfg.cvm.resolved_platform();
     let is_amd_sev_snp = platform == crate::config::CvmPlatform::AmdSevSnp && !manifest.no_tee;
     let is_tdx = platform == crate::config::CvmPlatform::Tdx && !manifest.no_tee;
+    let is_gcp_tdx = manifest.simulated_tee == Some(dstack_types::TeeVariant::DstackGcpTdx);
+    let is_aws_nitro_tpm =
+        manifest.simulated_tee == Some(dstack_types::TeeVariant::DstackAwsNitroTpm);
     let tdx_attestation_variant = if is_tdx {
         tdx_attestation_variant_from_requirements(requirements).unwrap_or_else(|| {
             cfg.cvm
@@ -1444,6 +1441,24 @@ fn make_vm_config(
     let num_nics = resolved_networks(manifest, &cfg.cvm).len() as u32;
     let num_verity_volumes = manifest.volumes.len() as u32;
     let swtpm = manifest.swtpm;
+    let gcp_measurement = if is_gcp_tdx {
+        Some(
+            image
+                .gcp_measurement
+                .clone()
+                .context("GCP TDX image is missing measurement.gcp.cbor measurement material")?,
+        )
+    } else {
+        None
+    };
+    let aws_measurement =
+        if is_aws_nitro_tpm {
+            Some(image.aws_measurement.clone().context(
+                "AWS NitroTPM image is missing measurement.aws.cbor measurement material",
+            )?)
+        } else {
+            None
+        };
     let mut config = serde_json::to_value(dstack_types::VmConfig {
         os_image_hash,
         cpu_count: effective_vcpus,
@@ -1464,8 +1479,8 @@ fn make_vm_config(
         ovmf_variant: image.info.ovmf_variant,
         tdx_attestation_variant,
         tdx_measurement,
-        gcp_measurement: None,
-        aws_measurement: None,
+        gcp_measurement,
+        aws_measurement,
     })?;
     // For backward compatibility
     config["spec_version"] = serde_json::Value::from(1);
@@ -1502,6 +1517,7 @@ pub(crate) fn needs_swtpm(
 
 #[cfg(test)]
 mod tests {
+    use super::mr_config::{mr_config_version, MrConfigVersion};
     use super::*;
     use crate::config::{
         load_config_figment, CvmPlatform, Networking, NetworkingMode, TdxAttestationVariantConfig,
@@ -1742,6 +1758,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn selects_mr_config_version_for_each_tee_mode() -> Result<()> {
+        let manifest = test_manifest(2048);
+        assert_eq!(
+            mr_config_version(&manifest, CvmPlatform::AmdSevSnp, false, false)?,
+            Some(MrConfigVersion::V3)
+        );
+        assert_eq!(
+            mr_config_version(&manifest, CvmPlatform::Tdx, false, false)?,
+            None
+        );
+        assert_eq!(
+            mr_config_version(&manifest, CvmPlatform::Tdx, true, false)?,
+            Some(MrConfigVersion::V1)
+        );
+        assert_eq!(
+            mr_config_version(&manifest, CvmPlatform::Tdx, true, true)?,
+            Some(MrConfigVersion::V3)
+        );
+        assert_eq!(
+            mr_config_version(&manifest, CvmPlatform::Tdx, false, true)
+                .err()
+                .map(|error| error.to_string()),
+            Some("key provider ID requires MrConfigV3, but use_mrconfigid is disabled".to_string())
+        );
+
+        let mut no_tee = manifest.clone();
+        no_tee.no_tee = true;
+        assert_eq!(
+            mr_config_version(&no_tee, CvmPlatform::AmdSevSnp, true, true)?,
+            None
+        );
+
+        no_tee.simulated_tee = Some(dstack_types::TeeVariant::DstackAmdSevSnp);
+        assert_eq!(
+            mr_config_version(&no_tee, CvmPlatform::Tdx, false, false)?,
+            Some(MrConfigVersion::V3)
+        );
+        Ok(())
+    }
+
     fn dummy_tdx_measurement_document() -> TdxOsImageMeasurementDocument {
         let measurement = TdxOsImageMeasurement {
             image: TdxImageMeasurement {
@@ -1794,6 +1851,8 @@ mod tests {
             digest: Some(hex_of(0xaa, 32)),
             tdx_measurement,
             sev_measurement: None,
+            gcp_measurement: None,
+            aws_measurement: None,
         }
     }
 
@@ -2112,7 +2171,7 @@ mod tests {
             sys_config["nvidia_attestation_proxy_url"],
             "http://10.0.2.2:8090"
         );
-        assert_eq!(parsed_mr_config.app_id, vec![0x11; 20]);
+        assert_eq!(parsed_mr_config.app_id, Some(vec![0x11; 20]));
         assert_eq!(parsed_mr_config.compose_hash, vec![0x22; 32]);
         assert_eq!(parsed_mr_config.gpu_policy_hash, None);
         assert_eq!(vm_config["mr_config"], sys_config["mr_config"]);

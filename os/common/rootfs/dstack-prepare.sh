@@ -309,11 +309,25 @@ cd /dstack
 # Verify and mount required read-only data volumes before the application starts.
 /bin/dstack-volume mount-all app-compose.json
 
-if [ "$(jq 'has("init_script")' app-compose.json)" == true ]; then
-	log "Running init script"
+mapfile -t init_scripts < <(
+	jq -r '
+		.init_script?
+		| if type == "array" then .[] elif type == "string" then . else empty end
+		| @base64
+	' app-compose.json
+)
+# Keep in sync with dstack_types::MAX_INIT_SCRIPTS.
+if ((${#init_scripts[@]} > 5)); then
+	log "Too many init scripts: maximum is 5"
+	exit 1
+fi
+if ((${#init_scripts[@]} > 0)); then
 	dstack-util notify-host -e "boot.progress" -d "init-script" || true
-	# shellcheck disable=SC1090
-	source <(jq -r '.init_script' app-compose.json)
+	for i in "${!init_scripts[@]}"; do
+		log "Running init script [$i]"
+		# shellcheck disable=SC1090
+		source <(printf '%s' "${init_scripts[$i]}" | base64 -d)
+	done
 fi
 
 RUNNER=$(jq -r '.runner' app-compose.json)

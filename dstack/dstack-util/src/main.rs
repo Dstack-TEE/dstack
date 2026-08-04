@@ -17,6 +17,7 @@ use ra_tls::{
     kdf::{derive_key, derive_p256_key_pair_from_bytes},
     rcgen::KeyPair,
 };
+use safe_write::{safe_write, safe_write_with_mode};
 use scale::Encode;
 use std::path::Path;
 use std::{
@@ -382,7 +383,11 @@ fn cmd_quote_report(args: QuoteReportArgs) -> Result<()> {
         }
         None => [0u8; 64],
     };
-    let attestation = Attestation::quote(&report_data).context("Failed to get attestation")?;
+    if args.debug {
+        eprintln!("debug: quote diagnostics enabled; attestation policy is unchanged");
+    }
+    let attestation = Attestation::quote_with_sys_config(&report_data, &args.sys_config)
+        .context("Failed to get attestation")?;
     let request = VerificationRequestJson {
         attestation: hex::encode(attestation.into_versioned().to_scale()?),
     };
@@ -653,10 +658,19 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
 }
 
 fn cmd_quote() -> Result<()> {
-    let mut report_data = [0; 64];
+    let mut input = Vec::with_capacity(65);
     io::stdin()
-        .read_exact(&mut report_data)
+        .take(65)
+        .read_to_end(&mut input)
         .context("Failed to read report data")?;
+    anyhow::ensure!(
+        input.len() == 64,
+        "report data must be exactly 64 bytes (received {})",
+        input.len()
+    );
+    let report_data: [u8; 64] = input
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("invalid report data length"))?;
     // Platform-adaptive: detect the running TEE and emit its raw hardware quote
     // (the TDX DCAP quote, or the AMD SEV-SNP report). For a verifier-ready,
     // platform-agnostic payload (with event log / mr_config), use `quote-report`.
@@ -698,9 +712,16 @@ fn cmd_rand(rand_args: RandArgs) -> Result<()> {
     if rand_args.hex {
         data = hex::encode(data).into_bytes();
     }
-    io::stdout()
-        .write_all(&data)
-        .context("Failed to write random data")?;
+    if let Some(output) = rand_args.output {
+        // key material: owner-only, and never half-written — a truncated
+        // random file would pass for a valid secret.
+        safe_write::safe_write_with_mode(&output, &data, 0o600)
+            .with_context(|| format!("Failed to write random output {output}"))?;
+    } else {
+        io::stdout()
+            .write_all(&data)
+            .context("Failed to write random data")?;
+    }
     Ok(())
 }
 
@@ -793,8 +814,9 @@ fn cmd_gen_ra_cert(args: GenRaCertArgs) -> Result<()> {
     let ca_cert = fs::read_to_string(args.ca_cert)?;
     let ca_key = fs::read_to_string(args.ca_key)?;
     let cert_pair = generate_ra_cert(ca_cert, ca_key)?;
-    fs::write(&args.cert_path, cert_pair.cert_pem).context("Failed to write certificate")?;
-    fs::write(&args.key_path, cert_pair.key_pem).context("Failed to write private key")?;
+    safe_write(&args.cert_path, &cert_pair.cert_pem).context("Failed to write certificate")?;
+    safe_write_with_mode(&args.key_path, &cert_pair.key_pem, 0o600)
+        .context("Failed to write private key")?;
     Ok(())
 }
 
@@ -819,8 +841,9 @@ fn cmd_gen_ca_cert(args: GenCaCertArgs) -> Result<()> {
     let cert = req
         .self_signed()
         .context("Failed to self-sign certificate")?;
-    fs::write(&args.cert, cert.pem()).context("Failed to write certificate")?;
-    fs::write(&args.key, key.serialize_pem()).context("Failed to write private key")?;
+    safe_write(&args.cert, cert.pem()).context("Failed to write certificate")?;
+    safe_write_with_mode(&args.key, key.serialize_pem(), 0o600)
+        .context("Failed to write private key")?;
     Ok(())
 }
 
@@ -835,7 +858,7 @@ fn cmd_gen_app_keys(args: GenAppKeysArgs) -> Result<()> {
     };
     let app_keys = make_app_keys(&key, &disk_key, &k256_key, args.ca_level, key_provider)?;
     let app_keys = serde_json::to_string(&app_keys).context("Failed to serialize app keys")?;
-    fs::write(&args.output, app_keys).context("Failed to write app keys")?;
+    safe_write_with_mode(&args.output, &app_keys, 0o600).context("Failed to write app keys")?;
     Ok(())
 }
 
@@ -1122,10 +1145,12 @@ fn cmd_vtpm_attest(args: VtpmAttestArgs) -> Result<()> {
             if let Some(error) = &result.error {
                 println!("Error: {}", error);
             }
-            anyhow::bail!("attestation failed");
         }
     }
 
+    if !result.success {
+        anyhow::bail!("attestation failed");
+    }
     Ok(())
 }
 
@@ -1343,4 +1368,73 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn rand_args(output: Option<String>, bytes: usize, hex: bool) -> RandArgs {
+        RandArgs { bytes, output, hex }
+    }
+
+    /// `-o` used to be parsed and then ignored, so the file was never created
+    /// and the bytes went to stdout instead.
+    #[test]
+    fn rand_writes_to_the_requested_output_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret.bin");
+
+        cmd_rand(rand_args(Some(path.display().to_string()), 32, false)).unwrap();
+
+        assert_eq!(fs::metadata(&path).unwrap().len(), 32);
+        // nothing but the target: no temporary file left behind.
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    /// The output is key material, so it must never be readable by anyone else.
+    #[test]
+    fn rand_output_is_owner_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret.bin");
+
+        cmd_rand(rand_args(Some(path.display().to_string()), 32, false)).unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "random output must be 0600, got {mode:o}");
+    }
+
+    #[test]
+    fn rand_hex_output_is_twice_as_long() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret.hex");
+
+        cmd_rand(rand_args(Some(path.display().to_string()), 16, true)).unwrap();
+
+        let body = fs::read(&path).unwrap();
+        assert_eq!(body.len(), 32);
+        assert!(body.iter().all(|b| b.is_ascii_hexdigit()));
+    }
+
+    /// Re-running must replace the file rather than failing, so a retry after a
+    /// partial or interrupted run cannot wedge the caller.
+    #[test]
+    fn rand_replaces_an_existing_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret.bin");
+
+        cmd_rand(rand_args(Some(path.display().to_string()), 8, false)).unwrap();
+        let first = fs::read(&path).unwrap();
+
+        cmd_rand(rand_args(Some(path.display().to_string()), 32, false)).unwrap();
+        let second = fs::read(&path).unwrap();
+
+        assert_eq!(first.len(), 8);
+        assert_eq!(second.len(), 32);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 }

@@ -150,8 +150,6 @@ pub fn emit_runtime_event(event: &str, payload: &[u8]) -> anyhow::Result<()> {
     let event = RuntimeEvent::new(event.to_string(), payload.to_vec(), version);
     let mode = detect_tee_variant()?;
 
-    event.emit().context("Failed to emit runtime event")?;
-
     if mode.has_tdx() {
         let digest = event.sha384_digest();
         let event_type = event.cc_event_type();
@@ -173,6 +171,11 @@ pub fn emit_runtime_event(event: &str, payload: &[u8]) -> anyhow::Result<()> {
             bank => anyhow::bail!("unsupported TPM PCR bank: {bank}"),
         }
     }
+
+    // Commit the userspace log only after the platform register accepted the
+    // measurement. A device failure must never leave an unmeasured event in
+    // the trusted replay log.
+    event.emit().context("Failed to emit runtime event")?;
     Ok(())
 }
 

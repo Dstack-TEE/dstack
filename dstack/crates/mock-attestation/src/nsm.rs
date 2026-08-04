@@ -86,6 +86,16 @@ impl NsmGenerator {
         report_data: &[u8],
         pcrs: BTreeMap<u16, Vec<u8>>,
     ) -> Result<Vec<u8>> {
+        self.attest_with_claims(Some(report_data), None, None, pcrs)
+    }
+
+    pub fn attest_with_claims(
+        &self,
+        user_data: Option<&[u8]>,
+        nonce: Option<&[u8]>,
+        public_key: Option<&[u8]>,
+        pcrs: BTreeMap<u16, Vec<u8>>,
+    ) -> Result<Vec<u8>> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .context("system clock before UNIX epoch")?
@@ -97,9 +107,9 @@ impl NsmGenerator {
             pcrs,
             certificate: self.leaf.der().to_vec(),
             cabundle: vec![self.root.der().to_vec()],
-            public_key: None,
-            user_data: Some(report_data.to_vec()),
-            nonce: None,
+            public_key: public_key.map(ToOwned::to_owned),
+            user_data: user_data.map(ToOwned::to_owned),
+            nonce: nonce.map(ToOwned::to_owned),
         };
         let mut payload = Vec::new();
         ciborium::into_writer(&document, &mut payload)?;

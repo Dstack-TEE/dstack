@@ -6,9 +6,10 @@ use std::sync::Arc;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Display,
+    io::Write as _,
     ops::Deref,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     str::FromStr,
     time::Duration,
 };
@@ -783,6 +784,11 @@ fn verify_manifest_feature_requirements(app_compose: &AppCompose) -> Result<()> 
     if app_compose.runner == "nerdctl-compose" && manifest_version < MANIFEST_VERSION_3 {
         bail!(
             "nerdctl-compose requires manifest_version >= {MANIFEST_VERSION_3}; use string manifest_version \"{MANIFEST_VERSION_3}\" so older guests fail closed"
+        );
+    }
+    if app_compose.init_script.len() > 1 && manifest_version < MANIFEST_VERSION_3 {
+        bail!(
+            "multiple init scripts require manifest_version >= {MANIFEST_VERSION_3}; use string manifest_version \"{MANIFEST_VERSION_3}\" so older guests fail closed"
         );
     }
     if app_compose.runner != "nerdctl-compose" && app_compose.snapshotter.is_some() {
@@ -1969,6 +1975,7 @@ struct AppInfo {
     instance_info: InstanceInfo,
     compose_hash: [u8; 32],
     gpu_policy_hash: [u8; 32],
+    init_script_hashes: Vec<Vec<u8>>,
 }
 
 struct Stage0<'a> {
@@ -2031,6 +2038,8 @@ impl<'a> Stage0<'a> {
         let cert_pair = generate_ra_cert(tmp_ca.temp_ca_cert.clone(), tmp_ca.temp_ca_key.clone())?;
         let collateral_urls = self.shared.sys_config.collateral_urls();
         let attestation_verifier = Arc::new(AttestationVerifier::new_prod(Some(&collateral_urls))?);
+        let verified_kms_measurement = Arc::new(std::sync::Mutex::new(None::<[u8; 32]>));
+        let captured_kms_measurement = verified_kms_measurement.clone();
         let ra_client = RaClientConfig::builder()
             .tls_no_check(false)
             .tls_built_in_root_certs(false)
@@ -2039,7 +2048,7 @@ impl<'a> Stage0<'a> {
             .tls_client_key(cert_pair.key_pem)
             .tls_ca_cert(tmp_ca.ca_cert.clone())
             .attestation_verifier(attestation_verifier)
-            .cert_validator(Box::new(|cert| {
+            .cert_validator(Box::new(move |cert| {
                 let Some(cert) = cert else {
                     bail!("Missing server cert");
                 };
@@ -2051,8 +2060,12 @@ impl<'a> Stage0<'a> {
                 }
                 if let Some(att) = &cert.attestation {
                     match att.decode_app_info(false) {
-                        Ok(kms_info) => emit_runtime_event("mr-kms", &kms_info.mr_aggregated)
-                            .context("failed to extend mr-kms to the launch measurement")?,
+                        Ok(kms_info) => {
+                            *captured_kms_measurement
+                                .lock()
+                                .map_err(|_| anyhow!("KMS measurement capture lock poisoned"))? =
+                                Some(kms_info.mr_aggregated);
+                        }
                         Err(err) if is_unsupported_app_info_quote(&err) => {
                             warn!("Skipping mr-kms runtime event for unsupported attestation quote: {err:#}");
                         }
@@ -2073,6 +2086,14 @@ impl<'a> Stage0<'a> {
             .await
             .context("Failed to get app key")?;
 
+        let kms_measurement = verified_kms_measurement
+            .lock()
+            .map_err(|_| anyhow!("KMS measurement capture lock poisoned"))?
+            .take();
+        if let Some(kms_measurement) = kms_measurement {
+            emit_runtime_event("mr-kms", &kms_measurement)
+                .context("failed to extend mr-kms to the launch measurement")?;
+        }
         emit_runtime_event("os-image-hash", &response.os_image_hash)
             .context("failed to extend os-image-hash to the launch measurement")?;
 
@@ -2469,19 +2490,39 @@ impl<'a> Stage0<'a> {
     fn luks_setup(&self, disk_crypt_key: &str, name: &str) -> Result<()> {
         let root_hd = &self.args.device;
         let sector_offset = PAYLOAD_OFFSET / 512;
-        cmd! {
-            info "Formatting encrypted disk";
-            echo -n $disk_crypt_key |
-                cryptsetup luksFormat
-                    --type luks2
-                    --offset $sector_offset
-                    --cipher aes-xts-plain64
-                    --pbkdf pbkdf2
-                    -d-
-                    $root_hd
-                    $name;
+        info!("Formatting encrypted disk");
+        let sector_offset = sector_offset.to_string();
+        let mut child = Command::new("cryptsetup")
+            .args([
+                "luksFormat",
+                "--type",
+                "luks2",
+                "--offset",
+                &sector_offset,
+                "--cipher",
+                "aes-xts-plain64",
+                "--pbkdf",
+                "pbkdf2",
+                "-d-",
+            ])
+            .arg(root_hd)
+            .arg(name)
+            .stdin(Stdio::piped())
+            .spawn()
+            .context("Failed to start cryptsetup luksFormat")?;
+        child
+            .stdin
+            .take()
+            .context("cryptsetup stdin is unavailable")?
+            .write_all(disk_crypt_key.as_bytes())
+            .context("Failed to send key to cryptsetup luksFormat")?;
+        if !child
+            .wait()
+            .context("Failed to wait for cryptsetup luksFormat")?
+            .success()
+        {
+            bail!("Failed to setup luks volume");
         }
-        .or(Err(anyhow!("Failed to setup luks volume")))?;
         self.open_encrypted_volume(disk_crypt_key, name)
     }
 
@@ -2512,11 +2553,29 @@ impl<'a> Stage0<'a> {
         let hdr_file = fs::File::open(&in_mem_hdr).context("Failed to open LUKS2 header")?;
         validate_luks2_headers(hdr_file).context("Failed to validate LUKS2 header")?;
 
-        cmd! {
-            info "Opening the device";
-            echo -n $disk_crypt_key | cryptsetup luksOpen --type luks2 --header $in_mem_hdr -d- $root_hd $name;
+        info!("Opening the device");
+        let mut child = Command::new("cryptsetup")
+            .args(["luksOpen", "--type", "luks2", "--header"])
+            .arg(&in_mem_hdr)
+            .arg("-d-")
+            .arg(root_hd)
+            .arg(name)
+            .stdin(Stdio::piped())
+            .spawn()
+            .context("Failed to start cryptsetup luksOpen")?;
+        child
+            .stdin
+            .take()
+            .context("cryptsetup stdin is unavailable")?
+            .write_all(disk_crypt_key.as_bytes())
+            .context("Failed to send key to cryptsetup luksOpen")?;
+        if !child
+            .wait()
+            .context("Failed to wait for cryptsetup luksOpen")?
+            .success()
+        {
+            bail!("Failed to open encrypted data disk");
         }
-        .or(Err(anyhow!("Failed to open encrypted data disk")))?;
 
         // Wait for device mapper to create the device
         let dm_path = format!("/dev/mapper/{name}");
@@ -2586,6 +2645,16 @@ impl<'a> Stage0<'a> {
         emit_runtime_event("system-preparing", &[])?;
         emit_runtime_event("app-id", &instance_info.app_id)?;
         emit_runtime_event("compose-hash", &compose_hash)?;
+        let init_script_hashes: Vec<Vec<u8>> = self
+            .shared
+            .app_compose
+            .init_script
+            .iter()
+            .map(|script| sha256(script.as_bytes()).to_vec())
+            .collect();
+        for script_hash in &init_script_hashes {
+            emit_runtime_event("init-script-hash", script_hash)?;
+        }
         let gpu_policy_hash = self
             .measure_gpu()
             .await
@@ -2619,6 +2688,7 @@ impl<'a> Stage0<'a> {
             instance_info,
             compose_hash,
             gpu_policy_hash,
+            init_script_hashes,
         })
     }
 
@@ -2626,6 +2696,7 @@ impl<'a> Stage0<'a> {
         config_id_verifier::verify_mr_config_id(
             &app_info.compose_hash,
             &app_info.gpu_policy_hash,
+            &app_info.init_script_hashes,
             &app_info
                 .instance_info
                 .app_id
@@ -3159,6 +3230,19 @@ fn test_nerdctl_compose_requires_v3_manifest() {
     assert!(err.to_string().contains("nerdctl-compose requires"));
 
     app_compose.manifest_version = "3".to_string();
+    verify_manifest_feature_requirements(&app_compose).unwrap();
+}
+
+#[test]
+fn test_multiple_init_scripts_require_v3_manifest() {
+    let mut app_compose = test_app_compose(serde_json::json!(2), None, None);
+    app_compose.init_script = vec!["echo one".into(), "echo two".into()];
+    let err = verify_manifest_feature_requirements(&app_compose).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("multiple init scripts require manifest_version"));
+
+    app_compose.manifest_version = "3".into();
     verify_manifest_feature_requirements(&app_compose).unwrap();
 }
 

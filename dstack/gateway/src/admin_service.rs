@@ -10,7 +10,7 @@ use dstack_gateway_rpc::{
     admin_server::{AdminRpc, AdminServer},
     CertAttestationInfo, CertbotConfigResponse, ClearInstancePortPolicyRequest,
     CreateDnsCredentialRequest, DeleteDnsCredentialRequest, DeleteZtDomainRequest,
-    DnsCredentialInfo, ForceReleaseCertLockRequest, GetDefaultDnsCredentialResponse,
+    DnsCredentialInfo, ExitRequest, ForceReleaseCertLockRequest, GetDefaultDnsCredentialResponse,
     GetDnsCredentialRequest, GetInfoRequest, GetInfoResponse, GetInstanceHandshakesRequest,
     GetInstanceHandshakesResponse, GetInstancePortPolicyRequest, GetInstancePortPolicyResponse,
     GetMetaResponse, GetNodeStatusesResponse, GetZtDomainRequest, GlobalConnectionsStats,
@@ -82,8 +82,8 @@ impl AdminRpcHandler {
 }
 
 impl AdminRpc for AdminRpcHandler {
-    async fn exit(self) -> Result<()> {
-        self.state.lock().exit();
+    async fn exit(self, request: ExitRequest) -> Result<()> {
+        self.state.lock().exit(request.force)
     }
 
     async fn renew_cert(self) -> Result<RenewCertResponse> {
@@ -93,9 +93,7 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn set_caa(self) -> Result<()> {
-        // TODO: Implement CAA setting for multi-domain certificates
-        // This requires iterating over all domain configurations and setting CAA records
-        bail!("set_caa is not implemented for multi-domain certificates yet");
+        self.state.certbot.set_caa_all().await
     }
 
     async fn reload_cert(self) -> Result<()> {
@@ -340,7 +338,14 @@ impl AdminRpc for AdminRpcHandler {
         let now = now_secs();
         let id = generate_cred_id();
         let dns_txt_ttl = request.dns_txt_ttl.unwrap_or(60);
-        let max_dns_wait = Duration::from_secs(request.max_dns_wait.unwrap_or(60 * 5).into());
+        let max_dns_wait_secs = request.max_dns_wait.unwrap_or(60 * 5);
+        if dns_txt_ttl == 0 {
+            bail!("dns_txt_ttl must be greater than zero");
+        }
+        if max_dns_wait_secs == 0 {
+            bail!("max_dns_wait must be greater than zero");
+        }
+        let max_dns_wait = Duration::from_secs(max_dns_wait_secs.into());
         let cred = DnsCredential {
             id: id.clone(),
             name: request.name,
@@ -792,6 +797,25 @@ fn redact_token(token: &str) -> String {
     }
 }
 
+fn validate_zt_domain(domain: &str) -> Result<()> {
+    if domain.is_empty() || domain.len() > 253 || !domain.is_ascii() {
+        bail!("domain must be a non-empty ASCII DNS name of at most 253 bytes");
+    }
+    for label in domain.split('.') {
+        if label.is_empty()
+            || label.len() > 63
+            || label.starts_with('-')
+            || label.ends_with('-')
+            || !label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            bail!("domain contains an invalid DNS label");
+        }
+    }
+    Ok(())
+}
+
 /// Convert proto ZtDomainConfig to internal ZtDomainConfig
 fn proto_to_zt_domain_config(
     proto: &ProtoZtDomainConfig,
@@ -817,6 +841,10 @@ fn proto_to_zt_domain_config(
         .strip_prefix("*.")
         .unwrap_or(&proto.domain)
         .to_string();
+    validate_zt_domain(&domain)?;
+    if proto.port == 0 {
+        bail!("port must be between 1 and 65535");
+    }
 
     Ok(ZtDomainConfig {
         domain,
@@ -854,5 +882,31 @@ fn zt_domain_to_proto(
             priority: config.priority,
         }),
         cert_status,
+    }
+}
+
+#[cfg(test)]
+mod zt_domain_tests {
+    use super::validate_zt_domain;
+
+    #[test]
+    fn accepts_a_dns_domain() {
+        validate_zt_domain("service.example.com").unwrap();
+    }
+
+    #[test]
+    fn rejects_empty_and_invalid_dns_domains() {
+        for domain in [
+            "",
+            ".example.com",
+            "example..com",
+            "-bad.example",
+            "bad-.example",
+        ] {
+            assert!(
+                validate_zt_domain(domain).is_err(),
+                "{domain} should be rejected"
+            );
+        }
     }
 }

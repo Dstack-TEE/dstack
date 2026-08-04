@@ -1851,6 +1851,7 @@ dependencies = [
  "dstack-vmm-rpc",
  "http-client",
  "rustix 0.38.44",
+ "safe-write",
  "serde_json",
  "toml",
 ]
@@ -2161,6 +2162,7 @@ dependencies = [
  "libc",
  "libloading",
  "mock-attestation",
+ "nix 0.29.0",
  "nsm-qvl",
  "pem",
  "reqwest",
@@ -2173,6 +2175,7 @@ dependencies = [
  "tokio",
  "tpm-qvl",
  "tpm-types",
+ "tpm2",
  "tracing",
  "tracing-subscriber",
 ]
@@ -2189,6 +2192,7 @@ dependencies = [
  "serde-human-bytes",
  "serde_jcs",
  "serde_json",
+ "serde_with",
  "sha2 0.10.9",
  "sha3",
  "size-parser",
@@ -2266,6 +2270,7 @@ dependencies = [
  "dstack-types",
  "ez-hash",
  "figment",
+ "flate2",
  "fs-err",
  "hex",
  "hex-literal",
@@ -2277,6 +2282,7 @@ dependencies = [
  "serde-human-bytes",
  "serde_json",
  "sha2 0.10.9",
+ "tar",
  "tempfile",
  "tokio",
  "tpm-qvl",
@@ -6577,11 +6583,12 @@ dependencies = [
 
 [[package]]
 name = "safe-write"
-version = "0.1.2"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8066891189c8e6c7d189c4c19d841721606b4cac7212160ed3b3fa97d448fbab"
+checksum = "b5a9dc0fc219eaa0265dbbee50170a469de86252d30b946c265c396b065b7f9f"
 dependencies = [
  "fs-err",
+ "tempfile",
 ]
 
 [[package]]
@@ -6945,7 +6952,20 @@ dependencies = [
  "schemars 1.2.1",
  "serde_core",
  "serde_json",
+ "serde_with_macros",
  "time",
+]
+
+[[package]]
+name = "serde_with_macros"
+version = "3.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84d57bc0c8b9a17920c178daa6bb924850d54a9c97ab45194bb8c17ad66bb660"
+dependencies = [
+ "darling 0.23.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]

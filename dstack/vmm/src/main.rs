@@ -55,6 +55,8 @@ enum Command {
     /// Start the VMM server (default mode)
     #[default]
     Serve,
+    /// Validate the effective server configuration without starting services.
+    CheckConfig,
     /// One-shot VM execution mode for debugging
     Run(RunArgs),
     /// Internal per-VM QEMU/swtpm launcher.
@@ -88,7 +90,6 @@ async fn run_external_api(app: App, figment: Figment, api_auth: Authenticator) -
     let external_api = rocket::custom(figment)
         .mount("/", main_routes::routes())
         .mount("/guest", ra_rpc::prpc_routes!(App, GuestApiHandler))
-        .mount("/api", ra_rpc::prpc_routes!(App, HostApiHandler))
         .mount(
             "/prpc",
             ra_rpc::prpc_routes!(App, RpcHandler, trim: "Teepod."),
@@ -178,8 +179,8 @@ async fn main() -> Result<()> {
 
     let figment = config::load_config_figment(args.config.as_deref());
     let config = Config::extract_or_default(&figment)?.abs_path()?;
-
-    // Validate host API configuration
+    // Preserve the existing startup validation. The broader static checks are
+    // opt-in through `check-config` until they have seen wider deployment use.
     config
         .host_api
         .validate()
@@ -188,6 +189,17 @@ async fn main() -> Result<()> {
     // Handle commands
     match args.command.unwrap_or_default() {
         Command::VmLauncher(_) => unreachable!("launcher mode handled before config loading"),
+        Command::CheckConfig => {
+            config.validate()?;
+            let _: rocket::listener::Endpoint = figment
+                .extract_inner("address")
+                .context("Invalid management API address")?;
+            let _: u16 = figment
+                .extract_inner("port")
+                .context("Invalid management API port")?;
+            println!("configuration is valid");
+            return Ok(());
+        }
         Command::Run(run_args) => {
             // One-shot VM execution mode
             return one_shot::run_one_shot(

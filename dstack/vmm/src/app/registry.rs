@@ -5,12 +5,13 @@
 //! OCI Distribution API client for pulling dstack guest images directly from
 //! a container registry without requiring a local Docker daemon.
 
-use std::path::Path;
+use std::{io::Read, path::Path};
 
 use anyhow::{bail, Context, Result};
 use flate2::read::GzDecoder;
 use reqwest::Client;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use tracing::info;
 
 fn build_client() -> Result<Client> {
@@ -91,6 +92,7 @@ async fn list_tags_with_token(client: &Client, registry: &str, repo: &str) -> Re
 /// Fetches the OCI manifest, downloads each layer blob, and extracts
 /// the tar (gzipped) contents into a flat directory.
 pub async fn pull_and_extract(image_ref: &str, tag: &str, image_path: &Path) -> Result<()> {
+    validate_registry_tag(tag)?;
     let (registry, repo) = parse_image_ref(image_ref)?;
     let client = build_client()?;
 
@@ -250,6 +252,22 @@ async fn download_and_extract_layers(
         }
 
         let bytes = response.bytes().await.context("failed to read blob body")?;
+        if bytes.len() as u64 != layer.size {
+            bail!(
+                "blob {} size mismatch: expected {}, received {}",
+                layer.digest,
+                layer.size,
+                bytes.len()
+            );
+        }
+        let actual_digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+        if actual_digest != layer.digest {
+            bail!(
+                "blob digest mismatch: expected {}, received {}",
+                layer.digest,
+                actual_digest
+            );
+        }
         extract_layer(&bytes, &layer.media_type, dest)?;
     }
 
@@ -265,14 +283,10 @@ fn extract_layer(data: &[u8], media_type: &str, dest: &Path) -> Result<()> {
     if is_gzip {
         let decoder = GzDecoder::new(data);
         let mut archive = tar::Archive::new(decoder);
-        archive
-            .unpack(dest)
-            .context("failed to extract gzipped tar layer")?;
+        unpack_archive(&mut archive, dest).context("failed to extract gzipped tar layer")?;
     } else {
         let mut archive = tar::Archive::new(data);
-        archive
-            .unpack(dest)
-            .context("failed to extract tar layer")?;
+        unpack_archive(&mut archive, dest).context("failed to extract tar layer")?;
     }
 
     // Remove docker/OCI artifact directories that may appear in layers
@@ -283,6 +297,19 @@ fn extract_layer(data: &[u8], media_type: &str, dest: &Path) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn unpack_archive<R: Read>(archive: &mut tar::Archive<R>, dest: &Path) -> Result<()> {
+    for entry in archive.entries().context("failed to read tar entries")? {
+        let mut entry = entry.context("failed to read tar entry")?;
+        if !entry
+            .unpack_in(dest)
+            .context("failed to unpack tar entry")?
+        {
+            bail!("archive entry escapes destination");
+        }
+    }
     Ok(())
 }
 
@@ -352,6 +379,21 @@ fn parse_www_authenticate(header: &str) -> (String, String) {
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
+
+fn validate_registry_tag(tag: &str) -> Result<()> {
+    if tag.is_empty()
+        || tag == "."
+        || tag == ".."
+        || tag.contains('/')
+        || tag.contains('\\')
+        || !tag
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        bail!("invalid registry tag");
+    }
+    Ok(())
+}
 
 fn determine_output_dir(tag: &str, image_path: &Path) -> std::path::PathBuf {
     let dir_name = if tag.starts_with("dstack-") {
@@ -440,6 +482,26 @@ struct OciIndexEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registry_tag_is_confined_to_one_image_store_entry() {
+        for valid in ["v0.6.0", "dstack-fixture_1", "sha256-deadbeef"] {
+            validate_registry_tag(valid).unwrap();
+        }
+        for invalid in [
+            "",
+            ".",
+            "..",
+            "../escape",
+            "dstack-../../escape",
+            "nested/tag",
+            r"nested\tag",
+            "tag,option",
+            "tag=value",
+        ] {
+            assert!(validate_registry_tag(invalid).is_err(), "{invalid}");
+        }
+    }
 
     #[test]
     fn test_parse_image_ref_private_registry() {

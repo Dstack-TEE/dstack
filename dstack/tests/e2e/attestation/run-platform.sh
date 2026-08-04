@@ -38,6 +38,16 @@ elif [[ "$TEE_PLATFORM" == dstack-amd-sev-snp ]]; then
   dstack-util attest-json --input "$WORK/snp-fixture.bin" --output "$WORK/snp-fixture.json"
   VM_CONFIG=$(jq -c '.config | fromjson' "$WORK/snp-fixture.json")
   MR_CONFIG=$(jq -r .mr_config <<<"$VM_CONFIG")
+elif [[ "$TEE_PLATFORM" == dstack-nitro-enclave ]]; then
+  for index in 0 1 2; do
+    printf 'dstack-tee-simulator/nsm/pcr/%s' "$index" |
+      sha384sum | cut -d' ' -f1 > "$WORK/pcr$index"
+  done
+  OS_IMAGE_HASH=$(
+    cat "$WORK/pcr0" "$WORK/pcr1" "$WORK/pcr2" |
+      xxd -r -p | sha256sum | cut -d' ' -f1
+  )
+  VM_CONFIG=$(jq -cn --arg os "$OS_IMAGE_HASH" '{os_image_hash:$os}')
 elif [[ "$TEE_PLATFORM" == dstack-aws-nitro-tpm ]]; then
   ZERO_PCR=$(printf '00%.0s' $(seq 1 48))
   printf '%s' "$ZERO_PCR" > "$WORK/pcr4"

@@ -10,6 +10,89 @@ use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 use size_parser::human_size;
 
+/// Bound event-log growth and MrConfigV3 size while supporting independent
+/// infrastructure-provider initialization stages.
+pub const MAX_INIT_SCRIPTS: usize = 5;
+
+pub mod init_script_hashes {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde_human_bytes::ByteBuf;
+
+    pub fn serialize<S>(values: &[Vec<u8>], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        values
+            .iter()
+            .cloned()
+            .map(ByteBuf::from)
+            .collect::<Vec<_>>()
+            .serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Vec<u8>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let values = Vec::<ByteBuf>::deserialize(deserializer)?;
+        if values.len() > super::MAX_INIT_SCRIPTS {
+            return Err(serde::de::Error::custom(format!(
+                "init_script_hashes supports at most {} hashes",
+                super::MAX_INIT_SCRIPTS
+            )));
+        }
+        if values.iter().any(|value| value.len() != 32) {
+            return Err(serde::de::Error::custom(
+                "each init_script_hash must be 32 bytes",
+            ));
+        }
+        Ok(values.into_iter().map(ByteBuf::into_vec).collect())
+    }
+
+    pub mod option {
+        use serde::{Deserialize, Deserializer, Serialize, Serializer};
+        use serde_human_bytes::ByteBuf;
+
+        pub fn serialize<S>(values: &Option<Vec<Vec<u8>>>, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            values
+                .as_ref()
+                .map(|values| {
+                    values
+                        .iter()
+                        .cloned()
+                        .map(ByteBuf::from)
+                        .collect::<Vec<_>>()
+                })
+                .serialize(serializer)
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Vec<Vec<u8>>>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            Option::<Vec<ByteBuf>>::deserialize(deserializer)?
+                .map(|values| {
+                    if values.len() > super::super::MAX_INIT_SCRIPTS {
+                        return Err(serde::de::Error::custom(format!(
+                            "init_script_hashes supports at most {} hashes",
+                            super::super::MAX_INIT_SCRIPTS
+                        )));
+                    }
+                    if values.iter().any(|value| value.len() != 32) {
+                        return Err(serde::de::Error::custom(
+                            "each init_script_hash must be 32 bytes",
+                        ));
+                    }
+                    Ok(values.into_iter().map(ByteBuf::into_vec).collect())
+                })
+                .transpose()
+        }
+    }
+}
+
 /// Identifies which OVMF flavour the guest image was built with.
 ///
 /// Only the pre-202505 OVMF measurement layout is supported.
@@ -131,6 +214,17 @@ pub struct AppCompose {
     pub snapshotter: Option<ContainerSnapshotter>,
     #[serde(default)]
     pub docker_compose_file: Option<String>,
+    /// Bash scripts executed before the application runner starts.
+    ///
+    /// A single string is accepted for backward compatibility and is treated
+    /// as a one-element list.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_init_scripts",
+        serialize_with = "serialize_init_scripts",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub init_script: Vec<String>,
     #[serde(default)]
     pub public_logs: bool,
     #[serde(default)]
@@ -139,7 +233,11 @@ pub struct AppCompose {
     pub public_tcbinfo: bool,
     #[serde(default)]
     pub kms_enabled: bool,
-    #[serde(deserialize_with = "deserialize_gateway_enabled", flatten)]
+    #[serde(
+        deserialize_with = "deserialize_gateway_enabled",
+        serialize_with = "serialize_gateway_enabled",
+        flatten
+    )]
     pub gateway_enabled: bool,
     #[serde(default)]
     pub local_key_provider_enabled: bool,
@@ -176,6 +274,41 @@ pub struct AppCompose {
     /// docs/verity-volumes.md.
     #[serde(default)]
     pub verity_volumes: Vec<VerityVolume>,
+}
+
+fn deserialize_init_scripts<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum InitScripts {
+        One(String),
+        Many(Vec<String>),
+    }
+
+    let scripts = match Option::<InitScripts>::deserialize(deserializer)? {
+        None => Vec::new(),
+        Some(InitScripts::One(script)) => vec![script],
+        Some(InitScripts::Many(scripts)) => scripts,
+    };
+    if scripts.len() > MAX_INIT_SCRIPTS {
+        return Err(serde::de::Error::custom(format!(
+            "init_script supports at most {MAX_INIT_SCRIPTS} scripts"
+        )));
+    }
+    Ok(scripts)
+}
+
+fn serialize_init_scripts<S>(scripts: &[String], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    if let [script] = scripts {
+        serializer.serialize_str(script)
+    } else {
+        scripts.serialize(serializer)
+    }
 }
 
 /// A pre-baked, read-only dm-verity volume attached to the CVM.
@@ -490,6 +623,21 @@ where
     Ok(value.gateway_enabled || value.tproxy_enabled)
 }
 
+fn serialize_gateway_enabled<S>(enabled: &bool, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    #[derive(Serialize)]
+    struct GatewayEnabled {
+        gateway_enabled: bool,
+    }
+
+    GatewayEnabled {
+        gateway_enabled: *enabled,
+    }
+    .serialize(serializer)
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum KeyProviderKind {
@@ -566,6 +714,71 @@ mod app_compose_tests {
             "name": "test",
             "runner": "docker-compose"
         }))
+    }
+
+    #[test]
+    fn init_script_accepts_string_array_and_null() {
+        assert!(parse_compose(serde_json::json!(2))
+            .unwrap()
+            .init_script
+            .is_empty());
+
+        let single: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": 2,
+            "name": "test",
+            "runner": "docker-compose",
+            "init_script": "echo one"
+        }))
+        .unwrap();
+        assert_eq!(single.init_script, ["echo one"]);
+        assert_eq!(
+            serde_json::to_value(&single).unwrap()["init_script"],
+            "echo one"
+        );
+
+        let multiple: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": 2,
+            "name": "test",
+            "runner": "docker-compose",
+            "init_script": ["echo one", "echo two"]
+        }))
+        .unwrap();
+        assert_eq!(multiple.init_script, ["echo one", "echo two"]);
+        assert_eq!(
+            serde_json::to_value(&multiple).unwrap()["init_script"],
+            serde_json::json!(["echo one", "echo two"])
+        );
+
+        let null: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": 2,
+            "name": "test",
+            "runner": "docker-compose",
+            "init_script": null
+        }))
+        .unwrap();
+        assert!(null.init_script.is_empty());
+        assert!(serde_json::to_value(&null)
+            .unwrap()
+            .get("init_script")
+            .is_none());
+
+        assert!(serde_json::from_value::<AppCompose>(serde_json::json!({
+            "manifest_version": 2,
+            "name": "test",
+            "runner": "docker-compose",
+            "init_script": ["echo one", 2]
+        }))
+        .is_err());
+
+        assert!(serde_json::from_value::<AppCompose>(serde_json::json!({
+            "manifest_version": 2,
+            "name": "test",
+            "runner": "docker-compose",
+            "init_script": ["1", "2", "3", "4", "5", "6"]
+        }))
+        .unwrap_err()
+        .to_string()
+        .contains("at most 5"));
     }
 
     #[test]
@@ -2014,6 +2227,7 @@ impl Platform {
         match product_name.map(str::trim) {
             Some("dstack" | "qemu") => return Some(Self::Dstack),
             Some("Google Compute Engine") => return Some(Self::Gcp),
+            Some("Nitro Enclave") => return Some(Self::NitroEnclave),
             _ => {}
         }
 
@@ -2069,6 +2283,14 @@ mod platform_tests {
         assert_eq!(
             Platform::detect_from_dmi(Some("Google Compute Engine"), Some("Amazon EC2")),
             Some(Platform::Gcp)
+        );
+    }
+
+    #[test]
+    fn detects_nitro_enclave_from_simulated_dmi() {
+        assert_eq!(
+            Platform::detect_from_dmi(Some("Nitro Enclave"), Some("AWS Nitro Enclaves")),
+            Some(Platform::NitroEnclave)
         );
     }
 }
