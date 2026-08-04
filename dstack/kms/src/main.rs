@@ -63,13 +63,18 @@ async fn run_onboard_service(kms_config: KmsConfig, figment: Figment) -> Result<
 
     // Remove section tls
 
-    let _ = rocket::custom(figment)
+    let rocket = rocket::custom(figment)
         .mount("/", rocket::routes![index, finish])
         .mount(
             "/prpc",
             ra_rpc::prpc_routes!(OnboardState, OnboardHandler, trim: "Onboard."),
         )
-        .manage(state)
+        .manage(state.clone())
+        .ignite()
+        .await
+        .map_err(|err| anyhow!(err.to_string()))?;
+    state.set_shutdown(rocket.shutdown())?;
+    let _ = rocket
         .launch()
         .await
         .map_err(|err| anyhow!(err.to_string()))?;
