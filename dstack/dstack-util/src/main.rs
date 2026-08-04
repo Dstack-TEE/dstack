@@ -698,9 +698,16 @@ fn cmd_rand(rand_args: RandArgs) -> Result<()> {
     if rand_args.hex {
         data = hex::encode(data).into_bytes();
     }
-    io::stdout()
-        .write_all(&data)
-        .context("Failed to write random data")?;
+    if let Some(output) = rand_args.output {
+        // key material: owner-only, and never half-written — a truncated
+        // random file would pass for a valid secret.
+        safe_write::safe_write_with_mode(&output, &data, 0o600)
+            .with_context(|| format!("Failed to write random output {output}"))?;
+    } else {
+        io::stdout()
+            .write_all(&data)
+            .context("Failed to write random data")?;
+    }
     Ok(())
 }
 
@@ -1343,4 +1350,73 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn rand_args(output: Option<String>, bytes: usize, hex: bool) -> RandArgs {
+        RandArgs { bytes, output, hex }
+    }
+
+    /// `-o` used to be parsed and then ignored, so the file was never created
+    /// and the bytes went to stdout instead.
+    #[test]
+    fn rand_writes_to_the_requested_output_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret.bin");
+
+        cmd_rand(rand_args(Some(path.display().to_string()), 32, false)).unwrap();
+
+        assert_eq!(fs::metadata(&path).unwrap().len(), 32);
+        // nothing but the target: no temporary file left behind.
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    /// The output is key material, so it must never be readable by anyone else.
+    #[test]
+    fn rand_output_is_owner_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret.bin");
+
+        cmd_rand(rand_args(Some(path.display().to_string()), 32, false)).unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "random output must be 0600, got {mode:o}");
+    }
+
+    #[test]
+    fn rand_hex_output_is_twice_as_long() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret.hex");
+
+        cmd_rand(rand_args(Some(path.display().to_string()), 16, true)).unwrap();
+
+        let body = fs::read(&path).unwrap();
+        assert_eq!(body.len(), 32);
+        assert!(body.iter().all(|b| b.is_ascii_hexdigit()));
+    }
+
+    /// Re-running must replace the file rather than failing, so a retry after a
+    /// partial or interrupted run cannot wedge the caller.
+    #[test]
+    fn rand_replaces_an_existing_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret.bin");
+
+        cmd_rand(rand_args(Some(path.display().to_string()), 8, false)).unwrap();
+        let first = fs::read(&path).unwrap();
+
+        cmd_rand(rand_args(Some(path.display().to_string()), 32, false)).unwrap();
+        let second = fs::read(&path).unwrap();
+
+        assert_eq!(first.len(), 8);
+        assert_eq!(second.len(), 32);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 }
