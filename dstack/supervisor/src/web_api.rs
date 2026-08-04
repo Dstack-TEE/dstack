@@ -81,10 +81,10 @@ fn clear(supervisor: &State<Supervisor>) -> Json<Response<()>> {
 }
 
 #[post("/shutdown")]
-async fn shutdown(supervisor: &State<Supervisor>, shutdown: Shutdown) -> Json<Response<()>> {
+async fn shutdown(supervisor: &State<Supervisor>, rocket_shutdown: Shutdown) -> Json<Response<()>> {
     let result = supervisor.shutdown().await;
     if result.is_ok() {
-        shutdown.notify();
+        rocket_shutdown.notify();
     }
     to_json(result)
 }
