@@ -49,7 +49,7 @@ pr	state	title	head	base	dependency	url
 890	OPEN	[STACKED on #883] fix(guest): protect KMS key output	codex/fix-guest-kms-key-permissions	codex/fix-guest-atomic-credentials	#883	https://github.com/Dstack-TEE/dstack/pull/890
 891	OPEN	fix(guest): protect gateway private state	codex/fix-guest-gateway-private-state	master		https://github.com/Dstack-TEE/dstack/pull/891
 892	OPEN	fix(guest): bound Host API operations	codex/fix-guest-host-api-bounds	master		https://github.com/Dstack-TEE/dstack/pull/892
-893	OPEN	fix(supervisor): reject untrusted client sockets	codex/fix-supervisor-trusted-client-sockets	master		https://github.com/Dstack-TEE/dstack/pull/893
+893	CLOSED	fix(supervisor): reject untrusted client sockets	codex/fix-supervisor-trusted-client-sockets	master		https://github.com/Dstack-TEE/dstack/pull/893
 894	OPEN	fix(guest-agent): reject inverted certificate validity	codex/fix-guest-agent-cert-validity	master		https://github.com/Dstack-TEE/dstack/pull/894
 895	OPEN	fix(attest): commit event log after measurement	codex/fix-attest-event-log-order	master		https://github.com/Dstack-TEE/dstack/pull/895
 896	OPEN	fix(util): reject oversized quote input	codex/fix-util-quote-size-limit	master		https://github.com/Dstack-TEE/dstack/pull/896
