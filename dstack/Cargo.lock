@@ -1851,6 +1851,7 @@ dependencies = [
  "dstack-vmm-rpc",
  "http-client",
  "rustix 0.38.44",
+ "safe-write",
  "serde_json",
  "toml",
 ]
@@ -6580,11 +6581,12 @@ dependencies = [
 
 [[package]]
 name = "safe-write"
-version = "0.1.3"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ed1f9442e2f57be7e5e7cc1246ca44bd94ac20ef8fb070621253674ac4cff4c"
+checksum = "b5a9dc0fc219eaa0265dbbee50170a469de86252d30b946c265c396b065b7f9f"
 dependencies = [
  "fs-err",
+ "tempfile",
 ]
 
 [[package]]
