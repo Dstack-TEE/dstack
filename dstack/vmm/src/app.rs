@@ -643,8 +643,13 @@ impl App {
             .collect::<HashMap<_, _>>();
         {
             let mut state = self.lock();
-            for cid in occupied_cids.values() {
-                state.cid_pool.occupy(*cid)?;
+            for (vm_id, cid) in occupied_cids.iter() {
+                // These CIDs come from processes that are already running, not
+                // from the pool, so a CID left over from an earlier cid_start /
+                // cid_pool_size must not stop the VMM from starting.
+                if let Err(err) = state.cid_pool.occupy(*cid) {
+                    warn!(id = %vm_id, "not tracking cid {cid} in the pool: {err}");
+                }
             }
         }
 
@@ -720,8 +725,12 @@ impl App {
             let mut state = self.lock();
             // First clear the pool and re-occupy running VM CIDs
             state.cid_pool.clear();
-            for cid in occupied_cids.values() {
-                state.cid_pool.occupy(*cid)?;
+            for (vm_id, cid) in occupied_cids.iter() {
+                // Same as in reload_vms(): an out-of-range CID from an earlier
+                // configuration is reported, not fatal.
+                if let Err(err) = state.cid_pool.occupy(*cid) {
+                    warn!(id = %vm_id, "not tracking cid {cid} in the pool: {err}");
+                }
             }
         }
 
