@@ -1413,12 +1413,12 @@ fn make_vm_config(
         .and_then(|d| hex::decode(d).ok())
         .unwrap_or_default();
     // Attach the lite measurement material whenever the image provides it,
-    // regardless of the resolved attestation variant: the guest's exposed
-    // event log always retains the RTMR0 ACPI digest events (see
-    // cc_eventlog::tdx::label_tdx_acpi_data_events), so a verifier can freely
-    // choose lite verification for a legacy-resolved boot too.
-    // `tdx_attestation_variant` keeps its original meaning of "the scheme the
-    // VMM/KMS resolved for this boot" and is unaffected by this.
+    // regardless of the resolved attestation variant, so the config shape stays
+    // uniform across images. It does not widen how the boot is verified:
+    // verifiers select the path from `tdx_attestation_variant` alone, and a
+    // legacy-resolved boot is verified through the image download even with the
+    // document attached. `tdx_attestation_variant` keeps its original meaning of
+    // "the scheme the VMM/KMS resolved for this boot".
     let tdx_measurement = if is_tdx {
         if tdx_attestation_variant.is_lite() {
             Some(image.tdx_measurement.clone().context(

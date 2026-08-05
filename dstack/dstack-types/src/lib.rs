@@ -1311,10 +1311,13 @@ pub struct VmConfig {
     #[serde(default, skip_serializing_if = "TdxAttestationVariant::is_legacy")]
     pub tdx_attestation_variant: TdxAttestationVariant,
     /// TDX-only no-image-download measurement material. Attached whenever
-    /// the OS image provides it, regardless of `tdx_attestation_variant`, so
-    /// a verifier can choose lite verification even for a boot that resolved
-    /// to `Legacy`. Omitted only when the image predates this measurement
-    /// material.
+    /// the OS image provides it, regardless of `tdx_attestation_variant`, and
+    /// omitted only when the image predates this measurement material.
+    ///
+    /// Its presence does not select lite verification: `tdx_attestation_variant`
+    /// alone does. A `Legacy` boot is verified through the image download even
+    /// when this document is attached, because only that path verifies the ACPI
+    /// tables.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tdx_measurement: Option<TdxOsImageMeasurementDocument>,
     /// GCP TDX no-image-download measurement material. Present for GCP
