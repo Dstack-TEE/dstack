@@ -168,6 +168,8 @@ This allows a simple deployment order:
 
 ### 2.5 Configuration File Examples
 
+> **Note:** A non-empty `rpc_domain` makes the gateway request its RPC TLS key and certificate from the local dstack Guest Agent. Ensure `/var/run/dstack/dstack.sock` is available, or set `DSTACK_AGENT_ADDRESS` to another Guest Agent endpoint. Set `rpc_domain = ""` when supplying pre-generated certificates.
+
 gateway-1.toml:
 
 ```toml
@@ -185,8 +187,6 @@ mandatory = false
 
 [core]
 rpc_domain = "rpc.gateway-1.demo.dstack.org"
-
-> **Note:** A non-empty `rpc_domain` makes the gateway request its RPC TLS key and certificate from the local dstack Guest Agent. Ensure `/var/run/dstack/dstack.sock` is available, or set `DSTACK_AGENT_ADDRESS` to another Guest Agent endpoint. Set `rpc_domain = ""` when supplying pre-generated certificates.
 
 [core.admin]
 enabled = true
