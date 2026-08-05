@@ -268,6 +268,7 @@ pub mod keys {
     pub const GLOBAL_CERTBOT_CONFIG: &str = "global/certbot_config";
     pub const GLOBAL_ACME_CREDENTIALS: &str = "global/acme_credentials";
     pub const GLOBAL_ACME_ATTESTATION: &str = "global/acme_attestation";
+    pub const GLOBAL_ACME_ROTATION_LOCK: &str = "global/acme_rotation_lock";
 
     pub fn inst(instance_id: &str) -> String {
         format!("{INST_PREFIX}{instance_id}")
@@ -976,6 +977,51 @@ impl KvStore {
     /// Release certificate renew lock
     pub fn release_cert_lock(&self, domain: &str) -> Result<()> {
         self.persistent.write().delete(keys::cert_lock(domain))?;
+        Ok(())
+    }
+
+    /// Try to acquire the global ACME credential rotation lock.
+    ///
+    /// Best-effort only: WaveKV is last-writer-wins without compare-and-swap,
+    /// so two nodes can both acquire during a replication gap. This narrows the
+    /// window for concurrent rotation from the full rotation duration to the
+    /// replication latency; it is not mutual exclusion. A crashed holder is
+    /// covered by the timeout.
+    pub fn try_acquire_rotation_lock(&self, lock_timeout_secs: u64) -> bool {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        if let Some(existing) = self.get_rotation_lock() {
+            // Check if lock is still valid (not expired)
+            if now < existing.started_at + lock_timeout_secs {
+                return false;
+            }
+        }
+
+        let lock = CertRenewLock {
+            started_at: now,
+            started_by: self.my_node_id,
+        };
+        self.persistent
+            .write()
+            .put_encoded(keys::GLOBAL_ACME_ROTATION_LOCK.to_string(), &lock)
+            .is_ok()
+    }
+
+    /// Get the global ACME credential rotation lock
+    pub fn get_rotation_lock(&self) -> Option<CertRenewLock> {
+        self.persistent
+            .read()
+            .decode(keys::GLOBAL_ACME_ROTATION_LOCK)
+    }
+
+    /// Release the global ACME credential rotation lock
+    pub fn release_rotation_lock(&self) -> Result<()> {
+        self.persistent
+            .write()
+            .delete(keys::GLOBAL_ACME_ROTATION_LOCK.to_string())?;
         Ok(())
     }
 

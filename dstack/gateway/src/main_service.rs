@@ -450,10 +450,20 @@ impl Proxy {
                 .collect(),
         };
 
-        // Get account_uri, account_quote and account_attestation from global ACME attestation
-        let (account_uri, account_quote, account_attestation) = kv_store
-            .get_acme_attestation()
-            .map(|att| (att.account_uri, att.quote, att.attestation))
+        // The account URI comes from the published credentials; the attestation
+        // record is written best-effort and may lag behind a rotation, so it
+        // only supplies the quote when it matches the current account.
+        let attestation = kv_store.get_acme_attestation();
+        let account_uri = kv_store
+            .get_acme_credentials()
+            .and_then(|creds| {
+                crate::distributed_certbot::extract_account_uri(&creds.acme_credentials)
+            })
+            .or_else(|| attestation.as_ref().map(|att| att.account_uri.clone()))
+            .unwrap_or_default();
+        let (account_quote, account_attestation) = attestation
+            .filter(|att| att.account_uri == account_uri)
+            .map(|att| (att.quote, att.attestation))
             .unwrap_or_default();
 
         for domain in &domains {

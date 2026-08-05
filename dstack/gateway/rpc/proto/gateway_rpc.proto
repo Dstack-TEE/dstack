@@ -474,9 +474,14 @@ service Admin {
   rpc GetCertbotConfig(google.protobuf.Empty) returns (CertbotConfigResponse) {}
   // Set global certbot configuration (includes ACME URL)
   rpc SetCertbotConfig(SetCertbotConfigRequest) returns (google.protobuf.Empty) {}
-  // Create a new ACME account, update every ZT-domain CAA record, and then
-  // replace the shared credentials. Call only one gateway at a time because
-  // WaveKV does not provide compare-and-swap.
+  // Create a new ACME account, publish the shared credentials, and re-pin
+  // every ZT-domain CAA record to the new account. If CAA re-pinning fails for
+  // some domains, the new credentials are already published; rerun SetCaa
+  // until it succeeds instead of retrying the rotation (each rotation
+  // registers a new rate-limited ACME account). Rotation is serialized across
+  // nodes by a best-effort lock (WaveKV has no compare-and-swap), so still
+  // avoid rotating from multiple gateways concurrently. This re-pins issuance
+  // to the new account; it does not deactivate the old ACME account at the CA.
   rpc RotateAcmeCredentials(google.protobuf.Empty) returns (RotateAcmeCredentialsResponse) {}
 
   // ==================== Per-Instance Port Policy Override ====================
