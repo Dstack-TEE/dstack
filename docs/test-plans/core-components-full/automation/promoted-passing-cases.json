@@ -1018,7 +1018,8 @@
       "source_run": "central-fixtures-20260724T032131Z",
       "source_status": "PASS",
       "entrypoint": "automation/passed-vmm-reload-case.py",
-      "environment": "INTEGRATION"
+      "environment": "INTEGRATION",
+      "notes": "case-owned restart materializes one persisted stopped VM only after startup and verifies ReloadVms preserves its CID without double reservation, duplication, or auto-start"
     },
     {
       "case_id": "tc-vmm-vmm-001",

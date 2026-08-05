@@ -25,7 +25,7 @@
 
 ## Objective
 
-Verify reload and crash recovery across success, boundary, failure, security, and recovery conditions.
+Verify reload and crash recovery across success, boundary, failure, security, and recovery conditions, including reconstruction of a persisted VM that appears only after VMM startup without double-reserving its CID.
 
 ## Preconditions
 
@@ -50,11 +50,11 @@ Query the relevant health, configuration, and baseline state for reload and cras
 <a id="tc-vmm-vm-lifecyc-005-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Restart VMM with running, stopped, exited, partially-created, and stale workdirs.
+Create a stopped VM and record its CID, stop the case-owned VMM, temporarily stage the VM work directory outside the configured run path, and restart the VMM without that VM in memory. Restore the persisted work directory only after startup, invoke `Vmm.ReloadVms`, and exercise partially-created and stale workdirs.
 
 **Expected results:**
 
-- Reload reconstructs accurate state, reconciles stale resources, and does not duplicate or auto-start stopped VMs.
+- `ReloadVms` loads exactly one filesystem-only stopped VM, preserves its CID, and does not fail by reserving the newly allocated CID twice; reload also reconciles stale resources without duplication or auto-starting the stopped VM.
 
 <a id="tc-vmm-vm-lifecyc-005-step-03"></a>
 ### Step 3: Verify state, isolation, and diagnostics
