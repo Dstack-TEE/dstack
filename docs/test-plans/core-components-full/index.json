@@ -2099,7 +2099,7 @@
             },
             {
               "id": "tc-gos-observabil-003",
-              "title": "WireGuard configuration and checker recovery",
+              "title": "Gateway checker startup contract and WireGuard isolation",
               "order": 3,
               "priority": "P1",
               "path": "01-guest-os/09-observability-and-network/tc-gos-observabil-003",
@@ -2131,10 +2131,10 @@
                 "simulation_allowed": false
               },
               "actions_under_test": [
-                "WireGuard configuration and checker recovery"
+                "Gateway checker startup contract and WireGuard isolation"
               ],
               "execution": {
-                "entrypoint": "automation/wireguard-checker-recovery-case.py",
+                "entrypoint": "automation/gateway-checker-recovery-case.py",
                 "args": [],
                 "timeout_seconds": 300
               }

@@ -114,7 +114,7 @@ def main() -> int:
                 ssh_argv,
                 "systemctl show dstack-prepare.service dstack-guest-agent.service "
                 "dstack-guest-agent.socket docker.service containerd.service "
-                "app-compose.service wg-checker.service "
+                "app-compose.service dstack-gateway-checker.service "
                 "--property=Id,LoadState,ActiveState,Requires,Wants,After,Before,"
                 "OnFailure,FailureAction,Restart,WatchdogUSec,TimeoutStartUSec --no-pager",
             ).stdout
@@ -127,7 +127,7 @@ def main() -> int:
                 "Id=app-compose.service",
                 "docker.service",
                 "containerd.service",
-                "Id=wg-checker.service",
+                "Id=dstack-gateway-checker.service",
             )
             missing = [token for token in required_tokens if token not in graph]
             if missing:
@@ -155,7 +155,7 @@ def main() -> int:
                 {
                     "id": f"{CASE_ID}-step-01",
                     "status": "PASS",
-                    "observed": "Runtime unit properties contained the checked-in prepare failure action, guest-agent socket/watchdog/restart edges, app-compose Docker/containerd ordering, and wg-checker node; primary and peer identities were distinct and healthy.",
+                    "observed": "Runtime unit properties contained the checked-in prepare failure action, guest-agent socket/watchdog/restart edges, app-compose Docker/containerd ordering, and gateway-checker node; primary and peer identities were distinct and healthy.",
                 }
             )
             emit("step-01", "PASS")
