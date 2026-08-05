@@ -2372,7 +2372,7 @@
       "source_status": "PASS",
       "entrypoint": "automation/gateway-renew-zt-domain-case.py",
       "promoted_at": "2026-07-29T00:00:00Z",
-      "notes": "three-node case-owned Gateway cluster, Pebble, DNS API, and simulator exercise ACME account bootstrap, peer agreement, invalid-directory fail-closed behavior, recovery, primary restart persistence, authorization, isolation, and cleanup without retaining account credentials or URI bodies",
+      "notes": "three-node case-owned Gateway cluster, Pebble, DNS API, and simulator exercise ACME account bootstrap, authenticated credential rotation, account-bound issue/issuewild CAA re-pinning, cross-node convergence, unauthorized rejection, invalid-directory fail-closed behavior, recovery, primary restart persistence, isolation, and cleanup without retaining account credentials or URI bodies",
       "environment": "INTEGRATION"
     },
     {
