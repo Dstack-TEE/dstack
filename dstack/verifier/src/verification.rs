@@ -1330,6 +1330,108 @@ mod tests {
     }
 
     #[test]
+    fn gcp_and_nitro_enclave_measurement_bindings_matrix() {
+        let verifier = test_verifier();
+
+        let nitro_pcrs = NitroPcrs {
+            pcr0: vec![0x10; 48],
+            pcr1: vec![0x11; 48],
+            pcr2: vec![0x12; 48],
+        };
+        let nitro_config: VmConfig = serde_json::from_value(serde_json::json!({
+            "os_image_hash": hex::encode(nitro_pcrs.image_hash()),
+        }))
+        .unwrap();
+        verifier
+            .verify_os_image_hash_for_nitro_enclave(&nitro_config, &nitro_pcrs)
+            .unwrap();
+        let mut changed_nitro = nitro_pcrs.clone();
+        changed_nitro.pcr2[0] ^= 1;
+        assert!(verifier
+            .verify_os_image_hash_for_nitro_enclave(&nitro_config, &changed_nitro)
+            .is_err());
+        let debug_nitro = NitroPcrs {
+            pcr0: vec![0; 48],
+            pcr1: vec![0; 48],
+            pcr2: vec![0; 48],
+        };
+        assert!(verifier
+            .verify_os_image_hash_for_nitro_enclave(&nitro_config, &debug_nitro)
+            .is_err());
+
+        let uki_hash = vec![0x24; 32];
+        let measurement = dstack_types::GcpOsImageMeasurement::new(uki_hash.clone()).unwrap();
+        let measurement_bytes = measurement.to_cbor_vec();
+        let checksum_file = format!(
+            "{}  measurement.gcp.cbor\n",
+            hex::encode(Sha256::digest(&measurement_bytes))
+        )
+        .into_bytes();
+        let os_image_hash = dstack_types::image_hash_from_sha256sum(&checksum_file);
+        let gcp_config: VmConfig = serde_json::from_value(serde_json::json!({
+            "os_image_hash": hex::encode(os_image_hash),
+            "gcp_measurement": dstack_types::GcpOsImageMeasurementDocument::new(
+                checksum_file,
+                measurement_bytes,
+            ),
+        }))
+        .unwrap();
+        let expected_pcr0 =
+            hex!("0cca9ec161b09288802e5a112255d21340ed5b797f5fe29cecccfd8f67b9f802");
+        let gcp_quote = |pcr0: Vec<u8>, event_28: Vec<u8>| TpmQuote {
+            message: Vec::new(),
+            signature: Vec::new(),
+            pcr_values: vec![tpm_types::PcrValue {
+                index: 0,
+                algorithm: "sha256".into(),
+                value: pcr0,
+            }],
+            ak_cert: Vec::new(),
+            platform: dstack_types::Platform::Gcp,
+            event_log: vec![
+                tpm_types::TpmEvent {
+                    pcr_index: 2,
+                    digest: vec![1; 32],
+                },
+                tpm_types::TpmEvent {
+                    pcr_index: 2,
+                    digest: vec![2; 32],
+                },
+                tpm_types::TpmEvent {
+                    pcr_index: 2,
+                    digest: event_28,
+                },
+            ],
+        };
+        verifier
+            .verify_os_image_hash_for_gcp_tdx(
+                &gcp_config,
+                &gcp_quote(expected_pcr0.to_vec(), uki_hash.clone()),
+            )
+            .unwrap();
+        assert!(verifier
+            .verify_os_image_hash_for_gcp_tdx(
+                &gcp_config,
+                &gcp_quote(vec![0; 32], uki_hash.clone()),
+            )
+            .is_err());
+        assert!(verifier
+            .verify_os_image_hash_for_gcp_tdx(
+                &gcp_config,
+                &gcp_quote(expected_pcr0.to_vec(), vec![0; 32]),
+            )
+            .is_err());
+        let mut missing_document = gcp_config;
+        missing_document.gcp_measurement = None;
+        assert!(verifier
+            .verify_os_image_hash_for_gcp_tdx(
+                &missing_document,
+                &gcp_quote(expected_pcr0.to_vec(), uki_hash),
+            )
+            .is_err());
+    }
+
+    #[test]
     fn aws_os_image_check_requires_measurement() {
         let pcrs = aws_boot_pcrs(0x04);
         let mut vm_config = aws_vm_config(&pcrs);
