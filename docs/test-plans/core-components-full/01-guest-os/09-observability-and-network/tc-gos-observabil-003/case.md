@@ -25,8 +25,18 @@
   `dstack-wg0` every 10 seconds. It performs a non-forced
   `dstack-util gateway-refresh --work-dir <dir>` every 180 seconds; a latest
   handshake stale for 180 seconds, or no handshake continuously for 180
-  seconds, triggers the same command with `--force`. A refresh resets the stale
-  timer whether the command succeeds or fails.
+  seconds, triggers the same command with `--force`.
+- A peer that never handshaked reports `0` rather than a timestamp, so the
+  checker substitutes the time it first observed that state. Only an observed
+  handshake clears that timer. A refresh must not clear it: the loop interval,
+  the handshake timeout, and the refresh interval are such that a periodic
+  refresh would otherwise re-arm the timer one tick before it can expire, and
+  the forced path would be unreachable for exactly the peer that needs it.
+- `--force` is the only path that rebuilds a tunnel whose configuration is
+  unchanged, because gateway setup returns early on an unchanged config
+  otherwise. It is also the expensive path (interface teardown plus certificate
+  re-request), so it is rate limited to one attempt per handshake timeout while
+  the gateway stays unreachable.
 - The complete matrix requires an isolated gateway registration, WireGuard
   interface/configuration, controllable peer and clock/handshake inputs, DNS and
   routing observation, and permission to disrupt/recover the tunnel. Never
@@ -67,6 +77,8 @@ Register with gateway, apply wg.conf, disrupt the tunnel, and restore connectivi
 **Expected results:**
 
 - Addresses, peers, routes, DNS, handshake monitoring, and recovery converge without duplicate interfaces or leaked keys.
+- Under a uniform 10-second clock, a peer that never handshakes reaches a forced refresh rather than only periodic ones.
+- While the gateway stays unreachable, forced refreshes are rate limited to one per handshake timeout instead of one per loop iteration.
 
 <a id="tc-gos-observabil-003-step-03"></a>
 ### Step 3: Verify state, isolation, and diagnostics
