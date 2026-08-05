@@ -149,6 +149,24 @@ const PERIODIC: Refresh = Refresh {
 };
 
 impl Checker {
+    /// Build the starting state for a checker coming up at `now`.
+    ///
+    /// If the WireGuard config is already on disk, boot registered this CVM
+    /// moments ago: `/etc` is a volatile overlay, so the file can only exist
+    /// because *this* boot wrote it. Start the periodic clock from now instead
+    /// of re-registering immediately. Otherwise a fleet rebooting together
+    /// would hit the gateway with a second full round of registrations seconds
+    /// after the first — piling onto the component this checker exists to
+    /// tolerate the loss of. With no config, boot's registration failed and
+    /// recovering fast is the whole point, so leave the clock unset and act on
+    /// the first poll.
+    fn starting(now: i64, config_present: bool) -> Self {
+        Self {
+            last_attempt: config_present.then_some(now),
+            ..Self::default()
+        }
+    }
+
     /// Decide whether to refresh now. Pure: same state plus same observation
     /// always yields the same answer.
     fn decide(&mut self, obs: Observation) -> Option<Refresh> {
@@ -241,11 +259,23 @@ fn parse_latest_handshake(output: &str) -> Option<i64> {
         .max()
 }
 
+fn wg_config_present() -> bool {
+    Path::new(WG_CONFIG_PATH).exists()
+}
+
 fn observe(now: i64) -> Observation {
+    let config_present = wg_config_present();
     Observation {
         now,
-        config_present: Path::new(WG_CONFIG_PATH).exists(),
-        latest_handshake: latest_handshake(WG_INTERFACE),
+        config_present,
+        // Without a config the interface was never brought up, so there is no
+        // handshake to read and `decide` would not look at one anyway. Skipping
+        // the probe matters because that is precisely the state a gateway
+        // outage parks the CVM in: otherwise we would fork `wg` every poll for
+        // the entire outage to answer a question nobody asks.
+        latest_handshake: config_present
+            .then(|| latest_handshake(WG_INTERFACE))
+            .flatten(),
     }
 }
 
@@ -281,8 +311,9 @@ pub async fn cmd_gateway_checker(args: GatewayCheckerArgs) -> Result<()> {
     // config here means boot-time registration failed and already reported it,
     // so the first success owes the host a retraction. Assuming health instead
     // would leave that boot error on screen forever after we recover.
-    let mut reported_degraded = !Path::new(WG_CONFIG_PATH).exists();
-    let mut checker = Checker::default();
+    let config_present = wg_config_present();
+    let mut reported_degraded = !config_present;
+    let mut checker = Checker::starting(now_secs(), config_present);
     loop {
         let now = now_secs();
         if let Some(refresh) = checker.decide(observe(now)) {
@@ -291,19 +322,37 @@ pub async fn cmd_gateway_checker(args: GatewayCheckerArgs) -> Result<()> {
                 Ok(()) => {
                     info!("dstack-gateway refresh succeeded");
                     if reported_degraded {
-                        info!("dstack-gateway route restored; clearing the reported error");
-                        // Empty body resets the host's boot_error field.
-                        vmm.notify_q("boot.error", "").await;
-                        reported_degraded = false;
+                        // Flip the flag only once the host has actually taken
+                        // the retraction. notify_q swallows the error, so a
+                        // host-API blip would strand a stale gateway error on
+                        // the VMM for the life of the VM. Empty body resets
+                        // the host's boot_error field.
+                        match vmm.notify("boot.error", "").await {
+                            Ok(()) => {
+                                info!("dstack-gateway route restored; cleared the reported error");
+                                reported_degraded = false;
+                            }
+                            Err(error) => {
+                                warn!("failed to retract the gateway error: {error:#}");
+                            }
+                        }
                     }
                     true
                 }
                 Err(error) => {
                     warn!("dstack-gateway refresh failed: {error:#}");
                     if !reported_degraded {
-                        vmm.notify_q("boot.error", &gateway_unavailable_message(&error))
-                            .await;
-                        reported_degraded = true;
+                        // Same reasoning in reverse: a report the host never
+                        // received must be retried, not marked as delivered.
+                        match vmm
+                            .notify("boot.error", &gateway_unavailable_message(&error))
+                            .await
+                        {
+                            Ok(()) => reported_degraded = true,
+                            Err(error) => {
+                                warn!("failed to report the gateway outage: {error:#}");
+                            }
+                        }
                     }
                     false
                 }
@@ -337,6 +386,10 @@ mod tests {
     /// `handshake` maps elapsed seconds to what `wg show ... latest-handshakes`
     /// would report at that moment. Every refresh is treated as succeeding, so
     /// the counts isolate the decision logic from the backoff.
+    ///
+    /// Deliberately starts from `Checker::default()`, not `Checker::starting`:
+    /// the upstream harness began with `LAST_REFRESH=0`, so this reproduces its
+    /// cadence exactly. The startup grace period is covered separately.
     fn replay(duration: i64, handshake: impl Fn(i64) -> Option<i64>) -> (usize, usize) {
         let mut checker = Checker::default();
         let (mut forced, mut periodic) = (0, 0);
@@ -490,15 +543,40 @@ mod tests {
     }
 
     #[test]
-    fn acts_immediately_on_first_poll() {
-        let mut checker = Checker::default();
+    fn acts_immediately_when_boot_left_no_config() {
+        let mut checker = Checker::starting(T0, false);
         assert_eq!(checker.decide(obs(0, false, None)), Some(MISSING_CONFIG));
+    }
 
-        let mut checker = Checker::default();
+    /// Boot registers the CVM, then this checker starts. Re-registering right
+    /// away would double the gateway's registration load on every fleet reboot
+    /// for no gain, so a config that is already on disk starts the periodic
+    /// clock rather than triggering an immediate refresh.
+    #[test]
+    fn does_not_re_register_a_cvm_boot_just_registered() {
+        let mut checker = Checker::starting(T0, true);
+        assert_eq!(checker.decide(obs(0, true, Some(T0))), None);
+        assert_eq!(checker.decide(obs(170, true, Some(T0 + 170))), None);
         assert_eq!(
-            checker.decide(obs(0, true, None)),
+            checker.decide(obs(180, true, Some(T0 + 180))),
             Some(PERIODIC),
-            "an existing config needs no forced reapply"
+            "the periodic clock still runs from process start"
+        );
+    }
+
+    /// A checker that comes up with no config must not inherit the grace period
+    /// above: that state means boot's registration failed and the CVM has no
+    /// route at all.
+    #[test]
+    fn a_missing_config_overrides_the_startup_grace_period() {
+        let mut checker = Checker::starting(T0, false);
+        assert_eq!(checker.decide(obs(0, false, None)), Some(MISSING_CONFIG));
+        checker.record(T0, MISSING_CONFIG, true);
+        // Once it lands, the periodic clock takes over from the refresh.
+        assert_eq!(checker.decide(obs(10, true, Some(T0 + 10))), None);
+        assert_eq!(
+            checker.decide(obs(180, true, Some(T0 + 180))),
+            Some(PERIODIC)
         );
     }
 
