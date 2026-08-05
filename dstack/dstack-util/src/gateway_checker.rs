@@ -311,6 +311,11 @@ pub async fn cmd_gateway_checker(args: GatewayCheckerArgs) -> Result<()> {
     // config here means boot-time registration failed and already reported it,
     // so the first success owes the host a retraction. Assuming health instead
     // would leave that boot error on screen forever after we recover.
+    //
+    // Reporting is deliberately fire-and-forget. Tracking delivery would mean
+    // carrying a third state ("degraded, and the host may or may not know")
+    // through the loop to cover a host-API blip that the next refresh cycle
+    // already re-reports on the way in or out of the degraded state.
     let config_present = wg_config_present();
     let mut reported_degraded = !config_present;
     let mut checker = Checker::starting(now_secs(), config_present);
@@ -322,37 +327,19 @@ pub async fn cmd_gateway_checker(args: GatewayCheckerArgs) -> Result<()> {
                 Ok(()) => {
                     info!("dstack-gateway refresh succeeded");
                     if reported_degraded {
-                        // Flip the flag only once the host has actually taken
-                        // the retraction. notify_q swallows the error, so a
-                        // host-API blip would strand a stale gateway error on
-                        // the VMM for the life of the VM. Empty body resets
-                        // the host's boot_error field.
-                        match vmm.notify("boot.error", "").await {
-                            Ok(()) => {
-                                info!("dstack-gateway route restored; cleared the reported error");
-                                reported_degraded = false;
-                            }
-                            Err(error) => {
-                                warn!("failed to retract the gateway error: {error:#}");
-                            }
-                        }
+                        info!("dstack-gateway route restored; clearing the reported error");
+                        // Empty body resets the host's boot_error field.
+                        vmm.notify_q("boot.error", "").await;
+                        reported_degraded = false;
                     }
                     true
                 }
                 Err(error) => {
                     warn!("dstack-gateway refresh failed: {error:#}");
                     if !reported_degraded {
-                        // Same reasoning in reverse: a report the host never
-                        // received must be retried, not marked as delivered.
-                        match vmm
-                            .notify("boot.error", &gateway_unavailable_message(&error))
-                            .await
-                        {
-                            Ok(()) => reported_degraded = true,
-                            Err(error) => {
-                                warn!("failed to report the gateway outage: {error:#}");
-                            }
-                        }
+                        vmm.notify_q("boot.error", &gateway_unavailable_message(&error))
+                            .await;
+                        reported_degraded = true;
                     }
                     false
                 }
