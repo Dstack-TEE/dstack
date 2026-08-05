@@ -33,11 +33,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use cmd_lib::run_fun as cmd;
+use sd_notify::NotifyState;
 use tracing::{error, info, warn};
 
-use crate::system_setup::{
-    gateway_unavailable_message, GatewayRefresher, WG_CONFIG_PATH, WG_INTERFACE,
-};
+use crate::system_setup::{GatewayRefresher, WG_CONFIG_PATH, WG_INTERFACE};
 
 /// How often the loop samples the world.
 const POLL_INTERVAL: Duration = Duration::from_secs(10);
@@ -279,7 +278,45 @@ fn observe(now: i64) -> Observation {
     }
 }
 
+/// systemd liveness reporting, inert when the unit has no `WatchdogSec`.
+///
+/// The recovery paths in this loop only work while the loop runs, and nothing
+/// below it can guarantee that: a wedged refresh leaves a healthy-looking
+/// process that systemd will never restart. Handing liveness to systemd covers
+/// a hang wherever it comes from, including causes not anticipated here.
+struct Watchdog {
+    enabled: bool,
+}
+
+impl Watchdog {
+    /// Report readiness and arm the watchdog. Readiness is sent before the
+    /// checker decides whether it has anything to do, so the paths that exit
+    /// straight away are still a started service that then stopped, not a
+    /// service that failed to start.
+    fn arm() -> Self {
+        let mut usec = 0;
+        let enabled = sd_notify::watchdog_enabled(false, &mut usec);
+        if let Err(error) = sd_notify::notify(false, &[NotifyState::Ready]) {
+            warn!("failed to report readiness to systemd: {error}");
+        }
+        if enabled {
+            info!("systemd watchdog armed, timeout={usec}us");
+        }
+        Self { enabled }
+    }
+
+    fn ping(&self) {
+        if !self.enabled {
+            return;
+        }
+        if let Err(error) = sd_notify::notify(false, &[NotifyState::Watchdog]) {
+            warn!("failed to ping the systemd watchdog: {error}");
+        }
+    }
+}
+
 pub async fn cmd_gateway_checker(args: GatewayCheckerArgs) -> Result<()> {
+    let watchdog = Watchdog::arm();
     let refresher =
         GatewayRefresher::load(&args.work_dir).context("failed to load gateway configuration")?;
 
@@ -306,41 +343,33 @@ pub async fn cmd_gateway_checker(args: GatewayCheckerArgs) -> Result<()> {
     }
 
     info!("watching dstack-gateway registration");
-    let vmm = refresher.host_api();
-    // Seed from the observable world rather than assuming health: no WireGuard
-    // config here means boot-time registration failed and already reported it,
-    // so the first success owes the host a retraction. Assuming health instead
-    // would leave that boot error on screen forever after we recover.
-    //
-    // Reporting is deliberately fire-and-forget. Tracking delivery would mean
-    // carrying a third state ("degraded, and the host may or may not know")
-    // through the loop to cover a host-API blip that the next refresh cycle
-    // already re-reports on the way in or out of the degraded state.
-    let config_present = wg_config_present();
-    let mut reported_degraded = !config_present;
-    let mut checker = Checker::starting(now_secs(), config_present);
+    // The checker does not report gateway state to the host. Boot already
+    // reports the one signal that matters -- this CVM came up without a route
+    // -- and mirroring every later transition would mean tracking what the host
+    // has been told, which is state this loop should not have to carry. The
+    // consequence is that a boot error stays on the VMM after the checker
+    // recovers, until the VM restarts.
+    let mut checker = Checker::starting(now_secs(), wg_config_present());
     loop {
+        // Ping before the work, not after, so a refresh that never returns
+        // stops the pings. Nothing else can do this for us: a refresh spends
+        // most of its time in blocking `cmd!` shell-outs (`wg-quick up` alone
+        // resolves peer endpoints), which occupy a runtime worker with no await
+        // point. tokio::time::timeout cannot cancel that, and a watchdog task
+        // on another worker would happily keep pinging while this loop is
+        // wedged. Only the loop itself can prove the loop is alive.
+        watchdog.ping();
+
         let now = now_secs();
         if let Some(refresh) = checker.decide(observe(now)) {
             info!("refreshing dstack-gateway: {}", refresh.reason);
             let succeeded = match refresher.refresh(refresh.force).await {
                 Ok(()) => {
                     info!("dstack-gateway refresh succeeded");
-                    if reported_degraded {
-                        info!("dstack-gateway route restored; clearing the reported error");
-                        // Empty body resets the host's boot_error field.
-                        vmm.notify_q("boot.error", "").await;
-                        reported_degraded = false;
-                    }
                     true
                 }
                 Err(error) => {
                     warn!("dstack-gateway refresh failed: {error:#}");
-                    if !reported_degraded {
-                        vmm.notify_q("boot.error", &gateway_unavailable_message(&error))
-                            .await;
-                        reported_degraded = true;
-                    }
                     false
                 }
             };

@@ -4,8 +4,16 @@ After=network-online.target dstack-prepare.service
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=notify
 ExecStart=/bin/dstack-util gateway-checker --work-dir /dstack
+# Every recovery path in the checker only runs while its loop runs, and a loop
+# that wedges leaves a healthy-looking process systemd would never restart. The
+# loop pings the watchdog itself, so a hang anywhere -- including the blocking
+# wg-quick/iptables shell-outs a refresh performs, which no in-process timeout
+# can cancel -- gets the service killed and restarted. The timeout is generous
+# because one refresh may legitimately spend minutes across KMS certificate
+# requests and every configured gateway URL.
+WatchdogSec=600
 # The checker exits 0 when the app never enabled dstack-gateway, because there
 # is then nothing to supervise. Restart=always would respawn that exit forever.
 Restart=on-failure

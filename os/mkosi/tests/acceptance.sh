@@ -86,6 +86,12 @@ exit_code=$(sed -n 's/^const EXIT_MISCONFIGURED: i32 = \([0-9]\+\);$/\1/p' "$che
 [[ -n $exit_code ]] || { echo "cannot read EXIT_MISCONFIGURED from $checker_src"; exit 1; }
 grep -q "^RestartPreventExitStatus=${exit_code}\$" "$gw_unit" || {
   echo "dstack-gateway-checker.service must set RestartPreventExitStatus=$exit_code"; exit 1; }
+# The loop's recovery paths only run while the loop runs, so systemd has to be
+# the thing that notices a wedge. WatchdogSec is useless without Type=notify.
+grep -q '^Type=notify$' "$gw_unit" || {
+  echo 'dstack-gateway-checker.service must use Type=notify to arm the watchdog'; exit 1; }
+grep -q '^WatchdogSec=' "$gw_unit" || {
+  echo 'dstack-gateway-checker.service must set WatchdogSec'; exit 1; }
 test ! -e "$D/../common/rootfs/wg-checker.sh"
 test ! -e "$D/../common/rootfs/wg-checker.service"
 # systemd enables any unit that matches no preset rule, so the enable list is

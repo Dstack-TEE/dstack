@@ -1936,14 +1936,6 @@ impl Stage0<'_> {
     }
 }
 
-/// The message reported to the host while this CVM has no gateway route.
-///
-/// Boot and the gateway checker share it so the operator sees one consistent
-/// string no matter which of the two noticed the outage.
-pub fn gateway_unavailable_message(error: &anyhow::Error) -> String {
-    format!("dstack-gateway registration failed, the app has no ingress route: {error:#}")
-}
-
 /// Owns the inputs needed to (re)register this CVM with dstack-gateway.
 ///
 /// Loading is separated from refreshing so a long-running caller (the gateway
@@ -1972,14 +1964,6 @@ impl GatewayRefresher {
     /// Whether this app opted into dstack-gateway at all.
     pub fn gateway_enabled(&self) -> bool {
         self.shared.app_compose.gateway_enabled()
-    }
-
-    /// Client for reporting guest state back to the host.
-    pub fn host_api(&self) -> HostApi {
-        HostApi::new(
-            self.shared.sys_config.host_api_url.clone(),
-            self.shared.sys_config.collateral_urls().pccs,
-        )
     }
 
     /// Validate the parts of the gateway config that can never become valid by
@@ -2923,7 +2907,12 @@ impl Stage1<'_> {
             // visible from the VMM. The gateway checker clears this once it
             // manages to register.
             self.vmm
-                .notify_q("boot.error", &gateway_unavailable_message(&error))
+                .notify_q(
+                    "boot.error",
+                    &format!(
+                        "dstack-gateway registration failed, the app has no ingress route: {error:#}"
+                    ),
+                )
                 .await;
         }
         self.vmm
