@@ -479,6 +479,71 @@ def main() -> int:
                 if account_uris and account_uris[0]
                 else ""
             )
+            rotate_route = f"{base}/Admin.RotateAcmeCredentials"
+            unauthorized_rotate_code = SUPPORT.http_call(
+                rotate_route,
+                b"{}",
+                "application/json",
+                None,
+            )[0]
+            rotate_code, rotate_body = SUPPORT.rpc(
+                base, token, "Admin.RotateAcmeCredentials", {}
+            )
+            rotate_value = json.loads(rotate_body) if rotate_code == 200 else {}
+            rotated_uri = str(
+                rotate_value.get("account_uri", rotate_value.get("accountUri", ""))
+            )
+            domains_updated = int(
+                rotate_value.get(
+                    "domains_updated", rotate_value.get("domainsUpdated", 0)
+                )
+            )
+            rotated_values: list[dict[str, Any]] = []
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                rotated_values = []
+                for node in cluster_nodes:
+                    node_code, node_body = case_owned_public_rpc(
+                        f"{str(node['rpc_url']).rstrip('/')}/AcmeInfo"
+                    )
+                    node_value = json.loads(node_body) if node_code == 200 else {}
+                    rotated_values.append(
+                        {
+                            "code": node_code,
+                            "uri": node_value.get(
+                                "account_uri", node_value.get("accountUri", "")
+                            ),
+                        }
+                    )
+                if rotated_uri and all(
+                    row["code"] == 200 and row["uri"] == rotated_uri
+                    for row in rotated_values
+                ):
+                    break
+                time.sleep(0.2)
+            rotated_account_hash = (
+                hashlib.sha256(rotated_uri.encode()).hexdigest() if rotated_uri else ""
+            )
+            caa_rows = [
+                row
+                for row in state.snapshot()["zone-0"]
+                if row["type"] == "CAA" and row["name"].rstrip(".") == domain
+            ]
+            checks["acme_account_rotation"] = (
+                unauthorized_rotate_code == 401
+                and rotate_code == 200
+                and domains_updated == 1
+                and bool(rotated_uri)
+                and rotated_account_hash != baseline_account_hash
+                and len(rotated_values) >= 2
+                and all(row["uri"] == rotated_uri for row in rotated_values)
+                and any(rotated_uri in row["content"] for row in caa_rows)
+                and any(" issuewild " in row["content"] for row in caa_rows)
+                and all(
+                    row["content"] not in ('0 issue ";"', '0 issuewild ";"')
+                    for row in caa_rows
+                )
+            )
             invalid_config = {**configured_values, "acme_url": "http://127.0.0.1:1/dir"}
             invalid_config_code = SUPPORT.rpc(
                 base, token, "Admin.SetCertbotConfig", invalid_config
@@ -567,7 +632,7 @@ def main() -> int:
                 and restart_code == 200
                 and bool(restart_uri)
                 and hashlib.sha256(str(restart_uri).encode()).hexdigest()
-                == baseline_account_hash
+                == rotated_account_hash
             )
             account_public = {
                 "cluster_node_count": len(account_values),
@@ -578,6 +643,16 @@ def main() -> int:
                     bool(row["quote"]) for row in account_values
                 ),
                 "cluster_account_agreement": len(set(account_uris)) == 1,
+                "unauthorized_rotation_http": unauthorized_rotate_code,
+                "rotation_http": rotate_code,
+                "rotation_changed_account": bool(rotated_account_hash)
+                and rotated_account_hash != baseline_account_hash,
+                "rotation_domains_updated": domains_updated,
+                "rotation_cluster_converged": bool(rotated_uri)
+                and all(row["uri"] == rotated_uri for row in rotated_values),
+                "rotation_caa_re_pinned": any(
+                    rotated_uri in row["content"] for row in caa_rows
+                ),
                 "invalid_config_http": invalid_config_code,
                 "invalid_directory_http": invalid_directory_code,
                 "restore_config_http": restore_config_code,
@@ -586,7 +661,7 @@ def main() -> int:
                 "restart_http": restart_code,
                 "restart_account_matches": bool(restart_uri)
                 and hashlib.sha256(str(restart_uri).encode()).hexdigest()
-                == baseline_account_hash,
+                == rotated_account_hash,
             }
         distributed_public: dict[str, Any] = {}
         if CASE_ID == "tc-gw-certificat-002":
