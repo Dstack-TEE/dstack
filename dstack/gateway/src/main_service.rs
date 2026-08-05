@@ -456,6 +456,7 @@ impl Proxy {
         let attestation = kv_store.get_acme_attestation();
         let account_uri = kv_store
             .get_acme_credentials()
+            .context("call RotateAcmeCredentials to replace the stored ACME credentials")?
             .and_then(|creds| {
                 crate::distributed_certbot::extract_account_uri(&creds.acme_credentials)
             })

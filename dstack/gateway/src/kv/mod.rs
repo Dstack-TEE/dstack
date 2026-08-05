@@ -915,9 +915,24 @@ impl KvStore {
 
     // ==================== Global ACME Credentials ====================
 
-    /// Get global ACME credentials (shared across all domains)
-    pub fn get_acme_credentials(&self) -> Option<CertCredentials> {
-        self.persistent.read().decode(keys::GLOBAL_ACME_CREDENTIALS)
+    /// Get global ACME credentials (shared across all domains).
+    ///
+    /// Fails closed on a corrupt record: a missing or deleted key is
+    /// `Ok(None)`, but a stored value that no longer decodes is an error.
+    /// Treating corruption as absence would silently register a fresh ACME
+    /// account that the existing account-bound CAA records refuse.
+    pub fn get_acme_credentials(&self) -> Result<Option<CertCredentials>> {
+        let state = self.persistent.read();
+        let Some(entry) = state.get(keys::GLOBAL_ACME_CREDENTIALS) else {
+            return Ok(None);
+        };
+        // A `None` value is a tombstone: the key was deliberately deleted.
+        let Some(value) = entry.value.as_ref() else {
+            return Ok(None);
+        };
+        decode(value)
+            .map(Some)
+            .context("corrupt ACME credentials record in KvStore")
     }
 
     /// Save global ACME credentials
@@ -982,12 +997,16 @@ impl KvStore {
 
     /// Try to acquire the global ACME credential rotation lock.
     ///
+    /// Returns the lock value that was written; pass it back to
+    /// [`Self::release_rotation_lock`] so a rotation that outlived the timeout
+    /// cannot delete the lock of the node that took over.
+    ///
     /// Best-effort only: WaveKV is last-writer-wins without compare-and-swap,
     /// so two nodes can both acquire during a replication gap. This narrows the
     /// window for concurrent rotation from the full rotation duration to the
     /// replication latency; it is not mutual exclusion. A crashed holder is
     /// covered by the timeout.
-    pub fn try_acquire_rotation_lock(&self, lock_timeout_secs: u64) -> bool {
+    pub fn try_acquire_rotation_lock(&self, lock_timeout_secs: u64) -> Option<CertRenewLock> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -996,7 +1015,7 @@ impl KvStore {
         if let Some(existing) = self.get_rotation_lock() {
             // Check if lock is still valid (not expired)
             if now < existing.started_at + lock_timeout_secs {
-                return false;
+                return None;
             }
         }
 
@@ -1007,7 +1026,8 @@ impl KvStore {
         self.persistent
             .write()
             .put_encoded(keys::GLOBAL_ACME_ROTATION_LOCK.to_string(), &lock)
-            .is_ok()
+            .ok()?;
+        Some(lock)
     }
 
     /// Get the global ACME credential rotation lock
@@ -1017,8 +1037,25 @@ impl KvStore {
             .decode(keys::GLOBAL_ACME_ROTATION_LOCK)
     }
 
-    /// Release the global ACME credential rotation lock
-    pub fn release_rotation_lock(&self) -> Result<()> {
+    /// Release the global ACME credential rotation lock.
+    ///
+    /// Only deletes the lock when the currently visible value is the one that
+    /// `acquired` wrote: a rotation that outlived the lock timeout must not
+    /// delete the lock of the node that took over (which would let a third
+    /// rotation start concurrently). Like acquisition, the check is
+    /// best-effort under WaveKV's last-writer-wins replication.
+    pub fn release_rotation_lock(&self, acquired: &CertRenewLock) -> Result<()> {
+        if let Some(current) = self.get_rotation_lock() {
+            if current.started_by != acquired.started_by
+                || current.started_at != acquired.started_at
+            {
+                warn!(
+                    "not releasing ACME rotation lock: node {} took it over after this rotation exceeded the lock timeout",
+                    current.started_by
+                );
+                return Ok(());
+            }
+        }
         self.persistent
             .write()
             .delete(keys::GLOBAL_ACME_ROTATION_LOCK.to_string())?;
@@ -1094,6 +1131,58 @@ fn validate_peer_url(url: &str) -> Result<()> {
         "peer URL must not contain credentials"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod acme_credentials_tests {
+    use super::*;
+
+    fn test_kv(data_dir: &std::path::Path) -> KvStore {
+        KvStore::new(1, vec![], data_dir).expect("failed to create kv store")
+    }
+
+    #[test]
+    fn missing_and_deleted_credentials_are_absent_not_errors() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+        assert!(kv
+            .get_acme_credentials()
+            .expect("missing key should not error")
+            .is_none());
+
+        kv.save_acme_credentials(&CertCredentials {
+            acme_credentials: "{}".to_string(),
+        })
+        .expect("save should succeed");
+        kv.persistent
+            .write()
+            .delete(keys::GLOBAL_ACME_CREDENTIALS.to_string())
+            .expect("delete should succeed");
+        assert!(kv
+            .get_acme_credentials()
+            .expect("tombstone should not error")
+            .is_none());
+    }
+
+    #[test]
+    fn corrupt_credentials_record_fails_closed() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+        kv.persistent
+            .write()
+            .put(
+                keys::GLOBAL_ACME_CREDENTIALS.to_string(),
+                b"not-messagepack".to_vec(),
+            )
+            .expect("raw put should succeed");
+        let err = kv
+            .get_acme_credentials()
+            .expect_err("corrupt record must not read as absent");
+        assert!(
+            err.to_string().contains("corrupt ACME credentials"),
+            "unexpected error: {err}"
+        );
+    }
 }
 
 #[cfg(test)]
