@@ -40,11 +40,11 @@ Use a unique run-scoped identifier and non-production credentials.
 <a id="tc-gw-proxy-prot-005-step-01"></a>
 ### Step 1: Inspect the effective prerequisite
 
-Start a case-owned DNS authority, registered simulator identity, assigned address, Gateway listener, and backend without modifying the host resolver.
+Start two case-owned DNS authorities, registered simulator identity, assigned address, Gateway listener, and backend without modifying the host resolver. Configure the first authority to return `SERVFAIL` and the second to serve the app-address records.
 
 **Expected results:**
 
-- The target component is healthy, the intended listener and policy are effective, and the baseline contains no run-scoped test object.
+- The target component is healthy, both configured DNS servers receive queries, resolution fails over from the first authority to the second, and the baseline contains no run-scoped test object.
 
 <a id="tc-gw-proxy-prot-005-step-02"></a>
 ### Step 2: Exercise the behavior
