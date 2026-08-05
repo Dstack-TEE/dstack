@@ -30,8 +30,10 @@ const INTEL_QE_VENDOR_ID: [u8; 16] = [
 pub struct TdxGenerator {
     root: Certificate,
     root_signing_key: SigningKey,
+    pck_ca: Certificate,
     pck: Certificate,
     pck_key: SigningKey,
+    pck_crl: Vec<u8>,
     tcb_signer: Certificate,
     tcb_signer_key: SigningKey,
     qe_signer: Certificate,
@@ -88,12 +90,19 @@ impl TdxGenerator {
             },
             root_signing_key,
         ) = make_root(&seed)?;
+        let (pck_ca, pck_ca_key) = make_ca(
+            "Mock Intel SGX PCK Platform CA",
+            "tdx-pck-ca",
+            &seed,
+            &root,
+            &root_key,
+        )?;
         let (pck, pck_key) = make_leaf(
             "Mock Intel SGX PCK Certificate",
             "tdx-pck",
             &seed,
-            &root,
-            &root_key,
+            &pck_ca,
+            &pck_ca_key,
             true,
         )?;
         let (tcb_signer, tcb_signer_key) = make_leaf(
@@ -112,6 +121,17 @@ impl TdxGenerator {
             &root_key,
             false,
         )?;
+        let pck_crl = CertificateRevocationListParams {
+            this_update: fixed_time(MOCK_PKI_NOT_BEFORE)?,
+            next_update: fixed_time(MOCK_PKI_NOT_AFTER)?,
+            crl_number: SerialNumber::from(1u64),
+            issuing_distribution_point: None,
+            revoked_certs: Vec::new(),
+            key_identifier_method: KeyIdMethod::Sha256,
+        }
+        .signed_by(&pck_ca, &pck_ca_key)?
+        .der()
+        .to_vec();
         let root_crl = CertificateRevocationListParams {
             this_update: fixed_time(MOCK_PKI_NOT_BEFORE)?,
             next_update: fixed_time(MOCK_PKI_NOT_AFTER)?,
@@ -126,8 +146,10 @@ impl TdxGenerator {
         Ok(Self {
             root,
             root_signing_key,
+            pck_ca,
             pck,
             pck_key,
+            pck_crl,
             tcb_signer,
             tcb_signer_key,
             qe_signer,
@@ -155,6 +177,10 @@ impl TdxGenerator {
 
     pub fn root_crl_der(&self) -> Vec<u8> {
         self.root_crl.clone()
+    }
+
+    pub fn pck_crl_der(&self) -> Vec<u8> {
+        self.pck_crl.clone()
     }
 
     pub fn attest(&self, report_data: [u8; 64]) -> Result<TdxEvidence> {
@@ -207,7 +233,8 @@ impl TdxGenerator {
             .map_err(|bytes: Vec<u8>| anyhow::anyhow!("invalid QE report size {}", bytes.len()))?;
         let qe_sig: Signature = self.pck_key.sign(&qe_report_bytes);
 
-        let pck_chain = format!("{}{}", self.pck.pem(), self.root.pem()).into_bytes();
+        let pck_chain =
+            format!("{}{}{}", self.pck.pem(), self.pck_ca.pem(), self.root.pem()).into_bytes();
         let qe_certification = QEReportCertificationData {
             qe_report: qe_report_bytes,
             qe_report_signature: qe_sig.to_bytes().into(),
@@ -287,9 +314,9 @@ impl TdxGenerator {
             "isvprodid":1, "tcbLevels":[{"tcb":{"isvsvn":1},"tcbDate":issue,"tcbStatus":"UpToDate"}]
         }).to_string();
         Ok(QuoteCollateralV3 {
-            pck_crl_issuer_chain: self.root.pem(),
+            pck_crl_issuer_chain: format!("{}{}", self.pck_ca.pem(), self.root.pem()),
             root_ca_crl: self.root_crl.clone(),
-            pck_crl: self.root_crl.clone(),
+            pck_crl: self.pck_crl.clone(),
             tcb_info_issuer_chain: format!("{}{}", self.tcb_signer.pem(), self.root.pem()),
             tcb_info_signature: sign_raw(&self.tcb_signer_key, tcb_info.as_bytes())?,
             tcb_info,
@@ -320,6 +347,25 @@ fn make_root(seed: &[u8; 32]) -> Result<(CertifiedKey, SigningKey)> {
     ]);
     let cert = params.self_signed(&key_pair)?;
     Ok((CertifiedKey { cert, key_pair }, signing_key))
+}
+
+fn make_ca(
+    name: &str,
+    label: &str,
+    seed: &[u8; 32],
+    issuer: &Certificate,
+    issuer_key: &KeyPair,
+) -> Result<(Certificate, KeyPair)> {
+    let (key, _) = deterministic_key_pair(seed, label)?;
+    let mut params = cert_params(name)?;
+    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    params.key_usages.extend([
+        KeyUsagePurpose::DigitalSignature,
+        KeyUsagePurpose::KeyCertSign,
+        KeyUsagePurpose::CrlSign,
+    ]);
+    let cert = params.signed_by(&key, issuer, issuer_key)?;
+    Ok((cert, key))
 }
 
 fn make_leaf(
