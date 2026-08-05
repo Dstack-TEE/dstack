@@ -111,6 +111,7 @@ def main() -> int:
     created_id = ""
     replacement: subprocess.Popen[bytes] | None = None
     injected: list[pathlib.Path] = []
+    staged_workdir: pathlib.Path | None = None
     status = "PASS"
     failure = ""
 
@@ -176,6 +177,9 @@ def main() -> int:
         matching = [vm for vm in before_restart if vm.get("id") == created_id]
         if len(matching) != 1 or matching[0].get("status") != "stopped":
             raise AssertionError("created VM is not uniquely stopped")
+        original_cid = matching[0].get("cid")
+        if original_cid is None:
+            raise AssertionError("created VM has no assigned CID")
         run_path = pathlib.Path(vmm["run_path"])
         for suffix in ("stale-workdir", "partial-create"):
             path = run_path / f"{prefix}-{suffix}"
@@ -193,6 +197,11 @@ def main() -> int:
             time.sleep(0.1)
         else:
             raise TimeoutError("case-owned VMM did not stop")
+        vm_workdir = run_path / created_id
+        staged_workdir = run_path.parent / f".{created_id}.reload-staged"
+        if staged_workdir.exists():
+            raise AssertionError("run-scoped reload staging path already exists")
+        vm_workdir.replace(staged_workdir)
         prepared = values["prepared_binaries"]
         binary = (
             prepared.get("dstack_vmm")
@@ -211,6 +220,11 @@ def main() -> int:
             start_new_session=True,
         )
         wait_rpc(vmm["rpc_url"], routes["Version"])
+        # Materialize the persisted VM only after startup. ReloadVms must take
+        # the filesystem-only path: allocate() reserves its CID, so a second
+        # occupy() would reject the same CID and leave the VM unloaded.
+        staged_workdir.replace(vm_workdir)
+        staged_workdir = None
         reload_result = rpc(vmm["rpc_url"], routes["ReloadVms"], {})
         after_restart = parse_vms(run(list(vmm["commands"]["list_vms"])))
         matching = [vm for vm in after_restart if vm.get("id") == created_id]
@@ -218,25 +232,30 @@ def main() -> int:
             raise AssertionError("ReloadVms failed after restart")
         if len(matching) != 1 or matching[0].get("status") != "stopped":
             raise AssertionError("reload duplicated or auto-started the stopped VM")
+        if matching[0].get("cid") != original_cid:
+            raise AssertionError("filesystem-only reload changed the VM CID")
         behavior = {
             "created_id": created_id,
+            "original_cid": original_cid,
             "before_status": "stopped",
             "reload": reload_result,
             "after_status": matching[0].get("status"),
+            "after_cid": matching[0].get("cid"),
             "after_count": len(matching),
+            "filesystem_only_at_reload": True,
             "injected_workdir_count": len(injected),
         }
         record(
             "step02-reload-recovery.json",
             step_ids[1],
             behavior,
-            "Stopped-VM reconstruction and stale/partial workdir recovery across a case-owned VMM restart.",
+            "Filesystem-only stopped-VM reconstruction with stable CID and stale/partial workdir recovery across a case-owned VMM restart.",
         )
         steps.append(
             {
                 "id": step_ids[1],
                 "status": "PASS",
-                "observed": "Restart and ReloadVms reconstructed one stopped VM without duplication or auto-start.",
+                "observed": "ReloadVms reconstructed one filesystem-only stopped VM with its CID reserved exactly once, without duplication or auto-start.",
             }
         )
         print(f"STEP {step_ids[1]} END - PASS", flush=True)
@@ -290,6 +309,12 @@ def main() -> int:
             )
         print(f"STEP {step_ids[min(current, 2)]} END - FAIL", flush=True)
     finally:
+        if staged_workdir is not None and staged_workdir.exists() and created_id:
+            try:
+                staged_workdir.replace(pathlib.Path(vmm["run_path"]) / created_id)
+                staged_workdir = None
+            except Exception:
+                pass
         if created_id:
             try:
                 rpc(vmm["rpc_url"], routes["RemoveVm"], {"id": created_id})
