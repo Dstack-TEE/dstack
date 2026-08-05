@@ -214,7 +214,7 @@ ca_certs = "$CERTS_DIR/gateway-ca.cert"
 mandatory = false
 
 [core]
-rpc_domain = "$GATEWAY_DOMAIN"
+rpc_domain = ""
 
 [core.sync]
 enabled = false
