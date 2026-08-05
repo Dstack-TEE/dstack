@@ -75,6 +75,7 @@ impl CertStore {
     }
 
     /// Get certificate data for a domain
+    #[cfg(test)]
     pub fn get_cert_data(&self, domain: &str) -> Option<&CertData> {
         self.cert_data.get(domain)
     }
@@ -172,19 +173,9 @@ impl CertResolver {
 
         let old_store = self.get();
 
-        // Build new store with all existing certs plus the new/updated one
-        let mut builder = CertStoreBuilder::new();
-
-        // Copy existing certs (except the one we're replacing)
-        for existing_domain in old_store.list_domains() {
-            if existing_domain != domain {
-                if let Some(existing_data) = old_store.get_cert_data(&existing_domain) {
-                    builder.add_cert(&existing_domain, existing_data)?;
-                }
-            }
-        }
-
-        // Add the new/updated cert
+        // Clone the installed store without revalidating existing certificates. An expired
+        // certificate for one domain must not block another domain from being renewed.
+        let mut builder = CertStoreBuilder::from_store(&old_store);
         builder.add_cert(domain, data)?;
 
         // Atomically swap
@@ -233,11 +224,25 @@ impl CertStoreBuilder {
         }
     }
 
+    fn from_store(store: &CertStore) -> Self {
+        Self {
+            exact_certs: store.exact_certs.clone(),
+            wildcard_certs: store.wildcard_certs.clone(),
+            cert_data: store.cert_data.clone(),
+        }
+    }
+
     /// Add a certificate to the builder
     ///
     /// The domain is the base domain (e.g., "example.com").
     /// All gateway certificates are wildcard certs for "*.{domain}".
     pub fn add_cert(&mut self, domain: &str, data: &CertData) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .context("system time is before Unix epoch")?
+            .as_secs();
+        anyhow::ensure!(data.not_after > now, "certificate is expired");
+
         let certified_key = parse_certified_key(&data.cert_pem, &data.key_pem)
             .with_context(|| format!("failed to parse certificate for {}", domain))?;
 
@@ -467,6 +472,53 @@ mod tests {
                 .expect("original certificate was lost")
                 .not_after,
             original_not_after
+        );
+        assert!(resolver.get().has_cert_for_sni("app.example.com"));
+    }
+
+    #[test]
+    fn expired_certificate_does_not_block_another_domain_update() {
+        let mut builder = CertStoreBuilder::new();
+        builder
+            .add_cert("expired.example.com", &make_test_cert_data())
+            .expect("failed to install initial certificate");
+        builder
+            .cert_data
+            .get_mut("expired.example.com")
+            .expect("installed certificate is missing")
+            .not_after = 1;
+
+        let resolver = CertResolver::new();
+        resolver.set(Arc::new(builder.build()));
+        resolver
+            .update_cert("fresh.example.com", &make_test_cert_data())
+            .expect("expired certificate blocked an unrelated update");
+
+        assert!(resolver.get().has_cert("expired.example.com"));
+        assert!(resolver.get().has_cert("fresh.example.com"));
+    }
+
+    #[test]
+    fn expired_update_retains_previous_certificate() {
+        let original = make_test_cert_data();
+        let mut expired = make_test_cert_data();
+        expired.not_after = 1;
+
+        let resolver = CertResolver::new();
+        resolver
+            .update_cert("example.com", &original)
+            .expect("failed to install original certificate");
+        resolver
+            .update_cert("example.com", &expired)
+            .expect_err("expired certificate must be rejected");
+
+        assert_eq!(
+            resolver
+                .get()
+                .get_cert_data("example.com")
+                .expect("original certificate was lost")
+                .not_after,
+            original.not_after
         );
         assert!(resolver.get().has_cert_for_sni("app.example.com"));
     }
