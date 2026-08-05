@@ -7,6 +7,7 @@
 HANDSHAKE_TIMEOUT=180
 REFRESH_INTERVAL=180
 LAST_REFRESH=0
+LAST_FORCE=0
 STALE_SINCE=0
 DSTACK_WORK_DIR=${DSTACK_WORK_DIR:-/dstack}
 IFNAME=dstack-wg0
@@ -39,7 +40,6 @@ do_refresh() {
     fi
 
     LAST_REFRESH=$now
-    STALE_SINCE=0
 }
 
 check_and_refresh() {
@@ -49,29 +49,41 @@ check_and_refresh() {
 
     now=$(date +%s)
 
-    # Periodic refresh every REFRESH_INTERVAL seconds (not forced)
-    if [ "$LAST_REFRESH" -eq 0 ] || [ $((now - LAST_REFRESH)) -ge $REFRESH_INTERVAL ]; then
-        do_refresh "$now" "Periodic refresh" 0
-        return
-    fi
-
-    # Check handshake staleness (forced refresh)
     latest=$(get_latest_handshake)
     if [ -z "$latest" ]; then
         latest=0
     fi
 
+    # A peer that never completed a handshake reports 0, so there is no
+    # timestamp to age against; fall back to when we first observed that state.
+    # STALE_SINCE is cleared only by an actual handshake, never by a refresh:
+    # since HANDSHAKE_TIMEOUT equals REFRESH_INTERVAL, clearing it on every
+    # periodic refresh re-arms the timer one tick before it can expire, leaving
+    # the forced branch unreachable for a peer that never handshakes.
     if [ "$latest" -gt 0 ]; then
-        if [ $((now - latest)) -ge $HANDSHAKE_TIMEOUT ]; then
-            do_refresh "$now" "WireGuard handshake stale" 1 >&2
-        fi
+        STALE_SINCE=0
+        stale_for=$((now - latest))
     else
         if [ "$STALE_SINCE" -eq 0 ]; then
             STALE_SINCE=$now
         fi
-        if [ $((now - STALE_SINCE)) -ge $HANDSHAKE_TIMEOUT ]; then
+        stale_for=$((now - STALE_SINCE))
+    fi
+
+    # Forced refresh bounces the interface and re-requests certificates, so cap
+    # it at one attempt per HANDSHAKE_TIMEOUT. Without this, a gateway that
+    # stays unreachable would be retried on every 10s tick.
+    if [ "$stale_for" -ge $HANDSHAKE_TIMEOUT ]; then
+        if [ $((now - LAST_FORCE)) -ge $HANDSHAKE_TIMEOUT ]; then
             do_refresh "$now" "WireGuard handshake stale" 1 >&2
+            LAST_FORCE=$now
         fi
+        return
+    fi
+
+    # Periodic refresh every REFRESH_INTERVAL seconds (not forced).
+    if [ "$LAST_REFRESH" -eq 0 ] || [ $((now - LAST_REFRESH)) -ge $REFRESH_INTERVAL ]; then
+        do_refresh "$now" "Periodic refresh" 0
     fi
 }
 
