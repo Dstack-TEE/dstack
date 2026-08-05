@@ -22,7 +22,7 @@ use ra_rpc::client::RaClient;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -301,8 +301,9 @@ impl App {
         self.config.run_path.clone()
     }
 
-    pub(crate) fn work_dir(&self, id: &str) -> VmWorkDir {
-        VmWorkDir::new(self.config.run_path.join(id))
+    pub(crate) fn work_dir(&self, id: &str) -> Result<VmWorkDir> {
+        validate_vm_id(id)?;
+        Ok(VmWorkDir::new(self.config.run_path.join(id)))
     }
 
     pub fn new(config: Config, supervisor: SupervisorClient) -> Self {
@@ -411,7 +412,7 @@ impl App {
             vm_state.config.clone()
         };
         if !is_running {
-            let work_dir = self.work_dir(id);
+            let work_dir = self.work_dir(id)?;
             for path in [work_dir.serial_pty(), work_dir.qmp_socket()] {
                 if path.symlink_metadata().is_ok() {
                     fs::remove_file(path)?;
@@ -456,7 +457,7 @@ impl App {
     }
 
     fn set_started(&self, id: &str, started: bool) -> Result<()> {
-        let work_dir = self.work_dir(id);
+        let work_dir = self.work_dir(id)?;
         work_dir
             .set_started(started)
             .context("Failed to set started")
@@ -468,7 +469,7 @@ impl App {
         Ok(())
     }
 
-    async fn stop_vm_process(&self, id: &str) -> Result<()> {
+    pub(crate) async fn stop_vm_process(&self, id: &str) -> Result<()> {
         let Some(info) = self.supervisor.info(id).await? else {
             return Ok(());
         };
@@ -514,7 +515,7 @@ impl App {
         }
 
         // Persist the removing marker so crash recovery can resume
-        let work_dir = self.work_dir(id);
+        let work_dir = self.work_dir(id)?;
         if let Err(err) = work_dir.set_removing() {
             warn!("failed to write .removing marker for {id}: {err:?}");
         }
@@ -576,7 +577,7 @@ impl App {
 
         // Only delete the workdir for user-initiated removal or if .removing marker exists.
         // Orphaned supervisor processes without the marker keep their data intact.
-        let vm_path = self.work_dir(id);
+        let vm_path = self.work_dir(id)?;
         if delete_workdir || vm_path.is_removing() {
             if vm_path.path().exists() {
                 if let Err(err) = fs::remove_dir_all(&vm_path) {
@@ -643,8 +644,13 @@ impl App {
             .collect::<HashMap<_, _>>();
         {
             let mut state = self.lock();
-            for cid in occupied_cids.values() {
-                state.cid_pool.occupy(*cid)?;
+            for (vm_id, cid) in occupied_cids.iter() {
+                // These CIDs come from processes that are already running, not
+                // from the pool, so a CID left over from an earlier cid_start /
+                // cid_pool_size must not stop the VMM from starting.
+                if let Err(err) = state.cid_pool.occupy(*cid) {
+                    warn!(id = %vm_id, "not tracking cid {cid} in the pool: {err}");
+                }
             }
         }
 
@@ -715,13 +721,20 @@ impl App {
             .flat_map(|(id, p)| p.config.cid.map(|cid| (id.clone(), cid)))
             .collect::<HashMap<_, _>>();
 
-        // Update CID pool with running VMs
+        // Rebuild the CID pool from every CID that is still spoken for
         {
             let mut state = self.lock();
-            // First clear the pool and re-occupy running VM CIDs
+            let reserved = cids_to_reserve(
+                &occupied_cids,
+                state.vms.iter().map(|(id, vm)| (id.clone(), vm.config.cid)),
+            );
             state.cid_pool.clear();
-            for cid in occupied_cids.values() {
-                state.cid_pool.occupy(*cid)?;
+            for (cid, vm_id) in reserved {
+                // Same as in reload_vms(): an out-of-range CID from an earlier
+                // configuration is reported, not fatal.
+                if let Err(err) = state.cid_pool.occupy(cid) {
+                    warn!(id = %vm_id, "not tracking cid {cid} in the pool: {err}");
+                }
             }
         }
 
@@ -884,10 +897,7 @@ impl App {
                     vm.state = old_state; // Preserve the existing state with statistics
                 }
                 None => {
-                    // This is a new VM, need to occupy its CID if it wasn't allocated
-                    if !cids_assigned.contains_key(&vm_id) {
-                        states.cid_pool.occupy(cid)?;
-                    }
+                    // Assigned CIDs were occupied above, while allocate() reserves a new CID.
                     let mut vm_state = VmState::new(vm_config);
                     vm_state.state.runtime_networks = runtime_networks;
                     states.add(vm_state);
@@ -945,13 +955,11 @@ impl App {
         let total = infos.len() as u32;
         let vms = paginate(infos, request.page, request.page_size)
             .map(|vm| {
-                vm.merged_info(
-                    vms.get(&vm.config.manifest.id),
-                    &self.work_dir(&vm.config.manifest.id),
-                )
+                let work_dir = self.work_dir(&vm.config.manifest.id)?;
+                let info = vm.merged_info(vms.get(&vm.config.manifest.id), &work_dir);
+                Ok(info.to_pb(&self.config.gateway, &self.config.cvm, request.brief))
             })
-            .map(|info| info.to_pb(&self.config.gateway, &self.config.cvm, request.brief))
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         Ok(StatusResponse {
             vms,
             port_mapping_enabled: self.config.cvm.port_mapping.enabled,
@@ -978,7 +986,7 @@ impl App {
             return Ok(None);
         };
         let info = vm_state
-            .merged_info(proc_state.as_ref(), &self.work_dir(id))
+            .merged_info(proc_state.as_ref(), &self.work_dir(id)?)
             .to_pb(&self.config.gateway, &self.config.cvm, false);
         Ok(Some(info))
     }
@@ -1029,20 +1037,21 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn compose_file_path(&self, id: &str) -> PathBuf {
-        self.shared_dir(id).join(APP_COMPOSE)
+    pub(crate) fn compose_file_path(&self, id: &str) -> Result<PathBuf> {
+        Ok(self.shared_dir(id)?.join(APP_COMPOSE))
     }
 
-    pub(crate) fn encrypted_env_path(&self, id: &str) -> PathBuf {
-        self.shared_dir(id).join(ENCRYPTED_ENV)
+    pub(crate) fn encrypted_env_path(&self, id: &str) -> Result<PathBuf> {
+        Ok(self.shared_dir(id)?.join(ENCRYPTED_ENV))
     }
 
-    pub(crate) fn user_config_path(&self, id: &str) -> PathBuf {
-        self.shared_dir(id).join(USER_CONFIG)
+    pub(crate) fn user_config_path(&self, id: &str) -> Result<PathBuf> {
+        Ok(self.shared_dir(id)?.join(USER_CONFIG))
     }
 
-    pub(crate) fn shared_dir(&self, id: &str) -> PathBuf {
-        self.config.run_path.join(id).join("shared")
+    pub(crate) fn shared_dir(&self, id: &str) -> Result<PathBuf> {
+        validate_vm_id(id)?;
+        Ok(self.config.run_path.join(id).join("shared"))
     }
 
     pub(crate) fn prepare_work_dir(
@@ -1051,7 +1060,7 @@ impl App {
         req: &VmConfiguration,
         app_id: &str,
     ) -> Result<VmWorkDir> {
-        let work_dir = self.work_dir(id);
+        let work_dir = self.work_dir(id)?;
         let shared_dir = work_dir.join("shared");
         fs::create_dir_all(&shared_dir).context("Failed to create shared directory")?;
         fs::write(shared_dir.join(APP_COMPOSE), &req.compose_file)
@@ -1078,32 +1087,17 @@ impl App {
     }
 
     pub(crate) fn sync_dynamic_config(&self, id: &str) -> Result<()> {
-        let work_dir = self.work_dir(id);
-        let shared_dir = self.shared_dir(id);
+        let work_dir = self.work_dir(id)?;
+        let shared_dir = self.shared_dir(id)?;
         let manifest = work_dir.manifest().context("Failed to read manifest")?;
         let cfg = &self.config;
         let compose_hash = sha256_file(shared_dir.join(APP_COMPOSE))?;
-        let platform = cfg.cvm.resolved_platform();
         let app_compose = work_dir
             .app_compose()
             .context("Failed to get app compose")?;
-        let use_mr_config_v3 = !manifest.no_tee
-            && (platform == crate::config::CvmPlatform::AmdSevSnp
-                || (platform == crate::config::CvmPlatform::Tdx
-                    && cfg.cvm.use_mrconfigid
-                    && !app_compose.key_provider_id.is_empty()));
-        let mr_config = if use_mr_config_v3 {
-            Some(
-                work_dir
-                    .prepare_mr_config_v3(
-                        &app_compose,
-                        manifest.gpus.as_ref().is_some_and(GpuConfig::has_gpus),
-                    )
-                    .context("Failed to prepare mr_config")?,
-            )
-        } else {
-            None
-        };
+        let mr_config = work_dir
+            .prepare_mr_config(&manifest, &cfg.cvm, &app_compose)
+            .context("Failed to prepare mr_config")?;
         let sys_config_str = make_sys_config(
             cfg,
             &manifest,
@@ -1178,7 +1172,10 @@ impl App {
                 if vm.state.removing {
                     return false;
                 }
-                let workdir = self.work_dir(&vm.config.manifest.id);
+                let Ok(workdir) = self.work_dir(&vm.config.manifest.id) else {
+                    warn!(id = %vm.config.manifest.id, "skipping restart: invalid VM id");
+                    return false;
+                };
                 let started = workdir.started().unwrap_or(false);
                 started && !running_vms.contains(&vm.config.manifest.id)
             })
@@ -1328,6 +1325,11 @@ pub(crate) fn make_sys_config(
         "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
         "vm_config": serde_json::to_string(&vm_config)?,
     });
+    // No attestation trust anchor is ever written here. Simulated deployments
+    // receive only the development seed through `.tee-simulator.json`; the
+    // in-guest simulator derives the matching roots itself and publishes them
+    // to the guest verifier. A host cannot be allowed to choose the root that
+    // authenticates the guest's key provider.
     if let Some(mr_config) = mr_config {
         MrConfigV3::from_document(&mr_config).context("Invalid mr_config document")?;
         sys_config["mr_config"] = serde_json::to_value(mr_config)?;
@@ -1394,6 +1396,9 @@ fn make_vm_config(
     let platform = cfg.cvm.resolved_platform();
     let is_amd_sev_snp = platform == crate::config::CvmPlatform::AmdSevSnp && !manifest.no_tee;
     let is_tdx = platform == crate::config::CvmPlatform::Tdx && !manifest.no_tee;
+    let is_gcp_tdx = manifest.simulated_tee == Some(dstack_types::TeeVariant::DstackGcpTdx);
+    let is_aws_nitro_tpm =
+        manifest.simulated_tee == Some(dstack_types::TeeVariant::DstackAwsNitroTpm);
     let tdx_attestation_variant = if is_tdx {
         tdx_attestation_variant_from_requirements(requirements).unwrap_or_else(|| {
             cfg.cvm
@@ -1413,12 +1418,12 @@ fn make_vm_config(
         .and_then(|d| hex::decode(d).ok())
         .unwrap_or_default();
     // Attach the lite measurement material whenever the image provides it,
-    // regardless of the resolved attestation variant: the guest's exposed
-    // event log always retains the RTMR0 ACPI digest events (see
-    // cc_eventlog::tdx::label_tdx_acpi_data_events), so a verifier can freely
-    // choose lite verification for a legacy-resolved boot too.
-    // `tdx_attestation_variant` keeps its original meaning of "the scheme the
-    // VMM/KMS resolved for this boot" and is unaffected by this.
+    // regardless of the resolved attestation variant, so the config shape stays
+    // uniform across images. It does not widen how the boot is verified:
+    // verifiers select the path from `tdx_attestation_variant` alone, and a
+    // legacy-resolved boot is verified through the image download even with the
+    // document attached. `tdx_attestation_variant` keeps its original meaning of
+    // "the scheme the VMM/KMS resolved for this boot".
     let tdx_measurement = if is_tdx {
         if tdx_attestation_variant.is_lite() {
             Some(image.tdx_measurement.clone().context(
@@ -1444,6 +1449,24 @@ fn make_vm_config(
     let num_nics = resolved_networks(manifest, &cfg.cvm).len() as u32;
     let num_verity_volumes = manifest.volumes.len() as u32;
     let swtpm = manifest.swtpm;
+    let gcp_measurement = if is_gcp_tdx {
+        Some(
+            image
+                .gcp_measurement
+                .clone()
+                .context("GCP TDX image is missing measurement.gcp.cbor measurement material")?,
+        )
+    } else {
+        None
+    };
+    let aws_measurement =
+        if is_aws_nitro_tpm {
+            Some(image.aws_measurement.clone().context(
+                "AWS NitroTPM image is missing measurement.aws.cbor measurement material",
+            )?)
+        } else {
+            None
+        };
     let mut config = serde_json::to_value(dstack_types::VmConfig {
         os_image_hash,
         cpu_count: effective_vcpus,
@@ -1464,8 +1487,8 @@ fn make_vm_config(
         ovmf_variant: image.info.ovmf_variant,
         tdx_attestation_variant,
         tdx_measurement,
-        gcp_measurement: None,
-        aws_measurement: None,
+        gcp_measurement,
+        aws_measurement,
     })?;
     // For backward compatibility
     config["spec_version"] = serde_json::Value::from(1);
@@ -1502,7 +1525,35 @@ pub(crate) fn needs_swtpm(
 
 #[cfg(test)]
 mod tests {
+    use super::mr_config::{mr_config_version, MrConfigVersion};
     use super::*;
+
+    #[test]
+    fn accepts_server_generated_ids() {
+        validate_vm_id(&uuid::Uuid::new_v4().to_string()).unwrap();
+        validate_vm_id("3f2504e0-4f89-41d3-9a0c-0305e82c3301").unwrap();
+        validate_vm_id("vm_1-A").unwrap();
+    }
+
+    #[test]
+    fn rejects_ids_that_would_escape_run_path() {
+        for id in [
+            "",
+            "..",
+            "../../etc",
+            "/etc/passwd",
+            "a/b",
+            "a\\b",
+            "vm id",
+            ".",
+            "\0",
+            "café",
+        ] {
+            assert!(validate_vm_id(id).is_err(), "should reject {id:?}");
+        }
+        assert!(validate_vm_id(&"a".repeat(65)).is_err());
+    }
+
     use crate::config::{
         load_config_figment, CvmPlatform, Networking, NetworkingMode, TdxAttestationVariantConfig,
     };
@@ -1512,6 +1563,55 @@ mod tests {
     };
     use rocket::figment::Figment;
     use std::time::UNIX_EPOCH;
+
+    fn reserve(running: &[(&str, u32)], in_memory: &[(&str, u32)]) -> Vec<(u32, String)> {
+        let running: HashMap<String, u32> = running
+            .iter()
+            .map(|(id, cid)| (id.to_string(), *cid))
+            .collect();
+        cids_to_reserve(
+            &running,
+            in_memory.iter().map(|(id, cid)| (id.to_string(), *cid)),
+        )
+        .into_iter()
+        .collect()
+    }
+
+    #[test]
+    fn stopped_vms_keep_their_cid_reserved_across_a_reload() {
+        // "running" comes from the supervisor, so a stopped VM appears only in
+        // memory. Reserving just the running set would free 1001 and let the
+        // next allocate() hand it to a new VM.
+        let reserved = reserve(
+            &[("running-vm", 1000)],
+            &[("running-vm", 1000), ("stopped-vm", 1001)],
+        );
+        assert_eq!(
+            reserved,
+            vec![
+                (1000, "running-vm".to_string()),
+                (1001, "stopped-vm".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_vm_both_running_and_in_memory_is_reserved_once() {
+        let reserved = reserve(&[("vm-a", 1000)], &[("vm-a", 1000)]);
+        assert_eq!(reserved, vec![(1000, "vm-a".to_string())]);
+    }
+
+    #[test]
+    fn running_state_wins_when_memory_disagrees_about_the_owner() {
+        // The supervisor knows who actually holds the CID right now.
+        let reserved = reserve(&[("live-owner", 1000)], &[("stale-owner", 1000)]);
+        assert_eq!(reserved, vec![(1000, "live-owner".to_string())]);
+    }
+
+    #[test]
+    fn nothing_is_reserved_when_no_vm_holds_a_cid() {
+        assert!(reserve(&[], &[]).is_empty());
+    }
 
     fn hex_of(byte: u8, len: usize) -> String {
         hex::encode(vec![byte; len])
@@ -1742,6 +1842,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn selects_mr_config_version_for_each_tee_mode() -> Result<()> {
+        let manifest = test_manifest(2048);
+        assert_eq!(
+            mr_config_version(&manifest, CvmPlatform::AmdSevSnp, false, false)?,
+            Some(MrConfigVersion::V3)
+        );
+        assert_eq!(
+            mr_config_version(&manifest, CvmPlatform::Tdx, false, false)?,
+            None
+        );
+        assert_eq!(
+            mr_config_version(&manifest, CvmPlatform::Tdx, true, false)?,
+            Some(MrConfigVersion::V1)
+        );
+        assert_eq!(
+            mr_config_version(&manifest, CvmPlatform::Tdx, true, true)?,
+            Some(MrConfigVersion::V3)
+        );
+        assert_eq!(
+            mr_config_version(&manifest, CvmPlatform::Tdx, false, true)
+                .err()
+                .map(|error| error.to_string()),
+            Some("key provider ID requires MrConfigV3, but use_mrconfigid is disabled".to_string())
+        );
+
+        let mut no_tee = manifest.clone();
+        no_tee.no_tee = true;
+        assert_eq!(
+            mr_config_version(&no_tee, CvmPlatform::AmdSevSnp, true, true)?,
+            None
+        );
+
+        no_tee.simulated_tee = Some(dstack_types::TeeVariant::DstackAmdSevSnp);
+        assert_eq!(
+            mr_config_version(&no_tee, CvmPlatform::Tdx, false, false)?,
+            Some(MrConfigVersion::V3)
+        );
+        Ok(())
+    }
+
     fn dummy_tdx_measurement_document() -> TdxOsImageMeasurementDocument {
         let measurement = TdxOsImageMeasurement {
             image: TdxImageMeasurement {
@@ -1794,6 +1935,8 @@ mod tests {
             digest: Some(hex_of(0xaa, 32)),
             tdx_measurement,
             sev_measurement: None,
+            gcp_measurement: None,
+            aws_measurement: None,
         }
     }
 
@@ -2088,6 +2231,19 @@ mod tests {
             make_sys_config(&config, &manifest, &compose_hash, Some(mr_config), None)?;
         let sys_config: serde_json::Value = serde_json::from_str(&sys_config_document)?;
         assert!(sys_config.get("tee_simulator").is_none());
+        // A host must never nominate the trust anchor that authenticates its
+        // guest's key provider, in any deployment mode. Simulated guests derive
+        // their own roots from the seed in `.tee-simulator.json` instead.
+        for key in sys_config
+            .as_object()
+            .context("sys-config must be an object")?
+            .keys()
+        {
+            assert!(
+                !key.contains("root_ca") && !key.contains("trust_anchor"),
+                "sys-config must not carry an attestation trust anchor: {key}"
+            );
+        }
         assert_eq!(sys_config["pccs_url"], config.cvm.pccs_url);
         assert_eq!(sys_config["collateral_urls"]["pccs"], config.cvm.pccs_url);
         let vm_config: serde_json::Value = serde_json::from_str(
@@ -2112,7 +2268,7 @@ mod tests {
             sys_config["nvidia_attestation_proxy_url"],
             "http://10.0.2.2:8090"
         );
-        assert_eq!(parsed_mr_config.app_id, vec![0x11; 20]);
+        assert_eq!(parsed_mr_config.app_id, Some(vec![0x11; 20]));
         assert_eq!(parsed_mr_config.compose_hash, vec![0x22; 32]);
         assert_eq!(parsed_mr_config.gpu_policy_hash, None);
         assert_eq!(vm_config["mr_config"], sys_config["mr_config"]);
@@ -2154,6 +2310,24 @@ mod tests {
         .map_err(anyhow::Error::msg)?;
         Ok(())
     }
+}
+
+/// CIDs that must survive a pool rebuild, mapped to the VM that owns each one.
+///
+/// Running processes are the authoritative source for CIDs currently on the
+/// wire, but they are not the whole picture: a stopped VM still records its CID
+/// in `vm.config.cid` and keeps it on restart, so it has to stay reserved too.
+/// Reserving only the running set would let `allocate()` hand the same CID to a
+/// new VM, and the two would collide the moment the stopped one starts.
+///
+/// Keyed by CID so a VM that is both running and in memory is reserved once.
+fn cids_to_reserve(
+    running: &HashMap<String, u32>,
+    in_memory: impl Iterator<Item = (String, u32)>,
+) -> BTreeMap<u32, String> {
+    let mut reserved: BTreeMap<u32, String> = in_memory.map(|(id, cid)| (cid, id)).collect();
+    reserved.extend(running.iter().map(|(id, cid)| (*cid, id.clone())));
+    reserved
 }
 
 fn paginate<T>(items: Vec<T>, page: u32, page_size: u32) -> impl Iterator<Item = T> {
@@ -2241,4 +2415,20 @@ impl AppState {
     pub fn iter_vms(&self) -> impl Iterator<Item = &VmState> {
         self.vms.values()
     }
+}
+
+/// Reject VM ids that would escape `run_path` once joined into a filesystem
+/// path. Ids are server-generated UUIDs, so hex digits plus `-` covers every
+/// legitimate value; `Path::join` replaces the base outright on an absolute
+/// path, and `..` walks out of it, so neither may reach the join.
+pub(crate) fn validate_vm_id(id: &str) -> Result<()> {
+    if id.is_empty()
+        || id.len() > 64
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        bail!("invalid VM id");
+    }
+    Ok(())
 }

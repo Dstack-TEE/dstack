@@ -108,10 +108,15 @@ const CreateVmDialogComponent = {
             </div>
 
             <div class="form-group full-width">
-              <label for="initScript">Init Script
+              <label>Init Scripts
                 <span class="help-icon" title="Executed before dockerd starts. Use for early system setup.">?</span>
               </label>
-              <textarea id="initScript" v-model="form.initScript" placeholder="Optional script executed before dockerd startup" rows="4"></textarea>
+              <div v-for="(script, index) in form.initScripts" :key="index" class="file-input-row">
+                <textarea :id="'initScript-' + index" v-model="form.initScripts[index]" :placeholder="'Init script ' + (index + 1)" rows="4"></textarea>
+                <button v-if="form.initScripts.length > 1" type="button" class="action-btn danger" @click="form.initScripts.splice(index, 1)">Remove</button>
+              </div>
+              <!-- Keep in sync with dstack_types::MAX_INIT_SCRIPTS. -->
+              <button v-if="form.initScripts.length < 5" type="button" class="action-btn" @click="form.initScripts.push('')">Add Init Script</button>
             </div>
 
             <div class="form-group full-width">

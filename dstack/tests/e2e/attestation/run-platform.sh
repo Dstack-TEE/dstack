@@ -38,6 +38,16 @@ elif [[ "$TEE_PLATFORM" == dstack-amd-sev-snp ]]; then
   dstack-util attest-json --input "$WORK/snp-fixture.bin" --output "$WORK/snp-fixture.json"
   VM_CONFIG=$(jq -c '.config | fromjson' "$WORK/snp-fixture.json")
   MR_CONFIG=$(jq -r .mr_config <<<"$VM_CONFIG")
+elif [[ "$TEE_PLATFORM" == dstack-nitro-enclave ]]; then
+  for index in 0 1 2; do
+    printf 'dstack-tee-simulator/nsm/pcr/%s' "$index" |
+      sha384sum | cut -d' ' -f1 > "$WORK/pcr$index"
+  done
+  OS_IMAGE_HASH=$(
+    cat "$WORK/pcr0" "$WORK/pcr1" "$WORK/pcr2" |
+      xxd -r -p | sha256sum | cut -d' ' -f1
+  )
+  VM_CONFIG=$(jq -cn --arg os "$OS_IMAGE_HASH" '{os_image_hash:$os}')
 elif [[ "$TEE_PLATFORM" == dstack-aws-nitro-tpm ]]; then
   ZERO_PCR=$(printf '00%.0s' $(seq 1 48))
   printf '%s' "$ZERO_PCR" > "$WORK/pcr4"
@@ -210,4 +220,39 @@ jq -e '.details.quote_verified == true' "$WORK/request.json.verification.json" >
 jq -e '.is_valid == true' "$WORK/request.json.verification.json" >/dev/null
 jq -e '.details.os_image_hash_verified == true' "$WORK/request.json.verification.json" >/dev/null
 jq -e '.details.event_log_verified == true' "$WORK/request.json.verification.json" >/dev/null
-echo "[$TEE_PLATFORM${TDX_ATTESTATION_VARIANT:+/$TDX_ATTESTATION_VARIANT}] dstack-util -> verifier full E2E passed"
+cp "$WORK/request.json.verification.json" "$WORK/development-root-verification.json"
+echo '{"development_root_accepted":true}'
+
+# The same simulator evidence must fail against the verifier's built-in
+# production roots. Keep the mock collateral endpoints so this assertion tests
+# the trust-anchor boundary rather than network or collateral availability.
+cat > "$WORK/production-verifier.toml" <<EOF_CONFIG
+address = "127.0.0.1"
+port = 8080
+image_cache_dir = "$WORK/production-image-cache"
+image_download_url = "http://127.0.0.1:9/mr_{OS_IMAGE_HASH}.tar.gz"
+image_download_timeout_secs = 1
+
+[attestation.urls]
+pccs = "http://127.0.0.1:18088"
+amd_kds = "http://127.0.0.1:18088/vcek/v1"
+EOF_CONFIG
+rm -f "$WORK/request.json.verification.json"
+set +e
+dstack-verifier --config "$WORK/production-verifier.toml" --verify "$WORK/request.json" \
+  >"$WORK/production-verifier.log" 2>&1
+PRODUCTION_VERIFIER_RC=$?
+set -e
+if [[ ! -s "$WORK/request.json.verification.json" ]]; then
+  cat "$WORK/production-verifier.log" >&2
+  echo "production-root verifier did not emit a verification result" >&2
+  exit 1
+fi
+cat "$WORK/request.json.verification.json"
+if (( PRODUCTION_VERIFIER_RC == 0 )) || ! jq -e '.is_valid == false' "$WORK/request.json.verification.json" >/dev/null; then
+  cat "$WORK/production-verifier.log" >&2
+  echo "simulator evidence unexpectedly passed production-root verification" >&2
+  exit 1
+fi
+echo '{"production_root_rejected":true}'
+echo "[$TEE_PLATFORM${TDX_ATTESTATION_VARIANT:+/$TDX_ATTESTATION_VARIANT}] dstack-util -> verifier trust-root isolation E2E passed"

@@ -25,6 +25,13 @@ async fn create_test_state() -> TestState {
     let mut config = figment.focus("core").extract::<Config>().unwrap();
     let temp_dir = TempDir::new().expect("failed to create temp dir");
     config.sync.data_dir = temp_dir.path().to_string_lossy().to_string();
+    // the default points at /etc/wireguard/wg0.conf, so anything that calls
+    // `reconfigure` would write to the host's real WireGuard config.
+    config.wg.config_path = temp_dir
+        .path()
+        .join("wg.conf")
+        .to_string_lossy()
+        .into_owned();
     let options = ProxyOptions {
         config,
         my_app_id: None,
@@ -52,6 +59,35 @@ async fn test_empty_config() {
     insta::assert_snapshot!(wg_config);
 }
 
+/// The rendered config contains the interface's WireGuard private key, so the
+/// file must not be readable by anyone else. It used to be written with the
+/// default mode, landing at `0o666 & !umask`.
+#[cfg(unix)]
+#[tokio::test]
+async fn wg_config_is_written_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let state = create_test_state().await;
+    let path = state.lock().config.wg.config_path.clone();
+
+    // `reconfigure` also runs `wg syncconf`, which fails without a real
+    // interface — that failure is logged rather than propagated, so the write
+    // is still exercised here.
+    state.lock().reconfigure().expect("reconfigure failed");
+
+    let rendered = std::fs::read_to_string(&path).expect("wg config was not written");
+    assert!(
+        rendered.contains("PrivateKey"),
+        "test would be vacuous: the config carries no key"
+    );
+
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        mode, 0o600,
+        "wg config holds a private key, got mode {mode:o}"
+    );
+}
+
 fn policy(restrict: bool, ports: &[u16]) -> PortPolicy {
     PortPolicy {
         ports: ports
@@ -60,6 +96,37 @@ fn policy(restrict: bool, ports: &[u16]) -> PortPolicy {
             .collect(),
         restrict_mode: restrict,
     }
+}
+
+#[test]
+fn test_validate_wireguard_public_key() {
+    assert!(validate_wireguard_public_key("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").is_ok());
+    assert!(validate_wireguard_public_key("not-a-wireguard-key").is_err());
+    assert!(validate_wireguard_public_key("AQID").is_err());
+}
+
+#[tokio::test]
+async fn test_invalid_wireguard_public_key_does_not_register() {
+    let state = create_test_state().await;
+    let result = state.do_register_cvm("app", "instance", "invalid", "compose", None);
+
+    assert!(result.is_err());
+    assert!(!state.lock().state.instances.contains_key("instance"));
+}
+
+#[tokio::test]
+async fn test_wireguard_public_key_cannot_be_reused_by_another_instance() {
+    const PUBLIC_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    let state = create_test_state().await;
+    state
+        .lock()
+        .new_client_by_id("instance-1", "app", PUBLIC_KEY, "compose", None)
+        .unwrap();
+
+    let result = state.do_register_cvm("app", "instance-2", PUBLIC_KEY, "compose", None);
+
+    assert!(result.is_err());
+    assert!(!state.lock().state.instances.contains_key("instance-2"));
 }
 
 #[tokio::test]
@@ -263,4 +330,88 @@ async fn test_config() {
     insta::assert_debug_snapshot!(info1);
     let wg_config = state.lock().generate_wg_config().unwrap();
     insta::assert_snapshot!(wg_config);
+}
+
+#[tokio::test]
+async fn gateway_top_n_batch_007_cache_health_and_invalidation() {
+    let state = create_test_state().await;
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    {
+        let mut proxy = state.lock();
+        for index in 0..4 {
+            proxy
+                .new_client_by_id(
+                    &format!("top-instance-{index}"),
+                    "top-app",
+                    &format!("top-key-{index}"),
+                    "",
+                    Some(policy(false, &[])),
+                )
+                .unwrap();
+        }
+        proxy.handshake_cache.set_for_test(BTreeMap::from([
+            ("top-key-0".to_string(), now),
+            ("top-key-1".to_string(), now - 1),
+            ("top-key-2".to_string(), now - 2),
+            ("top-key-3".to_string(), now - 3600),
+        ]));
+        let selected = proxy.select_top_n_hosts("top-app").unwrap();
+        let selected_ids = selected
+            .iter()
+            .map(|row| row.instance_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            selected_ids,
+            vec!["top-instance-0", "top-instance-1", "top-instance-2"]
+        );
+        assert_eq!(proxy.state.top_n.len(), 1);
+
+        proxy.handshake_cache.set_for_test(BTreeMap::from([
+            ("top-key-0".to_string(), now - 3600),
+            ("top-key-1".to_string(), now - 3600),
+            ("top-key-2".to_string(), now - 3600),
+            ("top-key-3".to_string(), now),
+        ]));
+        let cached = proxy.select_top_n_hosts("top-app").unwrap();
+        assert_eq!(
+            cached
+                .iter()
+                .map(|row| row.instance_id.as_str())
+                .collect::<Vec<_>>(),
+            selected_ids
+        );
+
+        proxy
+            .new_client_by_id(
+                "top-instance-4",
+                "top-app",
+                "top-key-4",
+                "",
+                Some(policy(false, &[])),
+            )
+            .unwrap();
+        assert!(proxy.state.top_n.is_empty());
+        proxy.handshake_cache.set_for_test(BTreeMap::from([
+            ("top-key-0".to_string(), now - 3600),
+            ("top-key-1".to_string(), now - 3600),
+            ("top-key-2".to_string(), now - 3600),
+            ("top-key-3".to_string(), now),
+            ("top-key-4".to_string(), now - 1),
+        ]));
+        let refreshed = proxy.select_top_n_hosts("top-app").unwrap();
+        assert_eq!(refreshed.len(), 2);
+        assert!(refreshed
+            .iter()
+            .any(|row| row.instance_id == "top-instance-4"));
+
+        proxy.remove_instance("top-instance-4").unwrap();
+        assert!(proxy.state.top_n.is_empty());
+        let direct = proxy.select_top_n_hosts("top-instance-3").unwrap();
+        assert_eq!(direct.len(), 1);
+        assert_eq!(direct[0].instance_id, "top-instance-3");
+        assert!(proxy.select_top_n_hosts("other-app").is_err());
+    }
 }

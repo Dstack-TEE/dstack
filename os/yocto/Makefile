@@ -20,7 +20,7 @@ all: dist
 -include $(wildcard mk.d/*.mk)
 
 dist: images
-	$(foreach flavor,$(FLAVORS),./mkimage.sh --dist-name $(call flavor_to_dist,$(flavor)) --flavor $(flavor);)
+	set -e; $(foreach flavor,$(FLAVORS),./mkimage.sh --dist-name $(call flavor_to_dist,$(flavor)) --flavor $(flavor);)
 
 # Build common artifacts (shared across all flavors)
 # dstack-guest is built here first to warm sstate/downloads and avoid concurrent
@@ -30,17 +30,17 @@ images-common:
 
 # Build flavor-specific artifacts using multiconfig (serial to avoid deadlock warnings)
 images-flavors:
-	$(foreach flavor,$(FLAVORS),bitbake mc:$(flavor):dstack-rootfs mc:$(flavor):dstack-uki;)
+	set -e; $(foreach flavor,$(FLAVORS),bitbake mc:$(flavor):dstack-rootfs mc:$(flavor):dstack-uki;)
 
 images: images-common images-flavors
 
 clean:
 	bitbake -c cleansstate virtual/kernel dstack-initramfs dstack-ovmf
-	$(foreach flavor,$(FLAVORS),bitbake -c cleansstate mc:$(flavor):dstack-rootfs mc:$(flavor):dstack-uki;)
+	set -e; $(foreach flavor,$(FLAVORS),bitbake -c cleansstate mc:$(flavor):dstack-rootfs mc:$(flavor):dstack-uki;)
 
 clean-dstack:
 	bitbake -c cleansstate dstack-guest
-	$(foreach flavor,$(FLAVORS),bitbake -c cleansstate mc:$(flavor):dstack-rootfs;)
+	set -e; $(foreach flavor,$(FLAVORS),bitbake -c cleansstate mc:$(flavor):dstack-rootfs;)
 
 clean-initrd:
 	bitbake -c cleansstate dstack-initramfs

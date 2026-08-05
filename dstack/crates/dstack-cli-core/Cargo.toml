@@ -14,6 +14,7 @@ http-client = { workspace = true, features = ["prpc"] }
 dstack-vmm-rpc.workspace = true
 dstack-types.workspace = true
 serde_json.workspace = true
+safe-write.workspace = true
 # advisory file locking (flock) for the allowlist/state read-modify-write;
 # already in the dependency tree transitively, so no extra compile cost.
 rustix = { version = "0.38", features = ["fs"] }

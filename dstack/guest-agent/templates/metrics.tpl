@@ -1,18 +1,18 @@
 # HELP system_os_name Operating system name
 # TYPE system_os_name gauge
-system_os_name{os_name="{{system_info.os_name}}"} 1
+system_os_name{os_name="{{system_info.os_name|prometheus_label}}"} 1
 
 # HELP system_os_version Operating system version
 # TYPE system_os_version gauge
-system_os_version{os_version="{{system_info.os_version}}"} 1
+system_os_version{os_version="{{system_info.os_version|prometheus_label}}"} 1
 
 # HELP system_kernel_version Kernel version
 # TYPE system_kernel_version gauge
-system_kernel_version{kernel_version="{{system_info.kernel_version}}"} 1
+system_kernel_version{kernel_version="{{system_info.kernel_version|prometheus_label}}"} 1
 
 # HELP system_cpu_model CPU model information
 # TYPE system_cpu_model gauge
-system_cpu_model{cpu_model="{{system_info.cpu_model}}"} 1
+system_cpu_model{cpu_model="{{system_info.cpu_model|prometheus_label}}"} 1
 
 # HELP system_num_cpus Number of logical CPUs
 # TYPE system_num_cpus gauge
@@ -65,23 +65,23 @@ system_load_average_15m {{system_info.loadavg_fifteen}}
 # HELP disk_total_size Disk total size in bytes
 # TYPE disk_total_size gauge
 {% for disk in system_info.disks %}
-disk_total_size{name="{{disk.name}}", mount_point="{{disk.mount_point}}"} {{disk.total_size}}
+disk_total_size{name="{{disk.name|prometheus_label}}", mount_point="{{disk.mount_point|prometheus_label}}"} {{disk.total_size}}
 {% endfor %}
 
 # HELP disk_free_size Disk free size in bytes
 # TYPE disk_free_size gauge
 {% for disk in system_info.disks %}
-disk_free_size{name="{{disk.name}}", mount_point="{{disk.mount_point}}"} {{disk.free_size}}
+disk_free_size{name="{{disk.name|prometheus_label}}", mount_point="{{disk.mount_point|prometheus_label}}"} {{disk.free_size}}
 {% endfor %}
 
 # HELP disk_used_size Disk used size in bytes
 # TYPE disk_used_size gauge
 {% for disk in system_info.disks %}
-disk_used_size{name="{{disk.name}}", mount_point="{{disk.mount_point}}"} {{disk.total_size - disk.free_size}}
+disk_used_size{name="{{disk.name|prometheus_label}}", mount_point="{{disk.mount_point|prometheus_label}}"} {{disk.total_size - disk.free_size}}
 {% endfor %}
 
 # HELP disk_usage_percentage Disk usage percentage
 # TYPE disk_usage_percentage gauge
 {% for disk in system_info.disks %}
-disk_usage_percentage{name="{{disk.name}}", mount_point="{{disk.mount_point}}"} {% if disk.total_size > 0 %}{{(disk.total_size - disk.free_size) as f64 / disk.total_size as f64 * 100.0}}{% else %}0{% endif %}
+disk_usage_percentage{name="{{disk.name|prometheus_label}}", mount_point="{{disk.mount_point|prometheus_label}}"} {% if disk.total_size > 0 %}{{(disk.total_size - disk.free_size) as f64 / disk.total_size as f64 * 100.0}}{% else %}0{% endif %}
 {% endfor %}

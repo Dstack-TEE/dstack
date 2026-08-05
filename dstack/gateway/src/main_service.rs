@@ -12,6 +12,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use auth_client::AuthClient;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use crate::distributed_certbot::DistributedCertBot;
 use cmd_lib::run_cmd as cmd;
@@ -25,7 +26,7 @@ use ra_rpc::{CallContext, RpcCall, VerifiedAttestation};
 use ra_tls::attestation::AppInfo;
 use rand::seq::IteratorRandom;
 use rinja::Template as _;
-use safe_write::safe_write;
+use safe_write::safe_write_with_mode;
 use serde::{Deserialize, Serialize};
 use smallvec::{smallvec, SmallVec};
 use tokio::sync::{
@@ -50,6 +51,16 @@ mod auth_client;
 mod handshakes;
 
 use handshakes::LatestHandshakesCache;
+
+fn validate_wireguard_public_key(public_key: &str) -> Result<()> {
+    let decoded = STANDARD
+        .decode(public_key)
+        .context("invalid WireGuard public key encoding")?;
+    if decoded.len() != 32 {
+        bail!("WireGuard public key must decode to 32 bytes");
+    }
+    Ok(())
+}
 
 #[derive(Clone)]
 pub struct Proxy {
@@ -112,6 +123,7 @@ pub(crate) struct ProxyState {
     /// Reference to KvStore for syncing changes
     kv_store: Arc<KvStore>,
     handshake_cache: Arc<LatestHandshakesCache>,
+    admin_shutdown: Option<rocket::Shutdown>,
 }
 
 /// Options for creating a Proxy instance
@@ -244,6 +256,7 @@ impl ProxyInner {
             state,
             kv_store: kv_store.clone(),
             handshake_cache: handshake_cache.clone(),
+            admin_shutdown: None,
         });
         let auth_client = AuthClient::new(config.auth.clone());
         // Bootstrap WaveKV first if sync is enabled, so certbot can load certs from peers
@@ -323,6 +336,7 @@ impl ProxyInner {
             AppAddressResolver::new(
                 config.proxy.app_address_ns_prefix.clone(),
                 config.proxy.app_address_ns_compat,
+                config.proxy.app_address_dns_servers.clone(),
             )
             .context("failed to create app address resolver")?,
         );
@@ -416,6 +430,10 @@ impl Proxy {
         }
     }
 
+    pub(crate) async fn rotate_acme_credentials(&self) -> Result<(String, usize)> {
+        self.certbot.rotate_acme_credentials().await
+    }
+
     /// Get ACME info for all managed domains (or a specific domain)
     pub(crate) fn acme_info(&self, domain: Option<&str>) -> Result<AcmeInfoResponse> {
         let kv_store = self.kv_store.clone();
@@ -432,10 +450,21 @@ impl Proxy {
                 .collect(),
         };
 
-        // Get account_uri, account_quote and account_attestation from global ACME attestation
-        let (account_uri, account_quote, account_attestation) = kv_store
-            .get_acme_attestation()
-            .map(|att| (att.account_uri, att.quote, att.attestation))
+        // The account URI comes from the published credentials; the attestation
+        // record is written best-effort and may lag behind a rotation, so it
+        // only supplies the quote when it matches the current account.
+        let attestation = kv_store.get_acme_attestation();
+        let account_uri = kv_store
+            .get_acme_credentials()
+            .context("call RotateAcmeCredentials to replace the stored ACME credentials")?
+            .and_then(|creds| {
+                crate::distributed_certbot::extract_account_uri(&creds.acme_credentials)
+            })
+            .or_else(|| attestation.as_ref().map(|att| att.account_uri.clone()))
+            .unwrap_or_default();
+        let (account_quote, account_attestation) = attestation
+            .filter(|att| att.account_uri == account_uri)
+            .map(|att| (att.quote, att.attestation))
             .unwrap_or_default();
 
         for domain in &domains {
@@ -486,9 +515,8 @@ impl Proxy {
         if instance_id.is_empty() {
             bail!("[{instance_id}] instance id is empty");
         }
-        if client_public_key.is_empty() {
-            bail!("[{instance_id}] client public key is empty");
-        }
+        validate_wireguard_public_key(client_public_key)
+            .with_context(|| format!("[{instance_id}] invalid client public key"))?;
         let client_info = state
             .new_client_by_id(
                 instance_id,
@@ -944,7 +972,18 @@ impl ProxyState {
         if public_key.is_empty() {
             bail!("public_key is empty");
         }
+        if self
+            .state
+            .instances
+            .values()
+            .any(|instance| instance.id != id && instance.public_key == public_key)
+        {
+            bail!("WireGuard public key is already registered to another instance");
+        }
         if let Some(existing) = self.state.instances.get_mut(id) {
+            if existing.app_id != app_id {
+                bail!("instance_id is already registered to a different app");
+            }
             let pubkey_changed = existing.public_key != public_key;
             if pubkey_changed {
                 info!("public key changed for instance {id}, new key: {public_key}");
@@ -1097,6 +1136,7 @@ impl ProxyState {
     }
 
     fn add_instance(&mut self, info: InstanceInfo) {
+        self.state.top_n.remove(&info.app_id);
         // Sync to KvStore
         let data = InstanceData {
             app_id: info.app_id.clone(),
@@ -1130,7 +1170,9 @@ impl ProxyState {
 
     pub(crate) fn reconfigure(&mut self) -> Result<()> {
         let wg_config = self.generate_wg_config()?;
-        safe_write(&self.config.wg.config_path, wg_config).context("Failed to write wg config")?;
+        // the rendered config carries the interface's WireGuard private key.
+        safe_write_with_mode(&self.config.wg.config_path, wg_config, 0o600)
+            .context("failed to write wg config")?;
         // wg setconf <interface_name> <config_path>
         let ifname = &self.config.wg.interface;
         let config_path = &self.config.wg.config_path;
@@ -1163,13 +1205,10 @@ impl ProxyState {
             // fallback to random selection
             return Ok(self.random_select_a_host(id).unwrap_or_default());
         }
-        let (top_n, insert_time) = self
-            .state
-            .top_n
-            .entry(id.to_string())
-            .or_insert((SmallVec::new(), Instant::now()));
-        if !top_n.is_empty() && insert_time.elapsed() < self.config.proxy.timeouts.cache_top_n {
-            return Ok(top_n.clone());
+        if let Some((top_n, insert_time)) = self.state.top_n.get(id) {
+            if !top_n.is_empty() && insert_time.elapsed() < self.config.proxy.timeouts.cache_top_n {
+                return Ok(top_n.clone());
+            }
         }
 
         let handshakes = self.latest_handshakes(None);
@@ -1183,25 +1222,31 @@ impl ProxyState {
                 .filter_map(|instance_id| {
                     let instance = self.state.instances.get(instance_id)?;
                     let (_, elapsed) = handshakes.get(&instance.public_key)?;
-                    Some((
-                        instance.ip,
-                        *elapsed,
-                        instance.connections.clone(),
-                        instance.id.clone(),
-                    ))
+                    (*elapsed < self.config.proxy.timeouts.handshake_stale).then(|| {
+                        (
+                            instance.ip,
+                            *elapsed,
+                            instance.connections.clone(),
+                            instance.id.clone(),
+                        )
+                    })
                 })
                 .collect::<SmallVec<[_; 4]>>(),
         };
         instances.sort_by(|a, b| a.1.cmp(&b.1));
         instances.truncate(n);
-        Ok(instances
+        let selected: AddressGroup = instances
             .into_iter()
             .map(|(ip, _, counter, instance_id)| AddressInfo {
                 ip,
                 counter,
                 instance_id,
             })
-            .collect())
+            .collect();
+        self.state
+            .top_n
+            .insert(id.to_string(), (selected.clone(), Instant::now()));
+        Ok(selected)
     }
 
     fn random_select_a_host(&self, id: &str) -> Option<AddressGroup> {
@@ -1225,7 +1270,7 @@ impl ProxyState {
                 // Consider instance healthy if it had a recent handshake
                 handshakes
                     .get(&instance.public_key)
-                    .map(|(_, elapsed)| *elapsed < Duration::from_secs(300))
+                    .map(|(_, elapsed)| *elapsed < self.config.proxy.timeouts.handshake_stale)
                     .unwrap_or(false)
             } else {
                 false
@@ -1265,6 +1310,7 @@ impl ProxyState {
         }
 
         self.state.allocated_addresses.remove(&info.ip);
+        self.state.top_n.remove(&info.app_id);
         if let Some(app_instances) = self.state.apps.get_mut(&info.app_id) {
             app_instances.remove(id);
             if app_instances.is_empty() {
@@ -1324,8 +1370,21 @@ impl ProxyState {
         Ok(())
     }
 
-    pub(crate) fn exit(&mut self) -> ! {
-        std::process::exit(0);
+    pub(crate) fn set_admin_shutdown(&mut self, shutdown: rocket::Shutdown) {
+        self.admin_shutdown = Some(shutdown);
+    }
+
+    pub(crate) fn exit(&self, force: bool) -> Result<()> {
+        if force {
+            std::process::exit(0);
+        }
+
+        let shutdown = self
+            .admin_shutdown
+            .as_ref()
+            .context("admin server shutdown handle is not initialized")?;
+        shutdown.notify();
+        Ok(())
     }
 
     pub(crate) fn refresh_state(&mut self) -> Result<()> {
@@ -1471,22 +1530,27 @@ impl GatewayRpc for RpcHandler {
         let app_id = hex::encode(&app_info.app_id);
         let instance_id = hex::encode(&app_info.instance_id);
         let compose_hash = hex::encode(&app_info.compose_hash);
-        let port_policy = request.port_policy.map(|p| {
-            let ports = p
-                .ports
-                .into_iter()
-                .filter_map(|attr| {
-                    // Wire format is uint32 to avoid varint shenanigans, but valid TCP
-                    // ports fit in u16. Drop out-of-range entries instead of truncating.
-                    let port = u16::try_from(attr.port).ok()?;
-                    Some((port, crate::kv::PortFlags { pp: attr.pp }))
+        let port_policy = request
+            .port_policy
+            .map(|policy| -> Result<PortPolicy> {
+                let ports = policy
+                    .ports
+                    .into_iter()
+                    .map(|attr| {
+                        let port = u16::try_from(attr.port)
+                            .with_context(|| format!("port {} out of u16 range", attr.port))?;
+                        if port == 0 {
+                            bail!("port must be between 1 and 65535");
+                        }
+                        Ok((port, crate::kv::PortFlags { pp: attr.pp }))
+                    })
+                    .collect::<Result<_>>()?;
+                Ok(PortPolicy {
+                    ports,
+                    restrict_mode: policy.restrict_mode,
                 })
-                .collect();
-            PortPolicy {
-                ports,
-                restrict_mode: p.restrict_mode,
-            }
-        });
+            })
+            .transpose()?;
         self.state.do_register_cvm(
             &app_id,
             &instance_id,

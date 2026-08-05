@@ -21,13 +21,10 @@ use anyhow::{bail, Context, Result};
 use aws_nitro_enclaves_nsm_api::api::{Request as NsmRequest, Response as NsmResponse};
 use dstack_types::TeeSimulatorConfig;
 use mock_attestation::{nsm::NsmGenerator, parse_seed, server::MockCollateralState};
+use tpm2::{add_command_capability, TpmAlgId, TpmCc, TpmContext};
 
 const AK_ECC_CERT: &str = "0x01c10002";
 const AK_ECC_TEMPLATE: &str = "0x01c10003";
-const TPM2_CC_NV_WRITE: u32 = 0x0000_0137;
-const TPM2_CC_NV_DEFINE_SPACE: u32 = 0x0000_012a;
-const TPM2_CC_NV_READ: u32 = 0x0000_014e;
-const TPM2_CC_NV_READ_PUBLIC: u32 = 0x0000_0169;
 const TPM2_CC_AWS_NSM_REQUEST: u32 = 0x2000_0001;
 const VTPM_PROXY_IOC_NEW_DEV: libc::c_ulong = 0xc014_a100;
 const VTPM_PROXY_FLAG_TPM2: u32 = 1;
@@ -115,8 +112,24 @@ pub fn start_gcp_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
         }
         thread::sleep(Duration::from_millis(20));
     }
-    command("tpm2_startup", &["-c"])?;
+    let mut startup_error = None;
+    for _ in 0..100 {
+        match command("tpm2_startup", &["-c"]) {
+            Ok(()) => {
+                startup_error = None;
+                break;
+            }
+            Err(error) => {
+                startup_error = Some(error);
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
+    if let Some(error) = startup_error {
+        return Err(error).context("GCP vTPM did not become ready");
+    }
     replay_fixture_event_log()?;
+    install_fixture_event_log()?;
 
     let template_with_size = state_dir.join("ak.tpm2b-public");
     let generated_public = state_dir.join("ak.public");
@@ -213,6 +226,37 @@ fn replay_fixture_event_log() -> Result<()> {
     Ok(())
 }
 
+fn install_fixture_event_log() -> Result<()> {
+    let security_root = Path::new("/sys/kernel/security");
+    let event_log = security_root.join("tpm0/binary_bios_measurements");
+    if event_log.exists() {
+        return Ok(());
+    }
+    let tpm_dir = event_log.parent().context("TPM event log has no parent")?;
+    // securityfs does not permit userspace to create a synthetic TPM event
+    // log hierarchy. Shadow it in this development-only guest before
+    // publishing the fixture that was replayed into the simulated PCRs.
+    let flags = nix::mount::MsFlags::MS_NOSUID
+        | nix::mount::MsFlags::MS_NODEV
+        | nix::mount::MsFlags::MS_NOEXEC;
+    nix::mount::mount(
+        Some("dstack-tee-simulator"),
+        security_root,
+        Some("tmpfs"),
+        flags,
+        Some("mode=0755"),
+    )
+    .context("failed to mount simulated securityfs shadow")?;
+    fs_err::create_dir_all(tpm_dir)
+        .context("failed to create TPM event-log directory in securityfs shadow")?;
+    fs_err::write(
+        event_log,
+        include_bytes!("../../cc-eventlog/samples/tpm_eventlog.bin"),
+    )
+    .context("failed to install simulated TPM event log")?;
+    Ok(())
+}
+
 fn create_tpm_device_node() -> Result<()> {
     if Path::new("/dev/tpm0").exists() {
         return Ok(());
@@ -261,12 +305,15 @@ pub fn run_nitro_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
     let generator = NsmGenerator::from_seed(parse_seed(seed)?)?;
     let (mut simulator, swtpm_stream) = UnixStream::pair()?;
     let swtpm_fd = swtpm_stream.as_raw_fd();
-    let flags = unsafe { libc::fcntl(swtpm_fd, libc::F_GETFD) };
-    anyhow::ensure!(flags >= 0, "failed to get swtpm socket flags");
-    anyhow::ensure!(
-        unsafe { libc::fcntl(swtpm_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } >= 0,
-        "failed to make swtpm socket inheritable"
+    let flags = nix::fcntl::FdFlag::from_bits_truncate(
+        nix::fcntl::fcntl(swtpm_fd, nix::fcntl::FcntlArg::F_GETFD)
+            .context("failed to get swtpm socket flags")?,
     );
+    nix::fcntl::fcntl(
+        swtpm_fd,
+        nix::fcntl::FcntlArg::F_SETFD(flags - nix::fcntl::FdFlag::FD_CLOEXEC),
+    )
+    .context("failed to make swtpm socket inheritable")?;
 
     let state_dir = std::env::temp_dir().join(format!("dstack-nitro-swtpm-{}", std::process::id()));
     fs_err::create_dir_all(&state_dir)?;
@@ -359,6 +406,7 @@ fn proxy_tpm_commands(
         let size = loop {
             match proxy.read(&mut command) {
                 Ok(size) => break size,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(error) if error.raw_os_error() == Some(libc::EPIPE) => {
                     thread::sleep(Duration::from_millis(10));
                 }
@@ -375,14 +423,14 @@ fn proxy_tpm_commands(
             let template = nv_write
                 .as_ref()
                 .context("NitroTPM vendor command without an NV request")?;
-            nsm_response = Some(handle_nsm_vendor_command(generator, template)?);
+            nsm_response = Some(handle_nsm_vendor_command(generator, template, backend)?);
             tpm_success_response()
-        } else if code == TPM2_CC_NV_READ && nsm_response.is_some() {
+        } else if code == TpmCc::NvRead.to_u32() && nsm_response.is_some() {
             nv_read_response(
                 &command,
                 nsm_response.as_deref().context("missing NSM response")?,
             )?
-        } else if code == TPM2_CC_NV_READ_PUBLIC && nsm_response.is_some() {
+        } else if code == TpmCc::NvReadPublic.to_u32() && nsm_response.is_some() {
             let mut response = transact(backend, &command)?;
             set_nv_public_size(
                 &mut response,
@@ -397,21 +445,30 @@ fn proxy_tpm_commands(
             // single NV index at 2 KiB. Define the backing index at that limit;
             // the proxy virtualizes its public size and reads after the vendor
             // command, while swtpm still handles its lifecycle and auth setup.
-            if code == TPM2_CC_NV_DEFINE_SPACE && command.ends_with(&8192u16.to_be_bytes()) {
+            if code == TpmCc::NvDefineSpace.to_u32() && command.ends_with(&8192u16.to_be_bytes()) {
                 let end = command.len();
                 command[end - 2..].copy_from_slice(&2048u16.to_be_bytes());
             }
-            if code == TPM2_CC_NV_WRITE {
+            if code == TpmCc::NvWrite.to_u32() {
                 if let Some(template) = parse_nv_write(&command)? {
                     nv_write = Some(template);
                 }
             }
-            transact(backend, &command)?
+            let mut response = transact(backend, &command)?;
+            advertise_nsm_vendor_command(code, &mut response)?;
+            response
         };
         proxy
             .write_all(&response)
             .context("failed to write vTPM response")?;
     }
+}
+
+fn advertise_nsm_vendor_command(code: u32, response: &mut Vec<u8>) -> Result<()> {
+    if code == TpmCc::GetCapability.to_u32() {
+        *response = add_command_capability(response, TPM2_CC_AWS_NSM_REQUEST)?;
+    }
+    Ok(())
 }
 
 fn parse_nv_write(command: &[u8]) -> Result<Option<NvWriteTemplate>> {
@@ -442,14 +499,21 @@ fn parse_nv_write(command: &[u8]) -> Result<Option<NvWriteTemplate>> {
 fn handle_nsm_vendor_command(
     generator: &NsmGenerator,
     template: &NvWriteTemplate,
+    backend: &mut UnixStream,
 ) -> Result<Vec<u8>> {
     let request: NsmRequest = serde_cbor::from_slice(&template.request)?;
     let response = match request {
         NsmRequest::Attestation { user_data, .. } => {
+            let mut tpm = TpmContext::from_stream(
+                backend
+                    .try_clone()
+                    .context("failed to clone NitroTPM stream")?,
+                "NitroTPM backend",
+            );
             let pcrs = [4u16, 7, 8, 12, 14]
                 .into_iter()
-                .map(|i| (i, vec![0; 48]))
-                .collect();
+                .map(|index| Ok((index, tpm.pcr_read_single(index.into(), TpmAlgId::Sha384)?)))
+                .collect::<Result<_>>()?;
             let document = generator.attest_with_pcrs(
                 user_data.as_ref().map(|v| v.as_slice()).unwrap_or_default(),
                 pcrs,

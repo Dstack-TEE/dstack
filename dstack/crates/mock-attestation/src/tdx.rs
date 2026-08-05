@@ -9,16 +9,19 @@ use dcap_qvl::quote::{
 };
 use dcap_qvl::QuoteCollateralV3;
 use p256::ecdsa::{signature::Signer, Signature, SigningKey};
-use p256::pkcs8::DecodePrivateKey;
+use p256::pkcs8::{DecodePrivateKey, EncodePrivateKey};
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, CertificateRevocationListParams,
     CertifiedKey, CustomExtension, DnType, ExtendedKeyUsagePurpose, IsCa, KeyIdMethod, KeyPair,
-    KeyUsagePurpose, SerialNumber,
+    KeyUsagePurpose, RemoteKeyPair, SerialNumber, SignatureAlgorithm, PKCS_ECDSA_P256_SHA256,
 };
 use scale::Encode;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use time::{Duration, OffsetDateTime};
+use time::OffsetDateTime;
+
+const MOCK_PKI_NOT_BEFORE: i64 = 1_577_836_800; // 2020-01-01T00:00:00Z
+const MOCK_PKI_NOT_AFTER: i64 = 4_102_444_800; // 2100-01-01T00:00:00Z
 
 const INTEL_QE_VENDOR_ID: [u8; 16] = [
     0x93, 0x9a, 0x72, 0x33, 0xf7, 0x9c, 0x4c, 0xa9, 0x94, 0x0a, 0x0d, 0xb3, 0x95, 0x7f, 0x06, 0x07,
@@ -26,14 +29,45 @@ const INTEL_QE_VENDOR_ID: [u8; 16] = [
 
 pub struct TdxGenerator {
     root: Certificate,
-    root_key: KeyPair,
+    root_signing_key: SigningKey,
     pck: Certificate,
-    pck_key: KeyPair,
+    pck_key: SigningKey,
     tcb_signer: Certificate,
-    tcb_signer_key: KeyPair,
+    tcb_signer_key: SigningKey,
     qe_signer: Certificate,
-    qe_signer_key: KeyPair,
+    qe_signer_key: SigningKey,
     root_crl: Vec<u8>,
+}
+
+struct DeterministicP256KeyPair {
+    key: SigningKey,
+    public_key: Vec<u8>,
+}
+
+impl DeterministicP256KeyPair {
+    fn new(key: SigningKey) -> Self {
+        let public_key = key
+            .verifying_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec();
+        Self { key, public_key }
+    }
+}
+
+impl RemoteKeyPair for DeterministicP256KeyPair {
+    fn public_key(&self) -> &[u8] {
+        &self.public_key
+    }
+
+    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, rcgen::Error> {
+        let signature: Signature = self.key.sign(message);
+        Ok(signature.to_der().as_bytes().to_vec())
+    }
+
+    fn algorithm(&self) -> &'static SignatureAlgorithm {
+        &PKCS_ECDSA_P256_SHA256
+    }
 }
 
 pub struct TdxEvidence {
@@ -47,10 +81,13 @@ impl TdxGenerator {
     }
 
     pub fn from_seed(seed: [u8; 32]) -> Result<Self> {
-        let CertifiedKey {
-            cert: root,
-            key_pair: root_key,
-        } = make_root(&seed)?;
+        let (
+            CertifiedKey {
+                cert: root,
+                key_pair: root_key,
+            },
+            root_signing_key,
+        ) = make_root(&seed)?;
         let (pck, pck_key) = make_leaf(
             "Mock Intel SGX PCK Certificate",
             "tdx-pck",
@@ -75,10 +112,9 @@ impl TdxGenerator {
             &root_key,
             false,
         )?;
-        let now = OffsetDateTime::now_utc();
         let root_crl = CertificateRevocationListParams {
-            this_update: now - Duration::days(1),
-            next_update: now + Duration::days(30),
+            this_update: fixed_time(MOCK_PKI_NOT_BEFORE)?,
+            next_update: fixed_time(MOCK_PKI_NOT_AFTER)?,
             crl_number: SerialNumber::from(1u64),
             issuing_distribution_point: None,
             revoked_certs: Vec::new(),
@@ -89,7 +125,7 @@ impl TdxGenerator {
         .to_vec();
         Ok(Self {
             root,
-            root_key,
+            root_signing_key,
             pck,
             pck_key,
             tcb_signer,
@@ -106,8 +142,11 @@ impl TdxGenerator {
     pub fn root_ca_pem(&self) -> String {
         self.root.pem()
     }
-    pub fn root_key_pem(&self) -> String {
-        self.root_key.serialize_pem()
+    pub fn root_key_pem(&self) -> Result<String> {
+        Ok(self
+            .root_signing_key
+            .to_pkcs8_pem(Default::default())?
+            .to_string())
     }
 
     pub fn sample_collateral(&self) -> Result<QuoteCollateralV3> {
@@ -166,8 +205,7 @@ impl TdxGenerator {
             .encode()
             .try_into()
             .map_err(|bytes: Vec<u8>| anyhow::anyhow!("invalid QE report size {}", bytes.len()))?;
-        let pck_key = signing_key(&self.pck_key)?;
-        let qe_sig: Signature = pck_key.sign(&qe_report_bytes);
+        let qe_sig: Signature = self.pck_key.sign(&qe_report_bytes);
 
         let pck_chain = format!("{}{}", self.pck.pem(), self.root.pem()).into_bytes();
         let qe_certification = QEReportCertificationData {
@@ -263,8 +301,16 @@ impl TdxGenerator {
     }
 }
 
-fn make_root(seed: &[u8; 32]) -> Result<CertifiedKey> {
-    let key_pair = crate::p256_key(seed, "tdx-root")?;
+fn deterministic_key_pair(seed: &[u8; 32], label: &str) -> Result<(KeyPair, SigningKey)> {
+    let serialized = crate::p256_key(seed, label)?;
+    let signing_key = SigningKey::from_pkcs8_pem(&serialized.serialize_pem())?;
+    let key_pair =
+        KeyPair::from_remote(Box::new(DeterministicP256KeyPair::new(signing_key.clone())))?;
+    Ok((key_pair, signing_key))
+}
+
+fn make_root(seed: &[u8; 32]) -> Result<(CertifiedKey, SigningKey)> {
+    let (key_pair, signing_key) = deterministic_key_pair(seed, "tdx-root")?;
     let mut params = cert_params("Mock Intel SGX Root CA")?;
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     params.key_usages.extend([
@@ -273,7 +319,7 @@ fn make_root(seed: &[u8; 32]) -> Result<CertifiedKey> {
         KeyUsagePurpose::CrlSign,
     ]);
     let cert = params.self_signed(&key_pair)?;
-    Ok(CertifiedKey { cert, key_pair })
+    Ok((CertifiedKey { cert, key_pair }, signing_key))
 }
 
 fn make_leaf(
@@ -283,8 +329,8 @@ fn make_leaf(
     root: &Certificate,
     root_key: &KeyPair,
     pck: bool,
-) -> Result<(Certificate, KeyPair)> {
-    let key = crate::p256_key(seed, label)?;
+) -> Result<(Certificate, SigningKey)> {
+    let (key, signing_key) = deterministic_key_pair(seed, label)?;
     let mut params = cert_params(name)?;
     params.key_usages.push(KeyUsagePurpose::DigitalSignature);
     params
@@ -294,17 +340,20 @@ fn make_leaf(
         params.custom_extensions.push(pck_extension());
     }
     let cert = params.signed_by(&key, root, root_key)?;
-    Ok((cert, key))
+    Ok((cert, signing_key))
 }
 
 fn cert_params(name: &str) -> Result<CertificateParams> {
     let mut params = CertificateParams::new(vec!["mock.dstack.invalid".into()])?;
     params.distinguished_name.push(DnType::CommonName, name);
     params.serial_number = Some(SerialNumber::from(42u64));
-    let now = OffsetDateTime::now_utc();
-    params.not_before = now - Duration::days(1);
-    params.not_after = now + Duration::days(30);
+    params.not_before = fixed_time(MOCK_PKI_NOT_BEFORE)?;
+    params.not_after = fixed_time(MOCK_PKI_NOT_AFTER)?;
     Ok(params)
+}
+
+fn fixed_time(timestamp: i64) -> Result<OffsetDateTime> {
+    Ok(OffsetDateTime::from_unix_timestamp(timestamp)?)
 }
 
 fn pck_extension() -> CustomExtension {
@@ -347,17 +396,34 @@ fn pck_extension() -> CustomExtension {
     CustomExtension::from_oid_content(&[1, 2, 840, 113741, 1, 13, 1], der)
 }
 
-fn signing_key(key: &KeyPair) -> Result<SigningKey> {
-    Ok(SigningKey::from_pkcs8_pem(&key.serialize_pem())?)
-}
-fn sign_raw(key: &KeyPair, message: &[u8]) -> Result<Vec<u8>> {
-    let sig: Signature = signing_key(key)?.sign(message);
+fn sign_raw(key: &SigningKey, message: &[u8]) -> Result<Vec<u8>> {
+    let sig: Signature = key.sign(message);
     Ok(sig.to_bytes().to_vec())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seeded_hierarchies_are_cross_process_compatible() {
+        let first = TdxGenerator::from_seed([0x31; 32]).unwrap();
+        let second = TdxGenerator::from_seed([0x31; 32]).unwrap();
+        assert_eq!(first.root_ca_der(), second.root_ca_der());
+        assert_eq!(first.root_crl_der(), second.root_crl_der());
+
+        let evidence = first.attest([0x42; 64]).unwrap();
+        let collateral = second.sample_collateral().unwrap();
+        assert_eq!(evidence.collateral, collateral);
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        dcap_qvl::verify::QuoteVerifier::new(second.root_ca_der())
+            .verify(&evidence.quote, &collateral, now)
+            .unwrap();
+    }
 
     #[test]
     fn generated_quote_passes_real_qvl_and_negative_cases_fail() {

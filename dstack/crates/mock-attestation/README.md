@@ -62,9 +62,22 @@ into verifier/KMS/gateway. The independently running host collateral service
 reconstructs the same hierarchy from the seed. Configure it under
 `[attestation.urls]`: TDX uses `pccs`, and SEV-SNP uses `amd_kds`.
 
-Every verifier process must also explicitly set
+The guest needs those roots too, to verify the KMS and the gateway it talks to.
+They do not travel from the host: `dstack-tee-simulator` derives them from the
+same seed and writes them to `/run/dstack/attestation`, guest tmpfs the host
+cannot reach, before `dstack-prepare` starts. `dstack-util` reads that one
+directory and nothing else, so a host can never nominate the trust anchor that
+authenticates its guest's key provider. Only the development image ships the
+simulator, and image contents are measured, so on a production image the
+directory never exists and vendor production roots are the only outcome.
+
+Every service configured with a mock root through its own TOML — KMS, gateway,
+`dstack-verifier` — must also explicitly set
 `attestation.insecure_allow_external_trust_anchors = true`. Merely mounting and
 configuring a mock root is rejected at startup while this flag remains false.
+The flag exists to make an operator acknowledge a hand-written non-production
+root, so it has no counterpart in the guest handoff above, where one program
+writes the roots and the next reads them out of a directory it authenticates.
 
 The seed adds only 64 hex bytes (the simulator config is well below 1 KiB).
 

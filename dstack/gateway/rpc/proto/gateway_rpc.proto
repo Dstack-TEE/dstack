@@ -164,6 +164,14 @@ message AcmeInfoResponse {
   string account_attestation = 5;
 }
 
+// Result of replacing the shared ACME account credentials.
+message RotateAcmeCredentialsResponse {
+  // URI of the newly-created ACME account. The private credentials are never returned.
+  string account_uri = 1;
+  // Number of ZT domains whose CAA records were updated for the new account.
+  uint32 domains_updated = 2;
+}
+
 // Get HostInfo for associated instance id.
 message GetInfoRequest {
   string id = 1;
@@ -394,13 +402,18 @@ message GetNodeStatusesResponse {
   repeated NodeStatusEntry statuses = 1;
 }
 
+message ExitRequest {
+  // Exit immediately without waiting for in-flight requests to drain.
+  bool force = 1;
+}
+
 service Admin {
   // Get the status of the gateway.
   rpc Status(google.protobuf.Empty) returns (StatusResponse) {}
   // Find Proxied HostInfo by instance ID
   rpc GetInfo(GetInfoRequest) returns (GetInfoResponse) {}
   // Exit the Gateway process.
-  rpc Exit(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+  rpc Exit(ExitRequest) returns (google.protobuf.Empty) {}
   // Renew the proxy TLS certificate if certbot is enabled
   rpc RenewCert(google.protobuf.Empty) returns (RenewCertResponse) {}
   // Reload the proxy TLS certificate from files
@@ -461,6 +474,15 @@ service Admin {
   rpc GetCertbotConfig(google.protobuf.Empty) returns (CertbotConfigResponse) {}
   // Set global certbot configuration (includes ACME URL)
   rpc SetCertbotConfig(SetCertbotConfigRequest) returns (google.protobuf.Empty) {}
+  // Create a new ACME account, publish the shared credentials, and re-pin
+  // every ZT-domain CAA record to the new account. If CAA re-pinning fails for
+  // some domains, the new credentials are already published; rerun SetCaa
+  // until it succeeds instead of retrying the rotation (each rotation
+  // registers a new rate-limited ACME account). Rotation is serialized across
+  // nodes by a best-effort lock (WaveKV has no compare-and-swap), so still
+  // avoid rotating from multiple gateways concurrently. This re-pins issuance
+  // to the new account; it does not deactivate the old ACME account at the CA.
+  rpc RotateAcmeCredentials(google.protobuf.Empty) returns (RotateAcmeCredentialsResponse) {}
 
   // ==================== Per-Instance Port Policy Override ====================
   // Set an admin override for an instance's port policy. Takes precedence

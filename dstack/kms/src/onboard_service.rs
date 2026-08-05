@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{bail, Context, Result};
 use dstack_kms_rpc::{
@@ -25,8 +25,9 @@ use ra_tls::{
     cert::{CaCert, CertRequest},
     rcgen::{Certificate, KeyPair, PKCS_ECDSA_P256_SHA256},
 };
-use safe_write::safe_write;
+use safe_write::{safe_write, safe_write_with_mode};
 use sha2::Digest;
+use tokio::sync::Mutex as AsyncMutex;
 use tracing::info;
 
 use crate::{
@@ -43,6 +44,8 @@ use crate::{
 pub struct OnboardState {
     config: KmsConfig,
     attestation_verifier: Arc<AttestationVerifier>,
+    bootstrap_lock: Arc<AsyncMutex<()>>,
+    shutdown: Arc<OnceLock<rocket::Shutdown>>,
 }
 
 impl OnboardState {
@@ -54,7 +57,17 @@ impl OnboardState {
         Ok(Self {
             config,
             attestation_verifier,
+            bootstrap_lock: Arc::new(AsyncMutex::new(())),
+            shutdown: Arc::new(OnceLock::new()),
         })
+    }
+
+    /// Hand the Rocket shutdown handle to the service so `finish` can stop the
+    /// server after its response has been sent.
+    pub fn set_shutdown(&self, shutdown: rocket::Shutdown) -> Result<()> {
+        self.shutdown
+            .set(shutdown)
+            .map_err(|_| anyhow::anyhow!("onboard shutdown handle is already set"))
     }
 }
 
@@ -72,9 +85,34 @@ impl RpcCall<OnboardState> for OnboardHandler {
     }
 }
 
+fn validate_onboarding_domain(domain: &str) -> Result<()> {
+    if domain.is_empty() || domain.len() > 253 || !domain.is_ascii() {
+        bail!("domain must be a non-empty ASCII DNS name of at most 253 bytes");
+    }
+    for label in domain.split('.') {
+        if label.is_empty()
+            || label.len() > 63
+            || label.starts_with('-')
+            || label.ends_with('-')
+            || !label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            bail!("domain contains an invalid DNS label");
+        }
+    }
+    Ok(())
+}
+
 impl OnboardRpc for OnboardHandler {
     async fn bootstrap(self, request: BootstrapRequest) -> Result<BootstrapResponse> {
-        ensure_self_kms_allowed(&self.state.config, &self.state.attestation_verifier)
+        validate_onboarding_domain(&request.domain)?;
+        let _bootstrap_guard = self.state.bootstrap_lock.lock().await;
+        let cfg = &self.state.config;
+        if cfg.bootstrap_info().exists() || cfg.root_ca_key().exists() || cfg.k256_key().exists() {
+            bail!("KMS has already been bootstrapped");
+        }
+        ensure_self_kms_allowed(cfg, &self.state.attestation_verifier)
             .await
             .context("KMS is not allowed to bootstrap")?;
         let keys = Keys::generate(&request.domain, self.state.config.attest_rpc_cert)
@@ -85,7 +123,6 @@ impl OnboardRpc for OnboardHandler {
         let ca_pubkey = keys.ca_key.public_key_der();
         let attestation = attest_keys(&ca_pubkey, &k256_pubkey).await?;
 
-        let cfg = &self.state.config;
         let response = BootstrapResponse {
             ca_pubkey,
             k256_pubkey,
@@ -98,6 +135,12 @@ impl OnboardRpc for OnboardHandler {
     }
 
     async fn onboard(self, request: OnboardRequest) -> Result<OnboardResponse> {
+        validate_onboarding_domain(&request.domain)?;
+        let _bootstrap_guard = self.state.bootstrap_lock.lock().await;
+        let cfg = &self.state.config;
+        if cfg.root_ca_key().exists() || cfg.k256_key().exists() {
+            bail!("KMS has already been onboarded");
+        }
         let source_url = request.source_url.trim_end_matches('/').to_string();
         let source_url = if source_url.ends_with("/prpc") {
             source_url
@@ -105,7 +148,7 @@ impl OnboardRpc for OnboardHandler {
             format!("{source_url}/prpc")
         };
         let keys = Keys::onboard(
-            &self.state.config,
+            cfg,
             &source_url,
             &request.domain,
             self.state.attestation_verifier.clone(),
@@ -113,8 +156,7 @@ impl OnboardRpc for OnboardHandler {
         .await
         .context("Failed to onboard")?;
         let k256_pubkey = keys.k256_key.verifying_key().to_sec1_bytes().to_vec();
-        keys.store(&self.state.config)
-            .context("Failed to store keys")?;
+        keys.store(cfg).context("Failed to store keys")?;
         Ok(OnboardResponse { k256_pubkey })
     }
 
@@ -171,7 +213,15 @@ impl OnboardRpc for OnboardHandler {
     }
 
     async fn finish(self) -> anyhow::Result<()> {
-        std::process::exit(0);
+        let shutdown = self
+            .state
+            .shutdown
+            .get()
+            .context("onboard shutdown handle is unavailable")?;
+        // Graceful shutdown lets Rocket finish sending this response before the
+        // server stops, so the client learns that onboarding succeeded.
+        shutdown.clone().notify();
+        Ok(())
     }
 }
 
@@ -341,6 +391,26 @@ mod tests {
         assert_eq!(response.site_name, "test-site");
         assert_eq!(response.eth_rpc_url, "https://rpc.example");
         assert_eq!(response.kms_contract_address, "0x1234");
+    }
+
+    #[test]
+    fn onboarding_domain_accepts_dns_name() {
+        validate_onboarding_domain("kms.example.com").unwrap();
+    }
+
+    #[test]
+    fn onboarding_domain_rejects_empty_overlong_and_invalid_labels() {
+        let overlong = "a".repeat(254);
+        for domain in [
+            "",
+            overlong.as_str(),
+            "-kms.example.com",
+            "kms-.example.com",
+            "kms..example.com",
+            "kms_example.com",
+        ] {
+            assert!(validate_onboarding_domain(domain).is_err(), "{domain:?}");
+        }
     }
 }
 
@@ -524,10 +594,10 @@ impl Keys {
     }
 
     fn store_keys(&self, cfg: &KmsConfig) -> Result<()> {
-        safe_write(cfg.tmp_ca_key(), self.tmp_ca_key.serialize_pem())?;
-        safe_write(cfg.root_ca_key(), self.ca_key.serialize_pem())?;
-        safe_write(cfg.rpc_key(), self.rpc_key.serialize_pem())?;
-        safe_write(cfg.k256_key(), self.k256_key.to_bytes())?;
+        safe_write_with_mode(cfg.tmp_ca_key(), self.tmp_ca_key.serialize_pem(), 0o600)?;
+        safe_write_with_mode(cfg.root_ca_key(), self.ca_key.serialize_pem(), 0o600)?;
+        safe_write_with_mode(cfg.rpc_key(), self.rpc_key.serialize_pem(), 0o600)?;
+        safe_write_with_mode(cfg.k256_key(), self.k256_key.to_bytes(), 0o600)?;
         Ok(())
     }
 
@@ -578,6 +648,7 @@ pub(crate) async fn update_certs(cfg: &KmsConfig) -> Result<()> {
 }
 
 pub(crate) async fn bootstrap_keys(cfg: &KmsConfig, verifier: &AttestationVerifier) -> Result<()> {
+    validate_onboarding_domain(&cfg.onboard.auto_bootstrap_domain)?;
     ensure_self_kms_allowed(cfg, verifier)
         .await
         .context("KMS is not allowed to auto-bootstrap")?;

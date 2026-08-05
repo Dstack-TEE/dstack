@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
+use std::{net::IpAddr, path::Path, sync::Arc};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -36,6 +36,7 @@ struct Cli {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     pub address: String,
     pub port: u16,
@@ -44,6 +45,51 @@ pub struct Config {
     pub attestation: AttestationVerifierConfig,
     pub image_download_url: String,
     pub image_download_timeout_secs: u64,
+}
+
+impl Config {
+    fn validate(&self) -> Result<()> {
+        self.address
+            .parse::<IpAddr>()
+            .with_context(|| format!("invalid verifier address: {}", self.address))?;
+        anyhow::ensure!(self.port != 0, "verifier port must not be zero");
+        anyhow::ensure!(
+            !self.image_cache_dir.trim().is_empty(),
+            "image_cache_dir must not be empty"
+        );
+        anyhow::ensure!(
+            self.image_download_timeout_secs > 0,
+            "image_download_timeout_secs must be greater than zero"
+        );
+        anyhow::ensure!(
+            self.image_download_url.contains("{OS_IMAGE_HASH}"),
+            "image_download_url must contain {{OS_IMAGE_HASH}}"
+        );
+        anyhow::ensure!(
+            self.image_download_url.starts_with("http://")
+                || self.image_download_url.starts_with("https://"),
+            "image_download_url must use http or https"
+        );
+        let probe_url = self
+            .image_download_url
+            .replace("{OS_IMAGE_HASH}", &"00".repeat(32));
+        let parsed = reqwest::Url::parse(&probe_url).context("invalid image_download_url")?;
+        debug_assert!(matches!(parsed.scheme(), "http" | "https"));
+        Ok(())
+    }
+}
+
+fn config_figment(config_path: &Path) -> Figment {
+    Figment::new()
+        .merge(Toml::string(include_str!("../dstack-verifier.toml")))
+        .merge(Toml::file(config_path))
+        .merge(Env::prefixed("DSTACK_VERIFIER_").split("__"))
+}
+
+fn load_config(figment: &Figment) -> Result<Config> {
+    let config: Config = figment.extract().context("Failed to load configuration")?;
+    config.validate()?;
+    Ok(config)
 }
 
 #[post("/verify", data = "<request>")]
@@ -72,7 +118,7 @@ fn health() -> Json<serde_json::Value> {
     }))
 }
 
-async fn run_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()> {
+async fn run_oneshot(file_path: &str, config: &Config) -> anyhow::Result<bool> {
     use std::fs;
 
     info!("Running in oneshot mode for file: {}", file_path);
@@ -110,51 +156,42 @@ async fn run_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()> {
     })?;
     info!("Stored verification result at {}", output_path);
 
-    // Output results
-    println!("\n=== Verification Results ===");
-    println!("Valid: {}", response.is_valid);
-    println!("Quote verified: {}", response.details.quote_verified);
-    println!(
-        "Event log verified: {}",
-        response.details.event_log_verified
-    );
-    println!(
-        "OS image hash verified: {}",
-        response.details.os_image_hash_verified
-    );
-    println!(
-        "ACPI tables verified: {}",
-        response.details.acpi_tables_verified
-    );
+    // Emit exactly one machine-readable document on stdout.
+    println!("{}", serde_json::to_string(&response)?);
+    Ok(response.is_valid)
+}
 
-    if let Some(tcb_status) = &response.details.tcb_status {
-        println!("TCB status: {}", tcb_status);
+fn verify_certificate_profile(cert_der: &[u8]) -> anyhow::Result<()> {
+    let (_, cert) = x509_parser::parse_x509_certificate(cert_der)
+        .context("failed to parse X.509 certificate")?;
+    cert.verify_signature(None)
+        .context("certificate self-signature verification failed")?;
+    if !cert.validity().is_valid() {
+        anyhow::bail!("certificate is outside its validity period");
     }
-
-    if !response.details.advisory_ids.is_empty() {
-        println!("Advisory IDs: {:?}", response.details.advisory_ids);
+    let key_usage = cert
+        .key_usage()
+        .context("failed to decode certificate key usage")?
+        .context("certificate key usage extension missing")?;
+    if !key_usage.value.digital_signature() {
+        anyhow::bail!("certificate key usage does not permit digital signatures");
     }
-
-    if let Some(reason) = &response.reason {
-        println!("Reason: {}", reason);
+    let extended = cert
+        .extended_key_usage()
+        .context("failed to decode certificate extended key usage")?
+        .context("certificate extended key usage extension missing")?;
+    if !extended.value.server_auth && !extended.value.client_auth {
+        anyhow::bail!(
+            "certificate extended key usage permits neither server nor client authentication"
+        );
     }
-
-    if let Some(report_data) = &response.details.report_data {
-        println!("Report data: {}", report_data);
+    let san = cert
+        .subject_alternative_name()
+        .context("failed to decode certificate SAN")?
+        .context("certificate SAN extension missing")?;
+    if san.value.general_names.is_empty() {
+        anyhow::bail!("certificate SAN extension is empty");
     }
-
-    if let Some(app_info) = &response.details.app_info {
-        println!("\n=== App Info ===");
-        println!("App ID: {}", hex::encode(&app_info.app_id));
-        println!("Instance ID: {}", hex::encode(&app_info.instance_id));
-        println!("Compose hash: {}", hex::encode(&app_info.compose_hash));
-    }
-
-    // Exit with appropriate code
-    if !response.is_valid {
-        std::process::exit(1);
-    }
-
     Ok(())
 }
 
@@ -169,13 +206,19 @@ async fn run_cert_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()
     let cert = fs::read(file_path)
         .map_err(|e| anyhow::anyhow!("failed to read certificate {}: {}", file_path, e))?;
 
-    let attestation_verifier = Arc::new(AttestationVerifier::load(&config.attestation)?);
-    let verified = if cert.starts_with(b"-----BEGIN") {
-        ra_tls::attestation::verify_pem(&cert, attestation_verifier.as_ref()).await
+    let cert_der = if cert.starts_with(b"-----BEGIN") {
+        let (_, pem) =
+            x509_parser::pem::parse_x509_pem(&cert).context("failed to parse PEM certificate")?;
+        pem.contents
     } else {
-        ra_tls::attestation::verify_der(&cert, attestation_verifier.as_ref()).await
-    }
-    .map_err(|e| anyhow::anyhow!("failed to verify RA-TLS certificate: {:#}", e))?;
+        cert
+    };
+    verify_certificate_profile(&cert_der)?;
+
+    let attestation_verifier = Arc::new(AttestationVerifier::load(&config.attestation)?);
+    let verified = ra_tls::attestation::verify_der(&cert_der, attestation_verifier.as_ref())
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to verify RA-TLS certificate: {:#}", e))?;
 
     let app_info = verified.attestation.decode_app_info(false).ok();
     // Bind the reported os_image_hash to the attested boot measurement. For
@@ -262,26 +305,38 @@ async fn main() -> Result<()> {
     {
         use tracing_subscriber::{fmt, EnvFilter};
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-        fmt().with_env_filter(filter).with_ansi(false).init();
+        fmt()
+            .with_env_filter(filter)
+            .with_ansi(false)
+            .with_writer(std::io::stderr)
+            .init();
     }
 
     let cli = Cli::parse();
 
-    let default_config_str = include_str!("../dstack-verifier.toml");
-
-    let figment = Figment::from(rocket::Config::default())
-        .merge(Toml::string(default_config_str))
-        .merge(Toml::file(&cli.config))
-        .merge(Env::prefixed("DSTACK_VERIFIER_"));
-
-    let config: Config = figment.extract().context("Failed to load configuration")?;
+    let config_path = Path::new(&cli.config);
+    let config_figment = config_figment(config_path);
+    let config = load_config(&config_figment)?;
     // Check for oneshot modes
     if let Some(file_path) = cli.verify {
-        if let Err(e) = run_oneshot(&file_path, &config).await {
-            error!("Oneshot verification failed: {:#}", e);
-            std::process::exit(1);
+        let (response, exit_code) = match run_oneshot(&file_path, &config).await {
+            Ok(is_valid) => (None, if is_valid { 0 } else { 1 }),
+            Err(error) => {
+                error!("Oneshot verification failed: {error:#}");
+                (
+                    Some(VerificationResponse {
+                        is_valid: false,
+                        details: VerificationDetails::default(),
+                        reason: Some(format!("Internal error: {error:#}")),
+                    }),
+                    1,
+                )
+            }
+        };
+        if let Some(response) = response {
+            println!("{}", serde_json::to_string(&response)?);
         }
-        std::process::exit(0);
+        std::process::exit(exit_code);
     }
     if let Some(file_path) = cli.verify_cert {
         if let Err(e) = run_cert_oneshot(&file_path, &config).await {
@@ -298,7 +353,8 @@ async fn main() -> Result<()> {
         Arc::new(AttestationVerifier::load(&config.attestation)?),
     ));
 
-    rocket::custom(figment)
+    let rocket_figment = Figment::from(rocket::Config::default()).merge(config_figment);
+    rocket::custom(rocket_figment)
         .mount("/", rocket::routes![verify_cvm, health])
         .manage(verifier)
         .attach(AdHoc::on_liftoff("Startup", |_| {
@@ -310,4 +366,72 @@ async fn main() -> Result<()> {
         .await
         .map_err(|err| anyhow::anyhow!("launch rocket failed: {err:?}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    fn valid_config(extra: &str) -> String {
+        format!(
+            r#"address = "127.0.0.1"
+port = 18080
+image_cache_dir = "/tmp/dstack-verifier-config-test"
+image_download_url = "http://127.0.0.1:18081/{{OS_IMAGE_HASH}}.tar.gz"
+image_download_timeout_secs = 7
+{extra}
+"#
+        )
+    }
+
+    #[test]
+    fn config_file_precedence_validation_and_unknown_field_matrix() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("verifier.toml");
+        std::fs::write(&path, valid_config("")).unwrap();
+        let loaded = load_config(&config_figment(&path)).unwrap();
+        assert_eq!(loaded.address, "127.0.0.1");
+        assert_eq!(loaded.port, 18080);
+        assert_eq!(loaded.image_download_timeout_secs, 7);
+
+        for (name, body, expected) in [
+            (
+                "zero-port",
+                valid_config("").replace("port = 18080", "port = 0"),
+                "port must not be zero",
+            ),
+            (
+                "empty-cache",
+                valid_config("").replace("/tmp/dstack-verifier-config-test", ""),
+                "image_cache_dir must not be empty",
+            ),
+            (
+                "zero-timeout",
+                valid_config("").replace("timeout_secs = 7", "timeout_secs = 0"),
+                "must be greater than zero",
+            ),
+            (
+                "missing-placeholder",
+                valid_config("").replace("/{OS_IMAGE_HASH}.tar.gz", "/image.tar.gz"),
+                "must contain {OS_IMAGE_HASH}",
+            ),
+            (
+                "invalid-scheme",
+                valid_config("").replace("http://", "file://"),
+                "must use http or https",
+            ),
+            (
+                "unknown-field",
+                valid_config("unknown_policy = true"),
+                "unknown field",
+            ),
+        ] {
+            std::fs::write(&path, body).unwrap();
+            let error = load_config(&config_figment(&path)).expect_err(name);
+            assert!(format!("{error:#}").contains(expected), "{name}: {error:#}");
+        }
+
+        std::fs::write(&path, valid_config("")).unwrap();
+        assert_eq!(load_config(&config_figment(&path)).unwrap().port, 18080);
+    }
 }

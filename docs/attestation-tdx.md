@@ -31,7 +31,19 @@ MRTD, RTMR0, RTMR1, and RTMR2 can be pre-calculated from the built image (given 
 
 RTMR3 differs as it contains runtime information like compose hash and instance id. Verify this by replaying the event log - if the calculated RTMR3 matches the quote's RTMR3, the event log information is valid. Then verify the compose hash, key provider, and other event log details match expectations.
 
-For a GPU launch, `compose-hash` is followed by `gpu-policy-hash` and, after successful NVIDIA attestation and policy evaluation, `gpu-attestation`. The `gpu-policy-hash` payload is `SHA-256(JCS(requirements.gpu_policy))`, using `{}` when the field is omitted. The `gpu-attestation` payload is JSON containing the verified device count, CC/DevTools state, and `evidence_sha256`.
+After `compose-hash`, each configured init script produces an ordered
+`init-script-hash` event whose payload is the SHA-256 digest of the exact UTF-8
+script bytes. The event order matches the script array order. These events let
+an infrastructure provider contribute initialization code approved by
+multiple parties and let each party verify its code independently without
+reconstructing the complete compose document.
+
+For a GPU launch, any `init-script-hash` events are followed by
+`gpu-policy-hash` and, after successful NVIDIA attestation and policy
+evaluation, `gpu-attestation`. The `gpu-policy-hash` payload is
+`SHA-256(JCS(requirements.gpu_policy))`, using `{}` when the field is omitted.
+The `gpu-attestation` payload is JSON containing the verified device count,
+CC/DevTools state, and `evidence_sha256`.
 
 The guest-agent `GpuInfo` API returns the complete `nvattest` JSON captured during boot. It is not trustworthy by itself. After verifying the TDX quote and replaying the event log to RTMR3, hash the exact UTF-8 bytes of `GpuInfo.attestation` and require the result to equal the `gpu-attestation` event's `evidence_sha256`. See [GPU Security for AI Workloads](./security/security-model.md#gpu-security-for-ai-workloads) for the event schema, ordering, Rego example, and platform differences.
 

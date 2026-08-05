@@ -18,8 +18,17 @@ use super::marshal::*;
 const TPM_MAX_COMMAND_SIZE: usize = 4096;
 
 /// TPM device handle
+trait ReadWrite: Read + Write {}
+
+impl<T: Read + Write> ReadWrite for T {}
+
+enum TpmTransport {
+    Device(File),
+    Stream(Box<dyn ReadWrite>),
+}
+
 pub struct TpmDevice {
-    file: File,
+    transport: TpmTransport,
     path: String,
 }
 
@@ -36,9 +45,17 @@ impl TpmDevice {
             .with_context(|| format!("failed to open TPM device: {}", device_path))?;
 
         Ok(Self {
-            file,
+            transport: TpmTransport::Device(file),
             path: device_path.to_string(),
         })
+    }
+
+    /// Create a TPM device over an already connected byte stream.
+    pub fn from_stream(stream: impl Read + Write + 'static, name: impl Into<String>) -> Self {
+        Self {
+            transport: TpmTransport::Stream(Box::new(stream)),
+            path: name.into(),
+        }
     }
 
     /// Detect and open the default TPM device
@@ -57,22 +74,41 @@ impl TpmDevice {
         &self.path
     }
 
-    /// Send a command to the TPM and receive the response
+    /// Send a command to the TPM and receive the response.
     pub fn transmit(&mut self, command: &[u8]) -> Result<Vec<u8>> {
-        // Write command
-        self.file
-            .write_all(command)
-            .context("failed to write TPM command")?;
-
-        // Read response
-        let mut response = vec![0u8; TPM_MAX_COMMAND_SIZE];
-        let n = self
-            .file
-            .read(&mut response)
-            .context("failed to read TPM response")?;
-
-        response.truncate(n);
-        Ok(response)
+        match &mut self.transport {
+            TpmTransport::Device(file) => {
+                file.write_all(command)
+                    .context("failed to write TPM command")?;
+                let mut response = vec![0u8; TPM_MAX_COMMAND_SIZE];
+                let size = file
+                    .read(&mut response)
+                    .context("failed to read TPM response")?;
+                response.truncate(size);
+                Ok(response)
+            }
+            TpmTransport::Stream(stream) => {
+                stream
+                    .write_all(command)
+                    .context("failed to write TPM command")?;
+                let mut header = [0u8; 10];
+                stream
+                    .read_exact(&mut header)
+                    .context("failed to read TPM response header")?;
+                let response_size =
+                    u32::from_be_bytes([header[2], header[3], header[4], header[5]]) as usize;
+                if !(header.len()..=TPM_MAX_COMMAND_SIZE).contains(&response_size) {
+                    bail!("invalid TPM response size: {response_size}");
+                }
+                let mut response = Vec::with_capacity(response_size);
+                response.extend_from_slice(&header);
+                response.resize(response_size, 0);
+                stream
+                    .read_exact(&mut response[header.len()..])
+                    .context("failed to read TPM response body")?;
+                Ok(response)
+            }
+        }
     }
 
     /// Execute a TPM command and parse the response
@@ -275,6 +311,17 @@ impl TpmResponse {
         }
     }
 
+    /// Serialize this response back to TPM wire format.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let size = 10 + self.data.len();
+        let mut response = Vec::with_capacity(size);
+        response.extend_from_slice(&self.tag.to_u16().to_be_bytes());
+        response.extend_from_slice(&(size as u32).to_be_bytes());
+        response.extend_from_slice(&self.response_code.to_be_bytes());
+        response.extend_from_slice(&self.data);
+        response
+    }
+
     /// Get a response buffer for parsing the data
     pub fn data_buffer(&self) -> ResponseBuffer<'_> {
         ResponseBuffer::new(&self.data)
@@ -290,9 +337,103 @@ impl TpmResponse {
     }
 }
 
+/// Add a command to a successful TPM_CAP_COMMANDS response.
+///
+/// Responses for other capabilities, TPM errors, and paginated command lists
+/// are returned unchanged.
+pub fn add_command_capability(response: &[u8], command_code: u32) -> Result<Vec<u8>> {
+    let mut response = TpmResponse::parse(response)?;
+    if !response.is_success() {
+        return Ok(response.to_bytes());
+    }
+    let mut buf = response.data_buffer();
+    let more_data = buf.get_u8()? != 0;
+    let capability = buf.get_u32()?;
+    if capability != TpmCap::Commands as u32 || more_data {
+        return Ok(response.to_bytes());
+    }
+    let count = buf.get_u32()? as usize;
+    let mut attributes = Vec::with_capacity(count + 1);
+    for _ in 0..count {
+        attributes.push(buf.get_u32()?);
+    }
+    if attributes.contains(&command_code) {
+        return Ok(response.to_bytes());
+    }
+    const COMMAND_INDEX_AND_VENDOR_MASK: u32 = 0x2000_ffff;
+    let sort_key = command_code & COMMAND_INDEX_AND_VENDOR_MASK;
+    let insertion = attributes
+        .iter()
+        .position(|attributes| attributes & COMMAND_INDEX_AND_VENDOR_MASK > sort_key)
+        .unwrap_or(attributes.len());
+    attributes.insert(insertion, command_code);
+
+    let mut data = Vec::with_capacity(9 + attributes.len() * 4);
+    data.push(u8::from(more_data));
+    data.extend_from_slice(&(TpmCap::Commands as u32).to_be_bytes());
+    data.extend_from_slice(&(attributes.len() as u32).to_be_bytes());
+    for attributes in attributes {
+        data.extend_from_slice(&attributes.to_be_bytes());
+    }
+    response.data = data;
+    Ok(response.to_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_transport_reads_a_framed_response() {
+        use std::os::unix::net::UnixStream;
+        use std::thread;
+
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let command = TpmCommand::new(TpmCc::GetRandom).finalize();
+        let command_len = command.len();
+        let server_thread = thread::spawn(move || {
+            let mut received = vec![0; command_len];
+            server.read_exact(&mut received).unwrap();
+            let response = TpmResponse {
+                tag: TpmSt::NoSessions,
+                response_code: 0,
+                data: vec![0, 0],
+            }
+            .to_bytes();
+            server.write_all(&response[..10]).unwrap();
+            server.write_all(&response[10..]).unwrap();
+        });
+
+        let mut device = TpmDevice::from_stream(client, "test stream");
+        let response = device.execute(&command).unwrap();
+        assert!(response.is_success());
+        assert_eq!(response.data, [0, 0]);
+        server_thread.join().unwrap();
+    }
+
+    #[test]
+    fn adds_a_vendor_command_to_command_capabilities() {
+        let response = TpmResponse {
+            tag: TpmSt::NoSessions,
+            response_code: 0,
+            data: {
+                let mut data = vec![0];
+                data.extend_from_slice(&(TpmCap::Commands as u32).to_be_bytes());
+                data.extend_from_slice(&1u32.to_be_bytes());
+                data.extend_from_slice(&0x2000_1000u32.to_be_bytes());
+                data
+            },
+        }
+        .to_bytes();
+        let response = add_command_capability(&response, 0x2000_0001).unwrap();
+        let response = TpmResponse::parse(&response).unwrap();
+        let mut data = response.data_buffer();
+        assert_eq!(data.get_u8().unwrap(), 0);
+        assert_eq!(data.get_u32().unwrap(), TpmCap::Commands as u32);
+        assert_eq!(data.get_u32().unwrap(), 2);
+        assert_eq!(data.get_u32().unwrap(), 0x2000_0001);
+        assert_eq!(data.get_u32().unwrap(), 0x2000_1000);
+    }
 
     #[test]
     fn test_command_builder() {

@@ -33,6 +33,7 @@ use tpm_qvl::verify::VerifiedReport as TpmVerifiedReport;
 /// File paths for attestation trust anchors. Empty fields retain the vendor
 /// production roots. Paths are read by the verifier, never by the attester.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RootCaPaths {
     pub tdx: Option<std::path::PathBuf>,
     pub gcp_tpm: Option<std::path::PathBuf>,
@@ -44,6 +45,7 @@ pub struct RootCaPaths {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AttestationVerifierConfig {
     #[serde(default)]
     pub insecure_allow_external_trust_anchors: bool,
@@ -252,8 +254,9 @@ static QUOTE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Read vm_config from sys-config.json
 #[cfg(feature = "quote")]
-fn read_vm_config() -> Result<String> {
-    let content = match fs_err::read_to_string(sys_config_path()) {
+fn read_vm_config(path: Option<&std::path::Path>) -> Result<String> {
+    let path = path.map_or_else(sys_config_path, std::path::Path::to_path_buf);
+    let content = match fs_err::read_to_string(path) {
         Ok(content) => content,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
         Err(err) => return Err(err).context("Failed to read sys-config"),
@@ -269,8 +272,9 @@ fn read_vm_config() -> Result<String> {
 /// where `mr_config` lives (top-level field, falling back to the one embedded
 /// in `vm_config`).
 #[cfg(feature = "quote")]
-fn read_mr_config_document() -> Result<Option<String>> {
-    let content = match fs_err::read_to_string(sys_config_path()) {
+fn read_mr_config_document(path: Option<&std::path::Path>) -> Result<Option<String>> {
+    let path = path.map_or_else(sys_config_path, std::path::Path::to_path_buf);
+    let content = match fs_err::read_to_string(path) {
         Ok(content) => content,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err).context("Failed to read sys-config"),
@@ -388,6 +392,19 @@ fn find_event(runtime_events: &[RuntimeEvent], name: &str) -> Result<RuntimeEven
 
 fn find_event_payload(runtime_events: &[RuntimeEvent], event: &str) -> Result<Vec<u8>> {
     find_event(runtime_events, event).map(|event| event.payload)
+}
+
+/// Returns ordered payloads for matching boot-time events.
+///
+/// Events after `system-ready` are application-controlled and intentionally
+/// excluded from system measurements exposed through decoded app info.
+fn find_event_payloads(runtime_events: &[RuntimeEvent], name: &str) -> Vec<Vec<u8>> {
+    runtime_events
+        .iter()
+        .take_while(|event| event.event != "system-ready")
+        .filter(|event| event.event == name)
+        .map(|event| event.payload.clone())
+        .collect()
 }
 
 fn decode_vm_config_with_fallback(config: &str, fallback_config: &str) -> Result<VmConfig> {
@@ -734,8 +751,15 @@ impl VersionedAttestation {
             bail!("Empty attestation bytes");
         };
         if first == 0x00 {
-            let legacy = LegacyVersionedAttestation::decode(&mut &bytes[..])
+            let mut input = bytes;
+            let legacy = LegacyVersionedAttestation::decode(&mut input)
                 .context("Failed to decode legacy VersionedAttestation")?;
+            if !input.is_empty() {
+                bail!(
+                    "Trailing bytes after legacy VersionedAttestation: {}",
+                    input.len()
+                );
+            }
             return match legacy {
                 LegacyVersionedAttestation::V0 { attestation } => Ok(Self::V0 { attestation }),
             };
@@ -890,6 +914,7 @@ impl AttestationV1 {
                 key_provider_info,
                 os_image_hash,
                 compose_hash,
+                init_script_hashes: Some(find_event_payloads(runtime_events, "init-script-hash")),
             }
         };
 
@@ -1095,6 +1120,15 @@ impl AttestationV1 {
                 DstackVerifiedReport::DstackAmdSevSnp(verified)
             }
         };
+
+        match &platform {
+            PlatformEvidence::Tdx { event_log, .. }
+            | PlatformEvidence::GcpTdx { event_log, .. } => {
+                cc_eventlog::tdx::validate_v2_preimages(event_log)
+                    .context("Failed to validate TDX V2 event digest preimages")?;
+            }
+            _ => {}
+        }
 
         Ok(VerifiedAttestation {
             quote: platform_into_legacy_quote(platform),
@@ -1547,7 +1581,7 @@ struct Mrs {
 fn key_provider_info_from_mr_config(mr_config: &MrConfigV3) -> Result<Vec<u8>> {
     serde_json::to_vec(&KeyProviderInfo::new(
         mr_config.key_provider_name().to_string(),
-        hex::encode(&mr_config.key_provider_id),
+        hex::encode(mr_config.key_provider_id.as_deref().unwrap_or_default()),
     ))
     .context("Failed to serialize key provider info")
 }
@@ -1607,14 +1641,15 @@ fn decode_app_info_sev_snp(
     let mrs = decode_mr_sev_snp(&parsed.measurement, &parsed.host_data);
 
     Ok(AppInfo {
-        app_id: mr_config.app_id,
-        instance_id: mr_config.instance_id,
+        app_id: mr_config.app_id.unwrap_or_default(),
+        instance_id: mr_config.instance_id.unwrap_or_default(),
         device_id: sha256(parsed.chip_id).to_vec(),
         mr_system: mrs.mr_system,
         mr_aggregated: mrs.mr_aggregated,
         key_provider_info,
         os_image_hash,
         compose_hash: mr_config.compose_hash,
+        init_script_hashes: mr_config.init_script_hashes,
     })
 }
 
@@ -1937,6 +1972,10 @@ impl<T: GetDeviceId> Attestation<T> {
                 key_provider_info,
                 os_image_hash,
                 compose_hash,
+                init_script_hashes: Some(find_event_payloads(
+                    &self.runtime_events,
+                    "init-script-hash",
+                )),
             }
         };
 
@@ -2027,6 +2066,12 @@ impl<T> Attestation<T> {
         self.find_event(event).map(|event| event.payload)
     }
 
+    /// SHA-256 payloads of all measured init scripts, in execution order.
+    /// Application-emitted events after `system-ready` are excluded.
+    pub fn decode_init_script_hashes(&self) -> Vec<Vec<u8>> {
+        find_event_payloads(&self.runtime_events, "init-script-hash")
+    }
+
     fn find_event_hex_payload(&self, event: &str) -> Result<String> {
         self.find_event(event)
             .map(|event| hex::encode(&event.payload))
@@ -2093,6 +2138,22 @@ impl Attestation {
     }
 
     pub fn quote_with_app_id(report_data: &[u8; 64], app_id: Option<[u8; 20]>) -> Result<Self> {
+        Self::quote_with_app_id_and_sys_config(report_data, app_id, None)
+    }
+
+    /// Create an attestation using an explicit sys-config path.
+    pub fn quote_with_sys_config(
+        report_data: &[u8; 64],
+        sys_config: &std::path::Path,
+    ) -> Result<Self> {
+        Self::quote_with_app_id_and_sys_config(report_data, None, Some(sys_config))
+    }
+
+    fn quote_with_app_id_and_sys_config(
+        report_data: &[u8; 64],
+        app_id: Option<[u8; 20]>,
+        sys_config: Option<&std::path::Path>,
+    ) -> Result<Self> {
         // Lock to prevent concurrent quote generation (TDX driver doesn't support it)
         let _guard = QUOTE_LOCK
             .lock()
@@ -2106,7 +2167,7 @@ impl Attestation {
             // AWS prefers host-shared vm_config because it carries the
             // aws_measurement and unified os_image_hash validated below.
             | TeeVariant::DstackAwsNitroTpm => {
-                read_vm_config().context("Failed to read vm config")?
+                read_vm_config(sys_config).context("Failed to read vm config")?
             }
             // NitroEnclave derives config from the signed image hash below.
             TeeVariant::DstackNitroEnclave => String::new(),
@@ -2216,7 +2277,7 @@ impl Attestation {
         };
         if let AttestationQuote::DstackAmdSevSnp(quote) = &mut quote {
             quote.mr_config =
-                read_mr_config_document()?.context("amd sev-snp mr_config is missing")?;
+                read_mr_config_document(sys_config)?.context("amd sev-snp mr_config is missing")?;
         }
 
         Ok(Self {
@@ -2291,6 +2352,18 @@ impl Attestation {
                 DstackVerifiedReport::DstackAwsNitroTpm(report)
             }
         };
+
+        match &self.quote {
+            AttestationQuote::DstackTdx(q) => {
+                cc_eventlog::tdx::validate_v2_preimages(&q.event_log)
+                    .context("Failed to validate TDX V2 event digest preimages")?;
+            }
+            AttestationQuote::DstackGcpTdx(q) => {
+                cc_eventlog::tdx::validate_v2_preimages(&q.tdx_quote.event_log)
+                    .context("Failed to validate TDX V2 event digest preimages")?;
+            }
+            _ => {}
+        }
 
         Ok(VerifiedAttestation {
             quote: self.quote,
@@ -2491,11 +2564,51 @@ pub struct AppInfo {
     /// Key provider info
     #[serde(with = "hex_bytes")]
     pub key_provider_info: Vec<u8>,
+    /// Optional SHA-256 pins for init scripts, in execution order. `None`
+    /// means the evidence did not bind this field. On SEV-SNP, `Some(vec![])`
+    /// explicitly binds an empty script list. On TDX and Nitro it only means
+    /// that no `init-script-hash` events were measured before `system-ready`;
+    /// pre-0.6.0 images emit no such events even when they run an init script.
+    #[serde(default, with = "dstack_types::init_script_hashes::option")]
+    pub init_script_hashes: Option<Vec<Vec<u8>>>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_info_defaults_missing_init_script_hashes() {
+        let app_info: AppInfo = serde_json::from_value(serde_json::json!({
+            "app_id": "",
+            "compose_hash": "",
+            "instance_id": "",
+            "device_id": "",
+            "mr_system": "0000000000000000000000000000000000000000000000000000000000000000",
+            "mr_aggregated": "0000000000000000000000000000000000000000000000000000000000000000",
+            "os_image_hash": "",
+            "key_provider_info": ""
+        }))
+        .unwrap();
+        assert!(app_info.init_script_hashes.is_none());
+    }
+
+    #[test]
+    fn app_info_preserves_explicit_empty_init_script_hashes() {
+        let app_info: AppInfo = serde_json::from_value(serde_json::json!({
+            "app_id": "",
+            "compose_hash": "",
+            "instance_id": "",
+            "device_id": "",
+            "mr_system": "0000000000000000000000000000000000000000000000000000000000000000",
+            "mr_aggregated": "0000000000000000000000000000000000000000000000000000000000000000",
+            "os_image_hash": "",
+            "key_provider_info": "",
+            "init_script_hashes": []
+        }))
+        .unwrap();
+        assert_eq!(app_info.init_script_hashes, Some(Vec::new()));
+    }
 
     #[test]
     fn external_trust_anchor_requires_explicit_insecure_opt_in() {
@@ -2690,7 +2803,10 @@ mod tests {
         let content = b"test content";
 
         let report_data = content_type.to_report_data(content);
-        assert_eq!(hex::encode(report_data), "7ea0b744ed5e9c0c83ff9f575668e1697652cd349f2027cdf26f918d4c53e8cd50b5ea9b449b4c3d50e20ae00ec29688d5a214e8daff8a10041f5d624dae8a01");
+        assert_eq!(
+            hex::encode(report_data),
+            "7ea0b744ed5e9c0c83ff9f575668e1697652cd349f2027cdf26f918d4c53e8cd50b5ea9b449b4c3d50e20ae00ec29688d5a214e8daff8a10041f5d624dae8a01"
+        );
 
         // Test SHA-256
         let result = content_type
@@ -2824,6 +2940,21 @@ mod tests {
     }
     fn v1_event(event: String, payload: Vec<u8>) -> RuntimeEvent {
         RuntimeEvent::new(event, payload, EventLogVersion::V1)
+    }
+
+    #[test]
+    fn init_script_hashes_exclude_application_events_after_system_ready() {
+        let events = vec![
+            v1_event("init-script-hash".into(), vec![0x11; 32]),
+            v1_event("init-script-hash".into(), vec![0x22; 32]),
+            v1_event("system-ready".into(), Vec::new()),
+            v1_event("init-script-hash".into(), vec![0xff; 32]),
+        ];
+
+        assert_eq!(
+            find_event_payloads(&events, "init-script-hash"),
+            vec![vec![0x11; 32], vec![0x22; 32]]
+        );
     }
 
     #[test]
@@ -3035,5 +3166,39 @@ mod tests {
             ])
         );
         Ok(())
+    }
+
+    #[test]
+    fn versioned_wire_formats_reject_malformed_boundaries() {
+        assert!(VersionedAttestation::from_bytes(&[]).is_err());
+        assert!(VersionedAttestation::from_bytes(&[0xff]).is_err());
+        assert!(VersionedAttestation::from_bytes(&vec![0xff; MAX_ATTESTATION_BYTES + 1]).is_err());
+
+        let legacy = dummy_tdx_attestation([0x31; 64]).into_versioned();
+        assert!(matches!(legacy, VersionedAttestation::V0 { .. }));
+        let legacy_bytes = legacy.to_bytes().unwrap();
+        let decoded = VersionedAttestation::from_bytes(&legacy_bytes).unwrap();
+        assert_eq!(decoded.into_v1().report_data().unwrap(), [0x31; 64]);
+        assert!(VersionedAttestation::from_bytes(&legacy_bytes[..legacy_bytes.len() - 1]).is_err());
+        assert!(
+            VersionedAttestation::from_bytes(&[legacy_bytes.as_slice(), &[0xaa]].concat()).is_err()
+        );
+
+        let current = dummy_tdx_attestation([0x32; 64])
+            .into_v1()
+            .into_dstack_pod("versioned-boundary".into());
+        let current = VersionedAttestation::V1 {
+            attestation: current,
+        };
+        let current_bytes = current.to_bytes().unwrap();
+        let decoded = VersionedAttestation::from_bytes(&current_bytes).unwrap();
+        assert_eq!(decoded.into_v1().report_data().unwrap(), [0x32; 64]);
+        assert!(
+            VersionedAttestation::from_bytes(&current_bytes[..current_bytes.len() - 1]).is_err()
+        );
+        assert!(
+            VersionedAttestation::from_bytes(&[current_bytes.as_slice(), &[0xaa]].concat())
+                .is_err()
+        );
     }
 }

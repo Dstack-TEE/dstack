@@ -15,16 +15,20 @@ use certbot::{AcmeClient, Dns01Client};
 use dstack_guest_agent_rpc::RawQuoteArgs;
 use ra_tls::attestation::QuoteContentType;
 use ra_tls::rcgen::KeyPair;
+use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 use crate::cert_store::CertResolver;
 use crate::kv::{
-    AcmeAttestation, CertAttestation, CertCredentials, CertData, DnsProvider, KvStore,
-    ZtDomainConfig,
+    AcmeAttestation, CertAttestation, CertCredentials, CertData, DnsCredential, DnsProvider,
+    KvStore, ZtDomainConfig,
 };
 
 /// Lock timeout for certificate renewal (10 minutes)
 const RENEW_LOCK_TIMEOUT_SECS: u64 = 600;
+
+/// Lock timeout for ACME credential rotation (10 minutes)
+const ROTATION_LOCK_TIMEOUT_SECS: u64 = 600;
 
 /// Default ACME URL (Let's Encrypt production)
 const DEFAULT_ACME_URL: &str = "https://acme-v02.api.letsencrypt.org/directory";
@@ -33,6 +37,11 @@ const DEFAULT_ACME_URL: &str = "https://acme-v02.api.letsencrypt.org/directory";
 pub struct DistributedCertBot {
     kv_store: Arc<KvStore>,
     cert_resolver: Arc<CertResolver>,
+    /// Serializes CAA reconciliation and credential rotation within this process.
+    ///
+    /// Credential rotation is additionally guarded across nodes by a
+    /// best-effort lock in WaveKV; see [`KvStore::try_acquire_rotation_lock`].
+    caa_lock: Mutex<()>,
 }
 
 impl DistributedCertBot {
@@ -40,7 +49,161 @@ impl DistributedCertBot {
         Self {
             kv_store,
             cert_resolver,
+            caa_lock: Default::default(),
         }
+    }
+
+    async fn dns_client(&self, domain: &str, dns_cred: &DnsCredential) -> Result<Dns01Client> {
+        match &dns_cred.provider {
+            DnsProvider::Cloudflare { api_token, api_url } => {
+                Dns01Client::new_cloudflare(domain.to_string(), api_token.clone(), api_url.clone())
+                    .await
+            }
+        }
+    }
+
+    /// Rotate the shared ACME account without interrupting certificate serving.
+    ///
+    /// The sequence is: validate every domain's DNS credential, create the
+    /// replacement account, publish the new credentials, then re-pin every
+    /// domain's CAA record to the new account. Publishing before re-pinning
+    /// makes the failure mode convergent: if some domains fail to re-pin, the
+    /// cluster is already on the new account and rerunning `SetCaa` finishes
+    /// the switch without registering yet another account (Let's Encrypt caps
+    /// new registrations per IP).
+    ///
+    /// Between publishing and re-pinning, a renewal on another node may pick up
+    /// the new account while a domain's CAA still pins the old one; that
+    /// issuance fails and the periodic renewal task retries. Re-pinning briefly
+    /// installs `;` guard CAA records, so a failure can leave a domain blocked
+    /// from issuance until a later `SetCaa` run succeeds (the same hazard as
+    /// [`Self::set_caa_all`]).
+    ///
+    /// This RPC re-pins issuance to the new account; it does not deactivate the
+    /// old ACME account at the CA.
+    pub async fn rotate_acme_credentials(&self) -> Result<(String, usize)> {
+        let Ok(_guard) = self.caa_lock.try_lock() else {
+            bail!("ACME credential rotation or CAA reconciliation is already in progress");
+        };
+        let Some(rotation_lock) = self
+            .kv_store
+            .try_acquire_rotation_lock(ROTATION_LOCK_TIMEOUT_SECS)
+        else {
+            bail!("another node is rotating ACME credentials; retry after it finishes");
+        };
+        let result = self.do_rotate_acme_credentials().await;
+        if let Err(err) = self.kv_store.release_rotation_lock(&rotation_lock) {
+            error!("failed to release ACME rotation lock: {err:?}");
+        }
+        result
+    }
+
+    async fn do_rotate_acme_credentials(&self) -> Result<(String, usize)> {
+        let configs = self.kv_store.list_zt_domain_configs();
+        let certbot_config = self.config();
+        let acme_url = if certbot_config.acme_url.is_empty() {
+            DEFAULT_ACME_URL
+        } else {
+            &certbot_config.acme_url
+        };
+
+        // Validate every domain's DNS credential up front: constructing a DNS
+        // client resolves the zone through an authenticated API call, so a
+        // misconfigured domain aborts the rotation here with no side effects
+        // and no ACME account consumed.
+        let mut prepared = Vec::with_capacity(configs.len());
+        for config in &configs {
+            let dns_cred = dns_credential_for(&self.kv_store, config)?;
+            let dns_client = self
+                .dns_client(&config.domain, &dns_cred)
+                .await
+                .with_context(|| format!("DNS credential check failed for {}", config.domain))?;
+            prepared.push((&config.domain, dns_cred, dns_client));
+        }
+        let total = prepared.len();
+        let mut prepared = prepared.into_iter();
+        let Some((first_domain, first_cred, first_client)) = prepared.next() else {
+            bail!("no ZT-Domain configured for ACME credential rotation");
+        };
+
+        let client = AcmeClient::new_account(
+            acme_url,
+            first_client,
+            first_cred.max_dns_wait,
+            first_cred.dns_txt_ttl,
+        )
+        .await
+        .context("failed to create replacement ACME account")?;
+        let credentials = client
+            .dump_credentials()
+            .context("failed to encode replacement ACME credentials")?;
+        let account_uri = client.account_id().to_string();
+
+        // Publish immediately. From here the cluster converges on the new
+        // account, and recovering from a partial re-pin below never needs to
+        // register another account. Readers create an ACME client per
+        // operation, so all nodes pick this up after WaveKV propagates it.
+        self.kv_store.save_acme_credentials(&CertCredentials {
+            acme_credentials: credentials.clone(),
+        })?;
+
+        // Re-pin every domain's CAA to the new account, best effort across all
+        // domains: one failing domain must not block re-pinning the rest. The
+        // first domain reuses the registration client, which is already bound
+        // to its DNS client and the new credentials.
+        let mut failed = Vec::new();
+        let mut record = |domain: &String, result: Result<()>| match result {
+            Ok(()) => info!("cert[{domain}]: CAA re-pinned to {account_uri}"),
+            Err(err) => {
+                error!("cert[{domain}]: failed to re-pin CAA: {err:?}");
+                failed.push(domain.clone());
+            }
+        };
+        record(
+            first_domain,
+            client
+                .set_caa_records(std::slice::from_ref(first_domain))
+                .await
+                .context("failed to update CAA records"),
+        );
+        for (domain, dns_cred, dns_client) in prepared {
+            let result = async {
+                let client = AcmeClient::load(
+                    dns_client,
+                    &credentials,
+                    dns_cred.max_dns_wait,
+                    dns_cred.dns_txt_ttl,
+                )
+                .await
+                .context("failed to prepare ACME client")?;
+                client
+                    .set_caa_records(std::slice::from_ref(domain))
+                    .await
+                    .context("failed to update CAA records")
+            }
+            .await;
+            record(domain, result);
+        }
+
+        // Attest the new account only after CAA re-pinning: attestation does
+        // not gate issuance, so its agent round trips must not widen the
+        // window where the published account and the CAA records disagree.
+        // Run it even when some domains failed so the new account is still
+        // recorded.
+        if let Err(err) = self.generate_and_save_acme_attestation(&account_uri).await {
+            warn!("failed to attest rotated ACME account: {err:?}");
+        }
+
+        if !failed.is_empty() {
+            bail!(
+                "rotated to {account_uri} and published the new credentials, but failed to \
+                 re-pin CAA for {}/{total} domains: {}; rerun SetCaa until it succeeds — \
+                 retrying the rotation would register yet another account",
+                failed.len(),
+                failed.join(", ")
+            );
+        }
+        Ok((account_uri, total))
     }
 
     /// Get the current certbot configuration from KV store
@@ -80,6 +243,71 @@ impl DistributedCertBot {
         // No valid cert, need to request new one
         info!(domain, "no valid certificate found, requesting from ACME");
         self.request_new_cert(domain).await
+    }
+
+    /// Set CAA records for every configured ZT domain.
+    ///
+    /// Reconciliation is per-domain best effort: a failing domain is logged and the
+    /// remaining domains are still reconciled, so one misconfigured domain cannot
+    /// leave the rest unauthorized. Failures are reported together in the returned
+    /// error.
+    ///
+    /// Note that reconciling a domain briefly installs `;` guard CAA records that
+    /// forbid issuance for that name. A failure in the middle of the sequence can
+    /// leave those guards behind, blocking issuance for the domain until a later run
+    /// succeeds. The guard window can also fail an ACME order that is in flight for
+    /// the same domain; the periodic renewal task retries, so that is transient.
+    pub async fn set_caa_all(&self) -> Result<()> {
+        let Ok(_guard) = self.caa_lock.try_lock() else {
+            bail!("ACME credential rotation or CAA reconciliation is already in progress");
+        };
+        let configs = self.kv_store.list_zt_domain_configs();
+        if configs.is_empty() {
+            warn!("no ZT-Domain configured, no CAA records to set");
+            return Ok(());
+        }
+
+        let total = configs.len();
+        let mut failed = Vec::new();
+        for config in configs {
+            let domain = config.domain.clone();
+            match self.set_caa(&domain, &config).await {
+                Ok(()) => info!("cert[{domain}]: CAA records reconciled"),
+                Err(err) => {
+                    error!("cert[{domain}]: failed to set CAA records: {err:?}");
+                    failed.push(domain);
+                }
+            }
+        }
+
+        if !failed.is_empty() {
+            bail!(
+                "failed to set CAA records for {}/{total} domains: {}; \
+                 they may retain guard CAA records that block issuance until a rerun succeeds",
+                failed.len(),
+                failed.join(", ")
+            );
+        }
+        info!("CAA records reconciled for {total} domains");
+        Ok(())
+    }
+
+    /// Set CAA records for a single ZT domain.
+    ///
+    /// The domain in the config is the base domain and certificates are issued for
+    /// `*.{domain}`, which the CAA lookup covers by climbing to the base domain.
+    ///
+    /// The written CAA value pins `accounturi` to the global ACME account, so this
+    /// reuses the account from the KV store and registers one if none exists yet.
+    async fn set_caa(&self, domain: &str, config: &ZtDomainConfig) -> Result<()> {
+        let acme_client = self
+            .get_or_create_acme_client(domain, config)
+            .await
+            .context("failed to initialize ACME client")?;
+        acme_client
+            .set_caa_records(&[domain.to_string()])
+            .await
+            .context("failed to set CAA records")
     }
 
     /// Try to renew all ZT-Domain certificates
@@ -290,23 +518,10 @@ impl DistributedCertBot {
         config: &ZtDomainConfig,
     ) -> Result<AcmeClient> {
         // Get DNS credential (from config or default)
-        let dns_cred = if let Some(ref cred_id) = config.dns_cred_id {
-            self.kv_store
-                .get_dns_credential(cred_id)
-                .context("specified DNS credential not found")?
-        } else {
-            self.kv_store
-                .get_default_dns_credential()
-                .context("no default DNS credential configured")?
-        };
+        let dns_cred = dns_credential_for(&self.kv_store, config)?;
 
         // Create DNS client based on provider
-        let dns01_client = match &dns_cred.provider {
-            DnsProvider::Cloudflare { api_token, api_url } => {
-                Dns01Client::new_cloudflare(domain.to_string(), api_token.clone(), api_url.clone())
-                    .await?
-            }
-        };
+        let dns01_client = self.dns_client(domain, &dns_cred).await?;
 
         // Use ACME URL from certbot config, fall back to default if not set
         let config = self.config();
@@ -316,20 +531,35 @@ impl DistributedCertBot {
             &config.acme_url
         };
 
-        // Try to load global ACME credentials from KvStore
-        if let Some(creds) = self.kv_store.get_acme_credentials() {
-            if acme_url_matches(&creds.acme_credentials, acme_url) {
-                info!("loaded global ACME account credentials from KvStore");
-                return AcmeClient::load(
-                    dns01_client,
-                    &creds.acme_credentials,
-                    dns_cred.max_dns_wait,
-                    dns_cred.dns_txt_ttl,
-                )
-                .await
-                .context("failed to load ACME client from KvStore credentials");
+        // Try to load global ACME credentials from KvStore. A corrupt record
+        // is an error, not absence: falling through to account registration
+        // would silently create an account that the account-bound CAA records
+        // refuse, and burn a rate-limited registration.
+        let stored_creds = self
+            .kv_store
+            .get_acme_credentials()
+            .context("call RotateAcmeCredentials to replace the stored ACME credentials")?;
+        if let Some(creds) = stored_creds {
+            if !acme_url_matches(&creds.acme_credentials, acme_url).context(
+                "invalid ACME credentials in KvStore; call RotateAcmeCredentials to replace them",
+            )? {
+                // Registering a fresh account here would leave every domain's
+                // CAA pinned to the old account and block issuance; rotation
+                // re-pins CAA along with the switch.
+                bail!(
+                    "stored ACME credentials are for a different ACME directory; \
+                     call RotateAcmeCredentials to switch directories"
+                );
             }
-            warn!("ACME URL mismatch in KvStore credentials, will create new account");
+            info!("loaded global ACME account credentials from KvStore");
+            return AcmeClient::load(
+                dns01_client,
+                &creds.acme_credentials,
+                dns_cred.max_dns_wait,
+                dns_cred.dns_txt_ttl,
+            )
+            .await
+            .context("failed to load ACME client from KvStore credentials");
         }
 
         // Create new global ACME account
@@ -481,6 +711,18 @@ impl DistributedCertBot {
     }
 }
 
+fn dns_credential_for(kv_store: &KvStore, config: &ZtDomainConfig) -> Result<DnsCredential> {
+    if let Some(ref cred_id) = config.dns_cred_id {
+        kv_store
+            .get_dns_credential(cred_id)
+            .context("specified DNS credential not found")
+    } else {
+        kv_store
+            .get_default_dns_credential()
+            .context("no default DNS credential configured")
+    }
+}
+
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -495,19 +737,18 @@ fn get_cert_expiry(cert_pem: &str) -> Option<u64> {
     Some(cert.validity().not_after.timestamp() as u64)
 }
 
-fn acme_url_matches(credentials_json: &str, expected_url: &str) -> bool {
+fn acme_url_matches(credentials_json: &str, expected_url: &str) -> Result<bool> {
     #[derive(serde::Deserialize)]
     struct Creds {
-        #[serde(default)]
         acme_url: String,
     }
-    serde_json::from_str::<Creds>(credentials_json)
-        .map(|c| c.acme_url == expected_url)
-        .unwrap_or(false)
+    let credentials = serde_json::from_str::<Creds>(credentials_json)
+        .context("failed to decode ACME credentials")?;
+    Ok(credentials.acme_url == expected_url)
 }
 
 /// Extract account_id (URI) from ACME credentials JSON
-fn extract_account_uri(credentials_json: &str) -> Option<String> {
+pub(crate) fn extract_account_uri(credentials_json: &str) -> Option<String> {
     #[derive(serde::Deserialize)]
     struct Creds {
         #[serde(default)]
@@ -517,4 +758,139 @@ fn extract_account_uri(credentials_json: &str) -> Option<String> {
         .ok()
         .filter(|c| !c.account_id.is_empty())
         .map(|c| c.account_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_certbot(data_dir: &std::path::Path) -> DistributedCertBot {
+        let kv_store =
+            Arc::new(KvStore::new(1, vec![], data_dir).expect("failed to create kv store"));
+        DistributedCertBot::new(kv_store, Arc::new(CertResolver::new()))
+    }
+
+    #[tokio::test]
+    async fn set_caa_all_succeeds_without_configured_domains() {
+        let data_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let certbot = test_certbot(data_dir.path());
+        // No ZT-Domain configured: nothing to reconcile and no DNS provider is contacted.
+        certbot
+            .set_caa_all()
+            .await
+            .expect("set_caa_all should succeed without domains");
+    }
+
+    #[tokio::test]
+    async fn set_caa_all_rejects_concurrent_runs() {
+        let data_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let certbot = test_certbot(data_dir.path());
+        let _guard = certbot.caa_lock.lock().await;
+        let err = certbot
+            .set_caa_all()
+            .await
+            .expect_err("a concurrent run should be rejected");
+        assert!(
+            err.to_string().contains("already in progress"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rotate_acme_credentials_rejects_concurrent_runs() {
+        let data_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let certbot = test_certbot(data_dir.path());
+        let _guard = certbot.caa_lock.lock().await;
+        let err = certbot
+            .rotate_acme_credentials()
+            .await
+            .expect_err("a concurrent run should be rejected");
+        assert!(
+            err.to_string().contains("already in progress"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rotate_acme_credentials_rejects_when_another_node_holds_the_lock() {
+        let data_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let certbot = test_certbot(data_dir.path());
+        assert!(certbot
+            .kv_store
+            .try_acquire_rotation_lock(ROTATION_LOCK_TIMEOUT_SECS)
+            .is_some());
+        let err = certbot
+            .rotate_acme_credentials()
+            .await
+            .expect_err("rotation should be rejected while the KV lock is held");
+        assert!(
+            err.to_string()
+                .contains("another node is rotating ACME credentials"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rotate_acme_credentials_requires_a_configured_domain() {
+        let data_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let certbot = test_certbot(data_dir.path());
+        let err = certbot
+            .rotate_acme_credentials()
+            .await
+            .expect_err("rotation without domains should fail");
+        assert!(
+            err.to_string().contains("no ZT-Domain configured"),
+            "unexpected error: {err}"
+        );
+        // The failed rotation must release the KV lock so a later run can proceed.
+        assert!(certbot
+            .kv_store
+            .try_acquire_rotation_lock(ROTATION_LOCK_TIMEOUT_SECS)
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn stale_rotation_holder_does_not_release_a_newer_lock() {
+        let data_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let certbot = test_certbot(data_dir.path());
+        let current = certbot
+            .kv_store
+            .try_acquire_rotation_lock(ROTATION_LOCK_TIMEOUT_SECS)
+            .expect("lock should be free");
+        // Simulate a holder that exceeded the timeout and was superseded.
+        let stale = crate::kv::CertRenewLock {
+            started_at: current.started_at.saturating_sub(100),
+            started_by: 99,
+        };
+        certbot
+            .kv_store
+            .release_rotation_lock(&stale)
+            .expect("stale release should be a no-op, not an error");
+        assert!(
+            certbot.kv_store.get_rotation_lock().is_some(),
+            "the newer holder's lock must remain in place"
+        );
+        certbot
+            .kv_store
+            .release_rotation_lock(&current)
+            .expect("owner release should succeed");
+        assert!(certbot.kv_store.get_rotation_lock().is_none());
+    }
+
+    #[test]
+    fn corrupt_acme_credentials_fail_closed() {
+        assert!(acme_url_matches("not-json", "https://acme.test/directory").is_err());
+        assert!(acme_url_matches("{}", "https://acme.test/directory").is_err());
+    }
+
+    #[test]
+    fn valid_acme_credentials_distinguish_directory() {
+        let credentials = r#"{"acme_url":"https://acme.test/directory"}"#;
+        assert!(acme_url_matches(credentials, "https://acme.test/directory")
+            .expect("valid credentials rejected"));
+        assert!(
+            !acme_url_matches(credentials, "https://other.test/directory")
+                .expect("valid credentials rejected")
+        );
+    }
 }

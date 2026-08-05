@@ -17,11 +17,47 @@ pub mod attestation;
 mod aws_nitro_tpm;
 #[cfg(feature = "quote")]
 mod sev_snp;
+pub mod trust_anchors;
 mod v1;
 
 const RUNTIME_EVENT_DIR: &str = "/run/log/dstack";
 const RUNTIME_EVENT_VERSION_FILE: &str = "/run/log/dstack/runtime_event_version";
 const RUNTIME_EVENT_LOCK_FILE: &str = "/run/log/dstack/runtime_event.lock";
+
+/// Build the verifier a guest authenticates the KMS and the gateway with.
+///
+/// Trust anchors are taken from [`trust_anchors::ANCHOR_DIR`] when that
+/// directory holds a set published inside this guest. When it does not — the
+/// only outcome on a production image — the vendor production roots apply.
+///
+/// `collateral_urls` selects where signed collateral is fetched from; the trust
+/// anchor still has to sign it.
+pub fn default_verifier(
+    collateral_urls: &attestation::CollateralUrls,
+) -> anyhow::Result<attestation::AttestationVerifier> {
+    use attestation::{AttestationVerifier, AttestationVerifierConfig};
+
+    let Some(root_ca) =
+        trust_anchors::load_anchors(std::path::Path::new(trust_anchors::ANCHOR_DIR))
+            .context("failed to load local attestation anchors")?
+    else {
+        return AttestationVerifier::new_prod(Some(collateral_urls));
+    };
+    tracing::warn!(
+        dir = trust_anchors::ANCHOR_DIR,
+        "verifying attestation against external trust anchors published by the in-guest TEE \
+         simulator; this guest cannot verify production evidence"
+    );
+    AttestationVerifier::load(&AttestationVerifierConfig {
+        // The opt-in exists to make an operator acknowledge a non-production
+        // root in a hand-written service config. Nothing here is hand-written:
+        // the roots came from a guest-local directory `load_anchors` already
+        // authenticated, so the flag has no one left to warn.
+        insecure_allow_external_trust_anchors: true,
+        urls: collateral_urls.clone(),
+        root_ca,
+    })
+}
 
 /// Acquire the system-wide runtime event lock, blocking until it is available.
 ///
@@ -150,8 +186,6 @@ pub fn emit_runtime_event(event: &str, payload: &[u8]) -> anyhow::Result<()> {
     let event = RuntimeEvent::new(event.to_string(), payload.to_vec(), version);
     let mode = detect_tee_variant()?;
 
-    event.emit().context("Failed to emit runtime event")?;
-
     if mode.has_tdx() {
         let digest = event.sha384_digest();
         let event_type = event.cc_event_type();
@@ -173,6 +207,11 @@ pub fn emit_runtime_event(event: &str, payload: &[u8]) -> anyhow::Result<()> {
             bank => anyhow::bail!("unsupported TPM PCR bank: {bank}"),
         }
     }
+
+    // Commit the userspace log only after the platform register accepted the
+    // measurement. A device failure must never leave an unmeasured event in
+    // the trusted replay log.
+    event.emit().context("Failed to emit runtime event")?;
     Ok(())
 }
 

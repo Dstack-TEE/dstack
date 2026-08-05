@@ -10,7 +10,7 @@ use std::{
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use cert_client::CertRequestClient;
-use dstack_attest::attestation::AttestationVerifier;
+use dstack_attest::default_verifier;
 use dstack_guest_agent_rpc::{
     dstack_guest_server::{DstackGuestRpc, DstackGuestServer},
     tappd_server::{TappdRpc, TappdServer},
@@ -163,7 +163,9 @@ impl AppState {
                 .context("Failed to parse VM config")?;
         let collateral_urls = sys_config.collateral_urls();
         let vm_config = sys_config.vm_config;
-        let verifier = Arc::new(AttestationVerifier::new_prod(Some(&collateral_urls))?);
+        // Same trust anchor decision as dstack-util: never host-supplied, and
+        // development roots only when this guest published them itself.
+        let verifier = Arc::new(default_verifier(&collateral_urls)?);
         let cert_client = CertRequestClient::create(&keys, verifier, vm_config.clone())
             .await
             .context("Failed to create cert signer")?;
@@ -269,8 +271,18 @@ pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
     })
 }
 
+fn validate_cert_validity(not_before: Option<u64>, not_after: Option<u64>) -> Result<()> {
+    if let (Some(not_before), Some(not_after)) = (not_before, not_after) {
+        if not_before >= not_after {
+            anyhow::bail!("not_before must be earlier than not_after");
+        }
+    }
+    Ok(())
+}
+
 impl DstackGuestRpc for InternalRpcHandler {
     async fn get_tls_key(self, request: GetTlsKeyArgs) -> anyhow::Result<GetTlsKeyResponse> {
+        validate_cert_validity(request.not_before, request.not_after)?;
         let mut seed = [0u8; 32];
         SystemRandom::new()
             .fill(&mut seed)
@@ -538,15 +550,15 @@ impl TappdRpc for InternalRpcHandlerV0 {
         } else {
             &request.hash_algorithm
         };
-        let prefix = if hash_algorithm == "raw" {
-            "".into()
-        } else {
-            QuoteContentType::AppData.tag().to_string()
-        };
         let content_type = if request.prefix.is_empty() {
             QuoteContentType::AppData
         } else {
             QuoteContentType::Custom(&request.prefix)
+        };
+        let prefix = if hash_algorithm == "raw" {
+            "".into()
+        } else {
+            content_type.tag().to_string()
         };
         let report_data =
             content_type.to_report_data_with_hash(&request.report_data, &request.hash_algorithm)?;
@@ -680,6 +692,7 @@ mod tests {
         backend::PlatformBackend,
         config::{AppComposeWrapper, Config},
     };
+    use dstack_attest::attestation::AttestationVerifier;
     use dstack_guest_agent_rpc::{GetAttestationForAppKeyRequest, SignRequest};
     use dstack_types::{AppCompose, AppKeys, EventLogVersion, KeyProvider};
     use ed25519_dalek::ed25519::signature::hazmat::PrehashVerifier;
@@ -739,6 +752,7 @@ mod tests {
             runner: String::new(),
             snapshotter: None,
             docker_compose_file: None,
+            init_script: Vec::new(),
             public_logs: false,
             public_sysinfo: false,
             public_tcbinfo: false,
@@ -1250,6 +1264,19 @@ pNs85uhOZE8z2jr8Pg==
         assert_eq!(resp_default.key, resp_secp.key);
     }
 
+    #[test]
+    fn test_tls_certificate_validity_order() {
+        assert!(validate_cert_validity(None, None).is_ok());
+        assert!(validate_cert_validity(Some(10), Some(11)).is_ok());
+        assert_eq!(
+            validate_cert_validity(Some(11), Some(11))
+                .unwrap_err()
+                .to_string(),
+            "not_before must be earlier than not_after"
+        );
+        assert!(validate_cert_validity(Some(12), Some(11)).is_err());
+    }
+
     #[tokio::test]
     async fn test_get_key_unsupported_algorithm_fails() {
         let (state, _guard) = setup_test_state().await;
@@ -1273,6 +1300,33 @@ pNs85uhOZE8z2jr8Pg==
 
         let response = handler.version().await.unwrap();
         assert!(!response.version.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_tdx_quote_reports_effective_prefix() {
+        let (state, _guard) = setup_test_state().await;
+
+        let default = InternalRpcHandlerV0 {
+            state: state.clone(),
+        }
+        .tdx_quote(TdxQuoteArgs {
+            report_data: b"test".to_vec(),
+            hash_algorithm: "sha512".to_string(),
+            prefix: "".to_string(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(default.prefix, "app-data");
+
+        let custom = InternalRpcHandlerV0 { state }
+            .tdx_quote(TdxQuoteArgs {
+                report_data: b"test".to_vec(),
+                hash_algorithm: "sha512".to_string(),
+                prefix: "custom-domain".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(custom.prefix, "custom-domain");
     }
 
     #[tokio::test]

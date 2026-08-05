@@ -10,7 +10,7 @@ use dstack_gateway_rpc::{
     admin_server::{AdminRpc, AdminServer},
     CertAttestationInfo, CertbotConfigResponse, ClearInstancePortPolicyRequest,
     CreateDnsCredentialRequest, DeleteDnsCredentialRequest, DeleteZtDomainRequest,
-    DnsCredentialInfo, ForceReleaseCertLockRequest, GetDefaultDnsCredentialResponse,
+    DnsCredentialInfo, ExitRequest, ForceReleaseCertLockRequest, GetDefaultDnsCredentialResponse,
     GetDnsCredentialRequest, GetInfoRequest, GetInfoResponse, GetInstanceHandshakesRequest,
     GetInstanceHandshakesResponse, GetInstancePortPolicyRequest, GetInstancePortPolicyResponse,
     GetMetaResponse, GetNodeStatusesResponse, GetZtDomainRequest, GlobalConnectionsStats,
@@ -18,10 +18,10 @@ use dstack_gateway_rpc::{
     ListCertAttestationsResponse, ListDnsCredentialsResponse, ListZtDomainsResponse,
     NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus, PortAttrs as RpcPortAttrs,
     PortPolicy as RpcPortPolicy, RenewCertResponse, RenewZtDomainCertRequest,
-    RenewZtDomainCertResponse, SetCertbotConfigRequest, SetDefaultDnsCredentialRequest,
-    SetInstancePortPolicyRequest, SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse,
-    StoreSyncStatus, UpdateDnsCredentialRequest, WaveKvStatusResponse, ZtDomainCertStatus,
-    ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
+    RenewZtDomainCertResponse, RotateAcmeCredentialsResponse, SetCertbotConfigRequest,
+    SetDefaultDnsCredentialRequest, SetInstancePortPolicyRequest, SetNodeStatusRequest,
+    SetNodeUrlRequest, StatusResponse, StoreSyncStatus, UpdateDnsCredentialRequest,
+    WaveKvStatusResponse, ZtDomainCertStatus, ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
 };
 use ra_rpc::{CallContext, RpcCall};
 use tracing::info;
@@ -82,8 +82,8 @@ impl AdminRpcHandler {
 }
 
 impl AdminRpc for AdminRpcHandler {
-    async fn exit(self) -> Result<()> {
-        self.state.lock().exit();
+    async fn exit(self, request: ExitRequest) -> Result<()> {
+        self.state.lock().exit(request.force)
     }
 
     async fn renew_cert(self) -> Result<RenewCertResponse> {
@@ -93,13 +93,19 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn set_caa(self) -> Result<()> {
-        // TODO: Implement CAA setting for multi-domain certificates
-        // This requires iterating over all domain configurations and setting CAA records
-        bail!("set_caa is not implemented for multi-domain certificates yet");
+        self.state.certbot.set_caa_all().await
     }
 
     async fn reload_cert(self) -> Result<()> {
         self.state.reload_all_certs_from_kvstore()
+    }
+
+    async fn rotate_acme_credentials(self) -> Result<RotateAcmeCredentialsResponse> {
+        let (account_uri, domains_updated) = self.state.rotate_acme_credentials().await?;
+        Ok(RotateAcmeCredentialsResponse {
+            account_uri,
+            domains_updated: domains_updated.try_into().unwrap_or(u32::MAX),
+        })
     }
 
     async fn status(self) -> Result<StatusResponse> {
@@ -340,7 +346,14 @@ impl AdminRpc for AdminRpcHandler {
         let now = now_secs();
         let id = generate_cred_id();
         let dns_txt_ttl = request.dns_txt_ttl.unwrap_or(60);
-        let max_dns_wait = Duration::from_secs(request.max_dns_wait.unwrap_or(60 * 5).into());
+        let max_dns_wait_secs = request.max_dns_wait.unwrap_or(60 * 5);
+        if dns_txt_ttl == 0 {
+            bail!("dns_txt_ttl must be greater than zero");
+        }
+        if max_dns_wait_secs == 0 {
+            bail!("max_dns_wait must be greater than zero");
+        }
+        let max_dns_wait = Duration::from_secs(max_dns_wait_secs.into());
         let cred = DnsCredential {
             id: id.clone(),
             name: request.name,
@@ -468,8 +481,9 @@ impl AdminRpc for AdminRpcHandler {
         let kv_store = self.state.kv_store();
         let cert_resolver = &self.state.cert_resolver;
 
+        let domain = normalize_zt_domain(&request.domain)?;
         let config = kv_store
-            .get_zt_domain_config(&request.domain)
+            .get_zt_domain_config(&domain)
             .context("ZT-Domain config not found")?;
 
         Ok(zt_domain_to_proto(config, kv_store, cert_resolver))
@@ -479,12 +493,13 @@ impl AdminRpc for AdminRpcHandler {
         let kv_store = self.state.kv_store();
         let cert_resolver = &self.state.cert_resolver;
 
-        // Check if domain already exists
-        if kv_store.get_zt_domain_config(&request.domain).is_some() {
-            bail!("ZT-Domain config already exists: {}", request.domain);
-        }
-
         let config = proto_to_zt_domain_config(&request, kv_store)?;
+
+        // Uniqueness is checked after normalization so wildcard, case, and a
+        // trailing root dot cannot silently overwrite the same DNS name.
+        if kv_store.get_zt_domain_config(&config.domain).is_some() {
+            bail!("ZT-Domain config already exists: {}", config.domain);
+        }
 
         kv_store.save_zt_domain_config(&config)?;
         info!("Added ZT-Domain config: {}", config.domain);
@@ -496,12 +511,12 @@ impl AdminRpc for AdminRpcHandler {
         let kv_store = self.state.kv_store();
         let cert_resolver = &self.state.cert_resolver;
 
-        // Check if config exists
-        kv_store
-            .get_zt_domain_config(&request.domain)
-            .context("ZT-Domain config not found")?;
-
         let config = proto_to_zt_domain_config(&request, kv_store)?;
+
+        // Check the normalized key rather than the caller's presentation.
+        kv_store
+            .get_zt_domain_config(&config.domain)
+            .context("ZT-Domain config not found")?;
 
         kv_store.save_zt_domain_config(&config)?;
         info!("Updated ZT-Domain config: {}", config.domain);
@@ -512,14 +527,14 @@ impl AdminRpc for AdminRpcHandler {
     async fn delete_zt_domain(self, request: DeleteZtDomainRequest) -> Result<()> {
         let kv_store = self.state.kv_store();
 
-        // Check if config exists
+        let domain = normalize_zt_domain(&request.domain)?;
         kv_store
-            .get_zt_domain_config(&request.domain)
+            .get_zt_domain_config(&domain)
             .context("ZT-Domain config not found")?;
 
         // Delete config (cert data, acme, attestations are kept for historical purposes)
-        kv_store.delete_zt_domain_config(&request.domain)?;
-        info!("Deleted ZT-Domain config: {}", request.domain);
+        kv_store.delete_zt_domain_config(&domain)?;
+        info!("Deleted ZT-Domain config: {domain}");
         Ok(())
     }
 
@@ -792,6 +807,35 @@ fn redact_token(token: &str) -> String {
     }
 }
 
+fn normalize_zt_domain(domain: &str) -> Result<String> {
+    let domain = domain.trim().trim_end_matches('.');
+    let domain = domain
+        .strip_prefix("*.")
+        .unwrap_or(domain)
+        .to_ascii_lowercase();
+    validate_zt_domain(&domain)?;
+    Ok(domain)
+}
+
+fn validate_zt_domain(domain: &str) -> Result<()> {
+    if domain.is_empty() || domain.len() > 253 || !domain.is_ascii() {
+        bail!("domain must be a non-empty ASCII DNS name of at most 253 bytes");
+    }
+    for label in domain.split('.') {
+        if label.is_empty()
+            || label.len() > 63
+            || label.starts_with('-')
+            || label.ends_with('-')
+            || !label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            bail!("domain contains an invalid DNS label");
+        }
+    }
+    Ok(())
+}
+
 /// Convert proto ZtDomainConfig to internal ZtDomainConfig
 fn proto_to_zt_domain_config(
     proto: &ProtoZtDomainConfig,
@@ -811,12 +855,10 @@ fn proto_to_zt_domain_config(
             .context("specified dns credential not found")?;
     }
 
-    // Strip wildcard prefix if user entered it
-    let domain = proto
-        .domain
-        .strip_prefix("*.")
-        .unwrap_or(&proto.domain)
-        .to_string();
+    let domain = normalize_zt_domain(&proto.domain)?;
+    if proto.port == 0 {
+        bail!("port must be between 1 and 65535");
+    }
 
     Ok(ZtDomainConfig {
         domain,
@@ -854,5 +896,31 @@ fn zt_domain_to_proto(
             priority: config.priority,
         }),
         cert_status,
+    }
+}
+
+#[cfg(test)]
+mod zt_domain_tests {
+    use super::validate_zt_domain;
+
+    #[test]
+    fn accepts_a_dns_domain() {
+        validate_zt_domain("service.example.com").unwrap();
+    }
+
+    #[test]
+    fn rejects_empty_and_invalid_dns_domains() {
+        for domain in [
+            "",
+            ".example.com",
+            "example..com",
+            "-bad.example",
+            "bad-.example",
+        ] {
+            assert!(
+                validate_zt_domain(domain).is_err(),
+                "{domain} should be rejected"
+            );
+        }
     }
 }

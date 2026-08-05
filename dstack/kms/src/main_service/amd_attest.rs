@@ -113,9 +113,9 @@ fn build_amd_snp_boot_info_with_tcb_status(
         mr_aggregated,
         os_image_hash: os_image_hash.to_vec(),
         mr_system,
-        app_id: mr_config.app_id.clone(),
+        app_id: mr_config.app_id.clone().unwrap_or_default(),
         compose_hash: mr_config.compose_hash.clone(),
-        instance_id: mr_config.instance_id.clone(),
+        instance_id: mr_config.instance_id.clone().unwrap_or_default(),
         device_id: verified_chip_id.to_vec(),
         key_provider_info,
         tcb_status: tcb_status.to_string(),
@@ -182,7 +182,7 @@ fn parse_measurement_input_from_vm_config(vm_config: &str) -> Result<Measurement
 fn mr_config_key_provider_info(mr_config: &MrConfigV3) -> Result<Vec<u8>> {
     serde_json::to_vec(&KeyProviderInfo::new(
         mr_config.key_provider_name().to_string(),
-        hex::encode(&mr_config.key_provider_id),
+        hex::encode(mr_config.key_provider_id.as_deref().unwrap_or_default()),
     ))
     .context("failed to serialize key provider info")
 }

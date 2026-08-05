@@ -4,7 +4,7 @@
 
 use std::{
     ffi::OsStr,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
@@ -20,7 +20,7 @@ use cc_eventlog::{
 use dstack_mr::{
     tdx::TdxRtmr0AcpiHashes, RtmrLog, RtmrLogs, TdxMeasurementDetails, TdxMeasurements,
 };
-use dstack_types::VmConfig;
+use dstack_types::{TdxAttestationVariant, VmConfig};
 use hex_literal::hex;
 use ra_tls::attestation::{
     AppInfo, Attestation, AttestationQuote, AttestationVerifier, DstackVerifiedReport, NitroPcrs,
@@ -415,6 +415,90 @@ impl CvmVerifier {
             .is_some_and(|digest| digest == expected))
     }
 
+    /// Mirrors the confinement rule `tar::Entry::unpack_in` applies internally:
+    /// `..` components, absolute paths, and Windows prefixes escape the
+    /// extraction root, while `.` components are stripped and are harmless.
+    ///
+    /// This duplicates the library check on purpose. `Archive::unpack` discards
+    /// the `unpack_in` return value, so an escaping member is silently dropped
+    /// and extraction still reports success; checking here turns that into an
+    /// error and keeps the boundary from widening if the library's behavior
+    /// ever changes. It must not be *stricter* than the library, though:
+    /// rejecting `.` components would reject the `./`-prefixed archives that
+    /// `tar -czf out.tar.gz .` produces, and roughly a third of the images
+    /// published on download.dstack.org are packed that way.
+    fn is_confined_archive_path(path: &Path) -> bool {
+        path.components()
+            .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
+    }
+
+    /// A manifest name must be literally a file name, because
+    /// `prune_unlisted_image_files` matches manifest entries against the
+    /// `file_name()` of each top-level directory entry, and `sha256sum -c`
+    /// resolves them relative to the extraction root.
+    fn is_flat_manifest_name(name: &str) -> bool {
+        Path::new(name)
+            .file_name()
+            .is_some_and(|file_name| file_name == OsStr::new(name))
+    }
+
+    fn validate_image_manifest_paths(files_doc: &str) -> Result<()> {
+        for (line_index, line) in files_doc.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let mut fields = line.split_whitespace();
+            let _digest = fields
+                .next()
+                .context("image manifest entry is missing a digest")?;
+            let name = fields
+                .next()
+                .context("image manifest entry is missing a path")?;
+            if fields.next().is_some() {
+                bail!("image manifest line {} has extra fields", line_index + 1);
+            }
+            if !Self::is_flat_manifest_name(name) {
+                bail!("image manifest line {} has an unsafe path", line_index + 1);
+            }
+            if name == "sha256sum.txt" {
+                bail!("image manifest must not recursively list sha256sum.txt");
+            }
+        }
+        Ok(())
+    }
+
+    fn extract_image_archive(tarball_path: &Path, extracted_dir: &Path) -> Result<()> {
+        let file = fs_err::File::open(tarball_path).context("Failed to open image archive")?;
+        // `MultiGzDecoder`, not `GzDecoder`: the latter stops at the first gzip
+        // member and reports clean EOF, so a concatenated-member archive would
+        // extract partially without any error.
+        let decoder = flate2::read::MultiGzDecoder::new(file);
+        let mut archive = tar::Archive::new(decoder);
+        for entry in archive.entries().context("Failed to read image archive")? {
+            let mut entry = entry.context("Failed to read image archive entry")?;
+            let path = entry
+                .path()
+                .context("Failed to decode image archive path")?;
+            if !Self::is_confined_archive_path(&path) {
+                bail!("image archive contains unsafe path {}", path.display());
+            }
+            let entry_type = entry.header().entry_type();
+            if !(entry_type.is_file() || entry_type.is_dir()) {
+                bail!(
+                    "image archive contains unsupported entry {}",
+                    path.display()
+                );
+            }
+            if !entry
+                .unpack_in(extracted_dir)
+                .context("Failed to extract image archive entry")?
+            {
+                bail!("image archive entry escaped the extraction root");
+            }
+        }
+        Ok(())
+    }
+
     fn prune_unlisted_image_files(extracted_dir: &Path, files_doc: &str) -> Result<()> {
         let listed_files: Vec<&OsStr> = files_doc
             .lines()
@@ -680,22 +764,25 @@ impl CvmVerifier {
             AttestationQuote::DstackGcpTdx(quote) => {
                 self.verify_os_image_hash_for_gcp_tdx(&vm_config, &quote.tpm_quote)?;
             }
-            AttestationQuote::DstackTdx(_) => {
-                // New images carry a self-contained measurement document even
-                // when the boot kept the legacy attestation selector. Prefer
-                // that signed-MR-bound material; retain image download only
-                // for old legacy images which do not provide it.
-                if vm_config.tdx_attestation_variant.is_lite()
-                    || vm_config.tdx_measurement.is_some()
-                {
-                    self.verify_os_image_hash_for_dstack_tdx_lite(
-                        &vm_config,
-                        attestation,
-                        debug,
-                        details,
-                    )
-                    .await?;
-                } else {
+            // The declared scheme alone selects the path, matched exhaustively
+            // so a new variant fails the build here instead of taking one.
+            //
+            // A `tdx_measurement` document must not pull a `Legacy` boot onto
+            // the lite path. The paths are not interchangeable: the legacy path
+            // recomputes the ACPI tables from `vm_config` and reports
+            // `acpi_tables_verified`, while the lite path takes the RTMR0 ACPI
+            // digests from the event log as given (see
+            // `tdx_acpi_hashes_from_event_log`) and never checks the table
+            // contents. Images attach the document whenever they have it,
+            // independent of the scheme, so honoring it here would drop ACPI
+            // table verification for a boot that resolved to `Legacy` precisely
+            // because the app asked for it (`requirements.tdx_measure_acpi_tables`,
+            // enforced guest-side in `dstack-util`'s system_setup).
+            //
+            // `Lite` without a document is rejected by the lite path itself,
+            // rather than degraded to a download.
+            AttestationQuote::DstackTdx(_) => match vm_config.tdx_attestation_variant {
+                TdxAttestationVariant::Legacy => {
                     self.verify_os_image_hash_for_dstack_tdx(
                         &vm_config,
                         attestation,
@@ -704,7 +791,16 @@ impl CvmVerifier {
                     )
                     .await?;
                 }
-            }
+                TdxAttestationVariant::Lite => {
+                    self.verify_os_image_hash_for_dstack_tdx_lite(
+                        &vm_config,
+                        attestation,
+                        debug,
+                        details,
+                    )
+                    .await?;
+                }
+            },
             AttestationQuote::DstackNitroEnclave(_) => {
                 let DstackVerifiedReport::DstackNitroEnclave(report) = &attestation.report else {
                     bail!("internal error: nitro quote without a verified nitro report");
@@ -1163,21 +1259,16 @@ impl CvmVerifier {
         let extracted_dir = tmp_dir.join("extracted");
         fs_err::create_dir_all(&extracted_dir).context("Failed to create extraction directory")?;
 
-        // Extract the tarball
-        let output = Command::new("tar")
-            .arg("xzf")
-            .arg(&tarball_path)
-            .current_dir(&extracted_dir)
-            .output()
+        file.flush()
             .await
-            .context("Failed to extract tarball")?;
+            .context("Failed to flush image archive")?;
+        drop(file);
+        Self::extract_image_archive(&tarball_path, &extracted_dir)?;
 
-        if !output.status.success() {
-            bail!(
-                "Failed to extract tarball: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
+        let sha256sum_path = extracted_dir.join("sha256sum.txt");
+        let files_doc =
+            fs_err::read_to_string(&sha256sum_path).context("Failed to read sha256sum.txt")?;
+        Self::validate_image_manifest_paths(&files_doc)?;
 
         // Verify checksum
         let output = Command::new("sha256sum")
@@ -1196,9 +1287,6 @@ impl CvmVerifier {
         }
 
         // Remove the files that are not listed in sha256sum.txt
-        let sha256sum_path = extracted_dir.join("sha256sum.txt");
-        let files_doc =
-            fs_err::read_to_string(&sha256sum_path).context("Failed to read sha256sum.txt")?;
         Self::prune_unlisted_image_files(&extracted_dir, &files_doc)?;
 
         // All image modes are addressed by sha256(sha256sum.txt). Extra
@@ -1318,6 +1406,108 @@ mod tests {
     }
 
     #[test]
+    fn gcp_and_nitro_enclave_measurement_bindings_matrix() {
+        let verifier = test_verifier();
+
+        let nitro_pcrs = NitroPcrs {
+            pcr0: vec![0x10; 48],
+            pcr1: vec![0x11; 48],
+            pcr2: vec![0x12; 48],
+        };
+        let nitro_config: VmConfig = serde_json::from_value(serde_json::json!({
+            "os_image_hash": hex::encode(nitro_pcrs.image_hash()),
+        }))
+        .unwrap();
+        verifier
+            .verify_os_image_hash_for_nitro_enclave(&nitro_config, &nitro_pcrs)
+            .unwrap();
+        let mut changed_nitro = nitro_pcrs.clone();
+        changed_nitro.pcr2[0] ^= 1;
+        assert!(verifier
+            .verify_os_image_hash_for_nitro_enclave(&nitro_config, &changed_nitro)
+            .is_err());
+        let debug_nitro = NitroPcrs {
+            pcr0: vec![0; 48],
+            pcr1: vec![0; 48],
+            pcr2: vec![0; 48],
+        };
+        assert!(verifier
+            .verify_os_image_hash_for_nitro_enclave(&nitro_config, &debug_nitro)
+            .is_err());
+
+        let uki_hash = vec![0x24; 32];
+        let measurement = dstack_types::GcpOsImageMeasurement::new(uki_hash.clone()).unwrap();
+        let measurement_bytes = measurement.to_cbor_vec();
+        let checksum_file = format!(
+            "{}  measurement.gcp.cbor\n",
+            hex::encode(Sha256::digest(&measurement_bytes))
+        )
+        .into_bytes();
+        let os_image_hash = dstack_types::image_hash_from_sha256sum(&checksum_file);
+        let gcp_config: VmConfig = serde_json::from_value(serde_json::json!({
+            "os_image_hash": hex::encode(os_image_hash),
+            "gcp_measurement": dstack_types::GcpOsImageMeasurementDocument::new(
+                checksum_file,
+                measurement_bytes,
+            ),
+        }))
+        .unwrap();
+        let expected_pcr0 =
+            hex!("0cca9ec161b09288802e5a112255d21340ed5b797f5fe29cecccfd8f67b9f802");
+        let gcp_quote = |pcr0: Vec<u8>, event_28: Vec<u8>| TpmQuote {
+            message: Vec::new(),
+            signature: Vec::new(),
+            pcr_values: vec![tpm_types::PcrValue {
+                index: 0,
+                algorithm: "sha256".into(),
+                value: pcr0,
+            }],
+            ak_cert: Vec::new(),
+            platform: dstack_types::Platform::Gcp,
+            event_log: vec![
+                tpm_types::TpmEvent {
+                    pcr_index: 2,
+                    digest: vec![1; 32],
+                },
+                tpm_types::TpmEvent {
+                    pcr_index: 2,
+                    digest: vec![2; 32],
+                },
+                tpm_types::TpmEvent {
+                    pcr_index: 2,
+                    digest: event_28,
+                },
+            ],
+        };
+        verifier
+            .verify_os_image_hash_for_gcp_tdx(
+                &gcp_config,
+                &gcp_quote(expected_pcr0.to_vec(), uki_hash.clone()),
+            )
+            .unwrap();
+        assert!(verifier
+            .verify_os_image_hash_for_gcp_tdx(
+                &gcp_config,
+                &gcp_quote(vec![0; 32], uki_hash.clone()),
+            )
+            .is_err());
+        assert!(verifier
+            .verify_os_image_hash_for_gcp_tdx(
+                &gcp_config,
+                &gcp_quote(expected_pcr0.to_vec(), vec![0; 32]),
+            )
+            .is_err());
+        let mut missing_document = gcp_config;
+        missing_document.gcp_measurement = None;
+        assert!(verifier
+            .verify_os_image_hash_for_gcp_tdx(
+                &missing_document,
+                &gcp_quote(expected_pcr0.to_vec(), uki_hash),
+            )
+            .is_err());
+    }
+
+    #[test]
     fn aws_os_image_check_requires_measurement() {
         let pcrs = aws_boot_pcrs(0x04);
         let mut vm_config = aws_vm_config(&pcrs);
@@ -1399,6 +1589,108 @@ mod tests {
         assert!(decode_key_provider_info(b"not json").is_none());
     }
 
+    fn sample_measurements(byte: u8) -> TdxMeasurements {
+        TdxMeasurements {
+            mrtd: vec![byte; 48],
+            rtmr0: vec![byte.wrapping_add(1); 48],
+            rtmr1: vec![byte.wrapping_add(2); 48],
+            rtmr2: vec![byte.wrapping_add(3); 48],
+        }
+    }
+
+    #[test]
+    fn measurement_cache_version_mismatch_is_ignored_and_replaced() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut verifier = test_verifier();
+        verifier.image_cache_dir = directory.path().display().to_string();
+        let config: VmConfig = serde_json::from_str("{}").unwrap();
+        let key = CvmVerifier::vm_config_cache_key(&config).unwrap();
+        let path = verifier.measurement_cache_path(&key);
+        fs_err::create_dir_all(path.parent().unwrap()).unwrap();
+
+        fs_err::write(
+            &path,
+            serde_json::to_vec(&CachedMeasurement {
+                version: MEASUREMENT_CACHE_VERSION - 1,
+                measurements: sample_measurements(0x11),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(verifier
+            .load_measurements_from_cache(&key)
+            .unwrap()
+            .is_none());
+
+        let current = sample_measurements(0x22);
+        verifier
+            .store_measurements_in_cache(&key, &current)
+            .unwrap();
+        let loaded = verifier
+            .load_measurements_from_cache(&key)
+            .unwrap()
+            .expect("current cache entry");
+        assert_eq!(
+            serde_json::to_vec(&loaded).unwrap(),
+            serde_json::to_vec(&current).unwrap()
+        );
+    }
+
+    #[test]
+    fn corrupt_measurement_cache_entry_is_ignored() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut verifier = test_verifier();
+        verifier.image_cache_dir = directory.path().display().to_string();
+        let config: VmConfig = serde_json::from_str("{}").unwrap();
+        let key = CvmVerifier::vm_config_cache_key(&config).unwrap();
+        let path = verifier.measurement_cache_path(&key);
+        fs_err::create_dir_all(path.parent().unwrap()).unwrap();
+        fs_err::write(path, b"{not json").unwrap();
+
+        assert!(verifier
+            .load_measurements_from_cache(&key)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn concurrent_measurement_cache_writes_are_atomic() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut verifier = test_verifier();
+        verifier.image_cache_dir = directory.path().display().to_string();
+        let config: VmConfig = serde_json::from_str("{}").unwrap();
+        let key = CvmVerifier::vm_config_cache_key(&config).unwrap();
+        let first = sample_measurements(0x11);
+        let second = sample_measurements(0x22);
+
+        std::thread::scope(|scope| {
+            for index in 0..16 {
+                let verifier = &verifier;
+                let key = &key;
+                let measurements = if index % 2 == 0 { &first } else { &second };
+                scope.spawn(move || {
+                    verifier
+                        .store_measurements_in_cache(key, measurements)
+                        .unwrap();
+                });
+            }
+        });
+        let cached = verifier
+            .load_measurements_from_cache(&key)
+            .unwrap()
+            .expect("one complete cache entry");
+        let encoded = serde_json::to_vec(&cached).unwrap();
+        assert!(
+            encoded == serde_json::to_vec(&first).unwrap()
+                || encoded == serde_json::to_vec(&second).unwrap()
+        );
+        let entries = fs_err::read_dir(verifier.measurement_cache_dir())
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(entries.len(), 1, "temporary cache files must not survive");
+    }
+
     #[test]
     fn image_cache_pruning_keeps_checksum_identity() {
         let dir = tempfile::tempdir().expect("temp image directory");
@@ -1412,6 +1704,164 @@ mod tests {
         assert!(dir.path().join("sha256sum.txt").exists());
         assert!(dir.path().join("metadata.json").exists());
         assert!(!dir.path().join("unmeasured").exists());
+    }
+
+    #[test]
+    fn image_paths_must_be_confined_and_manifest_paths_must_be_flat() {
+        for path in ["../escape", "/absolute", "nested/../escape"] {
+            assert!(
+                !CvmVerifier::is_confined_archive_path(Path::new(path)),
+                "{path}"
+            );
+        }
+        // `.` components are stripped by `unpack_in` and cannot escape, so the
+        // check must accept them: `tar -czf out.tar.gz .` prefixes every member
+        // with `./` and published images are packed that way.
+        for path in ["nested/artifact", "./metadata.json", ".", "./", ""] {
+            assert!(
+                CvmVerifier::is_confined_archive_path(Path::new(path)),
+                "{path}"
+            );
+        }
+
+        let digest = "00".repeat(32);
+        assert!(
+            CvmVerifier::validate_image_manifest_paths(&format!("{digest}  metadata.json\n"))
+                .is_ok()
+        );
+        for path in [
+            "../escape",
+            "/absolute",
+            "nested/artifact",
+            "./metadata.json",
+            ".",
+            "sha256sum.txt",
+        ] {
+            assert!(
+                CvmVerifier::validate_image_manifest_paths(&format!("{digest}  {path}\n")).is_err(),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn image_archive_rejects_links_and_accepts_regular_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let valid = directory.path().join("valid.tar.gz");
+        {
+            let file = fs_err::File::create(&valid).unwrap();
+            let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+            let mut archive = tar::Builder::new(encoder);
+            let payload = b"artifact";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(payload.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, "nested/artifact", &payload[..])
+                .unwrap();
+            archive.finish().unwrap();
+        }
+        let output = directory.path().join("valid-output");
+        fs_err::create_dir(&output).unwrap();
+        CvmVerifier::extract_image_archive(&valid, &output).unwrap();
+        assert_eq!(
+            fs_err::read(output.join("nested/artifact")).unwrap(),
+            b"artifact"
+        );
+
+        let linked = directory.path().join("linked.tar.gz");
+        {
+            let file = fs_err::File::create(&linked).unwrap();
+            let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+            let mut archive = tar::Builder::new(encoder);
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_size(0);
+            header.set_mode(0o777);
+            header.set_link_name("../outside").unwrap();
+            header.set_cksum();
+            archive.append_data(&mut header, "link", &[][..]).unwrap();
+            archive.finish().unwrap();
+        }
+        let output = directory.path().join("linked-output");
+        fs_err::create_dir(&output).unwrap();
+        assert!(CvmVerifier::extract_image_archive(&linked, &output).is_err());
+    }
+
+    /// Images published on download.dstack.org come in two shapes: members
+    /// packed from a glob (`bzImage`, ...) and members packed from `.`
+    /// (`./`, `./bzImage`, ...). Both must extract to the same flat layout.
+    #[test]
+    fn image_archive_accepts_dot_prefixed_members() {
+        let directory = tempfile::tempdir().unwrap();
+        let archive_path = directory.path().join("dot-prefixed.tar.gz");
+        {
+            let file = fs_err::File::create(&archive_path).unwrap();
+            let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+            let mut archive = tar::Builder::new(encoder);
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Directory);
+            header.set_size(0);
+            header.set_mode(0o755);
+            header.set_cksum();
+            archive.append_data(&mut header, "./", &[][..]).unwrap();
+            let payload = b"artifact";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(payload.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, "./metadata.json", &payload[..])
+                .unwrap();
+            archive.finish().unwrap();
+        }
+        let output = directory.path().join("dot-prefixed-output");
+        fs_err::create_dir(&output).unwrap();
+        CvmVerifier::extract_image_archive(&archive_path, &output).unwrap();
+        assert_eq!(
+            fs_err::read(output.join("metadata.json")).unwrap(),
+            b"artifact"
+        );
+    }
+
+    /// `GzDecoder` stops at the first member of a concatenated gzip stream and
+    /// reports clean EOF, which would truncate the archive without an error.
+    #[test]
+    fn image_archive_reads_every_gzip_member() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut tarball = tar::Builder::new(Vec::new());
+        let payload = b"artifact";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(payload.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tarball
+            .append_data(&mut header, "metadata.json", &payload[..])
+            .unwrap();
+        let tarball = tarball.into_inner().unwrap();
+
+        let archive_path = directory.path().join("multi-member.tar.gz");
+        {
+            use std::io::Write;
+
+            let mut file = fs_err::File::create(&archive_path).unwrap();
+            // One gzip member per half of the tar stream.
+            for half in tarball.chunks(tarball.len().div_ceil(2)) {
+                let mut encoder =
+                    flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+                encoder.write_all(half).unwrap();
+                file.write_all(&encoder.finish().unwrap()).unwrap();
+            }
+            file.flush().unwrap();
+        }
+        let output = directory.path().join("multi-member-output");
+        fs_err::create_dir(&output).unwrap();
+        CvmVerifier::extract_image_archive(&archive_path, &output).unwrap();
+        assert_eq!(
+            fs_err::read(output.join("metadata.json")).unwrap(),
+            b"artifact"
+        );
     }
 
     #[tokio::test]

@@ -18,7 +18,7 @@ dstack-types.workspace = true
 ez-hash.workspace = true
 fs-err.workspace = true
 safe-write.workspace = true
-rustix.workspace = true
+rustix = { workspace = true, features = ["process"] }
 hex.workspace = true
 hex_fmt.workspace = true
 or-panic.workspace = true
@@ -62,3 +62,5 @@ quote = [
 futures = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 dstack-mr = { workspace = true }
+rcgen = { workspace = true }
+tempfile = { workspace = true }
