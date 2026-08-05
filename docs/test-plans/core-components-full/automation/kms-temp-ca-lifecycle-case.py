@@ -47,6 +47,29 @@ def openssl(args: list[str]) -> bytes:
     return completed.stdout
 
 
+def replace_with_expiring_ca(cert: Path, key: Path, subject: str, pathlen: int) -> None:
+    """Replace a lease-owned public CA certificate without exposing its key."""
+    openssl(
+        [
+            "req",
+            "-x509",
+            "-new",
+            "-key",
+            str(key),
+            "-out",
+            str(cert),
+            "-days",
+            "1",
+            "-subj",
+            f"/O=Dstack/CN={subject}",
+            "-addext",
+            f"basicConstraints=critical,CA:TRUE,pathlen:{pathlen}",
+            "-addext",
+            "keyUsage=critical,digitalSignature,keyCertSign,cRLSign",
+        ]
+    )
+
+
 def validate(payload: dict[str, str]) -> dict[str, object]:
     """Validate public certificate roles without retaining private material."""
     required = ("temp_ca_cert", "temp_ca_key", "ca_cert")
@@ -65,6 +88,7 @@ def validate(payload: dict[str, str]) -> dict[str, object]:
         key.chmod(0o600)
         cert_pub = openssl(["x509", "-in", str(cert), "-pubkey", "-noout"])
         key_pub = openssl(["pkey", "-in", str(key), "-pubout"])
+        root_pub = openssl(["x509", "-in", str(ca), "-pubkey", "-noout"])
         if cert_pub != key_pub:
             raise AssertionError("temporary CA certificate and key do not match")
         openssl(["verify", "-CAfile", str(cert), str(cert)])
@@ -83,6 +107,7 @@ def validate(payload: dict[str, str]) -> dict[str, object]:
         ).hexdigest(),
         "temp_key_public_sha256": hashlib.sha256(key_pub).hexdigest(),
         "root_cert_sha256": hashlib.sha256(payload["ca_cert"].encode()).hexdigest(),
+        "root_public_sha256": hashlib.sha256(root_pub).hexdigest(),
         "private_material_persisted": False,
     }
 
@@ -153,6 +178,44 @@ def main() -> int:
         if first != after:
             raise AssertionError("temporary/root CA material changed after restart")
         rows.append({"name": "restart_persistence", "status": "PASS", **after_shape})
+
+        os.killpg(replacement.pid, signal.SIGTERM)
+        replacement.wait(timeout=10)
+        replacement = None
+        cert_dir = Path(kms["cert_dir"])
+        replace_with_expiring_ca(
+            cert_dir / "root-ca.crt",
+            cert_dir / "root-ca.key",
+            "Dstack KMS CA",
+            1,
+        )
+        replace_with_expiring_ca(
+            cert_dir / "tmp-ca.crt",
+            cert_dir / "tmp-ca.key",
+            "Dstack Client Temp CA",
+            0,
+        )
+        replacement = subprocess.Popen(
+            [binary, "--config", str(kms["config"])],
+            env={**os.environ, "DSTACK_AGENT_ADDRESS": f"unix:{agent_socket}"},
+            stdout=(artifacts / "renewal-kms.log").open("wb"),
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        renewed = wait_ready(url, identity)
+        renewed_shape = validate(renewed)
+        if renewed_shape["temp_cert_sha256"] == first_shape["temp_cert_sha256"]:
+            raise AssertionError("temporary CA certificate was not renewed")
+        if renewed_shape["root_cert_sha256"] == first_shape["root_cert_sha256"]:
+            raise AssertionError("root CA certificate was not renewed")
+        if (
+            renewed_shape["temp_key_public_sha256"]
+            != first_shape["temp_key_public_sha256"]
+        ):
+            raise AssertionError("temporary CA key changed during renewal")
+        if renewed_shape["root_public_sha256"] != first_shape["root_public_sha256"]:
+            raise AssertionError("root CA key changed during renewal")
+        rows.append({"name": "near_expiry_renewal", "status": "PASS", **renewed_shape})
         status = "PASS"
     except Exception as error:  # noqa: BLE001
         failure = f"{type(error).__name__}: {error}"
@@ -177,7 +240,7 @@ def main() -> int:
     (artifacts / "manifest.json").write_text(
         json.dumps({"artifacts": [artifact]}, indent=2) + "\n"
     )
-    summary = "3/3 temporary-CA lifecycle rows passed" if status == "PASS" else failure
+    summary = "4/4 CA lifecycle rows passed" if status == "PASS" else failure
     result = {
         "schema_version": "1.0",
         "case_id": CASE_ID,

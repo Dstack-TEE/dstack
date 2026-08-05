@@ -1979,7 +1979,7 @@
       "source_status": "PASS",
       "entrypoint": "automation/kms-temp-ca-capability-case.py",
       "promoted_at": "2026-07-29T17:15:51Z",
-      "notes": "3/3 lifecycle rows validate temporary-CA certificate/key role, root separation, repeated stability, and exact persistence across a real case-owned KMS restart",
+      "notes": "3/3 lifecycle rows validate temporary-CA certificate/key role, root separation, repeated stability, and exact persistence across a real case-owned KMS restart; the harness now also covers near-expiry renewal with key preservation",
       "environment": "SIMULATOR_BACKED_KMS_RPC"
     },
     {

@@ -7767,7 +7767,7 @@
             },
             {
               "id": "tc-kms-keys-certs-005",
-              "title": "Temporary CA lifecycle",
+              "title": "CA persistence and near-expiry renewal",
               "order": 5,
               "priority": "P0",
               "path": "03-kms/06-keys-certs-operations/tc-kms-keys-certs-005",
@@ -7799,7 +7799,9 @@
                 "simulation_allowed": false
               },
               "actions_under_test": [
-                "Temporary CA lifecycle"
+                "CA role validation",
+                "CA persistence across restart",
+                "Near-expiry CA renewal with key preservation"
               ],
               "execution": {
                 "entrypoint": "automation/kms-temp-ca-capability-case.py",
