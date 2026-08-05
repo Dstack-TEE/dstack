@@ -9,7 +9,7 @@ install -d "$DEST/usr/bin" "$DEST/usr/lib/systemd/system" \
   "$DEST/etc/systemd/journald.conf.d" "$DEST/etc/systemd/resolved.conf.d" \
   "$DEST/etc/systemd/system/docker.service.d" \
   "$DEST/etc/systemd/system/containerd.service.d" "$DEST/etc/sysctl.d"
-for s in dstack-prepare ephemeral-docker wg-checker app-compose; do
+for s in dstack-prepare ephemeral-docker app-compose; do
   install -m0755 "$ROOT/os/common/rootfs/$s.sh" "$DEST/usr/bin/$s.sh"
 done
 install -m0644 "$ROOT/os/common/rootfs/"*.service \

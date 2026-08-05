@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 use dstack_attest::emit_runtime_event;
 use dstack_types::{KeyProvider, KeyProviderKind};
 use fs_err as fs;
+use gateway_checker::{cmd_gateway_checker, GatewayCheckerArgs};
 use getrandom::fill as getrandom;
 use host_api::HostApi;
 use k256::schnorr::SigningKey;
@@ -29,6 +30,7 @@ use utils::AppKeys;
 
 mod crypto;
 mod docker_compose;
+mod gateway_checker;
 mod host_api;
 mod host_shared;
 mod parse_env_file;
@@ -71,6 +73,8 @@ enum Commands {
     HostShared(host_shared::HostSharedArgs),
     /// Refresh the dstack gateway configuration
     GatewayRefresh(GatewayRefreshArgs),
+    /// Keep the dstack gateway registration fresh (long-running)
+    GatewayChecker(GatewayCheckerArgs),
     /// Notify the host about the dstack app
     NotifyHost(HostNotifyArgs),
     /// Remove orphaned containers
@@ -1296,6 +1300,9 @@ async fn main() -> Result<()> {
             cmd_sys_setup(args).await?;
         }
         Commands::HostShared(args) => host_shared::cmd_host_shared(args)?,
+        Commands::GatewayChecker(args) => {
+            cmd_gateway_checker(args).await?;
+        }
         Commands::GatewayRefresh(args) => {
             cmd_gateway_refresh(args).await?;
         }

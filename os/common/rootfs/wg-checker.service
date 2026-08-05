@@ -1,13 +1,21 @@
 [Unit]
-Description=WireGuard Endpoint Checker Service
+Description=dstack Gateway Registration Checker
 After=network-online.target dstack-prepare.service
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/bin/wg-checker.sh
-Restart=always
+ExecStart=/bin/dstack-util gateway-checker --work-dir /dstack
+# The checker exits 0 when the app never enabled dstack-gateway, because there
+# is then nothing to supervise. Restart=always would respawn that exit forever.
+Restart=on-failure
 RestartSec=10
+# Exit code 3 means the gateway config is broken in a way retrying cannot fix
+# (no gateway app id, no gateway URLs). Both are fixed for the lifetime of the
+# VM, so respawning every RestartSec would just be a slower spin. Stop
+# restarting but stay in `failed` state so the mistake is visible. Keep in sync
+# with EXIT_MISCONFIGURED in dstack-util's gateway_checker.
+RestartPreventExitStatus=3
 StandardOutput=journal
 StandardError=journal+console
 

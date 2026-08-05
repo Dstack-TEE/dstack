@@ -315,7 +315,9 @@ impl HostShared {
 }
 
 const GATEWAY_CACHE_PATH: &str = "/run/dstack/gateway-cache.json";
-const WG_CONFIG_PATH: &str = "/etc/wireguard/dstack-wg0.conf";
+/// Name of the WireGuard interface linking this CVM to dstack-gateway.
+pub const WG_INTERFACE: &str = "dstack-wg0";
+pub const WG_CONFIG_PATH: &str = "/etc/wireguard/dstack-wg0.conf";
 /// Certificate validity period in seconds (10 days)
 const CERT_VALIDITY_SECS: u64 = 10 * 24 * 3600;
 const MAX_SUPPORTED_MANIFEST_VERSION: u32 = 3;
@@ -550,6 +552,14 @@ impl<'a> GatewayContext<'a> {
         // Get or generate key store (includes WireGuard keys and client certificate)
         let key_store = self.get_or_generate_key_store().await?;
 
+        // Persist the key store before attempting registration. Minting it costs a
+        // KMS round-trip, two cert signing requests and a TDX quote, so a gateway
+        // outage would otherwise make every retry pay that price again and turn a
+        // gateway outage into a KMS load spike across the whole fleet.
+        if let Err(e) = key_store.save() {
+            warn!("failed to save gateway cache: {e:?}");
+        }
+
         if self.shared.sys_config.gateway_urls.is_empty() {
             bail!("Missing gateway urls");
         }
@@ -597,11 +607,6 @@ impl<'a> GatewayContext<'a> {
                 Endpoint = {endpoint}\n\
                 PersistentKeepalive = 25\n",
             ));
-        }
-
-        // Save cache
-        if let Err(e) = key_store.save() {
-            warn!("Failed to save gateway cache: {e:?}");
         }
 
         // Check if config has changed (skip check if force is set)
@@ -1923,19 +1928,61 @@ impl Stage0<'_> {
     }
 }
 
-pub async fn cmd_gateway_refresh(args: GatewayRefreshArgs) -> Result<()> {
-    let host_shared_dir = args.work_dir.join(HOST_SHARED_DIR_NAME);
-    let shared = HostShared::load(host_shared_dir.as_path()).with_context(|| {
-        format!(
-            "Failed to load host-shared dir: {}",
-            host_shared_dir.display()
-        )
-    })?;
-    let keys_path = shared.dir.join(APP_KEYS);
-    let keys: AppKeys = deserialize_json_file(&keys_path)
-        .with_context(|| format!("Failed to load app keys from {}", keys_path.display()))?;
+/// Owns the inputs needed to (re)register this CVM with dstack-gateway.
+///
+/// Loading is separated from refreshing so a long-running caller (the gateway
+/// checker) can pay the parsing cost once and then refresh repeatedly.
+pub struct GatewayRefresher {
+    shared: HostShared,
+    keys: AppKeys,
+}
 
-    GatewayContext::new(&shared, &keys).setup(args.force).await
+impl GatewayRefresher {
+    /// Load the host-shared config and app keys from `work_dir`.
+    pub fn load(work_dir: &Path) -> Result<Self> {
+        let host_shared_dir = work_dir.join(HOST_SHARED_DIR_NAME);
+        let shared = HostShared::load(host_shared_dir.as_path()).with_context(|| {
+            format!(
+                "Failed to load host-shared dir: {}",
+                host_shared_dir.display()
+            )
+        })?;
+        let keys_path = shared.dir.join(APP_KEYS);
+        let keys: AppKeys = deserialize_json_file(&keys_path)
+            .with_context(|| format!("Failed to load app keys from {}", keys_path.display()))?;
+        Ok(Self { shared, keys })
+    }
+
+    /// Whether this app opted into dstack-gateway at all.
+    pub fn gateway_enabled(&self) -> bool {
+        self.shared.app_compose.gateway_enabled()
+    }
+
+    /// Validate the parts of the gateway config that can never become valid by
+    /// waiting. These are deployment mistakes, not outages, so callers that
+    /// retry should give up instead of looping forever.
+    pub fn check_config(&self) -> Result<()> {
+        if self.keys.gateway_app_id.is_empty() {
+            bail!("Missing allowed dstack-gateway app id");
+        }
+        if self.shared.sys_config.gateway_urls.is_empty() {
+            bail!("Missing gateway urls");
+        }
+        Ok(())
+    }
+
+    /// Register with dstack-gateway and apply the returned WireGuard config.
+    pub async fn refresh(&self, force: bool) -> Result<()> {
+        GatewayContext::new(&self.shared, &self.keys)
+            .setup(force)
+            .await
+    }
+}
+
+pub async fn cmd_gateway_refresh(args: GatewayRefreshArgs) -> Result<()> {
+    GatewayRefresher::load(&args.work_dir)?
+        .refresh(args.force)
+        .await
 }
 
 struct AppIdValidator {
