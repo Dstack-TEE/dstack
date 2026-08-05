@@ -24,7 +24,7 @@
 
 ## Objective
 
-Verify acme account bootstrap and persistence across success, boundary, failure, security, and recovery conditions.
+Verify ACME account bootstrap, administrative credential rotation, account-bound CAA re-pinning, cluster convergence, and persistence across success, boundary, failure, security, and recovery conditions.
 
 ## Preconditions
 
@@ -49,11 +49,11 @@ Query the relevant health, configuration, and baseline state for acme account bo
 <a id="tc-gw-certificat-001-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Initialize account, restart nodes, and attempt invalid directory/account/key state.
+Initialize an account, rotate it through the authenticated Admin API, verify CAA re-pinning and cross-node adoption, reject an unauthorized rotation, restart a node, and attempt an invalid directory state.
 
 **Expected results:**
 
-- Account URI/key persist and cluster agrees; corruption fails safely without silently creating a conflicting production account.
+- The new account differs from the old account, every node converges on it, `issue`/`issuewild` CAA records bind the new account, restart preserves it, unauthorized rotation is rejected, and an ACME directory mismatch fails safely without silently creating another account.
 
 <a id="tc-gw-certificat-001-step-03"></a>
 ### Step 3: Verify state, isolation, and diagnostics
