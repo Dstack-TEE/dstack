@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <a id="tc-kms-keys-certs-005"></a>
-# TC-KMS-KEYS-CERTS-005: Temporary CA handover material
+# TC-KMS-KEYS-CERTS-005: CA persistence and near-expiry renewal
 
 ## Metadata
 
@@ -11,7 +11,7 @@
 - Automation: Yes
 - Requirements: [req-kms-keys-certs-005](../../../feature-audit.md#req-kms-keys-certs-005)
 - Risks: [risk-kms-keys-certs-005](../../../feature-audit.md#risk-kms-keys-certs-005)
-- Source: `dstack/kms/src/main_service.rs`
+- Source: `dstack/kms/src/main_service.rs`, `dstack/kms/src/onboard_service.rs`
 
 ## Prepared execution knowledge
 
@@ -24,7 +24,8 @@
 
 ## Objective
 
-Verify that an authorized onboarding KMS receives the configured temporary CA handover material with the documented certificate roles and persistence semantics.
+Verify the documented CA roles, normal-restart persistence, and near-expiry
+renewal behavior for the root and temporary CA certificates.
 
 ## Preconditions
 
@@ -49,11 +50,21 @@ Query the relevant health, configuration, and baseline state for temporary ca li
 <a id="tc-kms-keys-certs-005-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Retrieve temporary CA credentials as an authorized KMS peer, validate each returned credential role, then repeat the request after a case-owned KMS restart.
+Retrieve temporary CA credentials as an authorized KMS peer and validate each
+returned credential role. Restart the case-owned KMS with unchanged state and
+verify exact certificate persistence. Then stop it, replace both public CA
+certificates with one-day certificates made from the existing lease-owned keys,
+and start it again.
 
 **Expected results:**
 
-- The returned temporary CA certificate matches the temporary CA private key and is a self-signed issuer used to mint onboarding RA-TLS client certificates. The separately returned root CA certificate is the persistent application-certificate trust root. Both configured CA values remain stable across a service restart; access is governed by KMS self-authorization rather than by a one-shot lifecycle transition.
+- The returned temporary CA certificate matches the temporary CA private key and
+  is a self-signed issuer used to mint onboarding RA-TLS client certificates.
+  The separately returned root CA certificate is the persistent
+  application-certificate trust root. An ordinary restart preserves both CA
+  certificate fingerprints. A restart with near-expiry certificates renews both
+  certificates while preserving their public keys and starts with a refreshed
+  RPC certificate.
 
 <a id="tc-kms-keys-certs-005-step-03"></a>
 ### Step 3: Verify state, isolation, and diagnostics
@@ -62,7 +73,12 @@ Re-query health and the authorized response, inspect component and peer logs, an
 
 **Expected results:**
 
-- Repeated authorized responses contain the same configured temporary and root CA certificates. When self-authorization enforcement is enabled, an unattested or unauthorized client is rejected before any CA material is returned. The service remains available and no credential content is written to evidence; retain only certificate fingerprints, public metadata, and validation outcomes.
+- Repeated authorized responses contain the final configured temporary and root
+  CA certificates. When self-authorization enforcement is enabled, an
+  unattested or unauthorized client is rejected before any CA material is
+  returned. The service remains available and no credential content is written
+  to evidence; retain only certificate fingerprints, public metadata, and
+  validation outcomes.
 
 ## Postconditions
 
