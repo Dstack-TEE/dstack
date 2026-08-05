@@ -158,7 +158,7 @@ async fn handle_connection(inbound: TcpStream, state: Proxy) -> Result<()> {
     };
 
     let (subdomain, base_domain) = sni.split_once('.').context("invalid sni")?;
-    if state.cert_resolver.get().contains_wildcard(base_domain) {
+    if state.kv_store().get_zt_domain_config(base_domain).is_some() {
         let dst = parse_dst_info(subdomain)?;
         debug!("dst: {dst:?}");
         if dst.is_tls {

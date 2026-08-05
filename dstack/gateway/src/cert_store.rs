@@ -84,11 +84,6 @@ impl CertStore {
     pub fn list_domains(&self) -> Vec<String> {
         self.cert_data.keys().cloned().collect()
     }
-
-    /// Check if a wildcard certificate exists for a domain
-    pub fn contains_wildcard(&self, base_domain: &str) -> bool {
-        self.wildcard_certs.contains_key(base_domain)
-    }
 }
 
 impl fmt::Debug for CertStore {
