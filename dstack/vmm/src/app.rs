@@ -301,8 +301,9 @@ impl App {
         self.config.run_path.clone()
     }
 
-    pub(crate) fn work_dir(&self, id: &str) -> VmWorkDir {
-        VmWorkDir::new(self.config.run_path.join(id))
+    pub(crate) fn work_dir(&self, id: &str) -> Result<VmWorkDir> {
+        validate_vm_id(id)?;
+        Ok(VmWorkDir::new(self.config.run_path.join(id)))
     }
 
     pub fn new(config: Config, supervisor: SupervisorClient) -> Self {
@@ -411,7 +412,7 @@ impl App {
             vm_state.config.clone()
         };
         if !is_running {
-            let work_dir = self.work_dir(id);
+            let work_dir = self.work_dir(id)?;
             for path in [work_dir.serial_pty(), work_dir.qmp_socket()] {
                 if path.symlink_metadata().is_ok() {
                     fs::remove_file(path)?;
@@ -456,7 +457,7 @@ impl App {
     }
 
     fn set_started(&self, id: &str, started: bool) -> Result<()> {
-        let work_dir = self.work_dir(id);
+        let work_dir = self.work_dir(id)?;
         work_dir
             .set_started(started)
             .context("Failed to set started")
@@ -514,7 +515,7 @@ impl App {
         }
 
         // Persist the removing marker so crash recovery can resume
-        let work_dir = self.work_dir(id);
+        let work_dir = self.work_dir(id)?;
         if let Err(err) = work_dir.set_removing() {
             warn!("failed to write .removing marker for {id}: {err:?}");
         }
@@ -576,7 +577,7 @@ impl App {
 
         // Only delete the workdir for user-initiated removal or if .removing marker exists.
         // Orphaned supervisor processes without the marker keep their data intact.
-        let vm_path = self.work_dir(id);
+        let vm_path = self.work_dir(id)?;
         if delete_workdir || vm_path.is_removing() {
             if vm_path.path().exists() {
                 if let Err(err) = fs::remove_dir_all(&vm_path) {
@@ -954,13 +955,11 @@ impl App {
         let total = infos.len() as u32;
         let vms = paginate(infos, request.page, request.page_size)
             .map(|vm| {
-                vm.merged_info(
-                    vms.get(&vm.config.manifest.id),
-                    &self.work_dir(&vm.config.manifest.id),
-                )
+                let work_dir = self.work_dir(&vm.config.manifest.id)?;
+                let info = vm.merged_info(vms.get(&vm.config.manifest.id), &work_dir);
+                Ok(info.to_pb(&self.config.gateway, &self.config.cvm, request.brief))
             })
-            .map(|info| info.to_pb(&self.config.gateway, &self.config.cvm, request.brief))
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         Ok(StatusResponse {
             vms,
             port_mapping_enabled: self.config.cvm.port_mapping.enabled,
@@ -987,7 +986,7 @@ impl App {
             return Ok(None);
         };
         let info = vm_state
-            .merged_info(proc_state.as_ref(), &self.work_dir(id))
+            .merged_info(proc_state.as_ref(), &self.work_dir(id)?)
             .to_pb(&self.config.gateway, &self.config.cvm, false);
         Ok(Some(info))
     }
@@ -1038,20 +1037,21 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn compose_file_path(&self, id: &str) -> PathBuf {
-        self.shared_dir(id).join(APP_COMPOSE)
+    pub(crate) fn compose_file_path(&self, id: &str) -> Result<PathBuf> {
+        Ok(self.shared_dir(id)?.join(APP_COMPOSE))
     }
 
-    pub(crate) fn encrypted_env_path(&self, id: &str) -> PathBuf {
-        self.shared_dir(id).join(ENCRYPTED_ENV)
+    pub(crate) fn encrypted_env_path(&self, id: &str) -> Result<PathBuf> {
+        Ok(self.shared_dir(id)?.join(ENCRYPTED_ENV))
     }
 
-    pub(crate) fn user_config_path(&self, id: &str) -> PathBuf {
-        self.shared_dir(id).join(USER_CONFIG)
+    pub(crate) fn user_config_path(&self, id: &str) -> Result<PathBuf> {
+        Ok(self.shared_dir(id)?.join(USER_CONFIG))
     }
 
-    pub(crate) fn shared_dir(&self, id: &str) -> PathBuf {
-        self.config.run_path.join(id).join("shared")
+    pub(crate) fn shared_dir(&self, id: &str) -> Result<PathBuf> {
+        validate_vm_id(id)?;
+        Ok(self.config.run_path.join(id).join("shared"))
     }
 
     pub(crate) fn prepare_work_dir(
@@ -1060,7 +1060,7 @@ impl App {
         req: &VmConfiguration,
         app_id: &str,
     ) -> Result<VmWorkDir> {
-        let work_dir = self.work_dir(id);
+        let work_dir = self.work_dir(id)?;
         let shared_dir = work_dir.join("shared");
         fs::create_dir_all(&shared_dir).context("Failed to create shared directory")?;
         fs::write(shared_dir.join(APP_COMPOSE), &req.compose_file)
@@ -1087,8 +1087,8 @@ impl App {
     }
 
     pub(crate) fn sync_dynamic_config(&self, id: &str) -> Result<()> {
-        let work_dir = self.work_dir(id);
-        let shared_dir = self.shared_dir(id);
+        let work_dir = self.work_dir(id)?;
+        let shared_dir = self.shared_dir(id)?;
         let manifest = work_dir.manifest().context("Failed to read manifest")?;
         let cfg = &self.config;
         let compose_hash = sha256_file(shared_dir.join(APP_COMPOSE))?;
@@ -1172,7 +1172,10 @@ impl App {
                 if vm.state.removing {
                     return false;
                 }
-                let workdir = self.work_dir(&vm.config.manifest.id);
+                let Ok(workdir) = self.work_dir(&vm.config.manifest.id) else {
+                    warn!(id = %vm.config.manifest.id, "skipping restart: invalid VM id");
+                    return false;
+                };
                 let started = workdir.started().unwrap_or(false);
                 started && !running_vms.contains(&vm.config.manifest.id)
             })
@@ -1519,6 +1522,33 @@ pub(crate) fn needs_swtpm(
 mod tests {
     use super::mr_config::{mr_config_version, MrConfigVersion};
     use super::*;
+
+    #[test]
+    fn accepts_server_generated_ids() {
+        validate_vm_id(&uuid::Uuid::new_v4().to_string()).unwrap();
+        validate_vm_id("3f2504e0-4f89-41d3-9a0c-0305e82c3301").unwrap();
+        validate_vm_id("vm_1-A").unwrap();
+    }
+
+    #[test]
+    fn rejects_ids_that_would_escape_run_path() {
+        for id in [
+            "",
+            "..",
+            "../../etc",
+            "/etc/passwd",
+            "a/b",
+            "a\\b",
+            "vm id",
+            ".",
+            "\0",
+            "café",
+        ] {
+            assert!(validate_vm_id(id).is_err(), "should reject {id:?}");
+        }
+        assert!(validate_vm_id(&"a".repeat(65)).is_err());
+    }
+
     use crate::config::{
         load_config_figment, CvmPlatform, Networking, NetworkingMode, TdxAttestationVariantConfig,
     };
@@ -2300,4 +2330,20 @@ impl AppState {
     pub fn iter_vms(&self) -> impl Iterator<Item = &VmState> {
         self.vms.values()
     }
+}
+
+/// Reject VM ids that would escape `run_path` once joined into a filesystem
+/// path. Ids are server-generated UUIDs, so hex digits plus `-` covers every
+/// legitimate value; `Path::join` replaces the base outright on an absolute
+/// path, and `..` walks out of it, so neither may reach the join.
+pub(crate) fn validate_vm_id(id: &str) -> Result<()> {
+    if id.is_empty()
+        || id.len() > 64
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        bail!("invalid VM id");
+    }
+    Ok(())
 }
