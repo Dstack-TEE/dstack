@@ -28,7 +28,7 @@ export AWS_LC_SYS_CMAKE_BUILDER = "1"
 # Ensure rsync-native is built before unpack runs
 do_unpack[depends] += "rsync-native:do_populate_sysroot"
 
-DSTACK_SERVICES = "dstack-guest-agent.service dstack-guest-agent.socket dstack-prepare.service app-compose.service wg-checker.service"
+DSTACK_SERVICES = "dstack-guest-agent.service dstack-guest-agent.socket dstack-prepare.service app-compose.service dstack-gateway-checker.service"
 SYSTEMD_PACKAGES = "${@bb.utils.contains('DISTRO_FEATURES','systemd','${PN}','',d)}"
 SYSTEMD_SERVICE:${PN} = "${@bb.utils.contains('DISTRO_FEATURES','systemd','${DSTACK_SERVICES}','',d)}"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
@@ -69,7 +69,6 @@ do_install() {
     install -m 0755 ${CARGO_BINDIR}/dstack-volume ${D}${bindir}
     install -m 0755 ${DSTACK_ROOTFS_FILES}/dstack-prepare.sh ${D}${bindir}
     install -m 0755 ${DSTACK_ROOTFS_FILES}/ephemeral-docker.sh ${D}${bindir}
-    install -m 0755 ${DSTACK_ROOTFS_FILES}/wg-checker.sh ${D}${bindir}
     install -m 0755 ${DSTACK_ROOTFS_FILES}/app-compose.sh ${D}${bindir}
     install -m 0644 ${DSTACK_ROOTFS_FILES}/journald.conf ${D}${sysconfdir}/systemd/journald.conf.d/dstack.conf
 
@@ -86,7 +85,7 @@ do_install() {
         install -m 0644 ${DSTACK_ROOTFS_FILES}/dstack-guest-agent.service ${D}${systemd_system_unitdir}
         install -m 0644 ${DSTACK_ROOTFS_FILES}/dstack-prepare.service ${D}${systemd_system_unitdir}
         install -m 0644 ${DSTACK_ROOTFS_FILES}/app-compose.service ${D}${systemd_system_unitdir}
-        install -m 0644 ${DSTACK_ROOTFS_FILES}/wg-checker.service ${D}${systemd_system_unitdir}
+        install -m 0644 ${DSTACK_ROOTFS_FILES}/dstack-gateway-checker.service ${D}${systemd_system_unitdir}
         install -m 0644 ${DSTACK_ROOTFS_FILES}/dstack-guest-agent.socket ${D}${systemd_system_unitdir}
         install -m 0644 ${DSTACK_ROOTFS_FILES}/llmnr.conf ${D}${sysconfdir}/systemd/resolved.conf.d
         install -d ${D}${sysconfdir}/systemd/system/docker.service.d
