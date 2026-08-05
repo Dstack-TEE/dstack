@@ -65,14 +65,16 @@ impl Config {
             self.image_download_url.contains("{OS_IMAGE_HASH}"),
             "image_download_url must contain {{OS_IMAGE_HASH}}"
         );
+        anyhow::ensure!(
+            self.image_download_url.starts_with("http://")
+                || self.image_download_url.starts_with("https://"),
+            "image_download_url must use http or https"
+        );
         let probe_url = self
             .image_download_url
             .replace("{OS_IMAGE_HASH}", &"00".repeat(32));
         let parsed = reqwest::Url::parse(&probe_url).context("invalid image_download_url")?;
-        anyhow::ensure!(
-            matches!(parsed.scheme(), "http" | "https"),
-            "image_download_url must use http or https"
-        );
+        debug_assert!(matches!(parsed.scheme(), "http" | "https"));
         Ok(())
     }
 }
@@ -85,7 +87,13 @@ fn config_figment(config_path: &Path) -> Figment {
 }
 
 fn load_config(config_path: &Path) -> Result<Config> {
-    let config: Config = config_figment(config_path)
+    // Extract the verifier settings without Rocket's defaults. `Config` denies
+    // unknown fields, while Rocket's figment contains framework-only keys such
+    // as `cli_colors` that are still needed when launching the server.
+    let config: Config = Figment::new()
+        .merge(Toml::string(include_str!("../dstack-verifier.toml")))
+        .merge(Toml::file(config_path))
+        .merge(Env::prefixed("DSTACK_VERIFIER_").split("__"))
         .extract()
         .context("Failed to load configuration")?;
     config.validate()?;
