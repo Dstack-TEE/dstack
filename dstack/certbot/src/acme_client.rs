@@ -57,6 +57,10 @@ pub(crate) fn acme_matches(encoded_credentials: &str, acme_url: &str) -> bool {
     credentials.acme_url == acme_url
 }
 
+fn caa_tag(content: &str) -> Option<&str> {
+    content.split_whitespace().nth(1)
+}
+
 impl AcmeClient {
     pub async fn load(
         dns01_client: Dns01Client,
@@ -146,9 +150,12 @@ impl AcmeClient {
                 if record.id == guard0 || record.id == guard1 {
                     continue;
                 }
-                if record.r#type == "CAA" {
+                if record.r#type == "CAA"
+                    && caa_tag(&record.content)
+                        .is_some_and(|tag| matches!(tag, "issue" | "issuewild"))
+                {
                     debug!(
-                        "removing existing CAA record {} {}",
+                        "removing existing issuer CAA record {} {}",
                         record.name, record.content
                     );
                     self.dns01_client.remove_record(&record.id).await?;
