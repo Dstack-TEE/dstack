@@ -102,13 +102,15 @@ def main() -> int:
             "no_handshake_force",
             "stale_handshake_force",
             "fresh_handshake_not_forced",
+            "steady_no_handshake_force",
+            "steady_force_rate_limited",
             "refresh_failure_observed",
             "refresh_recovery",
             "missing_wg_noop",
             "missing_config_noop",
             "interface_isolated",
         )
-        if evidence.get("checks", 0) < 20 or not all(
+        if evidence.get("checks", 0) < 24 or not all(
             evidence.get(key) is True for key in required
         ):
             raise RuntimeError("WireGuard evidence omitted a required row")
@@ -156,7 +158,7 @@ def main() -> int:
                 {
                     "id": f"{CASE_ID}-step-02",
                     "status": status,
-                    "observed": "The packaged checker performed periodic and forced refresh for no/stale handshakes, avoided forcing a fresh handshake, and exposed an injected failure."
+                    "observed": "The packaged checker performed periodic and forced refresh for no/stale handshakes, avoided forcing a fresh handshake, reached a forced refresh for a never-handshaken peer under a uniform 10s clock, rate limited forced refresh while the gateway stayed unreachable, and exposed an injected failure."
                     if status == "PASS"
                     else summary,
                 },
