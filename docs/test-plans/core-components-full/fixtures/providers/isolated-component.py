@@ -174,7 +174,7 @@ def write_gateway_config(
     sync_node_id: int | None = None,
     sync_bootnode: str = "",
     tls_identity: dict[str, str] | None = None,
-    app_address_dns_server: str | None = None,
+    app_address_dns_servers: list[str] | None = None,
     proxy_stress: bool = False,
     fast_recycle: bool = False,
     enable_debug: bool = True,
@@ -260,8 +260,10 @@ def write_gateway_config(
     if proxy_anchor not in text:
         fail("candidate Gateway config is missing core.proxy section")
     app_address_dns_line = (
-        f'app_address_dns_server = "{app_address_dns_server}"\n'
-        if app_address_dns_server
+        "app_address_dns_servers = ["
+        + ", ".join(f'"{server}"' for server in app_address_dns_servers)
+        + "]\n"
+        if app_address_dns_servers
         else ""
     )
     text = text.replace(
@@ -524,7 +526,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         shutil.rmtree(workspace, ignore_errors=True)
         fail("runtime manifest is unavailable")
     runtime = json.loads(runtime_path.read_text())
-    ports = reserve_ports()
+    ports = reserve_ports(17)
     names = (
         "rpc",
         "admin",
@@ -542,6 +544,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         "aux1",
         "aux2",
         "aux3",
+        "aux4",
     )
     port_map = dict(zip(names, ports, strict=True))
     values = {
@@ -1968,8 +1971,11 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                 sync_node_id=node_id if node_count > 1 else None,
                 sync_bootnode=bootnode,
                 tls_identity=registration_client,
-                app_address_dns_server=(
-                    f"127.0.0.1:{port_map['aux3']}"
+                app_address_dns_servers=(
+                    [
+                        f"127.0.0.1:{port_map['aux3']}",
+                        f"127.0.0.1:{port_map['aux4']}",
+                    ]
                     if case_id == "tc-gw-proxy-prot-005"
                     else None
                 ),
@@ -2127,8 +2133,11 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                     "failure_port": port_map["aux2"],
                     "proxy_address": values["gateway"]["proxy_address"],
                     "base_domain": "localhost",
-                    "dns_address": (
-                        f"127.0.0.1:{port_map['aux3']}"
+                    "dns_addresses": (
+                        [
+                            f"127.0.0.1:{port_map['aux3']}",
+                            f"127.0.0.1:{port_map['aux4']}",
+                        ]
                         if case_id == "tc-gw-proxy-prot-005"
                         else None
                     ),

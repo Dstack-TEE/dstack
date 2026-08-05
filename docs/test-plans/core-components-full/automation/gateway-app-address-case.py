@@ -54,10 +54,17 @@ def question_end(packet: bytes) -> tuple[int, str, int]:
 class DnsAuthority:
     """Small case-owned UDP TXT authority with mutable records and query counts."""
 
-    def __init__(self, address: tuple[str, int], records: dict[str, tuple[str, int]]):
+    def __init__(
+        self,
+        address: tuple[str, int],
+        records: dict[str, tuple[str, int]],
+        *,
+        fail_queries: bool = False,
+    ):
         """Initialize the bounded authority without opening a listener."""
         self.address = address
         self.records = records
+        self.fail_queries = fail_queries
         self.queries: dict[str, int] = {}
         self.errors: list[str] = []
         self.stop = threading.Event()
@@ -86,7 +93,12 @@ class DnsAuthority:
                         with self.lock:
                             self.queries[name] = self.queries.get(name, 0) + 1
                             record = self.records.get(name)
-                        if query_type == 16 and record is not None:
+                        if self.fail_queries:
+                            header = packet[:2] + struct.pack(
+                                "!HHHHH", 0x8182, 1, 0, 0, 0
+                            )
+                            response = header + packet[12:end]
+                        elif query_type == 16 and record is not None:
                             value, ttl = record
                             encoded = value.encode("utf-8")
                             answer = (
@@ -161,7 +173,12 @@ def main() -> int:
     runtime = json.loads(Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text())
     fixture = manifest["values"]["gateway_proxy_protocol_005"]
     proxy_host, proxy_port = str(fixture["proxy_address"]).rsplit(":", 1)
-    dns_host, dns_port = str(fixture["dns_address"]).rsplit(":", 1)
+    dns_addresses = []
+    for address in fixture["dns_addresses"]:
+        dns_host, dns_port = str(address).rsplit(":", 1)
+        dns_addresses.append((dns_host, int(dns_port)))
+    if len(dns_addresses) != 2:
+        raise ValueError("the app-address case requires two DNS servers")
     proxy = (proxy_host, int(proxy_port))
     backend = (str(fixture["backend_address"]), int(fixture["backend_port"]))
     app_id = str(fixture["registered_app_id"])
@@ -187,12 +204,19 @@ def main() -> int:
         f"{PREFIX}.{names['malformed']}": ("invalid-address", 1),
         f"{PREFIX}.{names['stale']}": (target, 1),
     }
-    authority = DnsAuthority((dns_host, int(dns_port)), records)
-    dns_worker = threading.Thread(
-        target=authority.serve, name="case-owned-dns", daemon=True
-    )
-    dns_worker.start()
-    authority.ready.wait(5)
+    failing_authority = DnsAuthority(dns_addresses[0], {}, fail_queries=True)
+    authority = DnsAuthority(dns_addresses[1], records)
+    authorities = [failing_authority, authority]
+    dns_workers = [
+        threading.Thread(
+            target=current.serve, name=f"case-owned-dns-{index}", daemon=True
+        )
+        for index, current in enumerate(authorities, start=1)
+    ]
+    for dns_worker in dns_workers:
+        dns_worker.start()
+    for current in authorities:
+        current.ready.wait(5)
     backend_records: list[dict[str, object]] = []
     backend_errors: list[str] = []
     backend_ready = threading.Event()
@@ -230,7 +254,8 @@ def main() -> int:
     backend_ready.wait(5)
     checks: dict[str, bool] = {
         "fixture_case_owned": fixture.get("case_owned") is True,
-        "dns_ready": authority.ready.is_set() and not authority.errors,
+        "dns_ready": all(current.ready.is_set() for current in authorities)
+        and not any(current.errors for current in authorities),
         "backend_ready": backend_ready.is_set() and not backend_errors,
     }
     try:
@@ -268,15 +293,22 @@ def main() -> int:
         checks["harness_exception_free"] = False
         backend_errors.append(type(error).__name__)
     backend_worker.join(5)
-    authority.stop.set()
-    dns_worker.join(2)
+    for current in authorities:
+        current.stop.set()
+    for dns_worker in dns_workers:
+        dns_worker.join(2)
     checks["backend_exact_sessions"] = (
         len(backend_records) == 6 and not backend_worker.is_alive()
     )
     checks["tls_clienthello_preserved"] = len(backend_records) == 6 and all(
         bool(row["tls_record"]) for row in backend_records
     )
-    checks["dns_clean_shutdown"] = not dns_worker.is_alive() and not authority.errors
+    checks["dns_clean_shutdown"] = not any(
+        dns_worker.is_alive() for dns_worker in dns_workers
+    ) and not any(current.errors for current in authorities)
+    checks["dns_server_failover"] = bool(failing_authority.queries) and bool(
+        authority.queries
+    )
     queried = set(authority.queries)
     checks["current_and_legacy_queried"] = any(
         name.startswith(PREFIX + ".") for name in queried
@@ -289,7 +321,12 @@ def main() -> int:
         "backend_connections": len(backend_records),
         "backend_records": backend_records,
         "backend_error_types": backend_errors,
-        "dns_error_types": authority.errors,
+        "dns_error_types": [
+            error for current in authorities for error in current.errors
+        ],
+        "dns_server_query_counts": [
+            sum(current.queries.values()) for current in authorities
+        ],
         "dns_query_name_classes": {
             "current": sum(
                 v for k, v in authority.queries.items() if k.startswith(PREFIX + ".")
