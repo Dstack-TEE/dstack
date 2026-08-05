@@ -17,11 +17,47 @@ pub mod attestation;
 mod aws_nitro_tpm;
 #[cfg(feature = "quote")]
 mod sev_snp;
+pub mod trust_anchors;
 mod v1;
 
 const RUNTIME_EVENT_DIR: &str = "/run/log/dstack";
 const RUNTIME_EVENT_VERSION_FILE: &str = "/run/log/dstack/runtime_event_version";
 const RUNTIME_EVENT_LOCK_FILE: &str = "/run/log/dstack/runtime_event.lock";
+
+/// Build the verifier a guest authenticates the KMS and the gateway with.
+///
+/// Trust anchors are taken from [`trust_anchors::ANCHOR_DIR`] when that
+/// directory holds a set published inside this guest. When it does not — the
+/// only outcome on a production image — the vendor production roots apply.
+///
+/// `collateral_urls` selects where signed collateral is fetched from; the trust
+/// anchor still has to sign it.
+pub fn default_verifier(
+    collateral_urls: &attestation::CollateralUrls,
+) -> anyhow::Result<attestation::AttestationVerifier> {
+    use attestation::{AttestationVerifier, AttestationVerifierConfig};
+
+    let Some(root_ca) =
+        trust_anchors::load_anchors(std::path::Path::new(trust_anchors::ANCHOR_DIR))
+            .context("failed to load local attestation anchors")?
+    else {
+        return AttestationVerifier::new_prod(Some(collateral_urls));
+    };
+    tracing::warn!(
+        dir = trust_anchors::ANCHOR_DIR,
+        "verifying attestation against external trust anchors published by the in-guest TEE \
+         simulator; this guest cannot verify production evidence"
+    );
+    AttestationVerifier::load(&AttestationVerifierConfig {
+        // The opt-in exists to make an operator acknowledge a non-production
+        // root in a hand-written service config. Nothing here is hand-written:
+        // the roots came from a guest-local directory `load_anchors` already
+        // authenticated, so the flag has no one left to warn.
+        insecure_allow_external_trust_anchors: true,
+        urls: collateral_urls.clone(),
+        root_ca,
+    })
+}
 
 /// Acquire the system-wide runtime event lock, blocking until it is available.
 ///

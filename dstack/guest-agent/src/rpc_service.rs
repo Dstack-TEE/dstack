@@ -10,7 +10,7 @@ use std::{
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use cert_client::CertRequestClient;
-use dstack_attest::attestation::AttestationVerifier;
+use dstack_attest::default_verifier;
 use dstack_guest_agent_rpc::{
     dstack_guest_server::{DstackGuestRpc, DstackGuestServer},
     tappd_server::{TappdRpc, TappdServer},
@@ -163,7 +163,9 @@ impl AppState {
                 .context("Failed to parse VM config")?;
         let collateral_urls = sys_config.collateral_urls();
         let vm_config = sys_config.vm_config;
-        let verifier = Arc::new(AttestationVerifier::new_prod(Some(&collateral_urls))?);
+        // Same trust anchor decision as dstack-util: never host-supplied, and
+        // development roots only when this guest published them itself.
+        let verifier = Arc::new(default_verifier(&collateral_urls)?);
         let cert_client = CertRequestClient::create(&keys, verifier, vm_config.clone())
             .await
             .context("Failed to create cert signer")?;
@@ -690,6 +692,7 @@ mod tests {
         backend::PlatformBackend,
         config::{AppComposeWrapper, Config},
     };
+    use dstack_attest::attestation::AttestationVerifier;
     use dstack_guest_agent_rpc::{GetAttestationForAppKeyRequest, SignRequest};
     use dstack_types::{AppCompose, AppKeys, EventLogVersion, KeyProvider};
     use ed25519_dalek::ed25519::signature::hazmat::PrehashVerifier;

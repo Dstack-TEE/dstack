@@ -1322,6 +1322,11 @@ pub(crate) fn make_sys_config(
         "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
         "vm_config": serde_json::to_string(&vm_config)?,
     });
+    // No attestation trust anchor is ever written here. Simulated deployments
+    // receive only the development seed through `.tee-simulator.json`; the
+    // in-guest simulator derives the matching roots itself and publishes them
+    // to the guest verifier. A host cannot be allowed to choose the root that
+    // authenticates the guest's key provider.
     if let Some(mr_config) = mr_config {
         MrConfigV3::from_document(&mr_config).context("Invalid mr_config document")?;
         sys_config["mr_config"] = serde_json::to_value(mr_config)?;
@@ -2174,6 +2179,19 @@ mod tests {
             make_sys_config(&config, &manifest, &compose_hash, Some(mr_config), None)?;
         let sys_config: serde_json::Value = serde_json::from_str(&sys_config_document)?;
         assert!(sys_config.get("tee_simulator").is_none());
+        // A host must never nominate the trust anchor that authenticates its
+        // guest's key provider, in any deployment mode. Simulated guests derive
+        // their own roots from the seed in `.tee-simulator.json` instead.
+        for key in sys_config
+            .as_object()
+            .context("sys-config must be an object")?
+            .keys()
+        {
+            assert!(
+                !key.contains("root_ca") && !key.contains("trust_anchor"),
+                "sys-config must not carry an attestation trust anchor: {key}"
+            );
+        }
         assert_eq!(sys_config["pccs_url"], config.cvm.pccs_url);
         assert_eq!(sys_config["collateral_urls"]["pccs"], config.cvm.pccs_url);
         let vm_config: serde_json::Value = serde_json::from_str(

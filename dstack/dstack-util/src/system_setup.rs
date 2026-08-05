@@ -15,7 +15,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use dstack_attest::{emit_runtime_event, set_runtime_event_version};
+use dstack_attest::{default_verifier, emit_runtime_event, set_runtime_event_version};
 use dstack_kms_rpc as rpc;
 use dstack_types::{
     gpu_policy_hash,
@@ -65,6 +65,10 @@ use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
 use serde_human_bytes as hex_bytes;
 use serde_json::Value;
 use tpm_attest::{self as tpm, TpmContext};
+
+fn attestation_verifier(sys_config: &SysConfig) -> Result<Arc<AttestationVerifier>> {
+    Ok(Arc::new(default_verifier(&sys_config.collateral_urls())?))
+}
 
 async fn sign_cert_request(
     cert_client: &CertRequestClient,
@@ -480,8 +484,7 @@ impl<'a> GatewayContext<'a> {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let cert_not_after = now + CERT_VALIDITY_SECS;
-        let collateral_urls = self.shared.sys_config.collateral_urls();
-        let verifier = Arc::new(AttestationVerifier::new_prod(Some(&collateral_urls))?);
+        let verifier = attestation_verifier(&self.shared.sys_config)?;
         let cert_client = CertRequestClient::create(
             self.keys,
             verifier,
@@ -2035,8 +2038,7 @@ impl<'a> Stage0<'a> {
                 .context("Failed to get temp ca cert")?
         };
         let cert_pair = generate_ra_cert(tmp_ca.temp_ca_cert.clone(), tmp_ca.temp_ca_key.clone())?;
-        let collateral_urls = self.shared.sys_config.collateral_urls();
-        let attestation_verifier = Arc::new(AttestationVerifier::new_prod(Some(&collateral_urls))?);
+        let attestation_verifier = attestation_verifier(&self.shared.sys_config)?;
         let verified_kms_measurement = Arc::new(std::sync::Mutex::new(None::<[u8; 32]>));
         let captured_kms_measurement = verified_kms_measurement.clone();
         let ra_client = RaClientConfig::builder()

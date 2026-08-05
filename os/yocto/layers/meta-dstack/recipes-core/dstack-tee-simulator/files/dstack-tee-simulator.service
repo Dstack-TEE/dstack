@@ -16,6 +16,9 @@ ExecStopPost=-/usr/bin/dstack-util host-shared unmount --mount-point /run/dstack
 ExecStopPost=-/bin/umount /sys/class/dmi/id/sys_vendor
 ExecStopPost=-/bin/umount /sys/class/dmi/id/product_name
 ExecStopPost=-/bin/sh -c 'test ! -e /run/dstack/created-tpm-marker || rm -f /dev/tpmrm0 /run/dstack/created-tpm-marker'
+# External trust anchors outlive no simulator run: dstack-util must fall
+# back to production roots the moment the simulated TEE is gone.
+ExecStopPost=-/bin/rm -rf /run/dstack/attestation
 ExecStopPost=/bin/systemctl unset-environment DCAP_TDX_RTMR_SYSFS_PATH DSTACK_CCEL_FILE
 Restart=on-failure
 RestartSec=1s
