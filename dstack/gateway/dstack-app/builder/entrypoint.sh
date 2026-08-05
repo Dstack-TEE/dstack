@@ -123,6 +123,7 @@ inbound_pp_enabled = ${INBOUND_PP_ENABLED:-false}
 connect = "${TIMEOUT_CONNECT:-5s}"
 handshake = "${TIMEOUT_HANDSHAKE:-5s}"
 cache_top_n = "${TIMEOUT_CACHE_TOP_N:-30s}"
+handshake_stale = "${TIMEOUT_HANDSHAKE_STALE:-30m}"
 dns_resolve = "${TIMEOUT_DNS_RESOLVE:-5s}"
 data_timeout_enabled = ${TIMEOUT_DATA_ENABLED:-true}
 idle = "${TIMEOUT_IDLE:-10m}"
