@@ -95,12 +95,6 @@ async fn sign_cert_request(
 
 mod config_id_verifier;
 
-fn is_unsupported_app_info_quote(err: &anyhow::Error) -> bool {
-    let message = format!("{err:#}");
-    message.contains("Unsupported attestation quote")
-        || message.contains("unsupported attestation quote for app info decoding")
-}
-
 #[derive(clap::Parser)]
 /// Prepare full disk encryption
 pub struct SetupArgs {
@@ -1993,6 +1987,25 @@ pub async fn cmd_gateway_refresh(args: GatewayRefreshArgs) -> Result<()> {
         .await
 }
 
+/// Accept only a certificate the KMS issued for its own RPC endpoint.
+///
+/// The attestation behind this certificate is already verified by the RA-TLS
+/// layer, and the KMS identity that matters to the guest is its CA public key,
+/// pinned separately by `verify_key_provider_id`. All that is left here is
+/// refusing a certificate minted for some other purpose.
+fn validate_kms_rpc_cert(cert: Option<CertInfo>) -> Result<()> {
+    let Some(cert) = cert else {
+        bail!("Missing server cert");
+    };
+    let Some(usage) = cert.special_usage else {
+        bail!("Missing server cert usage");
+    };
+    if usage != "kms:rpc" {
+        bail!("Invalid server cert usage: {usage}");
+    }
+    Ok(())
+}
+
 struct AppIdValidator {
     allowed_app_id: String,
 }
@@ -2093,8 +2106,6 @@ impl<'a> Stage0<'a> {
         };
         let cert_pair = generate_ra_cert(tmp_ca.temp_ca_cert.clone(), tmp_ca.temp_ca_key.clone())?;
         let attestation_verifier = attestation_verifier(&self.shared.sys_config)?;
-        let verified_kms_measurement = Arc::new(std::sync::Mutex::new(None::<[u8; 32]>));
-        let captured_kms_measurement = verified_kms_measurement.clone();
         let ra_client = RaClientConfig::builder()
             .tls_no_check(false)
             .tls_built_in_root_certs(false)
@@ -2103,32 +2114,7 @@ impl<'a> Stage0<'a> {
             .tls_client_key(cert_pair.key_pem)
             .tls_ca_cert(tmp_ca.ca_cert.clone())
             .attestation_verifier(attestation_verifier)
-            .cert_validator(Box::new(move |cert| {
-                let Some(cert) = cert else {
-                    bail!("Missing server cert");
-                };
-                let Some(usage) = cert.special_usage else {
-                    bail!("Missing server cert usage");
-                };
-                if usage != "kms:rpc" {
-                    bail!("Invalid server cert usage: {usage}");
-                }
-                if let Some(att) = &cert.attestation {
-                    match att.decode_app_info(false) {
-                        Ok(kms_info) => {
-                            *captured_kms_measurement
-                                .lock()
-                                .map_err(|_| anyhow!("KMS measurement capture lock poisoned"))? =
-                                Some(kms_info.mr_aggregated);
-                        }
-                        Err(err) if is_unsupported_app_info_quote(&err) => {
-                            warn!("Skipping mr-kms runtime event for unsupported attestation quote: {err:#}");
-                        }
-                        Err(err) => return Err(err).context("Failed to decode app_info"),
-                    }
-                }
-                Ok(())
-            }))
+            .cert_validator(Box::new(validate_kms_rpc_cert))
             .build()
             .into_client()
             .context("Failed to create client")?;
@@ -2141,14 +2127,6 @@ impl<'a> Stage0<'a> {
             .await
             .context("Failed to get app key")?;
 
-        let kms_measurement = verified_kms_measurement
-            .lock()
-            .map_err(|_| anyhow!("KMS measurement capture lock poisoned"))?
-            .take();
-        if let Some(kms_measurement) = kms_measurement {
-            emit_runtime_event("mr-kms", &kms_measurement)
-                .context("failed to extend mr-kms to the launch measurement")?;
-        }
         emit_runtime_event("os-image-hash", &response.os_image_hash)
             .context("failed to extend os-image-hash to the launch measurement")?;
 

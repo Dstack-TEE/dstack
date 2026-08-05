@@ -128,8 +128,8 @@ async fn main() -> Result<()> {
     if !config.attest_rpc_cert {
         warn!(
             "attest_rpc_cert = false; the KMS RPC certificate carries no attestation, so \
-             guests cannot verify which KMS they are talking to and will not extend \
-             mr-kms. Intended for local development only"
+             guests cannot verify which KMS they are talking to. Intended for local \
+             development only"
         );
     }
 
