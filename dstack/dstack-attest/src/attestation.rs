@@ -202,7 +202,6 @@ impl AttestationVerifier {
         self.external_trust_anchors
     }
 
-
     async fn verify_tdx_quote(&self, quote: &[u8]) -> Result<TdxVerifiedReport> {
         let collateral = self.tdx_collateral.fetch(quote).await?;
         let now = SystemTime::now()

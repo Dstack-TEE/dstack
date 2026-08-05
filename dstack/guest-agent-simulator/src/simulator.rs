@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use dcap_qvl::quote::Quote;
 use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
 use mock_attestation::tdx::TdxGenerator;

@@ -3,17 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use dcap_qvl::QuoteCollateralV3;
 use dcap_qvl::quote::{
     AuthData, AuthDataV4, CertificationData, Data, EnclaveReport, Header,
     QEReportCertificationData, Quote, Report, TDReport10,
 };
-use p256::ecdsa::{Signature, SigningKey, signature::Signer};
+use dcap_qvl::QuoteCollateralV3;
+use p256::ecdsa::{signature::Signer, Signature, SigningKey};
 use p256::pkcs8::{DecodePrivateKey, EncodePrivateKey};
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, CertificateRevocationListParams,
     CertifiedKey, CustomExtension, DnType, ExtendedKeyUsagePurpose, IsCa, KeyIdMethod, KeyPair,
-    KeyUsagePurpose, PKCS_ECDSA_P256_SHA256, RemoteKeyPair, SerialNumber, SignatureAlgorithm,
+    KeyUsagePurpose, RemoteKeyPair, SerialNumber, SignatureAlgorithm, PKCS_ECDSA_P256_SHA256,
 };
 use scale::Encode;
 use serde_json::json;
@@ -142,11 +142,11 @@ impl TdxGenerator {
     pub fn root_ca_pem(&self) -> String {
         self.root.pem()
     }
-    pub fn root_key_pem(&self) -> String {
-        self.root_signing_key
-            .to_pkcs8_pem(Default::default())
-            .expect("P-256 key serialization")
-            .to_string()
+    pub fn root_key_pem(&self) -> Result<String> {
+        Ok(self
+            .root_signing_key
+            .to_pkcs8_pem(Default::default())?
+            .to_string())
     }
 
     pub fn sample_collateral(&self) -> Result<QuoteCollateralV3> {
@@ -446,14 +446,13 @@ mod tests {
         );
         let mut tampered = evidence.quote.clone();
         tampered[100] ^= 1;
-        assert!(
-            verifier
-                .verify(&tampered, &evidence.collateral, now)
-                .is_err()
-        );
-        assert!(
-            crate::ensure_report_data(&verified.report.as_td10().unwrap().report_data, &[0x24; 64])
-                .is_err()
-        );
+        assert!(verifier
+            .verify(&tampered, &evidence.collateral, now)
+            .is_err());
+        assert!(crate::ensure_report_data(
+            &verified.report.as_td10().unwrap().report_data,
+            &[0x24; 64]
+        )
+        .is_err());
     }
 }
