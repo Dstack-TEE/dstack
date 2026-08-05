@@ -11,15 +11,18 @@
 //! re-running the same registration whenever the observable state says it is
 //! needed.
 //!
-//! There are exactly three reasons to refresh, in priority order:
+//! There are exactly three reasons to refresh. The order matters, because
+//! [`HANDSHAKE_TIMEOUT`] equals [`REFRESH_INTERVAL`] and the deadlines collide:
 //!
 //! 1. **No WireGuard config.** Boot-time registration never succeeded, so the
 //!    CVM has no route. Retried on a backoff (see [`Backoff`]).
-//! 2. **Periodic re-registration.** The gateway expires idle registrations, so
-//!    re-register every [`REFRESH_INTERVAL`] even when everything looks fine.
-//! 3. **Stale WireGuard handshake.** The tunnel exists but the peer stopped
+//! 2. **Stale WireGuard handshake.** The tunnel exists but the peer stopped
 //!    answering for [`HANDSHAKE_TIMEOUT`], which usually means the gateway
-//!    restarted and forgot us.
+//!    restarted and forgot us. Checked *before* the periodic refresh and rate
+//!    limited to one attempt per timeout, because only this forced path can
+//!    rebuild a tunnel whose config is unchanged, and it is the expensive one.
+//! 3. **Periodic re-registration.** The gateway expires idle registrations, so
+//!    re-register every [`REFRESH_INTERVAL`] even when everything looks fine.
 //!
 //! The decision logic is a pure function of an [`Observation`] so it can be
 //! unit tested without a gateway, a KMS, or a WireGuard interface; all I/O
@@ -121,45 +124,53 @@ struct Refresh {
 struct Checker {
     /// Timestamp of the last refresh attempt; `None` if none has run yet.
     last_attempt: Option<i64>,
+    /// Timestamp of the last *forced* refresh; `None` if none has run yet.
+    /// Tracked separately from `last_attempt` so a cheap periodic refresh does
+    /// not re-arm the rate limit that protects the expensive forced path.
+    last_force: Option<i64>,
     /// When the tunnel was first seen without any handshake; `None` while a
-    /// handshake exists or the config is absent.
+    /// handshake exists or the config is absent. Means exactly one thing: when
+    /// we first observed a peer with no handshake.
     handshake_missing_since: Option<i64>,
     backoff: Backoff,
 }
+
+const MISSING_CONFIG: Refresh = Refresh {
+    force: true,
+    reason: "WireGuard config is missing",
+};
+const STALE_HANDSHAKE: Refresh = Refresh {
+    force: true,
+    reason: "WireGuard handshake is stale",
+};
+const PERIODIC: Refresh = Refresh {
+    force: false,
+    reason: "periodic re-registration",
+};
 
 impl Checker {
     /// Decide whether to refresh now. Pure: same state plus same observation
     /// always yields the same answer.
     fn decide(&mut self, obs: Observation) -> Option<Refresh> {
-        // An attempt that has not cooled down yet blocks every reason below, so
-        // repeated failures cannot bypass the backoff by changing category.
-        let elapsed = match self.last_attempt {
-            // Nothing tried yet: act immediately.
-            None => return Some(Self::first_refresh(obs)),
-            Some(last) => obs.now.saturating_sub(last),
-        };
-        if elapsed < self.backoff.delay() {
-            return None;
-        }
-
         if !obs.config_present {
+            // No config means no interface, so there is no handshake to age.
             self.handshake_missing_since = None;
-            return (elapsed >= MISSING_CONFIG_RETRY_INTERVAL).then_some(Refresh {
-                force: true,
-                reason: "WireGuard config is missing",
-            });
+            let Some(last) = self.last_attempt else {
+                return Some(MISSING_CONFIG);
+            };
+            let delay = MISSING_CONFIG_RETRY_INTERVAL.max(self.backoff.delay());
+            return (obs.now.saturating_sub(last) >= delay).then_some(MISSING_CONFIG);
         }
 
-        if elapsed >= REFRESH_INTERVAL {
-            self.handshake_missing_since = None;
-            return Some(Refresh {
-                force: false,
-                reason: "periodic re-registration",
-            });
-        }
-
-        // The tunnel is configured and recently re-registered; the only thing
-        // left that can be wrong is the tunnel itself going quiet.
+        // Staleness is checked BEFORE the periodic refresh, and the
+        // missing-handshake timer is cleared ONLY by an observed handshake --
+        // never by a refresh. HANDSHAKE_TIMEOUT equals REFRESH_INTERVAL, so if
+        // a periodic refresh reset the timer it would re-arm at 0 while the
+        // timer had only reached REFRESH_INTERVAL - POLL_INTERVAL, and the
+        // forced branch would be unreachable for a peer that never handshakes.
+        // That matters because gateway setup short-circuits on an unchanged
+        // config unless force is set: a CVM whose WireGuard config is correct
+        // but whose tunnel is dead can only recover through a forced refresh.
         let silent_since = match obs.latest_handshake {
             Some(handshake) => {
                 self.handshake_missing_since = None;
@@ -170,32 +181,35 @@ impl Checker {
             // HANDSHAKE_TIMEOUT to complete its first handshake.
             None => *self.handshake_missing_since.get_or_insert(obs.now),
         };
-        (obs.now.saturating_sub(silent_since) >= HANDSHAKE_TIMEOUT).then_some(Refresh {
-            force: true,
-            reason: "WireGuard handshake is stale",
-        })
-    }
-
-    /// The first poll always acts: boot may have left the CVM unregistered, and
-    /// re-registering an already-healthy CVM is cheap and idempotent.
-    fn first_refresh(obs: Observation) -> Refresh {
-        if obs.config_present {
-            Refresh {
-                force: false,
-                reason: "initial re-registration",
-            }
-        } else {
-            Refresh {
-                force: true,
-                reason: "WireGuard config is missing",
-            }
+        if obs.now.saturating_sub(silent_since) >= HANDSHAKE_TIMEOUT {
+            // A forced refresh bounces the interface and re-requests
+            // certificates, so cap it at one attempt per HANDSHAKE_TIMEOUT.
+            // Unthrottled, a gateway that stays down would be hit on every
+            // poll: a self-inflicted flood aimed at something already broken.
+            let due = match self.last_force {
+                None => true,
+                Some(last) => obs.now.saturating_sub(last) >= HANDSHAKE_TIMEOUT,
+            };
+            // Return either way. While the tunnel is dead a periodic refresh
+            // is pointless, since only the forced path can rebuild it.
+            return due.then_some(STALE_HANDSHAKE);
         }
+
+        // The first poll always re-registers: boot may have left the CVM
+        // unregistered, and re-registering a healthy CVM is cheap.
+        let Some(last) = self.last_attempt else {
+            return Some(PERIODIC);
+        };
+        (obs.now.saturating_sub(last) >= REFRESH_INTERVAL).then_some(PERIODIC)
     }
 
     /// Record the outcome of a refresh triggered by [`Checker::decide`].
-    fn record(&mut self, now: i64, succeeded: bool) {
+    fn record(&mut self, now: i64, refresh: Refresh, succeeded: bool) {
         self.last_attempt = Some(now);
-        self.handshake_missing_since = None;
+        if refresh.force {
+            self.last_force = Some(now);
+        }
+        // handshake_missing_since is deliberately NOT cleared here; see decide().
         self.backoff.record(succeeded);
     }
 }
@@ -297,7 +311,7 @@ pub async fn cmd_gateway_checker(args: GatewayCheckerArgs) -> Result<()> {
             // now_secs() is re-read here rather than reusing `now`: a refresh can
             // block on network timeouts for a long time, and the backoff has to
             // count from when the attempt ended, not when it started.
-            checker.record(now_secs(), succeeded);
+            checker.record(now_secs(), refresh, succeeded);
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
@@ -317,6 +331,151 @@ mod tests {
         }
     }
 
+    /// Replay the checker against a scripted world for `duration` seconds at the
+    /// production poll interval, returning (forced, periodic) refresh counts.
+    ///
+    /// `handshake` maps elapsed seconds to what `wg show ... latest-handshakes`
+    /// would report at that moment. Every refresh is treated as succeeding, so
+    /// the counts isolate the decision logic from the backoff.
+    fn replay(duration: i64, handshake: impl Fn(i64) -> Option<i64>) -> (usize, usize) {
+        let mut checker = Checker::default();
+        let (mut forced, mut periodic) = (0, 0);
+        let mut elapsed = 0;
+        while elapsed < duration {
+            let observation = obs(elapsed, true, handshake(elapsed));
+            if let Some(refresh) = checker.decide(observation) {
+                if refresh.force {
+                    forced += 1;
+                } else {
+                    periodic += 1;
+                }
+                checker.record(T0 + elapsed, refresh, true);
+            }
+            elapsed += POLL_INTERVAL.as_secs() as i64;
+        }
+        (forced, periodic)
+    }
+
+    /// The scenario table from the upstream fix that made the forced branch
+    /// reachable and rate limited it (`fix(guest): let the missing-handshake
+    /// timer actually expire`). These counts are the contract that commit
+    /// established by replaying the shell checker against a mocked clock; the
+    /// Rust port has to reproduce them exactly or it has silently regressed.
+    #[test]
+    fn reproduces_the_upstream_forced_refresh_scenarios() {
+        // Healthy tunnel: handshakes keep landing, nothing is ever forced.
+        assert_eq!(replay(900, |t| Some(T0 + t)).0, 0, "healthy handshakes");
+
+        // A peer that never handshakes must still reach the forced path, once
+        // per HANDSHAKE_TIMEOUT: at 180, 360, 540 and 720 seconds.
+        assert_eq!(replay(900, |_| None).0, 4, "never handshakes");
+
+        // Frozen handshake with the gateway down: the timestamp never advances,
+        // so it ages past the timeout and is forced on the same cadence. Before
+        // the rate limit this was one forced refresh per poll.
+        assert_eq!(
+            replay(900, |_| Some(T0)).0,
+            4,
+            "handshake frozen, gateway down"
+        );
+
+        // Handshakes land for the first 180s, then the peer goes silent. The
+        // timer runs from the last real handshake, so forcing starts at 360.
+        let (forced, _) = replay(900, |t| Some(T0 + if t < 180 { t } else { 180 }));
+        assert_eq!(forced, 3, "handshake then peer gone");
+
+        // No handshake, then the gateway recovers at 540s. Two forced attempts
+        // (180, 360) and then the periodic cadence resumes.
+        let (forced, periodic) = replay(900, |t| (t >= 540).then_some(T0 + t));
+        assert_eq!(forced, 2, "no handshake, gateway recovers");
+        assert!(periodic >= 1, "periodic refresh must resume after recovery");
+    }
+
+    /// The regression the upstream fix was about: a periodic refresh must not
+    /// reset the missing-handshake timer. HANDSHAKE_TIMEOUT == REFRESH_INTERVAL,
+    /// so clearing it on every periodic refresh re-arms the timer one poll
+    /// before it can expire and the forced branch becomes unreachable.
+    #[test]
+    fn periodic_refresh_does_not_re_arm_the_missing_handshake_timer() {
+        assert_eq!(
+            HANDSHAKE_TIMEOUT, REFRESH_INTERVAL,
+            "this regression only bites while the two intervals are equal"
+        );
+        let mut checker = Checker::default();
+        // First poll: no handshake yet, so the timer starts and we re-register.
+        assert_eq!(checker.decide(obs(0, true, None)), Some(PERIODIC));
+        checker.record(T0, PERIODIC, true);
+        assert_eq!(checker.handshake_missing_since, Some(T0));
+
+        // Still no handshake one full timeout later. The forced branch must
+        // fire; if the refresh above had cleared the timer it would not.
+        assert_eq!(
+            checker.decide(obs(HANDSHAKE_TIMEOUT, true, None)),
+            Some(STALE_HANDSHAKE)
+        );
+        assert_eq!(
+            checker.handshake_missing_since,
+            Some(T0),
+            "the timer must survive the refresh that ran at t=0"
+        );
+    }
+
+    #[test]
+    fn staleness_outranks_the_periodic_refresh() {
+        let mut checker = Checker::default();
+        checker.record(T0, PERIODIC, true);
+        checker.handshake_missing_since = Some(T0);
+        // At exactly REFRESH_INTERVAL both deadlines are due. The forced path
+        // must win: only it can rebuild a tunnel whose config is unchanged.
+        assert_eq!(
+            checker.decide(obs(REFRESH_INTERVAL, true, None)),
+            Some(STALE_HANDSHAKE)
+        );
+    }
+
+    #[test]
+    fn forced_refresh_is_rate_limited_while_the_tunnel_stays_dead() {
+        let mut checker = Checker::default();
+        checker.record(T0, PERIODIC, true);
+        checker.handshake_missing_since = Some(T0);
+
+        let refresh = checker.decide(obs(180, true, None)).expect("forced");
+        assert!(refresh.force);
+        checker.record(T0 + 180, refresh, true);
+
+        // Every poll in the next window is still stale, but must stay quiet --
+        // and must not fall through to a periodic refresh either.
+        let mut elapsed = 190;
+        while elapsed < 360 {
+            assert_eq!(
+                checker.decide(obs(elapsed, true, None)),
+                None,
+                "forced refresh must not repeat at t={elapsed}"
+            );
+            elapsed += 10;
+        }
+        assert_eq!(
+            checker.decide(obs(360, true, None)),
+            Some(STALE_HANDSHAKE),
+            "one forced attempt per handshake timeout"
+        );
+    }
+
+    #[test]
+    fn an_observed_handshake_is_the_only_thing_that_clears_the_timer() {
+        let mut checker = Checker::default();
+        checker.record(T0, PERIODIC, true);
+
+        assert!(checker.decide(obs(10, true, None)).is_none());
+        assert_eq!(checker.handshake_missing_since, Some(T0 + 10));
+        // A handshake lands.
+        assert!(checker.decide(obs(20, true, Some(T0 + 20))).is_none());
+        assert_eq!(checker.handshake_missing_since, None);
+        // Losing it again restarts the clock rather than firing immediately.
+        assert!(checker.decide(obs(30, true, None)).is_none());
+        assert_eq!(checker.handshake_missing_since, Some(T0 + 30));
+    }
+
     #[test]
     fn parses_max_handshake_across_peers() {
         let output = "aaa\t1700000000\nbbb\t1700000042\nccc\t0\n";
@@ -333,12 +492,14 @@ mod tests {
     #[test]
     fn acts_immediately_on_first_poll() {
         let mut checker = Checker::default();
-        let refresh = checker.decide(obs(0, false, None)).expect("should refresh");
-        assert!(refresh.force);
+        assert_eq!(checker.decide(obs(0, false, None)), Some(MISSING_CONFIG));
 
         let mut checker = Checker::default();
-        let refresh = checker.decide(obs(0, true, None)).expect("should refresh");
-        assert!(!refresh.force, "an existing config needs no forced reapply");
+        assert_eq!(
+            checker.decide(obs(0, true, None)),
+            Some(PERIODIC),
+            "an existing config needs no forced reapply"
+        );
     }
 
     #[test]
@@ -346,23 +507,25 @@ mod tests {
         let mut checker = Checker::default();
         let mut t = 0;
         // First attempt fires immediately and fails.
-        assert!(checker.decide(obs(t, false, None)).is_some());
-        checker.record(T0 + t, false);
+        assert_eq!(checker.decide(obs(t, false, None)), Some(MISSING_CONFIG));
+        checker.record(T0 + t, MISSING_CONFIG, false);
 
         // 30s base delay, then 60s, then capped at MAX_RETRY_INTERVAL.
         for expected_delay in [30, 60, 120, 120] {
             for early in [10, expected_delay - 10] {
-                assert!(
-                    checker.decide(obs(t + early, false, None)).is_none(),
+                assert_eq!(
+                    checker.decide(obs(t + early, false, None)),
+                    None,
                     "must not retry after {early}s while waiting {expected_delay}s"
                 );
             }
             t += expected_delay;
-            assert!(
-                checker.decide(obs(t, false, None)).is_some(),
+            assert_eq!(
+                checker.decide(obs(t, false, None)),
+                Some(MISSING_CONFIG),
                 "must retry once {expected_delay}s have passed"
             );
-            checker.record(T0 + t, false);
+            checker.record(T0 + t, MISSING_CONFIG, false);
         }
     }
 
@@ -389,72 +552,31 @@ mod tests {
     #[test]
     fn re_registers_periodically_while_healthy() {
         let mut checker = Checker::default();
-        checker.record(T0, true);
+        checker.record(T0, PERIODIC, true);
 
-        // Healthy tunnel, fresh handshake: quiet until REFRESH_INTERVAL.
-        assert!(checker.decide(obs(170, true, Some(T0 + 170))).is_none());
-        let refresh = checker
-            .decide(obs(180, true, Some(T0 + 180)))
-            .expect("periodic refresh is due");
-        assert!(
-            !refresh.force,
-            "periodic refresh must not disrupt the tunnel"
+        assert_eq!(checker.decide(obs(170, true, Some(T0 + 170))), None);
+        assert_eq!(
+            checker.decide(obs(180, true, Some(T0 + 180))),
+            Some(PERIODIC),
+            "periodic refresh must not disrupt a healthy tunnel"
         );
-    }
-
-    #[test]
-    fn forces_refresh_when_the_handshake_goes_stale() {
-        let mut checker = Checker::default();
-        checker.record(T0, true);
-
-        // Handshake 179s old: still within tolerance.
-        assert!(checker.decide(obs(170, true, Some(T0 - 9))).is_none());
-        // 180s old and we have not hit the periodic interval yet.
-        let refresh = checker
-            .decide(obs(170, true, Some(T0 - 10)))
-            .expect("stale handshake must force a refresh");
-        assert!(refresh.force);
-        assert_eq!(refresh.reason, "WireGuard handshake is stale");
     }
 
     #[test]
     fn gives_a_new_interface_a_full_timeout_to_handshake() {
         let mut checker = Checker::default();
-        // Config appeared at t=0 but no handshake yet.
-        checker.record(T0, true);
+        checker.record(T0, PERIODIC, true);
 
-        assert!(checker.decide(obs(10, true, None)).is_none());
-        assert!(checker.decide(obs(179, true, None)).is_none());
-        // The timeout runs from t=10, when the missing handshake was first
+        // The timer runs from t=10, when the missing handshake was first
         // observed, not from the refresh at t=0.
-        assert!(checker.decide(obs(189, true, None)).is_some());
-    }
-
-    #[test]
-    fn a_recovered_handshake_clears_the_missing_timer() {
-        let mut checker = Checker::default();
-        checker.record(T0, true);
-
-        assert!(checker.decide(obs(10, true, None)).is_none());
-        // Handshake completes.
-        assert!(checker.decide(obs(20, true, Some(T0 + 20))).is_none());
-        assert_eq!(checker.handshake_missing_since, None);
-        // Losing it again restarts the clock instead of firing immediately.
-        assert!(checker.decide(obs(30, true, None)).is_none());
-        assert_eq!(checker.handshake_missing_since, Some(T0 + 30));
-    }
-
-    #[test]
-    fn backoff_outranks_the_missing_config_interval() {
-        let mut checker = Checker::default();
-        // Three consecutive failures put the backoff at the 120s cap, which is
-        // longer than the 30s missing-config interval.
-        checker.backoff.consecutive_failures = 3;
-        checker.record(T0, false);
-        assert_eq!(checker.backoff.consecutive_failures, 4);
-
-        assert!(checker.decide(obs(30, false, None)).is_none());
-        assert!(checker.decide(obs(119, false, None)).is_none());
-        assert!(checker.decide(obs(120, false, None)).is_some());
+        assert_eq!(checker.decide(obs(10, true, None)), None);
+        assert_eq!(checker.decide(obs(170, true, None)), None);
+        // At t=180 the timer has only reached 170, so the periodic refresh is
+        // what comes due. It must not disturb the timer.
+        assert_eq!(checker.decide(obs(180, true, None)), Some(PERIODIC));
+        checker.record(T0 + 180, PERIODIC, true);
+        assert_eq!(checker.handshake_missing_since, Some(T0 + 10));
+        // One poll later the timer finally expires and forces a refresh.
+        assert_eq!(checker.decide(obs(190, true, None)), Some(STALE_HANDSHAKE));
     }
 }
