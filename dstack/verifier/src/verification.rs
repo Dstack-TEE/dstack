@@ -20,7 +20,7 @@ use cc_eventlog::{
 use dstack_mr::{
     tdx::TdxRtmr0AcpiHashes, RtmrLog, RtmrLogs, TdxMeasurementDetails, TdxMeasurements,
 };
-use dstack_types::VmConfig;
+use dstack_types::{TdxAttestationVariant, VmConfig};
 use hex_literal::hex;
 use ra_tls::attestation::{
     AppInfo, Attestation, AttestationQuote, AttestationVerifier, DstackVerifiedReport, NitroPcrs,
@@ -680,22 +680,25 @@ impl CvmVerifier {
             AttestationQuote::DstackGcpTdx(quote) => {
                 self.verify_os_image_hash_for_gcp_tdx(&vm_config, &quote.tpm_quote)?;
             }
-            AttestationQuote::DstackTdx(_) => {
-                // New images carry a self-contained measurement document even
-                // when the boot kept the legacy attestation selector. Prefer
-                // that signed-MR-bound material; retain image download only
-                // for old legacy images which do not provide it.
-                if vm_config.tdx_attestation_variant.is_lite()
-                    || vm_config.tdx_measurement.is_some()
-                {
-                    self.verify_os_image_hash_for_dstack_tdx_lite(
-                        &vm_config,
-                        attestation,
-                        debug,
-                        details,
-                    )
-                    .await?;
-                } else {
+            // The declared scheme alone selects the path, matched exhaustively
+            // so a new variant fails the build here instead of taking one.
+            //
+            // A `tdx_measurement` document must not pull a `Legacy` boot onto
+            // the lite path. The paths are not interchangeable: the legacy path
+            // recomputes the ACPI tables from `vm_config` and reports
+            // `acpi_tables_verified`, while the lite path takes the RTMR0 ACPI
+            // digests from the event log as given (see
+            // `tdx_acpi_hashes_from_event_log`) and never checks the table
+            // contents. Images attach the document whenever they have it,
+            // independent of the scheme, so honoring it here would drop ACPI
+            // table verification for a boot that resolved to `Legacy` precisely
+            // because the app asked for it (`requirements.tdx_measure_acpi_tables`,
+            // enforced guest-side in `dstack-util`'s system_setup).
+            //
+            // `Lite` without a document is rejected by the lite path itself,
+            // rather than degraded to a download.
+            AttestationQuote::DstackTdx(_) => match vm_config.tdx_attestation_variant {
+                TdxAttestationVariant::Legacy => {
                     self.verify_os_image_hash_for_dstack_tdx(
                         &vm_config,
                         attestation,
@@ -704,7 +707,16 @@ impl CvmVerifier {
                     )
                     .await?;
                 }
-            }
+                TdxAttestationVariant::Lite => {
+                    self.verify_os_image_hash_for_dstack_tdx_lite(
+                        &vm_config,
+                        attestation,
+                        debug,
+                        details,
+                    )
+                    .await?;
+                }
+            },
             AttestationQuote::DstackNitroEnclave(_) => {
                 let DstackVerifiedReport::DstackNitroEnclave(report) = &attestation.report else {
                     bail!("internal error: nitro quote without a verified nitro report");
