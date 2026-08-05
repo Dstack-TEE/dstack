@@ -746,7 +746,6 @@ class MatrixRun:
       - RPC_DOMAIN=${{RPC_DOMAIN}}
       - NODE_ID=${{NODE_ID}}
       - PROXY_LISTEN_PORT=${{PROXY_LISTEN_PORT}}
-      - PROXY_BASE_DOMAIN=${{PROXY_BASE_DOMAIN}}
     restart: unless-stopped
 {dns_service}{observer_service}volumes:
   gateway-data: {{}}
@@ -767,7 +766,6 @@ class MatrixRun:
                     f"RPC_DOMAIN=gateway-{version}.test",
                     f"NODE_ID={node_id}",
                     "PROXY_LISTEN_PORT=8443",
-                    "PROXY_BASE_DOMAIN=gateway-candidate.test",
                 )
             )
             + "\n"
@@ -868,6 +866,29 @@ class MatrixRun:
         self.created_registry.write_text(json.dumps(ids, indent=2) + "\n")
         url = f"https://127.0.0.1:{service_port}"
         status = wait_http(url, tls=True, timeout=180)
+        if version == "candidate":
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{admin_port}/prpc/Admin.AddZtDomain",
+                data=json.dumps(
+                    {"domain": "gateway-candidate.test", "port": 8443, "priority": 100}
+                ).encode(),
+                headers={
+                    "authorization": "Bearer case-owned-admin",
+                    "content-type": "application/json",
+                },
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    if response.status != 200:
+                        raise RuntimeError(
+                            f"Gateway ZT-domain registration returned HTTP {response.status}"
+                        )
+            except urllib.error.HTTPError as error:
+                if error.code != 409:
+                    raise RuntimeError(
+                        f"Gateway ZT-domain registration returned HTTP {error.code}: "
+                        f"{error.read()[:500]!r}"
+                    ) from error
         if evidence_observer:
             observer_status = wait_http(
                 f"http://127.0.0.1:{observer_port}/observation",
