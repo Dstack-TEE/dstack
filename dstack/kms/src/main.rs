@@ -19,7 +19,6 @@ use tracing::{info, warn};
 mod admin_auth;
 mod admin_service;
 mod config;
-// mod ct_log;
 mod crypto;
 mod main_service;
 mod onboard_service;
