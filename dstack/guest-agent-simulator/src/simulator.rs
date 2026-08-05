@@ -58,23 +58,24 @@ pub fn simulated_quote_response(
 }
 
 pub fn simulated_attest_response(
-    attestation: &VersionedAttestation,
+    source: &VersionedAttestation,
     report_data: [u8; 64],
     patch_report_data: bool,
     generator: Option<&TdxGenerator>,
 ) -> Result<AttestResponse> {
-    let mut attestation = prepare_attestation(
-        attestation,
-        report_data,
-        patch_report_data,
-        generator,
-        "attest",
-    )?;
+    let preserve_legacy = matches!(source, VersionedAttestation::V0 { .. });
+    let mut attestation =
+        prepare_attestation(source, report_data, patch_report_data, generator, "attest")?;
     if let Some(event_log) = attestation.platform.tdx_event_log_mut() {
         cc_eventlog::tdx::fill_v2_preimages(event_log);
     }
+    let attestation = if preserve_legacy {
+        attestation.try_into_legacy()?.into_versioned()
+    } else {
+        VersionedAttestation::V1 { attestation }
+    };
     Ok(AttestResponse {
-        attestation: VersionedAttestation::V1 { attestation }.to_bytes()?,
+        attestation: attestation.to_bytes()?,
     })
 }
 
@@ -83,19 +84,23 @@ pub fn simulated_info_attestation(attestation: &VersionedAttestation) -> Version
 }
 
 pub fn simulated_certificate_attestation(
-    attestation: &VersionedAttestation,
+    source: &VersionedAttestation,
     pubkey: &[u8],
     patch_report_data: bool,
     generator: Option<&TdxGenerator>,
 ) -> Result<VersionedAttestation> {
+    let preserve_legacy = matches!(source, VersionedAttestation::V0 { .. });
     let report_data = QuoteContentType::RaTlsCert.to_report_data(pubkey);
     let attestation = prepare_attestation(
-        attestation,
+        source,
         report_data,
         patch_report_data,
         generator,
         "certificate_attestation",
     )?;
+    if preserve_legacy {
+        return Ok(attestation.try_into_legacy()?.into_versioned());
+    }
     Ok(VersionedAttestation::V1 { attestation })
 }
 

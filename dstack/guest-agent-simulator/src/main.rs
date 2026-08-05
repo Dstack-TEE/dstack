@@ -180,10 +180,11 @@ mod tests {
     }
 
     #[test]
-    fn simulator_attest_response_uses_supplied_report_data() {
+    fn simulator_attest_response_preserves_legacy_wire_format() {
         let platform = load_fixture_platform();
         let report_data = [0x5a; 64];
         let response = platform.attest_response(report_data).unwrap();
+        assert_eq!(response.attestation.first(), Some(&0x00));
         let patched = VersionedAttestation::from_bytes(&response.attestation)
             .unwrap()
             .into_v1();
