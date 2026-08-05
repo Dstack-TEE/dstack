@@ -2114,15 +2114,7 @@
     },
     {
       "component": "guest-os",
-      "source": "os/common/rootfs/wg-checker.service",
-      "case_ids": [
-        "tc-gos-platform-006"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "guest-os",
-      "source": "os/common/rootfs/wg-checker.sh",
+      "source": "os/common/rootfs/dstack-gateway-checker.service",
       "case_ids": [
         "tc-gos-observabil-003",
         "tc-gos-platform-006"

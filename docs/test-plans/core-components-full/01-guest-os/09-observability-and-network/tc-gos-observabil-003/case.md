@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <a id="tc-gos-observabil-003"></a>
-# TC-GOS-OBSERVABIL-003: WireGuard configuration and checker recovery
+# TC-GOS-OBSERVABIL-003: Gateway checker startup contract and WireGuard isolation
 
 ## Metadata
 
@@ -11,7 +11,7 @@
 - Automation: Yes
 - Requirements: [req-gos-observabil-003](../../../feature-audit.md#req-gos-observabil-003)
 - Risks: [risk-gos-observabil-003](../../../feature-audit.md#risk-gos-observabil-003)
-- Source: `os/common/rootfs/wg-checker.sh`
+- Source: `dstack/dstack-util/src/gateway_checker.rs`, `os/common/rootfs/dstack-gateway-checker.service`
 
 ## Prepared execution knowledge
 
@@ -21,33 +21,39 @@
 - Use the case metadata, inventories, and prepared manifest as the complete initial execution specification. Source inspection before the first tested operation is allowed only for a specific unresolved ambiguity.
 - Do not run a clean build unless this case explicitly tests build, packaging, features, or reproducibility. Otherwise reuse the shared target and prepared binaries.
 - If a mismatch occurs, write the provisional result first. Perform narrow source-level root-cause analysis only when failure investigation is enabled.
-- The checker watches `/etc/wireguard/dstack-wg0.conf` and interface
-  `dstack-wg0` every 10 seconds. It performs a non-forced
-  `dstack-util gateway-refresh --work-dir <dir>` every 180 seconds; a latest
-  handshake stale for 180 seconds, or no handshake continuously for 180
-  seconds, triggers the same command with `--force`.
-- A peer that never handshaked reports `0` rather than a timestamp, so the
-  checker substitutes the time it first observed that state. Only an observed
-  handshake clears that timer. A refresh must not clear it: the loop interval,
-  the handshake timeout, and the refresh interval are such that a periodic
-  refresh would otherwise re-arm the timer one tick before it can expire, and
-  the forced path would be unreachable for exactly the peer that needs it.
-- `--force` is the only path that rebuilds a tunnel whose configuration is
-  unchanged, because gateway setup returns early on an unchanged config
-  otherwise. It is also the expensive path (interface teardown plus certificate
-  re-request), so it is rate limited to one attempt per handshake timeout while
-  the gateway stays unreachable.
-- The complete matrix requires an isolated gateway registration, WireGuard
-  interface/configuration, controllable peer and clock/handshake inputs, DNS and
-  routing observation, and permission to disrupt/recover the tunnel. Never
-  alter networking, gateway registration, `/etc/wireguard`, services, routes,
-  DNS, or interfaces on a guest with `destructive_actions_allowed=false`. If no
-  distinct case-scoped network fixture is declared, preserve one bounded
-  manifest observation and report the behavior BLOCKED.
+- The checker is `dstack-util gateway-checker --work-dir <dir>`, run by
+  `dstack-gateway-checker.service`. It replaced the former `wg-checker.sh`.
+- Its refresh timing (180s periodic re-registration, 180s handshake staleness,
+  and the 30s/60s/120s retry backoff for a missing WireGuard config) is a pure
+  decision function covered by unit tests in `dstack/dstack-util/src/gateway_checker.rs`.
+  Do not re-derive that matrix here: an accelerated clock in the guest can only
+  restate those tests less reliably.
+- What unit tests cannot reach is the boundary between the process and systemd,
+  which is what this case covers. The checker encodes each unrecoverable startup
+  condition as an exit code, and the unit must honour it:
+  - An app that never enabled dstack-gateway has nothing to supervise, so the
+    checker exits 0. With `Restart=on-failure` systemd then leaves it alone;
+    `Restart=always` would respawn it every `RestartSec` for the life of every
+    gateway-less CVM.
+  - A missing gateway app id or gateway URL is a deployment mistake fixed for
+    the lifetime of the VM. The checker exits with `EXIT_MISCONFIGURED`, which
+    the unit pins in `RestartPreventExitStatus`. That stops the respawn while
+    leaving the unit in `failed` state, so the mistake stays visible. Read the
+    expected code from the product source; do not restate it.
+  - Any other non-zero exit is treated as transient and is retried.
+- Registration failure is no longer fatal to boot, so the guest reports
+  `boot.error` to the host while it has no route and retracts it once the
+  checker registers. The VMM surfaces that through `VmInfo.boot_error`.
+- This case needs an isolated WireGuard interface, permission to create a
+  network namespace, and the guest's own `dstack-util` and unit. Never alter
+  networking, gateway registration, `/etc/wireguard`, services, routes, DNS, or
+  interfaces on a guest with `destructive_actions_allowed=false`. If no distinct
+  case-scoped network fixture is declared, preserve one bounded manifest
+  observation and report the behavior BLOCKED.
 
 ## Objective
 
-Verify wireguard configuration and checker recovery across success, boundary, failure, security, and recovery conditions.
+Verify that the gateway checker maps each unrecoverable startup condition to the exit code its unit honours, and that a real WireGuard interface can be configured and observed in isolation.
 
 ## Preconditions
 
@@ -72,13 +78,14 @@ Query the relevant health, configuration, and baseline state for wireguard confi
 <a id="tc-gos-observabil-003-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Register with gateway, apply wg.conf, disrupt the tunnel, and restore connectivity.
+Build an isolated WireGuard interface, then run the packaged checker against synthesized host-shared inputs for each startup condition.
 
 **Expected results:**
 
-- Addresses, peers, routes, DNS, handshake monitoring, and recovery converge without duplicate interfaces or leaked keys.
-- Under a uniform 10-second clock, a peer that never handshakes reaches a forced refresh rather than only periodic ones.
-- While the gateway stays unreachable, forced refreshes are rate limited to one per handshake timeout instead of one per loop iteration.
+- Addresses, peers, routes, DNS, and the zero-handshake baseline are observable without duplicate interfaces or leaked keys.
+- A gateway-disabled app makes the checker exit 0 rather than poll.
+- A missing gateway app id and a missing gateway URL each make it exit with the code the unit pins in `RestartPreventExitStatus`.
+- The installed unit is loaded with `Restart=on-failure`, inhibits restart for exactly that code, and runs the `dstack-util` subcommand rather than the removed shell script.
 
 <a id="tc-gos-observabil-003-step-03"></a>
 ### Step 3: Verify state, isolation, and diagnostics
