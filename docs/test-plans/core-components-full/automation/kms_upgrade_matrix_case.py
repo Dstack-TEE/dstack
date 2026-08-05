@@ -679,6 +679,30 @@ class MatrixRun:
         dns_service = ""
         dns_config = ""
         gateway_dns = ""
+        certbot_services = ""
+        if version == "candidate":
+            gateway_dns = """    depends_on:
+      mock-cf-dns-api:
+        condition: service_started
+      pebble:
+        condition: service_started
+"""
+            certbot_services = """  mock-cf-dns-api:
+    image: kvin/mock-cf-dns-api:latest
+    network_mode: host
+    environment:
+      - PORT=18080
+      - DEBUG=true
+    restart: unless-stopped
+  pebble:
+    image: kvin/pebble:latest
+    network_mode: host
+    command: ["-http", "-dnsserver", "127.0.0.1:53"]
+    environment:
+      - PEBBLE_VA_NOSLEEP=1
+      - PEBBLE_VA_ALWAYS_VALID=1
+    restart: unless-stopped
+"""
         if version == "0.5.11":
             dns_script = (
                 pathlib.Path(json.loads(self.runtime_path.read_text())["repository"])
@@ -747,7 +771,7 @@ class MatrixRun:
       - NODE_ID=${{NODE_ID}}
       - PROXY_LISTEN_PORT=${{PROXY_LISTEN_PORT}}
     restart: unless-stopped
-{dns_service}{observer_service}volumes:
+{dns_service}{certbot_services}{observer_service}volumes:
   gateway-data: {{}}
 {configs_section}"""
         )
@@ -867,28 +891,73 @@ class MatrixRun:
         url = f"https://127.0.0.1:{service_port}"
         status = wait_http(url, tls=True, timeout=180)
         if version == "candidate":
-            request = urllib.request.Request(
-                f"http://127.0.0.1:{admin_port}/prpc/Admin.AddZtDomain",
-                data=json.dumps(
-                    {"domain": "gateway-candidate.test", "port": 8443, "priority": 100}
-                ).encode(),
-                headers={
-                    "authorization": "Bearer case-owned-admin",
-                    "content-type": "application/json",
-                },
-            )
-            try:
-                with urllib.request.urlopen(request, timeout=30) as response:
-                    if response.status != 200:
-                        raise RuntimeError(
-                            f"Gateway ZT-domain registration returned HTTP {response.status}"
-                        )
-            except urllib.error.HTTPError as error:
-                if error.code != 409:
+            admin_base = f"http://127.0.0.1:{admin_port}/prpc"
+
+            def admin_rpc(method: str, payload: dict[str, Any]) -> dict[str, Any]:
+                request = urllib.request.Request(
+                    f"{admin_base}/Admin.{method}",
+                    data=json.dumps(payload).encode(),
+                    headers={
+                        "authorization": "Bearer case-owned-admin",
+                        "content-type": "application/json",
+                    },
+                )
+                try:
+                    with urllib.request.urlopen(request, timeout=60) as response:
+                        body = response.read()
+                except urllib.error.HTTPError as error:
                     raise RuntimeError(
-                        f"Gateway ZT-domain registration returned HTTP {error.code}: "
+                        f"Gateway Admin.{method} returned HTTP {error.code}: "
                         f"{error.read()[:500]!r}"
                     ) from error
+                return json.loads(body) if body else {}
+
+            admin_rpc(
+                "SetCertbotConfig",
+                {
+                    "acme_url": "http://127.0.0.1:14000/dir",
+                    "renew_timeout_secs": 60,
+                },
+            )
+            admin_rpc(
+                "CreateDnsCredential",
+                {
+                    "name": "upgrade-matrix-cloudflare",
+                    "provider_type": "cloudflare",
+                    "cf_api_token": "case-owned",
+                    "cf_api_url": "http://127.0.0.1:18080/client/v4",
+                    "set_as_default": True,
+                    "dns_txt_ttl": 1,
+                    "max_dns_wait": 0,
+                },
+            )
+            admin_rpc(
+                "AddZtDomain",
+                {
+                    "domain": "gateway-candidate.test",
+                    "port": 8443,
+                    "priority": 100,
+                },
+            )
+            admin_rpc(
+                "RenewZtDomainCert",
+                {"domain": "gateway-candidate.test", "force": True},
+            )
+            certificate_deadline = time.monotonic() + 120
+            while time.monotonic() < certificate_deadline:
+                domain = admin_rpc(
+                    "GetZtDomain", {"domain": "gateway-candidate.test"}
+                )
+                cert_status = domain.get("cert_status") or domain.get("certStatus") or {}
+                if cert_status.get(
+                    "loaded_in_memory", cert_status.get("loadedInMemory", False)
+                ):
+                    break
+                time.sleep(1)
+            else:
+                raise RuntimeError(
+                    "Gateway ZT-domain certificate was not loaded within 120 seconds"
+                )
         if evidence_observer:
             observer_status = wait_http(
                 f"http://127.0.0.1:{observer_port}/observation",
