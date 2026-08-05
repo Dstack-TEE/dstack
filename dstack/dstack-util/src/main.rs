@@ -395,7 +395,7 @@ fn cmd_quote_report(args: QuoteReportArgs) -> Result<()> {
     let json =
         serde_json::to_string_pretty(&request).context("Failed to serialize request JSON")?;
     if let Some(output_path) = args.output {
-        fs::write(&output_path, json).context("Failed to write quote report")?;
+        safe_write::safe_write(&output_path, json).context("Failed to write quote report")?;
     } else {
         println!("{json}");
     }
@@ -430,7 +430,7 @@ fn cmd_attest(args: AttestArgs) -> Result<()> {
     if args.hex {
         let encoded = hex::encode(&attestation);
         if let Some(output) = args.output {
-            fs::write(&output, encoded).context("Failed to write attestation hex")?;
+            safe_write::safe_write(&output, encoded).context("Failed to write attestation hex")?;
         } else {
             println!("{encoded}");
         }
@@ -440,7 +440,7 @@ fn cmd_attest(args: AttestArgs) -> Result<()> {
     let output = args
         .output
         .unwrap_or_else(|| PathBuf::from("attestation.bin"));
-    fs::write(&output, &attestation).context("Failed to write attestation sample")?;
+    safe_write::safe_write(&output, &attestation).context("Failed to write attestation sample")?;
     Ok(())
 }
 
@@ -531,7 +531,7 @@ fn cmd_attest_json(args: AttestJsonArgs) -> Result<()> {
 
     let output = serde_json::to_string_pretty(&json).context("Failed to serialize JSON")?;
     if let Some(path) = args.output {
-        fs::write(&path, output).context("Failed to write JSON output")?;
+        safe_write::safe_write(&path, output).context("Failed to write JSON output")?;
     } else {
         println!("{output}");
     }
@@ -549,7 +549,8 @@ fn cmd_attest_strip(args: AttestStripArgs) -> Result<()> {
     let output = args
         .output
         .unwrap_or_else(|| PathBuf::from("attestation.strip.bin"));
-    fs::write(&output, stripped.to_scale()?).context("Failed to write stripped attestation")?;
+    safe_write::safe_write(&output, stripped.to_scale()?)
+        .context("Failed to write stripped attestation")?;
     Ok(())
 }
 
