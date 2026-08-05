@@ -39,7 +39,7 @@ use ra_tls::{
     cert::{generate_ra_cert, CertConfigV2, CertSigningRequestV2, Csr},
 };
 use rand::Rng as _;
-use safe_write::safe_write;
+use safe_write::{safe_write, safe_write_with_mode};
 use scopeguard::defer;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
@@ -346,7 +346,8 @@ impl GatewayKeyStore {
 
     fn save(&self) -> Result<()> {
         let content = serde_json::to_string(self).context("Failed to serialize gateway cache")?;
-        safe_write(GATEWAY_CACHE_PATH, &content).context("Failed to write gateway cache")?;
+        safe_write_with_mode(GATEWAY_CACHE_PATH, &content, 0o600)
+            .context("Failed to write gateway cache")?;
         Ok(())
     }
 
@@ -614,12 +615,10 @@ impl<'a> GatewayContext<'a> {
             }
         }
 
-        let wg_dir = Path::new("/etc/wireguard");
-        fs::create_dir_all(wg_dir)?;
-        fs::write(wg_dir.join("dstack-wg0.conf"), &new_config)?;
+        safe_write_with_mode(WG_CONFIG_PATH, &new_config, 0o600)
+            .context("Failed to write WireGuard config")?;
 
         cmd! {
-            chmod 600 $wg_dir/dstack-wg0.conf;
             ignore wg-quick down dstack-wg0;
         }?;
 
