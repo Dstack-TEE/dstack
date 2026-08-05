@@ -648,7 +648,7 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
     // Step 5: Output result
     let json = serde_json::to_string_pretty(&keys).context("Failed to serialize app keys")?;
     if let Some(output_path) = args.output {
-        fs::write(&output_path, &json).context("Failed to write app keys")?;
+        safe_write_with_mode(&output_path, &json, 0o600).context("Failed to write app keys")?;
         eprintln!("App keys written to: {}", output_path.display());
     } else {
         println!("{json}");
