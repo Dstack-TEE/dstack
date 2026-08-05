@@ -1197,7 +1197,8 @@ fn cmd_tpm_quote(args: TpmQuoteArgs) -> Result<()> {
         serde_json::to_string_pretty(&tpm_quote).context("Failed to serialize TPM quote")?;
 
     if let Some(output_path) = args.output {
-        fs::write(&output_path, quote_json).context("Failed to write quote to file")?;
+        safe_write_with_mode(&output_path, &quote_json, 0o600)
+            .context("Failed to write quote to file")?;
         eprintln!("TPM quote written to: {:?}", output_path);
     } else {
         println!("{}", quote_json);
