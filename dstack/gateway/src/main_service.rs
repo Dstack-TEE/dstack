@@ -323,7 +323,7 @@ impl ProxyInner {
             AppAddressResolver::new(
                 config.proxy.app_address_ns_prefix.clone(),
                 config.proxy.app_address_ns_compat,
-                config.proxy.app_address_dns_server,
+                config.proxy.app_address_dns_servers.clone(),
             )
             .context("failed to create app address resolver")?,
         );
