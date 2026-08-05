@@ -1165,9 +1165,7 @@ impl ProxyState {
             return Ok(self.random_select_a_host(id).unwrap_or_default());
         }
         if let Some((top_n, insert_time)) = self.state.top_n.get(id) {
-            if !top_n.is_empty()
-                && insert_time.elapsed() < self.config.proxy.timeouts.cache_top_n
-            {
+            if !top_n.is_empty() && insert_time.elapsed() < self.config.proxy.timeouts.cache_top_n {
                 return Ok(top_n.clone());
             }
         }
@@ -1183,12 +1181,14 @@ impl ProxyState {
                 .filter_map(|instance_id| {
                     let instance = self.state.instances.get(instance_id)?;
                     let (_, elapsed) = handshakes.get(&instance.public_key)?;
-                    (*elapsed < Duration::from_secs(300)).then(|| (
-                        instance.ip,
-                        *elapsed,
-                        instance.connections.clone(),
-                        instance.id.clone(),
-                    ))
+                    (*elapsed < self.config.proxy.timeouts.handshake_stale).then(|| {
+                        (
+                            instance.ip,
+                            *elapsed,
+                            instance.connections.clone(),
+                            instance.id.clone(),
+                        )
+                    })
                 })
                 .collect::<SmallVec<[_; 4]>>(),
         };
@@ -1229,7 +1229,7 @@ impl ProxyState {
                 // Consider instance healthy if it had a recent handshake
                 handshakes
                     .get(&instance.public_key)
-                    .map(|(_, elapsed)| *elapsed < Duration::from_secs(300))
+                    .map(|(_, elapsed)| *elapsed < self.config.proxy.timeouts.handshake_stale)
                     .unwrap_or(false)
             } else {
                 false

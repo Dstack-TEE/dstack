@@ -107,6 +107,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_handshake_stale() -> Duration {
+    Duration::from_secs(30 * 60)
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProxyConfig {
     pub tls_crypto_provider: CryptoProvider,
@@ -438,6 +442,9 @@ pub struct Timeouts {
 
     #[serde(with = "serde_duration")]
     pub cache_top_n: Duration,
+    /// Maximum WireGuard handshake age for an instance to be considered healthy.
+    #[serde(default = "default_handshake_stale", with = "serde_duration")]
+    pub handshake_stale: Duration,
 
     /// Timeout for DNS TXT record resolution (app address lookup).
     #[serde(with = "serde_duration")]
