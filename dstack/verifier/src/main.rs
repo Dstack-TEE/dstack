@@ -161,6 +161,40 @@ async fn run_oneshot(file_path: &str, config: &Config) -> anyhow::Result<bool> {
     Ok(response.is_valid)
 }
 
+fn verify_certificate_profile(cert_der: &[u8]) -> anyhow::Result<()> {
+    let (_, cert) = x509_parser::parse_x509_certificate(cert_der)
+        .context("failed to parse X.509 certificate")?;
+    cert.verify_signature(None)
+        .context("certificate self-signature verification failed")?;
+    if !cert.validity().is_valid() {
+        anyhow::bail!("certificate is outside its validity period");
+    }
+    let key_usage = cert
+        .key_usage()
+        .context("failed to decode certificate key usage")?
+        .context("certificate key usage extension missing")?;
+    if !key_usage.value.digital_signature() {
+        anyhow::bail!("certificate key usage does not permit digital signatures");
+    }
+    let extended = cert
+        .extended_key_usage()
+        .context("failed to decode certificate extended key usage")?
+        .context("certificate extended key usage extension missing")?;
+    if !extended.value.server_auth && !extended.value.client_auth {
+        anyhow::bail!(
+            "certificate extended key usage permits neither server nor client authentication"
+        );
+    }
+    let san = cert
+        .subject_alternative_name()
+        .context("failed to decode certificate SAN")?
+        .context("certificate SAN extension missing")?;
+    if san.value.general_names.is_empty() {
+        anyhow::bail!("certificate SAN extension is empty");
+    }
+    Ok(())
+}
+
 async fn run_cert_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()> {
     use std::fs;
 
@@ -172,13 +206,19 @@ async fn run_cert_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()
     let cert = fs::read(file_path)
         .map_err(|e| anyhow::anyhow!("failed to read certificate {}: {}", file_path, e))?;
 
-    let attestation_verifier = Arc::new(AttestationVerifier::load(&config.attestation)?);
-    let verified = if cert.starts_with(b"-----BEGIN") {
-        ra_tls::attestation::verify_pem(&cert, attestation_verifier.as_ref()).await
+    let cert_der = if cert.starts_with(b"-----BEGIN") {
+        let (_, pem) =
+            x509_parser::pem::parse_x509_pem(&cert).context("failed to parse PEM certificate")?;
+        pem.contents
     } else {
-        ra_tls::attestation::verify_der(&cert, attestation_verifier.as_ref()).await
-    }
-    .map_err(|e| anyhow::anyhow!("failed to verify RA-TLS certificate: {:#}", e))?;
+        cert
+    };
+    verify_certificate_profile(&cert_der)?;
+
+    let attestation_verifier = Arc::new(AttestationVerifier::load(&config.attestation)?);
+    let verified = ra_tls::attestation::verify_der(&cert_der, attestation_verifier.as_ref())
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to verify RA-TLS certificate: {:#}", e))?;
 
     let app_info = verified.attestation.decode_app_info(false).ok();
     // Bind the reported os_image_hash to the attested boot measurement. For
