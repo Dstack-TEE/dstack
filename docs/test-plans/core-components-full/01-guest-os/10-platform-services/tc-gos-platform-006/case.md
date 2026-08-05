@@ -28,7 +28,7 @@
   SSH command. That can intentionally tear down the guest transport or invoke
   the guest reboot failure action and is not a valid service-restart matrix.
 - Exercise dynamic restart/failure behavior only on a documented restartable
-  leaf such as `dstack-guest-agent` or `wg-checker`. Run each mutation as a
+  leaf such as `dstack-guest-agent` or `dstack-gateway-checker`. Run each mutation as a
   separate bounded controller command. If a guest transport interruption is
   expected, poll VMM state and reconnect through the manifest route before the
   next assertion; an SSH reset alone is not a product failure.

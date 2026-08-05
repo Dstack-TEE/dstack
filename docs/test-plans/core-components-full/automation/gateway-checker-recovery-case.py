@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 # SPDX-License-Identifier: Apache-2.0
-"""Exercise real WireGuard isolation and accelerated checker recovery policy."""
+"""Exercise real WireGuard isolation and the gateway checker startup contract."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import pathlib
+import re
 import subprocess
 import tempfile
 from typing import Any
 
 CASE_ID = "tc-gos-observabil-003"
+UNIT = "dstack-gateway-checker.service"
+# The checker's misconfigured exit code is pinned by the unit's
+# RestartPreventExitStatus. Read it from the source rather than restating it, so
+# this case cannot keep passing against a value the product no longer uses.
+EXIT_CONST_RE = re.compile(r"^const EXIT_MISCONFIGURED: i32 = (\d+);$", re.MULTILINE)
 
 
 def atomic_json(path: pathlib.Path, value: Any) -> None:
@@ -35,7 +41,7 @@ def run(
 
 
 def main() -> int:
-    """Run the checker recovery matrix inside a lease-owned mkosi guest."""
+    """Run the checker startup matrix inside a lease-owned mkosi guest."""
     result_dir = pathlib.Path(os.environ["DSTACK_TEST_RESULT_DIR"])
     artifacts = result_dir / "artifacts"
     runtime = json.loads(
@@ -47,41 +53,33 @@ def main() -> int:
     values = manifest.get("values") or {}
     ssh = [str(value) for value in values.get("ssh_argv") or []]
     status = "PASS"
-    summary = "WireGuard configuration and checker recovery lifecycle passed."
+    summary = "WireGuard isolation and gateway checker startup contract passed."
     evidence: dict[str, Any] = {}
     try:
         if not ssh or values.get("destructive_actions_allowed") is not True:
             raise RuntimeError("fixture omitted lease-owned guest controls")
         repository = pathlib.Path(str(runtime["repository"]))
-        checker = repository / "os/common/rootfs/wg-checker.sh"
+        checker_source = repository / "dstack/dstack-util/src/gateway_checker.rs"
+        matched = EXIT_CONST_RE.search(checker_source.read_text())
+        if not matched:
+            raise RuntimeError(f"cannot read EXIT_MISCONFIGURED from {checker_source}")
+        misconfigured_exit = matched.group(1)
         script = (
             repository
-            / "docs/test-plans/core-components-full/automation/wireguard-checker-lifecycle.sh"
+            / "docs/test-plans/core-components-full/automation/gateway-checker-lifecycle.sh"
         )
         installed = run(
-            [*ssh, "install -m 0755 /dev/stdin /run/dstack-test-wireguard-lifecycle"],
+            [*ssh, "install -m 0755 /dev/stdin /run/dstack-test-gateway-lifecycle"],
             data=script.read_bytes(),
         )
-        installed_checker = run(
-            [*ssh, "install -m 0755 /dev/stdin /run/dstack-test-wg-checker.sh"],
-            data=checker.read_bytes(),
-        )
-        if installed.returncode or installed_checker.returncode:
-            raise RuntimeError(
-                "failed to install WireGuard lifecycle or candidate checker"
-            )
-        expected_sha = hashlib.sha256(checker.read_bytes()).hexdigest()
+        if installed.returncode:
+            raise RuntimeError("failed to install the gateway checker lifecycle driver")
         executed = run(
-            [
-                *ssh,
-                "/run/dstack-test-wireguard-lifecycle",
-                expected_sha,
-                "/run/dstack-test-wg-checker.sh",
-            ],
+            [*ssh, "/run/dstack-test-gateway-lifecycle", UNIT, misconfigured_exit],
             timeout=240,
         )
         artifacts.mkdir(parents=True, exist_ok=True)
-        (artifacts / "wireguard-checker-lifecycle.log").write_bytes(
+        (artifacts / "gateway-checker-lifecycle.log").write_bytes(
             executed.stdout + executed.stderr
         )
         rows = [
@@ -91,29 +89,29 @@ def main() -> int:
         ]
         if executed.returncode or not rows:
             tail = (executed.stdout + executed.stderr).decode(errors="replace")[-2000:]
-            raise RuntimeError(f"WireGuard lifecycle rc={executed.returncode}: {tail}")
+            raise RuntimeError(
+                f"gateway checker lifecycle rc={executed.returncode}: {tail}"
+            )
         evidence = json.loads(rows[-1])
+        evidence["misconfigured_exit_code"] = int(misconfigured_exit)
         required = (
             "real_interface",
             "address_route",
             "dns_observed",
             "no_handshake_observed",
-            "periodic_refresh",
-            "no_handshake_force",
-            "stale_handshake_force",
-            "fresh_handshake_not_forced",
-            "steady_no_handshake_force",
-            "steady_force_rate_limited",
-            "refresh_failure_observed",
-            "refresh_recovery",
-            "missing_wg_noop",
-            "missing_config_noop",
+            "disabled_exits_zero",
+            "missing_app_id_exit_code",
+            "missing_urls_exit_code",
+            "unit_restart_on_failure",
+            "unit_prevents_restart",
+            "unit_runs_subcommand",
+            "legacy_script_absent",
             "interface_isolated",
         )
         if evidence.get("checks", 0) < 24 or not all(
             evidence.get(key) is True for key in required
         ):
-            raise RuntimeError("WireGuard evidence omitted a required row")
+            raise RuntimeError("gateway checker evidence omitted a required row")
     except (
         KeyError,
         OSError,
@@ -125,19 +123,19 @@ def main() -> int:
         summary = f"{type(error).__name__}: {error}"
     artifact_entries = [
         {
-            "path": "artifacts/wireguard-checker-lifecycle.json",
+            "path": "artifacts/gateway-checker-lifecycle.json",
             "step_id": f"{CASE_ID}-step-01",
-            "name": "WireGuard checker matrix",
-            "description": "Boolean and count evidence for isolated interface/configuration, handshake timing, refresh faults, recovery, and no-op boundaries.",
+            "name": "Gateway checker startup matrix",
+            "description": "Boolean and count evidence for isolated interface/configuration, checker exit codes per startup condition, and the shipped unit's restart policy.",
         },
         {
-            "path": "artifacts/wireguard-checker-lifecycle.log",
+            "path": "artifacts/gateway-checker-lifecycle.log",
             "step_id": f"{CASE_ID}-step-02",
-            "name": "WireGuard checker native log",
+            "name": "Gateway checker native log",
             "description": "Bounded native output with no WireGuard private keys, configuration content, or credentials.",
         },
     ]
-    atomic_json(artifacts / "wireguard-checker-lifecycle.json", evidence)
+    atomic_json(artifacts / "gateway-checker-lifecycle.json", evidence)
     atomic_json(artifacts / "manifest.json", {"artifacts": artifact_entries})
     atomic_json(
         result_dir / "result.json",
@@ -158,20 +156,20 @@ def main() -> int:
                 {
                     "id": f"{CASE_ID}-step-02",
                     "status": status,
-                    "observed": "The packaged checker performed periodic and forced refresh for no/stale handshakes, avoided forcing a fresh handshake, reached a forced refresh for a never-handshaken peer under a uniform 10s clock, rate limited forced refresh while the gateway stayed unreachable, and exposed an injected failure."
+                    "observed": "The packaged checker exited 0 for an app that never enabled dstack-gateway, and exited with the pinned misconfigured code for a missing gateway app id and for a missing gateway URL."
                     if status == "PASS"
                     else summary,
                 },
                 {
                     "id": f"{CASE_ID}-step-03",
                     "status": status,
-                    "observed": "Recovery succeeded; absent wg/config were no-ops; the namespace, trigger config, keys, and logs were cleaned without altering guest routing."
+                    "observed": "The installed unit was loaded with Restart=on-failure, inhibited restart for exactly the misconfigured exit code, ran the dstack-util subcommand rather than the removed shell script, and the namespace and guest routing were left unchanged."
                     if status == "PASS"
                     else summary,
                 },
             ],
             "artifacts": artifact_entries,
-            "remarks": "Time and refresh outcomes are accelerated through PATH-injected case-owned commands while the exact current-HEAD checker script overlaid into the mkosi guest and a real WireGuard kernel interface are exercised. Private keys are never persisted as evidence.",
+            "remarks": "Refresh timing (periodic interval, handshake staleness, retry backoff) is covered by dstack-util's gateway_checker unit tests over a pure decision function; this case covers the process/systemd boundary those tests cannot reach. The misconfigured exit code is read from the product source at run time. Private keys are never persisted as evidence.",
         },
     )
     return 0
