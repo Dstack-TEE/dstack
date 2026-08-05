@@ -24,20 +24,19 @@ mod tdvf;
 pub mod tdx;
 mod util;
 
-/// Return the supported OVMF variant for a dstack OS version string ("MAJOR.MINOR.PATCH").
+/// Return the supported OVMF variant for a dstack OS version string.
 ///
-/// The version is still parsed for compatibility with callers that validate the
-/// OS version through this helper, but all valid versions use `Pre202505`.
+/// Current images use `MAJOR.MINOR.PATCH`; historical images may append one
+/// non-empty dot-separated release or pre-release component. The first three
+/// components remain numeric. All valid versions currently use `Pre202505`.
 pub fn ovmf_variant_for_version(version: &str) -> Result<OvmfVariant> {
-    let parts: Vec<u32> = version
-        .split('.')
-        .map(|p| {
-            p.parse::<u32>()
-                .with_context(|| format!("invalid version component: {p}"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    if parts.len() != 3 {
-        bail!("expected MAJOR.MINOR.PATCH, got {version}");
+    let parts: Vec<&str> = version.split('.').collect();
+    if !(3..=4).contains(&parts.len()) || parts.get(3).is_some_and(|part| part.is_empty()) {
+        bail!("expected MAJOR.MINOR.PATCH[.SUFFIX], got {version}");
+    }
+    for part in &parts[..3] {
+        part.parse::<u32>()
+            .with_context(|| format!("invalid version component: {part}"))?;
     }
     Ok(OvmfVariant::Pre202505)
 }
@@ -91,8 +90,19 @@ mod ovmf_variant_tests {
     #[test]
     fn pre_202505_for_all_versions() {
         for v in [
-            "0.4.99", "0.5.7", "0.5.8", "0.5.9", "0.5.10", "0.5.99", "0.6.0", "0.6.1", "0.6.2",
-            "0.7.0", "1.0.0",
+            "0.4.99",
+            "0.5.4.1",
+            "0.5.7",
+            "0.5.8",
+            "0.5.9",
+            "0.5.10",
+            "0.5.10.rc1",
+            "0.5.99",
+            "0.6.0",
+            "0.6.1",
+            "0.6.2",
+            "0.7.0",
+            "1.0.0",
         ] {
             assert_eq!(
                 ovmf_variant_for_version(v).unwrap(),
@@ -107,6 +117,8 @@ mod ovmf_variant_tests {
         assert!(ovmf_variant_for_version("0.5").is_err());
         assert!(ovmf_variant_for_version("0.5.10-dev").is_err());
         assert!(ovmf_variant_for_version("v0.5.10").is_err());
+        assert!(ovmf_variant_for_version("0.5.10.").is_err());
+        assert!(ovmf_variant_for_version("0.5.10.1.2").is_err());
     }
 
     #[test]
