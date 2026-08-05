@@ -9,7 +9,7 @@ use ipnet::Ipv4Net;
 use load_config::load_config;
 use rocket::figment::Figment;
 use serde::{Deserialize, Serialize};
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tracing::info;
@@ -178,6 +178,10 @@ pub struct ProxyConfig {
     pub cert_key: Option<PathBuf>,
     pub app_address_ns_prefix: String,
     pub app_address_ns_compat: bool,
+    /// Dedicated DNS servers for app-address TXT lookups.
+    /// The system resolver is used when this list is empty.
+    #[serde(default)]
+    pub app_address_dns_servers: Vec<SocketAddr>,
     /// Maximum concurrent connections per app. 0 means unlimited.
     pub max_connections_per_app: u64,
     /// Port the dstack guest-agent listens on inside each CVM. Used by the
