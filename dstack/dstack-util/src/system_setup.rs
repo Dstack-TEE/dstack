@@ -15,7 +15,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use dstack_attest::{emit_runtime_event, set_runtime_event_version};
+use dstack_attest::{default_verifier, emit_runtime_event, set_runtime_event_version};
 use dstack_kms_rpc as rpc;
 use dstack_types::{
     gpu_policy_hash,
@@ -67,20 +67,7 @@ use serde_json::Value;
 use tpm_attest::{self as tpm, TpmContext};
 
 fn attestation_verifier(sys_config: &SysConfig) -> Result<Arc<AttestationVerifier>> {
-    let collateral_urls = sys_config.collateral_urls();
-    let Some(root_ca) = sys_config.tdx_attestation_root_ca.as_deref() else {
-        return Ok(Arc::new(AttestationVerifier::new_prod(Some(
-            &collateral_urls,
-        ))?));
-    };
-    anyhow::ensure!(
-        sys_config.insecure_allow_external_attestation_trust_anchor,
-        "external TDX attestation trust root requires explicit insecure opt-in"
-    );
-    Ok(Arc::new(AttestationVerifier::new_with_tdx_root(
-        Some(&collateral_urls),
-        root_ca.as_bytes(),
-    )?))
+    Ok(Arc::new(default_verifier(&sys_config.collateral_urls())?))
 }
 
 async fn sign_cert_request(

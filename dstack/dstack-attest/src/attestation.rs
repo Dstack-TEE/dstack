@@ -61,7 +61,6 @@ pub struct AttestationVerifier {
     aws_nitro_tpm: nsm_qvl::QuoteVerifier,
     sev_snp: sev_snp_qvl::QuoteVerifier,
     amd_kds: AmdKdsClient,
-    external_trust_anchors: bool,
 }
 
 impl AttestationVerifier {
@@ -149,7 +148,6 @@ impl AttestationVerifier {
             aws_nitro_tpm: nsm(aws_nitro_tpm.as_deref(), "AWS NitroTPM")?,
             sev_snp,
             amd_kds: AmdKdsClient::with_base_url(amd_kds)?,
-            external_trust_anchors: external_requested,
         })
     }
 
@@ -175,31 +173,7 @@ impl AttestationVerifier {
                     .filter(|url| !url.trim().is_empty())
                     .unwrap_or(sev_snp_qvl::AMD_KDS_DEFAULT_BASE_URL),
             )?,
-            external_trust_anchors: false,
         })
-    }
-
-    /// Construct a verifier with a development-only external TDX trust root.
-    ///
-    /// Callers must require an explicit insecure opt-in and surface the result
-    /// as simulated evidence; production verification must use `new_prod`.
-    pub fn new_with_tdx_root(
-        collateral_urls: Option<&CollateralUrls>,
-        root_ca: &[u8],
-    ) -> Result<Self> {
-        validate_x509_certificate(root_ca, "TDX")?;
-        let mut verifier = Self::new_prod(collateral_urls)?;
-        verifier.tdx = dcap_qvl::verify::QuoteVerifier::new(tdx_root_der(root_ca.to_vec())?);
-        verifier.external_trust_anchors = true;
-        Ok(verifier)
-    }
-
-    /// Whether this verifier accepts development-only external trust roots.
-    ///
-    /// A true value must be surfaced as simulated evidence by every caller;
-    /// production roots never set this flag.
-    pub fn is_simulated(&self) -> bool {
-        self.external_trust_anchors
     }
 
     async fn verify_tdx_quote(&self, quote: &[u8]) -> Result<TdxVerifiedReport> {

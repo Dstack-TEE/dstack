@@ -4,10 +4,19 @@
 
 use std::{
     process::{Child, Command, Stdio},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use mock_attestation::server::MockCollateralState;
+
+/// The simulator derives a development PKI before it mounts anything, so the
+/// budget has to cover process spawn plus four key generations, not just the
+/// mount. A debug build on a loaded CI runner is an order of magnitude slower
+/// than a local release-ish one, so keep the headroom generous: the test still
+/// returns as soon as the mountpoint appears, and a dead child is reported
+/// immediately rather than waited out.
+const READY_TIMEOUT: Duration = Duration::from_secs(30);
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 struct ChildGuard(Child);
 impl Drop for ChildGuard {
@@ -44,7 +53,7 @@ async fn start(platform: &str, seed: [u8; 32]) -> (tempfile::TempDir, ChildGuard
     if matches!(platform, "dstack-tdx" | "dstack-amd-sev-snp") {
         args.extend(["--mountpoint".into(), mountpoint.display().to_string()]);
     }
-    let child = ChildGuard(
+    let mut child = ChildGuard(
         Command::new(env!("CARGO_BIN_EXE_dstack-tee-simulator"))
             .args(args)
             .stdout(Stdio::null())
@@ -52,7 +61,8 @@ async fn start(platform: &str, seed: [u8; 32]) -> (tempfile::TempDir, ChildGuard
             .spawn()
             .unwrap(),
     );
-    for _ in 0..50 {
+    let deadline = Instant::now() + READY_TIMEOUT;
+    loop {
         let ready = match platform {
             "dstack-tdx" => mountpoint.join("com.intel.dcap/outblob").exists(),
             "dstack-amd-sev-snp" => mountpoint.join("provider").exists(),
@@ -61,9 +71,17 @@ async fn start(platform: &str, seed: [u8; 32]) -> (tempfile::TempDir, ChildGuard
         if ready {
             return (dir, child);
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        // A simulator that already exited never becomes ready. Say which one
+        // and with what status instead of reporting a timeout that hides it.
+        if let Some(status) = child.0.try_wait().unwrap() {
+            panic!("{platform} simulator exited before becoming ready: {status}");
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{platform} simulator did not become ready within {READY_TIMEOUT:?}"
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
     }
-    panic!("{platform} simulator process did not become ready")
 }
 
 #[tokio::test]
@@ -83,6 +101,14 @@ async fn separate_simulator_process_imports_config_seed_for_tsm_platforms() {
     dcap_qvl::verify::QuoteVerifier::new(host.tdx.root_ca_der())
         .verify(&quote, &host.tdx.sample_collateral().unwrap(), now)
         .unwrap();
+
+    // The guest verifier's trust anchor comes from the simulator, never from
+    // the host, so the published root must be the one that signed this quote.
+    let published = dstack_attest::trust_anchors::load_anchors(&dir.path().join("attestation"))
+        .unwrap()
+        .expect("simulator should publish external trust anchors");
+    let root = fs_err::read(published.tdx.unwrap()).unwrap();
+    assert_eq!(String::from_utf8(root).unwrap(), host.tdx.root_ca_pem());
     drop(child);
 
     let (dir, child) = start("dstack-amd-sev-snp", seed).await;

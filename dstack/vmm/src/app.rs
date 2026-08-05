@@ -4,7 +4,7 @@
 
 use crate::config::{Config, Networking, ProcessAnnotation, Protocol};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use bon::Builder;
 use dstack_kms_rpc::kms_client::KmsClient;
 use dstack_types::mr_config::MrConfigV3;
@@ -1325,28 +1325,11 @@ pub(crate) fn make_sys_config(
         "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
         "vm_config": serde_json::to_string(&vm_config)?,
     });
-    if manifest.simulated_tee == Some(dstack_types::TeeVariant::DstackTdx) {
-        let simulator = cfg
-            .cvm
-            .tee_simulator
-            .as_ref()
-            .context("TEE simulator credentials are unavailable")?;
-        let seed = simulator
-            .mock_attestation_seed
-            .as_deref()
-            .context("TEE simulator seed is unavailable")?;
-        let seed: [u8; 32] = hex::decode(seed)
-            .context("invalid TEE simulator seed")?
-            .try_into()
-            .map_err(|_| anyhow!("TEE simulator seed must contain 32 bytes"))?;
-        let root_ca = match simulator.tdx_root_ca.as_deref() {
-            Some(root_ca) => root_ca.to_string(),
-            None => mock_attestation::tdx::TdxGenerator::from_seed(seed)?.root_ca_pem(),
-        };
-        sys_config["insecure_allow_external_attestation_trust_anchor"] =
-            serde_json::Value::Bool(true);
-        sys_config["tdx_attestation_root_ca"] = serde_json::Value::String(root_ca);
-    }
+    // No attestation trust anchor is ever written here. Simulated deployments
+    // receive only the development seed through `.tee-simulator.json`; the
+    // in-guest simulator derives the matching roots itself and publishes them
+    // to the guest verifier. A host cannot be allowed to choose the root that
+    // authenticates the guest's key provider.
     if let Some(mr_config) = mr_config {
         MrConfigV3::from_document(&mr_config).context("Invalid mr_config document")?;
         sys_config["mr_config"] = serde_json::to_value(mr_config)?;
@@ -2199,6 +2182,19 @@ mod tests {
             make_sys_config(&config, &manifest, &compose_hash, Some(mr_config), None)?;
         let sys_config: serde_json::Value = serde_json::from_str(&sys_config_document)?;
         assert!(sys_config.get("tee_simulator").is_none());
+        // A host must never nominate the trust anchor that authenticates its
+        // guest's key provider, in any deployment mode. Simulated guests derive
+        // their own roots from the seed in `.tee-simulator.json` instead.
+        for key in sys_config
+            .as_object()
+            .context("sys-config must be an object")?
+            .keys()
+        {
+            assert!(
+                !key.contains("root_ca") && !key.contains("trust_anchor"),
+                "sys-config must not carry an attestation trust anchor: {key}"
+            );
+        }
         assert_eq!(sys_config["pccs_url"], config.cvm.pccs_url);
         assert_eq!(sys_config["collateral_urls"]["pccs"], config.cvm.pccs_url);
         let vm_config: serde_json::Value = serde_json::from_str(

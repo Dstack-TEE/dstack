@@ -1100,12 +1100,6 @@ pub struct SysConfig {
     /// for fields that are absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collateral_urls: Option<CollateralUrls>,
-    /// Development-only opt-in for a host-supplied TDX attestation trust root.
-    #[serde(default)]
-    pub insecure_allow_external_attestation_trust_anchor: bool,
-    /// Public PEM TDX root used only when the explicit insecure opt-in is set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tdx_attestation_root_ca: Option<String>,
     /// Optional NVIDIA attestation collateral proxy. When present, nvattest
     /// fetches both OCSP responses and RIM documents through this endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1153,9 +1147,6 @@ pub struct TeeSimulatorConfig {
     /// Base URL used in mock collateral certificates (AIA/CRL).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collateral_base_url: Option<String>,
-    /// Exact public PEM root shared with verifiers of simulated TDX evidence.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tdx_root_ca: Option<String>,
     /// MrConfigV3 document used to generate mock platform evidence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mr_config: Option<String>,
