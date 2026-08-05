@@ -25,7 +25,7 @@
 
 ## Objective
 
-Verify reload and crash recovery across success, boundary, failure, security, and recovery conditions, including reconstruction of a persisted VM that appears only after VMM startup without double-reserving its CID.
+Verify reload and crash recovery across success, boundary, failure, security, and recovery conditions, including reconstruction of a persisted VM that appears only after VMM startup and retention of stopped in-memory VM CID reservations.
 
 ## Preconditions
 
@@ -50,11 +50,11 @@ Query the relevant health, configuration, and baseline state for reload and cras
 <a id="tc-vmm-vm-lifecyc-005-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Create a stopped VM and record its CID, stop the case-owned VMM, temporarily stage the VM work directory outside the configured run path, and restart the VMM without that VM in memory. Restore the persisted work directory only after startup, invoke `Vmm.ReloadVms`, and exercise partially-created and stale workdirs.
+Create a stopped VM and record its CID, stop the case-owned VMM, temporarily stage the VM work directory outside the configured run path, and restart the VMM without that VM in memory. Restore the persisted work directory only after startup and invoke `Vmm.ReloadVms`. Invoke reload again while the VM is stopped in memory, create a second stopped VM, compare their CIDs, and exercise partially-created and stale workdirs.
 
 **Expected results:**
 
-- `ReloadVms` loads exactly one filesystem-only stopped VM, preserves its CID, and does not fail by reserving the newly allocated CID twice; reload also reconciles stale resources without duplication or auto-starting the stopped VM.
+- `ReloadVms` loads exactly one filesystem-only stopped VM, preserves its CID, and does not reserve the newly allocated CID twice. A subsequent reload keeps that stopped in-memory CID reserved, so the second VM receives a distinct CID; reload also reconciles stale resources without duplication or auto-starting either VM.
 
 <a id="tc-vmm-vm-lifecyc-005-step-03"></a>
 ### Step 3: Verify state, isolation, and diagnostics
