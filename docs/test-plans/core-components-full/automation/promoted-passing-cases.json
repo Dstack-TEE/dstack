@@ -1492,11 +1492,11 @@
     },
     {
       "case_id": "tc-gos-observabil-003",
-      "source_run": "wg-checker-official-001",
+      "source_run": "gateway-checker-official-001",
       "source_status": "PASS",
-      "entrypoint": "automation/wireguard-checker-recovery-case.py",
+      "entrypoint": "automation/gateway-checker-recovery-case.py",
       "environment": "MKOSI_TDXLAB",
-      "notes": "29/29 checks cover a real namespace-isolated WireGuard interface/peer/address/route/DNS baseline, periodic and forced refresh, no/stale/fresh handshake timing, a uniform 10s clock where the handshake timeout and refresh interval collide, forced-refresh rate limiting while the gateway stays unreachable, injected refresh failure and recovery, missing-wg/config no-op boundaries, key protection, and cleanup; current-HEAD checker keeps periodic refresh from re-arming the staleness timer that guards the never-handshaken forced path"
+      "notes": "checks cover a real namespace-isolated WireGuard interface/peer/address/route/DNS baseline and zero-handshake shape, then the checker's startup contract: exit 0 when the app never enabled dstack-gateway, the pinned misconfigured exit code for a missing gateway app id and for a missing gateway URL, and the installed unit honouring both through Restart=on-failure plus RestartPreventExitStatus; refresh timing moved to dstack-util gateway_checker unit tests when the checker stopped being a shell script"
     },
     {
       "case_id": "tc-gos-observabil-004",
@@ -1555,7 +1555,7 @@
       "source_status": "PASS",
       "entrypoint": "automation/systemd-graph-lifecycle-case.py",
       "environment": "HARDWARE",
-      "notes": "two lease-owned different-app hardware guests proved the runtime prepare failure action, guest-agent socket/watchdog/restart edges, app-compose Docker/containerd ordering, and wg-checker graph node; STOP of only the primary leaf process made the unchanged Tappd route fail, CONT restored the same identity, a nonexistent unit was rejected without graph loss, leaf restart recovered, and the adjacent peer identity/system state remained unchanged"
+      "notes": "two lease-owned different-app hardware guests proved the runtime prepare failure action, guest-agent socket/watchdog/restart edges, app-compose Docker/containerd ordering, and gateway-checker graph node; STOP of only the primary leaf process made the unchanged Tappd route fail, CONT restored the same identity, a nonexistent unit was rejected without graph loss, leaf restart recovered, and the adjacent peer identity/system state remained unchanged"
     },
     {
       "case_id": "tc-gos-platform-007",
