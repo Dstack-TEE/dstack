@@ -24,7 +24,7 @@ rustls-pki-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-x509-parser = { workspace = true, features = ["verify"] }
+x509-parser.workspace = true
 yasna.workspace = true
 tracing.workspace = true
 sha3.workspace = true

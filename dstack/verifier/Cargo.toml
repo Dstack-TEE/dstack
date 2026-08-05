@@ -39,6 +39,7 @@ tar.workspace = true
 
 # Internal dependencies
 ra-tls.workspace = true
+x509-parser = { workspace = true, features = ["verify"] }
 dstack-attest.workspace = true
 dstack-types.workspace = true
 dstack-mr.workspace = true

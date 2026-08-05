@@ -2295,6 +2295,7 @@ dependencies = [
  "tpm-types",
  "tracing",
  "tracing-subscriber",
+ "x509-parser",
 ]
 
 [[package]]

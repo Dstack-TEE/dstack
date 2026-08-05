@@ -53,42 +53,11 @@ pub async fn verify_pem(cert: &[u8], verifier: &AttestationVerifier) -> Result<V
     verify_der(&pem.contents, verifier).await
 }
 
-fn verify_certificate_profile(cert: &x509_parser::prelude::X509Certificate<'_>) -> Result<()> {
-    cert.verify_signature(None)
-        .context("certificate self-signature verification failed")?;
-    if !cert.validity().is_valid() {
-        bail!("certificate is outside its validity period");
-    }
-    let key_usage = cert
-        .key_usage()
-        .context("failed to decode certificate key usage")?
-        .context("certificate key usage extension missing")?;
-    if !key_usage.value.digital_signature() {
-        bail!("certificate key usage does not permit digital signatures");
-    }
-    let extended = cert
-        .extended_key_usage()
-        .context("failed to decode certificate extended key usage")?
-        .context("certificate extended key usage extension missing")?;
-    if !extended.value.server_auth && !extended.value.client_auth {
-        bail!("certificate extended key usage permits neither server nor client authentication");
-    }
-    let san = cert
-        .subject_alternative_name()
-        .context("failed to decode certificate SAN")?
-        .context("certificate SAN extension missing")?;
-    if san.value.general_names.is_empty() {
-        bail!("certificate SAN extension is empty");
-    }
-    Ok(())
-}
-
 /// Verify the RA-TLS attestation embedded in a parsed X.509 certificate.
 async fn verify_cert(
     cert: &x509_parser::prelude::X509Certificate<'_>,
     verifier: &AttestationVerifier,
 ) -> Result<VerifiedRaTlsCert> {
-    verify_certificate_profile(cert)?;
     let attestation = from_cert(cert)?.context("RA-TLS attestation extension missing")?;
     let public_key_der = cert.tbs_certificate.public_key().raw.to_vec();
     if public_key_der.is_empty() {
@@ -161,11 +130,9 @@ mod tests {
     #[tokio::test]
     async fn verify_der_rejects_missing_attestation_extension() {
         let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-        let alt_names = vec!["missing-attestation.example".to_string()];
         let cert = CertRequest::builder()
             .key(&key)
             .subject("missing-attestation.example")
-            .alt_names(&alt_names)
             .usage_server_auth(true)
             .build()
             .self_signed()
@@ -182,11 +149,9 @@ mod tests {
     async fn verify_der_rejects_attestation_not_bound_to_cert_key() {
         let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
         let attestation = fake_tdx_attestation([0u8; 64]);
-        let alt_names = vec!["mismatched-attestation.example".to_string()];
         let cert = CertRequest::builder()
             .key(&key)
             .subject("mismatched-attestation.example")
-            .alt_names(&alt_names)
             .usage_server_auth(true)
             .attestation(&attestation)
             .build()
