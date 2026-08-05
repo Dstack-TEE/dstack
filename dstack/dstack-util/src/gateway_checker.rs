@@ -32,7 +32,9 @@ use anyhow::{Context, Result};
 use cmd_lib::run_fun as cmd;
 use tracing::{error, info, warn};
 
-use crate::system_setup::{GatewayRefresher, WG_CONFIG_PATH, WG_INTERFACE};
+use crate::system_setup::{
+    gateway_unavailable_message, GatewayRefresher, WG_CONFIG_PATH, WG_INTERFACE,
+};
 
 /// How often the loop samples the world.
 const POLL_INTERVAL: Duration = Duration::from_secs(10);
@@ -46,7 +48,7 @@ const MISSING_CONFIG_RETRY_INTERVAL: i64 = 30;
 const MAX_RETRY_INTERVAL: i64 = 120;
 
 /// Exit code meaning "the gateway config is broken in a way retrying cannot
-/// fix". Pinned by `RestartPreventExitStatus` in wg-checker.service, so
+/// fix". Pinned by `RestartPreventExitStatus` in dstack-gateway-checker.service, so
 /// changing it requires changing the unit too.
 const EXIT_MISCONFIGURED: i32 = 3;
 
@@ -260,6 +262,12 @@ pub async fn cmd_gateway_checker(args: GatewayCheckerArgs) -> Result<()> {
     }
 
     info!("watching dstack-gateway registration");
+    let vmm = refresher.host_api();
+    // Seed from the observable world rather than assuming health: no WireGuard
+    // config here means boot-time registration failed and already reported it,
+    // so the first success owes the host a retraction. Assuming health instead
+    // would leave that boot error on screen forever after we recover.
+    let mut reported_degraded = !Path::new(WG_CONFIG_PATH).exists();
     let mut checker = Checker::default();
     loop {
         let now = now_secs();
@@ -268,16 +276,27 @@ pub async fn cmd_gateway_checker(args: GatewayCheckerArgs) -> Result<()> {
             let succeeded = match refresher.refresh(refresh.force).await {
                 Ok(()) => {
                     info!("dstack-gateway refresh succeeded");
+                    if reported_degraded {
+                        info!("dstack-gateway route restored; clearing the reported error");
+                        // Empty body resets the host's boot_error field.
+                        vmm.notify_q("boot.error", "").await;
+                        reported_degraded = false;
+                    }
                     true
                 }
                 Err(error) => {
-                    // now_secs() is re-read below: the refresh itself can block
-                    // on network timeouts for a long time, and the backoff must
-                    // count from when the attempt ended.
                     warn!("dstack-gateway refresh failed: {error:#}");
+                    if !reported_degraded {
+                        vmm.notify_q("boot.error", &gateway_unavailable_message(&error))
+                            .await;
+                        reported_degraded = true;
+                    }
                     false
                 }
             };
+            // now_secs() is re-read here rather than reusing `now`: a refresh can
+            // block on network timeouts for a long time, and the backoff has to
+            // count from when the attempt ended, not when it started.
             checker.record(now_secs(), succeeded);
         }
         tokio::time::sleep(POLL_INTERVAL).await;

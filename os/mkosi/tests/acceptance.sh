@@ -66,17 +66,17 @@ done < <(sed -n 's/^require_config \(CONFIG_[A-Z0-9_]*\) \([ynm]\)$/\1 \2/p' "$a
 [[ $required -ge 10 ]]
 grep -q '0002-acpi-sandbox' "$D/components/kernel/kernel-build.sh"
 grep -q -- '--fuzz=0' "$D/components/kernel/kernel-build.sh"
-for service in dstack-guest-agent dstack-prepare app-compose wg-checker; do
+for service in dstack-guest-agent dstack-prepare app-compose dstack-gateway-checker; do
   grep -q "$service" "$D/mkosi.skeleton/usr/lib/systemd/system-preset/80-dstack.preset"
 done
 # The gateway checker is a dstack-util subcommand, not a shell script. It exits 0
 # when the app did not enable dstack-gateway, so Restart must not be "always" or
 # systemd respawns it every RestartSec forever on every gateway-less CVM.
-wg_unit="$D/../common/rootfs/wg-checker.service"
-grep -q '^ExecStart=/bin/dstack-util gateway-checker ' "$wg_unit" || {
-  echo 'wg-checker.service must run the dstack-util gateway-checker subcommand'; exit 1; }
-grep -q '^Restart=on-failure$' "$wg_unit" || {
-  echo 'wg-checker.service must use Restart=on-failure'; exit 1; }
+gw_unit="$D/../common/rootfs/dstack-gateway-checker.service"
+grep -q '^ExecStart=/bin/dstack-util gateway-checker ' "$gw_unit" || {
+  echo 'dstack-gateway-checker.service must run the dstack-util gateway-checker subcommand'; exit 1; }
+grep -q '^Restart=on-failure$' "$gw_unit" || {
+  echo 'dstack-gateway-checker.service must use Restart=on-failure'; exit 1; }
 # A permanent misconfiguration exits with EXIT_MISCONFIGURED. If the unit does
 # not inhibit restarts for exactly that code, "fail loudly and stop" silently
 # degrades into a RestartSec respawn loop, which is what this whole exit code
@@ -84,9 +84,10 @@ grep -q '^Restart=on-failure$' "$wg_unit" || {
 checker_src="$D/../../dstack/dstack-util/src/gateway_checker.rs"
 exit_code=$(sed -n 's/^const EXIT_MISCONFIGURED: i32 = \([0-9]\+\);$/\1/p' "$checker_src")
 [[ -n $exit_code ]] || { echo "cannot read EXIT_MISCONFIGURED from $checker_src"; exit 1; }
-grep -q "^RestartPreventExitStatus=${exit_code}\$" "$wg_unit" || {
-  echo "wg-checker.service must set RestartPreventExitStatus=$exit_code"; exit 1; }
+grep -q "^RestartPreventExitStatus=${exit_code}\$" "$gw_unit" || {
+  echo "dstack-gateway-checker.service must set RestartPreventExitStatus=$exit_code"; exit 1; }
 test ! -e "$D/../common/rootfs/wg-checker.sh"
+test ! -e "$D/../common/rootfs/wg-checker.service"
 # systemd enables any unit that matches no preset rule, so the enable list is
 # only meaningful with a terminal disable. Without it, every package pulled in
 # by Packages= would start at boot with no diff to 80-dstack.preset.

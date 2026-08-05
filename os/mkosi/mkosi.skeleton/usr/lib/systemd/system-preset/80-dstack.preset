@@ -10,7 +10,7 @@ enable dstack-prepare.service
 enable dstack-guest-agent.socket
 enable dstack-guest-agent.service
 enable app-compose.service
-enable wg-checker.service
+enable dstack-gateway-checker.service
 enable nvidia-persistenced.service
 enable nvidia-fabricmanager.service
 enable containerd-stargz-grpc.service
