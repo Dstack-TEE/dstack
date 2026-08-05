@@ -1088,6 +1088,8 @@ mod tests {
                 digest: None,
                 tdx_measurement: None,
                 sev_measurement: None,
+                gcp_measurement: None,
+                aws_measurement: None,
             },
             cid: 100,
             workdir: PathBuf::from("/does-not-exist/vm-1"),

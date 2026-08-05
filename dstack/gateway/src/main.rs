@@ -223,7 +223,7 @@ async fn gen_debug_certs(
 
 fn write_cert(path: &str, cert: &str) -> Result<()> {
     info!("Writing cert to file: {path}");
-    safe_write::safe_write(path, cert)?;
+    safe_write::safe_write_with_mode(path, cert, 0o600)?;
     Ok(())
 }
 
@@ -347,15 +347,19 @@ async fn main() -> Result<()> {
             } else {
                 tracing::info!("admin server authentication enabled");
             }
-            rocket::custom(admin_figment)
+            let admin_rocket = rocket::custom(admin_figment)
                 .attach(auth_fairing)
                 .mount("/", admin_auth::routes())
                 .mount("/", web_routes::routes())
                 .mount("/", prpc!(Proxy, AdminRpcHandler, trim: "Admin."))
                 .mount("/prpc", prpc!(Proxy, AdminRpcHandler, trim: "Admin."))
-                .manage(admin_state)
-                .launch()
-                .await
+                .manage(admin_state.clone())
+                .ignite()
+                .await?;
+            admin_state
+                .lock()
+                .set_admin_shutdown(admin_rocket.shutdown());
+            admin_rocket.launch().await
         } else {
             std::future::pending().await
         }
@@ -384,4 +388,35 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::write_cert;
+    use std::fs;
+
+    #[test]
+    fn gateway_startup_private_file_matrix() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("gateway.key");
+        write_cert(output.to_str().unwrap(), "first").unwrap();
+        assert_eq!(fs::read(&output).unwrap(), b"first");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                fs::metadata(&output).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        write_cert(output.to_str().unwrap(), "second").unwrap();
+        assert_eq!(fs::read(&output).unwrap(), b"second");
+        assert!(fs::read_dir(directory.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
+    }
 }

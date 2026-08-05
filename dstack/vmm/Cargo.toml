@@ -62,10 +62,10 @@ url.workspace = true
 reqwest.workspace = true
 flate2.workspace = true
 tar.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
-tempfile.workspace = true
 
 [build-dependencies]
 or-panic.workspace = true

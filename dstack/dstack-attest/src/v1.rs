@@ -278,8 +278,17 @@ impl Attestation {
     }
 
     pub fn from_msgpack(bytes: &[u8]) -> Result<Self> {
-        let value: Self =
-            rmp_serde::from_slice(bytes).context("failed to decode attestation from msgpack")?;
+        let mut cursor = std::io::Cursor::new(bytes);
+        let mut decoder = rmp_serde::Deserializer::new(&mut cursor);
+        let value =
+            Self::deserialize(&mut decoder).context("failed to decode attestation from msgpack")?;
+        drop(decoder);
+        if cursor.position() != bytes.len() as u64 {
+            bail!(
+                "trailing bytes after attestation msgpack: {}",
+                bytes.len() as u64 - cursor.position()
+            );
+        }
         if value.version != ATTESTATION_VERSION {
             bail!(
                 "unsupported attestation version: expected {}, got {}",

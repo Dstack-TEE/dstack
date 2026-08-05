@@ -102,7 +102,7 @@ fn verify_sev_snp_attestation_bin() {
     );
     // The HOST_DATA-bound app identity is recovered from the mr_config document.
     assert_eq!(
-        hex::encode(&binding.mr_config.app_id),
+        hex::encode(binding.mr_config.app_id.as_deref().unwrap_or_default()),
         "86e59625be93207bc2351c4d1bba20037cec8e16",
         "mr_config app_id bound by HOST_DATA"
     );

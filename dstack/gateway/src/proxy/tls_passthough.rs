@@ -3,11 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::fmt::Debug;
+use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use hickory_resolver::config::{NameServerConfig, ResolverConfig};
 use hickory_resolver::lookup::Lookup;
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::proto::rr::RData;
 use hickory_resolver::TokioResolver;
 use proxy_protocol::ProxyHeader;
@@ -59,11 +62,11 @@ pub(crate) struct AppAddressResolver {
 }
 
 impl AppAddressResolver {
-    pub(crate) fn new(prefix: String, compat: bool) -> Result<Self> {
+    pub(crate) fn new(prefix: String, compat: bool, dns_servers: Vec<SocketAddr>) -> Result<Self> {
         Ok(Self {
             prefix,
             compat,
-            resolver: app_address_tokio_resolver_from_system_conf()?,
+            resolver: app_address_tokio_resolver(dns_servers)?,
         })
     }
 
@@ -72,8 +75,25 @@ impl AppAddressResolver {
     }
 }
 
-fn app_address_tokio_resolver_from_system_conf() -> Result<TokioResolver> {
-    let mut builder = TokioResolver::builder_tokio().context("failed to read system dns config")?;
+fn app_address_tokio_resolver(dns_servers: Vec<SocketAddr>) -> Result<TokioResolver> {
+    let mut builder = if dns_servers.is_empty() {
+        TokioResolver::builder_tokio().context("failed to read system dns config")?
+    } else {
+        let name_servers = dns_servers
+            .into_iter()
+            .map(|dns_server| {
+                let mut name_server = NameServerConfig::udp_and_tcp(dns_server.ip());
+                for connection in &mut name_server.connections {
+                    connection.port = dns_server.port();
+                }
+                name_server
+            })
+            .collect();
+        TokioResolver::builder_with_config(
+            ResolverConfig::from_parts(None, Vec::new(), name_servers),
+            TokioRuntimeProvider::default(),
+        )
+    };
 
     // App-address records may appear shortly after a CVM/app is registered.
     // Reusing one resolver enables positive TXT caching, but we do not want a
@@ -317,7 +337,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_app_address() -> Result<()> {
-        let resolver = AppAddressResolver::new("_dstack-app-address".to_string(), false)?;
+        let resolver = AppAddressResolver::new("_dstack-app-address".to_string(), false, vec![])?;
         let app_addr = resolver
             .resolve("3327603e03f5bd1f830812ca4a789277fc31f577.app.dstack.org")
             .await?;

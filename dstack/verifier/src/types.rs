@@ -78,8 +78,6 @@ impl PolicyBootInfo {
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct VerificationDetails {
-    /// True when verification used explicitly opted-in development trust roots.
-    pub simulated: bool,
     pub quote_verified: bool,
     /// Indicates that the event log was verified against the quote.
     ///
@@ -205,6 +203,7 @@ mod tests {
             mr_aggregated: [0x66; 32],
             os_image_hash: vec![0x77; 32],
             key_provider_info: br#"{"name":"tpm","id":"aws-test"}"#.to_vec(),
+            init_script_hashes: Some(Vec::new()),
         };
 
         let boot_info = PolicyBootInfo::from_app_info(

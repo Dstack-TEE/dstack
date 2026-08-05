@@ -15,6 +15,7 @@ use tracing::info;
 struct LocalMrConfigValues<'a> {
     compose_hash: &'a [u8; 32],
     gpu_policy_hash: &'a [u8; 32],
+    init_script_hashes: &'a [Vec<u8>],
     app_id: &'a [u8; 20],
     instance_id: &'a [u8],
     key_provider: KeyProviderKind,
@@ -67,6 +68,7 @@ fn read_snp_host_data() -> Result<[u8; 32]> {
 pub fn verify_mr_config_id(
     compose_hash: &[u8; 32],
     gpu_policy_hash: &[u8; 32],
+    init_script_hashes: &[Vec<u8>],
     app_id: &[u8; 20],
     instance_id: &[u8],
     key_provider: KeyProviderKind,
@@ -76,6 +78,7 @@ pub fn verify_mr_config_id(
     let local = LocalMrConfigValues {
         compose_hash,
         gpu_policy_hash,
+        init_script_hashes,
         app_id,
         instance_id,
         key_provider,
@@ -91,6 +94,9 @@ fn verify_mr_config_id_for_mode(mode: TeeVariant, local: LocalMrConfigValues<'_>
         // in measure_app_info); there is no host-supplied claim to cross-check.
         // The key_provider_id pin is enforced by verify_key_provider_id.
         TeeVariant::DstackAwsNitroTpm => Ok(()),
+        // Nitro Enclave binds the image through the signed NSM document and
+        // the app ID through its runtime event. It has no TDX mr_config_id.
+        TeeVariant::DstackNitroEnclave => Ok(()),
         _ => verify_tdx_mr_config_id(local),
     }
 }
@@ -168,17 +174,28 @@ fn verify_mr_config_v3_document(
             bail!("Invalid mr_config gpu_policy_hash");
         }
     }
-    if mr_config.app_id.as_slice() != local.app_id {
-        bail!("Invalid mr_config app_id");
+    if let Some(init_script_hashes) = mr_config.init_script_hashes.as_deref() {
+        if init_script_hashes != local.init_script_hashes {
+            bail!("Invalid mr_config init_script_hashes");
+        }
     }
-    if mr_config.instance_id.as_slice() != local.instance_id {
-        bail!("Invalid mr_config instance_id");
+    if let Some(app_id) = mr_config.app_id.as_deref() {
+        if app_id != local.app_id {
+            bail!("Invalid mr_config app_id");
+        }
+    }
+    if let Some(instance_id) = mr_config.instance_id.as_deref() {
+        if instance_id != local.instance_id {
+            bail!("Invalid mr_config instance_id");
+        }
     }
     if mr_config.key_provider != local.key_provider {
         bail!("Invalid mr_config key_provider");
     }
-    if mr_config.key_provider_id.as_slice() != local.key_provider_id {
-        bail!("Invalid mr_config key_provider_id");
+    if let Some(key_provider_id) = mr_config.key_provider_id.as_deref() {
+        if key_provider_id != local.key_provider_id {
+            bail!("Invalid mr_config key_provider_id");
+        }
     }
     Ok(mr_config)
 }
@@ -215,6 +232,7 @@ mod tests {
         let local = LocalMrConfigValues {
             compose_hash: &compose_hash,
             gpu_policy_hash: &gpu_policy_hash,
+            init_script_hashes: &[],
             app_id: &app_id,
             instance_id: &instance_id,
             key_provider: KeyProviderKind::Kms,
@@ -244,6 +262,7 @@ mod tests {
         let local = LocalMrConfigValues {
             compose_hash: &compose_hash,
             gpu_policy_hash: &gpu_policy_hash,
+            init_script_hashes: &[],
             app_id: &wrong_app_id,
             instance_id: &instance_id,
             key_provider: KeyProviderKind::Kms,
@@ -254,6 +273,36 @@ mod tests {
             Ok(_) => panic!("mismatched app_id must reject"),
             Err(err) => assert!(err.to_string().contains("Invalid mr_config app_id")),
         }
+    }
+
+    #[test]
+    fn mr_config_v3_skips_app_id_check_when_field_is_missing() -> Result<()> {
+        let compose_hash = [0x22u8; 32];
+        let gpu_policy_hash = [0x55u8; 32];
+        let app_id = [0x11u8; 20];
+        let instance_id = [0x44u8; 20];
+        let key_provider_id = [0x33u8; 32];
+        let document = MrConfigV3::new(
+            Vec::new(),
+            compose_hash.to_vec(),
+            Some(gpu_policy_hash.to_vec()),
+            KeyProviderKind::Kms,
+            key_provider_id.to_vec(),
+            instance_id.to_vec(),
+        )
+        .to_canonical_json();
+        let local = LocalMrConfigValues {
+            compose_hash: &compose_hash,
+            gpu_policy_hash: &gpu_policy_hash,
+            init_script_hashes: &[],
+            app_id: &app_id,
+            instance_id: &instance_id,
+            key_provider: KeyProviderKind::Kms,
+            key_provider_id: &key_provider_id,
+        };
+
+        verify_mr_config_v3_document(&document, local)?;
+        Ok(())
     }
 
     #[test]
@@ -276,6 +325,7 @@ mod tests {
         let local = LocalMrConfigValues {
             compose_hash: &compose_hash,
             gpu_policy_hash: &wrong_gpu_policy_hash,
+            init_script_hashes: &[],
             app_id: &app_id,
             instance_id: &instance_id,
             key_provider: KeyProviderKind::Kms,
@@ -309,6 +359,7 @@ mod tests {
         let local = LocalMrConfigValues {
             compose_hash: &compose_hash,
             gpu_policy_hash: &actual_gpu_policy_hash,
+            init_script_hashes: &[],
             app_id: &app_id,
             instance_id: &instance_id,
             key_provider: KeyProviderKind::Kms,
@@ -316,5 +367,97 @@ mod tests {
         };
 
         verify_tdx_mr_config_id_value(mr_config.to_tdx_mr_config_id(), Some(&document), local)
+    }
+
+    #[test]
+    fn mr_config_v3_document_rejects_mismatched_init_script_hashes() {
+        let compose_hash = [0x22u8; 32];
+        let gpu_policy_hash = [0x55u8; 32];
+        let app_id = [0x11u8; 20];
+        let instance_id = [0x44u8; 20];
+        let declared_hashes = vec![vec![0xaau8; 32]];
+        let actual_hashes = vec![vec![0xbbu8; 32]];
+        let document = MrConfigV3::new(
+            app_id.to_vec(),
+            compose_hash.to_vec(),
+            None,
+            KeyProviderKind::None,
+            Vec::new(),
+            instance_id.to_vec(),
+        )
+        .with_init_script_hashes(declared_hashes)
+        .to_canonical_json();
+        let local = LocalMrConfigValues {
+            compose_hash: &compose_hash,
+            gpu_policy_hash: &gpu_policy_hash,
+            init_script_hashes: &actual_hashes,
+            app_id: &app_id,
+            instance_id: &instance_id,
+            key_provider: KeyProviderKind::None,
+            key_provider_id: &[],
+        };
+
+        assert!(verify_mr_config_v3_document(&document, local)
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid mr_config init_script_hashes"));
+    }
+
+    #[test]
+    fn mr_config_v3_document_skips_init_script_check_when_field_is_missing() {
+        let compose_hash = [0x22u8; 32];
+        let gpu_policy_hash = [0x55u8; 32];
+        let app_id = [0x11u8; 20];
+        let instance_id = [0x44u8; 20];
+        let mut document = serde_json::to_value(MrConfigV3::new(
+            app_id.to_vec(),
+            compose_hash.to_vec(),
+            None,
+            KeyProviderKind::None,
+            Vec::new(),
+            instance_id.to_vec(),
+        ))
+        .unwrap();
+        document
+            .as_object_mut()
+            .unwrap()
+            .remove("init_script_hashes");
+        let local_without_scripts = LocalMrConfigValues {
+            compose_hash: &compose_hash,
+            gpu_policy_hash: &gpu_policy_hash,
+            init_script_hashes: &[],
+            app_id: &app_id,
+            instance_id: &instance_id,
+            key_provider: KeyProviderKind::None,
+            key_provider_id: &[],
+        };
+
+        verify_mr_config_v3_document(&document.to_string(), local_without_scripts).unwrap();
+
+        let actual_hashes = vec![vec![0xaau8; 32]];
+        let local_with_script = LocalMrConfigValues {
+            init_script_hashes: &actual_hashes,
+            ..local_without_scripts
+        };
+        verify_mr_config_v3_document(&document.to_string(), local_with_script).unwrap();
+    }
+
+    #[test]
+    fn nitro_enclave_does_not_require_tdx_mr_config() -> Result<()> {
+        let compose_hash = [0u8; 32];
+        let gpu_policy_hash = [0u8; 32];
+        let app_id = [0u8; 20];
+        let instance_id = [0u8; 20];
+        let local = LocalMrConfigValues {
+            compose_hash: &compose_hash,
+            gpu_policy_hash: &gpu_policy_hash,
+            init_script_hashes: &[],
+            app_id: &app_id,
+            instance_id: &instance_id,
+            key_provider: KeyProviderKind::None,
+            key_provider_id: &[],
+        };
+
+        verify_mr_config_id_for_mode(TeeVariant::DstackNitroEnclave, local)
     }
 }

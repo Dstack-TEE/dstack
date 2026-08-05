@@ -92,10 +92,15 @@ const UpdateVmDialogComponent = {
             </div>
           </div>
           <div class="form-group">
-            <label for="upgradeInitScript">Init Script
+            <label>Init Scripts
               <span class="help-icon" title="Executed before dockerd starts. Use for early system setup.">?</span>
             </label>
-            <textarea id="upgradeInitScript" v-model="dialog.initScript" placeholder="Optional: Bash script executed before dockerd startup" rows="3"></textarea>
+            <div v-for="(script, index) in dialog.initScripts" :key="index" class="file-input-row">
+              <textarea :id="'upgradeInitScript-' + index" v-model="dialog.initScripts[index]" :placeholder="'Init script ' + (index + 1)" rows="3"></textarea>
+              <button v-if="dialog.initScripts.length > 1" type="button" class="action-btn danger" @click="dialog.initScripts.splice(index, 1)">Remove</button>
+            </div>
+            <!-- Keep in sync with dstack_types::MAX_INIT_SCRIPTS. -->
+            <button v-if="dialog.initScripts.length < 5" type="button" class="action-btn" @click="dialog.initScripts.push('')">Add Init Script</button>
           </div>
           <div class="form-group">
             <label for="upgradePrelauncher">Pre-launch Script

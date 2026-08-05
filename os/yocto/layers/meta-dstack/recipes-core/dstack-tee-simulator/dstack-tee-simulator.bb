@@ -13,7 +13,7 @@ DSTACK_CORE_SRC ?= "${DSTACK_MONOREPO_ROOT}/dstack"
 S = "${UNPACKDIR}/repo/dstack"
 
 DEPENDS += "rsync-native cmake-native"
-RDEPENDS:${PN} += "dstack-guest fuse3-utils swtpm tpm2-tools openssl"
+RDEPENDS:${PN} += "dstack-guest fuse3-utils swtpm tpm2-tools libtss2-tcti-device openssl"
 do_unpack[depends] += "rsync-native:do_populate_sysroot"
 
 # aws-lc-sys cannot detect this Yocto cross build reliably with its default

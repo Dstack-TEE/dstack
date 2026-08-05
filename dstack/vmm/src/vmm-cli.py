@@ -925,9 +925,10 @@ class VmmCLI:
         app_id = args.app_id or self.calc_app_id(compose_content)
         print(f"App ID: {app_id}")
         if envs:
-            encrypt_pubkey = self.get_app_env_encrypt_pub_key(
-                app_id, args.kms_url[0] if args.kms_url else None
+            encrypt_url = args.kms_encrypt_url or (
+                args.kms_url[0] if args.kms_url else None
             )
+            encrypt_pubkey = self.get_app_env_encrypt_pub_key(app_id, encrypt_url)
             print(f"Encrypting environment variables with key: {encrypt_pubkey}")
             envs_list = [{"key": k, "value": v} for k, v in envs.items()]
             params["encrypted_env"] = encrypt_env(envs_list, encrypt_pubkey)
@@ -1791,6 +1792,11 @@ def main():
         "--hugepages", action="store_true", help="Enable hugepages for the VM"
     )
     deploy_parser.add_argument("--kms-url", action="append", type=str, help="KMS URL")
+    deploy_parser.add_argument(
+        "--kms-encrypt-url",
+        type=str,
+        help="Controller-reachable KMS URL used only to encrypt --env-file",
+    )
     deploy_parser.add_argument(
         "--gateway-url", action="append", type=str, help="Gateway URL"
     )

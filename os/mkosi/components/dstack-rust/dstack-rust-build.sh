@@ -63,9 +63,10 @@ if [[ ${DSTACK_SKIP_RUST:-0} != 1 ]]; then
   # hosts with different CPU counts while retaining parallel crate builds.
   export RUSTFLAGS="${RUSTFLAGS:-} $target_remap $home_remap --remap-path-prefix=$ROOT=/usr/src/dstack --remap-path-prefix=$build_root=/usr/src/dstack-build -C codegen-units=1 -C strip=debuginfo"
   cargo build --locked --release --manifest-path "$ROOT/dstack/Cargo.toml" \
-    -p dstack-guest-agent -p dstack-util
+    -p dstack-guest-agent -p dstack-util -p dstack-volume
   install -m0755 "$CARGO_TARGET_DIR/release/dstack-guest-agent" \
-    "$CARGO_TARGET_DIR/release/dstack-util" "$DEST/usr/bin/"
+    "$CARGO_TARGET_DIR/release/dstack-util" \
+    "$CARGO_TARGET_DIR/release/dstack-volume" "$DEST/usr/bin/"
   if [[ $FLAVOR == dev ]]; then
     cargo build --locked --release --manifest-path "$ROOT/dstack/Cargo.toml" \
       -p dstack-tee-simulator

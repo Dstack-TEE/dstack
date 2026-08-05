@@ -32,6 +32,7 @@ use crate::{
 };
 
 /// Outcome of a single fetch attempt, distinguishing what we can usefully retry.
+#[derive(Debug)]
 enum FetchError {
     /// Transient: connection failed, RPC timed out, agent returned 5xx, etc.
     /// The CVM might just be warming up — retry with backoff.
@@ -234,21 +235,22 @@ async fn fetch_port_policy(ip: Ipv4Addr, agent_port: u16) -> Result<PortPolicy, 
         .context("agent Info() rpc failed")
         .map_err(FetchError::Transient)?;
 
-    // Anything below this point is the agent telling us something we can't
-    // turn into port_policy — treat as permanent.
-    if info.tcb_info.is_empty() {
-        // Legacy CVM with public_tcbinfo=false; we cannot inspect app-compose
-        // remotely. Cache the default (open) policy so we don't keep retrying.
-        // Apps that need restrict_mode must run a CVM that reports policy at
-        // registration time — they cannot rely on lazy fetch.
+    parse_info_port_policy(&info.tcb_info)
+}
+
+fn parse_info_port_policy(tcb_info: &str) -> Result<PortPolicy, FetchError> {
+    // Legacy CVM with public_tcbinfo=false; we cannot inspect app-compose
+    // remotely. Cache the default (open) policy so we don't keep retrying.
+    // Apps that need restrict_mode must report policy during registration.
+    if tcb_info.is_empty() {
         return Ok(PortPolicy::default());
     }
-    let tcb: serde_json::Value = serde_json::from_str(&info.tcb_info)
+    let tcb: serde_json::Value = serde_json::from_str(tcb_info)
         .context("invalid tcb_info json")
         .map_err(FetchError::Permanent)?;
     let raw = tcb
         .get("app_compose")
-        .and_then(|v| v.as_str())
+        .and_then(|value| value.as_str())
         .ok_or_else(|| FetchError::Permanent(anyhow::anyhow!("tcb_info missing app_compose")))?;
     let app_compose: AppCompose = serde_json::from_str(raw)
         .context("failed to parse app_compose from tcb_info")
@@ -257,10 +259,58 @@ async fn fetch_port_policy(ip: Ipv4Addr, agent_port: u16) -> Result<PortPolicy, 
         .port_policy
         .ports
         .into_iter()
-        .map(|p| (p.port, PortFlags { pp: p.pp }))
+        .map(|port| (port.port, PortFlags { pp: port.pp }))
         .collect();
     Ok(PortPolicy {
         ports,
         restrict_mode: app_compose.port_policy.restrict_mode,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_info_port_policy, FetchError};
+
+    #[test]
+    fn legacy_empty_info_uses_bounded_open_compatibility_policy() {
+        let policy = parse_info_port_policy("").expect("legacy empty info rejected");
+        assert!(!policy.restrict_mode);
+        assert!(policy.ports.is_empty());
+    }
+
+    #[test]
+    fn reported_policy_wins_and_preserves_proxy_protocol_flags() {
+        let compose = serde_json::json!({
+            "manifest_version": "3",
+            "name": "port-policy-fixture",
+            "runner": "docker-compose",
+            "gateway_enabled": true,
+            "port_policy": {
+                "restrict_mode": true,
+                "ports": [
+                    {"port": 443, "pp": true},
+                    {"port": 8080, "pp": false}
+                ]
+            }
+        });
+        let tcb = serde_json::json!({"app_compose": compose.to_string()}).to_string();
+        let policy = parse_info_port_policy(&tcb).expect("reported policy rejected");
+        assert!(policy.restrict_mode);
+        assert!(policy.ports.get(&443).expect("443 missing").pp);
+        assert!(!policy.ports.get(&8080).expect("8080 missing").pp);
+    }
+
+    #[test]
+    fn malformed_or_missing_compose_is_permanent_failure() {
+        for value in [
+            "not-json",
+            r#"{"other":"value"}"#,
+            r#"{"app_compose":"bad"}"#,
+        ] {
+            assert!(matches!(
+                parse_info_port_policy(value),
+                Err(FetchError::Permanent(_))
+            ));
+        }
+    }
 }

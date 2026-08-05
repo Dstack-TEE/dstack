@@ -9,7 +9,7 @@ use ipnet::Ipv4Net;
 use load_config::load_config;
 use rocket::figment::Figment;
 use serde::{Deserialize, Serialize};
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tracing::info;
@@ -107,6 +107,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_handshake_stale() -> Duration {
+    Duration::from_secs(30 * 60)
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProxyConfig {
     pub tls_crypto_provider: CryptoProvider,
@@ -178,6 +182,10 @@ pub struct ProxyConfig {
     pub cert_key: Option<PathBuf>,
     pub app_address_ns_prefix: String,
     pub app_address_ns_compat: bool,
+    /// Dedicated DNS servers for app-address TXT lookups.
+    /// The system resolver is used when this list is empty.
+    #[serde(default)]
+    pub app_address_dns_servers: Vec<SocketAddr>,
     /// Maximum concurrent connections per app. 0 means unlimited.
     pub max_connections_per_app: u64,
     /// Port the dstack guest-agent listens on inside each CVM. Used by the
@@ -438,6 +446,9 @@ pub struct Timeouts {
 
     #[serde(with = "serde_duration")]
     pub cache_top_n: Duration,
+    /// Maximum WireGuard handshake age for an instance to be considered healthy.
+    #[serde(default = "default_handshake_stale", with = "serde_duration")]
+    pub handshake_stale: Duration,
 
     /// Timeout for DNS TXT record resolution (app address lookup).
     #[serde(with = "serde_duration")]

@@ -6,6 +6,10 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 
+if (process.env.NODE_ENV === 'production') {
+  throw new Error('auth-mock must not run with NODE_ENV=production');
+}
+
 // zod schemas for validation - compatible with original fastify implementation
 const BootInfoSchema = z.object({
   // required fields (matching original fastify schema)

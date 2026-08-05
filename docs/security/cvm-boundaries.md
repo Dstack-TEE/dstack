@@ -41,11 +41,13 @@ This is the main configuration file for the application in JSON format:
 | no_instance_id | 0.4.2 | boolean | Disable instance ID generation |
 | secure_time | 0.5.0 | boolean | Whether secure time is enabled |
 | pre_launch_script | 0.4.0 | string | Prelaunch bash script that runs before execute `docker compose up` |
-| init_script | 0.5.5 | string | Bash script that executed prior to dockerd startup |
+| init_script | 0.5.5 (string), 0.6.0 (string[]) | string or string[] | Up to 5 Bash scripts executed in order prior to dockerd startup; a string is treated as a one-element array. Multiple scripts require string `manifest_version: "3"` so older guests fail closed. MrConfigV3 binds the hashes only for manifest v3. |
 | storage_fs | 0.5.5 | string | Filesystem type for the data disk of the CVM. Supported values: "zfs", "ext4". default to "zfs". **ZFS:** Ensures filesystem integrity with built-in data protection features. **ext4:** Provides better performance for database applications with lower overhead and faster I/O operations, but no strong integrity protection. |
 | swap_size | 0.5.5 | string/integer | The linux swap size. default to 0. Can be in byte or human-readable format (e.g., "1G", "256M"). |
 | key_provider | 0.5.6 | string | Key provider type. Supported values: "none", "kms", "local", "tpm". GCP vTPM and AWS EC2 NitroTPM are part of their platform trust models. The Dstack platform can use VMM-managed swtpm for seal/unseal and restart persistence, but it offers no protection against the host and is intentionally not accepted by remote verifiers. |
 
+The five-script limit bounds runtime-event-log and MrConfigV3 growth while
+allowing several independently approved infrastructure initialization stages.
 
 The hash of this file content is extended as the dstack `compose-hash` launch event. On TDX-family platforms the launch event is measured into RTMR3. On AWS NitroTPM it is measured into non-resettable SHA384 PCR14 before the `system-ready` launch boundary. Remote verifiers extract and replay this event during attestation.
 
