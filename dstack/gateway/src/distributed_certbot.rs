@@ -20,8 +20,8 @@ use tracing::{error, info, warn};
 
 use crate::cert_store::CertResolver;
 use crate::kv::{
-    AcmeAttestation, CertAttestation, CertCredentials, CertData, DnsProvider, KvStore,
-    ZtDomainConfig,
+    AcmeAttestation, CertAttestation, CertCredentials, CertData, DnsCredential, DnsProvider,
+    KvStore, ZtDomainConfig,
 };
 
 /// Lock timeout for certificate renewal (10 minutes)
@@ -34,11 +34,10 @@ const DEFAULT_ACME_URL: &str = "https://acme-v02.api.letsencrypt.org/directory";
 pub struct DistributedCertBot {
     kv_store: Arc<KvStore>,
     cert_resolver: Arc<CertResolver>,
-    /// Serializes CAA reconciliation within this process.
+    /// Serializes CAA reconciliation and credential rotation within this process.
     ///
-    /// This is deliberately not a cluster-wide lock: CAA reconciliation is a rare
-    /// manual operation, so a node-local guard against concurrent admin calls is
-    /// enough and avoids a distributed lock that could be left behind on crash.
+    /// This is deliberately not a cluster-wide lock because WaveKV does not
+    /// provide compare-and-swap.
     caa_lock: Mutex<()>,
 }
 
@@ -49,6 +48,89 @@ impl DistributedCertBot {
             cert_resolver,
             caa_lock: Default::default(),
         }
+    }
+
+    async fn dns_client(&self, domain: &str, config: &ZtDomainConfig) -> Result<Dns01Client> {
+        let dns_cred = if let Some(ref cred_id) = config.dns_cred_id {
+            self.kv_store
+                .get_dns_credential(cred_id)
+                .context("specified DNS credential not found")?
+        } else {
+            self.kv_store
+                .get_default_dns_credential()
+                .context("no default DNS credential configured")?
+        };
+
+        match &dns_cred.provider {
+            DnsProvider::Cloudflare { api_token, api_url } => {
+                Dns01Client::new_cloudflare(domain.to_string(), api_token.clone(), api_url.clone())
+                    .await
+            }
+        }
+    }
+
+    /// Rotate the shared ACME account without interrupting certificate serving.
+    ///
+    /// CAA records are updated before the new credentials are published. WaveKV
+    /// has no CAS operation, so the lock only serializes calls handled by this
+    /// node; operators must not rotate through multiple nodes concurrently.
+    pub async fn rotate_acme_credentials(&self) -> Result<(String, usize)> {
+        let Ok(_guard) = self.caa_lock.try_lock() else {
+            bail!("ACME credential rotation or CAA reconciliation is already in progress");
+        };
+        let configs = self.kv_store.list_zt_domain_configs();
+        let first = configs
+            .first()
+            .context("no ZT-Domain configured for ACME credential rotation")?;
+        let certbot_config = self.config();
+        let acme_url = if certbot_config.acme_url.is_empty() {
+            DEFAULT_ACME_URL
+        } else {
+            &certbot_config.acme_url
+        };
+
+        let first_dns_cred = dns_credential_for(&self.kv_store, first)?;
+        let dns_client = self.dns_client(&first.domain, first).await?;
+        let client = AcmeClient::new_account(
+            acme_url,
+            dns_client,
+            first_dns_cred.max_dns_wait,
+            first_dns_cred.dns_txt_ttl,
+        )
+        .await
+        .context("failed to create replacement ACME account")?;
+        let credentials = client
+            .dump_credentials()
+            .context("failed to encode replacement ACME credentials")?;
+        let account_uri = client.account_id().to_string();
+
+        for config in &configs {
+            let dns_cred = dns_credential_for(&self.kv_store, config)?;
+            let dns_client = self.dns_client(&config.domain, config).await?;
+            let client = AcmeClient::load(
+                dns_client,
+                &credentials,
+                dns_cred.max_dns_wait,
+                dns_cred.dns_txt_ttl,
+            )
+            .await
+            .with_context(|| format!("failed to prepare ACME client for {}", config.domain))?;
+            client
+                .set_caa_records(&[format!("*.{}", config.domain)])
+                .await
+                .with_context(|| format!("failed to update CAA for {}", config.domain))?;
+        }
+
+        // Publish only after every CAA update succeeds. Readers create an ACME
+        // client per operation, so all nodes recover on their next retry after
+        // WaveKV propagates this value.
+        self.kv_store.save_acme_credentials(&CertCredentials {
+            acme_credentials: credentials,
+        })?;
+        if let Err(err) = self.generate_and_save_acme_attestation(&account_uri).await {
+            warn!("failed to attest rotated ACME account: {err:?}");
+        }
+        Ok((account_uri, configs.len()))
     }
 
     /// Get the current certbot configuration from KV store
@@ -363,23 +445,10 @@ impl DistributedCertBot {
         config: &ZtDomainConfig,
     ) -> Result<AcmeClient> {
         // Get DNS credential (from config or default)
-        let dns_cred = if let Some(ref cred_id) = config.dns_cred_id {
-            self.kv_store
-                .get_dns_credential(cred_id)
-                .context("specified DNS credential not found")?
-        } else {
-            self.kv_store
-                .get_default_dns_credential()
-                .context("no default DNS credential configured")?
-        };
+        let dns_cred = dns_credential_for(&self.kv_store, config)?;
 
         // Create DNS client based on provider
-        let dns01_client = match &dns_cred.provider {
-            DnsProvider::Cloudflare { api_token, api_url } => {
-                Dns01Client::new_cloudflare(domain.to_string(), api_token.clone(), api_url.clone())
-                    .await?
-            }
-        };
+        let dns01_client = self.dns_client(domain, config).await?;
 
         // Use ACME URL from certbot config, fall back to default if not set
         let config = self.config();
@@ -553,6 +622,18 @@ impl DistributedCertBot {
         self.kv_store.save_cert_attestation(domain, &attestation)?;
         info!(domain, "attestation saved to KvStore");
         Ok(())
+    }
+}
+
+fn dns_credential_for(kv_store: &KvStore, config: &ZtDomainConfig) -> Result<DnsCredential> {
+    if let Some(ref cred_id) = config.dns_cred_id {
+        kv_store
+            .get_dns_credential(cred_id)
+            .context("specified DNS credential not found")
+    } else {
+        kv_store
+            .get_default_dns_credential()
+            .context("no default DNS credential configured")
     }
 }
 

@@ -430,6 +430,10 @@ impl Proxy {
         }
     }
 
+    pub(crate) async fn rotate_acme_credentials(&self) -> Result<(String, usize)> {
+        self.certbot.rotate_acme_credentials().await
+    }
+
     /// Get ACME info for all managed domains (or a specific domain)
     pub(crate) fn acme_info(&self, domain: Option<&str>) -> Result<AcmeInfoResponse> {
         let kv_store = self.kv_store.clone();

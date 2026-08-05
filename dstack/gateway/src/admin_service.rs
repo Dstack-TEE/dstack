@@ -18,10 +18,10 @@ use dstack_gateway_rpc::{
     ListCertAttestationsResponse, ListDnsCredentialsResponse, ListZtDomainsResponse,
     NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus, PortAttrs as RpcPortAttrs,
     PortPolicy as RpcPortPolicy, RenewCertResponse, RenewZtDomainCertRequest,
-    RenewZtDomainCertResponse, SetCertbotConfigRequest, SetDefaultDnsCredentialRequest,
-    SetInstancePortPolicyRequest, SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse,
-    StoreSyncStatus, UpdateDnsCredentialRequest, WaveKvStatusResponse, ZtDomainCertStatus,
-    ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
+    RenewZtDomainCertResponse, RotateAcmeCredentialsResponse, SetCertbotConfigRequest,
+    SetDefaultDnsCredentialRequest, SetInstancePortPolicyRequest, SetNodeStatusRequest,
+    SetNodeUrlRequest, StatusResponse, StoreSyncStatus, UpdateDnsCredentialRequest,
+    WaveKvStatusResponse, ZtDomainCertStatus, ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
 };
 use ra_rpc::{CallContext, RpcCall};
 use tracing::info;
@@ -98,6 +98,14 @@ impl AdminRpc for AdminRpcHandler {
 
     async fn reload_cert(self) -> Result<()> {
         self.state.reload_all_certs_from_kvstore()
+    }
+
+    async fn rotate_acme_credentials(self) -> Result<RotateAcmeCredentialsResponse> {
+        let (account_uri, domains_updated) = self.state.rotate_acme_credentials().await?;
+        Ok(RotateAcmeCredentialsResponse {
+            account_uri,
+            domains_updated: domains_updated.try_into().unwrap_or(u32::MAX),
+        })
     }
 
     async fn status(self) -> Result<StatusResponse> {

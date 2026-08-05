@@ -164,6 +164,14 @@ message AcmeInfoResponse {
   string account_attestation = 5;
 }
 
+// Result of replacing the shared ACME account credentials.
+message RotateAcmeCredentialsResponse {
+  // URI of the newly-created ACME account. The private credentials are never returned.
+  string account_uri = 1;
+  // Number of ZT domains whose CAA records were updated for the new account.
+  uint32 domains_updated = 2;
+}
+
 // Get HostInfo for associated instance id.
 message GetInfoRequest {
   string id = 1;
@@ -466,6 +474,10 @@ service Admin {
   rpc GetCertbotConfig(google.protobuf.Empty) returns (CertbotConfigResponse) {}
   // Set global certbot configuration (includes ACME URL)
   rpc SetCertbotConfig(SetCertbotConfigRequest) returns (google.protobuf.Empty) {}
+  // Create a new ACME account, update every ZT-domain CAA record, and then
+  // replace the shared credentials. Call only one gateway at a time because
+  // WaveKV does not provide compare-and-swap.
+  rpc RotateAcmeCredentials(google.protobuf.Empty) returns (RotateAcmeCredentialsResponse) {}
 
   // ==================== Per-Instance Port Policy Override ====================
   // Set an admin override for an instance's port policy. Takes precedence
