@@ -62,6 +62,12 @@ struct Config {
     acme_url: String,
     /// Cloudflare API token
     cf_api_token: String,
+    /// Optional Cloudflare-compatible API base URL
+    #[serde(default)]
+    cf_api_url: Option<String>,
+    /// TTL for DNS TXT challenge records in seconds
+    #[serde(default = "default_dns_txt_ttl")]
+    dns_txt_ttl: u32,
     /// Auto set CAA record
     auto_set_caa: bool,
     /// List of domains to issue certificates for
@@ -85,6 +91,8 @@ impl Default for Config {
             workdir: ".".into(),
             acme_url: "https://acme-staging-v02.api.letsencrypt.org/directory".into(),
             cf_api_token: "".into(),
+            cf_api_url: None,
+            dns_txt_ttl: default_dns_txt_ttl(),
             auto_set_caa: true,
             domains: vec!["example.com".into()],
             renew_interval: 3600,
@@ -94,6 +102,10 @@ impl Default for Config {
             renewed_hook: None,
         }
     }
+}
+
+const fn default_dns_txt_ttl() -> u32 {
+    60
 }
 
 impl Config {
@@ -134,6 +146,8 @@ fn load_config(config: &PathBuf) -> Result<CertBotConfig> {
         .auto_create_account(true)
         .cert_subject_alt_names(config.domains)
         .cf_api_token(config.cf_api_token)
+        .maybe_cf_api_url(config.cf_api_url)
+        .dns_txt_ttl(config.dns_txt_ttl)
         .renew_interval(renew_interval)
         .renew_timeout(renew_timeout)
         .renew_expires_in(renew_expires_in)
