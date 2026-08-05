@@ -61,6 +61,7 @@ flate2.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 rmp-serde.workspace = true
 or-panic.workspace = true
+base64.workspace = true
 dstack-api-auth.workspace = true
 cached-cell.workspace = true
 
