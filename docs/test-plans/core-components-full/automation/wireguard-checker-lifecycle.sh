@@ -54,9 +54,10 @@ SH
 cat >"$ROOT/fake/sleep" <<'SH'
 #!/bin/sh
 count_file=${DSTACK_TEST_SLEEP_COUNT:?}
+limit=${DSTACK_TEST_MAX_TICKS:-8}
 count=0; test -f "$count_file" && count=$(/bin/cat "$count_file")
 count=$((count + 1)); printf '%s\n' "$count" >"$count_file"
-if test "$count" -ge 8; then /bin/kill -TERM "$PPID" 2>/dev/null; exit 0; fi
+if test "$count" -ge "$limit"; then /bin/kill -TERM "$PPID" 2>/dev/null; exit 0; fi
 /bin/sleep 0.03
 SH
 cat >"$ROOT/fake/wg" <<'SH'
@@ -80,7 +81,7 @@ chmod +x "$ROOT/fake/"*
 printf 'fixture\n' >"$CONF"
 
 run_checker() {
-  name=$1; times=$2; handshake=$3; fail_force=${4:-0}
+  name=$1; times=$2; handshake=$3; fail_force=${4:-0}; max_ticks=${5:-8}
   calls="$ROOT/$name.calls"; log="$ROOT/$name.log"; time_file="$ROOT/$name.times"; sleep_count="$ROOT/$name.sleeps"
   : >"$calls"
   : >"$sleep_count"
@@ -92,8 +93,21 @@ run_checker() {
   set +e
   DSTACK_WORK_DIR="$ROOT/work" DSTACK_TEST_TIME_FILE="$time_file" DSTACK_TEST_SLEEP_COUNT="$sleep_count" \
     DSTACK_TEST_HANDSHAKE_FILE="$ROOT/$name.handshake" DSTACK_TEST_CALLS="$calls" DSTACK_TEST_FAIL_FORCE="$fail_force" \
+    DSTACK_TEST_MAX_TICKS="$max_ticks" \
     PATH="$ROOT/fake:/bin:/usr/bin" /bin/sh "$CHECKER" >"$log" 2>&1
   set -e
+}
+
+# Emit `count` timestamps starting at `start`, spaced by the checker's real 10s
+# loop interval. Callers must supply more values than ticks: when the clock file
+# drains, the stub falls back to a far-future sentinel whose jump would trigger
+# a refresh that no real deployment would perform.
+steady_clock() {
+  start=$1; count=$2; index=0
+  while test "$index" -lt "$count"; do
+    printf '%s ' "$((start + index * 10))"
+    index=$((index + 1))
+  done
 }
 
 run_checker no_handshake '1000 1010 1191 1192 1200 1201 1202 1203' 0 1
@@ -108,6 +122,27 @@ check test "$(grep -c -- '--force' "$ROOT/fresh_handshake.calls")" -eq 0
 run_checker recovery '4000 4010 4191 4192 4200 4201 4202 4203' 0
 check test "$(grep -c -- '--force' "$ROOT/recovery.calls")" -ge 1
 check grep -q 'dstack gateway refresh succeeded' "$ROOT/recovery.log"
+
+# The scenarios above advance the clock in uneven jumps, so a periodic refresh
+# and a staleness deadline can land on separate ticks. Production runs a uniform
+# 10s loop where HANDSHAKE_TIMEOUT equals REFRESH_INTERVAL, so the two deadlines
+# collide every cycle. The scenarios below pin down that timing.
+
+# A peer that never completes a handshake must still reach a forced refresh.
+# Gateway setup short-circuits on an unchanged config unless --force is set, so
+# if a periodic refresh is allowed to re-arm the staleness timer, a CVM whose
+# config is correct but whose tunnel is dead stays unreachable indefinitely.
+run_checker steady_no_handshake "$(steady_clock 7000 60)" 0 0 45
+check test "$(grep -c 'gateway-refresh' "$ROOT/steady_no_handshake.calls")" -ge 2
+check test "$(grep -c -- '--force' "$ROOT/steady_no_handshake.calls")" -ge 1
+
+# A forced refresh tears the interface down and re-requests certificates, so an
+# unreachable gateway must not be retried on every 10s tick. Across 45 ticks
+# (450s) at most one forced attempt per 180s window may be issued; an unthrottled
+# checker would emit one per tick.
+run_checker steady_force_rate_limit "$(steady_clock 8000 60)" 7000 1 45
+check test "$(grep -c -- '--force' "$ROOT/steady_force_rate_limit.calls")" -ge 1
+check test "$(grep -c -- '--force' "$ROOT/steady_force_rate_limit.calls")" -le 4
 
 # With wg absent from PATH, the checker remains a no-op even when config exists.
 mkdir -p "$ROOT/no-wg"
@@ -132,4 +167,4 @@ set -e
 check test ! -s "$ROOT/no-config.calls"
 check ip -n "$NS" link show "$IFACE"
 
-printf '{"checks":%d,"real_interface":true,"address_route":true,"dns_observed":true,"no_handshake_observed":true,"periodic_refresh":true,"no_handshake_force":true,"stale_handshake_force":true,"fresh_handshake_not_forced":true,"refresh_failure_observed":true,"refresh_recovery":true,"missing_wg_noop":true,"missing_config_noop":true,"interface_isolated":true}\n' "$checks"
+printf '{"checks":%d,"real_interface":true,"address_route":true,"dns_observed":true,"no_handshake_observed":true,"periodic_refresh":true,"no_handshake_force":true,"stale_handshake_force":true,"fresh_handshake_not_forced":true,"steady_no_handshake_force":true,"steady_force_rate_limited":true,"refresh_failure_observed":true,"refresh_recovery":true,"missing_wg_noop":true,"missing_config_noop":true,"interface_isolated":true}\n' "$checks"
