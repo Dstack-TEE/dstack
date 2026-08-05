@@ -973,7 +973,7 @@ impl KvStore {
 
         if let Some(existing) = self.get_cert_lock(domain) {
             // Check if lock is still valid (not expired)
-            if now < existing.started_at + lock_timeout_secs {
+            if now < existing.started_at.saturating_add(lock_timeout_secs) {
                 return false;
             }
         }
@@ -1014,7 +1014,7 @@ impl KvStore {
 
         if let Some(existing) = self.get_rotation_lock() {
             // Check if lock is still valid (not expired)
-            if now < existing.started_at + lock_timeout_secs {
+            if now < existing.started_at.saturating_add(lock_timeout_secs) {
                 return None;
             }
         }
@@ -1181,6 +1181,42 @@ mod acme_credentials_tests {
         assert!(
             err.to_string().contains("corrupt ACME credentials"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn lease_expiry_does_not_overflow() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+        kv.persistent
+            .write()
+            .put_encoded(
+                keys::GLOBAL_ACME_ROTATION_LOCK.to_string(),
+                &CertRenewLock {
+                    started_at: u64::MAX,
+                    started_by: 2,
+                },
+            )
+            .expect("lock write should succeed");
+
+        assert!(
+            kv.try_acquire_rotation_lock(600).is_none(),
+            "a non-expired lock with a saturated expiry must remain held"
+        );
+
+        kv.persistent
+            .write()
+            .put_encoded(
+                keys::cert_lock("overflow.example"),
+                &CertRenewLock {
+                    started_at: u64::MAX,
+                    started_by: 2,
+                },
+            )
+            .expect("certificate lock write should succeed");
+        assert!(
+            !kv.try_acquire_cert_lock("overflow.example", 600),
+            "a non-expired certificate lock with a saturated expiry must remain held"
         );
     }
 }
