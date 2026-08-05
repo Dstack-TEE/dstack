@@ -8,18 +8,26 @@ import { z } from 'zod';
 import { createPublicClient, http, type Address, type Hex } from 'viem';
 
 // zod schemas for validation - compatible with original fastify implementation
+const boundedHex = (bytes: number, description: string) =>
+  z.string()
+    .regex(/^(?:0x)?[0-9a-fA-F]*$/, `${description} must be hexadecimal`)
+    .refine(
+      (value) => value.replace(/^0x/, '').length <= bytes * 2,
+      `${description} exceeds ${bytes} bytes`,
+    );
+
 const BootInfoSchema = z.object({
-  // required fields (matching original fastify schema)
-  mrAggregated: z.string().describe('aggregated MR measurement'),
-  osImageHash: z.string().describe('OS Image hash'),
-  appId: z.string().describe('application ID'),
-  composeHash: z.string().describe('compose hash'),
-  instanceId: z.string().describe('instance ID'),
-  deviceId: z.string().describe('device ID'),
-  // optional fields (for full compatibility with BootInfo interface)
-  tcbStatus: z.string().optional().default(''),
-  advisoryIds: z.array(z.string()).optional().default([]),
-  mrSystem: z.string().optional().default('')
+  // Short hexadecimal values remain compatible with the original backend,
+  // which left-pads them before making the contract call.
+  mrAggregated: boundedHex(32, 'aggregated MR measurement'),
+  osImageHash: boundedHex(32, 'OS Image hash'),
+  appId: boundedHex(20, 'application ID'),
+  composeHash: boundedHex(32, 'compose hash'),
+  instanceId: boundedHex(20, 'instance ID'),
+  deviceId: boundedHex(32, 'device ID'),
+  tcbStatus: z.string().max(128).optional().default(''),
+  advisoryIds: z.array(z.string().max(256)).max(128).optional().default([]),
+  mrSystem: boundedHex(32, 'system MR measurement').optional().default('')
 });
 
 const BootResponseSchema = z.object({
