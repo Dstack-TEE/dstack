@@ -149,35 +149,33 @@ impl CertBot {
     /// Run the certbot.
     pub async fn run(&self) {
         loop {
-            match self.renew(false).await {
-                Ok(renewed) => {
-                    if !renewed {
-                        continue;
-                    }
-                    if let Some(hook) = &self.config.renewed_hook {
-                        info!("running renewed hook");
-                        let result = std::process::Command::new("/bin/sh")
-                            .arg("-c")
-                            .arg(hook)
-                            .status();
-                        match result {
-                            Ok(status) => {
-                                if !status.success() {
-                                    error!("renewed hook failed with status: {status}");
-                                }
-                            }
-                            Err(err) => {
-                                error!("failed to run renewed hook: {err:?}");
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("failed to run certbot: {e:?}");
-                }
+            if let Err(error) = self.renew_and_run_hook(false).await {
+                error!("failed to run certbot: {error:?}");
             }
             sleep(self.config.renew_interval).await;
         }
+    }
+
+    /// Run one renewal attempt and invoke the configured hook after a commit.
+    pub async fn renew_and_run_hook(&self, force: bool) -> Result<bool> {
+        let renewed = self.renew(force).await?;
+        if !renewed {
+            return Ok(false);
+        }
+        let Some(hook) = &self.config.renewed_hook else {
+            return Ok(true);
+        };
+        info!("running renewed hook");
+        match std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(hook)
+            .status()
+        {
+            Ok(status) if status.success() => {}
+            Ok(status) => error!("renewed hook failed with status: {status}"),
+            Err(error) => error!("failed to run renewed hook: {error:?}"),
+        }
+        Ok(true)
     }
 
     /// Run the certbot once.

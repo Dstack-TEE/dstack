@@ -166,10 +166,28 @@ async fn renew(config: &PathBuf, once: bool, force: bool) -> Result<()> {
         .await
         .context("Failed to build bot")?;
     if once {
-        bot.renew(force).await?;
+        bot.renew_and_run_hook(force).await?;
     } else {
-        bot.run().await;
+        tokio::select! {
+            _ = bot.run() => unreachable!("certbot daemon returned"),
+            result = shutdown_signal() => result?,
+        }
     }
+    Ok(())
+}
+
+async fn shutdown_signal() -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result?,
+            _ = terminate.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    tokio::signal::ctrl_c().await?;
     Ok(())
 }
 
