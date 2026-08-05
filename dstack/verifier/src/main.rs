@@ -80,22 +80,14 @@ impl Config {
 }
 
 fn config_figment(config_path: &Path) -> Figment {
-    Figment::from(rocket::Config::default())
+    Figment::new()
         .merge(Toml::string(include_str!("../dstack-verifier.toml")))
         .merge(Toml::file(config_path))
         .merge(Env::prefixed("DSTACK_VERIFIER_").split("__"))
 }
 
-fn load_config(config_path: &Path) -> Result<Config> {
-    // Extract the verifier settings without Rocket's defaults. `Config` denies
-    // unknown fields, while Rocket's figment contains framework-only keys such
-    // as `cli_colors` that are still needed when launching the server.
-    let config: Config = Figment::new()
-        .merge(Toml::string(include_str!("../dstack-verifier.toml")))
-        .merge(Toml::file(config_path))
-        .merge(Env::prefixed("DSTACK_VERIFIER_").split("__"))
-        .extract()
-        .context("Failed to load configuration")?;
+fn load_config(figment: &Figment) -> Result<Config> {
+    let config: Config = figment.extract().context("Failed to load configuration")?;
     config.validate()?;
     Ok(config)
 }
@@ -322,8 +314,8 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let config_path = Path::new(&cli.config);
-    let figment = config_figment(config_path);
-    let config = load_config(config_path)?;
+    let config_figment = config_figment(config_path);
+    let config = load_config(&config_figment)?;
     // Check for oneshot modes
     if let Some(file_path) = cli.verify {
         if let Err(e) = run_oneshot(&file_path, &config).await {
@@ -347,7 +339,8 @@ async fn main() -> Result<()> {
         Arc::new(AttestationVerifier::load(&config.attestation)?),
     ));
 
-    rocket::custom(figment)
+    let rocket_figment = Figment::from(rocket::Config::default()).merge(config_figment);
+    rocket::custom(rocket_figment)
         .mount("/", rocket::routes![verify_cvm, health])
         .manage(verifier)
         .attach(AdHoc::on_liftoff("Startup", |_| {
@@ -382,7 +375,7 @@ image_download_timeout_secs = 7
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("verifier.toml");
         std::fs::write(&path, valid_config("")).unwrap();
-        let loaded = load_config(&path).unwrap();
+        let loaded = load_config(&config_figment(&path)).unwrap();
         assert_eq!(loaded.address, "127.0.0.1");
         assert_eq!(loaded.port, 18080);
         assert_eq!(loaded.image_download_timeout_secs, 7);
@@ -420,11 +413,11 @@ image_download_timeout_secs = 7
             ),
         ] {
             std::fs::write(&path, body).unwrap();
-            let error = load_config(&path).expect_err(name);
+            let error = load_config(&config_figment(&path)).expect_err(name);
             assert!(format!("{error:#}").contains(expected), "{name}: {error:#}");
         }
 
         std::fs::write(&path, valid_config("")).unwrap();
-        assert_eq!(load_config(&path).unwrap().port, 18080);
+        assert_eq!(load_config(&config_figment(&path)).unwrap().port, 18080);
     }
 }
