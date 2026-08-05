@@ -109,6 +109,7 @@ def main() -> int:
     steps: list[dict[str, Any]] = []
     artifacts: list[dict[str, Any]] = []
     created_id = ""
+    second_id = ""
     replacement: subprocess.Popen[bytes] | None = None
     injected: list[pathlib.Path] = []
     staged_workdir: pathlib.Path | None = None
@@ -164,15 +165,9 @@ def main() -> int:
             raise AssertionError("create-stopped helper failed")
         created_id = str(json.loads(created["stdout"])["id"])
         registry = pathlib.Path(test_input["created_vms_registry"])
-        registry.parent.mkdir(parents=True, exist_ok=True)
-        existing = (
-            [line for line in registry.read_text().splitlines() if line.strip()]
-            if registry.exists()
-            else []
-        )
-        if created_id not in existing:
-            with registry.open("a", encoding="utf-8") as output:
-                output.write(created_id + "\n")
+        registered = json.loads(registry.read_text())
+        if created_id not in registered:
+            raise AssertionError("create-stopped helper did not register the VM")
         before_restart = parse_vms(run(list(vmm["commands"]["list_vms"])))
         matching = [vm for vm in before_restart if vm.get("id") == created_id]
         if len(matching) != 1 or matching[0].get("status") != "stopped":
@@ -234,6 +229,33 @@ def main() -> int:
             raise AssertionError("reload duplicated or auto-started the stopped VM")
         if matching[0].get("cid") != original_cid:
             raise AssertionError("filesystem-only reload changed the VM CID")
+
+        # Rebuild the pool while the first VM is stopped but resident in
+        # memory, then allocate another VM. A reload that reserves supervisor
+        # processes only would free the stopped VM's CID and hand it out again.
+        in_memory_reload = rpc(vmm["rpc_url"], routes["ReloadVms"], {})
+        if in_memory_reload["status"] != 200:
+            raise AssertionError("ReloadVms failed for the in-memory stopped VM")
+        second = run(
+            [
+                *map(str, test_input["create_stopped_helper_argv"]),
+                "--name",
+                f"{prefix}-cid-reservation",
+            ],
+            timeout=60,
+        )
+        if second["returncode"] != 0:
+            raise AssertionError("second stopped VM creation failed after reload")
+        second_id = str(json.loads(second["stdout"])["id"])
+        after_second_create = parse_vms(run(list(vmm["commands"]["list_vms"])))
+        second_matching = [
+            vm for vm in after_second_create if vm.get("id") == second_id
+        ]
+        if len(second_matching) != 1 or second_matching[0].get("status") != "stopped":
+            raise AssertionError("second VM is not uniquely stopped")
+        second_cid = second_matching[0].get("cid")
+        if second_cid is None or second_cid == original_cid:
+            raise AssertionError("reload released the in-memory stopped VM CID")
         behavior = {
             "created_id": created_id,
             "original_cid": original_cid,
@@ -243,19 +265,23 @@ def main() -> int:
             "after_cid": matching[0].get("cid"),
             "after_count": len(matching),
             "filesystem_only_at_reload": True,
+            "in_memory_reload": in_memory_reload,
+            "second_id": second_id,
+            "second_cid": second_cid,
+            "stopped_vm_cid_remained_reserved": True,
             "injected_workdir_count": len(injected),
         }
         record(
             "step02-reload-recovery.json",
             step_ids[1],
             behavior,
-            "Filesystem-only stopped-VM reconstruction with stable CID and stale/partial workdir recovery across a case-owned VMM restart.",
+            "Filesystem-only reconstruction, stopped in-memory CID reservation, and stale/partial workdir recovery across a case-owned VMM restart.",
         )
         steps.append(
             {
                 "id": step_ids[1],
                 "status": "PASS",
-                "observed": "ReloadVms reconstructed one filesystem-only stopped VM with its CID reserved exactly once, without duplication or auto-start.",
+                "observed": "ReloadVms reconstructed one filesystem-only stopped VM, then kept its CID reserved across an in-memory reload and a second VM allocation.",
             }
         )
         print(f"STEP {step_ids[1]} END - PASS", flush=True)
@@ -276,6 +302,10 @@ def main() -> int:
             raise AssertionError(
                 "compatible unknown ReloadVms JSON field changed behavior"
             )
+        remove_second = rpc(vmm["rpc_url"], routes["RemoveVm"], {"id": second_id})
+        if remove_second["status"] != 200:
+            raise AssertionError("second run-scoped VM cleanup failed")
+        second_id = ""
         remove = rpc(vmm["rpc_url"], routes["RemoveVm"], {"id": created_id})
         if remove["status"] != 200:
             raise AssertionError("run-scoped VM cleanup failed")
@@ -283,6 +313,7 @@ def main() -> int:
         diagnostics = {
             "status_repeat_equal": True,
             "compatible_unknown_field": malformed,
+            "second_vm_cleanup": remove_second,
             "cleanup": remove,
         }
         record(
@@ -315,9 +346,11 @@ def main() -> int:
                 staged_workdir = None
             except Exception:
                 pass
-        if created_id:
+        for pending_id in (second_id, created_id):
+            if not pending_id:
+                continue
             try:
-                rpc(vmm["rpc_url"], routes["RemoveVm"], {"id": created_id})
+                rpc(vmm["rpc_url"], routes["RemoveVm"], {"id": pending_id})
             except Exception:
                 pass
         for path in injected:
