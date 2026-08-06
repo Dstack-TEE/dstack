@@ -220,7 +220,7 @@ async fn run_cert_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()
         .await
         .map_err(|e| anyhow::anyhow!("failed to verify RA-TLS certificate: {:#}", e))?;
 
-    let app_info = verified.attestation.decode_app_info(false).ok();
+    let app_info = verified.decode_app_info(false).ok();
     // Bind the reported os_image_hash to the attested boot measurement. For
     // every platform except TDX legacy this is a self-contained check (no image
     // download); relying parties should only trust `os_image_hash` when
@@ -233,8 +233,6 @@ async fn run_cert_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()
             "tee_variant": verified.attestation.quote.variant(),
             "report_data": hex::encode(verified.attestation.report_data),
             "public_key_der": hex::encode(&verified.public_key_der),
-            "app_id_extension": verified.app_id.as_ref().map(hex::encode),
-            "special_usage": verified.special_usage,
             "app_info": app_info.map(|info| serde_json::json!({
                 "app_id": hex::encode(info.app_id),
                 "compose_hash": hex::encode(info.compose_hash),
