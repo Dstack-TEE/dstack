@@ -464,15 +464,23 @@ impl App {
                 vm_state.state.runtime_networks = runtime_networks.clone();
             }
             for process in processes {
-                let result = self.supervisor.deploy(&process).await;
-                let result = match result {
-                    Ok(()) => self.confirm_process_started(&process.id).await,
-                    Err(error) => Err(error),
-                };
-                if let Err(error) = result {
-                    self.rollback_start_failure(id, &runtime_networks, &work_dir)
-                        .await;
-                    return Err(error)
+                if let Err(err) = self.supervisor.deploy(&process).await {
+                    if let Err(cleanup_error) = self
+                        .remove_filtered_networks(&vm_config.manifest.id, &runtime_networks)
+                        .await
+                    {
+                        warn!(id, %cleanup_error, "failed to roll back filtered networking");
+                    }
+                    if let Err(clear_err) = work_dir.clear_runtime_networks() {
+                        warn!(
+                            id,
+                            "failed to clear runtime networks after start failure: {clear_err}"
+                        );
+                    }
+                    if let Some(vm_state) = self.lock().get_mut(id) {
+                        vm_state.state.runtime_networks.clear();
+                    }
+                    return Err(err)
                         .with_context(|| format!("failed to start process {}", process.id));
                 }
             }
@@ -482,53 +490,6 @@ impl App {
             vm_state.state.devices = devices;
         }
         Ok(())
-    }
-
-    /// Supervisor deploy is asynchronous with respect to the launched command.
-    /// Keep the API call open briefly so an immediately failing QEMU launcher is
-    /// reported as a start failure instead of entering the auto-restart loop
-    /// with prepared host networking still attached.
-    async fn confirm_process_started(&self, id: &str) -> Result<()> {
-        for _ in 0..10 {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            let info = self
-                .supervisor
-                .info(id)
-                .await?
-                .with_context(|| format!("process {id} disappeared after deploy"))?;
-            if !info.state.status.is_running() {
-                bail!(
-                    "process {id} exited during startup: {:?}",
-                    info.state.status
-                );
-            }
-        }
-        Ok(())
-    }
-
-    async fn rollback_start_failure(
-        &self,
-        id: &str,
-        runtime_networks: &[Networking],
-        work_dir: &VmWorkDir,
-    ) {
-        // Prevent the periodic monitor from racing the rollback and preparing
-        // the same deterministic TAPs again.
-        if let Err(error) = self.set_started(id, false) {
-            warn!(id, %error, "failed to disable restart after start failure");
-        }
-        if let Err(error) = self.supervisor.remove(id).await {
-            warn!(id, %error, "failed to remove process after start failure");
-        }
-        if let Err(error) = self.remove_filtered_networks(id, runtime_networks).await {
-            warn!(id, %error, "failed to roll back filtered networking");
-        }
-        if let Err(error) = work_dir.clear_runtime_networks() {
-            warn!(id, %error, "failed to clear runtime networks after start failure");
-        }
-        if let Some(vm_state) = self.lock().get_mut(id) {
-            vm_state.state.runtime_networks.clear();
-        }
     }
 
     fn set_started(&self, id: &str, started: bool) -> Result<()> {
