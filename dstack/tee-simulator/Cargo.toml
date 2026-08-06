@@ -34,6 +34,7 @@ libloading = "0.8"
 pem.workspace = true
 aws-nitro-enclaves-nsm-api = "0.4"
 serde_cbor = "0.11"
+tpm2.workspace = true
 
 [dev-dependencies]
 dcap-qvl.workspace = true

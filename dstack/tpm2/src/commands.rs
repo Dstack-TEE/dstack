@@ -8,6 +8,7 @@
 
 use anyhow::{Context, Result};
 use std::collections::HashSet;
+use std::io::{Read, Write};
 use tracing::debug;
 
 use super::constants::*;
@@ -30,6 +31,13 @@ impl TpmContext {
         };
 
         Ok(Self { device })
+    }
+
+    /// Create a TPM context over an already connected byte stream.
+    pub fn from_stream(stream: impl Read + Write + 'static, name: impl Into<String>) -> Self {
+        Self {
+            device: TpmDevice::from_stream(stream, name),
+        }
     }
 
     /// Get the device path

@@ -8,13 +8,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use dstack_types::{
-    AwsOsImageMeasurementDocument, GcpOsImageMeasurementDocument, SevOsImageMeasurementDocument,
-    TdxOsImageMeasurementDocument, GCP_MEASUREMENT_FILENAME, SNP_MEASUREMENT_FILENAME,
-    TDX_MEASUREMENT_FILENAME,
+    AwsOsImageMeasurementDocument, AwsPcrReplay, GcpOsImageMeasurementDocument,
+    SevOsImageMeasurementDocument, TdxOsImageMeasurementDocument, GCP_MEASUREMENT_FILENAME,
+    SNP_MEASUREMENT_FILENAME, TDX_MEASUREMENT_FILENAME,
 };
 use serde::{Deserialize, Serialize};
 
 const AWS_MEASUREMENT_FILENAME: &str = "measurement.aws.cbor";
+const AWS_PCR_REPLAY_FILENAME: &str = "measurement.aws.replay.json";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ImageInfo {
@@ -86,6 +87,8 @@ pub struct Image {
     pub gcp_measurement: Option<GcpOsImageMeasurementDocument>,
     /// AWS NitroTPM no-image-download measurement material.
     pub aws_measurement: Option<AwsOsImageMeasurementDocument>,
+    /// AWS boot events consumed only by the development NitroTPM simulator.
+    pub aws_pcr_replay: Option<AwsPcrReplay>,
 }
 
 impl Image {
@@ -167,6 +170,17 @@ impl Image {
             AWS_MEASUREMENT_FILENAME,
             AwsOsImageMeasurementDocument::new,
         )?;
+        let aws_pcr_replay_path = base_path.join(AWS_PCR_REPLAY_FILENAME);
+        let aws_pcr_replay = if aws_pcr_replay_path.exists() {
+            Some(
+                serde_json::from_slice(&fs::read(&aws_pcr_replay_path).with_context(|| {
+                    format!("failed to read {}", aws_pcr_replay_path.display())
+                })?)
+                .with_context(|| format!("failed to parse {}", aws_pcr_replay_path.display()))?,
+            )
+        } else {
+            None
+        };
         if info.version.is_empty() {
             // Older images does not have version field. Fallback to the version of the image folder name
             info.version = guess_version(&base_path).unwrap_or_default();
@@ -184,6 +198,7 @@ impl Image {
             sev_measurement,
             gcp_measurement,
             aws_measurement,
+            aws_pcr_replay,
         }
         .ensure_exists()
     }

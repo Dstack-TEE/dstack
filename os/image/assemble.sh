@@ -484,14 +484,18 @@ if [[ "$UKI_CREATED" = "1" ]]; then
         echo "measurement.aws.cbor must be fixed at assemble time for a stable os_image_hash." >&2
         exit 1
     fi
-    echo "Generating AWS PCRs via host ${pcr_compute_bin}"
+    echo "Generating AWS PCRs and replay events via host ${pcr_compute_bin}"
     pcr_args=(--image "$uki_abs")
     # Secure Boot variable stores (optional; affects PCR7)
     [[ -n "${NITRO_TPM_PCR_PK:-}" ]] && pcr_args+=(--PK "$NITRO_TPM_PCR_PK")
     [[ -n "${NITRO_TPM_PCR_KEK:-}" ]] && pcr_args+=(--KEK "$NITRO_TPM_PCR_KEK")
     [[ -n "${NITRO_TPM_PCR_DB:-}" ]] && pcr_args+=(--db "$NITRO_TPM_PCR_DB")
-    pcr_json=$("$pcr_compute_bin" "${pcr_args[@]}") \
+    pcr_trace="${OUTPUT_DIR}/aws-pcr-compute.trace"
+    pcr_json_path="${OUTPUT_DIR}/aws-pcrs.json"
+    pcr_json=$(RUST_LOG=nitro_tpm_pcr_compute=debug \
+        "$pcr_compute_bin" "${pcr_args[@]}" 2>"$pcr_trace") \
         || { echo "Error: nitro-tpm-pcr-compute failed" >&2; exit 1; }
+    printf '%s\n' "$pcr_json" > "$pcr_json_path"
 
     pcr4=$(jq -r '.Measurements.PCR4 // empty' <<<"$pcr_json")
     pcr7=$(jq -r '.Measurements.PCR7 // empty' <<<"$pcr_json")
@@ -504,8 +508,11 @@ if [[ "$UKI_CREATED" = "1" ]]; then
     echo "Generating measurement.aws.cbor via ${DSTACK_MR_BIN}"
     "${DSTACK_MR_BIN}" aws-measurement-cbor "$pcr4" "$pcr7" "$pcr12" \
         > "${OUTPUT_DIR}/measurement.aws.cbor"
-    # Keep a machine-readable side-car for verifier-side PCR comparison.
-    printf '%s\n' "$pcr_json" > "${OUTPUT_DIR}/aws-pcrs.json"
+    python3 "$(dirname "$0")/aws-pcr-replay.py" \
+        --trace "$pcr_trace" \
+        --measurements "$pcr_json_path" \
+        --output "${OUTPUT_DIR}/measurement.aws.replay.json"
+    rm "$pcr_trace"
     HAVE_MEASUREMENT_AWS=1
 fi
 
@@ -518,7 +525,7 @@ if [ "$HAVE_MEASUREMENT_GCP" = "1" ]; then
     CHECKSUM_FILES+=(measurement.gcp.cbor)
 fi
 if [ "$HAVE_MEASUREMENT_AWS" = "1" ]; then
-    CHECKSUM_FILES+=(measurement.aws.cbor)
+    CHECKSUM_FILES+=(measurement.aws.cbor measurement.aws.replay.json)
 fi
 (
     cd "${OUTPUT_DIR}/"
@@ -544,7 +551,7 @@ if [ "$DSTACK_TAR_RELEASE" = "1" ]; then
         BARE_METAL_FILES+=(measurement.gcp.cbor)
     fi
     if [ "$HAVE_MEASUREMENT_AWS" = "1" ]; then
-        BARE_METAL_FILES+=(measurement.aws.cbor)
+        BARE_METAL_FILES+=(measurement.aws.cbor measurement.aws.replay.json)
     fi
     BARE_METAL_TAR_FILES=()
     for file in "${BARE_METAL_FILES[@]}"; do
@@ -557,7 +564,7 @@ if [ "$DSTACK_TAR_RELEASE" = "1" ]; then
     if [[ "$UKI_CREATED" = "1" ]]; then
         rm -rf "${IMAGE_TAR_UKI}"
         echo "Archiving UKI image to ${IMAGE_TAR_UKI}"
-        UKI_FILES=(disk.raw digest.txt sha256sum.txt measurement.gcp.cbor measurement.aws.cbor)
+        UKI_FILES=(disk.raw digest.txt sha256sum.txt measurement.gcp.cbor measurement.aws.cbor measurement.aws.replay.json)
         UKI_TAR_FILES=()
         for file in "${UKI_FILES[@]}"; do
             UKI_TAR_FILES+=("$TAR_DIR_NAME/$file")
