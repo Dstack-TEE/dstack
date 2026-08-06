@@ -8,6 +8,7 @@ use crate::{
     netd::{self, InterfaceIdentity, PrepareRequest, Request as NetdRequest},
 };
 
+use crate::process_manager::ProcessManager;
 use anyhow::{bail, Context, Result};
 use bon::Builder;
 use dstack_kms_rpc::kms_client::KmsClient;
@@ -32,7 +33,6 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
-use supervisor_client::SupervisorClient;
 use tracing::{debug, error, info, warn};
 
 pub use image::{Image, ImageInfo};
@@ -291,7 +291,7 @@ pub(crate) enum PullStatus {
 #[derive(Clone)]
 pub struct App {
     pub config: Arc<Config>,
-    pub supervisor: SupervisorClient,
+    pub supervisor: ProcessManager,
     state: Arc<Mutex<AppState>>,
     /// Pull status for registry images: tag → status.
     pub(crate) pull_status: Arc<Mutex<std::collections::HashMap<String, PullStatus>>>,
@@ -311,7 +311,7 @@ impl App {
         Ok(VmWorkDir::new(self.config.run_path.join(id)))
     }
 
-    pub fn new(config: Config, supervisor: SupervisorClient) -> Self {
+    pub fn new(config: Config, supervisor: ProcessManager) -> Self {
         let cid_start = config.cvm.cid_start;
         let cid_end = cid_start.saturating_add(config.cvm.cid_pool_size);
         let cid_pool = IdPool::new(cid_start, cid_end);

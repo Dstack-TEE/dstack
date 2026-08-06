@@ -178,6 +178,13 @@ tokens = []
 htpasswd_file = ""
 
 [supervisor]
+# Experimental: set to "systemd" to let dstack-vmm launch each VM as a
+# transient systemd service instead of using the standalone supervisor.
+backend = "supervisor"
+# Transient services are named <prefix>-<sha256(vm-id)>.service.
+systemd_unit_prefix = "dstack-vm"
+# Process metadata used to reconcile transient services after a VMM restart.
+systemd_state_dir = "./run/systemd-processes"
 exe = "./supervisor"
 sock = "./run/supervisor.sock"
 pid_file = "./run/supervisor.pid"

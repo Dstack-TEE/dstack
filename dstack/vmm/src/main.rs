@@ -32,6 +32,7 @@ mod main_service;
 mod netd;
 mod one_shot;
 mod openapi;
+mod process_manager;
 mod vm_launcher;
 
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -328,10 +329,15 @@ async fn main() -> Result<()> {
              token, or bind `address` to localhost / a Unix socket."
         );
     }
-    let supervisor = {
+    let supervisor = if config.supervisor.backend == config::ProcessManagerBackend::Systemd {
+        process_manager::ProcessManager::systemd(
+            config.supervisor.systemd_state_dir.clone(),
+            config.supervisor.systemd_unit_prefix.clone(),
+        )?
+    } else {
         let cfg = &config.supervisor;
         let abs_exe = Path::new(&cfg.exe).absolutize()?;
-        SupervisorClient::start_and_connect_uds(
+        let client = SupervisorClient::start_and_connect_uds(
             &abs_exe,
             &cfg.sock,
             &cfg.pid_file,
@@ -340,7 +346,8 @@ async fn main() -> Result<()> {
             cfg.auto_start,
         )
         .await
-        .context("Failed to connect to supervisor")?
+        .context("Failed to connect to supervisor")?;
+        process_manager::ProcessManager::supervisor(client)
     };
     let state = app::App::new(config, supervisor);
     state.reload_vms().await.context("Failed to reload VMs")?;
