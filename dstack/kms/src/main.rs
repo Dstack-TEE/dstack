@@ -63,7 +63,7 @@ async fn run_onboard_service(kms_config: KmsConfig, figment: Figment) -> Result<
     // Remove section tls
 
     let rocket = rocket::custom(figment)
-        .mount("/", rocket::routes![index, finish])
+        .mount("/", rocket::routes![index, finish, health])
         .mount(
             "/prpc",
             ra_rpc::prpc_routes!(OnboardState, OnboardHandler, trim: "Onboard."),
@@ -78,6 +78,11 @@ async fn run_onboard_service(kms_config: KmsConfig, figment: Figment) -> Result<
         .await
         .map_err(|err| anyhow!(err.to_string()))?;
     Ok(())
+}
+
+#[rocket::get("/health")]
+fn health() -> RawText<&'static str> {
+    RawText("OK")
 }
 
 #[rocket::get("/metrics")]
@@ -184,6 +189,7 @@ async fn main() -> Result<()> {
             "/prpc",
             ra_rpc::prpc_routes!(KmsState, RpcHandler, trim: "KMS."),
         )
+        .mount("/", rocket::routes![health])
         .manage(state.clone());
 
     if metrics_enabled {
