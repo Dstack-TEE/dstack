@@ -324,8 +324,9 @@ def main():
         wait_for(lambda: not vm_dir.exists(), "VM removal did not finish")
         evidence["matrix"]["host_reboot_equivalent"]["cleanup_after_recovery"] = True
 
-        # Launch failure after prepare must not leak a binding. A stopped VM is
-        # created first, then its qemu path is made to fail before StartVm.
+        # A QEMU process that exits after Supervisor accepted it is a runtime
+        # crash, not a deploy failure. Networking must remain available for the
+        # automatic restart loop and is cleaned only by Stop/Remove.
         failing = root / "qemu-fail"
         failing.write_text('#!/bin/sh\nif [ "$1" = "--version" ]; then echo "QEMU emulator version 9.2.0"; exit 0; fi\nexit 42\n')
         failing.chmod(0o755)
@@ -335,19 +336,36 @@ def main():
         processes.append(bad_vmm)
         bad_base = "http://127.0.0.1:18482"
         wait_for(lambda: run(["curl", "-sf", bad_base + "/"]).returncode == 0, "failure VMM did not listen")
-        before_failure = bindings()
-        try:
-            failed_vm = rpc(bad_base, "CreateVm", {"name": "must-fail", "image": image,
-                "compose_file": json.dumps(compose), "vcpu": 1, "memory": 1024,
-                "disk_size": 1, "stopped": False, "no_tee": True,
-                "networks": [{"mode": "bridge", "bridge_name": bridge}]})
-            cleanup_taps.append(tap_name("filter-b", failed_vm["id"], 0))
-        except Exception:
-            pass
-        deadline = time.monotonic() + 30
-        while bindings() != before_failure and time.monotonic() < deadline:
-            time.sleep(1)
-        evidence["matrix"]["qemu_failure_rollback"] = {"no_new_binding": bindings() == before_failure}
+        failed_vm = rpc(bad_base, "CreateVm", {"name": "must-fail", "image": image,
+            "compose_file": json.dumps(compose), "vcpu": 1, "memory": 1024,
+            "disk_size": 1, "stopped": False, "no_tee": True,
+            "networks": [{"mode": "bridge", "bridge_name": bridge}]})
+        failed_id = failed_vm["id"]
+        failed_tap = tap_name("filter-b", failed_id, 0)
+        cleanup_taps.append(failed_tap)
+        netd_restart_log = root / "netd-reboot.log"
+        wait_for(
+            lambda: netd_restart_log.read_text().count(
+                f"prepared filtered TAP tap={failed_tap}"
+            ) >= 2,
+            "automatic restart did not re-prepare filtered networking",
+            70,
+        )
+        binding_during_restart = failed_tap in bindings()
+        rpc(bad_base, "StopVm", {"id": failed_id})
+        rpc(bad_base, "RemoveVm", {"id": failed_id})
+        wait_for(
+            lambda: failed_tap not in bindings()
+            and not Path("/sys/class/net", failed_tap).exists(),
+            "Stop/Remove did not clean failed VM networking",
+            30,
+        )
+        evidence["matrix"]["qemu_failure_auto_restart"] = {
+            "tap": failed_tap,
+            "reprepared": True,
+            "binding_during_restart": binding_during_restart,
+            "cleanup_after_remove": True,
+        }
     finally:
         for process in reversed(processes):
             stop(process)
@@ -368,11 +386,12 @@ def main():
     passed = (
         all(name in required for name in ("concurrent_vmm", "spoof_filter", "netd_restart",
             "multi_nic_simulator", "vmm_restart", "libvirtd_restart",
-            "qemu_failure_rollback", "host_reboot_equivalent"))
+            "qemu_failure_auto_restart", "host_reboot_equivalent"))
         and all(spoof.get(key) for key in ("normal_seen", "ip_spoof_blocked", "mac_spoof_blocked", "arp_spoof_blocked"))
         and required["multi_nic_simulator"]["nic_count"] == 2
         and len(set(required["multi_nic_simulator"]["macs"])) == 2
-        and required["qemu_failure_rollback"]["no_new_binding"]
+        and all(required["qemu_failure_auto_restart"].get(key) for key in
+                ("reprepared", "binding_during_restart", "cleanup_after_remove"))
     )
     artifact = result_dir / "artifacts/vmm-network-lifecycle.json"
     artifact.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")

@@ -62,16 +62,17 @@ VMM instances against one netd and exercise filtered interfaces concurrently.
   source address, and ARP sender identity traffic is dropped.
 
 <a id="tc-vmm-compute-ne-001-step-03"></a>
-### Step 3: Verify failure rollback and service recovery
+### Step 3: Verify crash restart and service recovery
 
-Force QEMU launch failure after network preparation and verify rollback. Restart
+Force QEMU to exit after network preparation and verify automatic restart. Restart
 VMM, netd, and libvirtd independently, then perform a host-reboot-equivalent
 cycle by stopping all case-owned processes, removing ephemeral network state,
 and restarting from persisted VMM state.
 
 **Expected results:**
 
-- QEMU launch failure leaves no TAP or nwfilter binding.
+- A QEMU runtime crash retains or re-prepares its deterministic TAP and nwfilter
+  binding for automatic restart; Stop/Remove subsequently cleans both.
 - Existing guests survive VMM, netd, and libvirtd restart where applicable; new
   operations work after restart.
 - The reboot-equivalent cycle recreates both TAPs and bindings and removal cleans
