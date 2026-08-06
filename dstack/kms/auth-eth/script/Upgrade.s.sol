@@ -58,7 +58,7 @@ contract UpgradeKmsToV2 is Script {
         vm.startBroadcast();
 
         // Upgrade to a specific contract version
-        Upgrades.upgradeProxy(kmsProxy, "contracts/test-utils/DstackKmsV2.sol:DstackKmsV2", "");
+        Upgrades.upgradeProxy(kmsProxy, "DstackKmsV2.sol:DstackKmsV2", "");
 
         vm.stopBroadcast();
 
@@ -76,7 +76,7 @@ contract UpgradeAppToV2 is Script {
         vm.startBroadcast();
 
         // Upgrade to a specific contract version
-        Upgrades.upgradeProxy(appProxy, "contracts/test-utils/DstackAppV2.sol:DstackAppV2", "");
+        Upgrades.upgradeProxy(appProxy, "DstackAppV2.sol:DstackAppV2", "");
 
         vm.stopBroadcast();
 
