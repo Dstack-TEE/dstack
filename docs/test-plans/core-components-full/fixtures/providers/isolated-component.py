@@ -1116,7 +1116,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
             "Port mapping protocols and conflicts" in actions,
             volumes_dir,
             4096
-            if "Serial log separator rotation history and follow continuity" in actions
+            if "CVM log rotation retention and follow continuity" in actions
             else 0,
             supervisor_socket=supervisor_socket,
             auto_restart_policy=(
@@ -1307,11 +1307,8 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                     if auto_restart_case
                     else {}
                 ),
-                "serial_history_max_bytes": (
-                    4096
-                    if "Serial log separator rotation history and follow continuity"
-                    in actions
-                    else 0
+                "log_max_bytes": (
+                    4096 if "CVM log rotation retention and follow continuity" in actions else 0
                 ),
                 "vm_configuration": {
                     "name": test_name,
@@ -1415,15 +1412,16 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                 "cleanup_argv": cli_argv,
             }
 
-        if "Serial log separator rotation history and follow continuity" in actions:
-            serial_limit = 4096
+        if "CVM log rotation retention and follow continuity" in actions:
+            log_max_bytes = 4096
             values["vmm_serial_continuity"] = {
                 "destructive_actions_allowed": True,
-                "serial_limit": serial_limit,
+                "log_max_bytes": log_max_bytes,
+                "log_max_backups": 3,
                 "create_vm_argv": [sys.executable, str(create_helper)],
                 "boot_cycle_argv": cli_argv,
                 "serial_file_observer_argv": ["python3", "-c"],
-                "history_file_observer_argv": ["python3", "-c"],
+                "segment_file_observer_argv": ["python3", "-c"],
                 "tail_request_argv": ["curl", "--fail", "--silent"],
                 "follow_reader_argv": ["curl", "--fail", "--silent", "--no-buffer"],
                 "ansi_rows": ["preserve", "strip"],

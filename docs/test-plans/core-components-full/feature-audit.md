@@ -273,7 +273,7 @@ This audit is derived from the repository source inventory and is the traceabili
 <a id="req-vmm-ui-observa-003"></a><a id="risk-vmm-ui-observa-003"></a>| `req-vmm-ui-observa-003` | `risk-vmm-ui-observa-003` | [tc-vmm-ui-observa-003](02-vmm/06-ui-observability-host/tc-vmm-ui-observa-003/case.md#tc-vmm-ui-observa-003) — Host sealing-key provider integration | P0 |
 <a id="req-vmm-ui-observa-004"></a><a id="risk-vmm-ui-observa-004"></a>| `req-vmm-ui-observa-004` | `risk-vmm-ui-observa-004` | [tc-vmm-ui-observa-004](02-vmm/06-ui-observability-host/tc-vmm-ui-observa-004/case.md#tc-vmm-ui-observa-004) — Supervisor passthrough operations | P1 |
 <a id="req-vmm-ui-observa-005"></a><a id="risk-vmm-ui-observa-005"></a>| `req-vmm-ui-observa-005` | `risk-vmm-ui-observa-005` | [tc-vmm-ui-observa-005](02-vmm/06-ui-observability-host/tc-vmm-ui-observa-005/case.md#tc-vmm-ui-observa-005) — Web UI deployment workflows | P1 |
-<a id="req-vmm-serial-006"></a><a id="risk-vmm-serial-006"></a>| `req-vmm-serial-006` | `risk-vmm-serial-006` | [tc-vmm-serial-006](02-vmm/06-ui-observability-host/tc-vmm-serial-006/case.md#tc-vmm-serial-006) — Serial log separator rotation history and follow continuity | P0 |
+<a id="req-vmm-serial-006"></a><a id="risk-vmm-serial-006"></a>| `req-vmm-serial-006` | `risk-vmm-serial-006` | [tc-vmm-serial-006](02-vmm/06-ui-observability-host/tc-vmm-serial-006/case.md#tc-vmm-serial-006) — CVM log rotation retention and follow continuity | P0 |
 
 <a id="audit-section-vmm-guest-proxy-and-manifest"></a>
 ### Guest Proxy and Manifest Fidelity
