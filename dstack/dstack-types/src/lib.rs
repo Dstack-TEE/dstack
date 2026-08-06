@@ -1154,6 +1154,30 @@ pub struct TeeSimulatorConfig {
     /// JSON serialized VmConfig used to generate mock platform evidence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vm_config: Option<String>,
+    /// Ordered SHA-384 PCR extensions used to reproduce the AWS boot state in
+    /// the development NitroTPM simulator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_pcr_replay: Option<AwsPcrReplay>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct AwsPcrReplay {
+    pub version: u32,
+    pub events: Vec<AwsPcrReplayEvent>,
+    #[serde(with = "hex_bytes")]
+    pub pcr4: Vec<u8>,
+    #[serde(with = "hex_bytes")]
+    pub pcr7: Vec<u8>,
+    #[serde(with = "hex_bytes")]
+    pub pcr12: Vec<u8>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct AwsPcrReplayEvent {
+    pub pcr: u16,
+    pub event_type: String,
+    #[serde(with = "hex_bytes")]
+    pub digest: Vec<u8>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode)]

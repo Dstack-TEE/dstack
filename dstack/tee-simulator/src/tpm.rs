@@ -19,7 +19,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use aws_nitro_enclaves_nsm_api::api::{Request as NsmRequest, Response as NsmResponse};
-use dstack_types::TeeSimulatorConfig;
+use dstack_types::{AwsPcrReplay, TeeSimulatorConfig};
 use mock_attestation::{nsm::NsmGenerator, parse_seed, server::MockCollateralState};
 use tpm2::{add_command_capability, TpmAlgId, TpmCc, TpmContext};
 
@@ -340,6 +340,12 @@ pub fn run_nitro_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
     drop(swtpm_stream);
     fs_err::write(runtime_dir.join("swtpm.pid"), child.id().to_string())?;
 
+    let replay = config
+        .aws_pcr_replay
+        .as_ref()
+        .context("tee_simulator.aws_pcr_replay is required for NitroTPM")?;
+    replay_aws_boot_pcrs(&mut simulator, replay)?;
+
     let (control, mut proxy, tpm_num) = create_vtpm_proxy()?;
     let proxy_thread = thread::spawn(move || {
         let _control = control;
@@ -368,6 +374,45 @@ pub fn run_nitro_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
         .map_err(|_| anyhow::anyhow!("NitroTPM proxy thread panicked"))?;
     let _ = child.kill();
     result
+}
+
+fn replay_aws_boot_pcrs(backend: &mut UnixStream, replay: &AwsPcrReplay) -> Result<()> {
+    anyhow::ensure!(replay.version == 1, "unsupported AWS PCR replay version");
+    let mut tpm = TpmContext::from_stream(
+        backend
+            .try_clone()
+            .context("failed to clone NitroTPM stream for PCR replay")?,
+        "NitroTPM replay backend",
+    );
+    for event in &replay.events {
+        anyhow::ensure!(
+            matches!(event.pcr, 4 | 7 | 12),
+            "AWS PCR replay contains unsupported PCR {}",
+            event.pcr
+        );
+        anyhow::ensure!(
+            event.digest.len() == 48,
+            "AWS PCR replay event digest must be SHA-384"
+        );
+        tpm.pcr_extend(event.pcr.into(), &event.digest, TpmAlgId::Sha384)
+            .with_context(|| {
+                format!(
+                    "failed to replay {} into PCR{}",
+                    event.event_type, event.pcr
+                )
+            })?;
+    }
+    for (index, expected) in [(4u16, &replay.pcr4), (7, &replay.pcr7), (12, &replay.pcr12)] {
+        anyhow::ensure!(expected.len() == 48, "expected PCR{index} must be SHA-384");
+        let actual = tpm.pcr_read_single(index.into(), TpmAlgId::Sha384)?;
+        anyhow::ensure!(
+            actual == *expected,
+            "replayed PCR{index} mismatch: expected={}, actual={}",
+            hex::encode(expected),
+            hex::encode(actual)
+        );
+    }
+    Ok(())
 }
 
 fn create_vtpm_proxy() -> Result<(std::fs::File, std::fs::File, u32)> {
