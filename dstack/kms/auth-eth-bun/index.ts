@@ -113,10 +113,31 @@ const DSTACK_KMS_ABI = [
 class EthereumBackend {
   private client: ReturnType<typeof createPublicClient>;
   private kmsContractAddr: Address;
+  private expectedChainId?: number;
+  private finalityConfirmations: bigint;
 
-  constructor(client: ReturnType<typeof createPublicClient>, kmsContractAddr: string) {
+  constructor(
+    client: ReturnType<typeof createPublicClient>,
+    kmsContractAddr: string,
+    expectedChainId: number | undefined,
+    finalityConfirmations: bigint,
+  ) {
     this.client = client;
     this.kmsContractAddr = kmsContractAddr as Address;
+    this.expectedChainId = expectedChainId;
+    this.finalityConfirmations = finalityConfirmations;
+  }
+
+  private async finalizedBlockNumber(): Promise<bigint> {
+    const chainId = await this.client.getChainId();
+    if (this.expectedChainId !== undefined && chainId !== this.expectedChainId) {
+      throw new Error('authorization backend chain ID mismatch');
+    }
+    const head = await this.client.getBlockNumber();
+    if (head < this.finalityConfirmations) {
+      throw new Error('authorization backend has not reached configured finality');
+    }
+    return head - this.finalityConfirmations;
   }
 
   private decodeHex(hex: string, sz: number = 32): Hex {
@@ -142,20 +163,23 @@ class EthereumBackend {
       advisoryIds: bootInfo.advisoryIds || []
     };
 
+    const blockNumber = await this.finalizedBlockNumber();
     let response;
     if (isKms) {
       response = await this.client.readContract({
         address: this.kmsContractAddr,
         abi: DSTACK_KMS_ABI,
         functionName: 'isKmsAllowed',
-        args: [bootInfoStruct]
+        args: [bootInfoStruct],
+        blockNumber
       });
     } else {
       response = await this.client.readContract({
         address: this.kmsContractAddr,
         abi: DSTACK_KMS_ABI,
         functionName: 'isAppAllowed',
-        args: [bootInfoStruct]
+        args: [bootInfoStruct],
+        blockNumber
       });
     }
 
@@ -163,7 +187,8 @@ class EthereumBackend {
     const gatewayAppId = await this.client.readContract({
       address: this.kmsContractAddr,
       abi: DSTACK_KMS_ABI,
-      functionName: 'gatewayAppId'
+      functionName: 'gatewayAppId',
+      blockNumber
     });
 
     return {
@@ -203,10 +228,21 @@ const app = new Hono();
 // initialize ethereum backend
 const rpcUrl = process.env.ETH_RPC_URL || 'http://localhost:8545';
 const kmsContractAddr = process.env.KMS_CONTRACT_ADDR || '0x0000000000000000000000000000000000000000';
+const parseNonNegativeInteger = (name: string, value: string | undefined): number | undefined => {
+  if (value === undefined || value === '') return undefined;
+  if (!/^(?:0|[1-9][0-9]*)$/.test(value)) throw new Error(`${name} must be a non-negative integer`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new Error(`${name} exceeds the safe integer range`);
+  return parsed;
+};
+const expectedChainId = parseNonNegativeInteger('ETH_CHAIN_ID', process.env.ETH_CHAIN_ID);
+const finalityConfirmations = BigInt(
+  parseNonNegativeInteger('ETH_FINALITY_CONFIRMATIONS', process.env.ETH_FINALITY_CONFIRMATIONS) ?? 0,
+);
 const client = createPublicClient({
   transport: http(rpcUrl)
 });
-const ethereum = new EthereumBackend(client, kmsContractAddr);
+const ethereum = new EthereumBackend(client, kmsContractAddr, expectedChainId, finalityConfirmations);
 
 const publicRpcEndpoint = (value: string): string => {
   try {
