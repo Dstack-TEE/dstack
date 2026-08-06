@@ -1362,6 +1362,12 @@ pub(crate) fn sync_tee_simulator_config(
         .map(serde_json::from_value)
         .transpose()
         .context("invalid aws_pcr_replay in vm_config")?;
+    simulator_config.gcp_tpm_replay = vm_config_value
+        .get("gcp_tpm_replay")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .context("invalid gcp_tpm_replay in vm_config")?;
     simulator_config.vm_config = Some(sys_config.vm_config);
     fs::write(path, serde_json::to_vec(&simulator_config)?)
         .context("failed to write TEE simulator config")
@@ -1599,6 +1605,14 @@ fn make_vm_config(
         );
         config["aws_pcr_replay"] = serde_json::to_value(replay)?;
     }
+    if is_gcp_tdx {
+        config["gcp_tpm_replay"] = serde_json::to_value(
+            image
+                .gcp_tpm_replay
+                .as_ref()
+                .context("GCP TDX simulation requires measurement.gcp.eventlog.bin")?,
+        )?;
+    }
     if is_amd_sev_snp {
         if let Some(mr_config) = mr_config {
             MrConfigV3::from_document(&mr_config).context("Invalid mr_config document")?;
@@ -1806,7 +1820,7 @@ mod tests {
         };
         let mr_config = r#"{"version":3}"#;
         let vm_config = format!(
-            r#"{{"image":"dev","aws_pcr_replay":{{"version":1,"events":[],"pcr4":"{zero}","pcr7":"{zero}","pcr12":"{zero}"}}}}"#,
+            r#"{{"image":"dev","aws_pcr_replay":{{"version":1,"events":[],"pcr4":"{zero}","pcr7":"{zero}","pcr12":"{zero}"}},"gcp_tpm_replay":{{"event_log":"AQID"}}}}"#,
             zero = "00".repeat(48)
         );
         let sys_config = serde_json::json!({
@@ -1829,6 +1843,13 @@ mod tests {
         assert_eq!(
             written.aws_pcr_replay.as_ref().map(|replay| replay.version),
             Some(1)
+        );
+        assert_eq!(
+            written
+                .gcp_tpm_replay
+                .as_ref()
+                .map(|replay| replay.event_log.as_slice()),
+            Some([1, 2, 3].as_slice())
         );
 
         sync_tee_simulator_config(dir.path(), None, &sys_config)?;
@@ -2123,6 +2144,7 @@ mod tests {
             gcp_measurement: None,
             aws_measurement: None,
             aws_pcr_replay: None,
+            gcp_tpm_replay: None,
         }
     }
 

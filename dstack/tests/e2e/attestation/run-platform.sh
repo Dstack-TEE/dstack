@@ -17,6 +17,7 @@ mkdir -p /sys/kernel/config/tsm/report
 
 VM_CONFIG='{}'
 MR_CONFIG='{"version":3,"app_id":"","compose_hash":"","key_provider":"none"}'
+GCP_TPM_REPLAY=null
 if [[ "$TEE_PLATFORM" == dstack-tdx ]]; then
   VM_CONFIG=$(jq -c --arg variant "${TDX_ATTESTATION_VARIANT:?}" \
     '.vm_config | fromjson | .tdx_attestation_variant = $variant' \
@@ -33,6 +34,9 @@ elif [[ "$TEE_PLATFORM" == dstack-gcp-tdx ]]; then
     --arg checksum "$(base64 -w0 "$WORK/sha256sum.txt")" \
     --arg measurement "$(base64 -w0 "$WORK/measurement.gcp.cbor")" \
     '{os_image_hash:$os,gcp_measurement:{checksum_file:$checksum,measurement:$measurement}}')
+  GCP_TPM_REPLAY=$(jq -cn \
+    --arg event_log "$(base64 -w0 /usr/local/share/dstack/tpm_eventlog.bin)" \
+    '{event_log:$event_log}')
 elif [[ "$TEE_PLATFORM" == dstack-amd-sev-snp ]]; then
   jq -r .attestation /usr/local/share/dstack/sev-snp-attestation.json | xxd -r -p > "$WORK/snp-fixture.bin"
   dstack-util attest-json --input "$WORK/snp-fixture.bin" --output "$WORK/snp-fixture.json"
@@ -97,7 +101,8 @@ cat > "$SIM_CONFIG" <<JSON
   "mock_attestation_seed": "$SEED",
   "collateral_base_url": "http://127.0.0.1:18088",
   "mr_config": $(jq -Rn --arg value "$MR_CONFIG" '$value'),
-  "vm_config": $(jq -Rn --arg value "$VM_CONFIG" '$value')
+  "vm_config": $(jq -Rn --arg value "$VM_CONFIG" '$value'),
+  "gcp_tpm_replay": $GCP_TPM_REPLAY
 }
 JSON
 

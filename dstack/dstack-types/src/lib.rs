@@ -1158,6 +1158,15 @@ pub struct TeeSimulatorConfig {
     /// the development NitroTPM simulator.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aws_pcr_replay: Option<AwsPcrReplay>,
+    /// Image-specific GCP TPM event log replayed by the development simulator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gcp_tpm_replay: Option<GcpTpmReplay>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct GcpTpmReplay {
+    #[serde(with = "serde_human_bytes::base64")]
+    pub event_log: Vec<u8>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]

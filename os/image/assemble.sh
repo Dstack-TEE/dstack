@@ -500,6 +500,14 @@ if [[ "$UKI_CREATED" = "1" ]]; then
     fi
     echo "Generating measurement.gcp.cbor via ${DSTACK_MR_BIN}"
     "${DSTACK_MR_BIN}" gcp-measurement-cbor "${OUTPUT_DIR}/auth_hash.txt" > "${OUTPUT_DIR}/measurement.gcp.cbor"
+    if [[ "$IS_DEV" = "true" ]]; then
+        gcp_event_log_template="${GCP_TPM_EVENT_LOG_TEMPLATE:-$(dirname "$0")/../../dstack/cc-eventlog/samples/tpm_eventlog.bin}"
+        echo "Generating image-specific GCP TPM event log for the dev image"
+        python3 "$(dirname "$0")/gcp-tpm-eventlog.py" \
+            --template "$gcp_event_log_template" \
+            --uki-hash "${OUTPUT_DIR}/auth_hash.txt" \
+            --output "${OUTPUT_DIR}/measurement.gcp.eventlog.bin"
+    fi
     HAVE_MEASUREMENT_GCP=1
 fi
 
@@ -610,6 +618,9 @@ if [ "$DSTACK_TAR_RELEASE" = "1" ]; then
     fi
     if [ "$HAVE_MEASUREMENT_GCP" = "1" ]; then
         BARE_METAL_FILES+=(measurement.gcp.cbor)
+        if [[ "$IS_DEV" = "true" ]]; then
+            BARE_METAL_FILES+=(measurement.gcp.eventlog.bin)
+        fi
     fi
     if [ "$HAVE_MEASUREMENT_AWS" = "1" ]; then
         BARE_METAL_FILES+=(measurement.aws.cbor measurement.aws.replay.json)
@@ -626,6 +637,9 @@ if [ "$DSTACK_TAR_RELEASE" = "1" ]; then
         rm -rf "${IMAGE_TAR_UKI}"
         echo "Archiving UKI image to ${IMAGE_TAR_UKI}"
         UKI_FILES=(disk.raw digest.txt sha256sum.txt measurement.gcp.cbor measurement.aws.cbor measurement.aws.replay.json)
+        if [[ "$IS_DEV" = "true" ]]; then
+            UKI_FILES+=(measurement.gcp.eventlog.bin)
+        fi
         UKI_TAR_FILES=()
         for file in "${UKI_FILES[@]}"; do
             UKI_TAR_FILES+=("$TAR_DIR_NAME/$file")
