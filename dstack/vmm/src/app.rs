@@ -1355,6 +1355,13 @@ pub(crate) fn sync_tee_simulator_config(
     let sys_config: dstack_types::SysConfig = serde_json::from_str(sys_config)?;
     let mut simulator_config = simulator_config.clone();
     simulator_config.mr_config = sys_config.mr_config;
+    let vm_config_value: serde_json::Value = serde_json::from_str(&sys_config.vm_config)?;
+    simulator_config.aws_pcr_replay = vm_config_value
+        .get("aws_pcr_replay")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .context("invalid aws_pcr_replay in vm_config")?;
     simulator_config.vm_config = Some(sys_config.vm_config);
     fs::write(path, serde_json::to_vec(&simulator_config)?)
         .context("failed to write TEE simulator config")
@@ -1569,6 +1576,29 @@ fn make_vm_config(
     })?;
     // For backward compatibility
     config["spec_version"] = serde_json::Value::from(1);
+    if is_aws_nitro_tpm {
+        let replay = image
+            .aws_pcr_replay
+            .as_ref()
+            .context("AWS NitroTPM simulation requires measurement.aws.replay.json")?;
+        let replay_measurement = dstack_types::AwsOsImageMeasurement::from_boot_pcrs(
+            &replay.pcr4,
+            &replay.pcr7,
+            &replay.pcr12,
+        )
+        .map_err(anyhow::Error::msg)?;
+        let image_measurement = image
+            .aws_measurement
+            .as_ref()
+            .context("AWS NitroTPM image is missing measurement.aws.cbor")?
+            .decode_measurement()
+            .map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(
+            replay_measurement == image_measurement,
+            "measurement.aws.replay.json does not match measurement.aws.cbor"
+        );
+        config["aws_pcr_replay"] = serde_json::to_value(replay)?;
+    }
     if is_amd_sev_snp {
         if let Some(mr_config) = mr_config {
             MrConfigV3::from_document(&mr_config).context("Invalid mr_config document")?;
@@ -1775,7 +1805,10 @@ mod tests {
             ..Default::default()
         };
         let mr_config = r#"{"version":3}"#;
-        let vm_config = r#"{"image":"dev"}"#;
+        let vm_config = format!(
+            r#"{{"image":"dev","aws_pcr_replay":{{"version":1,"events":[],"pcr4":"{zero}","pcr7":"{zero}","pcr12":"{zero}"}}}}"#,
+            zero = "00".repeat(48)
+        );
         let sys_config = serde_json::json!({
             "kms_urls": [],
             "gateway_urls": [],
@@ -1792,7 +1825,11 @@ mod tests {
         assert_eq!(written.mock_attestation_seed, config.mock_attestation_seed);
         assert_eq!(written.collateral_base_url, config.collateral_base_url);
         assert_eq!(written.mr_config.as_deref(), Some(mr_config));
-        assert_eq!(written.vm_config.as_deref(), Some(vm_config));
+        assert_eq!(written.vm_config.as_deref(), Some(vm_config.as_str()));
+        assert_eq!(
+            written.aws_pcr_replay.as_ref().map(|replay| replay.version),
+            Some(1)
+        );
 
         sync_tee_simulator_config(dir.path(), None, &sys_config)?;
         assert!(!dir.path().join(TEE_SIMULATOR_CONFIG).exists());
@@ -2085,6 +2122,7 @@ mod tests {
             sev_measurement: None,
             gcp_measurement: None,
             aws_measurement: None,
+            aws_pcr_replay: None,
         }
     }
 
