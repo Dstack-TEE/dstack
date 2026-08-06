@@ -1251,7 +1251,11 @@ impl App {
         }
         for id in restart_vms {
             // A manual stop may have landed after the restart decision was made.
-            if !self.work_dir(&id).started().unwrap_or(false) {
+            let Ok(workdir) = self.work_dir(&id) else {
+                warn!(id, "skipping restart: invalid VM id");
+                continue;
+            };
+            if !workdir.started().unwrap_or(false) {
                 continue;
             }
             if let Err(error) = self.start_vm_with_restart_policy(&id, false).await {
