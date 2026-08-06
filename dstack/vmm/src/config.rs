@@ -197,11 +197,16 @@ const fn default_auto_restart_reset_window() -> u64 {
 
 impl AutoRestartConfig {
     pub fn validate(&self) -> Result<()> {
-        if self.enabled && self.interval == 0 {
-            bail!("cvm.auto_restart.interval must be greater than zero when enabled");
-        }
-        if self.initial_backoff > self.max_backoff {
-            bail!("cvm.auto_restart.initial_backoff must not exceed max_backoff");
+        if self.enabled {
+            if self.interval == 0 {
+                bail!("cvm.auto_restart.interval must be greater than zero when enabled");
+            }
+            if self.initial_backoff == 0 {
+                bail!("cvm.auto_restart.initial_backoff must be greater than zero when enabled");
+            }
+            if self.initial_backoff > self.max_backoff {
+                bail!("cvm.auto_restart.initial_backoff must not exceed max_backoff");
+            }
         }
         Ok(())
     }
@@ -868,6 +873,12 @@ mod tests {
             .to_string()
             .contains("interval"));
         config.interval = 1;
+        config.initial_backoff = 0;
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("initial_backoff"));
         config.initial_backoff = 6;
         assert!(config
             .validate()
@@ -875,6 +886,11 @@ mod tests {
             .to_string()
             .contains("max_backoff"));
         config.max_backoff = 6;
+        assert!(config.validate().is_ok());
+
+        config.enabled = false;
+        config.interval = 0;
+        config.initial_backoff = 7;
         assert!(config.validate().is_ok());
     }
 

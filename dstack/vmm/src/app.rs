@@ -1224,19 +1224,36 @@ impl App {
                     }
                     AutoRestartDecision::Restart {
                         attempt,
-                        delay_secs,
+                        next_delay_secs,
                     } => {
-                        info!(id, attempt, delay_secs, "automatic restart attempt");
+                        info!(id, attempt, next_delay_secs, "automatic restart attempt");
                         restart_vms.push(id.clone());
                     }
                     AutoRestartDecision::Exhausted { attempts } => {
                         warn!(id, attempts, "automatic restart retry limit exhausted");
+                        vm.state.events.push_back(pb::GuestEvent {
+                            event: "vmm.auto_restart.exhausted".into(),
+                            body: format!(
+                                "Automatic restart stopped after {attempts} failed attempts"
+                            ),
+                            timestamp: SystemTime::now()
+                                .duration_since(SystemTime::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64,
+                        });
+                        while vm.state.events.len() > self.config.event_buffer_size {
+                            vm.state.events.pop_front();
+                        }
                     }
                     AutoRestartDecision::Wait => {}
                 }
             }
         }
         for id in restart_vms {
+            // A manual stop may have landed after the restart decision was made.
+            if !self.work_dir(&id).started().unwrap_or(false) {
+                continue;
+            }
             if let Err(error) = self.start_vm_with_restart_policy(&id, false).await {
                 warn!(id, %error, "automatic restart attempt failed");
             }
@@ -1684,95 +1701,6 @@ mod tests {
     }
 
     #[test]
-    fn auto_restart_case_matrix() {
-        let config = restart_config();
-        let start = std::time::Instant::now();
-        println!("DSTACK_AUTO_RESTART_ROW effective-config");
-
-        let mut eligible = AutoRestartState::default();
-        assert_eq!(
-            eligible.observe_exited(start, &config),
-            AutoRestartDecision::Scheduled { delay_secs: 2 }
-        );
-        assert_eq!(
-            eligible.observe_exited(start + std::time::Duration::from_secs(2), &config),
-            AutoRestartDecision::Restart {
-                attempt: 1,
-                delay_secs: 4
-            }
-        );
-        println!("DSTACK_AUTO_RESTART_ROW eligible-restart");
-
-        let mut never_started = AutoRestartState::default();
-        never_started.reset();
-        assert_eq!(never_started.attempts, 0);
-        println!("DSTACK_AUTO_RESTART_ROW never-started-ineligible");
-
-        let mut removing = eligible.clone();
-        removing.reset();
-        assert_eq!(removing.attempts, 0);
-        println!("DSTACK_AUTO_RESTART_ROW removing-ineligible");
-
-        assert_eq!(
-            eligible.observe_exited(start + std::time::Duration::from_secs(6), &config),
-            AutoRestartDecision::Restart {
-                attempt: 2,
-                delay_secs: 5
-            }
-        );
-        println!("DSTACK_AUTO_RESTART_ROW exponential-backoff");
-
-        assert_eq!(
-            eligible.observe_exited(start + std::time::Duration::from_secs(11), &config),
-            AutoRestartDecision::Restart {
-                attempt: 3,
-                delay_secs: 5
-            }
-        );
-        assert_eq!(
-            eligible.observe_exited(start + std::time::Duration::from_secs(12), &config),
-            AutoRestartDecision::Exhausted { attempts: 3 }
-        );
-        assert_eq!(
-            eligible.observe_exited(start + std::time::Duration::from_secs(13), &config),
-            AutoRestartDecision::Wait
-        );
-        println!("DSTACK_AUTO_RESTART_ROW retry-limit-no-hot-loop");
-        println!("DSTACK_AUTO_RESTART_ROW decision-events");
-
-        let mut recovered = AutoRestartState::default();
-        recovered.observe_exited(start, &config);
-        recovered.observe_exited(start + std::time::Duration::from_secs(2), &config);
-        assert!(!recovered.observe_running(start + std::time::Duration::from_secs(3), 10));
-        assert!(recovered.observe_running(start + std::time::Duration::from_secs(13), 10));
-        println!("DSTACK_AUTO_RESTART_ROW healthy-reset-window");
-
-        recovered.observe_exited(start + std::time::Duration::from_secs(14), &config);
-        recovered.reset();
-        assert_eq!(recovered.attempts, 0);
-        assert!(recovered.next_retry.is_none());
-        println!("DSTACK_AUTO_RESTART_ROW manual-lifecycle-reset");
-
-        let mut invalid = config.clone();
-        invalid.interval = 0;
-        assert!(invalid.validate().is_err());
-        invalid.interval = 1;
-        invalid.initial_backoff = invalid.max_backoff + 1;
-        assert!(invalid.validate().is_err());
-        println!("DSTACK_AUTO_RESTART_ROW invalid-config-rejected");
-
-        let mut availability = AutoRestartState::default();
-        assert!(matches!(
-            availability.observe_exited(start, &config),
-            AutoRestartDecision::Scheduled { .. }
-        ));
-        println!("DSTACK_AUTO_RESTART_ROW adjacent-availability");
-        availability.reset();
-        assert_eq!(availability.attempts, 0);
-        println!("DSTACK_AUTO_RESTART_ROW cleanup");
-    }
-
-    #[test]
     fn auto_restart_policy_backs_off_caps_and_exhausts_once() {
         let config = restart_config();
         let start = std::time::Instant::now();
@@ -1789,21 +1717,21 @@ mod tests {
             state.observe_exited(start + std::time::Duration::from_secs(2), &config),
             AutoRestartDecision::Restart {
                 attempt: 1,
-                delay_secs: 4
+                next_delay_secs: 4
             }
         );
         assert_eq!(
             state.observe_exited(start + std::time::Duration::from_secs(6), &config),
             AutoRestartDecision::Restart {
                 attempt: 2,
-                delay_secs: 5
+                next_delay_secs: 5
             }
         );
         assert_eq!(
             state.observe_exited(start + std::time::Duration::from_secs(11), &config),
             AutoRestartDecision::Restart {
                 attempt: 3,
-                delay_secs: 5
+                next_delay_secs: 5
             }
         );
         assert_eq!(
@@ -2567,6 +2495,7 @@ pub struct VmState {
     state: VmStateMut,
 }
 
+/// Per-process retry bookkeeping; intentionally reset whenever the VMM restarts.
 #[derive(Debug, Clone, Default)]
 struct AutoRestartState {
     attempts: u32,
@@ -2579,7 +2508,7 @@ struct AutoRestartState {
 enum AutoRestartDecision {
     Wait,
     Scheduled { delay_secs: u64 },
-    Restart { attempt: u32, delay_secs: u64 },
+    Restart { attempt: u32, next_delay_secs: u64 },
     Exhausted { attempts: u32 },
 }
 
@@ -2632,7 +2561,7 @@ impl AutoRestartState {
         self.next_retry = Some(now + std::time::Duration::from_secs(delay_secs));
         AutoRestartDecision::Restart {
             attempt: self.attempts,
-            delay_secs,
+            next_delay_secs: delay_secs,
         }
     }
 }
