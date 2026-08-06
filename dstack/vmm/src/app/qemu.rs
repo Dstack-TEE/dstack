@@ -457,8 +457,13 @@ impl QemuCommandBuilder<'_> {
         });
         command.arg("-nographic");
         command.arg("-nodefaults");
+        // logappend=on stops QEMU from truncating the log when it opens the
+        // chardev, which is what makes in-place rotation safe: the fd is
+        // O_APPEND, so writes resume at the end of file after we truncate.
+        // Without it QEMU keeps writing at its old offset and punches a sparse
+        // hole instead, leaving the file as large as it was.
         command.arg("-chardev").arg(format!(
-            "pty,id=com0,path={},logfile={}",
+            "pty,id=com0,path={},logfile={},logappend=on",
             workdir.serial_pty().display(),
             workdir.serial_file().display()
         ));
@@ -776,6 +781,11 @@ impl QemuCommandBuilder<'_> {
         let note = serde_json::to_string(&ProcessAnnotation {
             kind: "cvm".to_string(),
             live_for: None,
+            // Recorded on the process rather than tracked in VMM memory, so it
+            // survives a VMM restart and describes the QEMU that is actually
+            // running. The vm-launcher wrapper copies this note verbatim, so
+            // TPM-backed VMs carry it too.
+            serial_logappend: true,
         })?;
         Ok(ProcessConfig {
             id: self.vm.manifest.id.clone(),

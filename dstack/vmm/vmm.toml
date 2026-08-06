@@ -124,6 +124,19 @@ initial_backoff = 5
 max_backoff = 300
 reset_window = 300
 
+# Retention for the logs a CVM writes into its work directory. Currently
+# governs serial.log: QEMU appends to it for the whole life of a boot, so
+# without a cap a chatty guest can fill the host disk.
+[cvm.log]
+# Past this size the log is rotated to serial.log.1 and truncated in place.
+# 0 disables rotation. Sizes take a single-letter suffix: "4M", "512K", "1G".
+max_bytes = "4M"
+# Rotated segments to keep; the oldest is discarded. A VM start rotates too,
+# so this is also how many previous boots stay on disk.
+max_backups = 3
+# How often a live log is checked against max_bytes.
+check_interval_secs = 5
+
 [cvm.gpu]
 enabled = false
 # The product IDs of the GPUs to discover

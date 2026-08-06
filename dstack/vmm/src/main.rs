@@ -26,6 +26,7 @@ mod config;
 mod discovery;
 mod guest_api_service;
 mod host_api_service;
+mod logrotate;
 mod main_routes;
 mod main_service;
 mod one_shot;
@@ -161,6 +162,22 @@ async fn auto_restart_task(app: App) {
     }
 }
 
+async fn log_rotation_task(app: App) {
+    if app.config.cvm.log.max_bytes == 0 {
+        info!("Log rotation is disabled");
+        return;
+    }
+    let mut interval = tokio::time::interval(Duration::from_secs(
+        app.config.cvm.log.check_interval_secs.max(1),
+    ));
+    loop {
+        interval.tick().await;
+        if let Err(err) = app.rotate_oversized_logs().await {
+            error!("Failed to rotate logs: {err:?}");
+        }
+    }
+}
+
 #[rocket::main]
 async fn main() -> Result<()> {
     {
@@ -288,6 +305,7 @@ async fn main() -> Result<()> {
     let state = app::App::new(config, supervisor);
     state.reload_vms().await.context("Failed to reload VMs")?;
     tokio::spawn(auto_restart_task(state.clone()));
+    tokio::spawn(log_rotation_task(state.clone()));
 
     tokio::select! {
         result = run_external_api(state.clone(), figment.clone(), api_auth) => {

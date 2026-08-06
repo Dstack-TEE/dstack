@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::config::{Config, Networking, ProcessAnnotation, Protocol};
+use crate::logrotate;
 
 use anyhow::{bail, Context, Result};
 use bon::Builder;
@@ -431,11 +432,16 @@ impl App {
                     fs::remove_file(path)?;
                 }
             }
-            // Append current serial.log to serial.history.log before QEMU truncates it.
-            rotate_serial_log(&work_dir, self.config.cvm.serial_history_max_bytes);
-            // Add boot separator to stdout/stderr (they are opened in append mode).
-            append_boot_separator(&work_dir.stdout_file());
-            append_boot_separator(&work_dir.stderr_file());
+            // Archive the previous boot into segments, which also clears the
+            // live logs for this boot. QEMU runs with logappend=on and no
+            // longer truncates serial.log on open, so a boot is simply another
+            // rotation trigger and boot boundaries land on segment boundaries.
+            for path in rotatable_logs(&work_dir, true) {
+                rotate_log(&path, self.config.cvm.log.max_backups);
+                // The logs are opened in append mode, so this marks the start
+                // of the new boot rather than replacing anything.
+                append_boot_separator(&path);
+            }
 
             let devices = self.try_allocate_gpus(&vm_config.manifest)?;
             let processes = vm_config.config_qemu(&work_dir, &self.config.cvm, &devices)?;
@@ -1171,6 +1177,41 @@ impl App {
         Ok(gpus)
     }
 
+    /// Rotate any live log that has grown past the configured cap.
+    pub(crate) async fn rotate_oversized_logs(&self) -> Result<()> {
+        let max_bytes = self.config.cvm.log.max_bytes;
+        if max_bytes == 0 {
+            return Ok(());
+        }
+        let max_backups = self.config.cvm.log.max_backups;
+        let running = self
+            .supervisor
+            .list()
+            .await
+            .context("failed to list VMs")?
+            .into_iter()
+            .filter(|process| process.state.status.is_running());
+        for process in running {
+            let Ok(work_dir) = self.work_dir(&process.config.id) else {
+                continue;
+            };
+            let serial = serial_log_is_rotatable(&process.config.note);
+            for path in rotatable_logs(&work_dir, serial) {
+                if let Some(rotated) = logrotate::rotate_if_oversized(&path, max_bytes, max_backups)
+                {
+                    logrotate::append_rotation_note(&path, &rotated);
+                    info!(
+                        id = process.config.id,
+                        log = %path.display(),
+                        bytes = rotated.bytes,
+                        "rotated oversized log"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) async fn try_restart_exited_vms(&self) -> Result<()> {
         let running_vms = self
             .supervisor
@@ -1266,6 +1307,12 @@ impl App {
     }
 }
 
+/// Leading bytes of the separator written by [`append_boot_separator`].
+///
+/// Written to stdout, stderr and the serial log at each boot so a log read in
+/// isolation still shows where a boot began.
+const BOOT_SEPARATOR_PREFIX: &str = "\n===== boot @ ";
+
 /// Append a boot separator line with timestamp to an append-mode log file.
 fn append_boot_separator(path: &std::path::Path) {
     use std::io::Write;
@@ -1276,52 +1323,43 @@ fn append_boot_separator(path: &std::path::Path) {
         return;
     };
     let timestamp = humantime::format_rfc3339_seconds(std::time::SystemTime::now());
-    let _ = writeln!(file, "\n===== boot @ {timestamp} =====\n");
+    let _ = writeln!(file, "{BOOT_SEPARATOR_PREFIX}{timestamp} =====\n");
 }
 
-/// Append current serial.log into serial.history.log with a boot separator,
-/// then truncate history if it exceeds `max_bytes`.
-fn rotate_serial_log(work_dir: &VmWorkDir, max_bytes: u64) {
-    use std::io::Write;
+/// Logs a CVM writes into its work directory, subject to retention.
+///
+/// stdout and stderr are written by the supervisor, which always opens them
+/// with `append(true)` and reopens them when they change, so they satisfy
+/// [`crate::logrotate`]'s contract no matter which VMM launched the VM.
+/// serial.log is written by QEMU, whose fd only appends when *we* passed
+/// `logappend=on`, so it is included only when `serial` says so.
+fn rotatable_logs(work_dir: &VmWorkDir, serial: bool) -> Vec<PathBuf> {
+    let mut paths = vec![work_dir.stdout_file(), work_dir.stderr_file()];
+    if serial {
+        paths.push(work_dir.serial_file());
+    }
+    paths
+}
 
-    let serial = work_dir.serial_file();
-    if !serial.exists() {
-        return;
+/// Rotate a log and record where its output went.
+///
+/// The rotation itself is generic (see [`crate::logrotate`]); the note is here
+/// because the VMM log API serves only the live file.
+fn rotate_log(path: &Path, max_backups: usize) {
+    if let Some(rotated) = logrotate::rotate(path, max_backups) {
+        logrotate::append_rotation_note(path, &rotated);
     }
-    let Ok(content) = fs::read(&serial) else {
-        return;
-    };
-    if content.is_empty() {
-        return;
-    }
-    let history = work_dir.serial_history_file();
-    let Ok(mut file) = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&history)
-    else {
-        return;
-    };
-    let timestamp = humantime::format_rfc3339_seconds(std::time::SystemTime::now());
-    let _ = writeln!(file, "\n===== boot @ {timestamp} =====\n");
-    let _ = file.write_all(&content);
-    drop(file);
+}
 
-    // Truncate from the front if history exceeds max_bytes.
-    if let Ok(meta) = fs::metadata(&history) {
-        if meta.len() > max_bytes {
-            if let Ok(data) = fs::read(&history) {
-                let skip = data.len() - max_bytes as usize;
-                // Find the next newline after skip point to avoid cutting mid-line.
-                let start = data[skip..]
-                    .iter()
-                    .position(|&b| b == b'\n')
-                    .map(|p| skip + p + 1)
-                    .unwrap_or(skip);
-                let _ = fs::write(&history, &data[start..]);
-            }
-        }
-    }
+/// Whether a supervised process's serial log may be rotated in place.
+///
+/// Rotation truncates the log while QEMU holds it open, which only works when
+/// QEMU opened it with `logappend=on`. Anything we cannot positively confirm —
+/// an annotation from an older VMM, an unparseable note — answers `false`.
+fn serial_log_is_rotatable(note: &str) -> bool {
+    serde_json::from_str::<ProcessAnnotation>(note)
+        .unwrap_or_default()
+        .serial_logappend
 }
 
 pub(crate) fn simulator_config_for_manifest(
@@ -1702,6 +1740,84 @@ mod tests {
             max_backoff: 5,
             reset_window: 10,
         }
+    }
+
+    #[test]
+    fn serial_log_is_rotatable_only_when_the_annotation_confirms_it() {
+        // A VM launched by the current binary.
+        let current = serde_json::to_string(&ProcessAnnotation {
+            kind: "cvm".into(),
+            live_for: None,
+            serial_logappend: true,
+        })
+        .unwrap();
+        assert!(serial_log_is_rotatable(&current));
+
+        // A VM inherited from a VMM that predates the option: its QEMU holds
+        // the log without O_APPEND, so truncating it would punch a sparse hole
+        // and the file would spring straight back over the cap.
+        assert!(!serial_log_is_rotatable(r#"{"kind":"cvm"}"#));
+        assert!(!serial_log_is_rotatable(
+            r#"{"kind":"cvm","live_for":null}"#
+        ));
+
+        // Anything we cannot read must answer conservatively.
+        assert!(!serial_log_is_rotatable(""));
+        assert!(!serial_log_is_rotatable("not json"));
+        assert!(!serial_log_is_rotatable(r#"{"serial_logappend":"yes"}"#));
+    }
+
+    #[test]
+    fn cvm_annotation_marks_the_serial_log_rotatable() {
+        // The flag must survive the round trip the supervisor performs, and
+        // must not disturb how existing consumers classify the process.
+        let note = serde_json::to_string(&ProcessAnnotation {
+            kind: "cvm".into(),
+            live_for: None,
+            serial_logappend: true,
+        })
+        .unwrap();
+        let parsed: ProcessAnnotation = serde_json::from_str(&note).unwrap();
+        assert!(parsed.serial_logappend);
+        assert!(parsed.is_cvm());
+    }
+
+    #[test]
+    fn rotatable_logs_always_include_supervisor_written_logs() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let workdir = VmWorkDir::new(temp.path());
+
+        // A VM inherited from an older VMM: QEMU holds serial.log without
+        // O_APPEND, so rotating it would punch a sparse hole. stdout and stderr
+        // are the supervisor's, always opened with append(true), so they stay
+        // eligible and keep their cap across a VMM upgrade.
+        let inherited = rotatable_logs(&workdir, false);
+        assert_eq!(
+            inherited,
+            vec![workdir.stdout_file(), workdir.stderr_file()]
+        );
+
+        let launched = rotatable_logs(&workdir, true);
+        assert_eq!(
+            launched,
+            vec![
+                workdir.stdout_file(),
+                workdir.stderr_file(),
+                workdir.serial_file()
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn log_retention_defaults() -> Result<()> {
+        // These come from the shipped vmm.toml, not from serde defaults, so
+        // this also pins that the values there parse into what they read as.
+        let config = test_tdx_config()?;
+        assert_eq!(config.cvm.log.max_bytes, 4 * 1024 * 1024);
+        assert_eq!(config.cvm.log.max_backups, 3);
+        assert_eq!(config.cvm.log.check_interval_secs, 5);
+        Ok(())
     }
 
     #[test]
