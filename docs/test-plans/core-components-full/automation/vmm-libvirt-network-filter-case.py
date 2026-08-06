@@ -196,6 +196,7 @@ def main():
     sock = root / "netd.sock"
     processes = []
     owned = []
+    cleanup_taps = []
     evidence = {"matrix": {}, "candidate_commit": runtime["candidate_commit"]}
     template = (repo / "dstack/vmm/vmm.toml").read_text()
     for directory in (root / "a", root / "b"):
@@ -270,6 +271,7 @@ def main():
                 {"mode": "bridge", "bridge_name": bridge},
                 {"mode": "bridge", "bridge_name": bridge}]})
         vm_id = created["id"]
+        cleanup_taps.extend(tap_name("filter-a", vm_id, nic) for nic in range(2))
         vm_dir = root / "a/vms" / vm_id
         manifest = wait_for(lambda: json.loads((vm_dir / "vm-manifest.json").read_text()) if (vm_dir / "vm-manifest.json").is_file() else None, "VM manifest missing")
         launch = json.loads((vm_dir / "launch.json").read_text())
@@ -335,14 +337,17 @@ def main():
         wait_for(lambda: run(["curl", "-sf", bad_base + "/"]).returncode == 0, "failure VMM did not listen")
         before_failure = bindings()
         try:
-            rpc(bad_base, "CreateVm", {"name": "must-fail", "image": image,
+            failed_vm = rpc(bad_base, "CreateVm", {"name": "must-fail", "image": image,
                 "compose_file": json.dumps(compose), "vcpu": 1, "memory": 1024,
                 "disk_size": 1, "stopped": False, "no_tee": True,
                 "networks": [{"mode": "bridge", "bridge_name": bridge}]})
+            cleanup_taps.append(tap_name("filter-b", failed_vm["id"], 0))
         except Exception:
             pass
-        rolled_back = wait_for(lambda: bindings() == before_failure, "failed QEMU leaked a binding", 30)
-        evidence["matrix"]["qemu_failure_rollback"] = {"no_new_binding": bool(rolled_back)}
+        deadline = time.monotonic() + 30
+        while bindings() != before_failure and time.monotonic() < deadline:
+            time.sleep(1)
+        evidence["matrix"]["qemu_failure_rollback"] = {"no_new_binding": bindings() == before_failure}
     finally:
         for process in reversed(processes):
             stop(process)
@@ -353,6 +358,9 @@ def main():
                 except Exception:
                     sudo("virsh", "-c", "qemu:///system", "nwfilter-binding-delete", tap)
                     sudo("ip", "link", "del", tap)
+        for tap in cleanup_taps:
+            sudo("virsh", "-c", "qemu:///system", "nwfilter-binding-delete", tap)
+            sudo("ip", "link", "del", tap)
         sudo("ip", "link", "del", bridge)
 
     required = evidence["matrix"]
