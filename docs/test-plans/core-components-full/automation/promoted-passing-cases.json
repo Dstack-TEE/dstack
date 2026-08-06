@@ -1707,7 +1707,7 @@
       "case_id": "tc-vmm-compute-ne-001",
       "source_run": "vmm-network-lifecycle-006",
       "source_status": "PASS",
-      "entrypoint": "automation/vmm-custom-network-capability-case.py",
+      "entrypoint": "automation/vmm-libvirt-network-filter-case.py",
       "promoted_at": "2026-07-29T03:41:42Z",
       "notes": "seven default/user/bridge/multi-NIC/invalid-input rows use a unique lease-owned bridge and TAP; the complete candidate VMM unit suite confirms custom netdev IDs and deterministic distinct MACs; cleanup restored the host baseline without starting a VM or testing image construction",
       "environment": "MKOSI_RUNTIME_LEASED_NETWORK"
