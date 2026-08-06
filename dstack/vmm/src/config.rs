@@ -169,30 +169,13 @@ pub struct AutoRestartConfig {
     /// How often the supervisor state is sampled.
     pub interval: u64,
     /// Maximum consecutive automatic restart attempts before intervention.
-    #[serde(default = "default_auto_restart_max_retries")]
     pub max_retries: u32,
     /// Delay before the first retry. Later retries use exponential backoff.
-    #[serde(default = "default_auto_restart_initial_backoff")]
     pub initial_backoff: u64,
     /// Upper bound for the exponential retry delay.
-    #[serde(default = "default_auto_restart_max_backoff")]
     pub max_backoff: u64,
     /// Continuous healthy runtime required to reset the retry budget.
-    #[serde(default = "default_auto_restart_reset_window")]
     pub reset_window: u64,
-}
-
-const fn default_auto_restart_max_retries() -> u32 {
-    5
-}
-const fn default_auto_restart_initial_backoff() -> u64 {
-    5
-}
-const fn default_auto_restart_max_backoff() -> u64 {
-    300
-}
-const fn default_auto_restart_reset_window() -> u64 {
-    300
 }
 
 impl AutoRestartConfig {
