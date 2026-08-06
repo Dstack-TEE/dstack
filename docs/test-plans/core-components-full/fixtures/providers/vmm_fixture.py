@@ -186,7 +186,7 @@ def write_vmm_config(
     enable_key_provider: bool = False,
     enable_port_mapping: bool = False,
     volumes_dir: str = "",
-    serial_history_max_bytes: int = 0,
+    log_max_bytes: int = 0,
     port_mapping_range: str = "",
     simulator_collateral_url: str = "http://10.0.2.2:18088",
     simulator_tdx_root_ca: str = "",
@@ -282,13 +282,12 @@ range = [
             f'collateral_base_url = "{simulator_collateral_url}"\n'
             f"tdx_root_ca = {json.dumps(simulator_tdx_root_ca)}\n"
         )
-    if serial_history_max_bytes:
-        marker = "use_mrconfigid = true"
+    if log_max_bytes:
+        # cvm.log is a sub-table, so the value has to be rewritten in place.
+        # Appending to the [cvm] scalar block instead would either land the key
+        # outside the table or swallow every [cvm] key that follows it.
+        marker = 'max_bytes = "4M"'
         if marker not in text:
-            fail("candidate VMM config is missing cvm.use_mrconfigid")
-        text = text.replace(
-            marker,
-            f"{marker}\nserial_history_max_bytes = {serial_history_max_bytes}",
-            1,
-        )
+            fail("candidate VMM config is missing cvm.log.max_bytes")
+        text = text.replace(marker, f"max_bytes = {log_max_bytes}", 1)
     destination.write_text(text, encoding="utf-8")

@@ -6185,7 +6185,7 @@
             },
             {
               "id": "tc-vmm-serial-006",
-              "title": "Serial log separator rotation history and follow continuity",
+              "title": "CVM log rotation retention and follow continuity",
               "order": 6,
               "priority": "P0",
               "path": "02-vmm/06-ui-observability-host/tc-vmm-serial-006",
@@ -6216,7 +6216,7 @@
                 "simulation_allowed": false
               },
               "actions_under_test": [
-                "Serial log separator rotation history and follow continuity"
+                "CVM log rotation retention and follow continuity"
               ],
               "execution": {
                 "entrypoint": "automation/vmm-serial-continuity-capability-case.py",
