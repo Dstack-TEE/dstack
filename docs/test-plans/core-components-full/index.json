@@ -5667,7 +5667,7 @@
                 "User bridge and custom networking"
               ],
               "execution": {
-                "entrypoint": "automation/vmm-custom-network-capability-case.py",
+                "entrypoint": "automation/vmm-libvirt-network-filter-case.py",
                 "args": [],
                 "timeout_seconds": 120
               }

@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <a id="tc-vmm-compute-ne-001"></a>
-# TC-VMM-COMPUTE-NE-001: User bridge and custom networking
+# TC-VMM-COMPUTE-NE-001: Bridge networking and libvirt network filtering
 
 ## Metadata
 
@@ -24,7 +24,9 @@
 
 ## Objective
 
-Verify user bridge and custom networking across success, boundary, failure, security, and recovery conditions.
+Verify the optional libvirt network-filter path without delegating QEMU lifecycle
+management to libvirt. The integration path uses a development image and the TEE
+simulator; it is not evidence for TDX or SNP attestation.
 
 ## Preconditions
 
@@ -49,20 +51,31 @@ Query the relevant health, configuration, and baseline state for user bridge and
 <a id="tc-vmm-compute-ne-001-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Deploy singular and multiple networks using user, bridge, defaults, and overrides.
+Deploy a two-NIC simulator VM through the VMM API. In addition, run two isolated
+VMM instances against one netd and exercise filtered interfaces concurrently.
 
 **Expected results:**
 
-- Resolved interfaces, MACs, taps, bridges, netdev IDs, routes, and status match precedence rules and clean up on removal.
+- Both simulator NICs have distinct MAC addresses, TAPs, and libvirt nwfilter
+  bindings. Concurrent instances cannot remove each other's deterministic TAPs.
+- Normal DHCP and guest traffic passes, while forged Ethernet source MAC, IPv4
+  source address, and ARP sender identity traffic is dropped.
 
 <a id="tc-vmm-compute-ne-001-step-03"></a>
-### Step 3: Verify state, isolation, and diagnostics
+### Step 3: Verify failure rollback and service recovery
 
-Re-query the public status/state interfaces, inspect component and peer logs, and repeat the request with one invalid or unauthorized input appropriate to this interface.
+Force QEMU launch failure after network preparation and verify rollback. Restart
+VMM, netd, and libvirtd independently, then perform a host-reboot-equivalent
+cycle by stopping all case-owned processes, removing ephemeral network state,
+and restarting from persisted VMM state.
 
 **Expected results:**
 
-- Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
+- QEMU launch failure leaves no TAP or nwfilter binding.
+- Existing guests survive VMM, netd, and libvirtd restart where applicable; new
+  operations work after restart.
+- The reboot-equivalent cycle recreates both TAPs and bindings and removal cleans
+  all case-owned resources.
 
 ## Postconditions
 
