@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2026 Phala Network
+# SPDX-License-Identifier: Apache-2.0
+
 """Build a NitroTPM PCR replay document from the pinned AWS tool trace."""
 
 import argparse
@@ -7,17 +10,16 @@ import json
 import re
 from pathlib import Path
 
-
-EVENT_RE = re.compile(
-    r"\[PCR(4|7|12)\]\s+([A-Z0-9_]+):\s+SHA384:([0-9a-fA-F]{96})"
-)
+EVENT_RE = re.compile(r"\[PCR(4|7|12)\]\s+([A-Z0-9_]+):\s+SHA384:([0-9a-fA-F]{96})")
 
 
 def extend(current: bytes, digest: bytes) -> bytes:
+    """Extend a SHA-384 PCR value with one measured digest."""
     return hashlib.sha384(current + digest).digest()
 
 
 def main() -> None:
+    """Generate and validate the NitroTPM PCR replay document."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--trace", type=Path, required=True)
     parser.add_argument("--measurements", type=Path, required=True)
