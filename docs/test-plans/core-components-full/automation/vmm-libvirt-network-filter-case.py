@@ -4,14 +4,12 @@
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
 import re
 import signal
 import socket
-import struct
 import subprocess
 import threading
 import time
@@ -20,9 +18,6 @@ import uuid
 from pathlib import Path
 
 CASE_ID = "tc-vmm-compute-ne-001"
-TUNSETIFF = 0x400454CA
-IFF_TAP = 0x0002
-IFF_NO_PI = 0x1000
 
 
 def run(argv, timeout=60):
@@ -119,8 +114,6 @@ def packet_probe(tap, bridge, expected_mac, root):
     )
     try:
         time.sleep(1)
-        fd = os.open("/dev/net/tun", os.O_RDWR)
-        fcntl.ioctl(fd, TUNSETIFF, struct.pack("16sH", tap.encode(), IFF_TAP | IFF_NO_PI))
         good = bytes.fromhex(expected_mac.replace(":", ""))
         bad = b"\x02\xaa\xbb\xcc\xdd\xee"
         broadcast = b"\xff" * 6
@@ -133,11 +126,16 @@ def packet_probe(tap, bridge, expected_mac, root):
             )
 
         # One allowed identity and each prohibited identity are deliberately unique.
-        os.write(fd, arp(good, "192.0.2.2"))
-        os.write(fd, arp(good, "192.0.2.99"))
-        os.write(fd, arp(bad, "192.0.2.2"))
-        os.write(fd, arp(bad, "192.0.2.99"))
-        os.close(fd)
+        frames = [arp(good, "192.0.2.2"), arp(good, "192.0.2.99"),
+                  arp(bad, "192.0.2.2"), arp(bad, "192.0.2.99")]
+        sender = (
+            "import socket,sys,time;"
+            "s=socket.socket(socket.AF_PACKET,socket.SOCK_RAW);s.bind((sys.argv[1],0));"
+            "[(s.send(bytes.fromhex(x)),time.sleep(.1)) for x in sys.argv[2:]]"
+        )
+        sent = sudo("python3", "-c", sender, tap, *[frame.hex() for frame in frames])
+        if sent.returncode:
+            raise RuntimeError(f"raw packet injection failed: {sent.stderr}")
         time.sleep(2)
     finally:
         stop(tcpdump)
@@ -343,8 +341,8 @@ def main():
                 "networks": [{"mode": "bridge", "bridge_name": bridge}]})
         except Exception:
             pass
-        time.sleep(2)
-        evidence["matrix"]["qemu_failure_rollback"] = {"no_new_binding": bindings() == before_failure}
+        rolled_back = wait_for(lambda: bindings() == before_failure, "failed QEMU leaked a binding", 30)
+        evidence["matrix"]["qemu_failure_rollback"] = {"no_new_binding": bool(rolled_back)}
     finally:
         for process in reversed(processes):
             stop(process)
