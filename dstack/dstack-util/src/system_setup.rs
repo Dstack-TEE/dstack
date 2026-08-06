@@ -381,34 +381,6 @@ fn gateway_rpc_url(base: &str) -> String {
     }
 }
 
-async fn register_first_available_gateway<T, F, Fut>(
-    gateway_urls: &[String],
-    mut register: F,
-) -> Result<T>
-where
-    F: FnMut(String) -> Fut,
-    Fut: std::future::Future<Output = Result<T>>,
-{
-    if gateway_urls.is_empty() {
-        bail!("Missing gateway urls");
-    }
-    let mut first_error = None;
-    for gateway_url in gateway_urls {
-        let gateway_url = gateway_url.trim_end_matches('/').to_string();
-        match register(gateway_url).await {
-            Ok(response) => return Ok(response),
-            Err(err) => {
-                warn!("Failed to register CVM: {err:?}, retrying with next dstack-gateway");
-                if first_error.is_none() {
-                    first_error = Some(err);
-                }
-            }
-        }
-    }
-    Err(first_error.unwrap_or_else(|| anyhow!("unknown error")))
-        .context("Failed to register CVM, all dstack-gateway urls are down")
-}
-
 struct GatewayContext<'a> {
     shared: &'a HostShared,
     keys: &'a AppKeys,
@@ -607,13 +579,28 @@ impl<'a> GatewayContext<'a> {
             warn!("failed to save gateway cache: {e:?}");
         }
 
-        // Read config and make the API call against the first healthy gateway.
-        let response =
-            register_first_available_gateway(&self.shared.sys_config.gateway_urls, |gateway_url| {
-                let key_store = key_store.clone();
-                async move { self.register_cvm(&gateway_url, &key_store).await }
-            })
-            .await?;
+        if self.shared.sys_config.gateway_urls.is_empty() {
+            bail!("Missing gateway urls");
+        }
+        // Read config and make API call
+        let response = 'out: {
+            let mut error = anyhow!("unknown error");
+            for (i, url) in self.shared.sys_config.gateway_urls.iter().enumerate() {
+                let response = self.register_cvm(url, &key_store).await;
+                match response {
+                    Ok(response) => {
+                        break 'out response;
+                    }
+                    Err(err) => {
+                        warn!("Failed to register CVM: {err:?}, retrying with next dstack-gateway");
+                        if i == 0 {
+                            error = err;
+                        }
+                    }
+                }
+            }
+            return Err(error).context("Failed to register CVM, all dstack-gateway urls are down");
+        };
         let mut wg_info = response.wg.context("Missing wg info")?;
 
         let client_ip = &wg_info.client_ip;
@@ -3610,10 +3597,8 @@ mod kms_provider_inventory_tests {
 
 #[cfg(test)]
 mod gateway_registration_refresh_tests {
-    use super::{gateway_rpc_url, register_first_available_gateway, GatewayKeyStore};
-    use anyhow::anyhow;
+    use super::{gateway_rpc_url, GatewayKeyStore};
     use std::os::unix::fs::PermissionsExt as _;
-    use std::sync::{Arc, Mutex};
 
     fn key_store(cert_not_after: u64) -> GatewayKeyStore {
         GatewayKeyStore {
@@ -3678,79 +3663,5 @@ mod gateway_registration_refresh_tests {
         assert!(key_store(1_601).is_cert_valid_at(1_000));
         assert!(!key_store(1_600).is_cert_valid_at(1_000));
         assert!(!key_store(u64::MAX).is_cert_valid_at(u64::MAX));
-    }
-
-    #[tokio::test]
-    async fn ordered_outage_wrong_identity_and_malformed_fail_over() {
-        let urls = ["outage", "wrong-identity", "malformed", "healthy"]
-            .map(|name| format!("https://{name}.test/"));
-        let attempts = Arc::new(Mutex::new(Vec::new()));
-        let observed = attempts.clone();
-        let response = register_first_available_gateway(&urls, move |url| {
-            observed.lock().unwrap().push(url.clone());
-            async move {
-                if url.contains("healthy") {
-                    Ok("stable-instance")
-                } else {
-                    Err(anyhow!("injected registration failure"))
-                }
-            }
-        })
-        .await
-        .unwrap();
-        assert_eq!(response, "stable-instance");
-        assert_eq!(attempts.lock().unwrap().len(), 4);
-    }
-
-    #[tokio::test]
-    async fn first_success_short_circuits_and_all_failed_preserves_first_error() {
-        let healthy = ["first".to_string(), "must-not-run".to_string()];
-        let attempts = Arc::new(Mutex::new(0));
-        let observed = attempts.clone();
-        register_first_available_gateway(&healthy, move |_| {
-            *observed.lock().unwrap() += 1;
-            async { Ok::<_, anyhow::Error>(()) }
-        })
-        .await
-        .unwrap();
-        assert_eq!(*attempts.lock().unwrap(), 1);
-
-        let failed = ["first".to_string(), "second".to_string()];
-        let error = register_first_available_gateway::<(), _, _>(&failed, |url| async move {
-            Err(anyhow!("failure-at-{url}"))
-        })
-        .await
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("failure-at-first"));
-    }
-
-    #[tokio::test]
-    async fn concurrent_refreshes_have_isolated_selection_state() {
-        let urls = ["down".to_string(), "healthy".to_string()];
-        let refresh = || async {
-            register_first_available_gateway(&urls, |url| async move {
-                if url == "healthy" {
-                    Ok(url)
-                } else {
-                    Err(anyhow!("down"))
-                }
-            })
-            .await
-        };
-        let (left, right) = tokio::join!(refresh(), refresh());
-        assert_eq!(left.unwrap(), "healthy");
-        assert_eq!(right.unwrap(), "healthy");
-    }
-
-    #[tokio::test]
-    async fn empty_gateway_inventory_fails_closed() {
-        let error = register_first_available_gateway::<(), _, _>(&[], |_| async {
-            panic!("registration must not run");
-            #[allow(unreachable_code)]
-            Ok(())
-        })
-        .await
-        .unwrap_err();
-        assert!(error.to_string().contains("Missing gateway urls"));
     }
 }
