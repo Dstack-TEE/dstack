@@ -166,6 +166,7 @@ def make_config(template, root, image_store, binary, supervisor, bridge, port, i
         'sock = "./run/supervisor.sock"': f'sock = "{root}/supervisor.sock"',
         'pid_file = "./run/supervisor.pid"': f'pid_file = "{root}/supervisor.pid"',
         'log_file = "./run/supervisor.log"': f'log_file = "{root}/supervisor.log"',
+        'port = 10000': f'port = {port + 1000}',
         '[key_provider]\nenabled = true': '[key_provider]\nenabled = false',
         '[cvm.networking]\nmode = "user"': f'[cvm.networking]\nmode = "bridge"\nbridge = "{bridge}"',
         '[cvm.network_filter]\nmode = "none"': '[cvm.network_filter]\nmode = "libvirt"',
