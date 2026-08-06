@@ -100,15 +100,12 @@ def wait_for(predicate, message, timeout=90):
     raise TimeoutError(message)
 
 
-def socket_ready(path):
-    try:
-        client = socket.socket(socket.AF_UNIX)
-        client.settimeout(0.2)
-        client.connect(str(path))
-        client.close()
-        return True
-    except OSError:
-        return False
+def wait_netd(path, process, message):
+    wait_for(lambda: path.exists() or process.poll() is not None, message)
+    if process.poll() is not None:
+        raise RuntimeError(f"{message}: netd exited with {process.returncode}")
+    # Existence can briefly refer to the old listener during a restart.
+    time.sleep(0.5)
 
 
 def packet_probe(tap, bridge, expected_mac, root):
@@ -224,7 +221,7 @@ def main():
                 raise RuntimeError(result.stderr)
         netd_process = start([str(binary), "--config", str(config_a), "netd", "--allow-uid", str(os.getuid())], root / "netd.log", root=True)
         processes.append(netd_process)
-        wait_for(lambda: socket_ready(sock), "netd socket was not created")
+        wait_netd(sock, netd_process, "netd socket was not created")
 
         values = [None, None]
         errors = []
@@ -254,7 +251,7 @@ def main():
         stop(netd_process)
         netd_process = start([str(binary), "--config", str(config_a), "netd", "--allow-uid", str(os.getuid())], root / "netd-restart.log", root=True)
         processes.append(netd_process)
-        wait_for(lambda: socket_ready(sock), "netd did not restart")
+        wait_netd(sock, netd_process, "netd did not restart")
         check = netd(sock, {"operation": "check", "instance_id": "filter-probe", "vm_id": "spoof", "nic_index": 0})
         evidence["matrix"]["netd_restart"] = {"tap": check, "binding_present": check in bindings()}
 
@@ -304,7 +301,7 @@ def main():
             sudo("ip", "link", "del", tap)
         netd_process = start([str(binary), "--config", str(config_a), "netd", "--allow-uid", str(os.getuid())], root / "netd-reboot.log", root=True)
         processes.append(netd_process)
-        wait_for(lambda: socket_ready(sock), "netd reboot-equivalent restart failed")
+        wait_netd(sock, netd_process, "netd reboot-equivalent restart failed")
         vmm = start([str(binary), "--config", str(config_a)], root / "vmm-reboot.log", cwd=root / "a")
         processes.append(vmm)
         wait_for(lambda: run(["curl", "-sf", base + "/"]).returncode == 0, "VMM reboot-equivalent restart failed")
