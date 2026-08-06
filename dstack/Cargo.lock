@@ -1875,7 +1875,6 @@ dependencies = [
  "dstack-build-info",
  "dstack-gateway-rpc",
  "dstack-guest-agent-rpc",
- "dstack-kms-rpc",
  "dstack-types",
  "flate2",
  "fs-err",

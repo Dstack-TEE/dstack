@@ -11,7 +11,6 @@ log_level = "info"
 address = "127.0.0.1:8010"
 
 [core]
-kms_url = ""
 # auto set soft ulimit to hard ulimit
 set_ulimit = true
 rpc_domain = ""
@@ -62,7 +61,6 @@ insecure_enable_debug_rpc = false
 # gateway's own loopback on a port of their choosing, bypassing port_policy.
 insecure_localhost_backend = false
 insecure_skip_attestation = false
-key_file = "debug_key.json"
 address = "127.0.0.1:8012"
 
 [core.wg]

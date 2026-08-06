@@ -156,8 +156,7 @@ ca_certs = "${abs_run_dir}/certs/gateway-ca.cert"
 mandatory = false
 
 [core]
-kms_url = ""
-rpc_domain = "gateway.tdxlab.dstack.org"
+rpc_domain = ""
 
 [core.debug]
 insecure_enable_debug_rpc = true

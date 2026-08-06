@@ -12,7 +12,6 @@ ca_certs = "/var/lib/gateway/certs/gateway-ca.cert"
 mandatory = false
 
 [core]
-kms_url = ""
 rpc_domain = "gateway-3"
 
 [core.admin]

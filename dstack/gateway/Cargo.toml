@@ -32,7 +32,7 @@ pin-project.workspace = true
 serde_json.workspace = true
 rand.workspace = true
 dstack-build-info.workspace = true
-ra-rpc = { workspace = true, features = ["client", "rocket"] }
+ra-rpc = { workspace = true, features = ["rocket"] }
 dstack-gateway-rpc.workspace = true
 certbot.workspace = true
 bytes.workspace = true
@@ -41,7 +41,6 @@ smallvec.workspace = true
 futures.workspace = true
 cmd_lib.workspace = true
 load_config.workspace = true
-dstack-kms-rpc.workspace = true
 ra-tls.workspace = true
 dstack-guest-agent-rpc.workspace = true
 http-client = { workspace = true, features = ["prpc"] }
@@ -71,10 +70,6 @@ nix = { workspace = true, features = ["resource", "fs", "socket", "zerocopy"] }
 ktls.workspace = true
 libc.workspace = true
 socket2.workspace = true
-
-[[bin]]
-name = "gen_debug_key"
-path = "src/gen_debug_key.rs"
 
 [dev-dependencies]
 insta.workspace = true
