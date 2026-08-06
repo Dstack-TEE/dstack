@@ -34,9 +34,8 @@ enforce_self_authorization = true
 # Whether the KMS embeds an attestation in its own RPC certificate. Set false
 # only for local dev/testing where the KMS runs outside a TEE. This narrows what
 # the KMS asserts about itself and relaxes no verification: quotes presented to
-# the KMS are still fully checked, a guest that accepts an unattested
-# certificate simply does not extend mr-kms, and another KMS refuses to onboard
-# from one.
+# the KMS are still fully checked, and another KMS refuses to onboard from an
+# unattested one.
 attest_rpc_cert = true
 # AMD SEV-SNP key/cert release remains disabled unless this local KMS gate is
 # explicitly enabled. External auth policy must still allow the verified

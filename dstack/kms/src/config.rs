@@ -61,10 +61,8 @@ pub(crate) struct KmsConfig {
     ///
     /// This narrows what the KMS asserts about itself; it relaxes no
     /// verification anywhere. Quotes presented *to* the KMS are still fully
-    /// checked, so key release stays gated, and relying parties keep their own
-    /// policy: a guest accepts an unattested KMS certificate but then does not
-    /// extend `mr-kms`, so a remote verifier can still tell, and another KMS
-    /// refuses to onboard from one.
+    /// checked, so key release stays gated, and another KMS refuses to onboard
+    /// from an unattested one.
     #[serde(default = "default_true")]
     pub attest_rpc_cert: bool,
     /// Whether trusted RPCs require the KMS to first attest itself to its

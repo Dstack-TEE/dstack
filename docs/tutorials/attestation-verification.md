@@ -526,7 +526,6 @@ These are the standard events you'll see in the log:
 | `gpu-attestation` | Verified GPU state and digest of the boot-time `nvattest` JSON | Required for an attested GPU launch; verify as described below |
 | `instance-id` | Unique instance identifier | Should match `instance_id` from response |
 | `boot-mr-done` | Boot measurements complete | Marker event |
-| `mr-kms` | KMS identity measurement | KMS public key hash |
 | `os-image-hash` | Guest OS image hash | Should match `tcb_info.os_image_hash` |
 | `key-provider` | Key provider type | e.g., `kms` |
 | `storage-fs` | Storage filesystem type | Storage configuration |
