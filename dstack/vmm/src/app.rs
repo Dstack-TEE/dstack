@@ -517,9 +517,6 @@ impl App {
         if let Err(error) = self.set_started(id, false) {
             warn!(id, %error, "failed to disable restart after start failure");
         }
-        if let Err(error) = self.supervisor.stop(id).await {
-            warn!(id, %error, "failed to stop process after start failure");
-        }
         if let Err(error) = self.supervisor.remove(id).await {
             warn!(id, %error, "failed to remove process after start failure");
         }
