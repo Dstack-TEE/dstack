@@ -128,8 +128,13 @@ pub fn start_gcp_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
     if let Some(error) = startup_error {
         return Err(error).context("GCP vTPM did not become ready");
     }
-    replay_fixture_event_log()?;
-    install_fixture_event_log()?;
+    let replay = config
+        .gcp_tpm_replay
+        .as_ref()
+        .context("tee_simulator.gcp_tpm_replay is required for GCP")?;
+    validate_gcp_event_log(config, &replay.event_log)?;
+    replay_gcp_event_log(&replay.event_log)?;
+    install_gcp_event_log(&replay.event_log)?;
 
     let template_with_size = state_dir.join("ak.tpm2b-public");
     let generated_public = state_dir.join("ak.public");
@@ -216,9 +221,36 @@ pub fn start_gcp_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
     Ok(())
 }
 
-fn replay_fixture_event_log() -> Result<()> {
-    let bytes = include_bytes!("../../cc-eventlog/samples/tpm_eventlog.bin");
-    let event_log = cc_eventlog::tpm::TpmEventLog::decode(&mut bytes.as_slice())?;
+fn validate_gcp_event_log(config: &TeeSimulatorConfig, mut bytes: &[u8]) -> Result<()> {
+    let vm_config: dstack_types::VmConfig = serde_json::from_str(
+        config
+            .vm_config
+            .as_deref()
+            .context("tee_simulator.vm_config is required for GCP")?,
+    )?;
+    let expected = vm_config
+        .gcp_measurement
+        .as_ref()
+        .context("vm_config.gcp_measurement is required for GCP")?
+        .decode_measurement()
+        .map_err(anyhow::Error::msg)?
+        .uki_authenticode_sha256;
+    let event_log = cc_eventlog::tpm::TpmEventLog::decode(&mut bytes)?;
+    let actual = event_log
+        .pcr2_events()
+        .get(2)
+        .context("GCP TPM event log is missing the UKI event")?
+        .digest
+        .clone();
+    anyhow::ensure!(
+        actual == expected,
+        "GCP TPM event-log UKI digest does not match measurement.gcp.cbor"
+    );
+    Ok(())
+}
+
+fn replay_gcp_event_log(mut bytes: &[u8]) -> Result<()> {
+    let event_log = cc_eventlog::tpm::TpmEventLog::decode(&mut bytes)?;
     for event in event_log.events {
         let extension = format!("{}:sha256={}", event.pcr_index, hex::encode(event.digest));
         command("tpm2_pcrextend", &[&extension])?;
@@ -226,16 +258,20 @@ fn replay_fixture_event_log() -> Result<()> {
     Ok(())
 }
 
-fn install_fixture_event_log() -> Result<()> {
+fn install_gcp_event_log(bytes: &[u8]) -> Result<()> {
     let security_root = Path::new("/sys/kernel/security");
     let event_log = security_root.join("tpm0/binary_bios_measurements");
     if event_log.exists() {
+        anyhow::ensure!(
+            fs_err::read(&event_log)? == bytes,
+            "existing simulated TPM event log does not match the image"
+        );
         return Ok(());
     }
     let tpm_dir = event_log.parent().context("TPM event log has no parent")?;
     // securityfs does not permit userspace to create a synthetic TPM event
     // log hierarchy. Shadow it in this development-only guest before
-    // publishing the fixture that was replayed into the simulated PCRs.
+    // publishing the event log that was replayed into the simulated PCRs.
     let flags = nix::mount::MsFlags::MS_NOSUID
         | nix::mount::MsFlags::MS_NODEV
         | nix::mount::MsFlags::MS_NOEXEC;
@@ -249,14 +285,8 @@ fn install_fixture_event_log() -> Result<()> {
     .context("failed to mount simulated securityfs shadow")?;
     fs_err::create_dir_all(tpm_dir)
         .context("failed to create TPM event-log directory in securityfs shadow")?;
-    fs_err::write(
-        event_log,
-        include_bytes!("../../cc-eventlog/samples/tpm_eventlog.bin"),
-    )
-    .context("failed to install simulated TPM event log")?;
-    Ok(())
+    fs_err::write(event_log, bytes).context("failed to install simulated TPM event log")
 }
-
 fn create_tpm_device_node() -> Result<()> {
     if Path::new("/dev/tpm0").exists() {
         return Ok(());
@@ -584,6 +614,38 @@ fn set_nv_public_size(response: &mut [u8], size: usize) -> Result<()> {
     );
     response[data_size_pos..data_size_pos + 2].copy_from_slice(&(size as u16).to_be_bytes());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gcp_event_log_is_bound_to_vm_measurement() {
+        let fixture = include_bytes!("../../cc-eventlog/samples/tpm_eventlog.bin");
+        let fixture_hash =
+            hex::decode("9ab14a46f858662a89adc102d2a57a13f52f75c1769d65a4c34edbbfc8855f0f")
+                .unwrap();
+        let image_hash = vec![0x5a; 32];
+        let offset = fixture
+            .windows(fixture_hash.len())
+            .position(|window| window == fixture_hash)
+            .unwrap();
+        let mut event_log = fixture.to_vec();
+        event_log[offset..offset + image_hash.len()].copy_from_slice(&image_hash);
+
+        let measurement = dstack_types::GcpOsImageMeasurement::new(image_hash).unwrap();
+        let document =
+            dstack_types::GcpOsImageMeasurementDocument::from_measurement(Vec::new(), measurement);
+        let mut config = TeeSimulatorConfig {
+            vm_config: Some(serde_json::json!({ "gcp_measurement": document }).to_string()),
+            ..Default::default()
+        };
+        validate_gcp_event_log(&config, &event_log).unwrap();
+
+        config.vm_config = Some("{}".into());
+        assert!(validate_gcp_event_log(&config, &event_log).is_err());
+    }
 }
 
 fn nv_read_response(command: &[u8], contents: &[u8]) -> Result<Vec<u8>> {

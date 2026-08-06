@@ -1091,6 +1091,7 @@ mod tests {
                 gcp_measurement: None,
                 aws_measurement: None,
                 aws_pcr_replay: None,
+                gcp_tpm_replay: None,
             },
             cid: 100,
             workdir: PathBuf::from("/does-not-exist/vm-1"),

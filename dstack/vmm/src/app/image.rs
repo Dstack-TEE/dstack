@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use dstack_types::{
-    AwsOsImageMeasurementDocument, AwsPcrReplay, GcpOsImageMeasurementDocument,
+    AwsOsImageMeasurementDocument, AwsPcrReplay, GcpOsImageMeasurementDocument, GcpTpmReplay,
     SevOsImageMeasurementDocument, TdxOsImageMeasurementDocument, GCP_MEASUREMENT_FILENAME,
     SNP_MEASUREMENT_FILENAME, TDX_MEASUREMENT_FILENAME,
 };
@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 const AWS_MEASUREMENT_FILENAME: &str = "measurement.aws.cbor";
 const AWS_PCR_REPLAY_FILENAME: &str = "measurement.aws.replay.json";
+const GCP_TPM_EVENT_LOG_FILENAME: &str = "measurement.gcp.eventlog.bin";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ImageInfo {
@@ -89,6 +90,8 @@ pub struct Image {
     pub aws_measurement: Option<AwsOsImageMeasurementDocument>,
     /// AWS boot events consumed only by the development NitroTPM simulator.
     pub aws_pcr_replay: Option<AwsPcrReplay>,
+    /// GCP TPM event log consumed only by the development simulator.
+    pub gcp_tpm_replay: Option<GcpTpmReplay>,
 }
 
 impl Image {
@@ -185,6 +188,15 @@ impl Image {
         } else {
             None
         };
+        let gcp_event_log_path = base_path.join(GCP_TPM_EVENT_LOG_FILENAME);
+        let gcp_tpm_replay = if gcp_event_log_path.exists() {
+            Some(GcpTpmReplay {
+                event_log: fs::read(&gcp_event_log_path)
+                    .with_context(|| format!("failed to read {}", gcp_event_log_path.display()))?,
+            })
+        } else {
+            None
+        };
         if info.version.is_empty() {
             // Older images does not have version field. Fallback to the version of the image folder name
             info.version = guess_version(&base_path).unwrap_or_default();
@@ -203,6 +215,7 @@ impl Image {
             gcp_measurement,
             aws_measurement,
             aws_pcr_replay,
+            gcp_tpm_replay,
         }
         .ensure_exists()
     }

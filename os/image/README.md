@@ -22,6 +22,12 @@ All measurement artifacts are listed in `sha256sum.txt`, so
 Deploy tooling (`dstack-cloud prepare`) only **embeds** these files into
 `VmConfig`; it must not recompute PCRs (that would change the image identity).
 
+Dev images additionally carry `measurement.gcp.eventlog.bin`, a GCP firmware
+event-log template with the assembled UKI Authenticode digest for the vTPM
+simulator. This simulator-only fixture is not generated for release images and
+is deliberately excluded from `sha256sum.txt`, so it does not affect the
+production `os_image_hash`.
+
 AWS PCR precompute requires a pinned host `nitro-tpm-pcr-compute` binary (Rust,
 [aws/NitroTPM-Tools](https://github.com/aws/NitroTPM-Tools)). Set
 `NITRO_TPM_PCR_COMPUTE_BIN` or install it on `PATH`, for example with
