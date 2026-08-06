@@ -1995,10 +1995,10 @@ pub async fn cmd_gateway_refresh(args: GatewayRefreshArgs) -> Result<()> {
 /// refusing a certificate minted for some other purpose.
 fn validate_kms_rpc_cert(cert: Option<CertInfo>) -> Result<()> {
     let Some(cert) = cert else {
-        bail!("Missing server cert");
+        bail!("missing server cert");
     };
     let Some(usage) = cert.special_usage else {
-        bail!("Missing server cert usage");
+        bail!("missing server cert usage");
     };
     if usage != "kms:rpc" {
         bail!("Invalid server cert usage: {usage}");
