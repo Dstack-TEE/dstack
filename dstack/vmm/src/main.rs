@@ -153,11 +153,11 @@ async fn auto_restart_task(app: App) {
     let mut interval =
         tokio::time::interval(Duration::from_secs(app.config.cvm.auto_restart.interval));
     loop {
+        interval.tick().await;
         info!("Checking for exited VMs");
         if let Err(err) = app.try_restart_exited_vms().await {
             error!("Failed to restart exited VMs: {err:?}");
         }
-        interval.tick().await;
     }
 }
 
@@ -185,6 +185,11 @@ async fn main() -> Result<()> {
         .host_api
         .validate()
         .context("Invalid host_api configuration")?;
+    config
+        .cvm
+        .auto_restart
+        .validate()
+        .context("Invalid cvm.auto_restart configuration")?;
 
     // Handle commands
     match args.command.unwrap_or_default() {

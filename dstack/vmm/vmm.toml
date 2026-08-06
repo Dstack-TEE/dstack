@@ -119,6 +119,10 @@ range = [
 [cvm.auto_restart]
 enabled = true
 interval = 20
+max_retries = 5
+initial_backoff = 5
+max_backoff = 300
+reset_window = 300
 
 [cvm.gpu]
 enabled = false
