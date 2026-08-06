@@ -178,6 +178,28 @@ pub struct AutoRestartConfig {
     pub reset_window: u64,
 }
 
+/// Retention for the logs a CVM writes into its work directory.
+///
+/// Currently governs serial.log. The caps are deliberately not named after it,
+/// because rotation itself is generic (see `crate::logrotate`) and stdout/stderr
+/// are the obvious next call sites.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LogConfig {
+    /// Max size of a live log. QEMU appends to serial.log for the whole life of
+    /// a boot, so without a cap a chatty guest can fill the host disk. Past
+    /// this size the log is rotated and truncated in place. 0 disables
+    /// rotation.
+    #[serde(with = "size_parser::human_size")]
+    pub max_bytes: u64,
+
+    /// Rotated segments to keep. Follows logrotate semantics: the oldest is
+    /// discarded.
+    pub max_backups: usize,
+
+    /// How often a live log is checked against `max_bytes`, in seconds.
+    pub check_interval_secs: u64,
+}
+
 impl AutoRestartConfig {
     pub fn validate(&self) -> Result<()> {
         if self.enabled {
@@ -353,12 +375,8 @@ pub struct CvmConfig {
     #[serde(default)]
     pub product: ProductConfig,
 
-    /// Max size in bytes for serial.history.log (default 4MB).
-    /// Previous boot serial logs are appended here before each restart.
-    /// Accepts human-readable sizes like "4MB", "512KB".
-    #[serde(default = "default_serial_history_max_bytes")]
-    #[serde(with = "size_parser::human_size")]
-    pub serial_history_max_bytes: u64,
+    /// Guest log retention.
+    pub log: LogConfig,
 
     /// Directory holding attachable volume images (e.g. pre-baked verity
     /// volumes). A deploy may only attach files under this directory, referenced
@@ -522,6 +540,13 @@ pub struct ProcessAnnotation {
     pub kind: String,
     #[serde(default)]
     pub live_for: Option<String>,
+    /// Whether this process's serial chardev log was opened with
+    /// `logappend=on`, which is what makes rotating it in place safe.
+    ///
+    /// Absent for processes launched before this option existed, and `default`
+    /// makes those deserialize to `false` — the conservative answer.
+    #[serde(default)]
+    pub serial_logappend: bool,
 }
 
 impl ProcessAnnotation {
@@ -747,10 +772,6 @@ pub struct KeyProviderConfig {
     pub enabled: bool,
     pub address: IpAddr,
     pub port: u16,
-}
-
-fn default_serial_history_max_bytes() -> u64 {
-    4 * 1024 * 1024 // 4MB
 }
 
 const CLIENT_CONF_PATH: &str = "/etc/dstack/client.conf";
