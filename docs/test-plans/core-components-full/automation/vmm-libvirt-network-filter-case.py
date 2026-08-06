@@ -8,6 +8,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import signal
 import socket
 import struct
@@ -272,10 +273,12 @@ def main():
         vm_id = created["id"]
         vm_dir = root / "a/vms" / vm_id
         manifest = wait_for(lambda: json.loads((vm_dir / "vm-manifest.json").read_text()) if (vm_dir / "vm-manifest.json").is_file() else None, "VM manifest missing")
+        launch = json.loads((vm_dir / "launch.json").read_text())
+        macs = re.findall(r"mac=([0-9a-f:]{17})", json.dumps(launch), re.IGNORECASE)
         wait_for(lambda: sum(1 for line in bindings().splitlines() if "dt" in line) >= 4, "two VM bindings missing")
         evidence["matrix"]["multi_nic_simulator"] = {
             "vm_id": vm_id, "nic_count": len(manifest["networks"]),
-            "macs": [item["mac"] for item in manifest["networks"]],
+            "macs": macs,
             "qemu_started": (vm_dir / "qemu.pid").is_file(), "attestation_tested": False,
         }
 
