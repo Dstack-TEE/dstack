@@ -245,6 +245,92 @@ pub(crate) async fn ensure_kms_allowed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Webhook;
+    use ra_tls::attestation::TeeVariant;
+    use serde_json::Value;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    fn boot_info(identity: u8) -> BootInfo {
+        BootInfo {
+            tee_variant: TeeVariant::DstackTdx,
+            mr_aggregated: vec![identity; 32],
+            os_image_hash: vec![identity.wrapping_add(1); 32],
+            mr_system: vec![identity.wrapping_add(2); 32],
+            app_id: vec![identity.wrapping_add(3); 20],
+            compose_hash: vec![identity.wrapping_add(4); 32],
+            instance_id: vec![identity.wrapping_add(5); 20],
+            device_id: vec![identity.wrapping_add(6); 32],
+            key_provider_info: vec![identity.wrapping_add(7); 32],
+            tcb_status: "UpToDate".into(),
+            advisory_ids: vec![],
+        }
+    }
+
+    fn serve(responses: Vec<&'static str>) -> (String, thread::JoinHandle<Vec<(String, Value)>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 4096];
+                let header_end = loop {
+                    let read = stream.read(&mut chunk).unwrap();
+                    assert_ne!(read, 0, "request ended before headers");
+                    request.extend_from_slice(&chunk[..read]);
+                    if let Some(position) = request.windows(4).position(|part| part == b"\r\n\r\n")
+                    {
+                        break position + 4;
+                    }
+                };
+                let headers = String::from_utf8_lossy(&request[..header_end]).into_owned();
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.split_once(':').and_then(|(name, value)| {
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().unwrap())
+                        })
+                    })
+                    .unwrap_or(0);
+                while request.len() < header_end + content_length {
+                    let read = stream.read(&mut chunk).unwrap();
+                    assert_ne!(read, 0, "request ended before body");
+                    request.extend_from_slice(&chunk[..read]);
+                }
+                let path = headers
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap()
+                    .to_string();
+                let body =
+                    serde_json::from_slice(&request[header_end..header_end + content_length])
+                        .unwrap();
+                requests.push((path, body));
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response.len(),
+                    response
+                )
+                .unwrap();
+            }
+            requests
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    fn webhook(url: String) -> AuthApi {
+        AuthApi::Webhook {
+            webhook: Webhook { url },
+        }
+    }
 
     #[test]
     fn app_id_len_must_be_20_bytes() {
@@ -254,5 +340,68 @@ mod tests {
             Ok(()) => panic!("19-byte app_id must reject"),
             Err(err) => assert!(err.to_string().contains("app_id must be 20 bytes")),
         }
+    }
+
+    #[rocket::async_test]
+    async fn repeated_authorization_is_never_served_from_a_decision_cache() {
+        let (url, server) = serve(vec![
+            r#"{"isAllowed":true,"gatewayAppId":"gateway","reason":"initial allow"}"#,
+            r#"{"isAllowed":false,"gatewayAppId":"gateway","reason":"revoked"}"#,
+        ]);
+        let auth = webhook(url);
+        let info = boot_info(1);
+
+        let first = auth.is_app_allowed(&info, false).await.unwrap();
+        let repeated = auth.is_app_allowed(&info, false).await.unwrap();
+        assert!(first.is_allowed);
+        assert!(!repeated.is_allowed);
+        assert_eq!(repeated.reason, "revoked");
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].0, "/bootAuth/app");
+        assert_eq!(requests[1].0, "/bootAuth/app");
+        assert_eq!(requests[0].1, requests[1].1);
+    }
+
+    #[rocket::async_test]
+    async fn authorization_scope_preserves_route_and_every_identity_field() {
+        let (url, server) = serve(vec![
+            r#"{"isAllowed":true,"gatewayAppId":"gateway","reason":"app"}"#,
+            r#"{"isAllowed":true,"gatewayAppId":"gateway","reason":"kms"}"#,
+        ]);
+        let auth = webhook(url);
+        let app = boot_info(10);
+        let kms = boot_info(20);
+
+        assert!(auth.is_app_allowed(&app, false).await.unwrap().is_allowed);
+        assert!(auth.is_app_allowed(&kms, true).await.unwrap().is_allowed);
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests[0].0, "/bootAuth/app");
+        assert_eq!(requests[1].0, "/bootAuth/kms");
+        assert_ne!(requests[0].1["appId"], requests[1].1["appId"]);
+        assert_ne!(requests[0].1["deviceId"], requests[1].1["deviceId"]);
+        assert_ne!(requests[0].1["osImageHash"], requests[1].1["osImageHash"]);
+        assert_ne!(requests[0].1["composeHash"], requests[1].1["composeHash"]);
+        assert_ne!(requests[0].1["instanceId"], requests[1].1["instanceId"]);
+        assert_ne!(requests[0].1["mrAggregated"], requests[1].1["mrAggregated"]);
+    }
+
+    #[rocket::async_test]
+    async fn malformed_backend_response_fails_closed_and_next_request_recovers() {
+        let (url, server) = serve(vec![
+            "not-json",
+            r#"{"isAllowed":true,"gatewayAppId":"gateway","reason":"recovered"}"#,
+        ]);
+        let auth = webhook(url);
+        let info = boot_info(30);
+
+        let error = auth.is_app_allowed(&info, false).await.unwrap_err();
+        assert!(error.to_string().contains("failed to decode response"));
+        let recovered = auth.is_app_allowed(&info, false).await.unwrap();
+        assert!(recovered.is_allowed);
+        assert_eq!(recovered.reason, "recovered");
+        assert_eq!(server.join().unwrap().len(), 2);
     }
 }
