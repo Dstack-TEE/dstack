@@ -149,13 +149,7 @@ contract EventAuditTest is Test {
         Vm.Log[] memory logs = vm.getRecordedLogs();
         vm.stopPrank();
 
-        _assertAudit(
-            logs,
-            owner,
-            "implementation-upgrade",
-            bytes32(uint256(uint160(address(replacement)))),
-            true
-        );
+        _assertAudit(logs, owner, "implementation-upgrade", bytes32(uint256(uint160(address(replacement)))), true);
         assertEq(Upgrades.getImplementationAddress(address(app)), address(replacement));
     }
 
@@ -175,7 +169,8 @@ contract EventAuditTest is Test {
             Vm.Log memory entry = logs[i];
             if (
                 entry.topics.length == 4 && entry.topics[0] == AUDIT_TOPIC && entry.topics[1] == actorTopic
-                    && entry.topics[2] == policyTopic && entry.topics[3] == value && abi.decode(entry.data, (bool)) == enabled
+                    && entry.topics[2] == policyTopic && entry.topics[3] == value
+                    && abi.decode(entry.data, (bool)) == enabled
             ) {
                 return;
             }
