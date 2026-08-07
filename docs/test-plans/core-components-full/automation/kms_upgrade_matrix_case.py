@@ -894,23 +894,28 @@ class MatrixRun:
             admin_base = f"http://127.0.0.1:{admin_port}/prpc"
 
             def admin_rpc(method: str, payload: dict[str, Any]) -> dict[str, Any]:
-                request = urllib.request.Request(
-                    f"{admin_base}/Admin.{method}",
-                    data=json.dumps(payload).encode(),
-                    headers={
-                        "authorization": "Bearer case-owned-admin",
-                        "content-type": "application/json",
-                    },
-                )
-                try:
-                    with urllib.request.urlopen(request, timeout=60) as response:
-                        body = response.read()
-                except urllib.error.HTTPError as error:
-                    raise RuntimeError(
-                        f"Gateway Admin.{method} returned HTTP {error.code}: "
-                        f"{error.read()[:500]!r}"
-                    ) from error
-                return json.loads(body) if body else {}
+                for rpc_method in (f"Admin.{method}", method):
+                    request = urllib.request.Request(
+                        f"{admin_base}/{rpc_method}",
+                        data=json.dumps(payload).encode(),
+                        headers={
+                            "authorization": "Bearer case-owned-admin",
+                            "content-type": "application/json",
+                        },
+                    )
+                    try:
+                        with urllib.request.urlopen(request, timeout=60) as response:
+                            body = response.read()
+                    except urllib.error.HTTPError as error:
+                        error_body = error.read()
+                        if rpc_method.startswith("Admin.") and b"Service not found" in error_body:
+                            continue
+                        raise RuntimeError(
+                            f"Gateway {rpc_method} returned HTTP {error.code}: "
+                            f"{error_body[:500]!r}"
+                        ) from error
+                    return json.loads(body) if body else {}
+                raise RuntimeError(f"Gateway admin RPC route not found: {method}")
 
             admin_rpc(
                 "SetCertbotConfig",
@@ -928,7 +933,7 @@ class MatrixRun:
                     "cf_api_url": "http://127.0.0.1:18080/client/v4",
                     "set_as_default": True,
                     "dns_txt_ttl": 1,
-                    "max_dns_wait": 0,
+                    "max_dns_wait": 300,
                 },
             )
             admin_rpc(
