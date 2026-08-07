@@ -694,7 +694,10 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                     if source_file.name == "metadata.json":
                         shutil.copy2(source_file, target)
                     elif source_file.is_file():
-                        target.symlink_to(source_file)
+                        try:
+                            os.link(source_file, target)
+                        except OSError:
+                            shutil.copy2(source_file, target)
                 deletable_images.append(image_name)
         discovery_images: dict[str, str] = {}
         if "Local image discovery metadata and deletion" in actions:
@@ -711,7 +714,10 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                 if source_file.name == "metadata.json":
                     shutil.copy2(source_file, target)
                 elif source_file.is_file():
-                    target.symlink_to(source_file)
+                    try:
+                        os.link(source_file, target)
+                    except OSError:
+                        shutil.copy2(source_file, target)
             invalid_image = f"dstack-test-invalid-{lease_id[-12:]}"
             invalid_dir = case_image_store / invalid_image
             invalid_dir.mkdir()
