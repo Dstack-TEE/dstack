@@ -132,12 +132,17 @@ def main() -> int:
 
         protected: dict[str, dict[str, int]] = {}
         surfaces = {
-            "version": (version_path, "POST", b"{}"),
-            "ui": ("/", "GET", None),
-            "resource": ("/res/x25519.js", "GET", None),
-            "logs": ("/logs?id=missing&follow=false&ansi=false&lines=1", "GET", None),
+            "version": (version_path, "POST", b"{}", 200),
+            "ui": ("/", "GET", None, 200),
+            "resource": ("/res/x25519.js", "GET", None, 200),
+            "logs": (
+                "/logs?id=missing&follow=false&ansi=false&lines=1",
+                "GET",
+                None,
+                404,
+            ),
         }
-        for name, (path, method, payload) in surfaces.items():
+        for name, (path, method, payload, valid_status) in surfaces.items():
             outcomes: dict[str, int] = {}
             for credential, headers in (
                 ("valid", valid),
@@ -149,7 +154,7 @@ def main() -> int:
                     base + path, method=method, body=payload, headers=headers
                 )
                 outcomes[credential] = status
-            if outcomes["valid"] != 200:
+            if outcomes["valid"] != valid_status:
                 raise AssertionError(f"{name} rejected valid credentials: {outcomes}")
             if any(outcomes[key] != 401 for key in ("missing", "wrong", "stale")):
                 raise AssertionError(f"{name} accepted invalid credentials: {outcomes}")
