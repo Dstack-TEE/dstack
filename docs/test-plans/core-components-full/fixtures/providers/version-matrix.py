@@ -191,6 +191,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
             "destructive_actions_allowed": True,
         },
         "cleanup_handle": {
+            "state_root": str(STATE_ROOT.resolve()),
             "workspace": str(workspace),
             "vmm_url": vmm_url,
             "vmm_cli": str(vmm_cli),
@@ -276,7 +277,14 @@ def destroy(value: dict[str, Any]) -> dict[str, Any]:
         if not text:
             continue
         workspace = Path(text).resolve()
-        if workspace.parent != ROOT or not workspace.name.startswith("lease-"):
+        state_root_text = str(handle.get("state_root", ""))
+        state_root = (
+            Path(state_root_text).resolve() if state_root_text else ROOT.resolve()
+        )
+        if (
+            workspace.parent != state_root / "version-fixtures"
+            or not workspace.name.startswith("lease-")
+        ):
             fail(f"refusing unsafe version workspace cleanup: {workspace}")
         registry = workspace / "created-vms.json"
         if registry.is_file():
