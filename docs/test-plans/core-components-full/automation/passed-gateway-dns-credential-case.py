@@ -191,6 +191,15 @@ def call(
     return observation
 
 
+def is_empty_response(response: dict[str, Any]) -> bool:
+    """Accept the current JSON and protobuf encodings of protobuf Empty."""
+    return (
+        response["body_len"] == 0
+        or response.get("body") == {}
+        or (response["body_len"] == 4 and response.get("body") is None)
+    )
+
+
 def credential_id(response: dict[str, Any]) -> str:
     """Extract the documented DNS credential id."""
     body = response.get("body")
@@ -649,7 +658,7 @@ def main() -> int:
             )
             if (
                 deleted["status"] != 200
-                or deleted["body_len"] != 0
+                or not is_empty_response(deleted)
                 or listed["status"] != 200
                 or contains_id(listed.get("body"), created_id)
                 or malformed["status"] < 400
@@ -680,7 +689,7 @@ def main() -> int:
             )
             if (
                 selected["status"] != 200
-                or selected["body_len"] != 0
+                or not is_empty_response(selected)
                 or current["status"] != 200
                 or not contains_id(current.get("body"), created_id)
                 or invalid["status"] < 400
