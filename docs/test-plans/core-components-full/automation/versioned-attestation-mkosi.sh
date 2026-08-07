@@ -38,8 +38,9 @@ p=pathlib.Path(sys.argv[1]).read_bytes(); r=pathlib.Path(sys.argv[2]); r.joinpat
 PY
 for kind in truncated unknown oversized; do if "$UTIL" attest-info -i "$ROOT/$kind.bin" >"$ROOT/$kind.out" 2>"$ROOT/$kind.err"; then eval "${kind^^}_RC=0"; else eval "${kind^^}_RC=$?"; fi; done
 test "$TRUNCATED_RC" -ne 0 -a "$UNKNOWN_RC" -ne 0 -a "$OVERSIZED_RC" -ne 0
-if "$UTIL" attest-json -i "$ROOT/v0.bin" -o "$ROOT/missing/out.json" 2>"$ROOT/output.err"; then OUTPUT_RC=0; else OUTPUT_RC=$?; fi
-test "$OUTPUT_RC" -ne 0; test ! -e "$ROOT/missing/out.json"
+printf 'not-a-directory\n' >"$ROOT/output-parent"
+if "$UTIL" attest-json -i "$ROOT/v0.bin" -o "$ROOT/output-parent/out.json" 2>"$ROOT/output.err"; then OUTPUT_RC=0; else OUTPUT_RC=$?; fi
+test "$OUTPUT_RC" -ne 0; test ! -e "$ROOT/output-parent/out.json"
 V0_HASH=$(sha256sum "$ROOT/v0.bin"|cut -d' ' -f1); V1_HASH=$(sha256sum "$ROOT/v1.bin"|cut -d' ' -f1); test "$V0_HASH" != "$V1_HASH"; test "$V0_HASH" != "$(sha256sum "$ROOT/app-b.bin"|cut -d' ' -f1)"
 stop_sim
 if "$UTIL" attest -o "$ROOT/device.bin" 2>"$ROOT/device.err"; then DEVICE_RC=0; else DEVICE_RC=$?; fi
