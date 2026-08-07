@@ -60,6 +60,12 @@ Teardown stops QEMU first, removes the binding, and deletes the TAP. Operations
 are serialized by `netd`. The design intentionally does not add ownership
 aliases; deployments must use unique instance IDs.
 
+Every UID listed in `allowed_uids` is mutually trusted for network operations:
+the protocol does not pin an UID to an instance namespace, so any allowed UID
+can prepare, check, or remove any deterministic identity. Deploy VMM instances
+that do not share this trust boundary with dedicated netd sockets and distinct
+allowlists.
+
 `netd` invokes fixed absolute `ip` and `virsh` executables with separate
 arguments. It never accepts a command, executable path, TAP name, or raw XML
 from a client. Filter XML is generated internally with XML escaping and is
@@ -109,3 +115,8 @@ dstack-vmm --config ./vmm.toml \
 
 User networking and bridge networking with `mode = "none"` never connect to
 `netd`. Libvirt mode fails closed if `netd` is unavailable.
+
+Filtered TAP netdevs currently set `vhost=off`. This keeps the initial backend
+on the directly bound TAP path and avoids adding `/dev/vhost-net` permissions
+to the QEMU user. It is a deliberate security-first throughput tradeoff; a
+future configurable vhost mode requires equivalent filter integration tests.

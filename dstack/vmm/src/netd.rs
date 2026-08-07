@@ -65,6 +65,8 @@ pub enum Request {
         #[serde(flatten)]
         identity: InterfaceIdentity,
     },
+    /// Verify a deterministic TAP and binding for operations and integration
+    /// diagnostics. The VMM startup path uses Prepare rather than Check.
     Check {
         #[serde(flatten)]
         identity: InterfaceIdentity,
@@ -137,7 +139,7 @@ pub async fn request(socket: &Path, request: &Request) -> Result<String> {
 }
 
 pub async fn serve(config: NetdConfig) -> Result<()> {
-    if unsafe { libc::geteuid() } != 0 {
+    if !nix::unistd::Uid::effective().is_root() {
         bail!("netd must run as root");
     }
     require_executable(IP_PATH)?;

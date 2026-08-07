@@ -618,6 +618,9 @@ impl QemuCommandBuilder<'_> {
                                 vm_id: self.vm.manifest.id.clone(),
                                 nic_index: index,
                             });
+                            // Keep the filtered backend conservative: QEMU
+                            // uses the TAP path on which libvirt installed the
+                            // nwfilter binding instead of opening vhost-net.
                             format!(
                                 "tap,id={net_id},ifname={tap},script=no,downscript=no,vhost=off"
                             )

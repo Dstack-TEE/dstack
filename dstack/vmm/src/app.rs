@@ -553,9 +553,12 @@ impl App {
                 netd::request(&self.config.netd.socket, &NetdRequest::Prepare(request)).await
             {
                 for identity in prepared.into_iter().rev() {
-                    let _ =
+                    if let Err(cleanup_error) =
                         netd::request(&self.config.netd.socket, &NetdRequest::Remove { identity })
-                            .await;
+                            .await
+                    {
+                        warn!(%cleanup_error, "failed to roll back prepared filtered network");
+                    }
                 }
                 return Err(error).context("failed to prepare libvirt-filtered networking");
             }
