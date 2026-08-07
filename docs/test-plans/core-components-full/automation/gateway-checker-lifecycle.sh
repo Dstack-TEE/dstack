@@ -77,10 +77,13 @@ write_compose() {
     "$1" >"$work/.host-shared/app-compose.json"
 }
 run_checker() {
-  set +e
-  timeout 30 dstack-util gateway-checker --work-dir "$work" >"$ROOT/$1.log" 2>&1
-  printf '%s' "$?" >"$ROOT/$1.rc"
-  set -e
+  local rc
+  if timeout 30 dstack-util gateway-checker --work-dir "$work" >"$ROOT/$1.log" 2>&1; then
+    rc=0
+  else
+    rc=$?
+  fi
+  printf '%s' "$rc" >"$ROOT/$1.rc"
 }
 
 # An app that never enabled dstack-gateway has nothing to supervise. The
