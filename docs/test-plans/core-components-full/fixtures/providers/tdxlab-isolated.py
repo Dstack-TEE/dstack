@@ -831,6 +831,10 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         isinstance(actions, list)
         and "Containerd stargz snapshotter integrity and fallback" in actions
     )
+    dashboard_log_requested = (
+        isinstance(actions, list)
+        and "Dashboard metrics and container log filtering" in actions
+    )
     config_entry_requested = (
         isinstance(actions, list)
         and "Guest-agent configuration precedence and compose deserialization"
@@ -876,6 +880,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         or sysbox_requested
         or journal_lifecycle_requested
         or stargz_lifecycle_requested
+        or dashboard_log_requested
         or host_shared_lifecycle_requested
         or wireguard_checker_requested
     )
@@ -1217,10 +1222,10 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         ]
         # Verify the exact access path before exposing the fixture to a case.
         run([*ssh_argv, "true"], timeout=30)
-        if sysbox_requested or stargz_lifecycle_requested:
+        if sysbox_requested or stargz_lifecycle_requested or dashboard_log_requested:
             # The SSH installer intentionally prunes bootstrap-only images after
-            # pre-launch. Reload the pinned Sysbox workload corpus once access
-            # is ready so the case never depends on registry availability.
+            # pre-launch. Reload the pinned workload corpus once access is ready
+            # so image-dependent cases never rely on registry availability.
             loaded = run(
                 [
                     *ssh_argv,
