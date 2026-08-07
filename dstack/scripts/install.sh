@@ -6,7 +6,7 @@
 set -eu
 
 DEFAULT_REPO="https://github.com/Dstack-TEE/dstack"
-DEFAULT_REF="master"
+DEFAULT_REF="next"
 DEFAULT_PREFIX="/usr/local"
 
 usage() {
@@ -15,13 +15,13 @@ Install dstackup from source.
 
 Usage:
   dstack/scripts/install.sh [options]
-  curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/master/dstack/scripts/install.sh | sh
+  curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/next/dstack/scripts/install.sh | sh
 
 Options:
   --repo URL       Git repository to clone when not run from a checkout.
                   Default: https://github.com/Dstack-TEE/dstack
   --ref REF        Git ref to checkout when cloning or updating DSTACK_SRC.
-                  Default: master
+                  Default: next
   --src DIR        Persistent source checkout to build from.
                   Default: a temporary checkout
   --prefix DIR     Install dstackup under DIR/bin. Use the same DIR with
