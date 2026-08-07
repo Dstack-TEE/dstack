@@ -44,8 +44,9 @@ APP1=$(sha256sum "$ROOT/out/app-keys.json"|cut -d' ' -f1)
 "$UTIL" gen-app-keys --ca-level 1 --output "$ROOT/out/app-keys-2.json"
 APP2=$(sha256sum "$ROOT/out/app-keys-2.json"|cut -d' ' -f1)
 test "$APP1" != "$APP2"
-if "$UTIL" gen-app-keys --ca-level 1 --output "$ROOT/missing/app.json" >"$ROOT/app-fault.out" 2>"$ROOT/app-fault.err"; then APP_FAULT_RC=0; else APP_FAULT_RC=$?; fi
-test "$APP_FAULT_RC" -ne 0; test ! -e "$ROOT/missing/app.json"
+printf 'not-a-directory\n' >"$ROOT/app-output-parent"
+if "$UTIL" gen-app-keys --ca-level 1 --output "$ROOT/app-output-parent/app.json" >"$ROOT/app-fault.out" 2>"$ROOT/app-fault.err"; then APP_FAULT_RC=0; else APP_FAULT_RC=$?; fi
+test "$APP_FAULT_RC" -ne 0; test ! -e "$ROOT/app-output-parent/app.json"
 "$UTIL" gen-app-keys --ca-level 1 --output "$ROOT/out/app-retry.json"
 test "$(jq -r '.ca_cert|length>0' "$ROOT/out/app-retry.json")" = true
 # Logs must not contain private PEM bodies or serialized private key fields.
