@@ -51,11 +51,11 @@ Capture effective configuration, input files/requests, existing processes/resour
 <a id="tc-gw-internal-001-step-02"></a>
 ### Step 2: Exercise behavior and boundaries
 
-Start production/debug cert generation, existing/missing/mismatched files, alternate names, crypto providers, low file limits and bind conflicts.
+Start production certificate generation, disabled debug-listener configuration, existing/missing/mismatched files, alternate names, crypto providers, low file limits and bind conflicts.
 
 **Expected results:**
 
-- Production obtains attested certificates, debug keys never enter production, permissions are restrictive, limits are raised or fail clearly, and no partial listener remains.
+- Production obtains attested certificates, the disabled debug listener has no key-material configuration, permissions are restrictive, limits are raised or fail clearly, and no partial listener remains.
 
 <a id="tc-gw-internal-001-step-03"></a>
 ### Step 3: Inject failure and concurrency
