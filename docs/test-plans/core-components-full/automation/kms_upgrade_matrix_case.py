@@ -933,7 +933,7 @@ class MatrixRun:
                     "cf_api_url": "http://127.0.0.1:18080/client/v4",
                     "set_as_default": True,
                     "dns_txt_ttl": 1,
-                    "max_dns_wait": 300,
+                    "max_dns_wait": 5,
                 },
             )
             admin_rpc(
@@ -949,6 +949,7 @@ class MatrixRun:
                 {"domain": "gateway-candidate.test", "force": True},
             )
             certificate_deadline = time.monotonic() + 120
+            cert_status: dict[str, Any] = {}
             while time.monotonic() < certificate_deadline:
                 domain = admin_rpc(
                     "GetZtDomain", {"domain": "gateway-candidate.test"}
@@ -961,7 +962,8 @@ class MatrixRun:
                 time.sleep(1)
             else:
                 raise RuntimeError(
-                    "Gateway ZT-domain certificate was not loaded within 120 seconds"
+                    "Gateway ZT-domain certificate was not loaded within 120 seconds: "
+                    f"{cert_status}"
                 )
         if evidence_observer:
             observer_status = wait_http(
