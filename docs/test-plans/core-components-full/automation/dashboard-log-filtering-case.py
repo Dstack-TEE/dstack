@@ -201,6 +201,11 @@ docker logs --timestamps "$name"
                 90,
             )
             if fixture.returncode:
+                observations["container_fixture_diagnostic"] = {
+                    "returncode": fixture.returncode,
+                    "stdout_tail": fixture.stdout[-2000:],
+                    "stderr_tail": fixture.stderr[-2000:],
+                }
                 raise AssertionError("failed to create timestamped log fixture")
             timestamps = marker_times(fixture, markers)
             ordered = [timestamps[marker] for marker in markers]
