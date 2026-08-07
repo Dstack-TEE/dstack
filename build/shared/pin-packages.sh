@@ -22,8 +22,25 @@ if [ -z "$PKG_LIST" ]; then
     exit 1
 fi
 
-echo "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/${SNAPSHOT_DATE} bookworm main" > /etc/apt/sources.list
-echo "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/${SNAPSHOT_DATE} bookworm-security main" >> /etc/apt/sources.list
+# Detect base image suite (e.g. bookworm, trixie). Different Debian releases
+# ship different sources layouts (legacy sources.list vs deb822
+# sources.list.d/*.sources), so we must wipe both and rewrite from scratch
+# pointing at the frozen snapshot for this exact suite. Otherwise the base
+# image's default live sources stay active and packages drift on every build.
+# shellcheck source=/dev/null
+SUITE=$(. /etc/os-release && echo "${VERSION_CODENAME:-}")
+if [ -z "$SUITE" ]; then
+    echo "could not detect Debian suite from /etc/os-release" >&2
+    exit 1
+fi
+
+rm -f /etc/apt/sources.list
+rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources
+
+cat > /etc/apt/sources.list <<EOF
+deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/${SNAPSHOT_DATE} ${SUITE} main
+deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/${SNAPSHOT_DATE} ${SUITE}-security main
+EOF
 echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/10no-check-valid-until
 
 mkdir -p /etc/apt/preferences.d
