@@ -18,6 +18,7 @@
 - Read and obey [`automation/execution-guide.md`](../../../automation/execution-guide.md) before executing Step 1.
 - Read `DSTACK_TEST_RUNTIME_MANIFEST` once and use its prepared binaries, shared Cargo target, fixture paths, commit, and toolchain as authoritative. Do not rediscover them from processes, old sessions, or broad source searches.
 - Runtime state and evidence remain case-scoped even though immutable build outputs are shared.
+- The current Bun authorization backend resolves decisions at a finalized block. The case-owned Ethereum fixture must implement both `eth_chainId` and `eth_blockNumber`, return a head above the configured confirmation depth, and accept the resulting block-qualified `eth_call` requests.
 - Use the case metadata, inventories, and prepared manifest as the complete initial execution specification. Source inspection before the first tested operation is allowed only for a specific unresolved ambiguity.
 - Do not run a clean build unless this case explicitly tests build, packaging, features, or reproducibility. Otherwise reuse the shared target and prepared binaries.
 - If a mismatch occurs, write the provisional result first. Perform narrow source-level root-cause analysis only when failure investigation is enabled.
