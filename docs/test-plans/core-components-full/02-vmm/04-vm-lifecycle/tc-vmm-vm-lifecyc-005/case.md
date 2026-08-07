@@ -22,6 +22,7 @@
 - Do not run a clean build unless this case explicitly tests build, packaging, features, or reproducibility. Otherwise reuse the shared target and prepared binaries.
 - If a mismatch occurs, write the provisional result first. Perform narrow source-level root-cause analysis only when failure investigation is enabled.
 - Use `values.vmm.test_input.create_stopped_helper_argv` for the first valid creation and register its returned JSON `id` in `values.vmm.test_input.created_vms_registry` before any follow-on action. Use the exact `values.vmm.json_prpc_routes` and `values.vmm.commands.list_vms`; do not inspect the helper, VMM config, CLI help, or implementation source to rediscover these prepared interfaces. Poll public status for state transitions and asynchronous removal, and use bounded force-stop/remove cleanup unless graceful shutdown is the behavior under test.
+- Current `VmInfo` intentionally does not expose the internal vsock CID. Verify externally visible reload reconstruction with the case-owned VMM and run the exact candidate regression `app::tests::stopped_vms_keep_their_cid_reserved_across_a_reload` from the prepared shared target for the internal CID-pool invariant; do not infer a CID from list ordering.
 
 ## Objective
 
@@ -50,11 +51,11 @@ Query the relevant health, configuration, and baseline state for reload and cras
 <a id="tc-vmm-vm-lifecyc-005-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Create a stopped VM and record its CID, stop the case-owned VMM, temporarily stage the VM work directory outside the configured run path, and restart the VMM without that VM in memory. Restore the persisted work directory only after startup and invoke `Vmm.ReloadVms`. Invoke reload again while the VM is stopped in memory, create a second stopped VM, compare their CIDs, and exercise partially-created and stale workdirs.
+Create a stopped VM, stop the case-owned VMM, temporarily stage the VM work directory outside the configured run path, and restart the VMM without that VM in memory. Restore the persisted work directory only after startup and invoke `Vmm.ReloadVms`. Invoke reload again while the VM is stopped in memory, create a second stopped VM, exercise partially-created and stale workdirs, and run the exact candidate CID-reservation regression.
 
 **Expected results:**
 
-- `ReloadVms` loads exactly one filesystem-only stopped VM, preserves its CID, and does not reserve the newly allocated CID twice. A subsequent reload keeps that stopped in-memory CID reserved, so the second VM receives a distinct CID; reload also reconciles stale resources without duplication or auto-starting either VM.
+- `ReloadVms` loads exactly one filesystem-only stopped VM without duplication or auto-start, a second stopped VM can be created after the in-memory reload, and the exact source regression proves that the first VM's internal CID remains reserved across reload. Reload also reconciles stale resources without exposing internal allocation state through `VmInfo`.
 
 <a id="tc-vmm-vm-lifecyc-005-step-03"></a>
 ### Step 3: Verify state, isolation, and diagnostics
