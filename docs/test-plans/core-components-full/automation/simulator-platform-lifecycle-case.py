@@ -90,6 +90,28 @@ def main() -> int:
                 raise RuntimeError(
                     f"guest install failed: {done.stderr.decode(errors='replace')[-500:]}"
                 )
+        image_dir = store / image
+        for name in (
+            "measurement.gcp.eventlog.bin",
+            "measurement.gcp.cbor",
+            "measurement.aws.replay.json",
+            "sha256sum.txt",
+        ):
+            source = image_dir / name
+            remote_name = "tpm_eventlog.bin" if name.endswith("eventlog.bin") else name
+            done = run(
+                [
+                    *ssh,
+                    f"install -m 0644 /dev/stdin /run/dstack-test-platform/{remote_name}",
+                ],
+                data=source.read_bytes(),
+                timeout=60,
+            )
+            if done.returncode:
+                raise RuntimeError(
+                    f"failed to install simulator replay fixture {name}: "
+                    + done.stderr.decode(errors="replace")[-500:]
+                )
         done = run([*ssh, "/run/dstack-test-platform/run-case"], timeout=600)
         log = done.stdout + done.stderr
         (artifacts / "mkosi-platform-lifecycle.log").write_bytes(log)
