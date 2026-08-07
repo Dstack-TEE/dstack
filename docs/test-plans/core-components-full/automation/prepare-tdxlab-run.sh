@@ -26,9 +26,25 @@ require_command() {
   }
 }
 
-for command in cargo curl docker dstack-acpi-tables git jq mkosi npm python3 tar; do
+for command in cargo curl docker dstack-acpi-tables git jq mkosi npm python3 tar unshare; do
   require_command "$command"
 done
+
+user_namespace_ready() {
+  unshare --user --map-root-user true >/dev/null 2>&1
+}
+
+if ! user_namespace_ready; then
+  if [[ $(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null) == 1 ]]; then
+    sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0
+  fi
+  user_namespace_ready || {
+    printf '%s\n' \
+      'Unprivileged user namespaces are unavailable after prerequisite setup.' \
+      'mkosi cannot build exact-revision guest images in this environment.' >&2
+    exit 1
+  }
+fi
 
 docker_ready() {
   sudo su kvin -c "docker info --format '{{.ServerVersion}}'" >/dev/null 2>&1
