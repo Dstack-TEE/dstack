@@ -92,8 +92,8 @@ def main() -> int:
             after = output.read_bytes()
             if written.returncode or len(before) != 48:
                 raise AssertionError("file output failed")
-            if repeat.returncode == 0 or before != after:
-                raise AssertionError("existing output was overwritten")
+            if repeat.returncode or len(after) != 8 or before == after:
+                raise AssertionError("atomic existing-file replacement failed")
             mode = stat.S_IMODE(output.stat().st_mode)
             if mode != 0o600:
                 raise AssertionError(f"random output mode was {mode:o}")
@@ -106,7 +106,7 @@ def main() -> int:
             "hex_length": len(encoded.stdout),
             "file_length": 48,
             "file_mode": "0600",
-            "overwrite_rejected": True,
+            "atomic_replacement": True,
             "binary_hex_exact": True,
             "random_values_persisted": False,
         }
@@ -114,7 +114,7 @@ def main() -> int:
             {
                 "id": f"{case_id}-step-02",
                 "status": "PASS",
-                "observed": "Atomic owner-only file output rejected overwrite and independent hex decoding matched.",
+                "observed": "Atomic owner-only file replacement and independent hex decoding matched.",
             }
         )
         print(f"STEP {case_id}-step-02 END - PASS", flush=True)
