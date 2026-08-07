@@ -48,11 +48,44 @@ export interface DockerConfig extends SortableObject {
   token_key?: string;
 }
 
+export interface GpuPolicy extends SortableObject {
+  /** Guest-side default is true; omit to keep it rather than sending false. */
+  attest_gpu?: boolean;
+  /** Rego v0 policy over nvattest claims; must define data.policy.nv_match. */
+  rego?: string;
+  allow_devtools?: boolean;
+  allow_debug?: boolean;
+  allow_insecure_boot?: boolean;
+}
+
 export interface Requirements extends SortableObject {
   os_version?: string;
   platforms?: RequirementPlatform[];
   tdx_measure_acpi_tables?: boolean;
   launch_token_hash?: string;
+  /** Measured even when absent: an omitted policy is measured as {}. */
+  gpu_policy?: GpuPolicy;
+}
+
+export interface PortAttrs extends SortableObject {
+  port: number;
+  /** Send a PROXY protocol header on outbound connections to this port. */
+  pp?: boolean;
+}
+
+export interface PortPolicy extends SortableObject {
+  ports?: PortAttrs[];
+  /** Forward only to the listed ports; reject the rest at TCP-accept time. */
+  restrict_mode?: boolean;
+}
+
+export interface VerityVolume extends SortableObject {
+  /** Bare image file name resolved by the VMM under its volumes dir. */
+  source: string;
+  /** Hex dm-verity root hash: the volume's content identity. */
+  verity_root: string;
+  /** Absolute mount path inside the guest. */
+  target: string;
 }
 
 export interface AppCompose extends SortableObject {
@@ -77,6 +110,15 @@ export interface AppCompose extends SortableObject {
   allowed_envs?: string[];
   no_instance_id?: boolean;
   secure_time?: boolean;
+  /** Bash scripts run before the application runner starts. */
+  init_script?: string[];
+  storage_fs?: "ext4" | "zfs";
+  /** Human-readable size such as "2G"; dstack-types serializes it as a string. */
+  swap_size?: string;
+  /** Event log digest format. Omit for v1, which dstack-types omits too. */
+  event_log_version?: number;
+  port_policy?: PortPolicy;
+  verity_volumes?: VerityVolume[];
   requirements?: Requirements;
   // Legacy fields for backward compatibility
   bash_script?: string;

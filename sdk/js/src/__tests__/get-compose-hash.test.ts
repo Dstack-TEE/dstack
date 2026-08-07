@@ -559,4 +559,84 @@ describe('Deterministic JSON Serialization', () => {
       expect(hash).toHaveLength(64)
     })
   })
+
+  describe('Fields Declared From dstack-types', () => {
+    // These were reachable through the index signature all along; declaring them
+    // gives callers type checking and pins the wire shapes that are easy to get
+    // wrong. The expected hashes are the values this same function produces, so
+    // they double as cross-language vectors for the Go and Python SDKs.
+
+    it('should hash port_policy', () => {
+      const compose: AppCompose = {
+        runner: "docker-compose",
+        docker_compose_file: "docker-compose.yml",
+        port_policy: {
+          ports: [{ port: 443, pp: true }, { port: 8080, pp: false }],
+          restrict_mode: true,
+        },
+      }
+
+      expect(getComposeHash(compose)).toBe(
+        "6be823decce06179698ee6fd087d82951c21ba6a24ba6419a6801b0be1ce2bdc"
+      )
+    })
+
+    it('should hash swap_size as a string, not a byte count', () => {
+      const compose: AppCompose = {
+        runner: "docker-compose",
+        storage_fs: "zfs",
+        swap_size: "2G",
+      }
+
+      expect(getComposeHash(compose)).toBe(
+        "b140f74b52ae10dc42efe16e4368784b60f755ada3781a0be8b8aafae6a6ab86"
+      )
+    })
+
+    it('should hash init_script, event_log_version and verity_volumes', () => {
+      expect(getComposeHash({
+        runner: "docker-compose",
+        init_script: ["echo one", "echo two"],
+      })).toBe("8c35247d5b685a8d24b97182f3b0a4e3c1ab6d8eecee6704424a0de0dd8a66a3")
+
+      expect(getComposeHash({
+        runner: "docker-compose",
+        event_log_version: 2,
+      })).toBe("8d1f7a3b6a6fc64236667a69c7618c5075d85d4c3afd8fb9a4b0c733b60ae8f5")
+
+      expect(getComposeHash({
+        runner: "docker-compose",
+        verity_volumes: [{
+          source: "data.img",
+          verity_root: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+          target: "/mnt/data",
+        }],
+      })).toBe("3eb00892f370ab31f854172991b655a0880ccb7786d121dfb75cbd9b038df19f")
+    })
+
+    it('should hash requirements.gpu_policy', () => {
+      const compose: AppCompose = {
+        runner: "docker-compose",
+        requirements: {
+          gpu_policy: { rego: "package policy\nnv_match := true" },
+        },
+      }
+
+      expect(getComposeHash(compose)).toBe(
+        "a5032c9af6ccb3403062e80def3b41d4308753da5237735d99c913484fc75865"
+      )
+    })
+
+    it('should hash the tpm key provider', () => {
+      const compose: AppCompose = {
+        runner: "docker-compose",
+        key_provider: "tpm",
+        key_provider_id: "aabb",
+      }
+
+      expect(getComposeHash(compose)).toBe(
+        "e4bfbeaf851f73b873f04e74cc5699668dc282bd96e15dbf0ab1e5e05cc2ca76"
+      )
+    })
+  })
 })
