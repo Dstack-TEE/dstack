@@ -8,8 +8,9 @@ Thank you for your interest in contributing to this project!
   request against it unless a maintainer asks otherwise.
 - `release/vX.Y` carries a released line. It only takes fixes cherry-picked
   back from `next`; do not develop on it directly. Version tags are cut here.
-- `dev-*` is reserved for shared integration branches that need full CI. A
-  personal feature branch does not need to follow that pattern.
+
+Name a working branch whatever describes it. CI runs on pull requests, so a
+branch gets its checks once a PR is open rather than on every push.
 
 The default branch was renamed from `master` to `next`. Web links, raw file
 URLs, and the REST API redirect, but the old ref name is gone at the git
