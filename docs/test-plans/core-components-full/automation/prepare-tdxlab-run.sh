@@ -51,11 +51,15 @@ dev_image="dstack-dev-mkosi-$short_revision"
 image_store=$(jq -er '.environment.DSTACK_TEST_IMAGE_STORE' "$template")
 image_store=$(realpath -e -- "$image_store")
 image_matches() {
-  local name=$1 expected_dev=$2 metadata="$image_store/$1/metadata.json"
+  local name=$1 expected_dev=$2 image="$image_store/$1"
+  local metadata="$image/metadata.json"
   [[ -f $metadata ]] &&
     [[ $(jq -r '.git_revision' "$metadata") == "$revision" ]] &&
     [[ $(jq -r '.backend' "$metadata") == mkosi ]] &&
-    [[ $(jq -r '.is_dev' "$metadata") == "$expected_dev" ]]
+    [[ $(jq -r '.is_dev' "$metadata") == "$expected_dev" ]] &&
+    [[ $(sha256sum "$image/sha256sum.txt" | cut -d' ' -f1) == \
+      "$(tr -d '[:space:]' <"$image/digest.txt")" ]] &&
+    (cd "$image" && sha256sum --check --status sha256sum.txt)
 }
 for row in "$prod_image:false" "$dev_image:true"; do
   IFS=: read -r name expected_dev <<<"$row"
@@ -122,12 +126,21 @@ if ! image_matches "$prod_image" false || ! image_matches "$dev_image" true; the
       printf 'mkosi output flavor mismatch: %s\n' "$source" >&2
       exit 1
     }
+    [[ $(jq -r '.backend' "$metadata") == mkosi ]] || {
+      printf 'mkosi output backend mismatch: %s\n' "$source" >&2
+      exit 1
+    }
+    (cd "$source" && sha256sum --check --status sha256sum.txt) || {
+      printf 'mkosi output checksum verification failed: %s\n' "$source" >&2
+      exit 1
+    }
+    [[ $(sha256sum "$source/sha256sum.txt" | cut -d' ' -f1) == \
+      "$(tr -d '[:space:]' <"$source/digest.txt")" ]] || {
+      printf 'mkosi output digest mismatch: %s\n' "$source" >&2
+      exit 1
+    }
     stage="$image_store/.$name.tmp.$$"
     sudo cp -a -- "$source" "$stage"
-    normalized=$(mktemp "$cache_root/tmp/metadata.XXXXXX.json")
-    jq '.backend = "mkosi"' "$metadata" >"$normalized"
-    sudo install -m 0644 "$normalized" "$stage/metadata.json"
-    rm -f "$normalized"
     sudo chown -R root:root "$stage"
     sudo mv -- "$stage" "$image_store/$name"
   done
