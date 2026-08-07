@@ -26,9 +26,15 @@ require_command() {
   }
 }
 
-for command in cargo curl git jq npm python3 tar; do
+for command in cargo curl dstack-acpi-tables git jq npm python3 tar; do
   require_command "$command"
 done
+acpi_tables_bin=$(realpath -e -- "$(command -v dstack-acpi-tables)")
+qemu_data_dir=$(realpath -e -- "$(dirname "$acpi_tables_bin")/../share/qemu")
+test -d "$qemu_data_dir" || {
+  printf 'missing required dstack-acpi-tables data directory: %s\n' "$qemu_data_dir" >&2
+  exit 1
+}
 test -x "$HOME/.bun/bin/bun" || {
   printf 'missing required command: %s\n' "$HOME/.bun/bin/bun" >&2
   exit 1
@@ -88,12 +94,15 @@ if ! sudo su kvin -c "docker image inspect alpine:latest" >/dev/null 2>&1; then
   sudo su kvin -c "docker pull alpine:latest"
 fi
 
-python3 - "$template" "$generated_lab" "$plan" "$fixture_root" "$foundry_bin" <<'PY'
+python3 - "$template" "$generated_lab" "$plan" "$fixture_root" "$foundry_bin" \
+  "$acpi_tables_bin" "$qemu_data_dir" <<'PY'
 import json
 import pathlib
 import sys
 
-template, output, plan, full_tdx, foundry_bin = map(pathlib.Path, sys.argv[1:])
+template, output, plan, full_tdx, foundry_bin, acpi_tables, qemu_data = map(
+    pathlib.Path, sys.argv[1:]
+)
 value = json.loads(template.read_text())
 environment = value.setdefault("environment", {})
 providers = {
@@ -110,6 +119,8 @@ for variable, name in providers.items():
 environment["DSTACK_TEST_VERIFIER_FULL_TDX_IMAGE_DIR"] = str(
     full_tdx.resolve(strict=True)
 )
+environment["DSTACK_TEST_ACPI_TABLES_BINARY"] = str(acpi_tables.resolve(strict=True))
+environment["DSTACK_TEST_QEMU_DATA_DIR"] = str(qemu_data.resolve(strict=True))
 path_prepend = value.setdefault("environment_path_prepend", [])
 foundry_path = str(foundry_bin.resolve(strict=True))
 if foundry_path not in path_prepend:
