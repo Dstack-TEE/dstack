@@ -21,6 +21,8 @@ node_name = ""
 registry = ""
 
 [cvm]
+# Process manager: "supervisor" (default) or experimental "systemd".
+pm = "supervisor"
 # TEE platform: "auto", "tdx", or "amd-sev-snp". Auto selects AMD SEV-SNP when host CPU flags include sev_snp, otherwise TDX.
 platform = "auto"
 qemu_path = ""
@@ -178,19 +180,19 @@ tokens = []
 htpasswd_file = ""
 
 [supervisor]
-# Experimental: set to "systemd" to let dstack-vmm launch each VM as a
-# transient systemd service instead of using the standalone supervisor.
-backend = "supervisor"
-# Transient services are named <prefix>-<sha256(vm-id)>.service.
-systemd_unit_prefix = "dstack-vm"
-# Process metadata used to reconcile transient services after a VMM restart.
-systemd_state_dir = "./run/systemd-processes"
 exe = "./supervisor"
 sock = "./run/supervisor.sock"
 pid_file = "./run/supervisor.pid"
 log_file = "./run/supervisor.log"
 detached = false
 auto_start = true
+
+[systemd]
+# Used when cvm.pm = "systemd". Transient services are named
+# <unit_prefix>-<sha256(vm-id)>.service.
+unit_prefix = "dstack-vm"
+# Process metadata used to reconcile transient services after a VMM restart.
+state_dir = "./run/systemd-processes"
 
 [host_api]
 ident = "dstack VMM"

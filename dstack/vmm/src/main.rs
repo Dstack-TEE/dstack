@@ -329,10 +329,10 @@ async fn main() -> Result<()> {
              token, or bind `address` to localhost / a Unix socket."
         );
     }
-    let supervisor = if config.supervisor.backend == config::ProcessManagerBackend::Systemd {
+    let supervisor = if config.cvm.pm == config::ProcessManagerBackend::Systemd {
         process_manager::ProcessManager::systemd(
-            config.supervisor.systemd_state_dir.clone(),
-            config.supervisor.systemd_unit_prefix.clone(),
+            config.systemd.state_dir.clone(),
+            config.systemd.unit_prefix.clone(),
         )?
     } else {
         let cfg = &config.supervisor;

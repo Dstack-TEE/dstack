@@ -8,14 +8,15 @@ kernel-side shutdown, such as encrypted-memory teardown.
 Enable it in the VMM configuration:
 
 ```toml
-[supervisor]
-backend = "systemd"
-systemd_unit_prefix = "dstack-vm"
-systemd_state_dir = "/run/dstack-vmm/systemd-processes"
+[cvm]
+pm = "systemd"
+
+[systemd]
+unit_prefix = "dstack-vm"
+state_dir = "/run/dstack-vmm/systemd-processes"
 ```
 
-The section retains its historical name so existing configurations remain compatible.
-The default backend is `supervisor`. Keep the existing `supervisor.*` settings (exe/sock/pid_file/log_file/...) in place; they are currently still required even when using `backend = "systemd"`.
+The default process manager is `supervisor`.
 
 ## Runtime model
 
@@ -51,7 +52,7 @@ child shutdown. systemd owns the final cgroup lifetime. A stop request is
 submitted asynchronously so the VMM can report a VM as stopping while QEMU is
 still completing kernel teardown.
 
-Process metadata is persisted in `systemd_state_dir`. It is required because a
+Process metadata is persisted in `systemd.state_dir`. It is required because a
 successful transient unit may be garbage-collected after exit, while the VMM
 still needs the original process annotation and CID during reconciliation.
 

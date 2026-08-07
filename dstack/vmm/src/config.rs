@@ -294,6 +294,9 @@ impl TdxAttestationVariantConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CvmConfig {
+    /// Process manager used to launch and monitor VM processes.
+    #[serde(default)]
+    pub pm: ProcessManagerBackend,
     /// TEE platform to use when launching CVMs. Omit (or set `auto`) to detect
     /// the host TEE from /proc/cpuinfo (AMD SEV-SNP vs Intel TDX); set `tdx` or
     /// `amd-sev-snp` to force a platform.
@@ -495,18 +498,29 @@ fn default_systemd_state_dir() -> PathBuf {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SupervisorConfig {
-    #[serde(default)]
-    pub backend: ProcessManagerBackend,
     pub exe: String,
     pub sock: String,
     pub pid_file: String,
     pub log_file: String,
     pub detached: bool,
     pub auto_start: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SystemdConfig {
     #[serde(default = "default_systemd_unit_prefix")]
-    pub systemd_unit_prefix: String,
+    pub unit_prefix: String,
     #[serde(default = "default_systemd_state_dir")]
-    pub systemd_state_dir: PathBuf,
+    pub state_dir: PathBuf,
+}
+
+impl Default for SystemdConfig {
+    fn default() -> Self {
+        Self {
+            unit_prefix: default_systemd_unit_prefix(),
+            state_dir: default_systemd_state_dir(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -549,10 +563,13 @@ pub struct Config {
 
     /// CVM configuration
     pub cvm: CvmConfig,
-
     /// Privileged host networking service configuration.
     #[serde(default)]
     pub netd: NetdConfig,
+
+    /// Experimental systemd process manager configuration
+    #[serde(default)]
+    pub systemd: SystemdConfig,
     /// Gateway configuration
     pub gateway: GatewayConfig,
 
