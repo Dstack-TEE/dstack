@@ -18,6 +18,7 @@ mkdir -p /sys/kernel/config/tsm/report
 VM_CONFIG='{}'
 MR_CONFIG='{"version":3,"app_id":"","compose_hash":"","key_provider":"none"}'
 GCP_TPM_REPLAY=null
+AWS_PCR_REPLAY=null
 if [[ "$TEE_PLATFORM" == dstack-tdx ]]; then
   VM_CONFIG=$(jq -c --arg variant "${TDX_ATTESTATION_VARIANT:?}" \
     '.vm_config | fromjson | .tdx_attestation_variant = $variant' \
@@ -62,11 +63,14 @@ elif [[ "$TEE_PLATFORM" == dstack-aws-nitro-tpm ]]; then
   MEASUREMENT_HASH=$(sha256sum "$WORK/measurement.aws.cbor" | cut -d' ' -f1)
   printf '%s  measurement.aws.cbor\n' "$MEASUREMENT_HASH" > "$WORK/sha256sum.txt"
   OS_IMAGE_HASH=$(sha256sum "$WORK/sha256sum.txt" | cut -d' ' -f1)
+  AWS_PCR_REPLAY=$(jq -cn --arg pcr "$ZERO_PCR" \
+    '{version:1,events:[],pcr4:$pcr,pcr7:$pcr,pcr12:$pcr}')
   VM_CONFIG=$(jq -cn \
     --arg os "$OS_IMAGE_HASH" \
     --arg checksum "$(base64 -w0 "$WORK/sha256sum.txt")" \
     --arg measurement "$(base64 -w0 "$WORK/measurement.aws.cbor")" \
-    '{os_image_hash:$os,aws_measurement:{checksum_file:$checksum,measurement:$measurement}}')
+    --argjson replay "$AWS_PCR_REPLAY" \
+    '{os_image_hash:$os,aws_measurement:{checksum_file:$checksum,measurement:$measurement},aws_pcr_replay:$replay}')
 fi
 
 cleanup() {
@@ -102,7 +106,8 @@ cat > "$SIM_CONFIG" <<JSON
   "collateral_base_url": "http://127.0.0.1:18088",
   "mr_config": $(jq -Rn --arg value "$MR_CONFIG" '$value'),
   "vm_config": $(jq -Rn --arg value "$VM_CONFIG" '$value'),
-  "gcp_tpm_replay": $GCP_TPM_REPLAY
+  "gcp_tpm_replay": $GCP_TPM_REPLAY,
+  "aws_pcr_replay": $AWS_PCR_REPLAY
 }
 JSON
 

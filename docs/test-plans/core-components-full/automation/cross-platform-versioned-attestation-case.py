@@ -165,7 +165,7 @@ def verify_legacy_tdx(
     acpi_tables = Path(str(environment["DSTACK_TEST_ACPI_TABLES_BINARY"]))
     if hashlib.sha256((fixture / "sha256sum.txt").read_bytes()).hexdigest() != FULL_TDX_IMAGE_HASH:
         raise RuntimeError("prepared full-TDX image does not match its quote")
-    workspace = artifacts / "legacy-tdx"
+    workspace = artifacts.parent / "debug-workspace" / "legacy-tdx"
     cache = workspace / "cache"
     shutil.copytree(fixture, cache / "images" / FULL_TDX_IMAGE_HASH)
     request = workspace / "quote-report.json"
