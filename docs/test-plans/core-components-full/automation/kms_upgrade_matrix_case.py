@@ -908,7 +908,10 @@ class MatrixRun:
                             body = response.read()
                     except urllib.error.HTTPError as error:
                         error_body = error.read()
-                        if rpc_method.startswith("Admin.") and b"Service not found" in error_body:
+                        if (
+                            rpc_method.startswith("Admin.")
+                            and b"Service not found" in error_body
+                        ):
                             continue
                         raise RuntimeError(
                             f"Gateway {rpc_method} returned HTTP {error.code}: "
@@ -951,10 +954,10 @@ class MatrixRun:
             certificate_deadline = time.monotonic() + 120
             cert_status: dict[str, Any] = {}
             while time.monotonic() < certificate_deadline:
-                domain = admin_rpc(
-                    "GetZtDomain", {"domain": "gateway-candidate.test"}
+                domain = admin_rpc("GetZtDomain", {"domain": "gateway-candidate.test"})
+                cert_status = (
+                    domain.get("cert_status") or domain.get("certStatus") or {}
                 )
-                cert_status = domain.get("cert_status") or domain.get("certStatus") or {}
                 if cert_status.get(
                     "loaded_in_memory", cert_status.get("loadedInMemory", False)
                 ):
@@ -1718,8 +1721,7 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             )
 
         malformed_code, malformed_raw = http(
-            f"https://127.0.0.1:{gateway['service_port']}"
-            "/prpc/Tproxy.RegisterCvm?json",
+            f"https://127.0.0.1:{gateway['service_port']}/prpc/Tproxy.RegisterCvm?json",
             b"{}",
         )
         if 0 < malformed_code < 400:
@@ -2554,8 +2556,7 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
         if wrong_port is not None:
             raise RuntimeError("unlisted port bypassed the app port policy")
         malformed_code, _ = http(
-            f"https://127.0.0.1:{gateway['service_port']}"
-            "/prpc/Tproxy.RegisterCvm?json",
+            f"https://127.0.0.1:{gateway['service_port']}/prpc/Tproxy.RegisterCvm?json",
             b"{}",
         )
         if 0 < malformed_code < 400:
