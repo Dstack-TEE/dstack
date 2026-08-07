@@ -2,8 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::config::{Config, Networking, ProcessAnnotation, Protocol};
-use crate::logrotate;
+use crate::{
+    config::{Config, NetworkFilterMode, Networking, NetworkingMode, ProcessAnnotation, Protocol},
+    logrotate,
+    netd::{self, InterfaceIdentity, PrepareRequest, Request as NetdRequest},
+};
 
 use anyhow::{bail, Context, Result};
 use bon::Builder;
@@ -18,6 +21,7 @@ use dstack_vmm_rpc::{
 use fs_err as fs;
 use guest_api::client::DefaultClient as GuestClient;
 use id_pool::IdPool;
+use nix::unistd::{Uid, User};
 use or_panic::ResultOrPanic;
 use ra_rpc::client::RaClient;
 use serde::{Deserialize, Serialize};
@@ -443,17 +447,30 @@ impl App {
                 append_boot_separator(&path);
             }
 
+            let runtime_networks = resolved_networks(&vm_config.manifest, &self.config.cvm);
             let devices = self.try_allocate_gpus(&vm_config.manifest)?;
             let processes = vm_config.config_qemu(&work_dir, &self.config.cvm, &devices)?;
-            let runtime_networks = resolved_networks(&vm_config.manifest, &self.config.cvm);
             work_dir.set_runtime_networks(&runtime_networks)?;
+            if let Err(error) = self
+                .prepare_filtered_networks(&vm_config, &runtime_networks)
+                .await
+            {
+                let _ = work_dir.clear_runtime_networks();
+                return Err(error);
+            }
             {
                 let mut state = self.lock();
                 let vm_state = state.get_mut(id).context("VM not found")?;
-                vm_state.state.runtime_networks = runtime_networks;
+                vm_state.state.runtime_networks = runtime_networks.clone();
             }
             for process in processes {
                 if let Err(err) = self.supervisor.deploy(&process).await {
+                    if let Err(cleanup_error) = self
+                        .remove_filtered_networks(&vm_config.manifest.id, &runtime_networks)
+                        .await
+                    {
+                        warn!(id, %cleanup_error, "failed to roll back filtered networking");
+                    }
                     if let Err(clear_err) = work_dir.clear_runtime_networks() {
                         warn!(
                             id,
@@ -488,6 +505,108 @@ impl App {
         }
         self.set_started(id, false)?;
         self.stop_vm_process(id).await?;
+        let networks = self.work_dir(id)?.runtime_networks();
+        self.remove_filtered_networks(id, &networks).await?;
+        Ok(())
+    }
+
+    async fn prepare_filtered_networks(
+        &self,
+        vm: &VmConfig,
+        networks: &[Networking],
+    ) -> Result<()> {
+        if self.config.cvm.network_filter.mode == NetworkFilterMode::None {
+            return Ok(());
+        }
+        let qemu_uid = if self.config.cvm.user.is_empty() {
+            Uid::effective().as_raw()
+        } else {
+            User::from_name(&self.config.cvm.user)
+                .context("failed to resolve QEMU user")?
+                .with_context(|| format!("QEMU user {} does not exist", self.config.cvm.user))?
+                .uid
+                .as_raw()
+        };
+        let mut prepared = Vec::new();
+        for (nic_index, network) in networks.iter().enumerate() {
+            if network.mode != NetworkingMode::Bridge {
+                continue;
+            }
+            let identity = InterfaceIdentity {
+                instance_id: self.config.cvm.instance_id.clone(),
+                vm_id: vm.manifest.id.clone(),
+                nic_index,
+            };
+            let request = PrepareRequest {
+                identity: identity.clone(),
+                bridge: network.bridge.clone(),
+                mac: network::mac_address_for_vm_index(
+                    &vm.manifest.id,
+                    &network.mac_prefix_bytes(),
+                    nic_index,
+                ),
+                qemu_uid,
+                filter: self.config.cvm.network_filter.filter.clone(),
+                parameters: self.config.cvm.network_filter.parameters.clone(),
+            };
+            if let Err(error) =
+                netd::request(&self.config.netd.socket, &NetdRequest::Prepare(request)).await
+            {
+                // The client may have timed out while netd was still finishing
+                // this Prepare. Remove the in-flight identity first; netd's
+                // serialized accept loop processes it after Prepare completes.
+                if let Err(cleanup_error) = netd::request(
+                    &self.config.netd.socket,
+                    &NetdRequest::Remove {
+                        identity: identity.clone(),
+                    },
+                )
+                .await
+                {
+                    warn!(%cleanup_error, "failed to roll back in-flight filtered network");
+                }
+                for identity in prepared.into_iter().rev() {
+                    if let Err(cleanup_error) =
+                        netd::request(&self.config.netd.socket, &NetdRequest::Remove { identity })
+                            .await
+                    {
+                        warn!(%cleanup_error, "failed to roll back prepared filtered network");
+                    }
+                }
+                return Err(error).context("failed to prepare libvirt-filtered networking");
+            }
+            prepared.push(identity);
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn remove_filtered_networks(
+        &self,
+        vm_id: &str,
+        networks: &[Networking],
+    ) -> Result<()> {
+        if self.config.cvm.network_filter.mode == NetworkFilterMode::None {
+            return Ok(());
+        }
+        let mut first_error = None;
+        for (nic_index, network) in networks.iter().enumerate().rev() {
+            if network.mode != NetworkingMode::Bridge {
+                continue;
+            }
+            let identity = InterfaceIdentity {
+                instance_id: self.config.cvm.instance_id.clone(),
+                vm_id: vm_id.to_string(),
+                nic_index,
+            };
+            if let Err(error) =
+                netd::request(&self.config.netd.socket, &NetdRequest::Remove { identity }).await
+            {
+                first_error.get_or_insert(error);
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(error).context("failed to remove libvirt-filtered networking");
+        }
         Ok(())
     }
 
@@ -595,6 +714,11 @@ impl App {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
             }
+        }
+
+        let runtime_networks = self.work_dir(id)?.runtime_networks();
+        if let Err(error) = self.remove_filtered_networks(id, &runtime_networks).await {
+            warn!(id, %error, "failed to remove filtered networking during VM removal");
         }
 
         // Only delete the workdir for user-initiated removal or if .removing marker exists.

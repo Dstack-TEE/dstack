@@ -701,7 +701,7 @@ impl VmmRpc for RpcHandler {
             manifest.gateway_urls = request.gateway_urls.clone();
         }
         if request.update_networking {
-            manifest.networks = if request.networks.is_empty() {
+            let networks = if request.networks.is_empty() {
                 validate_default_network(&self.app.config.cvm)?;
                 vec![]
             } else {
@@ -715,8 +715,14 @@ impl VmmRpc for RpcHandler {
                 .await?
                 .is_some_and(|info| info.state.status.is_running());
             if !is_running {
+                let runtime_networks = vm_work_dir.runtime_networks();
+                self.app
+                    .remove_filtered_networks(&request.id, &runtime_networks)
+                    .await
+                    .context("failed to remove previous filtered networking")?;
                 vm_work_dir.clear_runtime_networks()?;
             }
+            manifest.networks = networks;
         }
         let compose_file = fs::read_to_string(vm_work_dir.app_compose_path())
             .context("failed to read app compose for swtpm decision")?;

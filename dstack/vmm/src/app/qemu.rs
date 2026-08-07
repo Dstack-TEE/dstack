@@ -14,7 +14,10 @@ use super::{
 };
 use crate::{
     app::Manifest,
-    config::{CvmConfig, CvmPlatform, Networking, NetworkingMode, ProcessAnnotation},
+    config::{
+        CvmConfig, CvmPlatform, NetworkFilterMode, Networking, NetworkingMode, ProcessAnnotation,
+    },
+    netd::{tap_name, InterfaceIdentity},
     vm_launcher::{ChildCommand, LaunchSpec},
 };
 use anyhow::{bail, Context, Result};
@@ -605,7 +608,24 @@ impl QemuCommandBuilder<'_> {
                 }
                 NetworkingMode::Bridge => {
                     tracing::info!("bridge networking: mac={mac} bridge={}", networking.bridge);
-                    format!("bridge,id={net_id},br={}", networking.bridge)
+                    match self.cfg.network_filter.mode {
+                        NetworkFilterMode::None => {
+                            format!("bridge,id={net_id},br={}", networking.bridge)
+                        }
+                        NetworkFilterMode::Libvirt => {
+                            let tap = tap_name(&InterfaceIdentity {
+                                instance_id: self.cfg.instance_id.clone(),
+                                vm_id: self.vm.manifest.id.clone(),
+                                nic_index: index,
+                            });
+                            // Keep the filtered backend conservative: QEMU
+                            // uses the TAP path on which libvirt installed the
+                            // nwfilter binding instead of opening vhost-net.
+                            format!(
+                                "tap,id={net_id},ifname={tap},script=no,downscript=no,vhost=off"
+                            )
+                        }
+                    }
                 }
                 NetworkingMode::Custom => {
                     if !networking.netdev.contains(&format!("id={net_id}")) {
@@ -986,7 +1006,10 @@ mod tests {
     };
     use crate::app::image::{Image, ImageInfo};
     use crate::app::{needs_swtpm, GpuConfig, Manifest, PortMapping, VmVolume, VmWorkDir};
-    use crate::config::{Config, CvmPlatform, Protocol, DEFAULT_CONFIG};
+    use crate::config::{
+        Config, CvmPlatform, NetworkFilterMode, NetworkingMode, Protocol, DEFAULT_CONFIG,
+    };
+    use crate::netd::{tap_name, InterfaceIdentity};
     use dstack_types::{KeyProviderKind, TeeVariant};
 
     #[test]
@@ -1186,6 +1209,42 @@ mod tests {
             .args
             .iter()
             .any(|arg| arg.contains("virtio-net-pci,netdev=net1")));
+
+        for network in &mut prepared.networks {
+            network.mode = NetworkingMode::Bridge;
+            network.bridge = "br0".into();
+        }
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert!(process
+            .args
+            .iter()
+            .any(|arg| arg == "bridge,id=net0,br=br0"));
+
+        config.cvm.instance_id = "vmm-a".into();
+        config.cvm.network_filter.mode = NetworkFilterMode::Libvirt;
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        let expected_tap = tap_name(&InterfaceIdentity {
+            instance_id: "vmm-a".into(),
+            vm_id: "vm-1".into(),
+            nic_index: 0,
+        });
+        assert!(process.args.iter().any(|arg| {
+            arg == &format!("tap,id=net0,ifname={expected_tap},script=no,downscript=no,vhost=off")
+        }));
 
         prepared.swtpm_socket = Some(PathBuf::from("/does-not-exist/vm-1/swtpm/swtpm.sock"));
         let process = QemuCommandBuilder {

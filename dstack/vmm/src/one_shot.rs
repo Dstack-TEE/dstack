@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::app::{
-    make_sys_config, simulator_config_for_manifest, sync_tee_simulator_config, Image, VmConfig,
-    VmWorkDir,
+    make_sys_config, resolved_networks, simulator_config_for_manifest, sync_tee_simulator_config,
+    Image, VmConfig, VmWorkDir,
 };
-use crate::config::Config;
+use crate::config::{Config, NetworkFilterMode, NetworkingMode};
 use crate::main_service;
 use anyhow::{Context, Result};
 use fs_err as fs;
@@ -278,6 +278,17 @@ Compose file content (first 200 chars):
         workdir: workdir_path.clone(),
         gateway_enabled: app_compose.gateway_enabled(),
     };
+
+    if !dry_run
+        && config.cvm.network_filter.mode == NetworkFilterMode::Libvirt
+        && resolved_networks(&manifest, &config.cvm)
+            .iter()
+            .any(|network| network.mode == NetworkingMode::Bridge)
+    {
+        anyhow::bail!(
+            "one-shot execution does not manage libvirt-filtered TAP lifecycle; run the VMM server directly or use --dry-run"
+        );
+    }
 
     let process_configs = vm_builder_config
         .config_qemu(&workdir_path, &config.cvm, &gpus)

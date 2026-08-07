@@ -7,7 +7,7 @@ use std::{path::Path, time::Duration};
 use anyhow::{anyhow, Context, Result};
 use app::App;
 use clap::{Args as ClapArgs, Parser, Subcommand};
-use config::Config;
+use config::{Config, NetdConfig};
 use dstack_api_auth::{Authenticator, HttpAuthConfig, HttpAuthFairing};
 use guest_api_service::GuestApiHandler;
 use host_api_service::HostApiHandler;
@@ -29,6 +29,7 @@ mod host_api_service;
 mod logrotate;
 mod main_routes;
 mod main_service;
+mod netd;
 mod one_shot;
 mod openapi;
 mod vm_launcher;
@@ -46,6 +47,9 @@ struct Args {
     /// Path to the configuration file
     #[arg(short, long)]
     config: Option<String>,
+    /// Override the netd socket used by the VMM (useful without systemd).
+    #[arg(long, global = true)]
+    netd_socket: Option<String>,
     /// Subcommand to run
     #[command(subcommand)]
     command: Option<Command>,
@@ -60,9 +64,21 @@ enum Command {
     CheckConfig,
     /// One-shot VM execution mode for debugging
     Run(RunArgs),
+    /// Run the privileged TAP and libvirt nwfilter broker.
+    Netd(NetdArgs),
     /// Internal per-VM QEMU/swtpm launcher.
     #[command(hide = true)]
     VmLauncher(VmLauncherArgs),
+}
+
+#[derive(ClapArgs)]
+struct NetdArgs {
+    /// Override the Unix socket configured in [netd].
+    #[arg(long)]
+    socket: Option<String>,
+    /// Authorize an additional client UID. May be repeated.
+    #[arg(long = "allow-uid")]
+    allow_uids: Vec<u32>,
 }
 
 #[derive(ClapArgs)]
@@ -195,7 +211,30 @@ async fn main() -> Result<()> {
     }
 
     let figment = config::load_config_figment(args.config.as_deref());
-    let config = Config::extract_or_default(&figment)?.abs_path()?;
+    if let Some(Command::Netd(netd_args)) = &args.command {
+        let mut netd_config: NetdConfig = figment
+            .extract_inner("netd")
+            .context("failed to load [netd] configuration")?;
+        if let Some(socket) = args.netd_socket.as_deref() {
+            netd_config.socket = socket.into();
+        }
+        if let Some(socket) = netd_args.socket.as_deref() {
+            netd_config.socket = socket.into();
+        }
+        netd_config
+            .allowed_uids
+            .extend(netd_args.allow_uids.iter().copied());
+        netd_config.allowed_uids.sort_unstable();
+        netd_config.allowed_uids.dedup();
+        return netd::serve(netd_config).await;
+    }
+
+    let mut config = Config::extract_or_default(&figment)?.abs_path()?;
+    config.cvm.instance_id = netd::instance_id(&config.cvm.instance_id, config.run_path.as_path());
+    if let Some(socket) = args.netd_socket.as_deref() {
+        config.netd.socket = socket.into();
+    }
+
     // Preserve the existing startup validation. The broader static checks are
     // opt-in through `check-config` until they have seen wider deployment use.
     config
@@ -222,6 +261,7 @@ async fn main() -> Result<()> {
             println!("configuration is valid");
             return Ok(());
         }
+        Command::Netd(_) => unreachable!("netd mode handled before server startup"),
         Command::Run(run_args) => {
             // One-shot VM execution mode
             return one_shot::run_one_shot(
