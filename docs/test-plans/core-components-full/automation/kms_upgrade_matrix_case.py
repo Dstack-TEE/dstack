@@ -1057,6 +1057,7 @@ class MatrixRun:
     environment:
       DERIVATION_PATH: kms-upgrade-009-{identity}
       GATEWAY_URLS: ${{GATEWAY_URLS}}
+      GATEWAY_REQUEST_CONTRACTS: ${{GATEWAY_REQUEST_CONTRACTS}}
       GATEWAY_PORTS: ${{GATEWAY_PORTS}}
       DSTACK_TEST_SECRET_PRIMARY: ${{DSTACK_TEST_SECRET_PRIMARY:-}}
       DSTACK_TEST_SECRET_PEER: ${{DSTACK_TEST_SECRET_PEER:-}}
@@ -1084,6 +1085,12 @@ configs:
             "GATEWAY_URLS": ""
             if native_gateway
             else ",".join(row["guest_url"] for row in (gateway_rows or [])),
+            "GATEWAY_REQUEST_CONTRACTS": ""
+            if native_gateway
+            else ",".join(
+                "legacy" if row["version"] == "gateway-0.5.8" else "current"
+                for row in (gateway_rows or [])
+            ),
             "GATEWAY_PORTS": ",".join(
                 str(port) for port in (restricted_ports or [8000])
             ),
