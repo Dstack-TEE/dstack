@@ -691,7 +691,6 @@ class MatrixRun:
     image: kvin/mock-cf-dns-api:latest
     network_mode: host
     environment:
-      - PORT=18080
       - DEBUG=true
     restart: unless-stopped
   pebble:
@@ -933,7 +932,7 @@ class MatrixRun:
                     "name": "upgrade-matrix-cloudflare",
                     "provider_type": "cloudflare",
                     "cf_api_token": "case-owned",
-                    "cf_api_url": "http://127.0.0.1:18080/client/v4",
+                    "cf_api_url": "http://127.0.0.1:8080/client/v4",
                     "set_as_default": True,
                     "dns_txt_ttl": 1,
                     "max_dns_wait": 5,
