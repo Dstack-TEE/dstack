@@ -5,6 +5,7 @@
 package dstack
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -264,14 +265,25 @@ func sortKeys(v interface{}) interface{} {
 	}
 }
 
-// toDeterministicJSON converts the structure to deterministic JSON
+// toDeterministicJSON converts the structure to deterministic JSON.
+//
+// encoding/json escapes <, > and & as \u003c, \u003e and \u0026 unless told
+// otherwise, while JSON.stringify and json.dumps emit them literally. Those
+// characters are ordinary in a compose document — ">=0.6.0" in
+// requirements.os_version, "sh -c \"migrate && serve\"" in
+// docker_compose_file — so the escaping alone made Go disagree with every other
+// SDK about an app's compose hash. Encoder.SetEscapeHTML(false) turns it off;
+// Encoder also appends a newline, which is not part of the hashed bytes.
 func toDeterministicJSON(v interface{}) (string, error) {
 	sorted := sortKeys(v)
-	jsonBytes, err := json.Marshal(sorted)
-	if err != nil {
+
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(sorted); err != nil {
 		return "", err
 	}
-	return string(jsonBytes), nil
+	return strings.TrimSuffix(buf.String(), "\n"), nil
 }
 
 // GetComposeHash computes the SHA256 hash of the application composition

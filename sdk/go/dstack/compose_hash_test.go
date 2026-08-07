@@ -408,3 +408,63 @@ func TestNewFieldsDecodeIntoDeclaredFields(t *testing.T) {
 		t.Fatalf("Extra = %v, want empty now that these fields are declared", compose.Extra)
 	}
 }
+
+// TestGetComposeHashDoesNotHTMLEscape covers the characters encoding/json
+// escapes by default. They are ordinary in a compose document — ">=" in an OS
+// version requirement, "&&" in a shell command inside docker_compose_file — so
+// escaping them made Go disagree with JS and Python about an app's identity for
+// a large share of real apps, not just exotic ones.
+func TestGetComposeHashDoesNotHTMLEscape(t *testing.T) {
+	tests := []struct {
+		name    string
+		compose AppCompose
+		want    string
+	}{
+		{
+			name: "ampersands in a shell command",
+			compose: AppCompose{
+				Runner:            "docker-compose",
+				DockerComposeFile: "services:\n  app:\n    command: sh -c \"migrate && serve\"\n",
+			},
+			want: "bc86cfbcfe7da69519337f0a9d782d131b8b5174c56687f1c1442fd97bc36a7b",
+		},
+		{
+			name: "semver range in os_version",
+			compose: AppCompose{
+				Runner:       "docker-compose",
+				Requirements: &Requirements{OsVersion: ">=0.6.0"},
+			},
+			want: "60a87802e72b8dbb07f1f50a07465e7e1af4994a4f434dc0398c1339cf05357d",
+		},
+		{
+			name:    "angle brackets in a name",
+			compose: AppCompose{Runner: "docker-compose", Name: "a<b>c"},
+			want:    "5c3fd99daeb46af71c7e127d53ed041bfc9c1935b60992eee8f8d5a02181f483",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := GetComposeHash(tt.compose, false)
+			if err != nil {
+				t.Fatalf("GetComposeHash: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("hash = %s, want %s (JS reference)", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDeterministicJSONEmitsNoTrailingNewline guards the other half of the
+// switch to json.Encoder: Encoder appends a newline that Marshal does not, and
+// a stray newline would change every hash.
+func TestDeterministicJSONEmitsNoTrailingNewline(t *testing.T) {
+	got, err := toDeterministicJSON(map[string]any{"runner": "docker-compose"})
+	if err != nil {
+		t.Fatalf("toDeterministicJSON: %v", err)
+	}
+	if got != `{"runner":"docker-compose"}` {
+		t.Fatalf("deterministic JSON = %q, want the compact form with no trailing newline", got)
+	}
+}
