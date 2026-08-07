@@ -157,6 +157,9 @@ pub async fn serve(config: NetdConfig) -> Result<()> {
     info!(socket = %config.socket.display(), "netd listening");
     loop {
         let (mut stream, _) = listener.accept().await?;
+        // This timeout bounds async socket reads and writes. handle_request is
+        // synchronous, so helper execution is bounded separately by
+        // COMMAND_TIMEOUT rather than preempted by this future timeout.
         match timeout(CONNECTION_TIMEOUT, serve_connection(&config, &mut stream)).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => warn!(%error, "netd connection failed"),

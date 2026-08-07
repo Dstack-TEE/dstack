@@ -21,7 +21,7 @@ use dstack_vmm_rpc::{
 use fs_err as fs;
 use guest_api::client::DefaultClient as GuestClient;
 use id_pool::IdPool;
-use nix::unistd::User;
+use nix::unistd::{Uid, User};
 use or_panic::ResultOrPanic;
 use ra_rpc::client::RaClient;
 use serde::{Deserialize, Serialize};
@@ -519,7 +519,7 @@ impl App {
             return Ok(());
         }
         let qemu_uid = if self.config.cvm.user.is_empty() {
-            unsafe { libc::geteuid() }
+            Uid::effective().as_raw()
         } else {
             User::from_name(&self.config.cvm.user)
                 .context("failed to resolve QEMU user")?
@@ -552,6 +552,19 @@ impl App {
             if let Err(error) =
                 netd::request(&self.config.netd.socket, &NetdRequest::Prepare(request)).await
             {
+                // The client may have timed out while netd was still finishing
+                // this Prepare. Remove the in-flight identity first; netd's
+                // serialized accept loop processes it after Prepare completes.
+                if let Err(cleanup_error) = netd::request(
+                    &self.config.netd.socket,
+                    &NetdRequest::Remove {
+                        identity: identity.clone(),
+                    },
+                )
+                .await
+                {
+                    warn!(%cleanup_error, "failed to roll back in-flight filtered network");
+                }
                 for identity in prepared.into_iter().rev() {
                     if let Err(cleanup_error) =
                         netd::request(&self.config.netd.socket, &NetdRequest::Remove { identity })

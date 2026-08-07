@@ -287,6 +287,7 @@ strip-ansi-escapes = "0.2.1"
 tailf = "0.1.2"
 time = "0.3.47"
 uuid = { version = "1.15.1", features = ["v4"] }
+wait-timeout = "0.2"
 which = "7.0.2"
 smallvec = "1.14.0"
 cmd_lib = "1.9.5"
