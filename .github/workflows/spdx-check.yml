@@ -6,9 +6,9 @@ name: SPDX License Check
 
 on:
   push:
-    branches: [ next ]
+    branches: [ next, 'release/**' ]
   pull_request:
-    branches: [ next ]
+    branches: [ next, 'release/**' ]
 
 jobs:
   reuse-lint:

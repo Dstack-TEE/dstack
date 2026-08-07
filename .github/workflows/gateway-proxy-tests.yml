@@ -10,13 +10,13 @@ name: Gateway proxy tests
 # and asserts on what actually reaches the wire.
 on:
   push:
-    branches: [ next ]
+    branches: [ next, 'release/**' ]
     paths:
       - 'dstack/gateway/**'
       - 'dstack/vendor/ktls/**'
       - '.github/workflows/gateway-proxy-tests.yml'
   pull_request:
-    branches: [ next ]
+    branches: [ next, 'release/**' ]
     paths:
       - 'dstack/gateway/**'
       - 'dstack/vendor/ktls/**'
