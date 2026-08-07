@@ -26,9 +26,26 @@ require_command() {
   }
 }
 
-for command in cargo curl dstack-acpi-tables git jq mkosi npm python3 tar; do
+for command in cargo curl docker dstack-acpi-tables git jq mkosi npm python3 tar; do
   require_command "$command"
 done
+
+docker_ready() {
+  sudo su kvin -c "docker info --format '{{.ServerVersion}}'" >/dev/null 2>&1
+}
+
+if ! docker_ready; then
+  if command -v systemctl >/dev/null 2>&1; then
+    sudo systemctl start docker.service >/dev/null 2>&1 || true
+  fi
+  docker_ready || {
+    printf '%s\n' \
+      'Docker daemon is unavailable after attempting to start docker.service.' \
+      'Inspect systemctl status docker.service before preparing the test run.' >&2
+    exit 1
+  }
+fi
+
 acpi_tables_bin=$(realpath -e -- "$(command -v dstack-acpi-tables)")
 qemu_data_dir=$(realpath -e -- "$(dirname "$acpi_tables_bin")/../share/qemu")
 test -d "$qemu_data_dir" || {
