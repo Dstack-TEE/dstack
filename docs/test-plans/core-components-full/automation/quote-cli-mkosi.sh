@@ -72,8 +72,9 @@ assert json.loads(find(d,"config"))["identity"]=="a"
 assert json.loads(find(b,"config"))["identity"]=="b"
 PYDECODE
 grep -q 'policy is unchanged' "$ROOT/debug.err"
-if "$UTIL" quote-report --report-data 00 --sys-config "$ROOT/config-a/.sys-config.json" -o "$ROOT/missing/out.json" 2>"$ROOT/output.err"; then OUTPUT_RC=0; else OUTPUT_RC=$?; fi
-test "$OUTPUT_RC" -ne 0; test ! -e "$ROOT/missing/out.json"
+printf 'not-a-directory\n' >"$ROOT/output-parent"
+if "$UTIL" quote-report --report-data 00 --sys-config "$ROOT/config-a/.sys-config.json" -o "$ROOT/output-parent/out.json" 2>"$ROOT/output.err"; then OUTPUT_RC=0; else OUTPUT_RC=$?; fi
+test "$OUTPUT_RC" -ne 0; test ! -e "$ROOT/output-parent/out.json"
 stop_sim
 if python3 -c 'import sys;sys.stdout.buffer.write(b"z"*64)' | "$UTIL" quote >"$ROOT/device-fault.quote" 2>"$ROOT/device.err"; then DEVICE_RC=0; else DEVICE_RC=$?; fi
 test "$DEVICE_RC" -ne 0; test ! -s "$ROOT/device-fault.quote"
