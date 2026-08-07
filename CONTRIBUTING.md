@@ -2,6 +2,27 @@
 
 Thank you for your interest in contributing to this project!
 
+## Branches
+
+- `next` is the integration mainline and the default branch. Open every pull
+  request against it unless a maintainer asks otherwise.
+- `release/vX.Y` carries a released line. It only takes fixes cherry-picked
+  back from `next`; do not develop on it directly. Version tags are cut here.
+- `dev-*` is reserved for shared integration branches that need full CI. A
+  personal feature branch does not need to follow that pattern.
+
+The default branch was renamed from `master` to `next`. Web links, raw file
+URLs, and the REST API redirect, but the old ref name is gone at the git
+level: `git fetch origin master` and `git clone -b master` now fail. Update an
+existing clone with:
+
+```bash
+git branch -m master next
+git fetch origin
+git branch -u origin/next next
+git remote set-head origin -a
+```
+
 ## Development
 
 1. Fork the repository

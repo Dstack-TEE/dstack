@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/Dstack-TEE/dstack/blob/master/os/spec/artifact-manifest.schema.json",
+  "$id": "https://github.com/Dstack-TEE/dstack/blob/next/os/spec/artifact-manifest.schema.json",
   "title": "dstack OS backend artifact manifest",
   "description": "Versioned handoff from an OS build backend to the common image assembler. Artifact paths are relative to the manifest.",
   "$defs": {

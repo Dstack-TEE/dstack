@@ -83,7 +83,7 @@ To verify dstack App data trustworthiness:
 
 - Review source code for correctness and safety.
 - Build image from source.
-- Calculate MRTD, RTMR0, RTMR1, and RTMR2 values using [dstack-mr](https://github.com/Dstack-TEE/dstack/tree/master/dstack/dstack-mr).
+- Calculate MRTD, RTMR0, RTMR1, and RTMR2 values using [dstack-mr](https://github.com/Dstack-TEE/dstack/tree/next/dstack/dstack-mr).
 - Verify quote measurements:
     - Confirm MRTD, RTMR0, RTMR1, and RTMR2 match pre-calculated values.
     - Verify RTMR3 matches the event log replay result.

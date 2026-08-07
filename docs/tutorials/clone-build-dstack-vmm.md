@@ -56,13 +56,13 @@ All build commands should be run as the `ubuntu` user. Only the final installati
 ### Step 2: Verify dstack Repository
 
 The dstack repository should already be cloned and checked out on the current
-`master` branch from [Local Key Provider](/tutorial/gramine-key-provider):
+`next` branch from [Local Key Provider](/tutorial/gramine-key-provider):
 
 ```bash
 cd ~/dstack
 git describe --tags
 git branch --show-current
-# Should show master
+# Should show next
 ```
 
 ### Step 3: Build dstack-vmm
@@ -111,8 +111,8 @@ ls -la /usr/local/bin/dstack-supervisor
 # Check out a monorepo-era release tag when one is available
 git checkout <release-tag>
 
-# Or use the master branch for latest development
-git checkout master
+# Or use the next branch for latest development
+git checkout next
 git pull --ff-only
 ```
 

@@ -49,12 +49,12 @@ These contracts use the UUPS (Universal Upgradeable Proxy Standard) pattern for 
 
 ### Step 1: Clone Repository and Navigate to auth-eth
 
-On your **local machine**, clone the dstack repository (if you haven't already) and use the current `master` branch:
+On your **local machine**, clone the dstack repository (if you haven't already) and use the current `next` branch:
 
 ```bash
 git clone https://github.com/Dstack-TEE/dstack.git ~/dstack 2>/dev/null || true
 cd ~/dstack
-git checkout master
+git checkout next
 cd dstack/kms/auth-eth
 ```
 
