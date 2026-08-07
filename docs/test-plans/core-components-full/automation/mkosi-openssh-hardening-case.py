@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import shlex
 import subprocess
 import tempfile
 import time
@@ -59,6 +60,7 @@ def main() -> int:
         "candidate_commit": runtime.get("candidate_commit"),
         "guest_image": image,
     }
+    prepared_host_keys: list[str] = []
     started = time.monotonic()
     try:
         if (
@@ -79,6 +81,33 @@ def main() -> int:
         inventory_before = run(list_vms, timeout=30)
         if inventory_before.returncode:
             raise RuntimeError("baseline VM inventory query failed")
+        host_keys = run(
+            [*ssh, "find /etc/ssh -maxdepth 1 -type f -name 'ssh_host_*_key' -print"],
+            timeout=30,
+        )
+        if host_keys.returncode:
+            raise RuntimeError("failed to inventory OpenSSH host keys")
+        if not host_keys.stdout.strip():
+            generated = run([*ssh, "ssh-keygen -A"], timeout=60)
+            if generated.returncode:
+                raise RuntimeError(
+                    "failed to prepare ephemeral OpenSSH host keys: "
+                    + generated.stderr.decode(errors="replace")[-500:]
+                )
+            prepared = run(
+                [
+                    *ssh,
+                    "find /etc/ssh -maxdepth 1 -type f -name 'ssh_host_*' -print",
+                ],
+                timeout=30,
+            )
+            if prepared.returncode or not prepared.stdout.strip():
+                raise RuntimeError("OpenSSH host-key preparation produced no files")
+            prepared_host_keys = prepared.stdout.decode().splitlines()
+        evidence["host_key_preparation"] = {
+            "required": bool(prepared_host_keys),
+            "generated_file_count": len(prepared_host_keys),
+        }
         script = (
             pathlib.Path(str(runtime["repository"]))
             / "docs/test-plans/core-components-full/automation/mkosi-openssh-hardening.sh"
@@ -199,6 +228,19 @@ def main() -> int:
         summary = f"{type(error).__name__}: {error}"
     finally:
         if ssh:
+            if prepared_host_keys:
+                cleanup_keys = run(
+                    [
+                        *ssh,
+                        "rm -f "
+                        + " ".join(
+                            shlex.quote(path)
+                            for path in prepared_host_keys
+                        ),
+                    ],
+                    timeout=30,
+                )
+                evidence["host_key_cleanup_returncode"] = cleanup_keys.returncode
             evidence["cleanup_returncode"] = run(
                 [*ssh, "rm -f /run/dstack-test-openssh"], timeout=30
             ).returncode
