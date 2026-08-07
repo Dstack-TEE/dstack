@@ -133,12 +133,12 @@ def main() -> int:
         )
 
         request = {"client_public_key": base64.b64encode(os.urandom(32)).decode()}
-        unauth_code = post(f"{public}/Gateway.RegisterCvm?json", request)[0]
-        valid_code = post(f"{public}/Gateway.RegisterCvm?json", request, identity=identity)[0]
+        unauth_code = post(f"{public}/Tproxy.RegisterCvm?json", request)[0]
+        valid_code = post(f"{public}/Tproxy.RegisterCvm?json", request, identity=identity)[0]
         wrong_dir = pathlib.Path(tempfile.mkdtemp(prefix="wrong-client-", dir=result_dir))
         try:
             wrong = generate_wrong_identity(wrong_dir)
-            wrong_code = post(f"{public}/Gateway.RegisterCvm?json", request, identity=wrong)[0]
+            wrong_code = post(f"{public}/Tproxy.RegisterCvm?json", request, identity=wrong)[0]
         finally:
             for path in wrong_dir.glob("*"):
                 path.unlink()

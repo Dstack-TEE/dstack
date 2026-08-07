@@ -124,7 +124,7 @@ def main() -> int:
                 "restrict_mode": True,
             },
         }
-        register_url = f"{rpc_base}/Gateway.RegisterCvm?json"
+        register_url = f"{rpc_base}/Tproxy.RegisterCvm?json"
         first_code, first_body = tls_rpc(register_url, request, identity)
         repeat_code, repeat_body = tls_rpc(register_url, request, identity)
         first_ip = (decoded(first_body).get("wg") or {}).get("client_ip", "")

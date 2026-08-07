@@ -481,7 +481,7 @@ def register_gateway_fixture(
             "Content-Type: application/json",
             "--data-binary",
             request_body,
-            f"{rpc_url}/Gateway.RegisterCvm?json",
+            f"{rpc_url}/Tproxy.RegisterCvm?json",
         ],
         text=True,
         stdout=subprocess.PIPE,
@@ -490,7 +490,8 @@ def register_gateway_fixture(
         check=False,
     )
     if response.returncode:
-        fail(f"failed to register gateway fixture identity: {response.stderr[-500:]}")
+        detail = (response.stdout + response.stderr)[-1000:]
+        fail(f"failed to register gateway fixture identity: {detail}")
     try:
         payload = json.loads(response.stdout)
     except json.JSONDecodeError as error:

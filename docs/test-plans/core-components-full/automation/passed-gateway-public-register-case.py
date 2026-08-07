@@ -215,7 +215,7 @@ def main() -> int:
         certfile=str(registration_client["cert"]),
         keyfile=str(registration_client["key"]),
     )
-    route = f"{base}/Gateway.RegisterCvm"
+    route = f"{base}/Tproxy.RegisterCvm"
     contract = inventory(plan_root)
     key = wg_public_key()
     steps: list[dict[str, Any]] = []
