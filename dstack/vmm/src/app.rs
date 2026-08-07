@@ -564,7 +564,11 @@ impl App {
         Ok(())
     }
 
-    async fn remove_filtered_networks(&self, vm_id: &str, networks: &[Networking]) -> Result<()> {
+    pub(crate) async fn remove_filtered_networks(
+        &self,
+        vm_id: &str,
+        networks: &[Networking],
+    ) -> Result<()> {
         if self.config.cvm.network_filter.mode == NetworkFilterMode::None {
             return Ok(());
         }
