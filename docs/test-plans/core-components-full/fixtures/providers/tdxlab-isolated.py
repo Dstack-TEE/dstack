@@ -780,6 +780,8 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
     request_value = value.get("request", {})
     profile = str(request_value.get("profile", "guest-readonly"))
     actions = request_value.get("actions_under_test", [])
+    lease = value.get("lease", {})
+    case_id = str(lease.get("case_id", ""))
     configuration_materialization = (
         isinstance(actions, list)
         and "System and user configuration materialization" in actions
@@ -832,8 +834,11 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         and "Containerd stargz snapshotter integrity and fallback" in actions
     )
     dashboard_log_requested = (
-        isinstance(actions, list)
-        and "Dashboard metrics and container log filtering" in actions
+        case_id == "tc-gos-observabil-001"
+        or (
+            isinstance(actions, list)
+            and "Dashboard metrics and container log filtering" in actions
+        )
     )
     config_entry_requested = (
         isinstance(actions, list)
@@ -893,9 +898,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         deploy_mode = ["--no-tee", "--simulated-tee", "dstack-tdx"]
     elif not endpoint_ready("127.0.0.1", 3443):
         fail("local key provider is unavailable on 127.0.0.1:3443")
-    lease = value.get("lease", {})
     lease_id = str(lease.get("lease_id", ""))
-    case_id = str(lease.get("case_id", ""))
     if not lease_id.startswith("lease-") or not case_id:
         fail("lease identity is missing")
     state = PROVIDER_ROOT / lease_id
