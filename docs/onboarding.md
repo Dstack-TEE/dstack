@@ -3,7 +3,7 @@
 Use this guide to get a first dstack app running on one Intel TDX host. The workflow uses `dstackup` for host setup and `dstack` for app deployment:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/master/dstack/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/next/dstack/scripts/install.sh | sh
 sudo dstackup install
 sudo dstack deploy \
   -n hello-nginx \
@@ -78,7 +78,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 Build and install the `dstackup` bootstrap command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/master/dstack/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/next/dstack/scripts/install.sh | sh
 ```
 
 The bootstrap installer builds `dstackup` from a temporary source checkout and installs it under `/usr/local/bin`. The `dstackup install` command then builds and installs `dstack`, `dstack-auth`, `dstack-vmm`, `supervisor`, static assets, and host config into the system layout.
@@ -216,7 +216,7 @@ Use `--prefix` when you want a second isolated install on the same host. A custo
 Install `dstackup` into the prefix, then use the same prefix for `dstackup` and `dstack`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/master/dstack/scripts/install.sh | sh -s -- --prefix /opt/dstack-test
+curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/next/dstack/scripts/install.sh | sh -s -- --prefix /opt/dstack-test
 
 sudo /opt/dstack-test/bin/dstackup install \
   --prefix /opt/dstack-test \

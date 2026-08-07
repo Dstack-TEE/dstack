@@ -11,7 +11,7 @@ pub(crate) const DEFAULT_VMM_BIN: &str = "dstack-vmm";
 pub(crate) const DEFAULT_AUTH_BIN: &str = "dstack-auth";
 pub(crate) const DEFAULT_SUPERVISOR_BIN: &str = "supervisor";
 pub(crate) const DEFAULT_SOURCE_REPO: &str = "https://github.com/Dstack-TEE/dstack";
-pub(crate) const DEFAULT_SOURCE_REF: &str = "master";
+pub(crate) const DEFAULT_SOURCE_REF: &str = "next";
 pub(crate) const DEFAULT_RELEASE_API_BASE_URL: &str = "https://api.github.com/repos";
 
 #[derive(Parser)]

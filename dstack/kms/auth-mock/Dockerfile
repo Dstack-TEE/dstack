@@ -6,7 +6,7 @@ FROM oven/bun:1-alpine
 WORKDIR /app
 
 ARG DSTACK_REV
-ARG DSTACK_BRANCH=master
+ARG DSTACK_BRANCH=next
 
 RUN apk add --no-cache git
 RUN git clone --branch ${DSTACK_BRANCH} https://github.com/Dstack-TEE/dstack.git && \

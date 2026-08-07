@@ -2,6 +2,29 @@
 
 Thank you for your interest in contributing to this project!
 
+## Branches
+
+- `next` is the integration mainline and the default branch. Open every pull
+  request against it unless a maintainer asks otherwise.
+- `release/v<major>.<minor>.x` carries a released line — `release/v0.5.x` is
+  the current one. It only takes fixes cherry-picked back from `next`; do not
+  develop on it directly. Patch tags are cut here.
+
+Name a working branch whatever describes it. CI runs on pull requests, so a
+branch gets its checks once a PR is open rather than on every push.
+
+The default branch was renamed from `master` to `next`. Web links, raw file
+URLs, and the REST API redirect, but the old ref name is gone at the git
+level: `git fetch origin master` and `git clone -b master` now fail. Update an
+existing clone with:
+
+```bash
+git branch -m master next
+git fetch origin
+git branch -u origin/next next
+git remote set-head origin -a
+```
+
 ## Development
 
 1. Fork the repository

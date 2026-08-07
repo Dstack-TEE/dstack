@@ -6,7 +6,7 @@ A HTTP server that provides dstack quote verification services using the same ve
 
 ### POST /verify
 
-Verifies a dstack attestation or quote with the provided data and VM configuration. The body can be grabbed via [getQuote](https://github.com/Dstack-TEE/dstack/blob/master/sdk/curl/api.md#3-get-quote) or [attest](https://github.com/Dstack-TEE/dstack/blob/master/sdk/curl/api.md#8-attest).
+Verifies a dstack attestation or quote with the provided data and VM configuration. The body can be grabbed via [getQuote](https://github.com/Dstack-TEE/dstack/blob/next/sdk/curl/api.md#3-get-quote) or [attest](https://github.com/Dstack-TEE/dstack/blob/next/sdk/curl/api.md#8-attest).
 
 **Request Body:**
 Provide either `attestation` or (`quote` + `event_log` + `vm_config`).

@@ -1,6 +1,6 @@
 [Unit]
 Description=dstack development TEE ABI simulator
-Documentation=https://github.com/Dstack-TEE/dstack/blob/master/CONTRIBUTING.md
+Documentation=https://github.com/Dstack-TEE/dstack/blob/next/CONTRIBUTING.md
 Before=dstack-prepare.service
 
 [Service]

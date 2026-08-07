@@ -9,9 +9,9 @@ permissions:
 
 on:
   push:
-    branches: [ master, next, dev-* ]
+    branches: [ next, 'release/**' ]
   pull_request:
-    branches: [ master, next, dev-* ]
+    branches: [ next, 'release/**' ]
 
 jobs:
   build:
