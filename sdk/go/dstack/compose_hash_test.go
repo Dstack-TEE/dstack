@@ -549,3 +549,122 @@ func TestUnsetAttestGPUIsOmitted(t *testing.T) {
 		t.Fatalf("attest_gpu emitted when unset: %s", encoded)
 	}
 }
+
+// TestNestedObjectsPassUnknownFieldsThrough covers the nested counterpart of
+// AppCompose.Extra. A struct field anywhere in the document drops unknown keys
+// on marshal, so passthrough at the top level alone still left every nested
+// object able to change an app's hash.
+func TestNestedObjectsPassUnknownFieldsThrough(t *testing.T) {
+	tests := []struct {
+		name    string
+		compose AppCompose
+		want    string
+	}{
+		{
+			name: "requirements",
+			compose: AppCompose{
+				Runner: "docker-compose",
+				Requirements: &Requirements{
+					OsVersion: ">=0.6.0",
+					Extra:     map[string]any{"future_req": true},
+				},
+			},
+			want: "18955f7789a7aa43e3ae2c1d00b96c26caef8a91f1f0c55ad362f0a0a39215c0",
+		},
+		{
+			name: "docker_config",
+			compose: AppCompose{
+				Runner: "docker-compose",
+				DockerConfig: &DockerConfig{
+					Registry: "docker.io",
+					Extra:    map[string]any{"future_key": 1},
+				},
+			},
+			want: "37cd67d88435bdb727b3e240a9a0ff57b7bebbc17eacd573c3d4746aacd104f6",
+		},
+		{
+			name: "port_policy",
+			compose: AppCompose{
+				Runner: "docker-compose",
+				PortPolicy: &PortPolicy{
+					Ports: []PortAttrs{{Port: 443, PP: true}},
+					Extra: map[string]any{"future_mode": "strict"},
+				},
+			},
+			want: "57ff3fb4784d409a6339feb615f02695f74a713d9c914d700c0b62d20c578a7e",
+		},
+		{
+			name: "port_policy.ports entry",
+			compose: AppCompose{
+				Runner: "docker-compose",
+				PortPolicy: &PortPolicy{
+					Ports: []PortAttrs{{Port: 443, PP: true, Extra: map[string]any{"future_attr": 7}}},
+				},
+			},
+			want: "04ebb30d7c219a18cadf4ae77bf32e7230060f2b0bf90775296ec9f94aa40dbb",
+		},
+		{
+			name: "verity_volumes entry",
+			compose: AppCompose{
+				Runner: "docker-compose",
+				VerityVolumes: []VerityVolume{{
+					Source:     "a.img",
+					VerityRoot: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+					Target:     "/mnt/a",
+					Extra:      map[string]any{"future_opt": true},
+				}},
+			},
+			want: "3a50068f1ffb7626725c73f0a1511843f9e918d9b3a51144a445c3d2dd1ba2a6",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := GetComposeHash(tt.compose, false)
+			if err != nil {
+				t.Fatalf("GetComposeHash: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("hash = %s, want %s (JS reference)", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestNestedExtraCannotShadowDeclaredFields checks the collision guard reaches
+// nested objects too.
+func TestNestedExtraCannotShadowDeclaredFields(t *testing.T) {
+	_, err := GetComposeHash(AppCompose{
+		Runner:       "docker-compose",
+		Requirements: &Requirements{Extra: map[string]any{"os_version": ">=0.6.0"}},
+	}, false)
+	if err == nil {
+		t.Fatal("GetComposeHash accepted a nested Extra key shadowing a declared field")
+	}
+}
+
+// TestNestedUnknownFieldsRoundTrip decodes a document whose unknown keys sit
+// inside nested objects and re-hashes it unchanged.
+func TestNestedUnknownFieldsRoundTrip(t *testing.T) {
+	raw := `{"runner":"docker-compose","requirements":{"future_req":true,"os_version":">=0.6.0"}}`
+
+	var compose AppCompose
+	if err := json.Unmarshal([]byte(raw), &compose); err != nil {
+		t.Fatalf("unmarshal app compose: %v", err)
+	}
+	if compose.Requirements == nil {
+		t.Fatal("requirements dropped during decoding")
+	}
+	if _, ok := compose.Requirements.Extra["future_req"]; !ok {
+		t.Fatalf("nested unknown key dropped during decoding: %+v", compose.Requirements)
+	}
+
+	got, err := GetComposeHash(compose, false)
+	if err != nil {
+		t.Fatalf("GetComposeHash: %v", err)
+	}
+	const want = "18955f7789a7aa43e3ae2c1d00b96c26caef8a91f1f0c55ad362f0a0a39215c0"
+	if got != want {
+		t.Fatalf("hash after round trip = %s, want %s", got, want)
+	}
+}

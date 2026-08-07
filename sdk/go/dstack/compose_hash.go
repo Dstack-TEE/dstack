@@ -43,6 +43,9 @@ type PortAttrs struct {
 	// PP asks the gateway to send a PROXY protocol header on outbound
 	// connections to this port.
 	PP bool `json:"pp"`
+
+	// Extra carries keys this SDK version does not declare. See AppCompose.Extra.
+	Extra map[string]any `json:"-"`
 }
 
 // PortPolicy is the per-port policy consumed by the gateway.
@@ -51,6 +54,9 @@ type PortPolicy struct {
 	// RestrictMode makes the gateway forward only to ports listed in Ports and
 	// reject everything else at TCP-accept time.
 	RestrictMode bool `json:"restrict_mode"`
+
+	// Extra carries keys this SDK version does not declare. See AppCompose.Extra.
+	Extra map[string]any `json:"-"`
 }
 
 // VerityVolume is a pre-baked, read-only dm-verity volume attached to the CVM.
@@ -61,6 +67,9 @@ type VerityVolume struct {
 	VerityRoot string `json:"verity_root"`
 	// Target is the absolute mount path inside the guest.
 	Target string `json:"target"`
+
+	// Extra carries keys this SDK version does not declare. See AppCompose.Extra.
+	Extra map[string]any `json:"-"`
 }
 
 // DockerConfig represents Docker configuration
@@ -68,6 +77,9 @@ type DockerConfig struct {
 	Registry string `json:"registry,omitempty"`
 	Username string `json:"username,omitempty"`
 	TokenKey string `json:"token_key,omitempty"`
+
+	// Extra carries keys this SDK version does not declare. See AppCompose.Extra.
+	Extra map[string]any `json:"-"`
 }
 
 // RequirementPlatform represents an allowed guest attestation platform.
@@ -100,6 +112,9 @@ type GpuPolicy struct {
 	AllowDebug bool `json:"allow_debug,omitempty"`
 	// AllowInsecureBoot permits claims that do not assert GPU secure boot.
 	AllowInsecureBoot bool `json:"allow_insecure_boot,omitempty"`
+
+	// Extra carries keys this SDK version does not declare. See AppCompose.Extra.
+	Extra map[string]any `json:"-"`
 }
 
 // Requirements represents guest-side requirements.
@@ -112,6 +127,9 @@ type Requirements struct {
 	// field as the default empty policy {} and emits its digest as the
 	// gpu-policy-hash launch event.
 	GpuPolicy *GpuPolicy `json:"gpu_policy,omitempty"`
+
+	// Extra carries keys this SDK version does not declare. See AppCompose.Extra.
+	Extra map[string]any `json:"-"`
 }
 
 // AppCompose represents the application composition structure
@@ -171,11 +189,15 @@ type AppCompose struct {
 	Extra map[string]any `json:"-"`
 }
 
-// declaredComposeFields returns the JSON names of every declared AppCompose
-// field, including those omitempty would leave out of a given document.
-var declaredComposeFields = sync.OnceValue(func() map[string]struct{} {
+var declaredFieldCache sync.Map // reflect.Type -> map[string]struct{}
+
+// declaredFieldNames returns the JSON names of every declared field on t,
+// including those omitempty would leave out of a given document.
+func declaredFieldNames(t reflect.Type) map[string]struct{} {
+	if cached, ok := declaredFieldCache.Load(t); ok {
+		return cached.(map[string]struct{})
+	}
 	names := make(map[string]struct{})
-	t := reflect.TypeOf(AppCompose{})
 	for i := 0; i < t.NumField(); i++ {
 		tag := t.Field(i).Tag.Get("json")
 		name, _, _ := strings.Cut(tag, ",")
@@ -184,18 +206,18 @@ var declaredComposeFields = sync.OnceValue(func() map[string]struct{} {
 		}
 		names[name] = struct{}{}
 	}
+	declaredFieldCache.Store(t, names)
 	return names
-})
+}
 
-// MarshalJSON emits the declared fields and then merges Extra into the same
-// object.
-func (a AppCompose) MarshalJSON() ([]byte, error) {
-	type plain AppCompose
-	encoded, err := json.Marshal(plain(a))
+// marshalWithExtra encodes declared and merges extra into the same JSON object.
+// typeName only appears in error messages.
+func marshalWithExtra(declared any, extra map[string]any, t reflect.Type, typeName string) ([]byte, error) {
+	encoded, err := json.Marshal(declared)
 	if err != nil {
 		return nil, err
 	}
-	if len(a.Extra) == 0 {
+	if len(extra) == 0 {
 		return encoded, nil
 	}
 
@@ -204,18 +226,50 @@ func (a AppCompose) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 
-	declared := declaredComposeFields()
-	for key, value := range a.Extra {
-		if _, isDeclared := declared[key]; isDeclared {
-			return nil, fmt.Errorf("dstack: app_compose Extra key %q collides with a declared field; set the field instead", key)
+	names := declaredFieldNames(t)
+	for key, value := range extra {
+		if _, isDeclared := names[key]; isDeclared {
+			return nil, fmt.Errorf("dstack: %s Extra key %q collides with a declared field; set the field instead", typeName, key)
 		}
 		raw, err := json.Marshal(value)
 		if err != nil {
-			return nil, fmt.Errorf("dstack: app_compose Extra key %q: %w", key, err)
+			return nil, fmt.Errorf("dstack: %s Extra key %q: %w", typeName, key, err)
 		}
 		merged[key] = raw
 	}
 	return json.Marshal(merged)
+}
+
+// unmarshalExtra returns the keys of data that t does not declare.
+func unmarshalExtra(data []byte, t reflect.Type, typeName string) (map[string]any, error) {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return nil, err
+	}
+
+	names := declaredFieldNames(t)
+	extra := make(map[string]any)
+	for key, raw := range all {
+		if _, isDeclared := names[key]; isDeclared {
+			continue
+		}
+		var value any
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return nil, fmt.Errorf("dstack: %s field %q: %w", typeName, key, err)
+		}
+		extra[key] = value
+	}
+	if len(extra) == 0 {
+		return nil, nil
+	}
+	return extra, nil
+}
+
+// MarshalJSON emits the declared fields and then merges Extra into the same
+// object.
+func (a AppCompose) MarshalJSON() ([]byte, error) {
+	type plain AppCompose
+	return marshalWithExtra(plain(a), a.Extra, reflect.TypeFor[AppCompose](), "app_compose")
 }
 
 // UnmarshalJSON decodes the declared fields and collects everything else into
@@ -228,26 +282,137 @@ func (a *AppCompose) UnmarshalJSON(data []byte) error {
 	}
 	*a = AppCompose(decoded)
 
-	var all map[string]json.RawMessage
-	if err := json.Unmarshal(data, &all); err != nil {
+	extra, err := unmarshalExtra(data, reflect.TypeFor[AppCompose](), "app_compose")
+	if err != nil {
 		return err
 	}
+	a.Extra = extra
+	return nil
+}
 
-	declared := declaredComposeFields()
-	extra := make(map[string]any)
-	for key, raw := range all {
-		if _, isDeclared := declared[key]; isDeclared {
-			continue
-		}
-		var value any
-		if err := json.Unmarshal(raw, &value); err != nil {
-			return fmt.Errorf("dstack: app_compose field %q: %w", key, err)
-		}
-		extra[key] = value
+func (r Requirements) MarshalJSON() ([]byte, error) {
+	type plain Requirements
+	return marshalWithExtra(plain(r), r.Extra, reflect.TypeFor[Requirements](), "requirements")
+}
+
+func (r *Requirements) UnmarshalJSON(data []byte) error {
+	type plain Requirements
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
 	}
-	if len(extra) > 0 {
-		a.Extra = extra
+	*r = Requirements(decoded)
+
+	extra, err := unmarshalExtra(data, reflect.TypeFor[Requirements](), "requirements")
+	if err != nil {
+		return err
 	}
+	r.Extra = extra
+	return nil
+}
+
+func (g GpuPolicy) MarshalJSON() ([]byte, error) {
+	type plain GpuPolicy
+	return marshalWithExtra(plain(g), g.Extra, reflect.TypeFor[GpuPolicy](), "gpu_policy")
+}
+
+func (g *GpuPolicy) UnmarshalJSON(data []byte) error {
+	type plain GpuPolicy
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*g = GpuPolicy(decoded)
+
+	extra, err := unmarshalExtra(data, reflect.TypeFor[GpuPolicy](), "gpu_policy")
+	if err != nil {
+		return err
+	}
+	g.Extra = extra
+	return nil
+}
+
+func (d DockerConfig) MarshalJSON() ([]byte, error) {
+	type plain DockerConfig
+	return marshalWithExtra(plain(d), d.Extra, reflect.TypeFor[DockerConfig](), "docker_config")
+}
+
+func (d *DockerConfig) UnmarshalJSON(data []byte) error {
+	type plain DockerConfig
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*d = DockerConfig(decoded)
+
+	extra, err := unmarshalExtra(data, reflect.TypeFor[DockerConfig](), "docker_config")
+	if err != nil {
+		return err
+	}
+	d.Extra = extra
+	return nil
+}
+
+func (p PortPolicy) MarshalJSON() ([]byte, error) {
+	type plain PortPolicy
+	return marshalWithExtra(plain(p), p.Extra, reflect.TypeFor[PortPolicy](), "port_policy")
+}
+
+func (p *PortPolicy) UnmarshalJSON(data []byte) error {
+	type plain PortPolicy
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*p = PortPolicy(decoded)
+
+	extra, err := unmarshalExtra(data, reflect.TypeFor[PortPolicy](), "port_policy")
+	if err != nil {
+		return err
+	}
+	p.Extra = extra
+	return nil
+}
+
+func (p PortAttrs) MarshalJSON() ([]byte, error) {
+	type plain PortAttrs
+	return marshalWithExtra(plain(p), p.Extra, reflect.TypeFor[PortAttrs](), "port_policy.ports entry")
+}
+
+func (p *PortAttrs) UnmarshalJSON(data []byte) error {
+	type plain PortAttrs
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*p = PortAttrs(decoded)
+
+	extra, err := unmarshalExtra(data, reflect.TypeFor[PortAttrs](), "port_policy.ports entry")
+	if err != nil {
+		return err
+	}
+	p.Extra = extra
+	return nil
+}
+
+func (v VerityVolume) MarshalJSON() ([]byte, error) {
+	type plain VerityVolume
+	return marshalWithExtra(plain(v), v.Extra, reflect.TypeFor[VerityVolume](), "verity_volumes entry")
+}
+
+func (v *VerityVolume) UnmarshalJSON(data []byte) error {
+	type plain VerityVolume
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*v = VerityVolume(decoded)
+
+	extra, err := unmarshalExtra(data, reflect.TypeFor[VerityVolume](), "verity_volumes entry")
+	if err != nil {
+		return err
+	}
+	v.Extra = extra
 	return nil
 }
 
