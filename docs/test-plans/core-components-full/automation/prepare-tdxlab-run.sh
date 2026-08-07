@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
+export PATH="$HOME/.cargo/bin:$HOME/.bun/bin:$PATH"
 
 repo=${1:-$(git rev-parse --show-toplevel)}
 output=${2:?usage: prepare-tdxlab-run.sh REPOSITORY OUTPUT_JSON [CACHE_ROOT]}
