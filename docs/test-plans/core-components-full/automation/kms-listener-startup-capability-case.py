@@ -262,7 +262,8 @@ def main() -> int:
         )
         step2_ok = (
             finish_code == 200
-            and finish_body in {b"{}", b""}
+            # pRPC JSON encodes google.protobuf.Empty as JSON null.
+            and finish_body in {b"null", b"{}", b""}
             and transition_samples[-1]
             == {"onboard": False, "main": True, "admin": True}
             and not overlap
