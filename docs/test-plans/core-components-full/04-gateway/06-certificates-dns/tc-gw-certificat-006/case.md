@@ -24,7 +24,7 @@
 
 ## Objective
 
-Verify certificate store sni wildcard and hot reload across success, boundary, failure, security, and recovery conditions.
+Verify the current wildcard certificate-store lookup and hot-reload rejection behavior across success, boundary, failure, and recovery conditions.
 
 ## Preconditions
 
@@ -49,11 +49,11 @@ Query the relevant health, configuration, and baseline state for certificate sto
 <a id="tc-gw-certificat-006-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Load exact/wildcard chains, overlapping names, expired/mismatched/corrupt keys, then reload under traffic.
+Exercise empty and populated stores, one-label wildcard lookup, mismatched-key rejection, expired-update rejection, and an unrelated update while another stored entry is expired.
 
 **Expected results:**
 
-- Most-specific valid cert is selected; bad updates retain prior cert; reload is atomic with no handshake interruption.
+- A wildcard matches exactly one child label but not its base or nested descendants; expired and mismatched replacements retain the prior certificate, and an expired entry does not block another domain's update.
 
 <a id="tc-gw-certificat-006-step-03"></a>
 ### Step 3: Verify state, isolation, and diagnostics
