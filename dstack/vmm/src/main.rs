@@ -42,6 +42,14 @@ fn app_version() -> String {
     dstack_build_info::app_version!()
 }
 
+fn is_connection_refused(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::ConnectionRefused)
+    })
+}
+
 #[derive(Parser)]
 #[command(author, version, about, long_version = app_version())]
 struct Args {
@@ -358,27 +366,39 @@ async fn main() -> Result<()> {
         ),
         config::ProcessManagerBackend::Systemd => {
             if legacy_socket_exists {
-                let client = connect_supervisor(false).await.context(
-                    "supervisor socket exists but its state cannot be verified in systemd mode; \
-                     if Supervisor is definitely not running, remove the stale socket and restart",
-                )?;
-                anyhow::ensure!(
-                    !client
-                        .list()
-                        .await?
-                        .iter()
-                        .any(|process| process.state.status.is_running()),
-                    "running Supervisor VMs detected; use cvm.pm = \"auto\" for migration"
-                );
+                match connect_supervisor(false).await {
+                    Ok(client) => anyhow::ensure!(
+                        !client
+                            .list()
+                            .await?
+                            .iter()
+                            .any(|process| process.state.status.is_running()),
+                        "running Supervisor VMs detected; use cvm.pm = \"auto\" for migration"
+                    ),
+                    Err(error) if is_connection_refused(&error) => {
+                        warn!(%error, "ignoring stale legacy Supervisor socket")
+                    }
+                    Err(error) => return Err(error).context(
+                        "supervisor socket exists but its state cannot be verified in systemd mode; \
+                         if Supervisor is definitely not running, remove the stale socket and restart",
+                    ),
+                }
             }
             process_manager::ProcessManager::systemd(systemd_manager()?)
         }
         config::ProcessManagerBackend::Auto => {
             let legacy_supervisor = if legacy_socket_exists {
-                Some(connect_supervisor(false).await.context(
-                    "supervisor socket exists but its state cannot be verified in auto mode; \
-                     if Supervisor is definitely not running, remove the stale socket and restart",
-                )?)
+                match connect_supervisor(false).await {
+                    Ok(client) => Some(client),
+                    Err(error) if is_connection_refused(&error) => {
+                        warn!(%error, "ignoring stale legacy Supervisor socket");
+                        None
+                    }
+                    Err(error) => return Err(error).context(
+                        "supervisor socket exists but its state cannot be verified in auto mode; \
+                         if Supervisor is definitely not running, remove the stale socket and restart",
+                    ),
+                }
             } else {
                 info!("legacy supervisor socket is absent; using systemd for all VMs");
                 None

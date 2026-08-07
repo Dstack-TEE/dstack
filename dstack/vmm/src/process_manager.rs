@@ -125,17 +125,21 @@ impl AutoProcessManager {
         // the handoff and the other fails on record/unit removal or collision.
         if self.is_supervisor_process(&config.id).await {
             let supervisor = self.supervisor()?;
-            if supervisor
-                .info(&config.id)
-                .await?
-                .is_some_and(|info| info.state.status.is_running())
-            {
-                bail!("process is already running");
+            match supervisor.info(&config.id).await? {
+                Some(info) if info.state.status.is_running() => {
+                    bail!("process is already running")
+                }
+                Some(_) => {
+                    // Natural exits leave Supervisor's `started` flag set.
+                    // Normalize it before removing the legacy record.
+                    supervisor.stop(&config.id).await?;
+                    supervisor.remove(&config.id).await?;
+                }
+                None => {
+                    // Supervisor may have restarted or the record may have
+                    // been removed out of band. It is already safe to migrate.
+                }
             }
-            // Natural exits leave Supervisor's `started` flag set. Normalize
-            // it before removing the legacy record and migrating this launch.
-            supervisor.stop(&config.id).await?;
-            supervisor.remove(&config.id).await?;
             self.supervisor_processes.write().await.remove(&config.id);
         }
         self.systemd.deploy(config).await
@@ -171,8 +175,15 @@ impl AutoProcessManager {
                         .filter(|process| pinned.contains_key(&process.config.id))
                         .collect::<Vec<_>>();
                     let mut cache = self.supervisor_processes.write().await;
+                    let present = legacy
+                        .iter()
+                        .map(|process| process.config.id.as_str())
+                        .collect::<std::collections::HashSet<_>>();
+                    cache.retain(|id, _| present.contains(id.as_str()));
                     for process in &legacy {
-                        cache.insert(process.config.id.clone(), process.clone());
+                        if let Some(cached) = cache.get_mut(&process.config.id) {
+                            *cached = process.clone();
+                        }
                     }
                     drop(cache);
                     processes.extend(legacy);
@@ -191,10 +202,11 @@ impl AutoProcessManager {
             match self.supervisor()?.info(id).await {
                 Ok(info) => {
                     if let Some(process) = &info {
-                        self.supervisor_processes
-                            .write()
-                            .await
-                            .insert(id.to_string(), process.clone());
+                        if let Some(cached) = self.supervisor_processes.write().await.get_mut(id) {
+                            *cached = process.clone();
+                        }
+                    } else {
+                        self.supervisor_processes.write().await.remove(id);
                     }
                     Ok(info)
                 }
@@ -221,9 +233,9 @@ fn system_time_from_monotonic_micros(value: &str) -> Option<SystemTime> {
         tv_sec: 0,
         tv_nsec: 0,
     };
-    // SAFETY: `now` points to a valid timespec and CLOCK_BOOTTIME is a
-    // process-independent monotonic clock on Linux.
-    if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut now) } != 0 {
+    // SAFETY: `now` points to a valid timespec. systemd's monotonic timestamp
+    // properties use CLOCK_MONOTONIC through its dual_timestamp helpers.
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) } != 0 {
         return None;
     }
     let now_micros = (now.tv_sec as u64)
@@ -251,17 +263,20 @@ fn state_from_systemd_properties(
     let active_state = value("ActiveState");
     let sub_state = value("SubState");
     let running = matches!(active_state, "active" | "activating" | "deactivating");
+    let plain_status = value("ExecMainStatus").parse::<i32>().unwrap_or_default();
+    let raw_status = match value("ExecMainCode") {
+        "exited" => plain_status << 8,
+        "dumped" => plain_status | 0x80,
+        _ => plain_status,
+    };
     let status = if running {
         ProcessStatus::Running
-    } else if !started {
+    } else if !started && raw_status == 0 {
         ProcessStatus::Stopped
     } else if load_state == "not-found" || matches!(active_state, "inactive" | "failed") {
-        let status = value("ExecMainStatus").parse::<i32>().unwrap_or_default();
-        ProcessStatus::Exited(match value("ExecMainCode") {
-            "exited" => status << 8,
-            "dumped" => status | 0x80,
-            _ => status,
-        })
+        // A collected unit has no status properties, so a started record can
+        // only be represented as a clean exit after daemon reload/reboot.
+        ProcessStatus::Exited(raw_status)
     } else {
         ProcessStatus::Error(format!(
             "systemd unit is {active_state}/{sub_state} (code={}, status={})",
@@ -422,7 +437,17 @@ impl SystemdProcessManager {
         {
             let mut command = Command::new("systemctl");
             command.arg("stop").arg("--no-block").arg(self.unit(id));
-            Self::command(command, "systemctl stop").await?;
+            if let Err(error) = Self::command(command, "systemctl stop").await {
+                // The unit may have exited and been collected between the
+                // preceding status query and this stop request.
+                if self
+                    .info(id)
+                    .await?
+                    .is_some_and(|info| info.state.status.is_running())
+                {
+                    return Err(error);
+                }
+            }
         }
         Ok(())
     }
@@ -550,6 +575,13 @@ mod tests {
             state(
                 "LoadState=loaded\nActiveState=failed\nExecMainCode=exited\nExecMainStatus=3",
                 true
+            ),
+            ProcessStatus::Exited(768)
+        ));
+        assert!(matches!(
+            state(
+                "LoadState=loaded\nActiveState=failed\nExecMainCode=exited\nExecMainStatus=3",
+                false
             ),
             ProcessStatus::Exited(768)
         ));

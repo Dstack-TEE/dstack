@@ -95,6 +95,11 @@ atomic property handling and event-driven state updates.
   VMM environment. Variables in `ProcessConfig.env` are forwarded; unrelated
   inherited variables are not.
 - Unit status is currently polled through `systemctl show`.
+- If Supervisor becomes unavailable during an `auto` migration, pinned VMs
+  retain their cached state to prevent double launch and CID reuse. Their
+  stop/removal may remain pending until Supervisor is restored.
+- `systemd.stop_timeout` syntax is validated by systemd when the first VM is
+  launched; an invalid time span causes that launch to fail.
 - Start and stop are not yet transactional with the metadata file.
 - A host reboot removes transient units; normal VMM workdir recovery recreates
   services for VMs marked for automatic start.
