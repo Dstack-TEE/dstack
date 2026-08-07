@@ -319,7 +319,7 @@ def main() -> int:
             workspace,
             environment,
         )
-        require_rejection(row, completed, "failed to verify RA-TLS certificate")
+        require_rejection(row, completed, "failed to parse PEM certificate")
         rows.append(row)
 
         stage = "service restart and env port"
