@@ -29,12 +29,22 @@ def atomic_json(path: pathlib.Path, value: Any) -> None:
     temporary.replace(path)
 
 
-def replace_path(text: str, field: str, old: str, new: pathlib.Path) -> str:
-    """Replace one unambiguous TOML path field."""
-    marker = f'{field} = "{old}"'
-    if text.count(marker) != 1:
-        raise AssertionError(f"TLS {field} field was ambiguous")
-    return text.replace(marker, f'{field} = "{new}"', 1)
+def replace_path(text: str, section: str, field: str, new: pathlib.Path) -> str:
+    """Replace one path field within an unambiguous TOML section."""
+    lines = text.splitlines(keepends=True)
+    current = ""
+    matches: list[int] = []
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            current = stripped[1:-1]
+        elif current == section and stripped.split("=", 1)[0].strip() == field:
+            matches.append(index)
+    if len(matches) != 1:
+        raise AssertionError(f"TLS {section}.{field} field was ambiguous")
+    ending = "\n" if lines[matches[0]].endswith("\n") else ""
+    lines[matches[0]] = f'{field} = "{new}"{ending}'
+    return "".join(lines)
 
 
 def main() -> int:
@@ -74,12 +84,12 @@ def main() -> int:
         failure_dir / "gateway-ca.cert",
     ]
     failure_config = workspace / "config/gateway-on-demand-failure.toml"
-    failure_text = replace_path(config_text, "key", tls["key"], failure_paths[0])
-    failure_text = replace_path(failure_text, "certs", tls["certs"], failure_paths[1])
+    failure_text = replace_path(config_text, "tls", "key", failure_paths[0])
+    failure_text = replace_path(failure_text, "tls", "certs", failure_paths[1])
     failure_text = replace_path(
         failure_text,
+        "tls.mutual",
         "ca_certs",
-        tls["mutual"]["ca_certs"],
         failure_paths[2],
     )
     failure_config.write_text(failure_text)
