@@ -60,7 +60,29 @@ You only need to add the `APP_LAUNCH_TOKEN` environment variable to enable LAUNC
 
 ![Token Environment Variable](../assets/token-env.png)
 
-user_config is not encrypted, and similarly requires integrity checks at the application layer. For example, you can store a USER_CONFIG_HASH in encrypted environment variables and verify it in the prelaunch script.
+user_config is not encrypted, and similarly requires integrity checks at the application layer. For example, you can store a USER_CONFIG_HASH in encrypted environment variables and verify it in the prelaunch script. Such a check is a defense-in-depth measure, not a gate: it does not reliably run before your containers do (see the next section), so the authoritative check belongs in `init_script` or in the application itself.
+
+## Security semantics must not depend on `pre_launch_script` running first
+
+`pre_launch_script` runs from `app-compose.service`, which is ordered `After=docker.service`. Docker restores containers when the daemon starts, so on a reboot your application can already be running by the time the prelaunch script executes:
+
+- **`restart: always`** — Docker restarts the container whenever the daemon starts, even if it was stopped cleanly beforehand. Every reboot takes this path. This is the restart policy used throughout dstack's own examples.
+- **`restart: unless-stopped`** — a clean shutdown runs the `ExecStop` of `app-compose.service`, which stops the containers, so Docker does not restore them. But an unclean stop (host reset, guest crash, power loss) leaves them in the running state and Docker restores them on the next boot. The host decides when to reset a CVM, so it can force this path at will.
+
+`init_script` has no such gap. It runs from `dstack-prepare.service`, which is ordered `Before=docker.service`, so every init script completes before dockerd — and therefore before any container — starts, on every boot. Init scripts also run after `dstack-util setup`, so app keys and the decrypted env file are already available to them. Anything that must run before application code belongs in `init_script`.
+
+This is an ordering property, not an integrity one. Both scripts are measured into the compose hash, so the scripts you audited are the scripts that run. What is not guaranteed is that the prelaunch one runs *first*.
+
+**Unsafe in `pre_launch_script`:**
+
+- Verifying `USER_CONFIG_HASH` or an `APP_LAUNCH_TOKEN` and calling `exit 1` to abort the launch. After a reboot the app is already serving with the unverified input; the non-zero exit only marks `app-compose.service` as failed.
+- Fetching or integrity-checking a data file, model weights, or a database snapshot before the app consumes it. The restored container may already have read the previous, unchecked copy.
+- Installing firewall rules, network namespaces, or an egress proxy that is meant to contain the application. There is a window in which the app runs unconstrained.
+- Deriving or writing a secret that the app expects to find on disk. On the early-start path the app sees whatever the previous boot left there.
+
+**Safe in `pre_launch_script`:** work whose only effect is on the `docker compose up` that immediately follows it — pre-pulling or importing images, generating a compose override, or writing files that containers pick up only when that compose run recreates them.
+
+**For app auditors:** treat any check in a `pre_launch_script` as advisory. When judging whether a deployment enforces a security property, ask whether the property still holds on a boot where the prelaunch script has not run yet. If it does not, the check must move into `init_script`, or into the application itself before it serves traffic or touches secrets.
 
 ## Don't put secrets in docker-compose.yaml
 

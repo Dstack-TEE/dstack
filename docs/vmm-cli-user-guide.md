@@ -225,7 +225,7 @@ First, create an application composition file that describes your application:
 
 - `--name`: Friendly name for your application
 - `--docker-compose`: Path to your Docker Compose file
-- `--prelaunch-script`: Optional script to run before starting containers
+- `--prelaunch-script`: Optional script to run before starting containers. It runs after dockerd, so containers restored by a Docker restart policy may already be running; do not put security gates here (see [security best practices](./security/security-best-practices.md#security-semantics-must-not-depend-on-pre_launch_script-running-first))
 - `--kms`: Enable Key Management Service for secrets
 - `--gateway`: Enable dstack-gateway for external access
 - `--local-key-provider`: Use local key provider
