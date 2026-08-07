@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 # SPDX-License-Identifier: Apache-2.0
-set -euo pipefail
+set -Eeuo pipefail
 # Exercise the packaged gateway checker's startup contract against a real
 # WireGuard interface.
 #
@@ -29,6 +29,18 @@ cleanup() {
   rm -rf "/etc/netns/$NS" "$ROOT"
 }
 trap cleanup EXIT
+failure() {
+  rc=$?
+  printf 'gateway checker lifecycle failed at line %s: %s\n' \
+    "${BASH_LINENO[0]}" "$BASH_COMMAND" >&2
+  for diagnostic in "$ROOT"/*.rc "$ROOT"/*.log "$ROOT"/unit.properties; do
+    [[ -f "$diagnostic" ]] || continue
+    printf '%s:\n' "$(basename "$diagnostic")" >&2
+    tail -n 40 "$diagnostic" >&2
+  done
+  exit "$rc"
+}
+trap failure ERR
 mkdir -p "$ROOT"
 for binary in ip wg awk systemctl dstack-util; do check command -v "$binary" >/dev/null; done
 
