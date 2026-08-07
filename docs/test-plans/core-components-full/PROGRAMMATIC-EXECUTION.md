@@ -22,6 +22,12 @@ tools/dstack-test/dstack-test sweep --plan <plan> --run-id <id> --workers 8 \
 tools/dstack-test/dstack-test verify-registry --plan <plan>
 ```
 
+On tdxlab, create the runtime manifest with
+`automation/prepare-tdxlab-run.sh` rather than calling `prepare-run.sh`
+directly. The wrapper makes every external provider and deterministic tool/data
+prerequisite part of the prepared run; plain preparation cannot provision those
+lab-specific inputs.
+
 A scripted case averages 0.4s against 178s for an agent-driven one, so the
 whole scripted set sweeps in seconds. That is what makes "fix, then re-verify"
 cheap enough to do on every change.
