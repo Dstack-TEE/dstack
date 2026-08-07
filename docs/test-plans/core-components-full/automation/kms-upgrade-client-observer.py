@@ -23,6 +23,11 @@ SOCKET_PATH = os.environ.get("TAPPD_SOCKET", "/var/run/tappd.sock")
 DSTACK_SOCKET_PATH = os.environ.get("DSTACK_SOCKET", "/var/run/dstack.sock")
 DERIVATION_PATH = os.environ.get("DERIVATION_PATH", "kms-upgrade-009")
 GATEWAY_URLS = [url for url in os.environ.get("GATEWAY_URLS", "").split(",") if url]
+GATEWAY_REQUEST_CONTRACTS = [
+    value
+    for value in os.environ.get("GATEWAY_REQUEST_CONTRACTS", "").split(",")
+    if value
+]
 GATEWAY_PORTS = [
     int(port) for port in os.environ.get("GATEWAY_PORTS", "8000").split(",") if port
 ]
@@ -105,7 +110,11 @@ def certificate_public_key_sha256(certificate: str) -> str:
 
 
 def register_gateway(
-    url: str, private_key: str, certificate_chain: list[str]
+    url: str,
+    request_contract: str,
+    client_public_key: str,
+    private_key: str,
+    certificate_chain: list[str],
 ) -> dict[str, Any]:
     """Register through one Gateway without retaining app certificate material."""
     with tempfile.TemporaryDirectory() as directory:
@@ -119,40 +128,53 @@ def register_gateway(
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
         context.load_cert_chain(cert_path, key_path)
-        payload = json.dumps(
-            {
-                "client_public_key": __import__("base64")
-                .b64encode(os.urandom(32))
-                .decode(),
-                "port_policy": {
-                    "ports": [{"port": port, "pp": False} for port in GATEWAY_PORTS]
-                },
-            },
-            separators=(",", ":"),
-        ).encode()
+        if request_contract not in {"current", "legacy"}:
+            raise RuntimeError(
+                f"Unsupported Gateway request contract: {request_contract}"
+            )
+        request_value: dict[str, Any] = {"client_public_key": client_public_key}
+        if request_contract == "current":
+            request_value["port_policy"] = {
+                "ports": [{"port": port, "pp": False} for port in GATEWAY_PORTS]
+            }
+        payload = json.dumps(request_value, separators=(",", ":")).encode()
         rpc_name = "Tproxy.RegisterCvm"
         for candidate in ("Tproxy.RegisterCvm", "Gateway.RegisterCvm"):
-            request = urllib.request.Request(
-                f"{url.rstrip('/')}/prpc/{candidate}?json",
-                data=payload,
-                headers={"content-type": "application/json"},
-            )
-            try:
-                with urllib.request.urlopen(
-                    request, context=context, timeout=30
-                ) as response:
-                    code, body = response.status, response.read()
-            except urllib.error.HTTPError as error:
-                code, body = error.code, error.read()
+            endpoint = f"{url.rstrip('/')}/prpc/{candidate}?json"
+
+            def post(data: bytes) -> tuple[int, bytes]:
+                request = urllib.request.Request(
+                    endpoint,
+                    data=data,
+                    headers={"content-type": "application/json"},
+                )
+                try:
+                    with urllib.request.urlopen(
+                        request, context=context, timeout=30
+                    ) as response:
+                        return response.status, response.read()
+                except urllib.error.HTTPError as error:
+                    return error.code, error.read()
+
+            code, body = post(payload)
             rpc_name = candidate
             if candidate == "Tproxy.RegisterCvm" and b"Service not found" in body:
                 continue
             break
         value = json.loads(body) if body else {}
+        error_detail = None
+        if code != 200:
+            raw_error = value.get("error") if isinstance(value, dict) else None
+            if not isinstance(raw_error, str):
+                raw_error = body.decode(errors="replace")
+            error_detail = raw_error.replace(client_public_key, "<redacted>")[:300]
         return {
             "http": code,
             "rpc_name": rpc_name,
             "assigned_ip": str((value.get("wg") or {}).get("client_ip", "")),
+            "request_contract": request_contract,
+            "error_detail": error_detail,
+            "response_sha256": hashlib.sha256(body).hexdigest(),
             "private_material_exported": False,
         }
 
@@ -170,16 +192,15 @@ def observe() -> dict[str, Any]:
     if not isinstance(chain, list) or not chain:
         raise RuntimeError("Tappd.DeriveKey omitted the certificate chain")
     info = tappd("Info", {})
-    registration_identity = guest_rpc(
-        "DstackGuest",
-        "GetTlsKey",
+    registration_identity = tappd(
+        "DeriveKey",
         {
+            "path": f"{DERIVATION_PATH}-gateway-registration",
             "subject": DERIVATION_PATH,
             "alt_names": [],
-            "usage_ra_tls": False,
+            "usage_ra_tls": True,
             "usage_server_auth": False,
             "usage_client_auth": True,
-            "with_app_info": True,
         },
     )
     registration_key = registration_identity.get("key") or registration_identity.get(
@@ -191,7 +212,7 @@ def observe() -> dict[str, Any]:
     if not isinstance(registration_key, str) or not isinstance(
         registration_chain, list
     ):
-        raise RuntimeError("DstackGuest.GetTlsKey omitted registration identity")
+        raise RuntimeError("Tappd.DeriveKey omitted the Gateway registration identity")
     delivered_environment = {
         name: hashlib.sha256(value.encode()).hexdigest()
         for name, value in os.environ.items()
@@ -215,9 +236,22 @@ def observe() -> dict[str, Any]:
             "created_on_this_boot": CONTINUITY_CREATED_BY_PROCESS,
             "bytes": len(value),
         }
+    if len(GATEWAY_REQUEST_CONTRACTS) != len(GATEWAY_URLS):
+        raise RuntimeError(
+            "Gateway URLs and request contracts must have the same length"
+        )
+    gateway_client_public_key = __import__("base64").b64encode(os.urandom(32)).decode()
     gateway_registrations = [
-        register_gateway(url, registration_key, registration_chain)
-        for url in GATEWAY_URLS
+        register_gateway(
+            url,
+            request_contract,
+            gateway_client_public_key,
+            registration_key,
+            registration_chain,
+        )
+        for url, request_contract in zip(
+            GATEWAY_URLS, GATEWAY_REQUEST_CONTRACTS, strict=True
+        )
     ]
     trust_chain: dict[str, Any] | None = None
     if TRUST_CHAIN_OBSERVATION:
