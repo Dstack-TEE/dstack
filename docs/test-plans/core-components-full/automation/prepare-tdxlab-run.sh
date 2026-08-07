@@ -67,11 +67,27 @@ done
 if ! image_matches "$prod_image" false || ! image_matches "$dev_image" true; then
   mkosi_root="$cache_root/mkosi-candidate-$short_revision"
   mkdir -p "$cache_root/tmp/mkosi" "$mkosi_root"
-  "$repo/os/mkosi/build.sh" lint
+  git_common=$(realpath -e -- "$(git -C "$repo" rev-parse --git-common-dir)")
+  original_repo=${git_common%/.git}
+  build_repo="$original_repo.worktrees/candidate-image-$short_revision"
+  if [[ ! -e $build_repo/.git ]]; then
+    mkdir -p "$(dirname "$build_repo")"
+    git -C "$repo" worktree add --detach "$build_repo" "$revision"
+  fi
+  [[ $(git -C "$build_repo" rev-parse HEAD) == "$revision" ]] || {
+    printf 'candidate image worktree points at the wrong revision: %s\n' \
+      "$build_repo" >&2
+    exit 1
+  }
+  [[ -z $(git -C "$build_repo" status --porcelain) ]] || {
+    printf 'candidate image worktree is dirty: %s\n' "$build_repo" >&2
+    exit 1
+  }
+  "$build_repo/os/mkosi/build.sh" lint
   TMPDIR="$cache_root/tmp/mkosi" \
     FLAVORS="prod dev" \
     DSTACK_DEV_CACHE_DIR="$cache_root/mkosi-dev" \
-    "$repo/os/mkosi/build.sh" image "$mkosi_root"
+    "$build_repo/os/mkosi/build.sh" image "$mkosi_root"
   prod_source="$mkosi_root/out/prod/dstack-0.6.0"
   dev_source="$mkosi_root/out/dev/dstack-0.6.0"
   for row in "$prod_source:$prod_image:false" "$dev_source:$dev_image:true"; do
