@@ -1496,6 +1496,18 @@ def scripted_sweep(
             for case_id, value in results.items()
             if value["status"] not in ("PASS", "SKIPPED", "BLOCKED")
         ),
+        # Preserve bounded failure diagnostics. Previously fixture exceptions
+        # were reduced to a bare ERROR count, which made an individual rerun
+        # impossible to diagnose after the worker returned.
+        "outcomes": {
+            case_id: {
+                key: value[key]
+                for key in ("status", "summary", "error")
+                if key in value
+            }
+            for case_id, value in sorted(results.items())
+            if value["status"] != "PASS"
+        },
     }
     atomic_json(run_dir / "scripted-sweep.json", summary)
     return summary
