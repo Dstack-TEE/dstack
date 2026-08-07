@@ -27,11 +27,13 @@ use tokio::{
 };
 use tracing::{info, warn};
 use uuid::Uuid;
+use wait_timeout::ChildExt;
 
 use crate::config::NetdConfig;
 
 const MAX_MESSAGE_SIZE: u64 = 64 * 1024;
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(35);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const IP_PATH: &str = "/usr/sbin/ip";
 const VIRSH_PATH: &str = "/usr/bin/virsh";
 const LOCK_PATH: &str = "/run/lock/dstack-netd.lock";
@@ -446,6 +448,15 @@ fn virsh(uri: &str, args: &[&str], stdin: Option<&[u8]>) -> Result<()> {
 }
 
 fn run_command(program: &str, args: &[&str], stdin: Option<&[u8]>) -> Result<()> {
+    run_command_with_timeout(program, args, stdin, COMMAND_TIMEOUT)
+}
+
+fn run_command_with_timeout(
+    program: &str,
+    args: &[&str],
+    stdin: Option<&[u8]>,
+    command_timeout: Duration,
+) -> Result<()> {
     let mut child = Command::new(program)
         .args(args)
         .stdin(if stdin.is_some() {
@@ -463,6 +474,14 @@ fn run_command(program: &str, args: &[&str], stdin: Option<&[u8]>) -> Result<()>
             .take()
             .context("missing command stdin")?
             .write_all(input)?;
+    }
+    if child.wait_timeout(command_timeout)?.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+        bail!(
+            "{} timed out after {command_timeout:?}",
+            Path::new(program).display()
+        );
     }
     let output = child.wait_with_output()?;
     if !output.status.success() {
@@ -588,5 +607,19 @@ mod tests {
         // EPIPE. In both cases serve() logs this per-connection error and keeps
         // accepting clients.
         assert!(result.unwrap().is_err());
+    }
+
+    #[test]
+    fn command_timeout_kills_stalled_tool() {
+        let started = std::time::Instant::now();
+        let error = run_command_with_timeout(
+            "/bin/sh",
+            &["-c", "sleep 10"],
+            None,
+            Duration::from_millis(50),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }
