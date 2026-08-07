@@ -244,3 +244,32 @@ def test_sort_object_function():
     # Nested keys should also be sorted
     nested_keys = list(sorted_obj["nested"].keys())
     assert nested_keys == ["a", "z"]
+
+
+def test_nested_unknown_fields_do_not_crash():
+    """Nested objects must accept keys this SDK version does not declare.
+
+    requirements.gpu_policy is a live example: it exists in dstack-types but was
+    never added to Requirements here, so from_dict raised TypeError and the
+    compose could not be hashed at all.
+    """
+    compose = {
+        "runner": "docker-compose",
+        "requirements": {"os_version": ">=0.6.0", "gpu_policy": {"rego": "package x"}},
+    }
+    # JS reference value for the same document.
+    assert (
+        get_compose_hash(dict(compose))
+        == "0eb176e27fed3e305de09e5e83fec2dacc87485eaa612b0164a2d4d0b289ccb3"
+    )
+
+
+def test_docker_config_accepts_unknown_fields():
+    compose = {
+        "runner": "docker-compose",
+        "docker_config": {"registry": "docker.io", "future_key": 1},
+    }
+    assert (
+        get_compose_hash(dict(compose))
+        == "37cd67d88435bdb727b3e240a9a0ff57b7bebbc17eacd573c3d4746aacd104f6"
+    )
