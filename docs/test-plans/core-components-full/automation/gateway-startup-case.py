@@ -146,7 +146,7 @@ def main() -> int:
             "private_file_modes": all((path.stat().st_mode & 0o777) == 0o600 for path in private_files),
             "alternate_name_present": san.returncode == 0 and b"DNS:localhost" in san.stdout,
             "initial_health": health(health_url, token) == 200,
-            "missing_debug_artifact_ignored_in_production": not (config_path.parent / core["debug"]["key_file"]).exists(),
+            "debug_config_has_no_key_material": "key_file" not in core["debug"],
         }
 
         conflict = start(binary, config_path, environment)
@@ -208,7 +208,7 @@ def main() -> int:
             "description": "Modes, counts, resource limits, return-code classes, and booleans only; no path, certificate, key, token, URL, or native output is retained.",
         })
         steps = [
-            {"id": f"{CASE_ID}-step-01", "status": "PASS", "observed": "The case-owned candidate started in production certificate mode with no debug artifact or listener."},
+            {"id": f"{CASE_ID}-step-01", "status": "PASS", "observed": "The case-owned candidate started in production certificate mode with no debug listener or debug key configuration."},
             {"id": f"{CASE_ID}-step-02", "status": "PASS", "observed": "Simulator-attested production TLS material contained the requested alternate name, used mode 0600, and the process raised its open-file soft limit to the hard limit."},
             {"id": f"{CASE_ID}-step-03", "status": "PASS", "observed": "Bind conflict and missing static certificate starts failed without disturbing the original healthy listener."},
             {"id": f"{CASE_ID}-step-04", "status": "PASS", "observed": "The original process exited and a same-config restart converged healthy with identical resource policy and no private temporary file."},
