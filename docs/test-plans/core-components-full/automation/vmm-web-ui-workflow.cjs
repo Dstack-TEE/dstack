@@ -58,7 +58,7 @@ const fs = require('fs');
     await page.getByRole('button', { name: 'Deploy', exact: true }).focus();
     await page.keyboard.press('Enter');
     await page.waitForTimeout(500);
-    if (!alertMessages.some(x => x.includes('Failed to create VM'))) throw new Error('server error was not displayed');
+    if (!alertMessages.some(x => x.includes('controlled server rejection'))) throw new Error('server error was not displayed');
     if (!await page.getByRole('heading', { name: 'Deploy a new instance' }).isVisible()) throw new Error('dialog closed after rejected submit');
     rows['server-error-recovery'] = true;
     await page.unroute('**/prpc/CreateVm*');
