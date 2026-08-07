@@ -294,6 +294,9 @@ impl TdxAttestationVariantConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CvmConfig {
+    /// Process manager used to launch and monitor VM processes.
+    #[serde(default)]
+    pub pm: ProcessManagerBackend,
     /// TEE platform to use when launching CVMs. Omit (or set `auto`) to detect
     /// the host TEE from /proc/cpuinfo (AMD SEV-SNP vs Intel TDX); set `tdx` or
     /// `amd-sev-snp` to force a platform.
@@ -477,6 +480,31 @@ pub struct AuthConfig {
     pub htpasswd_file: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessManagerBackend {
+    /// Launch and manage every VM through the standalone Supervisor service.
+    #[default]
+    Supervisor,
+    /// Launch and manage every VM as a transient systemd service.
+    Systemd,
+    /// Launch new VMs through systemd, but keep VMs found running in the
+    /// standalone Supervisor there until each VM is restarted.
+    Auto,
+}
+
+fn default_systemd_unit_prefix() -> String {
+    "dstack-vm".into()
+}
+
+fn default_systemd_state_dir() -> PathBuf {
+    PathBuf::new()
+}
+
+fn default_systemd_stop_timeout() -> String {
+    "infinity".into()
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SupervisorConfig {
     pub exe: String,
@@ -485,6 +513,26 @@ pub struct SupervisorConfig {
     pub log_file: String,
     pub detached: bool,
     pub auto_start: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SystemdConfig {
+    #[serde(default = "default_systemd_unit_prefix")]
+    pub unit_prefix: String,
+    #[serde(default = "default_systemd_state_dir")]
+    pub state_dir: PathBuf,
+    #[serde(default = "default_systemd_stop_timeout")]
+    pub stop_timeout: String,
+}
+
+impl Default for SystemdConfig {
+    fn default() -> Self {
+        Self {
+            unit_prefix: default_systemd_unit_prefix(),
+            state_dir: default_systemd_state_dir(),
+            stop_timeout: default_systemd_stop_timeout(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -527,10 +575,13 @@ pub struct Config {
 
     /// CVM configuration
     pub cvm: CvmConfig,
-
     /// Privileged host networking service configuration.
     #[serde(default)]
     pub netd: NetdConfig,
+
+    /// Experimental systemd process manager configuration
+    #[serde(default)]
+    pub systemd: SystemdConfig,
     /// Gateway configuration
     pub gateway: GatewayConfig,
 
@@ -635,6 +686,7 @@ impl Config {
     pub fn abs_path(mut self) -> Result<Self> {
         self.image.path = self.image.path.absolutize()?.to_path_buf();
         self.run_path = self.run_path.absolutize()?.to_path_buf();
+        self.systemd.state_dir = self.systemd.state_dir.absolutize()?.to_path_buf();
         Ok(self)
     }
 
@@ -675,11 +727,17 @@ impl Config {
         }
 
         validate_networking(&self.cvm.networking)?;
+        if self.cvm.pm != ProcessManagerBackend::Systemd {
+            anyhow::ensure!(
+                !self.supervisor.sock.trim().is_empty(),
+                "supervisor.sock must not be empty unless cvm.pm = \"systemd\""
+            );
+        }
         anyhow::ensure!(
-            !self.supervisor.sock.trim().is_empty(),
-            "supervisor.sock must not be empty"
+            !self.systemd.stop_timeout.trim().is_empty(),
+            "systemd.stop_timeout must not be empty"
         );
-        if self.supervisor.auto_start {
+        if self.cvm.pm == ProcessManagerBackend::Supervisor && self.supervisor.auto_start {
             for (name, value) in [
                 ("supervisor.exe", self.supervisor.exe.as_str()),
                 ("supervisor.pid_file", self.supervisor.pid_file.as_str()),
@@ -897,6 +955,9 @@ impl Config {
             if me.run_path == PathBuf::default() {
                 me.run_path = app_home.join("vm");
             }
+            if me.systemd.state_dir == PathBuf::default() {
+                me.systemd.state_dir = app_home.join("systemd-processes");
+            }
             if me.cvm.qemu_path == PathBuf::default() {
                 // Prefer the path from dstack client config if present
                 if let Some(qemu_path) = read_qemu_path_from_client_conf() {
@@ -1084,6 +1145,16 @@ mod tests {
     #[test]
     fn config_validation_accepts_defaults() {
         default_config().validate().unwrap();
+    }
+
+    #[test]
+    fn process_manager_modes_parse() {
+        let parse = |mode: &str| {
+            serde_json::from_str::<ProcessManagerBackend>(&format!("\"{mode}\"")).unwrap()
+        };
+        assert_eq!(parse("supervisor"), ProcessManagerBackend::Supervisor);
+        assert_eq!(parse("systemd"), ProcessManagerBackend::Systemd);
+        assert_eq!(parse("auto"), ProcessManagerBackend::Auto);
     }
 
     #[test]
