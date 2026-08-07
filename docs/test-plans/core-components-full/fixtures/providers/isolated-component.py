@@ -181,6 +181,7 @@ def write_gateway_config(
     exercise_startup: bool = False,
 ) -> None:
     text = source.read_text(encoding="utf-8")
+    fixture_subnet = f"10.{ports['rpc'] >> 8}.{ports['rpc'] & 0xff}"
     replacements = {
         'address = "127.0.0.1:8010"': f'address = "127.0.0.1:{ports["rpc"]}"',
         "set_ulimit = true": (
@@ -201,6 +202,13 @@ def write_gateway_config(
         'listen_addr = "0.0.0.0"': 'listen_addr = "127.0.0.1"',
         "listen_port = 8443": f"listen_port = {ports['proxy']}",
         'interface = "wg0"': 'interface = "lo"',
+        'ip = "10.0.0.1/24"': f'ip = "{fixture_subnet}.1/24"',
+        'reserved_net = ["10.0.0.1/32"]': (
+            f'reserved_net = ["{fixture_subnet}.1/32"]'
+        ),
+        'client_ip_range = "10.0.0.0/25"': (
+            f'client_ip_range = "{fixture_subnet}.0/25"'
+        ),
         'config_path = "/etc/wireguard/wg0.conf"': f'config_path = "{workspace / "run/wireguard.conf"}"',
         "listen_port = 51820": f"listen_port = {ports['proxy']}",
         'data_dir = "/dstack-gateway/data"': f'data_dir = "{workspace / "data/sync"}"',
