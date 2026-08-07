@@ -1438,7 +1438,8 @@ def scripted_sweep(
     if runtime_manifest is not None:
         if not runtime_manifest.is_file():
             raise DstackTestError(f"runtime manifest not found: {runtime_manifest}")
-        shutil.copyfile(runtime_manifest, target_manifest)
+        if runtime_manifest.resolve() != target_manifest.resolve():
+            shutil.copyfile(runtime_manifest, target_manifest)
     elif not target_manifest.is_file():
         raise DstackTestError(
             "run has no runtime-manifest.json; pass --runtime-manifest PATH"
