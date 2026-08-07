@@ -25,6 +25,10 @@ PROTO_PATHS = [
     "vmm/rpc/proto/vmm_rpc.proto",
 ]
 WIRE_RENAMES = {
+    "gateway.Admin.Exit": (
+        ("google.protobuf.Empty", "google.protobuf.Empty", False, False),
+        ("ExitRequest", "google.protobuf.Empty", False, False),
+    ),
     "vmm.Vmm.UpgradeApp": (
         ("UpgradeAppRequest", "Id", False, False),
         ("UpdateVmRequest", "Id", False, False),
