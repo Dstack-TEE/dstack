@@ -501,6 +501,10 @@ fn default_systemd_state_dir() -> PathBuf {
     PathBuf::new()
 }
 
+fn default_systemd_stop_timeout() -> String {
+    "infinity".into()
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SupervisorConfig {
     pub exe: String,
@@ -517,6 +521,8 @@ pub struct SystemdConfig {
     pub unit_prefix: String,
     #[serde(default = "default_systemd_state_dir")]
     pub state_dir: PathBuf,
+    #[serde(default = "default_systemd_stop_timeout")]
+    pub stop_timeout: String,
 }
 
 impl Default for SystemdConfig {
@@ -524,6 +530,7 @@ impl Default for SystemdConfig {
         Self {
             unit_prefix: default_systemd_unit_prefix(),
             state_dir: default_systemd_state_dir(),
+            stop_timeout: default_systemd_stop_timeout(),
         }
     }
 }
@@ -726,6 +733,10 @@ impl Config {
                 "supervisor.sock must not be empty unless cvm.pm = \"systemd\""
             );
         }
+        anyhow::ensure!(
+            !self.systemd.stop_timeout.trim().is_empty(),
+            "systemd.stop_timeout must not be empty"
+        );
         if self.cvm.pm == ProcessManagerBackend::Supervisor && self.supervisor.auto_start {
             for (name, value) in [
                 ("supervisor.exe", self.supervisor.exe.as_str()),

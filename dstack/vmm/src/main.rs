@@ -330,9 +330,10 @@ async fn main() -> Result<()> {
         );
     }
     let systemd_manager = || {
-        process_manager::ProcessManager::systemd(
+        process_manager::ProcessManager::systemd_backend(
             config.systemd.state_dir.clone(),
             config.systemd.unit_prefix.clone(),
+            config.systemd.stop_timeout.clone(),
         )
     };
     let supervisor_config = &config.supervisor;
@@ -358,7 +359,8 @@ async fn main() -> Result<()> {
         config::ProcessManagerBackend::Systemd => {
             if legacy_socket_exists {
                 let client = connect_supervisor(false).await.context(
-                    "supervisor socket exists but its state cannot be verified in systemd mode",
+                    "supervisor socket exists but its state cannot be verified in systemd mode; \
+                     if Supervisor is definitely not running, remove the stale socket and restart",
                 )?;
                 anyhow::ensure!(
                     !client
@@ -369,12 +371,13 @@ async fn main() -> Result<()> {
                     "running Supervisor VMs detected; use cvm.pm = \"auto\" for migration"
                 );
             }
-            systemd_manager()?
+            process_manager::ProcessManager::systemd(systemd_manager()?)
         }
         config::ProcessManagerBackend::Auto => {
             let legacy_supervisor = if legacy_socket_exists {
                 Some(connect_supervisor(false).await.context(
-                    "supervisor socket exists but its state cannot be verified in auto mode",
+                    "supervisor socket exists but its state cannot be verified in auto mode; \
+                     if Supervisor is definitely not running, remove the stale socket and restart",
                 )?)
             } else {
                 info!("legacy supervisor socket is absent; using systemd for all VMs");

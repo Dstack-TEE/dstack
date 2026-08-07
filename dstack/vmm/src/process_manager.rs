@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::path::PathBuf;
+use std::time::{Duration, SystemTime};
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{bail, Context, Result};
@@ -26,17 +27,26 @@ impl ProcessManager {
         Self::Supervisor(client)
     }
 
-    pub fn systemd(state_dir: PathBuf, unit_prefix: String) -> Result<Self> {
-        Ok(Self::Systemd(Arc::new(SystemdProcessManager::new(
+    pub fn systemd_backend(
+        state_dir: PathBuf,
+        unit_prefix: String,
+        stop_timeout: String,
+    ) -> Result<Arc<SystemdProcessManager>> {
+        Ok(Arc::new(SystemdProcessManager::new(
             state_dir,
             unit_prefix,
-        )?)))
+            stop_timeout,
+        )?))
     }
 
-    pub async fn auto(systemd: Self, supervisor: Option<SupervisorClient>) -> Result<Self> {
-        let Self::Systemd(systemd) = systemd else {
-            bail!("auto process manager requires a systemd backend");
-        };
+    pub fn systemd(backend: Arc<SystemdProcessManager>) -> Self {
+        Self::Systemd(backend)
+    }
+
+    pub async fn auto(
+        systemd: Arc<SystemdProcessManager>,
+        supervisor: Option<SupervisorClient>,
+    ) -> Result<Self> {
         let mut supervisor_processes = HashMap::new();
         if let Some(client) = &supervisor {
             for process in client.list().await? {
@@ -111,8 +121,8 @@ impl AutoProcessManager {
     }
 
     async fn deploy(&self, config: &ProcessConfig) -> Result<()> {
-        // VMM start operations are serialized by the caller. If that changes,
-        // migration should gain a per-ID lock spanning this handoff.
+        // Concurrent deploys of the same ID are not serialized here; one wins
+        // the handoff and the other fails on record/unit removal or collision.
         if self.is_supervisor_process(&config.id).await {
             let supervisor = self.supervisor()?;
             if supervisor
@@ -205,7 +215,32 @@ struct ProcessRecord {
     started: bool,
 }
 
-fn state_from_systemd_properties(properties: &str, started: bool) -> (ProcessStatus, Option<u32>) {
+fn system_time_from_monotonic_micros(value: &str) -> Option<SystemTime> {
+    let target = value.parse::<u64>().ok().filter(|value| *value != 0)?;
+    let mut now = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `now` points to a valid timespec and CLOCK_BOOTTIME is a
+    // process-independent monotonic clock on Linux.
+    if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut now) } != 0 {
+        return None;
+    }
+    let now_micros = (now.tv_sec as u64)
+        .saturating_mul(1_000_000)
+        .saturating_add((now.tv_nsec as u64) / 1_000);
+    SystemTime::now().checked_sub(Duration::from_micros(now_micros.saturating_sub(target)))
+}
+
+fn state_from_systemd_properties(
+    properties: &str,
+    started: bool,
+) -> (
+    ProcessStatus,
+    Option<u32>,
+    Option<SystemTime>,
+    Option<SystemTime>,
+) {
     let value = |name: &str| {
         properties
             .lines()
@@ -222,10 +257,10 @@ fn state_from_systemd_properties(properties: &str, started: bool) -> (ProcessSta
         ProcessStatus::Stopped
     } else if load_state == "not-found" || matches!(active_state, "inactive" | "failed") {
         let status = value("ExecMainStatus").parse::<i32>().unwrap_or_default();
-        ProcessStatus::Exited(if value("ExecMainCode") == "exited" {
-            status << 8
-        } else {
-            status
+        ProcessStatus::Exited(match value("ExecMainCode") {
+            "exited" => status << 8,
+            "dumped" => status | 0x80,
+            _ => status,
         })
     } else {
         ProcessStatus::Error(format!(
@@ -235,16 +270,19 @@ fn state_from_systemd_properties(properties: &str, started: bool) -> (ProcessSta
         ))
     };
     let pid = value("MainPID").parse().ok().filter(|pid| *pid != 0);
-    (status, pid)
+    let started_at = system_time_from_monotonic_micros(value("ExecMainStartTimestampMonotonic"));
+    let stopped_at = system_time_from_monotonic_micros(value("InactiveEnterTimestampMonotonic"));
+    (status, pid, started_at, stopped_at)
 }
 
 pub struct SystemdProcessManager {
     state_dir: PathBuf,
     unit_prefix: String,
+    stop_timeout: String,
 }
 
 impl SystemdProcessManager {
-    fn new(state_dir: PathBuf, unit_prefix: String) -> Result<Self> {
+    fn new(state_dir: PathBuf, unit_prefix: String, stop_timeout: String) -> Result<Self> {
         anyhow::ensure!(
             !unit_prefix.is_empty(),
             "systemd unit prefix must not be empty"
@@ -259,6 +297,7 @@ impl SystemdProcessManager {
         Ok(Self {
             state_dir,
             unit_prefix,
+            stop_timeout,
         })
     }
 
@@ -317,7 +356,7 @@ impl SystemdProcessManager {
             .arg("--property=KillMode=mixed")
             .arg("--property=KillSignal=SIGTERM")
             .arg("--property=SendSIGKILL=yes")
-            .arg("--property=TimeoutStopSec=30min")
+            .arg(format!("--property=TimeoutStopSec={}", self.stop_timeout))
             .arg("--property=ExitType=cgroup")
             .arg("--property=Restart=no")
             .arg(format!("--description=dstack VM process {}", config.id));
@@ -424,12 +463,10 @@ impl SystemdProcessManager {
                     continue;
                 }
             };
-            match self.info_from_record(record).await {
-                Ok(info) => processes.push(info),
-                Err(error) => {
-                    warn!(path = %path.display(), %error, "skipping unavailable systemd process")
-                }
-            }
+            // A per-record parse error is isolated above. A systemd-wide
+            // query error is propagated so callers cannot lose CID ownership
+            // and mistake a running VM for a stopped one.
+            processes.push(self.info_from_record(record).await?);
         }
         Ok(processes)
     }
@@ -454,23 +491,23 @@ impl SystemdProcessManager {
         command
             .arg("show")
             .arg(&unit)
-            .arg("--property=LoadState,ActiveState,SubState,MainPID,ExecMainCode,ExecMainStatus");
-        // `systemctl show` returns non-zero for a collected transient unit but
-        // still emits LoadState=not-found, which is a valid stopped state.
-        let output = command
-            .output()
-            .await
-            .context("failed to execute systemctl show")?;
+            .arg(
+                "--property=LoadState,ActiveState,SubState,MainPID,ExecMainCode,ExecMainStatus,ExecMainStartTimestampMonotonic,InactiveEnterTimestampMonotonic",
+            );
+        // A bus failure must not be mapped to a stopped VM: callers rely on an
+        // error here to avoid rotating logs and attempting duplicate restarts.
+        let output = Self::command(command, "systemctl show").await?;
         let properties = String::from_utf8_lossy(&output.stdout);
-        let (status, pid) = state_from_systemd_properties(&properties, record.started);
+        let (status, pid, started_at, stopped_at) =
+            state_from_systemd_properties(&properties, record.started);
         Ok(ProcessInfo {
             config: record.config,
             state: ProcessState {
                 status,
                 started: record.started,
                 pid,
-                started_at: None,
-                stopped_at: None,
+                started_at,
+                stopped_at,
             },
         })
     }
@@ -483,8 +520,12 @@ mod tests {
     #[test]
     fn unit_names_are_stable_and_do_not_embed_process_ids() {
         let dir = tempfile::tempdir().unwrap();
-        let manager =
-            SystemdProcessManager::new(dir.path().to_path_buf(), "dstack-vm".into()).unwrap();
+        let manager = SystemdProcessManager::new(
+            dir.path().to_path_buf(),
+            "dstack-vm".into(),
+            "infinity".into(),
+        )
+        .unwrap();
         assert_eq!(manager.unit("vm/one"), manager.unit("vm/one"));
         assert_ne!(manager.unit("vm/one"), manager.unit("vm-two"));
         assert!(!manager.unit("vm/one").contains("vm/one"));

@@ -192,11 +192,16 @@ detached = false
 auto_start = true
 
 [systemd]
-# Used when cvm.pm = "systemd". Transient services are named
+# Used when cvm.pm = "systemd" or "auto". Transient services are named
 # <unit_prefix>-<sha256(vm-id)>.service.
 unit_prefix = "dstack-vm"
 # Process metadata used to reconcile transient services after a VMM restart.
+# Empty defaults to ~/.dstack-vmm/systemd-processes.
 state_dir = ""
+# How long systemd waits after SIGTERM before escalating to SIGKILL. Large TDX
+# guests can spend hours tearing down encrypted memory, so the safe default is
+# unbounded. Set a systemd time span such as "30min" to enable escalation.
+stop_timeout = "infinity"
 
 [host_api]
 ident = "dstack VMM"

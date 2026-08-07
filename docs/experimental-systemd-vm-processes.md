@@ -14,6 +14,7 @@ pm = "auto"
 [systemd]
 unit_prefix = "dstack-vm"
 state_dir = "/var/lib/dstack-vmm/systemd-processes"
+stop_timeout = "infinity"
 ```
 
 The three process-manager modes are:
@@ -54,7 +55,7 @@ ExitType=cgroup
 KillMode=mixed
 KillSignal=SIGTERM
 SendSIGKILL=yes
-TimeoutStopSec=30min
+TimeoutStopSec=<systemd.stop_timeout>
 Restart=no
 ```
 
@@ -62,6 +63,10 @@ The existing launcher remains responsible for swtpm readiness and graceful
 child shutdown. systemd owns the final cgroup lifetime. A stop request is
 submitted asynchronously so the VMM can report a VM as stopping while QEMU is
 still completing kernel teardown.
+
+The default stop timeout is `infinity` because large encrypted-memory guests
+can spend hours in kernel teardown. Operators that prefer bounded escalation
+can set a systemd time span such as `stop_timeout = "30min"`.
 
 Process metadata is persisted in `systemd.state_dir`. It is required because a
 successful transient unit may be garbage-collected after exit, while the VMM
