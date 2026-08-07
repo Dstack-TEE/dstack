@@ -59,8 +59,16 @@ def main() -> int:
     inventory_path = (
         repository / "docs/test-plans/core-components-full/configuration-inventory.json"
     )
-    base = source.read_text()
-    parsed = tomllib.loads(base)
+    source_text = source.read_text()
+    parsed = tomllib.loads(source_text)
+    management_port_prepared = "port" not in parsed
+    base = source_text
+    if management_port_prepared:
+        base = replace_once(
+            base,
+            'address = "unix:./vmm.sock"',
+            'address = "unix:./vmm.sock"\nport = 0',
+        )
     fields = json.loads(inventory_path.read_text())["components"]["vmm"]["fields"]
     coverage = {field: inventory_present(parsed, field) for field in fields}
 
@@ -125,6 +133,7 @@ def main() -> int:
         "missing_inventory_fields": [
             field for field, present in coverage.items() if not present
         ],
+        "management_port_prepared": management_port_prepared,
         "matrix": observations,
         "service_started": False,
         "run_scoped_state_only": True,
