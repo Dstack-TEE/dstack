@@ -42,12 +42,31 @@ reset_devices() {
 cleanup() { reset_devices; rm -rf "$ROOT"; }
 trap cleanup EXIT
 write_config() {
-  jq -cn \
-    --arg platform "$1" \
-    --arg seed "${2:-$SEED}" \
-    --arg mr '{"version":3,"app_id":"","compose_hash":"","key_provider":"none"}' \
-    '{platform:$platform,mock_attestation_seed:$seed,collateral_base_url:"http://127.0.0.1:18088",mr_config:$mr,vm_config:"{}"}' \
-    >"$ROOT/config.json"
+  local platform=$1 seed=${2:-$SEED}
+  if test "$platform" = dstack-gcp-tdx; then
+    local os_image_hash
+    os_image_hash=$(sha256sum "$ROOT/sha256sum.txt" | cut -d' ' -f1)
+    jq -cn \
+      --arg platform "$platform" --arg seed "$seed" \
+      --arg os_image_hash "$os_image_hash" \
+      --arg checksum "$(base64 -w0 "$ROOT/sha256sum.txt")" \
+      --arg measurement "$(base64 -w0 "$ROOT/measurement.gcp.cbor")" \
+      --arg event_log "$(base64 -w0 "$ROOT/tpm_eventlog.bin")" \
+      '{platform:$platform,mock_attestation_seed:$seed,collateral_base_url:"http://127.0.0.1:18088",mr_config:"{\"version\":3,\"app_id\":\"\",\"compose_hash\":\"\",\"key_provider\":\"none\"}",vm_config:({os_image_hash:$os_image_hash,gcp_measurement:{checksum_file:$checksum,measurement:$measurement}}|tojson),gcp_tpm_replay:{event_log:$event_log}}' \
+      >"$ROOT/config.json"
+  elif test "$platform" = dstack-aws-nitro-tpm; then
+    jq -cn \
+      --arg platform "$platform" --arg seed "$seed" \
+      --slurpfile replay "$ROOT/measurement.aws.replay.json" \
+      '{platform:$platform,mock_attestation_seed:$seed,collateral_base_url:"http://127.0.0.1:18088",mr_config:"{\"version\":3,\"app_id\":\"\",\"compose_hash\":\"\",\"key_provider\":\"none\"}",vm_config:"{}",aws_pcr_replay:$replay[0]}' \
+      >"$ROOT/config.json"
+  else
+    jq -cn \
+      --arg platform "$platform" --arg seed "$seed" \
+      --arg mr '{"version":3,"app_id":"","compose_hash":"","key_provider":"none"}' \
+      '{platform:$platform,mock_attestation_seed:$seed,collateral_base_url:"http://127.0.0.1:18088",mr_config:$mr,vm_config:"{}"}' \
+      >"$ROOT/config.json"
+  fi
 }
 start_fuse() {
   local platform=$1 mount=$2 seed=${3:-$SEED}
