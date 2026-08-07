@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -12,11 +12,13 @@ use sha2::{Digest, Sha256};
 use supervisor_client::supervisor::{ProcessConfig, ProcessInfo, ProcessState, ProcessStatus};
 use supervisor_client::SupervisorClient;
 use tokio::process::Command;
+use tokio::sync::RwLock;
 
 #[derive(Clone)]
 pub enum ProcessManager {
     Supervisor(SupervisorClient),
     Systemd(Arc<SystemdProcessManager>),
+    Auto(Arc<AutoProcessManager>),
 }
 
 impl ProcessManager {
@@ -31,10 +33,30 @@ impl ProcessManager {
         )?)))
     }
 
+    pub async fn auto(systemd: Self, supervisor: Option<SupervisorClient>) -> Result<Self> {
+        let Self::Systemd(systemd) = systemd else {
+            bail!("auto process manager requires a systemd backend");
+        };
+        let mut supervisor_processes = HashSet::new();
+        if let Some(client) = &supervisor {
+            for process in client.list().await? {
+                if process.state.status.is_running() {
+                    supervisor_processes.insert(process.config.id);
+                }
+            }
+        }
+        Ok(Self::Auto(Arc::new(AutoProcessManager {
+            systemd,
+            supervisor,
+            supervisor_processes: RwLock::new(supervisor_processes),
+        })))
+    }
+
     pub async fn deploy(&self, config: &ProcessConfig) -> Result<()> {
         match self {
             Self::Supervisor(client) => client.deploy(config).await,
             Self::Systemd(manager) => manager.deploy(config).await,
+            Self::Auto(manager) => manager.deploy(config).await,
         }
     }
 
@@ -42,6 +64,7 @@ impl ProcessManager {
         match self {
             Self::Supervisor(client) => client.stop(id).await,
             Self::Systemd(manager) => manager.stop(id).await,
+            Self::Auto(manager) => manager.stop(id).await,
         }
     }
 
@@ -49,6 +72,7 @@ impl ProcessManager {
         match self {
             Self::Supervisor(client) => client.remove(id).await,
             Self::Systemd(manager) => manager.remove(id).await,
+            Self::Auto(manager) => manager.remove(id).await,
         }
     }
 
@@ -56,6 +80,7 @@ impl ProcessManager {
         match self {
             Self::Supervisor(client) => client.list().await,
             Self::Systemd(manager) => manager.list().await,
+            Self::Auto(manager) => manager.list().await,
         }
     }
 
@@ -63,6 +88,92 @@ impl ProcessManager {
         match self {
             Self::Supervisor(client) => client.info(id).await,
             Self::Systemd(manager) => manager.info(id).await,
+            Self::Auto(manager) => manager.info(id).await,
+        }
+    }
+}
+
+pub struct AutoProcessManager {
+    systemd: Arc<SystemdProcessManager>,
+    supervisor: Option<SupervisorClient>,
+    /// VM processes found running in Supervisor when the VMM started. They
+    /// stay pinned to Supervisor until their next deploy.
+    supervisor_processes: RwLock<HashSet<String>>,
+}
+
+impl AutoProcessManager {
+    async fn is_supervisor_process(&self, id: &str) -> bool {
+        self.supervisor_processes.read().await.contains(id)
+    }
+
+    fn supervisor(&self) -> Result<&SupervisorClient> {
+        self.supervisor
+            .as_ref()
+            .context("legacy supervisor is unavailable")
+    }
+
+    async fn deploy(&self, config: &ProcessConfig) -> Result<()> {
+        if self.is_supervisor_process(&config.id).await {
+            let supervisor = self.supervisor()?;
+            if supervisor
+                .info(&config.id)
+                .await?
+                .is_some_and(|info| info.state.status.is_running())
+            {
+                bail!("process is already running");
+            }
+            // Natural exits leave Supervisor's `started` flag set. Normalize
+            // it before removing the legacy record and migrating this launch.
+            supervisor.stop(&config.id).await?;
+            supervisor.remove(&config.id).await?;
+            self.supervisor_processes.write().await.remove(&config.id);
+        }
+        self.systemd.deploy(config).await
+    }
+
+    async fn stop(&self, id: &str) -> Result<()> {
+        if self.is_supervisor_process(id).await {
+            self.supervisor()?.stop(id).await
+        } else {
+            self.systemd.stop(id).await
+        }
+    }
+
+    async fn remove(&self, id: &str) -> Result<()> {
+        if self.is_supervisor_process(id).await {
+            self.supervisor()?.remove(id).await?;
+            self.supervisor_processes.write().await.remove(id);
+            Ok(())
+        } else {
+            self.systemd.remove(id).await
+        }
+    }
+
+    async fn list(&self) -> Result<Vec<ProcessInfo>> {
+        let mut processes = self.systemd.list().await?;
+        let ids = self
+            .supervisor_processes
+            .read()
+            .await
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        if !ids.is_empty() {
+            let supervisor = self.supervisor()?;
+            for id in ids {
+                if let Some(process) = supervisor.info(&id).await? {
+                    processes.push(process);
+                }
+            }
+        }
+        Ok(processes)
+    }
+
+    async fn info(&self, id: &str) -> Result<Option<ProcessInfo>> {
+        if self.is_supervisor_process(id).await {
+            self.supervisor()?.info(id).await
+        } else {
+            self.systemd.info(id).await
         }
     }
 }
@@ -322,8 +433,8 @@ mod tests {
     #[test]
     fn unit_names_are_stable_and_do_not_embed_process_ids() {
         let dir = tempfile::tempdir().unwrap();
-        let manager = SystemdProcessManager::new(dir.path().to_path_buf(), "dstack-vm".into())
-            .unwrap();
+        let manager =
+            SystemdProcessManager::new(dir.path().to_path_buf(), "dstack-vm".into()).unwrap();
         assert_eq!(manager.unit("vm/one"), manager.unit("vm/one"));
         assert_ne!(manager.unit("vm/one"), manager.unit("vm-two"));
         assert!(!manager.unit("vm/one").contains("vm/one"));

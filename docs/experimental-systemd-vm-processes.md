@@ -9,14 +9,23 @@ Enable it in the VMM configuration:
 
 ```toml
 [cvm]
-pm = "systemd"
+pm = "auto"
 
 [systemd]
 unit_prefix = "dstack-vm"
 state_dir = "/run/dstack-vmm/systemd-processes"
 ```
 
-The default process manager is `supervisor`.
+The three process-manager modes are:
+
+- `supervisor`: launch and manage every VM through the standalone Supervisor.
+- `systemd`: launch and manage every VM as a transient systemd service.
+- `auto`: use systemd for every new launch. When the VMM starts, VM processes
+  already running in Supervisor are pinned to Supervisor for their remaining
+  lifecycle. Their next VM launch removes the stopped Supervisor record and
+  migrates them to systemd.
+
+The default is `supervisor`, preserving existing deployments.
 
 ## Runtime model
 

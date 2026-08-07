@@ -21,7 +21,11 @@ node_name = ""
 registry = ""
 
 [cvm]
-# Process manager: "supervisor" (default) or experimental "systemd".
+# Process manager modes:
+# - "supervisor": launch and manage every VM through standalone Supervisor.
+# - "systemd": launch and manage every VM as a transient systemd service.
+# - "auto": use systemd for new launches, but keep VMs already running in
+#   Supervisor there until each VM is restarted.
 pm = "supervisor"
 # TEE platform: "auto", "tdx", or "amd-sev-snp". Auto selects AMD SEV-SNP when host CPU flags include sev_snp, otherwise TDX.
 platform = "auto"

@@ -483,9 +483,14 @@ pub struct AuthConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProcessManagerBackend {
+    /// Launch and manage every VM through the standalone Supervisor service.
     #[default]
     Supervisor,
+    /// Launch and manage every VM as a transient systemd service.
     Systemd,
+    /// Launch new VMs through systemd, but keep VMs found running in the
+    /// standalone Supervisor there until each VM is restarted.
+    Auto,
 }
 
 fn default_systemd_unit_prefix() -> String {

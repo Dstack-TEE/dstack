@@ -329,25 +329,42 @@ async fn main() -> Result<()> {
              token, or bind `address` to localhost / a Unix socket."
         );
     }
-    let supervisor = if config.cvm.pm == config::ProcessManagerBackend::Systemd {
+    let systemd_manager = || {
         process_manager::ProcessManager::systemd(
             config.systemd.state_dir.clone(),
             config.systemd.unit_prefix.clone(),
-        )?
-    } else {
-        let cfg = &config.supervisor;
+        )
+    };
+    let supervisor_config = &config.supervisor;
+    let connect_supervisor = |auto_start| async move {
+        let cfg = supervisor_config;
         let abs_exe = Path::new(&cfg.exe).absolutize()?;
-        let client = SupervisorClient::start_and_connect_uds(
+        SupervisorClient::start_and_connect_uds(
             &abs_exe,
             &cfg.sock,
             &cfg.pid_file,
             &cfg.log_file,
             cfg.detached,
-            cfg.auto_start,
+            auto_start,
         )
         .await
-        .context("failed to connect to supervisor")?;
-        process_manager::ProcessManager::supervisor(client)
+        .context("failed to connect to supervisor")
+    };
+    let supervisor = match config.cvm.pm {
+        config::ProcessManagerBackend::Supervisor => process_manager::ProcessManager::supervisor(
+            connect_supervisor(supervisor_config.auto_start).await?,
+        ),
+        config::ProcessManagerBackend::Systemd => systemd_manager()?,
+        config::ProcessManagerBackend::Auto => {
+            let legacy_supervisor = match connect_supervisor(false).await {
+                Ok(client) => Some(client),
+                Err(error) => {
+                    info!(%error, "legacy supervisor is not running; using systemd for all VMs");
+                    None
+                }
+            };
+            process_manager::ProcessManager::auto(systemd_manager()?, legacy_supervisor).await?
+        }
     };
     let state = app::App::new(config, supervisor);
     state.reload_vms().await.context("Failed to reload VMs")?;
