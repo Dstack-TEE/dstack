@@ -40,7 +40,23 @@ The checked adapter at `fixtures/providers/tdxlab-isolated.py` creates a new
 lease-owned candidate CVM, waits for guest boot and SSH-over-gateway readiness,
 publishes the case-scoped SSH and RPC inventory, and removes the VM during
 fixture cleanup. It never restarts the physical host and never selects an
-existing VM. Configure it on tdxlab before starting the controller:
+existing VM. Prepare a complete tdxlab run with the checked preflight wrapper:
+
+```bash
+plan=$PWD/docs/test-plans/core-components-full
+run_id=<run-id>
+"$plan/automation/prepare-tdxlab-run.sh" \
+  "$PWD" "$plan/results/$run_id/runtime-manifest.json"
+```
+
+The wrapper validates and prepares the pinned Foundry toolchain, KMS JavaScript
+dependencies and contract submodules, full-TDX verifier fixture, container base
+image, and all external provider paths. It records those non-secret inputs in
+the runtime manifest so case execution does not depend on the launching shell
+retaining exports.
+
+For provider development without the wrapper, configure it explicitly before
+starting the controller:
 
 ```bash
 export DSTACK_TEST_PROVIDER_TDXLAB_ISOLATED="$PWD/fixtures/providers/tdxlab-isolated.py"
