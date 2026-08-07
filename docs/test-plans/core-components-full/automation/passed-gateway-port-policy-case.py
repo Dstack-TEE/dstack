@@ -183,6 +183,13 @@ def policy_ports(value: Any) -> set[int]:
     }
 
 
+def is_empty_response(response: dict[str, Any]) -> bool:
+    """Accept the current JSON encoding and protobuf encoding of Empty."""
+    return response["status"] == 200 and (
+        response["body_len"] == 0 or response.get("body") in ({}, None)
+    )
+
+
 def assert_admin_policy(response: dict[str, Any]) -> None:
     """Require the expected effective and admin override policy."""
     body = response.get("body")
@@ -306,7 +313,7 @@ def main() -> int:
             {"instance_id": instance_id, "policy": POLICY},
             None,
         )
-        if set_response["status"] != 200 or set_response["body_len"] != 0:
+        if not is_empty_response(set_response):
             raise AssertionError("SetInstancePortPolicy did not return Empty")
         assert_admin_policy(readback)
         if (
@@ -343,7 +350,7 @@ def main() -> int:
                 {"instance_id": instance_id},
                 None,
             )
-            if cleared["status"] != 200 or cleared["body_len"] != 0:
+            if not is_empty_response(cleared):
                 raise AssertionError("ClearInstancePortPolicy did not return Empty")
             assert_no_policy(after_clear)
             if clear_malformed["status"] < 400 or clear_no_auth["status"] not in (
@@ -484,7 +491,7 @@ def main() -> int:
                 {"instance_id": instance_id},
                 auth,
             )
-            if cleared["status"] != 200 or cleared["body_len"] != 0:
+            if not is_empty_response(cleared):
                 raise AssertionError("cleanup ClearInstancePortPolicy failed")
         final_state = call(
             base, "Admin.GetInstancePortPolicy", {"instance_id": instance_id}, auth
@@ -493,7 +500,7 @@ def main() -> int:
         repeat_clear = call(
             base, "Admin.ClearInstancePortPolicy", {"instance_id": instance_id}, auth
         )
-        if repeat_clear["status"] != 200 or repeat_clear["body_len"] != 0:
+        if not is_empty_response(repeat_clear):
             raise AssertionError("idempotent ClearInstancePortPolicy failed")
         record(
             "step03-cleanup.json",
