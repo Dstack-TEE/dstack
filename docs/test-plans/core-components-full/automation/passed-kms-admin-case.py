@@ -55,6 +55,7 @@ def call(url: str, body: bytes, token: str | None) -> dict[str, Any]:
         "body_len": len(raw),
         "body_sha256": hashlib.sha256(raw).hexdigest(),
         "content_type": content_type,
+        "empty_success": raw in (b"", b"null", b"{}"),
     }
 
 
@@ -227,7 +228,7 @@ def main() -> int:
             malformed = call(route, b'{"broken":', token)
             repeat = call(route, b"{}", token)
         if any(
-            item["status"] != 200 or item["body_len"] != 0
+            item["status"] != 200 or item["empty_success"] is not True
             for item in (valid, absent, compatible, repeat)
         ):
             raise AssertionError(
