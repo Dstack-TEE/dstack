@@ -90,6 +90,15 @@ def endpoint_ready(url: str) -> bool:
         return False
 
 
+def is_empty_response(response: dict[str, Any]) -> bool:
+    """Accept the current JSON and protobuf encodings of protobuf Empty."""
+    return (
+        response["body_len"] == 0
+        or response.get("body") == {}
+        or (response["body_len"] == 4 and response.get("body") is None)
+    )
+
+
 def wait_stopped(url: str, timeout: float = 8.0) -> float:
     """Wait for an Exit target to stop accepting connections."""
     started = time.monotonic()
@@ -208,7 +217,7 @@ def main() -> int:
             }
             lifecycle.append(row)
             atomic_json(artifacts_dir / "step02-exit-matrix.json", lifecycle)
-            if response["status"] != 200 or response["body_len"] != 0:
+            if response["status"] != 200 or not is_empty_response(response):
                 raise AssertionError(
                     f"{name} did not return the documented Empty response"
                 )
