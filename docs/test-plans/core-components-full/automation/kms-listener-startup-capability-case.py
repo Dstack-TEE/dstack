@@ -143,7 +143,7 @@ def main() -> int:
     workspace = pathlib.Path(values["component_substrate"]["workspace"])
     cert_dir = pathlib.Path(onboard["cert_dir"])
     config = pathlib.Path(onboard["config"])
-    candidate = pathlib.Path(runtime["kms_startup_candidate_binary"])
+    candidate = pathlib.Path(runtime["prepared_binaries"]["dstack_kms"]["path"])
     expected_head = runtime["candidate_commit"]
     agent_socket = values["kms_guest_simulator"]["services"]["DstackGuest"]["socket"]
     agent = f"unix:{agent_socket}"
