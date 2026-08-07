@@ -26,7 +26,7 @@ require_command() {
   }
 }
 
-for command in cargo curl dstack-acpi-tables git jq npm python3 tar; do
+for command in cargo curl dstack-acpi-tables git jq mkosi npm python3 tar; do
   require_command "$command"
 done
 acpi_tables_bin=$(realpath -e -- "$(command -v dstack-acpi-tables)")
@@ -39,6 +39,63 @@ test -x "$HOME/.bun/bin/bun" || {
   printf 'missing required command: %s\n' "$HOME/.bun/bin/bun" >&2
   exit 1
 }
+
+# Guest-backed cases must exercise binaries from this candidate revision, not
+# an older image that happens to carry the same release version. Build both
+# flavors once through mkosi's content-addressed component cache, validate the
+# embedded provenance, then publish them under immutable revision-derived names.
+revision=$(git -C "$repo" rev-parse HEAD)
+short_revision=${revision:0:9}
+prod_image="dstack-mkosi-$short_revision"
+dev_image="dstack-dev-mkosi-$short_revision"
+image_store=$(jq -er '.environment.DSTACK_TEST_IMAGE_STORE' "$template")
+image_store=$(realpath -e -- "$image_store")
+image_matches() {
+  local name=$1 expected_dev=$2 metadata="$image_store/$1/metadata.json"
+  [[ -f $metadata ]] &&
+    [[ $(jq -r '.git_revision' "$metadata") == "$revision" ]] &&
+    [[ $(jq -r '.backend' "$metadata") == mkosi ]] &&
+    [[ $(jq -r '.is_dev' "$metadata") == "$expected_dev" ]]
+}
+for row in "$prod_image:false" "$dev_image:true"; do
+  IFS=: read -r name expected_dev <<<"$row"
+  if [[ -e $image_store/$name ]] && ! image_matches "$name" "$expected_dev"; then
+    printf 'candidate image name exists with mismatched provenance: %s\n' "$name" >&2
+    exit 1
+  fi
+done
+if ! image_matches "$prod_image" false || ! image_matches "$dev_image" true; then
+  mkosi_root="$cache_root/mkosi-candidate-$short_revision"
+  mkdir -p "$cache_root/tmp/mkosi" "$mkosi_root"
+  "$repo/os/mkosi/build.sh" lint
+  TMPDIR="$cache_root/tmp/mkosi" \
+    FLAVORS="prod dev" \
+    DSTACK_DEV_CACHE_DIR="$cache_root/mkosi-dev" \
+    "$repo/os/mkosi/build.sh" image "$mkosi_root"
+  prod_source="$mkosi_root/out/prod/dstack-0.6.0"
+  dev_source="$mkosi_root/out/dev/dstack-0.6.0"
+  for row in "$prod_source:$prod_image:false" "$dev_source:$dev_image:true"; do
+    IFS=: read -r source name expected_dev <<<"$row"
+    [[ -e $image_store/$name ]] && continue
+    metadata="$source/metadata.json"
+    [[ -f $source/sha256sum.txt && -f $metadata ]] || {
+      printf 'mkosi output is incomplete: %s\n' "$source" >&2
+      exit 1
+    }
+    [[ $(jq -r '.git_revision' "$metadata") == "$revision" ]] || {
+      printf 'mkosi output revision mismatch: %s\n' "$source" >&2
+      exit 1
+    }
+    [[ $(jq -r '.is_dev' "$metadata") == "$expected_dev" ]] || {
+      printf 'mkosi output flavor mismatch: %s\n' "$source" >&2
+      exit 1
+    }
+    stage="$image_store/.$name.tmp.$$"
+    sudo cp -a -- "$source" "$stage"
+    sudo chown -R root:root "$stage"
+    sudo mv -- "$stage" "$image_store/$name"
+  done
+fi
 if [[ ! -x "$foundry_bin/forge" ]]; then
   archive=$(mktemp "$cache_root/tmp/foundry.XXXXXX.tar.gz")
   trap 'rm -f "$archive"' EXIT
@@ -95,14 +152,15 @@ if ! sudo su kvin -c "docker image inspect alpine:latest" >/dev/null 2>&1; then
 fi
 
 python3 - "$template" "$generated_lab" "$plan" "$fixture_root" "$foundry_bin" \
-  "$acpi_tables_bin" "$qemu_data_dir" <<'PY'
+  "$acpi_tables_bin" "$qemu_data_dir" "$prod_image" "$dev_image" <<'PY'
 import json
 import pathlib
 import sys
 
 template, output, plan, full_tdx, foundry_bin, acpi_tables, qemu_data = map(
-    pathlib.Path, sys.argv[1:]
+    pathlib.Path, sys.argv[1:8]
 )
+prod_image, dev_image = sys.argv[8:]
 value = json.loads(template.read_text())
 environment = value.setdefault("environment", {})
 providers = {
@@ -121,6 +179,10 @@ environment["DSTACK_TEST_VERIFIER_FULL_TDX_IMAGE_DIR"] = str(
 )
 environment["DSTACK_TEST_ACPI_TABLES_BINARY"] = str(acpi_tables.resolve(strict=True))
 environment["DSTACK_TEST_QEMU_DATA_DIR"] = str(qemu_data.resolve(strict=True))
+environment["DSTACK_TEST_GUEST_IMAGE"] = prod_image
+environment["DSTACK_TEST_NO_TEE_GUEST_IMAGE"] = dev_image
+environment["DSTACK_TEST_GUEST_PROD_IMAGE"] = prod_image
+environment["DSTACK_TEST_GUEST_DEV_IMAGE"] = dev_image
 path_prepend = value.setdefault("environment_path_prepend", [])
 foundry_path = str(foundry_bin.resolve(strict=True))
 if foundry_path not in path_prepend:
