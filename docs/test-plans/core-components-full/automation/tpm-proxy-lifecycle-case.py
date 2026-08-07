@@ -47,7 +47,17 @@ reset_tpm() {
   chmod 0666 /dev/vtpmx
 }
 write_config() {
-  printf '{"platform":"%s","mock_attestation_seed":"%s","collateral_base_url":"http://127.0.0.1:18088"}\n' "$1" "$2" > "$ROOT/config.json"
+  local os_image_hash
+  os_image_hash=$(sha256sum "$ROOT/sha256sum.txt" | cut -d' ' -f1)
+  jq -cn \
+    --arg platform "$1" \
+    --arg seed "$2" \
+    --arg os_image_hash "$os_image_hash" \
+    --arg checksum "$(base64 -w0 "$ROOT/sha256sum.txt")" \
+    --arg measurement "$(base64 -w0 "$ROOT/measurement.gcp.cbor")" \
+    --arg event_log "$(base64 -w0 "$ROOT/tpm_eventlog.bin")" \
+    '{platform:$platform,mock_attestation_seed:$seed,collateral_base_url:"http://127.0.0.1:18088",vm_config:({os_image_hash:$os_image_hash,gcp_measurement:{checksum_file:$checksum,measurement:$measurement}}|tojson),gcp_tpm_replay:{event_log:$event_log}}' \
+    > "$ROOT/config.json"
 }
 start_gcp() {
   reset_tpm
@@ -221,6 +231,27 @@ def main() -> int:
             if uploaded.returncode:
                 raise RuntimeError(
                     f"failed to install {key}: {uploaded.stderr.decode(errors='replace')[-500:]}"
+                )
+        image_dir = store / image
+        for name in (
+            "measurement.gcp.eventlog.bin",
+            "measurement.gcp.cbor",
+            "sha256sum.txt",
+        ):
+            source = image_dir / name
+            remote_name = "tpm_eventlog.bin" if name.endswith("eventlog.bin") else name
+            uploaded = run(
+                [
+                    *ssh,
+                    f"install -m 0644 /dev/stdin /run/dstack-test-tpm/{remote_name}",
+                ],
+                data=source.read_bytes(),
+                timeout=60,
+            )
+            if uploaded.returncode:
+                raise RuntimeError(
+                    f"failed to install GCP TPM replay fixture {name}: "
+                    + uploaded.stderr.decode(errors="replace")[-500:]
                 )
         completed = run([*ssh, "bash", "-s"], data=REMOTE.encode(), timeout=600)
         log = completed.stdout + completed.stderr
