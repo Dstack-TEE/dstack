@@ -4,6 +4,7 @@
 
 from dstack_sdk.get_compose_hash import AppCompose
 from dstack_sdk.get_compose_hash import DockerConfig
+from dstack_sdk.get_compose_hash import Requirements
 from dstack_sdk.get_compose_hash import get_compose_hash
 from dstack_sdk.get_compose_hash import sort_object
 
@@ -272,4 +273,74 @@ def test_docker_config_accepts_unknown_fields():
     assert (
         get_compose_hash(dict(compose))
         == "37cd67d88435bdb727b3e240a9a0ff57b7bebbc17eacd573c3d4746aacd104f6"
+    )
+
+
+def test_fields_declared_from_dstack_types():
+    """Fields that reached the hash through **kwargs are now named parameters.
+
+    Expected values are the JS SDK's, which the consistency doc designates as
+    the reference implementation.
+    """
+    assert (
+        get_compose_hash(
+            AppCompose(
+                runner="docker-compose",
+                docker_compose_file="docker-compose.yml",
+                port_policy={
+                    "ports": [{"port": 443, "pp": True}, {"port": 8080, "pp": False}],
+                    "restrict_mode": True,
+                },
+            )
+        )
+        == "6be823decce06179698ee6fd087d82951c21ba6a24ba6419a6801b0be1ce2bdc"
+    )
+
+    assert (
+        get_compose_hash(
+            AppCompose(runner="docker-compose", storage_fs="zfs", swap_size="2G")
+        )
+        == "b140f74b52ae10dc42efe16e4368784b60f755ada3781a0be8b8aafae6a6ab86"
+    )
+
+    assert (
+        get_compose_hash(
+            AppCompose(runner="docker-compose", init_script=["echo one", "echo two"])
+        )
+        == "8c35247d5b685a8d24b97182f3b0a4e3c1ab6d8eecee6704424a0de0dd8a66a3"
+    )
+
+    assert (
+        get_compose_hash(AppCompose(runner="docker-compose", event_log_version=2))
+        == "8d1f7a3b6a6fc64236667a69c7618c5075d85d4c3afd8fb9a4b0c733b60ae8f5"
+    )
+
+    assert (
+        get_compose_hash(
+            AppCompose(
+                runner="docker-compose",
+                verity_volumes=[
+                    {
+                        "source": "data.img",
+                        "verity_root": "00112233445566778899aabbccddeeff"
+                        "00112233445566778899aabbccddeeff",
+                        "target": "/mnt/data",
+                    }
+                ],
+            )
+        )
+        == "3eb00892f370ab31f854172991b655a0880ccb7786d121dfb75cbd9b038df19f"
+    )
+
+
+def test_gpu_policy_is_a_named_requirements_field():
+    compose = AppCompose(
+        runner="docker-compose",
+        requirements=Requirements(
+            gpu_policy={"rego": "package policy\nnv_match := true"}
+        ),
+    )
+    assert (
+        get_compose_hash(compose)
+        == "a5032c9af6ccb3403062e80def3b41d4308753da5237735d99c913484fc75865"
     )

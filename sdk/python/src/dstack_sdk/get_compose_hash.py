@@ -113,6 +113,12 @@ class AppCompose:
         bash_script: Optional[str] = None,  # Legacy
         pre_launch_script: Optional[str] = None,  # Legacy
         snapshotter: Optional[str] = None,
+        init_script: Optional[List[str]] = None,
+        storage_fs: Optional[str] = None,
+        swap_size: Optional[str] = None,
+        event_log_version: Optional[int] = None,
+        port_policy: Optional[Dict[str, Any]] = None,
+        verity_volumes: Optional[List[Dict[str, Any]]] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize a new ``AppCompose`` instance with arbitrary extra fields."""
@@ -138,6 +144,16 @@ class AppCompose:
         self.requirements = requirements
         self.bash_script = bash_script
         self.pre_launch_script = pre_launch_script
+        # Bash scripts run before the application runner starts.
+        self.init_script = init_script
+        self.storage_fs = storage_fs
+        # Human-readable size such as "2G"; dstack-types serializes it as a
+        # string, not a byte count.
+        self.swap_size = swap_size
+        # Event log digest format. Leave unset for v1, which dstack-types omits.
+        self.event_log_version = event_log_version
+        self.port_policy = port_policy
+        self.verity_volumes = verity_volumes
 
         # Add any additional fields
         for key, value in kwargs.items():
