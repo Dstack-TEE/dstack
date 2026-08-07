@@ -13,6 +13,10 @@ template="$plan/automation/tdxlab-manifest.json"
 generated_lab="${output%.json}.lab.json"
 fixture_root="$cache_root/fixtures/verifier/full-tdx-0.5.4.1"
 image_hash=14ad42d0270b444eaeb53918a5a94d9b17eec7a817cd336173b17c5327541c67
+foundry_version=v1.7.1
+foundry_sha256=cf7e688ed0c4c48adffca788b496076e31060b67ac5afe1e43dbb5499c20c88b
+foundry_bin="$cache_root/tools/foundry-$foundry_version"
+mkdir -p "$cache_root/tmp"
 
 require_command() {
   command -v "$1" >/dev/null || {
@@ -28,7 +32,17 @@ test -x "$HOME/.bun/bin/bun" || {
   printf 'missing required command: %s\n' "$HOME/.bun/bin/bun" >&2
   exit 1
 }
-require_command forge
+if [[ ! -x "$foundry_bin/forge" ]]; then
+  archive=$(mktemp "$cache_root/tmp/foundry.XXXXXX.tar.gz")
+  trap 'rm -f "$archive"' EXIT
+  mkdir -p "$foundry_bin"
+  curl --fail --location --retry 3 --output "$archive" \
+    "https://github.com/foundry-rs/foundry/releases/download/$foundry_version/foundry_${foundry_version}_linux_amd64.tar.gz"
+  echo "$foundry_sha256  $archive" | sha256sum --check --status
+  tar -xzf "$archive" -C "$foundry_bin"
+  test -x "$foundry_bin/forge"
+fi
+export PATH="$foundry_bin:$PATH"
 
 # Only initialize the contract fixtures used by the scripted KMS cases. The
 # much larger Yocto submodules are unrelated to this run preparation.
@@ -73,12 +87,12 @@ if ! sudo su kvin -c "docker image inspect alpine:latest" >/dev/null 2>&1; then
   sudo su kvin -c "docker pull alpine:latest"
 fi
 
-python3 - "$template" "$generated_lab" "$plan" "$fixture_root" <<'PY'
+python3 - "$template" "$generated_lab" "$plan" "$fixture_root" "$foundry_bin" <<'PY'
 import json
 import pathlib
 import sys
 
-template, output, plan, full_tdx = map(pathlib.Path, sys.argv[1:])
+template, output, plan, full_tdx, foundry_bin = map(pathlib.Path, sys.argv[1:])
 value = json.loads(template.read_text())
 environment = value.setdefault("environment", {})
 providers = {
@@ -95,6 +109,10 @@ for variable, name in providers.items():
 environment["DSTACK_TEST_VERIFIER_FULL_TDX_IMAGE_DIR"] = str(
     full_tdx.resolve(strict=True)
 )
+path_prepend = value.setdefault("environment_path_prepend", [])
+foundry_path = str(foundry_bin.resolve(strict=True))
+if foundry_path not in path_prepend:
+    path_prepend.insert(0, foundry_path)
 output.parent.mkdir(parents=True, exist_ok=True)
 output.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 PY
