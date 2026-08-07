@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import tempfile
 import time
@@ -20,12 +21,15 @@ from pathlib import Path
 CASE_IDS = {"tc-gos-attestatio-002", "tc-int-failure-se-008"}
 VM_ID = re.compile(r"Created VM with ID:\s*([0-9a-f-]{36})", re.IGNORECASE)
 SIMULATOR_SERVICES = (
-    "dstack-tdx-legacy",
     "dstack-tdx-lite",
     "gcp-tdx",
     "amd-sev-snp",
     "aws-nitro-enclave",
     "aws-nitro-tpm",
+)
+
+FULL_TDX_IMAGE_HASH = (
+    "14ad42d0270b444eaeb53918a5a94d9b17eec7a817cd336173b17c5327541c67"
 )
 
 
@@ -150,8 +154,71 @@ def append_vm(registry: Path, vm_id: str) -> None:
     registry.write_text(json.dumps(value, indent=2) + "\n")
 
 
+def verify_legacy_tdx(
+    runtime: dict[str, object], repository: Path, artifacts: Path
+) -> dict[str, object]:
+    """Verify the production legacy-TDX quote against its prepared full image."""
+    environment = runtime.get("environment") or {}
+    if not isinstance(environment, dict):
+        raise RuntimeError("runtime environment is not an object")
+    fixture = Path(str(environment["DSTACK_TEST_VERIFIER_FULL_TDX_IMAGE_DIR"]))
+    acpi_tables = Path(str(environment["DSTACK_TEST_ACPI_TABLES_BINARY"]))
+    if hashlib.sha256((fixture / "sha256sum.txt").read_bytes()).hexdigest() != FULL_TDX_IMAGE_HASH:
+        raise RuntimeError("prepared full-TDX image does not match its quote")
+    workspace = artifacts / "legacy-tdx"
+    cache = workspace / "cache"
+    shutil.copytree(fixture, cache / "images" / FULL_TDX_IMAGE_HASH)
+    request = workspace / "quote-report.json"
+    shutil.copy2(repository / "dstack/verifier/fixtures/quote-report.json", request)
+    config = workspace / "verifier.toml"
+    config.write_text(
+        f'''address = "127.0.0.1"
+port = 8080
+image_cache_dir = "{cache}"
+image_download_url = "http://127.0.0.1:1/{{OS_IMAGE_HASH}}.tar.gz"
+image_download_timeout_secs = 1
+'''
+    )
+    binary = Path(
+        str((runtime.get("prepared_binaries") or {})["dstack_verifier"]["path"])
+    )
+    process_environment = os.environ.copy()
+    process_environment["PATH"] = f"{acpi_tables.parent}:{process_environment['PATH']}"
+    completed = subprocess.run(
+        [str(binary), "--config", str(config), "--verify", str(request)],
+        text=True,
+        capture_output=True,
+        timeout=300,
+        check=False,
+        env=process_environment,
+    )
+    (artifacts / "dstack-tdx-legacy.log").write_text(
+        completed.stdout + completed.stderr
+    )
+    response = json.loads(Path(f"{request}.verification.json").read_text())
+    details = response.get("details") or {}
+    passed = completed.returncode == 0 and response.get("is_valid") is True and all(
+        details.get(field) is True
+        for field in (
+            "quote_verified",
+            "event_log_verified",
+            "os_image_hash_verified",
+            "acpi_tables_verified",
+        )
+    )
+    row = {
+        "service": "dstack-tdx-legacy",
+        "returncode": completed.returncode,
+        "verified": passed,
+        "fixture": "production quote with hash-bound full image",
+    }
+    if not passed:
+        raise RuntimeError(f"legacy TDX fixture failed: {row}")
+    return row
+
+
 def main() -> int:
-    """Run hardware guest boundaries and six simulated platform controls."""
+    """Run hardware TDX, a production legacy fixture, and five simulations."""
     case_id = os.environ.get("DSTACK_TEST_CASE_ID", "")
     if case_id not in CASE_IDS:
         raise SystemExit(f"unsupported case: {case_id}")
@@ -321,7 +388,7 @@ def main() -> int:
             raise RuntimeError(
                 f"attestation image build failed with rc={build.returncode}"
             )
-        simulated = []
+        simulated = [verify_legacy_tdx(runtime, repository, artifacts)]
         for service in SIMULATOR_SERVICES:
             completed = run_as_kvin(
                 f"cd {quoted_suite} && docker compose run --rm {service}", 600
@@ -350,7 +417,7 @@ def main() -> int:
             emit(
                 f"{case_id}-step-02",
                 "PASS",
-                "TDX legacy, TDX lite, GCP TDX, SEV-SNP, Nitro Enclave, and NitroTPM rows were accepted by their exact development roots and rejected by built-in production roots.",
+                "The production legacy-TDX quote passed full-image and ACPI verification; TDX lite, GCP TDX, SEV-SNP, Nitro Enclave, and NitroTPM simulations were accepted by their exact development roots and rejected by built-in production roots.",
             )
         )
         steps.append(
@@ -377,7 +444,7 @@ def main() -> int:
         "schema_version": "1.0",
         "case_id": case_id,
         "status": status,
-        "summary": "Physical TDX and six simulated platform rows satisfied versioned decoding, challenge binding, boundary rejection, recovery, and cleanup contracts.",
+        "summary": "Physical TDX, production legacy-TDX, and five simulated platform rows satisfied versioned decoding, challenge binding, boundary rejection, recovery, and cleanup contracts.",
         "steps": steps,
         "artifacts": [
             {
@@ -387,7 +454,7 @@ def main() -> int:
             }
             for path in sorted(artifacts.iterdir())
         ],
-        "remarks": "The TDX row confirms physical hardware evidence. Other platform rows confirm functional encoding and verification only, not vendor hardware signatures or physical isolation.",
+        "remarks": "The live TDX row confirms physical hardware evidence, and the legacy-TDX row verifies a production quote against its hash-bound full image. The five simulator rows confirm functional encoding and verification only, not vendor hardware signatures or physical isolation.",
         "duration_seconds": round(time.monotonic() - started, 3),
     }
     if failure:
