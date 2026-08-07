@@ -124,6 +124,10 @@ if ! image_matches "$prod_image" false || ! image_matches "$dev_image" true; the
     }
     stage="$image_store/.$name.tmp.$$"
     sudo cp -a -- "$source" "$stage"
+    normalized=$(mktemp "$cache_root/tmp/metadata.XXXXXX.json")
+    jq '.backend = "mkosi"' "$metadata" >"$normalized"
+    sudo install -m 0644 "$normalized" "$stage/metadata.json"
+    rm -f "$normalized"
     sudo chown -R root:root "$stage"
     sudo mv -- "$stage" "$image_store/$name"
   done
