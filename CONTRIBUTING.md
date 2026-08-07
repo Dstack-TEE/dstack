@@ -6,8 +6,9 @@ Thank you for your interest in contributing to this project!
 
 - `next` is the integration mainline and the default branch. Open every pull
   request against it unless a maintainer asks otherwise.
-- `release/vX.Y` carries a released line. It only takes fixes cherry-picked
-  back from `next`; do not develop on it directly. Version tags are cut here.
+- `release/v<major>.<minor>.x` carries a released line — `release/v0.5.x` is
+  the current one. It only takes fixes cherry-picked back from `next`; do not
+  develop on it directly. Patch tags are cut here.
 
 Name a working branch whatever describes it. CI runs on pull requests, so a
 branch gets its checks once a PR is open rather than on every push.
