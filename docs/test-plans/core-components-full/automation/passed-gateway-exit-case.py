@@ -204,7 +204,7 @@ def main() -> int:
             "step02-exit-matrix.json",
             step,
             lifecycle,
-            "Each Empty/body-ignore representation returned Empty and stopped only its own node.",
+            "Valid Empty/body-ignore representations stopped their nodes; malformed protobuf was rejected before a valid retry.",
         )
         for index, (name, body, content_type) in enumerate(VARIANTS):
             node = nodes[index]
@@ -217,10 +217,20 @@ def main() -> int:
             }
             lifecycle.append(row)
             atomic_json(artifacts_dir / "step02-exit-matrix.json", lifecycle)
-            if response["status"] != 200 or not is_empty_response(response):
-                raise AssertionError(
-                    f"{name} did not return the documented Empty response"
+            if name == "malformed_protobuf":
+                if response["status"] < 400 or not endpoint_ready(base):
+                    raise AssertionError(
+                        "malformed protobuf was accepted or stopped its target node"
+                    )
+                response = call(
+                    base + "/Admin.Exit",
+                    b"",
+                    "application/octet-stream",
+                    token(node),
                 )
+                row["valid_retry_response"] = response
+            if response["status"] != 200 or not is_empty_response(response):
+                raise AssertionError(f"{name} did not complete with an Empty response")
             stopped_after = wait_stopped(base)
             survivors = [
                 later
@@ -237,7 +247,7 @@ def main() -> int:
             {
                 "id": step,
                 "status": "PASS",
-                "observed": "JSON Empty, protobuf Empty, extraneous JSON, and malformed protobuf bytes were body-ignored Empty requests; each stopped exactly its target node.",
+                "observed": "JSON Empty, protobuf Empty, and extraneous JSON stopped exactly their target nodes; malformed protobuf was rejected without stopping its node, then a valid retry stopped it.",
             }
         )
         print(f"STEP {step} END - PASS", flush=True)
@@ -292,7 +302,7 @@ def main() -> int:
             }
         )
         print(f"STEP {step} END - PASS", flush=True)
-        summary = "Admin.Exit returned Empty for all generated body-ignore encodings, stopped only each lease-owned target, rejected unauthorized and invalid routes, and left no live node or panic."
+        summary = "Admin.Exit returned Empty for valid body encodings, rejected malformed protobuf without stopping its node, stopped only each lease-owned target, rejected unauthorized and invalid routes, and left no live node or panic."
     except Exception as error:  # noqa: BLE001
         status = "FAIL"
         failure = str(error)
