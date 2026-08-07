@@ -256,6 +256,7 @@ Use this checklist to verify a workload running in a dstack CVM.
 - [ ] Launch event log replays correctly (RTMR3 on TDX-family platforms, PCR14 on AWS NitroTPM)
 - [ ] Config commitment matches the expected app/config target (on AWS: PCR14 replay; PCR8 is an optional shortcut — see the [AWS verifier runbook](../aws-ec2-production-verifier-runbook.md))
 - [ ] reportData contains your challenge (replay protection)
+- [ ] No security-relevant check depends on `pre_launch_script` running before the application; such checks belong in `init_script` or in the application itself
 
 **GPU verification (when required):**
 - [ ] The `gpu-attestation` device count is greater than zero and matches the expected deployment
@@ -341,6 +342,10 @@ Attestation proves which code is running, not that the code is bug-free. It prov
 ### Environment variables need application-layer authentication
 
 Encrypted environment variables prevent the host from reading your secrets. However, the host can replace encrypted values with different ones. Your application should verify authenticity using patterns like LAUNCH_TOKEN. See [security-best-practices.md](./security-best-practices.md) for details.
+
+### `pre_launch_script` is not a launch gate
+
+`pre_launch_script` runs after dockerd, so a container with a Docker restart policy can be running before it executes — always with `restart: always`, and after any unclean stop with `restart: unless-stopped`. Attestation still binds the script contents, but not the order. Use `init_script`, which runs before dockerd on every boot, for anything that must precede application code. See [security-best-practices.md](./security-best-practices.md#security-semantics-must-not-depend-on-pre_launch_script-running-first) for the failure modes and auditor guidance.
 
 ### KMS root key security
 
