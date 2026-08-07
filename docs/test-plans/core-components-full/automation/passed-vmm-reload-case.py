@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -196,7 +197,7 @@ def main() -> int:
         staged_workdir = run_path.parent / f".{created_id}.reload-staged"
         if staged_workdir.exists():
             raise AssertionError("run-scoped reload staging path already exists")
-        vm_workdir.replace(staged_workdir)
+        shutil.move(str(vm_workdir), str(staged_workdir))
         prepared = values["prepared_binaries"]
         binary = (
             prepared.get("dstack_vmm")
@@ -218,7 +219,7 @@ def main() -> int:
         # Materialize the persisted VM only after startup. ReloadVms must take
         # the filesystem-only path: allocate() reserves its CID, so a second
         # occupy() would reject the same CID and leave the VM unloaded.
-        staged_workdir.replace(vm_workdir)
+        shutil.move(str(staged_workdir), str(vm_workdir))
         staged_workdir = None
         reload_result = rpc(vmm["rpc_url"], routes["ReloadVms"], {})
         after_restart = parse_vms(run(list(vmm["commands"]["list_vms"])))
@@ -355,7 +356,10 @@ def main() -> int:
     finally:
         if staged_workdir is not None and staged_workdir.exists() and created_id:
             try:
-                staged_workdir.replace(pathlib.Path(vmm["run_path"]) / created_id)
+                shutil.move(
+                    str(staged_workdir),
+                    str(pathlib.Path(vmm["run_path"]) / created_id),
+                )
                 staged_workdir = None
             except Exception:
                 pass
