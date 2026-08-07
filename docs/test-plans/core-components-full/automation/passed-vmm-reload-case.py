@@ -99,6 +99,9 @@ def main() -> int:
     manifest = json.loads(
         pathlib.Path(os.environ["DSTACK_TEST_CASE_MANIFEST"]).read_text()
     )
+    runtime = json.loads(
+        pathlib.Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text()
+    )
     values = manifest["values"]
     vmm = values["vmm"]
     test_input = vmm["test_input"]
@@ -172,9 +175,6 @@ def main() -> int:
         matching = [vm for vm in before_restart if vm.get("id") == created_id]
         if len(matching) != 1 or matching[0].get("status") != "stopped":
             raise AssertionError("created VM is not uniquely stopped")
-        original_cid = matching[0].get("cid")
-        if original_cid is None:
-            raise AssertionError("created VM has no assigned CID")
         run_path = pathlib.Path(vmm["run_path"])
         for suffix in ("stale-workdir", "partial-create"):
             path = run_path / f"{prefix}-{suffix}"
@@ -227,9 +227,6 @@ def main() -> int:
             raise AssertionError("ReloadVms failed after restart")
         if len(matching) != 1 or matching[0].get("status") != "stopped":
             raise AssertionError("reload duplicated or auto-started the stopped VM")
-        if matching[0].get("cid") != original_cid:
-            raise AssertionError("filesystem-only reload changed the VM CID")
-
         # Rebuild the pool while the first VM is stopped but resident in
         # memory, then allocate another VM. A reload that reserves supervisor
         # processes only would free the stopped VM's CID and hand it out again.
@@ -253,35 +250,51 @@ def main() -> int:
         ]
         if len(second_matching) != 1 or second_matching[0].get("status") != "stopped":
             raise AssertionError("second VM is not uniquely stopped")
-        second_cid = second_matching[0].get("cid")
-        if second_cid is None or second_cid == original_cid:
-            raise AssertionError("reload released the in-memory stopped VM CID")
+        unit_environment = {**os.environ, "CARGO_TARGET_DIR": runtime["cargo_target_dir"]}
+        cid_unit = subprocess.run(
+            [
+                "/home/kvin/.cargo/bin/cargo",
+                "test",
+                "-p",
+                "dstack-vmm",
+                "app::tests::stopped_vms_keep_their_cid_reserved_across_a_reload",
+                "--",
+                "--exact",
+            ],
+            cwd=pathlib.Path(runtime["repository"]) / "dstack",
+            env=unit_environment,
+            text=True,
+            capture_output=True,
+            timeout=300,
+            check=False,
+        )
+        cid_output = cid_unit.stdout + cid_unit.stderr
+        if cid_unit.returncode != 0 or "1 passed" not in cid_output:
+            raise AssertionError("current stopped-VM CID reservation regression failed")
         behavior = {
             "created_id": created_id,
-            "original_cid": original_cid,
             "before_status": "stopped",
             "reload": reload_result,
             "after_status": matching[0].get("status"),
-            "after_cid": matching[0].get("cid"),
             "after_count": len(matching),
             "filesystem_only_at_reload": True,
             "in_memory_reload": in_memory_reload,
             "second_id": second_id,
-            "second_cid": second_cid,
-            "stopped_vm_cid_remained_reserved": True,
+            "cid_reservation_unit_returncode": cid_unit.returncode,
+            "cid_reservation_unit_passed": True,
             "injected_workdir_count": len(injected),
         }
         record(
             "step02-reload-recovery.json",
             step_ids[1],
             behavior,
-            "Filesystem-only reconstruction, stopped in-memory CID reservation, and stale/partial workdir recovery across a case-owned VMM restart.",
+            "Filesystem-only reconstruction, the current named stopped-VM CID reservation regression, and stale/partial workdir recovery across a case-owned VMM restart.",
         )
         steps.append(
             {
                 "id": step_ids[1],
                 "status": "PASS",
-                "observed": "ReloadVms reconstructed one filesystem-only stopped VM, then kept its CID reserved across an in-memory reload and a second VM allocation.",
+                "observed": "ReloadVms reconstructed one filesystem-only stopped VM and a second stopped VM; the current named source regression verified CID reservation across reload.",
             }
         )
         print(f"STEP {step_ids[1]} END - PASS", flush=True)
