@@ -43,7 +43,7 @@ def write_config(path: pathlib.Path, cache: pathlib.Path, download_url: str) -> 
         "\n".join(
             [
                 'address = "127.0.0.1"',
-                "port = 0",
+                "port = 1",
                 f'image_cache_dir = "{cache}"',
                 f'image_download_url = "{download_url}"',
                 "image_download_timeout_secs = 2",
