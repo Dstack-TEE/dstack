@@ -191,7 +191,7 @@ impl SystemdProcessManager {
             .await?
             .is_some_and(|info| info.state.status.is_running())
         {
-            bail!("Process is already running");
+            bail!("process is already running");
         }
         let record = ProcessRecord {
             config: config.clone(),
@@ -272,10 +272,7 @@ impl SystemdProcessManager {
             .arg(&unit)
             .arg("--property=LoadState,ActiveState,SubState,MainPID,ExecMainCode,ExecMainStatus")
             .stdout(Stdio::piped());
-        let output = command
-            .output()
-            .await
-            .context("failed to execute systemctl show")?;
+        let output = Self::command(command, "systemctl show").await?;
         let properties = String::from_utf8_lossy(&output.stdout);
         let value = |name: &str| {
             properties
@@ -324,8 +321,9 @@ mod tests {
 
     #[test]
     fn unit_names_are_stable_and_do_not_embed_process_ids() {
-        let manager =
-            SystemdProcessManager::new(PathBuf::from("/tmp/test"), "dstack-vm".into()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let manager = SystemdProcessManager::new(dir.path().to_path_buf(), "dstack-vm".into())
+            .unwrap();
         assert_eq!(manager.unit("vm/one"), manager.unit("vm/one"));
         assert_ne!(manager.unit("vm/one"), manager.unit("vm-two"));
         assert!(!manager.unit("vm/one").contains("vm/one"));

@@ -346,7 +346,7 @@ async fn main() -> Result<()> {
             cfg.auto_start,
         )
         .await
-        .context("Failed to connect to supervisor")?;
+        .context("failed to connect to supervisor")?;
         process_manager::ProcessManager::supervisor(client)
     };
     let state = app::App::new(config, supervisor);

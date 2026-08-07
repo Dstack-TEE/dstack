@@ -14,8 +14,8 @@ systemd_unit_prefix = "dstack-vm"
 systemd_state_dir = "/run/dstack-vmm/systemd-processes"
 ```
 
-The section retains its historical name so existing configurations remain
-compatible. The default backend is `supervisor`.
+The section retains its historical name so existing configurations remain compatible.
+The default backend is `supervisor`. Keep the existing `supervisor.*` settings (exe/sock/pid_file/log_file/...) in place; they are currently still required even when using `backend = "systemd"`.
 
 ## Runtime model
 
