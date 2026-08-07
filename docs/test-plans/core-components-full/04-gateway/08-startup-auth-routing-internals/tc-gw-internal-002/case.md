@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <a id="tc-gw-internal-002"></a>
-# TC-GW-INTERNAL-002: Gateway debug key generation artifact safety
+# TC-GW-INTERNAL-002: Gateway on-demand TLS key artifact safety
 
 ## Metadata
 
@@ -11,7 +11,7 @@
 - Automation: Yes
 - Requirements: [req-gw-internal-002](../../../feature-audit.md#req-gw-internal-002)
 - Risks: [risk-gw-internal-002](../../../feature-audit.md#risk-gw-internal-002)
-- Source: `dstack/gateway/src/gen_debug_key.rs`
+- Source: `dstack/gateway/src/main.rs:gen_certs`
 
 ## Prepared execution knowledge
 
@@ -20,13 +20,13 @@
 - Runtime state and evidence remain case-scoped even though immutable build outputs are shared.
 - Use the case metadata, inventories, and prepared manifest as the complete initial execution specification. Source inspection before the first tested operation is allowed only for a specific unresolved ambiguity.
 - Do not run a clean build unless this case explicitly tests build, packaging, features, or reproducibility. Otherwise reuse the shared target and prepared binaries.
-- The generator is the distinct Cargo binary `gen_debug_key`, not a `dstack-gateway` subcommand. Invoke the prepared shared-target `release/gen_debug_key` binary with exactly one simulator URL argument from the case manifest, and run it with the intended output directory as its working directory because it writes `debug_key.json`.
-- Pass the simulator pRPC origin to `gen_debug_key`, not a route-prefixed client URL: when the manifest value ends in `/prpc`, remove that suffix before invocation because `PrpcClient` appends `GetQuote?json` itself.
+- The legacy `gen_debug_key` binary, `debug_key.json`, `core.debug.key_file`, and direct KMS signing path were removed. Confirm they remain absent rather than attempting to prepare or invoke them.
+- The current Gateway requests a fresh TLS key and certificate chain from DstackGuest during startup, publishes the configured key, certificate, and mutual-CA destinations with restrictive permissions, and must fail before publishing destination artifacts when DstackGuest is unavailable.
 - If a mismatch occurs, write the provisional result first. Perform narrow source-level root-cause analysis only when failure investigation is enabled.
 
 ## Objective
 
-Verify gateway debug key generation artifact safety exactly matches the source-defined behavior across normal, boundary, concurrent, failure, and restart paths.
+Verify Gateway on-demand DstackGuest TLS-key generation and artifact safety match the current source-defined behavior across normal and dependency-failure paths, with no legacy pre-generated debug-key mechanism.
 
 ## Preconditions
 
@@ -51,20 +51,20 @@ Capture effective configuration, input files/requests, existing processes/resour
 <a id="tc-gw-internal-002-step-02"></a>
 ### Step 2: Exercise behavior and boundaries
 
-Generate debug key data twice with target existing, unsafe permissions/path, interrupted write and production-config consumption attempt.
+Inspect the live startup artifacts generated through DstackGuest and start an isolated candidate with fresh destination paths and an unavailable DstackGuest dependency.
 
 **Expected results:**
 
-- Output is atomic, restricted, explicitly debug-labeled, not silently overwritten, and production startup refuses it.
+- The live key, certificate chain, and mutual CA are complete and mode `0600`; no legacy generator, binary, configuration field, or `debug_key.json` exists.
 
 <a id="tc-gw-internal-002-step-03"></a>
 ### Step 3: Inject failure and concurrency
 
-Interrupt the primary dependency at its commit boundary, issue a conflicting concurrent operation, restore it, and retry once.
+Make DstackGuest unavailable before the isolated candidate requests its TLS key and inspect all fresh destination paths after the bounded startup failure.
 
 **Expected results:**
 
-- At most one operation commits, failure cleanup releases all temporary resources, diagnostics identify the failed phase, and retry converges without duplicate state.
+- Startup fails nonzero before any key, certificate-chain, mutual-CA, or temporary destination artifact is published.
 
 <a id="tc-gw-internal-002-step-04"></a>
 ### Step 4: Verify restart, isolation, and redaction

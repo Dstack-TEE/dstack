@@ -11,7 +11,7 @@ from pathlib import Path
 
 CASE_ID = "tc-gw-internal-002"
 CAPABILITY = "gateway-internal-002"
-ACTION = "Gateway debug key generation artifact safety"
+ACTION = "Gateway on-demand TLS key artifact safety"
 FIXTURE_KEY = "gateway_internal_002"
 REQUIRED = [
     "gateway_argv",
