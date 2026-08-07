@@ -80,12 +80,38 @@ const (
 	RequirementPlatformNitro     RequirementPlatform = "dstack-nitro-enclave"
 )
 
+// GpuPolicy is the application GPU policy applied before key provisioning.
+//
+// Every field is omitted when unset so the guest applies its own default. That
+// matters most for AttestGPU, whose guest-side default is true: emitting a bare
+// false would silently turn off GPU attestation for a caller who only wanted to
+// set Rego.
+type GpuPolicy struct {
+	// AttestGPU requires an attached GPU to pass local TEE attestation before
+	// the guest continues booting. Nil leaves the guest default (true) in place.
+	AttestGPU *bool `json:"attest_gpu,omitempty"`
+	// Rego is an optional Rego v0 policy evaluated against nvattest's claims
+	// array. It must define the boolean rule data.policy.nv_match.
+	Rego string `json:"rego,omitempty"`
+	// AllowDevtools permits NVIDIA DevTools mode, which disables the GPU
+	// memory-confidentiality guarantees expected in production.
+	AllowDevtools bool `json:"allow_devtools,omitempty"`
+	// AllowDebug permits claims whose GPU attestation debug status is enabled.
+	AllowDebug bool `json:"allow_debug,omitempty"`
+	// AllowInsecureBoot permits claims that do not assert GPU secure boot.
+	AllowInsecureBoot bool `json:"allow_insecure_boot,omitempty"`
+}
+
 // Requirements represents guest-side requirements.
 type Requirements struct {
 	OsVersion            string                 `json:"os_version,omitempty"`
 	Platforms            *[]RequirementPlatform `json:"platforms,omitempty"`
 	TdxMeasureAcpiTables *bool                  `json:"tdx_measure_acpi_tables,omitempty"`
 	LaunchTokenHash      string                 `json:"launch_token_hash,omitempty"`
+	// GpuPolicy is measured even when absent: the guest parses an omitted
+	// field as the default empty policy {} and emits its digest as the
+	// gpu-policy-hash launch event.
+	GpuPolicy *GpuPolicy `json:"gpu_policy,omitempty"`
 }
 
 // AppCompose represents the application composition structure

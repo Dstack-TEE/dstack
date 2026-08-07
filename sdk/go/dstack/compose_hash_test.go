@@ -468,3 +468,84 @@ func TestDeterministicJSONEmitsNoTrailingNewline(t *testing.T) {
 		t.Fatalf("deterministic JSON = %q, want the compact form with no trailing newline", got)
 	}
 }
+
+// TestGetComposeHashCoversGpuPolicy pins requirements.gpu_policy, the fifth
+// Requirements field in dstack-types that no SDK had declared.
+func TestGetComposeHashCoversGpuPolicy(t *testing.T) {
+	tests := []struct {
+		name    string
+		compose AppCompose
+		want    string
+	}{
+		{
+			name: "rego only",
+			compose: AppCompose{
+				Runner:       "docker-compose",
+				Requirements: &Requirements{GpuPolicy: &GpuPolicy{Rego: "package policy\nnv_match := true"}},
+			},
+			want: "a5032c9af6ccb3403062e80def3b41d4308753da5237735d99c913484fc75865",
+		},
+		{
+			name: "every field set",
+			compose: AppCompose{
+				Runner: "docker-compose",
+				Requirements: &Requirements{
+					OsVersion: ">=0.6.0",
+					GpuPolicy: &GpuPolicy{
+						AttestGPU:         boolPtr(true),
+						Rego:              "package policy\nnv_match := true",
+						AllowDevtools:     true,
+						AllowDebug:        true,
+						AllowInsecureBoot: true,
+					},
+				},
+			},
+			want: "46d26e08d9aef4b229f210bdda13443b99d210707c827d631e2f1115cde57370",
+		},
+		{
+			name: "attestation explicitly disabled",
+			compose: AppCompose{
+				Runner:       "docker-compose",
+				Requirements: &Requirements{GpuPolicy: &GpuPolicy{AttestGPU: boolPtr(false)}},
+			},
+			want: "4b508db2484d27c3ea89ef3ae42411b7dbe00593dd577c5c8797c30d89f7d847",
+		},
+		{
+			name: "empty policy",
+			compose: AppCompose{
+				Runner:       "docker-compose",
+				Requirements: &Requirements{GpuPolicy: &GpuPolicy{}},
+			},
+			want: "4a691b287d3991fa248e7efd982c90b94f34b56d23037cdf724597198407dfda",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := GetComposeHash(tt.compose, false)
+			if err != nil {
+				t.Fatalf("GetComposeHash: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("hash = %s, want %s (JS reference)", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestUnsetAttestGPUIsOmitted guards the safety default: a caller who sets only
+// Rego must not silently ship attest_gpu=false, which would turn off GPU
+// attestation.
+func TestUnsetAttestGPUIsOmitted(t *testing.T) {
+	encoded, err := json.Marshal(&GpuPolicy{Rego: "package policy"})
+	if err != nil {
+		t.Fatalf("marshal gpu policy: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal gpu policy: %v", err)
+	}
+	if _, present := decoded["attest_gpu"]; present {
+		t.Fatalf("attest_gpu emitted when unset: %s", encoded)
+	}
+}
