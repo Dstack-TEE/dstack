@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -44,8 +45,14 @@ def main() -> int:
     main_text = main_source.read_text()
     markers = {
         "finish_not_process_exit": "std::process::exit(0)" not in text,
-        "finish_notifies_shutdown": "shutdown.notify();" in text,
-        "finish_returns_ok": "shutdown.notify();\n        Ok(())" in text,
+        "finish_notifies_shutdown": bool(
+            re.search(r"shutdown\s*\.clone\(\)\s*\.notify\(\);", text)
+        ),
+        "finish_returns_ok": bool(
+            re.search(
+                r"shutdown\s*\.clone\(\)\s*\.notify\(\);\s*Ok\(\(\)\)", text
+            )
+        ),
         "ignited_shutdown_captured": "state.set_shutdown(rocket.shutdown())?;"
         in main_text,
     }
