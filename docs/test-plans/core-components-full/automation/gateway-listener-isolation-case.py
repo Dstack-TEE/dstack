@@ -84,8 +84,8 @@ def main() -> int:
         absent_code, absent_body = post(f"{admin}/Admin.Status", None)
         wrong_code, wrong_body = post(f"{admin}/Admin.Status", "wrong-case-token")
         public_admin_code, public_admin_body = post(f"{public}/Admin.Status", None)
-        public_info_code, public_info_body = post(f"{public}/Gateway.Info", None)
-        admin_public_code, admin_public_body = post(f"{admin}/Gateway.Info", token)
+        public_info_code, public_info_body = post(f"{public}/Tproxy.Info", None)
+        admin_public_code, admin_public_body = post(f"{admin}/Tproxy.Info", token)
         public_parts = urllib.parse.urlsplit(public)
         public_health = urllib.parse.urlunsplit(
             (public_parts.scheme, public_parts.netloc, "/health", "", "")
