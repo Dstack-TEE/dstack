@@ -69,7 +69,7 @@ def main() -> int:
     summary = "Gateway route-index matrix did not complete"
     try:
         probes = {
-            "public_info": request(f"{public}/Gateway.Info", post=True),
+            "public_info": request(f"{public}/Tproxy.Info", post=True),
             "public_admin": request(f"{public}/Admin.Status", post=True),
             "admin_status": request(f"{admin}/Admin.Status", token=token, post=True),
             "admin_dashboard": request(f"{admin_origin}/", token=token),

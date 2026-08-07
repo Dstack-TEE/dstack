@@ -124,7 +124,7 @@ def main() -> int:
         )
 
         plain_public = public.replace("https://", "http://", 1)
-        plain_public_code = post(f"{plain_public}/Gateway.Info", {})[0]
+        plain_public_code = post(f"{plain_public}/Tproxy.Info", {})[0]
         tls_admin = admin.replace("http://", "https://", 1)
         tls_admin_code = post(f"{tls_admin}/Admin.Status", {}, token=token)[0]
         admin_code = post(f"{admin}/Admin.Status", {}, token=token)[0]

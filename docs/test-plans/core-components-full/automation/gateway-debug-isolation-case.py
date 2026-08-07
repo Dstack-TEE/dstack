@@ -119,7 +119,7 @@ def main() -> int:
             and debug_admin_code in {400, 404}
         )
 
-        prod_info_code, _ = post(f"{prod_public}/Gateway.Info", {})
+        prod_info_code, _ = post(f"{prod_public}/Tproxy.Info", {})
         prod_admin_code, _ = post(f"{prod_admin}/Admin.Status", {}, token)
         checks["production_node_healthy"] = prod_info_code == 200 and prod_admin_code == 200
         checks["production_debug_listener_absent"] = listener_absent(prod_debug)
