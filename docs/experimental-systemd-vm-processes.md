@@ -13,7 +13,7 @@ pm = "auto"
 
 [systemd]
 unit_prefix = "dstack-vm"
-state_dir = "/run/dstack-vmm/systemd-processes"
+state_dir = "/var/lib/dstack-vmm/systemd-processes"
 ```
 
 The three process-manager modes are:
@@ -25,7 +25,9 @@ The three process-manager modes are:
   lifecycle. Their next VM launch removes the stopped Supervisor record and
   migrates them to systemd.
 
-The default is `supervisor`, preserving existing deployments.
+The default is `supervisor`, preserving existing deployments. Use `auto` for
+transitions from Supervisor. Direct `systemd` mode refuses to start when it can
+verify that Supervisor still owns running VMs.
 
 ## Runtime model
 
@@ -52,7 +54,7 @@ ExitType=cgroup
 KillMode=mixed
 KillSignal=SIGTERM
 SendSIGKILL=yes
-TimeoutStopSec=infinity
+TimeoutStopSec=30min
 Restart=no
 ```
 
@@ -64,6 +66,7 @@ still completing kernel teardown.
 Process metadata is persisted in `systemd.state_dir`. It is required because a
 successful transient unit may be garbage-collected after exit, while the VMM
 still needs the original process annotation and CID during reconciliation.
+When left empty, it defaults to `~/.dstack-vmm/systemd-processes`.
 
 ## Inspecting a VM
 
@@ -83,6 +86,9 @@ atomic property handling and event-driven state updates.
 - The host must run systemd with support for `ExitType=cgroup` and
   `StandardOutput=append:`.
 - The VMM must be authorized to create and stop system services.
+- Transient services inherit the systemd manager environment rather than the
+  VMM environment. Variables in `ProcessConfig.env` are forwarded; unrelated
+  inherited variables are not.
 - Unit status is currently polled through `systemctl show`.
 - Start and stop are not yet transactional with the metadata file.
 - A host reboot removes transient units; normal VMM workdir recovery recreates

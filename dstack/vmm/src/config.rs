@@ -498,7 +498,7 @@ fn default_systemd_unit_prefix() -> String {
 }
 
 fn default_systemd_state_dir() -> PathBuf {
-    "./run/systemd-processes".into()
+    PathBuf::new()
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -679,6 +679,7 @@ impl Config {
     pub fn abs_path(mut self) -> Result<Self> {
         self.image.path = self.image.path.absolutize()?.to_path_buf();
         self.run_path = self.run_path.absolutize()?.to_path_buf();
+        self.systemd.state_dir = self.systemd.state_dir.absolutize()?.to_path_buf();
         Ok(self)
     }
 
@@ -719,11 +720,13 @@ impl Config {
         }
 
         validate_networking(&self.cvm.networking)?;
-        anyhow::ensure!(
-            !self.supervisor.sock.trim().is_empty(),
-            "supervisor.sock must not be empty"
-        );
-        if self.supervisor.auto_start {
+        if self.cvm.pm != ProcessManagerBackend::Systemd {
+            anyhow::ensure!(
+                !self.supervisor.sock.trim().is_empty(),
+                "supervisor.sock must not be empty unless cvm.pm = \"systemd\""
+            );
+        }
+        if self.cvm.pm == ProcessManagerBackend::Supervisor && self.supervisor.auto_start {
             for (name, value) in [
                 ("supervisor.exe", self.supervisor.exe.as_str()),
                 ("supervisor.pid_file", self.supervisor.pid_file.as_str()),
@@ -941,6 +944,9 @@ impl Config {
             if me.run_path == PathBuf::default() {
                 me.run_path = app_home.join("vm");
             }
+            if me.systemd.state_dir == PathBuf::default() {
+                me.systemd.state_dir = app_home.join("systemd-processes");
+            }
             if me.cvm.qemu_path == PathBuf::default() {
                 // Prefer the path from dstack client config if present
                 if let Some(qemu_path) = read_qemu_path_from_client_conf() {
@@ -1128,6 +1134,16 @@ mod tests {
     #[test]
     fn config_validation_accepts_defaults() {
         default_config().validate().unwrap();
+    }
+
+    #[test]
+    fn process_manager_modes_parse() {
+        let parse = |mode: &str| {
+            serde_json::from_str::<ProcessManagerBackend>(&format!("\"{mode}\"")).unwrap()
+        };
+        assert_eq!(parse("supervisor"), ProcessManagerBackend::Supervisor);
+        assert_eq!(parse("systemd"), ProcessManagerBackend::Systemd);
+        assert_eq!(parse("auto"), ProcessManagerBackend::Auto);
     }
 
     #[test]

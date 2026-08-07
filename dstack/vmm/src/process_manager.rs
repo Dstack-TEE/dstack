@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::path::PathBuf;
-use std::process::Stdio;
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -13,6 +12,7 @@ use supervisor_client::supervisor::{ProcessConfig, ProcessInfo, ProcessState, Pr
 use supervisor_client::SupervisorClient;
 use tokio::process::Command;
 use tokio::sync::RwLock;
+use tracing::warn;
 
 #[derive(Clone)]
 pub enum ProcessManager {
@@ -37,12 +37,10 @@ impl ProcessManager {
         let Self::Systemd(systemd) = systemd else {
             bail!("auto process manager requires a systemd backend");
         };
-        let mut supervisor_processes = HashSet::new();
+        let mut supervisor_processes = HashMap::new();
         if let Some(client) = &supervisor {
             for process in client.list().await? {
-                if process.state.status.is_running() {
-                    supervisor_processes.insert(process.config.id);
-                }
+                supervisor_processes.insert(process.config.id.clone(), process);
             }
         }
         Ok(Self::Auto(Arc::new(AutoProcessManager {
@@ -98,12 +96,12 @@ pub struct AutoProcessManager {
     supervisor: Option<SupervisorClient>,
     /// VM processes found running in Supervisor when the VMM started. They
     /// stay pinned to Supervisor until their next deploy.
-    supervisor_processes: RwLock<HashSet<String>>,
+    supervisor_processes: RwLock<HashMap<String, ProcessInfo>>,
 }
 
 impl AutoProcessManager {
     async fn is_supervisor_process(&self, id: &str) -> bool {
-        self.supervisor_processes.read().await.contains(id)
+        self.supervisor_processes.read().await.contains_key(id)
     }
 
     fn supervisor(&self) -> Result<&SupervisorClient> {
@@ -113,6 +111,8 @@ impl AutoProcessManager {
     }
 
     async fn deploy(&self, config: &ProcessConfig) -> Result<()> {
+        // VMM start operations are serialized by the caller. If that changes,
+        // migration should gain a per-ID lock spanning this handoff.
         if self.is_supervisor_process(&config.id).await {
             let supervisor = self.supervisor()?;
             if supervisor
@@ -151,18 +151,25 @@ impl AutoProcessManager {
 
     async fn list(&self) -> Result<Vec<ProcessInfo>> {
         let mut processes = self.systemd.list().await?;
-        let ids = self
-            .supervisor_processes
-            .read()
-            .await
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
-        if !ids.is_empty() {
+        let pinned = self.supervisor_processes.read().await.clone();
+        if !pinned.is_empty() {
             let supervisor = self.supervisor()?;
-            for id in ids {
-                if let Some(process) = supervisor.info(&id).await? {
-                    processes.push(process);
+            match supervisor.list().await {
+                Ok(legacy) => {
+                    let legacy = legacy
+                        .into_iter()
+                        .filter(|process| pinned.contains_key(&process.config.id))
+                        .collect::<Vec<_>>();
+                    let mut cache = self.supervisor_processes.write().await;
+                    for process in &legacy {
+                        cache.insert(process.config.id.clone(), process.clone());
+                    }
+                    drop(cache);
+                    processes.extend(legacy);
+                }
+                Err(error) => {
+                    warn!(%error, "legacy supervisor is unavailable; using cached pinned VM state");
+                    processes.extend(pinned.into_values());
                 }
             }
         }
@@ -171,7 +178,21 @@ impl AutoProcessManager {
 
     async fn info(&self, id: &str) -> Result<Option<ProcessInfo>> {
         if self.is_supervisor_process(id).await {
-            self.supervisor()?.info(id).await
+            match self.supervisor()?.info(id).await {
+                Ok(info) => {
+                    if let Some(process) = &info {
+                        self.supervisor_processes
+                            .write()
+                            .await
+                            .insert(id.to_string(), process.clone());
+                    }
+                    Ok(info)
+                }
+                Err(error) => {
+                    warn!(%id, %error, "legacy supervisor is unavailable; using cached pinned VM state");
+                    Ok(self.supervisor_processes.read().await.get(id).cloned())
+                }
+            }
         } else {
             self.systemd.info(id).await
         }
@@ -182,6 +203,39 @@ impl AutoProcessManager {
 struct ProcessRecord {
     config: ProcessConfig,
     started: bool,
+}
+
+fn state_from_systemd_properties(properties: &str, started: bool) -> (ProcessStatus, Option<u32>) {
+    let value = |name: &str| {
+        properties
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{name}=")))
+            .unwrap_or_default()
+    };
+    let load_state = value("LoadState");
+    let active_state = value("ActiveState");
+    let sub_state = value("SubState");
+    let running = matches!(active_state, "active" | "activating" | "deactivating");
+    let status = if running {
+        ProcessStatus::Running
+    } else if !started {
+        ProcessStatus::Stopped
+    } else if load_state == "not-found" || matches!(active_state, "inactive" | "failed") {
+        let status = value("ExecMainStatus").parse::<i32>().unwrap_or_default();
+        ProcessStatus::Exited(if value("ExecMainCode") == "exited" {
+            status << 8
+        } else {
+            status
+        })
+    } else {
+        ProcessStatus::Error(format!(
+            "systemd unit is {active_state}/{sub_state} (code={}, status={})",
+            value("ExecMainCode"),
+            value("ExecMainStatus")
+        ))
+    };
+    let pid = value("MainPID").parse().ok().filter(|pid| *pid != 0);
+    (status, pid)
 }
 
 pub struct SystemdProcessManager {
@@ -249,6 +303,11 @@ impl SystemdProcessManager {
 
     async fn launch(&self, config: &ProcessConfig) -> Result<()> {
         let unit = self.unit(&config.id);
+        // Failed transient units remain loaded until reset and otherwise
+        // prevent automatic restart from reusing the unit name.
+        let mut reset = Command::new("systemctl");
+        reset.arg("reset-failed").arg(&unit);
+        let _ = reset.output().await;
         let mut command = Command::new("systemd-run");
         command
             .arg("--quiet")
@@ -258,7 +317,7 @@ impl SystemdProcessManager {
             .arg("--property=KillMode=mixed")
             .arg("--property=KillSignal=SIGTERM")
             .arg("--property=SendSIGKILL=yes")
-            .arg("--property=TimeoutStopSec=infinity")
+            .arg("--property=TimeoutStopSec=30min")
             .arg("--property=ExitType=cgroup")
             .arg("--property=Restart=no")
             .arg(format!("--description=dstack VM process {}", config.id));
@@ -309,11 +368,7 @@ impl SystemdProcessManager {
             started: true,
         };
         self.write_record(&record)?;
-        if let Err(error) = self.launch(config).await {
-            let _ = fs_err::remove_file(self.record_path(&config.id));
-            return Err(error);
-        }
-        Ok(())
+        self.launch(config).await
     }
 
     async fn stop(&self, id: &str) -> Result<()> {
@@ -339,11 +394,11 @@ impl SystemdProcessManager {
             .await?
             .is_some_and(|info| info.state.status.is_running())
         {
-            bail!("Process is running");
+            bail!("process is running");
         }
         let record = self.read_record(id)?;
         if record.started {
-            bail!("Process is started");
+            bail!("process is started");
         }
         let mut command = Command::new("systemctl");
         command.arg("reset-failed").arg(self.unit(id));
@@ -358,62 +413,57 @@ impl SystemdProcessManager {
             if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
                 continue;
             }
-            let raw = fs_err::read(entry.path())?;
-            let record: ProcessRecord = serde_json::from_slice(&raw)?;
-            if let Some(info) = self.info_from_record(record).await? {
-                processes.push(info);
+            let path = entry.path();
+            let record = fs_err::read(&path)
+                .context("failed to read process record")
+                .and_then(|raw| serde_json::from_slice::<ProcessRecord>(&raw).map_err(Into::into));
+            let record = match record {
+                Ok(record) => record,
+                Err(error) => {
+                    warn!(path = %path.display(), %error, "skipping invalid process record");
+                    continue;
+                }
+            };
+            match self.info_from_record(record).await {
+                Ok(info) => processes.push(info),
+                Err(error) => {
+                    warn!(path = %path.display(), %error, "skipping unavailable systemd process")
+                }
             }
         }
         Ok(processes)
     }
 
     async fn info(&self, id: &str) -> Result<Option<ProcessInfo>> {
-        let path = self.record_path(id);
-        if !path.exists() {
-            return Ok(None);
+        match self.read_record(id) {
+            Ok(record) => self.info_from_record(record).await.map(Some),
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error),
         }
-        self.info_from_record(self.read_record(id)?).await
     }
 
-    async fn info_from_record(&self, record: ProcessRecord) -> Result<Option<ProcessInfo>> {
+    async fn info_from_record(&self, record: ProcessRecord) -> Result<ProcessInfo> {
         let unit = self.unit(&record.config.id);
         let mut command = Command::new("systemctl");
         command
             .arg("show")
             .arg(&unit)
-            .arg("--property=LoadState,ActiveState,SubState,MainPID,ExecMainCode,ExecMainStatus")
-            .stdout(Stdio::piped());
-        let output = Self::command(command, "systemctl show").await?;
+            .arg("--property=LoadState,ActiveState,SubState,MainPID,ExecMainCode,ExecMainStatus");
+        // `systemctl show` returns non-zero for a collected transient unit but
+        // still emits LoadState=not-found, which is a valid stopped state.
+        let output = command
+            .output()
+            .await
+            .context("failed to execute systemctl show")?;
         let properties = String::from_utf8_lossy(&output.stdout);
-        let value = |name: &str| {
-            properties
-                .lines()
-                .find_map(|line| line.strip_prefix(&format!("{name}=")))
-                .unwrap_or_default()
-        };
-        let load_state = value("LoadState");
-        let active_state = value("ActiveState");
-        let sub_state = value("SubState");
-        let running = matches!(active_state, "active" | "activating" | "deactivating")
-            || matches!(
-                sub_state,
-                "running" | "start" | "stop-sigterm" | "stop-sigkill"
-            );
-        let status = if running {
-            ProcessStatus::Running
-        } else if !record.started {
-            ProcessStatus::Stopped
-        } else if load_state == "not-found" || active_state == "inactive" {
-            ProcessStatus::Exited(value("ExecMainStatus").parse().unwrap_or_default())
-        } else {
-            ProcessStatus::Error(format!(
-                "systemd unit is {active_state}/{sub_state} (code={}, status={})",
-                value("ExecMainCode"),
-                value("ExecMainStatus")
-            ))
-        };
-        let pid = value("MainPID").parse().ok().filter(|pid| *pid != 0);
-        Ok(Some(ProcessInfo {
+        let (status, pid) = state_from_systemd_properties(&properties, record.started);
+        Ok(ProcessInfo {
             config: record.config,
             state: ProcessState {
                 status,
@@ -422,7 +472,7 @@ impl SystemdProcessManager {
                 started_at: None,
                 stopped_at: None,
             },
-        }))
+        })
     }
 }
 
@@ -438,5 +488,36 @@ mod tests {
         assert_eq!(manager.unit("vm/one"), manager.unit("vm/one"));
         assert_ne!(manager.unit("vm/one"), manager.unit("vm-two"));
         assert!(!manager.unit("vm/one").contains("vm/one"));
+    }
+
+    #[test]
+    fn maps_systemd_states_to_process_status() {
+        let state = |properties, started| state_from_systemd_properties(properties, started).0;
+        assert!(matches!(
+            state("ActiveState=active\nSubState=running\nMainPID=42", true),
+            ProcessStatus::Running
+        ));
+        assert!(matches!(
+            state("ActiveState=deactivating\nSubState=stop-sigterm", false),
+            ProcessStatus::Running
+        ));
+        assert!(matches!(
+            state("LoadState=not-found\nActiveState=inactive", false),
+            ProcessStatus::Stopped
+        ));
+        assert!(matches!(
+            state(
+                "LoadState=loaded\nActiveState=failed\nExecMainCode=exited\nExecMainStatus=3",
+                true
+            ),
+            ProcessStatus::Exited(768)
+        ));
+        assert!(matches!(
+            state(
+                "LoadState=loaded\nActiveState=failed\nExecMainCode=killed\nExecMainStatus=9",
+                true
+            ),
+            ProcessStatus::Exited(9)
+        ));
     }
 }

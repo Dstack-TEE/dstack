@@ -710,7 +710,7 @@ impl VmmRpc for RpcHandler {
             };
             let is_running = self
                 .app
-                .supervisor
+                .process_manager
                 .info(&request.id)
                 .await?
                 .is_some_and(|info| info.state.status.is_running());
@@ -884,7 +884,7 @@ impl VmmRpc for RpcHandler {
 
     async fn sv_list(self) -> Result<SvListResponse> {
         use supervisor_client::supervisor::ProcessStatus;
-        let list = self.app.supervisor.list().await?;
+        let list = self.app.process_manager.list().await?;
         let processes = list
             .into_iter()
             .map(|p| {
@@ -913,7 +913,7 @@ impl VmmRpc for RpcHandler {
         // same helper preserves generic Supervisor stop semantics for every
         // other process type.
         self.app
-            .supervisor
+            .process_manager
             .info(&request.id)
             .await?
             .context("Supervisor process not found")?;
@@ -921,7 +921,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn sv_remove(self, request: Id) -> Result<()> {
-        self.app.supervisor.remove(&request.id).await?;
+        self.app.process_manager.remove(&request.id).await?;
         Ok(())
     }
 

@@ -291,7 +291,7 @@ pub(crate) enum PullStatus {
 #[derive(Clone)]
 pub struct App {
     pub config: Arc<Config>,
-    pub supervisor: ProcessManager,
+    pub process_manager: ProcessManager,
     state: Arc<Mutex<AppState>>,
     /// Pull status for registry images: tag → status.
     pub(crate) pull_status: Arc<Mutex<std::collections::HashMap<String, PullStatus>>>,
@@ -311,12 +311,12 @@ impl App {
         Ok(VmWorkDir::new(self.config.run_path.join(id)))
     }
 
-    pub fn new(config: Config, supervisor: ProcessManager) -> Self {
+    pub fn new(config: Config, process_manager: ProcessManager) -> Self {
         let cid_start = config.cvm.cid_start;
         let cid_end = cid_start.saturating_add(config.cvm.cid_pool_size);
         let cid_pool = IdPool::new(cid_start, cid_end);
         Self {
-            supervisor: supervisor.clone(),
+            process_manager,
             state: Arc::new(Mutex::new(AppState {
                 cid_pool,
                 vms: HashMap::new(),
@@ -413,7 +413,7 @@ impl App {
         }
         self.sync_dynamic_config(id)?;
         let is_running = self
-            .supervisor
+            .process_manager
             .info(id)
             .await?
             .is_some_and(|info| info.state.status.is_running());
@@ -464,7 +464,7 @@ impl App {
                 vm_state.state.runtime_networks = runtime_networks.clone();
             }
             for process in processes {
-                if let Err(err) = self.supervisor.deploy(&process).await {
+                if let Err(err) = self.process_manager.deploy(&process).await {
                     if let Err(cleanup_error) = self
                         .remove_filtered_networks(&vm_config.manifest.id, &runtime_networks)
                         .await
@@ -611,37 +611,37 @@ impl App {
     }
 
     pub(crate) async fn stop_vm_process(&self, id: &str) -> Result<()> {
-        let Some(info) = self.supervisor.info(id).await? else {
+        let Some(info) = self.process_manager.info(id).await? else {
             return Ok(());
         };
         // Non-TPM VMs run QEMU directly and keep the existing Supervisor stop
         // path. Only the TPM launcher's hidden subcommand implements graceful
         // child-process shutdown.
         if info.config.args.first().map(String::as_str) != Some("vm-launcher") {
-            return self.supervisor.stop(id).await;
+            return self.process_manager.stop(id).await;
         }
         if info.state.status.is_running() {
             let pid = info.state.pid.context("running VM launcher has no PID")?;
             if let Err(error) = signal_pidfd(pid, libc::SIGTERM) {
                 warn!(id, %pid, %error, "failed to signal VM launcher gracefully; forcing shutdown");
-                return self.supervisor.stop(id).await;
+                return self.process_manager.stop(id).await;
             }
             for _ in 0..150 {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 let running = self
-                    .supervisor
+                    .process_manager
                     .info(id)
                     .await?
                     .is_some_and(|info| info.state.status.is_running());
                 if !running {
                     // Synchronize Supervisor's `started` flag after the launcher
                     // completed its graceful child cleanup.
-                    return self.supervisor.stop(id).await;
+                    return self.process_manager.stop(id).await;
                 }
             }
             warn!(id, "VM launcher did not stop gracefully; forcing shutdown");
         }
-        self.supervisor.stop(id).await
+        self.process_manager.stop(id).await
     }
 
     pub async fn remove_vm(&self, id: &str) -> Result<()> {
@@ -687,7 +687,7 @@ impl App {
         // Some VMs take a long time to stop (e.g. 2+ hours), so we wait indefinitely.
         let mut poll_count: u64 = 0;
         loop {
-            match self.supervisor.info(id).await {
+            match self.process_manager.info(id).await {
                 Ok(Some(info)) if info.state.status.is_running() => {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     poll_count += 1;
@@ -700,7 +700,7 @@ impl App {
                 }
                 Ok(Some(_)) => {
                     // Not running — remove from supervisor
-                    if let Err(err) = self.supervisor.remove(id).await {
+                    if let Err(err) = self.process_manager.remove(id).await {
                         warn!("supervisor.remove({id}) failed: {err:?}");
                     }
                     break;
@@ -778,7 +778,11 @@ impl App {
 
     pub async fn reload_vms(&self) -> Result<()> {
         let vm_path = self.vm_dir();
-        let running_vms = self.supervisor.list().await.context("Failed to list VMs")?;
+        let running_vms = self
+            .process_manager
+            .list()
+            .await
+            .context("Failed to list VMs")?;
         let running_vms: Vec<(ProcessAnnotation, _)> = running_vms
             .into_iter()
             .map(|p| (serde_json::from_str(&p.config.note).unwrap_or_default(), p))
@@ -852,7 +856,11 @@ impl App {
         let mut removed = 0u32;
 
         // Get running VMs to preserve CIDs and process info
-        let running_vms = self.supervisor.list().await.context("Failed to list VMs")?;
+        let running_vms = self
+            .process_manager
+            .list()
+            .await
+            .context("Failed to list VMs")?;
         let running_vms_map: HashMap<String, _> = running_vms
             .into_iter()
             .map(|p| (p.config.id.clone(), p))
@@ -1065,7 +1073,7 @@ impl App {
 
     pub async fn list_vms(&self, request: StatusRequest) -> Result<StatusResponse> {
         let vms = self
-            .supervisor
+            .process_manager
             .list()
             .await
             .context("Failed to list VMs")?
@@ -1126,7 +1134,7 @@ impl App {
     }
 
     pub async fn vm_info(&self, id: &str) -> Result<Option<pb::VmInfo>> {
-        let proc_state = self.supervisor.info(id).await?;
+        let proc_state = self.process_manager.info(id).await?;
         let state = self.lock();
         let Some(vm_state) = state.get(id) else {
             return Ok(None);
@@ -1309,7 +1317,7 @@ impl App {
         }
         let max_backups = self.config.cvm.log.max_backups;
         let running = self
-            .supervisor
+            .process_manager
             .list()
             .await
             .context("failed to list VMs")?
@@ -1338,7 +1346,7 @@ impl App {
 
     pub(crate) async fn try_restart_exited_vms(&self) -> Result<()> {
         let running_vms = self
-            .supervisor
+            .process_manager
             .list()
             .await
             .context("Failed to list VMs")?
@@ -1452,9 +1460,8 @@ fn append_boot_separator(path: &std::path::Path) {
 
 /// Logs a CVM writes into its work directory, subject to retention.
 ///
-/// stdout and stderr are written by the supervisor, which always opens them
-/// with `append(true)` and reopens them when they change, so they satisfy
-/// [`crate::logrotate`]'s contract no matter which VMM launched the VM.
+/// stdout and stderr are opened in append mode by every process-manager
+/// backend, so in-place truncation satisfies [`crate::logrotate`]'s contract.
 /// serial.log is written by QEMU, whose fd only appends when *we* passed
 /// `logappend=on`, so it is included only when `serial` says so.
 fn rotatable_logs(work_dir: &VmWorkDir, serial: bool) -> Vec<PathBuf> {

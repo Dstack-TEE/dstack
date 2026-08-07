@@ -196,7 +196,7 @@ auto_start = true
 # <unit_prefix>-<sha256(vm-id)>.service.
 unit_prefix = "dstack-vm"
 # Process metadata used to reconcile transient services after a VMM restart.
-state_dir = "./run/systemd-processes"
+state_dir = ""
 
 [host_api]
 ident = "dstack VMM"
