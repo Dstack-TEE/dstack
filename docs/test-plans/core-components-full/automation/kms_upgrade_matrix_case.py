@@ -1712,7 +1712,7 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
 
         malformed_code, malformed_raw = http(
             f"https://127.0.0.1:{gateway['service_port']}"
-            "/prpc/Gateway.RegisterCvm?json",
+            "/prpc/Tproxy.RegisterCvm?json",
             b"{}",
         )
         if 0 < malformed_code < 400:
@@ -2136,7 +2136,7 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             if repeat_trust.get(field) != trust[field]:
                 raise RuntimeError(f"repeated trust observation changed {field}")
         malformed_code, _ = http(
-            f"https://127.0.0.1:{gateway['service_port']}/prpc/Gateway.RegisterCvm?json",
+            f"https://127.0.0.1:{gateway['service_port']}/prpc/Tproxy.RegisterCvm?json",
             b"{}",
         )
         if 0 < malformed_code < 400:
@@ -2548,7 +2548,7 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             raise RuntimeError("unlisted port bypassed the app port policy")
         malformed_code, _ = http(
             f"https://127.0.0.1:{gateway['service_port']}"
-            "/prpc/Gateway.RegisterCvm?json",
+            "/prpc/Tproxy.RegisterCvm?json",
             b"{}",
         )
         if 0 < malformed_code < 400:
@@ -3052,7 +3052,7 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
 
         invalid_rows = []
         for gateway in (old_gateway, candidate_gateway):
-            code, raw = http(f"{gateway['url']}/prpc/Gateway.RegisterCvm?json", b"{}")
+            code, raw = http(f"{gateway['url']}/prpc/Tproxy.RegisterCvm?json", b"{}")
             if 0 < code < 400:
                 raise RuntimeError(
                     f"{gateway['version']} accepted invalid registration"
