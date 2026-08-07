@@ -15,8 +15,9 @@ test "$A" = "$(stable_hash "$ROOT/b.json")"
 if "$UTIL" get-keys --kms-url "$URL" --root-ca "$ROOT/kms.crt" --app-id 31 -o "$ROOT/bad-app.json" 2>"$ROOT/bad-app.err"; then BAD_APP_RC=0; else BAD_APP_RC=$?; fi
 printf 'not-a-certificate\n' >"$ROOT/wrong.crt"; if "$UTIL" get-keys --kms-url "$URL" --root-ca "$ROOT/wrong.crt" -o "$ROOT/wrong.json" 2>"$ROOT/wrong.err"; then WRONG_CA_RC=0; else WRONG_CA_RC=$?; fi
 if timeout 8 "$UTIL" get-keys --kms-url https://10.0.2.2:1 --root-ca "$ROOT/kms.crt" -o "$ROOT/unreachable.json" 2>"$ROOT/unreachable.err"; then UNREACHABLE_RC=0; else UNREACHABLE_RC=$?; fi
-if run "$APP_A" "$ROOT/missing/out.json" 2>"$ROOT/output.err"; then OUTPUT_RC=0; else OUTPUT_RC=$?; fi
-test "$BAD_APP_RC" -ne 0 -a "$WRONG_CA_RC" -ne 0 -a "$UNREACHABLE_RC" -ne 0 -a "$OUTPUT_RC" -ne 0; test ! -e "$ROOT/bad-app.json" -a ! -e "$ROOT/wrong.json" -a ! -e "$ROOT/unreachable.json" -a ! -e "$ROOT/missing/out.json"
+printf 'not-a-directory\n' >"$ROOT/output-parent"
+if run "$APP_A" "$ROOT/output-parent/out.json" 2>"$ROOT/output.err"; then OUTPUT_RC=0; else OUTPUT_RC=$?; fi
+test "$BAD_APP_RC" -ne 0 -a "$WRONG_CA_RC" -ne 0 -a "$UNREACHABLE_RC" -ne 0 -a "$OUTPUT_RC" -ne 0; test ! -e "$ROOT/bad-app.json" -a ! -e "$ROOT/wrong.json" -a ! -e "$ROOT/unreachable.json" -a ! -e "$ROOT/output-parent/out.json"
 run "$APP_A" "$ROOT/retry.json" 2>"$ROOT/retry.err"; test "$A" = "$(stable_hash "$ROOT/retry.json")"
 python3 - <<PY
 import json
