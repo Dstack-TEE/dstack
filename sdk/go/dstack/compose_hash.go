@@ -22,7 +22,45 @@ const (
 	KeyProviderNone  KeyProviderKind = "none"
 	KeyProviderKMS   KeyProviderKind = "kms"
 	KeyProviderLocal KeyProviderKind = "local"
+	KeyProviderTPM   KeyProviderKind = "tpm"
 )
+
+// EventLogVersion selects the event log digest format. It is serialized as a
+// number, matching dstack-types EventLogVersion.
+type EventLogVersion int
+
+const (
+	// EventLogVersionV1 is the legacy binary digest and the implicit default.
+	EventLogVersionV1 EventLogVersion = 1
+	// EventLogVersionV2 is the JCS canonical JSON digest.
+	EventLogVersionV2 EventLogVersion = 2
+)
+
+// PortAttrs holds the gateway policy for a single port.
+type PortAttrs struct {
+	Port uint16 `json:"port"`
+	// PP asks the gateway to send a PROXY protocol header on outbound
+	// connections to this port.
+	PP bool `json:"pp"`
+}
+
+// PortPolicy is the per-port policy consumed by the gateway.
+type PortPolicy struct {
+	Ports []PortAttrs `json:"ports"`
+	// RestrictMode makes the gateway forward only to ports listed in Ports and
+	// reject everything else at TCP-accept time.
+	RestrictMode bool `json:"restrict_mode"`
+}
+
+// VerityVolume is a pre-baked, read-only dm-verity volume attached to the CVM.
+type VerityVolume struct {
+	// Source is a bare image file name resolved by the VMM under its volumes dir.
+	Source string `json:"source"`
+	// VerityRoot is the hex dm-verity root hash: the volume's content identity.
+	VerityRoot string `json:"verity_root"`
+	// Target is the absolute mount path inside the guest.
+	Target string `json:"target"`
+}
 
 // DockerConfig represents Docker configuration
 type DockerConfig struct {
@@ -71,8 +109,25 @@ type AppCompose struct {
 	NoInstanceID            *bool           `json:"no_instance_id,omitempty"`
 	SecureTime              *bool           `json:"secure_time,omitempty"`
 	Requirements            *Requirements   `json:"requirements,omitempty"`
-	BashScript              string          `json:"bash_script,omitempty"`       // Legacy
-	PreLaunchScript         string          `json:"pre_launch_script,omitempty"` // Legacy
+	// InitScript holds bash scripts run before the application runner starts.
+	InitScript []string `json:"init_script,omitempty"`
+	// StorageFS selects the guest data filesystem ("ext4" or "zfs").
+	StorageFS string `json:"storage_fs,omitempty"`
+	// SwapSize is a human-readable size such as "2G". dstack-types serializes
+	// this field as a string in JSON, not as a byte count.
+	SwapSize string `json:"swap_size,omitempty"`
+	// EventLogVersion selects the event log digest format. Leave it unset for
+	// v1, which dstack-types omits from the document.
+	EventLogVersion EventLogVersion `json:"event_log_version,omitempty"`
+	// PortPolicy is optional here even though dstack-types always serializes
+	// it: emitting an empty policy for an app that does not use one would
+	// change that app's compose hash.
+	PortPolicy *PortPolicy `json:"port_policy,omitempty"`
+	// VerityVolumes are measured as part of these compose bytes, so the guest
+	// only mounts content matching the attested app.
+	VerityVolumes   []VerityVolume `json:"verity_volumes,omitempty"`
+	BashScript      string         `json:"bash_script,omitempty"`       // Legacy
+	PreLaunchScript string         `json:"pre_launch_script,omitempty"` // Legacy
 
 	// Extra carries app_compose keys this SDK version does not declare.
 	//
