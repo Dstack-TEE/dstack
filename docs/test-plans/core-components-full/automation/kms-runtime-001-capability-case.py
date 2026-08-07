@@ -71,6 +71,8 @@ class RpcHandler(http.server.BaseHTTPRequestHandler):
             method = request.get("method")
             if method == "eth_chainId":
                 result = "0x7a69"
+            elif method == "eth_blockNumber":
+                result = "0x100"
             elif method == "eth_call":
                 data = request.get("params", [{}])[0].get("data", "")[:10]
                 if data == GATEWAY_SELECTOR:
