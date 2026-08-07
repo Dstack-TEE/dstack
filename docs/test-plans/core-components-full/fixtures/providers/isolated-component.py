@@ -188,10 +188,14 @@ def write_gateway_config(
         ),
         '[core.admin]\nenabled = false\naddress = "127.0.0.1:8011"': f'[core.admin]\nenabled = true\naddress = "127.0.0.1:{ports["admin"]}"',
         'auth_token = ""': f'auth_token = "{admin_token}"',
-        "[core.debug]\ninsecure_enable_debug_rpc = false\ninsecure_skip_attestation = false": (
-            "[core.debug]\ninsecure_enable_debug_rpc = true\ninsecure_skip_attestation = true"
-            if enable_debug
-            else "[core.debug]\ninsecure_enable_debug_rpc = false\ninsecure_skip_attestation = false"
+        "insecure_enable_debug_rpc = false": (
+            f"insecure_enable_debug_rpc = {str(enable_debug).lower()}"
+        ),
+        "insecure_localhost_backend = false": (
+            f"insecure_localhost_backend = {str(enable_debug).lower()}"
+        ),
+        "insecure_skip_attestation = false": (
+            f"insecure_skip_attestation = {str(enable_debug).lower()}"
         ),
         'address = "127.0.0.1:8012"': f'address = "127.0.0.1:{ports["debug"]}"',
         'listen_addr = "0.0.0.0"': 'listen_addr = "127.0.0.1"',
