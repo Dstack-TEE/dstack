@@ -932,6 +932,7 @@ class MatrixRun:
                     "name": "upgrade-matrix-cloudflare",
                     "provider_type": "cloudflare",
                     "cf_api_token": "case-owned",
+                    "cf_zone_id": "case-owned-zone",
                     "cf_api_url": "http://127.0.0.1:8080/client/v4",
                     "set_as_default": True,
                     "dns_txt_ttl": 1,
