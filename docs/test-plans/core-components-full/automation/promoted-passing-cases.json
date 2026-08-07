@@ -2417,7 +2417,7 @@
       "source_status": "PASS",
       "entrypoint": "automation/gateway-cert-store-case.py",
       "promoted_at": "2026-07-29T00:00:00Z",
-      "notes": "candidate cert-store suite exercises exact-over-wildcard SNI precedence, one-label wildcard boundaries, corrupt/expired/mismatched update rejection, prior-certificate retention, and concurrent atomic reload",
+      "notes": "candidate cert-store suite exercises empty and populated stores, one-label wildcard boundaries, mismatched and expired update rejection with prior-certificate retention, and unrelated-domain renewal with an expired stored entry",
       "environment": "INTEGRATION"
     },
     {
