@@ -25,7 +25,7 @@ on:
   # would be silently dropped. The static job costs seconds and the image build
   # is gated by its own `if`, so an unfiltered push trigger is cheap.
   push:
-    branches: [master]
+    branches: [master, next]
     tags: ['mkosi-os-v*']
 
 concurrency:
