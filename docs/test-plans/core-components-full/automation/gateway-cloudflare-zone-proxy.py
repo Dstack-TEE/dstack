@@ -28,6 +28,23 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def normalize_upstream(self, path: str, body: bytes) -> bytes:
+        """Add pagination required by the current client to legacy list replies."""
+        if self.command != "GET" or not path.endswith("/dns_records"):
+            return body
+        value = json.loads(body)
+        if not isinstance(value.get("result"), list) or "result_info" in value:
+            return body
+        count = len(value["result"])
+        value["result_info"] = {
+            "page": 1,
+            "per_page": 50,
+            "total_pages": 1,
+            "count": count,
+            "total_count": count,
+        }
+        return json.dumps(value, separators=(",", ":")).encode()
+
     def dispatch(self) -> None:
         """Handle zone discovery locally and proxy all record operations."""
         parsed = urllib.parse.urlsplit(self.path)
@@ -62,9 +79,10 @@ class Handler(BaseHTTPRequestHandler):
                 request.add_header(header, value)
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
+                body = self.normalize_upstream(parsed.path, response.read())
                 self.send_body(
                     response.status,
-                    response.read(),
+                    body,
                     response.headers.get_content_type(),
                 )
         except urllib.error.HTTPError as error:
