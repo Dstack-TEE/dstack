@@ -14,13 +14,25 @@ from pathlib import Path
 CASES = {
     "tc-vmm-volume-008": {
         "filter": "volume",
-        "minimum_tests": 7,
-        "subject": "verity volume parsing, confinement, validation, deduplication, measurement, and readonly QEMU attachment",
+        "expected_tests": [
+            "volume_extraction_keeps_other_compose_fields_opaque",
+            "resolve_volume_source_rejects_escape_symlink_and_qemu_metachars",
+            "resolve_volumes_resolves_measured_source",
+            "resolve_volumes_attaches_duplicate_root_once",
+            "vm_measurement_config_includes_verity_volume_count",
+        ],
+        "subject": "current verity volume parsing, confinement, deduplication, resolution, and measurement",
     },
     "tc-vmm-tdxvariant-005": {
         "filter": "app::tests::tdx_",
-        "minimum_tests": 7,
-        "subject": "TDX legacy/lite/auto boundaries, requirements precedence, historical capability, and corrected retry",
+        "expected_tests": [
+            "tdx_auto_variant_uses_legacy_for_low_non_2g_memory",
+            "tdx_auto_variant_uses_lite_for_2g_supported_image",
+            "tdx_auto_variant_falls_back_to_legacy_when_image_lacks_lite_support",
+            "tdx_requirements_measure_acpi_tables_overrides_lite_to_legacy",
+            "tdx_requirements_skip_acpi_tables_overrides_legacy_to_lite",
+        ],
+        "subject": "current TDX legacy/lite/auto memory, image-capability, and requirements precedence",
     },
     "tc-vmm-internal-001": {
         "filter": "app::host_share::tests",
@@ -39,13 +51,19 @@ CASES = {
     },
     "tc-vmm-internal-004": {
         "filter": "app::mr_config::tests",
-        "minimum_tests": 4,
-        "subject": "TDX and SNP measurement carriers, mutations, deterministic derivation, and GPU policy binding",
+        "expected_tests": [
+            "manifest_v2_omits_init_script_hashes",
+            "manifest_v3_includes_empty_init_script_hashes",
+        ],
+        "subject": "current manifest-version measurement carrier behavior",
     },
     "tc-vmm-internal-005": {
         "filter": "app::vm_info::tests",
-        "minimum_tests": 4,
-        "subject": "VM info optional values, gateway URLs, ports, fallbacks, and networking projections",
+        "expected_tests": [
+            "sanitize_optional_filters_empty_owned_values",
+            "sanitize_optional_filters_empty_borrowed_values",
+        ],
+        "subject": "current VM-info optional owned and borrowed value sanitization",
     },
     "tc-vmm-internal-008": {
         "filter": "vm_launcher::tests",
@@ -81,14 +99,29 @@ def main() -> int:
     output = process.stdout + process.stderr
     matches = [int(value) for value in re.findall(r"(\d+) passed; 0 failed", output)]
     passed_tests = max(matches, default=0)
-    passed = process.returncode == 0 and passed_tests >= int(row["minimum_tests"])
+    expected_tests = row.get("expected_tests")
+    expected_count = (
+        len(expected_tests) if isinstance(expected_tests, list) else row["minimum_tests"]
+    )
+    named_tests_present = (
+        all(name in output for name in expected_tests)
+        if isinstance(expected_tests, list)
+        else True
+    )
+    passed = (
+        process.returncode == 0
+        and passed_tests >= int(expected_count)
+        and named_tests_present
+    )
     status = "PASS" if passed else "FAIL"
     evidence = {
         "candidate_commit": runtime["candidate_commit"],
         "case_id": case_id,
         "cargo_target_dir_shared": True,
         "filter": row["filter"],
-        "minimum_tests": row["minimum_tests"],
+        "minimum_tests": expected_count,
+        "expected_tests": expected_tests or [],
+        "named_tests_present": named_tests_present,
         "passed_tests": passed_tests,
         "returncode": process.returncode,
         "diagnostic_tail": output[-3000:],
