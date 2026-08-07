@@ -19,7 +19,7 @@
 - Read `DSTACK_TEST_RUNTIME_MANIFEST` once and use its prepared binaries, shared Cargo target, fixture paths, commit, and toolchain as authoritative. Do not rediscover them from processes, old sessions, or broad source searches.
 - Runtime state and evidence remain case-scoped even though immutable build outputs are shared.
 - Prepared RPC contract: `Admin.Exit` takes `google.protobuf.Empty` (no fields) and returns `google.protobuf.Empty` (no fields). The authoritative field matrix is the matching entry in [`api-inventory.json`](../../../api-inventory.json); do not reconstruct it from implementation source.
-- Empty-input transport semantics: `prpc-build` intentionally generates a zero-argument handler for `google.protobuf.Empty` and does not decode the request body. Exercise empty and extraneous/malformed bodies as body-ignored compatibility inputs, and use an invalid pRPC route for the negative transport check; GET is an explicitly supported JSON transport and is not a negative case. Do not expect malformed body rejection from an Empty-input handler.
+- Empty-input transport semantics: exercise empty JSON/protobuf and extraneous JSON compatibility inputs. The current protobuf transport validates framing even for `google.protobuf.Empty`, so malformed protobuf must be rejected without invoking `Exit`; use an invalid pRPC route as a separate negative transport check. GET is an explicitly supported JSON transport and is not a negative case.
 - For the candidate guest-agent target, use `automation/start-simulator.sh` and the recorded service socket/route, then `automation/stop-simulator.sh`. Do not compile or design another simulator launcher.
 - Exercise the case-prescribed absent/default/valid/boundary-invalid/unknown-field and JSON/protobuf representations with a checked-in helper when available. Keep secret response material in memory and record only structural checks, public material, and hashes.
 - If a mismatch occurs, write the provisional result first. Perform narrow source-level root-cause analysis only when failure investigation is enabled.
@@ -35,7 +35,7 @@ Verify the complete request, response, authorization, state transition, and erro
 
 ## Test Data
 
-The `Admin.Exit` entry in [`api-inventory.json`](../../../api-inventory.json) is mandatory test data. `google.protobuf.Empty` has no request fields. Exercise the documented empty JSON/protobuf encodings plus extraneous and malformed body bytes, which the generated zero-argument handler intentionally ignores, and validate every response field, nested message field, and presence bit. Use an invalid pRPC route for negative transport framing; GET is supported by `ra-rpc`.
+The `Admin.Exit` entry in [`api-inventory.json`](../../../api-inventory.json) is mandatory test data. `google.protobuf.Empty` has no request fields. Exercise the documented empty JSON/protobuf encodings plus extraneous JSON and malformed protobuf bytes. Confirm extraneous JSON compatibility and protobuf framing rejection, then validate every response field, nested message field, and presence bit. Use an invalid pRPC route for a separate negative routing check; GET is supported by `ra-rpc`.
 
 Use a unique run-scoped identifier and non-production credentials.
 
@@ -53,11 +53,11 @@ Query the relevant health, configuration, and baseline state for admin.exit.
 <a id="tc-gw-admin-003-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Invoke `Admin.Exit` with a valid `google.protobuf.Empty` request using a valid admin credential on the dedicated admin listener; capture the binary and JSON pRPC representations. Then send extraneous and malformed request-body bytes to confirm Empty-input body-ignore semantics, exercise an invalid pRPC route, and, where protected, omit the credential.
+Invoke `Admin.Exit` with a valid `google.protobuf.Empty` request using a valid admin credential on the dedicated admin listener; capture the binary and JSON pRPC representations. Then send extraneous JSON and malformed protobuf request bodies to confirm the current compatibility and framing semantics, exercise an invalid pRPC route, and, where protected, omit the credential.
 
 **Expected results:**
 
-- The valid call returns `google.protobuf.Empty` with every documented field and exhibits the documented `Exit` state and side effects; extraneous or malformed bodies are ignored without changing the response or state, invalid routing returns a structured transport error, and protected calls reject missing credentials.
+- The valid call returns `google.protobuf.Empty` with every documented field and exhibits the documented `Exit` state and side effects; extraneous JSON is accepted, malformed protobuf is rejected without invoking `Exit`, invalid routing returns a structured transport error, and protected calls reject missing credentials.
 
 <a id="tc-gw-admin-003-step-03"></a>
 ### Step 3: Verify state, isolation, and diagnostics
