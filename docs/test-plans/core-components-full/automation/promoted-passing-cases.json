@@ -1961,7 +1961,7 @@
       "source_status": "PASS",
       "entrypoint": "automation/kms-key-handover-capability-case.py",
       "promoted_at": "2026-07-29T17:21:02Z",
-      "notes": "configured current plus two ordered historical root-key pairs pass startup validation and attested GetKmsKey JSON/protobuf, repeat stability, distinctness, unauthenticated/malformed rejection, and liveness rows",
+      "notes": "the current root-key pair passes startup validation and attested GetKmsKey JSON/protobuf, repeat stability, unauthenticated/malformed rejection, and liveness rows",
       "environment": "SIMULATOR_BACKED_KMS_RPC"
     },
     {
