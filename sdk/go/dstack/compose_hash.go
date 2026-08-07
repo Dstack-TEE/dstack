@@ -8,7 +8,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"sort"
+	"strings"
+	"sync"
 )
 
 // KeyProviderKind represents the key provider type
@@ -69,6 +73,100 @@ type AppCompose struct {
 	Requirements            *Requirements   `json:"requirements,omitempty"`
 	BashScript              string          `json:"bash_script,omitempty"`       // Legacy
 	PreLaunchScript         string          `json:"pre_launch_script,omitempty"` // Legacy
+
+	// Extra carries app_compose keys this SDK version does not declare.
+	//
+	// The compose hash is taken over the whole app_compose document, so a key
+	// dropped during marshalling changes the resulting app identity. The
+	// JavaScript SDK (index signature) and the Python SDK (**kwargs) both keep
+	// unknown keys; Go marshals a struct, which silently discards them. Extra
+	// closes that gap, so a compose using a field newer than this SDK still
+	// hashes to the same value as it does everywhere else.
+	//
+	// Keys are merged into the top-level object on marshal and collected from
+	// it on unmarshal. A key that is already a declared field is rejected
+	// rather than silently overriding it.
+	Extra map[string]any `json:"-"`
+}
+
+// declaredComposeFields returns the JSON names of every declared AppCompose
+// field, including those omitempty would leave out of a given document.
+var declaredComposeFields = sync.OnceValue(func() map[string]struct{} {
+	names := make(map[string]struct{})
+	t := reflect.TypeOf(AppCompose{})
+	for i := 0; i < t.NumField(); i++ {
+		tag := t.Field(i).Tag.Get("json")
+		name, _, _ := strings.Cut(tag, ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		names[name] = struct{}{}
+	}
+	return names
+})
+
+// MarshalJSON emits the declared fields and then merges Extra into the same
+// object.
+func (a AppCompose) MarshalJSON() ([]byte, error) {
+	type plain AppCompose
+	encoded, err := json.Marshal(plain(a))
+	if err != nil {
+		return nil, err
+	}
+	if len(a.Extra) == 0 {
+		return encoded, nil
+	}
+
+	var merged map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &merged); err != nil {
+		return nil, err
+	}
+
+	declared := declaredComposeFields()
+	for key, value := range a.Extra {
+		if _, isDeclared := declared[key]; isDeclared {
+			return nil, fmt.Errorf("dstack: app_compose Extra key %q collides with a declared field; set the field instead", key)
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("dstack: app_compose Extra key %q: %w", key, err)
+		}
+		merged[key] = raw
+	}
+	return json.Marshal(merged)
+}
+
+// UnmarshalJSON decodes the declared fields and collects everything else into
+// Extra, so a document can be re-hashed without losing keys.
+func (a *AppCompose) UnmarshalJSON(data []byte) error {
+	type plain AppCompose
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*a = AppCompose(decoded)
+
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return err
+	}
+
+	declared := declaredComposeFields()
+	extra := make(map[string]any)
+	for key, raw := range all {
+		if _, isDeclared := declared[key]; isDeclared {
+			continue
+		}
+		var value any
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return fmt.Errorf("dstack: app_compose field %q: %w", key, err)
+		}
+		extra[key] = value
+	}
+	if len(extra) > 0 {
+		a.Extra = extra
+	}
+	return nil
 }
 
 // preprocessAppCompose removes conflicting fields based on runner type

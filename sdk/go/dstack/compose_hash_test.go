@@ -4,7 +4,10 @@
 
 package dstack
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 // The expected hashes below are reference values produced by the JavaScript
 // SDK (sdk/js/src/get-compose-hash.ts), which CROSS_LANGUAGE_CONSISTENCY_TESTING.md
@@ -163,5 +166,94 @@ func TestGetComposeHashDistinguishesDifferentComposes(t *testing.T) {
 	}
 	if a == b {
 		t.Fatal("different composes produced the same hash")
+	}
+}
+
+// TestGetComposeHashPassesUnknownFieldsThrough covers the fields Go does not
+// declare. The JS SDK's AppCompose carries an index signature and the Python
+// SDK accepts **kwargs, so both hash unknown keys. Go marshals a struct, which
+// silently drops them — producing a hash that disagrees with every other SDK
+// for the same compose.
+func TestGetComposeHashPassesUnknownFieldsThrough(t *testing.T) {
+	tests := []struct {
+		name  string
+		extra map[string]any
+		want  string
+	}{
+		{
+			name: "port_policy",
+			extra: map[string]any{
+				"port_policy": map[string]any{
+					"ports": []any{
+						map[string]any{"port": 443, "pp": true},
+						map[string]any{"port": 8080, "pp": false},
+					},
+					"restrict_mode": true,
+				},
+			},
+			want: "6be823decce06179698ee6fd087d82951c21ba6a24ba6419a6801b0be1ce2bdc",
+		},
+		{
+			name:  "utf8 values",
+			extra: map[string]any{"text": "你好世界", "description": "🚀 Deploy"},
+			want:  "735ef5a6a9ac2405dda08948b551c9c7b529f4e4b790d6784ff5e2ee2e394f41",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compose := AppCompose{Runner: "docker-compose", Extra: tt.extra}
+			if tt.name == "port_policy" {
+				compose.DockerComposeFile = "docker-compose.yml"
+			}
+			got, err := GetComposeHash(compose, false)
+			if err != nil {
+				t.Fatalf("GetComposeHash: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("hash = %s, want %s (JS reference)", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestExtraCannotShadowDeclaredFields guards the one way Extra could corrupt a
+// hash: a key that also exists as a struct field would otherwise be emitted
+// twice, and which one wins would depend on map iteration order.
+func TestExtraCannotShadowDeclaredFields(t *testing.T) {
+	_, err := GetComposeHash(AppCompose{
+		Runner: "docker-compose",
+		Extra:  map[string]any{"runner": "bash"},
+	}, false)
+	if err == nil {
+		t.Fatal("GetComposeHash accepted an Extra key shadowing a declared field")
+	}
+}
+
+// TestAppComposeRoundTripsUnknownFields covers decoding: an app_compose read
+// from the wire must keep the fields this SDK version does not know about, or
+// re-hashing it would produce a different app identity.
+func TestAppComposeRoundTripsUnknownFields(t *testing.T) {
+	// Key order is deliberately scrambled: the hash must not depend on it.
+	raw := `{"runner":"docker-compose","docker_compose_file":"docker-compose.yml","port_policy":{"restrict_mode":true,"ports":[{"pp":true,"port":443},{"pp":false,"port":8080}]}}`
+
+	var compose AppCompose
+	if err := json.Unmarshal([]byte(raw), &compose); err != nil {
+		t.Fatalf("unmarshal app compose: %v", err)
+	}
+	if compose.Runner != "docker-compose" {
+		t.Fatalf("Runner = %q, want docker-compose", compose.Runner)
+	}
+	if _, ok := compose.Extra["port_policy"]; !ok {
+		t.Fatal("port_policy dropped during decoding")
+	}
+
+	got, err := GetComposeHash(compose, false)
+	if err != nil {
+		t.Fatalf("GetComposeHash: %v", err)
+	}
+	want := "6be823decce06179698ee6fd087d82951c21ba6a24ba6419a6801b0be1ce2bdc"
+	if got != want {
+		t.Fatalf("hash after round trip = %s, want %s", got, want)
 	}
 }
