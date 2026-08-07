@@ -88,8 +88,24 @@ if ! image_matches "$prod_image" false || ! image_matches "$dev_image" true; the
     FLAVORS="prod dev" \
     DSTACK_DEV_CACHE_DIR="$cache_root/mkosi-dev" \
     "$build_repo/os/mkosi/build.sh" image "$mkosi_root"
-  prod_source="$mkosi_root/out/prod/dstack-0.6.0"
-  dev_source="$mkosi_root/out/dev/dstack-0.6.0"
+  find_image_output() {
+    local flavor=$1 expected_dev=$2 output_root="$mkosi_root/out/$1"
+    local -a candidates=()
+    while IFS= read -r -d '' metadata; do
+      if [[ $(jq -r '.is_dev' "$metadata") == "$expected_dev" ]]; then
+        candidates+=("${metadata%/metadata.json}")
+      fi
+    done < <(find "$output_root" -mindepth 2 -maxdepth 2 -type f \
+      -name metadata.json -print0)
+    [[ ${#candidates[@]} -eq 1 ]] || {
+      printf 'expected exactly one %s mkosi image output, found %s under %s\n' \
+        "$flavor" "${#candidates[@]}" "$output_root" >&2
+      return 1
+    }
+    printf '%s\n' "${candidates[0]}"
+  }
+  prod_source=$(find_image_output prod false)
+  dev_source=$(find_image_output dev true)
   for row in "$prod_source:$prod_image:false" "$dev_source:$dev_image:true"; do
     IFS=: read -r source name expected_dev <<<"$row"
     [[ -e $image_store/$name ]] && continue
