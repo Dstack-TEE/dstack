@@ -20,6 +20,7 @@
 - Runtime state and evidence remain case-scoped even though immutable build outputs are shared.
 - Use the case metadata, inventories, and prepared manifest as the complete initial execution specification. Source inspection before the first tested operation is allowed only for a specific unresolved ambiguity.
 - Do not run a clean build unless this case explicitly tests build, packaging, features, or reproducibility. Otherwise reuse the shared target and prepared binaries.
+- The shipped example can omit Rocket's top-level management `port`, while the current `check-config` command requires both management endpoint fields. Detect that omission and add run-scoped `port = 0` only to generated matrix copies before invoking `check-config`; retain whether preparation was required in bounded evidence and never edit the shipped file.
 - If a mismatch occurs, write the provisional result first. Perform narrow source-level root-cause analysis only when failure investigation is enabled.
 
 ## Objective
