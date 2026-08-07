@@ -674,6 +674,12 @@ class MatrixRun:
         ) / (
             "docs/test-plans/core-components-full/automation/gateway-certificate-observer.py"
         )
+        cloudflare_proxy = pathlib.Path(
+            json.loads(self.runtime_path.read_text())["repository"]
+        ) / (
+            "docs/test-plans/core-components-full/automation/"
+            "gateway-cloudflare-zone-proxy.py"
+        )
         observer_service = ""
         observer_config = ""
         dns_service = ""
@@ -684,6 +690,8 @@ class MatrixRun:
             gateway_dns = """    depends_on:
       mock-cf-dns-api:
         condition: service_started
+      cloudflare-zone-proxy:
+        condition: service_healthy
       pebble:
         condition: service_started
 """
@@ -692,6 +700,22 @@ class MatrixRun:
     network_mode: host
     environment:
       - DEBUG=true
+    restart: unless-stopped
+  cloudflare-zone-proxy:
+    image: dstacktee/dstack-kms:0.5.8
+    network_mode: host
+    entrypoint: ["python3", "/opt/gateway-cloudflare-zone-proxy.py"]
+    configs:
+      - source: cloudflare-zone-proxy
+        target: /opt/gateway-cloudflare-zone-proxy.py
+    depends_on:
+      mock-cf-dns-api:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python3", "/opt/gateway-cloudflare-zone-proxy.py", "--check"]
+      interval: 1s
+      timeout: 3s
+      retries: 15
     restart: unless-stopped
   pebble:
     image: kvin/pebble:latest
@@ -702,6 +726,9 @@ class MatrixRun:
       - PEBBLE_VA_ALWAYS_VALID=1
     restart: unless-stopped
 """
+            dns_config = f"""  cloudflare-zone-proxy:
+    content: |
+{"".join(f"      {line}\n" for line in cloudflare_proxy.read_text().splitlines())}"""
         if version == "0.5.11":
             dns_script = (
                 pathlib.Path(json.loads(self.runtime_path.read_text())["repository"])
@@ -933,7 +960,7 @@ class MatrixRun:
                     "provider_type": "cloudflare",
                     "cf_api_token": "case-owned",
                     "cf_zone_id": "case-owned-zone",
-                    "cf_api_url": "http://127.0.0.1:8080/client/v4",
+                    "cf_api_url": "http://127.0.0.1:18080/client/v4",
                     "set_as_default": True,
                     "dns_txt_ttl": 1,
                     "max_dns_wait": 5,
