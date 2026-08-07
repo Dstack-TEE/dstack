@@ -77,7 +77,7 @@ def registration(
 ) -> tuple[int, dict[str, Any] | None]:
     """Register one public WireGuard identity and port policy."""
     return post(
-        f"{url.rstrip('/')}/Gateway.RegisterCvm",
+        f"{url.rstrip('/')}/Tproxy.RegisterCvm",
         {
             "client_public_key": key,
             "port_policy": {
