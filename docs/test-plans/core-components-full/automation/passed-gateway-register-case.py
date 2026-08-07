@@ -167,7 +167,10 @@ def require_response(value: dict[str, Any], fields: list[dict[str, Any]]) -> Non
     """Validate and redact a successful JSON registration response."""
     body = value["body"]
     if value["status"] != 200 or not isinstance(body, dict):
-        raise AssertionError(f"registration failed with HTTP {value['status']}")
+        detail = body.get("error") if isinstance(body, dict) else None
+        raise AssertionError(
+            f"registration failed with HTTP {value['status']}: {detail or 'no JSON error'}"
+        )
     missing = sorted(
         str(field["name"]) for field in fields if field["name"] not in body
     )
@@ -262,6 +265,7 @@ def main() -> int:
                 {
                     **valid_payload,
                     "instance_id": f"instance-unknown-{tag}",
+                    "client_public_key": wg_public_key(),
                     "__future_field": True,
                 }
             ).encode(),
@@ -306,7 +310,11 @@ def main() -> int:
 
         step = f"{case_id}-step-03"
         print(f"STEP {step} START", flush=True)
-        protobuf_payload = {**valid_payload, "instance_id": f"instance-protobuf-{tag}"}
+        protobuf_payload = {
+            **valid_payload,
+            "instance_id": f"instance-protobuf-{tag}",
+            "client_public_key": wg_public_key(),
+        }
         protobuf = request(
             route,
             encode(contract["request_fields"], protobuf_payload),
