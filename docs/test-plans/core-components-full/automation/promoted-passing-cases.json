@@ -1700,7 +1700,7 @@
       "source_status": "PASS",
       "entrypoint": "automation/vmm-internal-unit-case.py",
       "promoted_at": "2026-07-28T04:45:39Z",
-      "notes": "seven candidate rows cover legacy/lite/auto memory and image-capability boundaries, requirements precedence, v0.5.4/v0.5.8/v0.5.11 compatibility, missing collateral fail-closed, and corrected retry through the shared immutable Cargo target",
+      "notes": "the complete current five-test source matrix covers TDX auto selection across memory, image capability, and explicit requirements precedence",
       "environment": "UNIT"
     },
     {
@@ -1774,7 +1774,7 @@
       "source_status": "PASS",
       "entrypoint": "automation/vmm-internal-unit-case.py",
       "promoted_at": "2026-07-28T04:57:08Z",
-      "notes": "seven candidate rows cover opaque parser behavior, traversal/symlink/metachar confinement, target/hash validation, duplicate-root deduplication, measured source resolution, measurement count, and readonly ordered QEMU attachment through the shared immutable Cargo target",
+      "notes": "the complete current five-test source matrix covers verity volume parsing, path confinement, duplicate-root resolution, and measurement binding",
       "environment": "UNIT"
     },
     {
@@ -1853,7 +1853,7 @@
       "source_status": "PASS",
       "entrypoint": "automation/vmm-internal-unit-case.py",
       "promoted_at": "2026-07-28T05:02:52Z",
-      "notes": "four candidate rows cover TDX MR config ID and SNP host_data agreement, fail-closed malformed documents, deterministic compose binding, and GPU policy mutation through the shared immutable Cargo target",
+      "notes": "the complete current two-test source matrix covers manifest-v2 and manifest-v3 init-script hash carrier behavior",
       "environment": "UNIT"
     },
     {
@@ -1862,7 +1862,7 @@
       "source_status": "PASS",
       "entrypoint": "automation/vmm-internal-unit-case.py",
       "promoted_at": "2026-07-28T05:02:52Z",
-      "notes": "four candidate rows cover optional instance identifiers, default/custom gateway URLs and ports, invalid URL fallback, and bridge/user/custom networking projection through the shared immutable Cargo target",
+      "notes": "the complete current two-test source matrix covers optional owned and borrowed VM-info value sanitization",
       "environment": "UNIT"
     },
     {
