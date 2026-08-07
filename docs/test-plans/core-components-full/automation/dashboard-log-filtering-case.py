@@ -185,8 +185,9 @@ def main() -> int:
                 ssh_argv,
                 f"""set -eu
 name={container}
-image=$(docker ps --format '{{{{.Image}}}}' | head -n1)
-[ -n "$image" ]
+image=ubuntu:latest
+docker image inspect "$image" >/dev/null
+docker run --rm --entrypoint sh "$image" -c true
 docker rm -f "$name" >/dev/null 2>&1 || true
 docker run -d --name "$name" --entrypoint sh "$image" -c 'printf "%s\\n" "{markers[0]}"; sleep 2; printf "\\033[31m%s\\033[0m\\n" "{markers[1]}"; sleep 2; printf "%s\\n" "{markers[2]}" >&2' >/dev/null
 for _ in $(seq 1 30); do
