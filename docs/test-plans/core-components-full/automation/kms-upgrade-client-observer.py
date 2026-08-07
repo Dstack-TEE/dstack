@@ -130,8 +130,8 @@ def register_gateway(
             },
             separators=(",", ":"),
         ).encode()
-        rpc_name = "Gateway.RegisterCvm"
-        for candidate in ("Gateway.RegisterCvm", "Tproxy.RegisterCvm"):
+        rpc_name = "Tproxy.RegisterCvm"
+        for candidate in ("Tproxy.RegisterCvm", "Gateway.RegisterCvm"):
             request = urllib.request.Request(
                 f"{url.rstrip('/')}/prpc/{candidate}?json",
                 data=payload,
@@ -145,7 +145,7 @@ def register_gateway(
             except urllib.error.HTTPError as error:
                 code, body = error.code, error.read()
             rpc_name = candidate
-            if candidate == "Gateway.RegisterCvm" and b"Service not found" in body:
+            if candidate == "Tproxy.RegisterCvm" and b"Service not found" in body:
                 continue
             break
         value = json.loads(body) if body else {}
