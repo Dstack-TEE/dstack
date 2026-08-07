@@ -31,6 +31,7 @@ use uuid::Uuid;
 use crate::config::NetdConfig;
 
 const MAX_MESSAGE_SIZE: u64 = 64 * 1024;
+const CONNECTION_TIMEOUT: Duration = Duration::from_secs(35);
 const IP_PATH: &str = "/usr/sbin/ip";
 const VIRSH_PATH: &str = "/usr/bin/virsh";
 const LOCK_PATH: &str = "/run/lock/dstack-netd.lock";
@@ -152,39 +153,48 @@ pub async fn serve(config: NetdConfig) -> Result<()> {
     info!(socket = %config.socket.display(), "netd listening");
     loop {
         let (mut stream, _) = listener.accept().await?;
-        let uid = peer_uid(&stream)?;
-        let allowed = uid == 0 || config.allowed_uids.contains(&uid);
-        let response = if allowed {
-            match read_request(&mut stream)
-                .await
-                .and_then(|request| handle_request(&config.libvirt_uri, request))
-            {
-                Ok(tap) => Response {
-                    ok: true,
-                    tap: Some(tap),
-                    error: None,
-                },
-                Err(error) => {
-                    warn!(%uid, %error, "netd request failed");
-                    Response {
-                        ok: false,
-                        tap: None,
-                        error: Some(format!("{error:#}")),
-                    }
+        match timeout(CONNECTION_TIMEOUT, serve_connection(&config, &mut stream)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => warn!(%error, "netd connection failed"),
+            Err(_) => warn!("netd connection timed out"),
+        }
+    }
+}
+
+async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Result<()> {
+    let uid = peer_uid(stream)?;
+    let allowed = uid == 0 || config.allowed_uids.contains(&uid);
+    let response = if allowed {
+        match read_request(stream)
+            .await
+            .and_then(|request| handle_request(&config.libvirt_uri, request))
+        {
+            Ok(tap) => Response {
+                ok: true,
+                tap: Some(tap),
+                error: None,
+            },
+            Err(error) => {
+                warn!(%uid, %error, "netd request failed");
+                Response {
+                    ok: false,
+                    tap: None,
+                    error: Some(format!("{error:#}")),
                 }
             }
-        } else {
-            warn!(%uid, "rejected unauthorized netd client");
-            Response {
-                ok: false,
-                tap: None,
-                error: Some("caller UID is not authorized".into()),
-            }
-        };
-        let encoded = serde_json::to_vec(&response)?;
-        stream.write_all(&encoded).await?;
-        stream.shutdown().await?;
-    }
+        }
+    } else {
+        warn!(%uid, "rejected unauthorized netd client");
+        Response {
+            ok: false,
+            tap: None,
+            error: Some("caller UID is not authorized".into()),
+        }
+    };
+    let encoded = serde_json::to_vec(&response)?;
+    stream.write_all(&encoded).await?;
+    stream.shutdown().await?;
+    Ok(())
 }
 
 async fn read_request(stream: &mut UnixStream) -> Result<Request> {
@@ -562,5 +572,21 @@ mod tests {
         assert_eq!(value["vm_id"], "vm");
         assert_eq!(value["nic_index"], 2);
         assert!(value.get("identity").is_none());
+    }
+
+    #[tokio::test]
+    async fn disconnected_client_is_confined_to_one_connection() {
+        let (mut server, client) = UnixStream::pair().unwrap();
+        drop(client);
+        let result = timeout(
+            Duration::from_secs(1),
+            serve_connection(&NetdConfig::default(), &mut server),
+        )
+        .await;
+        assert!(result.is_ok(), "disconnected peer blocked the handler");
+        // Either the EOF is reported while reading or the response write sees
+        // EPIPE. In both cases serve() logs this per-connection error and keeps
+        // accepting clients.
+        assert!(result.unwrap().is_err());
     }
 }
