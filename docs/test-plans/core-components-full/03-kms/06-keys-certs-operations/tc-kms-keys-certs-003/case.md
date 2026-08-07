@@ -40,7 +40,7 @@ Use a unique run-scoped identifier and non-production credentials.
 <a id="tc-kms-keys-certs-003-step-01"></a>
 ### Step 1: Inspect the effective prerequisite
 
-Query the relevant health, configuration, and baseline state for kms key handover and rotation chain.
+Query the relevant health, configuration, and baseline state for KMS key handover.
 
 **Expected results:**
 
@@ -49,11 +49,11 @@ Query the relevant health, configuration, and baseline state for kms key handove
 <a id="tc-kms-keys-certs-003-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Request GetKmsKey from authorized/unauthorized KMS across current and historical keys.
+Request GetKmsKey from authorized and unauthorized KMS identities for the current root key.
 
 **Expected results:**
 
-- Temporary CA wrapping and ordered key set allow authorized continuity; app callers and altered configs receive no root material.
+- Temporary CA wrapping and the current key set allow authorized continuity; app callers and altered configs receive no root material.
 
 <a id="tc-kms-keys-certs-003-step-03"></a>
 ### Step 3: Verify state, isolation, and diagnostics

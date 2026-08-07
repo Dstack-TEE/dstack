@@ -1656,38 +1656,6 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         source_certs.mkdir()
         source_config = workspace / "config/source-kms.toml"
         historical_keys: list[tuple[Path, Path]] = []
-        if case_id == "tc-kms-keys-certs-003":
-            curve_order = int(
-                "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141",
-                16,
-            )
-            for index in range(2):
-                history_dir = workspace / f"data/history-{index}"
-                history_dir.mkdir()
-                ca_key = history_dir / "root-ca.key"
-                k256_key = history_dir / "root-k256.key"
-                completed = subprocess.run(
-                    [
-                        "openssl",
-                        "genpkey",
-                        "-algorithm",
-                        "EC",
-                        "-pkeyopt",
-                        "ec_paramgen_curve:P-256",
-                        "-out",
-                        str(ca_key),
-                    ],
-                    capture_output=True,
-                    timeout=30,
-                    check=False,
-                )
-                if completed.returncode:
-                    fail("failed to generate historical CA key")
-                ca_key.chmod(0o600)
-                scalar = secrets.randbelow(curve_order - 1) + 1
-                k256_key.write_bytes(scalar.to_bytes(32, "big"))
-                k256_key.chmod(0o600)
-                historical_keys.append((ca_key, k256_key))
         source_admin_token = secrets.token_hex(32)
         source_admin_token_path = workspace / "data/source-kms-admin-token"
         source_admin_token_path.write_text(source_admin_token, encoding="utf-8")

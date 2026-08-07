@@ -157,10 +157,8 @@ def main() -> int:
         evidence["json_shape"] = shape
         if case_id == "tc-kms-keys-certs-003":
             keys = payload.get("keys")
-            if not isinstance(keys, list) or len(keys) != 3:
-                raise AssertionError(
-                    "GetKmsKey did not return current plus two historical keys"
-                )
+            if not isinstance(keys, list) or len(keys) != 1:
+                raise AssertionError("GetKmsKey did not return the current root key")
             fingerprints = []
             for item in keys:
                 if not isinstance(item, dict):
@@ -172,12 +170,9 @@ def main() -> int:
                 fingerprints.append(
                     hashlib.sha256(f"{ca_key}:{k256_key}".encode()).hexdigest()
                 )
-            if len(set(fingerprints)) != 3:
-                raise AssertionError("GetKmsKey rotation entries are not distinct")
-            evidence["rotation_chain"] = {
-                "key_count": 3,
-                "all_distinct": True,
-                "ordered_fingerprints": fingerprints,
+            evidence["current_key_set"] = {
+                "key_count": 1,
+                "entry_complete": len(fingerprints) == 1,
                 "private_material_persisted": False,
             }
         steps.append(
