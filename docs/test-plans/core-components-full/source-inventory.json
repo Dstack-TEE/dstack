@@ -4072,7 +4072,6 @@
         "dstack/gateway/src/config.rs",
         "dstack/gateway/src/debug_service.rs",
         "dstack/gateway/src/distributed_certbot.rs",
-        "dstack/gateway/src/gen_debug_key.rs",
         "dstack/gateway/src/kv/https_client.rs",
         "dstack/gateway/src/kv/mod.rs",
         "dstack/gateway/src/kv/sync_service.rs",

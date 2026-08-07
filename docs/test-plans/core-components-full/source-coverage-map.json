@@ -518,8 +518,9 @@
     },
     {
       "component": "gateway",
-      "source": "dstack/gateway/src/gen_debug_key.rs",
+      "source": "dstack/gateway/src/main.rs",
       "case_ids": [
+        "tc-gw-internal-001",
         "tc-gw-internal-002"
       ],
       "rationale": "direct source reference"
@@ -546,14 +547,6 @@
       "case_ids": [
         "tc-gw-cluster-ad-001",
         "tc-int-compatibil-004"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "gateway",
-      "source": "dstack/gateway/src/main.rs",
-      "case_ids": [
-        "tc-gw-internal-001"
       ],
       "rationale": "direct source reference"
     },

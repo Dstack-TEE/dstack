@@ -12341,7 +12341,7 @@
             },
             {
               "id": "tc-gw-internal-002",
-              "title": "Gateway debug key generation artifact safety",
+              "title": "Gateway on-demand TLS key artifact safety",
               "order": 2,
               "priority": "P0",
               "path": "04-gateway/08-startup-auth-routing-internals/tc-gw-internal-002",
@@ -12373,7 +12373,7 @@
                 "simulation_allowed": false
               },
               "actions_under_test": [
-                "Gateway debug key generation artifact safety"
+                "Gateway on-demand TLS key artifact safety"
               ],
               "execution": {
                 "entrypoint": "automation/gateway-debug-key-case.py",
