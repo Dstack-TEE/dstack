@@ -373,7 +373,7 @@ def main() -> int:
             route, json.dumps(valid_payload).encode(), context=authenticated
         )
         require_response(repeat, contract["response_fields"])
-        health = request(base + "/Gateway.Info", b"{}", context=authenticated)
+        health = request(base + "/Tproxy.Info", b"{}", context=authenticated)
         if health["status"] != 200:
             raise AssertionError("Gateway.Info was unavailable after registration")
         record(
