@@ -6,9 +6,9 @@ name: Docker Build Check
 
 on:
   push:
-    branches: [ master, next, dev-* ]
+    branches: [ next, dev-* ]
   pull_request:
-    branches: [ master, next, dev-* ]
+    branches: [ next, dev-* ]
 
 env:
   DSTACK_REV: ${{ github.event.pull_request.head.sha || github.sha }}
