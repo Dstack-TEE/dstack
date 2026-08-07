@@ -151,7 +151,7 @@ def packet_probe(tap, bridge, expected_mac, root):
     }
 
 
-def make_config(template, root, image_store, binary, supervisor, bridge, port, instance):
+def make_config(template, root, image_store, binary, supervisor, bridge, port):
     text = template
     replacements = {
         'temp_dir = "/tmp"': f'temp_dir = "{root}/data"\nrun_path = "{root}/vms"',
@@ -159,7 +159,6 @@ def make_config(template, root, image_store, binary, supervisor, bridge, port, i
         '# path = ""': f'path = "{image_store}"',
         'qemu_path = ""': 'qemu_path = "/usr/bin/qemu-system-x86_64"',
         'platform = "auto"': 'platform = "tdx"',
-        'instance_id = ""': f'instance_id = "{instance}"',
         'exe = "./supervisor"': f'exe = "{supervisor}"',
         'sock = "./run/supervisor.sock"': f'sock = "{root}/supervisor.sock"',
         'pid_file = "./run/supervisor.pid"': f'pid_file = "{root}/supervisor.pid"',
@@ -201,8 +200,8 @@ def main():
     template = (repo / "dstack/vmm/vmm.toml").read_text()
     for directory in (root / "a", root / "b"):
         directory.mkdir(exist_ok=True)
-    config_a = make_config(template, root / "a", image_store, binary, supervisor, bridge, 18481, "filter-a")
-    config_b = make_config(template, root / "b", image_store, binary, supervisor, bridge, 18482, "filter-b")
+    config_a = make_config(template, root / "a", image_store, binary, supervisor, bridge, 18481)
+    config_b = make_config(template, root / "b", image_store, binary, supervisor, bridge, 18482)
 
     def prepare(instance, vm, nic, mac, ip):
         value = {"operation": "prepare", "instance_id": instance, "vm_id": vm,

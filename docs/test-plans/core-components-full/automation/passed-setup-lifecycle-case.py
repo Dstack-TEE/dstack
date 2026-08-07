@@ -79,8 +79,14 @@ def main() -> int:
     values = manifest.get("values", {})
     if values.get("destructive_actions_allowed") is not True:
         raise RuntimeError("fixture is not lease-owned")
-    if values.get("image") != "dstack-dev-0.6.0":
-        raise RuntimeError("unexpected guest image")
+    expected_image = os.environ.get("DSTACK_TEST_NO_TEE_GUEST_IMAGE")
+    if not expected_image:
+        raise RuntimeError("DSTACK_TEST_NO_TEE_GUEST_IMAGE is required")
+    if values.get("image") != expected_image:
+        raise RuntimeError(
+            f"unexpected guest image: expected {expected_image!r}, "
+            f"got {values.get('image')!r}"
+        )
     cli = [str(x) for x in values["vmm_cli_argv"]]
     vm_id = str(values["vm_id"])
     observations: dict[str, Any] = {"image": values["image"], "cycles": []}
@@ -225,7 +231,7 @@ def main() -> int:
             else failures[0],
             "steps": steps,
             "artifacts": [artifact],
-            "remarks": "Only the lease-owned dstack-dev-0.6.0 VM was restarted; the physical host and adjacent VMs were not modified.",
+            "remarks": "Only the lease-owned no-TEE guest VM was restarted; the physical host and adjacent VMs were not modified.",
         },
     )
     return 0
