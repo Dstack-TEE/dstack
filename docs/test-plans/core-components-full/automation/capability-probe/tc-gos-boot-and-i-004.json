@@ -1,7 +1,0 @@
-{
-  "schema_version": "1.0",
-  "case_id": "tc-gos-boot-and-i-004",
-  "capability": "guest-identity-matrix-suite",
-  "reason": "The provider implements the five-row identity matrix, but no alternate guest image is declared or installed for the independently changed-image row, so the complete matrix cannot be provisioned.",
-  "expires_when": "the fixture declares the complete five-guest identity matrix with an available alternate image and duplicate, changed-compose, changed-image, and changed-instance rows, at which point the probe fails and a real matrix harness must run"
-}

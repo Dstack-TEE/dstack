@@ -265,6 +265,7 @@ environment["DSTACK_TEST_GUEST_IMAGE"] = prod_image
 environment["DSTACK_TEST_NO_TEE_GUEST_IMAGE"] = dev_image
 environment["DSTACK_TEST_GUEST_PROD_IMAGE"] = prod_image
 environment["DSTACK_TEST_GUEST_DEV_IMAGE"] = dev_image
+environment["DSTACK_TEST_IDENTITY_ALT_IMAGE"] = prod_image
 path_prepend = value.setdefault("environment_path_prepend", [])
 foundry_path = str(foundry_bin.resolve(strict=True))
 if foundry_path not in path_prepend:
