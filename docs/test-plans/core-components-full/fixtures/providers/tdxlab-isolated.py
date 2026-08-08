@@ -319,12 +319,13 @@ def config(value: dict[str, Any]) -> dict[str, Any]:
     if not image_store:
         fail("DSTACK_TEST_IMAGE_STORE is required for mkosi image provenance")
     try:
-        require_image_backend(image_store, image)
+        image_provenance = require_image_backend(image_store, image)
     except RuntimeError as error:
         fail(str(error))
     return {
         "cli": cli,
         "image": image,
+        "image_provenance": image_provenance,
         "image_store": Path(image_store).resolve(),
         "repository": repository,
         "runtime": runtime,
@@ -368,9 +369,6 @@ def start_vmm(
         requested_images = [
             settings["image"],
             os.environ.get("DSTACK_TEST_NO_TEE_GUEST_IMAGE", "dstack-dev-0.6.0"),
-            os.environ.get(
-                "DSTACK_TEST_IDENTITY_ALT_IMAGE", "dstack-0.6.0-identity-alt"
-            ),
             *(extra_images or []),
         ]
         link_image_store(
@@ -890,6 +888,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         or wireguard_checker_requested
     )
     deploy_mode: list[str] = []
+    identity_alternate_image = ""
     if (
         profile in {"no-tee-guest-lifecycle", "identity-matrix"}
         or key_derivation_requested
@@ -898,6 +897,29 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         deploy_mode = ["--no-tee", "--simulated-tee", "dstack-tdx"]
     elif not endpoint_ready("127.0.0.1", 3443):
         fail("local key provider is unavailable on 127.0.0.1:3443")
+    if identity_matrix_requested:
+        identity_alternate_image = os.environ.get(
+            "DSTACK_TEST_IDENTITY_ALT_IMAGE", ""
+        ).strip()
+        if not identity_alternate_image:
+            fail("DSTACK_TEST_IDENTITY_ALT_IMAGE is required for identity-matrix")
+        if identity_alternate_image == image:
+            fail("identity-matrix alternate image must differ from the base image")
+        try:
+            alternate_provenance = require_image_backend(
+                settings["image_store"], identity_alternate_image
+            )
+        except RuntimeError as error:
+            fail(f"identity-matrix alternate image is unavailable: {error}")
+        if (
+            alternate_provenance.get("git_revision")
+            != settings["image_provenance"].get("git_revision")
+        ):
+            fail(
+                "identity-matrix images must have the same source revision: "
+                f"base={settings['image_provenance'].get('git_revision')!r}, "
+                f"alternate={alternate_provenance.get('git_revision')!r}"
+            )
     lease_id = str(lease.get("lease_id", ""))
     if not lease_id.startswith("lease-") or not case_id:
         fail("lease identity is missing")
@@ -1031,6 +1053,9 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                 Path(str(case_kms["tdx_root_ca"])).read_text(encoding="utf-8")
                 if case_kms
                 else ""
+            ),
+            extra_images=(
+                [identity_alternate_image] if identity_matrix_requested else None
             ),
         )
     except BaseException:
@@ -1383,9 +1408,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         }
     if identity_matrix_requested:
         matrix_vm_ids = [str(vm_id)]
-        alternate_image = os.environ.get(
-            "DSTACK_TEST_IDENTITY_ALT_IMAGE", "dstack-0.6.0-identity-alt"
-        )
+        alternate_image = identity_alternate_image
         changed_compose_path = state / "changed-app-compose.json"
         changed_compose = json.loads(json.dumps(compose_value))
         changed_compose["public_sysinfo"] = not bool(
