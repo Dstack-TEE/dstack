@@ -33,7 +33,11 @@ def main() -> int:
         "candidate_head_exact": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=repository, text=True
         ).strip()
-        == runtime["candidate_commit"],
+        == subprocess.check_output(
+            ["git", "rev-parse", str(runtime["candidate_commit"])],
+            cwd=repository,
+            text=True,
+        ).strip(),
         "ct_log_source_absent": not (kms / "src/ct_log.rs").exists(),
         "ct_log_module_absent": re.search(
             r"^\s*(?://\s*)?mod\s+ct_log\s*;", main_source, re.MULTILINE
@@ -49,7 +53,7 @@ def main() -> int:
     environment = os.environ.copy()
     environment["CARGO_TARGET_DIR"] = runtime["cargo_target_dir"]
     completed = subprocess.run(
-        ["cargo", "test", "--locked", "--offline", "-p", "dstack-kms", "--lib"],
+        ["cargo", "test", "--locked", "--offline", "-p", "dstack-kms"],
         cwd=repository / "dstack",
         env=environment,
         text=True,
