@@ -14,6 +14,7 @@ import signal
 import socket
 import subprocess
 import time
+import urllib.request
 
 
 def wait_port(port: int, process: subprocess.Popen[str], timeout: float = 30) -> None:
@@ -58,6 +59,20 @@ def stop(p: subprocess.Popen[str]) -> None:
         p.wait(5)
     except subprocess.TimeoutExpired:
         os.killpg(p.pid, signal.SIGKILL)
+
+
+def verify_simulator_collateral(port: int, root: pathlib.Path) -> None:
+    """Require the seed-owned PCCS endpoint and trust root before guest boot."""
+    if not root.is_file() or root.stat().st_size == 0:
+        raise RuntimeError("mock attestation fixture did not publish the TDX root")
+    url = f"http://127.0.0.1:{port}/tdx/certification/v4/tcb?fmspc=000000000000"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            body = json.load(response)
+    except Exception as error:
+        raise RuntimeError(f"mock TDX collateral probe failed at {url}: {error}") from error
+    if response.status != 200 or not isinstance(body, dict) or "tcbInfo" not in body:
+        raise RuntimeError("mock TDX collateral probe returned an invalid response")
 
 
 def verify_unattested_rpc_certificate(cert: pathlib.Path) -> None:
@@ -122,6 +137,13 @@ def main() -> int:
     a = ap.parse_args()
     runtime = json.loads(a.runtime_manifest.read_text())
     bins = runtime["prepared_binaries"]
+    required_binaries = ["dstack_kms"]
+    if a.guest_attestation == "simulator":
+        required_binaries.append("dstack_mock_attestation")
+    for name in required_binaries:
+        binary = pathlib.Path(str(bins.get(name, {}).get("path", "")))
+        if not binary.is_file() or not os.access(binary, os.X_OK):
+            raise RuntimeError(f"prepared {name.replace('_', '-')} binary is unavailable")
     state = a.state.resolve()
     state.mkdir(parents=True, exist_ok=False)
     (state / "logs").mkdir()
@@ -188,6 +210,9 @@ def main() -> int:
                 a.collateral_port,
             )
             started.append(mock.pid)
+            verify_simulator_collateral(
+                a.collateral_port, state / "roots/tdx-root-ca.pem"
+            )
         kms_cfg = state / "config/kms.toml"
         agent = f"unix:{sim['services']['DstackGuest']['socket']}"
         env = {"DSTACK_AGENT_ADDRESS": agent}

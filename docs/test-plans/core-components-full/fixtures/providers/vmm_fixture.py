@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import fcntl
 import functools
-import json
 import os
 import socket
 import subprocess
@@ -189,7 +188,6 @@ def write_vmm_config(
     log_max_bytes: int = 0,
     port_mapping_range: str = "",
     simulator_collateral_url: str = "http://10.0.2.2:18088",
-    simulator_tdx_root_ca: str = "",
     pccs_url: str = "",
     supervisor_socket: Path | None = None,
     auto_restart_policy: dict[str, int] | None = None,
@@ -280,7 +278,6 @@ range = [
             "\n[cvm.tee_simulator]\n"
             f'mock_attestation_seed = "{simulator_seed}"\n'
             f'collateral_base_url = "{simulator_collateral_url}"\n'
-            f"tdx_root_ca = {json.dumps(simulator_tdx_root_ca)}\n"
         )
     if log_max_bytes:
         # cvm.log is a sub-table, so the value has to be rewritten in place.
