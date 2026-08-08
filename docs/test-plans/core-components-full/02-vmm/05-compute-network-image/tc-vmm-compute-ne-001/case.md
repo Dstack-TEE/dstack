@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <a id="tc-vmm-compute-ne-001"></a>
-# TC-VMM-COMPUTE-NE-001: Bridge networking and libvirt network filtering
+# TC-VMM-COMPUTE-NE-001: User and bridge multi-NIC lifecycle
 
 ## Metadata
 
@@ -24,9 +24,9 @@
 
 ## Objective
 
-Verify the optional libvirt network-filter path without delegating QEMU lifecycle
-management to libvirt. The integration path uses a development image and the TEE
-simulator; it is not evidence for TDX or SNP attestation.
+Verify the current user and bridge networking paths across multi-NIC command
+generation and QEMU lifecycle. The integration path uses a development image and
+the TEE simulator; it is not evidence for TDX or SNP attestation.
 
 ## Preconditions
 
@@ -51,32 +51,27 @@ Query the relevant health, configuration, and baseline state for user bridge and
 <a id="tc-vmm-compute-ne-001-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Deploy a two-NIC simulator VM through the VMM API. In addition, run two isolated
-VMM instances against one netd and exercise filtered interfaces concurrently.
+Deploy a two-NIC user-network simulator VM through the VMM API and materialize a
+stopped two-NIC bridge launch through the same public contract.
 
 **Expected results:**
 
-- Both simulator NICs have distinct MAC addresses, TAPs, and libvirt nwfilter
-  bindings. Concurrent instances cannot remove each other's deterministic TAPs.
-- Normal DHCP and guest traffic passes, while forged Ethernet source MAC, IPv4
-  source address, and ARP sender identity traffic is dropped.
+- Both simulator NICs have distinct deterministic MAC addresses and ordered QEMU
+  netdev/device pairs. User and bridge requests retain their selected modes.
+- Invalid mode/bridge combinations fail closed without affecting VMM availability.
 
 <a id="tc-vmm-compute-ne-001-step-03"></a>
 ### Step 3: Verify crash restart and service recovery
 
 Force QEMU to exit after network preparation and verify automatic restart. Restart
-VMM, netd, and libvirtd independently, then perform a host-reboot-equivalent
-cycle by stopping all case-owned processes, removing ephemeral network state,
-and restarting from persisted VMM state.
+VMM independently and re-query the persisted launch and process state.
 
 **Expected results:**
 
-- A QEMU runtime crash retains or re-prepares its deterministic TAP and nwfilter
-  binding for automatic restart; Stop/Remove subsequently cleans both.
-- Existing guests survive VMM, netd, and libvirtd restart where applicable; new
-  operations work after restart.
-- The reboot-equivalent cycle recreates both TAPs and bindings and removal cleans
-  all case-owned resources.
+- A QEMU runtime crash preserves the resolved network launch and automatic restart
+  replaces the process; Stop/Remove subsequently cleans the VM state.
+- Existing guests survive VMM restart, invalid adjacent requests remain isolated,
+  and removal cleans all case-owned resources.
 
 ## Postconditions
 
