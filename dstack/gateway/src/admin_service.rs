@@ -208,16 +208,33 @@ impl AdminRpc for AdminRpcHandler {
                 .collect()
         };
 
+        // Per-peer protocol/digest telemetry lives on the sync manager, not the store.
+        let links = self
+            .state
+            .wavekv_sync
+            .as_ref()
+            .map(|s| s.link_status())
+            .unwrap_or_default();
+        let links_for = |name: &str| -> Vec<wavekv::sync::PeerLinkStatus> {
+            links
+                .iter()
+                .find(|(store, _)| *store == name)
+                .map(|(_, l)| l.clone())
+                .unwrap_or_default()
+        };
+
         Ok(WaveKvStatusResponse {
             enabled: self.state.config.sync.enabled,
             persistent: Some(build_store_status(
                 "persistent",
                 persistent_status,
+                &links_for("persistent"),
                 &get_peer_last_seen,
             )),
             ephemeral: Some(build_store_status(
                 "ephemeral",
                 ephemeral_status,
+                &links_for("ephemeral"),
                 &get_peer_last_seen,
             )),
         })
@@ -718,6 +735,7 @@ fn port_policy_view_to_proto(view: PortPolicyView) -> GetInstancePortPolicyRespo
 fn build_store_status(
     name: &str,
     status: WaveKvNodeStatus,
+    links: &[wavekv::sync::PeerLinkStatus],
     get_peer_last_seen: &impl Fn(u32) -> Vec<(u32, u64)>,
 ) -> StoreSyncStatus {
     StoreSyncStatus {
@@ -727,6 +745,9 @@ fn build_store_status(
         next_seq: status.next_seq,
         dirty: status.dirty,
         wal_enabled: status.wal,
+        digest: status.digest,
+        entries_merged: status.entries_merged,
+        entries_rejected: status.entries_rejected,
         peers: status
             .peers
             .into_iter()
@@ -735,12 +756,18 @@ fn build_store_status(
                     .into_iter()
                     .map(|(node_id, timestamp)| LastSeenEntry { node_id, timestamp })
                     .collect();
+                let link = links.iter().find(|l| l.id == p.id);
+                #[allow(deprecated)]
                 ProtoPeerSyncStatus {
                     id: p.id,
                     local_ack: p.ack,
-                    peer_ack: p.pack,
-                    buffered_logs: p.logs as u64,
+                    peer_ack: p.peer_ack,
+                    // wavekv 2.0 keeps no per-peer log buffers.
+                    buffered_logs: 0,
                     last_seen,
+                    heard_from: p.heard_from,
+                    protocol: link.map(|l| l.protocol).unwrap_or_default().to_string(),
+                    digest_mismatches: link.map(|l| l.digest_mismatches).unwrap_or(0),
                 }
             })
             .collect(),
