@@ -592,6 +592,33 @@ mod tests {
     }
 
     #[test]
+    fn filesystem_boundaries_are_failure_atomic() {
+        let mut state = SimulatorState::new(
+            Arc::new(TdxGenerator::from_seed([0x71; 32]).unwrap()),
+            CCEL_FIXTURE,
+            None,
+        )
+        .unwrap();
+        let original_quote = state.outblob.clone();
+        let original_rtmr3 = state.rtmrs[3];
+
+        assert!(state.request_quote(&[0x11; 63]).is_err());
+        assert_eq!(state.generation, 0);
+        assert_eq!(state.outblob, original_quote);
+
+        assert!(state.extend_rtmr(3, &[0x22; 47]).is_err());
+        assert_eq!(state.rtmrs[3], original_rtmr3);
+        assert!(state.extend_rtmr(1, &[0x22; 48]).is_err());
+        assert_eq!(state.rtmrs[1], replay_boot_rtmrs(CCEL_FIXTURE).unwrap()[1]);
+
+        state.request_quote(&[0x33; 64]).unwrap();
+        assert_eq!(state.generation, 1);
+        assert_ne!(state.outblob, original_quote);
+        state.extend_rtmr(3, &[0x44; 48]).unwrap();
+        assert_ne!(state.rtmrs[3], original_rtmr3);
+    }
+
+    #[test]
     fn boot_rtmrs_replay_the_bundled_ccel() {
         let rtmrs = replay_boot_rtmrs(CCEL_FIXTURE).unwrap();
         assert!(rtmrs[..2].iter().all(|rtmr| *rtmr != [0u8; 48]));
