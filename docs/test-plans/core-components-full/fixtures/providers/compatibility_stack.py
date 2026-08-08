@@ -12,8 +12,42 @@ import secrets
 import subprocess
 import sys
 import tarfile
+import tomllib
 from types import ModuleType
 from typing import Any
+
+
+def verify_physical_attestation_config(
+    kms_config: pathlib.Path, vmm_config: pathlib.Path | None = None
+) -> dict[str, Any]:
+    """Reject simulator collateral before a physical compatibility run."""
+    with kms_config.open("rb") as source:
+        kms = tomllib.load(source)
+    kms_core = kms.get("core", {})
+    if "attestation" in kms_core:
+        raise RuntimeError(
+            "physical compatibility KMS overrides product attestation collateral"
+        )
+    observed: dict[str, Any] = {
+        "mode": "physical-tdx",
+        "kms_uses_product_attestation_defaults": True,
+    }
+    if vmm_config is None:
+        return observed
+    with vmm_config.open("rb") as source:
+        vmm = tomllib.load(source)
+    cvm = vmm.get("cvm", {})
+    if cvm.get("pccs_url", ""):
+        raise RuntimeError("physical compatibility VMM overrides product PCCS")
+    if "tee_simulator" in cvm:
+        raise RuntimeError("physical compatibility VMM enables the TEE simulator")
+    observed.update(
+        {
+            "vmm_uses_product_pccs": True,
+            "vmm_tee_simulator_absent": True,
+        }
+    )
+    return observed
 
 
 def load_provider(name: str) -> ModuleType:
@@ -76,7 +110,7 @@ def start(
             "--output",
             str(kms_output),
             "--guest-attestation",
-            "simulator",
+            "hardware",
             "--rpc-attestation",
             "compatibility-unverified",
         ],
@@ -91,18 +125,18 @@ def start(
     kms = json.loads(kms_output.read_text(encoding="utf-8"))
     handle: dict[str, Any] | None = None
     try:
+        kms_config = kms_state / "config/kms.toml"
+        verify_physical_attestation_config(kms_config)
         handle = tdx.start_vmm(
             workspace,
             lease_id,
             settings,
             "compatibility-matrix",
-            simulator_seed=seed,
-            simulator_collateral_url=str(kms["guest_collateral_url"]),
-            simulator_tdx_root_ca=pathlib.Path(
-                str(kms["tdx_root_ca"])
-            ).read_text(encoding="utf-8"),
             extra_images=images,
             allow_udp_port_mapping=True,
+        )
+        attestation_probe = verify_physical_attestation_config(
+            kms_config, pathlib.Path(str(handle["config"]))
         )
         simulator = json.loads(
             pathlib.Path(str(kms["simulator_fixture"])).read_text(encoding="utf-8")
@@ -293,6 +327,7 @@ def start(
                 "from": tdx.PORT_MAPPING_START,
                 "to": tdx.PORT_BLOCK_END,
             },
+            "attestation_probe": attestation_probe,
             "handle": handle,
             "logs": {
                 "vmm": str(handle["log"]),

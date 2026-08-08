@@ -1576,11 +1576,11 @@
     },
     {
       "case_id": "tc-gos-platform-010",
-      "source_run": "pending-seed-matched-rerun",
+      "source_run": "pending-physical-tdx-rerun",
       "source_status": "PASS",
       "entrypoint": "automation/guest-config-compatibility-case.py",
-      "environment": "SIMULATOR",
-      "notes": "Four official guest versions use one seed-matched case-owned TDX collateral service to test current KMS, Gateway, and VMM configuration compatibility without claiming physical origin."
+      "environment": "TDXLAB_PHYSICAL_TDX_FOUR_GUEST_MATRIX",
+      "notes": "Four official guest versions use one case-owned physical-TDX VMM and product PCCS collateral to test current KMS, Gateway, and VMM configuration compatibility."
     },
     {
       "case_id": "tc-gos-entry-001",
