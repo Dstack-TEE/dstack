@@ -13,11 +13,8 @@ import time
 from pathlib import Path
 
 CASE_ID = "tc-gw-internal-007"
-TEST_FILTER = "internal_models_matrix"
-SUBJECT = (
-    "RAII counter lifecycle and concurrency, effective policy provenance, "
-    "stable map ordering, and escaped dashboard rendering"
-)
+TEST_FILTER = "gateway_top_n_batch_007_cache_health_and_invalidation"
+SUBJECT = "top-N cache health, ordering, invalidation, and model reconstruction"
 
 
 def main() -> int:
