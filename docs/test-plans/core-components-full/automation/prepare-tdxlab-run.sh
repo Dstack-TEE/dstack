@@ -235,8 +235,13 @@ if ! sudo su kvin -c "docker image inspect alpine:latest" >/dev/null 2>&1; then
   sudo su kvin -c "docker pull alpine:latest"
 fi
 
+docker_subnet_pool=$(
+  "$plan/automation/prepare-docker-network-pool.py"
+)
+
 python3 - "$template" "$generated_lab" "$plan" "$fixture_root" "$foundry_bin" \
-  "$acpi_tables_bin" "$qemu_data_dir" "$prod_image" "$dev_image" <<'PY'
+  "$acpi_tables_bin" "$qemu_data_dir" "$prod_image" "$dev_image" \
+  "$docker_subnet_pool" <<'PY'
 import json
 import pathlib
 import sys
@@ -244,7 +249,7 @@ import sys
 template, output, plan, full_tdx, foundry_bin, acpi_tables, qemu_data = map(
     pathlib.Path, sys.argv[1:8]
 )
-prod_image, dev_image = sys.argv[8:]
+prod_image, dev_image, docker_subnet_pool = sys.argv[8:]
 value = json.loads(template.read_text())
 environment = value.setdefault("environment", {})
 providers = {
@@ -268,6 +273,7 @@ environment["DSTACK_TEST_NO_TEE_GUEST_IMAGE"] = dev_image
 environment["DSTACK_TEST_GUEST_PROD_IMAGE"] = prod_image
 environment["DSTACK_TEST_GUEST_DEV_IMAGE"] = dev_image
 environment["DSTACK_TEST_IDENTITY_ALT_IMAGE"] = prod_image
+environment["DSTACK_TEST_DOCKER_SUBNET_POOL"] = docker_subnet_pool
 path_prepend = value.setdefault("environment_path_prepend", [])
 foundry_path = str(foundry_bin.resolve(strict=True))
 if foundry_path not in path_prepend:
