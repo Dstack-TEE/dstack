@@ -105,7 +105,13 @@ def start_success(base: str, vm_id: str, vm_dir: Path) -> tuple[int, str]:
     if code != 200:
         raise RuntimeError(f"StartVm returned HTTP {code}")
     pid = wait_for(lambda: current_pid(vm_dir), f"VM {vm_id} did not start", 120)
-    command = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode()
+    launch_path = vm_dir / "launch.json"
+    if launch_path.is_file():
+        launch = json.loads(launch_path.read_text())
+        qemu = launch["qemu"]
+        command = " ".join([qemu["command"], *qemu["args"]])
+    else:
+        command = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode()
     return pid, command
 
 
@@ -146,8 +152,8 @@ def main() -> int:
         success_pid, command = start_success(base, success_id, success_dir)
         evidence["placement_process"] = {
             "pid": success_pid,
-            "executable": os.readlink(f"/proc/{success_pid}/exe"),
-            "command": command,
+            "supervised_executable": os.readlink(f"/proc/{success_pid}/exe"),
+            "qemu_command": command,
         }
         placement = {
             "qemu_started": process_alive(success_pid),
