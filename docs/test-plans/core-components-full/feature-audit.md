@@ -403,11 +403,11 @@ This audit is derived from the repository source inventory and is the traceabili
 <a id="req-kms-upgrade-012"></a><a id="risk-kms-upgrade-012"></a>| `req-kms-upgrade-012` | `risk-kms-upgrade-012` | [tc-kms-upgrade-012](03-kms/08-upgrade-onboard-compatibility/tc-kms-upgrade-012/case.md#tc-kms-upgrade-012) — Post-KMS gateway 0.6.0 upgrade order | P0 |
 
 <a id="audit-section-kms-certificate-transparency-log"></a>
-### Certificate Transparency Log Files
+### Removed Certificate-Log Surface
 
 | Requirement | Risk | Case | Priority |
 |---|---|---|---|
-<a id="req-kms-ct-001"></a><a id="risk-kms-ct-001"></a>| `req-kms-ct-001` | `risk-kms-ct-001` | [tc-kms-ct-001](03-kms/09-certificate-transparency-log/tc-kms-ct-001/case.md#tc-kms-ct-001) — Concurrent certificate log append and iteration | P0 |
+<a id="req-kms-ct-001"></a><a id="risk-kms-ct-001"></a>| `req-kms-ct-001` | `risk-kms-ct-001` | [tc-kms-ct-001](03-kms/09-certificate-transparency-log/tc-kms-ct-001/case.md#tc-kms-ct-001) — Removed certificate-log surface regression | P0 |
 
 <a id="audit-section-kms-service-startup"></a>
 ### Service Startup and Mode Transition
