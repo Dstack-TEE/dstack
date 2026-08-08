@@ -41,6 +41,7 @@ fn app_info(app_byte: u8, instance_byte: u8) -> AppInfo {
         mr_aggregated: [0x66; 32],
         os_image_hash: vec![0x77; 32],
         key_provider_info: vec![0x88; 32],
+        init_script_hashes: None,
     }
 }
 async fn read_req(s: &mut tokio::net::TcpStream) -> (usize, String) {
