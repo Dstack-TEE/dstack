@@ -1244,8 +1244,7 @@ configs:
             / "docs/test-plans/core-components-full/automation/kms-upgrade-client-observer.py"
         )
         gateway_cache_volume = (
-            "      - /run/dstack/gateway-cache.json:"
-            "/run/dstack-host/gateway-cache.json:ro\n"
+            "      - /run/dstack:/run/dstack-host:ro\n"
             if native_gateway
             else ""
         )
