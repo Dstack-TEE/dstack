@@ -185,6 +185,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                 ],
                 "image_archive_path": stack["image_archive_path"],
                 "port_mapping": stack["port_mapping"],
+                "attestation_probe": stack["attestation_probe"],
                 "case_owned": True,
                 "allowed_actions": ["deploy", "start", "stop", "restart", "remove"],
             },
