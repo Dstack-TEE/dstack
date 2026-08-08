@@ -19,6 +19,7 @@ REQUIRED_TESTS = (
     "runtime_events::tests::mixed_v1_v2_replay",
     "runtime_events::tests::v2_digest_is_canonical_json_hash",
     "tdx::tests::fill_preimage_v2_is_canonical_json",
+    "tdx::tests::stripped_v2_runtime_event_preserves_digest_binding",
     "tdx::tests::validates_v2_digest_preimage_before_use",
     "tdx::tests::rejects_missing_or_malformed_v2_preimage",
     "tdx::tests::rejects_v2_preimage_digest_mismatch",
@@ -82,9 +83,9 @@ def main() -> int:
             check=False,
         )
         output = completed.stdout + completed.stderr
-        passed = bool(re.search(r"test result: ok\. 37 passed; 0 failed", output)) and all(
-            f"{test} ... ok" in output for test in REQUIRED_TESTS
-        )
+        passed = bool(
+            re.search(r"test result: ok\. \d+ passed; 0 failed", output)
+        ) and all(f"{test} ... ok" in output for test in REQUIRED_TESTS)
         row.update(
             {
                 "returncode": completed.returncode,
@@ -107,6 +108,7 @@ def main() -> int:
             "valid_v2_preimages",
             "mixed_v1_v2_replay",
             "canonical_v2_digest",
+            "stripped_v2_digest_binding",
             "missing_preimage_rejection",
             "malformed_preimage_rejection",
             "digest_preimage_mismatch_rejection",
