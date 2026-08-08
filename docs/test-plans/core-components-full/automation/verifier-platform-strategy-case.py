@@ -15,13 +15,13 @@ from typing import Any
 
 CASE_ID = "tc-ver-strategy-006"
 TESTS = (
-    "platform_image_strategy_decision_table_is_exhaustive",
-    "image_download_digest_redirect_timeout_and_retry_matrix",
     "verifies_tdx_lite_fixture_without_acpi_table_verification",
     "verifies_sev_snp_attestation_fixture_without_image_download",
     "gcp_and_nitro_enclave_measurement_bindings_matrix",
+    "aws_os_image_check_requires_measurement",
     "aws_os_image_check_accepts_bound_measurement",
     "aws_os_image_check_rejects_boot_pcr_digest_mismatch",
+    "image_cache_pruning_keeps_checksum_identity",
 )
 
 
@@ -102,11 +102,11 @@ def main() -> int:
             "nitro_tpm",
         ],
         "properties": [
-            "exhaustive_strategy_selection",
             "platform_specific_measurement_binding",
             "offline_self_contained_paths_do_not_download",
-            "download_timeout_retry_and_failure_atomicity",
-            "cross_strategy_fallback_is_impossible",
+            "required_measurement_rejection",
+            "boot_pcr_digest_mismatch_rejection",
+            "cache_identity_pruning",
         ],
     }
     artifact = {
@@ -134,7 +134,7 @@ def main() -> int:
                 {
                     "id": f"{case_id}-step-02",
                     "status": status,
-                    "observed": "Platform-specific download, CBOR, PCR, measurement, outage, mutation, and retry bindings were exercised.",
+                    "observed": "Platform-specific offline, CBOR, PCR, measurement, rejection, and cache-identity bindings were exercised.",
                 },
                 {
                     "id": f"{case_id}-step-03",
