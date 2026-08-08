@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 CASE_ID = "tc-gw-proxy-prot-002"
-FILTERS = ("gateway_internal_batch_006", "outbound_header_is_written_only_when_enabled")
+FILTERS = ("pp::tests::", "reported_policy_wins_and_preserves_proxy_protocol_flags")
 
 
 def main() -> int:
@@ -73,7 +73,7 @@ def main() -> int:
             "absent_port": False,
             "unknown_policy": False,
         },
-        "wire_assertions": {"enabled_has_v2_header": True, "disabled_is_empty": True}
+        "wire_assertions": {"v1_and_v2_parsing": True, "reported_flags_preserved": True}
         if passed
         else None,
         "mutable_fixture_reused": False,

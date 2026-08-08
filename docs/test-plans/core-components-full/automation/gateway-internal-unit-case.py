@@ -14,9 +14,9 @@ from pathlib import Path
 
 CASES = {
     "tc-gw-internal-006": {
-        "filter": "gateway_internal_batch_006",
-        "minimum_tests": 1,
-        "subject": "fail-closed port filtering, reported-policy parsing, PROXY protocol decisions, and bounded retry backoff",
+        "filter": "port_policy",
+        "minimum_tests": 8,
+        "subject": "fail-closed port filtering, compatibility policy, reported-policy precedence, and PROXY protocol flags",
     },
 }
 
@@ -34,8 +34,15 @@ def main() -> int:
     env["CARGO_TARGET_DIR"] = str(runtime["cargo_target_dir"])
     process = subprocess.run(
         [
-            "cargo", "test", "--locked", "--offline", "-p", "dstack-gateway",
-            str(row["filter"]), "--", "--nocapture",
+            "cargo",
+            "test",
+            "--locked",
+            "--offline",
+            "-p",
+            "dstack-gateway",
+            str(row["filter"]),
+            "--",
+            "--nocapture",
         ],
         cwd=Path(runtime["repository"]) / "dstack",
         env=env,
@@ -80,10 +87,12 @@ def main() -> int:
             {"id": f"{case_id}-step-{n:02d}", "status": status, "observed": observed}
             for n in range(1, 5)
         ],
-        "evidence": [{
-            "path": "artifacts/gateway-internal-unit.json",
-            "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
-        }],
+        "evidence": [
+            {
+                "path": "artifacts/gateway-internal-unit.json",
+                "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+            }
+        ],
         "remarks": (
             "Immutable Cargo artifacts are shared across compatible cases; evidence and the "
             "raw lease substrate remain case-scoped. No VM, listener, credential, or service was created."
