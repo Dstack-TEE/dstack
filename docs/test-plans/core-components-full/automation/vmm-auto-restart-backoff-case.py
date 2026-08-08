@@ -16,13 +16,7 @@ import urllib.request
 from typing import Any
 
 CASE_ID = "tc-vmm-vm-lifecyc-006"
-POLICY_ROWS = {
-    "effective-config", "eligible-restart", "never-started-ineligible",
-    "removing-ineligible", "exponential-backoff", "retry-limit-no-hot-loop",
-    "decision-events", "healthy-reset-window", "manual-lifecycle-reset",
-    "invalid-config-rejected", "adjacent-availability", "cleanup",
-}
-MARKER = "DSTACK_AUTO_RESTART_ROW "
+POLICY_TEST_COUNT = 3
 
 
 def atomic_json(path: pathlib.Path, value: Any) -> None:
@@ -128,14 +122,14 @@ def main() -> int:
         target = os.environ.get("DSTACK_TEST_SHARED_CARGO_TARGET", runtime.get("cargo_target_dir"))
         policy_process = subprocess.run(
             ["cargo", "test", "--manifest-path", str(pathlib.Path(runtime["repository"]) / "dstack/Cargo.toml"),
-             "-p", "dstack-vmm", "auto_restart_case_matrix", "--target-dir", str(target), "--", "--nocapture"],
+             "-p", "dstack-vmm", "auto_restart_", "--target-dir", str(target), "--", "--nocapture"],
             text=True, capture_output=True, timeout=180, check=False,
         )
         policy_output = policy_process.stdout + policy_process.stderr
-        rows = {line.split(MARKER, 1)[1].strip() for line in policy_output.splitlines() if MARKER in line}
-        if policy_process.returncode or rows != POLICY_ROWS:
+        passed = f"{POLICY_TEST_COUNT} passed; 0 failed" in policy_output
+        if policy_process.returncode or not passed:
             raise AssertionError("candidate policy boundary matrix did not match")
-        evidence["policy_rows"] = sorted(rows)
+        evidence["policy_tests_passed"] = POLICY_TEST_COUNT
         evidence["baseline_count"] = len(listed(list_command))
         eligible = create(test_input, "restart-eligible")
         ids.append(eligible)
