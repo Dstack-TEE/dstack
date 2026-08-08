@@ -262,3 +262,253 @@ pub async fn push_store(
     })?;
     Ok(Status::Ok)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{load_config_figment, Config, MutualConfig, TlsConfig};
+    use crate::kv::NodeData;
+    use crate::main_service::{Proxy, ProxyOptions};
+    use rocket::local::asynchronous::Client;
+    use tempfile::TempDir;
+    use wavekv::types::{Entry, Metadata};
+
+    const ME: u32 = 1;
+    const PEER: u32 = 2;
+
+    fn peer_uuid() -> Vec<u8> {
+        b"the-real-peer-2".to_vec()
+    }
+
+    /// A self-signed CA plus a leaf it signs. `HttpSyncNetwork::new` loads all three
+    /// from disk to build its rustls client config, and the root store only accepts a
+    /// trust anchor with `CA:TRUE` — so a lone self-signed leaf is not enough.
+    fn write_tls_material(dir: &std::path::Path) -> TlsConfig {
+        use ra_tls::rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
+
+        let ca_key = KeyPair::generate().expect("ca key");
+        let mut ca_params = CertificateParams::new(vec![]).expect("ca params");
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let ca_cert = ca_params.self_signed(&ca_key).expect("ca cert");
+
+        let leaf_key = KeyPair::generate().expect("leaf key");
+        let leaf_params =
+            CertificateParams::new(vec!["gateway.test".to_string()]).expect("leaf params");
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &ca_cert, &ca_key)
+            .expect("leaf cert");
+
+        let cert_path = dir.join("node.crt");
+        let key_path = dir.join("node.key");
+        let ca_path = dir.join("ca.crt");
+        std::fs::write(&cert_path, leaf_cert.pem()).expect("write cert");
+        std::fs::write(&key_path, leaf_key.serialize_pem()).expect("write key");
+        std::fs::write(&ca_path, ca_cert.pem()).expect("write ca");
+
+        TlsConfig {
+            certs: cert_path.to_string_lossy().into_owned(),
+            key: key_path.to_string_lossy().into_owned(),
+            mutual: MutualConfig {
+                ca_certs: ca_path.to_string_lossy().into_owned(),
+            },
+        }
+    }
+
+    /// A gateway serving the real sync routes over Rocket's local client.
+    ///
+    /// `insecure_skip_attestation` stands in for the mTLS peer check, which is not what
+    /// these tests are about; everything below it — route dispatch, the gzip framing,
+    /// the store split, the uuid check — is the production path.
+    async fn serving_gateway(sync_enabled: bool) -> (Client, Proxy, TempDir) {
+        // `main` installs this once at startup; the sync client builds a rustls config,
+        // so a test that skips it panics inside rustls rather than failing an assertion.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let figment = load_config_figment(None);
+        let mut config = figment.focus("core").extract::<Config>().unwrap();
+        let temp_dir = TempDir::new().expect("temp dir");
+
+        config.sync.enabled = sync_enabled;
+        config.sync.node_id = ME;
+        config.sync.bootnode = String::new();
+        config.sync.data_dir = temp_dir.path().to_string_lossy().into_owned();
+        config.wg.config_path = temp_dir
+            .path()
+            .join("wg.conf")
+            .to_string_lossy()
+            .into_owned();
+        config.debug.insecure_skip_attestation = true;
+
+        let tls_config = write_tls_material(temp_dir.path());
+        let proxy = Proxy::new(ProxyOptions {
+            config,
+            my_app_id: None,
+            tls_config,
+        })
+        .await
+        .expect("failed to build gateway");
+
+        let rocket = rocket::build()
+            .manage(proxy.clone())
+            .mount("/", crate::web_routes::wavekv_sync_routes());
+        let client = Client::tracked(rocket).await.expect("rocket client");
+        (client, proxy, temp_dir)
+    }
+
+    /// Register the peer so `query_uuid` returns something: the uuid check is opt-in and
+    /// an unknown sender bypasses it entirely.
+    fn register_peer(proxy: &Proxy) {
+        proxy
+            .kv_store()
+            .sync_node(
+                PEER,
+                &NodeData {
+                    uuid: peer_uuid(),
+                    url: "https://peer.test:8011".to_string(),
+                    wg_public_key: String::new(),
+                    wg_endpoint: String::new(),
+                    wg_ip: String::new(),
+                },
+            )
+            .expect("register peer");
+    }
+
+    fn push_envelope(uuid: Vec<u8>, key: &str) -> SyncEnvelope {
+        let mut env = SyncEnvelope::new(PEER, uuid);
+        env.push_only = true;
+        env.entries.push(Entry::new(
+            key.to_string(),
+            Some(b"v".to_vec()),
+            Metadata::new(PEER, 1, 1),
+        ));
+        env
+    }
+
+    fn body(env: &SyncEnvelope) -> Vec<u8> {
+        gzip(&env.encode().expect("encode envelope")).expect("gzip")
+    }
+
+    #[tokio::test]
+    async fn a_stamped_push_is_accepted_and_lands_in_the_store() {
+        let (client, proxy, _tmp) = serving_gateway(true).await;
+        register_peer(&proxy);
+
+        let response = client
+            .post("/wavekv/push/persistent")
+            .body(body(&push_envelope(peer_uuid(), "node/9")))
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), Status::Ok);
+        assert!(
+            proxy.kv_store().persistent().read().get("node/9").is_some(),
+            "a well-formed push must reach the store"
+        );
+    }
+
+    /// The route-level view of the bug that made every opportunistic push fail: the
+    /// sender built its envelope without stamping `sender_uuid`, and the receiver's
+    /// `check_uuid` — which only the manager runs, not `merge_push` — rejected it.
+    #[tokio::test]
+    async fn an_unstamped_push_is_refused_at_the_route() {
+        let (client, proxy, _tmp) = serving_gateway(true).await;
+        register_peer(&proxy);
+
+        let response = client
+            .post("/wavekv/push/persistent")
+            .body(body(&push_envelope(Vec::new(), "node/9")))
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), Status::InternalServerError);
+        assert!(
+            proxy.kv_store().persistent().read().get("node/9").is_none(),
+            "a push that fails the identity check must not write anything"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_v2_round_trip_returns_a_decodable_envelope() {
+        let (client, proxy, _tmp) = serving_gateway(true).await;
+        register_peer(&proxy);
+        proxy
+            .kv_store()
+            .persistent()
+            .write()
+            .put("node/7".to_string(), b"v".to_vec())
+            .expect("seed");
+
+        let request = SyncEnvelope::new(PEER, peer_uuid());
+        let response = client
+            .post("/wavekv/sync2/persistent")
+            .body(body(&request))
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), Status::Ok);
+        let bytes = response.into_bytes().await.expect("body");
+        let decoded = SyncEnvelope::decode(&gunzip(&bytes).expect("gunzip")).expect("decode");
+        assert_eq!(decoded.sender_id, ME);
+        assert!(
+            decoded.entries.iter().any(|e| e.key == "node/7"),
+            "an empty ack map must draw the whole live state"
+        );
+    }
+
+    /// 404 is the negotiation signal: it is what tells a peer "this node has no v2
+    /// route, fall back to v1". Nothing else on these routes may produce it by accident.
+    #[tokio::test]
+    async fn an_unknown_store_is_a_404_because_that_is_the_v1_signal() {
+        let (client, proxy, _tmp) = serving_gateway(true).await;
+        register_peer(&proxy);
+
+        let response = client
+            .post("/wavekv/sync2/bogus")
+            .body(body(&SyncEnvelope::new(PEER, peer_uuid())))
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), Status::NotFound);
+    }
+
+    /// ...which is why a node with sync switched off must answer 503 and not 404. A 404
+    /// here would demote this node to v1 in every peer's cache for a whole reprobe
+    /// window — silently, and without sync being on to fix it.
+    #[tokio::test]
+    async fn a_sync_disabled_node_answers_503_rather_than_404() {
+        let (client, _proxy, _tmp) = serving_gateway(false).await;
+
+        for path in [
+            "/wavekv/sync/persistent",
+            "/wavekv/sync2/persistent",
+            "/wavekv/push/persistent",
+        ] {
+            let response = client
+                .post(path)
+                .body(body(&SyncEnvelope::new(PEER, peer_uuid())))
+                .dispatch()
+                .await;
+            assert_eq!(
+                response.status(),
+                Status::ServiceUnavailable,
+                "{path} must not look like a missing v2 route"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_push_from_node_id_zero_is_refused() {
+        let (client, proxy, _tmp) = serving_gateway(true).await;
+        register_peer(&proxy);
+
+        let mut env = push_envelope(peer_uuid(), "node/9");
+        env.sender_id = 0;
+        let response = client
+            .post("/wavekv/push/persistent")
+            .body(body(&env))
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), Status::BadRequest);
+    }
+}

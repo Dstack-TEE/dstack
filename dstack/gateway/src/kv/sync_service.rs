@@ -120,10 +120,18 @@ impl ExchangeInterface for HttpSyncNetwork {
     /// anti-entropy backstop and the only ack authority.
     async fn push_to(&self, _node: &Node, peer: NodeId, env: SyncEnvelope) -> Result<()> {
         let push_url = self.route_for(peer, "push")?;
-        self.client
+        let delivered = self
+            .client
             .post_bytes_probe(&push_url, env.encode()?)
             .await
             .with_context(|| format!("failed to push to peer {peer} at {push_url}"))?;
+        // `post_bytes_probe` maps 404/405 to `Ok(None)` so the v2 probe can read it as
+        // "not upgraded yet". Discarding that here would report a mistyped URL, or a
+        // peer with no push route, as a delivered push — and pushes are best-effort and
+        // debug-logged, so nothing else would ever contradict it.
+        if delivered.is_none() {
+            anyhow::bail!("peer {peer} has no push route at {push_url}");
+        }
         Ok(())
     }
 }
