@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Run the simulator-backed TDX V2 event-log and RTMR3 matrix."""
+"""Run the current TDX V2 event-log preimage and replay suite."""
 
 from __future__ import annotations
 
@@ -14,7 +14,16 @@ import tempfile
 from typing import Any
 
 CASE_ID = "tc-ver-input-plat-003"
-TEST = "tdx_v2_event_log_rtmr3_failure_and_recovery_matrix"
+PACKAGE = "cc-eventlog"
+REQUIRED_TESTS = (
+    "runtime_events::tests::mixed_v1_v2_replay",
+    "runtime_events::tests::v2_digest_is_canonical_json_hash",
+    "tdx::tests::fill_preimage_v2_is_canonical_json",
+    "tdx::tests::validates_v2_digest_preimage_before_use",
+    "tdx::tests::rejects_missing_or_malformed_v2_preimage",
+    "tdx::tests::rejects_v2_preimage_digest_mismatch",
+    "tdx::tests::rejects_noncanonical_v2_preimage_with_matching_digest",
+)
 
 
 def atomic_json(path: pathlib.Path, value: Any) -> None:
@@ -48,10 +57,10 @@ def main() -> int:
     repository = pathlib.Path(runtime["repository"])
     environment = os.environ.copy()
     environment["CARGO_TARGET_DIR"] = str(runtime["cargo_target_dir"])
-    row: dict[str, Any] = {"test": TEST}
+    row: dict[str, Any] = {"package": PACKAGE, "tests": REQUIRED_TESTS}
     status = "PASS"
     summary = (
-        "TDX V2 event-log preimage, RTMR3 replay, failure, and recovery matrix passed."
+        "TDX V2 event-log preimage validation and mixed-version replay suite passed."
     )
     try:
         completed = subprocess.run(
@@ -59,9 +68,10 @@ def main() -> int:
                 find_command(environment, "cargo"),
                 "test",
                 "-p",
-                "dstack-attest",
-                TEST,
+                PACKAGE,
                 "--lib",
+                "--",
+                "--nocapture",
             ],
             cwd=repository / "dstack",
             env=environment,
@@ -72,7 +82,9 @@ def main() -> int:
             check=False,
         )
         output = completed.stdout + completed.stderr
-        passed = bool(re.search(r"test result: ok\. 1 passed; 0 failed", output))
+        passed = bool(re.search(r"test result: ok\. 37 passed; 0 failed", output)) and all(
+            f"{test} ... ok" in output for test in REQUIRED_TESTS
+        )
         row.update(
             {
                 "returncode": completed.returncode,
@@ -81,7 +93,9 @@ def main() -> int:
             }
         )
         if completed.returncode or not passed:
-            raise AssertionError(f"{TEST} failed with rc={completed.returncode}")
+            raise AssertionError(
+                f"{PACKAGE} V2 event-log suite failed with rc={completed.returncode}"
+            )
     except (AssertionError, KeyError, OSError, subprocess.TimeoutExpired) as error:
         status = "FAIL"
         summary = str(error)
@@ -91,22 +105,18 @@ def main() -> int:
         "row": row,
         "covered_behaviors": [
             "valid_v2_preimages",
-            "rtmr3_replay_match",
-            "reordered_event_rejection",
-            "missing_event_rejection",
-            "duplicate_event_rejection",
-            "payload_mismatch_rejection",
+            "mixed_v1_v2_replay",
+            "canonical_v2_digest",
             "missing_preimage_rejection",
             "malformed_preimage_rejection",
             "digest_preimage_mismatch_rejection",
-            "malformed_json_rejection",
-            "post_failure_recovery",
+            "noncanonical_preimage_rejection",
         ],
     }
     artifact = {
         "path": "artifacts/tdx-v2-eventlog-rtmr3-matrix.json",
         "step_id": f"{case_id}-step-02",
-        "name": "TDX V2 event-log and RTMR3 matrix",
+        "name": "TDX V2 event-log preimage matrix",
         "description": "Exact test identity, return code, covered behaviors, and hashed output.",
     }
     atomic_json(result_dir / artifact["path"], evidence)
@@ -128,7 +138,7 @@ def main() -> int:
                 {
                     "id": f"{case_id}-step-02",
                     "status": status,
-                    "observed": "V2 preimages, RTMR3 equality, reorder, omission, duplication, mutation, malformed inputs, and recovery were exercised.",
+                    "observed": "Canonical V2 preimages, mixed-version replay, missing and malformed preimages, digest mismatches, and noncanonical inputs were exercised.",
                 },
                 {
                     "id": f"{case_id}-step-03",
@@ -137,7 +147,7 @@ def main() -> int:
                 },
             ],
             "artifacts": [artifact],
-            "remarks": "This simulator-backed matrix verifies production V2 preimage and RTMR3 replay behavior; only a real TDX platform can establish physical hardware origin.",
+            "remarks": "This source suite verifies V2 event encoding and replay inputs; only a real TDX platform can establish physical hardware origin.",
         },
     )
     return 0
