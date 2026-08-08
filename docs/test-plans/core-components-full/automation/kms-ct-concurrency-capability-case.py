@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Exercise candidate KMS certificate-log concurrency and atomicity behavior."""
+"""Verify that the removed KMS certificate-log surface stays absent."""
 
 from __future__ import annotations
 
@@ -10,145 +10,95 @@ import os
 import re
 import subprocess
 import time
+import tomllib
 from pathlib import Path
 
 CASE_ID = "tc-kms-ct-001"
 RESULT_RE = re.compile(r"test result: ok\. (\d+) passed; 0 failed")
-TESTS = {
-    "concurrent_writes_are_unique_and_never_overwrite",
-    "collision_allocation_preserves_existing_file",
-    "iterator_excludes_malformed_and_unrelated_entries",
-    "exhausted_collision_range_fails_without_overwrite",
-    "iteration_survives_writer_restart",
-}
-
-
-def emit(step: int, status: str, observed: str) -> dict[str, str]:
-    """Emit one runner-protocol step and return its result row."""
-    step_id = f"{CASE_ID}-step-{step:02d}"
-    print(f"STEP {step_id} START", flush=True)
-    print(f"EVIDENCE {step_id} - {observed}", flush=True)
-    print(f"STEP {step_id} END - {status}", flush=True)
-    return {"id": step_id, "status": status, "observed": observed}
 
 
 def main() -> int:
-    """Execute candidate certificate-log tests and write bounded evidence."""
+    """Check the removed surface and execute the current KMS library tests."""
+    started = time.monotonic()
     result_dir = Path(os.environ["DSTACK_TEST_RESULT_DIR"])
-    artifacts_dir = result_dir / "artifacts"
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    artifacts = result_dir / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
     runtime = json.loads(Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text())
     repository = Path(runtime["repository"])
-    command = [
-        "cargo",
-        "test",
-        "-p",
-        "dstack-kms",
-        "ct_log::tests",
-        "--",
-        "--nocapture",
-    ]
-    environment = os.environ.copy()
-    environment["RUSTUP_TOOLCHAIN"] = "1.92.0"
-    environment["CARGO_TARGET_DIR"] = runtime["cargo_target_dir"]
-    started = time.monotonic()
-    steps: list[dict[str, str]] = []
-    status = "FAIL"
-    failure = ""
+    kms = repository / "dstack/kms"
+    cargo = tomllib.loads((kms / "Cargo.toml").read_text())
+    main_source = (kms / "src/main.rs").read_text()
 
-    baseline = {
-        "candidate_commit": runtime["candidate_commit"],
-        "repository_head": subprocess.check_output(
+    checks = {
+        "candidate_head_exact": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=repository, text=True
-        ).strip(),
-        "command": command,
-        "test_count": len(TESTS),
-        "concurrent_writers": 64,
-        "collision_slots": 4097,
+        ).strip()
+        == runtime["candidate_commit"],
+        "ct_log_source_absent": not (kms / "src/ct_log.rs").exists(),
+        "ct_log_module_absent": re.search(
+            r"^\s*(?://\s*)?mod\s+ct_log\s*;", main_source, re.MULTILINE
+        )
+        is None,
+        "cert_log_configuration_absent": "cert_log_dir" not in "".join(
+            path.read_text(errors="replace")
+            for path in sorted((kms / "src").glob("**/*.rs"))
+        ),
+        "dead_chrono_dependency_absent": "chrono"
+        not in cargo.get("dependencies", {}),
     }
-    (artifacts_dir / "baseline.json").write_text(
-        json.dumps(baseline, indent=2, sort_keys=True) + "\n"
+    environment = os.environ.copy()
+    environment["CARGO_TARGET_DIR"] = runtime["cargo_target_dir"]
+    completed = subprocess.run(
+        ["cargo", "test", "--locked", "--offline", "-p", "dstack-kms", "--lib"],
+        cwd=repository / "dstack",
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=600,
+        check=False,
     )
-    if baseline["candidate_commit"] != baseline["repository_head"]:
-        failure = "runtime manifest candidate commit does not match repository HEAD"
-        steps.append(emit(1, "FAIL", failure))
-    else:
-        steps.append(
-            emit(
-                1,
-                "PASS",
-                "Candidate HEAD, Rust 1.92 command, 64-writer load, and 4097 collision-slot boundary were recorded.",
-            )
-        )
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=repository / "dstack",
-                env=environment,
-                text=True,
-                capture_output=True,
-                timeout=600,
-                check=False,
-            )
-            log = completed.stdout + completed.stderr
-            (artifacts_dir / "cargo-test.log").write_text(log)
-            named = {name for name in TESTS if name in log}
-            passed = sum(int(value) for value in RESULT_RE.findall(log))
-            if completed.returncode or passed != len(TESTS) or named != TESTS:
-                raise RuntimeError(
-                    f"candidate test rc={completed.returncode}, passed={passed}/{len(TESTS)}, named={len(named)}/{len(TESTS)}"
-                )
-            steps.append(
-                emit(
-                    2,
-                    "PASS",
-                    "5/5 candidate tests passed: 64 concurrent writers committed unique immutable contents and iteration excluded malformed entries.",
-                )
-            )
-            steps.append(
-                emit(
-                    3,
-                    "PASS",
-                    "Collision retry and 4097-slot exhaustion were fail-closed; staged files were atomically committed or removed without overwrite or leakage.",
-                )
-            )
-            steps.append(
-                emit(
-                    4,
-                    "PASS",
-                    "Restart-style re-open preserved both committed certificates; test tempdirs were case-scoped and output contained no certificate private material.",
-                )
-            )
-            status = "PASS"
-        except Exception as error:  # noqa: BLE001
-            failure = f"{type(error).__name__}: {error}"
-            steps.append(emit(len(steps) + 1, "FAIL", failure))
-
-    entries = []
-    for path in sorted(artifacts_dir.iterdir()):
-        entries.append(
-            {
-                "path": f"artifacts/{path.name}",
-                "name": path.name,
-                "description": "Candidate certificate-log execution evidence.",
-                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-            }
-        )
-    (artifacts_dir / "manifest.json").write_text(
-        json.dumps({"artifacts": entries}, indent=2, sort_keys=True) + "\n"
+    (artifacts / "cargo-test.log").write_text(completed.stdout)
+    passed_tests = max(
+        (int(value) for value in RESULT_RE.findall(completed.stdout)), default=0
+    )
+    checks["kms_library_tests_pass"] = completed.returncode == 0 and passed_tests > 0
+    status = "PASS" if all(checks.values()) else "FAIL"
+    evidence = {
+        "candidate_commit": runtime["candidate_commit"],
+        "checks": checks,
+        "kms_library_tests_passed": passed_tests,
+        "returncode": completed.returncode,
+        "private_material_persisted": False,
+    }
+    evidence_path = artifacts / "removed-certificate-log-surface.json"
+    evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+    artifact_rows = [
+        {
+            "path": f"artifacts/{path.name}",
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
+        for path in (evidence_path, artifacts / "cargo-test.log")
+    ]
+    failed = sorted(name for name, passed in checks.items() if not passed)
+    observed = (
+        f"Removed certificate-log surface remained absent and {passed_tests} current KMS library tests passed."
+        if status == "PASS"
+        else f"Removed certificate-log regression checks failed: {failed}"
     )
     result = {
         "schema_version": "1.0",
         "case_id": CASE_ID,
         "provisional": False,
         "status": status,
-        "summary": "Candidate certificate-log concurrency, atomic commit, filtering, exhaustion, and restart behavior passed."
-        if status == "PASS"
-        else failure,
-        "steps": steps,
-        "artifacts": entries,
+        "summary": observed,
+        "steps": [
+            {"id": f"{CASE_ID}-step-{step:02d}", "status": status, "observed": observed}
+            for step in range(1, 4)
+        ],
+        "evidence": artifact_rows,
         "duration_seconds": round(time.monotonic() - started, 3),
-        "remarks": "The case uses candidate Rust tests against a case-scoped temporary filesystem and reuses the prepared Cargo target; it does not test image construction.",
+        "remarks": "The removed module had no production call site. This regression prevents its unsafe file-writing and configuration surface from returning silently.",
     }
     (result_dir / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     return 0 if status == "PASS" else 1

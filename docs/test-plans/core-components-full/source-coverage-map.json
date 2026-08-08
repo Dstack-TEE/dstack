@@ -4996,19 +4996,11 @@
     },
     {
       "component": "kms",
-      "source": "dstack/kms/src/ct_log.rs",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-ct-001"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "kms",
       "source": "dstack/kms/src/main.rs",
       "case_ids": [
         "tc-kms-startup-001",
-        "tc-kms-build-001"
+        "tc-kms-build-001",
+        "tc-kms-ct-001"
       ],
       "rationale": "direct source reference"
     },
