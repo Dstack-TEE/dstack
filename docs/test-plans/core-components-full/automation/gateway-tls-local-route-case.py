@@ -68,16 +68,27 @@ def main() -> int:
         raise ValueError("unsupported case")
     started = time.monotonic()
     result_dir = pathlib.Path(os.environ["DSTACK_TEST_RESULT_DIR"])
-    manifest = json.loads(pathlib.Path(os.environ["DSTACK_TEST_CASE_MANIFEST"]).read_text())
-    runtime = json.loads(pathlib.Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text())
+    manifest = json.loads(
+        pathlib.Path(os.environ["DSTACK_TEST_CASE_MANIFEST"]).read_text()
+    )
+    runtime = json.loads(
+        pathlib.Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text()
+    )
     gateway = manifest["values"]["gateway"]
     proxy_address = str(gateway["proxy_address"])
     env = os.environ.copy()
     env["CARGO_TARGET_DIR"] = str(runtime["cargo_target_dir"])
     unit = subprocess.run(
         [
-            "cargo", "test", "--locked", "--offline", "-p", "dstack-gateway",
-            "gateway_internal_batch_005", "--", "--nocapture",
+            "cargo",
+            "test",
+            "--locked",
+            "--offline",
+            "-p",
+            "dstack-gateway",
+            "proxy::tls_terminate::tests::",
+            "--",
+            "--nocapture",
         ],
         cwd=pathlib.Path(runtime["repository"]) / "dstack",
         env=env,
@@ -104,18 +115,38 @@ def main() -> int:
         gateway_name = "gateway.localhost"
         health_name = "health.localhost"
         probes = {
-            "index": tls_request(proxy_address, gateway_name, http_request("GET", "/.dstack/index", gateway_name)),
-            "health": tls_request(proxy_address, gateway_name, http_request("GET", "/health", gateway_name)),
-            "method": tls_request(proxy_address, gateway_name, http_request("POST", "/.dstack/index", gateway_name)),
-            "missing": tls_request(proxy_address, gateway_name, http_request("GET", "/.dstack/missing", gateway_name)),
-            "legacy_health": tls_request(proxy_address, health_name, http_request("GET", "/", health_name)),
+            "index": tls_request(
+                proxy_address,
+                gateway_name,
+                http_request("GET", "/.dstack/index", gateway_name),
+            ),
+            "health": tls_request(
+                proxy_address,
+                gateway_name,
+                http_request("GET", "/health", gateway_name),
+            ),
+            "method": tls_request(
+                proxy_address,
+                gateway_name,
+                http_request("POST", "/.dstack/index", gateway_name),
+            ),
+            "missing": tls_request(
+                proxy_address,
+                gateway_name,
+                http_request("GET", "/.dstack/missing", gateway_name),
+            ),
+            "legacy_health": tls_request(
+                proxy_address, health_name, http_request("GET", "/", health_name)
+            ),
         }
         codes = {name: value[0] for name, value in probes.items()}
         bodies = {name: value[1] for name, value in probes.items()}
         index_body = bodies["index"].split(b"\r\n\r\n", 1)[-1]
         checks = {
             "candidate_stream_matrix": unit_passed >= 1,
-            "local_index_exact": codes["index"] == 200 and b'"type":"dstack gateway"' in index_body and b'"/app-info"' in index_body,
+            "local_index_exact": codes["index"] == 200
+            and b'"type":"dstack gateway"' in index_body
+            and b'"/app-info"' in index_body,
             "local_health_available": codes["health"] == 200,
             "method_rejected": codes["method"] == 405,
             "missing_route_rejected": codes["missing"] == 404,
@@ -136,23 +167,45 @@ def main() -> int:
         }
         artifact_path = result_dir / "artifacts/gateway-tls-local-routes.json"
         atomic_json(artifact_path, observation)
-        artifacts.append({
-            "path": "artifacts/gateway-tls-local-routes.json",
-            "step_id": f"{CASE_ID}-step-02",
-            "name": "Gateway TLS local-route matrix",
-            "description": "HTTP statuses, response sizes, candidate test count, and booleans only; no URL, certificate, key, or body is retained.",
-        })
+        artifacts.append(
+            {
+                "path": "artifacts/gateway-tls-local-routes.json",
+                "step_id": f"{CASE_ID}-step-02",
+                "name": "Gateway TLS local-route matrix",
+                "description": "HTTP statuses, response sizes, candidate test count, and booleans only; no URL, certificate, key, or body is retained.",
+            }
+        )
         steps = [
-            {"id": f"{CASE_ID}-step-01", "status": "PASS", "observed": f"{unit_passed} candidate stream/response boundary test passed through the shared Cargo target."},
-            {"id": f"{CASE_ID}-step-02", "status": "PASS", "observed": "The case-owned TLS proxy served the Gateway index and both current and legacy local health routes."},
-            {"id": f"{CASE_ID}-step-03", "status": "PASS", "observed": "Unsupported methods and paths failed with exact bounded status codes while non-EOF stream errors remained visible in the candidate matrix."},
-            {"id": f"{CASE_ID}-step-04", "status": "PASS", "observed": "All responses remained bounded and the case retained no endpoint, certificate, key, or native body."},
+            {
+                "id": f"{CASE_ID}-step-01",
+                "status": "PASS",
+                "observed": f"{unit_passed} candidate stream/response boundary test passed through the shared Cargo target.",
+            },
+            {
+                "id": f"{CASE_ID}-step-02",
+                "status": "PASS",
+                "observed": "The case-owned TLS proxy served the Gateway index and both current and legacy local health routes.",
+            },
+            {
+                "id": f"{CASE_ID}-step-03",
+                "status": "PASS",
+                "observed": "Unsupported methods and paths failed with exact bounded status codes while non-EOF stream errors remained visible in the candidate matrix.",
+            },
+            {
+                "id": f"{CASE_ID}-step-04",
+                "status": "PASS",
+                "observed": "All responses remained bounded and the case retained no endpoint, certificate, key, or native body.",
+            },
         ]
         status = "PASS"
         summary = "Gateway TLS local routes, exact response boundaries, expected EOF handling, and visible transport errors passed."
     except Exception as error:  # noqa: BLE001
         steps = [
-            {"id": f"{CASE_ID}-step-{n:02d}", "status": "FAIL" if n == 1 else "NOT_RUN", "observed": str(error) if n == 1 else "Not run after failure."}
+            {
+                "id": f"{CASE_ID}-step-{n:02d}",
+                "status": "FAIL" if n == 1 else "NOT_RUN",
+                "observed": str(error) if n == 1 else "Not run after failure.",
+            }
             for n in range(1, 5)
         ]
         summary = f"Gateway TLS local-route matrix failed: {error}"
@@ -160,14 +213,27 @@ def main() -> int:
     evidence = []
     for artifact in artifacts:
         path = result_dir / artifact["path"]
-        evidence.append({"path": artifact["path"], "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
-    atomic_json(result_dir / "result.json", {
-        "schema_version": "1.0", "case_id": CASE_ID, "provisional": False,
-        "status": status, "summary": summary, "steps": steps, "artifacts": artifacts,
-        "evidence": evidence,
-        "remarks": "The immutable Cargo target is shared; runtime and evidence remain case-scoped. No URL, certificate, key, credential, or native response body is retained.",
-        "duration_seconds": round(time.monotonic() - started, 3),
-    })
+        evidence.append(
+            {
+                "path": artifact["path"],
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        )
+    atomic_json(
+        result_dir / "result.json",
+        {
+            "schema_version": "1.0",
+            "case_id": CASE_ID,
+            "provisional": False,
+            "status": status,
+            "summary": summary,
+            "steps": steps,
+            "artifacts": artifacts,
+            "evidence": evidence,
+            "remarks": "The immutable Cargo target is shared; runtime and evidence remain case-scoped. No URL, certificate, key, credential, or native response body is retained.",
+            "duration_seconds": round(time.monotonic() - started, 3),
+        },
+    )
     return 0 if status == "PASS" else 1
 
 
