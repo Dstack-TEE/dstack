@@ -127,6 +127,19 @@ def main() -> int:
     )
     repo = pathlib.Path(runtime["repository"])
     package = repo / "dstack/kms/auth-eth"
+    required = [
+        package / "lib/forge-std/src/Test.sol",
+        package
+        / "lib/openzeppelin-contracts-upgradeable/contracts/proxy/utils/UUPSUpgradeable.sol",
+        package
+        / "lib/openzeppelin-contracts-upgradeable/lib/openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol",
+        package / "lib/openzeppelin-foundry-upgrades/src/Upgrades.sol",
+    ]
+    missing = [str(path.relative_to(package)) for path in required if not path.is_file()]
+    if missing:
+        raise RuntimeError(
+            "Foundry contract submodules are not initialized: " + ", ".join(missing)
+        )
     commit = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=repo, text=True
     ).strip()
