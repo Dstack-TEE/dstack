@@ -83,6 +83,7 @@ revision=$(git -C "$repo" rev-parse HEAD)
 short_revision=${revision:0:9}
 prod_image="dstack-mkosi-$short_revision"
 dev_image="dstack-dev-mkosi-$short_revision"
+identity_image="dstack-dev-mkosi-$short_revision-identity-variant"
 image_store=$(jq -er '.environment.DSTACK_TEST_IMAGE_STORE' "$template")
 image_store=$(realpath -e -- "$image_store")
 image_matches() {
@@ -180,6 +181,55 @@ if ! image_matches "$prod_image" false || ! image_matches "$dev_image" true; the
     sudo mv -- "$stage" "$image_store/$name"
   done
 fi
+
+# The identity matrix changes the measured image input while keeping the guest
+# capable of running the development TEE simulator. A production image cannot
+# serve as that row: it intentionally omits the simulator. Derive a second,
+# checksum-bound package identity from the exact-revision dev image instead.
+identity_image_matches() {
+  local image="$image_store/$identity_image"
+  [[ -f $image/identity-variant.txt ]] &&
+    [[ $(cat "$image/identity-variant.txt") == dstack-test-identity-variant-v1 ]] &&
+    [[ $(jq -r '.git_revision' "$image/metadata.json") == "$revision" ]] &&
+    [[ $(jq -r '.backend' "$image/metadata.json") == mkosi ]] &&
+    [[ $(jq -r '.is_dev' "$image/metadata.json") == true ]] &&
+    [[ $(sha256sum "$image/sha256sum.txt" | cut -d' ' -f1) == \
+      "$(tr -d '[:space:]' <"$image/digest.txt")" ]] &&
+    (cd "$image" && sha256sum --check --status sha256sum.txt)
+}
+if [[ -e $image_store/$identity_image ]] && ! identity_image_matches; then
+  printf 'identity variant exists with mismatched provenance: %s\n' \
+    "$identity_image" >&2
+  exit 1
+fi
+if ! identity_image_matches; then
+  stage="$image_store/.$identity_image.tmp.$$"
+  identity_tmp=$(mktemp -d "$cache_root/tmp/identity-variant.XXXXXX")
+  cleanup_identity_stage() {
+    [[ -z ${stage:-} ]] || sudo rm -rf -- "$stage"
+    rm -rf -- "$identity_tmp"
+  }
+  trap cleanup_identity_stage EXIT
+  sudo cp -al -- "$image_store/$dev_image" "$stage"
+  printf '%s\n' dstack-test-identity-variant-v1 \
+    >"$identity_tmp/identity-variant.txt"
+  {
+    cat "$stage/sha256sum.txt"
+    (cd "$identity_tmp" && sha256sum identity-variant.txt)
+  } >"$identity_tmp/sha256sum.txt"
+  sha256sum "$identity_tmp/sha256sum.txt" | cut -d' ' -f1 \
+    >"$identity_tmp/digest.txt"
+  sudo install -m 0644 "$identity_tmp/identity-variant.txt" \
+    "$stage/identity-variant.txt"
+  sudo install -m 0644 "$identity_tmp/sha256sum.txt" "$stage/sha256sum.txt"
+  sudo install -m 0644 "$identity_tmp/digest.txt" "$stage/digest.txt"
+  (cd "$stage" && sha256sum --check --status sha256sum.txt)
+  sudo chown -R root:root "$stage"
+  sudo mv -- "$stage" "$image_store/$identity_image"
+  stage=""
+  rm -rf -- "$identity_tmp"
+  trap - EXIT
+fi
 if [[ ! -x "$foundry_bin/forge" ]]; then
   archive=$(mktemp "$cache_root/tmp/foundry.XXXXXX.tar.gz")
   trap 'rm -f "$archive"' EXIT
@@ -241,6 +291,7 @@ docker_subnet_pool=$(
 
 python3 - "$template" "$generated_lab" "$plan" "$fixture_root" "$foundry_bin" \
   "$acpi_tables_bin" "$qemu_data_dir" "$prod_image" "$dev_image" \
+  "$identity_image" \
   "$docker_subnet_pool" <<'PY'
 import json
 import pathlib
@@ -249,7 +300,7 @@ import sys
 template, output, plan, full_tdx, foundry_bin, acpi_tables, qemu_data = map(
     pathlib.Path, sys.argv[1:8]
 )
-prod_image, dev_image, docker_subnet_pool = sys.argv[8:]
+prod_image, dev_image, identity_image, docker_subnet_pool = sys.argv[8:]
 value = json.loads(template.read_text())
 environment = value.setdefault("environment", {})
 providers = {
@@ -272,7 +323,7 @@ environment["DSTACK_TEST_GUEST_IMAGE"] = prod_image
 environment["DSTACK_TEST_NO_TEE_GUEST_IMAGE"] = dev_image
 environment["DSTACK_TEST_GUEST_PROD_IMAGE"] = prod_image
 environment["DSTACK_TEST_GUEST_DEV_IMAGE"] = dev_image
-environment["DSTACK_TEST_IDENTITY_ALT_IMAGE"] = prod_image
+environment["DSTACK_TEST_IDENTITY_ALT_IMAGE"] = identity_image
 environment["DSTACK_TEST_DOCKER_SUBNET_POOL"] = docker_subnet_pool
 path_prepend = value.setdefault("environment_path_prepend", [])
 foundry_path = str(foundry_bin.resolve(strict=True))
