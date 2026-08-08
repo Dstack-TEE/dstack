@@ -9015,13 +9015,13 @@
         },
         {
           "id": "section-kms-certificate-transparency-log",
-          "title": "Certificate Transparency Log Files",
+          "title": "Removed Certificate-Log Surface",
           "order": 9,
           "path": "03-kms/09-certificate-transparency-log",
           "cases": [
             {
               "id": "tc-kms-ct-001",
-              "title": "Concurrent certificate log append and iteration",
+              "title": "Removed certificate-log surface regression",
               "order": 1,
               "priority": "P0",
               "path": "03-kms/09-certificate-transparency-log/tc-kms-ct-001",
@@ -9053,7 +9053,7 @@
                 "simulation_allowed": false
               },
               "actions_under_test": [
-                "Concurrent certificate log append and iteration"
+                "Removed certificate-log surface regression"
               ],
               "execution": {
                 "entrypoint": "automation/kms-ct-concurrency-capability-case.py",
