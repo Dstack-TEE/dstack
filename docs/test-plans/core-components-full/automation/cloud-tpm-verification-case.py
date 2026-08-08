@@ -118,8 +118,9 @@ def main() -> int:
         (artifacts / "cloud-tpm-matrix.log").write_text(matrix_output)
         if (
             matrix_run.returncode
-            or f"{MATRIX_TEST} ... ok" not in matrix_output
-            or "test result: ok. 1 passed; 0 failed" not in matrix_output
+            or f"tpm::tests::{MATRIX_TEST} ... ok" not in matrix_output
+            or f"tdx::tests::{MATRIX_TEST} ... ok" not in matrix_output
+            or "test result: ok. 2 passed; 0 failed" not in matrix_output
         ):
             raise RuntimeError(
                 f"cloud TPM matrix failed with rc={matrix_run.returncode}"
@@ -128,7 +129,7 @@ def main() -> int:
             emit(
                 f"{CASE_ID}-step-02",
                 "PASS",
-                "The current source-defined TPM QVL test accepted valid signed evidence and rejected a wrong AK root, a tampered quote, and a mismatched qualifying-data binding.",
+                "The current source-defined TPM and TDX QVL tests accepted valid signed evidence and rejected wrong roots, tampered quotes, and mismatched report-data bindings.",
             )
         )
         steps.append(
