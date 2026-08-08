@@ -2080,6 +2080,40 @@ fn validate_key_provider_inputs(kind: KeyProviderKind, kms_urls: &[String]) -> R
     Ok(())
 }
 
+fn kms_rpc_url(base: &str) -> String {
+    let base = base.trim_end_matches('/');
+    if base.ends_with("/prpc") {
+        base.to_string()
+    } else {
+        format!("{base}/prpc")
+    }
+}
+
+async fn request_first_available_kms<T, F, Fut>(kms_urls: &[String], mut request: F) -> Result<T>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    if kms_urls.is_empty() {
+        bail!("No KMS URLs are set");
+    }
+    let mut first_error = None;
+    for kms_url in kms_urls {
+        let kms_url = kms_rpc_url(kms_url);
+        match request(kms_url.clone()).await {
+            Ok(response) => return Ok(response),
+            Err(err) => {
+                warn!("Failed to get app keys from KMS {kms_url}: {err:?}");
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+            }
+        }
+    }
+    Err(first_error.unwrap_or_else(|| anyhow!("unknown error")))
+        .context("Failed to get app keys from KMS")
+}
+
 impl<'a> Stage0<'a> {
     fn host_api(&self) -> HostApi {
         HostApi::new(
@@ -2173,30 +2207,10 @@ impl<'a> Stage0<'a> {
     }
 
     async fn request_app_keys_from_kms(&self) -> Result<AppKeys> {
-        if self.shared.sys_config.kms_urls.is_empty() {
-            bail!("No KMS URLs are set");
-        }
-        let keys = 'out: {
-            let mut error = anyhow!("unknown error");
-            for (i, kms_url) in self.shared.sys_config.kms_urls.iter().enumerate() {
-                let kms_url = format!("{kms_url}/prpc");
-                let response = self.request_app_keys_from_kms_url(kms_url.clone()).await;
-                match response {
-                    Ok(response) => {
-                        break 'out response;
-                    }
-                    Err(err) => {
-                        warn!("Failed to get app keys from KMS {kms_url}: {err:?}");
-                        // Record the first error
-                        if i == 0 {
-                            error = err;
-                        }
-                    }
-                }
-            }
-            return Err(error).context("Failed to get app keys from KMS");
-        };
-        Ok(keys)
+        request_first_available_kms(&self.shared.sys_config.kms_urls, |kms_url| async move {
+            self.request_app_keys_from_kms_url(kms_url).await
+        })
+        .await
     }
 
     fn verify_key_provider_id(&self, provider_id: &[u8]) -> Result<()> {
@@ -3580,9 +3594,104 @@ fn test_unquote_os_release_value_handles_quoting_styles() {
 }
 
 #[cfg(test)]
-mod kms_provider_inventory_tests {
-    use super::validate_key_provider_inputs;
+mod kms_provider_failover_tests {
+    use super::{kms_rpc_url, request_first_available_kms, validate_key_provider_inputs};
+    use anyhow::{anyhow, Result};
     use dstack_types::KeyProviderKind;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn normalizes_kms_rpc_urls_once() {
+        assert_eq!(kms_rpc_url("https://kms.test"), "https://kms.test/prpc");
+        assert_eq!(kms_rpc_url("https://kms.test/"), "https://kms.test/prpc");
+        assert_eq!(
+            kms_rpc_url("https://kms.test/prpc"),
+            "https://kms.test/prpc"
+        );
+        assert_eq!(
+            kms_rpc_url("https://kms.test/prpc/"),
+            "https://kms.test/prpc"
+        );
+    }
+
+    #[tokio::test]
+    async fn ordered_failover_skips_timeout_wrong_cert_and_denial() {
+        let urls =
+            ["timeout", "wrong-cert", "deny", "healthy"].map(|name| format!("https://{name}.test"));
+        let attempted = Arc::new(Mutex::new(Vec::new()));
+        let observed = attempted.clone();
+        let value = request_first_available_kms(&urls, move |url| {
+            observed.lock().unwrap().push(url.clone());
+            async move {
+                if url.contains("healthy") {
+                    Ok("stable-app-identity")
+                } else {
+                    Err(anyhow!("injected endpoint failure"))
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(value, "stable-app-identity");
+        assert_eq!(attempted.lock().unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn failover_stops_after_first_success() {
+        let urls = ["healthy", "must-not-run"].map(|name| format!("https://{name}.test"));
+        let attempted = Arc::new(Mutex::new(Vec::new()));
+        let observed = attempted.clone();
+        request_first_available_kms(&urls, move |url| {
+            observed.lock().unwrap().push(url.clone());
+            async move { Ok::<_, anyhow::Error>(url) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            attempted.lock().unwrap().as_slice(),
+            &["https://healthy.test/prpc"]
+        );
+    }
+
+    #[tokio::test]
+    async fn all_failed_returns_first_diagnostic_and_retry_recovers() {
+        let urls = ["first", "second"].map(|name| format!("https://{name}.test"));
+        let error = request_first_available_kms::<(), _, _>(&urls, |url| async move {
+            Err(anyhow!("failure at {url}"))
+        })
+        .await
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("failure at https://first.test/prpc"));
+        let recovered = request_first_available_kms(&urls, |url| async move {
+            if url.contains("first") {
+                Err(anyhow!("dependency remains unavailable"))
+            } else {
+                Ok("recovered-once")
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(recovered, "recovered-once");
+    }
+
+    #[tokio::test]
+    async fn concurrent_requests_keep_order_and_state_isolated() -> Result<()> {
+        let urls = ["down".to_string(), "healthy".to_string()];
+        let run = || async {
+            request_first_available_kms(&urls, |url| async move {
+                if url.contains("healthy") {
+                    Ok(url)
+                } else {
+                    Err(anyhow!("down"))
+                }
+            })
+            .await
+        };
+        let (left, right) = tokio::join!(run(), run());
+        assert_eq!(left?, "healthy/prpc");
+        assert_eq!(right?, "healthy/prpc");
+        Ok(())
+    }
 
     #[test]
     fn local_key_providers_do_not_require_kms_inventory() {
@@ -3591,6 +3700,18 @@ mod kms_provider_inventory_tests {
         assert!(validate_key_provider_inputs(KeyProviderKind::Tpm, &no_urls).is_ok());
         assert!(validate_key_provider_inputs(KeyProviderKind::None, &no_urls).is_ok());
         let error = validate_key_provider_inputs(KeyProviderKind::Kms, &no_urls).unwrap_err();
+        assert!(error.to_string().contains("No KMS URLs are set"));
+    }
+
+    #[tokio::test]
+    async fn empty_kms_list_fails_closed_without_request() {
+        let error = request_first_available_kms::<(), _, _>(&[], |_| async {
+            panic!("request must not run for an empty KMS list");
+            #[allow(unreachable_code)]
+            Ok(())
+        })
+        .await
+        .unwrap_err();
         assert!(error.to_string().contains("No KMS URLs are set"));
     }
 }

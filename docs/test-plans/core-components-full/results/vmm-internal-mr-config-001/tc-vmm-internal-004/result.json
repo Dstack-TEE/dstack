@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "case_id": "tc-vmm-internal-004",
+  "provisional": false,
+  "status": "PASS",
+  "summary": "4 candidate VMM unit rows passed for TDX and SNP measurement carriers, mutations, deterministic derivation, and GPU policy binding.",
+  "steps": [
+    {
+      "id": "tc-vmm-internal-004-step-01",
+      "status": "PASS",
+      "observed": "4 candidate VMM unit rows passed for TDX and SNP measurement carriers, mutations, deterministic derivation, and GPU policy binding."
+    },
+    {
+      "id": "tc-vmm-internal-004-step-02",
+      "status": "PASS",
+      "observed": "4 candidate VMM unit rows passed for TDX and SNP measurement carriers, mutations, deterministic derivation, and GPU policy binding."
+    },
+    {
+      "id": "tc-vmm-internal-004-step-03",
+      "status": "PASS",
+      "observed": "4 candidate VMM unit rows passed for TDX and SNP measurement carriers, mutations, deterministic derivation, and GPU policy binding."
+    },
+    {
+      "id": "tc-vmm-internal-004-step-04",
+      "status": "PASS",
+      "observed": "4 candidate VMM unit rows passed for TDX and SNP measurement carriers, mutations, deterministic derivation, and GPU policy binding."
+    }
+  ],
+  "evidence": [
+    {
+      "path": "artifacts/vmm-internal-unit.json",
+      "sha256": "650b9e2f1b50eafd5a42eb869ca1946d3435944abeab5e2f0cf7fa48214254bb"
+    }
+  ],
+  "remarks": "The immutable Cargo target is shared across compatible cases; result state and evidence remain case-scoped. No VM or service was started."
+}

@@ -181,13 +181,6 @@ SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "Apache-2.0"
 precedence = "override"
 
-# ktls 6.0.2 plus rustls/ktls#70; see dstack/vendor/README.md.
-[[annotations]]
-path = "dstack/vendor/ktls/**"
-SPDX-FileCopyrightText = "Copyright (c) 2022 Amos Wenger <amos@bearcove.net>"
-SPDX-License-Identifier = "MIT OR Apache-2.0"
-precedence = "override"
-
 # Generated files
 
 [[annotations]]
@@ -217,6 +210,11 @@ SPDX-License-Identifier = "CC0-1.0"
 
 [[annotations]]
 path = "**/src/generated/*"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "tools/dstack-test/tests/fixtures/**"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
 
@@ -258,3 +256,26 @@ path = [
 ]
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = [
+    "docs/test-plans/core-components-full/index.json",
+    "docs/test-plans/core-components-full/source-inventory.json",
+]
+SPDX-FileCopyrightText = "© 2026 Phala Network <dstack@phala.network>"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "docs/test-plans/core-components-full/configuration-inventory.json"
+SPDX-FileCopyrightText = "© 2026 Phala Network <dstack@phala.network>"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "docs/test-plans/core-components-full/api-inventory.json"
+SPDX-FileCopyrightText = "© 2026 Phala Network <dstack@phala.network>"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "docs/test-plans/core-components-full/source-coverage-map.json"
+SPDX-FileCopyrightText = "© 2026 Phala Network <dstack@phala.network>"
+SPDX-License-Identifier = "Apache-2.0"

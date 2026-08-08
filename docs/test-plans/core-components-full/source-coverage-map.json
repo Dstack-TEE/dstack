@@ -1,0 +1,6591 @@
+{
+  "schema_version": "1.0",
+  "description": "Reverse traceability from every inventoried non-vendor repository file to one or more test cases. A generic build mapping is used only for manifests/generated/support files without independent runtime behavior.",
+  "entries": [
+    {
+      "component": "gateway",
+      "source": "dstack/certbot/cli/Cargo.toml",
+      "case_ids": [
+        "tc-gw-certbot-006"
+      ],
+      "rationale": "certbot CLI behavior; component build/generated/existing-test gate"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/certbot/cli/src/main.rs",
+      "case_ids": [
+        "tc-gw-certbot-006"
+      ],
+      "rationale": "direct source reference; certbot CLI behavior"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/certbot/src/acme_client.rs",
+      "case_ids": [
+        "tc-gw-certbot-002",
+        "tc-gw-certbot-001",
+        "tc-gw-certbot-003",
+        "tc-gw-certbot-004",
+        "tc-gw-certbot-005"
+      ],
+      "rationale": "direct source reference; certbot engine behavior"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/certbot/src/acme_client/tests.rs",
+      "case_ids": [
+        "tc-gw-certbot-001",
+        "tc-gw-certbot-002",
+        "tc-gw-certbot-003",
+        "tc-gw-certbot-004",
+        "tc-gw-certbot-005"
+      ],
+      "rationale": "certbot engine behavior"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/certbot/src/bot.rs",
+      "case_ids": [
+        "tc-gw-certbot-004",
+        "tc-gw-certbot-001",
+        "tc-gw-certbot-002",
+        "tc-gw-certbot-003",
+        "tc-gw-certbot-005"
+      ],
+      "rationale": "direct source reference; certbot engine behavior"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/certbot/src/bot/tests.rs",
+      "case_ids": [
+        "tc-gw-certbot-001",
+        "tc-gw-certbot-002",
+        "tc-gw-certbot-003",
+        "tc-gw-certbot-004",
+        "tc-gw-certbot-005"
+      ],
+      "rationale": "certbot engine behavior"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/certbot/src/dns01_client.rs",
+      "case_ids": [
+        "tc-gw-certbot-001",
+        "tc-gw-certbot-002",
+        "tc-gw-certbot-003",
+        "tc-gw-certbot-004",
+        "tc-gw-certbot-005"
+      ],
+      "rationale": "certbot engine behavior"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/certbot/src/dns01_client/cloudflare.rs",
+      "case_ids": [
+        "tc-gw-certbot-003",
+        "tc-gw-certbot-001",
+        "tc-gw-certbot-002",
+        "tc-gw-certbot-004",
+        "tc-gw-certbot-005"
+      ],
+      "rationale": "direct source reference; certbot engine behavior"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/certbot/src/http_client.rs",
+      "case_ids": [
+        "tc-gw-certbot-001",
+        "tc-gw-certbot-002",
+        "tc-gw-certbot-003",
+        "tc-gw-certbot-004",
+        "tc-gw-certbot-005"
+      ],
+      "rationale": "certbot engine behavior"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/certbot/src/lib.rs",
+      "case_ids": [
+        "tc-gw-certbot-001",
+        "tc-gw-certbot-002",
+        "tc-gw-certbot-003",
+        "tc-gw-certbot-004",
+        "tc-gw-certbot-005"
+      ],
+      "rationale": "certbot engine behavior"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/certbot/src/workdir.rs",
+      "case_ids": [
+        "tc-gw-certbot-005",
+        "tc-gw-certbot-001",
+        "tc-gw-certbot-002",
+        "tc-gw-certbot-003",
+        "tc-gw-certbot-004"
+      ],
+      "rationale": "direct source reference; certbot engine behavior"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/ct_monitor/Cargo.toml",
+      "case_ids": [
+        "tc-gw-certificat-007"
+      ],
+      "rationale": "certificate transparency monitoring"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/ct_monitor/src/main.rs",
+      "case_ids": [
+        "tc-gw-certificat-007"
+      ],
+      "rationale": "certificate transparency monitoring"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/dstack-app/.gitignore",
+      "case_ids": [
+        "tc-int-mixed-004"
+      ],
+      "rationale": "direct source reference; gateway packaging and deployment"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/dstack-app/bootstrap-cluster.sh",
+      "case_ids": [
+        "tc-int-mixed-004"
+      ],
+      "rationale": "direct source reference; gateway packaging and deployment"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/dstack-app/builder/Dockerfile",
+      "case_ids": [
+        "tc-int-mixed-004"
+      ],
+      "rationale": "direct source reference; gateway packaging and deployment"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/dstack-app/builder/README.md",
+      "case_ids": [
+        "tc-int-mixed-004"
+      ],
+      "rationale": "direct source reference; gateway packaging and deployment"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/dstack-app/builder/build-image.sh",
+      "case_ids": [
+        "tc-int-mixed-004"
+      ],
+      "rationale": "direct source reference; gateway packaging and deployment"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/dstack-app/builder/entrypoint.sh",
+      "case_ids": [
+        "tc-int-mixed-004"
+      ],
+      "rationale": "direct source reference; gateway packaging and deployment"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/dstack-app/builder/shared/builder-pinned-packages.txt",
+      "case_ids": [
+        "tc-int-mixed-004"
+      ],
+      "rationale": "direct source reference; gateway packaging and deployment"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/dstack-app/builder/shared/pinned-packages.txt",
+      "case_ids": [
+        "tc-int-mixed-004"
+      ],
+      "rationale": "direct source reference; gateway packaging and deployment"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/dstack-app/deploy-to-vmm.sh",
+      "case_ids": [
+        "tc-int-mixed-004"
+      ],
+      "rationale": "direct source reference; gateway packaging and deployment"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/dstack-app/docker-compose.yaml",
+      "case_ids": [
+        "tc-int-mixed-004"
+      ],
+      "rationale": "direct source reference; gateway packaging and deployment"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/rpc/Cargo.toml",
+      "case_ids": [
+        "tc-gw-gateway-001",
+        "tc-gw-gateway-002",
+        "tc-gw-gateway-003",
+        "tc-gw-gateway-004",
+        "tc-gw-debug-001",
+        "tc-gw-debug-002",
+        "tc-gw-debug-003",
+        "tc-gw-debug-004",
+        "tc-gw-admin-001",
+        "tc-gw-admin-002",
+        "tc-gw-admin-003",
+        "tc-gw-admin-004",
+        "tc-gw-admin-005",
+        "tc-gw-admin-006",
+        "tc-gw-admin-007",
+        "tc-gw-admin-008",
+        "tc-gw-admin-009",
+        "tc-gw-admin-010",
+        "tc-gw-admin-011",
+        "tc-gw-admin-012",
+        "tc-gw-admin-013",
+        "tc-gw-admin-014",
+        "tc-gw-admin-015",
+        "tc-gw-admin-016",
+        "tc-gw-admin-017",
+        "tc-gw-admin-018",
+        "tc-gw-admin-019",
+        "tc-gw-admin-020",
+        "tc-gw-admin-021",
+        "tc-gw-admin-022",
+        "tc-gw-admin-023",
+        "tc-gw-admin-024",
+        "tc-gw-admin-025",
+        "tc-gw-admin-026",
+        "tc-gw-admin-027",
+        "tc-gw-admin-028",
+        "tc-gw-admin-029",
+        "tc-gw-admin-030",
+        "tc-gw-admin-031",
+        "tc-gw-admin-032",
+        "tc-gw-admin-033"
+      ],
+      "rationale": "direct source reference; gateway RPC generated contract; component build/generated/existing-test gate"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/rpc/build.rs",
+      "case_ids": [
+        "tc-gw-gateway-001",
+        "tc-gw-gateway-002",
+        "tc-gw-gateway-003",
+        "tc-gw-gateway-004",
+        "tc-gw-debug-001",
+        "tc-gw-debug-002",
+        "tc-gw-debug-003",
+        "tc-gw-debug-004",
+        "tc-gw-admin-001",
+        "tc-gw-admin-002",
+        "tc-gw-admin-003",
+        "tc-gw-admin-004",
+        "tc-gw-admin-005",
+        "tc-gw-admin-006",
+        "tc-gw-admin-007",
+        "tc-gw-admin-008",
+        "tc-gw-admin-009",
+        "tc-gw-admin-010",
+        "tc-gw-admin-011",
+        "tc-gw-admin-012",
+        "tc-gw-admin-013",
+        "tc-gw-admin-014",
+        "tc-gw-admin-015",
+        "tc-gw-admin-016",
+        "tc-gw-admin-017",
+        "tc-gw-admin-018",
+        "tc-gw-admin-019",
+        "tc-gw-admin-020",
+        "tc-gw-admin-021",
+        "tc-gw-admin-022",
+        "tc-gw-admin-023",
+        "tc-gw-admin-024",
+        "tc-gw-admin-025",
+        "tc-gw-admin-026",
+        "tc-gw-admin-027",
+        "tc-gw-admin-028",
+        "tc-gw-admin-029",
+        "tc-gw-admin-030",
+        "tc-gw-admin-031",
+        "tc-gw-admin-032",
+        "tc-gw-admin-033"
+      ],
+      "rationale": "direct source reference; gateway RPC generated contract; component build/generated/existing-test gate"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
+      "case_ids": [
+        "tc-gw-debug-001",
+        "tc-gw-debug-004",
+        "tc-gw-debug-003",
+        "tc-gw-debug-002",
+        "tc-gw-admin-013",
+        "tc-gw-admin-026",
+        "tc-gw-admin-022",
+        "tc-gw-admin-015",
+        "tc-gw-admin-024",
+        "tc-gw-admin-023",
+        "tc-gw-admin-018",
+        "tc-gw-admin-020",
+        "tc-gw-admin-012",
+        "tc-gw-admin-025",
+        "tc-gw-admin-030",
+        "tc-gw-admin-003",
+        "tc-gw-admin-014",
+        "tc-gw-admin-021",
+        "tc-gw-admin-017",
+        "tc-gw-admin-004",
+        "tc-gw-admin-007",
+        "tc-gw-admin-002",
+        "tc-gw-admin-016",
+        "tc-gw-admin-006",
+        "tc-gw-admin-001",
+        "tc-gw-admin-009",
+        "tc-gw-admin-029",
+        "tc-gw-admin-031",
+        "tc-gw-admin-008",
+        "tc-gw-admin-033",
+        "tc-gw-admin-010",
+        "tc-gw-admin-027",
+        "tc-gw-admin-011",
+        "tc-gw-admin-032",
+        "tc-gw-admin-028",
+        "tc-gw-admin-005",
+        "tc-gw-admin-019",
+        "tc-gw-gateway-003",
+        "tc-gw-gateway-001",
+        "tc-gw-gateway-002",
+        "tc-gw-gateway-004"
+      ],
+      "rationale": "direct source reference; gateway RPC generated contract"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/rpc/src/generated.rs",
+      "case_ids": [
+        "tc-gw-gateway-001",
+        "tc-gw-gateway-002",
+        "tc-gw-gateway-003",
+        "tc-gw-gateway-004",
+        "tc-gw-debug-001",
+        "tc-gw-debug-002",
+        "tc-gw-debug-003",
+        "tc-gw-debug-004",
+        "tc-gw-admin-001",
+        "tc-gw-admin-002",
+        "tc-gw-admin-003",
+        "tc-gw-admin-004",
+        "tc-gw-admin-005",
+        "tc-gw-admin-006",
+        "tc-gw-admin-007",
+        "tc-gw-admin-008",
+        "tc-gw-admin-009",
+        "tc-gw-admin-010",
+        "tc-gw-admin-011",
+        "tc-gw-admin-012",
+        "tc-gw-admin-013",
+        "tc-gw-admin-014",
+        "tc-gw-admin-015",
+        "tc-gw-admin-016",
+        "tc-gw-admin-017",
+        "tc-gw-admin-018",
+        "tc-gw-admin-019",
+        "tc-gw-admin-020",
+        "tc-gw-admin-021",
+        "tc-gw-admin-022",
+        "tc-gw-admin-023",
+        "tc-gw-admin-024",
+        "tc-gw-admin-025",
+        "tc-gw-admin-026",
+        "tc-gw-admin-027",
+        "tc-gw-admin-028",
+        "tc-gw-admin-029",
+        "tc-gw-admin-030",
+        "tc-gw-admin-031",
+        "tc-gw-admin-032",
+        "tc-gw-admin-033"
+      ],
+      "rationale": "direct source reference; gateway RPC generated contract"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/rpc/src/lib.rs",
+      "case_ids": [
+        "tc-gw-gateway-001",
+        "tc-gw-gateway-002",
+        "tc-gw-gateway-003",
+        "tc-gw-gateway-004",
+        "tc-gw-debug-001",
+        "tc-gw-debug-002",
+        "tc-gw-debug-003",
+        "tc-gw-debug-004",
+        "tc-gw-admin-001",
+        "tc-gw-admin-002",
+        "tc-gw-admin-003",
+        "tc-gw-admin-004",
+        "tc-gw-admin-005",
+        "tc-gw-admin-006",
+        "tc-gw-admin-007",
+        "tc-gw-admin-008",
+        "tc-gw-admin-009",
+        "tc-gw-admin-010",
+        "tc-gw-admin-011",
+        "tc-gw-admin-012",
+        "tc-gw-admin-013",
+        "tc-gw-admin-014",
+        "tc-gw-admin-015",
+        "tc-gw-admin-016",
+        "tc-gw-admin-017",
+        "tc-gw-admin-018",
+        "tc-gw-admin-019",
+        "tc-gw-admin-020",
+        "tc-gw-admin-021",
+        "tc-gw-admin-022",
+        "tc-gw-admin-023",
+        "tc-gw-admin-024",
+        "tc-gw-admin-025",
+        "tc-gw-admin-026",
+        "tc-gw-admin-027",
+        "tc-gw-admin-028",
+        "tc-gw-admin-029",
+        "tc-gw-admin-030",
+        "tc-gw-admin-031",
+        "tc-gw-admin-032",
+        "tc-gw-admin-033"
+      ],
+      "rationale": "direct source reference; gateway RPC generated contract"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/admin_auth.rs",
+      "case_ids": [
+        "tc-gw-cluster-ad-005"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/admin_service.rs",
+      "case_ids": [
+        "tc-gw-certificat-005",
+        "tc-gw-certificat-003",
+        "tc-gw-certificat-004",
+        "tc-gw-cluster-ad-003",
+        "tc-gw-cluster-ad-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/cert_store.rs",
+      "case_ids": [
+        "tc-gw-certificat-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/config.rs",
+      "case_ids": [
+        "tc-gw-cluster-ad-008"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/debug_service.rs",
+      "case_ids": [
+        "tc-gw-cluster-ad-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/distributed_certbot.rs",
+      "case_ids": [
+        "tc-gw-certificat-002",
+        "tc-gw-certificat-001",
+        "tc-gw-certificat-007"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/main.rs",
+      "case_ids": [
+        "tc-gw-internal-001",
+        "tc-gw-internal-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/kv/https_client.rs",
+      "case_ids": [
+        "tc-int-compatibil-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/kv/mod.rs",
+      "case_ids": [
+        "tc-int-compatibil-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/kv/sync_service.rs",
+      "case_ids": [
+        "tc-gw-cluster-ad-001",
+        "tc-int-compatibil-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/main_service.rs",
+      "case_ids": [
+        "tc-gw-proxy-prot-005",
+        "tc-gw-registrati-001",
+        "tc-gw-registrati-003",
+        "tc-gw-registrati-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/main_service/auth_client.rs",
+      "case_ids": [
+        "tc-gw-internal-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/main_service/handshakes.rs",
+      "case_ids": [
+        "tc-gw-registrati-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/models.rs",
+      "case_ids": [
+        "tc-gw-internal-007"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/pp.rs",
+      "case_ids": [
+        "tc-gw-proxy-prot-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/proxy.rs",
+      "case_ids": [
+        "tc-gw-proxy-prot-002",
+        "tc-gw-proxy-prot-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/proxy/io_bridge.rs",
+      "case_ids": [
+        "tc-gw-proxy-prot-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/proxy/port_policy.rs",
+      "case_ids": [
+        "tc-gw-internal-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/proxy/sni.rs",
+      "case_ids": [
+        "tc-gw-internal-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/proxy/tls_passthough.rs",
+      "case_ids": [
+        "tc-gw-proxy-prot-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/proxy/tls_terminate.rs",
+      "case_ids": [
+        "tc-gw-internal-005"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/web_routes.rs",
+      "case_ids": [
+        "tc-gw-cluster-ad-007"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/web_routes/route_index.rs",
+      "case_ids": [
+        "tc-gw-internal-008"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/web_routes/wavekv_sync.rs",
+      "case_ids": [
+        "tc-gw-cluster-ad-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/templates/dashboard.html",
+      "case_ids": [
+        "tc-gw-registrati-002",
+        "tc-gw-proxy-prot-004"
+      ],
+      "rationale": "direct source reference; gateway WireGuard/reverse-proxy templates"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/templates/rproxy.yaml",
+      "case_ids": [
+        "tc-gw-registrati-002",
+        "tc-gw-proxy-prot-004"
+      ],
+      "rationale": "direct source reference; gateway WireGuard/reverse-proxy templates"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/templates/wg.conf",
+      "case_ids": [
+        "tc-gw-registrati-002",
+        "tc-gw-proxy-prot-004"
+      ],
+      "rationale": "direct source reference; gateway WireGuard/reverse-proxy templates"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/cert-client/Cargo.toml",
+      "case_ids": [
+        "tc-gos-attestatio-004",
+        "tc-kms-keys-certs-004"
+      ],
+      "rationale": "certificate request and chain client"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/cert-client/src/lib.rs",
+      "case_ids": [
+        "tc-gos-attestatio-004",
+        "tc-kms-keys-certs-004"
+      ],
+      "rationale": "certificate request and chain client"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/crates/dstack-volume/Cargo.toml",
+      "case_ids": [
+        "tc-gos-storage-an-005"
+      ],
+      "rationale": "volume declaration encryption/persistence"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/crates/dstack-volume/src/bin/dstack-volume.rs",
+      "case_ids": [
+        "tc-gos-storage-an-005"
+      ],
+      "rationale": "volume declaration encryption/persistence"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/crates/dstack-volume/src/lib.rs",
+      "case_ids": [
+        "tc-gos-storage-an-005"
+      ],
+      "rationale": "volume declaration encryption/persistence"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/crates/dstack-volume/src/volume.rs",
+      "case_ids": [
+        "tc-gos-storage-an-005"
+      ],
+      "rationale": "volume declaration encryption/persistence"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/crates/dstack-volume/src/volume_format.rs",
+      "case_ids": [
+        "tc-gos-storage-an-005"
+      ],
+      "rationale": "volume declaration encryption/persistence"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/dstack-types/Cargo.toml",
+      "case_ids": [
+        "tc-gos-platform-010",
+        "tc-gos-compose-006",
+        "tc-vmm-manifest-002"
+      ],
+      "rationale": "compose, VM, attestation and compatibility schemas"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/dstack-types/src/lib.rs",
+      "case_ids": [
+        "tc-gos-platform-010",
+        "tc-gos-compose-006",
+        "tc-vmm-manifest-002"
+      ],
+      "rationale": "compose, VM, attestation and compatibility schemas"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/dstack-types/src/mr_config.rs",
+      "case_ids": [
+        "tc-gos-platform-010",
+        "tc-gos-compose-006",
+        "tc-vmm-manifest-002"
+      ],
+      "rationale": "compose, VM, attestation and compatibility schemas"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/dstack-types/src/shared_filenames.rs",
+      "case_ids": [
+        "tc-gos-platform-010",
+        "tc-gos-compose-006",
+        "tc-vmm-manifest-002"
+      ],
+      "rationale": "compose, VM, attestation and compatibility schemas"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/dstack-types/src/version.rs",
+      "case_ids": [
+        "tc-gos-platform-010",
+        "tc-gos-compose-006",
+        "tc-vmm-manifest-002"
+      ],
+      "rationale": "compose, VM, attestation and compatibility schemas"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/dstack-util/src/crypto.rs",
+      "case_ids": [
+        "tc-gos-setup-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/dstack-util/src/docker_compose.rs",
+      "case_ids": [
+        "tc-gos-setup-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/dstack-util/src/host_api.rs",
+      "case_ids": [
+        "tc-gos-setup-010"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/dstack-util/src/host_shared.rs",
+      "case_ids": [
+        "tc-gos-platform-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/dstack-util/src/main.rs",
+      "case_ids": [
+        "tc-gos-setup-024",
+        "tc-gos-setup-018",
+        "tc-gos-setup-021",
+        "tc-gos-setup-020",
+        "tc-gos-setup-023",
+        "tc-gos-setup-019",
+        "tc-gos-setup-022"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/dstack-util/src/parse_env_file.rs",
+      "case_ids": [
+        "tc-gos-setup-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/dstack-util/src/system_setup.rs",
+      "case_ids": [
+        "tc-gos-setup-008",
+        "tc-gos-setup-004",
+        "tc-gos-setup-006",
+        "tc-gos-setup-007",
+        "tc-gos-setup-011",
+        "tc-gos-setup-009"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/dstack-util/src/system_setup/config_id_verifier.rs",
+      "case_ids": [
+        "tc-gos-setup-005"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/dstack-util/src/utils.rs",
+      "case_ids": [
+        "tc-gos-setup-004"
+      ],
+      "rationale": "system setup JSON/file hashing support and component regression gate"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/dstack.toml",
+      "case_ids": [
+        "tc-gos-entry-001"
+      ],
+      "rationale": "guest-agent mandatory configuration matrix"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/fixtures/attestation.bin",
+      "case_ids": [
+        "tc-gos-setup-022",
+        "tc-ver-cli-cert-o-006"
+      ],
+      "rationale": "attestation CLI and verifier fixture regression"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/rpc/Cargo.toml",
+      "case_ids": [
+        "tc-gos-tappd-001",
+        "tc-gos-tappd-002",
+        "tc-gos-tappd-003",
+        "tc-gos-tappd-004",
+        "tc-gos-tappd-005",
+        "tc-gos-tappd-006",
+        "tc-gos-dstackguest-001",
+        "tc-gos-dstackguest-002",
+        "tc-gos-dstackguest-003",
+        "tc-gos-dstackguest-004",
+        "tc-gos-dstackguest-005",
+        "tc-gos-dstackguest-006",
+        "tc-gos-dstackguest-007",
+        "tc-gos-dstackguest-008",
+        "tc-gos-dstackguest-009",
+        "tc-gos-worker-001",
+        "tc-gos-worker-002",
+        "tc-gos-worker-003",
+        "tc-gos-guestapi-001",
+        "tc-gos-guestapi-002",
+        "tc-gos-guestapi-003",
+        "tc-gos-guestapi-004",
+        "tc-gos-guestapi-005",
+        "tc-gos-proxiedguestapi-001",
+        "tc-gos-proxiedguestapi-002",
+        "tc-gos-proxiedguestapi-003",
+        "tc-gos-proxiedguestapi-004",
+        "tc-gos-proxiedguestapi-005"
+      ],
+      "rationale": "guest-agent RPC generated contract; component build/generated/existing-test gate"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/rpc/build.rs",
+      "case_ids": [
+        "tc-gos-tappd-001",
+        "tc-gos-tappd-002",
+        "tc-gos-tappd-003",
+        "tc-gos-tappd-004",
+        "tc-gos-tappd-005",
+        "tc-gos-tappd-006",
+        "tc-gos-dstackguest-001",
+        "tc-gos-dstackguest-002",
+        "tc-gos-dstackguest-003",
+        "tc-gos-dstackguest-004",
+        "tc-gos-dstackguest-005",
+        "tc-gos-dstackguest-006",
+        "tc-gos-dstackguest-007",
+        "tc-gos-dstackguest-008",
+        "tc-gos-dstackguest-009",
+        "tc-gos-worker-001",
+        "tc-gos-worker-002",
+        "tc-gos-worker-003",
+        "tc-gos-guestapi-001",
+        "tc-gos-guestapi-002",
+        "tc-gos-guestapi-003",
+        "tc-gos-guestapi-004",
+        "tc-gos-guestapi-005",
+        "tc-gos-proxiedguestapi-001",
+        "tc-gos-proxiedguestapi-002",
+        "tc-gos-proxiedguestapi-003",
+        "tc-gos-proxiedguestapi-004",
+        "tc-gos-proxiedguestapi-005"
+      ],
+      "rationale": "guest-agent RPC generated contract; component build/generated/existing-test gate"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/rpc/proto/agent_rpc.proto",
+      "case_ids": [
+        "tc-gos-worker-002",
+        "tc-gos-worker-001",
+        "tc-gos-worker-003",
+        "tc-gos-tappd-001",
+        "tc-gos-tappd-004",
+        "tc-gos-tappd-005",
+        "tc-gos-tappd-002",
+        "tc-gos-tappd-003",
+        "tc-gos-tappd-006",
+        "tc-gos-dstackguest-005",
+        "tc-gos-dstackguest-001",
+        "tc-gos-dstackguest-008",
+        "tc-gos-dstackguest-002",
+        "tc-gos-dstackguest-006",
+        "tc-gos-dstackguest-003",
+        "tc-gos-dstackguest-004",
+        "tc-gos-dstackguest-007",
+        "tc-gos-dstackguest-009",
+        "tc-gos-guestapi-001",
+        "tc-gos-guestapi-002",
+        "tc-gos-guestapi-003",
+        "tc-gos-guestapi-004",
+        "tc-gos-guestapi-005",
+        "tc-gos-proxiedguestapi-001",
+        "tc-gos-proxiedguestapi-002",
+        "tc-gos-proxiedguestapi-003",
+        "tc-gos-proxiedguestapi-004",
+        "tc-gos-proxiedguestapi-005"
+      ],
+      "rationale": "direct source reference; guest-agent RPC generated contract"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/rpc/src/generated.rs",
+      "case_ids": [
+        "tc-gos-tappd-001",
+        "tc-gos-tappd-002",
+        "tc-gos-tappd-003",
+        "tc-gos-tappd-004",
+        "tc-gos-tappd-005",
+        "tc-gos-tappd-006",
+        "tc-gos-dstackguest-001",
+        "tc-gos-dstackguest-002",
+        "tc-gos-dstackguest-003",
+        "tc-gos-dstackguest-004",
+        "tc-gos-dstackguest-005",
+        "tc-gos-dstackguest-006",
+        "tc-gos-dstackguest-007",
+        "tc-gos-dstackguest-008",
+        "tc-gos-dstackguest-009",
+        "tc-gos-worker-001",
+        "tc-gos-worker-002",
+        "tc-gos-worker-003",
+        "tc-gos-guestapi-001",
+        "tc-gos-guestapi-002",
+        "tc-gos-guestapi-003",
+        "tc-gos-guestapi-004",
+        "tc-gos-guestapi-005",
+        "tc-gos-proxiedguestapi-001",
+        "tc-gos-proxiedguestapi-002",
+        "tc-gos-proxiedguestapi-003",
+        "tc-gos-proxiedguestapi-004",
+        "tc-gos-proxiedguestapi-005"
+      ],
+      "rationale": "guest-agent RPC generated contract"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/rpc/src/lib.rs",
+      "case_ids": [
+        "tc-gos-tappd-001",
+        "tc-gos-tappd-002",
+        "tc-gos-tappd-003",
+        "tc-gos-tappd-004",
+        "tc-gos-tappd-005",
+        "tc-gos-tappd-006",
+        "tc-gos-dstackguest-001",
+        "tc-gos-dstackguest-002",
+        "tc-gos-dstackguest-003",
+        "tc-gos-dstackguest-004",
+        "tc-gos-dstackguest-005",
+        "tc-gos-dstackguest-006",
+        "tc-gos-dstackguest-007",
+        "tc-gos-dstackguest-008",
+        "tc-gos-dstackguest-009",
+        "tc-gos-worker-001",
+        "tc-gos-worker-002",
+        "tc-gos-worker-003",
+        "tc-gos-guestapi-001",
+        "tc-gos-guestapi-002",
+        "tc-gos-guestapi-003",
+        "tc-gos-guestapi-004",
+        "tc-gos-guestapi-005",
+        "tc-gos-proxiedguestapi-001",
+        "tc-gos-proxiedguestapi-002",
+        "tc-gos-proxiedguestapi-003",
+        "tc-gos-proxiedguestapi-004",
+        "tc-gos-proxiedguestapi-005"
+      ],
+      "rationale": "guest-agent RPC generated contract"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/src/backend.rs",
+      "case_ids": [
+        "tc-int-failure-se-002",
+        "tc-gos-boot-and-i-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/src/config.rs",
+      "case_ids": [
+        "tc-gos-entry-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/src/guest_api_service.rs",
+      "case_ids": [
+        "tc-gos-observabil-004",
+        "tc-gos-boot-and-i-005"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/src/http_routes.rs",
+      "case_ids": [
+        "tc-gos-observabil-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/src/lib.rs",
+      "case_ids": [
+        "tc-gos-entry-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/src/main.rs",
+      "case_ids": [
+        "tc-gos-entry-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/src/models.rs",
+      "case_ids": [
+        "tc-gos-entry-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/src/rpc_service.rs",
+      "case_ids": [
+        "tc-gos-attestatio-006",
+        "tc-gos-attestatio-003",
+        "tc-gos-attestatio-001",
+        "tc-gos-attestatio-004",
+        "tc-gos-attestatio-005"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/src/server.rs",
+      "case_ids": [
+        "tc-gos-observabil-005"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/src/socket_activation.rs",
+      "case_ids": [
+        "tc-gos-observabil-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/templates/dashboard.html",
+      "case_ids": [
+        "tc-gos-entry-003",
+        "tc-gos-observabil-001"
+      ],
+      "rationale": "dashboard escaping and observability"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/templates/metrics.tpl",
+      "case_ids": [
+        "tc-gos-entry-003",
+        "tc-gos-observabil-001"
+      ],
+      "rationale": "metrics formatting and observability"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-api/Cargo.toml",
+      "case_ids": [
+        "tc-gos-guestapi-001",
+        "tc-gos-guestapi-002",
+        "tc-gos-guestapi-003",
+        "tc-gos-guestapi-004",
+        "tc-gos-guestapi-005",
+        "tc-vmm-manifest-001"
+      ],
+      "rationale": "guest API direct/proxied contract; component build/generated/existing-test gate"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-api/build.rs",
+      "case_ids": [
+        "tc-gos-guestapi-001",
+        "tc-gos-guestapi-002",
+        "tc-gos-guestapi-003",
+        "tc-gos-guestapi-004",
+        "tc-gos-guestapi-005",
+        "tc-vmm-manifest-001"
+      ],
+      "rationale": "guest API direct/proxied contract; component build/generated/existing-test gate"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-api/proto/guest_api.proto",
+      "case_ids": [
+        "tc-gos-guestapi-001",
+        "tc-gos-guestapi-004",
+        "tc-gos-guestapi-005",
+        "tc-gos-guestapi-003",
+        "tc-gos-guestapi-002",
+        "tc-gos-proxiedguestapi-001",
+        "tc-gos-proxiedguestapi-004",
+        "tc-gos-proxiedguestapi-003",
+        "tc-gos-proxiedguestapi-002",
+        "tc-gos-proxiedguestapi-005",
+        "tc-vmm-manifest-001"
+      ],
+      "rationale": "direct source reference; guest API direct/proxied contract"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-api/src/client.rs",
+      "case_ids": [
+        "tc-gos-guestapi-001",
+        "tc-gos-guestapi-002",
+        "tc-gos-guestapi-003",
+        "tc-gos-guestapi-004",
+        "tc-gos-guestapi-005",
+        "tc-vmm-manifest-001"
+      ],
+      "rationale": "guest API direct/proxied contract"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-api/src/generated/mod.rs",
+      "case_ids": [
+        "tc-gos-guestapi-001",
+        "tc-gos-guestapi-002",
+        "tc-gos-guestapi-003",
+        "tc-gos-guestapi-004",
+        "tc-gos-guestapi-005",
+        "tc-vmm-manifest-001"
+      ],
+      "rationale": "guest API direct/proxied contract; component build/generated/existing-test gate"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-api/src/lib.rs",
+      "case_ids": [
+        "tc-gos-guestapi-001",
+        "tc-gos-guestapi-002",
+        "tc-gos-guestapi-003",
+        "tc-gos-guestapi-004",
+        "tc-gos-guestapi-005",
+        "tc-vmm-manifest-001"
+      ],
+      "rationale": "guest API direct/proxied contract"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/key-provider-client/Cargo.toml",
+      "case_ids": [
+        "tc-gos-platform-001",
+        "tc-gos-platform-002",
+        "tc-gos-setup-006"
+      ],
+      "rationale": "key-provider transport and identity"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/key-provider-client/src/host.rs",
+      "case_ids": [
+        "tc-gos-platform-001",
+        "tc-gos-platform-002",
+        "tc-gos-setup-006"
+      ],
+      "rationale": "key-provider transport and identity"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/key-provider-client/src/lib.rs",
+      "case_ids": [
+        "tc-gos-platform-001",
+        "tc-gos-platform-002",
+        "tc-gos-setup-006"
+      ],
+      "rationale": "key-provider transport and identity"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/load_config/Cargo.toml",
+      "case_ids": [
+        "tc-gos-entry-001",
+        "tc-vmm-configurat-001",
+        "tc-kms-startup-001"
+      ],
+      "rationale": "configuration loading precedence"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/load_config/src/lib.rs",
+      "case_ids": [
+        "tc-gos-entry-001",
+        "tc-vmm-configurat-001",
+        "tc-kms-startup-001"
+      ],
+      "rationale": "configuration loading precedence"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/local-key-provider/Cargo.toml",
+      "case_ids": [
+        "tc-gos-platform-001",
+        "tc-gos-platform-002"
+      ],
+      "rationale": "local key-provider mode and sealing; component build/generated/existing-test gate"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/local-key-provider/README.md",
+      "case_ids": [
+        "tc-gos-platform-001",
+        "tc-gos-platform-002"
+      ],
+      "rationale": "local key-provider mode and sealing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/local-key-provider/build/Dockerfile.aesmd",
+      "case_ids": [
+        "tc-gos-platform-001",
+        "tc-gos-platform-002"
+      ],
+      "rationale": "local key-provider mode and sealing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/local-key-provider/build/Dockerfile.key-provider",
+      "case_ids": [
+        "tc-gos-platform-001",
+        "tc-gos-platform-002"
+      ],
+      "rationale": "local key-provider mode and sealing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/local-key-provider/build/Makefile",
+      "case_ids": [
+        "tc-gos-platform-001",
+        "tc-gos-platform-002"
+      ],
+      "rationale": "local key-provider mode and sealing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/local-key-provider/build/docker-compose.yaml",
+      "case_ids": [
+        "tc-gos-platform-001",
+        "tc-gos-platform-002"
+      ],
+      "rationale": "local key-provider mode and sealing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/local-key-provider/build/entrypoint-aesmd.sh",
+      "case_ids": [
+        "tc-gos-platform-001",
+        "tc-gos-platform-002"
+      ],
+      "rationale": "local key-provider mode and sealing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/local-key-provider/build/entrypoint-local-key-provider.sh",
+      "case_ids": [
+        "tc-gos-platform-001",
+        "tc-gos-platform-002"
+      ],
+      "rationale": "local key-provider mode and sealing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/local-key-provider/build/local-key-provider.manifest.template",
+      "case_ids": [
+        "tc-gos-platform-001",
+        "tc-gos-platform-002"
+      ],
+      "rationale": "local key-provider mode and sealing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/local-key-provider/build/run.sh",
+      "case_ids": [
+        "tc-gos-platform-001",
+        "tc-gos-platform-002"
+      ],
+      "rationale": "local key-provider mode and sealing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/local-key-provider/src/crypto.rs",
+      "case_ids": [
+        "tc-gos-platform-002",
+        "tc-gos-platform-001"
+      ],
+      "rationale": "direct source reference; local key-provider mode and sealing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/local-key-provider/src/error.rs",
+      "case_ids": [
+        "tc-gos-platform-002",
+        "tc-gos-platform-001"
+      ],
+      "rationale": "direct source reference; local key-provider mode and sealing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/local-key-provider/src/gramine.rs",
+      "case_ids": [
+        "tc-gos-platform-002",
+        "tc-gos-platform-001"
+      ],
+      "rationale": "direct source reference; local key-provider mode and sealing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/local-key-provider/src/main.rs",
+      "case_ids": [
+        "tc-gos-platform-002",
+        "tc-gos-platform-001"
+      ],
+      "rationale": "direct source reference; local key-provider mode and sealing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/local-key-provider/src/protocol.rs",
+      "case_ids": [
+        "tc-gos-platform-002",
+        "tc-gos-platform-001"
+      ],
+      "rationale": "direct source reference; local key-provider mode and sealing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/local-key-provider/src/provider.rs",
+      "case_ids": [
+        "tc-gos-platform-002",
+        "tc-gos-platform-001"
+      ],
+      "rationale": "direct source reference; local key-provider mode and sealing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/local-key-provider/src/server.rs",
+      "case_ids": [
+        "tc-gos-platform-002",
+        "tc-gos-platform-001"
+      ],
+      "rationale": "direct source reference; local key-provider mode and sealing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/lspci/Cargo.toml",
+      "case_ids": [
+        "tc-gos-setup-011",
+        "tc-vmm-compute-ne-004"
+      ],
+      "rationale": "GPU/PCI inventory"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/lspci/src/lib.rs",
+      "case_ids": [
+        "tc-gos-setup-011",
+        "tc-vmm-compute-ne-004"
+      ],
+      "rationale": "GPU/PCI inventory"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/lspci/src/snapshots/lspci__lspci.snap",
+      "case_ids": [
+        "tc-gos-setup-011",
+        "tc-vmm-compute-ne-004"
+      ],
+      "rationale": "GPU/PCI inventory"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/nsm-attest/Cargo.toml",
+      "case_ids": [
+        "tc-gos-attestatio-002",
+        "tc-gos-setup-016",
+        "tc-ver-nitro-008"
+      ],
+      "rationale": "Nitro evidence generation"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/nsm-attest/src/lib.rs",
+      "case_ids": [
+        "tc-gos-attestatio-002",
+        "tc-gos-setup-016",
+        "tc-ver-nitro-008"
+      ],
+      "rationale": "Nitro evidence generation"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/nsm-attest/src/types.rs",
+      "case_ids": [
+        "tc-gos-attestatio-002",
+        "tc-gos-setup-016",
+        "tc-ver-nitro-008"
+      ],
+      "rationale": "Nitro evidence generation"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/nsm-attest/tests/attestation_test.rs",
+      "case_ids": [
+        "tc-gos-attestatio-002",
+        "tc-gos-setup-016",
+        "tc-ver-nitro-008"
+      ],
+      "rationale": "Nitro evidence generation"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/nsm-attest/tests/nitro_attestation.bin",
+      "case_ids": [
+        "tc-gos-attestatio-002",
+        "tc-gos-setup-016",
+        "tc-ver-nitro-008"
+      ],
+      "rationale": "Nitro evidence generation"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/rocket-vsock-listener/Cargo.toml",
+      "case_ids": [
+        "tc-gos-observabil-002",
+        "tc-vmm-manifest-001"
+      ],
+      "rationale": "vsock listener and proxied transport"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/rocket-vsock-listener/src/lib.rs",
+      "case_ids": [
+        "tc-gos-observabil-002",
+        "tc-vmm-manifest-001"
+      ],
+      "rationale": "vsock listener and proxied transport"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/serde-duration/Cargo.toml",
+      "case_ids": [
+        "tc-vmm-configurat-001",
+        "tc-gw-internal-001"
+      ],
+      "rationale": "duration configuration parsing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/serde-duration/src/lib.rs",
+      "case_ids": [
+        "tc-vmm-configurat-001",
+        "tc-gw-internal-001"
+      ],
+      "rationale": "duration configuration parsing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/sev-snp-attest/Cargo.toml",
+      "case_ids": [
+        "tc-gos-attestatio-002",
+        "tc-gos-setup-014",
+        "tc-ver-input-plat-005"
+      ],
+      "rationale": "SEV-SNP evidence generation"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/sev-snp-attest/src/lib.rs",
+      "case_ids": [
+        "tc-gos-attestatio-002",
+        "tc-gos-setup-014",
+        "tc-ver-input-plat-005"
+      ],
+      "rationale": "SEV-SNP evidence generation"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/size-parser/Cargo.toml",
+      "case_ids": [
+        "tc-gos-setup-007",
+        "tc-vmm-vm-lifecyc-004"
+      ],
+      "rationale": "storage/resource size parsing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/size-parser/README.md",
+      "case_ids": [
+        "tc-gos-setup-007",
+        "tc-vmm-vm-lifecyc-004"
+      ],
+      "rationale": "storage/resource size parsing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/size-parser/src/lib.rs",
+      "case_ids": [
+        "tc-gos-setup-007",
+        "tc-vmm-vm-lifecyc-004"
+      ],
+      "rationale": "storage/resource size parsing"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/sodiumbox/Cargo.toml",
+      "case_ids": [
+        "tc-gos-setup-002",
+        "tc-int-end-to-end-003"
+      ],
+      "rationale": "encrypted environment authenticated box"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/sodiumbox/README.md",
+      "case_ids": [
+        "tc-gos-setup-002",
+        "tc-int-end-to-end-003"
+      ],
+      "rationale": "encrypted environment authenticated box"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/sodiumbox/src/lib.rs",
+      "case_ids": [
+        "tc-gos-setup-002",
+        "tc-int-end-to-end-003"
+      ],
+      "rationale": "encrypted environment authenticated box"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/supervisor/client/src/lib.rs",
+      "case_ids": [
+        "tc-gos-setup-012"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/supervisor/client/src/main.rs",
+      "case_ids": [
+        "tc-gos-setup-012"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/supervisor/src/lib.rs",
+      "case_ids": [
+        "tc-gos-storage-an-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/supervisor/src/main.rs",
+      "case_ids": [
+        "tc-gos-storage-an-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/supervisor/src/process.rs",
+      "case_ids": [
+        "tc-gos-storage-an-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/supervisor/src/supervisor.rs",
+      "case_ids": [
+        "tc-gos-storage-an-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/supervisor/src/web_api.rs",
+      "case_ids": [
+        "tc-gos-storage-an-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/supervisor/supervisor.toml",
+      "case_ids": [
+        "tc-gos-storage-an-004",
+        "tc-gos-setup-012"
+      ],
+      "rationale": "supervisor lifecycle and mandatory configuration matrix"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tdx-attest/Cargo.toml",
+      "case_ids": [
+        "tc-gos-attestatio-001",
+        "tc-gos-setup-018",
+        "tc-ver-input-plat-002"
+      ],
+      "rationale": "TDX evidence generation and binding"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tdx-attest/examples/test_tdx.rs",
+      "case_ids": [
+        "tc-gos-attestatio-001",
+        "tc-gos-setup-018",
+        "tc-ver-input-plat-002"
+      ],
+      "rationale": "TDX evidence generation and binding"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tdx-attest/src/dummy.rs",
+      "case_ids": [
+        "tc-gos-attestatio-001",
+        "tc-gos-setup-018",
+        "tc-ver-input-plat-002"
+      ],
+      "rationale": "TDX evidence generation and binding"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tdx-attest/src/lib.rs",
+      "case_ids": [
+        "tc-gos-attestatio-001",
+        "tc-gos-setup-018",
+        "tc-ver-input-plat-002"
+      ],
+      "rationale": "TDX evidence generation and binding"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tdx-attest/src/linux.rs",
+      "case_ids": [
+        "tc-gos-attestatio-001",
+        "tc-gos-setup-018",
+        "tc-ver-input-plat-002"
+      ],
+      "rationale": "TDX evidence generation and binding"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tdx-attest/src/snapshots/tdx_attest__eventlog__tests__parse_ccel-2.snap",
+      "case_ids": [
+        "tc-gos-attestatio-001",
+        "tc-gos-setup-018",
+        "tc-ver-input-plat-002"
+      ],
+      "rationale": "TDX evidence generation and binding"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tdx-attest/src/snapshots/tdx_attest__eventlog__tests__parse_ccel.snap",
+      "case_ids": [
+        "tc-gos-attestatio-001",
+        "tc-gos-setup-018",
+        "tc-ver-input-plat-002"
+      ],
+      "rationale": "TDX evidence generation and binding"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tee-simulator/src/main.rs",
+      "case_ids": [
+        "tc-gos-setup-017"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tee-simulator/src/nsm.rs",
+      "case_ids": [
+        "tc-gos-setup-016"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tee-simulator/src/sev_snp.rs",
+      "case_ids": [
+        "tc-gos-setup-014"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tee-simulator/src/tdx.rs",
+      "case_ids": [
+        "tc-gos-setup-013"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tee-simulator/src/tpm.rs",
+      "case_ids": [
+        "tc-gos-setup-015"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tpm-attest/Cargo.toml",
+      "case_ids": [
+        "tc-gos-setup-022",
+        "tc-ver-input-plat-006"
+      ],
+      "rationale": "TPM quote generation and verification"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tpm-attest/src/esapi.rs",
+      "case_ids": [
+        "tc-gos-setup-022",
+        "tc-ver-input-plat-006"
+      ],
+      "rationale": "TPM quote generation and verification"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tpm-attest/src/gcp_ak.rs",
+      "case_ids": [
+        "tc-gos-setup-022",
+        "tc-ver-input-plat-006"
+      ],
+      "rationale": "TPM quote generation and verification"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tpm-attest/src/lib.rs",
+      "case_ids": [
+        "tc-gos-setup-022",
+        "tc-ver-input-plat-006"
+      ],
+      "rationale": "TPM quote generation and verification"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tpm-attest/tests/tpm_quote_sample.README.md",
+      "case_ids": [
+        "tc-gos-setup-022",
+        "tc-ver-input-plat-006"
+      ],
+      "rationale": "TPM quote generation and verification"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tpm-attest/tests/tpm_quote_sample.bin",
+      "case_ids": [
+        "tc-gos-setup-022",
+        "tc-ver-input-plat-006"
+      ],
+      "rationale": "TPM quote generation and verification"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tpm-types/Cargo.toml",
+      "case_ids": [
+        "tc-gos-setup-015",
+        "tc-gos-setup-022",
+        "tc-ver-input-plat-006"
+      ],
+      "rationale": "TPM wire and evidence types"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tpm-types/src/lib.rs",
+      "case_ids": [
+        "tc-gos-setup-015",
+        "tc-gos-setup-022",
+        "tc-ver-input-plat-006"
+      ],
+      "rationale": "TPM wire and evidence types"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tpm2/Cargo.toml",
+      "case_ids": [
+        "tc-gos-setup-015",
+        "tc-gos-setup-022"
+      ],
+      "rationale": "TPM command and quote operations"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tpm2/src/bin/tpm2-test.rs",
+      "case_ids": [
+        "tc-gos-setup-015",
+        "tc-gos-setup-022"
+      ],
+      "rationale": "TPM command and quote operations"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tpm2/src/commands.rs",
+      "case_ids": [
+        "tc-gos-setup-015",
+        "tc-gos-setup-022"
+      ],
+      "rationale": "TPM command and quote operations"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tpm2/src/constants.rs",
+      "case_ids": [
+        "tc-gos-setup-015",
+        "tc-gos-setup-022"
+      ],
+      "rationale": "TPM command and quote operations"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tpm2/src/device.rs",
+      "case_ids": [
+        "tc-gos-setup-015",
+        "tc-gos-setup-022"
+      ],
+      "rationale": "TPM command and quote operations"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tpm2/src/lib.rs",
+      "case_ids": [
+        "tc-gos-setup-015",
+        "tc-gos-setup-022"
+      ],
+      "rationale": "TPM command and quote operations"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tpm2/src/marshal.rs",
+      "case_ids": [
+        "tc-gos-setup-015",
+        "tc-gos-setup-022"
+      ],
+      "rationale": "TPM command and quote operations"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tpm2/src/session.rs",
+      "case_ids": [
+        "tc-gos-setup-015",
+        "tc-gos-setup-022"
+      ],
+      "rationale": "TPM command and quote operations"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/tpm2/src/types.rs",
+      "case_ids": [
+        "tc-gos-setup-015",
+        "tc-gos-setup-022"
+      ],
+      "rationale": "TPM command and quote operations"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/rootfs/app-compose.service",
+      "case_ids": [
+        "tc-gos-platform-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/rootfs/app-compose.sh",
+      "case_ids": [
+        "tc-gos-platform-006",
+        "tc-gos-storage-an-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/rootfs/containerd.service.d/dstack-prepare.conf",
+      "case_ids": [
+        "tc-gos-platform-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/rootfs/docker.service.d/dstack-guest-agent.conf",
+      "case_ids": [
+        "tc-gos-platform-008",
+        "tc-gos-platform-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/rootfs/docker.service.d/dstack-prepare.conf",
+      "case_ids": [
+        "tc-gos-platform-008",
+        "tc-gos-platform-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/rootfs/dstack-guest-agent.service",
+      "case_ids": [
+        "tc-gos-platform-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/rootfs/dstack-guest-agent.socket",
+      "case_ids": [
+        "tc-gos-platform-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/rootfs/dstack-prepare.service",
+      "case_ids": [
+        "tc-gos-boot-and-i-001",
+        "tc-gos-platform-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/rootfs/dstack-prepare.sh",
+      "case_ids": [
+        "tc-int-failure-se-001",
+        "tc-gos-boot-and-i-003",
+        "tc-gos-platform-006",
+        "tc-gos-storage-an-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/rootfs/ephemeral-docker.sh",
+      "case_ids": [
+        "tc-gos-platform-006",
+        "tc-gos-storage-an-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/rootfs/journald.conf",
+      "case_ids": [
+        "tc-gos-platform-007",
+        "tc-gos-platform-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/rootfs/llmnr.conf",
+      "case_ids": [
+        "tc-gos-platform-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/rootfs/sysctl.d/99-dstack.conf",
+      "case_ids": [
+        "tc-gos-platform-005",
+        "tc-gos-platform-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/rootfs/tdx-attest.conf",
+      "case_ids": [
+        "tc-gos-platform-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/rootfs/dstack-gateway-checker.service",
+      "case_ids": [
+        "tc-gos-observabil-003",
+        "tc-gos-platform-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/spec/artifact-manifest.schema.json",
+      "case_ids": [
+        "tc-ver-image-meas-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/.gitignore",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/Makefile",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/README.md",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/build.sh",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/dev-setup",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/conf/distro/dstack.conf",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/conf/layer.conf",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/conf/local.conf",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/conf/machine/dstack.conf",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/conf/multiconfig/dev.conf",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/conf/multiconfig/prod.conf",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-connectivity/openssh/files/disable-password-auth.conf",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-connectivity/openssh/openssh_%.bbappend",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-containers/containerd-config/containerd-config_1.1.0.bb",
+      "case_ids": [
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-containers/containerd-config/files/config.toml",
+      "case_ids": [
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-containers/stargz-snapshotter/files/containerd-stargz-grpc.service",
+      "case_ids": [
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-containers/stargz-snapshotter/stargz-snapshotter_0.18.2.bb",
+      "case_ids": [
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/base-files/base-files%.bbappend",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/base-files/files/dstack-motd",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/busybox/busybox%.bbappend",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/busybox/files/fragment.cfg",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/chrony/chrony%.bbappend",
+      "case_ids": [
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/chrony/files/chrony.conf",
+      "case_ids": [
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/docker/docker-moby%.bbappend",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/docker/files/docker.service.d_override.conf",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-guest/dstack-guest.bb",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-ovmf/dstack-ovmf/0001-Update-path-to-native-BaseTools.patch",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-ovmf/dstack-ovmf/0002-BaseTools-makefile-adjust-to-build-in-under-bitbake.patch",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-ovmf/dstack-ovmf/0003-Debug-prefix-map.patch",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-ovmf/dstack-ovmf/0004-Reproduciable.patch",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-ovmf/dstack-ovmf/0005-UefiCpuPkg-CpuExceptionHandlerLib-fix-push-instructi.patch",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-ovmf/dstack-ovmf/0006-OvmfPkg-AmdSev-drop-embedded-grub.patch",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-ovmf/dstack-ovmf_git.bb",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-sysbox/dstack-sysbox_0.6.7.bb",
+      "case_ids": [
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-sysbox/files/50-sysbox-mod.conf",
+      "case_ids": [
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-sysbox/files/99-sysbox-sysctl.conf",
+      "case_ids": [
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-sysbox/files/sysbox-fs.service",
+      "case_ids": [
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-sysbox/files/sysbox-mgr.service",
+      "case_ids": [
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-sysbox/files/sysbox.service",
+      "case_ids": [
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-sysbox/files/sysboxFsProtobuf.pb.go",
+      "case_ids": [
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-sysbox/files/sysboxMgrProtobuf.pb.go",
+      "case_ids": [
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-tee-simulator/dstack-tee-simulator.bb",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-tee-simulator/files/dstack-tee-simulator.service",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-tee-simulator/files/tee-simulator.conf",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-zfs/dstack-zfs/0001-Define-strndupa-if-it-does-not-exist.patch",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-zfs/dstack-zfs_2.4.0.bb",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/images/dstack-initramfs.bb",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/images/dstack-initscript.bb",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/images/dstack-initscript/init",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/images/dstack-rootfs-base.inc",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/images/dstack-rootfs-dev.inc",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/images/dstack-rootfs-nvidia.inc",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/images/dstack-rootfs-prod.inc",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/images/dstack-rootfs.bb",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/images/dstack-uki.bb",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/images/files/docker-daemon-nvidia.json",
+      "case_ids": [
+        "tc-gos-yocto-006",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/images/files/docker-daemon.json",
+      "case_ids": [
+        "tc-gos-yocto-006",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/ovmf/ovmf%.bbappend",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/systemd/files/0001-core-suppress-ephemeral-status-output.patch",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/systemd/systemd_%.bbappend",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-devtools/fdisk/gptfdisk_%.bbappend",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-devtools/gcc/libgcc-initial_%.bbappend",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-devtools/gptfdisk/gptfdisk_%.bbappend",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0001-x86-tdx-select-dma-direct-remap.patch",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0002-acpi-sandbox-block-aml-systemmemory-ram-access.patch",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/dstack-aws.cfg",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/dstack-aws.scc",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/dstack-docker.cfg",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/dstack-docker.scc",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/dstack-sysbox.cfg",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/dstack-sysbox.scc",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/dstack-tdx.cfg",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/dstack-tdx.scc",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/dstack.cfg",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/dstack.scc",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/linux-yocto%.bbappend",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/README.md",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/artwork/loaded_modules.png",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/conf/layer.conf",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/custom-licenses/NVIDIA-Proprietary",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/containerd-config/containerd-config_1.0.0.bb",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/containerd-config/files/config.toml",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/ldconfig-compatibility-symlink/ldconfig-compatibility-symlink_1.0.0.bb",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/libnvidia-container/libnvidia-container.inc",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/libnvidia-container/libnvidia-container/0001-build-fix.patch",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/libnvidia-container/libnvidia-container/0002-secomp-fix.patch",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/libnvidia-container/libnvidia-container/0003-fix-remove-buildpath-for-package-qa.patch",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/libnvidia-container/libnvidia-container_1.00.bb",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/libnvidia-container/libtirpc134_1.3.4.bb",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvattest/files/0001-validate-ocsp-response-freshness.patch",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvattest/files/10-nvidia-gpu-ordering.conf",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvattest/files/regorus-ffi-Cargo.lock",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvattest/nvattest_2026.06.09.bb",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia-container-toolkit/files/0001-Fix-cgo-LDFLAGS-for-go-1.21-and-later.patch",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia-container-toolkit/files/config.toml",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia-container-toolkit/nvidia-container-toolkit.inc",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia-container-toolkit/nvidia-container-toolkit_1.00.bb",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/files/nvidia-fabricmanager-nvswitch-condition.conf",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/files/nvidia-gpu-detect",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/files/nvidia-persistenced.service",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/files/nvidia.conf",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/libnvidia-nscq_580.105.08.bb",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/libnvidia-nscq_580.95.05.bb",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/libnvidia-nscq_595.58.03.bb",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/nvidia-fabricmanager_%.bbappend",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/nvidia-fabricmanager_580.105.08.bb",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/nvidia-fabricmanager_580.95.05.bb",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/nvidia-fabricmanager_595.58.03.bb",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/nvidia-gpu-detect_1.0.bb",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/nvidia-kernel-module.inc",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/nvidia-libs.inc",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/nvidia-modprobe-config_1.0.bb",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/nvidia-persistenced_1.0.bb",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/nvidia_580.105.08.bb",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/nvidia_580.95.05.bb",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/nvidia_595.58.03.bb",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-kernel/linux/files/nvidia.cfg",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-kernel/linux/files/nvidia.scc",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-nvidia/recipes-kernel/linux/linux-yocto%.bbappend",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/mk.d/.gitignore",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/mkimage.sh",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/repro-build/.gitignore",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/repro-build/Dockerfile.repro",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/repro-build/check.sh",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/repro-build/repro-build.sh",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/scripts/docker-check-config.sh",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/scripts/export-artifacts.sh",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/setup.d/.gitignore",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/setup.d/nvidia-layer.sh",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/tools/README.md",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/tools/aws/audit-aws-ec2-image-hardening.sh",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "direct source reference; Yocto image/runtime/hardening"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/tools/fix-self-uid-map.sh",
+      "case_ids": [
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Yocto image/runtime/hardening"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/cached-cell/Cargo.toml",
+      "case_ids": [
+        "tc-kms-keys-certs-006",
+        "tc-kms-auth-010"
+      ],
+      "rationale": "cached authorization/measurement state"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/cached-cell/src/lib.rs",
+      "case_ids": [
+        "tc-kms-keys-certs-006",
+        "tc-kms-auth-010"
+      ],
+      "rationale": "cached authorization/measurement state"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/http-client/Cargo.toml",
+      "case_ids": [
+        "tc-kms-attestatio-005",
+        "tc-kms-auth-007"
+      ],
+      "rationale": "KMS authorization/image HTTP transport"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/http-client/src/hyper_vsock.rs",
+      "case_ids": [
+        "tc-kms-attestatio-005",
+        "tc-kms-auth-007"
+      ],
+      "rationale": "KMS authorization/image HTTP transport"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/http-client/src/lib.rs",
+      "case_ids": [
+        "tc-kms-attestatio-005",
+        "tc-kms-auth-007"
+      ],
+      "rationale": "KMS authorization/image HTTP transport"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/http-client/src/prpc.rs",
+      "case_ids": [
+        "tc-kms-attestatio-005",
+        "tc-kms-auth-007"
+      ],
+      "rationale": "KMS authorization/image HTTP transport"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/Cargo.toml",
+      "case_ids": [
+        "tc-kms-build-001"
+      ],
+      "rationale": "direct source reference; component build/generated/existing-test gate"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/README.md",
+      "case_ids": [
+        "tc-kms-build-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth-bun/.oxlintrc.json",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth-bun/README.md",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth-bun/bun.lock",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth-bun/index.test.ts",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-002"
+      ],
+      "rationale": "direct source reference; component build/generated/existing-test gate"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth-bun/index.ts",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-002",
+        "tc-kms-auth-003",
+        "tc-kms-auth-007"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth-bun/openapi.json",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-002",
+        "tc-kms-auth-008"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth-bun/package.json",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-002"
+      ],
+      "rationale": "direct source reference; component build/generated/existing-test gate"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth-bun/vitest.config.ts",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/.env.example",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/.gitignore",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/.openzeppelin/unknown-2035.json",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/README.md",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/TESTING.md",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/contracts/DstackApp.sol",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-005",
+        "tc-kms-auth-009",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-003",
+        "tc-kms-auth-007",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/contracts/DstackKms.sol",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-009",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-003",
+        "tc-kms-auth-007",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/contracts/IAppAuth.sol",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-009",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-003",
+        "tc-kms-auth-007",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/contracts/IAppAuthBasicManagement.sol",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-009",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-003",
+        "tc-kms-auth-007",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/contracts/test-utils/DstackAppV2.sol",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-009",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-003",
+        "tc-kms-auth-007",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/contracts/test-utils/DstackKmsV2.sol",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-009",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-003",
+        "tc-kms-auth-007",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/docs/formal-verification.md",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/docs/specification.md",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/foundry.toml",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling; component build/generated/existing-test gate"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/jest.config.js",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/package-lock.json",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/package.json",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling; component build/generated/existing-test gate"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/run-tests.sh",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/script/Deploy.s.sol",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-003",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/script/Manage.s.sol",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-003",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/script/Query.s.sol",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-003",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/script/README.md",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-003",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/script/Upgrade.s.sol",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-003",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/scripts/README.md",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/scripts/cleanup.sh",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/scripts/run-tests.sh",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/scripts/setup-local-chain.sh",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/scripts/test-all.sh",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/slither.config.json",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling; component build/generated/existing-test gate"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/src/ethereum.ts",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/src/main.test.ts",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling; component build/generated/existing-test gate"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/src/main.ts",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/src/server.ts",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/src/types.ts",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/test/DstackApp.symbolic.t.sol",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/test/DstackApp.t.sol",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/test/DstackKms.symbolic.t.sol",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/test/DstackKms.t.sol",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/test/UpgradesWithPlugin.t.sol",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/tsconfig.json",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling; component build/generated/existing-test gate"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-mock/.oxlintrc.json",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-mock/Dockerfile",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-mock/README.md",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-mock/bun.lock",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-mock/index.test.ts",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-002"
+      ],
+      "rationale": "direct source reference; component build/generated/existing-test gate"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-mock/index.ts",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-mock/openapi.json",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-mock/package.json",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-002"
+      ],
+      "rationale": "direct source reference; component build/generated/existing-test gate"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-mock/vitest.config.ts",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-simple/.oxlintrc.json",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-simple/README.md",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-simple/auth-config.example.json",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-simple/bun.lock",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-simple/index.test.ts",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-001"
+      ],
+      "rationale": "direct source reference; component build/generated/existing-test gate"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-simple/index.ts",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-001",
+        "tc-kms-attestatio-005"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-simple/package.json",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-001"
+      ],
+      "rationale": "direct source reference; component build/generated/existing-test gate"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-simple/vitest.config.ts",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/dstack-app/.gitignore",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-004"
+      ],
+      "rationale": "direct source reference; KMS application packaging"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/dstack-app/builder/Dockerfile",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-004"
+      ],
+      "rationale": "direct source reference; KMS application packaging"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/dstack-app/builder/README.md",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-004"
+      ],
+      "rationale": "direct source reference; KMS application packaging"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/dstack-app/builder/build-image.sh",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-004"
+      ],
+      "rationale": "direct source reference; KMS application packaging"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/dstack-app/builder/shared/builder-pinned-packages.txt",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-004"
+      ],
+      "rationale": "direct source reference; KMS application packaging"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/dstack-app/builder/shared/qemu-pinned-packages.txt",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-004"
+      ],
+      "rationale": "direct source reference; KMS application packaging"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/dstack-app/compose-dev.yaml",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-004"
+      ],
+      "rationale": "direct source reference; KMS application packaging"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/dstack-app/compose-simple.yaml",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-004"
+      ],
+      "rationale": "direct source reference; KMS application packaging"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/dstack-app/deploy-simple.sh",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-004"
+      ],
+      "rationale": "direct source reference; KMS application packaging"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/dstack-app/deploy-to-vmm.sh",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-004"
+      ],
+      "rationale": "direct source reference; KMS application packaging"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/dstack-app/docker-compose.yaml",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-004"
+      ],
+      "rationale": "direct source reference; KMS application packaging"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/dstack-app/entrypoint.sh",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-runtime-004"
+      ],
+      "rationale": "direct source reference; KMS application packaging"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/kms.toml",
+      "case_ids": [
+        "tc-kms-build-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/rpc/Cargo.toml",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-kms-001",
+        "tc-kms-kms-002",
+        "tc-kms-kms-003",
+        "tc-kms-kms-004",
+        "tc-kms-kms-005",
+        "tc-kms-kms-006",
+        "tc-kms-admin-001",
+        "tc-kms-onboard-001",
+        "tc-kms-onboard-002",
+        "tc-kms-onboard-003",
+        "tc-kms-onboard-004"
+      ],
+      "rationale": "direct source reference; KMS RPC generated contract; component build/generated/existing-test gate"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/rpc/build.rs",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-kms-001",
+        "tc-kms-kms-002",
+        "tc-kms-kms-003",
+        "tc-kms-kms-004",
+        "tc-kms-kms-005",
+        "tc-kms-kms-006",
+        "tc-kms-admin-001",
+        "tc-kms-onboard-001",
+        "tc-kms-onboard-002",
+        "tc-kms-onboard-003",
+        "tc-kms-onboard-004"
+      ],
+      "rationale": "direct source reference; KMS RPC generated contract; component build/generated/existing-test gate"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/rpc/proto/kms_rpc.proto",
+      "case_ids": [
+        "tc-kms-admin-001",
+        "tc-kms-build-001",
+        "tc-kms-onboard-002",
+        "tc-kms-onboard-004",
+        "tc-kms-onboard-003",
+        "tc-kms-onboard-001",
+        "tc-kms-kms-001",
+        "tc-kms-kms-006",
+        "tc-kms-kms-005",
+        "tc-kms-kms-002",
+        "tc-kms-kms-003",
+        "tc-kms-kms-004"
+      ],
+      "rationale": "direct source reference; KMS RPC generated contract"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/rpc/src/.gitignore",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-kms-001",
+        "tc-kms-kms-002",
+        "tc-kms-kms-003",
+        "tc-kms-kms-004",
+        "tc-kms-kms-005",
+        "tc-kms-kms-006",
+        "tc-kms-admin-001",
+        "tc-kms-onboard-001",
+        "tc-kms-onboard-002",
+        "tc-kms-onboard-003",
+        "tc-kms-onboard-004"
+      ],
+      "rationale": "direct source reference; KMS RPC generated contract"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/rpc/src/generated.rs",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-kms-001",
+        "tc-kms-kms-002",
+        "tc-kms-kms-003",
+        "tc-kms-kms-004",
+        "tc-kms-kms-005",
+        "tc-kms-kms-006",
+        "tc-kms-admin-001",
+        "tc-kms-onboard-001",
+        "tc-kms-onboard-002",
+        "tc-kms-onboard-003",
+        "tc-kms-onboard-004"
+      ],
+      "rationale": "direct source reference; KMS RPC generated contract"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/rpc/src/lib.rs",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-kms-001",
+        "tc-kms-kms-002",
+        "tc-kms-kms-003",
+        "tc-kms-kms-004",
+        "tc-kms-kms-005",
+        "tc-kms-kms-006",
+        "tc-kms-admin-001",
+        "tc-kms-onboard-001",
+        "tc-kms-onboard-002",
+        "tc-kms-onboard-003",
+        "tc-kms-onboard-004"
+      ],
+      "rationale": "direct source reference; KMS RPC generated contract"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/src/admin_auth.rs",
+      "case_ids": [
+        "tc-kms-keys-certs-007",
+        "tc-kms-build-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/src/admin_service.rs",
+      "case_ids": [
+        "tc-kms-keys-certs-006",
+        "tc-kms-build-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/src/config.rs",
+      "case_ids": [
+        "tc-kms-keys-certs-008",
+        "tc-kms-build-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/src/crypto.rs",
+      "case_ids": [
+        "tc-kms-keys-certs-001",
+        "tc-kms-build-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/src/ct_log.rs",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-ct-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/src/main.rs",
+      "case_ids": [
+        "tc-kms-startup-001",
+        "tc-kms-build-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/src/main_service.rs",
+      "case_ids": [
+        "tc-kms-keys-certs-004",
+        "tc-kms-keys-certs-005",
+        "tc-kms-keys-certs-003",
+        "tc-kms-keys-certs-002",
+        "tc-kms-build-001",
+        "tc-kms-attestatio-003",
+        "tc-kms-attestatio-001",
+        "tc-int-compatibil-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/src/main_service/amd_attest.rs",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-attestatio-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/src/main_service/upgrade_authority.rs",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-010",
+        "tc-kms-attestatio-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/src/onboard_service.rs",
+      "case_ids": [
+        "tc-kms-keys-certs-009",
+        "tc-kms-build-001",
+        "tc-kms-bootstrap--002",
+        "tc-kms-bootstrap--003",
+        "tc-kms-bootstrap--001",
+        "tc-kms-bootstrap--004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/src/www/onboard.html",
+      "case_ids": [
+        "tc-kms-build-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/ra-rpc/Cargo.toml",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-kms-001",
+        "tc-kms-onboard-002"
+      ],
+      "rationale": "RA RPC transport and attested channel"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/ra-rpc/prpc-openapi.md",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-kms-001",
+        "tc-kms-onboard-002"
+      ],
+      "rationale": "RA RPC transport and attested channel"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/ra-rpc/src/client.rs",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-kms-001",
+        "tc-kms-onboard-002"
+      ],
+      "rationale": "RA RPC transport and attested channel"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/ra-rpc/src/lib.rs",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-kms-001",
+        "tc-kms-onboard-002"
+      ],
+      "rationale": "RA RPC transport and attested channel"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/ra-rpc/src/openapi.rs",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-kms-001",
+        "tc-kms-onboard-002"
+      ],
+      "rationale": "RA RPC transport and attested channel"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/ra-rpc/src/rocket_helper.rs",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-kms-001",
+        "tc-kms-onboard-002"
+      ],
+      "rationale": "RA RPC transport and attested channel"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/cc-eventlog/Cargo.toml",
+      "case_ids": [
+        "tc-ver-input-plat-003",
+        "tc-gos-setup-018"
+      ],
+      "rationale": "event-log parsing and replay"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/cc-eventlog/samples/ccel.bin",
+      "case_ids": [
+        "tc-ver-input-plat-003",
+        "tc-gos-setup-018"
+      ],
+      "rationale": "event-log parsing and replay"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/cc-eventlog/samples/tpm_eventlog.bin",
+      "case_ids": [
+        "tc-ver-input-plat-003",
+        "tc-gos-setup-018"
+      ],
+      "rationale": "event-log parsing and replay"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/cc-eventlog/src/codecs.rs",
+      "case_ids": [
+        "tc-ver-input-plat-003",
+        "tc-gos-setup-018"
+      ],
+      "rationale": "event-log parsing and replay"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/cc-eventlog/src/lib.rs",
+      "case_ids": [
+        "tc-ver-input-plat-003",
+        "tc-gos-setup-018"
+      ],
+      "rationale": "event-log parsing and replay"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/cc-eventlog/src/runtime_events.rs",
+      "case_ids": [
+        "tc-ver-input-plat-003",
+        "tc-gos-setup-018"
+      ],
+      "rationale": "event-log parsing and replay"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/cc-eventlog/src/snapshots/cc_eventlog__tests__parse_ccel-2.snap",
+      "case_ids": [
+        "tc-ver-input-plat-003",
+        "tc-gos-setup-018"
+      ],
+      "rationale": "event-log parsing and replay"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/cc-eventlog/src/snapshots/cc_eventlog__tests__parse_ccel.snap",
+      "case_ids": [
+        "tc-ver-input-plat-003",
+        "tc-gos-setup-018"
+      ],
+      "rationale": "event-log parsing and replay"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/cc-eventlog/src/tcg.rs",
+      "case_ids": [
+        "tc-ver-input-plat-003",
+        "tc-gos-setup-018"
+      ],
+      "rationale": "event-log parsing and replay"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/cc-eventlog/src/tdx.rs",
+      "case_ids": [
+        "tc-ver-input-plat-003",
+        "tc-gos-setup-018"
+      ],
+      "rationale": "event-log parsing and replay"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/cc-eventlog/src/tpm.rs",
+      "case_ids": [
+        "tc-ver-input-plat-003",
+        "tc-gos-setup-018"
+      ],
+      "rationale": "event-log parsing and replay"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-attest/src/amd_sev_snp.rs",
+      "case_ids": [
+        "tc-ver-tools-003",
+        "tc-gos-attestatio-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-attest/src/attestation.rs",
+      "case_ids": [
+        "tc-ver-tools-003",
+        "tc-gos-attestatio-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-attest/src/aws_nitro_tpm.rs",
+      "case_ids": [
+        "tc-ver-tools-003",
+        "tc-gos-attestatio-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-attest/src/lib.rs",
+      "case_ids": [
+        "tc-ver-tools-003",
+        "tc-gos-attestatio-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-attest/src/sev_snp.rs",
+      "case_ids": [
+        "tc-ver-tools-003",
+        "tc-gos-attestatio-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-attest/src/v1.rs",
+      "case_ids": [
+        "tc-ver-tools-003",
+        "tc-gos-attestatio-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-mr/cli/Cargo.toml",
+      "case_ids": [
+        "tc-ver-tools-001"
+      ],
+      "rationale": "direct source reference; component build/generated/existing-test gate"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-mr/cli/src/main.rs",
+      "case_ids": [
+        "tc-ver-tools-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-mr/src/acpi.rs",
+      "case_ids": [
+        "tc-ver-tools-002",
+        "tc-ver-image-meas-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-mr/src/kernel.rs",
+      "case_ids": [
+        "tc-ver-tools-002",
+        "tc-ver-image-meas-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-mr/src/lib.rs",
+      "case_ids": [
+        "tc-ver-tools-002",
+        "tc-ver-image-meas-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-mr/src/machine.rs",
+      "case_ids": [
+        "tc-ver-tools-002",
+        "tc-ver-image-meas-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-mr/src/main.rs",
+      "case_ids": [
+        "tc-ver-tools-002",
+        "tc-ver-image-meas-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-mr/src/measurement.rs",
+      "case_ids": [
+        "tc-ver-tools-002",
+        "tc-ver-image-meas-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-mr/src/num.rs",
+      "case_ids": [
+        "tc-ver-tools-002",
+        "tc-ver-image-meas-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-mr/src/sev.rs",
+      "case_ids": [
+        "tc-ver-tools-002",
+        "tc-ver-image-meas-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-mr/src/tdvf.rs",
+      "case_ids": [
+        "tc-ver-tools-002",
+        "tc-ver-image-meas-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-mr/src/tdx.rs",
+      "case_ids": [
+        "tc-ver-tools-002",
+        "tc-ver-image-meas-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-mr/src/util.rs",
+      "case_ids": [
+        "tc-ver-tools-002",
+        "tc-ver-image-meas-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/nsm-qvl/Cargo.toml",
+      "case_ids": [
+        "tc-ver-nitro-008"
+      ],
+      "rationale": "Nitro document verification"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/nsm-qvl/certs/AWS_NitroEnclaves_Root-G1.pem",
+      "case_ids": [
+        "tc-ver-nitro-008"
+      ],
+      "rationale": "Nitro document verification"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/nsm-qvl/src/collateral.rs",
+      "case_ids": [
+        "tc-ver-nitro-008"
+      ],
+      "rationale": "Nitro document verification"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/nsm-qvl/src/lib.rs",
+      "case_ids": [
+        "tc-ver-nitro-008"
+      ],
+      "rationale": "Nitro document verification"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/nsm-qvl/src/verify.rs",
+      "case_ids": [
+        "tc-ver-nitro-008"
+      ],
+      "rationale": "Nitro document verification"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/nsm-qvl/tests/nitro_attestation.README.md",
+      "case_ids": [
+        "tc-ver-nitro-008"
+      ],
+      "rationale": "Nitro document verification"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/nsm-qvl/tests/nitro_attestation.bin",
+      "case_ids": [
+        "tc-ver-nitro-008"
+      ],
+      "rationale": "Nitro document verification"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/nsm-qvl/tests/verify_test.rs",
+      "case_ids": [
+        "tc-ver-nitro-008"
+      ],
+      "rationale": "Nitro document verification"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/ra-tls/Cargo.toml",
+      "case_ids": [
+        "tc-ver-cli-cert-o-002",
+        "tc-kms-upgrade-002",
+        "tc-gos-attestatio-004"
+      ],
+      "rationale": "RA-TLS certificate/evidence binding"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/ra-tls/assets/tdx_quote",
+      "case_ids": [
+        "tc-ver-cli-cert-o-002",
+        "tc-kms-upgrade-002",
+        "tc-gos-attestatio-004"
+      ],
+      "rationale": "RA-TLS certificate/evidence binding"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/ra-tls/src/attestation.rs",
+      "case_ids": [
+        "tc-ver-cli-cert-o-002",
+        "tc-kms-upgrade-002",
+        "tc-gos-attestatio-004"
+      ],
+      "rationale": "RA-TLS certificate/evidence binding"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/ra-tls/src/cert.rs",
+      "case_ids": [
+        "tc-ver-cli-cert-o-002",
+        "tc-kms-upgrade-002",
+        "tc-gos-attestatio-004"
+      ],
+      "rationale": "RA-TLS certificate/evidence binding"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/ra-tls/src/kdf.rs",
+      "case_ids": [
+        "tc-ver-cli-cert-o-002",
+        "tc-kms-upgrade-002",
+        "tc-gos-attestatio-004"
+      ],
+      "rationale": "RA-TLS certificate/evidence binding"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/ra-tls/src/lib.rs",
+      "case_ids": [
+        "tc-ver-cli-cert-o-002",
+        "tc-kms-upgrade-002",
+        "tc-gos-attestatio-004"
+      ],
+      "rationale": "RA-TLS certificate/evidence binding"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/ra-tls/src/oids.rs",
+      "case_ids": [
+        "tc-ver-cli-cert-o-002",
+        "tc-kms-upgrade-002",
+        "tc-gos-attestatio-004"
+      ],
+      "rationale": "RA-TLS certificate/evidence binding"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/ra-tls/src/traits.rs",
+      "case_ids": [
+        "tc-ver-cli-cert-o-002",
+        "tc-kms-upgrade-002",
+        "tc-gos-attestatio-004"
+      ],
+      "rationale": "RA-TLS certificate/evidence binding"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/sev-snp-qvl/Cargo.toml",
+      "case_ids": [
+        "tc-ver-input-plat-005"
+      ],
+      "rationale": "SEV-SNP report/certificate verification"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/sev-snp-qvl/src/lib.rs",
+      "case_ids": [
+        "tc-ver-input-plat-005"
+      ],
+      "rationale": "SEV-SNP report/certificate verification"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/tpm-qvl/Cargo.toml",
+      "case_ids": [
+        "tc-ver-input-plat-006"
+      ],
+      "rationale": "TPM quote verification"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/tpm-qvl/certs/AWS_NitroEnclaves_Root-G1.pem",
+      "case_ids": [
+        "tc-ver-input-plat-006"
+      ],
+      "rationale": "TPM quote verification"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/tpm-qvl/certs/gcp-root-ca.pem",
+      "case_ids": [
+        "tc-ver-input-plat-006"
+      ],
+      "rationale": "TPM quote verification"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/tpm-qvl/src/collateral.rs",
+      "case_ids": [
+        "tc-ver-input-plat-006"
+      ],
+      "rationale": "TPM quote verification"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/tpm-qvl/src/lib.rs",
+      "case_ids": [
+        "tc-ver-input-plat-006"
+      ],
+      "rationale": "TPM quote verification"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/tpm-qvl/src/verify.rs",
+      "case_ids": [
+        "tc-ver-input-plat-006"
+      ],
+      "rationale": "TPM quote verification"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/verifier/dstack-verifier.toml",
+      "case_ids": [
+        "tc-ver-build-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/verifier/fixtures/quote-report.json",
+      "case_ids": [
+        "tc-ver-cli-cert-o-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/verifier/fixtures/sev-snp-attestation.json",
+      "case_ids": [
+        "tc-ver-cli-cert-o-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/verifier/fixtures/sev-snp.README.md",
+      "case_ids": [
+        "tc-ver-cli-cert-o-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/verifier/fixtures/tdx-lite-attestation.json",
+      "case_ids": [
+        "tc-ver-cli-cert-o-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/verifier/fixtures/tdx-lite-getquote.json",
+      "case_ids": [
+        "tc-ver-cli-cert-o-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/verifier/fixtures/tdx-lite.README.md",
+      "case_ids": [
+        "tc-ver-cli-cert-o-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/verifier/src/lib.rs",
+      "case_ids": [
+        "tc-ver-tools-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/verifier/src/main.rs",
+      "case_ids": [
+        "tc-ver-cli-cert-o-002",
+        "tc-ver-cli-cert-o-001",
+        "tc-ver-cli-cert-o-005",
+        "tc-ver-tools-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/verifier/src/types.rs",
+      "case_ids": [
+        "tc-ver-input-plat-001",
+        "tc-ver-cli-cert-o-004",
+        "tc-int-compatibil-005"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/verifier/src/verification.rs",
+      "case_ids": [
+        "tc-ver-input-plat-002",
+        "tc-ver-input-plat-003",
+        "tc-ver-input-plat-006",
+        "tc-ver-input-plat-005",
+        "tc-ver-input-plat-004",
+        "tc-ver-cli-cert-o-003",
+        "tc-ver-tools-005",
+        "tc-ver-image-meas-001",
+        "tc-ver-image-meas-002",
+        "tc-ver-image-meas-005"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/api-auth/Cargo.toml",
+      "case_ids": [
+        "tc-vmm-configurat-002"
+      ],
+      "rationale": "external API authentication"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/api-auth/README.md",
+      "case_ids": [
+        "tc-vmm-configurat-002"
+      ],
+      "rationale": "external API authentication"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/api-auth/src/lib.rs",
+      "case_ids": [
+        "tc-vmm-configurat-002"
+      ],
+      "rationale": "external API authentication"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/build-info/Cargo.toml",
+      "case_ids": [
+        "tc-vmm-vmm-014",
+        "tc-gos-dstackguest-009",
+        "tc-gw-gateway-003"
+      ],
+      "rationale": "version/build metadata"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/build-info/src/lib.rs",
+      "case_ids": [
+        "tc-vmm-vmm-014",
+        "tc-gos-dstackguest-009",
+        "tc-gw-gateway-003"
+      ],
+      "rationale": "version/build metadata"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/dstack-auth/Cargo.toml",
+      "case_ids": [
+        "tc-vmm-configurat-002",
+        "tc-gw-cluster-ad-005",
+        "tc-kms-keys-certs-007"
+      ],
+      "rationale": "shared authentication policy"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/dstack-auth/src/main.rs",
+      "case_ids": [
+        "tc-vmm-configurat-002",
+        "tc-gw-cluster-ad-005",
+        "tc-kms-keys-certs-007"
+      ],
+      "rationale": "shared authentication policy"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/mock-attestation/Cargo.toml",
+      "case_ids": [
+        "tc-vmm-configurat-003",
+        "tc-ver-input-plat-007"
+      ],
+      "rationale": "per-instance simulated attestation"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/mock-attestation/README.md",
+      "case_ids": [
+        "tc-vmm-configurat-003",
+        "tc-ver-input-plat-007"
+      ],
+      "rationale": "per-instance simulated attestation"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/mock-attestation/src/lib.rs",
+      "case_ids": [
+        "tc-vmm-configurat-003",
+        "tc-ver-input-plat-007"
+      ],
+      "rationale": "per-instance simulated attestation"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/mock-attestation/src/main.rs",
+      "case_ids": [
+        "tc-vmm-configurat-003",
+        "tc-ver-input-plat-007"
+      ],
+      "rationale": "per-instance simulated attestation"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/mock-attestation/src/nsm.rs",
+      "case_ids": [
+        "tc-vmm-configurat-003",
+        "tc-ver-input-plat-007"
+      ],
+      "rationale": "per-instance simulated attestation"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/mock-attestation/src/server.rs",
+      "case_ids": [
+        "tc-vmm-configurat-003",
+        "tc-ver-input-plat-007"
+      ],
+      "rationale": "per-instance simulated attestation"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/mock-attestation/src/sev_snp.rs",
+      "case_ids": [
+        "tc-vmm-configurat-003",
+        "tc-ver-input-plat-007"
+      ],
+      "rationale": "per-instance simulated attestation"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/mock-attestation/src/tdx.rs",
+      "case_ids": [
+        "tc-vmm-configurat-003",
+        "tc-ver-input-plat-007"
+      ],
+      "rationale": "per-instance simulated attestation"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/mock-attestation/src/tpm.rs",
+      "case_ids": [
+        "tc-vmm-configurat-003",
+        "tc-ver-input-plat-007"
+      ],
+      "rationale": "per-instance simulated attestation"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/host-api/Cargo.toml",
+      "case_ids": [
+        "tc-vmm-vmm-001",
+        "tc-vmm-vmm-002",
+        "tc-vmm-vmm-003",
+        "tc-vmm-vmm-004",
+        "tc-vmm-vmm-005",
+        "tc-vmm-vmm-006",
+        "tc-vmm-vmm-007",
+        "tc-vmm-vmm-008",
+        "tc-vmm-vmm-009",
+        "tc-vmm-vmm-010",
+        "tc-vmm-vmm-011",
+        "tc-vmm-vmm-012",
+        "tc-vmm-vmm-013",
+        "tc-vmm-vmm-014",
+        "tc-vmm-vmm-015",
+        "tc-vmm-vmm-016",
+        "tc-vmm-vmm-017",
+        "tc-vmm-vmm-018",
+        "tc-vmm-vmm-019",
+        "tc-vmm-vmm-020",
+        "tc-vmm-vmm-021",
+        "tc-vmm-vmm-022",
+        "tc-vmm-vmm-023",
+        "tc-vmm-hostapi-001",
+        "tc-vmm-hostapi-002",
+        "tc-vmm-hostapi-003"
+      ],
+      "rationale": "host API contract and clients; component build/generated/existing-test gate"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/host-api/build.rs",
+      "case_ids": [
+        "tc-vmm-vmm-001",
+        "tc-vmm-vmm-002",
+        "tc-vmm-vmm-003",
+        "tc-vmm-vmm-004",
+        "tc-vmm-vmm-005",
+        "tc-vmm-vmm-006",
+        "tc-vmm-vmm-007",
+        "tc-vmm-vmm-008",
+        "tc-vmm-vmm-009",
+        "tc-vmm-vmm-010",
+        "tc-vmm-vmm-011",
+        "tc-vmm-vmm-012",
+        "tc-vmm-vmm-013",
+        "tc-vmm-vmm-014",
+        "tc-vmm-vmm-015",
+        "tc-vmm-vmm-016",
+        "tc-vmm-vmm-017",
+        "tc-vmm-vmm-018",
+        "tc-vmm-vmm-019",
+        "tc-vmm-vmm-020",
+        "tc-vmm-vmm-021",
+        "tc-vmm-vmm-022",
+        "tc-vmm-vmm-023",
+        "tc-vmm-hostapi-001",
+        "tc-vmm-hostapi-002",
+        "tc-vmm-hostapi-003"
+      ],
+      "rationale": "host API contract and clients; component build/generated/existing-test gate"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/host-api/proto/host_api.proto",
+      "case_ids": [
+        "tc-vmm-hostapi-003",
+        "tc-vmm-hostapi-002",
+        "tc-vmm-hostapi-001",
+        "tc-vmm-vmm-001",
+        "tc-vmm-vmm-002",
+        "tc-vmm-vmm-003",
+        "tc-vmm-vmm-004",
+        "tc-vmm-vmm-005",
+        "tc-vmm-vmm-006",
+        "tc-vmm-vmm-007",
+        "tc-vmm-vmm-008",
+        "tc-vmm-vmm-009",
+        "tc-vmm-vmm-010",
+        "tc-vmm-vmm-011",
+        "tc-vmm-vmm-012",
+        "tc-vmm-vmm-013",
+        "tc-vmm-vmm-014",
+        "tc-vmm-vmm-015",
+        "tc-vmm-vmm-016",
+        "tc-vmm-vmm-017",
+        "tc-vmm-vmm-018",
+        "tc-vmm-vmm-019",
+        "tc-vmm-vmm-020",
+        "tc-vmm-vmm-021",
+        "tc-vmm-vmm-022",
+        "tc-vmm-vmm-023"
+      ],
+      "rationale": "direct source reference; host API contract and clients"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/host-api/src/client.rs",
+      "case_ids": [
+        "tc-vmm-vmm-001",
+        "tc-vmm-vmm-002",
+        "tc-vmm-vmm-003",
+        "tc-vmm-vmm-004",
+        "tc-vmm-vmm-005",
+        "tc-vmm-vmm-006",
+        "tc-vmm-vmm-007",
+        "tc-vmm-vmm-008",
+        "tc-vmm-vmm-009",
+        "tc-vmm-vmm-010",
+        "tc-vmm-vmm-011",
+        "tc-vmm-vmm-012",
+        "tc-vmm-vmm-013",
+        "tc-vmm-vmm-014",
+        "tc-vmm-vmm-015",
+        "tc-vmm-vmm-016",
+        "tc-vmm-vmm-017",
+        "tc-vmm-vmm-018",
+        "tc-vmm-vmm-019",
+        "tc-vmm-vmm-020",
+        "tc-vmm-vmm-021",
+        "tc-vmm-vmm-022",
+        "tc-vmm-vmm-023",
+        "tc-vmm-hostapi-001",
+        "tc-vmm-hostapi-002",
+        "tc-vmm-hostapi-003"
+      ],
+      "rationale": "host API contract and clients"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/host-api/src/generated/mod.rs",
+      "case_ids": [
+        "tc-vmm-vmm-001",
+        "tc-vmm-vmm-002",
+        "tc-vmm-vmm-003",
+        "tc-vmm-vmm-004",
+        "tc-vmm-vmm-005",
+        "tc-vmm-vmm-006",
+        "tc-vmm-vmm-007",
+        "tc-vmm-vmm-008",
+        "tc-vmm-vmm-009",
+        "tc-vmm-vmm-010",
+        "tc-vmm-vmm-011",
+        "tc-vmm-vmm-012",
+        "tc-vmm-vmm-013",
+        "tc-vmm-vmm-014",
+        "tc-vmm-vmm-015",
+        "tc-vmm-vmm-016",
+        "tc-vmm-vmm-017",
+        "tc-vmm-vmm-018",
+        "tc-vmm-vmm-019",
+        "tc-vmm-vmm-020",
+        "tc-vmm-vmm-021",
+        "tc-vmm-vmm-022",
+        "tc-vmm-vmm-023",
+        "tc-vmm-hostapi-001",
+        "tc-vmm-hostapi-002",
+        "tc-vmm-hostapi-003"
+      ],
+      "rationale": "host API contract and clients; component build/generated/existing-test gate"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/host-api/src/lib.rs",
+      "case_ids": [
+        "tc-vmm-vmm-001",
+        "tc-vmm-vmm-002",
+        "tc-vmm-vmm-003",
+        "tc-vmm-vmm-004",
+        "tc-vmm-vmm-005",
+        "tc-vmm-vmm-006",
+        "tc-vmm-vmm-007",
+        "tc-vmm-vmm-008",
+        "tc-vmm-vmm-009",
+        "tc-vmm-vmm-010",
+        "tc-vmm-vmm-011",
+        "tc-vmm-vmm-012",
+        "tc-vmm-vmm-013",
+        "tc-vmm-vmm-014",
+        "tc-vmm-vmm-015",
+        "tc-vmm-vmm-016",
+        "tc-vmm-vmm-017",
+        "tc-vmm-vmm-018",
+        "tc-vmm-vmm-019",
+        "tc-vmm-vmm-020",
+        "tc-vmm-vmm-021",
+        "tc-vmm-vmm-022",
+        "tc-vmm-vmm-023",
+        "tc-vmm-hostapi-001",
+        "tc-vmm-hostapi-002",
+        "tc-vmm-hostapi-003"
+      ],
+      "rationale": "host API contract and clients"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/rpc/Cargo.toml",
+      "case_ids": [
+        "tc-vmm-vmm-001",
+        "tc-vmm-vmm-002",
+        "tc-vmm-vmm-003",
+        "tc-vmm-vmm-004",
+        "tc-vmm-vmm-005",
+        "tc-vmm-vmm-006",
+        "tc-vmm-vmm-007",
+        "tc-vmm-vmm-008",
+        "tc-vmm-vmm-009",
+        "tc-vmm-vmm-010",
+        "tc-vmm-vmm-011",
+        "tc-vmm-vmm-012",
+        "tc-vmm-vmm-013",
+        "tc-vmm-vmm-014",
+        "tc-vmm-vmm-015",
+        "tc-vmm-vmm-016",
+        "tc-vmm-vmm-017",
+        "tc-vmm-vmm-018",
+        "tc-vmm-vmm-019",
+        "tc-vmm-vmm-020",
+        "tc-vmm-vmm-021",
+        "tc-vmm-vmm-022",
+        "tc-vmm-vmm-023",
+        "tc-vmm-hostapi-001",
+        "tc-vmm-hostapi-002",
+        "tc-vmm-hostapi-003"
+      ],
+      "rationale": "direct source reference; VMM RPC generated contract; component build/generated/existing-test gate"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/rpc/build.rs",
+      "case_ids": [
+        "tc-vmm-vmm-001",
+        "tc-vmm-vmm-002",
+        "tc-vmm-vmm-003",
+        "tc-vmm-vmm-004",
+        "tc-vmm-vmm-005",
+        "tc-vmm-vmm-006",
+        "tc-vmm-vmm-007",
+        "tc-vmm-vmm-008",
+        "tc-vmm-vmm-009",
+        "tc-vmm-vmm-010",
+        "tc-vmm-vmm-011",
+        "tc-vmm-vmm-012",
+        "tc-vmm-vmm-013",
+        "tc-vmm-vmm-014",
+        "tc-vmm-vmm-015",
+        "tc-vmm-vmm-016",
+        "tc-vmm-vmm-017",
+        "tc-vmm-vmm-018",
+        "tc-vmm-vmm-019",
+        "tc-vmm-vmm-020",
+        "tc-vmm-vmm-021",
+        "tc-vmm-vmm-022",
+        "tc-vmm-vmm-023",
+        "tc-vmm-hostapi-001",
+        "tc-vmm-hostapi-002",
+        "tc-vmm-hostapi-003"
+      ],
+      "rationale": "direct source reference; VMM RPC generated contract; component build/generated/existing-test gate"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/rpc/proto/prpc.proto",
+      "case_ids": [
+        "tc-vmm-vmm-001",
+        "tc-vmm-vmm-002",
+        "tc-vmm-vmm-003",
+        "tc-vmm-vmm-004",
+        "tc-vmm-vmm-005",
+        "tc-vmm-vmm-006",
+        "tc-vmm-vmm-007",
+        "tc-vmm-vmm-008",
+        "tc-vmm-vmm-009",
+        "tc-vmm-vmm-010",
+        "tc-vmm-vmm-011",
+        "tc-vmm-vmm-012",
+        "tc-vmm-vmm-013",
+        "tc-vmm-vmm-014",
+        "tc-vmm-vmm-015",
+        "tc-vmm-vmm-016",
+        "tc-vmm-vmm-017",
+        "tc-vmm-vmm-018",
+        "tc-vmm-vmm-019",
+        "tc-vmm-vmm-020",
+        "tc-vmm-vmm-021",
+        "tc-vmm-vmm-022",
+        "tc-vmm-vmm-023",
+        "tc-vmm-hostapi-001",
+        "tc-vmm-hostapi-002",
+        "tc-vmm-hostapi-003"
+      ],
+      "rationale": "direct source reference; VMM RPC generated contract"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
+      "case_ids": [
+        "tc-vmm-vmm-023",
+        "tc-vmm-vmm-016",
+        "tc-vmm-vmm-021",
+        "tc-vmm-vmm-006",
+        "tc-vmm-vmm-010",
+        "tc-vmm-vmm-003",
+        "tc-vmm-vmm-012",
+        "tc-vmm-vmm-020",
+        "tc-vmm-vmm-008",
+        "tc-vmm-vmm-018",
+        "tc-vmm-vmm-004",
+        "tc-vmm-vmm-019",
+        "tc-vmm-vmm-013",
+        "tc-vmm-vmm-007",
+        "tc-vmm-vmm-015",
+        "tc-vmm-vmm-002",
+        "tc-vmm-vmm-005",
+        "tc-vmm-vmm-014",
+        "tc-vmm-vmm-001",
+        "tc-vmm-vmm-009",
+        "tc-vmm-vmm-017",
+        "tc-vmm-vmm-011",
+        "tc-vmm-vmm-022",
+        "tc-vmm-hostapi-001",
+        "tc-vmm-hostapi-002",
+        "tc-vmm-hostapi-003"
+      ],
+      "rationale": "direct source reference; VMM RPC generated contract"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/rpc/src/generated.rs",
+      "case_ids": [
+        "tc-vmm-vmm-001",
+        "tc-vmm-vmm-002",
+        "tc-vmm-vmm-003",
+        "tc-vmm-vmm-004",
+        "tc-vmm-vmm-005",
+        "tc-vmm-vmm-006",
+        "tc-vmm-vmm-007",
+        "tc-vmm-vmm-008",
+        "tc-vmm-vmm-009",
+        "tc-vmm-vmm-010",
+        "tc-vmm-vmm-011",
+        "tc-vmm-vmm-012",
+        "tc-vmm-vmm-013",
+        "tc-vmm-vmm-014",
+        "tc-vmm-vmm-015",
+        "tc-vmm-vmm-016",
+        "tc-vmm-vmm-017",
+        "tc-vmm-vmm-018",
+        "tc-vmm-vmm-019",
+        "tc-vmm-vmm-020",
+        "tc-vmm-vmm-021",
+        "tc-vmm-vmm-022",
+        "tc-vmm-vmm-023",
+        "tc-vmm-hostapi-001",
+        "tc-vmm-hostapi-002",
+        "tc-vmm-hostapi-003"
+      ],
+      "rationale": "direct source reference; VMM RPC generated contract"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/rpc/src/lib.rs",
+      "case_ids": [
+        "tc-vmm-vmm-001",
+        "tc-vmm-vmm-002",
+        "tc-vmm-vmm-003",
+        "tc-vmm-vmm-004",
+        "tc-vmm-vmm-005",
+        "tc-vmm-vmm-006",
+        "tc-vmm-vmm-007",
+        "tc-vmm-vmm-008",
+        "tc-vmm-vmm-009",
+        "tc-vmm-vmm-010",
+        "tc-vmm-vmm-011",
+        "tc-vmm-vmm-012",
+        "tc-vmm-vmm-013",
+        "tc-vmm-vmm-014",
+        "tc-vmm-vmm-015",
+        "tc-vmm-vmm-016",
+        "tc-vmm-vmm-017",
+        "tc-vmm-vmm-018",
+        "tc-vmm-vmm-019",
+        "tc-vmm-vmm-020",
+        "tc-vmm-vmm-021",
+        "tc-vmm-vmm-022",
+        "tc-vmm-vmm-023",
+        "tc-vmm-hostapi-001",
+        "tc-vmm-hostapi-002",
+        "tc-vmm-hostapi-003"
+      ],
+      "rationale": "direct source reference; VMM RPC generated contract"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/app.rs",
+      "case_ids": [
+        "tc-int-failure-se-003",
+        "tc-int-compatibil-002",
+        "tc-vmm-configurat-003",
+        "tc-vmm-vm-lifecyc-001",
+        "tc-vmm-vm-lifecyc-006",
+        "tc-vmm-vm-lifecyc-002",
+        "tc-vmm-vm-lifecyc-005",
+        "tc-vmm-ui-observa-001",
+        "tc-vmm-compute-ne-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/app/host_share.rs",
+      "case_ids": [
+        "tc-vmm-internal-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/app/id_pool.rs",
+      "case_ids": [
+        "tc-vmm-internal-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/app/image.rs",
+      "case_ids": [
+        "tc-vmm-internal-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/app/mr_config.rs",
+      "case_ids": [
+        "tc-vmm-internal-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/app/network.rs",
+      "case_ids": [
+        "tc-vmm-compute-ne-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/app/qemu.rs",
+      "case_ids": [
+        "tc-vmm-compute-ne-007",
+        "tc-vmm-compute-ne-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/app/registry.rs",
+      "case_ids": [
+        "tc-vmm-compute-ne-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/app/vm_info.rs",
+      "case_ids": [
+        "tc-vmm-internal-005"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/app/workdir.rs",
+      "case_ids": [
+        "tc-vmm-manifest-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/config.rs",
+      "case_ids": [
+        "tc-vmm-configurat-001",
+        "tc-vmm-compute-ne-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/discovery.rs",
+      "case_ids": [
+        "tc-vmm-compute-ne-005"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/guest_api_service.rs",
+      "case_ids": [
+        "tc-vmm-manifest-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/host_api_service.rs",
+      "case_ids": [
+        "tc-vmm-ui-observa-003"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/main.rs",
+      "case_ids": [
+        "tc-vmm-configurat-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/main_routes.rs",
+      "case_ids": [
+        "tc-vmm-ui-observa-002"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/main_service.rs",
+      "case_ids": [
+        "tc-vmm-configurat-004",
+        "tc-vmm-vm-lifecyc-003",
+        "tc-vmm-vm-lifecyc-004",
+        "tc-vmm-ui-observa-004"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/one_shot.rs",
+      "case_ids": [
+        "tc-vmm-internal-006"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/openapi.rs",
+      "case_ids": [
+        "tc-vmm-internal-007"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/vm_launcher.rs",
+      "case_ids": [
+        "tc-vmm-internal-008"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/.gitignore",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/README.md",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/build.mjs",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/package-lock.json",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/package.json",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build; component build/generated/existing-test gate"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/scripts/build_proto.sh",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/src/App.ts",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/src/components/CreateVmDialog.ts",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/src/components/EncryptedEnvEditor.ts",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/src/components/ForkVmDialog.ts",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/src/components/GpuConfigEditor.ts",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/src/components/PortMappingEditor.ts",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/src/components/UpdateVmDialog.ts",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/src/composables/useVmManager.ts",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/src/index.html",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/src/lib/vmmRpcClient.ts",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/src/lib/x25519.js",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/src/main.ts",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/src/styles/main.css",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/src/templates/app.html",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/ui/tsconfig.json",
+      "case_ids": [
+        "tc-vmm-ui-observa-005"
+      ],
+      "rationale": "direct source reference; VMM UI workflow and build; component build/generated/existing-test gate"
+    }
+  ]
+}
