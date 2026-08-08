@@ -250,7 +250,7 @@ def main() -> int:
         user_request = create_request(
             image,
             "user-matrix",
-            stopped=False,
+            stopped=True,
             networks=[{"mode": "user"}, {"mode": "user"}],
         )
         code, body = rpc(base, "CreateVm", user_request, 180)
@@ -259,6 +259,9 @@ def main() -> int:
         user_id = str(body["id"])
         user_dir = runtime_root / "vms" / user_id
         created.append((user_id, user_dir))
+        start_code, _ = rpc(base, "StartVm", {"id": user_id}, 180)
+        if start_code != 200:
+            raise RuntimeError(f"user VM start failed with HTTP {start_code}")
         old_pid = wait_for(
             lambda: int((user_dir / "qemu.pid").read_text())
             if (user_dir / "qemu.pid").is_file()
