@@ -60,6 +60,24 @@ def stop(p: subprocess.Popen[str]) -> None:
         os.killpg(p.pid, signal.SIGKILL)
 
 
+def verify_unattested_rpc_certificate(cert: pathlib.Path) -> None:
+    """Fail preparation unless compatibility mode omitted RA-TLS attestation."""
+    completed = subprocess.run(
+        ["openssl", "x509", "-in", str(cert), "-noout", "-text"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=10,
+        check=False,
+    )
+    if completed.returncode:
+        raise RuntimeError(f"failed to inspect KMS RPC certificate: {completed.stderr}")
+    if "1.3.6.1.4.1.62397.1.8" in completed.stdout:
+        raise RuntimeError(
+            "KMS compatibility RPC certificate unexpectedly contains attestation"
+        )
+
+
 def write_kms(
     path: pathlib.Path,
     certs: pathlib.Path,
@@ -74,9 +92,9 @@ def write_kms(
     attestation = ""
     if root:
         attestation = f'''\n[core.attestation]\ninsecure_allow_external_trust_anchors = true\n[core.attestation.urls]\npccs = "{pccs}"\n[core.attestation.root_ca]\ntdx = "{root}"\n'''
-    disable_rpc_attestation = rpc_attestation == "compatibility-unverified"
+    attest_rpc_cert = rpc_attestation != "compatibility-unverified"
     path.write_text(
-        f'''[rpc]\naddress = "0.0.0.0"\nport = {rpc}\n[rpc.tls]\nkey = "{certs / "rpc.key"}"\ncerts = "{certs / "rpc.crt"}"\n[rpc.tls.mutual]\nca_certs = "{certs / "tmp-ca.crt"}"\nmandatory = false\n[core]\ncert_dir = "{certs}"\nenforce_self_authorization = false\ninsecure_disable_rpc_attestation = {str(disable_rpc_attestation).lower()}\n[core.image]\nverify = false\ncache_dir = "{certs.parent / "image-cache"}"\ndownload_url = "http://127.0.0.1:1/{{OS_IMAGE_HASH}}.tar.gz"\ndownload_timeout = "2s"\n[core.admin]\nenabled = true\naddress = "127.0.0.1"\nport = {admin}\nauth_token = "{secrets.token_hex(32)}"\n[core.auth_api]\ntype = "dev"\n[core.auth_api.dev]\ngateway_app_id = "any"\n[core.onboard]\nenabled = true\nauto_bootstrap_domain = "{"10.0.2.2" if bootstrap else ""}"\naddress = "127.0.0.1"\nport = {onboard}\n{attestation}'''
+        f'''[rpc]\naddress = "0.0.0.0"\nport = {rpc}\n[rpc.tls]\nkey = "{certs / "rpc.key"}"\ncerts = "{certs / "rpc.crt"}"\n[rpc.tls.mutual]\nca_certs = "{certs / "tmp-ca.crt"}"\nmandatory = false\n[core]\ncert_dir = "{certs}"\nenforce_self_authorization = false\nattest_rpc_cert = {str(attest_rpc_cert).lower()}\n[core.image]\nverify = false\ncache_dir = "{certs.parent / "image-cache"}"\ndownload_url = "http://127.0.0.1:1/{{OS_IMAGE_HASH}}.tar.gz"\ndownload_timeout = "2s"\n[core.admin]\nenabled = true\naddress = "127.0.0.1"\nport = {admin}\nauth_token = "{secrets.token_hex(32)}"\n[core.auth_api]\ntype = "dev"\n[core.auth_api.dev]\ngateway_app_id = "any"\n[core.onboard]\nenabled = true\nauto_bootstrap_domain = "{"10.0.2.2" if bootstrap else ""}"\naddress = "127.0.0.1"\nport = {onboard}\n{attestation}'''
     )
 
 
@@ -208,6 +226,8 @@ def main() -> int:
             [kms_bin, "--config", str(kms_cfg)], state / "logs/kms.log", a.kms_port, env
         )
         started.append(kms.pid)
+        if a.rpc_attestation == "compatibility-unverified":
+            verify_unattested_rpc_certificate(state / "certs/rpc.crt")
         value = {
             "pids": started,
             "simulator_fixture": str(simulator_fixture),
