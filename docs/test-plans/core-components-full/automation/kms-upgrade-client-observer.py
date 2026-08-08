@@ -252,7 +252,7 @@ def observe(*, register_gateways: bool = True) -> dict[str, Any]:
         raise RuntimeError(
             "Gateway URLs and request contracts must have the same length"
         )
-    if GATEWAY_CLIENT_PUBLIC_KEY_FILE:
+    if register_gateways and GATEWAY_CLIENT_PUBLIC_KEY_FILE:
         deadline = time.monotonic() + 60
         gateway_cache = pathlib.Path(GATEWAY_CLIENT_PUBLIC_KEY_FILE)
         while not gateway_cache.is_file():
@@ -262,10 +262,12 @@ def observe(*, register_gateways: bool = True) -> dict[str, Any]:
         gateway_client_public_key = json.loads(gateway_cache.read_text()).get("wg_pk")
         if not isinstance(gateway_client_public_key, str):
             raise RuntimeError("Native Gateway cache omitted its public key")
-    else:
+    elif register_gateways:
         gateway_client_public_key = (
             __import__("base64").b64encode(os.urandom(32)).decode()
         )
+    else:
+        gateway_client_public_key = ""
     gateway_registrations = (
         [
             register_gateway(
