@@ -367,8 +367,15 @@ pub mod keys {
     }
 }
 
+/// Encode a KV value as MessagePack.
+///
+/// Structs are encoded as maps keyed by field name rather than as positional
+/// arrays. Field-name keys let a reader skip fields it does not know and fill
+/// in `#[serde(default)]` fields it does not receive, so the value types below
+/// can gain fields without breaking gateways running an older build. Decoding
+/// accepts both forms, so values written by older releases stay readable.
 pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>> {
-    rmp_serde::encode::to_vec(value).context("failed to encode value")
+    rmp_serde::encode::to_vec_named(value).context("failed to encode value")
 }
 
 pub fn decode<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T> {
@@ -1218,6 +1225,122 @@ mod acme_credentials_tests {
             !kv.try_acquire_cert_lock("overflow.example", 600),
             "a non-expired certificate lock with a saturated expiry must remain held"
         );
+    }
+}
+
+/// KV values replicate between gateways, so their MessagePack encoding is a wire
+/// contract across a mixed-version cluster and across a node's own restart. Named
+/// maps keep that contract on field names rather than field order, so a value type
+/// can gain a field without breaking gateways still running an older build.
+#[cfg(test)]
+mod value_encoding_tests {
+    use super::*;
+    use serde::{Deserialize, Serialize};
+
+    /// A value type that has since gained a field. Stands in for an older gateway
+    /// reading a record written by this build.
+    #[derive(Debug, Serialize, Deserialize)]
+    struct ReducedCertRenewLock {
+        started_at: u64,
+    }
+
+    #[test]
+    fn values_are_encoded_as_named_maps() {
+        let encoded = encode(&CertRenewLock {
+            started_at: 1_700_000_000,
+            started_by: 7,
+        })
+        .expect("encode should succeed");
+
+        assert_eq!(
+            encoded[0] & 0xf0,
+            0x80,
+            "values must encode as MessagePack maps, not positional arrays"
+        );
+    }
+
+    /// New writer, old reader: a peer whose struct predates a field must skip it.
+    #[test]
+    fn named_values_decode_against_a_reduced_field_set() {
+        let encoded = encode(&CertRenewLock {
+            started_at: 1_700_000_000,
+            started_by: 7,
+        })
+        .expect("encode should succeed");
+
+        let reduced: ReducedCertRenewLock =
+            decode(&encoded).expect("a reader without started_by must skip the field, not fail");
+        assert_eq!(reduced.started_at, 1_700_000_000);
+    }
+
+    /// Old writer, new reader: records written before this change are positional
+    /// arrays and must keep decoding after an upgrade.
+    #[test]
+    fn legacy_positional_records_are_still_readable() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = KvStore::new(1, vec![], dir.path()).expect("failed to create kv store");
+
+        let legacy = rmp_serde::encode::to_vec(&CertRenewLock {
+            started_at: 1_700_000_000,
+            started_by: 7,
+        })
+        .expect("legacy encode should succeed");
+        assert_eq!(
+            legacy[0] & 0xf0,
+            0x90,
+            "fixture must be a positional array to exercise the legacy path"
+        );
+
+        kv.persistent
+            .write()
+            .put(keys::cert_lock("legacy.example"), legacy)
+            .expect("put should succeed");
+
+        let decoded = kv
+            .get_cert_lock("legacy.example")
+            .expect("a record written by an older gateway must stay readable");
+        assert_eq!(decoded.started_at, 1_700_000_000);
+        assert_eq!(decoded.started_by, 7);
+    }
+
+    /// `DnsCredential` is the most demanding value type in the set: it nests an
+    /// internally tagged enum and a field with a custom `serde(with)` codec, both of
+    /// which behave differently across self-describing and positional encodings.
+    #[test]
+    fn nested_tagged_enums_and_custom_codecs_survive_both_encodings() {
+        let credential = DnsCredential {
+            id: "cred-1".to_string(),
+            name: "primary".to_string(),
+            provider: DnsProvider::Cloudflare {
+                api_token: "token".to_string(),
+                api_url: Some("https://api.cloudflare.com/client/v4".to_string()),
+            },
+            max_dns_wait: Duration::from_secs(90),
+            dns_txt_ttl: 60,
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_001,
+        };
+
+        for (label, encoded) in [
+            ("named", encode(&credential).expect("named encode")),
+            (
+                "legacy positional",
+                rmp_serde::encode::to_vec(&credential).expect("positional encode"),
+            ),
+        ] {
+            let decoded: DnsCredential =
+                decode(&encoded).unwrap_or_else(|err| panic!("{label} decode failed: {err}"));
+            assert_eq!(decoded.id, credential.id, "{label}");
+            assert_eq!(decoded.max_dns_wait, credential.max_dns_wait, "{label}");
+            assert_eq!(decoded.dns_txt_ttl, credential.dns_txt_ttl, "{label}");
+            let DnsProvider::Cloudflare { api_token, api_url } = decoded.provider;
+            assert_eq!(api_token, "token", "{label}");
+            assert_eq!(
+                api_url.as_deref(),
+                Some("https://api.cloudflare.com/client/v4"),
+                "{label}"
+            );
+        }
     }
 }
 
