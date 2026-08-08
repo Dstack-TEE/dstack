@@ -144,6 +144,11 @@ def main() -> int:
         success_dir = run_path / success_id
         created.append((success_id, success_dir))
         success_pid, command = start_success(base, success_id, success_dir)
+        evidence["placement_process"] = {
+            "pid": success_pid,
+            "executable": os.readlink(f"/proc/{success_pid}/exe"),
+            "command": command,
+        }
         placement = {
             "qemu_started": process_alive(success_pid),
             "taskset_node0": command.startswith("taskset -c "),
