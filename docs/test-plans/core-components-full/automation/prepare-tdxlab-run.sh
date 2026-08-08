@@ -62,6 +62,8 @@ if ! docker_ready; then
   }
 fi
 
+"$plan/automation/prepare-vmm-hugepages.sh"
+
 acpi_tables_bin=$(realpath -e -- "$(command -v dstack-acpi-tables)")
 qemu_data_dir=$(realpath -e -- "$(dirname "$acpi_tables_bin")/../share/qemu")
 test -d "$qemu_data_dir" || {
