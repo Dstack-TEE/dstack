@@ -318,6 +318,8 @@ def main() -> int:
             "20G",
             "--user-config",
             str(user_config),
+            "--simulated-tee",
+            "dstack-tdx",
             "--kms-url",
             str(live["kms_guest_url"]),
             "--gateway-url",
@@ -335,9 +337,7 @@ def main() -> int:
                 "vcpu": 2,
                 "memory_mib": 4096,
                 "disk_gib": 20,
-                "simulator_switch_present": any(
-                    a in argv for a in ("--no-tee", "--simulated-tee")
-                ),
+                "simulated_tee": argv[argv.index("--simulated-tee") + 1],
             },
             "returncode": result["returncode"],
             "stderr": result["stderr"],
@@ -388,6 +388,8 @@ def main() -> int:
             f"{version} did not reach boot_progress=done within shared 10-minute deadline"
         )
     for version in versions:
+        if rows[version].get("argv_policy", {}).get("simulated_tee") != "dstack-tdx":
+            failures.append(f"{version} did not select the prepared TDX simulator")
         if rows[version].get("vm_id") and not rows[version].get("boot_done"):
             failures.append(f"{version} exited or failed before boot_progress=done")
 
