@@ -115,6 +115,7 @@ def make_config(
         'sock = "./run/supervisor.sock"': f'sock = "{runtime_root}/supervisor.sock"',
         'pid_file = "./run/supervisor.pid"': f'pid_file = "{runtime_root}/supervisor.pid"',
         'log_file = "./run/supervisor.log"': f'log_file = "{runtime_root}/supervisor.log"',
+        "detached = false": "detached = true",
         'port = 10000': f"port = {port + 1000}",
         '[key_provider]\nenabled = true': '[key_provider]\nenabled = false',
     }
