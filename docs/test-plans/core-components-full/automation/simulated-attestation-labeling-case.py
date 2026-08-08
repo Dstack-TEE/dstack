@@ -22,9 +22,7 @@ SERVICES = (
     "aws-nitro-enclave",
     "aws-nitro-tpm",
 )
-FULL_TDX_IMAGE_HASH = (
-    "14ad42d0270b444eaeb53918a5a94d9b17eec7a817cd336173b17c5327541c67"
-)
+FULL_TDX_IMAGE_HASH = "14ad42d0270b444eaeb53918a5a94d9b17eec7a817cd336173b17c5327541c67"
 
 
 def run_as_kvin(command: str, *, timeout: int) -> subprocess.CompletedProcess[str]:
@@ -67,7 +65,10 @@ def verify_legacy_tdx(
         raise RuntimeError("runtime environment is not an object")
     fixture = Path(str(environment["DSTACK_TEST_VERIFIER_FULL_TDX_IMAGE_DIR"]))
     checksum = fixture / "sha256sum.txt"
-    if not checksum.is_file() or hashlib.sha256(checksum.read_bytes()).hexdigest() != FULL_TDX_IMAGE_HASH:
+    if (
+        not checksum.is_file()
+        or hashlib.sha256(checksum.read_bytes()).hexdigest() != FULL_TDX_IMAGE_HASH
+    ):
         raise RuntimeError("prepared full-TDX image does not match the legacy quote")
     workspace = result_dir / "debug-workspace" / "legacy-tdx"
     cache = workspace / "cache"
@@ -83,7 +84,9 @@ image_download_url = "http://127.0.0.1:1/{{OS_IMAGE_HASH}}.tar.gz"
 image_download_timeout_secs = 1
 '''
     )
-    binary = Path(str((runtime.get("prepared_binaries") or {})["dstack_verifier"]["path"]))
+    binary = Path(
+        str((runtime.get("prepared_binaries") or {})["dstack_verifier"]["path"])
+    )
     process_environment = os.environ.copy()
     acpi = Path(str(environment["DSTACK_TEST_ACPI_TABLES_BINARY"]))
     process_environment["PATH"] = f"{acpi.parent}:{process_environment['PATH']}"
@@ -99,9 +102,18 @@ image_download_timeout_secs = 1
     (artifacts / "dstack-tdx-legacy.log").write_text(log)
     response = json.loads(Path(f"{request}.verification.json").read_text())
     details = response.get("details") or {}
-    verified = completed.returncode == 0 and response.get("is_valid") is True and all(
-        details.get(field) is True
-        for field in ("quote_verified", "event_log_verified", "os_image_hash_verified", "acpi_tables_verified")
+    verified = (
+        completed.returncode == 0
+        and response.get("is_valid") is True
+        and all(
+            details.get(field) is True
+            for field in (
+                "quote_verified",
+                "event_log_verified",
+                "os_image_hash_verified",
+                "acpi_tables_verified",
+            )
+        )
     )
     if not verified:
         raise RuntimeError("prepared legacy TDX quote/image verification failed")
@@ -169,7 +181,10 @@ def main() -> int:
             rows.append(row)
             if completed.returncode:
                 raise RuntimeError(f"{service} failed with rc={completed.returncode}")
-            if not row["development_root_accepted"] or not row["production_root_rejected"]:
+            if (
+                not row["development_root_accepted"]
+                or not row["production_root_rejected"]
+            ):
                 raise RuntimeError(f"{service} omitted a required policy assertion")
         (artifacts / "platform-policy-matrix.json").write_text(
             json.dumps(rows, indent=2, sort_keys=True) + "\n"
