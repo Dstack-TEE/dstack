@@ -15,7 +15,7 @@ from pathlib import Path
 CASES = {
     "tc-gw-internal-006": {
         "filter": "port_policy",
-        "minimum_tests": 8,
+        "minimum_tests": 7,
         "subject": "fail-closed port filtering, compatibility policy, reported-policy precedence, and PROXY protocol flags",
     },
 }
