@@ -100,10 +100,15 @@ def run_matrix(repo: Path, cache: Path, shared_cache: Path) -> dict[str, Any]:
         package / "lib/forge-std/src/Test.sol",
         package
         / "lib/openzeppelin-contracts-upgradeable/contracts/proxy/utils/UUPSUpgradeable.sol",
+        package
+        / "lib/openzeppelin-contracts-upgradeable/lib/openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol",
         package / "lib/openzeppelin-foundry-upgrades/src/Upgrades.sol",
     ]
     if not all(path.is_file() for path in required):
-        raise RuntimeError("Foundry contract submodules are not initialized")
+        missing = [str(path.relative_to(package)) for path in required if not path.is_file()]
+        raise RuntimeError(
+            "Foundry contract submodules are not initialized: " + ", ".join(missing)
+        )
     forge = find_forge()
     env = os.environ.copy()
     env["PATH"] = os.pathsep.join(
@@ -212,6 +217,11 @@ def main() -> int:
                 "commit": commit,
                 "forge_version": payload["forge_version"],
                 "rows": selected,
+                "failed_runs": {
+                    name: run
+                    for name, run in payload.get("runs", {}).items()
+                    if run.get("exit_code") != 0
+                },
             },
             indent=2,
         )
