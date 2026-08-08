@@ -36,3 +36,31 @@ pub fn wavekv_sync_routes() -> Vec<Route> {
         wavekv_sync::push_store
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The v1/v2 negotiation is driven entirely by whether a peer answers 404 on the v2
+    /// route. A typo in any of these paths would therefore not fail — every peer would
+    /// simply 404 forever and the whole cluster would stay silently on v1.
+    #[test]
+    fn the_sync_routes_are_mounted_where_peers_look_for_them() {
+        let mounted: Vec<String> = wavekv_sync_routes()
+            .iter()
+            .map(|route| route.uri.to_string())
+            .collect();
+
+        for expected in [
+            "/wavekv/sync/<store>",
+            "/wavekv/sync2/<store>",
+            "/wavekv/push/<store>",
+        ] {
+            assert!(
+                mounted.iter().any(|uri| uri == expected),
+                "{expected} is not mounted; peers would 404 and never negotiate v2. \
+                 mounted: {mounted:?}"
+            );
+        }
+    }
+}
