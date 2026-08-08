@@ -3773,7 +3773,8 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             2, new_primary, enabled=False
         )
         rollback = matrix.deploy_client(
-            [new_primary_route, old_primary_route, old_secondary_route]
+            [new_primary_route, old_primary_route, old_secondary_route],
+            kms_encrypt_row=old_primary,
         )
         new_primary_route, target_recovery = matrix.configure_endpoint_proxy(
             2, new_primary, enabled=True
@@ -3891,14 +3892,18 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
         source_route, source_outage = matrix.configure_endpoint_proxy(
             0, source, enabled=False
         )
-        target_failover = matrix.deploy_client([source_route, target_route])
+        target_failover = matrix.deploy_client(
+            [source_route, target_route], kms_encrypt_row=target
+        )
         source_route, source_recovery = matrix.configure_endpoint_proxy(
             0, source, enabled=True
         )
         target_route, target_outage = matrix.configure_endpoint_proxy(
             1, target, enabled=False
         )
-        source_failover = matrix.deploy_client([target_route, source_route])
+        source_failover = matrix.deploy_client(
+            [target_route, source_route], kms_encrypt_row=source
+        )
         target_route, target_recovery = matrix.configure_endpoint_proxy(
             1, target, enabled=True
         )
