@@ -29,6 +29,7 @@ GATEWAY_REQUEST_CONTRACTS = [
     for value in os.environ.get("GATEWAY_REQUEST_CONTRACTS", "").split(",")
     if value
 ]
+GATEWAY_REGISTRATION_MODE = os.environ.get("GATEWAY_REGISTRATION_MODE", "all")
 GATEWAY_CLIENT_PUBLIC_KEY_FILE = os.environ.get("GATEWAY_CLIENT_PUBLIC_KEY_FILE", "")
 GATEWAY_WG_PROBE_IPS = [
     value for value in os.environ.get("GATEWAY_WG_PROBE_IPS", "").split(",") if value
@@ -160,6 +161,12 @@ def register_gateway(
                         return response.status, response.read()
                 except urllib.error.HTTPError as error:
                     return error.code, error.read()
+                except (urllib.error.URLError, TimeoutError, OSError) as error:
+                    reason = getattr(error, "reason", error)
+                    diagnostic = json.dumps(
+                        {"error": type(reason).__name__}, separators=(",", ":")
+                    ).encode()
+                    return 0, diagnostic
 
             code, body = post(payload)
             rpc_name = candidate
@@ -298,8 +305,21 @@ def observe(*, register_gateways: bool = True) -> dict[str, Any]:
             or "",
             "certificate_chain_pem": chain,
         }
-    if register_gateways and any(
-        row["http"] != 200 or not row["assigned_ip"] for row in gateway_registrations
+    if GATEWAY_REGISTRATION_MODE not in {"all", "fallback"}:
+        raise RuntimeError(
+            f"Unsupported Gateway registration mode: {GATEWAY_REGISTRATION_MODE}"
+        )
+    successful_registrations = [
+        row
+        for row in gateway_registrations
+        if row["http"] == 200 and row["assigned_ip"]
+    ]
+    if register_gateways and (
+        not successful_registrations
+        or (
+            GATEWAY_REGISTRATION_MODE == "all"
+            and len(successful_registrations) != len(gateway_registrations)
+        )
     ):
         raise RuntimeError(f"Gateway registration failed: {gateway_registrations}")
     return {
