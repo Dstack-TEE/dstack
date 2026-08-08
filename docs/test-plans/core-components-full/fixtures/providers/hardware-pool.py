@@ -5,8 +5,10 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
+import secrets
 import shutil
 import socket
 import subprocess
@@ -19,6 +21,18 @@ STATE_ROOT = Path(
     or str(Path.home() / ".cache/dstack-test/runtime-state")
 )
 ROOT = STATE_ROOT / "hardware-pool"
+
+
+def load_tdxlab_provider() -> Any:
+    """Load the sibling isolated-VMM provider without relying on import paths."""
+    path = Path(__file__).resolve().parent / "tdxlab-isolated.py"
+    spec = importlib.util.spec_from_file_location("dstack_test_tdxlab_isolated", path)
+    if spec is None or spec.loader is None:
+        fail(f"cannot load isolated VMM provider: {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def fail(message: str) -> None:
@@ -158,8 +172,38 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         workspace
     )
     port_base = find_port_block()
-    vmm_url = os.environ.get("DSTACK_TEST_VMM_URL", "http://127.0.0.1:12100")
     cli = repository / "dstack/vmm/src/vmm-cli.py"
+    stack_handle: dict[str, Any] | None = None
+    if str(lease.get("profile", "")) == "cross-platform-attestation":
+        tdxlab = load_tdxlab_provider()
+        image_store = Path(os.environ["DSTACK_TEST_IMAGE_STORE"]).resolve()
+        candidate_image = os.environ.get("DSTACK_TEST_GUEST_IMAGE", "dstack-0.6.0")
+        development_image = os.environ.get(
+            "DSTACK_TEST_NO_TEE_GUEST_IMAGE", "dstack-dev-0.6.0"
+        )
+        settings = {
+            "runtime": runtime,
+            "runtime_manifest": runtime_path,
+            "repository": repository,
+            "image_store": image_store,
+            "image": candidate_image,
+            "cli": cli,
+        }
+        try:
+            stack_handle = tdxlab.start_vmm(
+                workspace,
+                lease_id,
+                settings,
+                "cross-platform-attestation",
+                simulator_seed=secrets.token_hex(32),
+                extra_images=[development_image],
+            )
+        except BaseException:
+            shutil.rmtree(workspace, ignore_errors=True)
+            raise
+        vmm_url = str(stack_handle["url"])
+    else:
+        vmm_url = os.environ.get("DSTACK_TEST_VMM_URL", "http://127.0.0.1:12100")
     matrix = [
         {
             "name": "tdx",
@@ -290,6 +334,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
             "registry": str(registry),
             "vmm_cli": str(cli),
             "vmm_url": vmm_url,
+            "stack_handle": stack_handle,
         },
     }
 
@@ -298,12 +343,37 @@ def verify(value: dict[str, Any]) -> dict[str, Any]:
     """Verify that all matrix rows and collateral are available."""
     values = value.get("prepared", {}).get("values", {})
     matrix = values.get("attestation_matrix", [])
-    ok = isinstance(matrix, list) and len(matrix) == 6
+    profile = str((value.get("lease") or {}).get("profile", ""))
+    listener_ready = True
+    if profile == "cross-platform-attestation":
+        live_vmm = values.get("live_vmm", {})
+        cli = live_vmm.get("cli_argv", []) if isinstance(live_vmm, dict) else []
+        process = subprocess.run(
+            [*[str(item) for item in cli], "lsvm", "--json"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+            check=False,
+        )
+        try:
+            inventory = json.loads(process.stdout) if process.returncode == 0 else None
+        except json.JSONDecodeError:
+            inventory = None
+        listener_ready = isinstance(inventory, list)
+    ok = isinstance(matrix, list) and len(matrix) == 6 and listener_ready
     return {
         "ok": ok,
-        "expected": {"matrix_rows": 6},
-        "observed": {"matrix_rows": len(matrix) if isinstance(matrix, list) else 0},
-        "error": None if ok else "cross-platform attestation interface is incomplete",
+        "expected": {"matrix_rows": 6, "vmm_listener_ready": True},
+        "observed": {
+            "matrix_rows": len(matrix) if isinstance(matrix, list) else 0,
+            "vmm_listener_ready": listener_ready,
+        },
+        "error": (
+            None
+            if ok
+            else "cross-platform attestation matrix or lease-owned VMM is unavailable"
+        ),
     }
 
 
@@ -346,6 +416,9 @@ def destroy(value: dict[str, Any]) -> dict[str, Any]:
             )
             if process.returncode and "not found" not in process.stderr.lower():
                 errors.append(process.stderr[-1000:])
+        stack_handle = handle.get("stack_handle")
+        if isinstance(stack_handle, dict):
+            load_tdxlab_provider().release_vmm(stack_handle, workspace)
         shutil.rmtree(workspace, ignore_errors=True)
     if errors:
         fail("; ".join(errors))
