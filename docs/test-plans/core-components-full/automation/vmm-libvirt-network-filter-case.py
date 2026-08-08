@@ -80,6 +80,11 @@ def wait_for(predicate, message: str, timeout: float = 90):
     raise TimeoutError(message)
 
 
+def process_command(pid: int) -> str:
+    """Read the case-owned QEMU command without shell interpolation."""
+    return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode()
+
+
 def make_config(
     template: str,
     artifact_root: Path,
@@ -210,18 +215,14 @@ def main() -> int:
             else None,
             "bridge VM manifest missing",
         )
-        launch = wait_for(
-            lambda: json.loads((bridge_dir / "launch.json").read_text())
-            if (bridge_dir / "launch.json").is_file()
+        bridge_pid = wait_for(
+            lambda: int((bridge_dir / "qemu.pid").read_text())
+            if (bridge_dir / "qemu.pid").is_file()
             else None,
-            "bridge VM launch missing",
-        )
-        wait_for(
-            lambda: (bridge_dir / "qemu.pid").is_file(),
             "bridge VM did not start",
             120,
         )
-        launch_text = json.dumps(launch)
+        launch_text = process_command(bridge_pid)
         macs = re.findall(r"mac=([0-9a-f:]{17})", launch_text, re.IGNORECASE)
         evidence["matrix"]["bridge_launch"] = {
             "nic_count": len(manifest["networks"]),
@@ -256,8 +257,7 @@ def main() -> int:
             "user VM did not start",
             120,
         )
-        user_launch = json.loads((user_dir / "launch.json").read_text())
-        user_text = json.dumps(user_launch)
+        user_text = process_command(old_pid)
         evidence["matrix"]["user_launch"] = {
             "user_netdevs": user_text.count("user,id=net") == 2,
             "qemu_started": True,
