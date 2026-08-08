@@ -15,9 +15,12 @@ from typing import Any
 
 CASE_ID = "tc-ver-image-meas-003"
 ROWS = (
-    ("dstack-mr", "acpi_swtpm_and_qemu_version_policy_matrix"),
-    ("dstack-mr", "rejects_swtpm_before_external_acpi_generation"),
-    ("dstack-verifier", "verifier_accepts_matching_swtpm_tdx_lite_evidence"),
+    ("dstack-mr", "ovmf_variant_for_image_handles_missing_and_unknown"),
+    ("dstack-mr", "pre_202505_for_all_versions"),
+    ("dstack-mr", "rejects_malformed_version"),
+    ("dstack-verifier", "tdx_lite_acpi_hashes_are_selected_by_event_name"),
+    ("dstack-verifier", "tdx_lite_acpi_hashes_reject_unlabeled_events"),
+    ("dstack-verifier", "verifies_tdx_lite_fixture_without_acpi_table_verification"),
 )
 
 
@@ -94,10 +97,12 @@ def main() -> int:
         "rows": evidence_rows,
         "qemu_versions": ["8.0.0", "8.2.2", "9.0.0", "9.1.0", "10.0.1"],
         "properties": [
-            "required_acpi_table_offsets",
-            "unsupported_and_malformed_version_rejection",
-            "offline_swtpm_rejection_before_external_tool",
-            "matching_swtpm_lite_evidence_acceptance",
+            "ovmf_variant_selection",
+            "pre_202505_version_policy",
+            "malformed_version_rejection",
+            "acpi_event_name_selection",
+            "unlabeled_acpi_event_rejection",
+            "matching_tdx_lite_evidence_acceptance",
             "no_image_download_for_matching_lite_evidence",
         ],
     }
@@ -126,7 +131,7 @@ def main() -> int:
                 {
                     "id": f"{case_id}-step-02",
                     "status": status,
-                    "observed": "Offline rejection and signed matching-evidence verifier acceptance were exercised independently.",
+                    "observed": "OVMF version boundaries, ACPI event labels, malformed inputs, and matching offline TDX-lite evidence were exercised independently.",
                 },
                 {
                     "id": f"{case_id}-step-03",

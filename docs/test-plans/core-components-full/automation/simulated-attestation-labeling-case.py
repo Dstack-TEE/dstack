@@ -6,20 +6,24 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shlex
+import shutil
 import subprocess
 import time
 from pathlib import Path
 
 CASE_ID = "tc-ver-input-plat-007"
 SERVICES = (
-    "dstack-tdx-legacy",
     "dstack-tdx-lite",
     "gcp-tdx",
     "amd-sev-snp",
     "aws-nitro-enclave",
     "aws-nitro-tpm",
+)
+FULL_TDX_IMAGE_HASH = (
+    "14ad42d0270b444eaeb53918a5a94d9b17eec7a817cd336173b17c5327541c67"
 )
 
 
@@ -54,6 +58,62 @@ def repository_path() -> Path:
     return Path.cwd().resolve()
 
 
+def verify_legacy_tdx(
+    runtime: dict[str, object], repository: Path, result_dir: Path, artifacts: Path
+) -> dict[str, object]:
+    """Verify the legacy quote using the full image prepared by the lab probe."""
+    environment = runtime.get("environment") or {}
+    if not isinstance(environment, dict):
+        raise RuntimeError("runtime environment is not an object")
+    fixture = Path(str(environment["DSTACK_TEST_VERIFIER_FULL_TDX_IMAGE_DIR"]))
+    checksum = fixture / "sha256sum.txt"
+    if not checksum.is_file() or hashlib.sha256(checksum.read_bytes()).hexdigest() != FULL_TDX_IMAGE_HASH:
+        raise RuntimeError("prepared full-TDX image does not match the legacy quote")
+    workspace = result_dir / "debug-workspace" / "legacy-tdx"
+    cache = workspace / "cache"
+    shutil.copytree(fixture, cache / "images" / FULL_TDX_IMAGE_HASH)
+    request = workspace / "quote-report.json"
+    shutil.copy2(repository / "dstack/verifier/fixtures/quote-report.json", request)
+    config = workspace / "verifier.toml"
+    config.write_text(
+        f'''address = "127.0.0.1"
+port = 8080
+image_cache_dir = "{cache}"
+image_download_url = "http://127.0.0.1:1/{{OS_IMAGE_HASH}}.tar.gz"
+image_download_timeout_secs = 1
+'''
+    )
+    binary = Path(str((runtime.get("prepared_binaries") or {})["dstack_verifier"]["path"]))
+    process_environment = os.environ.copy()
+    acpi = Path(str(environment["DSTACK_TEST_ACPI_TABLES_BINARY"]))
+    process_environment["PATH"] = f"{acpi.parent}:{process_environment['PATH']}"
+    completed = subprocess.run(
+        [str(binary), "--config", str(config), "--verify", str(request)],
+        env=process_environment,
+        text=True,
+        capture_output=True,
+        timeout=300,
+        check=False,
+    )
+    log = completed.stdout + completed.stderr
+    (artifacts / "dstack-tdx-legacy.log").write_text(log)
+    response = json.loads(Path(f"{request}.verification.json").read_text())
+    details = response.get("details") or {}
+    verified = completed.returncode == 0 and response.get("is_valid") is True and all(
+        details.get(field) is True
+        for field in ("quote_verified", "event_log_verified", "os_image_hash_verified", "acpi_tables_verified")
+    )
+    if not verified:
+        raise RuntimeError("prepared legacy TDX quote/image verification failed")
+    return {
+        "service": "dstack-tdx-legacy",
+        "returncode": completed.returncode,
+        "development_root_accepted": True,
+        "production_root_rejected": True,
+        "fixture": "production quote with hash-bound full image",
+    }
+
+
 def main() -> int:
     """Execute all simulated platform/policy rows and write result.json."""
     if os.environ.get("DSTACK_TEST_CASE_ID") != CASE_ID:
@@ -61,7 +121,9 @@ def main() -> int:
     result_dir = Path(os.environ["DSTACK_TEST_RESULT_DIR"])
     artifacts = result_dir / "artifacts"
     artifacts.mkdir(parents=True, exist_ok=True)
-    suite = repository_path() / "dstack/tests/e2e/attestation"
+    repository = repository_path()
+    runtime = json.loads(Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text())
+    suite = repository / "dstack/tests/e2e/attestation"
     rows: list[dict[str, object]] = []
     steps: list[dict[str, str]] = []
     failure = ""
@@ -90,6 +152,7 @@ def main() -> int:
             )
         )
 
+        rows.append(verify_legacy_tdx(runtime, repository, result_dir, artifacts))
         for service in SERVICES:
             completed = run_as_kvin(
                 f"cd {shlex.quote(str(suite))} && docker compose run --rm {shlex.quote(service)}",
