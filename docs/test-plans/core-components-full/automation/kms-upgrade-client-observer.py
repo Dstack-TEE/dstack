@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -27,6 +28,10 @@ GATEWAY_REQUEST_CONTRACTS = [
     value
     for value in os.environ.get("GATEWAY_REQUEST_CONTRACTS", "").split(",")
     if value
+]
+GATEWAY_CLIENT_PUBLIC_KEY_FILE = os.environ.get("GATEWAY_CLIENT_PUBLIC_KEY_FILE", "")
+GATEWAY_WG_PROBE_IPS = [
+    value for value in os.environ.get("GATEWAY_WG_PROBE_IPS", "").split(",") if value
 ]
 GATEWAY_PORTS = [
     int(port) for port in os.environ.get("GATEWAY_PORTS", "8000").split(",") if port
@@ -240,7 +245,20 @@ def observe() -> dict[str, Any]:
         raise RuntimeError(
             "Gateway URLs and request contracts must have the same length"
         )
-    gateway_client_public_key = __import__("base64").b64encode(os.urandom(32)).decode()
+    if GATEWAY_CLIENT_PUBLIC_KEY_FILE:
+        deadline = time.monotonic() + 60
+        gateway_cache = pathlib.Path(GATEWAY_CLIENT_PUBLIC_KEY_FILE)
+        while not gateway_cache.is_file():
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Native Gateway public-key cache did not appear")
+            time.sleep(1)
+        gateway_client_public_key = json.loads(gateway_cache.read_text()).get("wg_pk")
+        if not isinstance(gateway_client_public_key, str):
+            raise RuntimeError("Native Gateway cache omitted its public key")
+    else:
+        gateway_client_public_key = (
+            __import__("base64").b64encode(os.urandom(32)).decode()
+        )
     gateway_registrations = [
         register_gateway(
             url,
@@ -326,6 +344,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         """Return a public observation or a bounded diagnostic."""
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/gateway-wireguard-probe":
+            ip = urllib.parse.parse_qs(parsed.query).get("ip", [""])[0]
+            if ip not in GATEWAY_WG_PROBE_IPS:
+                self.send_error(400)
+                return
+            try:
+                with socket.create_connection((ip, 8000), timeout=3):
+                    status = 200
+                    value = {"ip": ip, "tcp_8000": True}
+            except OSError as error:
+                status = 503
+                value = {
+                    "ip": ip,
+                    "tcp_8000": False,
+                    "error": type(error).__name__,
+                }
+            body = json.dumps(value).encode()
+            self.send_response(status)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == "/route" and ROUTE_INSTANCE:
             body = json.dumps({"instance": ROUTE_INSTANCE}).encode()
             self.send_response(200)

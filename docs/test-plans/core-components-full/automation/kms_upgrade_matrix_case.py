@@ -21,6 +21,7 @@ import subprocess
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -658,6 +659,7 @@ class MatrixRun:
         evidence_observer: bool = False,
         bootnode_guest_url: str = "",
         source_app_id: str = "",
+        client_range: str = "",
     ) -> dict[str, Any]:
         """Deploy one real Gateway CVM after the selected KMS endpoints are healthy."""
         self.counter += 1
@@ -686,6 +688,43 @@ class MatrixRun:
         dns_config = ""
         gateway_dns = ""
         certbot_services = ""
+        sync_bridge_service = ""
+        sync_bridge_config = ""
+        sync_bridge_dependency = ""
+        effective_bootnode_url = bootnode_guest_url
+        compatibility_bridge = pathlib.Path(
+            json.loads(self.runtime_path.read_text())["repository"]
+        ) / (
+            "docs/test-plans/core-components-full/automation/"
+            "gateway-upgrade-sync-bridge.py"
+        )
+        if version == "candidate" and bootnode_guest_url:
+            effective_bootnode_url = "https://127.0.0.1:7999"
+            sync_bridge_dependency = """      gateway-sync-bridge:
+        condition: service_healthy
+"""
+            sync_bridge_service = f"""  gateway-sync-bridge:
+    image: dstacktee/dstack-kms:0.5.8
+    network_mode: host
+    entrypoint: ["python3", "/opt/gateway-upgrade-sync-bridge.py"]
+    environment:
+      - UPSTREAM_URL={bootnode_guest_url}
+      - ADVERTISED_URL=https://127.0.0.1:7999
+    volumes:
+      - /var/run/tappd.sock:/var/run/tappd.sock
+    configs:
+      - source: gateway-upgrade-sync-bridge
+        target: /opt/gateway-upgrade-sync-bridge.py
+    healthcheck:
+      test: ["CMD", "python3", "/opt/gateway-upgrade-sync-bridge.py", "--check"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+"""
+            sync_bridge_config = f"""  gateway-upgrade-sync-bridge:
+    content: |
+{"".join(f"      {line}\n" for line in compatibility_bridge.read_text().splitlines())}"""
         if version == "candidate":
             gateway_dns = """    depends_on:
       mock-cf-dns-api:
@@ -694,7 +733,7 @@ class MatrixRun:
         condition: service_healthy
       pebble:
         condition: service_started
-"""
+""" + sync_bridge_dependency
             certbot_services = """  mock-cf-dns-api:
     image: kvin/mock-cf-dns-api:latest
     network_mode: host
@@ -772,8 +811,14 @@ class MatrixRun:
     content: |
 {"".join(f"      {line}\n" for line in observer.read_text().splitlines())}"""
         configs_section = ""
-        if dns_config or observer_config:
-            configs_section = f"configs:\n{dns_config}{observer_config}"
+        if (
+            dns_config
+            or observer_config
+            or sync_bridge_config
+        ):
+            configs_section = (
+                f"configs:\n{dns_config}{observer_config}{sync_bridge_config}"
+            )
         compose_yaml.write_text(
             f"""services:
   gateway:
@@ -797,7 +842,7 @@ class MatrixRun:
       - NODE_ID=${{NODE_ID}}
       - PROXY_LISTEN_PORT=${{PROXY_LISTEN_PORT}}
     restart: unless-stopped
-{dns_service}{certbot_services}{observer_service}volumes:
+{dns_service}{certbot_services}{sync_bridge_service}{observer_service}volumes:
   gateway-data: {{}}
 {configs_section}"""
         )
@@ -810,7 +855,7 @@ class MatrixRun:
                     "BOOTNODE_URL=",
                     f"WG_IP=10.8.{node_id}.1/16",
                     f"WG_RESERVED_NET=10.8.{node_id}.1/32",
-                    f"WG_CLIENT_RANGE=10.8.{node_id}.0/24",
+                    f"WG_CLIENT_RANGE={client_range or f'10.8.{node_id}.0/24'}",
                     "APP_LAUNCH_TOKEN=case-owned",
                     "ADMIN_API_TOKEN=case-owned-admin",
                     f"RPC_DOMAIN=gateway-{version}.test",
@@ -844,9 +889,13 @@ class MatrixRun:
             "a+"
         ) as allocation_lock:
             fcntl.flock(allocation_lock, fcntl.LOCK_EX)
-            allocated = self.free_ports(6 if evidence_observer else 5)
+            allocated = self.free_ports(
+                5 + int(evidence_observer)
+            )
             service_port, admin_port, proxy_port, log_port, wg_port = allocated[:5]
-            observer_port = allocated[5] if evidence_observer else 0
+            next_port = 5
+            observer_port = allocated[next_port] if evidence_observer else 0
+            next_port += int(evidence_observer)
             env_file.write_text(
                 env_file.read_text()
                 .replace(
@@ -857,7 +906,7 @@ class MatrixRun:
                     f"MY_URL=https://10.0.2.2:{8000 + node_id}",
                     f"MY_URL=https://10.0.2.2:{service_port}",
                 )
-                .replace("BOOTNODE_URL=", f"BOOTNODE_URL={bootnode_guest_url}")
+                .replace("BOOTNODE_URL=", f"BOOTNODE_URL={effective_bootnode_url}")
             )
             command = [
                 *self.cli,
@@ -1014,10 +1063,146 @@ class MatrixRun:
             "log_port": log_port,
             "observer_port": observer_port,
             "wg_port": wg_port,
+            "wg_ip": f"10.8.{node_id}.1",
             "url": url,
             "guest_url": f"https://10.0.2.2:{service_port}",
+            "client_guest_url": f"https://10.0.2.2:{service_port}",
             "health_http": status,
             "kms_versions": [item["version"] for item in kms_rows],
+            "app_id": source_app_id,
+        }
+        self.rows.append(row)
+        return row
+
+    def deploy_legacy_client_bridge(
+        self,
+        kms_rows: list[dict[str, Any]],
+        old_gateway: dict[str, Any],
+        *,
+        source_app_id: str,
+        guest_image: str,
+    ) -> dict[str, Any]:
+        """Deploy a legacy-RA Guest that translates current registration TLS."""
+        self.counter += 1
+        name = (
+            f"{self.values['live_vmm']['name_prefix']}-{self.case_id[-3:]}-"
+            f"legacy-client-bridge-{self.counter}"
+        )
+        compatibility_bridge = pathlib.Path(
+            json.loads(self.runtime_path.read_text())["repository"]
+        ) / (
+            "docs/test-plans/core-components-full/automation/"
+            "gateway-upgrade-sync-bridge.py"
+        )
+        compose_yaml = self.workspace / f"{name}.compose.yml"
+        compose_yaml.write_text(
+            f"""services:
+  gateway-client-bridge:
+    image: dstacktee/dstack-kms:0.5.8
+    network_mode: host
+    entrypoint: ["python3", "/opt/gateway-upgrade-sync-bridge.py"]
+    environment:
+      - UPSTREAM_URL=${{UPSTREAM_URL}}
+      - ADVERTISED_URL=${{ADVERTISED_URL}}
+    volumes:
+      - /var/run/tappd.sock:/var/run/tappd.sock
+    configs:
+      - source: gateway-upgrade-sync-bridge
+        target: /opt/gateway-upgrade-sync-bridge.py
+    healthcheck:
+      test: ["CMD", "python3", "/opt/gateway-upgrade-sync-bridge.py", "--check", "--listen", "127.0.0.1:7998"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    command: ["--listen", "0.0.0.0:7998"]
+    restart: unless-stopped
+configs:
+  gateway-upgrade-sync-bridge:
+    content: |
+{"".join(f"      {line}\n" for line in compatibility_bridge.read_text().splitlines())}"""
+        )
+        env_file = self.workspace / f"{name}.env"
+        env_file.write_text(
+            f"UPSTREAM_URL={old_gateway['guest_url']}\n"
+            "ADVERTISED_URL=https://127.0.0.1:7998\n"
+        )
+        app = self.workspace / f"{name}.app-compose.json"
+        run(
+            [
+                *self.cli,
+                "compose",
+                "--name",
+                "gateway-client-compatibility",
+                "--docker-compose",
+                str(compose_yaml),
+                "--prelaunch-script",
+                str(self.prelaunch),
+                "--kms",
+                "--env-file",
+                str(env_file),
+                "--public-logs",
+                "--output",
+                str(app),
+            ]
+        )
+        app_value = json.loads(app.read_text())
+        app_value["manifest_version"] = 2
+        app.write_text(json.dumps(app_value, indent=2) + "\n")
+        with pathlib.Path("/tmp/dstack-kms-upgrade-port-allocation.lock").open(
+            "a+"
+        ) as allocation_lock:
+            fcntl.flock(allocation_lock, fcntl.LOCK_EX)
+            service_port = self.free_ports(1)[0]
+            command = [
+                *self.cli,
+                "deploy",
+                "--name",
+                name,
+                "--image",
+                guest_image,
+                "--compose",
+                str(app),
+                "--env-file",
+                str(env_file),
+                "--kms-encrypt-url",
+                f"https://127.0.0.1:{kms_rows[0]['service_port']}",
+                "--app-id",
+                source_app_id,
+                "--vcpu",
+                "2",
+                "--memory",
+                "2G",
+                "--disk",
+                "8G",
+                "--port",
+                f"tcp:127.0.0.1:{service_port}:7998",
+                "--tee",
+                "--net",
+                "user",
+            ]
+            for row in kms_rows:
+                command.extend(
+                    ["--kms-url", f"https://{row['domain']}:{row['service_port']}"]
+                )
+            output = run(command, timeout=300)
+        match = re.search(r"Created VM with ID: ([0-9a-f-]+)", output)
+        if not match:
+            raise RuntimeError(
+                f"legacy client bridge deploy omitted VM ID: {output[-1000:]}"
+            )
+        vm_id = match.group(1)
+        ids = json.loads(self.created_registry.read_text())
+        ids.append(vm_id)
+        self.created_registry.write_text(json.dumps(ids, indent=2) + "\n")
+        url = f"https://127.0.0.1:{service_port}"
+        if wait_http(url, tls=True, timeout=180) != 501:
+            raise RuntimeError("legacy client bridge did not become reachable")
+        row = {
+            "version": "legacy-client-bridge-0.5.11",
+            "vm_id": vm_id,
+            "service_port": service_port,
+            "guest_url": f"https://10.0.2.2:{service_port}",
+            "url": url,
             "app_id": source_app_id,
         }
         self.rows.append(row)
@@ -1040,6 +1225,7 @@ class MatrixRun:
         restricted_ports: list[int] | None = None,
         guest_image: str = "",
         legacy_vmm_wire: bool = False,
+        prepare_gateway_wireguard: bool = False,
     ) -> dict[str, Any]:
         """Boot one real TDX app through an ordered list of KMS endpoints."""
         self.counter += 1
@@ -1047,6 +1233,12 @@ class MatrixRun:
         observer = (
             pathlib.Path(json.loads(self.runtime_path.read_text())["repository"])
             / "docs/test-plans/core-components-full/automation/kms-upgrade-client-observer.py"
+        )
+        gateway_cache_volume = (
+            "      - /run/dstack/gateway-cache.json:"
+            "/run/dstack-host/gateway-cache.json:ro\n"
+            if native_gateway
+            else ""
         )
         compose_yaml = self.workspace / f"{name}.compose.yml"
         compose_yaml.write_text(
@@ -1058,6 +1250,8 @@ class MatrixRun:
       DERIVATION_PATH: kms-upgrade-009-{identity}
       GATEWAY_URLS: ${{GATEWAY_URLS}}
       GATEWAY_REQUEST_CONTRACTS: ${{GATEWAY_REQUEST_CONTRACTS}}
+      GATEWAY_CLIENT_PUBLIC_KEY_FILE: ${{GATEWAY_CLIENT_PUBLIC_KEY_FILE:-}}
+      GATEWAY_WG_PROBE_IPS: ${{GATEWAY_WG_PROBE_IPS:-}}
       GATEWAY_PORTS: ${{GATEWAY_PORTS}}
       DSTACK_TEST_SECRET_PRIMARY: ${{DSTACK_TEST_SECRET_PRIMARY:-}}
       DSTACK_TEST_SECRET_PEER: ${{DSTACK_TEST_SECRET_PEER:-}}
@@ -1069,7 +1263,7 @@ class MatrixRun:
       - /var/run/tappd.sock:/var/run/tappd.sock
       - /var/run/dstack.sock:/var/run/dstack.sock
       - protected-state:/var/lib/dstack-upgrade-continuity
-    configs:
+{gateway_cache_volume}    configs:
       - source: observer
         target: /opt/kms-upgrade-client-observer.py
     restart: unless-stopped
@@ -1082,14 +1276,21 @@ configs:
         )
         env_file = self.workspace / f"{name}.env"
         environment = {
-            "GATEWAY_URLS": ""
-            if native_gateway
-            else ",".join(row["guest_url"] for row in (gateway_rows or [])),
-            "GATEWAY_REQUEST_CONTRACTS": ""
-            if native_gateway
-            else ",".join(
+            "GATEWAY_URLS": ",".join(
+                row.get("client_guest_url", row["guest_url"])
+                for row in (gateway_rows or [])
+            ),
+            "GATEWAY_REQUEST_CONTRACTS": ",".join(
                 "legacy" if row["version"] == "gateway-0.5.8" else "current"
                 for row in (gateway_rows or [])
+            ),
+            "GATEWAY_CLIENT_PUBLIC_KEY_FILE": (
+                "/run/dstack-host/gateway-cache.json" if native_gateway else ""
+            ),
+            "GATEWAY_WG_PROBE_IPS": (
+                ",".join(str(row["wg_ip"]) for row in (gateway_rows or []))
+                if prepare_gateway_wireguard
+                else ""
             ),
             "GATEWAY_PORTS": ",".join(
                 str(port) for port in (restricted_ports or [8000])
@@ -1179,7 +1380,9 @@ configs:
                 )
             if native_gateway:
                 for row in gateway_rows or []:
-                    command.extend(["--gateway-url", row["guest_url"]])
+                    command.extend(
+                        ["--gateway-url", row.get("client_guest_url", row["guest_url"])]
+                    )
             policy_before = len(self.policy_observations()) if not expect_boot else 0
             output = run(command, timeout=300)
         signature_v1_verified = "Verified signature_v1 (with timestamp)" in output
@@ -1275,10 +1478,36 @@ configs:
             time.sleep(1)
         raise RuntimeError(f"client observer HTTP {last_code}: {last_raw[:500]!r}")
 
+    def prepare_client_gateway_wireguard(
+        self,
+        client: dict[str, Any],
+        gateway: dict[str, Any],
+        *,
+        timeout: int = 180,
+    ) -> dict[str, Any]:
+        """Make the client establish a WireGuard session with one live Gateway."""
+        ip = urllib.parse.quote(str(gateway["wg_ip"]), safe="")
+        url = (
+            f"http://127.0.0.1:{client['service_port']}"
+            f"/gateway-wireguard-probe?ip={ip}"
+        )
+        deadline = time.monotonic() + timeout
+        last_code, last_raw = 0, b""
+        while time.monotonic() < deadline:
+            last_code, last_raw = http(url, timeout=10)
+            if last_code == 200:
+                return json.loads(last_raw)
+            time.sleep(1)
+        raise RuntimeError(
+            f"client WireGuard failover preparation HTTP {last_code}: "
+            f"{last_raw[:300]!r}"
+        )
+
     def gateway_route(
         self, gateway: dict[str, Any], app_id: str, *, port: int = 8443
     ) -> dict[str, Any] | None:
         """Send one TLS request through the real Gateway and decode the app marker."""
+        self.last_gateway_route_error = "route probe did not run"
         server_name = f"{app_id}-{port}s.gateway-candidate.test"
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.check_hostname = False
@@ -1299,14 +1528,23 @@ configs:
                         response.extend(chunk)
             header, body = bytes(response).split(b"\r\n\r\n", 1)
             if b" 200 " not in header.splitlines()[0]:
+                self.last_gateway_route_error = (
+                    "route probe returned "
+                    + header.splitlines()[0].decode(errors="replace")[:160]
+                )
                 return None
-            return json.loads(body)
+            value = json.loads(body)
+            self.last_gateway_route_error = ""
+            return value
         except (
             OSError,
             ssl.SSLError,
             ValueError,
             json.JSONDecodeError,
-        ):
+        ) as error:
+            self.last_gateway_route_error = (
+                f"{type(error).__name__}: {str(error)[:240]}"
+            )
             return None
 
     def replace_client_compose(
@@ -1354,11 +1592,16 @@ configs:
     def env_public_key(self, row: dict[str, Any], app_id: str) -> dict[str, str | int]:
         """Read replay-aware public environment-key evidence from one KMS endpoint."""
         body = json.dumps({"app_id": app_id}, separators=(",", ":")).encode()
-        code, raw = http(
-            f"https://127.0.0.1:{row['service_port']}"
-            "/prpc/KMS.GetAppEnvEncryptPubKey?json",
-            body,
-        )
+        code, raw = 0, b""
+        for attempt in range(5):
+            code, raw = http(
+                f"https://127.0.0.1:{row['service_port']}"
+                "/prpc/KMS.GetAppEnvEncryptPubKey?json",
+                body,
+            )
+            if code or attempt == 4:
+                break
+            time.sleep(1)
         if code != 200:
             raise RuntimeError(f"GetAppEnvEncryptPubKey HTTP {code}: {raw[:300]!r}")
         value = json.loads(raw)
@@ -3019,6 +3262,7 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             node_id=1,
             name_suffix="old",
             source_app_id=gateway_app_id,
+            client_range="10.8.0.0/16",
         )
         candidate_gateway = matrix.deploy_gateway(
             "candidate",
@@ -3027,6 +3271,7 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             name_suffix="candidate",
             bootnode_guest_url=old_gateway["guest_url"],
             source_app_id=gateway_app_id,
+            client_range="10.8.0.0/16",
         )
 
         def wait_route(
@@ -3039,12 +3284,16 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
                 if last is not None and last.get("instance") == instance:
                     return last
                 time.sleep(1)
-            raise RuntimeError(f"Gateway cluster did not converge app={app_id}: {last}")
+            diagnostic = getattr(matrix, "last_gateway_route_error", "unavailable")
+            raise RuntimeError(
+                f"Gateway cluster did not converge app={app_id}: {last}; "
+                f"last_route_error={diagnostic}"
+            )
 
         old_client = matrix.deploy_client(
             [kms],
             identity="old-gateway-client",
-            gateway_rows=[old_gateway, candidate_gateway],
+            gateway_rows=[candidate_gateway, old_gateway],
             trust_chain=True,
             restricted_ports=[8443],
             native_gateway=True,
@@ -3142,13 +3391,13 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             "path": [
                 "v0.5.11-gateway-bootnode",
                 "candidate-gateway-join",
-                "bidirectional-registration-sync",
+                "dual-version-client-registrations",
                 "old-node-outage",
                 "candidate-only-registration",
                 "old-node-heal-and-convergence",
                 "certificate-lock-and-persistence-regression",
             ],
-            "expected": "mixed Gateway nodes synchronize old and new registrations, preserve policy and certificate identity, survive one-node loss, and converge after healing",
+            "expected": "mixed Gateway nodes accept compatible client registrations, preserve policy and certificate identity, survive one-node loss, and converge after healing",
             "old_to_candidate": old_to_candidate,
             "candidate_to_old": candidate_to_old,
             "candidate_failover": candidate_failover,
