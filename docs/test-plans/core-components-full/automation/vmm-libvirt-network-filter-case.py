@@ -85,6 +85,15 @@ def process_command(pid: int) -> str:
     return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode()
 
 
+def process_stopped(pid: int) -> bool:
+    """Return whether the observed case-owned QEMU PID has exited."""
+    try:
+        os.kill(pid, 0)
+        return False
+    except ProcessLookupError:
+        return True
+
+
 def make_config(
     template: str,
     artifact_root: Path,
@@ -234,7 +243,7 @@ def main() -> int:
         if stop_code != 200:
             raise RuntimeError(f"bridge VM stop failed with HTTP {stop_code}")
         wait_for(
-            lambda: not (bridge_dir / "qemu.pid").exists(),
+            lambda: process_stopped(bridge_pid),
             "bridge VM did not stop",
         )
 

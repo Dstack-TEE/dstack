@@ -24,6 +24,7 @@
 - Create each matrix row with `values.vmm.test_input.create_stopped_helper_argv` and pass the required `--name`, `--vcpu`, `--memory`, `--hugepages`, and `--pin-numa` overrides explicitly. The helper applies these options to the prepared command and registers the returned VM ID; do not infer that extra arguments are ignored.
 - A stopped definition does not allocate CPU, memory, or hugepages. After confirming that the requested flags persisted in public VM configuration, call `StartVm` and grade resource placement or exhaustion from the launch result, QEMU command line, and public state. Acceptance by `CreateVm` alone is not evidence that an overcommitted row succeeded.
 - Read `values.host_capabilities` before creating a VM. If `hugepages_2m_total` is zero or no NUMA node is available, preserve that manifest observation and finalize the hardware-placement rows as BLOCKED; do not treat the expected absence of a QEMU process as a product FAIL or scan unrelated host VMs.
+- The tdxlab run must first execute `automation/prepare-vmm-hugepages.sh`, which idempotently verifies hugetlbfs and provisions the bounded 2 MiB hugepage pool before fixture inventory.
 
 ## Objective
 
@@ -31,7 +32,7 @@ Verify numa pinning hugepages and resource isolation across success, boundary, f
 
 ## Preconditions
 
-1. The shared plan prerequisites are healthy and the target listener is reachable.
+1. The shared plan prerequisites are healthy, at least 512 free 2 MiB hugepages and one NUMA node were recorded by the prepared fixture, and the target listener is reachable.
 2. Commands use isolated test data and preserve native request and response output.
 
 ## Test Data
