@@ -32,8 +32,9 @@ CASES = {
     },
     "tc-gos-setup-016": {
         "filter": "nsm::tests",
-        "passed": 2,
+        "passed": 3,
         "tests": (
+            "nsm::tests::measured_state_models_a_production_enclave ... ok",
             "nsm::tests::pcr_lifecycle_matches_nsm_semantics ... ok",
             "nsm::tests::attestation_binds_claims_and_current_pcrs ... ok",
         ),
