@@ -1225,6 +1225,7 @@ configs:
         trust_chain: bool = False,
         continuity: bool = False,
         register_gateways_on_boot: bool = True,
+        gateway_registration_mode: str = "all",
         source_app_id: str = "",
         expect_boot: bool = True,
         expect_policy_denial: bool = True,
@@ -1258,6 +1259,7 @@ configs:
       DERIVATION_PATH: kms-upgrade-009-{identity}
       GATEWAY_URLS: ${{GATEWAY_URLS}}
       GATEWAY_REQUEST_CONTRACTS: ${{GATEWAY_REQUEST_CONTRACTS}}
+      GATEWAY_REGISTRATION_MODE: ${{GATEWAY_REGISTRATION_MODE}}
       GATEWAY_CLIENT_PUBLIC_KEY_FILE: ${{GATEWAY_CLIENT_PUBLIC_KEY_FILE:-}}
       GATEWAY_WG_PROBE_IPS: ${{GATEWAY_WG_PROBE_IPS:-}}
       GATEWAY_PORTS: ${{GATEWAY_PORTS}}
@@ -1292,6 +1294,7 @@ configs:
                 "legacy" if row["version"] == "gateway-0.5.8" else "current"
                 for row in (gateway_rows or [])
             ),
+            "GATEWAY_REGISTRATION_MODE": gateway_registration_mode,
             "GATEWAY_CLIENT_PUBLIC_KEY_FILE": (
                 "/run/dstack-host/gateway-cache.json" if native_gateway else ""
             ),
@@ -1977,7 +1980,20 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             trust_chain=True,
             native_gateway=True,
             restricted_ports=[8443],
+            gateway_registration_mode="fallback",
         )
+        identity_registrations = identity_client["observation"][
+            "gateway_registrations"
+        ]
+        if (
+            len(identity_registrations) != 2
+            or identity_registrations[0]["http"] != 0
+            or identity_registrations[1]["http"] != 200
+        ):
+            raise RuntimeError(
+                "wrong-identity registration did not reject then fall back: "
+                f"{identity_registrations}"
+            )
         identity_route = wait_route(identity_client)
         if identity_route.get("instance") != identity_client["route_instance"]:
             raise RuntimeError("wrong-identity fallback selected another peer")
