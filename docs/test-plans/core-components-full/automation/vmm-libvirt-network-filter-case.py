@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import time
@@ -81,22 +82,25 @@ def wait_for(predicate, message: str, timeout: float = 90):
 
 def make_config(
     template: str,
-    root: Path,
+    artifact_root: Path,
+    runtime_root: Path,
     image_store: Path,
     supervisor: Path,
     port: int,
 ) -> Path:
     """Materialize current VMM configuration without obsolete netd fields."""
     replacements = {
-        'temp_dir = "/tmp"': f'temp_dir = "{root}/data"\nrun_path = "{root}/vms"',
+        'temp_dir = "/tmp"': (
+            f'temp_dir = "{runtime_root}/data"\nrun_path = "{runtime_root}/vms"'
+        ),
         'address = "unix:./vmm.sock"': f'address = "127.0.0.1:{port}"',
         '# path = ""': f'path = "{image_store}"',
         'qemu_path = ""': 'qemu_path = "/usr/bin/qemu-system-x86_64"',
         'platform = "auto"': 'platform = "tdx"',
         'exe = "./supervisor"': f'exe = "{supervisor}"',
-        'sock = "./run/supervisor.sock"': f'sock = "{root}/supervisor.sock"',
-        'pid_file = "./run/supervisor.pid"': f'pid_file = "{root}/supervisor.pid"',
-        'log_file = "./run/supervisor.log"': f'log_file = "{root}/supervisor.log"',
+        'sock = "./run/supervisor.sock"': f'sock = "{runtime_root}/supervisor.sock"',
+        'pid_file = "./run/supervisor.pid"': f'pid_file = "{runtime_root}/supervisor.pid"',
+        'log_file = "./run/supervisor.log"': f'log_file = "{runtime_root}/supervisor.log"',
         'port = 10000': f"port = {port + 1000}",
         '[key_provider]\nenabled = true': '[key_provider]\nenabled = false',
     }
@@ -106,7 +110,7 @@ def make_config(
             raise RuntimeError(f"VMM template is missing {old!r}")
         text = text.replace(old, new, 1)
     text += '\n[cvm.tee_simulator]\nmock_attestation_seed = "' + "12" * 32 + '"\n'
-    path = root / "vmm.toml"
+    path = artifact_root / "vmm.toml"
     path.write_text(text)
     return path
 
@@ -157,9 +161,14 @@ def main() -> int:
     image = os.environ["DSTACK_TEST_NO_TEE_GUEST_IMAGE"]
     root = result_dir / "artifacts/network-lifecycle"
     root.mkdir(parents=True)
+    runtime_key = hashlib.sha256(str(result_dir).encode()).hexdigest()[:12]
+    runtime_root = Path(f"/tmp/dtnet-{runtime_key}")
+    shutil.rmtree(runtime_root, ignore_errors=True)
+    runtime_root.mkdir(mode=0o700)
     config = make_config(
         (repository / "dstack/vmm/vmm.toml").read_text(),
         root,
+        runtime_root,
         image_store,
         supervisor,
         18481,
@@ -190,7 +199,7 @@ def main() -> int:
         if code != 200 or not body.get("id"):
             raise RuntimeError(f"stopped bridge VM creation failed with HTTP {code}")
         bridge_id = str(body["id"])
-        bridge_dir = root / "vms" / bridge_id
+        bridge_dir = runtime_root / "vms" / bridge_id
         created.append((bridge_id, bridge_dir))
         manifest = wait_for(
             lambda: json.loads((bridge_dir / "vm-manifest.json").read_text())
@@ -218,7 +227,7 @@ def main() -> int:
         if code != 200 or not body.get("id"):
             raise RuntimeError(f"user VM creation failed with HTTP {code}")
         user_id = str(body["id"])
-        user_dir = root / "vms" / user_id
+        user_dir = runtime_root / "vms" / user_id
         created.append((user_id, user_dir))
         old_pid = wait_for(
             lambda: int((user_dir / "qemu.pid").read_text())
@@ -281,6 +290,7 @@ def main() -> int:
                 except Exception:
                     pass
         stop(process)
+        shutil.rmtree(runtime_root, ignore_errors=True)
 
     artifact = result_dir / "artifacts/vmm-network-lifecycle.json"
     artifact.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
