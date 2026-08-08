@@ -2599,7 +2599,7 @@
                 },
                 "destructive_scope": "lease-only",
                 "hardware_required": false,
-                "simulation_allowed": false
+                "simulation_allowed": true
               },
               "actions_under_test": [
                 "Guest configuration backward and forward compatibility"
