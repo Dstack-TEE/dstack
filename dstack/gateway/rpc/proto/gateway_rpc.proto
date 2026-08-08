@@ -339,9 +339,18 @@ message PeerSyncStatus {
   uint32 id = 1;
   uint64 local_ack = 2;
   uint64 peer_ack = 3;
-  uint64 buffered_logs = 4;
+  // Always 0 since wavekv 2.0, which replicates state instead of operation logs and
+  // keeps no per-peer log buffers. Retained so existing clients keep decoding.
+  uint64 buffered_logs = 4 [deprecated = true];
   // Last seen timestamps: [(observer_node_id, timestamp), ...]
   repeated LastSeenEntry last_seen = 5;
+  // Whether this peer has ever reported an ack map.
+  bool heard_from = 6;
+  // Sync protocol last negotiated with this peer: "v1" or "v2".
+  string protocol = 7;
+  // Consecutive quiescent rounds whose state digests disagreed. Non-zero means the
+  // replicas have silently diverged; wavekv 1.x could not detect this at all.
+  uint32 digest_mismatches = 8;
 }
 
 message LastSeenEntry {
@@ -358,6 +367,13 @@ message StoreSyncStatus {
   bool dirty = 5;
   bool wal_enabled = 6;
   repeated PeerSyncStatus peers = 7;
+  // Hex SHA-256 over the replicated state. Two converged replicas produce equal
+  // digests by construction, so comparing this across the cluster is the promotion
+  // gate for the wavekv v2 rollout and the standing divergence check afterwards.
+  string digest = 8;
+  uint64 entries_merged = 9;
+  // Entries refused by the admission policy or the ingest quotas.
+  uint64 entries_rejected = 10;
 }
 
 // WaveKV sync status response
