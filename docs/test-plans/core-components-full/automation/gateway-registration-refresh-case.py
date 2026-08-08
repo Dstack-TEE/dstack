@@ -9,6 +9,7 @@ import json
 import os
 import re
 import signal
+import shutil
 import socket
 import ssl
 import subprocess
@@ -152,10 +153,11 @@ def main() -> int:
     replacement: subprocess.Popen[bytes] | None = None
     failure = ""
     status = "FAIL"
+    cargo = shutil.which("cargo") or str(Path.home() / ".cargo/bin/cargo")
 
     try:
         native = subprocess.run(
-            ["cargo", "test", "-p", "dstack-util", TEST_FILTER, "--", "--nocapture"],
+            [cargo, "test", "--locked", "-p", "dstack-util", TEST_FILTER, "--", "--nocapture"],
             cwd=Path(runtime["repository"]) / "dstack",
             env={**os.environ, "CARGO_TARGET_DIR": str(runtime["cargo_target_dir"])},
             text=True,
