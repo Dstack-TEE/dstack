@@ -3015,7 +3015,9 @@ mod tests {
             vec![4, 5, 6],
             cc_eventlog::EventLogVersion::V2,
         ));
-        let encoded = att.into_versioned().to_bytes().unwrap();
+        // RA-TLS certificates use the stripped representation. Its runtime
+        // events must retain the advertised digest paired with each preimage.
+        let encoded = att.into_versioned().into_stripped().to_bytes().unwrap();
         let VersionedAttestation::V1 { attestation } =
             VersionedAttestation::from_bytes(&encoded).unwrap()
         else {
