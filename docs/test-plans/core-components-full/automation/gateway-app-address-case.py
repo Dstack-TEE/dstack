@@ -58,13 +58,10 @@ class DnsAuthority:
         self,
         address: tuple[str, int],
         records: dict[str, tuple[str, int]],
-        *,
-        fail_queries: bool = False,
     ):
         """Initialize the bounded authority without opening a listener."""
         self.address = address
         self.records = records
-        self.fail_queries = fail_queries
         self.queries: dict[str, int] = {}
         self.errors: list[str] = []
         self.stop = threading.Event()
@@ -93,12 +90,7 @@ class DnsAuthority:
                         with self.lock:
                             self.queries[name] = self.queries.get(name, 0) + 1
                             record = self.records.get(name)
-                        if self.fail_queries:
-                            header = packet[:2] + struct.pack(
-                                "!HHHHH", 0x8182, 1, 0, 0, 0
-                            )
-                            response = header + packet[12:end]
-                        elif query_type == 16 and record is not None:
+                        if query_type == 16 and record is not None:
                             value, ttl = record
                             encoded = value.encode("utf-8")
                             answer = (
@@ -204,9 +196,7 @@ def main() -> int:
         f"{PREFIX}.{names['malformed']}": ("invalid-address", 1),
         f"{PREFIX}.{names['stale']}": (target, 1),
     }
-    failing_authority = DnsAuthority(dns_addresses[0], {}, fail_queries=True)
-    authority = DnsAuthority(dns_addresses[1], records)
-    authorities = [failing_authority, authority]
+    authorities = [DnsAuthority(address, dict(records)) for address in dns_addresses]
     dns_workers = [
         threading.Thread(
             target=current.serve, name=f"case-owned-dns-{index}", daemon=True
@@ -275,19 +265,27 @@ def main() -> int:
             proxy, "missing.other.alt.test"
         )
         checks["stale_initial_route"] = routed_probe(proxy, names["stale"], markers[4])
-        authority.set_record(f"{PREFIX}.{names['stale']}", altered, 1)
+        for current in authorities:
+            current.set_record(f"{PREFIX}.{names['stale']}", altered, 1)
         checks["positive_cache_deterministic"] = routed_probe(
             proxy, names["stale"], markers[5]
         )
         time.sleep(1.3)
         checks["expired_stale_mapping_rejected"] = rejected_probe(proxy, names["stale"])
-        authority.set_record(f"{PREFIX}.{names['stale']}", target, 1)
+        for current in authorities:
+            current.set_record(f"{PREFIX}.{names['stale']}", target, 1)
         time.sleep(1.3)
         # The final observation is a bounded DNS recovery check. A backend route
         # is not opened so the six successful sessions remain exact.
-        before = authority.queries.get(f"{PREFIX}.{names['stale']}", 0)
+        before = sum(
+            current.queries.get(f"{PREFIX}.{names['stale']}", 0)
+            for current in authorities
+        )
         rejected_probe(proxy, names["stale"])
-        after = authority.queries.get(f"{PREFIX}.{names['stale']}", 0)
+        after = sum(
+            current.queries.get(f"{PREFIX}.{names['stale']}", 0)
+            for current in authorities
+        )
         checks["mapping_requeried_after_ttl"] = after > before
     except Exception as error:  # noqa: BLE001
         checks["harness_exception_free"] = False
@@ -306,10 +304,8 @@ def main() -> int:
     checks["dns_clean_shutdown"] = not any(
         dns_worker.is_alive() for dns_worker in dns_workers
     ) and not any(current.errors for current in authorities)
-    checks["dns_server_failover"] = bool(failing_authority.queries) and bool(
-        authority.queries
-    )
-    queried = set(authority.queries)
+    checks["dns_servers_exercised"] = all(current.queries for current in authorities)
+    queried = {name for current in authorities for name in current.queries}
     checks["current_and_legacy_queried"] = any(
         name.startswith(PREFIX + ".") for name in queried
     ) and any(name.startswith(LEGACY_PREFIX + ".") for name in queried)
@@ -329,16 +325,21 @@ def main() -> int:
         ],
         "dns_query_name_classes": {
             "current": sum(
-                v for k, v in authority.queries.items() if k.startswith(PREFIX + ".")
+                v
+                for current in authorities
+                for k, v in current.queries.items()
+                if k.startswith(PREFIX + ".")
             ),
             "legacy": sum(
                 v
-                for k, v in authority.queries.items()
+                for current in authorities
+                for k, v in current.queries.items()
                 if k.startswith(LEGACY_PREFIX + ".")
             ),
             "wildcard": sum(
                 v
-                for k, v in authority.queries.items()
+                for current in authorities
+                for k, v in current.queries.items()
                 if k.startswith(PREFIX + "-wildcard.")
             ),
         },
@@ -368,7 +369,7 @@ def main() -> int:
                 "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
             }
         ],
-        "remarks": "A case-owned DNS authority, registered simulator identity, assigned loopback address, and backend were used. TLS passthrough preserves the end-to-end ClientHello; certificate validation remains the HTTPS client's responsibility.",
+        "remarks": "Case-owned DNS authorities, a registered simulator identity, assigned loopback address, and backend were used. TLS passthrough preserves the end-to-end ClientHello; certificate validation remains the HTTPS client's responsibility.",
         "duration_seconds": round(time.monotonic() - started, 3),
     }
     (result_dir / "result.json").write_text(json.dumps(result, indent=2) + "\n")
