@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <a id="tc-kms-ct-001"></a>
-# TC-KMS-CT-001: Concurrent certificate log append and iteration
+# TC-KMS-CT-001: Removed certificate-log surface regression
 
 ## Metadata
 
@@ -11,7 +11,7 @@
 - Automation: Yes
 - Requirements: [req-kms-ct-001](../../../feature-audit.md#req-kms-ct-001)
 - Risks: [risk-kms-ct-001](../../../feature-audit.md#risk-kms-ct-001)
-- Source: `dstack/kms/src/ct_log.rs`
+- Source: `dstack/kms/src/main.rs`, `dstack/kms/Cargo.toml`
 
 ## Prepared execution knowledge
 
@@ -24,55 +24,47 @@
 
 ## Objective
 
-Verify concurrent certificate log append and iteration exactly matches the source-defined behavior across normal, boundary, concurrent, failure, and restart paths.
+Verify the removed, unused certificate-log implementation and configuration surface do not silently return to KMS.
 
 ## Preconditions
 
-1. Use an isolated deployment with the relevant effective configuration and a clean run-scoped baseline.
-2. Enable redacted process, file, RPC, and lifecycle evidence collection.
+1. Use the exact candidate repository and prepared Cargo target.
+2. Preserve bounded source-inventory and test output evidence.
 
 ## Test Data
 
-Include minimum, maximum, duplicate, missing, malformed, and cross-instance values appropriate to the behavior.
+Use the candidate KMS module graph, dependency manifest, configuration fields, and library test suite.
 
 ## Steps
 
 <a id="tc-kms-ct-001-step-01"></a>
 ### Step 1: Record effective inputs and baseline
 
-Capture effective configuration, input files/requests, existing processes/resources, and public status before the operation.
+Confirm the runtime manifest commit matches the candidate repository HEAD.
 
 **Expected results:**
 
-- Inputs resolve unambiguously to the intended test identity and no run-scoped output or resource exists.
+- The candidate identity is exact and no service or mutable runtime state is required.
 
 <a id="tc-kms-ct-001-step-02"></a>
 ### Step 2: Exercise behavior and boundaries
 
-Write certificates for identical/different app IDs concurrently across filename collisions, restart, permissions, full disk, malformed existing names and iteration.
+Inspect the KMS module graph, source inventory, configuration fields, and dependency manifest, then run the current KMS library tests.
 
 **Expected results:**
 
-- Each issued certificate has one immutable ordered file, collision allocation is race-safe, iteration excludes unrelated/malformed files, and logging failure follows certificate-issuance policy without overwrite.
+- `ct_log.rs`, its module declaration, `cert_log_dir`, and its sole `chrono` dependency remain absent, while the current KMS library suite passes.
 
 <a id="tc-kms-ct-001-step-03"></a>
 ### Step 3: Inject failure and concurrency
 
-Interrupt the primary dependency at its commit boundary, issue a conflicting concurrent operation, restore it, and retry once.
+Search all candidate KMS Rust sources for the removed configuration and module surface.
 
 **Expected results:**
 
-- At most one operation commits, failure cleanup releases all temporary resources, diagnostics identify the failed phase, and retry converges without duplicate state.
+- No hidden call site or configuration hook can reactivate the deleted non-atomic file writer.
 
 <a id="tc-kms-ct-001-step-04"></a>
-### Step 4: Verify restart, isolation, and redaction
-
-Restart the owning service where permitted and inspect state for this and an adjacent identity plus all collected output.
-
-**Expected results:**
-
-- Persisted and transient state follow policy, adjacent identities are unchanged, and no private material or credential appears in output.
-
 ## Postconditions
 
-Remove run-scoped state and verify processes, files, devices, listeners, and allocations match baseline.
+No service, file, listener, credential, or run-scoped product state was created.
