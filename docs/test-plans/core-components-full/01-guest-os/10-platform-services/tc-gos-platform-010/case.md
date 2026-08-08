@@ -24,8 +24,8 @@
 - Use one case-owned seed-matched TDX simulator and collateral service for all
   four rows. This exercises each official guest's attestation/configuration
   integration through the production verifier path without claiming physical
-  TDX origin; select it explicitly with `--simulated-tee dstack-tdx` for each
-  deployment. Physical attestation is covered by the hardware cases.
+  TDX origin; select it explicitly with `--no-tee --simulated-tee dstack-tdx`
+  for each deployment. Physical attestation is covered by the hardware cases.
 - The compatibility rows intentionally exercise the current VMM, KMS, and
   gateway with official guest images `dstack-dev-0.5.4`, `dstack-0.5.8`,
   `dstack-0.5.11`, and `dstack-0.6.0`. Generate one current-schema compose with
