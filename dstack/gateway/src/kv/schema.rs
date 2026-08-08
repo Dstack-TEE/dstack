@@ -15,6 +15,25 @@
 //! arrive in a response. Rejected entries also park the round's ack adoption (rule R1),
 //! so a peer sending inadmissible data keeps re-offering it rather than having it
 //! silently dropped.
+//!
+//! # Adding a key: this schema must be widened one release before it is used
+//!
+//! Ack parking makes the schema *forward-incompatible in one direction*. Values may gain
+//! fields freely — they are named-map encoded, so an older gateway skips what it does not
+//! know. Adding a **key** is different: an older gateway rejects it, which sets
+//! `complete = false` for the whole round, which parks ack adoption for that pair
+//! entirely. The two nodes then re-exchange the same batch forever and their digests stay
+//! unequal. Nothing errors; the pair simply stops making progress, and the symptom is
+//! indistinguishable from an unrelated stall such as a peer with a runaway clock.
+//!
+//! So a new key ships in two releases, never one:
+//!
+//! 1. Widen the schema to **accept** the new prefix. Do not write it yet. Roll this out
+//!    to every node.
+//! 2. Only then start **writing** it.
+//!
+//! The same applies in reverse when retiring a key: stop writing it, roll that out, and
+//! only afterwards narrow the schema.
 
 use wavekv::{types::Entry, Admission, AdmissionPolicy};
 
