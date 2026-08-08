@@ -35,15 +35,6 @@ def request() -> dict[str, Any]:
     return value
 
 
-def endpoint_ready(host: str, port: int) -> bool:
-    """Return whether a TCP endpoint accepts connections."""
-    try:
-        with socket.create_connection((host, port), timeout=3):
-            return True
-    except OSError:
-        return False
-
-
 def probe_gpu_inventory() -> dict[str, Any]:
     """Return a bounded inventory proving whether NVIDIA GPUs are available."""
     command = shutil.which("nvidia-smi")
@@ -169,15 +160,6 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
     port_base = find_port_block()
     vmm_url = os.environ.get("DSTACK_TEST_VMM_URL", "http://127.0.0.1:12100")
     cli = repository / "dstack/vmm/src/vmm-cli.py"
-    mock_root = Path(
-        os.environ.get(
-            "DSTACK_TEST_MOCK_ROOTS", "/tmp/dstack-test-mock-attestation/roots"
-        )
-    ).resolve()
-    mock_port = int(os.environ.get("DSTACK_TEST_MOCK_PORT", "18088"))
-    if not endpoint_ready("127.0.0.1", mock_port):
-        shutil.rmtree(workspace, ignore_errors=True)
-        fail(f"mock collateral service is unavailable on 127.0.0.1:{mock_port}")
     matrix = [
         {
             "name": "tdx",
@@ -268,12 +250,6 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         ]
     values = {
         "attestation_matrix": matrix,
-        "mock_attestation": {
-            "public_roots": str(mock_root),
-            "collateral_base_url_guest": f"http://10.0.2.2:{mock_port}",
-            "collateral_base_url_host": f"http://127.0.0.1:{mock_port}",
-            "development_only": True,
-        },
         "live_vmm": {
             "url": vmm_url,
             "cli_argv": [sys.executable, str(cli), "--url", vmm_url],
@@ -322,13 +298,7 @@ def verify(value: dict[str, Any]) -> dict[str, Any]:
     """Verify that all matrix rows and collateral are available."""
     values = value.get("prepared", {}).get("values", {})
     matrix = values.get("attestation_matrix", [])
-    ok = (
-        isinstance(matrix, list)
-        and len(matrix) == 6
-        and endpoint_ready(
-            "127.0.0.1", int(os.environ.get("DSTACK_TEST_MOCK_PORT", "18088"))
-        )
-    )
+    ok = isinstance(matrix, list) and len(matrix) == 6
     return {
         "ok": ok,
         "expected": {"matrix_rows": 6},
