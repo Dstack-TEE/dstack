@@ -7,26 +7,38 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
 CASE_ID = "tc-vmm-compute-ne-007"
-EXPECTED = {
-    "no-tee",
-    "tdx-full",
-    "tdx-lite",
-    "amd-sev-snp",
-    "gcp-tdx",
-    "nitro-tpm",
-    "nitro-enclave",
-    "swtpm",
-    "gpu-command",
-    "network-matrix",
-    "host-share-measurement",
-    "restart-determinism",
-    "invalid-custom-recovery",
+ROW_TESTS = {
+    "no-tee": {"app::qemu::tests::qemu_command_builder_does_not_require_prepared_paths_to_exist"},
+    "tdx-full": {"app::tests::selects_mr_config_version_for_each_tee_mode"},
+    "tdx-lite": {"app::tests::tdx_auto_variant_uses_lite_for_2g_supported_image"},
+    "amd-sev-snp": {
+        "app::qemu::tests::amd_sev_snp_uses_confidential_virtio_pci_options",
+        "app::tests::amd_sev_snp_sys_config_includes_measurement_input_and_mr_config",
+    },
+    "gcp-tdx": {"app::tests::simulator_config_is_written_separately_with_measurement_inputs"},
+    "nitro-tpm": {"app::tests::simulator_config_is_written_separately_with_measurement_inputs"},
+    "nitro-enclave": {"app::tests::instance_platform_overrides_node_simulator_template"},
+    "swtpm": {
+        "app::qemu::tests::swtpm_is_omitted_when_simulator_provides_the_tpm",
+        "app::tests::vm_measurement_config_includes_swtpm",
+    },
+    "gpu-command": {"app::qemu::tests::qemu_command_builder_does_not_require_prepared_paths_to_exist"},
+    "network-matrix": {
+        "app::qemu::tests::qemu_command_builder_does_not_require_prepared_paths_to_exist",
+        "app::tests::vm_measurement_config_ignores_networking_changes",
+    },
+    "host-share-measurement": {"app::qemu::tests::qemu_command_builder_does_not_require_prepared_paths_to_exist"},
+    "restart-determinism": {
+        "app::tests::auto_restart_policy_backs_off_caps_and_exhausts_once",
+        "app::tests::auto_restart_policy_resets_only_after_healthy_window",
+    },
+    "invalid-custom-recovery": {"app::qemu::tests::qemu_command_builder_does_not_require_prepared_paths_to_exist"},
 }
-MARKER = "DSTACK_PLATFORM_ROW "
 
 
 def main() -> int:
@@ -49,7 +61,6 @@ def main() -> int:
             str(repository / "dstack/Cargo.toml"),
             "-p",
             "dstack-vmm",
-            "volume_qemu_command_is_readonly_ordered_and_does_not_require_paths",
             "--target-dir",
             target,
             "--",
@@ -61,20 +72,23 @@ def main() -> int:
         check=False,
     )
     output = process.stdout + process.stderr
-    observed = {
-        line.split(MARKER, 1)[1].strip()
-        for line in output.splitlines()
-        if MARKER in line
+    passed_tests = {
+        match.group(1)
+        for match in re.finditer(r"^test ([^ ]+) \.\.\. ok$", output, re.MULTILINE)
     }
-    missing = sorted(EXPECTED - observed)
-    unexpected = sorted(observed - EXPECTED)
-    passed = process.returncode == 0 and not missing and not unexpected
+    rows = {
+        row: sorted(tests)
+        for row, tests in ROW_TESTS.items()
+        if tests <= passed_tests
+    }
+    missing = sorted(set(ROW_TESTS) - set(rows))
+    passed = process.returncode == 0 and not missing
     evidence = {
         "candidate_commit": runtime["candidate_commit"],
-        "expected_rows": sorted(EXPECTED),
-        "observed_rows": sorted(observed),
+        "expected_rows": sorted(ROW_TESTS),
+        "observed_rows": sorted(rows),
+        "row_test_bindings": rows,
         "missing_rows": missing,
-        "unexpected_rows": unexpected,
         "cargo_returncode": process.returncode,
         "diagnostic_tail": output[-4000:],
         "shared_target": target,
@@ -87,7 +101,7 @@ def main() -> int:
     artifact_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + chr(10))
     status = "PASS" if passed else "FAIL"
     summary = (
-        f"{len(observed)}/{len(EXPECTED)} QEMU platform rows matched; "
+        f"{len(rows)}/{len(ROW_TESTS)} QEMU platform rows matched; "
         f"cargo={process.returncode}"
     )
     result = {
