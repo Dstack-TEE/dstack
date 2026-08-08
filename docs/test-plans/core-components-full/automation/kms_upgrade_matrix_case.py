@@ -1471,10 +1471,15 @@ configs:
         return row
 
     def client_observation(
-        self, row: dict[str, Any], *, timeout: int = 180
+        self,
+        row: dict[str, Any],
+        *,
+        timeout: int = 180,
+        register_gateways: bool = True,
     ) -> dict[str, Any]:
         """Wait for and return one live client's public observation."""
-        url = f"http://127.0.0.1:{row['service_port']}/observation"
+        path = "/observation" if register_gateways else "/identity-observation"
+        url = f"http://127.0.0.1:{row['service_port']}{path}"
         deadline = time.monotonic() + timeout
         last_code = 0
         last_raw = b""
@@ -1977,10 +1982,14 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             enabled=False,
             guest_url_override=unavailable_guest_url,
         )
-        before_restart = matrix.client_observation(outage_client)
+        before_restart = matrix.client_observation(
+            outage_client, register_gateways=False
+        )
         run([*matrix.cli, "stop", outage_client["vm_id"], "--force"])
         run([*matrix.cli, "start", outage_client["vm_id"]], timeout=120)
-        after_restart = matrix.client_observation(outage_client, timeout=180)
+        after_restart = matrix.client_observation(
+            outage_client, timeout=180, register_gateways=False
+        )
         if before_restart.get("public_key_sha256") != after_restart.get(
             "public_key_sha256"
         ):

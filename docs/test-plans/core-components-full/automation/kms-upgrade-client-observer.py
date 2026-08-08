@@ -184,7 +184,7 @@ def register_gateway(
         }
 
 
-def observe() -> dict[str, Any]:
+def observe(*, register_gateways: bool = True) -> dict[str, Any]:
     """Return stable public evidence for the app identity provisioned by KMS."""
     derived = tappd(
         "DeriveKey",
@@ -259,18 +259,22 @@ def observe() -> dict[str, Any]:
         gateway_client_public_key = (
             __import__("base64").b64encode(os.urandom(32)).decode()
         )
-    gateway_registrations = [
-        register_gateway(
-            url,
-            request_contract,
-            gateway_client_public_key,
-            registration_key,
-            registration_chain,
-        )
-        for url, request_contract in zip(
-            GATEWAY_URLS, GATEWAY_REQUEST_CONTRACTS, strict=True
-        )
-    ]
+    gateway_registrations = (
+        [
+            register_gateway(
+                url,
+                request_contract,
+                gateway_client_public_key,
+                registration_key,
+                registration_chain,
+            )
+            for url, request_contract in zip(
+                GATEWAY_URLS, GATEWAY_REQUEST_CONTRACTS, strict=True
+            )
+        ]
+        if register_gateways
+        else []
+    )
     trust_chain: dict[str, Any] | None = None
     if TRUST_CHAIN_OBSERVATION:
         identity = {
@@ -294,7 +298,7 @@ def observe() -> dict[str, Any]:
             or "",
             "certificate_chain_pem": chain,
         }
-    if any(
+    if register_gateways and any(
         row["http"] != 200 or not row["assigned_ip"] for row in gateway_registrations
     ):
         raise RuntimeError(f"Gateway registration failed: {gateway_registrations}")
@@ -376,11 +380,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        if self.path != "/observation":
+        if self.path not in {"/observation", "/identity-observation"}:
             self.send_error(404)
             return
         try:
-            body = json.dumps(observe(), sort_keys=True).encode()
+            body = json.dumps(
+                observe(register_gateways=self.path == "/observation"), sort_keys=True
+            ).encode()
             self.send_response(200)
         except Exception as error:  # noqa: BLE001
             body = json.dumps({"error": str(error)}).encode()
