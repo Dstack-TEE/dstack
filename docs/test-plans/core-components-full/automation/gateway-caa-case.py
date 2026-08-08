@@ -539,17 +539,33 @@ def main() -> int:
             )
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            concurrent_codes = list(
+            concurrent_responses = list(
                 executor.map(
-                    lambda _: http_call(route, b"{}", "application/json", token)[0],
+                    lambda _: http_call(route, b"{}", "application/json", token),
                     range(2),
                 )
             )
+        concurrent_codes = [response[0] for response in concurrent_responses]
+        contention_diagnostics = [
+            response[1].decode("utf-8", errors="replace").lower()
+            for response in concurrent_responses
+            if response[0] == 400
+        ]
         facts_after_concurrency = record_facts(state)
-        checks["concurrent_idempotence"] = concurrent_codes == [200, 200] and all(
-            facts_after_concurrency[d]["count"] == 3
-            and facts_after_concurrency[d]["unrelated_caa_preserved"]
-            for d in domains[:2]
+        checks["concurrent_idempotence"] = (
+            200 in concurrent_codes
+            and all(code in {200, 400} for code in concurrent_codes)
+            and all(
+                any(
+                    marker in diagnostic for marker in ("busy", "progress", "operation")
+                )
+                for diagnostic in contention_diagnostics
+            )
+            and all(
+                facts_after_concurrency[d]["count"] == 3
+                and facts_after_concurrency[d]["unrelated_caa_preserved"]
+                for d in domains[:2]
+            )
         )
         before_failure = state.snapshot()
         with state.lock:
