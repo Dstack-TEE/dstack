@@ -316,7 +316,7 @@ def observe(*, register_gateways: bool = True) -> dict[str, Any]:
         for row in gateway_registrations
         if row["http"] == 200 and row["assigned_ip"]
     ]
-    if register_gateways and (
+    if register_gateways and gateway_registrations and (
         not successful_registrations
         or (
             GATEWAY_REGISTRATION_MODE == "all"
