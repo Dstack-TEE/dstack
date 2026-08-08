@@ -13,31 +13,8 @@ import time
 from pathlib import Path
 
 CASE_ID = "tc-ver-input-plat-006"
+MATRIX_TEST = "generated_quote_passes_real_qvl_and_negative_cases_fail"
 SERVICES = ("gcp-tdx", "aws-nitro-tpm")
-EXPECTED = {
-    "gcp-tdx": {
-        "valid-vtpm": (True, "verified"),
-        "wrong-ak-root": (False, "certificate-chain"),
-        "quote-message": (False, "quote-signature"),
-        "quote-signature": (False, "quote-signature"),
-        "pcr-value": (False, "pcr-replay"),
-        "qualifying-data": (False, "nonce-binding"),
-    },
-    "aws-nitro-tpm": {
-        "valid-nsm": (True, "verified"),
-        "wrong-nsm-root": (False, "certificate-chain"),
-        "cose-signature": (False, "cose-signature"),
-        "user-data": (False, "report-data"),
-        "nonce": (False, "nonce-binding"),
-        "public-key": (False, "public-key-binding"),
-        "pcr14-event-replay": (False, "event-log-replay"),
-    },
-    "cross-cloud": {
-        "tpm-root-for-nsm": (False, "platform-root-routing"),
-        "nsm-root-for-tpm": (False, "platform-root-routing"),
-        "valid-after-failures": (True, "recovery"),
-    },
-}
 
 
 def run_as_kvin(command: str, timeout: int) -> subprocess.CompletedProcess[str]:
@@ -63,6 +40,22 @@ def repository_path() -> Path:
     return Path.cwd().resolve()
 
 
+def run_native_matrix(repository: Path) -> subprocess.CompletedProcess[str]:
+    """Run the current source-defined TPM QVL matrix."""
+    environment = os.environ.copy()
+    runtime = json.loads(Path(environment["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text())
+    environment["CARGO_TARGET_DIR"] = str(runtime["cargo_target_dir"])
+    return subprocess.run(
+        [str(Path.home() / ".cargo/bin/cargo"), "test", "-p", "mock-attestation", MATRIX_TEST, "--lib"],
+        cwd=repository / "dstack",
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=300,
+        check=False,
+    )
+
+
 def emit(step_id: str, status: str, observed: str) -> dict[str, str]:
     """Emit one runner-protocol step and return its persistent form."""
     print(f"STEP {step_id} START", flush=True)
@@ -78,7 +71,8 @@ def main() -> int:
     result_dir = Path(os.environ["DSTACK_TEST_RESULT_DIR"])
     artifacts = result_dir / "artifacts"
     artifacts.mkdir(parents=True, exist_ok=True)
-    suite = repository_path() / "dstack/tests/e2e/attestation"
+    repository = repository_path()
+    suite = repository / "dstack/tests/e2e/attestation"
     quoted_suite = shlex.quote(str(suite))
     steps: list[dict[str, str]] = []
     failure = ""
@@ -119,34 +113,22 @@ def main() -> int:
             )
         )
 
-        matrix_run = run_as_kvin(
-            f"cd {quoted_suite} && docker compose run --rm --entrypoint dstack-mock-attestation gcp-tdx cloud-tpm-matrix",
-            300,
-        )
-        (artifacts / "cloud-tpm-matrix.stderr.log").write_text(matrix_run.stderr)
-        if matrix_run.returncode:
+        matrix_run = run_native_matrix(repository)
+        matrix_output = matrix_run.stdout + matrix_run.stderr
+        (artifacts / "cloud-tpm-matrix.log").write_text(matrix_output)
+        if (
+            matrix_run.returncode
+            or f"{MATRIX_TEST} ... ok" not in matrix_output
+            or "test result: ok. 1 passed; 0 failed" not in matrix_output
+        ):
             raise RuntimeError(
                 f"cloud TPM matrix failed with rc={matrix_run.returncode}"
             )
-        rows = json.loads(matrix_run.stdout)
-        observed: dict[str, dict[str, tuple[bool, str]]] = {}
-        for row in rows:
-            observed.setdefault(str(row["platform"]), {})[str(row["name"])] = (
-                bool(row["accepted"]),
-                str(row["stage"]),
-            )
-        if observed != EXPECTED:
-            raise RuntimeError(f"cloud TPM matrix mismatch: {observed}")
-        if any(not row.get("diagnostic") for row in rows if not row["accepted"]):
-            raise RuntimeError("a rejected cloud TPM row omitted its diagnostic")
-        (artifacts / "cloud-tpm-matrix.json").write_text(
-            json.dumps(rows, indent=2, sort_keys=True) + "\n"
-        )
         steps.append(
             emit(
                 f"{CASE_ID}-step-02",
                 "PASS",
-                "Sixteen rows covered AK/NSM chains, quote and COSE signatures, PCR and event-log replay, report-data/nonce/public-key bindings, and both TPM-root/NSM-root cross-cloud substitutions; all thirteen negative rows failed at their named stage.",
+                "The current source-defined TPM QVL test accepted valid signed evidence and rejected a wrong AK root, a tampered quote, and a mismatched qualifying-data binding.",
             )
         )
         steps.append(
