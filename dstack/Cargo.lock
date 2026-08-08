@@ -2286,6 +2286,7 @@ dependencies = [
  "hex-literal",
  "nsm-attest",
  "ra-tls",
+ "rcgen",
  "reqwest",
  "rocket",
  "serde",
