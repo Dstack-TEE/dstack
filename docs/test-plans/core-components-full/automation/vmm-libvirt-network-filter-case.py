@@ -201,21 +201,41 @@ def main() -> int:
         bridge_id = str(body["id"])
         bridge_dir = runtime_root / "vms" / bridge_id
         created.append((bridge_id, bridge_dir))
+        start_code, _ = rpc(base, "StartVm", {"id": bridge_id}, 180)
+        if start_code != 200:
+            raise RuntimeError(f"bridge VM start failed with HTTP {start_code}")
         manifest = wait_for(
             lambda: json.loads((bridge_dir / "vm-manifest.json").read_text())
             if (bridge_dir / "vm-manifest.json").is_file()
             else None,
             "bridge VM manifest missing",
         )
-        launch = json.loads((bridge_dir / "launch.json").read_text())
+        launch = wait_for(
+            lambda: json.loads((bridge_dir / "launch.json").read_text())
+            if (bridge_dir / "launch.json").is_file()
+            else None,
+            "bridge VM launch missing",
+        )
+        wait_for(
+            lambda: (bridge_dir / "qemu.pid").is_file(),
+            "bridge VM did not start",
+            120,
+        )
         launch_text = json.dumps(launch)
         macs = re.findall(r"mac=([0-9a-f:]{17})", launch_text, re.IGNORECASE)
         evidence["matrix"]["bridge_launch"] = {
             "nic_count": len(manifest["networks"]),
             "distinct_macs": len(set(macs)) == 2,
             "bridge_netdevs": launch_text.count("bridge,id=net") == 2,
-            "stopped": not (bridge_dir / "qemu.pid").exists(),
+            "qemu_started": True,
         }
+        stop_code, _ = rpc(base, "StopVm", {"id": bridge_id}, 60)
+        if stop_code != 200:
+            raise RuntimeError(f"bridge VM stop failed with HTTP {stop_code}")
+        wait_for(
+            lambda: not (bridge_dir / "qemu.pid").exists(),
+            "bridge VM did not stop",
+        )
 
         user_request = create_request(
             image,
