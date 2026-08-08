@@ -248,6 +248,12 @@ git -C "$repo" submodule update --init --depth 1 -- \
   dstack/kms/auth-eth/lib/forge-std \
   dstack/kms/auth-eth/lib/openzeppelin-contracts-upgradeable \
   dstack/kms/auth-eth/lib/openzeppelin-foundry-upgrades
+git -C "$repo/dstack/kms/auth-eth/lib/openzeppelin-contracts-upgradeable" \
+  submodule update --init --depth 1 -- lib/openzeppelin-contracts
+test -s "$repo/dstack/kms/auth-eth/lib/forge-std/src/Test.sol"
+test -s "$repo/dstack/kms/auth-eth/lib/openzeppelin-contracts-upgradeable/contracts/proxy/utils/UUPSUpgradeable.sol"
+test -s "$repo/dstack/kms/auth-eth/lib/openzeppelin-contracts-upgradeable/lib/openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol"
+test -s "$repo/dstack/kms/auth-eth/lib/openzeppelin-foundry-upgrades/src/Upgrades.sol"
 
 # Materialize locked JavaScript dependencies before workers start. Installing
 # into shared package directories from concurrent cases races and previously
