@@ -808,6 +808,14 @@ mod tests {
             "626262626262626262626262626262626262626262c402e1e2c4036b6d73",
         );
 
+        /// True when `bytes` opens with a MessagePack map header of any width. The
+        /// header widens from fixmap to map16 at 16 entries, so matching on the fixmap
+        /// range alone would start failing precisely when `AppInfo` grows past 15
+        /// fields — the case this encoding exists to support.
+        fn starts_with_msgpack_map(bytes: &[u8]) -> bool {
+            matches!(bytes.first().copied(), Some(0x80..=0x8f | 0xde | 0xdf))
+        }
+
         fn sample_app_info() -> AppInfo {
             AppInfo {
                 app_id: vec![0xa1, 0xa2, 0xa3],
@@ -849,9 +857,8 @@ mod tests {
         fn named_app_info_decodes_against_legacy_field_set() {
             let encoded = rmp_serde::to_vec_named(&sample_app_info()).unwrap();
 
-            assert_eq!(
-                encoded[0] & 0xf0,
-                0x80,
+            assert!(
+                starts_with_msgpack_map(&encoded),
                 "app info must encode as a MessagePack map, not a positional array"
             );
 

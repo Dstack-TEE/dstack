@@ -1244,6 +1244,19 @@ mod value_encoding_tests {
         started_at: u64,
     }
 
+    /// True when `bytes` opens with a MessagePack map header of any width. The header
+    /// widens from fixmap to map16 at 16 entries, so matching on the fixmap range alone
+    /// would start failing precisely when a value type grows past 15 fields — the case
+    /// this encoding exists to support.
+    fn starts_with_msgpack_map(bytes: &[u8]) -> bool {
+        matches!(bytes.first().copied(), Some(0x80..=0x8f | 0xde | 0xdf))
+    }
+
+    /// The positional counterpart: fixarray, array16, or array32.
+    fn starts_with_msgpack_array(bytes: &[u8]) -> bool {
+        matches!(bytes.first().copied(), Some(0x90..=0x9f | 0xdc | 0xdd))
+    }
+
     #[test]
     fn values_are_encoded_as_named_maps() {
         let encoded = encode(&CertRenewLock {
@@ -1252,9 +1265,8 @@ mod value_encoding_tests {
         })
         .expect("encode should succeed");
 
-        assert_eq!(
-            encoded[0] & 0xf0,
-            0x80,
+        assert!(
+            starts_with_msgpack_map(&encoded),
             "values must encode as MessagePack maps, not positional arrays"
         );
     }
@@ -1285,9 +1297,8 @@ mod value_encoding_tests {
             started_by: 7,
         })
         .expect("legacy encode should succeed");
-        assert_eq!(
-            legacy[0] & 0xf0,
-            0x90,
+        assert!(
+            starts_with_msgpack_array(&legacy),
             "fixture must be a positional array to exercise the legacy path"
         );
 
