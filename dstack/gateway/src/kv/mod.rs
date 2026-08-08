@@ -30,6 +30,7 @@
 
 mod https_client;
 pub mod import;
+mod schema;
 mod sync_service;
 
 pub use https_client::{AppIdValidator, HttpsClientConfig};
@@ -471,6 +472,18 @@ fn drop_future_observations<T>(
 /// in `#[serde(default)]` fields it does not receive, so the value types below
 /// can gain fields without breaking gateways running an older build. Decoding
 /// accepts both forms, so values written by older releases stay readable.
+/// wavekv configuration shared by both stores.
+///
+/// The admission policy is the important part: it confines a peer to the key shapes
+/// this gateway actually defines, so a compromised or buggy node in the cluster cannot
+/// plant arbitrary keys that every other node would then replicate and persist forever.
+fn store_config(store: schema::Store) -> wavekv::NodeConfig {
+    wavekv::NodeConfig {
+        admission: Some(std::sync::Arc::new(schema::GatewaySchema::new(store))),
+        ..Default::default()
+    }
+}
+
 pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     rmp_serde::encode::to_vec_named(value).context("failed to encode value")
 }
@@ -652,7 +665,12 @@ impl KvStore {
         data_dir: impl AsRef<Path>,
     ) -> Result<Self> {
         let data_dir = data_dir.as_ref();
-        let persistent = match Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir) {
+        let persistent = match Node::with_persistence_and_config(
+            my_node_id,
+            peer_ids.clone(),
+            data_dir,
+            store_config(schema::Store::Persistent),
+        ) {
             Ok(node) => node,
             Err(err) if is_storage_failure(&err) => {
                 return Err(err).with_context(|| {
@@ -679,7 +697,12 @@ impl KvStore {
                     data_dir.display(),
                     quarantined.display(),
                 );
-                Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir)
+                Node::with_persistence_and_config(
+                    my_node_id,
+                    peer_ids.clone(),
+                    data_dir,
+                    store_config(schema::Store::Persistent),
+                )
                     .context("failed to create persistent wavekv node on a fresh data dir")?
             }
         };
@@ -694,7 +717,11 @@ impl KvStore {
             }
         }
 
-        let ephemeral = Node::new(my_node_id, all_peer_ids);
+        let ephemeral = Node::with_config(
+            my_node_id,
+            all_peer_ids,
+            store_config(schema::Store::Ephemeral),
+        );
 
         Ok(Self {
             persistent,
@@ -1772,6 +1799,152 @@ mod value_encoding_tests {
                 "{label}"
             );
         }
+    }
+}
+
+/// The gateway speaks two wavekv protocols during a rolling upgrade: the frozen v1
+/// `SyncMessage`/`SyncResponse` pair on `/wavekv/sync`, and the v2 `SyncEnvelope` on
+/// `/wavekv/sync2`. These tests pin the wire behaviour of both at the gateway layer.
+#[cfg(test)]
+mod sync_wire_tests {
+    use super::*;
+    use wavekv::sync::{SyncEnvelope, SyncMessage, SyncResponse};
+
+    fn store(dir: &std::path::Path, id: NodeId, peers: Vec<NodeId>) -> KvStore {
+        KvStore::new(id, peers, dir).expect("failed to create kv store")
+    }
+
+    /// A gateway still on wavekv 1.x encodes `SyncMessage` positionally. The v1 route
+    /// must keep accepting that after this upgrade.
+    #[test]
+    fn a_positionally_encoded_v1_request_is_still_accepted() {
+        let msg = SyncMessage {
+            sender_id: 2,
+            sender_uuid: b"uuid".to_vec(),
+            sender_ack: [(1u32, 5u64)].into_iter().collect(),
+            entries: Vec::new(),
+        };
+        let legacy = rmp_serde::encode::to_vec(&msg).expect("legacy encode");
+        assert_eq!(
+            legacy[0] & 0xf0,
+            0x90,
+            "fixture must be positional to exercise the legacy path"
+        );
+
+        let decoded: SyncMessage = decode(&legacy).expect("the v1 wire format must still decode");
+        assert_eq!(decoded.sender_id, 2);
+        assert_eq!(decoded.sender_ack.get(&1), Some(&5));
+    }
+
+    /// ...and the response this gateway sends back must decode on that older peer,
+    /// which uses a reader built before the named-map switch.
+    #[test]
+    fn a_v1_peer_can_decode_our_sync_response() {
+        let response = SyncResponse {
+            peer_id: 1,
+            entries: Vec::new(),
+            progress: [(1u32, 7u64)].into_iter().collect(),
+            is_snapshot: true,
+        };
+        let encoded = encode(&response).expect("encode");
+        let decoded: SyncResponse =
+            rmp_serde::decode::from_slice(&encoded).expect("a v1 peer must decode this");
+        assert!(decoded.is_snapshot);
+        assert_eq!(decoded.progress.get(&1), Some(&7));
+    }
+
+    #[test]
+    fn a_v2_envelope_survives_the_transport_framing() {
+        use flate2::{read::GzDecoder, write::GzEncoder, Compression};
+        use std::io::{Read, Write};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let kv = store(dir.path(), 1, vec![2]);
+        kv.persistent()
+            .write()
+            .put(keys::peer_addr(1), b"https://a.example".to_vec())
+            .expect("put");
+
+        let env = kv.persistent().read().prepare_sync(2, Vec::new());
+        assert!(!env.entries.is_empty());
+
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(&env.encode().expect("encode")).unwrap();
+        let wire = encoder.finish().unwrap();
+
+        let mut plain = Vec::new();
+        GzDecoder::new(&wire[..]).read_to_end(&mut plain).unwrap();
+        let decoded = SyncEnvelope::decode(&plain).expect("decode");
+
+        assert_eq!(decoded.sender_id, 1);
+        assert_eq!(decoded.entries.len(), env.entries.len());
+        assert!(
+            decoded.digest.is_some(),
+            "the digest drives divergence detection"
+        );
+    }
+
+    /// End-to-end through the shim: a v1-shaped exchange against this gateway's store
+    /// converges it with the requester's view.
+    #[test]
+    fn the_v1_shim_serves_a_complete_delta() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let kv = store(dir.path(), 1, vec![2]);
+        for id in 1..=3 {
+            kv.persistent()
+                .write()
+                .put(keys::peer_addr(id), format!("https://n{id}").into_bytes())
+                .expect("put");
+        }
+
+        let request = SyncMessage {
+            sender_id: 2,
+            sender_uuid: Vec::new(),
+            sender_ack: Default::default(),
+            entries: Vec::new(),
+        };
+        let response = kv
+            .persistent()
+            .write()
+            .handle_sync_v1(request)
+            .expect("shim response");
+
+        assert_eq!(response.entries.len(), 3);
+        assert!(
+            response.is_snapshot,
+            "the flag is what makes a v1 client adopt our coverage before merging"
+        );
+        assert_eq!(response.progress.get(&1), Some(&3));
+    }
+
+    /// A peer cannot plant keys outside the schema, in either store.
+    #[test]
+    fn merged_entries_outside_the_schema_are_refused() {
+        use wavekv::types::{Entry, Metadata};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let kv = store(dir.path(), 1, vec![2]);
+
+        let mut env = SyncEnvelope::new(2, Vec::new());
+        env.entries.push(Entry::new(
+            "not-a-gateway-key".to_string(),
+            Some(b"x".to_vec()),
+            Metadata::new(2, 1, 1),
+        ));
+        env.acks.insert(2, 1);
+
+        let outcome = kv
+            .persistent()
+            .write()
+            .apply_envelope(env)
+            .expect("apply should not fail the whole round");
+
+        assert_eq!(outcome.rejected, 1);
+        assert!(
+            !outcome.acks_adopted,
+            "a rejection must park the round's acks so the peer keeps re-offering"
+        );
+        assert!(kv.persistent().read().get("not-a-gateway-key").is_none());
     }
 }
 
