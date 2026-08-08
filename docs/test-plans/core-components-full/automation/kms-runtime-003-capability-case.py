@@ -73,6 +73,19 @@ def main() -> int:
     runtime = json.loads(Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text())
     repo = Path(runtime["repository"])
     project = repo / "dstack/kms/auth-eth"
+    required = [
+        project / "lib/forge-std/src/Test.sol",
+        project
+        / "lib/openzeppelin-contracts-upgradeable/contracts/proxy/utils/UUPSUpgradeable.sol",
+        project
+        / "lib/openzeppelin-contracts-upgradeable/lib/openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol",
+        project / "lib/openzeppelin-foundry-upgrades/src/Upgrades.sol",
+    ]
+    missing = [str(path.relative_to(project)) for path in required if not path.is_file()]
+    if missing:
+        raise RuntimeError(
+            "Foundry contract submodules are not initialized: " + ", ".join(missing)
+        )
     foundry = Path.home() / ".cache/dstack-test/toolchains/foundry"
     node = Path.home() / ".local/share/fnm/node-versions/v20.19.6/installation/bin"
     env = dict(os.environ)
