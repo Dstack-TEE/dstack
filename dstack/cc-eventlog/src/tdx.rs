@@ -85,7 +85,7 @@ impl TdxEvent {
             Self {
                 imr: self.imr,
                 event_type: self.event_type,
-                digest: Vec::new(),
+                digest: self.digest.clone(),
                 event: self.event.clone(),
                 event_payload: self.event_payload.clone(),
                 version: self.version,
@@ -320,6 +320,17 @@ mod tests {
         // And hashing it reproduces the digest
         let actual = Sha384::hash([input.as_slice()]);
         assert_eq!(actual.as_slice(), &tdx.digest);
+    }
+
+    #[test]
+    fn stripped_v2_runtime_event_preserves_digest_binding() {
+        let mut event = v2_event();
+        event.fill_preimage();
+
+        let stripped = event.stripped();
+
+        assert_eq!(stripped.digest, event.digest);
+        validate_v2_preimages(&[stripped]).expect("stripped V2 event remains verifiable");
     }
 
     #[test]
