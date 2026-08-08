@@ -51,8 +51,8 @@ Query the relevant health, configuration, and baseline state for user bridge and
 <a id="tc-vmm-compute-ne-001-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Deploy a two-NIC user-network simulator VM through the VMM API and materialize a
-stopped two-NIC bridge launch through the same public contract.
+Deploy a two-NIC user-network simulator VM through the VMM API, then materialize,
+start, and stop a two-NIC bridge launch through the same public contract.
 
 **Expected results:**
 
