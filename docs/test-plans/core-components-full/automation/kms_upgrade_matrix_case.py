@@ -1224,6 +1224,7 @@ configs:
         encrypted_environment: dict[str, str] | None = None,
         trust_chain: bool = False,
         continuity: bool = False,
+        register_gateways_on_boot: bool = True,
         source_app_id: str = "",
         expect_boot: bool = True,
         expect_policy_denial: bool = True,
@@ -1402,7 +1403,10 @@ configs:
         ids = json.loads(self.created_registry.read_text())
         ids.append(vm_id)
         self.created_registry.write_text(json.dumps(ids, indent=2) + "\n")
-        observation_url = f"http://127.0.0.1:{service_port}/observation"
+        observation_path = (
+            "/observation" if register_gateways_on_boot else "/identity-observation"
+        )
+        observation_url = f"http://127.0.0.1:{service_port}{observation_path}"
         if expect_boot:
             status = wait_http(observation_url, tls=False, timeout=180)
             code, raw = http(observation_url)
@@ -1931,6 +1935,7 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             trust_chain=True,
             native_gateway=True,
             restricted_ports=[8443],
+            register_gateways_on_boot=False,
         )
         if matrix.gateway_route(gateway, outage_client["app_id"]) is not None:
             raise RuntimeError(
@@ -1949,6 +1954,7 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             probe_path="/",
             expected_http=None,
         )
+        matrix.client_observation(outage_client)
 
         def wait_route(client: dict[str, Any], *, timeout: int = 180) -> dict[str, Any]:
             deadline = time.monotonic() + timeout
