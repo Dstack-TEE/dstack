@@ -624,7 +624,14 @@ class MatrixRun:
             **backend,
             "service_port": int(proxy["port"]),
             **({"domain": expected_domain} if expected_domain else {}),
-            **({"guest_url": guest_url_override} if guest_url_override else {}),
+            **(
+                {
+                    "guest_url": guest_url_override,
+                    "client_guest_url": guest_url_override,
+                }
+                if guest_url_override
+                else {}
+            ),
         }
         url = f"https://127.0.0.1:{route['service_port']}{probe_path}"
         if enabled:
