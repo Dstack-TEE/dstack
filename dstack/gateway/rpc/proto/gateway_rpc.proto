@@ -351,6 +351,10 @@ message PeerSyncStatus {
   // Consecutive quiescent rounds whose state digests disagreed. Non-zero means the
   // replicas have silently diverged; wavekv 1.x could not detect this at all.
   uint32 digest_mismatches = 8;
+  // Consecutive sync rounds that failed outright. Only a definitive 404/405 demotes a
+  // peer to "v1"; a 5xx or a timeout leaves `protocol` untouched by design, so this is
+  // the only field that moves when a peer is failing every round.
+  uint32 consecutive_failures = 9;
 }
 
 message LastSeenEntry {

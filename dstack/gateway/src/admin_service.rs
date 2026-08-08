@@ -817,6 +817,7 @@ fn build_store_status(
                     heard_from: p.heard_from,
                     protocol: link.map(|l| l.protocol).unwrap_or_default().to_string(),
                     digest_mismatches: link.map(|l| l.digest_mismatches).unwrap_or(0),
+                    consecutive_failures: link.map(|l| l.consecutive_failures).unwrap_or(0),
                 }
             })
             .collect(),
