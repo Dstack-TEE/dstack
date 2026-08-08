@@ -2215,11 +2215,11 @@
     },
     {
       "case_id": "tc-kms-ct-001",
-      "source_run": "kms-ct-concurrency-retained-001",
+      "source_run": "pending-current-source-rerun",
       "source_status": "PASS",
       "entrypoint": "automation/kms-ct-concurrency-capability-case.py",
       "environment": "INTEGRATION",
-      "notes": "candidate Rust 1.92 execution: 5/5 tests, 64 concurrent writers, atomic no-clobber commit, 4097-slot exhaustion cleanup, filtering, and restart persistence"
+      "notes": "candidate regression verifies the deleted unused certificate-log module, configuration hook, and sole dependency remain absent while current KMS library tests pass"
     },
     {
       "case_id": "tc-kms-startup-001",
