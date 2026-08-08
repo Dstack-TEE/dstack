@@ -428,7 +428,10 @@ def start_vmm(
             simulator_seed=simulator_seed,
             simulator_collateral_url=simulator_collateral_url,
             simulator_tdx_root_ca=simulator_tdx_root_ca,
-            pccs_url=simulator_collateral_url if simulator_seed else "",
+            # Physical TDX guests must use the product PCCS default even when
+            # this VMM also serves no-TEE simulator guests. Simulator
+            # collateral is carried separately by `[cvm.tee_simulator]`.
+            pccs_url="",
             # Supervisor uses an AF_UNIX socket whose pathname is limited to
             # SUN_LEN. Its security check also requires a real parent directory,
             # so place it beside (not beneath) the short QEMU symlink.
