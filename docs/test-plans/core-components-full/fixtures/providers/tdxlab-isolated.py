@@ -341,7 +341,6 @@ def start_vmm(
     profile: str,
     simulator_seed: str = "",
     simulator_collateral_url: str = "http://10.0.2.2:18088",
-    simulator_tdx_root_ca: str = "",
     extra_images: list[str] | None = None,
     allow_udp_port_mapping: bool = False,
 ) -> dict[str, Any]:
@@ -427,11 +426,10 @@ def start_vmm(
             # quotes, so `[cvm.tee_simulator]` is never written for them.
             simulator_seed=simulator_seed,
             simulator_collateral_url=simulator_collateral_url,
-            simulator_tdx_root_ca=simulator_tdx_root_ca,
-            # Physical TDX guests must use the product PCCS default even when
-            # this VMM also serves no-TEE simulator guests. Simulator
-            # collateral is carried separately by `[cvm.tee_simulator]`.
-            pccs_url="",
+            # A simulated guest derives its trust anchors from the seed, but
+            # its verifier still reads the collateral URL from SysConfig.
+            # Physical TDX leases retain the product PCCS default.
+            pccs_url=simulator_collateral_url if simulator_seed else "",
             # Supervisor uses an AF_UNIX socket whose pathname is limited to
             # SUN_LEN. Its security check also requires a real parent directory,
             # so place it beside (not beneath) the short QEMU symlink.
@@ -1051,11 +1049,6 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                 str(case_kms["guest_collateral_url"])
                 if case_kms
                 else "http://10.0.2.2:18088"
-            ),
-            simulator_tdx_root_ca=(
-                Path(str(case_kms["tdx_root_ca"])).read_text(encoding="utf-8")
-                if case_kms
-                else ""
             ),
             extra_images=(
                 [identity_alternate_image] if identity_matrix_requested else None
