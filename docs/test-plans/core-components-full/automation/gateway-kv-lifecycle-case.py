@@ -53,7 +53,7 @@ def main() -> int:
             "--offline",
             "-p",
             "dstack-gateway",
-            "gateway_kv_batch_009",
+            "kv::",
             "--",
             "--nocapture",
         ],
@@ -85,7 +85,7 @@ def main() -> int:
         and all(count >= 3 for count in node_counts),
         "cluster_peer_visibility": len(peer_counts) == 3
         and all(count >= 2 for count in peer_counts),
-        "kv_lifecycle_matrix": unit.returncode == 0 and unit_passed >= 1,
+        "kv_lifecycle_matrix": unit.returncode == 0 and unit_passed >= 5,
     }
     passed = all(checks.values())
     status = "PASS" if passed else "FAIL"
