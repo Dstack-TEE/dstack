@@ -166,7 +166,7 @@ def main() -> int:
             ),
             (
                 "mock-attestation",
-                "tdx::tests::tdx_quote_collateral_and_tcb_matrix",
+                "server::tests::tdx_quote_collateral_and_tcb_matrix",
             ),
         ]
         search_path = os.pathsep.join(
