@@ -76,7 +76,7 @@ def start(
             "--output",
             str(kms_output),
             "--guest-attestation",
-            "hardware",
+            "simulator",
             "--rpc-attestation",
             "compatibility-unverified",
         ],
@@ -96,9 +96,11 @@ def start(
             lease_id,
             settings,
             "compatibility-matrix",
-            simulator_seed="",
-            simulator_collateral_url="",
-            simulator_tdx_root_ca="",
+            simulator_seed=seed,
+            simulator_collateral_url=str(kms["guest_collateral_url"]),
+            simulator_tdx_root_ca=pathlib.Path(
+                str(kms["tdx_root_ca"])
+            ).read_text(encoding="utf-8"),
             extra_images=images,
             allow_udp_port_mapping=True,
         )
