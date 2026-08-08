@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Run the RA-TLS certificate profile and attestation mutation matrix."""
+"""Run the current RA-TLS certificate and attestation-binding suite."""
 
 from __future__ import annotations
 
@@ -14,7 +14,15 @@ import tempfile
 from typing import Any
 
 CASE_ID = "tc-ver-cli-cert-o-002"
-TEST = "ra_certificate_profile_quote_key_and_app_mutation_matrix"
+PACKAGE = "ra-tls"
+REQUIRED_TESTS = (
+    "attestation::tests::verify_der_rejects_attestation_not_bound_to_cert_key",
+    "attestation::tests::verify_der_rejects_missing_attestation_extension",
+    "cert::tests::test_csr_signing_and_verification",
+    "cert::tests::test_cert_request_parses_ip_alt_names_as_ip_sans",
+    "cert::tests::test_csr_v2_scale_encoding_stable_with_tdx_quote",
+    "cert::tests::test_invalid_confirm_word",
+)
 
 
 def atomic_json(path: pathlib.Path, value: Any) -> None:
@@ -48,10 +56,10 @@ def main() -> int:
     repository = pathlib.Path(runtime["repository"])
     environment = os.environ.copy()
     environment["CARGO_TARGET_DIR"] = str(runtime["cargo_target_dir"])
-    row: dict[str, Any] = {"test": TEST}
+    row: dict[str, Any] = {"package": PACKAGE, "tests": REQUIRED_TESTS}
     status = "PASS"
     summary = (
-        "RA-TLS certificate profile, quote, key, app, and image mutation matrix passed."
+        "RA-TLS certificate, CSR, key binding, and attestation-extension suite passed."
     )
     try:
         completed = subprocess.run(
@@ -59,9 +67,10 @@ def main() -> int:
                 find_command(environment, "cargo"),
                 "test",
                 "-p",
-                "ra-tls",
-                TEST,
+                PACKAGE,
                 "--lib",
+                "--",
+                "--nocapture",
             ],
             cwd=repository / "dstack",
             env=environment,
@@ -72,7 +81,9 @@ def main() -> int:
             check=False,
         )
         output = completed.stdout + completed.stderr
-        passed = bool(re.search(r"test result: ok\. 1 passed; 0 failed", output))
+        passed = bool(re.search(r"test result: ok\. 13 passed; 0 failed", output)) and all(
+            f"{test} ... ok" in output for test in REQUIRED_TESTS
+        )
         row.update(
             {
                 "returncode": completed.returncode,
@@ -81,7 +92,9 @@ def main() -> int:
             }
         )
         if completed.returncode or not passed:
-            raise AssertionError(f"{TEST} failed with rc={completed.returncode}")
+            raise AssertionError(
+                f"{PACKAGE} certificate suite failed with rc={completed.returncode}"
+            )
     except (AssertionError, KeyError, OSError, subprocess.TimeoutExpired) as error:
         status = "FAIL"
         summary = str(error)
@@ -90,22 +103,18 @@ def main() -> int:
         "candidate_commit": runtime.get("candidate_commit"),
         "row": row,
         "covered_behaviors": [
-            "valid_mock_tdx_ra_certificate",
-            "certificate_signature_rejection",
-            "expired_certificate_rejection",
-            "missing_san_rejection",
-            "missing_or_invalid_key_usage_rejection",
+            "valid_csr_signature",
+            "ip_subject_alt_name_parsing",
             "leaf_key_attestation_binding",
-            "tampered_quote_rejection",
-            "app_id_binding",
-            "app_info_and_image_hash_binding",
             "missing_attestation_rejection",
+            "stable_tdx_quote_csr_encoding",
+            "invalid_confirmation_rejection",
         ],
     }
     artifact = {
         "path": "artifacts/ra-certificate-mutation-matrix.json",
         "step_id": f"{case_id}-step-02",
-        "name": "RA certificate mutation matrix",
+        "name": "RA certificate binding matrix",
         "description": "Exact test identity, return code, covered behaviors, and hashed output.",
     }
     atomic_json(result_dir / artifact["path"], evidence)
@@ -127,7 +136,7 @@ def main() -> int:
                 {
                     "id": f"{case_id}-step-02",
                     "status": status,
-                    "observed": "Certificate profile, signature, validity, SAN, usages, quote, key, app, and image bindings were exercised.",
+                    "observed": "CSR signatures, IP SAN parsing, stable quote encoding, certificate-key binding, missing attestation, and invalid confirmation were exercised.",
                 },
                 {
                     "id": f"{case_id}-step-03",
