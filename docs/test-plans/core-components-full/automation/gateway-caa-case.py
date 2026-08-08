@@ -576,7 +576,11 @@ def main() -> int:
                 name for name, passed in checks.items() if not passed
             )
             raise AssertionError(
-                f"CAA concurrency, fault, or recovery matrix failed: checks={failed_checks}"
+                "CAA concurrency, fault, or recovery matrix failed: "
+                f"checks={failed_checks}, concurrent_statuses={concurrent_codes}, "
+                f"concurrent_record_facts={facts_after_concurrency}, "
+                f"failure_status={failure_code}, recovery_status={recovery_code}, "
+                f"final_record_facts={final_facts}"
             )
         steps.extend(
             [
