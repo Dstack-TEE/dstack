@@ -243,6 +243,56 @@ impl HttpsClient {
         serde_json::from_slice(&body).context("failed to parse response")
     }
 
+    /// Send an already-encoded body and return the raw response bytes, or `None` when
+    /// the peer does not expose the route.
+    ///
+    /// `None` (rather than an error) is what lets the caller distinguish "this peer has
+    /// not been upgraded yet" from "the request failed", which is the basis of the
+    /// wavekv v1/v2 protocol negotiation.
+    pub async fn post_bytes_probe(&self, url: &str, body: Vec<u8>) -> Result<Option<Vec<u8>>> {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        encoder
+            .write_all(&body)
+            .context("failed to compress request")?;
+        let compressed = encoder.finish().context("failed to finish compression")?;
+
+        let request = hyper::Request::builder()
+            .method(hyper::Method::POST)
+            .uri(url)
+            .header("content-type", "application/x-msgpack-gz")
+            .body(Full::new(Bytes::from(compressed)))
+            .context("failed to build request")?;
+
+        let response = self
+            .client
+            .request(request)
+            .await
+            .with_context(|| format!("failed to send request to {url}"))?;
+
+        let status = response.status();
+        if status == hyper::StatusCode::NOT_FOUND || status == hyper::StatusCode::METHOD_NOT_ALLOWED
+        {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            anyhow::bail!("request failed: {status}");
+        }
+
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .context("failed to read response body")?
+            .to_bytes();
+
+        let mut decoder = GzDecoder::new(&body[..]);
+        let mut decompressed = Vec::new();
+        decoder
+            .read_to_end(&mut decompressed)
+            .context("failed to decompress response")?;
+        Ok(Some(decompressed))
+    }
+
     /// Send a POST request with msgpack + gzip encoded body and receive msgpack + gzip response
     pub async fn post_compressed_msg<T: Serialize, R: DeserializeOwned>(
         &self,

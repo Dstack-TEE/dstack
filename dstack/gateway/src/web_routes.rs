@@ -44,7 +44,11 @@ pub fn health_routes() -> Vec<Route> {
 
 /// WaveKV sync endpoint (for main server, requires mTLS gateway auth)
 pub fn wavekv_sync_routes() -> Vec<Route> {
-    routes![wavekv_sync::sync_store]
+    routes![
+        wavekv_sync::sync_store,
+        wavekv_sync::sync_store_v2,
+        wavekv_sync::push_store
+    ]
 }
 
 #[cfg(test)]
