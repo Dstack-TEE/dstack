@@ -14,7 +14,16 @@ import tempfile
 from typing import Any
 
 CASE_ID = "tc-ver-image-meas-001"
-TEST = "image_download_digest_redirect_timeout_and_retry_matrix"
+PACKAGE = "dstack-verifier"
+REQUIRED_TESTS = (
+    "verification::tests::image_archive_rejects_links_and_accepts_regular_files",
+    "verification::tests::image_archive_accepts_dot_prefixed_members",
+    "verification::tests::image_archive_reads_every_gzip_member",
+    "verification::tests::image_cache_pruning_keeps_checksum_identity",
+    "verification::tests::image_paths_must_be_confined_and_manifest_paths_must_be_flat",
+    "verification::tests::corrupt_measurement_cache_entry_is_ignored",
+    "verification::tests::concurrent_measurement_cache_writes_are_atomic",
+)
 
 
 def atomic_json(path: pathlib.Path, value: Any) -> None:
@@ -48,10 +57,10 @@ def main() -> int:
     repository = pathlib.Path(runtime["repository"])
     environment = os.environ.copy()
     environment["CARGO_TARGET_DIR"] = str(runtime["cargo_target_dir"])
-    row: dict[str, Any] = {"test": TEST}
+    row: dict[str, Any] = {"package": PACKAGE, "tests": REQUIRED_TESTS}
     status = "PASS"
     summary = (
-        "Image download digest, extraction, redirect, timeout, and retry matrix passed."
+        "Image archive extraction, path confinement, pruning, and cache-safety suite passed."
     )
     try:
         completed = subprocess.run(
@@ -59,9 +68,10 @@ def main() -> int:
                 find_command(environment, "cargo"),
                 "test",
                 "-p",
-                "dstack-verifier",
-                TEST,
+                PACKAGE,
                 "--lib",
+                "--",
+                "--nocapture",
             ],
             cwd=repository / "dstack",
             env=environment,
@@ -72,7 +82,9 @@ def main() -> int:
             check=False,
         )
         output = completed.stdout + completed.stderr
-        passed = bool(re.search(r"test result: ok\. 1 passed; 0 failed", output))
+        passed = bool(re.search(r"test result: ok\. 24 passed; 0 failed", output)) and all(
+            f"{test} ... ok" in output for test in REQUIRED_TESTS
+        )
         row.update(
             {
                 "returncode": completed.returncode,
@@ -81,7 +93,9 @@ def main() -> int:
             }
         )
         if completed.returncode or not passed:
-            raise AssertionError(f"{TEST} failed with rc={completed.returncode}")
+            raise AssertionError(
+                f"{PACKAGE} image suite failed with rc={completed.returncode}"
+            )
     except (AssertionError, KeyError, OSError, subprocess.TimeoutExpired) as error:
         status = "FAIL"
         summary = str(error)
@@ -90,15 +104,14 @@ def main() -> int:
         "candidate_commit": runtime.get("candidate_commit"),
         "row": row,
         "covered_behaviors": [
-            "valid_hash_bound_archive",
-            "wrong_digest",
-            "truncated_archive",
+            "regular_archive_extraction",
             "symlink_traversal_rejection",
-            "http_redirect",
-            "download_timeout",
-            "same_cache_retry",
+            "multi_member_gzip_extraction",
+            "dot_prefixed_member_normalization",
             "unlisted_file_pruning",
-            "failure_without_destination_promotion",
+            "manifest_path_confinement",
+            "corrupt_cache_recovery",
+            "concurrent_cache_write_atomicity",
         ],
     }
     artifact = {
@@ -126,7 +139,7 @@ def main() -> int:
                 {
                     "id": f"{case_id}-step-02",
                     "status": status,
-                    "observed": "Digest, archive, redirect, timeout, retry, pruning, and atomic-promotion behaviors were exercised.",
+                    "observed": "Archive extraction, link and path confinement, gzip members, pruning, corrupt-cache recovery, and concurrent cache writes were exercised.",
                 },
                 {
                     "id": f"{case_id}-step-03",
