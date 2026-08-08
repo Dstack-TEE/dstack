@@ -890,12 +890,21 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
     )
     deploy_mode: list[str] = []
     identity_alternate_image = ""
+    selected_image_provenance = settings["image_provenance"]
     if (
         profile in {"no-tee-guest-lifecycle", "identity-matrix"}
         or key_derivation_requested
     ):
         image = os.environ.get("DSTACK_TEST_NO_TEE_GUEST_IMAGE", "dstack-dev-0.6.0")
         deploy_mode = ["--no-tee", "--simulated-tee", "dstack-tdx"]
+        try:
+            selected_image_provenance = require_image_backend(
+                settings["image_store"], image
+            )
+        except RuntimeError as error:
+            fail(f"simulated guest image is unavailable: {error}")
+        if selected_image_provenance.get("is_dev") is not True:
+            fail("simulated guest image must be a development image")
     elif not endpoint_ready("127.0.0.1", 3443):
         fail("local key provider is unavailable on 127.0.0.1:3443")
     if identity_matrix_requested:
@@ -912,13 +921,15 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
             )
         except RuntimeError as error:
             fail(f"identity-matrix alternate image is unavailable: {error}")
+        if alternate_provenance.get("is_dev") is not True:
+            fail("identity-matrix alternate image must be a development image")
         if (
             alternate_provenance.get("git_revision")
-            != settings["image_provenance"].get("git_revision")
+            != selected_image_provenance.get("git_revision")
         ):
             fail(
                 "identity-matrix images must have the same source revision: "
-                f"base={settings['image_provenance'].get('git_revision')!r}, "
+                f"base={selected_image_provenance.get('git_revision')!r}, "
                 f"alternate={alternate_provenance.get('git_revision')!r}"
             )
     lease_id = str(lease.get("lease_id", ""))
