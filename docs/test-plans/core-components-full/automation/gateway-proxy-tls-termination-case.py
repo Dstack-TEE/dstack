@@ -165,7 +165,7 @@ def main() -> int:
             "--offline",
             "-p",
             "dstack-gateway",
-            "gateway_internal_batch_005",
+            "proxy::tls_terminate::tests::",
             "--",
             "--nocapture",
         ],

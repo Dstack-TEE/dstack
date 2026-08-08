@@ -215,7 +215,7 @@ def main() -> int:
             "--offline",
             "-p",
             "dstack-gateway",
-            "gateway_proxy_batch_003",
+            "proxy::tests::test_parse_destination",
             "--",
             "--nocapture",
         ],
@@ -242,7 +242,7 @@ def main() -> int:
             effective.get("restrict_mode", effective.get("restrictMode", False))
         )
         checks["listener_reachable"] = not backend_error
-        checks["multi_host_failover"] = unit.returncode == 0 and unit_passed >= 1
+        checks["destination_parser_unit"] = unit.returncode == 0 and unit_passed >= 1
         checks["valid_instance_route"] = routed_probe(proxy, instance_name, markers[0])
         checks["unknown_app_rejected"] = rejected_probe(
             proxy, client_hello(unknown_name)
