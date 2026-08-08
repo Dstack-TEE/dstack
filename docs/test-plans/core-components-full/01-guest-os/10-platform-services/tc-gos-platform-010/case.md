@@ -21,6 +21,10 @@
 - Use the case metadata, inventories, and prepared manifest as the complete initial execution specification. Source inspection before the first tested operation is allowed only for a specific unresolved ambiguity.
 - Do not run a clean build unless this case explicitly tests build, packaging, features, or reproducibility. Otherwise reuse the shared target and prepared binaries.
 - If a mismatch occurs, write the provisional result first. Perform narrow source-level root-cause analysis only when failure investigation is enabled.
+- Use one case-owned seed-matched TDX simulator and collateral service for all
+  four rows. This exercises each official guest's attestation/configuration
+  integration through the production verifier path without claiming physical
+  TDX origin; physical attestation is covered by the hardware cases.
 - The compatibility rows intentionally exercise the current VMM, KMS, and
   gateway with official guest images `dstack-dev-0.5.4`, `dstack-0.5.8`,
   `dstack-0.5.11`, and `dstack-0.6.0`. Generate one current-schema compose with
