@@ -7,6 +7,7 @@ from __future__ import annotations
 import concurrent.futures
 import hashlib
 import http.server
+import ipaddress
 import json
 import os
 import pathlib
@@ -49,6 +50,19 @@ def docker(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
         timeout=60,
         check=check,
     )
+
+
+def create_network(name: str) -> subprocess.CompletedProcess[str]:
+    """Create a case-owned network outside the daemon's exhausted default pool."""
+    pool_value = os.environ.get("DSTACK_TEST_DOCKER_SUBNET_POOL")
+    if not pool_value:
+        raise RuntimeError("prepared Docker subnet pool is missing")
+    pool = ipaddress.ip_network(pool_value)
+    subnets = tuple(pool.subnets(new_prefix=24))
+    index = int.from_bytes(hashlib.sha256(name.encode()).digest()[:4], "big") % len(
+        subnets
+    )
+    return docker("network", "create", "--subnet", str(subnets[index]), name)
 
 
 def published_port(name: str, container_port: str) -> int:
@@ -374,7 +388,7 @@ def main() -> int:
 
     try:
         thread.start()
-        docker("network", "create", network)
+        create_network(network)
         docker("run", "-d", "--name", cf_name, "--network", network, CF_IMAGE)
         cf_ip = docker(
             "inspect",
