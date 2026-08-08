@@ -318,9 +318,7 @@ def main() -> int:
             "20G",
             "--user-config",
             str(user_config),
-            "--no-tee",
-            "--simulated-tee",
-            "dstack-tdx",
+            "--tee",
             "--kms-url",
             str(live["kms_guest_url"]),
             "--gateway-url",
@@ -338,8 +336,9 @@ def main() -> int:
                 "vcpu": 2,
                 "memory_mib": 4096,
                 "disk_gib": 20,
+                "physical_tee": "--tee" in argv,
                 "no_tee": "--no-tee" in argv,
-                "simulated_tee": argv[argv.index("--simulated-tee") + 1],
+                "simulated_tee": "--simulated-tee" in argv,
             },
             "returncode": result["returncode"],
             "stderr": result["stderr"],
@@ -391,8 +390,12 @@ def main() -> int:
         )
     for version in versions:
         policy = rows[version].get("argv_policy", {})
-        if not policy.get("no_tee") or policy.get("simulated_tee") != "dstack-tdx":
-            failures.append(f"{version} did not select the prepared TDX simulator")
+        if (
+            not policy.get("physical_tee")
+            or policy.get("no_tee")
+            or policy.get("simulated_tee")
+        ):
+            failures.append(f"{version} did not select physical TDX exclusively")
         if rows[version].get("vm_id") and not rows[version].get("boot_done"):
             failures.append(f"{version} exited or failed before boot_progress=done")
 
