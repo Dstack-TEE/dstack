@@ -118,6 +118,7 @@ def main() -> int:
         "vmm_url": live.get("url"),
         "allowed_actions": live.get("allowed_actions"),
         "case_owned_dependencies": bool(live.get("case_owned")),
+        "attestation_probe": live.get("attestation_probe"),
         "registry_initial": json.loads(registry.read_text())
         if registry.exists()
         else [],
@@ -127,6 +128,14 @@ def main() -> int:
             "disk_gib_per_row": 20,
         },
     }
+    expected_attestation_probe = {
+        "mode": "physical-tdx",
+        "kms_uses_product_attestation_defaults": True,
+        "vmm_uses_product_pccs": True,
+        "vmm_tee_simulator_absent": True,
+    }
+    if live.get("attestation_probe") != expected_attestation_probe:
+        failures.append("physical TDX collateral prerequisite probe did not pass")
     record(
         "step01-baseline.json",
         f"{CASE_ID}-step-01",
