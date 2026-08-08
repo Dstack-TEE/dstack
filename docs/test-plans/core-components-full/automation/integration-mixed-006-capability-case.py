@@ -172,6 +172,7 @@ def main() -> int:
             node_id=1,
             name_suffix="old",
             source_app_id=gateway_app_id,
+            client_range="10.8.0.0/16",
         )
         candidate_gateway = matrix.deploy_gateway(
             "candidate",
@@ -180,8 +181,25 @@ def main() -> int:
             name_suffix="candidate",
             bootnode_guest_url=old_gateway["guest_url"],
             source_app_id=gateway_app_id,
+            client_range="10.8.0.0/16",
         )
         gateways = [old_gateway, candidate_gateway]
+        candidate_client_app_id = hashlib.sha1(  # noqa: S324
+            f"{CASE_ID}:candidate-client".encode()
+        ).hexdigest()
+        legacy_client_bridge = matrix.deploy_legacy_client_bridge(
+            kms_rows,
+            old_gateway,
+            source_app_id=candidate_client_app_id,
+            guest_image=guest_images["0.5.11"],
+        )
+        old_gateway["client_guest_url"] = legacy_client_bridge["guest_url"]
+        evidence["gateway_wireguard_cluster"] = {
+            "peer_count": len(gateways),
+            "distinct_endpoints": len({row["wg_port"] for row in gateways}),
+            "shared_client_range": "10.8.0.0/16",
+            "private_material_exported": False,
+        }
         gateway_identities = [matrix.gateway_tls_identity(row) for row in gateways]
         evidence["gateway_identities"] = gateway_identities
 
@@ -199,10 +217,18 @@ def main() -> int:
                 kms_encrypt_row=candidate_primary,
                 guest_image=guest_images[version],
                 legacy_vmm_wire=version != "0.6.0-candidate",
-                gateway_rows=gateways if version == "0.6.0-candidate" else None,
+                gateway_rows=[candidate_gateway, old_gateway]
+                if version == "0.6.0-candidate"
+                else None,
                 native_gateway=version == "0.6.0-candidate",
+                prepare_gateway_wireguard=version == "0.6.0-candidate",
                 trust_chain=version == "0.6.0-candidate",
                 restricted_ports=[8443],
+                source_app_id=(
+                    candidate_client_app_id
+                    if version == "0.6.0-candidate"
+                    else ""
+                ),
             )
             guests.append((version, guest))
         baseline_clients = {
@@ -317,6 +343,8 @@ def main() -> int:
                 )
                 for version, guest in guests:
                     candidate_guest = version == "0.6.0-candidate"
+                    if candidate_guest:
+                        matrix.prepare_client_gateway_wireguard(guest, survivor)
                     deadline = time.monotonic() + (180 if candidate_guest else 1)
                     route = None
                     while time.monotonic() < deadline:
