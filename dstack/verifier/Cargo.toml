@@ -58,3 +58,6 @@ hex-literal.workspace = true
 [features]
 default = ["binary"]
 binary = ["dep:clap", "dep:figment", "dep:rocket", "dep:tracing-subscriber"]
+
+[dev-dependencies]
+rcgen.workspace = true

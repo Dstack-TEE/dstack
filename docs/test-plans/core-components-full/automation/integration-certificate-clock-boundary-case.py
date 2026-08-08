@@ -161,8 +161,8 @@ def main() -> int:
                 "cert_store::tests::expired_update_retains_previous_certificate",
             ),
             (
-                "ra-tls",
-                "attestation::tests::ra_certificate_profile_quote_key_and_app_mutation_matrix",
+                "dstack-verifier",
+                "certificate_profile_tests::certificate_profile_rejects_expired_and_future_certificates",
             ),
             (
                 "mock-attestation",
