@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import shlex
@@ -40,6 +41,17 @@ def docker(args: list[str], timeout: int = 300) -> dict[str, Any]:
         "output_sha256": hashlib.sha256(done.stdout.encode()).hexdigest(),
         "output_tail": done.stdout[-8000:],
     }
+
+
+def docker_network_args(name: str) -> list[str]:
+    pool_value = os.environ.get("DSTACK_TEST_DOCKER_SUBNET_POOL")
+    if not pool_value:
+        raise RuntimeError("prepared Docker subnet pool is missing")
+    subnets = tuple(ipaddress.ip_network(pool_value).subnets(new_prefix=24))
+    index = int.from_bytes(hashlib.sha256(name.encode()).digest()[:4], "big") % len(
+        subnets
+    )
+    return ["network", "create", "--subnet", str(subnets[index]), name]
 
 
 def free_port() -> int:
@@ -190,7 +202,7 @@ def main() -> int:
         )
         if runs["build"]["exit_code"]:
             raise RuntimeError(runs["build"]["output_tail"])
-        runs["network"] = docker(["network", "create", network])
+        runs["network"] = docker(docker_network_args(network))
         runs["auth_start"] = start_auth()
         outage = wait_health(port, 500)
         outage_status, outage_boot = request(port, "/bootAuth/app", valid)

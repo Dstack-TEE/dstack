@@ -100,7 +100,7 @@ def main() -> int:
 
     try:
         thread.start()
-        SUPPORT.docker("network", "create", network)
+        SUPPORT.create_network(network)
         SUPPORT.docker(
             "run", "-d", "--name", dns_name, "--network", network, SUPPORT.CF_IMAGE
         )
