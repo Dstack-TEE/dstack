@@ -1733,11 +1733,16 @@ configs:
 
     def metadata(self, row: dict[str, Any]) -> dict[str, str]:
         """Return safe public identity hashes for one initialized KMS."""
-        code, raw = http(
-            f"https://127.0.0.1:{row['service_port']}/prpc/KMS.GetMeta?json"
-        )
+        url = f"https://127.0.0.1:{row['service_port']}/prpc/KMS.GetMeta?json"
+        deadline = time.monotonic() + 30
+        code, raw = 0, b""
+        while time.monotonic() < deadline:
+            code, raw = http(url)
+            if code == 200:
+                break
+            time.sleep(1)
         if code != 200:
-            raise RuntimeError(f"GetMeta HTTP {code}")
+            raise RuntimeError(f"GetMeta HTTP {code}: vm={row['vm_id']}")
         value = json.loads(raw)
         cert = self.workspace / f"{row['vm_id']}.ca.pem"
         cert.write_text(value["ca_cert"])
