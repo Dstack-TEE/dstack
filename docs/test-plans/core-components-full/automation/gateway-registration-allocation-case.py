@@ -33,8 +33,10 @@ def load_support() -> Any:
 SUPPORT = load_support()
 
 
-def register(debug_base: str, app: str, instance: str, key: str) -> tuple[int, str]:
-    """Register one debug identity and return only status plus assigned IP."""
+def register(
+    debug_base: str, app: str, instance: str, key: str
+) -> tuple[int, str, bool]:
+    """Register one debug identity and classify the pRPC application result."""
     code, body = SUPPORT.SUPPORT.rpc(
         debug_base,
         "",
@@ -42,7 +44,9 @@ def register(debug_base: str, app: str, instance: str, key: str) -> tuple[int, s
         {"app_id": app, "instance_id": instance, "client_public_key": key},
     )
     value = SUPPORT.decoded(body)
-    return code, str((value.get("wg") or {}).get("client_ip", ""))
+    client_ip = str((value.get("wg") or {}).get("client_ip", ""))
+    application_error = bool(value.get("error")) or not client_ip
+    return code, client_ip, application_error
 
 
 def main() -> int:
@@ -92,14 +96,17 @@ def main() -> int:
             first_results = list(
                 executor.map(lambda row: register(debug_base, *row), first_rows)
             )
-        first_ips = [ip for code, ip in first_results if code == 200]
+        first_ips = [
+            ip for code, ip, application_error in first_results
+            if code == 200 and not application_error
+        ]
         checks["concurrent_unique_allocation"] = (
             len(first_ips) == count
             and len(set(first_ips)) == count
             and all(ipaddress.ip_address(ip).version == 4 for ip in first_ips)
         )
-        repeat_code, repeat_ip = register(debug_base, *first_rows[0])
-        duplicate_code, _ = register(
+        repeat_code, repeat_ip, repeat_error = register(debug_base, *first_rows[0])
+        duplicate_code, _, duplicate_error = register(
             debug_base,
             first_rows[0][0],
             f"{prefix}-duplicate-key",
@@ -107,8 +114,9 @@ def main() -> int:
         )
         checks["idempotent_and_collision_safe"] = (
             repeat_code == 200
+            and not repeat_error
             and repeat_ip == first_results[0][1]
-            and duplicate_code >= 400
+            and (duplicate_code >= 400 or duplicate_error)
         )
 
         recycle_deadline = time.monotonic() + 12
@@ -137,7 +145,10 @@ def main() -> int:
             second_results = list(
                 executor.map(lambda row: register(debug_base, *row), second_rows)
             )
-        second_ips = [ip for code, ip in second_results if code == 200]
+        second_ips = [
+            ip for code, ip, application_error in second_results
+            if code == 200 and not application_error
+        ]
         checks["recycled_addresses_not_concurrently_reused"] = (
             len(second_ips) == len(second_rows)
             and len(set(second_ips)) == len(second_ips)
@@ -169,6 +180,7 @@ def main() -> int:
             "repeat_http": repeat_code,
             "repeat_ip_stable": repeat_ip == first_results[0][1],
             "duplicate_key_http": duplicate_code,
+            "duplicate_key_application_error": duplicate_error,
             "remaining_after_recycle": len(remaining),
             "second_registration_count": len(second_ips),
             "second_unique_ip_count": len(set(second_ips)),
