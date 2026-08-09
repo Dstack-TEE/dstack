@@ -703,20 +703,55 @@ def main() -> int:
             node_admin_urls = [
                 str(node["admin_url"]).rstrip("/") for node in cluster_nodes
             ]
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=len(cluster_nodes)
-            ) as executor:
-                distributed_responses = list(
-                    executor.map(
-                        lambda node_base: SUPPORT.rpc(
+            with state.lock:
+                state.blocked = True
+                state.block_release.clear()
+                distributed_operation_baseline = len(state.operations)
+            distributed_dns_blocked = False
+            try:
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=len(cluster_nodes)
+                ) as executor:
+                    primary_future = executor.submit(
+                        SUPPORT.rpc,
+                        node_admin_urls[0],
+                        token,
+                        "Admin.RenewZtDomainCert",
+                        {"domain": domain, "force": True},
+                    )
+                    distributed_deadline = time.monotonic() + 10
+                    while time.monotonic() < distributed_deadline:
+                        with state.lock:
+                            distributed_dns_blocked = (
+                                len(state.operations)
+                                > distributed_operation_baseline
+                            )
+                        if distributed_dns_blocked:
+                            break
+                        time.sleep(0.05)
+                    if not distributed_dns_blocked:
+                        raise RuntimeError(
+                            "distributed renewal did not reach the blocked DNS fixture"
+                        )
+                    competing_futures = [
+                        executor.submit(
+                            SUPPORT.rpc,
                             node_base,
                             token,
                             "Admin.RenewZtDomainCert",
                             {"domain": domain, "force": True},
-                        ),
-                        node_admin_urls,
-                    )
-                )
+                        )
+                        for node_base in node_admin_urls[1:]
+                    ]
+                    time.sleep(0.2)
+                    state.block_release.set()
+                    distributed_responses = [primary_future.result()] + [
+                        future.result() for future in competing_futures
+                    ]
+            finally:
+                with state.lock:
+                    state.blocked = False
+                    state.block_release.set()
             distributed_statuses = [code for code, _ in distributed_responses]
             distributed_renewed = [
                 response_fields(body)[0] if code == 200 else False
@@ -859,6 +894,7 @@ def main() -> int:
                     {row["not_after"] for row in converged_rows}
                 )
                 == 1,
+                "initial_request_blocked": distributed_dns_blocked,
                 "blocked_request_observed": request_blocked,
                 "force_release_http": force_release_code,
                 "stale_recovery_http": stale_recovery_code,
