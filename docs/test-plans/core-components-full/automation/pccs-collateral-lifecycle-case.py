@@ -45,6 +45,10 @@ def main() -> int:
     repository = Path(runtime["repository"])
     physical_dir = result_dir / "physical-provider"
     physical_dir.mkdir()
+    physical_log = artifacts / "physical-provider-controller.log"
+    collateral_log = artifacts / "collateral-policy.log"
+    physical_log.write_text("")
+    collateral_log.write_text("")
     status = "FAIL"
     failure = ""
     observation: dict[str, Any] = {}
@@ -69,9 +73,7 @@ def main() -> int:
             timeout=900,
             check=False,
         )
-        (artifacts / "physical-provider-controller.log").write_text(
-            physical.stdout + physical.stderr
-        )
+        physical_log.write_text(physical.stdout + physical.stderr)
         physical_result = json.loads((physical_dir / "result.json").read_text())
         if physical.returncode or physical_result.get("status") != "PASS":
             raise RuntimeError(
@@ -112,7 +114,7 @@ def main() -> int:
             check=False,
         )
         collateral_output = collateral.stdout + collateral.stderr
-        (artifacts / "collateral-policy.log").write_text(collateral_output)
+        collateral_log.write_text(collateral_output)
         if collateral.returncode or not TEST_RE.search(collateral_output):
             raise RuntimeError(
                 f"controlled PCCS/QVL matrix failed rc={collateral.returncode}"
