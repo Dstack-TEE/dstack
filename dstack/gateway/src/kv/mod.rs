@@ -484,6 +484,44 @@ fn store_config(store: schema::Store) -> wavekv::NodeConfig {
     }
 }
 
+/// Ceiling on a decompressed sync payload.
+///
+/// The wire is gzipped, and gzip expands by three orders of magnitude on
+/// attacker-chosen input: the 16 MiB cap on a request body is a cap on the *compressed*
+/// size, which bounds nothing useful on its own. Every gateway in the cluster shares one
+/// app_id, so mTLS proves only that a peer is *some* gateway of this deployment — the
+/// same reason the key schema exists (see `schema.rs`).
+///
+/// The value is far above any legitimate payload. A v2 delta is capped by
+/// `max_delta_bytes` (4 MiB by default) and the v1 shim answers with the whole live
+/// state, which is bounded by the gateway's own key set — instances, certificates and
+/// node records — not by anything a peer controls.
+pub const MAX_DECOMPRESSED_SYNC_BYTES: usize = 128 * 1024 * 1024;
+
+/// Ceiling on a compressed sync response, mirroring the 16 MiB the routes accept on a
+/// request. Without it a peer's response body is read to completion before any decoding
+/// bound applies.
+pub const MAX_COMPRESSED_SYNC_BYTES: usize = 16 * 1024 * 1024;
+
+/// Decompress gzip, refusing anything that expands past `limit`.
+///
+/// Reads one byte past the limit so a payload landing exactly on it is still accepted
+/// and a larger one is rejected rather than silently truncated — `Read::take` alone
+/// would hand back a short buffer that then fails to decode, reporting the wrong fault.
+pub fn gunzip_bounded(data: &[u8], limit: usize) -> Result<Vec<u8>> {
+    use std::io::Read;
+
+    let mut out = Vec::new();
+    flate2::read::GzDecoder::new(data)
+        .take(limit as u64 + 1)
+        .read_to_end(&mut out)
+        .context("failed to decompress payload")?;
+    if out.len() > limit {
+        anyhow::bail!("decompressed payload exceeds {limit} bytes");
+    }
+    Ok(out)
+}
+
 pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     rmp_serde::encode::to_vec_named(value).context("failed to encode value")
 }

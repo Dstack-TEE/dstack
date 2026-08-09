@@ -7,10 +7,10 @@
 //! Sync data is encoded using msgpack + gzip compression for efficiency.
 
 use crate::{
-    kv::{decode, encode},
+    kv::{decode, encode, gunzip_bounded, MAX_DECOMPRESSED_SYNC_BYTES},
     main_service::Proxy,
 };
-use flate2::{read::GzDecoder, write::GzEncoder, Compression};
+use flate2::{write::GzEncoder, Compression};
 use ra_tls::traits::CertExt;
 use rocket::{
     data::{Data, ToByteUnit},
@@ -18,7 +18,7 @@ use rocket::{
     mtls::{oid::Oid, Certificate},
     post, State,
 };
-use std::io::{Read, Write};
+use std::io::Write;
 use tracing::warn;
 use wavekv::sync::{SyncEnvelope, SyncMessage, SyncResponse};
 
@@ -37,11 +37,8 @@ impl CertExt for RocketCert<'_> {
 
 /// Decode compressed msgpack data
 fn decode_sync_message(data: &[u8]) -> Result<SyncMessage, Status> {
-    // Decompress
-    let mut decoder = GzDecoder::new(data);
-    let mut decompressed = Vec::new();
-    decoder.read_to_end(&mut decompressed).map_err(|e| {
-        warn!("failed to decompress sync message: {e}");
+    let decompressed = gunzip_bounded(data, MAX_DECOMPRESSED_SYNC_BYTES).map_err(|e| {
+        warn!("failed to decompress sync message: {e:#}");
         Status::BadRequest
     })?;
 
@@ -73,13 +70,10 @@ fn gzip(bytes: &[u8]) -> Result<Vec<u8>, Status> {
 }
 
 fn gunzip(data: &[u8]) -> Result<Vec<u8>, Status> {
-    let mut decoder = GzDecoder::new(data);
-    let mut decompressed = Vec::new();
-    decoder.read_to_end(&mut decompressed).map_err(|e| {
-        warn!("failed to decompress sync payload: {e}");
+    gunzip_bounded(data, MAX_DECOMPRESSED_SYNC_BYTES).map_err(|e| {
+        warn!("failed to decompress sync payload: {e:#}");
         Status::BadRequest
-    })?;
-    Ok(decompressed)
+    })
 }
 
 /// Read a v2 envelope from a request body, applying the same size cap as the v1 route.
@@ -494,6 +488,48 @@ mod tests {
                 "{path} must not look like a missing v2 route"
             );
         }
+    }
+
+    /// gzip expands by three orders of magnitude on attacker-chosen input, so the
+    /// 16 MiB cap on the request body bounds the *compressed* size and nothing else.
+    /// mTLS proves only that the sender is some gateway of this deployment, which is
+    /// the same trust level the key schema already assumes is insufficient.
+    #[tokio::test]
+    async fn a_compression_bomb_is_refused_before_it_is_decompressed() {
+        let (client, _proxy, _tmp) = serving_gateway(true).await;
+
+        // ~130 MiB of zeroes compresses to well under the request cap.
+        let bomb = gzip(&vec![0u8; MAX_DECOMPRESSED_SYNC_BYTES + 1]).expect("gzip");
+        assert!(
+            bomb.len() < 16 * 1024 * 1024,
+            "the fixture has to fit through the body cap to be testing anything: {} bytes",
+            bomb.len()
+        );
+
+        for path in [
+            "/wavekv/sync/persistent",
+            "/wavekv/sync2/persistent",
+            "/wavekv/push/persistent",
+        ] {
+            let response = client.post(path).body(bomb.clone()).dispatch().await;
+            assert_eq!(
+                response.status(),
+                Status::BadRequest,
+                "{path} must refuse an over-sized expansion"
+            );
+        }
+    }
+
+    /// The limit is inclusive, so a payload landing exactly on it still decodes. Without
+    /// this the bound could tighten by a byte and only the bomb test would still pass.
+    #[test]
+    fn a_payload_exactly_on_the_limit_still_decompresses() {
+        let exact = gzip(&vec![7u8; MAX_DECOMPRESSED_SYNC_BYTES]).expect("gzip");
+        let out = gunzip_bounded(&exact, MAX_DECOMPRESSED_SYNC_BYTES).expect("must be accepted");
+        assert_eq!(out.len(), MAX_DECOMPRESSED_SYNC_BYTES);
+
+        let one_over = gzip(&vec![7u8; MAX_DECOMPRESSED_SYNC_BYTES + 1]).expect("gzip");
+        assert!(gunzip_bounded(&one_over, MAX_DECOMPRESSED_SYNC_BYTES).is_err());
     }
 
     #[tokio::test]
