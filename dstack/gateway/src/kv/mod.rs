@@ -1903,7 +1903,20 @@ mod sync_wire_tests {
             .put(keys::peer_addr(1), b"https://a.example".to_vec())
             .expect("put");
 
-        let env = kv.persistent().read().prepare_sync(2, Vec::new());
+        // Requests deliberately carry no digest: sending it would let any responder
+        // echo it back and forge agreement forever. So frame a *response*, which is
+        // the direction the digest actually travels.
+        assert!(kv
+            .persistent()
+            .read()
+            .prepare_sync(2, Vec::new())
+            .digest
+            .is_none());
+        let env = kv
+            .persistent()
+            .write()
+            .handle_envelope(SyncEnvelope::new(2, Vec::new()), Vec::new())
+            .expect("respond");
         assert!(!env.entries.is_empty());
 
         let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
