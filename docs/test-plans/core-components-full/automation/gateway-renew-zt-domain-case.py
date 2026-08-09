@@ -379,11 +379,11 @@ def main() -> int:
             state.block_release.clear()
             concurrent_operation_baseline = len(state.operations)
 
-        def concurrent_renew() -> tuple[int, bytes]:
+        def concurrent_renew(force: bool) -> tuple[int, bytes]:
             request_barrier.wait(timeout=10)
             return SUPPORT.http_call(
                 route,
-                json.dumps({"domain": domain, "force": True}).encode(),
+                json.dumps({"domain": domain, "force": force}).encode(),
                 "application/json",
                 token,
             )
@@ -392,7 +392,8 @@ def main() -> int:
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
                 concurrent_futures = [
-                    executor.submit(concurrent_renew) for _ in range(2)
+                    executor.submit(concurrent_renew, force)
+                    for force in (True, False)
                 ]
                 concurrent_deadline = time.monotonic() + 10
                 while time.monotonic() < concurrent_deadline:
@@ -403,8 +404,9 @@ def main() -> int:
                     if concurrent_dns_blocked:
                         break
                     time.sleep(0.05)
-                # Keep the first issuance in the DNS fixture briefly so the
-                # second request reaches the Gateway's per-domain lock.
+                # Keep the forced issuance in the DNS fixture briefly so the
+                # non-forced request reaches the Gateway's per-domain lock and
+                # rechecks the freshly issued certificate after acquiring it.
                 if concurrent_dns_blocked:
                     time.sleep(0.2)
                 state.block_release.set()
@@ -1004,7 +1006,7 @@ def main() -> int:
             {
                 "id": f"{CASE_ID}-step-03",
                 "status": "PASS",
-                "observed": "Concurrent forced requests admitted one renewal, DNS outage failed closed, retry renewed successfully, the adjacent zone stayed empty, and Gateway remained healthy.",
+                "observed": "Concurrent forced and non-forced requests admitted one renewal, DNS outage failed closed, retry renewed successfully, the adjacent zone stayed empty, and Gateway remained healthy.",
             }
         )
         public = {
