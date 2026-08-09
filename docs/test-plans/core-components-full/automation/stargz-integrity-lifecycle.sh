@@ -23,6 +23,17 @@ checks=0
 unit_override=false
 
 check() { "$@"; checks=$((checks + 1)); }
+failure_diagnostics() {
+  rc=$?
+  printf 'stargz lifecycle failed: line=%s rc=%s checks=%s\n' "$1" "$rc" "$checks" >&2
+  for log in "$ROOT"/*.log; do
+    test -f "$log" || continue
+    printf '%s\n' "--- ${log##*/} ---" >&2
+    tail -n 40 "$log" >&2
+  done
+  return "$rc"
+}
+trap 'failure_diagnostics "$LINENO"' ERR
 wait_snapshotter() {
   for _ in $(seq 1 50); do
     if systemctl is-active --quiet "$UNIT" && ctr-remote -n "$NS" snapshots --snapshotter "$SNAPSHOTTER" ls >/dev/null 2>&1; then
