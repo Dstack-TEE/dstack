@@ -150,11 +150,12 @@ def main() -> int:
             "repeat_stop": restop,
             "final_state": "stopped",
         }
+        concurrent_codes = {200, 400, 409}
         if (
             restart != 200
             or restop != 200
-            or not any(code == 200 for code in starts)
-            or not any(code == 200 for code in stops)
+            or any(code not in concurrent_codes for code in starts)
+            or any(code not in concurrent_codes for code in stops)
         ):
             raise AssertionError("valid lifecycle transition did not converge")
         steps.append(
