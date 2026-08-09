@@ -1911,6 +1911,41 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
             gateway_env = {
                 "DSTACK_AGENT_ADDRESS": f"unix:{simulator_values['services']['DstackGuest']['socket']}"
             }
+            if case_id == "tc-gw-registrati-002":
+                mock_bin = node_workspace / "run/mock-bin"
+                mock_bin.mkdir()
+                applied_config = node_workspace / "run/applied-wireguard.conf"
+                wg = mock_bin / "wg"
+                wg.write_text(
+                    "#!/bin/sh\n"
+                    "case \"$1\" in\n"
+                    "  syncconf) test \"$2\" = lo && test -s \"$3\" && "
+                    "cp \"$3\" \"$DSTACK_TEST_WG_APPLIED_CONFIG\" ;;\n"
+                    "  show) test \"$2\" = lo && test \"$3\" = latest-handshakes ;;\n"
+                    "  *) exit 2 ;;\n"
+                    "esac\n",
+                    encoding="utf-8",
+                )
+                wg.chmod(0o755)
+                gateway_env["DSTACK_TEST_WG_APPLIED_CONFIG"] = str(applied_config)
+                gateway_env["PATH"] = f"{mock_bin}:{os.environ.get('PATH', '')}"
+                probe_config = node_workspace / "run/wireguard-probe.conf"
+                probe_config.write_text("[Interface]\nPrivateKey = probe\n", encoding="utf-8")
+                probe = subprocess.run(
+                    [str(wg), "syncconf", "lo", str(probe_config)],
+                    env={**os.environ, **gateway_env},
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                if (
+                    probe.returncode
+                    or applied_config.read_text(encoding="utf-8")
+                    != probe_config.read_text(encoding="utf-8")
+                ):
+                    fail("lease-owned WireGuard command probe failed")
             if case_id in {
                 "tc-gw-cluster-ad-004",
                 "tc-gw-proxy-prot-003",
