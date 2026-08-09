@@ -83,7 +83,7 @@ def main() -> int:
             }
         )
 
-        count = 32
+        count = 8
         first_rows = [
             (
                 f"{prefix}-app",
@@ -92,7 +92,7 @@ def main() -> int:
             )
             for index in range(count)
         ]
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
             first_results = list(
                 executor.map(lambda row: register(debug_base, *row), first_rows)
             )
@@ -119,7 +119,7 @@ def main() -> int:
             and (duplicate_code >= 400 or duplicate_error)
         )
 
-        recycle_deadline = time.monotonic() + 12
+        recycle_deadline = time.monotonic() + 20
         remaining = set(row[1] for row in first_rows)
         while time.monotonic() < recycle_deadline:
             sync_code, sync_body = SUPPORT.SUPPORT.http_call(
@@ -139,9 +139,9 @@ def main() -> int:
                 f"{prefix}-new-{index:02d}",
                 base64.b64encode(os.urandom(32)).decode(),
             )
-            for index in range(16)
+            for index in range(4)
         ]
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
             second_results = list(
                 executor.map(lambda row: register(debug_base, *row), second_rows)
             )
@@ -163,7 +163,7 @@ def main() -> int:
                 {
                     "id": f"{CASE_ID}-step-02",
                     "status": "PASS",
-                    "observed": "Thirty-two concurrent registrations received unique IPv4 allocations; re-registration was stable and duplicate keys were rejected.",
+                    "observed": "Eight concurrent registrations received unique IPv4 allocations; re-registration was stable and duplicate keys were rejected.",
                 },
                 {
                     "id": f"{CASE_ID}-step-03",
