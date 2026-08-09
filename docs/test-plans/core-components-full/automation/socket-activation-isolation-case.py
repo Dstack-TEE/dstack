@@ -282,7 +282,10 @@ def main() -> int:
                 )
             ssh(
                 ssh_argv,
-                "set -eu; kill $(cat /run/dstack-test-bind-conflict.pid); "
+                "set -eu; pid=$(cat /run/dstack-test-bind-conflict.pid); kill \"$pid\"; "
+                "for _ in $(seq 1 50); do "
+                "if ! kill -0 \"$pid\" 2>/dev/null; then break; fi; sleep 0.1; "
+                "done; ! kill -0 \"$pid\" 2>/dev/null; "
                 "rm -f /run/dstack-test-bind-conflict.pid; "
                 f"systemctl reset-failed {shlex.quote(service)}; "
                 f"systemctl start {shlex.quote(service)}",
