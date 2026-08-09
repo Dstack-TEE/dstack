@@ -91,10 +91,10 @@ def derive(tappd_url: str, host: str, port: int) -> tuple[bytes, dict[str, Any]]
         try:
             response = provider_request(host, port, quote)
             break
-        except (ConnectionResetError, ConnectionAbortedError, TimeoutError):
-            if attempts >= 3:
+        except (OSError, RuntimeError, json.JSONDecodeError):
+            if attempts >= 15:
                 raise
-            time.sleep(attempts)
+            time.sleep(2)
     ciphertext = bytes(response["encrypted_key"])
     provider_quote = bytes(response["provider_quote"])
     plaintext = SealedBox(private_key).decrypt(ciphertext)
