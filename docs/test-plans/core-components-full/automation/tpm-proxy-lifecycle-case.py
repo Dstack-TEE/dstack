@@ -68,7 +68,8 @@ start_gcp() {
     if test -e /dev/tpmrm0 \
       && TPM2TOOLS_TCTI=device:/dev/tpmrm0 tpm2_pcrread sha256:0 >/dev/null 2>&1 \
       && TPM2TOOLS_TCTI=device:/dev/tpmrm0 tpm2_nvreadpublic 0x01c10003 >/dev/null 2>&1 \
-      && TPM2TOOLS_TCTI=device:/dev/tpmrm0 tpm2_nvreadpublic 0x01c10002 >/dev/null 2>&1; then
+      && TPM2TOOLS_TCTI=device:/dev/tpmrm0 tpm2_nvreadpublic 0x01c10002 >/dev/null 2>&1 \
+      && TPM2TOOLS_TCTI=device:/dev/tpmrm0 tpm2_nvread -C o 0x01c10002 -o /dev/null >/dev/null 2>&1; then
       return
     fi
     kill -0 "$(cat "$ROOT/simulator.pid")" 2>/dev/null || { cat "$ROOT/simulator.log" >&2; return 1; }
