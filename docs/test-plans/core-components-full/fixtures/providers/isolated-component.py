@@ -177,6 +177,7 @@ def write_gateway_config(
     app_address_dns_servers: list[str] | None = None,
     proxy_stress: bool = False,
     fast_recycle: bool = False,
+    recycle_timeout_seconds: int = 2,
     enable_debug: bool = True,
     exercise_startup: bool = False,
 ) -> None:
@@ -228,7 +229,7 @@ def write_gateway_config(
     if fast_recycle:
         recycle_replacements = {
             '[core.recycle]\nenabled = true\ninterval = "5m"': '[core.recycle]\nenabled = true\ninterval = "1s"',
-            'timeout = "10h"': 'timeout = "2s"',
+            'timeout = "10h"': f'timeout = "{recycle_timeout_seconds}s"',
         }
         for old, new in recycle_replacements.items():
             if old not in text:
@@ -2005,6 +2006,9 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                     "tc-gw-registrati-002",
                     "tc-gw-cluster-ad-001",
                 },
+                recycle_timeout_seconds=(
+                    5 if case_id == "tc-gw-registrati-002" else 2
+                ),
                 enable_debug=not (
                     case_id == "tc-gw-internal-001"
                     or (
