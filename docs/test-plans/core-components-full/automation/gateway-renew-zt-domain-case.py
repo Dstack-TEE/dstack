@@ -373,17 +373,51 @@ def main() -> int:
             }
         )
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            concurrent_responses = list(
-                executor.map(
-                    lambda _: SUPPORT.http_call(
-                        route,
-                        json.dumps({"domain": domain, "force": True}).encode(),
-                        "application/json",
-                        token,
-                    ),
-                    range(2),
-                )
+        request_barrier = threading.Barrier(2)
+        with state.lock:
+            state.blocked = True
+            state.block_release.clear()
+            concurrent_operation_baseline = len(state.operations)
+
+        def concurrent_renew() -> tuple[int, bytes]:
+            request_barrier.wait(timeout=10)
+            return SUPPORT.http_call(
+                route,
+                json.dumps({"domain": domain, "force": True}).encode(),
+                "application/json",
+                token,
+            )
+
+        concurrent_dns_blocked = False
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                concurrent_futures = [
+                    executor.submit(concurrent_renew) for _ in range(2)
+                ]
+                concurrent_deadline = time.monotonic() + 10
+                while time.monotonic() < concurrent_deadline:
+                    with state.lock:
+                        concurrent_dns_blocked = (
+                            len(state.operations) > concurrent_operation_baseline
+                        )
+                    if concurrent_dns_blocked:
+                        break
+                    time.sleep(0.05)
+                # Keep the first issuance in the DNS fixture briefly so the
+                # second request reaches the Gateway's per-domain lock.
+                if concurrent_dns_blocked:
+                    time.sleep(0.2)
+                state.block_release.set()
+                concurrent_responses = [
+                    future.result() for future in concurrent_futures
+                ]
+        finally:
+            with state.lock:
+                state.blocked = False
+                state.block_release.set()
+        if not concurrent_dns_blocked:
+            raise RuntimeError(
+                "concurrent renewal did not reach the blocked DNS fixture"
             )
         concurrent_statuses = [code for code, _ in concurrent_responses]
         concurrent_renewed = [
@@ -925,6 +959,8 @@ def main() -> int:
             raise AssertionError(
                 "concurrency/fault/recovery matrix failed: "
                 f"checks={sorted(k for k, v in checks.items() if not v)}, "
+                f"concurrent_statuses={concurrent_statuses}, "
+                f"concurrent_renewed={concurrent_renewed}, "
                 f"account={account_public}, distributed={distributed_public}, "
                 f"attestation={attestation_public}"
             )
