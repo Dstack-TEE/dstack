@@ -280,13 +280,23 @@ def main() -> int:
                 raise AssertionError(
                     "service unexpectedly accepted the TCP bind conflict"
                 )
+            bind_probe = (
+                "import socket; "
+                "s=socket.socket(); "
+                "s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); "
+                f"s.bind(('0.0.0.0',{external_port})); s.close()"
+            )
             ssh(
                 ssh_argv,
-                "set -eu; pid=$(cat /run/dstack-test-bind-conflict.pid); kill \"$pid\"; "
+                "set -eu; "
+                f"systemctl stop {shlex.quote(service)}; "
+                f"! systemctl is-active --quiet {shlex.quote(service)}; "
+                "pid=$(cat /run/dstack-test-bind-conflict.pid); kill \"$pid\"; "
                 "for _ in $(seq 1 50); do "
                 "if ! kill -0 \"$pid\" 2>/dev/null; then break; fi; sleep 0.1; "
                 "done; ! kill -0 \"$pid\" 2>/dev/null; "
                 "rm -f /run/dstack-test-bind-conflict.pid; "
+                f"python3 -c {shlex.quote(bind_probe)}; "
                 f"systemctl reset-failed {shlex.quote(service)}; "
                 f"systemctl start {shlex.quote(service)}",
             )
