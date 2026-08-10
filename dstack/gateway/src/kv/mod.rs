@@ -987,7 +987,12 @@ impl KvStore {
         Ok(())
     }
 
-    /// List all ZT-Domain configurations
+    /// List all ZT-Domain configurations.
+    ///
+    /// A record whose `domain` disagrees with the domain in its key is
+    /// skipped: everything downstream (certificate issuance, DNS-01 challenge,
+    /// `cert/{domain}/data`) is driven by the value, so honouring it would let
+    /// one poisoned record request a certificate for an unrelated domain.
     pub fn list_zt_domain_configs(&self) -> Vec<ZtDomainConfig> {
         let state = self.persistent.read();
         state
@@ -998,13 +1003,22 @@ impl KvStore {
                     return None;
                 }
                 let value = entry.value.as_ref()?;
-                match decode(value) {
-                    Ok(config) => Some(config),
+                let config: ZtDomainConfig = match decode(value) {
+                    Ok(config) => config,
                     Err(e) => {
                         warn!("failed to decode cert config for key {key}: {e:?}");
-                        None
+                        return None;
                     }
+                };
+                let key_domain = keys::parse_cert_domain(key)?;
+                if key_domain != config.domain {
+                    warn!(
+                        "skipping cert config at key {key}: record claims domain {}",
+                        config.domain
+                    );
+                    return None;
                 }
+                Some(config)
             })
             .collect()
     }
@@ -1701,6 +1715,42 @@ mod corruption_tests {
             1,
             "the unreadable data dir must be kept for inspection"
         );
+    }
+
+    #[test]
+    fn a_cert_config_that_disagrees_with_its_key_is_skipped() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+        kv.save_zt_domain_config(&ZtDomainConfig {
+            domain: "good.example".to_string(),
+            dns_cred_id: None,
+            port: 443,
+            node: None,
+            priority: 0,
+        })
+        .expect("save should succeed");
+        // Same record filed under another domain's key: honouring the value
+        // would request a certificate for a domain nobody configured.
+        kv.persistent
+            .write()
+            .put_encoded(
+                keys::zt_domain_config("victim.example"),
+                &ZtDomainConfig {
+                    domain: "attacker.example".to_string(),
+                    dns_cred_id: None,
+                    port: 443,
+                    node: None,
+                    priority: 100,
+                },
+            )
+            .expect("raw put should succeed");
+
+        let domains: Vec<String> = kv
+            .list_zt_domain_configs()
+            .into_iter()
+            .map(|c| c.domain)
+            .collect();
+        assert_eq!(domains, vec!["good.example".to_string()]);
     }
 }
 
