@@ -763,6 +763,37 @@ mod tests {
         }
     }
 
+    /// The limits must leave room for the largest legitimate message.
+    ///
+    /// The boundary test below asserts a payload of exactly `MAX_DECOMPRESSED_SYNC_BYTES`
+    /// is accepted — but it builds that payload *from the same constant*, so it holds
+    /// whatever the constant says. Shrinking the limit to a few kilobytes keeps it green
+    /// while rejecting every real delta. Pin the values against what production sends,
+    /// which is the property that actually matters.
+    // Deliberately runtime assertions rather than `const { assert!(..) }`: a const block
+    // would fail the build, which mutation testing scores as "unviable" rather than
+    // "caught", and would lose the message explaining what the number is for.
+    #[allow(clippy::assertions_on_constants)]
+    #[test]
+    fn the_sync_limits_admit_the_largest_message_the_protocol_can_produce() {
+        // A v2 delta is capped by wavekv's `max_delta_bytes` (4 MiB by default), and the
+        // v1 shim answers with the whole live state.
+        const MAX_DELTA_BYTES: usize = 4 * 1024 * 1024;
+        assert!(
+            MAX_DECOMPRESSED_SYNC_BYTES >= 8 * MAX_DELTA_BYTES,
+            "a decompression limit of {MAX_DECOMPRESSED_SYNC_BYTES} bytes would reject \
+             ordinary sync traffic, not just a bomb"
+        );
+
+        // The compressed ceiling mirrors what the routes accept on a request, so a peer
+        // cannot answer with more than it would have been allowed to ask.
+        assert_eq!(
+            crate::kv::MAX_COMPRESSED_SYNC_BYTES,
+            16 * 1024 * 1024,
+            "this must stay equal to the 16 MiB the routes accept on a request body"
+        );
+    }
+
     /// The limit is inclusive, so a payload landing exactly on it still decodes. Without
     /// this the bound could tighten by a byte and only the bomb test would still pass.
     #[test]
