@@ -517,3 +517,52 @@ async fn a_cvm_registered_on_another_node_becomes_a_wg_peer_here() {
     let rendered = proxy.generate_wg_config().unwrap();
     assert!(rendered.contains(peer_ip), "peer missing from wg.conf");
 }
+
+#[tokio::test]
+async fn an_instance_deleted_on_another_node_stops_being_routable_here() {
+    let state = create_test_state().await;
+    sync_from_peer(
+        &state,
+        "peer-instance",
+        "10.0.0.40",
+        &test_pubkey("peer-key"),
+    );
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+    assert!(state.lock().state.instances.contains_key("peer-instance"));
+
+    // The remote node recycled the CVM; until the deletion is applied locally
+    // the deregistered instance keeps receiving proxied traffic.
+    state
+        .kv_store
+        .sync_delete_instance("peer-instance")
+        .unwrap();
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+
+    let proxy = state.lock();
+    assert!(!proxy.state.instances.contains_key("peer-instance"));
+    assert!(!proxy.state.apps.contains_key("peer-app"));
+    assert!(!proxy
+        .state
+        .allocated_addresses
+        .contains(&"10.0.0.40".parse().unwrap()));
+}
+
+#[tokio::test]
+async fn a_local_registration_survives_a_reload_that_cannot_see_it_yet() {
+    let state = create_test_state().await;
+    state
+        .lock()
+        .new_client_by_id("fresh", "fresh-app", &test_pubkey("fresh-key"), "", None)
+        .unwrap();
+    // Stand in for a KV write that failed: the instance exists locally only.
+    // Evicting it would black-hole a live CVM until it re-registers.
+    state
+        .kv_store
+        .persistent()
+        .write()
+        .delete(crate::kv::keys::inst("fresh"))
+        .unwrap();
+
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+    assert!(state.lock().state.instances.contains_key("fresh"));
+}

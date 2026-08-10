@@ -885,12 +885,40 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
     Ok(())
 }
 
+/// Grace period protecting a freshly registered local instance from being
+/// dropped by the "gone from KV" pass.
+///
+/// A registration writes to ProxyState and to the KV store under the same lock,
+/// so the two cannot normally disagree — but if that write failed, the instance
+/// would otherwise be evicted before the CVM's next registration refresh.
+const LOCAL_REGISTRATION_GRACE: Duration = Duration::from_secs(60);
+
 fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> {
     let accepted = import::accept_instances(&proxy.config.wg, store.load_all_instances());
     report_rejected_instances(accepted.rejected);
     let instances = accepted.instances;
     let mut state = proxy.lock();
     let mut wg_changed = false;
+
+    // Instances deleted (or recycled) on another node must stop being routable
+    // here too, rather than lingering until this node's own recycle timeout.
+    // Records that merely failed validation are left alone: the last known-good
+    // state of an instance is better than no state at all.
+    let removed: Vec<String> = state
+        .state
+        .instances
+        .iter()
+        .filter(|(id, info)| {
+            !instances.contains_key(*id)
+                && info.reg_time.elapsed().unwrap_or_default() > LOCAL_REGISTRATION_GRACE
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    for instance_id in removed {
+        info!("WaveKV: instance {instance_id} was deleted remotely, dropping it");
+        state.forget_instance(&instance_id);
+        wg_changed = true;
+    }
 
     for (instance_id, data) in instances {
         let new_info = InstanceInfo {
@@ -1325,18 +1353,12 @@ impl ProxyState {
         self.handshake_cache.latest(stale_timeout)
     }
 
-    fn remove_instance(&mut self, id: &str) -> Result<()> {
-        let info = self
-            .state
-            .instances
-            .remove(id)
-            .context("instance not found")?;
-
-        // Sync deletion to KvStore
-        if let Err(err) = self.kv_store.sync_delete_instance(id) {
-            error!("Failed to sync instance deletion to KvStore: {err:?}");
-        }
-
+    /// Drop an instance from the local state only.
+    ///
+    /// Used when the KV store already says the instance is gone; the syncing
+    /// counterpart is [`Self::remove_instance`].
+    fn forget_instance(&mut self, id: &str) -> Option<InstanceInfo> {
+        let info = self.state.instances.remove(id)?;
         self.state.allocated_addresses.remove(&info.ip);
         self.state.top_n.remove(&info.app_id);
         if let Some(app_instances) = self.state.apps.get_mut(&info.app_id) {
@@ -1344,6 +1366,16 @@ impl ProxyState {
             if app_instances.is_empty() {
                 self.state.apps.remove(&info.app_id);
             }
+        }
+        Some(info)
+    }
+
+    fn remove_instance(&mut self, id: &str) -> Result<()> {
+        self.forget_instance(id).context("instance not found")?;
+
+        // Sync deletion to KvStore
+        if let Err(err) = self.kv_store.sync_delete_instance(id) {
+            error!("Failed to sync instance deletion to KvStore: {err:?}");
         }
         Ok(())
     }
