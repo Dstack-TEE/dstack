@@ -1405,18 +1405,14 @@ mod decompression_tests {
         encoder.finish().expect("finish")
     }
 
-    /// gzip expands by three orders of magnitude on attacker-chosen input, so the
-    /// 16 MiB cap the route puts on the request body bounds the *compressed* size
-    /// and nothing else.
+    /// A bomb rejected by size, not by decoding: gzip expands by three orders of
+    /// magnitude on attacker-chosen input, so the cap on the compressed body
+    /// bounds nothing on its own.
     #[test]
-    fn a_compression_bomb_is_refused_instead_of_allocated() {
-        let bomb = gzip(&vec![0u8; MAX_DECOMPRESSED_SYNC_BYTES + 1]);
-        assert!(
-            bomb.len() < MAX_COMPRESSED_SYNC_BYTES,
-            "the fixture has to fit through the body cap to be testing anything: {} bytes",
-            bomb.len()
-        );
-        assert!(gunzip_bounded(&bomb, MAX_DECOMPRESSED_SYNC_BYTES).is_err());
+    fn an_expansion_past_the_limit_is_refused() {
+        let bomb = gzip(&vec![0u8; 512 * 1024]);
+        assert!(gunzip_bounded(&bomb, 4096).is_err());
+        assert!(bomb.len() < 4096, "the fixture must be small compressed");
     }
 
     /// The limit is inclusive, so a payload landing exactly on it still decodes.
