@@ -407,6 +407,47 @@ pub fn gunzip_bounded(data: &[u8], limit: usize) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// How far into the future a replicated observation may be timestamped before
+/// this node ignores it.
+///
+/// `handshake/` and `last_seen/` records are wall-clock seconds written by
+/// whichever node made the observation, and the gateway aggregates them with
+/// `max`. Without a horizon, a single node with a fast clock — or one corrupt
+/// record near `u64::MAX` — keeps a dead CVM "alive" on every node forever:
+/// `recycle()` never fires and top-N routing keeps steering traffic at it.
+/// 5 minutes is well above the drift between NTP-synced hosts and well below
+/// the recycle timeout.
+pub const MAX_CLOCK_DRIFT_SECS: u64 = 300;
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Drop observations timestamped beyond [`MAX_CLOCK_DRIFT_SECS`] into the
+/// future, logging once per call with the number dropped.
+fn drop_future_observations<T>(
+    observations: impl Iterator<Item = T>,
+    timestamp: impl Fn(&T) -> u64,
+    kind: &str,
+) -> Vec<T> {
+    let horizon = now_secs().saturating_add(MAX_CLOCK_DRIFT_SECS);
+    let mut dropped = 0usize;
+    let kept = observations
+        .filter(|item| {
+            let plausible = timestamp(item) <= horizon;
+            dropped += usize::from(!plausible);
+            plausible
+        })
+        .collect();
+    if dropped > 0 {
+        warn!("ignored {dropped} {kind} observation(s) dated more than {MAX_CLOCK_DRIFT_SECS}s ahead of local time");
+    }
+    kept
+}
+
 /// Encode a KV value as MessagePack.
 ///
 /// Structs are encoded as maps keyed by field name rather than as positional
@@ -669,9 +710,13 @@ impl KvStore {
         Ok(())
     }
 
-    /// Get all handshake observations for an instance (from all nodes)
+    /// Get all handshake observations for an instance (from all nodes).
+    ///
+    /// Observations dated into the future are dropped; see
+    /// [`MAX_CLOCK_DRIFT_SECS`].
     pub fn get_instance_handshakes(&self, instance_id: &str) -> BTreeMap<NodeId, u64> {
-        self.ephemeral
+        let observations = self
+            .ephemeral
             .read()
             .iter_decoded(&keys::handshake_prefix(instance_id))
             .filter_map(|(key, ts)| {
@@ -679,14 +724,22 @@ impl KvStore {
                 let observer: NodeId = suffix.parse().ok()?;
                 Some((observer, ts))
             })
+            .collect::<Vec<_>>();
+        drop_future_observations(observations.into_iter(), |(_, ts)| *ts, "handshake")
+            .into_iter()
             .collect()
     }
 
-    /// Get the latest handshake timestamp for an instance (max across all nodes)
+    /// Get the latest handshake timestamp for an instance (max across all
+    /// nodes), ignoring future-dated observations.
     pub fn get_instance_latest_handshake(&self, instance_id: &str) -> Option<u64> {
-        self.ephemeral
+        let observations = self
+            .ephemeral
             .read()
             .iter_decoded_values(&keys::handshake_prefix(instance_id))
+            .collect::<Vec<u64>>();
+        drop_future_observations(observations.into_iter(), |ts| *ts, "handshake")
+            .into_iter()
             .max()
     }
 
@@ -698,9 +751,10 @@ impl KvStore {
         Ok(())
     }
 
-    /// Get all observations of a node's last_seen
+    /// Get all observations of a node's last_seen, ignoring future-dated ones.
     pub fn get_node_last_seen_by_all(&self, node_id: NodeId) -> BTreeMap<NodeId, u64> {
-        self.ephemeral
+        let observations = self
+            .ephemeral
             .read()
             .iter_decoded(&keys::last_seen_node_prefix(node_id))
             .filter_map(|(key, ts)| {
@@ -708,14 +762,22 @@ impl KvStore {
                 let seen_by: NodeId = suffix.parse().ok()?;
                 Some((seen_by, ts))
             })
+            .collect::<Vec<_>>();
+        drop_future_observations(observations.into_iter(), |(_, ts)| *ts, "node last_seen")
+            .into_iter()
             .collect()
     }
 
-    /// Get the latest last_seen timestamp for a node (max across all observers)
+    /// Get the latest last_seen timestamp for a node (max across all
+    /// observers), ignoring future-dated observations.
     pub fn get_node_latest_last_seen(&self, node_id: NodeId) -> Option<u64> {
-        self.ephemeral
+        let observations = self
+            .ephemeral
             .read()
             .iter_decoded_values(&keys::last_seen_node_prefix(node_id))
+            .collect::<Vec<u64>>();
+        drop_future_observations(observations.into_iter(), |ts| *ts, "node last_seen")
+            .into_iter()
             .max()
     }
 
@@ -1510,6 +1572,44 @@ mod corruption_tests {
         assert!(kv.get_acme_attestation().is_err());
         assert!(kv.get_default_dns_credential_id().is_err());
         assert!(kv.get_default_dns_credential().is_err());
+    }
+
+    #[test]
+    fn future_dated_observations_are_ignored() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+        let now = now_secs();
+
+        kv.ephemeral
+            .write()
+            .put_encoded(keys::handshake("cvm", 2), &(now.saturating_sub(30)))
+            .unwrap();
+        kv.ephemeral
+            .write()
+            .put_encoded(keys::handshake("cvm", 3), &u64::MAX)
+            .unwrap();
+        // A peer with a broken clock must not keep a dead CVM alive forever.
+        let latest = kv
+            .get_instance_latest_handshake("cvm")
+            .expect("the plausible observation should survive");
+        assert!(latest <= now, "kept a future-dated handshake: {latest}");
+        assert_eq!(kv.get_instance_handshakes("cvm").len(), 1);
+
+        kv.ephemeral
+            .write()
+            .put_encoded(keys::last_seen_node(7, 3), &u64::MAX)
+            .unwrap();
+        assert_eq!(kv.get_node_latest_last_seen(7), None);
+        assert!(kv.get_node_last_seen_by_all(7).is_empty());
+
+        // Drift within the allowance stays usable: nodes are not perfectly
+        // synchronized and dropping every slightly-ahead record would make
+        // instances look stale.
+        kv.ephemeral
+            .write()
+            .put_encoded(keys::handshake("cvm", 4), &(now + MAX_CLOCK_DRIFT_SECS / 2))
+            .unwrap();
+        assert_eq!(kv.get_instance_handshakes("cvm").len(), 2);
     }
 }
 
