@@ -15,20 +15,24 @@ use ra_tls::traits::CertExt;
 use rocket::{
     data::{Data, ToByteUnit},
     http::{ContentType, Status},
-    mtls::{oid::Oid, Certificate},
+    mtls::{oid::Oid, x509::X509Extension, Certificate},
     post, State,
 };
 use std::io::Write;
 use tracing::warn;
 use wavekv::sync::{SyncEnvelope, SyncMessage, SyncResponse};
 
-/// Wrapper to implement CertExt for Rocket's Certificate
-struct RocketCert<'a>(&'a Certificate<'a>);
+/// Adapter implementing `CertExt` over a parsed certificate's extension list.
+///
+/// It holds the extensions rather than the `Certificate` so that a test can build one:
+/// `rocket::mtls::Certificate` has no public constructor — it can only be produced by a
+/// real mTLS handshake — while an extension list comes straight out of `X509Certificate`.
+struct RocketCert<'a, 'b>(&'b [X509Extension<'a>]);
 
-impl CertExt for RocketCert<'_> {
+impl CertExt for RocketCert<'_, '_> {
     fn get_extension_der(&self, oid: &[u64]) -> anyhow::Result<Option<Vec<u8>>> {
         let oid = Oid::from(oid).map_err(|_| anyhow::anyhow!("failed to create OID from slice"))?;
-        let Some(ext) = self.0.extensions().iter().find(|ext| ext.oid == oid) else {
+        let Some(ext) = self.0.iter().find(|ext| ext.oid == oid) else {
             return Ok(None);
         };
         Ok(Some(ext.value.to_vec()))
@@ -104,7 +108,15 @@ fn verify_gateway_peer(state: &Proxy, cert: Option<Certificate<'_>>) -> Result<(
         return Err(Status::Unauthorized);
     };
 
-    let cert = RocketCert(&cert);
+    authorize_peer(&RocketCert(cert.extensions()), state.my_app_id())
+}
+
+/// Decide whether a certificate's app identity is one we accept.
+///
+/// Split out from `verify_gateway_peer` because that function's other half — the
+/// attestation bypass and Rocket's certificate guard — cannot be exercised from a test,
+/// which left this decision, the actual authorization rule, uncovered.
+fn authorize_peer(cert: &impl CertExt, my_app_id: Option<&[u8]>) -> Result<(), Status> {
     let remote_app_id = match cert.get_app_id().map_err(|e| {
         warn!("WaveKV sync: failed to extract app_id from certificate: {e}");
         Status::Unauthorized
@@ -124,12 +136,8 @@ fn verify_gateway_peer(state: &Proxy, cert: Option<Certificate<'_>>) -> Result<(
         return Err(Status::Unauthorized);
     };
 
-    if state.my_app_id() != Some(remote_app_id.as_slice()) {
-        warn!(
-            "WaveKV sync: app_id mismatch, expected {:?}, got {:?}",
-            state.my_app_id(),
-            remote_app_id
-        );
+    if my_app_id != Some(remote_app_id.as_slice()) {
+        warn!("WaveKV sync: app_id mismatch, expected {my_app_id:?}, got {remote_app_id:?}");
         return Err(Status::Forbidden);
     }
 
@@ -310,10 +318,25 @@ mod tests {
 
     /// A gateway serving the real sync routes over Rocket's local client.
     ///
-    /// `insecure_skip_attestation` stands in for the mTLS peer check, which is not what
-    /// these tests are about; everything below it — route dispatch, the gzip framing,
-    /// the store split, the uuid check — is the production path.
+    /// `insecure_skip_attestation` is on, which makes `verify_gateway_peer` return
+    /// immediately: these tests are about everything below it — route dispatch, the gzip
+    /// framing, the store split, the uuid check. `enforcing_gateway` covers the gate
+    /// itself, which this fixture cannot, because Rocket's local client speaks no TLS
+    /// and so can never present a certificate.
     async fn serving_gateway(sync_enabled: bool) -> (Client, Proxy, TempDir) {
+        serving_gateway_with(sync_enabled, true).await
+    }
+
+    /// The same gateway with the attestation bypass switched off, so the peer check runs
+    /// for real.
+    async fn enforcing_gateway() -> (Client, Proxy, TempDir) {
+        serving_gateway_with(true, false).await
+    }
+
+    async fn serving_gateway_with(
+        sync_enabled: bool,
+        skip_attestation: bool,
+    ) -> (Client, Proxy, TempDir) {
         // `main` installs this once at startup; the sync client builds a rustls config,
         // so a test that skips it panics inside rustls rather than failing an assertion.
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -331,7 +354,7 @@ mod tests {
             .join("wg.conf")
             .to_string_lossy()
             .into_owned();
-        config.debug.insecure_skip_attestation = true;
+        config.debug.insecure_skip_attestation = skip_attestation;
 
         let tls_config = write_tls_material(temp_dir.path());
         let proxy = Proxy::new(ProxyOptions {
@@ -347,6 +370,135 @@ mod tests {
             .mount("/", crate::web_routes::wavekv_sync_routes());
         let client = Client::tracked(rocket).await.expect("rocket client");
         (client, proxy, temp_dir)
+    }
+
+    /// The sync routes are the cluster's write surface: anything that reaches them can
+    /// insert entries that replicate to every gateway. `verify_gateway_peer` is the only
+    /// thing standing in front of them, and with `insecure_skip_attestation` set — which
+    /// every other test here sets — its first statement returns `Ok(())`, so the gate
+    /// itself was never executed by any test. Replacing the whole function body with
+    /// `Ok(())` did not turn the suite red.
+    ///
+    /// Rocket's local client speaks no TLS and so presents no certificate, which is
+    /// exactly the case that must be refused.
+    #[tokio::test]
+    async fn every_sync_route_refuses_a_peer_it_cannot_identify() {
+        let (client, _proxy, _tmp) = enforcing_gateway().await;
+
+        for route in [
+            "/wavekv/sync/persistent",
+            "/wavekv/sync2/persistent",
+            "/wavekv/push/persistent",
+        ] {
+            let response = client.post(route).body(Vec::new()).dispatch().await;
+            assert_eq!(
+                response.status(),
+                Status::Unauthorized,
+                "{route} served a request from an unauthenticated caller"
+            );
+        }
+    }
+
+    /// A real certificate carrying `PHALA_RATLS_APP_ID`, minted locally.
+    ///
+    /// Nothing here needs a TEE: the extension is an ordinary X.509 extension that
+    /// `CertRequest` adds unconditionally, and the check under test never looks at a
+    /// quote — it reads two extensions and compares bytes.
+    fn cert_with_app_id(app_id: &[u8]) -> Vec<u8> {
+        use ra_tls::cert::CertRequest;
+        use ra_tls::rcgen::KeyPair;
+
+        let key = KeyPair::generate().expect("key");
+        let cert = CertRequest::builder()
+            .key(&key)
+            .subject("peer.test")
+            .app_id(app_id)
+            .build()
+            .self_signed()
+            .expect("self-signed cert");
+        cert.der().to_vec()
+    }
+
+    /// A certificate with no app identity at all.
+    fn cert_without_app_id() -> Vec<u8> {
+        use ra_tls::cert::CertRequest;
+        use ra_tls::rcgen::KeyPair;
+
+        let key = KeyPair::generate().expect("key");
+        let cert = CertRequest::builder()
+            .key(&key)
+            .subject("peer.test")
+            .build()
+            .self_signed()
+            .expect("self-signed cert");
+        cert.der().to_vec()
+    }
+
+    fn authorize(der: &[u8], my_app_id: Option<&[u8]>) -> Result<(), Status> {
+        use rocket::mtls::x509::{FromDer, X509Certificate};
+        let (_, parsed) = X509Certificate::from_der(der).expect("parse cert");
+        authorize_peer(&RocketCert(parsed.extensions()), my_app_id)
+    }
+
+    /// The rule the sync routes are defended by: same app id or nothing.
+    ///
+    /// Every case below was previously unreachable, because the only tests that touched
+    /// this code set `insecure_skip_attestation` and returned before it. Inverting the
+    /// comparison to `==` left the suite green.
+    #[test]
+    fn a_peer_is_authorized_only_when_its_app_id_matches_ours() {
+        let ours = b"app-id-of-this-cluster".to_vec();
+
+        assert_eq!(authorize(&cert_with_app_id(&ours), Some(&ours)), Ok(()));
+
+        assert_eq!(
+            authorize(&cert_with_app_id(b"a-different-app"), Some(&ours)),
+            Err(Status::Forbidden),
+            "a valid certificate from another app must not reach the sync routes"
+        );
+    }
+
+    /// A certificate that proves nothing about which app presented it is refused, rather
+    /// than falling through to a comparison against `None`.
+    #[test]
+    fn a_certificate_without_an_app_id_is_refused() {
+        assert_eq!(
+            authorize(&cert_without_app_id(), Some(b"app-id-of-this-cluster")),
+            Err(Status::Unauthorized)
+        );
+    }
+
+    /// A gateway that does not know its own app id cannot authorize anyone. Comparing
+    /// `None` against a present remote id must reject, never match.
+    #[test]
+    fn a_gateway_without_an_app_id_authorizes_nobody() {
+        assert_eq!(
+            authorize(&cert_with_app_id(b"anything"), None),
+            Err(Status::Forbidden)
+        );
+    }
+
+    /// The adapter must match the app-id extension by OID and no other. Returning some
+    /// other extension's bytes would hand `authorize_peer` a value it would happily
+    /// compare.
+    #[test]
+    fn the_adapter_reads_the_app_id_extension_and_not_a_neighbour() {
+        use ra_tls::traits::CertExt;
+        use rocket::mtls::x509::{FromDer, X509Certificate};
+
+        let der = cert_with_app_id(b"the-app-id");
+        let (_, parsed) = X509Certificate::from_der(&der).expect("parse cert");
+        let adapter = RocketCert(parsed.extensions());
+
+        assert_eq!(
+            adapter.get_app_id().expect("read app id"),
+            Some(b"the-app-id".to_vec())
+        );
+        assert_eq!(
+            adapter.get_special_usage().expect("read special usage"),
+            None,
+            "an extension that was never set must read back as absent"
+        );
     }
 
     /// Register the peer so `query_uuid` returns something: the uuid check is opt-in and
