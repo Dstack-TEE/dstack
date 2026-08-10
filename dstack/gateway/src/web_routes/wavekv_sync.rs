@@ -617,6 +617,97 @@ mod tests {
         assert_eq!(response.status(), Status::NotFound);
     }
 
+    fn v1_body(msg: &SyncMessage) -> Vec<u8> {
+        gzip(&encode(msg).expect("encode v1 message")).expect("gzip")
+    }
+
+    fn v1_request() -> SyncMessage {
+        SyncMessage {
+            sender_id: PEER,
+            sender_uuid: peer_uuid(),
+            // Empty coverage, so the shim answers with everything it holds.
+            sender_ack: Default::default(),
+            entries: Vec::new(),
+        }
+    }
+
+    /// The v1 shim is how a gateway that has not been upgraded still receives state, and
+    /// nothing exercised it at the route level: the store dispatch could be deleted, the
+    /// node-id-zero guard inverted, and the response body replaced with three bytes,
+    /// all without turning the suite red.
+    ///
+    /// Deleting the `"persistent"` arm is the sharpest of those. It falls through to
+    /// `_ => 404`, and a 404 on a sync route is precisely the signal a v2 peer reads as
+    /// "this node does not speak that protocol" — so the failure would not look like an
+    /// error, it would look like a successful protocol downgrade.
+    #[tokio::test]
+    async fn a_v1_round_trip_serves_the_state_this_node_holds() {
+        let (client, proxy, _tmp) = serving_gateway(true).await;
+        register_peer(&proxy);
+        proxy
+            .kv_store()
+            .persistent()
+            .write()
+            .put("node/7".to_string(), b"v".to_vec())
+            .expect("seed");
+
+        let response = client
+            .post("/wavekv/sync/persistent")
+            .body(v1_body(&v1_request()))
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), Status::Ok);
+        let bytes = response.into_bytes().await.expect("body");
+        let decoded: SyncResponse =
+            decode(&gunzip(&bytes).expect("gunzip")).expect("decode v1 response");
+
+        assert_eq!(decoded.peer_id, ME);
+        assert!(
+            decoded.entries.iter().any(|e| e.key == "node/7"),
+            "a peer with no coverage must receive the state this node holds"
+        );
+    }
+
+    /// Both stores are reachable over the v1 route. The ephemeral arm carries the
+    /// liveness data a stale peer needs most, and losing it would read as a downgrade
+    /// rather than a fault, exactly as above.
+    #[tokio::test]
+    async fn the_v1_route_serves_the_ephemeral_store_as_well() {
+        let (client, proxy, _tmp) = serving_gateway(true).await;
+        register_peer(&proxy);
+
+        let response = client
+            .post("/wavekv/sync/ephemeral")
+            .body(v1_body(&v1_request()))
+            .dispatch()
+            .await;
+
+        assert_eq!(
+            response.status(),
+            Status::Ok,
+            "a 404 here would demote this node to no-such-route in the caller's cache"
+        );
+    }
+
+    /// Node id 0 is the unset value, so an entry authored by it collides with every
+    /// other unset sender. The v1 route rejects it, as the push and v2 routes do.
+    #[tokio::test]
+    async fn a_v1_sync_from_node_id_zero_is_refused() {
+        let (client, proxy, _tmp) = serving_gateway(true).await;
+        register_peer(&proxy);
+
+        let mut msg = v1_request();
+        msg.sender_id = 0;
+        let response = client
+            .post("/wavekv/sync/persistent")
+            .body(v1_body(&msg))
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), Status::BadRequest);
+    }
+
     /// ...which is why a node with sync switched off must answer 503 and not 404. A 404
     /// here would demote this node to v1 in every peer's cache for a whole reprobe
     /// window — silently, and without sync being on to fix it.
