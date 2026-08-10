@@ -4,16 +4,93 @@
 
 //! Prometheus metrics for the gateway.
 //!
+//! Counters live in process-wide atomics rather than on `Proxy` because the
+//! sites that need them -- the KV codec, `reconfigure()` -- run on code paths
+//! that hold no handle to the proxy state. `proxy::NUM_CONNECTIONS` and
+//! `proxy::stats` already work this way.
+//!
 //! Gauges are not stored: they are sampled from live state when a scrape
 //! arrives, so a scrape never has to be kept in sync with a mutation.
 //!
 //! Label values that come from replicated state (domains, and therefore
-//! anything a peer can name) are escaped, so a peer cannot forge series in the
-//! scrape output.
+//! anything a peer can name) are escaped, and the decode-failure label set is
+//! a fixed list of known prefixes plus `other`, so a peer cannot inflate
+//! cardinality by inventing keys.
 
 use std::fmt::Write as _;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use dstack_gateway_rpc::ProxyAccelStatus;
+
+/// Key prefixes that get their own decode-failure series.
+///
+/// Longest match wins, so `node/status/` folds into `node/`. Anything unknown
+/// is counted under `other`.
+const METERED_PREFIXES: [&str; 9] = [
+    "inst/",
+    "node/",
+    "conn/",
+    "handshake/",
+    "last_seen/",
+    "__peer_addr/",
+    "cert/",
+    "dns_cred/",
+    "global/",
+];
+
+const OTHER_PREFIX: &str = "other";
+
+static DECODE_FAILURES: [AtomicU64; METERED_PREFIXES.len() + 1] =
+    [const { AtomicU64::new(0) }; METERED_PREFIXES.len() + 1];
+static WG_SYNCCONF_TOTAL: AtomicU64 = AtomicU64::new(0);
+static WG_SYNCCONF_FAILURES: AtomicU64 = AtomicU64::new(0);
+static KV_PERSIST_FAILURES: AtomicU64 = AtomicU64::new(0);
+
+/// Record that a replicated value could not be decoded.
+///
+/// A decode failure makes the record invisible to the data plane with nothing
+/// but a log line to say so, which is how a single corrupt record turns into
+/// "that CVM silently stopped being routable".
+pub(crate) fn record_decode_failure(key: &str) {
+    DECODE_FAILURES[prefix_index(key)].fetch_add(1, Ordering::Relaxed);
+}
+
+/// Record the outcome of pushing a new WireGuard config.
+///
+/// `wg syncconf` rejects the *whole* file when one peer stanza is bad, and the
+/// call site can only log it, so without a counter a gateway that stopped
+/// applying routing updates looks healthy.
+pub(crate) fn record_wg_syncconf(ok: bool) {
+    WG_SYNCCONF_TOTAL.fetch_add(1, Ordering::Relaxed);
+    if !ok {
+        WG_SYNCCONF_FAILURES.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Record a failed periodic snapshot. Repeated failures mean the node is one
+/// restart away from replaying a very long WAL, or from losing the writes it
+/// never managed to snapshot.
+pub(crate) fn record_kv_persist_failure() {
+    KV_PERSIST_FAILURES.fetch_add(1, Ordering::Relaxed);
+}
+
+fn prefix_index(key: &str) -> usize {
+    let mut best: Option<usize> = None;
+    for (index, prefix) in METERED_PREFIXES.iter().enumerate() {
+        if !key.starts_with(prefix) {
+            continue;
+        }
+        match best {
+            Some(current) if METERED_PREFIXES[current].len() >= prefix.len() => {}
+            _ => best = Some(index),
+        }
+    }
+    best.unwrap_or(METERED_PREFIXES.len())
+}
+
+fn prefix_label(index: usize) -> &'static str {
+    METERED_PREFIXES.get(index).copied().unwrap_or(OTHER_PREFIX)
+}
 
 /// Live state sampled for one scrape.
 pub(crate) struct Snapshot {
@@ -203,6 +280,43 @@ pub(crate) fn render(snapshot: &Snapshot) -> String {
 
     header(
         &mut out,
+        "dstack_gateway_kv_decode_failures_total",
+        "Replicated values that could not be decoded, by key prefix.",
+        "counter",
+    );
+    for (index, counter) in DECODE_FAILURES.iter().enumerate() {
+        line(
+            &mut out,
+            "dstack_gateway_kv_decode_failures_total",
+            &format!("{{prefix=\"{}\"}}", escape_label(prefix_label(index))),
+            counter.load(Ordering::Relaxed),
+        );
+    }
+
+    counter(
+        &mut out,
+        "dstack_gateway_wg_syncconf_total",
+        "WireGuard config applications attempted.",
+        "",
+        WG_SYNCCONF_TOTAL.load(Ordering::Relaxed),
+    );
+    counter(
+        &mut out,
+        "dstack_gateway_wg_syncconf_failures_total",
+        "WireGuard config applications rejected by wg syncconf. A non-zero rate means routing updates are not reaching the data plane.",
+        "",
+        WG_SYNCCONF_FAILURES.load(Ordering::Relaxed),
+    );
+    counter(
+        &mut out,
+        "dstack_gateway_kv_persist_failures_total",
+        "Periodic WaveKV snapshots that failed.",
+        "",
+        KV_PERSIST_FAILURES.load(Ordering::Relaxed),
+    );
+
+    header(
+        &mut out,
         "dstack_gateway_cert_not_after_seconds",
         "Certificate expiry per domain, in seconds since the epoch.",
         "gauge",
@@ -377,5 +491,37 @@ mod tests {
         assert!(rendered.contains(
             "dstack_gateway_cert_not_after_seconds{domain=\"evil\\\" 1\\ndstack_gateway_instances 999\\n#\"} 1800000000"
         ));
+    }
+
+    #[test]
+    fn decode_failures_are_bucketed_by_longest_matching_prefix() {
+        assert_eq!(prefix_label(prefix_index("inst/abc")), "inst/");
+        // node/status/ is a sub-prefix of node/: the longer one wins.
+        assert_eq!(prefix_label(prefix_index("node/status/3")), "node/");
+        assert_eq!(prefix_label(prefix_index("cert/example.com/data")), "cert/");
+        assert_eq!(prefix_label(prefix_index("__peer_addr/3")), "__peer_addr/");
+        // A key a peer invented does not get a series of its own.
+        assert_eq!(prefix_label(prefix_index("whatever/1")), "other");
+        assert_eq!(prefix_label(prefix_index("")), "other");
+    }
+
+    #[test]
+    fn recording_a_failure_moves_its_own_bucket_only() {
+        // Process-wide statics: assert on deltas, never on absolute values.
+        let before: Vec<u64> = DECODE_FAILURES
+            .iter()
+            .map(|counter| counter.load(Ordering::Relaxed))
+            .collect();
+        record_decode_failure("dns_cred/abc");
+        let after: Vec<u64> = DECODE_FAILURES
+            .iter()
+            .map(|counter| counter.load(Ordering::Relaxed))
+            .collect();
+
+        let moved = prefix_index("dns_cred/abc");
+        for (index, (before, after)) in before.iter().zip(after.iter()).enumerate() {
+            let expected = if index == moved { before + 1 } else { *before };
+            assert_eq!(*after, expected, "bucket {} moved unexpectedly", index);
+        }
     }
 }

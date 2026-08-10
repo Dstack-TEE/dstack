@@ -831,7 +831,10 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
                 match kv_store_for_persist.persist_if_dirty() {
                     Ok(true) => info!("WaveKV: periodic persist completed"),
                     Ok(false) => {} // No changes to persist
-                    Err(err) => error!("WaveKV: periodic persist failed: {err:?}"),
+                    Err(err) => {
+                        crate::metrics::record_kv_persist_failure();
+                        error!("WaveKV: periodic persist failed: {err:?}");
+                    }
                 }
             }
         });
@@ -1178,8 +1181,16 @@ impl ProxyState {
         let config_path = &self.config.wg.config_path;
 
         match cmd!(wg syncconf $ifname $config_path) {
-            Ok(_) => info!("wg config updated"),
-            Err(err) => error!("failed to set wg config: {err:?}"),
+            Ok(_) => {
+                crate::metrics::record_wg_syncconf(true);
+                info!("wg config updated");
+            }
+            Err(err) => {
+                // Rejected configs are only logged, so the counter is the one
+                // signal that routing updates stopped reaching the data plane.
+                crate::metrics::record_wg_syncconf(false);
+                error!("failed to set wg config: {err:?}");
+            }
         }
         Ok(())
     }

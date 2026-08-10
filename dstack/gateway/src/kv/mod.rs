@@ -394,6 +394,7 @@ impl GetPutCodec for NodeState {
             .and_then(|entry| match decode(entry.value.as_ref()?) {
                 Ok(value) => Some(value),
                 Err(e) => {
+                    crate::metrics::record_decode_failure(key);
                     warn!("failed to decode value for key {key}: {e:?}");
                     None
                 }
@@ -414,6 +415,7 @@ impl GetPutCodec for NodeState {
             let value = match decode(entry.value.as_ref()?) {
                 Ok(value) => value,
                 Err(e) => {
+                    crate::metrics::record_decode_failure(key);
                     warn!("failed to decode value for key {key}: {e:?}");
                     return None;
                 }
@@ -430,6 +432,7 @@ impl GetPutCodec for NodeState {
             let value = match decode(entry.value.as_ref()?) {
                 Ok(value) => value,
                 Err(e) => {
+                    crate::metrics::record_decode_failure(key);
                     warn!("failed to decode value for key {key}: {e:?}");
                     return None;
                 }
@@ -833,6 +836,7 @@ impl KvStore {
                 match decode(value) {
                     Ok(config) => Some(config),
                     Err(e) => {
+                        crate::metrics::record_decode_failure(key);
                         warn!("failed to decode cert config for key {key}: {e:?}");
                         None
                     }
@@ -905,6 +909,7 @@ impl KvStore {
                 match decode(value) {
                     Ok(data) => Some((domain.to_string(), data)),
                     Err(e) => {
+                        crate::metrics::record_decode_failure(key);
                         warn!("failed to decode cert data for key {key}: {e:?}");
                         None
                     }
