@@ -182,7 +182,14 @@ impl ProxyInner {
         );
         let state = build_state_from_kv_store(instances);
 
-        // Sync this node to KvStore
+        // This node's own records are written *after* the bootstrap below, not
+        // here. A local write allocates a sequence number, and after a
+        // data-directory loss this node has no record of which numbers it
+        // already spent — only its peers do. `bootstrap` rebuilds the counter
+        // from their coverage, so anything written before it reuses numbers the
+        // peers already treat as seen and is silently dropped cluster-wide.
+        // That would strand exactly the records recovery depends on: the fresh
+        // uuid peers check us against, and our sync address.
         let node_data = NodeData {
             uuid: config.uuid(),
             url: config.sync.my_url.clone(),
@@ -190,18 +197,6 @@ impl ProxyInner {
             wg_endpoint: config.wg.endpoint.clone(),
             wg_ip: config.wg.ip.to_string(),
         };
-        if let Err(err) = kv_store.sync_node(config.sync.node_id, &node_data) {
-            error!("Failed to sync this node to KvStore: {err:?}");
-        }
-        // Set this node's status to Online
-        if let Err(err) = kv_store.set_node_status(config.sync.node_id, NodeStatus::Up) {
-            error!("Failed to set node status: {err:?}");
-        }
-        // Register this node's sync URL in DB (for peer discovery)
-        if let Err(err) = kv_store.register_peer_url(config.sync.node_id, &config.sync.my_url) {
-            error!("Failed to register peer URL: {err:?}");
-        }
-
         // Build HttpsClientConfig for mTLS communication
         let https_config = {
             let tls = &tls_config;
@@ -232,7 +227,12 @@ impl ProxyInner {
 
         // Create WaveKV sync service (only if sync is enabled)
         let wavekv_sync = if config.sync.enabled {
-            match WaveKvSyncService::new(&kv_store, &config.sync, https_config.clone()) {
+            match WaveKvSyncService::new(
+                &kv_store,
+                &config.sync,
+                https_config.clone(),
+                node_data.uuid.clone(),
+            ) {
                 Ok(sync_service) => Some(Arc::new(sync_service)),
                 Err(err) => {
                     error!("Failed to create WaveKV sync service: {err:?}");
@@ -265,6 +265,20 @@ impl ProxyInner {
             if let Err(err) = wavekv_sync.bootstrap().await {
                 warn!("WaveKV bootstrap failed: {err:?}");
             }
+        }
+
+        // Publish this node's own records now that the sequence counter reflects
+        // whatever the peers already know we have spent (see the note above).
+        if let Err(err) = kv_store.sync_node(config.sync.node_id, &node_data) {
+            error!("Failed to sync this node to KvStore: {err:?}");
+        }
+        // Set this node's status to Online
+        if let Err(err) = kv_store.set_node_status(config.sync.node_id, NodeStatus::Up) {
+            error!("Failed to set node status: {err:?}");
+        }
+        // Register this node's sync URL in DB (for peer discovery)
+        if let Err(err) = kv_store.register_peer_url(config.sync.node_id, &config.sync.my_url) {
+            error!("Failed to register peer URL: {err:?}");
         }
 
         // Create CertResolver and load certificates from KvStore
