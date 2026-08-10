@@ -7,10 +7,10 @@
 //! Sync data is encoded using msgpack + gzip compression for efficiency.
 
 use crate::{
-    kv::{decode, encode},
+    kv::{decode, encode, gunzip_bounded, MAX_DECOMPRESSED_SYNC_BYTES},
     main_service::Proxy,
 };
-use flate2::{read::GzDecoder, write::GzEncoder, Compression};
+use flate2::{write::GzEncoder, Compression};
 use ra_tls::traits::CertExt;
 use rocket::{
     data::{Data, ToByteUnit},
@@ -18,7 +18,7 @@ use rocket::{
     mtls::{oid::Oid, Certificate},
     post, State,
 };
-use std::io::{Read, Write};
+use std::io::Write;
 use tracing::warn;
 use wavekv::sync::{SyncMessage, SyncResponse};
 
@@ -37,11 +37,8 @@ impl CertExt for RocketCert<'_> {
 
 /// Decode compressed msgpack data
 fn decode_sync_message(data: &[u8]) -> Result<SyncMessage, Status> {
-    // Decompress
-    let mut decoder = GzDecoder::new(data);
-    let mut decompressed = Vec::new();
-    decoder.read_to_end(&mut decompressed).map_err(|e| {
-        warn!("failed to decompress sync message: {e}");
+    let decompressed = gunzip_bounded(data, MAX_DECOMPRESSED_SYNC_BYTES).map_err(|e| {
+        warn!("failed to decompress sync message: {e:#}");
         Status::BadRequest
     })?;
 

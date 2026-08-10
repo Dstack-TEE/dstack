@@ -5,12 +5,12 @@
 //! HTTPS client with mTLS and custom certificate verification during TLS handshake.
 
 use std::fmt::Debug;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use flate2::{read::GzDecoder, write::GzEncoder, Compression};
-use http_body_util::{BodyExt, Full};
+use flate2::{write::GzEncoder, Compression};
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
 use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::{
@@ -23,7 +23,27 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme};
 use serde::{de::DeserializeOwned, Serialize};
 
-use super::{decode, encode};
+use super::{
+    decode, encode, gunzip_bounded, MAX_COMPRESSED_SYNC_BYTES, MAX_DECOMPRESSED_SYNC_BYTES,
+};
+
+/// Read a peer's response body, refusing one larger than the sync route accepts
+/// on a request.
+///
+/// `Body::collect` reads to completion, so without this a peer could stream an
+/// unbounded response and the decompression limit downstream would never be
+/// reached — the memory is already gone by then.
+async fn read_body_bounded(body: hyper::body::Incoming) -> Result<Bytes> {
+    Limited::new(body, MAX_COMPRESSED_SYNC_BYTES)
+        .collect()
+        .await
+        .map(|collected| collected.to_bytes())
+        .map_err(|err| {
+            anyhow::anyhow!(
+                "failed to read response body (limit {MAX_COMPRESSED_SYNC_BYTES} bytes): {err}"
+            )
+        })
+}
 
 /// Custom certificate validator trait for TLS handshake verification.
 ///
@@ -218,12 +238,7 @@ impl HttpsClient {
             anyhow::bail!("request failed: {}", response.status());
         }
 
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .context("failed to read response body")?
-            .to_bytes();
+        let body = read_body_bounded(response.into_body()).await?;
 
         serde_json::from_slice(&body).context("failed to parse response")
     }
@@ -260,19 +275,8 @@ impl HttpsClient {
             anyhow::bail!("request failed: {}", response.status());
         }
 
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .context("failed to read response body")?
-            .to_bytes();
-
-        // Decompress
-        let mut decoder = GzDecoder::new(body.as_ref());
-        let mut decompressed = Vec::new();
-        decoder
-            .read_to_end(&mut decompressed)
-            .context("failed to decompress response")?;
+        let body = read_body_bounded(response.into_body()).await?;
+        let decompressed = gunzip_bounded(&body, MAX_DECOMPRESSED_SYNC_BYTES)?;
 
         decode(&decompressed).context("failed to decode response")
     }
