@@ -650,6 +650,119 @@ mod transport_tests {
         );
     }
 
+    /// A server certificate carrying an app id, signed by the same test CA.
+    fn app_id_server_cert(
+        dir: &std::path::Path,
+        app_id: &[u8],
+    ) -> (HttpsClientConfig, Vec<u8>, Vec<u8>) {
+        use ra_tls::cert::CertRequest;
+        use ra_tls::rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
+
+        let ca_key = KeyPair::generate().expect("ca key");
+        let mut ca_params = CertificateParams::new(vec![]).expect("ca params");
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let ca_cert = ca_params.self_signed(&ca_key).expect("ca cert");
+
+        let leaf_key = KeyPair::generate().expect("leaf key");
+        let alt_names = vec!["127.0.0.1".to_string()];
+        let leaf_cert = CertRequest::builder()
+            .key(&leaf_key)
+            .subject("peer.test")
+            .alt_names(&alt_names)
+            .app_id(app_id)
+            .usage_server_auth(true)
+            .build()
+            .signed_by(&ca_cert, &ca_key)
+            .expect("leaf cert");
+
+        let cert_path = dir.join("node.crt");
+        let key_path = dir.join("node.key");
+        let ca_path = dir.join("ca.crt");
+        std::fs::write(&cert_path, leaf_cert.pem()).expect("write cert");
+        std::fs::write(&key_path, leaf_key.serialize_pem()).expect("write key");
+        std::fs::write(&ca_path, ca_cert.pem()).expect("write ca");
+
+        (
+            HttpsClientConfig {
+                cert_path: cert_path.to_string_lossy().into_owned(),
+                key_path: key_path.to_string_lossy().into_owned(),
+                ca_cert_path: ca_path.to_string_lossy().into_owned(),
+                cert_validator: None,
+            },
+            leaf_cert.der().to_vec(),
+            leaf_key.serialize_der(),
+        )
+    }
+
+    /// The client-side identity check, over a real handshake rather than a direct call.
+    ///
+    /// `AppIdValidator` runs inside `CustomCertVerifier`, which rustls only reaches once
+    /// standard chain verification passes — so unit-testing the validator alone leaves
+    /// the wiring untested. A peer from another app must fail to connect at all, before
+    /// any application bytes move.
+    #[tokio::test]
+    async fn a_peer_from_another_app_cannot_complete_the_handshake() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let ours = b"app-id-of-this-cluster".to_vec();
+
+        for (server_app_id, expect_ok) in
+            [(ours.clone(), true), (b"a-different-app".to_vec(), false)]
+        {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let (mut config, cert, key) = app_id_server_cert(dir.path(), &server_app_id);
+            config.cert_validator = Some(Arc::new(AppIdValidator::new(ours.clone())));
+            let url = serve(StatusCode::NOT_FOUND, Vec::new(), cert, key).await;
+
+            let got = HttpsClient::new(&config)
+                .expect("client")
+                .post_bytes_probe(&url, b"x".to_vec())
+                .await;
+
+            if expect_ok {
+                assert_eq!(
+                    got.expect("a peer from our own app must connect"),
+                    None,
+                    "the 404 should still read as not-upgraded"
+                );
+            } else {
+                assert!(
+                    got.is_err(),
+                    "a peer from another app completed the handshake"
+                );
+            }
+        }
+    }
+
+    /// `post_compressed_msg` is the v1 sync path — how a v2 gateway talks to one that
+    /// has not been upgraded. Its status check was as untested as the negotiation's, so
+    /// a v1 peer answering 500 could have been decoded as a successful round.
+    #[tokio::test]
+    async fn a_failed_v1_sync_is_not_decoded_as_a_response() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, cert, key) = tls_material(dir.path());
+        let url = serve(StatusCode::INTERNAL_SERVER_ERROR, Vec::new(), cert, key).await;
+        let client = HttpsClient::new(&config).expect("client");
+        let out: Result<u32> = client.post_compressed_msg(&url, &1u32).await;
+        assert!(out.is_err(), "a 500 from a v1 peer must not decode");
+    }
+
+    /// `post_json` is the bootnode GetPeers path, and the threat model does not assume a
+    /// bootnode is honest — so a failure status must not be parsed as a peer list.
+    #[tokio::test]
+    async fn a_failed_bootnode_fetch_is_not_parsed_as_peers() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, cert, key) = tls_material(dir.path());
+        let url = serve(StatusCode::FORBIDDEN, b"null".to_vec(), cert, key).await;
+        let client = HttpsClient::new(&config).expect("client");
+        let out: Result<Option<u32>> = client.post_json(&url, &()).await;
+        assert!(
+            out.is_err(),
+            "a 403 from a bootnode must not parse as a body"
+        );
+    }
+
     /// The response body is bounded before it is decompressed, so a peer cannot spend
     /// our memory ahead of any decoding limit.
     ///
