@@ -10,7 +10,6 @@ import os
 import pathlib
 import subprocess
 import tempfile
-import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -58,6 +57,15 @@ def main() -> int:
     name = f'{vmm["test_input"]["name_prefix"]}-web-ui'
     output = result_dir / "artifacts/browser-workflow.json"; output.parent.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy(); env.update({"DSTACK_BROWSER_WORKFLOW":str(fixture["browser_workflow"]),"DSTACK_UI_URL":str(fixture["ui_url"]),"DSTACK_UI_VM_NAME":name,"DSTACK_UI_IMAGE":str(vmm["test_input"]["image"]),"DSTACK_UI_OUTPUT":str(output)})
+    health = subprocess.run(
+        [str(item) for item in fixture["health_probe_argv"]],
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    if health.returncode:
+        raise RuntimeError("VMM health probe failed before browser workflow")
     command = [str(x) for x in fixture["browser_session_argv"]]
     browser = subprocess.run(command, text=True, capture_output=True, timeout=240, check=False, env=env)
     evidence: dict[str,Any] = {"browser_returncode":browser.returncode,"browser_diagnostic_tail":(browser.stdout+browser.stderr)[-5000:],"vm_processes_started":1,"image_build_tested":False}
