@@ -310,7 +310,7 @@ impl AdminRpc for AdminRpcHandler {
             .into_iter()
             .map(dns_cred_to_proto)
             .collect();
-        let default_id = kv_store.get_default_dns_credential_id();
+        let default_id = kv_store.get_default_dns_credential_id()?;
         Ok(ListDnsCredentialsResponse {
             credentials,
             default_id,
@@ -323,7 +323,7 @@ impl AdminRpc for AdminRpcHandler {
     ) -> Result<DnsCredentialInfo> {
         let kv_store = self.state.kv_store();
         let cred = kv_store
-            .get_dns_credential(&request.id)
+            .get_dns_credential(&request.id)?
             .context("dns credential not found")?;
         Ok(dns_cred_to_proto(cred))
     }
@@ -383,7 +383,7 @@ impl AdminRpc for AdminRpcHandler {
         let kv_store = self.state.kv_store();
 
         let mut cred = kv_store
-            .get_dns_credential(&request.id)
+            .get_dns_credential(&request.id)?
             .context("dns credential not found")?;
 
         // Update name if provided
@@ -414,7 +414,7 @@ impl AdminRpc for AdminRpcHandler {
         let kv_store = self.state.kv_store();
 
         // Check if this is the default credential
-        if let Some(default_id) = kv_store.get_default_dns_credential_id() {
+        if let Some(default_id) = kv_store.get_default_dns_credential_id()? {
             if default_id == request.id {
                 bail!("cannot delete the default DNS credential; set a different default first");
             }
@@ -438,8 +438,12 @@ impl AdminRpc for AdminRpcHandler {
 
     async fn get_default_dns_credential(self) -> Result<GetDefaultDnsCredentialResponse> {
         let kv_store = self.state.kv_store();
-        let default_id = kv_store.get_default_dns_credential_id().unwrap_or_default();
-        let credential = kv_store.get_default_dns_credential().map(dns_cred_to_proto);
+        let default_id = kv_store
+            .get_default_dns_credential_id()?
+            .unwrap_or_default();
+        let credential = kv_store
+            .get_default_dns_credential()?
+            .map(dns_cred_to_proto);
         Ok(GetDefaultDnsCredentialResponse {
             default_id,
             credential,
@@ -454,7 +458,7 @@ impl AdminRpc for AdminRpcHandler {
 
         // Verify the credential exists
         kv_store
-            .get_dns_credential(&request.id)
+            .get_dns_credential(&request.id)?
             .context("dns credential not found")?;
 
         kv_store.set_default_dns_credential_id(&request.id)?;
@@ -609,7 +613,7 @@ impl AdminRpc for AdminRpcHandler {
     // ==================== Global Certbot Configuration ====================
 
     async fn get_certbot_config(self) -> Result<CertbotConfigResponse> {
-        let config = self.state.kv_store().get_certbot_config();
+        let config = self.state.kv_store().get_certbot_config()?;
         Ok(CertbotConfigResponse {
             renew_interval_secs: config.renew_interval.as_secs(),
             renew_before_expiration_secs: config.renew_before_expiration.as_secs(),
@@ -620,7 +624,7 @@ impl AdminRpc for AdminRpcHandler {
 
     async fn set_certbot_config(self, request: SetCertbotConfigRequest) -> Result<()> {
         let kv_store = self.state.kv_store();
-        let mut config = kv_store.get_certbot_config();
+        let mut config = kv_store.get_certbot_config()?;
 
         // Update only the fields that are specified
         if let Some(secs) = request.renew_interval_secs {
@@ -851,7 +855,7 @@ fn proto_to_zt_domain_config(
     // Validate DNS credential if specified
     if let Some(ref cred_id) = dns_cred_id {
         kv_store
-            .get_dns_credential(cred_id)
+            .get_dns_credential(cred_id)?
             .context("specified dns credential not found")?;
     }
 

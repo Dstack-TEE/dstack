@@ -456,7 +456,9 @@ impl Proxy {
         // The account URI comes from the published credentials; the attestation
         // record is written best-effort and may lag behind a rotation, so it
         // only supplies the quote when it matches the current account.
-        let attestation = kv_store.get_acme_attestation();
+        let attestation = kv_store
+            .get_acme_attestation()
+            .context("failed to read the ACME account attestation")?;
         let account_uri = kv_store
             .get_acme_credentials()
             .context("call RotateAcmeCredentials to replace the stored ACME credentials")?
@@ -647,7 +649,17 @@ async fn start_certbot_task(proxy: Proxy) {
 
         loop {
             // Get current config from KV store (allows dynamic updates)
-            let renew_interval = proxy.kv_store.get_certbot_config().renew_interval;
+            let renew_interval = match proxy.kv_store.get_certbot_config() {
+                Ok(config) => config.renew_interval,
+                Err(err) => {
+                    // Falling back to the defaults here would switch acme_url
+                    // back to Let's Encrypt production; wait for an operator to
+                    // repair the record instead.
+                    error!("failed to read certbot config, skipping renewal round: {err:?}");
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    continue;
+                }
+            };
             if renew_interval.is_zero() {
                 // Check again later if disabled
                 tokio::time::sleep(Duration::from_secs(60)).await;

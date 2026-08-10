@@ -100,7 +100,7 @@ impl DistributedCertBot {
 
     async fn do_rotate_acme_credentials(&self) -> Result<(String, usize)> {
         let configs = self.kv_store.list_zt_domain_configs();
-        let certbot_config = self.config();
+        let certbot_config = self.config()?;
         let acme_url = if certbot_config.acme_url.is_empty() {
             DEFAULT_ACME_URL
         } else {
@@ -206,8 +206,12 @@ impl DistributedCertBot {
         Ok((account_uri, total))
     }
 
-    /// Get the current certbot configuration from KV store
-    fn config(&self) -> crate::kv::GlobalCertbotConfig {
+    /// Get the current certbot configuration from KV store.
+    ///
+    /// Propagates a corrupt record instead of falling back to the defaults:
+    /// the default `acme_url` is Let's Encrypt production, so a silent
+    /// fallback would move issuance to a different ACME server.
+    fn config(&self) -> Result<crate::kv::GlobalCertbotConfig> {
         self.kv_store.get_certbot_config()
     }
 
@@ -337,7 +341,7 @@ impl DistributedCertBot {
         } else if let Some(ref data) = cert_data {
             let now = now_secs();
             let expires_in = data.not_after.saturating_sub(now);
-            expires_in < self.config().renew_before_expiration.as_secs()
+            expires_in < self.config()?.renew_before_expiration.as_secs()
         } else {
             true
         };
@@ -422,7 +426,7 @@ impl DistributedCertBot {
             wildcard_domain
         );
         let cert_pem = tokio::time::timeout(
-            self.config().renew_timeout,
+            self.config()?.renew_timeout,
             acme_client.request_new_certificate(&key_pem, &[wildcard_domain]),
         )
         .await
@@ -476,7 +480,7 @@ impl DistributedCertBot {
             wildcard_domain
         );
         let new_cert_pem = tokio::time::timeout(
-            self.config().renew_timeout,
+            self.config()?.renew_timeout,
             // Note: we request a new cert rather than renew, since we have a new key
             acme_client.request_new_certificate(&key_pem, &[wildcard_domain]),
         )
@@ -524,7 +528,7 @@ impl DistributedCertBot {
         let dns01_client = self.dns_client(domain, &dns_cred).await?;
 
         // Use ACME URL from certbot config, fall back to default if not set
-        let config = self.config();
+        let config = self.config()?;
         let acme_url = if config.acme_url.is_empty() {
             DEFAULT_ACME_URL
         } else {
@@ -714,11 +718,11 @@ impl DistributedCertBot {
 fn dns_credential_for(kv_store: &KvStore, config: &ZtDomainConfig) -> Result<DnsCredential> {
     if let Some(ref cred_id) = config.dns_cred_id {
         kv_store
-            .get_dns_credential(cred_id)
+            .get_dns_credential(cred_id)?
             .context("specified DNS credential not found")
     } else {
         kv_store
-            .get_default_dns_credential()
+            .get_default_dns_credential()?
             .context("no default DNS credential configured")
     }
 }

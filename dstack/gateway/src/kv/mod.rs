@@ -424,6 +424,7 @@ pub fn decode<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T> {
 
 trait GetPutCodec {
     fn decode<T: for<'de> serde::Deserialize<'de>>(&self, key: &str) -> Option<T>;
+    fn decode_strict<T: for<'de> serde::Deserialize<'de>>(&self, key: &str) -> Result<Option<T>>;
     fn put_encoded<T: serde::Serialize>(&mut self, key: String, value: &T) -> Result<()>;
     fn iter_decoded<T: for<'de> serde::Deserialize<'de>>(
         &self,
@@ -445,6 +446,27 @@ impl GetPutCodec for NodeState {
                     None
                 }
             })
+    }
+
+    /// Three-state read: `Ok(None)` for a key that is missing or tombstoned,
+    /// `Ok(Some)` for a decodable value, `Err` for a stored value that no
+    /// longer decodes.
+    ///
+    /// [`Self::decode`] folds corruption into `None`, which is right for
+    /// per-instance records (skip the bad one, keep serving the rest) and
+    /// wrong for global records, where "absent" means "apply the default" and
+    /// a corrupt record would silently change cluster-wide behavior.
+    fn decode_strict<T: for<'de> serde::Deserialize<'de>>(&self, key: &str) -> Result<Option<T>> {
+        let Some(entry) = self.get(key) else {
+            return Ok(None);
+        };
+        // A `None` value is a tombstone: the key was deliberately deleted.
+        let Some(value) = entry.value.as_ref() else {
+            return Ok(None);
+        };
+        decode(value)
+            .map(Some)
+            .with_context(|| format!("corrupt record at KV key {key}"))
     }
 
     fn put_encoded<T: serde::Serialize>(&mut self, key: String, value: &T) -> Result<()> {
@@ -777,9 +799,15 @@ impl KvStore {
 
     // ==================== DNS Credential Management ====================
 
-    /// Get a DNS credential by ID
-    pub fn get_dns_credential(&self, cred_id: &str) -> Option<DnsCredential> {
-        self.persistent.read().decode(&keys::dns_cred(cred_id))
+    /// Get a DNS credential by ID.
+    ///
+    /// Fails closed on a corrupt record: silently reading it as "no such
+    /// credential" would make the certbot fall back to the default credential
+    /// and issue the domain's certificate through the wrong DNS account.
+    pub fn get_dns_credential(&self, cred_id: &str) -> Result<Option<DnsCredential>> {
+        self.persistent
+            .read()
+            .decode_strict(&keys::dns_cred(cred_id))
     }
 
     /// Save a DNS credential
@@ -804,9 +832,12 @@ impl KvStore {
             .collect()
     }
 
-    /// Get the default DNS credential ID
-    pub fn get_default_dns_credential_id(&self) -> Option<String> {
-        self.persistent.read().decode(keys::DNS_CRED_DEFAULT)
+    /// Get the default DNS credential ID.
+    ///
+    /// Fails closed on a corrupt record for the same reason as
+    /// [`Self::get_dns_credential`].
+    pub fn get_default_dns_credential_id(&self) -> Result<Option<String>> {
+        self.persistent.read().decode_strict(keys::DNS_CRED_DEFAULT)
     }
 
     /// Set the default DNS credential ID
@@ -818,19 +849,26 @@ impl KvStore {
     }
 
     /// Get the default DNS credential (resolves the ID to the actual credential)
-    pub fn get_default_dns_credential(&self) -> Option<DnsCredential> {
-        let cred_id = self.get_default_dns_credential_id()?;
+    pub fn get_default_dns_credential(&self) -> Result<Option<DnsCredential>> {
+        let Some(cred_id) = self.get_default_dns_credential_id()? else {
+            return Ok(None);
+        };
         self.get_dns_credential(&cred_id)
     }
 
     // ==================== Global Certbot Config ====================
 
-    /// Get global certbot configuration (returns default if not set)
-    pub fn get_certbot_config(&self) -> GlobalCertbotConfig {
-        self.persistent
+    /// Get global certbot configuration (returns default if not set).
+    ///
+    /// Fails closed on a corrupt record: falling back to the defaults would
+    /// silently switch `acme_url` back to Let's Encrypt production and reset
+    /// every renewal interval on this node.
+    pub fn get_certbot_config(&self) -> Result<GlobalCertbotConfig> {
+        Ok(self
+            .persistent
             .read()
-            .decode(keys::GLOBAL_CERTBOT_CONFIG)
-            .unwrap_or_default()
+            .decode_strict(keys::GLOBAL_CERTBOT_CONFIG)?
+            .unwrap_or_default())
     }
 
     /// Set global certbot configuration
@@ -969,16 +1007,9 @@ impl KvStore {
     /// Treating corruption as absence would silently register a fresh ACME
     /// account that the existing account-bound CAA records refuse.
     pub fn get_acme_credentials(&self) -> Result<Option<CertCredentials>> {
-        let state = self.persistent.read();
-        let Some(entry) = state.get(keys::GLOBAL_ACME_CREDENTIALS) else {
-            return Ok(None);
-        };
-        // A `None` value is a tombstone: the key was deliberately deleted.
-        let Some(value) = entry.value.as_ref() else {
-            return Ok(None);
-        };
-        decode(value)
-            .map(Some)
+        self.persistent
+            .read()
+            .decode_strict(keys::GLOBAL_ACME_CREDENTIALS)
             .context("corrupt ACME credentials record in KvStore")
     }
 
@@ -990,9 +1021,15 @@ impl KvStore {
         Ok(())
     }
 
-    /// Get global ACME attestation (TDX quote of account URI)
-    pub fn get_acme_attestation(&self) -> Option<AcmeAttestation> {
-        self.persistent.read().decode(keys::GLOBAL_ACME_ATTESTATION)
+    /// Get global ACME attestation (TDX quote of account URI).
+    ///
+    /// Fails closed on a corrupt record: reporting "no attestation" for an
+    /// account that does have one lets a verifier conclude the ACME account is
+    /// unattested.
+    pub fn get_acme_attestation(&self) -> Result<Option<AcmeAttestation>> {
+        self.persistent
+            .read()
+            .decode_strict(keys::GLOBAL_ACME_ATTESTATION)
     }
 
     /// Save global ACME attestation
@@ -1425,6 +1462,54 @@ mod decompression_tests {
         let out = gunzip_bounded(&exact, 4096).expect("must be accepted");
         assert_eq!(out.len(), 4096);
         assert!(gunzip_bounded(&gzip(&vec![7u8; 4097]), 4096).is_err());
+    }
+}
+
+#[cfg(test)]
+mod corruption_tests {
+    use super::*;
+
+    fn test_kv(data_dir: &std::path::Path) -> KvStore {
+        KvStore::new(1, vec![], data_dir).expect("failed to create kv store")
+    }
+
+    fn put_raw(kv: &KvStore, key: &str, value: &[u8]) {
+        kv.persistent
+            .write()
+            .put(key.to_string(), value.to_vec())
+            .expect("raw put should succeed");
+    }
+
+    #[test]
+    fn a_corrupt_certbot_config_does_not_read_as_the_default() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+        // Absent means "use the defaults" — that part must keep working.
+        let default = kv
+            .get_certbot_config()
+            .expect("missing key should not error");
+        assert!(default.acme_url.is_empty());
+
+        kv.set_certbot_config(&GlobalCertbotConfig {
+            acme_url: "https://acme-staging.example/directory".to_string(),
+            ..Default::default()
+        })
+        .expect("save should succeed");
+        put_raw(&kv, keys::GLOBAL_CERTBOT_CONFIG, b"not-messagepack");
+        // Reading the corrupt record as the default would silently move
+        // issuance back to Let's Encrypt production.
+        assert!(kv.get_certbot_config().is_err());
+    }
+
+    #[test]
+    fn corrupt_global_records_fail_closed() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+        put_raw(&kv, keys::GLOBAL_ACME_ATTESTATION, b"not-messagepack");
+        put_raw(&kv, keys::DNS_CRED_DEFAULT, b"not-messagepack");
+        assert!(kv.get_acme_attestation().is_err());
+        assert!(kv.get_default_dns_credential_id().is_err());
+        assert!(kv.get_default_dns_credential().is_err());
     }
 }
 
