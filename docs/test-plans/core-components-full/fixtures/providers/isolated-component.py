@@ -1412,7 +1412,13 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                 "browser_session_argv": browser_command,
                 "browser_workflow": str(web_ui_workflow),
                 "ui_url": f"{rpc_url}/",
-                "health_probe_argv": [*cli_argv, "status"],
+                "health_probe_argv": [
+                    "curl",
+                    "--fail",
+                    "--silent",
+                    "--show-error",
+                    f"{rpc_url}/",
+                ],
                 "semantic_form_rows": [
                     "defaults",
                     "image",
