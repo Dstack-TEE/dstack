@@ -564,15 +564,36 @@ pub struct KvStore {
 }
 
 impl KvStore {
-    /// Create a new sync store
+    /// Create a new sync store.
+    ///
+    /// If the on-disk WAL/snapshot cannot be read, the data directory is moved
+    /// aside and the store starts empty rather than refusing to boot: the
+    /// persistent state is replicated on every peer, a torn WAL tail is the
+    /// normal artifact of a crash, and a gateway that cannot start serves no
+    /// traffic at all. Nothing is deleted — the unreadable directory is kept
+    /// under `<data_dir>.corrupt.<unix_ts>` for inspection.
     pub fn new(
         my_node_id: NodeId,
         peer_ids: Vec<NodeId>,
         data_dir: impl AsRef<Path>,
     ) -> Result<Self> {
-        let persistent =
-            Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir.as_ref())
-                .context("failed to create persistent wavekv node")?;
+        let data_dir = data_dir.as_ref();
+        let persistent = match Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir) {
+            Ok(node) => node,
+            Err(err) => {
+                let quarantined = quarantine_data_dir(data_dir).context(
+                    "failed to open the WaveKV data dir and failed to move it aside for recovery",
+                )?;
+                error!(
+                    "WaveKV data dir {} is unreadable ({err:#}); moved it to {} and started empty — \
+                     state will be re-fetched from peers",
+                    data_dir.display(),
+                    quarantined.display(),
+                );
+                Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir)
+                    .context("failed to create persistent wavekv node on a fresh data dir")?
+            }
+        };
 
         // Get peers from persistent store (may have been restored from WAL)
         // and include them when creating ephemeral store
@@ -1265,6 +1286,37 @@ impl KvStore {
     }
 }
 
+/// Move an unreadable WaveKV data dir aside, returning the new path.
+///
+/// Renaming keeps the bytes for post-mortem analysis and guarantees the
+/// gateway never starts on half-readable state.
+fn quarantine_data_dir(data_dir: &Path) -> Result<std::path::PathBuf> {
+    anyhow::ensure!(
+        data_dir.exists(),
+        "WaveKV data dir {} does not exist",
+        data_dir.display()
+    );
+    let stamp = now_secs();
+    for attempt in 0..u32::MAX {
+        let suffix = if attempt == 0 {
+            format!("corrupt.{stamp}")
+        } else {
+            format!("corrupt.{stamp}.{attempt}")
+        };
+        let mut target = data_dir.as_os_str().to_owned();
+        target.push(".");
+        target.push(&suffix);
+        let target = std::path::PathBuf::from(target);
+        if target.exists() {
+            continue;
+        }
+        std::fs::rename(data_dir, &target)
+            .with_context(|| format!("failed to rename {}", data_dir.display()))?;
+        return Ok(target);
+    }
+    anyhow::bail!("no free quarantine path for {}", data_dir.display())
+}
+
 fn validate_peer_url(url: &str) -> Result<()> {
     let parsed = reqwest::Url::parse(url).context("invalid peer URL")?;
     anyhow::ensure!(
@@ -1610,6 +1662,45 @@ mod corruption_tests {
             .put_encoded(keys::handshake("cvm", 4), &(now + MAX_CLOCK_DRIFT_SECS / 2))
             .unwrap();
         assert_eq!(kv.get_instance_handshakes("cvm").len(), 2);
+    }
+
+    #[test]
+    fn an_unreadable_data_dir_is_quarantined_instead_of_blocking_startup() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let data_dir = dir.path().join("kv");
+        {
+            let kv = test_kv(&data_dir);
+            kv.sync_instance(
+                "cvm",
+                &InstanceData {
+                    app_id: "app".to_string(),
+                    ip: "10.0.0.20".parse().unwrap(),
+                    public_key: "key".to_string(),
+                    reg_time: 1,
+                    port_policy: None,
+                    port_policy_hash: String::new(),
+                    admin_port_policy: None,
+                },
+            )
+            .expect("sync should succeed");
+            kv.persist_if_dirty().expect("persist should succeed");
+        }
+        // A torn WAL tail is the normal artifact of a crash and every record is
+        // replicated, so it must not keep the gateway from booting.
+        std::fs::write(data_dir.join("node_1.wal"), b"garbage").expect("failed to corrupt wal");
+
+        let kv = KvStore::new(1, vec![], &data_dir).expect("startup must survive a corrupt wal");
+        assert!(kv.load_all_instances().is_empty());
+        let quarantined: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("failed to read temp dir")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".corrupt."))
+            .collect();
+        assert_eq!(
+            quarantined.len(),
+            1,
+            "the unreadable data dir must be kept for inspection"
+        );
     }
 }
 
