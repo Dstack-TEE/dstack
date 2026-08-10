@@ -673,11 +673,34 @@ def wait_ready(
 ) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     latest: dict[str, Any] = {}
+    sealing_restarts = 0
     while time.monotonic() < deadline:
         latest = info(cli, vm_id)
-        if latest.get("boot_error"):
+        boot_error = str(latest.get("boot_error") or "")
+        if "Failed to get sealing key" in boot_error and sealing_restarts < 2:
+            exit_deadline = min(deadline, time.monotonic() + 60)
+            while time.monotonic() < exit_deadline:
+                latest = info(cli, vm_id)
+                if latest.get("status") == "exited":
+                    break
+                time.sleep(2)
+            if latest.get("status") != "exited":
+                fail(
+                    "guest did not exit after a transient sealing-provider failure: "
+                    f"{latest.get('status')}"
+                )
+            time.sleep(5)
+            restarted = run([*cli, "start", vm_id], timeout=120, check=False)
+            if restarted.returncode:
+                fail(
+                    "guest restart after a transient sealing-provider failure failed: "
+                    f"{restarted.stderr[-1000:]}"
+                )
+            sealing_restarts += 1
+            continue
+        if boot_error:
             fail(
-                f"guest boot failed: {latest.get('boot_error')}\n"
+                f"guest boot failed: {boot_error}\n"
                 f"--- vmm log preserved at ---\n"
                 f"{preserve_failure_evidence(vmm_log, vm_id, vm_root)}\n"
                 f"--- vmm log tail ---\n{vmm_log_tail(vmm_log)}\n"
