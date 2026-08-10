@@ -251,7 +251,7 @@ mod tests {
         // PROXY prefix matched but no \r\n terminator within V1_MAX_LENGTH bytes.
         let bytes = vec![b'P'; V1_MAX_LENGTH + 8]; // all 'P' — never closes
         let mut head = b"PROXY".to_vec();
-        head.extend(std::iter::repeat(b'A').take(V1_MAX_LENGTH));
+        head.extend(std::iter::repeat_n(b'A', V1_MAX_LENGTH));
         let err = read_proxy_header(&head[..]).await.unwrap_err();
         let msg = format!("{err:#}");
         assert!(

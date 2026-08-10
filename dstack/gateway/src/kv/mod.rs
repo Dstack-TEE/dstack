@@ -1448,3 +1448,67 @@ mod peer_url_tests {
         }
     }
 }
+
+/// The key namespace is the on-disk contract between releases.
+///
+/// Every builder and parser here survived mutation: `handshake_prefix` could return
+/// `""`, `parse_inst_key` could return `Some("xyzzy")`, and nothing noticed. That is not
+/// a cosmetic gap — these strings are what a gateway uses to find its own state after an
+/// upgrade. Changing one silently orphans every existing record: the data is still
+/// replicated, still in the digest, and no longer reachable by any reader.
+#[cfg(test)]
+mod key_schema_tests {
+    use super::keys;
+
+    /// A prefix must actually be a prefix of the keys it is used to iterate, or a range
+    /// scan silently returns nothing and the caller reads an empty collection as "none".
+    #[test]
+    fn every_iteration_prefix_matches_the_keys_it_must_find() {
+        assert!(keys::handshake("inst-a", 7).starts_with(&keys::handshake_prefix("inst-a")));
+        assert!(keys::last_seen_node(3, 7).starts_with(&keys::last_seen_node_prefix(3)));
+        assert!(keys::cert_attestation_latest("a.example")
+            .starts_with(&keys::cert_attestation_prefix("a.example")));
+        assert!(keys::cert_attestation_history("a.example", 1234)
+            .starts_with(&keys::cert_attestation_prefix("a.example")));
+    }
+
+    /// A prefix must not be so short that it also matches a neighbour's keys, which
+    /// would make an iteration return another instance's or node's records.
+    #[test]
+    fn an_iteration_prefix_does_not_capture_a_neighbour() {
+        assert!(!keys::handshake("inst-b", 7).starts_with(&keys::handshake_prefix("inst-a")));
+        assert!(!keys::last_seen_node(4, 7).starts_with(&keys::last_seen_node_prefix(3)));
+        assert!(!keys::cert_attestation_latest("b.example")
+            .starts_with(&keys::cert_attestation_prefix("a.example")));
+        // `inst-a` must not swallow `inst-ab`.
+        assert!(!keys::handshake("inst-ab", 7).starts_with(&keys::handshake_prefix("inst-a")));
+    }
+
+    /// Builders and parsers must agree, or a record written by one release is invisible
+    /// to the next.
+    #[test]
+    fn every_key_parses_back_to_what_built_it() {
+        assert_eq!(keys::parse_inst_key(&keys::inst("inst-a")), Some("inst-a"));
+        assert_eq!(keys::parse_node_info_key(&keys::node_info(42)), Some(42));
+        assert_eq!(
+            keys::parse_cert_domain(&keys::cert_attestation_latest("a.example")),
+            Some("a.example")
+        );
+        assert_eq!(
+            keys::parse_cert_domain(&keys::cert_lock("a.example")),
+            Some("a.example")
+        );
+    }
+
+    /// A parser must reject a key from another namespace rather than returning a value
+    /// derived from it, which would cross-wire two record types.
+    #[test]
+    fn a_parser_refuses_a_key_from_another_namespace() {
+        assert_eq!(keys::parse_inst_key(&keys::node_info(1)), None);
+        assert_eq!(keys::parse_cert_domain(&keys::inst("inst-a")), None);
+        assert_eq!(keys::parse_node_info_key(&keys::node_status(1)), None);
+        assert_eq!(keys::parse_node_info_key(&keys::inst("inst-a")), None);
+        // `node/info/` and `node/status/` share a stem; neither may claim the other.
+        assert_eq!(keys::parse_node_info_key("node/info/not-a-number"), None);
+    }
+}
