@@ -741,7 +741,7 @@ def main() -> int:
                             node_base,
                             token,
                             "Admin.RenewZtDomainCert",
-                            {"domain": domain, "force": True},
+                            {"domain": domain, "force": False},
                         )
                         for node_base in node_admin_urls[1:]
                     ]
