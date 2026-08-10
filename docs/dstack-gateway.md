@@ -88,3 +88,29 @@ insecure_no_auth = false
 The admin server is fail-closed: if it is enabled with no `admin_token` and no `htpasswd_file`, and `insecure_no_auth` is `false`, it refuses to start rather than exposing an unauthenticated admin API.
 
 Clients authenticate by sending `Authorization: Bearer <token>` or the `X-Admin-Token: <token>` header.
+
+## Metrics
+
+The admin server exposes Prometheus metrics at `GET /metrics`. It is part of the
+admin API, so it requires the same credentials and is only reachable when
+`core.admin.enabled` is true — the series name domains, node ids and instance
+counts, which is topology that should not be readable without authentication.
+
+```yaml
+scrape_configs:
+  - job_name: dstack-gateway
+    static_configs:
+      - targets: ["127.0.0.1:8011"]
+    authorization:
+      credentials: "<the admin token>"
+```
+
+Series worth alerting on:
+
+| Metric | Why |
+|---|---|
+| `dstack_gateway_wg_syncconf_failures_total` | `wg syncconf` rejects the whole config file when one peer stanza is bad, so a non-zero rate means routing updates have stopped reaching the data plane while the gateway still looks healthy. |
+| `dstack_gateway_kv_decode_failures_total` | A replicated record that fails to decode is skipped, which makes the CVM behind it silently unroutable. Labelled by key prefix. |
+| `dstack_gateway_kv_peer_buffered_logs` | Entries still buffered for a peer. Sustained growth means that peer stopped acknowledging and the two nodes are drifting apart. |
+| `dstack_gateway_cert_not_after_seconds` | Certificate expiry per domain; alert on `- time()` falling under the renewal window. |
+| `dstack_gateway_kv_persist_failures_total` | Periodic snapshots are failing, so a restart replays a growing WAL. |
