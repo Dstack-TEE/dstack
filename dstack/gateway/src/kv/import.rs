@@ -1,0 +1,318 @@
+// SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
+//! Validation boundary between replicated KV records and the local data plane.
+//!
+//! Every `inst/` record that reaches `ProxyState` — and through it the rendered
+//! `wg.conf` — passes through [`accept_instances`] first. The registration-path
+//! checks are re-run here because:
+//!
+//! - a record can arrive from a peer without ever passing through this node's
+//!   registration RPC, so its checks are not a boundary for synced data;
+//! - last-writer-wins replication cannot enforce invariants that span keys, so
+//!   IP and public-key uniqueness have to be re-established on import;
+//! - `wg syncconf` rejects the *whole* config file when a single peer key is
+//!   malformed, which turns one bad record into a node-wide WireGuard freeze.
+//!
+//! Validation never aborts the batch: an offending record is skipped and
+//! reported, every other instance keeps its routing.
+
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::net::Ipv4Addr;
+
+use anyhow::{bail, ensure, Result};
+use base64::{engine::general_purpose::STANDARD, Engine};
+
+use super::InstanceData;
+use crate::config::WgConfig;
+
+/// A WireGuard public key is 32 raw bytes, base64-encoded by `wg`.
+const WG_PUBLIC_KEY_BYTES: usize = 32;
+
+/// Upper bound on identifier fields carried in a KV record. Real values are
+/// hex-encoded hashes (40-64 chars); the bound keeps a corrupt record that
+/// still decodes from pushing an arbitrarily long string into the logs and the
+/// rendered config.
+const MAX_ID_LEN: usize = 128;
+
+/// A record that failed validation, along with the reason.
+pub struct RejectedInstance {
+    pub instance_id: String,
+    pub reason: anyhow::Error,
+}
+
+/// Records accepted for import, plus the ones that were skipped.
+pub struct AcceptedInstances {
+    pub instances: BTreeMap<String, InstanceData>,
+    pub rejected: Vec<RejectedInstance>,
+}
+
+/// Validate a WireGuard public key as `wg` itself would accept it.
+pub fn validate_wg_public_key(public_key: &str) -> Result<()> {
+    ensure!(!public_key.is_empty(), "public key is empty");
+    ensure!(
+        !public_key.contains(|c: char| c.is_whitespace() || c.is_control()),
+        "public key contains whitespace or control characters"
+    );
+    let decoded = STANDARD
+        .decode(public_key)
+        .map_err(|err| anyhow::anyhow!("public key is not valid base64: {err}"))?;
+    ensure!(
+        decoded.len() == WG_PUBLIC_KEY_BYTES,
+        "public key decodes to {} bytes, expected {WG_PUBLIC_KEY_BYTES}",
+        decoded.len()
+    );
+    Ok(())
+}
+
+fn validate_id(field: &str, value: &str) -> Result<()> {
+    ensure!(!value.is_empty(), "{field} is empty");
+    ensure!(
+        value.len() <= MAX_ID_LEN,
+        "{field} is {} bytes, limit is {MAX_ID_LEN}",
+        value.len()
+    );
+    ensure!(
+        !value.contains(|c: char| c.is_whitespace() || c.is_control()),
+        "{field} contains whitespace or control characters"
+    );
+    Ok(())
+}
+
+/// Per-record checks that do not depend on any other record.
+fn validate_instance(wg: &WgConfig, instance_id: &str, data: &InstanceData) -> Result<()> {
+    validate_id("instance_id", instance_id)?;
+    validate_id("app_id", &data.app_id)?;
+    validate_wg_public_key(&data.public_key)?;
+    // The routable network, not this node's allocation share: in a cluster
+    // every node carries peers for the CVMs registered on the other nodes, and
+    // those hold addresses from the other nodes' shares by design.
+    ensure!(
+        wg.is_routable_client_ip(data.ip),
+        "ip {} is outside the WireGuard network",
+        data.ip
+    );
+    Ok(())
+}
+
+/// Filter KV instance records down to the ones safe to apply locally.
+///
+/// Conflicts on IP or public key are resolved by registration time (oldest
+/// wins, ties broken by instance ID) so that every node reaches the same
+/// decision from the same KV contents — the local registration path resolves
+/// them the same way, by refusing the newcomer.
+pub fn accept_instances(
+    wg: &WgConfig,
+    records: BTreeMap<String, InstanceData>,
+) -> AcceptedInstances {
+    let mut ordered: Vec<(String, InstanceData)> = records.into_iter().collect();
+    ordered.sort_by(|(left_id, left), (right_id, right)| {
+        left.reg_time
+            .cmp(&right.reg_time)
+            .then_with(|| left_id.cmp(right_id))
+    });
+
+    let mut instances = BTreeMap::new();
+    let mut rejected = Vec::new();
+    let mut claimed_ips: HashMap<Ipv4Addr, String> = HashMap::new();
+    let mut claimed_keys: HashSet<String> = HashSet::new();
+
+    for (instance_id, data) in ordered {
+        let checked = validate_instance(wg, &instance_id, &data).and_then(|()| {
+            if let Some(owner) = claimed_ips.get(&data.ip) {
+                bail!("ip {} is already assigned to instance {owner}", data.ip);
+            }
+            if claimed_keys.contains(&data.public_key) {
+                bail!("public key is already registered to another instance");
+            }
+            Ok(())
+        });
+        if let Err(reason) = checked {
+            rejected.push(RejectedInstance {
+                instance_id,
+                reason,
+            });
+            continue;
+        }
+        claimed_ips.insert(data.ip, instance_id.clone());
+        claimed_keys.insert(data.public_key.clone());
+        instances.insert(instance_id, data);
+    }
+
+    AcceptedInstances {
+        instances,
+        rejected,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ipnet::Ipv4Net;
+
+    fn wg_config() -> WgConfig {
+        WgConfig {
+            public_key: "gateway".to_string(),
+            private_key: "gateway".to_string(),
+            listen_port: 51820,
+            ip: "10.0.0.1/24".parse::<Ipv4Net>().unwrap(),
+            reserved_net: vec!["10.0.0.0/28".parse::<Ipv4Net>().unwrap()],
+            client_ip_range: "10.0.0.0/24".parse::<Ipv4Net>().unwrap(),
+            interface: "wg0".to_string(),
+            config_path: "/tmp/wg.conf".to_string(),
+            endpoint: "127.0.0.1:51820".to_string(),
+        }
+    }
+
+    fn key(seed: u8) -> String {
+        STANDARD.encode([seed; WG_PUBLIC_KEY_BYTES])
+    }
+
+    fn instance(ip: &str, public_key: &str, reg_time: u64) -> InstanceData {
+        InstanceData {
+            app_id: "0123456789abcdef".to_string(),
+            ip: ip.parse().unwrap(),
+            public_key: public_key.to_string(),
+            reg_time,
+            port_policy: None,
+            port_policy_hash: String::new(),
+            admin_port_policy: None,
+        }
+    }
+
+    fn accept(records: Vec<(&str, InstanceData)>) -> AcceptedInstances {
+        let records = records
+            .into_iter()
+            .map(|(id, data)| (id.to_string(), data))
+            .collect();
+        accept_instances(&wg_config(), records)
+    }
+
+    #[test]
+    fn accepts_well_formed_records() {
+        let accepted = accept(vec![
+            ("a", instance("10.0.0.20", &key(1), 100)),
+            ("b", instance("10.0.0.21", &key(2), 200)),
+        ]);
+        assert!(accepted.rejected.is_empty());
+        assert_eq!(accepted.instances.len(), 2);
+    }
+
+    #[test]
+    fn rejects_keys_wg_would_refuse() {
+        for bad in [
+            "",
+            "not base64!",
+            &STANDARD.encode([1u8; 16]),
+            &format!("{}\nEndpoint = 10.0.0.9:1234", key(3)),
+        ] {
+            assert!(
+                validate_wg_public_key(bad).is_err(),
+                "accepted public key {bad:?}"
+            );
+        }
+        assert!(validate_wg_public_key(&key(3)).is_ok());
+    }
+
+    #[test]
+    fn one_bad_record_does_not_drop_the_others() {
+        let accepted = accept(vec![
+            ("bad-key", instance("10.0.0.20", "not-a-key", 100)),
+            ("good", instance("10.0.0.21", &key(2), 200)),
+        ]);
+        assert_eq!(accepted.rejected.len(), 1);
+        assert_eq!(accepted.rejected[0].instance_id, "bad-key");
+        assert!(accepted.instances.contains_key("good"));
+    }
+
+    #[test]
+    fn rejects_addresses_belonging_to_this_gateway() {
+        // The gateway's own wg address, an address in its reserved net, and
+        // non-unicast garbage must never reach the peer list.
+        for ip in ["10.0.0.1", "10.0.0.5", "127.0.0.1", "224.0.0.1", "0.0.0.0"] {
+            let accepted = accept(vec![("x", instance(ip, &key(1), 100))]);
+            assert!(accepted.instances.is_empty(), "accepted ip {ip}");
+        }
+    }
+
+    #[test]
+    fn duplicate_ip_and_key_claims_resolve_to_the_older_registration() {
+        let accepted = accept(vec![
+            ("new", instance("10.0.0.20", &key(9), 300)),
+            ("old", instance("10.0.0.20", &key(1), 100)),
+        ]);
+        assert_eq!(accepted.instances.len(), 1);
+        assert!(accepted.instances.contains_key("old"));
+
+        let accepted = accept(vec![
+            ("new", instance("10.0.0.21", &key(1), 300)),
+            ("old", instance("10.0.0.20", &key(1), 100)),
+        ]);
+        assert_eq!(accepted.instances.len(), 1);
+        assert!(accepted.instances.contains_key("old"));
+    }
+
+    #[test]
+    fn conflict_resolution_does_not_depend_on_iteration_order() {
+        let forward = accept(vec![
+            ("a", instance("10.0.0.20", &key(1), 100)),
+            ("b", instance("10.0.0.20", &key(2), 100)),
+        ]);
+        let reverse = accept(vec![
+            ("b", instance("10.0.0.20", &key(2), 100)),
+            ("a", instance("10.0.0.20", &key(1), 100)),
+        ]);
+        assert_eq!(
+            forward.instances.keys().collect::<Vec<_>>(),
+            reverse.instances.keys().collect::<Vec<_>>()
+        );
+        assert!(forward.instances.contains_key("a"));
+    }
+
+    #[test]
+    fn a_cluster_peers_address_is_not_judged_by_this_nodes_pool() {
+        // Every deployment gives each node its own slice, and a CVM is handed
+        // every gateway as a WireGuard server — so each node must carry peers
+        // holding addresses out of the other nodes' slices. The two shapes in
+        // tree disagree on whether those slices sit inside a node's own
+        // interface network, so neither the pool nor the interface network can
+        // decide this.
+        let shapes = [
+            // deploy-to-vmm.sh: /18 pools inside a shared /16 interface.
+            ("10.8.0.1/16", "10.8.0.0/18", "10.8.0.5", "10.8.64.5"),
+            // test-run/cluster.sh and e2e/configs: a /24 per node, and no
+            // node's interface covers another's.
+            ("10.0.41.1/24", "10.0.41.0/24", "10.0.41.5", "10.0.42.5"),
+        ];
+        for (ip, pool, mine, peers) in shapes {
+            let gateway_addr = ip.split('/').next().unwrap_or_default();
+            let wg = WgConfig {
+                ip: ip.parse::<Ipv4Net>().unwrap(),
+                reserved_net: vec![format!("{gateway_addr}/32").parse::<Ipv4Net>().unwrap()],
+                client_ip_range: pool.parse::<Ipv4Net>().unwrap(),
+                ..wg_config()
+            };
+            let records = [
+                ("mine", instance(mine, &key(1), 100)),
+                ("peers", instance(peers, &key(2), 100)),
+                // Still refused: this gateway's own address.
+                ("steals-gateway-ip", instance(gateway_addr, &key(3), 100)),
+            ]
+            .into_iter()
+            .map(|(id, data)| (id.to_string(), data))
+            .collect();
+            let accepted = accept_instances(&wg, records);
+            assert!(accepted.instances.contains_key("mine"), "{ip}");
+            assert!(
+                accepted.instances.contains_key("peers"),
+                "{ip}: a peer node's instance was refused, which would leave every \
+                 gateway serving only its own CVMs"
+            );
+            assert!(
+                !accepted.instances.contains_key("steals-gateway-ip"),
+                "{ip}"
+            );
+        }
+    }
+}

@@ -7,7 +7,7 @@ InstanceInfo {
     id: "test-id-1",
     app_id: "app-id-1",
     ip: 10.0.0.3,
-    public_key: "test-pubkey-1",
+    public_key: "dGVzdC1wdWJrZXktMXRlc3QtcHVia2V5LTF0ZXN0LXA=",
     reg_time: SystemTime {
         tv_sec: 0,
         tv_nsec: 0,

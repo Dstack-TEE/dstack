@@ -12,7 +12,6 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use auth_client::AuthClient;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use crate::distributed_certbot::DistributedCertBot;
 use cmd_lib::run_cmd as cmd;
@@ -40,10 +39,10 @@ use crate::{
     cert_store::{CertResolver, CertStoreBuilder},
     config::{Config, TlsConfig},
     kv::{
-        fetch_peers_from_bootnode, AppIdValidator, CertData, HttpsClientConfig, InstanceData,
-        KvStore, NodeData, NodeStatus, PortPolicy, WaveKvSyncService,
+        fetch_peers_from_bootnode, import, AppIdValidator, CertData, HttpsClientConfig,
+        InstanceData, KvStore, NodeData, NodeStatus, PortPolicy, WaveKvSyncService,
     },
-    models::{InstanceInfo, PortPolicyView, WgConf},
+    models::{InstanceInfo, PortPolicyView, WgConf, WgPeer},
     proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo, AppAddressResolver},
 };
 
@@ -51,16 +50,6 @@ mod auth_client;
 mod handshakes;
 
 use handshakes::LatestHandshakesCache;
-
-fn validate_wireguard_public_key(public_key: &str) -> Result<()> {
-    let decoded = STANDARD
-        .decode(public_key)
-        .context("invalid WireGuard public key encoding")?;
-    if decoded.len() != 32 {
-        bail!("WireGuard public key must decode to 32 bytes");
-    }
-    Ok(())
-}
 
 #[derive(Clone)]
 pub struct Proxy {
@@ -180,7 +169,7 @@ impl ProxyInner {
             instances.len(),
             nodes.len()
         );
-        let state = build_state_from_kv_store(instances);
+        let state = build_state_from_kv_store(&config, instances);
 
         // This node's own records are written *after* the bootstrap below, not
         // here. A local write allocates a sequence number, and after a
@@ -529,7 +518,7 @@ impl Proxy {
         if instance_id.is_empty() {
             bail!("[{instance_id}] instance id is empty");
         }
-        validate_wireguard_public_key(client_public_key)
+        import::validate_wg_public_key(client_public_key)
             .with_context(|| format!("[{instance_id}] invalid client public key"))?;
         let client_info = state
             .new_client_by_id(
@@ -581,11 +570,31 @@ impl Proxy {
     }
 }
 
-fn build_state_from_kv_store(instances: BTreeMap<String, InstanceData>) -> ProxyStateMut {
+/// Log the records a KV import refused, one line each.
+///
+/// A refused record makes its CVM invisible to this node, so it must never be
+/// a silent skip.
+fn report_rejected_instances(rejected: Vec<import::RejectedInstance>) {
+    for import::RejectedInstance {
+        instance_id,
+        reason,
+    } in rejected
+    {
+        error!("ignoring KV instance record {instance_id}: {reason:#}");
+    }
+}
+
+fn build_state_from_kv_store(
+    config: &Config,
+    instances: BTreeMap<String, InstanceData>,
+) -> ProxyStateMut {
     let mut state = ProxyStateMut::default();
 
+    let accepted = import::accept_instances(&config.wg, instances);
+    report_rejected_instances(accepted.rejected);
+
     // Build instances
-    for (instance_id, data) in instances {
+    for (instance_id, data) in accepted.instances {
         let info = InstanceInfo {
             id: instance_id.clone(),
             app_id: data.app_id.clone(),
@@ -877,7 +886,9 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
 }
 
 fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> {
-    let instances = store.load_all_instances();
+    let accepted = import::accept_instances(&proxy.config.wg, store.load_all_instances());
+    report_rejected_instances(accepted.rejected);
+    let instances = accepted.instances;
     let mut state = proxy.lock();
     let mut wg_changed = false;
 
@@ -934,26 +945,7 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
 
 impl ProxyState {
     fn valid_ip(&self, ip: Ipv4Addr) -> bool {
-        // Must be within client IP range
-        if !self.config.wg.client_ip_range.contains(&ip) {
-            return false;
-        }
-        if self.config.wg.ip.broadcast() == ip {
-            return false;
-        }
-        if self.config.wg.ip.addr() == ip {
-            return false;
-        }
-        if self
-            .config
-            .wg
-            .reserved_net
-            .iter()
-            .any(|net| net.contains(&ip))
-        {
-            return false;
-        }
-        true
+        self.config.wg.is_valid_client_ip(ip)
     }
     fn alloc_ip(&mut self) -> Option<Ipv4Addr> {
         for ip in self.config.wg.client_ip_range.hosts() {
@@ -983,9 +975,10 @@ impl ProxyState {
         if app_id.is_empty() {
             bail!("app_id is empty");
         }
-        if public_key.is_empty() {
-            bail!("public_key is empty");
-        }
+        // Checked here as well as on the KV import path: a key `wg` refuses
+        // makes it reject the whole config file, so it must never enter the
+        // instance table in the first place.
+        import::validate_wg_public_key(public_key).context("invalid WireGuard public key")?;
         if self
             .state
             .instances
@@ -1174,10 +1167,31 @@ impl ProxyState {
     }
 
     fn generate_wg_config(&self) -> Result<String> {
+        // Last check before the values leave Rust: `wg syncconf` refuses the
+        // entire file when one peer is malformed, so a record that somehow got
+        // past the import boundary must cost only its own routing.
+        let mut peers = Vec::with_capacity(self.state.instances.len());
+        for info in self.state.instances.values() {
+            if let Err(err) = import::validate_wg_public_key(&info.public_key) {
+                error!("excluding instance {} from wg config: {err:#}", info.id);
+                continue;
+            }
+            if !self.config.wg.is_routable_client_ip(info.ip) {
+                error!(
+                    "excluding instance {} from wg config: ip {} is outside the wg network",
+                    info.id, info.ip
+                );
+                continue;
+            }
+            peers.push(WgPeer {
+                public_key: &info.public_key,
+                ip: info.ip,
+            });
+        }
         let model = WgConf {
             private_key: &self.config.wg.private_key,
             listen_port: self.config.wg.listen_port,
-            peers: (&self.state.instances).into(),
+            peers,
         };
         Ok(model.render()?)
     }

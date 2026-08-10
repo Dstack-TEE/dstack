@@ -29,11 +29,12 @@
 //! - `last_seen/node/{node_id}/{seen_by_node_id}` → u64 (timestamp)
 
 mod https_client;
+pub mod import;
 mod sync_service;
 
 pub use https_client::{AppIdValidator, HttpsClientConfig};
 pub use sync_service::{fetch_peers_from_bootnode, WaveKvSyncService};
-use tracing::warn;
+use tracing::{error, warn};
 
 use std::{collections::BTreeMap, net::Ipv4Addr, path::Path, time::Duration};
 

@@ -6,6 +6,7 @@ use super::*;
 use crate::config::{load_config_figment, Config, MutualConfig};
 use crate::kv::PortFlags;
 use crate::proxy::port_policy::is_port_allowed;
+use base64::Engine as _;
 use tempfile::TempDir;
 
 struct TestState {
@@ -88,6 +89,19 @@ async fn wg_config_is_written_owner_only() {
     );
 }
 
+/// Deterministic stand-in for a real WireGuard public key.
+///
+/// Registration and the wg-config renderer both reject keys `wg` itself would
+/// refuse, so test fixtures have to be 32 base64-encoded bytes like the real
+/// thing.
+fn test_pubkey(label: &str) -> String {
+    let mut key = [0u8; 32];
+    for (slot, byte) in key.iter_mut().zip(label.bytes().cycle()) {
+        *slot = byte;
+    }
+    base64::engine::general_purpose::STANDARD.encode(key)
+}
+
 fn policy(restrict: bool, ports: &[u16]) -> PortPolicy {
     PortPolicy {
         ports: ports
@@ -100,9 +114,12 @@ fn policy(restrict: bool, ports: &[u16]) -> PortPolicy {
 
 #[test]
 fn test_validate_wireguard_public_key() {
-    assert!(validate_wireguard_public_key("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").is_ok());
-    assert!(validate_wireguard_public_key("not-a-wireguard-key").is_err());
-    assert!(validate_wireguard_public_key("AQID").is_err());
+    assert!(crate::kv::import::validate_wg_public_key(
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    )
+    .is_ok());
+    assert!(crate::kv::import::validate_wg_public_key("not-a-wireguard-key").is_err());
+    assert!(crate::kv::import::validate_wg_public_key("AQID").is_err());
 }
 
 #[tokio::test]
@@ -137,7 +154,7 @@ async fn test_port_policy_restrict_mode_allows_listed_only() {
         .new_client_by_id(
             "inst-allow",
             "app-allow",
-            "pubkey-allow",
+            &test_pubkey("pubkey-allow"),
             "hash-allow",
             Some(policy(true, &[8080, 9090])),
         )
@@ -155,7 +172,7 @@ async fn test_port_policy_disabled_allows_all() {
         .new_client_by_id(
             "inst-open",
             "app-open",
-            "pubkey-open",
+            &test_pubkey("pubkey-open"),
             "hash-open",
             // restrict_mode = false, but with `ports` listed: still open.
             Some(policy(false, &[8080])),
@@ -174,7 +191,7 @@ async fn test_port_policy_unknown_fails_closed() {
         .new_client_by_id(
             "inst-legacy",
             "app-legacy",
-            "pubkey-legacy",
+            &test_pubkey("pubkey-legacy"),
             "hash-legacy",
             None,
         )
@@ -199,7 +216,7 @@ async fn test_admin_override_takes_precedence() {
         .new_client_by_id(
             "inst-ovr",
             "app-ovr",
-            "pubkey-ovr",
+            &test_pubkey("pubkey-ovr"),
             "hash-ovr",
             Some(policy(true, &[8080])),
         )
@@ -223,7 +240,7 @@ async fn test_admin_override_can_open_what_instance_restricts() {
         .new_client_by_id(
             "inst-lock",
             "app-lock",
-            "pubkey-lock",
+            &test_pubkey("pubkey-lock"),
             "hash-lock",
             Some(policy(true, &[])),
         )
@@ -245,7 +262,7 @@ async fn test_clear_admin_override_reverts_to_instance_policy() {
         .new_client_by_id(
             "inst-revert",
             "app-revert",
-            "pubkey-revert",
+            &test_pubkey("pubkey-revert"),
             "hash-revert",
             Some(policy(true, &[8080])),
         )
@@ -285,7 +302,7 @@ async fn test_admin_override_survives_compose_hash_change() {
         .new_client_by_id(
             "inst-upgrade",
             "app-upgrade",
-            "pubkey-upgrade",
+            &test_pubkey("pubkey-upgrade"),
             "hash-v1",
             Some(policy(true, &[8080])),
         )
@@ -301,7 +318,7 @@ async fn test_admin_override_survives_compose_hash_change() {
         .new_client_by_id(
             "inst-upgrade",
             "app-upgrade",
-            "pubkey-upgrade",
+            &test_pubkey("pubkey-upgrade"),
             "hash-v2",
             Some(policy(true, &[7070, 8080])),
         )
@@ -317,14 +334,26 @@ async fn test_config() {
     let state = create_test_state().await;
     let mut info = state
         .lock()
-        .new_client_by_id("test-id-0", "app-id-0", "test-pubkey-0", "", None)
+        .new_client_by_id(
+            "test-id-0",
+            "app-id-0",
+            &test_pubkey("test-pubkey-0"),
+            "",
+            None,
+        )
         .unwrap();
 
     info.reg_time = SystemTime::UNIX_EPOCH;
     insta::assert_debug_snapshot!(info);
     let mut info1 = state
         .lock()
-        .new_client_by_id("test-id-1", "app-id-1", "test-pubkey-1", "", None)
+        .new_client_by_id(
+            "test-id-1",
+            "app-id-1",
+            &test_pubkey("test-pubkey-1"),
+            "",
+            None,
+        )
         .unwrap();
     info1.reg_time = SystemTime::UNIX_EPOCH;
     insta::assert_debug_snapshot!(info1);
@@ -346,17 +375,17 @@ async fn gateway_top_n_batch_007_cache_health_and_invalidation() {
                 .new_client_by_id(
                     &format!("top-instance-{index}"),
                     "top-app",
-                    &format!("top-key-{index}"),
+                    &test_pubkey(&format!("top-key-{index}")),
                     "",
                     Some(policy(false, &[])),
                 )
                 .unwrap();
         }
         proxy.handshake_cache.set_for_test(BTreeMap::from([
-            ("top-key-0".to_string(), now),
-            ("top-key-1".to_string(), now - 1),
-            ("top-key-2".to_string(), now - 2),
-            ("top-key-3".to_string(), now - 3600),
+            (test_pubkey("top-key-0"), now),
+            (test_pubkey("top-key-1"), now - 1),
+            (test_pubkey("top-key-2"), now - 2),
+            (test_pubkey("top-key-3"), now - 3600),
         ]));
         let selected = proxy.select_top_n_hosts("top-app").unwrap();
         let selected_ids = selected
@@ -370,10 +399,10 @@ async fn gateway_top_n_batch_007_cache_health_and_invalidation() {
         assert_eq!(proxy.state.top_n.len(), 1);
 
         proxy.handshake_cache.set_for_test(BTreeMap::from([
-            ("top-key-0".to_string(), now - 3600),
-            ("top-key-1".to_string(), now - 3600),
-            ("top-key-2".to_string(), now - 3600),
-            ("top-key-3".to_string(), now),
+            (test_pubkey("top-key-0"), now - 3600),
+            (test_pubkey("top-key-1"), now - 3600),
+            (test_pubkey("top-key-2"), now - 3600),
+            (test_pubkey("top-key-3"), now),
         ]));
         let cached = proxy.select_top_n_hosts("top-app").unwrap();
         assert_eq!(
@@ -388,18 +417,18 @@ async fn gateway_top_n_batch_007_cache_health_and_invalidation() {
             .new_client_by_id(
                 "top-instance-4",
                 "top-app",
-                "top-key-4",
+                &test_pubkey("top-key-4"),
                 "",
                 Some(policy(false, &[])),
             )
             .unwrap();
         assert!(proxy.state.top_n.is_empty());
         proxy.handshake_cache.set_for_test(BTreeMap::from([
-            ("top-key-0".to_string(), now - 3600),
-            ("top-key-1".to_string(), now - 3600),
-            ("top-key-2".to_string(), now - 3600),
-            ("top-key-3".to_string(), now),
-            ("top-key-4".to_string(), now - 1),
+            (test_pubkey("top-key-0"), now - 3600),
+            (test_pubkey("top-key-1"), now - 3600),
+            (test_pubkey("top-key-2"), now - 3600),
+            (test_pubkey("top-key-3"), now),
+            (test_pubkey("top-key-4"), now - 1),
         ]));
         let refreshed = proxy.select_top_n_hosts("top-app").unwrap();
         assert_eq!(refreshed.len(), 2);
@@ -414,4 +443,77 @@ async fn gateway_top_n_batch_007_cache_health_and_invalidation() {
         assert_eq!(direct[0].instance_id, "top-instance-3");
         assert!(proxy.select_top_n_hosts("other-app").is_err());
     }
+}
+
+/// Write a record straight into the KV store, bypassing registration, the way
+/// a peer's sync round would.
+fn sync_from_peer(state: &TestState, instance_id: &str, ip: &str, public_key: &str) {
+    state
+        .kv_store
+        .sync_instance(
+            instance_id,
+            &InstanceData {
+                app_id: "peer-app".to_string(),
+                ip: ip.parse().unwrap(),
+                public_key: public_key.to_string(),
+                reg_time: 1,
+                port_policy: None,
+                port_policy_hash: String::new(),
+                admin_port_policy: None,
+            },
+        )
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_poisoned_peer_record_costs_only_its_own_instance() {
+    let state = create_test_state().await;
+    sync_from_peer(&state, "good", "10.0.0.41", &test_pubkey("good-key"));
+    // A key `wg` refuses makes `wg syncconf` reject the entire config file, so
+    // this record must never reach ProxyState or the rendered peer list.
+    sync_from_peer(
+        &state,
+        "poisoned",
+        "10.0.0.42",
+        "not-a-key\nEndpoint = 1.2.3.4:1",
+    );
+    // The gateway's own wg address, claimed by an instance.
+    sync_from_peer(
+        &state,
+        "steals-gateway-ip",
+        "10.0.0.1",
+        &test_pubkey("other"),
+    );
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+
+    let proxy = state.lock();
+    assert!(proxy.state.instances.contains_key("good"));
+    assert!(!proxy.state.instances.contains_key("poisoned"));
+    assert!(!proxy.state.instances.contains_key("steals-gateway-ip"));
+
+    let rendered = proxy.generate_wg_config().unwrap();
+    assert!(rendered.contains(&test_pubkey("good-key")));
+    assert!(!rendered.contains("Endpoint = 1.2.3.4:1"));
+}
+
+#[tokio::test]
+async fn a_cvm_registered_on_another_node_becomes_a_wg_peer_here() {
+    let state = create_test_state().await;
+    // What a peer node allocated out of its own slice. `test-run/cluster.sh`
+    // and the e2e configs give each node a /24 of its own, so a peer's address
+    // is outside this node's pool *and* outside its interface network — yet
+    // every CVM is handed every gateway as a WireGuard server, so this node
+    // still has to carry it.
+    let peer_ip = "10.0.42.5";
+    assert!(!state.config.wg.is_valid_client_ip(peer_ip.parse().unwrap()));
+    sync_from_peer(&state, "peer-node-cvm", peer_ip, &test_pubkey("far"));
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+
+    let proxy = state.lock();
+    assert!(
+        proxy.state.instances.contains_key("peer-node-cvm"),
+        "refusing a peer node's instance leaves each gateway serving only its own CVMs"
+    );
+    let rendered = proxy.generate_wg_config().unwrap();
+    assert!(rendered.contains(peer_ip), "peer missing from wg.conf");
 }

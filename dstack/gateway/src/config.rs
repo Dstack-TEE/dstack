@@ -31,6 +31,48 @@ impl WgConfig {
     fn validate(&self) -> Result<()> {
         validate(self.ip, &self.reserved_net, self.client_ip_range)
     }
+
+    /// Whether this gateway may allocate `ip` to a CVM registering with it.
+    ///
+    /// Narrower than [`Self::is_routable_client_ip`]: `client_ip_range` is this
+    /// node's *share* of the cluster's address space, and handing out an address
+    /// from outside it would collide with whichever node owns that share.
+    pub fn is_valid_client_ip(&self, ip: Ipv4Addr) -> bool {
+        self.client_ip_range.contains(&ip) && self.is_routable_client_ip(ip)
+    }
+
+    /// Whether `ip` may appear as a WireGuard peer address on this gateway.
+    ///
+    /// Deliberately says nothing about *which pool* the address came from. A
+    /// CVM registers with one gateway but is handed every gateway as a
+    /// WireGuard server, so each node carries peers for the CVMs registered on
+    /// the other nodes — and each node allocates from its own
+    /// `client_ip_range`. Nothing in this node's config describes the other
+    /// nodes' pools, and the deployments do not even agree on a shape that
+    /// could be inferred: `dstack-app/deploy-to-vmm.sh` puts every pool inside
+    /// one /16 that each interface covers, while `test-run/cluster.sh` and the
+    /// e2e configs give each node a /24 that no other node's interface covers.
+    /// Judging a replicated address by local topology refuses legitimate peers
+    /// under the second shape, so this is limited to what a node can assert on
+    /// its own: an ordinary unicast address that is not one of *this* gateway's.
+    ///
+    /// What keeps the peer list coherent is not this check but the uniqueness
+    /// pass in `kv::import` — no two instances may claim the same address —
+    /// which holds cluster-wide because it runs over the whole KV contents.
+    pub fn is_routable_client_ip(&self, ip: Ipv4Addr) -> bool {
+        if ip.is_unspecified() || ip.is_loopback() || ip.is_multicast() || ip.is_broadcast() {
+            return false;
+        }
+        // This gateway's own addresses: handing them to a peer would point the
+        // interface's traffic into a tunnel.
+        if self.ip.addr() == ip || self.ip.broadcast() == ip {
+            return false;
+        }
+        if self.reserved_net.iter().any(|net| net.contains(&ip)) {
+            return false;
+        }
+        true
+    }
 }
 
 fn validate(ip: Ipv4Net, reserved_net: &[Ipv4Net], client_ip_range: Ipv4Net) -> Result<()> {

@@ -6,7 +6,6 @@ use dstack_gateway_rpc::{AcmeInfoResponse, ProxyAccelStatus, StatusResponse};
 use rinja::Template;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{btree_map::Iter, BTreeMap},
     net::Ipv4Addr,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -20,38 +19,6 @@ use crate::kv::PortPolicy;
 mod filters {
     pub fn hex(data: impl AsRef<[u8]>) -> rinja::Result<String> {
         Ok(hex::encode(data))
-    }
-}
-
-pub struct MapValues<'a, K, V>(pub &'a BTreeMap<K, V>);
-impl<K, V> Copy for MapValues<'_, K, V> {}
-impl<K, V> Clone for MapValues<'_, K, V> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-impl<'a, K, V> From<&'a BTreeMap<K, V>> for MapValues<'a, K, V> {
-    fn from(map: &'a BTreeMap<K, V>) -> Self {
-        MapValues(map)
-    }
-}
-
-pub struct MapValuesIter<'a, K, V>(Iter<'a, K, V>);
-
-impl<'a, K, V> IntoIterator for MapValues<'a, K, V> {
-    type Item = &'a V;
-    type IntoIter = MapValuesIter<'a, K, V>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        MapValuesIter(self.0.iter())
-    }
-}
-
-impl<'a, K, V> Iterator for MapValuesIter<'a, K, V> {
-    type Item = &'a V;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(|(_, v)| v)
     }
 }
 
@@ -155,12 +122,22 @@ impl<C: Counting> Drop for EnteredCounter<C> {
     }
 }
 
+/// One `[Peer]` stanza of the rendered WireGuard config.
+///
+/// Built by the caller rather than borrowed straight from the instance table so
+/// that a record `wg` would refuse can be left out — the template renders with
+/// `escape = "none"`, and `wg syncconf` rejects the whole file on one bad line.
+pub struct WgPeer<'a> {
+    pub public_key: &'a str,
+    pub ip: Ipv4Addr,
+}
+
 #[derive(Template)]
 #[template(path = "wg.conf", escape = "none")]
 pub struct WgConf<'a> {
     pub private_key: &'a str,
     pub listen_port: u16,
-    pub peers: MapValues<'a, String, InstanceInfo>,
+    pub peers: Vec<WgPeer<'a>>,
 }
 
 #[derive(Template)]
