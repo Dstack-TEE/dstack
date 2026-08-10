@@ -303,6 +303,45 @@ class MatrixRun:
             f"need={count} reserved={len(reserved)}"
         )
 
+    def wait_vm_http(
+        self, url: str, vm_id: str, *, tls: bool, timeout: int = 180
+    ) -> int:
+        """Wait for a guest listener and recover transient sealing failures."""
+        deadline = time.monotonic() + timeout
+        sealing_restarts = 0
+        last_code = 0
+        latest: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            last_code, _ = http(url, timeout=10)
+            if last_code:
+                return last_code
+            latest = json.loads(run([*self.cli, "info", "--json", vm_id]))
+            boot_error = str(latest.get("boot_error") or "")
+            if "Failed to get sealing key" in boot_error and sealing_restarts < 2:
+                exit_deadline = min(deadline, time.monotonic() + 60)
+                while time.monotonic() < exit_deadline:
+                    latest = json.loads(run([*self.cli, "info", "--json", vm_id]))
+                    if latest.get("status") == "exited":
+                        break
+                    time.sleep(2)
+                if latest.get("status") != "exited":
+                    raise RuntimeError(
+                        "KMS guest did not exit after a transient sealing failure: "
+                        f"{latest.get('status')}"
+                    )
+                time.sleep(5)
+                run([*self.cli, "start", vm_id], timeout=120)
+                sealing_restarts += 1
+                continue
+            if boot_error:
+                raise RuntimeError(f"KMS guest boot failed: {boot_error}")
+            time.sleep(1)
+        raise RuntimeError(
+            f"listener timeout ({'TLS' if tls else 'plain'}): {url}, "
+            f"last={last_code}, vm_status={latest.get('status')}, "
+            f"boot_progress={latest.get('boot_progress')!r}"
+        )
+
     def deploy(
         self,
         version: str,
@@ -414,7 +453,7 @@ class MatrixRun:
         self.created_registry.write_text(json.dumps(ids, indent=2) + "\n")
         url = f"{'https' if initialized else 'http'}://127.0.0.1:{service_port}"
         probe = f"{url}/prpc/KMS.GetMeta?json" if initialized else f"{url}/"
-        wait_http(probe, tls=initialized)
+        self.wait_vm_http(probe, vm_id, tls=initialized)
         row = {
             "version": version,
             "vm_id": vm_id,

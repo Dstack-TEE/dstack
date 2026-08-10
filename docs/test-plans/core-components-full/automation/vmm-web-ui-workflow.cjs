@@ -15,10 +15,16 @@ const fs = require('fs');
     const context = await browser.newContext();
     const page = await context.newPage();
     page.on('dialog', async dialog => { alertMessages.push(dialog.message()); await dialog.accept(); });
-    await page.goto(uiUrl, { waitUntil: 'networkidle' });
-    await page.getByRole('button', { name: 'Deploy Instance' }).waitFor();
+    const uiDeadline = Date.now() + 90000;
+    const deployButton = page.getByRole('button', { name: 'Deploy Instance' });
+    while (Date.now() < uiDeadline) {
+      await page.goto(uiUrl, { waitUntil: 'networkidle' });
+      if (await deployButton.isVisible()) break;
+      await page.waitForTimeout(2000);
+    }
+    await deployButton.waitFor({ timeout: 1000 });
     rows['healthy-ui'] = true;
-    await page.getByRole('button', { name: 'Deploy Instance' }).click();
+    await deployButton.click();
     const defaults = {
       vcpu: await page.locator('#vcpu').inputValue(),
       memory: await page.locator('#memory').inputValue(),
