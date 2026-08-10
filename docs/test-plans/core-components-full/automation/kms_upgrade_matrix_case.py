@@ -2147,9 +2147,15 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             expect_policy_denial=False,
             kms_encrypt_row=healthy,
         )
-        stalled_info = json.loads(
-            run([*matrix.cli, "info", "--json", stalled["vm_id"]])
-        )
+        boot_error_deadline = time.monotonic() + 120
+        stalled_info: dict[str, Any] = {}
+        while time.monotonic() < boot_error_deadline:
+            stalled_info = json.loads(
+                run([*matrix.cli, "info", "--json", stalled["vm_id"]])
+            )
+            if str(stalled_info.get("boot_error") or "").strip():
+                break
+            time.sleep(1)
         stalled_status = str(stalled_info.get("status", "")).lower()
         boot_errors = [
             event
@@ -2158,9 +2164,16 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
         ]
         if stalled_status not in {"running", "started", "exited"}:
             raise RuntimeError(f"KMS outage left an unsafe VM state: {stalled_info}")
-        if len(boot_errors) != 1:
+        aggregated_boot_error = str(stalled_info.get("boot_error") or "").strip()
+        if not aggregated_boot_error or len(boot_errors) != 1:
             raise RuntimeError(
-                f"KMS outage did not produce one bounded boot failure: {boot_errors}"
+                "KMS outage did not produce one bounded boot failure: "
+                f"boot_error={aggregated_boot_error!r}, events={boot_errors}"
+            )
+        if str(boot_errors[0].get("body") or "").strip() != aggregated_boot_error:
+            raise RuntimeError(
+                "KMS outage boot failure fields disagreed: "
+                f"boot_error={aggregated_boot_error!r}, event={boot_errors[0]}"
             )
         healthy_route, restored = matrix.configure_endpoint_proxy(
             0, healthy, enabled=True
