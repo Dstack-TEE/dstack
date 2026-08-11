@@ -475,13 +475,6 @@ fn sync_from_peer_at(
         .unwrap();
 }
 
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-}
-
 #[tokio::test]
 async fn a_poisoned_peer_record_costs_only_its_own_instance() {
     let state = create_test_state().await;

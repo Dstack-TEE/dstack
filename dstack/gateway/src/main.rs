@@ -32,6 +32,7 @@ mod main_service;
 mod models;
 mod pp;
 mod proxy;
+mod time;
 mod web_routes;
 
 #[global_allocator]

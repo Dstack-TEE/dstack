@@ -35,6 +35,7 @@ use crate::{
     main_service::Proxy,
     models::PortPolicyView,
     proxy::{stats::accel_status, NUM_CONNECTIONS},
+    time::now_secs,
 };
 
 pub struct AdminRpcHandler {
@@ -750,13 +751,6 @@ impl RpcCall<Proxy> for AdminRpcHandler {
 }
 
 // ==================== Helper Functions ====================
-
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
 
 fn generate_cred_id() -> String {
     use std::time::SystemTime;

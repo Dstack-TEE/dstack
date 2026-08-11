@@ -30,8 +30,9 @@ use std::net::Ipv4Addr;
 use anyhow::{ensure, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 
-use super::{now_secs, InstanceData, LoadedInstances, MAX_CLOCK_DRIFT_SECS};
+use super::{InstanceData, LoadedInstances, MAX_CLOCK_DRIFT_SECS};
 use crate::config::WgConfig;
+use crate::time::now_secs;
 
 /// A WireGuard public key is 32 raw bytes, base64-encoded by `wg`.
 const WG_PUBLIC_KEY_BYTES: usize = 32;

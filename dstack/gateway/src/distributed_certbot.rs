@@ -8,7 +8,7 @@
 //! with dynamic DNS credential configuration and attestation storage.
 
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use certbot::{AcmeClient, Dns01Client};
@@ -23,6 +23,7 @@ use crate::kv::{
     AcmeAttestation, CertAttestation, CertCredentials, CertData, DnsCredential, DnsProvider,
     KvStore, ZtDomainConfig,
 };
+use crate::time::now_secs;
 
 /// Lock timeout for certificate renewal (10 minutes)
 const RENEW_LOCK_TIMEOUT_SECS: u64 = 600;
@@ -725,13 +726,6 @@ fn dns_credential_for(kv_store: &KvStore, config: &ZtDomainConfig) -> Result<Dns
             .get_default_dns_credential()?
             .context("no default DNS credential configured")
     }
-}
-
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }
 
 fn get_cert_expiry(cert_pem: &str) -> Option<u64> {

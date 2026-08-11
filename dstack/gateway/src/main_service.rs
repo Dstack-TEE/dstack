@@ -45,6 +45,7 @@ use crate::{
     },
     models::{InstanceInfo, PortPolicyView, WgConf, WgPeer},
     proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo, AppAddressResolver},
+    time::{decode_ts, encode_ts, now_secs},
 };
 
 mod auth_client;
@@ -302,10 +303,7 @@ impl ProxyInner {
             })?;
             let key_pem = std::fs::read_to_string(cert_key)
                 .with_context(|| format!("failed to read proxy cert_key {}", cert_key.display()))?;
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
+            let now = now_secs();
             let cert_data = CertData {
                 cert_pem,
                 key_pem,
@@ -1527,10 +1525,7 @@ impl ProxyState {
         }
 
         // Update this node's last_seen in KvStore
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+        let now = now_secs();
         if let Err(err) = self
             .kv_store
             .sync_node_last_seen(self.config.sync.node_id, now)
@@ -1594,16 +1589,6 @@ impl ProxyState {
             })
             .collect()
     }
-}
-
-fn decode_ts(ts: u64) -> SystemTime {
-    UNIX_EPOCH
-        .checked_add(Duration::from_secs(ts))
-        .unwrap_or(UNIX_EPOCH)
-}
-
-pub(crate) fn encode_ts(ts: SystemTime) -> u64 {
-    ts.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 pub struct RpcHandler {

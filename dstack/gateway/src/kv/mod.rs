@@ -44,6 +44,8 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+
+use crate::time::now_secs;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use wavekv::{node::NodeState, types::NodeId, Node};
@@ -439,13 +441,6 @@ pub fn gunzip_bounded(data: &[u8], limit: usize) -> Result<Vec<u8>> {
 /// 5 minutes is well above the drift between NTP-synced hosts and well below
 /// the recycle timeout.
 pub const MAX_CLOCK_DRIFT_SECS: u64 = 300;
-
-fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
 
 /// Drop observations timestamped beyond [`MAX_CLOCK_DRIFT_SECS`] into the
 /// future, logging once per call with the number dropped.
@@ -961,10 +956,7 @@ impl KvStore {
     }
 
     pub fn update_peer_last_seen(&self, peer_id: NodeId) {
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+        let ts = now_secs();
         let key = keys::last_seen_node(peer_id, self.my_node_id);
         if let Err(e) = self.ephemeral.write().put_encoded(key, &ts) {
             warn!("failed to update peer {peer_id} last_seen: {e}");
@@ -1250,10 +1242,7 @@ impl KvStore {
     /// Try to acquire certificate renew lock
     /// Returns true if lock acquired, false if already locked by another node
     pub fn try_acquire_cert_lock(&self, domain: &str, lock_timeout_secs: u64) -> bool {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = now_secs();
 
         if let Some(existing) = self.get_cert_lock(domain) {
             // Check if lock is still valid (not expired)
@@ -1291,10 +1280,7 @@ impl KvStore {
     /// replication latency; it is not mutual exclusion. A crashed holder is
     /// covered by the timeout.
     pub fn try_acquire_rotation_lock(&self, lock_timeout_secs: u64) -> Option<CertRenewLock> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = now_secs();
 
         if let Some(existing) = self.get_rotation_lock() {
             // Check if lock is still valid (not expired)
