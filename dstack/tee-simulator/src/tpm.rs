@@ -9,6 +9,7 @@ use std::{
     io::{Read, Write},
     os::{
         fd::{AsRawFd, FromRawFd},
+        unix::fs::{FileTypeExt as _, MetadataExt as _},
         unix::net::UnixStream,
     },
     path::Path,
@@ -65,6 +66,50 @@ fn command(program: &str, args: &[&str]) -> Result<()> {
         .with_context(|| format!("failed to execute {program}"))?;
     if !status.success() {
         bail!("{program} failed with status {status}");
+    }
+    Ok(())
+}
+
+fn device_node_matches(path: &Path, major: u64, minor: u64) -> Result<bool> {
+    let metadata = match fs_err::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    Ok(metadata.file_type().is_char_device()
+        && nix::sys::stat::major(metadata.rdev()) == major
+        && nix::sys::stat::minor(metadata.rdev()) == minor)
+}
+
+fn ensure_device_node(path: &Path, major: &str, minor: &str) -> Result<()> {
+    let expected_major = major.parse().context("invalid device major")?;
+    let expected_minor = minor.parse().context("invalid device minor")?;
+    if device_node_matches(path, expected_major, expected_minor)? {
+        return Ok(());
+    }
+    match fs_err::symlink_metadata(path) {
+        Ok(_) => {
+            // Recheck in case udev published the expected node between the two
+            // metadata calls above.
+            if device_node_matches(path, expected_major, expected_minor)? {
+                return Ok(());
+            }
+            bail!(
+                "{} exists but is not character device {expected_major}:{expected_minor}",
+                path.display()
+            );
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    let path_text = path.to_str().context("device path is not UTF-8")?;
+    if let Err(error) = command("mknod", &[path_text, "c", major, minor]) {
+        // udev can publish the node after the existence check but before
+        // mknod. Accept only the exact character device registered by sysfs.
+        if device_node_matches(path, expected_major, expected_minor)? {
+            return Ok(());
+        }
+        return Err(error);
     }
     Ok(())
 }
@@ -288,9 +333,6 @@ fn install_gcp_event_log(bytes: &[u8]) -> Result<()> {
     fs_err::write(event_log, bytes).context("failed to install simulated TPM event log")
 }
 fn create_tpm_device_node() -> Result<()> {
-    if Path::new("/dev/tpm0").exists() {
-        return Ok(());
-    }
     let sys_dev = Path::new("/sys/class/tpm/tpm0/dev");
     if !sys_dev.exists() {
         return Ok(());
@@ -300,7 +342,7 @@ fn create_tpm_device_node() -> Result<()> {
         .trim()
         .split_once(':')
         .context("invalid /sys/class/tpm/tpm0/dev")?;
-    command("mknod", &["/dev/tpm0", "c", major, minor])
+    ensure_device_node(Path::new("/dev/tpm0"), major, minor)
 }
 
 fn provision_nv(index: &str, contents: &Path) -> Result<()> {
@@ -397,7 +439,7 @@ pub fn run_nitro_vtpm(runtime_dir: &Path, config: &TeeSimulatorConfig) -> Result
         .trim()
         .split_once(':')
         .context("invalid vTPM device number")?;
-    command("mknod", &["/dev/tpm0", "c", major, minor])?;
+    ensure_device_node(Path::new("/dev/tpm0"), major, minor)?;
     sd_notify::notify(true, &[sd_notify::NotifyState::Ready])?;
     let result = proxy_thread
         .join()

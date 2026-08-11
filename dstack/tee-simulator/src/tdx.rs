@@ -82,11 +82,13 @@ impl SimulatorState {
         let report_data: [u8; 64] = report_data
             .try_into()
             .map_err(|_| anyhow::anyhow!("inblob must be exactly 64 bytes"))?;
-        self.outblob = self.make_quote(report_data)?;
-        self.generation = self
+        let generation = self
             .generation
             .checked_add(1)
             .context("tsm generation overflow")?;
+        let outblob = self.make_quote(report_data)?;
+        self.outblob = outblob;
+        self.generation = generation;
         Ok(())
     }
 
@@ -589,6 +591,39 @@ mod tests {
         assert!(state.extend_rtmr(3, &[0u8; 48]).is_ok());
         assert!(state.extend_rtmr(4, &[0u8; 48]).is_err());
         assert!(state.extend_rtmr(3, &[0u8; 47]).is_err());
+    }
+
+    #[test]
+    fn state_updates_are_failure_atomic() {
+        let mut state = SimulatorState::new(
+            Arc::new(TdxGenerator::from_seed([0x71; 32]).unwrap()),
+            CCEL_FIXTURE,
+            None,
+        )
+        .unwrap();
+        let original_quote = state.outblob.clone();
+        let original_rtmr3 = state.rtmrs[3];
+
+        assert!(state.request_quote(&[0x11; 63]).is_err());
+        assert_eq!(state.generation, 0);
+        assert_eq!(state.outblob, original_quote);
+
+        assert!(state.extend_rtmr(3, &[0x22; 47]).is_err());
+        assert_eq!(state.rtmrs[3], original_rtmr3);
+        assert!(state.extend_rtmr(1, &[0x22; 48]).is_err());
+        assert_eq!(state.rtmrs[1], replay_boot_rtmrs(CCEL_FIXTURE).unwrap()[1]);
+
+        state.generation = i64::MAX;
+        assert!(state.request_quote(&[0x33; 64]).is_err());
+        assert_eq!(state.generation, i64::MAX);
+        assert_eq!(state.outblob, original_quote);
+        state.generation = 0;
+
+        state.request_quote(&[0x33; 64]).unwrap();
+        assert_eq!(state.generation, 1);
+        assert_ne!(state.outblob, original_quote);
+        state.extend_rtmr(3, &[0x44; 48]).unwrap();
+        assert_ne!(state.rtmrs[3], original_rtmr3);
     }
 
     #[test]
