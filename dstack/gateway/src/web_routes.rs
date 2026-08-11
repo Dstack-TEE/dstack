@@ -48,11 +48,12 @@ pub fn wavekv_sync_routes() -> Vec<Route> {
 mod tests {
     use super::*;
 
-    /// The scrape output names domains, node ids and instance counts, so the
-    /// endpoint belongs on the authenticated admin listener and nowhere else.
-    /// `main.rs` mounts `routes()` on the admin rocket, `health_routes()` on
-    /// the public and debug ones, and `wavekv_sync_routes()` on the public one.
-    #[test]
+    /// The scrape output names domains, node ids and instance counts, so `/metrics`
+    /// must be part of the authenticated admin route set (`routes()`) and must not
+    /// be included in the route sets intended for non-admin listeners.
+    ///
+    /// This test checks the route-set membership only; it does not inspect Rocket
+    /// listener wiring in `main.rs`.
     fn metrics_is_mounted_on_the_admin_listener_only() {
         let mounted = |set: Vec<Route>| set.iter().any(|route| route.uri.path() == "/metrics");
         assert!(mounted(routes()));
