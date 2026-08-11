@@ -81,6 +81,15 @@ fn pick_cid_start_from(
     candidates: impl Iterator<Item = u32>,
 ) -> Result<u32> {
     if let Some(start) = explicit {
+        // A start so high that its pool runs off the end of the CID space. The
+        // VMM rejects this too (`Config::validate`), but preflight is where it
+        // belongs: nothing has been written to the host yet.
+        if start.checked_add(CID_POOL_SIZE).is_none() {
+            bail!(
+                "--cid-start {start} leaves no room for a {CID_POOL_SIZE}-wide pool \
+                 (it overflows u32)"
+            );
+        }
         // An explicit choice is checked against the pool it actually asks for,
         // not the stride: the operator picked the number, so don't demand
         // growth headroom they didn't ask for.
@@ -177,6 +186,14 @@ mod tests {
             .to_string();
         assert!(err.contains("--cid-start 40500 overlaps"), "{err}");
         assert!(err.contains("e.g. --cid-start 60000"), "{err}");
+    }
+
+    #[test]
+    fn explicit_is_refused_when_its_pool_runs_off_the_end_of_the_cid_space() {
+        let err = pick_cid_start_from(Some(u32::MAX - 10), None, &[], [60_000].into_iter())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("leaves no room for a 1000-wide pool"), "{err}");
     }
 
     #[test]
