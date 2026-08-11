@@ -43,8 +43,8 @@ pub trait CertExt {
         let Some(app_info_bytes) = self.get_extension_bytes(PHALA_RATLS_APP_INFO)? else {
             return Ok(None);
         };
-        let app_info =
-            rmp_serde::from_slice(&app_info_bytes).context("Failed to decode app info as json")?;
+        let app_info = rmp_serde::from_slice(&app_info_bytes)
+            .context("failed to decode app info as msgpack")?;
         Ok(app_info)
     }
 }

@@ -382,8 +382,13 @@ impl<Key> CertRequest<'_, Key> {
             add_ext(&mut params, PHALA_RATLS_APP_ID, app_id);
         }
         if let Some(app_info) = self.app_info {
+            // Encode as a MessagePack map keyed by field name rather than a positional
+            // array. Field-name keys let readers tolerate fields they do not know, so
+            // appending a field to `AppInfo` no longer breaks peers built against an
+            // older definition. Decoding accepts both forms, so certificates issued by
+            // older releases (positional) stay readable.
             let app_info_bytes =
-                rmp_serde::to_vec(&app_info).context("Failed to serialize app info")?;
+                rmp_serde::to_vec_named(&app_info).context("failed to serialize app info")?;
             add_ext(&mut params, PHALA_RATLS_APP_INFO, app_info_bytes);
         }
         if let Some(usage) = self.special_usage {
@@ -758,5 +763,136 @@ mod tests {
         let actual = hex::encode(csr.encode());
         let expected = "44706c65617365207369676e20636572743a0c0102030040746573742e6578616d706c652e636f6d000100010000000000040900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
         assert_eq!(actual, expected);
+    }
+
+    /// `AppInfo` travels inside RA-TLS certificates, so its MessagePack encoding is a
+    /// cross-release wire contract: a certificate issued by one build gets parsed by
+    /// peers built from another, and certificates outlive the process that issued them.
+    ///
+    /// Positional (array) encoding made that contract the *field order and count*, so
+    /// appending a field broke every peer that had not been rebuilt. Encoding as a map
+    /// keyed by field name makes it the *field names*, which readers can skip when
+    /// unknown. These tests pin both directions across the v0.5.11 boundary.
+    mod app_info_encoding {
+        use super::*;
+        use serde::{Deserialize, Serialize};
+        use serde_human_bytes as hex_bytes;
+
+        /// The exact `AppInfo` layout shipped in v0.5.6 through v0.5.11: eight fields,
+        /// no `init_script_hashes`. Stands in for a peer built against those releases.
+        #[derive(Debug, Serialize, Deserialize)]
+        struct LegacyAppInfo {
+            #[serde(with = "hex_bytes")]
+            app_id: Vec<u8>,
+            #[serde(with = "hex_bytes")]
+            compose_hash: Vec<u8>,
+            #[serde(with = "hex_bytes")]
+            instance_id: Vec<u8>,
+            #[serde(with = "hex_bytes")]
+            device_id: Vec<u8>,
+            #[serde(with = "hex_bytes")]
+            mr_system: [u8; 32],
+            #[serde(with = "hex_bytes")]
+            mr_aggregated: [u8; 32],
+            #[serde(with = "hex_bytes")]
+            os_image_hash: Vec<u8>,
+            #[serde(with = "hex_bytes")]
+            key_provider_info: Vec<u8>,
+        }
+
+        /// A v0.5.11 app-info extension body: `LegacyAppInfo` in positional MessagePack,
+        /// exactly as `rmp_serde::to_vec` emitted it. Leading `0x98` is a fixarray of 8.
+        const LEGACY_POSITIONAL_APP_INFO: &str = concat!(
+            "98c403a1a2a3c402b1b2c402c1c2c401d1c42051515151515151515151515151",
+            "51515151515151515151515151515151515151c4206262626262626262626262",
+            "626262626262626262626262626262626262626262c402e1e2c4036b6d73",
+        );
+
+        /// True when `bytes` opens with a MessagePack map header of any width. The
+        /// header widens from fixmap to map16 at 16 entries, so matching on the fixmap
+        /// range alone would start failing precisely when `AppInfo` grows past 15
+        /// fields — the case this encoding exists to support.
+        fn starts_with_msgpack_map(bytes: &[u8]) -> bool {
+            matches!(bytes.first().copied(), Some(0x80..=0x8f | 0xde | 0xdf))
+        }
+
+        fn sample_app_info() -> AppInfo {
+            AppInfo {
+                app_id: vec![0xa1, 0xa2, 0xa3],
+                compose_hash: vec![0xb1, 0xb2],
+                instance_id: vec![0xc1, 0xc2],
+                device_id: vec![0xd1],
+                mr_system: [0x51; 32],
+                mr_aggregated: [0x62; 32],
+                os_image_hash: vec![0xe1, 0xe2],
+                key_provider_info: b"kms".to_vec(),
+                init_script_hashes: Some(vec![[0xf1; 32].to_vec(), [0xf2; 32].to_vec()]),
+            }
+        }
+
+        /// Old certificate, new reader. Certificates issued before this change carry a
+        /// positional array and must keep parsing; fields added since default in.
+        #[test]
+        fn legacy_positional_app_info_still_decodes() {
+            let bytes = hex::decode(LEGACY_POSITIONAL_APP_INFO).unwrap();
+            let decoded: AppInfo = rmp_serde::from_slice(&bytes).unwrap();
+
+            assert_eq!(decoded.app_id, vec![0xa1, 0xa2, 0xa3]);
+            assert_eq!(decoded.compose_hash, vec![0xb1, 0xb2]);
+            assert_eq!(decoded.instance_id, vec![0xc1, 0xc2]);
+            assert_eq!(decoded.device_id, vec![0xd1]);
+            assert_eq!(decoded.mr_system, [0x51; 32]);
+            assert_eq!(decoded.mr_aggregated, [0x62; 32]);
+            assert_eq!(decoded.os_image_hash, vec![0xe1, 0xe2]);
+            assert_eq!(decoded.key_provider_info, b"kms".to_vec());
+            assert_eq!(
+                decoded.init_script_hashes, None,
+                "a field absent from the legacy layout must decode as unbound, not fail"
+            );
+        }
+
+        /// New certificate, old reader. This is the direction positional encoding broke:
+        /// a v0.5.11 peer decoding a certificate issued by this build.
+        #[test]
+        fn named_app_info_decodes_against_legacy_field_set() {
+            let encoded = rmp_serde::to_vec_named(&sample_app_info()).unwrap();
+
+            assert!(
+                starts_with_msgpack_map(&encoded),
+                "app info must encode as a MessagePack map, not a positional array"
+            );
+
+            let legacy: LegacyAppInfo = rmp_serde::from_slice(&encoded)
+                .expect("a reader without init_script_hashes must skip it, not fail");
+            assert_eq!(legacy.app_id, vec![0xa1, 0xa2, 0xa3]);
+            assert_eq!(legacy.mr_system, [0x51; 32]);
+            assert_eq!(legacy.key_provider_info, b"kms".to_vec());
+        }
+
+        /// The encoding change must not drop or reshape any field on the way through a
+        /// real certificate extension.
+        #[test]
+        fn app_info_survives_a_certificate_round_trip() {
+            let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+            let app_info = sample_app_info();
+            let cert = CertRequest::builder()
+                .key(&key)
+                .subject("test.example.com")
+                .app_info(&app_info)
+                .build()
+                .self_signed()
+                .unwrap();
+
+            let decoded = cert.get_app_info().unwrap().expect("app info extension");
+            assert_eq!(decoded.app_id, app_info.app_id);
+            assert_eq!(decoded.compose_hash, app_info.compose_hash);
+            assert_eq!(decoded.instance_id, app_info.instance_id);
+            assert_eq!(decoded.device_id, app_info.device_id);
+            assert_eq!(decoded.mr_system, app_info.mr_system);
+            assert_eq!(decoded.mr_aggregated, app_info.mr_aggregated);
+            assert_eq!(decoded.os_image_hash, app_info.os_image_hash);
+            assert_eq!(decoded.key_provider_info, app_info.key_provider_info);
+            assert_eq!(decoded.init_script_hashes, app_info.init_script_hashes);
+        }
     }
 }
