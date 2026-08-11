@@ -54,6 +54,7 @@ mod tests {
     ///
     /// This test checks the route-set membership only; it does not inspect Rocket
     /// listener wiring in `main.rs`.
+    #[test]
     fn metrics_is_mounted_on_the_admin_listener_only() {
         let mounted = |set: Vec<Route>| set.iter().any(|route| route.uri.path() == "/metrics");
         assert!(mounted(routes()));
