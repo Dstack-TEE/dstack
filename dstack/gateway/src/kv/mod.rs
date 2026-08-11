@@ -1131,6 +1131,7 @@ impl KvStore {
                 match decode(value) {
                     Ok(att) => Some(att),
                     Err(e) => {
+                        crate::metrics::record_decode_failure(key);
                         warn!("failed to decode attestation for key {key}: {e:?}");
                         None
                     }

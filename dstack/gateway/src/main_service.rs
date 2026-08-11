@@ -1172,6 +1172,20 @@ impl ProxyState {
     }
 
     pub(crate) fn reconfigure(&mut self) -> Result<()> {
+        // Every way out of here that is not a clean apply leaves the data plane
+        // on the routing table it already had, so they all feed one counter --
+        // the early returns included. A config that cannot be rendered or
+        // written never reaches `wg` at all, and both call sites of this
+        // function only log the `Err`, so a full disk would otherwise look
+        // exactly like having nothing to apply.
+        let result = self.reconfigure_inner();
+        if result.is_err() {
+            crate::metrics::record_wg_reconfigure(false);
+        }
+        result
+    }
+
+    fn reconfigure_inner(&mut self) -> Result<()> {
         let wg_config = self.generate_wg_config()?;
         // the rendered config carries the interface's WireGuard private key.
         safe_write_with_mode(&self.config.wg.config_path, wg_config, 0o600)
@@ -1182,13 +1196,15 @@ impl ProxyState {
 
         match cmd!(wg syncconf $ifname $config_path) {
             Ok(_) => {
-                crate::metrics::record_wg_syncconf(true);
+                crate::metrics::record_wg_reconfigure(true);
                 info!("wg config updated");
             }
             Err(err) => {
-                // Rejected configs are only logged, so the counter is the one
-                // signal that routing updates stopped reaching the data plane.
-                crate::metrics::record_wg_syncconf(false);
+                // `wg syncconf` rejects the whole file when one peer stanza is
+                // bad, and this stays `Ok` for the caller as it always has, so
+                // the counter is the only signal that routing updates stopped
+                // reaching the data plane.
+                crate::metrics::record_wg_reconfigure(false);
                 error!("failed to set wg config: {err:?}");
             }
         }

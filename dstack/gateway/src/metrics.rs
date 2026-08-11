@@ -43,8 +43,8 @@ const OTHER_PREFIX: &str = "other";
 
 static DECODE_FAILURES: [AtomicU64; METERED_PREFIXES.len() + 1] =
     [const { AtomicU64::new(0) }; METERED_PREFIXES.len() + 1];
-static WG_SYNCCONF_TOTAL: AtomicU64 = AtomicU64::new(0);
-static WG_SYNCCONF_FAILURES: AtomicU64 = AtomicU64::new(0);
+static WG_RECONFIGURE_TOTAL: AtomicU64 = AtomicU64::new(0);
+static WG_RECONFIGURE_FAILURES: AtomicU64 = AtomicU64::new(0);
 static KV_PERSIST_FAILURES: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
@@ -94,13 +94,16 @@ pub(crate) fn record_decode_failure(key: &str) {
 
 /// Record the outcome of pushing a new WireGuard config.
 ///
-/// `wg syncconf` rejects the *whole* file when one peer stanza is bad, and the
-/// call site can only log it, so without a counter a gateway that stopped
+/// Covers the whole of `reconfigure()`, not just `wg syncconf`: rendering and
+/// writing the config can fail too, and all three leave the data plane on its
+/// previous routing table while the gateway keeps answering. `wg syncconf`
+/// additionally rejects the *whole* file when one peer stanza is bad, and its
+/// call site can only log that, so without a counter a gateway that stopped
 /// applying routing updates looks healthy.
-pub(crate) fn record_wg_syncconf(ok: bool) {
-    WG_SYNCCONF_TOTAL.fetch_add(1, Ordering::Relaxed);
+pub(crate) fn record_wg_reconfigure(ok: bool) {
+    WG_RECONFIGURE_TOTAL.fetch_add(1, Ordering::Relaxed);
     if !ok {
-        WG_SYNCCONF_FAILURES.fetch_add(1, Ordering::Relaxed);
+        WG_RECONFIGURE_FAILURES.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -332,17 +335,17 @@ pub(crate) fn render(snapshot: &Snapshot) -> String {
 
     counter(
         &mut out,
-        "dstack_gateway_wg_syncconf_total",
+        "dstack_gateway_wg_reconfigure_total",
         "WireGuard config applications attempted.",
         "",
-        WG_SYNCCONF_TOTAL.load(Ordering::Relaxed),
+        WG_RECONFIGURE_TOTAL.load(Ordering::Relaxed),
     );
     counter(
         &mut out,
-        "dstack_gateway_wg_syncconf_failures_total",
-        "WireGuard config applications rejected by wg syncconf. A non-zero rate means routing updates are not reaching the data plane.",
+        "dstack_gateway_wg_reconfigure_failures_total",
+        "WireGuard config applications that did not reach the data plane: render failure, write failure, or a config wg syncconf rejected.",
         "",
-        WG_SYNCCONF_FAILURES.load(Ordering::Relaxed),
+        WG_RECONFIGURE_FAILURES.load(Ordering::Relaxed),
     );
     counter(
         &mut out,
