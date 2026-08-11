@@ -82,7 +82,10 @@ SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
-path = "os/common/rootfs/**"
+path = [
+    "os/common/rootfs/**",
+    "os/common/scripts/**",
+]
 SPDX-FileCopyrightText = "Copyright (c) 2024-2025 The Project Contributors"
 SPDX-License-Identifier = "Apache-2.0"
 
