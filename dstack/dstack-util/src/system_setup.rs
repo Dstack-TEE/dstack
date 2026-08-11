@@ -644,16 +644,31 @@ impl<'a> GatewayContext<'a> {
             ignore wg-quick down dstack-wg0;
         }?;
 
+        // Every rule change takes /run/xtables.lock, and dockerd rewrites its own
+        // rules on each container start/stop -- which happens throughout boot,
+        // exactly when this runs. Without -w, iptables does not wait for the lock;
+        // it exits immediately with "another app is currently holding the xtables
+        // lock", aborting this sequence part-way.
+        //
+        // The bound is per invocation, not for the sequence: with four fixed
+        // calls plus one per peer, a lock held throughout could cost roughly
+        // 5s * (4 + peers). That is deliberate -- it stays well inside the
+        // gateway checker's 600s WatchdogSec, whose unit comment already
+        // accounts for blocking iptables shell-outs, while still bounding each
+        // wait so a wedged holder cannot stall the caller indefinitely the way
+        // a bare -w would.
+        let xtables_wait = "5";
+
         // Setup WireGuard iptables rules
         cmd! {
             // Create the chain if it doesn't exist
-            ignore iptables -N DSTACK_WG 2>/dev/null;
+            ignore iptables -w $xtables_wait -N DSTACK_WG 2>/dev/null;
             // Flush the chain
-            iptables -F DSTACK_WG;
+            iptables -w $xtables_wait -F DSTACK_WG;
             // Remove any existing jump rule
-            ignore iptables -D INPUT -p udp --dport $wg_listen_port -j DSTACK_WG 2>/dev/null;
+            ignore iptables -w $xtables_wait -D INPUT -p udp --dport $wg_listen_port -j DSTACK_WG 2>/dev/null;
             // Insert the new jump rule at the beginning of the INPUT chain
-            iptables -I INPUT -p udp --dport $wg_listen_port -j DSTACK_WG
+            iptables -w $xtables_wait -I INPUT -p udp --dport $wg_listen_port -j DSTACK_WG
         }?;
 
         for peer in &wg_info.servers {
@@ -663,11 +678,11 @@ impl<'a> GatewayContext<'a> {
                 .split(':')
                 .next()
                 .context("Invalid wireguard endpoint")?;
-            cmd!(iptables -A DSTACK_WG -s $endpoint_ip -j ACCEPT)?;
+            cmd!(iptables -w $xtables_wait -A DSTACK_WG -s $endpoint_ip -j ACCEPT)?;
         }
 
         // Drop any UDP packets that don't come from an allowed IP.
-        cmd!(iptables -A DSTACK_WG -j DROP)?;
+        cmd!(iptables -w $xtables_wait -A DSTACK_WG -j DROP)?;
 
         info!("Starting WireGuard");
         cmd!(wg-quick up dstack-wg0)?;
