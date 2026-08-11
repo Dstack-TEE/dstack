@@ -41,6 +41,9 @@ const METERED_PREFIXES: [&str; 9] = [
 
 const OTHER_PREFIX: &str = "other";
 
+/// Ceiling on `cert_not_after` series, far above any real deployment.
+const MAX_CERT_SERIES: usize = 256;
+
 static DECODE_FAILURES: [AtomicU64; METERED_PREFIXES.len() + 1] =
     [const { AtomicU64::new(0) }; METERED_PREFIXES.len() + 1];
 static WG_RECONFIGURE_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -183,8 +186,8 @@ pub(crate) fn render(snapshot: &Snapshot) -> String {
     );
     gauge(
         &mut out,
-        "dstack_gateway_instances",
-        "CVM instances currently in the routing table.",
+        "dstack_gateway_cluster_instances",
+        "CVM instances currently in the routing table. Replicated: every node reports the same value, so aggregate with max(), not sum().",
         "",
         snapshot.instances,
     );
@@ -197,15 +200,15 @@ pub(crate) fn render(snapshot: &Snapshot) -> String {
     );
     gauge(
         &mut out,
-        "dstack_gateway_nodes",
-        "Gateway nodes known to this node.",
+        "dstack_gateway_cluster_nodes",
+        "Gateway nodes known to the cluster. Replicated: aggregate with max(), not sum().",
         "",
         snapshot.nodes_total,
     );
     gauge(
         &mut out,
-        "dstack_gateway_nodes_active",
-        "Gateway nodes not marked down.",
+        "dstack_gateway_cluster_nodes_active",
+        "Gateway nodes this node does not consider down. Replicated state seen locally, so disagreement between nodes is itself the replication-lag signal.",
         "",
         snapshot.nodes_active,
     );
@@ -234,14 +237,14 @@ pub(crate) fn render(snapshot: &Snapshot) -> String {
 
     header(
         &mut out,
-        "dstack_gateway_kv_keys",
-        "Keys held in a WaveKV store.",
+        "dstack_gateway_cluster_kv_keys",
+        "Keys held in a WaveKV store. Replicated: aggregate with max(), not sum().",
         "gauge",
     );
     for store in &snapshot.stores {
         line(
             &mut out,
-            "dstack_gateway_kv_keys",
+            "dstack_gateway_cluster_kv_keys",
             &store_label(store),
             store.keys,
         );
@@ -355,16 +358,29 @@ pub(crate) fn render(snapshot: &Snapshot) -> String {
         KV_PERSIST_FAILURES.load(Ordering::Relaxed),
     );
 
+    gauge(
+        &mut out,
+        "dstack_gateway_cluster_cert_domains",
+        "Domains holding certificate data. Exceeding the number of cert_not_after series means the series were truncated.",
+        "",
+        snapshot.cert_not_after.len() as u64,
+    );
     header(
         &mut out,
-        "dstack_gateway_cert_not_after_seconds",
-        "Certificate expiry per domain, in seconds since the epoch.",
+        "dstack_gateway_cluster_cert_not_after_seconds",
+        "Certificate expiry per domain, in seconds since the epoch. Replicated: every node reports the same series.",
         "gauge",
     );
-    for (domain, not_after) in &snapshot.cert_not_after {
+    // Domains are only created through the admin API, so in practice this is a
+    // handful of wildcard certificates. The cap is for the case where it is
+    // not: the records are replicated, so a peer with write access could turn
+    // one label into an unbounded series count. Truncation is by domain order
+    // rather than by expiry so the exported set does not flap between scrapes;
+    // `cert_domains` above is what tells you it happened.
+    for (domain, not_after) in snapshot.cert_not_after.iter().take(MAX_CERT_SERIES) {
         line(
             &mut out,
-            "dstack_gateway_cert_not_after_seconds",
+            "dstack_gateway_cluster_cert_not_after_seconds",
             &format!("{{domain=\"{}\"}}", escape_label(domain)),
             *not_after,
         );
@@ -502,14 +518,14 @@ mod tests {
         let rendered = render(&snapshot());
         for expected in [
             "dstack_gateway_build_info{version=\"0.0.0-test\",node_id=\"7\"} 1",
-            "dstack_gateway_instances 3",
+            "dstack_gateway_cluster_instances 3",
             "dstack_gateway_connections 12",
-            "dstack_gateway_nodes_active 2",
+            "dstack_gateway_cluster_nodes_active 2",
             "dstack_gateway_ktls_offload_failed_total 1",
-            "dstack_gateway_kv_keys{store=\"persistent\"} 42",
+            "dstack_gateway_cluster_kv_keys{store=\"persistent\"} 42",
             "dstack_gateway_kv_dirty{store=\"persistent\"} 1",
             "dstack_gateway_kv_peer_buffered_logs{store=\"persistent\",peer=\"2\"} 1",
-            "dstack_gateway_cert_not_after_seconds{domain=\"app.example.com\"} 1800000000",
+            "dstack_gateway_cluster_cert_not_after_seconds{domain=\"app.example.com\"} 1800000000",
         ] {
             assert!(rendered.contains(expected), "missing sample: {expected}");
         }
@@ -535,7 +551,7 @@ mod tests {
             );
         }
         assert!(rendered.contains(
-            "dstack_gateway_cert_not_after_seconds{domain=\"tabhereandbell\"} 1800000000"
+            "dstack_gateway_cluster_cert_not_after_seconds{domain=\"tabhereandbell\"} 1800000000"
         ));
     }
 
@@ -544,7 +560,7 @@ mod tests {
         let mut snapshot = snapshot();
         // A domain arrives from replicated state, so treat it as peer-supplied.
         snapshot.cert_not_after = vec![(
-            "evil\" 1\ndstack_gateway_instances 999\n#".to_string(),
+            "evil\" 1\ndstack_gateway_cluster_instances 999\n#".to_string(),
             1_800_000_000,
         )];
         let rendered = render(&snapshot);
@@ -553,7 +569,7 @@ mod tests {
         // sample line, and the real gauge still reads what it was given.
         let forged = rendered
             .lines()
-            .filter(|row| row.starts_with("dstack_gateway_instances "))
+            .filter(|row| row.starts_with("dstack_gateway_cluster_instances "))
             .count();
         assert_eq!(
             forged, 1,
@@ -561,9 +577,9 @@ mod tests {
         );
         assert!(rendered
             .lines()
-            .any(|row| row == "dstack_gateway_instances 3"));
+            .any(|row| row == "dstack_gateway_cluster_instances 3"));
         assert!(rendered.contains(
-            "dstack_gateway_cert_not_after_seconds{domain=\"evil\\\" 1\\ndstack_gateway_instances 999\\n#\"} 1800000000"
+            "dstack_gateway_cluster_cert_not_after_seconds{domain=\"evil\\\" 1\\ndstack_gateway_cluster_instances 999\\n#\"} 1800000000"
         ));
     }
 
@@ -577,6 +593,27 @@ mod tests {
         // A key a peer invented does not get a series of its own.
         assert_eq!(prefix_label(prefix_index("whatever/1")), "other");
         assert_eq!(prefix_label(prefix_index("")), "other");
+    }
+
+    #[test]
+    fn the_per_domain_expiry_series_is_capped() {
+        let mut snapshot = snapshot();
+        let total = MAX_CERT_SERIES + 25;
+        snapshot.cert_not_after = (0..total)
+            .map(|i| (format!("d{i:04}.example.com"), 1_800_000_000 + i as u64))
+            .collect();
+        let rendered = render(&snapshot);
+
+        let exported = rendered
+            .lines()
+            .filter(|row| row.starts_with("dstack_gateway_cluster_cert_not_after_seconds{"))
+            .count();
+        assert_eq!(exported, MAX_CERT_SERIES, "the cap did not hold");
+        // The real count still reaches the operator, so truncation is visible
+        // rather than silent.
+        assert!(rendered
+            .lines()
+            .any(|row| row == format!("dstack_gateway_cluster_cert_domains {total}")));
     }
 
     #[test]
