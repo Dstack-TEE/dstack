@@ -6,18 +6,18 @@ name: SPDX License Check
 
 on:
   push:
-    branches: [ master, main ]
+    branches: [ 'release/**' ]
   pull_request:
-    branches: [ master, main ]
+    branches: [ 'release/**' ]
 
 jobs:
   reuse-lint:
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      
+
     - name: REUSE Compliance Check
       uses: fsfe/reuse-action@v5
       with:

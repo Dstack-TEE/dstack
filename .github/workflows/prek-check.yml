@@ -6,9 +6,9 @@ name: Prek checks
 
 on:
   push:
-    branches: [ master, next, dev-* ]
+    branches: [ 'release/**' ]
   pull_request:
-    branches: [ master, next, dev-* ]
+    branches: [ 'release/**' ]
 
 permissions:
   contents: read
