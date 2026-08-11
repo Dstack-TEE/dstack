@@ -375,6 +375,15 @@ fn counter(out: &mut String, name: &str, help: &str, labels: &str, value: u64) {
 ///
 /// Domains reach this from replicated state, so an unescaped quote or newline
 /// would be a peer-controlled way to forge series in the scrape output.
+///
+/// The format defines exactly three escapes: `\\`, `\"` and `\n`. Escaping
+/// anything else is not the safer choice it looks like -- `prometheus/common`'s
+/// parser, which backs `promtool check metrics` and most client tooling,
+/// rejects an unknown escape sequence outright. Emitting `\t` would hand the
+/// same hostile peer a cheaper attack than the one this function exists to
+/// stop: one tab in a domain and the entire scrape stops parsing. Remaining
+/// control characters are dropped instead, so the output is valid and carries
+/// no raw control bytes either.
 fn escape_label(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -382,8 +391,7 @@ fn escape_label(value: &str) -> String {
             '\\' => escaped.push_str("\\\\"),
             '"' => escaped.push_str("\\\""),
             '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
+            _ if ch.is_control() => {}
             _ => escaped.push(ch),
         }
     }
@@ -465,6 +473,30 @@ mod tests {
         ] {
             assert!(rendered.contains(expected), "missing sample: {expected}");
         }
+    }
+
+    #[test]
+    fn only_the_three_escapes_the_format_defines_are_emitted() {
+        // The exposition format defines \\, \" and \n and nothing else, and
+        // `prometheus/common`'s parser errors on any other escape sequence. A
+        // tab that reaches a label value must therefore be dropped rather than
+        // written as `\t`, which would cost the whole scrape -- a cheaper
+        // attack than the injection this escaping exists to stop.
+        assert_eq!(escape_label("a\tb\rc\u{7}d"), "abcd");
+        assert_eq!(escape_label("a\\b\"c\nd"), "a\\\\b\\\"c\\nd");
+
+        let mut snapshot = snapshot();
+        snapshot.cert_not_after = vec![("tab\there\rand\u{7}bell".to_string(), 1_800_000_000)];
+        let rendered = render(&snapshot);
+        for undefined in ["\\t", "\\r"] {
+            assert!(
+                !rendered.contains(undefined),
+                "emitted `{undefined}`, an escape the exposition format does not define"
+            );
+        }
+        assert!(rendered.contains(
+            "dstack_gateway_cert_not_after_seconds{domain=\"tabhereandbell\"} 1800000000"
+        ));
     }
 
     #[test]
