@@ -19,6 +19,11 @@ pub fn render(state: &State<Proxy>) -> String {
 }
 
 fn sample(state: &State<Proxy>) -> Snapshot {
+    // Everything below reads replicated records through the decoding helpers
+    // that feed `record_decode_failure`. A scrape reporting a counter must not
+    // also be a writer of it.
+    let _sampling = metrics::scrape_guard();
+
     let kv_store = state.kv_store().clone();
     let accel = accel_status(&state.config.proxy);
 

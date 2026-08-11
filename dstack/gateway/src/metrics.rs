@@ -17,6 +17,7 @@
 //! a fixed list of known prefixes plus `other`, so a peer cannot inflate
 //! cardinality by inventing keys.
 
+use std::cell::Cell;
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -46,12 +47,48 @@ static WG_SYNCCONF_TOTAL: AtomicU64 = AtomicU64::new(0);
 static WG_SYNCCONF_FAILURES: AtomicU64 = AtomicU64::new(0);
 static KV_PERSIST_FAILURES: AtomicU64 = AtomicU64::new(0);
 
+thread_local! {
+    /// Set while a scrape is sampling live state.
+    ///
+    /// A scrape reads the same replicated records the data path reads, through
+    /// the same decoding helpers, so without this it would feed the very
+    /// counter it is about to report: one permanently corrupt record would
+    /// increment `decode_failures` once per scrape forever, and `rate()` over
+    /// it would measure the scrape interval rather than anything about the
+    /// store. Observing must not be indistinguishable from failing.
+    static SAMPLING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Suppresses decode-failure counting until dropped.
+///
+/// Correctness depends on the sampler staying synchronous: it must not yield
+/// to the runtime while this is alive, or the flag would apply to whatever
+/// else the runtime schedules onto this thread.
+pub(crate) struct ScrapeGuard(bool);
+
+impl Drop for ScrapeGuard {
+    fn drop(&mut self) {
+        SAMPLING.with(|sampling| sampling.set(self.0));
+    }
+}
+
+/// Mark the current thread as sampling for a scrape. See [`ScrapeGuard`].
+#[must_use = "decode-failure suppression ends as soon as the guard is dropped"]
+pub(crate) fn scrape_guard() -> ScrapeGuard {
+    ScrapeGuard(SAMPLING.with(|sampling| sampling.replace(true)))
+}
+
 /// Record that a replicated value could not be decoded.
 ///
 /// A decode failure makes the record invisible to the data plane with nothing
 /// but a log line to say so, which is how a single corrupt record turns into
 /// "that CVM silently stopped being routable".
+///
+/// Counting is suppressed while a scrape samples; see [`ScrapeGuard`].
 pub(crate) fn record_decode_failure(key: &str) {
+    if SAMPLING.with(Cell::get) {
+        return;
+    }
     DECODE_FAILURES[prefix_index(key)].fetch_add(1, Ordering::Relaxed);
 }
 
@@ -537,6 +574,35 @@ mod tests {
         // A key a peer invented does not get a series of its own.
         assert_eq!(prefix_label(prefix_index("whatever/1")), "other");
         assert_eq!(prefix_label(prefix_index("")), "other");
+    }
+
+    #[test]
+    fn a_scrape_does_not_feed_the_counter_it_reports() {
+        // Process-wide statics: assert on deltas, never on absolute values.
+        let bucket = &DECODE_FAILURES[prefix_index("conn/probe")];
+        let before = bucket.load(Ordering::Relaxed);
+        {
+            let _guard = scrape_guard();
+            record_decode_failure("conn/probe");
+            // Nested guards must not end suppression early.
+            {
+                let _inner = scrape_guard();
+                record_decode_failure("conn/probe");
+            }
+            record_decode_failure("conn/probe");
+        }
+        assert_eq!(
+            bucket.load(Ordering::Relaxed),
+            before,
+            "a scrape counted its own reads"
+        );
+
+        record_decode_failure("conn/probe");
+        assert_eq!(
+            bucket.load(Ordering::Relaxed),
+            before + 1,
+            "suppression outlived the scrape"
+        );
     }
 
     #[test]
