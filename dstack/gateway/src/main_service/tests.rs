@@ -661,3 +661,27 @@ async fn a_future_dated_registration_cannot_park_itself_in_the_data_plane() {
 
     assert!(!state.lock().state.instances.contains_key("zombie"));
 }
+
+#[tokio::test]
+async fn a_stuck_bad_record_is_reported_once_and_again_when_it_recovers() {
+    let state = create_test_state().await;
+    sync_from_peer(&state, "peer-instance", "10.0.0.40", "not-a-key");
+
+    // A record is refused for what it contains, so it stays refused until
+    // someone rewrites it. `reported_rejections` is what keeps the reload from
+    // re-emitting the same `error!` on every round: a reason already in the map
+    // is not logged again, so a second identical reload must leave it untouched.
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+    let first = state.lock().reported_rejections.clone();
+    assert_eq!(first.len(), 1);
+    assert!(first["peer-instance"].contains("public key"));
+
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+    assert_eq!(state.lock().reported_rejections, first);
+
+    // Recovery is a transition too, and clearing the entry is what lets a
+    // later relapse be reported instead of silently swallowed.
+    sync_from_peer(&state, "peer-instance", "10.0.0.40", &test_pubkey("good"));
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+    assert!(state.lock().reported_rejections.is_empty());
+}

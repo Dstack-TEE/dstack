@@ -114,6 +114,9 @@ pub(crate) struct ProxyState {
     kv_store: Arc<KvStore>,
     handshake_cache: Arc<LatestHandshakesCache>,
     admin_shutdown: Option<rocket::Shutdown>,
+    /// Reason last logged for each KV instance record this node refuses, so a
+    /// record that stays bad is reported once rather than on every reload.
+    reported_rejections: BTreeMap<String, String>,
 }
 
 /// Options for creating a Proxy instance
@@ -248,6 +251,7 @@ impl ProxyInner {
             kv_store: kv_store.clone(),
             handshake_cache: handshake_cache.clone(),
             admin_shutdown: None,
+            reported_rejections: BTreeMap::new(),
         });
         let auth_client = AuthClient::new(config.auth.clone());
         // Bootstrap WaveKV first if sync is enabled, so certbot can load certs from peers
@@ -589,6 +593,40 @@ fn report_rejected_instances(rejected: &[import::RejectedInstance]) {
     }
 }
 
+/// Report refused records, but only what has changed since the last reload.
+///
+/// A record is refused because of what it contains, so nothing about the next
+/// reload will make it acceptable — it stays refused until someone rewrites it.
+/// Logging the whole set every round turns one stuck record into an unbounded
+/// stream of identical `error!` lines, at whatever rate peer syncs happen to
+/// wake the watch task, which buries the very first occurrence. Report a record
+/// when it starts being refused or its reason changes, and again when it
+/// recovers, so the log carries transitions instead of a level.
+fn report_new_rejections(
+    reported: &mut BTreeMap<String, String>,
+    rejected: &[import::RejectedInstance],
+) {
+    let mut current = BTreeMap::new();
+    for import::RejectedInstance {
+        instance_id,
+        reason,
+        ..
+    } in rejected
+    {
+        let reason = format!("{reason:#}");
+        if reported.get(instance_id) != Some(&reason) {
+            error!("ignoring KV instance record {instance_id}: {reason}");
+        }
+        current.insert(instance_id.clone(), reason);
+    }
+    for instance_id in reported.keys() {
+        if !current.contains_key(instance_id) {
+            info!("KV instance record {instance_id} is usable again");
+        }
+    }
+    *reported = current;
+}
+
 fn build_state_from_kv_store(config: &Config, instances: LoadedInstances) -> ProxyStateMut {
     let mut state = ProxyStateMut::default();
 
@@ -907,7 +945,6 @@ const LOCAL_REGISTRATION_GRACE: Duration = Duration::from_secs(60);
 
 fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> {
     let accepted = import::accept_instances(&proxy.config.wg, store.load_all_instances());
-    report_rejected_instances(&accepted.rejected);
     // An unreadable record is not a deletion. Its instance keeps whatever the
     // data plane already holds, so it must be exempt from the removal pass
     // below; a record that lost an IP or key conflict is not exempt, because
@@ -919,6 +956,7 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
         .collect();
     let instances = accepted.instances;
     let mut state = proxy.lock();
+    report_new_rejections(&mut state.reported_rejections, &accepted.rejected);
     let mut wg_changed = false;
 
     // Instances deleted (or recycled) on another node must stop being routable
