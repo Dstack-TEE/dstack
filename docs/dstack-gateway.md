@@ -100,7 +100,7 @@ counts, which is topology that should not be readable without authentication.
 scrape_configs:
   - job_name: dstack-gateway
     static_configs:
-      - targets: ["127.0.0.1:8011"]
+      - targets: ["<core.admin.address>"]
     authorization:
       credentials: "<the admin token>"
 ```
