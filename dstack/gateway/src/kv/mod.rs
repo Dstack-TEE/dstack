@@ -265,6 +265,8 @@ pub mod keys {
     pub const CERT_PREFIX: &str = "cert/";
     pub const DNS_CRED_PREFIX: &str = "dns_cred/";
     pub const DNS_CRED_DEFAULT: &str = "dns_cred_default";
+    /// Shared by the `GLOBAL_*` keys below; not itself a key.
+    pub const GLOBAL_PREFIX: &str = "global/";
     pub const GLOBAL_CERTBOT_CONFIG: &str = "global/certbot_config";
     pub const GLOBAL_ACME_CREDENTIALS: &str = "global/acme_credentials";
     pub const GLOBAL_ACME_ATTESTATION: &str = "global/acme_attestation";

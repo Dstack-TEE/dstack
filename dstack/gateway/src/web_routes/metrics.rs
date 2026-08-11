@@ -63,6 +63,10 @@ fn sample(state: &State<Proxy>) -> Snapshot {
 }
 
 fn store_snapshot(name: &'static str, node: &wavekv::node::Node) -> StoreSnapshot {
+    // `status()` is O(peers) on wavekv 1.x, so this is cheap enough to do under
+    // the read lock. On the 2.0 branch it also computes a state digest over the
+    // whole dataset -- at that point this call hashes the entire store, twice
+    // per scrape, while blocking writers. Revisit when the dependency moves.
     let status = node.read().status();
     StoreSnapshot {
         name,

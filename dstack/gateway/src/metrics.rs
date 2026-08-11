@@ -23,20 +23,26 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use dstack_gateway_rpc::ProxyAccelStatus;
 
+use crate::kv::keys;
+
 /// Key prefixes that get their own decode-failure series.
 ///
-/// Longest match wins, so `node/status/` folds into `node/`. Anything unknown
-/// is counted under `other`.
+/// Taken from `kv::keys` rather than spelled out here: a prefix that is
+/// renamed there and not here would not break anything loudly, it would just
+/// start counting that key space under `other`.
+///
+/// Anything unmatched lands in `other`, which is what keeps a peer from
+/// inventing key spaces to inflate cardinality.
 const METERED_PREFIXES: [&str; 9] = [
-    "inst/",
-    "node/",
-    "conn/",
-    "handshake/",
-    "last_seen/",
-    "__peer_addr/",
-    "cert/",
-    "dns_cred/",
-    "global/",
+    keys::INST_PREFIX,
+    keys::NODE_PREFIX,
+    keys::CONN_PREFIX,
+    keys::HANDSHAKE_PREFIX,
+    keys::LAST_SEEN_NODE_PREFIX,
+    keys::PEER_ADDR_PREFIX,
+    keys::CERT_PREFIX,
+    keys::DNS_CRED_PREFIX,
+    keys::GLOBAL_PREFIX,
 ];
 
 const OTHER_PREFIX: &str = "other";
@@ -117,18 +123,23 @@ pub(crate) fn record_kv_persist_failure() {
     KV_PERSIST_FAILURES.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Index of the longest prefix in `prefixes` that `key` starts with.
+///
+/// Longest rather than first so that adding a narrower prefix later (say
+/// `node/status/` next to `node/`) routes keys to the narrower series instead
+/// of depending on array order. The current set does not overlap, so this is
+/// here to keep the next addition from being a silent mis-bucketing.
+fn longest_prefix_index(prefixes: &[&str], key: &str) -> Option<usize> {
+    prefixes
+        .iter()
+        .enumerate()
+        .filter(|(_, prefix)| key.starts_with(*prefix))
+        .max_by_key(|(_, prefix)| prefix.len())
+        .map(|(index, _)| index)
+}
+
 fn prefix_index(key: &str) -> usize {
-    let mut best: Option<usize> = None;
-    for (index, prefix) in METERED_PREFIXES.iter().enumerate() {
-        if !key.starts_with(prefix) {
-            continue;
-        }
-        match best {
-            Some(current) if METERED_PREFIXES[current].len() >= prefix.len() => {}
-            _ => best = Some(index),
-        }
-    }
-    best.unwrap_or(METERED_PREFIXES.len())
+    longest_prefix_index(&METERED_PREFIXES, key).unwrap_or(METERED_PREFIXES.len())
 }
 
 fn prefix_label(index: usize) -> &'static str {
@@ -294,14 +305,14 @@ pub(crate) fn render(snapshot: &Snapshot) -> String {
     }
     header(
         &mut out,
-        "dstack_gateway_kv_peer_peer_ack",
+        "dstack_gateway_kv_peer_remote_ack",
         "How far a peer reports having consumed this node's log.",
         "gauge",
     );
     for (store, peer) in peers(snapshot) {
         line(
             &mut out,
-            "dstack_gateway_kv_peer_peer_ack",
+            "dstack_gateway_kv_peer_remote_ack",
             &peer_label(store, peer),
             peer.peer_ack,
         );
@@ -584,15 +595,34 @@ mod tests {
     }
 
     #[test]
-    fn decode_failures_are_bucketed_by_longest_matching_prefix() {
+    fn decode_failures_are_bucketed_by_key_prefix() {
         assert_eq!(prefix_label(prefix_index("inst/abc")), "inst/");
-        // node/status/ is a sub-prefix of node/: the longer one wins.
+        // No narrower `node/` prefix is metered, so this folds into `node/`.
         assert_eq!(prefix_label(prefix_index("node/status/3")), "node/");
         assert_eq!(prefix_label(prefix_index("cert/example.com/data")), "cert/");
         assert_eq!(prefix_label(prefix_index("__peer_addr/3")), "__peer_addr/");
+        assert_eq!(
+            prefix_label(prefix_index("global/certbot_config")),
+            "global/"
+        );
         // A key a peer invented does not get a series of its own.
         assert_eq!(prefix_label(prefix_index("whatever/1")), "other");
         assert_eq!(prefix_label(prefix_index("")), "other");
+    }
+
+    #[test]
+    fn a_narrower_prefix_wins_over_a_wider_one() {
+        // The metered set does not overlap today, so drive the rule directly:
+        // adding `node/status/` later must not depend on where in the array it
+        // lands.
+        let prefixes = ["node/", "node/status/"];
+        assert_eq!(longest_prefix_index(&prefixes, "node/status/3"), Some(1));
+        assert_eq!(longest_prefix_index(&prefixes, "node/info/3"), Some(0));
+
+        let reversed = ["node/status/", "node/"];
+        assert_eq!(longest_prefix_index(&reversed, "node/status/3"), Some(0));
+
+        assert_eq!(longest_prefix_index(&prefixes, "inst/1"), None);
     }
 
     #[test]

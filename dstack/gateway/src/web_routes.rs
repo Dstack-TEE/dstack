@@ -4,7 +4,7 @@
 
 use crate::main_service::Proxy;
 use anyhow::Result;
-use rocket::{get, response::content::RawHtml, response::content::RawText, routes, Route, State};
+use rocket::{get, http::ContentType, response::content::RawHtml, routes, Route, State};
 
 mod metrics;
 mod route_index;
@@ -21,8 +21,11 @@ async fn index(state: &State<Proxy>) -> Result<RawHtml<String>, String> {
 /// and instance counts, which is topology no unauthenticated caller should be
 /// able to read.
 #[get("/metrics")]
-fn scrape(state: &State<Proxy>) -> RawText<String> {
-    RawText(metrics::render(state))
+fn scrape(state: &State<Proxy>) -> (ContentType, String) {
+    // Naming the exposition version lets a scraper pick its parser instead of
+    // inferring one from a bare `text/plain`.
+    let content_type = ContentType::new("text", "plain").with_params([("version", "0.0.4")]);
+    (content_type, metrics::render(state))
 }
 
 #[get("/health")]
