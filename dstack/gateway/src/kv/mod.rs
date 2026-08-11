@@ -36,7 +36,12 @@ pub use https_client::{AppIdValidator, HttpsClientConfig};
 pub use sync_service::{fetch_peers_from_bootnode, WaveKvSyncService};
 use tracing::{error, warn};
 
-use std::{collections::BTreeMap, net::Ipv4Addr, path::Path, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::Ipv4Addr,
+    path::Path,
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -88,6 +93,22 @@ pub struct InstanceData {
     /// ClearInstancePortPolicy.
     #[serde(default)]
     pub admin_port_policy: Option<PortPolicy>,
+}
+
+/// The `inst/` records currently in the KV store, split by readability.
+///
+/// A key that is absent or tombstoned does not appear here at all — that is the
+/// signal that the instance was deleted. A key whose bytes no longer decode
+/// lands in `undecodable`, which is deliberately *not* the same signal: the
+/// record still exists, we just cannot read it, and dropping the instance from
+/// the data plane on that basis would turn one unreadable record into an
+/// outage.
+#[derive(Debug, Default)]
+pub struct LoadedInstances {
+    /// Records that decoded successfully, keyed by instance ID.
+    pub decoded: BTreeMap<String, InstanceData>,
+    /// Instance IDs whose stored bytes are present but no longer decode.
+    pub undecodable: BTreeSet<String>,
 }
 
 /// Gateway node status (stored separately for independent updates)
@@ -475,6 +496,10 @@ trait GetPutCodec {
         &self,
         prefix: &str,
     ) -> impl Iterator<Item = T>;
+    fn iter_decoded_strict<T: for<'de> serde::Deserialize<'de>>(
+        &self,
+        prefix: &str,
+    ) -> impl Iterator<Item = (String, Result<T>)>;
 }
 
 impl GetPutCodec for NodeState {
@@ -545,6 +570,25 @@ impl GetPutCodec for NodeState {
                 }
             };
             Some(value)
+        })
+    }
+
+    /// Like [`Self::iter_decoded`], but surfaces undecodable records instead of
+    /// skipping them.
+    ///
+    /// Tombstoned keys are still skipped — a deleted record and an unreadable
+    /// one call for opposite responses, and only this form lets the caller tell
+    /// them apart.
+    fn iter_decoded_strict<T: for<'de> serde::Deserialize<'de>>(
+        &self,
+        prefix: &str,
+    ) -> impl Iterator<Item = (String, Result<T>)> {
+        self.iter_by_prefix(prefix).filter_map(|(key, entry)| {
+            let value = entry.value.as_ref()?;
+            Some((
+                key.to_string(),
+                decode(value).with_context(|| format!("corrupt record at KV key {key}")),
+            ))
         })
     }
 }
@@ -648,16 +692,28 @@ impl KvStore {
         Ok(())
     }
 
-    /// Load all instances from sync store (for initial sync on startup)
-    pub fn load_all_instances(&self) -> BTreeMap<String, InstanceData> {
-        self.persistent
+    /// Load all instances from the sync store.
+    pub fn load_all_instances(&self) -> LoadedInstances {
+        let mut loaded = LoadedInstances::default();
+        for (key, result) in self
+            .persistent
             .read()
-            .iter_decoded(keys::INST_PREFIX)
-            .filter_map(|(key, data)| {
-                let instance_id = keys::parse_inst_key(&key)?;
-                Some((instance_id.into(), data))
-            })
-            .collect()
+            .iter_decoded_strict::<InstanceData>(keys::INST_PREFIX)
+        {
+            let Some(instance_id) = keys::parse_inst_key(&key) else {
+                continue;
+            };
+            match result {
+                Ok(data) => {
+                    loaded.decoded.insert(instance_id.into(), data);
+                }
+                Err(err) => {
+                    error!("{err:#}");
+                    loaded.undecodable.insert(instance_id.into());
+                }
+            }
+        }
+        loaded
     }
 
     // ==================== Node Sync ====================
@@ -1704,7 +1760,9 @@ mod corruption_tests {
         std::fs::write(data_dir.join("node_1.wal"), b"garbage").expect("failed to corrupt wal");
 
         let kv = KvStore::new(1, vec![], &data_dir).expect("startup must survive a corrupt wal");
-        assert!(kv.load_all_instances().is_empty());
+        let loaded = kv.load_all_instances();
+        assert!(loaded.decoded.is_empty());
+        assert!(loaded.undecodable.is_empty());
         let quarantined: Vec<_> = std::fs::read_dir(dir.path())
             .expect("failed to read temp dir")
             .filter_map(|entry| entry.ok())

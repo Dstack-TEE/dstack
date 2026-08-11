@@ -448,6 +448,16 @@ async fn gateway_top_n_batch_007_cache_health_and_invalidation() {
 /// Write a record straight into the KV store, bypassing registration, the way
 /// a peer's sync round would.
 fn sync_from_peer(state: &TestState, instance_id: &str, ip: &str, public_key: &str) {
+    sync_from_peer_at(state, instance_id, ip, public_key, 1);
+}
+
+fn sync_from_peer_at(
+    state: &TestState,
+    instance_id: &str,
+    ip: &str,
+    public_key: &str,
+    reg_time: u64,
+) {
     state
         .kv_store
         .sync_instance(
@@ -456,7 +466,7 @@ fn sync_from_peer(state: &TestState, instance_id: &str, ip: &str, public_key: &s
                 app_id: "peer-app".to_string(),
                 ip: ip.parse().unwrap(),
                 public_key: public_key.to_string(),
-                reg_time: 1,
+                reg_time,
                 port_policy: None,
                 port_policy_hash: String::new(),
                 admin_port_policy: None,
@@ -565,4 +575,68 @@ async fn a_local_registration_survives_a_reload_that_cannot_see_it_yet() {
 
     reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
     assert!(state.lock().state.instances.contains_key("fresh"));
+}
+
+#[tokio::test]
+async fn a_record_that_stops_validating_keeps_the_instance_it_describes() {
+    let state = create_test_state().await;
+    sync_from_peer(&state, "peer-instance", "10.0.0.40", &test_pubkey("good"));
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+    assert!(state.lock().state.instances.contains_key("peer-instance"));
+
+    // A peer overwrites the record with one this node refuses. "I cannot read
+    // your current state" is not "you were deleted": the last known-good state
+    // keeps the CVM reachable until a usable record or a real deletion arrives.
+    sync_from_peer(&state, "peer-instance", "10.0.0.40", "not-a-key");
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+
+    let proxy = state.lock();
+    let instance = proxy
+        .state
+        .instances
+        .get("peer-instance")
+        .expect("a rejected record must not evict the instance");
+    assert_eq!(instance.public_key, test_pubkey("good"));
+    assert!(proxy.generate_wg_config().unwrap().contains("10.0.0.40"));
+}
+
+#[tokio::test]
+async fn an_undecodable_record_keeps_the_instance_it_describes() {
+    let state = create_test_state().await;
+    sync_from_peer(&state, "peer-instance", "10.0.0.40", &test_pubkey("good"));
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+
+    // A torn write, or a record written by a build whose schema this one cannot
+    // read. Folding that into "absent" would let a rolling upgrade evict every
+    // instance the newer nodes registered.
+    state
+        .kv_store
+        .persistent()
+        .write()
+        .put(
+            crate::kv::keys::inst("peer-instance"),
+            b"not-messagepack".to_vec(),
+        )
+        .unwrap();
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+
+    assert!(state.lock().state.instances.contains_key("peer-instance"));
+}
+
+#[tokio::test]
+async fn an_instance_that_lost_an_ip_conflict_stops_being_routable() {
+    let state = create_test_state().await;
+    sync_from_peer_at(&state, "loser", "10.0.0.40", &test_pubkey("loser"), 300);
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+    assert!(state.lock().state.instances.contains_key("loser"));
+
+    // An older registration claims the same IP. Unlike an unreadable record,
+    // this one is readable and says the address belongs to someone else, so
+    // the loser has to go: two peers on one IP is a config `wg` will not load.
+    sync_from_peer_at(&state, "winner", "10.0.0.40", &test_pubkey("winner"), 100);
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+
+    let proxy = state.lock();
+    assert!(!proxy.state.instances.contains_key("loser"));
+    assert!(proxy.state.instances.contains_key("winner"));
 }

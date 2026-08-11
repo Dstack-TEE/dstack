@@ -40,7 +40,8 @@ use crate::{
     config::{Config, TlsConfig},
     kv::{
         fetch_peers_from_bootnode, import, AppIdValidator, CertData, HttpsClientConfig,
-        InstanceData, KvStore, NodeData, NodeStatus, PortPolicy, WaveKvSyncService,
+        InstanceData, KvStore, LoadedInstances, NodeData, NodeStatus, PortPolicy,
+        WaveKvSyncService,
     },
     models::{InstanceInfo, PortPolicyView, WgConf, WgPeer},
     proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo, AppAddressResolver},
@@ -165,8 +166,9 @@ impl ProxyInner {
         let instances = kv_store.load_all_instances();
         let nodes = kv_store.load_all_nodes();
         info!(
-            "Loaded state from WaveKV: {} instances, {} nodes",
-            instances.len(),
+            "Loaded state from WaveKV: {} instances ({} unreadable), {} nodes",
+            instances.decoded.len(),
+            instances.undecodable.len(),
             nodes.len()
         );
         let state = build_state_from_kv_store(&config, instances);
@@ -576,24 +578,22 @@ impl Proxy {
 ///
 /// A refused record makes its CVM invisible to this node, so it must never be
 /// a silent skip.
-fn report_rejected_instances(rejected: Vec<import::RejectedInstance>) {
+fn report_rejected_instances(rejected: &[import::RejectedInstance]) {
     for import::RejectedInstance {
         instance_id,
         reason,
+        ..
     } in rejected
     {
         error!("ignoring KV instance record {instance_id}: {reason:#}");
     }
 }
 
-fn build_state_from_kv_store(
-    config: &Config,
-    instances: BTreeMap<String, InstanceData>,
-) -> ProxyStateMut {
+fn build_state_from_kv_store(config: &Config, instances: LoadedInstances) -> ProxyStateMut {
     let mut state = ProxyStateMut::default();
 
     let accepted = import::accept_instances(&config.wg, instances);
-    report_rejected_instances(accepted.rejected);
+    report_rejected_instances(&accepted.rejected);
 
     // Build instances
     for (instance_id, data) in accepted.instances {
@@ -907,21 +907,29 @@ const LOCAL_REGISTRATION_GRACE: Duration = Duration::from_secs(60);
 
 fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> {
     let accepted = import::accept_instances(&proxy.config.wg, store.load_all_instances());
-    report_rejected_instances(accepted.rejected);
+    report_rejected_instances(&accepted.rejected);
+    // An unreadable record is not a deletion. Its instance keeps whatever the
+    // data plane already holds, so it must be exempt from the removal pass
+    // below; a record that lost an IP or key conflict is not exempt, because
+    // the winner owns that IP or key and the loser has to stop being routable.
+    let unreadable: HashSet<String> = accepted
+        .unreadable()
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
     let instances = accepted.instances;
     let mut state = proxy.lock();
     let mut wg_changed = false;
 
     // Instances deleted (or recycled) on another node must stop being routable
     // here too, rather than lingering until this node's own recycle timeout.
-    // Records that merely failed validation are left alone: the last known-good
-    // state of an instance is better than no state at all.
     let removed: Vec<String> = state
         .state
         .instances
         .iter()
         .filter(|(id, info)| {
             !instances.contains_key(*id)
+                && !unreadable.contains(id.as_str())
                 && info.reg_time.elapsed().unwrap_or_default() > LOCAL_REGISTRATION_GRACE
         })
         .map(|(id, _)| id.clone())

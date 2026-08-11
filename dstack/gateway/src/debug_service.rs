@@ -85,6 +85,7 @@ impl DebugRpc for DebugRpcHandler {
         // Get all instances
         let instances: Vec<InstanceEntry> = kv_store
             .load_all_instances()
+            .decoded
             .into_iter()
             .map(|(instance_id, data)| InstanceEntry {
                 instance_id,

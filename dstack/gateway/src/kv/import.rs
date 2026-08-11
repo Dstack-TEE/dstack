@@ -17,14 +17,20 @@
 //!
 //! Validation never aborts the batch: an offending record is skipped and
 //! reported, every other instance keeps its routing.
+//!
+//! Refusals are not all the same, so [`Rejection`] tells the caller which kind
+//! it is holding. A record this node cannot make sense of says nothing about
+//! whether its instance still exists, so the instance keeps the state the data
+//! plane already has; a record that lost an IP or key conflict says the address
+//! belongs to someone else, so its instance has to stop being routable.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::Ipv4Addr;
 
-use anyhow::{bail, ensure, Result};
+use anyhow::{ensure, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 
-use super::InstanceData;
+use super::{InstanceData, LoadedInstances};
 use crate::config::WgConfig;
 
 /// A WireGuard public key is 32 raw bytes, base64-encoded by `wg`.
@@ -36,16 +42,46 @@ const WG_PUBLIC_KEY_BYTES: usize = 32;
 /// rendered config.
 const MAX_ID_LEN: usize = 128;
 
+/// Whether a refused record should also cost the instance the state the data
+/// plane already holds for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rejection {
+    /// The record is unusable: it fails validation, or its bytes no longer
+    /// decode. Either way this node cannot tell what the instance looks like
+    /// now, and the last known-good state is a better answer than none — so
+    /// whatever the data plane already knows about the instance stays.
+    Unusable,
+    /// The record is well-formed but lost a uniqueness conflict to an older
+    /// registration. Here the winner genuinely owns the IP or the key, so the
+    /// loser has to stop being routable; keeping it would put the same address
+    /// in `wg.conf` twice and hand it traffic that belongs to the winner.
+    LostConflict,
+}
+
 /// A record that failed validation, along with the reason.
 pub struct RejectedInstance {
     pub instance_id: String,
     pub reason: anyhow::Error,
+    pub rejection: Rejection,
 }
 
 /// Records accepted for import, plus the ones that were skipped.
 pub struct AcceptedInstances {
     pub instances: BTreeMap<String, InstanceData>,
     pub rejected: Vec<RejectedInstance>,
+}
+
+impl AcceptedInstances {
+    /// Instance IDs that are absent from `instances` only because their record
+    /// was unreadable, and whose existing data-plane state must therefore be
+    /// left in place rather than treated as a remote deletion.
+    pub fn unreadable(&self) -> HashSet<&str> {
+        self.rejected
+            .iter()
+            .filter(|rejected| rejected.rejection == Rejection::Unusable)
+            .map(|rejected| rejected.instance_id.as_str())
+            .collect()
+    }
 }
 
 /// Validate a WireGuard public key as `wg` itself would accept it.
@@ -102,11 +138,13 @@ fn validate_instance(wg: &WgConfig, instance_id: &str, data: &InstanceData) -> R
 /// wins, ties broken by instance ID) so that every node reaches the same
 /// decision from the same KV contents — the local registration path resolves
 /// them the same way, by refusing the newcomer.
-pub fn accept_instances(
-    wg: &WgConfig,
-    records: BTreeMap<String, InstanceData>,
-) -> AcceptedInstances {
-    let mut ordered: Vec<(String, InstanceData)> = records.into_iter().collect();
+pub fn accept_instances(wg: &WgConfig, loaded: LoadedInstances) -> AcceptedInstances {
+    let LoadedInstances {
+        decoded,
+        undecodable,
+    } = loaded;
+
+    let mut ordered: Vec<(String, InstanceData)> = decoded.into_iter().collect();
     ordered.sort_by(|(left_id, left), (right_id, right)| {
         left.reg_time
             .cmp(&right.reg_time)
@@ -114,24 +152,40 @@ pub fn accept_instances(
     });
 
     let mut instances = BTreeMap::new();
-    let mut rejected = Vec::new();
+    let mut rejected: Vec<RejectedInstance> = undecodable
+        .into_iter()
+        .map(|instance_id| RejectedInstance {
+            instance_id,
+            reason: anyhow::anyhow!("record does not decode"),
+            rejection: Rejection::Unusable,
+        })
+        .collect();
     let mut claimed_ips: HashMap<Ipv4Addr, String> = HashMap::new();
     let mut claimed_keys: HashSet<String> = HashSet::new();
 
     for (instance_id, data) in ordered {
-        let checked = validate_instance(wg, &instance_id, &data).and_then(|()| {
-            if let Some(owner) = claimed_ips.get(&data.ip) {
-                bail!("ip {} is already assigned to instance {owner}", data.ip);
-            }
-            if claimed_keys.contains(&data.public_key) {
-                bail!("public key is already registered to another instance");
-            }
-            Ok(())
-        });
-        if let Err(reason) = checked {
+        let checked = validate_instance(wg, &instance_id, &data)
+            .map_err(|reason| (Rejection::Unusable, reason))
+            .and_then(|()| {
+                if let Some(owner) = claimed_ips.get(&data.ip) {
+                    return Err((
+                        Rejection::LostConflict,
+                        anyhow::anyhow!("ip {} is already assigned to instance {owner}", data.ip),
+                    ));
+                }
+                if claimed_keys.contains(&data.public_key) {
+                    return Err((
+                        Rejection::LostConflict,
+                        anyhow::anyhow!("public key is already registered to another instance"),
+                    ));
+                }
+                Ok(())
+            });
+        if let Err((rejection, reason)) = checked {
             rejected.push(RejectedInstance {
                 instance_id,
                 reason,
+                rejection,
             });
             continue;
         }
@@ -150,6 +204,7 @@ pub fn accept_instances(
 mod tests {
     use super::*;
     use ipnet::Ipv4Net;
+    use std::collections::BTreeSet;
 
     fn wg_config() -> WgConfig {
         WgConfig {
@@ -181,12 +236,18 @@ mod tests {
         }
     }
 
+    fn loaded(records: Vec<(&str, InstanceData)>) -> LoadedInstances {
+        LoadedInstances {
+            decoded: records
+                .into_iter()
+                .map(|(id, data)| (id.to_string(), data))
+                .collect(),
+            undecodable: BTreeSet::new(),
+        }
+    }
+
     fn accept(records: Vec<(&str, InstanceData)>) -> AcceptedInstances {
-        let records = records
-            .into_iter()
-            .map(|(id, data)| (id.to_string(), data))
-            .collect();
-        accept_instances(&wg_config(), records)
+        accept_instances(&wg_config(), loaded(records))
     }
 
     #[test]
@@ -293,16 +354,15 @@ mod tests {
                 client_ip_range: pool.parse::<Ipv4Net>().unwrap(),
                 ..wg_config()
             };
-            let records = [
-                ("mine", instance(mine, &key(1), 100)),
-                ("peers", instance(peers, &key(2), 100)),
-                // Still refused: this gateway's own address.
-                ("steals-gateway-ip", instance(gateway_addr, &key(3), 100)),
-            ]
-            .into_iter()
-            .map(|(id, data)| (id.to_string(), data))
-            .collect();
-            let accepted = accept_instances(&wg, records);
+            let accepted = accept_instances(
+                &wg,
+                loaded(vec![
+                    ("mine", instance(mine, &key(1), 100)),
+                    ("peers", instance(peers, &key(2), 100)),
+                    // Still refused: this gateway's own address.
+                    ("steals-gateway-ip", instance(gateway_addr, &key(3), 100)),
+                ]),
+            );
             assert!(accepted.instances.contains_key("mine"), "{ip}");
             assert!(
                 accepted.instances.contains_key("peers"),
@@ -314,5 +374,42 @@ mod tests {
                 "{ip}"
             );
         }
+    }
+
+    #[test]
+    fn a_conflict_loser_is_dropped_but_an_unusable_record_keeps_its_instance() {
+        // The two rejection kinds drive opposite decisions in the reload pass:
+        // a conflict loser must lose its routing to the winner, while an
+        // instance whose record we cannot read keeps what the data plane holds.
+        let accepted = accept(vec![
+            ("loser", instance("10.0.0.20", &key(9), 300)),
+            ("winner", instance("10.0.0.20", &key(1), 100)),
+            ("malformed", instance("10.0.0.30", "not-a-key", 100)),
+        ]);
+        let kind = |id: &str| {
+            accepted
+                .rejected
+                .iter()
+                .find(|rejected| rejected.instance_id == id)
+                .map(|rejected| rejected.rejection)
+        };
+        assert_eq!(kind("loser"), Some(Rejection::LostConflict));
+        assert_eq!(kind("malformed"), Some(Rejection::Unusable));
+        assert_eq!(accepted.unreadable(), HashSet::from(["malformed"]));
+    }
+
+    #[test]
+    fn an_undecodable_record_is_reported_as_unreadable_not_as_absent() {
+        let accepted = accept_instances(
+            &wg_config(),
+            LoadedInstances {
+                decoded: [("good".to_string(), instance("10.0.0.20", &key(1), 100))]
+                    .into_iter()
+                    .collect(),
+                undecodable: ["corrupt".to_string()].into_iter().collect(),
+            },
+        );
+        assert!(accepted.instances.contains_key("good"));
+        assert_eq!(accepted.unreadable(), HashSet::from(["corrupt"]));
     }
 }
