@@ -63,6 +63,14 @@ IMAGE_INSTALL = "\
     kernel-module-xt-set \
     kernel-module-xt-nflog \
     kernel-module-xt-physdev \
+    kernel-module-ebt-arp \
+    kernel-module-ebt-ip \
+    kernel-module-ebt-ip6 \
+    kernel-module-ebt-among \
+    kernel-module-ebt-limit \
+    kernel-module-ebt-vlan \
+    kernel-module-nft-meta-bridge \
+    kernel-module-nft-reject-bridge \
     fuse3 \
     fuse3-utils \
     pigz \
