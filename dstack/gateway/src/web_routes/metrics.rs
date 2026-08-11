@@ -22,17 +22,16 @@ fn sample(state: &State<Proxy>) -> Snapshot {
     let kv_store = state.kv_store().clone();
     let accel = accel_status(&state.config.proxy);
 
-    // Hold the proxy lock only for the counts. The public data path takes it on
-    // every connection, so a scrape must not read KV or format anything while
-    // holding it.
-    let (instances, nodes_total, nodes_active) = {
-        let proxy_state = state.lock();
-        (
-            proxy_state.state.instances.len() as u64,
-            proxy_state.get_all_nodes().len() as u64,
-            proxy_state.get_active_nodes().len() as u64,
-        )
-    };
+    // The public data path takes this lock on every connection, so the scrape
+    // holds it for one O(1) count and nothing else.
+    //
+    // The node counts deliberately do not go through `get_all_nodes()` /
+    // `get_active_nodes()`: those read no proxy state at all -- only
+    // `self.kv_store` -- so routing them through the lock would drag two loads
+    // of the node table, a `GatewayNodeInfo` per node, and one ephemeral-lock
+    // acquisition per node for an unused `last_seen` in here with them.
+    let instances = state.lock().state.instances.len() as u64;
+    let (nodes_total, nodes_active) = kv_store.count_nodes();
 
     let stores = vec![
         store_snapshot("persistent", kv_store.persistent()),

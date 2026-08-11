@@ -583,6 +583,32 @@ impl KvStore {
             .collect()
     }
 
+    /// Whether a node counts as active. A node with no recorded status is up.
+    ///
+    /// The routing path and the metrics sampler both filter on this, and they
+    /// have to agree: a gauge that counts a node the router has dropped is
+    /// describing a routing table that does not exist.
+    pub(crate) fn node_is_active(status: Option<&NodeStatus>) -> bool {
+        !matches!(status, Some(NodeStatus::Down))
+    }
+
+    /// Count all and active nodes, without materialising `GatewayNodeInfo`.
+    ///
+    /// A scrape wants two numbers. Reaching them through `get_all_nodes()` and
+    /// `get_active_nodes()` instead means loading the node table twice, cloning
+    /// five strings per node, and taking the ephemeral lock once per node for a
+    /// `last_seen` that the count never reads -- all of it under the proxy lock
+    /// that the data path takes on every connection.
+    pub fn count_nodes(&self) -> (u64, u64) {
+        let statuses = self.load_all_node_statuses();
+        let nodes = self.load_all_nodes();
+        let active = nodes
+            .keys()
+            .filter(|id| Self::node_is_active(statuses.get(id)))
+            .count() as u64;
+        (nodes.len() as u64, active)
+    }
+
     // ==================== Connection Count Sync ====================
 
     /// Sync connection count for an instance (from this node)

@@ -1466,16 +1466,9 @@ impl ProxyState {
         self.kv_store
             .load_all_nodes()
             .into_iter()
-            .filter(|(id, _)| {
-                if !exclude_down {
-                    return true;
-                }
-                // Exclude nodes with status "down"
-                match node_statuses.get(id) {
-                    Some(NodeStatus::Down) => false,
-                    _ => true, // Include Up or nodes without explicit status
-                }
-            })
+            // Shared with the metrics sampler so the gauge and the routing
+            // table cannot disagree about what "active" means.
+            .filter(|(id, _)| !exclude_down || KvStore::node_is_active(node_statuses.get(id)))
             .map(|(id, node)| GatewayNodeInfo {
                 id,
                 uuid: node.uuid,
