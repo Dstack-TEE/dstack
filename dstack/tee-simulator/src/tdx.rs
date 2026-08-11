@@ -82,11 +82,13 @@ impl SimulatorState {
         let report_data: [u8; 64] = report_data
             .try_into()
             .map_err(|_| anyhow::anyhow!("inblob must be exactly 64 bytes"))?;
-        self.outblob = self.make_quote(report_data)?;
-        self.generation = self
+        let generation = self
             .generation
             .checked_add(1)
             .context("tsm generation overflow")?;
+        let outblob = self.make_quote(report_data)?;
+        self.outblob = outblob;
+        self.generation = generation;
         Ok(())
     }
 
@@ -592,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_boundaries_are_failure_atomic() {
+    fn state_updates_are_failure_atomic() {
         let mut state = SimulatorState::new(
             Arc::new(TdxGenerator::from_seed([0x71; 32]).unwrap()),
             CCEL_FIXTURE,
@@ -610,6 +612,12 @@ mod tests {
         assert_eq!(state.rtmrs[3], original_rtmr3);
         assert!(state.extend_rtmr(1, &[0x22; 48]).is_err());
         assert_eq!(state.rtmrs[1], replay_boot_rtmrs(CCEL_FIXTURE).unwrap()[1]);
+
+        state.generation = i64::MAX;
+        assert!(state.request_quote(&[0x33; 64]).is_err());
+        assert_eq!(state.generation, i64::MAX);
+        assert_eq!(state.outblob, original_quote);
+        state.generation = 0;
 
         state.request_quote(&[0x33; 64]).unwrap();
         assert_eq!(state.generation, 1);

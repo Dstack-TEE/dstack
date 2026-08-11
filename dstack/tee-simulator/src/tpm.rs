@@ -87,6 +87,21 @@ fn ensure_device_node(path: &Path, major: &str, minor: &str) -> Result<()> {
     if device_node_matches(path, expected_major, expected_minor)? {
         return Ok(());
     }
+    match fs_err::symlink_metadata(path) {
+        Ok(_) => {
+            // Recheck in case udev published the expected node between the two
+            // metadata calls above.
+            if device_node_matches(path, expected_major, expected_minor)? {
+                return Ok(());
+            }
+            bail!(
+                "{} exists but is not character device {expected_major}:{expected_minor}",
+                path.display()
+            );
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
     let path_text = path.to_str().context("device path is not UTF-8")?;
     if let Err(error) = command("mknod", &[path_text, "c", major, minor]) {
         // udev can publish the node after the existence check but before
