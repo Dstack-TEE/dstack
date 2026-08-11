@@ -59,7 +59,7 @@ use cert_client::CertRequestClient;
 use cmd_lib::run_fun as cmd;
 use dstack_gateway_rpc::{
     gateway_client::GatewayClient, PortAttrs as RpcPortAttrs, PortPolicy as RpcPortPolicy,
-    RegisterCvmRequest, RegisterCvmResponse, WireGuardPeer,
+    RegisterCvmRequest, RegisterCvmResponse, WireGuardConfig, WireGuardPeer,
 };
 use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
 use serde_human_bytes as hex_bytes;
@@ -637,7 +637,44 @@ impl<'a> GatewayContext<'a> {
             }
         }
 
-        safe_write_with_mode(WG_CONFIG_PATH, &new_config, 0o600)
+        // The config file is also the "already applied" marker the check above
+        // reads, so it must not outlive a failed apply: the rules and the
+        // interface are what it stands for, and leaving it behind makes every
+        // later refresh take the early return and skip the setup it never
+        // finished. Nothing else repairs that -- the refresher only re-applies
+        // when the rendered config differs -- so the CVM would keep running with
+        // a half-built DSTACK_WG chain until the gateway list happened to change.
+        // Removing it is safe because it is rewritten before the `wg-quick down`
+        // below on the next attempt, and correct because /etc is a tmpfs overlay
+        // (see mount_overlay in dstack-prepare.sh), so the file already shares
+        // the reboot lifetime of the iptables rules rather than outliving them.
+        let applied = self
+            .apply_wg_config(&new_config, &wg_info, wg_listen_port)
+            .await;
+        if applied.is_err() {
+            if let Err(err) = fs::remove_file(WG_CONFIG_PATH) {
+                warn!("failed to drop the partially applied WireGuard config: {err:?}");
+            }
+        }
+        applied
+    }
+
+    /// Write the rendered WireGuard config, program the DSTACK_WG chain that
+    /// restricts its listen port to the gateway peers, and bring the interface
+    /// up.
+    ///
+    /// Best-effort: an error can leave the chain partly built and the jump from
+    /// INPUT already installed. What the caller guarantees is not that the
+    /// kernel state is untouched, but that the next refresh will redo the whole
+    /// sequence -- it removes the config file this wrote, so the "config
+    /// unchanged" early return cannot skip the retry.
+    async fn apply_wg_config(
+        &self,
+        new_config: &str,
+        wg_info: &WireGuardConfig,
+        wg_listen_port: &str,
+    ) -> Result<()> {
+        safe_write_with_mode(WG_CONFIG_PATH, new_config, 0o600)
             .context("Failed to write WireGuard config")?;
 
         cmd! {
