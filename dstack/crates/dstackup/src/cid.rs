@@ -65,13 +65,18 @@ fn first_free(candidates: impl Iterator<Item = u32>, occupied: &[(u32, u32)]) ->
 /// choose a CID window that won't collide with a VMM already on this host.
 ///
 /// Precedence: an explicit `--cid-start` is honored but refused on overlap; then
-/// a random free block.
-pub(crate) fn pick_cid_start(explicit: Option<u32>, occupied: &[(u32, u32)]) -> Result<u32> {
-    pick_cid_start_from(explicit, occupied, random_starts())
+/// the start a previous install recorded; then a random free block.
+pub(crate) fn pick_cid_start(
+    explicit: Option<u32>,
+    recorded: Option<u32>,
+    occupied: &[(u32, u32)],
+) -> Result<u32> {
+    pick_cid_start_from(explicit, recorded, occupied, random_starts())
 }
 
 fn pick_cid_start_from(
     explicit: Option<u32>,
+    recorded: Option<u32>,
     occupied: &[(u32, u32)],
     candidates: impl Iterator<Item = u32>,
 ) -> Result<u32> {
@@ -94,6 +99,14 @@ fn pick_cid_start_from(
         return Ok(start);
     }
 
+    // A recorded start already belongs to this install, so a re-run reuses it
+    // verbatim and never moves a live instance's pool out from under its running
+    // CVMs. It is deliberately not re-checked: `occupied` includes this install's
+    // own VMM, so the check could only ever fail against itself.
+    if let Some(start) = recorded {
+        return Ok(start);
+    }
+
     match first_free(candidates, occupied) {
         Some(start) => {
             println!("  [ok] cid-start {start} (avoids CIDs already reserved on this host)");
@@ -112,7 +125,7 @@ mod tests {
 
     #[test]
     fn takes_the_first_candidate_when_the_host_is_empty() {
-        let picked = pick_cid_start_from(None, &[], [40_000, 50_000].into_iter()).unwrap();
+        let picked = pick_cid_start_from(None, None, &[], [40_000, 50_000].into_iter()).unwrap();
         assert_eq!(picked, 40_000);
     }
 
@@ -120,7 +133,8 @@ mod tests {
     fn skips_candidates_whose_stride_is_taken() {
         let occupied = [(40_000, 41_000), (50_000, 50_001)];
         let picked =
-            pick_cid_start_from(None, &occupied, [40_000, 50_000, 60_000].into_iter()).unwrap();
+            pick_cid_start_from(None, None, &occupied, [40_000, 50_000, 60_000].into_iter())
+                .unwrap();
         assert_eq!(picked, 60_000);
     }
 
@@ -131,14 +145,15 @@ mod tests {
         let occupied = [(45_000, 45_001)];
         assert!(window_overlaps(40_000, CID_BLOCK_STRIDE, &occupied));
         assert!(!window_overlaps(40_000, CID_POOL_SIZE, &occupied));
-        let picked = pick_cid_start_from(None, &occupied, [40_000, 60_000].into_iter()).unwrap();
+        let picked =
+            pick_cid_start_from(None, None, &occupied, [40_000, 60_000].into_iter()).unwrap();
         assert_eq!(picked, 60_000);
     }
 
     #[test]
     fn gives_up_after_the_attempt_budget() {
         let occupied = [(40_000, 50_000)];
-        let err = pick_cid_start_from(None, &occupied, std::iter::repeat(40_000))
+        let err = pick_cid_start_from(None, None, &occupied, std::iter::repeat(40_000))
             .unwrap_err()
             .to_string();
         assert!(err.contains("could not find a free CID window"), "{err}");
@@ -149,18 +164,36 @@ mod tests {
         // Overlaps the *stride* of an occupied block but not its pool, which an
         // explicit choice is allowed to do.
         let occupied = [(40_000, 41_000)];
-        let picked = pick_cid_start_from(Some(45_000), &occupied, [60_000].into_iter()).unwrap();
+        let picked =
+            pick_cid_start_from(Some(45_000), None, &occupied, [60_000].into_iter()).unwrap();
         assert_eq!(picked, 45_000);
     }
 
     #[test]
     fn explicit_is_refused_on_overlap_and_suggests_a_free_start() {
         let occupied = [(40_000, 41_000)];
-        let err = pick_cid_start_from(Some(40_500), &occupied, [60_000].into_iter())
+        let err = pick_cid_start_from(Some(40_500), None, &occupied, [60_000].into_iter())
             .unwrap_err()
             .to_string();
         assert!(err.contains("--cid-start 40500 overlaps"), "{err}");
         assert!(err.contains("e.g. --cid-start 60000"), "{err}");
+    }
+
+    #[test]
+    fn explicit_wins_over_a_recorded_start() {
+        let picked =
+            pick_cid_start_from(Some(45_000), Some(70_000), &[], [60_000].into_iter()).unwrap();
+        assert_eq!(picked, 45_000);
+    }
+
+    #[test]
+    fn a_recorded_start_is_reused_verbatim() {
+        // The install's own VMM shows up in `occupied`; reusing must not treat
+        // that as a conflict, otherwise every re-run would move the pool.
+        let occupied = [(70_000, 71_000)];
+        let picked =
+            pick_cid_start_from(None, Some(70_000), &occupied, [60_000].into_iter()).unwrap();
+        assert_eq!(picked, 70_000);
     }
 
     #[test]

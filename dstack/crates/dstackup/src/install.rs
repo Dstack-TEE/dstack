@@ -90,7 +90,7 @@ pub(crate) async fn cmd_install(mut o: InstallOpts, release_api_base_url: &str) 
 
     // 4. preflight - fail BEFORE any side effect (image download, key provider,
     //    dirs, units), so a CID/port clash can't half-install the host.
-    let cid_start = pick_cid_start(o.cid_start, &host::occupied_cid_ranges())?;
+    let cid_start = pick_cid_start(o.cid_start, st.cid_start, &host::occupied_cid_ranges())?;
     let kms_owned = kms_port_owned(
         &st,
         &client_url,
@@ -219,6 +219,7 @@ pub(crate) async fn cmd_install(mut o: InstallOpts, release_api_base_url: &str) 
     st.client_url = client_url.clone();
     st.client_token_path = token_path.display().to_string();
     st.auth_port = o.auth_port;
+    st.cid_start = Some(cid_start);
     st.platform = platform.vmm_str().to_string();
     st.image = o.image.clone();
     let instance = effective_instance(&o, &layout, explicit_prefix);
