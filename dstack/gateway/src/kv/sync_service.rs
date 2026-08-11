@@ -37,15 +37,22 @@ pub struct HttpSyncNetwork {
 }
 
 impl HttpSyncNetwork {
+    /// `my_uuid` is passed in rather than read back out of the store.
+    ///
+    /// Our own uuid is local configuration, not replicated state, and sourcing
+    /// it from the store forced this node's `node/info` record to be written
+    /// before the service could be built — which is to say before `bootstrap`
+    /// had rebuilt the sequence counter. After a data-directory loss that made
+    /// the record spend a sequence number the peers already consider seen, so
+    /// the one record they check us against was the one guaranteed to be
+    /// dropped.
     pub fn new(
         kv_store: KvStore,
         store_path: &'static str,
         tls_config: &HttpsClientConfig,
+        my_uuid: Vec<u8>,
     ) -> Result<Self> {
         let client = HttpsClient::new(tls_config)?;
-        let my_uuid = kv_store
-            .get_peer_uuid(kv_store.my_node_id)
-            .context("failed to get my UUID")?;
         Ok(Self {
             client,
             kv_store,
@@ -108,10 +115,12 @@ impl WaveKvSyncService {
     /// * `kv_store` - The sync store containing persistent and ephemeral nodes
     /// * `sync_config` - Sync configuration
     /// * `tls_config` - TLS configuration for mTLS peer authentication
+    /// * `my_uuid` - This node's uuid, from local configuration
     pub fn new(
         kv_store: &KvStore,
         sync_config: &GwSyncConfig,
         tls_config: HttpsClientConfig,
+        my_uuid: Vec<u8>,
     ) -> Result<Self> {
         let sync_config = KvSyncConfig {
             interval: sync_config.interval,
@@ -119,8 +128,10 @@ impl WaveKvSyncService {
         };
 
         // Both networks use the same persistent node for URL lookup, but different paths
-        let persistent_network = HttpSyncNetwork::new(kv_store.clone(), "persistent", &tls_config)?;
-        let ephemeral_network = HttpSyncNetwork::new(kv_store.clone(), "ephemeral", &tls_config)?;
+        let persistent_network =
+            HttpSyncNetwork::new(kv_store.clone(), "persistent", &tls_config, my_uuid.clone())?;
+        let ephemeral_network =
+            HttpSyncNetwork::new(kv_store.clone(), "ephemeral", &tls_config, my_uuid)?;
 
         let persistent_manager = Arc::new(SyncManager::with_config(
             kv_store.persistent().clone(),

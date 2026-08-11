@@ -367,6 +367,45 @@ pub mod keys {
     }
 }
 
+/// Ceiling on a decompressed sync payload.
+///
+/// The wire is gzipped, and gzip expands by three orders of magnitude on
+/// attacker-chosen input: the 16 MiB cap the sync route puts on a request body
+/// is a cap on the *compressed* size, which bounds nothing useful on its own.
+/// Every gateway in a cluster shares one app_id, so the RA-TLS check on the
+/// route proves the sender is *some* gateway of this deployment — not that its
+/// payload is well-formed.
+///
+/// The value is far above any legitimate payload: a sync response carries the
+/// whole live state, which is bounded by the gateway's own key set (instances,
+/// nodes, certificates) rather than by anything a peer controls.
+pub const MAX_DECOMPRESSED_SYNC_BYTES: usize = 128 * 1024 * 1024;
+
+/// Ceiling on a compressed sync body, mirroring the 16 MiB the route accepts on
+/// a request. Without it a peer's *response* is read to completion before any
+/// decompression bound applies, and the memory is already spent.
+pub const MAX_COMPRESSED_SYNC_BYTES: usize = 16 * 1024 * 1024;
+
+/// Decompress gzip, refusing anything that expands past `limit`.
+///
+/// Reads one byte past the limit so a payload landing exactly on it is still
+/// accepted and a larger one is rejected rather than silently truncated —
+/// `Read::take` alone would hand back a short buffer that then fails to decode,
+/// reporting the wrong fault.
+pub fn gunzip_bounded(data: &[u8], limit: usize) -> Result<Vec<u8>> {
+    use std::io::Read;
+
+    let mut out = Vec::new();
+    flate2::read::GzDecoder::new(data)
+        .take(limit as u64 + 1)
+        .read_to_end(&mut out)
+        .context("failed to decompress payload")?;
+    if out.len() > limit {
+        anyhow::bail!("decompressed payload exceeds {limit} bytes");
+    }
+    Ok(out)
+}
+
 /// Encode a KV value as MessagePack.
 ///
 /// Structs are encoded as maps keyed by field name rather than as positional
@@ -1356,6 +1395,39 @@ mod value_encoding_tests {
 }
 
 #[cfg(test)]
+mod decompression_tests {
+    use super::*;
+    use std::io::Write;
+
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(bytes).expect("write");
+        encoder.finish().expect("finish")
+    }
+
+    /// A bomb rejected by size, not by decoding: gzip expands by three orders of
+    /// magnitude on attacker-chosen input, so the cap on the compressed body
+    /// bounds nothing on its own.
+    #[test]
+    fn an_expansion_past_the_limit_is_refused() {
+        let bomb = gzip(&vec![0u8; 512 * 1024]);
+        assert!(gunzip_bounded(&bomb, 4096).is_err());
+        assert!(bomb.len() < 4096, "the fixture must be small compressed");
+    }
+
+    /// The limit is inclusive, so a payload landing exactly on it still decodes.
+    /// Without this the bound could tighten by a byte and only the bomb test would
+    /// still pass.
+    #[test]
+    fn a_payload_exactly_on_the_limit_still_decompresses() {
+        let exact = gzip(&vec![7u8; 4096]);
+        let out = gunzip_bounded(&exact, 4096).expect("must be accepted");
+        assert_eq!(out.len(), 4096);
+        assert!(gunzip_bounded(&gzip(&vec![7u8; 4097]), 4096).is_err());
+    }
+}
+
+#[cfg(test)]
 mod peer_url_tests {
     use super::validate_peer_url;
 
@@ -1374,5 +1446,69 @@ mod peer_url_tests {
         ] {
             assert!(validate_peer_url(url).is_err(), "accepted {url}");
         }
+    }
+}
+
+/// The key namespace is the on-disk contract between releases.
+///
+/// Every builder and parser here survived mutation: `handshake_prefix` could return
+/// `""`, `parse_inst_key` could return `Some("xyzzy")`, and nothing noticed. That is not
+/// a cosmetic gap — these strings are what a gateway uses to find its own state after an
+/// upgrade. Changing one silently orphans every existing record: the data is still
+/// replicated, still in the digest, and no longer reachable by any reader.
+#[cfg(test)]
+mod key_schema_tests {
+    use super::keys;
+
+    /// A prefix must actually be a prefix of the keys it is used to iterate, or a range
+    /// scan silently returns nothing and the caller reads an empty collection as "none".
+    #[test]
+    fn every_iteration_prefix_matches_the_keys_it_must_find() {
+        assert!(keys::handshake("inst-a", 7).starts_with(&keys::handshake_prefix("inst-a")));
+        assert!(keys::last_seen_node(3, 7).starts_with(&keys::last_seen_node_prefix(3)));
+        assert!(keys::cert_attestation_latest("a.example")
+            .starts_with(&keys::cert_attestation_prefix("a.example")));
+        assert!(keys::cert_attestation_history("a.example", 1234)
+            .starts_with(&keys::cert_attestation_prefix("a.example")));
+    }
+
+    /// A prefix must not be so short that it also matches a neighbour's keys, which
+    /// would make an iteration return another instance's or node's records.
+    #[test]
+    fn an_iteration_prefix_does_not_capture_a_neighbour() {
+        assert!(!keys::handshake("inst-b", 7).starts_with(&keys::handshake_prefix("inst-a")));
+        assert!(!keys::last_seen_node(4, 7).starts_with(&keys::last_seen_node_prefix(3)));
+        assert!(!keys::cert_attestation_latest("b.example")
+            .starts_with(&keys::cert_attestation_prefix("a.example")));
+        // `inst-a` must not swallow `inst-ab`.
+        assert!(!keys::handshake("inst-ab", 7).starts_with(&keys::handshake_prefix("inst-a")));
+    }
+
+    /// Builders and parsers must agree, or a record written by one release is invisible
+    /// to the next.
+    #[test]
+    fn every_key_parses_back_to_what_built_it() {
+        assert_eq!(keys::parse_inst_key(&keys::inst("inst-a")), Some("inst-a"));
+        assert_eq!(keys::parse_node_info_key(&keys::node_info(42)), Some(42));
+        assert_eq!(
+            keys::parse_cert_domain(&keys::cert_attestation_latest("a.example")),
+            Some("a.example")
+        );
+        assert_eq!(
+            keys::parse_cert_domain(&keys::cert_lock("a.example")),
+            Some("a.example")
+        );
+    }
+
+    /// A parser must reject a key from another namespace rather than returning a value
+    /// derived from it, which would cross-wire two record types.
+    #[test]
+    fn a_parser_refuses_a_key_from_another_namespace() {
+        assert_eq!(keys::parse_inst_key(&keys::node_info(1)), None);
+        assert_eq!(keys::parse_cert_domain(&keys::inst("inst-a")), None);
+        assert_eq!(keys::parse_node_info_key(&keys::node_status(1)), None);
+        assert_eq!(keys::parse_node_info_key(&keys::inst("inst-a")), None);
+        // `node/info/` and `node/status/` share a stem; neither may claim the other.
+        assert_eq!(keys::parse_node_info_key("node/info/not-a-number"), None);
     }
 }

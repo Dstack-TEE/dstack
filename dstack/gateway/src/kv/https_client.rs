@@ -5,12 +5,12 @@
 //! HTTPS client with mTLS and custom certificate verification during TLS handshake.
 
 use std::fmt::Debug;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use flate2::{read::GzDecoder, write::GzEncoder, Compression};
-use http_body_util::{BodyExt, Full};
+use flate2::{write::GzEncoder, Compression};
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
 use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::{
@@ -23,7 +23,27 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme};
 use serde::{de::DeserializeOwned, Serialize};
 
-use super::{decode, encode};
+use super::{
+    decode, encode, gunzip_bounded, MAX_COMPRESSED_SYNC_BYTES, MAX_DECOMPRESSED_SYNC_BYTES,
+};
+
+/// Read a peer's response body, refusing one larger than the sync route accepts
+/// on a request.
+///
+/// `Body::collect` reads to completion, so without this a peer could stream an
+/// unbounded response and the decompression limit downstream would never be
+/// reached — the memory is already gone by then.
+async fn read_body_bounded(body: hyper::body::Incoming) -> Result<Bytes> {
+    Limited::new(body, MAX_COMPRESSED_SYNC_BYTES)
+        .collect()
+        .await
+        .map(|collected| collected.to_bytes())
+        .map_err(|err| {
+            anyhow::anyhow!(
+                "failed to read response body (limit {MAX_COMPRESSED_SYNC_BYTES} bytes): {err}"
+            )
+        })
+}
 
 /// Custom certificate validator trait for TLS handshake verification.
 ///
@@ -218,12 +238,7 @@ impl HttpsClient {
             anyhow::bail!("request failed: {}", response.status());
         }
 
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .context("failed to read response body")?
-            .to_bytes();
+        let body = read_body_bounded(response.into_body()).await?;
 
         serde_json::from_slice(&body).context("failed to parse response")
     }
@@ -260,19 +275,8 @@ impl HttpsClient {
             anyhow::bail!("request failed: {}", response.status());
         }
 
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .context("failed to read response body")?
-            .to_bytes();
-
-        // Decompress
-        let mut decoder = GzDecoder::new(body.as_ref());
-        let mut decompressed = Vec::new();
-        decoder
-            .read_to_end(&mut decompressed)
-            .context("failed to decompress response")?;
+        let body = read_body_bounded(response.into_body()).await?;
+        let decompressed = gunzip_bounded(&body, MAX_DECOMPRESSED_SYNC_BYTES)?;
 
         decode(&decompressed).context("failed to decode response")
     }
@@ -318,5 +322,335 @@ impl CertValidator for AppIdValidator {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ra_tls::cert::CertRequest;
+    use ra_tls::rcgen::KeyPair;
+
+    /// A certificate carrying `PHALA_RATLS_APP_ID`, minted in process.
+    ///
+    /// No TEE is involved: `CertRequest` writes the extension unconditionally, and the
+    /// validator below never looks at a quote — it parses DER and compares bytes.
+    fn cert_with_app_id(app_id: &[u8]) -> Vec<u8> {
+        let key = KeyPair::generate().expect("key");
+        CertRequest::builder()
+            .key(&key)
+            .subject("peer.test")
+            .app_id(app_id)
+            .build()
+            .self_signed()
+            .expect("self-signed cert")
+            .der()
+            .to_vec()
+    }
+
+    fn cert_without_app_id() -> Vec<u8> {
+        let key = KeyPair::generate().expect("key");
+        CertRequest::builder()
+            .key(&key)
+            .subject("peer.test")
+            .build()
+            .self_signed()
+            .expect("self-signed cert")
+            .der()
+            .to_vec()
+    }
+
+    /// The client half of the same rule the sync route enforces on inbound requests.
+    ///
+    /// This runs during the TLS handshake, so a validator that always returns `Ok(())`
+    /// means this gateway will complete a mutually-authenticated connection to any peer
+    /// presenting any certificate our CA signed — and then send it our state. Replacing
+    /// the whole body with `Ok(())`, or inverting the comparison, left the suite green.
+    #[test]
+    fn a_peer_certificate_is_accepted_only_when_its_app_id_matches() {
+        let ours = b"app-id-of-this-cluster".to_vec();
+        let validator = AppIdValidator::new(ours.clone());
+
+        assert_eq!(validator.validate(&cert_with_app_id(&ours)), Ok(()));
+        assert!(
+            validator
+                .validate(&cert_with_app_id(b"a-different-app"))
+                .is_err(),
+            "a certificate from another app must not complete the handshake"
+        );
+    }
+
+    /// A certificate that says nothing about which app holds it proves nothing, and must
+    /// be refused rather than treated as unconstrained.
+    #[test]
+    fn a_peer_certificate_without_an_app_id_is_refused() {
+        let validator = AppIdValidator::new(b"app-id-of-this-cluster".to_vec());
+        let err = validator
+            .validate(&cert_without_app_id())
+            .expect_err("a certificate with no app identity must be refused");
+        assert!(err.contains("app_id"), "{err}");
+    }
+
+    /// Anything that is not a certificate is a parse failure, not a pass.
+    #[test]
+    fn a_malformed_certificate_is_refused() {
+        let validator = AppIdValidator::new(b"whatever".to_vec());
+        assert!(validator.validate(b"not a certificate at all").is_err());
+    }
+}
+
+/// The client paths tested against a real TLS peer.
+///
+/// `https_only()` means a plain HTTP stub will not do, which is why these paths had no
+/// coverage at all: the status check on a sync response, the status check on a bootnode
+/// fetch, the response-size bound, and the identity check that runs inside the
+/// handshake. No container and no TEE — a local listener with a certificate minted in
+/// process.
+#[cfg(test)]
+mod transport_tests {
+    use super::*;
+    use hyper::service::service_fn;
+    use hyper::{Response, StatusCode};
+    use hyper_util::rt::TokioIo;
+    use std::convert::Infallible;
+    use tokio::net::TcpListener;
+    use tokio_rustls::TlsAcceptor;
+
+    /// A CA plus a leaf valid for 127.0.0.1, written where `HttpsClient::new` expects.
+    fn tls_material(dir: &std::path::Path) -> (HttpsClientConfig, Vec<u8>, Vec<u8>) {
+        use ra_tls::rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
+
+        let ca_key = KeyPair::generate().expect("ca key");
+        let mut ca_params = CertificateParams::new(vec![]).expect("ca params");
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let ca_cert = ca_params.self_signed(&ca_key).expect("ca cert");
+
+        let leaf_key = KeyPair::generate().expect("leaf key");
+        let leaf_params =
+            CertificateParams::new(vec!["127.0.0.1".to_string()]).expect("leaf params");
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &ca_cert, &ca_key)
+            .expect("leaf cert");
+
+        write_material(
+            dir,
+            &ca_cert.pem(),
+            &leaf_cert.pem(),
+            &leaf_key.serialize_pem(),
+        );
+        (
+            client_config(dir),
+            leaf_cert.der().to_vec(),
+            leaf_key.serialize_der(),
+        )
+    }
+
+    /// A server certificate that also carries an app id, for the handshake-identity test.
+    fn app_id_server_cert(
+        dir: &std::path::Path,
+        app_id: &[u8],
+    ) -> (HttpsClientConfig, Vec<u8>, Vec<u8>) {
+        use ra_tls::cert::CertRequest;
+        use ra_tls::rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
+
+        let ca_key = KeyPair::generate().expect("ca key");
+        let mut ca_params = CertificateParams::new(vec![]).expect("ca params");
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let ca_cert = ca_params.self_signed(&ca_key).expect("ca cert");
+
+        let leaf_key = KeyPair::generate().expect("leaf key");
+        let alt_names = vec!["127.0.0.1".to_string()];
+        let leaf_cert = CertRequest::builder()
+            .key(&leaf_key)
+            .subject("peer.test")
+            .alt_names(&alt_names)
+            .app_id(app_id)
+            .usage_server_auth(true)
+            .build()
+            .signed_by(&ca_cert, &ca_key)
+            .expect("leaf cert");
+
+        write_material(
+            dir,
+            &ca_cert.pem(),
+            &leaf_cert.pem(),
+            &leaf_key.serialize_pem(),
+        );
+        (
+            client_config(dir),
+            leaf_cert.der().to_vec(),
+            leaf_key.serialize_der(),
+        )
+    }
+
+    fn write_material(dir: &std::path::Path, ca_pem: &str, cert_pem: &str, key_pem: &str) {
+        std::fs::write(dir.join("node.crt"), cert_pem).expect("write cert");
+        std::fs::write(dir.join("node.key"), key_pem).expect("write key");
+        std::fs::write(dir.join("ca.crt"), ca_pem).expect("write ca");
+    }
+
+    fn client_config(dir: &std::path::Path) -> HttpsClientConfig {
+        HttpsClientConfig {
+            cert_path: dir.join("node.crt").to_string_lossy().into_owned(),
+            key_path: dir.join("node.key").to_string_lossy().into_owned(),
+            ca_cert_path: dir.join("ca.crt").to_string_lossy().into_owned(),
+            cert_validator: None,
+        }
+    }
+
+    /// Serve one fixed response over TLS and return the URL to reach it.
+    async fn serve(status: StatusCode, body: Vec<u8>, cert: Vec<u8>, key: Vec<u8>) -> String {
+        let certs = vec![rustls::pki_types::CertificateDer::from(cert)];
+        let key = rustls::pki_types::PrivateKeyDer::try_from(key).expect("server key");
+        let config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .expect("server config");
+        let acceptor = TlsAcceptor::from(Arc::new(config));
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                let body = body.clone();
+                tokio::spawn(async move {
+                    let Ok(tls) = acceptor.accept(stream).await else {
+                        return;
+                    };
+                    let _ = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(
+                            TokioIo::new(tls),
+                            service_fn(move |_req| {
+                                let body = body.clone();
+                                async move {
+                                    Ok::<_, Infallible>(
+                                        Response::builder()
+                                            .status(status)
+                                            .body(Full::new(Bytes::from(body)))
+                                            .expect("response"),
+                                    )
+                                }
+                            }),
+                        )
+                        .await;
+                });
+            }
+        });
+
+        format!("https://127.0.0.1:{}/wavekv/sync/persistent", addr.port())
+    }
+
+    fn gzip_with(level: Compression, bytes: &[u8]) -> Vec<u8> {
+        let mut encoder = GzEncoder::new(Vec::new(), level);
+        encoder.write_all(bytes).expect("gzip");
+        encoder.finish().expect("gzip finish")
+    }
+
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        gzip_with(Compression::fast(), bytes)
+    }
+
+    /// Drive `post_compressed_msg` against a peer serving one fixed response.
+    async fn round_trip(status: StatusCode, body: Vec<u8>) -> Result<u32> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, cert, key) = tls_material(dir.path());
+        let url = serve(status, body, cert, key).await;
+        HttpsClient::new(&config)
+            .expect("client")
+            .post_compressed_msg(&url, &1u32)
+            .await
+    }
+
+    /// The status check on a sync response was untested, so a peer answering 500 could
+    /// have been decoded as a successful round.
+    #[tokio::test]
+    async fn a_failed_sync_is_not_decoded_as_a_response() {
+        // The body must be one that *would* decode, so the status check is the only
+        // thing that can reject it. With an empty body the decode fails on its own and
+        // the assertion measures nothing.
+        let body = gzip(&encode(&7u32).expect("encode"));
+        assert!(
+            round_trip(StatusCode::INTERNAL_SERVER_ERROR, body.clone())
+                .await
+                .is_err(),
+            "a 500 from a peer must not decode, even when its body would"
+        );
+        assert_eq!(
+            round_trip(StatusCode::OK, body).await.expect("200 decodes"),
+            7
+        );
+    }
+
+    /// `post_json` is the bootnode GetPeers path, and the threat model does not assume a
+    /// bootnode is honest — so a failure status must not be parsed as a peer list.
+    #[tokio::test]
+    async fn a_failed_bootnode_fetch_is_not_parsed_as_peers() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, cert, key) = tls_material(dir.path());
+        let url = serve(StatusCode::FORBIDDEN, b"null".to_vec(), cert, key).await;
+        let client = HttpsClient::new(&config).expect("client");
+        let out: Result<Option<u32>> = client.post_json(&url, &()).await;
+        assert!(
+            out.is_err(),
+            "a 403 from a bootnode must not parse as a body"
+        );
+    }
+
+    /// The response body is bounded before it is decompressed, so a peer cannot spend
+    /// our memory ahead of any decoding limit.
+    ///
+    /// The body must be *valid* gzip that merely exceeds the compressed ceiling. A
+    /// malformed one is rejected by `gunzip_bounded` whatever the ceiling says, so it
+    /// would pass this test with the bound removed entirely. Stored-mode gzip keeps the
+    /// encoded size at roughly the input size, so the payload clears the ceiling while
+    /// decompressing well inside it.
+    #[tokio::test]
+    async fn an_oversized_response_body_is_refused() {
+        let stored = gzip_with(
+            Compression::none(),
+            &vec![0u8; MAX_COMPRESSED_SYNC_BYTES + 1],
+        );
+        assert!(
+            stored.len() > MAX_COMPRESSED_SYNC_BYTES,
+            "the fixture depends on the compressed body clearing the ceiling"
+        );
+        assert!(round_trip(StatusCode::OK, stored).await.is_err());
+    }
+
+    /// The client-side identity check, over a real handshake rather than a direct call.
+    ///
+    /// `AppIdValidator` runs inside `CustomCertVerifier`, which rustls only reaches once
+    /// standard chain verification passes — so unit-testing the validator alone leaves
+    /// the wiring untested. A peer from another app must fail to connect at all, before
+    /// any application bytes move.
+    #[tokio::test]
+    async fn a_peer_from_another_app_cannot_complete_the_handshake() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let ours = b"app-id-of-this-cluster".to_vec();
+        let body = gzip(&encode(&7u32).expect("encode"));
+
+        for (server_app_id, expect_ok) in
+            [(ours.clone(), true), (b"a-different-app".to_vec(), false)]
+        {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let (mut config, cert, key) = app_id_server_cert(dir.path(), &server_app_id);
+            config.cert_validator = Some(Arc::new(AppIdValidator::new(ours.clone())));
+            let url = serve(StatusCode::OK, body.clone(), cert, key).await;
+
+            let got: Result<u32> = HttpsClient::new(&config)
+                .expect("client")
+                .post_compressed_msg(&url, &1u32)
+                .await;
+
+            assert_eq!(
+                got.is_ok(),
+                expect_ok,
+                "app id {server_app_id:?} against ours {ours:?}"
+            );
+        }
     }
 }
