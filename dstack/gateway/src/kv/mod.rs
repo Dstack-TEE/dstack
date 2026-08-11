@@ -607,15 +607,47 @@ pub struct KvStore {
     my_node_id: NodeId,
 }
 
+/// Whether opening the persistent store failed because the storage is
+/// unavailable, rather than because the stored bytes are unreadable.
+///
+/// wavekv reports both through `anyhow`, so they have to be told apart by what
+/// is in the error chain. Unreadable content arrives as a decode failure, a
+/// checksum or header `bail!`, or a read that ran off the end of a truncated
+/// file — the last of which is an `io::Error`, but only ever `UnexpectedEof` or
+/// `InvalidData`. Every other `io::Error` is the storage layer talking: no
+/// space left, permission denied, too many open files, the data volume not
+/// mounted yet.
+fn is_storage_failure(err: &anyhow::Error) -> bool {
+    err.chain()
+        .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
+        .any(|io| {
+            !matches!(
+                io.kind(),
+                std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::InvalidData
+            )
+        })
+}
+
 impl KvStore {
     /// Create a new sync store.
     ///
-    /// If the on-disk WAL/snapshot cannot be read, the data directory is moved
-    /// aside and the store starts empty rather than refusing to boot: the
+    /// If the on-disk WAL/snapshot cannot be *read*, the data directory is
+    /// moved aside and the store starts empty rather than refusing to boot: the
     /// persistent state is replicated on every peer, a torn WAL tail is the
     /// normal artifact of a crash, and a gateway that cannot start serves no
     /// traffic at all. Nothing is deleted — the unreadable directory is kept
     /// under `<data_dir>.corrupt.<unix_ts>` for inspection.
+    ///
+    /// A failure of the *storage* is a different matter and fails the boot. A
+    /// full disk, an exhausted fd table or a volume that has not finished
+    /// mounting all say nothing about the contents, so moving the directory
+    /// aside would discard intact state — and, because the condition persists
+    /// across restarts, would do it again on every attempt, burying the real
+    /// data under a pile of `.corrupt.*` directories. Failing here instead
+    /// leaves the state alone and puts the actual cause in front of the
+    /// operator, which for a single-node deployment holding the only copy of
+    /// the ACME account and DNS credentials is the difference between a restart
+    /// and a rebuild.
     pub fn new(
         my_node_id: NodeId,
         peer_ids: Vec<NodeId>,
@@ -624,6 +656,15 @@ impl KvStore {
         let data_dir = data_dir.as_ref();
         let persistent = match Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir) {
             Ok(node) => node,
+            Err(err) if is_storage_failure(&err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "cannot open the WaveKV data dir {}; refusing to start rather than \
+                         quarantine a directory whose contents are most likely intact",
+                        data_dir.display()
+                    )
+                });
+            }
             Err(err) => {
                 // Keep the original open error in the context: if moving the
                 // directory aside also fails, the reason the open failed is the
@@ -1758,6 +1799,31 @@ mod corruption_tests {
             .put_encoded(keys::handshake("cvm", 4), &(now + MAX_CLOCK_DRIFT_SECS / 2))
             .unwrap();
         assert_eq!(kv.get_instance_handshakes("cvm").len(), 2);
+    }
+
+    #[test]
+    fn a_storage_failure_fails_the_boot_instead_of_quarantining_intact_state() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        // Stand in for the storage being unusable — a full disk, an exhausted
+        // fd table, a volume that has not finished mounting. None of these say
+        // anything about the contents, and the condition survives a restart, so
+        // quarantining here would discard intact state once per boot attempt.
+        let data_dir = dir.path().join("kv");
+        std::fs::write(&data_dir, b"not a directory").expect("failed to create blocker");
+
+        let Err(err) = KvStore::new(1, vec![], &data_dir) else {
+            panic!("startup must fail when the storage is unusable");
+        };
+        assert!(
+            format!("{err:#}").contains("refusing to start"),
+            "wrong failure: {err:#}"
+        );
+        let quarantined = std::fs::read_dir(dir.path())
+            .expect("failed to read temp dir")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".corrupt."))
+            .count();
+        assert_eq!(quarantined, 0, "quarantined a directory it could not read");
     }
 
     #[test]
