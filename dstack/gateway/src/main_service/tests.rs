@@ -475,6 +475,13 @@ fn sync_from_peer_at(
         .unwrap();
 }
 
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
 #[tokio::test]
 async fn a_poisoned_peer_record_costs_only_its_own_instance() {
     let state = create_test_state().await;
@@ -639,4 +646,18 @@ async fn an_instance_that_lost_an_ip_conflict_stops_being_routable() {
     let proxy = state.lock();
     assert!(!proxy.state.instances.contains_key("loser"));
     assert!(proxy.state.instances.contains_key("winner"));
+}
+
+#[tokio::test]
+async fn a_future_dated_registration_cannot_park_itself_in_the_data_plane() {
+    let state = create_test_state().await;
+    // Both the removal pass and `recycle()` age instances with
+    // `elapsed().unwrap_or_default()`, which reads a future `reg_time` as zero
+    // age — an instance dated forward would survive deletion and recycling
+    // alike until this process restarts.
+    let far_future = now_secs() + 365 * 24 * 3600;
+    sync_from_peer_at(&state, "zombie", "10.0.0.40", &test_pubkey("z"), far_future);
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+
+    assert!(!state.lock().state.instances.contains_key("zombie"));
 }

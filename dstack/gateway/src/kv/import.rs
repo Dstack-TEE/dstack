@@ -30,11 +30,14 @@ use std::net::Ipv4Addr;
 use anyhow::{ensure, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 
-use super::{InstanceData, LoadedInstances};
+use super::{now_secs, InstanceData, LoadedInstances, MAX_CLOCK_DRIFT_SECS};
 use crate::config::WgConfig;
 
 /// A WireGuard public key is 32 raw bytes, base64-encoded by `wg`.
 const WG_PUBLIC_KEY_BYTES: usize = 32;
+
+/// Padded base64 of 32 bytes is always 44 characters.
+const WG_PUBLIC_KEY_B64_LEN: usize = 44;
 
 /// Upper bound on identifier fields carried in a KV record. Real values are
 /// hex-encoded hashes (40-64 chars); the bound keeps a corrupt record that
@@ -91,6 +94,13 @@ pub fn validate_wg_public_key(public_key: &str) -> Result<()> {
         !public_key.contains(|c: char| c.is_whitespace() || c.is_control()),
         "public key contains whitespace or control characters"
     );
+    // `wg` writes the padded form and accepts nothing else, so the length is
+    // part of the format rather than a consequence of the decode below.
+    ensure!(
+        public_key.len() == WG_PUBLIC_KEY_B64_LEN,
+        "public key is {} characters, expected {WG_PUBLIC_KEY_B64_LEN}",
+        public_key.len()
+    );
     let decoded = STANDARD
         .decode(public_key)
         .map_err(|err| anyhow::anyhow!("public key is not valid base64: {err}"))?;
@@ -117,7 +127,15 @@ fn validate_id(field: &str, value: &str) -> Result<()> {
 }
 
 /// Per-record checks that do not depend on any other record.
-fn validate_instance(wg: &WgConfig, instance_id: &str, data: &InstanceData) -> Result<()> {
+///
+/// `now` is the local wall clock in seconds, taken once per batch so every
+/// record in a batch is judged against the same instant.
+fn validate_instance(
+    wg: &WgConfig,
+    now: u64,
+    instance_id: &str,
+    data: &InstanceData,
+) -> Result<()> {
     validate_id("instance_id", instance_id)?;
     validate_id("app_id", &data.app_id)?;
     validate_wg_public_key(&data.public_key)?;
@@ -129,6 +147,21 @@ fn validate_instance(wg: &WgConfig, instance_id: &str, data: &InstanceData) -> R
         "ip {} is outside the WireGuard network",
         data.ip
     );
+    // `reg_time` is the registering node's clock at that one instant, so a
+    // clock only has to be wrong once — during the window before chrony
+    // converges, or across a time jump — for the future timestamp to be written
+    // into the KV permanently. It does not heal when the clock does: both the
+    // "gone from KV" pass and `recycle()` age instances with
+    // `elapsed().unwrap_or_default()`, which reads a future timestamp as zero
+    // age, so the instance is immune to remote deletion and to local recycling
+    // until the process restarts. Same horizon as the handshake observations,
+    // which are ignored for the same reason.
+    let horizon = now.saturating_add(MAX_CLOCK_DRIFT_SECS);
+    ensure!(
+        data.reg_time <= horizon,
+        "reg_time {} is more than {MAX_CLOCK_DRIFT_SECS}s ahead of local time ({now})",
+        data.reg_time
+    );
     Ok(())
 }
 
@@ -139,6 +172,10 @@ fn validate_instance(wg: &WgConfig, instance_id: &str, data: &InstanceData) -> R
 /// decision from the same KV contents — the local registration path resolves
 /// them the same way, by refusing the newcomer.
 pub fn accept_instances(wg: &WgConfig, loaded: LoadedInstances) -> AcceptedInstances {
+    accept_instances_at(wg, loaded, now_secs())
+}
+
+fn accept_instances_at(wg: &WgConfig, loaded: LoadedInstances, now: u64) -> AcceptedInstances {
     let LoadedInstances {
         decoded,
         undecodable,
@@ -164,7 +201,7 @@ pub fn accept_instances(wg: &WgConfig, loaded: LoadedInstances) -> AcceptedInsta
     let mut claimed_keys: HashSet<String> = HashSet::new();
 
     for (instance_id, data) in ordered {
-        let checked = validate_instance(wg, &instance_id, &data)
+        let checked = validate_instance(wg, now, &instance_id, &data)
             .map_err(|reason| (Rejection::Unusable, reason))
             .and_then(|()| {
                 if let Some(owner) = claimed_ips.get(&data.ip) {
@@ -206,9 +243,13 @@ mod tests {
     use ipnet::Ipv4Net;
     use std::collections::BTreeSet;
 
+    /// Wall clock the tests validate against; every fixture `reg_time` below is
+    /// well under it unless the test is about the future-timestamp horizon.
+    const NOW: u64 = 1_700_000_000;
+
     fn wg_config() -> WgConfig {
         WgConfig {
-            public_key: "gateway".to_string(),
+            public_key: key(7),
             private_key: "gateway".to_string(),
             listen_port: 51820,
             ip: "10.0.0.1/24".parse::<Ipv4Net>().unwrap(),
@@ -247,7 +288,7 @@ mod tests {
     }
 
     fn accept(records: Vec<(&str, InstanceData)>) -> AcceptedInstances {
-        accept_instances(&wg_config(), loaded(records))
+        accept_instances_at(&wg_config(), loaded(records), NOW)
     }
 
     #[test]
@@ -377,6 +418,25 @@ mod tests {
     }
 
     #[test]
+    fn rejects_registrations_dated_into_the_future() {
+        // A future reg_time reads as zero age in every `elapsed()` check, which
+        // makes the instance immune to both remote deletion and local recycling.
+        let accepted = accept(vec![
+            (
+                "future",
+                instance("10.0.0.20", &key(1), NOW + MAX_CLOCK_DRIFT_SECS + 1),
+            ),
+            (
+                "skewed",
+                instance("10.0.0.21", &key(2), NOW + MAX_CLOCK_DRIFT_SECS),
+            ),
+        ]);
+        assert!(!accepted.instances.contains_key("future"));
+        // Drift inside the horizon is ordinary skew between nodes.
+        assert!(accepted.instances.contains_key("skewed"));
+    }
+
+    #[test]
     fn a_conflict_loser_is_dropped_but_an_unusable_record_keeps_its_instance() {
         // The two rejection kinds drive opposite decisions in the reload pass:
         // a conflict loser must lose its routing to the winner, while an
@@ -400,7 +460,7 @@ mod tests {
 
     #[test]
     fn an_undecodable_record_is_reported_as_unreadable_not_as_absent() {
-        let accepted = accept_instances(
+        let accepted = accept_instances_at(
             &wg_config(),
             LoadedInstances {
                 decoded: [("good".to_string(), instance("10.0.0.20", &key(1), 100))]
@@ -408,8 +468,17 @@ mod tests {
                     .collect(),
                 undecodable: ["corrupt".to_string()].into_iter().collect(),
             },
+            NOW,
         );
         assert!(accepted.instances.contains_key("good"));
         assert_eq!(accepted.unreadable(), HashSet::from(["corrupt"]));
+    }
+
+    #[test]
+    fn rejects_keys_of_the_wrong_length_before_decoding_them() {
+        let oversized = "A".repeat(4096);
+        assert!(validate_wg_public_key(&oversized).is_err());
+        // 32 bytes unpadded is 43 characters; `wg` writes the padded form.
+        assert!(validate_wg_public_key(key(1).trim_end_matches('=')).is_err());
     }
 }

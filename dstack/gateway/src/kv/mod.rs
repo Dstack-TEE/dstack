@@ -625,9 +625,15 @@ impl KvStore {
         let persistent = match Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir) {
             Ok(node) => node,
             Err(err) => {
-                let quarantined = quarantine_data_dir(data_dir).context(
-                    "failed to open the WaveKV data dir and failed to move it aside for recovery",
-                )?;
+                // Keep the original open error in the context: if moving the
+                // directory aside also fails, the reason the open failed is the
+                // more useful half of the diagnosis and is otherwise lost.
+                let quarantined = quarantine_data_dir(data_dir).with_context(|| {
+                    format!(
+                        "failed to open the WaveKV data dir ({err:#}) and failed to \
+                         move it aside for recovery"
+                    )
+                })?;
                 error!(
                     "WaveKV data dir {} is unreadable ({err:#}); moved it to {} and started empty — \
                      state will be re-fetched from peers",
