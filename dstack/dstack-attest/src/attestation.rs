@@ -2414,7 +2414,11 @@ impl Attestation {
     /// msgpack wire format so the `version` field is preserved (SCALE
     /// V0 skips it for legacy binary compat). Otherwise default to V0 for
     /// backward compat with callers that expect the SCALE format.
-    pub fn into_versioned(self) -> VersionedAttestation {
+    pub fn into_versioned(mut self) -> VersionedAttestation {
+        // V2 event digests cannot be reconstructed from the serialized event
+        // fields alone. Populate their canonical preimages before the legacy
+        // quote is projected into either wire schema.
+        self.fill_event_preimages();
         let has_v2 = self
             .runtime_events
             .iter()
@@ -2990,6 +2994,17 @@ mod tests {
     #[test]
     fn into_versioned_upgrades_to_v1_when_any_event_is_v2() {
         let mut att = dummy_tdx_attestation([8u8; 64]);
+        let AttestationQuote::DstackTdx(tdx_quote) = &mut att.quote else {
+            panic!("expected TDX attestation");
+        };
+        tdx_quote.event_log.push(
+            cc_eventlog::RuntimeEvent::new(
+                "compose-hash".into(),
+                vec![4, 5, 6],
+                cc_eventlog::EventLogVersion::V2,
+            )
+            .into(),
+        );
         att.runtime_events.push(cc_eventlog::RuntimeEvent::new(
             "app-id".into(),
             vec![1, 2, 3],
@@ -3000,11 +3015,22 @@ mod tests {
             vec![4, 5, 6],
             cc_eventlog::EventLogVersion::V2,
         ));
-        let versioned = att.into_versioned();
+        // RA-TLS certificates use the stripped representation. Its runtime
+        // events must retain the advertised digest paired with each preimage.
+        let encoded = att.into_versioned().into_stripped().to_bytes().unwrap();
+        let VersionedAttestation::V1 { attestation } =
+            VersionedAttestation::from_bytes(&encoded).unwrap()
+        else {
+            panic!("presence of a V2 event must force the V1 msgpack wire format");
+        };
+        let PlatformEvidence::Tdx { event_log, .. } = attestation.platform else {
+            panic!("expected TDX platform evidence");
+        };
         assert!(
-            matches!(versioned, VersionedAttestation::V1 { .. }),
-            "presence of a V2 event must force the V1 msgpack wire format to preserve `version`"
+            event_log[0].preimage.is_some(),
+            "serialized V2 TDX events must carry their canonical digest preimage"
         );
+        cc_eventlog::tdx::validate_v2_preimages(&event_log).unwrap();
     }
     fn v1_event(event: String, payload: Vec<u8>) -> RuntimeEvent {
         RuntimeEvent::new(event, payload, EventLogVersion::V1)
