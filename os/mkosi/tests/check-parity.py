@@ -9,25 +9,33 @@ import subprocess
 import sys
 
 
-def resolves_in_rootfs(root: str, path: str, depth: int = 0) -> bool:
-    """Return whether a path exists in the image and its symlinks resolve.
+def resolve_in_rootfs(root: str, path: str, depth: int = 0):
+    """Return the rootfs-relative path a symlink chain ends at, or None.
 
     os.path.lexists() is true for a dangling symlink, so a versioned library
     whose target was never installed would satisfy the parity check and then
     fail at runtime. Symlinks are followed with absolute targets treated as
-    rootfs-relative, since the image is not mounted at / on the build host.
+    rootfs-relative, since the image is not mounted at / on the build host --
+    os.path.realpath() would instead escape into the build host's own
+    filesystem and report on whatever binary happens to sit at that path there.
     """
     if depth > 16:
-        return False
-    full = os.path.join(root, path.lstrip("/"))
+        return None
+    rel = os.path.normpath(path.lstrip("/"))
+    full = os.path.join(root, rel)
     if not os.path.lexists(full):
-        return False
+        return None
     if not os.path.islink(full):
-        return True
+        return rel
     target = os.readlink(full)
     if not os.path.isabs(target):
-        target = os.path.join(os.path.dirname(path.lstrip("/")), target)
-    return resolves_in_rootfs(root, os.path.normpath(target.lstrip("/")), depth + 1)
+        target = os.path.join(os.path.dirname(rel), target)
+    return resolve_in_rootfs(root, target, depth + 1)
+
+
+def resolves_in_rootfs(root: str, path: str) -> bool:
+    """Return whether a path exists in the image and its symlinks resolve."""
+    return resolve_in_rootfs(root, path) is not None
 
 
 spec_path, rootfs, kernel_tree, flavor = sys.argv[1:]
@@ -67,6 +75,22 @@ else:
     for path in spec.get("prod_forbidden_paths", []):
         if os.path.lexists(os.path.join(rootfs, path)):
             missing.append(f"prod contains forbidden path:/{path}")
+for path, expected in spec.get("required_symlink_resolutions", {}).items():
+    # Which netfilter frontend the image programs is decided by a symlink, and
+    # on this backend that symlink comes from the distribution's default rather
+    # than from anything dstack states. That default is what silently put the
+    # two guest images on different rulesets, so assert it instead of
+    # inheriting it: os/yocto builds the equivalent links explicitly in
+    # iptables_%.bbappend, and here the build fails if Debian ever flips.
+    resolved = resolve_in_rootfs(rootfs, path)
+    if resolved is None:
+        missing.append(f"netfilter frontend missing or dangling:/{path}")
+        continue
+    target = os.path.basename(resolved)
+    if target != expected:
+        missing.append(
+            f"netfilter frontend:/{path} resolves to {target}, wanted {expected}"
+        )
 for path in spec.get("runtime_link_paths", []):
     result = subprocess.run(
         ["lddtree", "-R", rootfs, f"/{path}"],
