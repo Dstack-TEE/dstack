@@ -5,7 +5,7 @@
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use dstack_gateway_rpc::{
     admin_server::{AdminRpc, AdminServer},
     CertAttestationInfo, CertbotConfigResponse, ClearInstancePortPolicyRequest,
@@ -24,11 +24,14 @@ use dstack_gateway_rpc::{
     WaveKvStatusResponse, ZtDomainCertStatus, ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
 };
 use ra_rpc::{CallContext, RpcCall};
-use tracing::info;
+use tracing::{info, warn};
 use wavekv::node::NodeStatus as WaveKvNodeStatus;
 
 use crate::{
-    kv::{DnsCredential, DnsProvider, NodeStatus, PortFlags, PortPolicy, ZtDomainConfig},
+    kv::{
+        DnsCredential, DnsProvider, GlobalCertbotConfig, NodeStatus, PortFlags, PortPolicy,
+        ZtDomainConfig,
+    },
     main_service::Proxy,
     models::PortPolicyView,
     proxy::{stats::accel_status, NUM_CONNECTIONS},
@@ -624,22 +627,7 @@ impl AdminRpc for AdminRpcHandler {
 
     async fn set_certbot_config(self, request: SetCertbotConfigRequest) -> Result<()> {
         let kv_store = self.state.kv_store();
-        let mut config = kv_store.get_certbot_config()?;
-
-        // Update only the fields that are specified
-        if let Some(secs) = request.renew_interval_secs {
-            config.renew_interval = Duration::from_secs(secs);
-        }
-        if let Some(secs) = request.renew_before_expiration_secs {
-            config.renew_before_expiration = Duration::from_secs(secs);
-        }
-        if let Some(secs) = request.renew_timeout_secs {
-            config.renew_timeout = Duration::from_secs(secs);
-        }
-        if let Some(url) = request.acme_url {
-            config.acme_url = url;
-        }
-
+        let config = merge_certbot_config(kv_store.get_certbot_config(), request)?;
         kv_store.set_certbot_config(&config)?;
         info!(
             "Updated certbot config: renew_interval={:?}, renew_before_expiration={:?}, renew_timeout={:?}, acme_url={:?}",
@@ -900,6 +888,118 @@ fn zt_domain_to_proto(
             priority: config.priority,
         }),
         cert_status,
+    }
+}
+
+/// Apply a partial certbot-config update to the stored record.
+///
+/// SetCertbotConfig is a merge: a field the operator leaves unset keeps its
+/// stored value. That needs a readable base, and `global/certbot_config` is a
+/// singleton with no delete RPC — so if an unreadable record simply failed the
+/// call, the corruption would be permanent, and since `do_rotate_acme_credentials`
+/// reads the same key it would keep RotateAcmeCredentials blocked along with it.
+///
+/// Merging into the defaults instead is not the answer either: `acme_url`
+/// defaults to empty, which means Let's Encrypt production. An operator who hit
+/// a corrupt record and then tuned `renew_interval` would silently move issuance
+/// off their staging or private ACME server and start burning real rate limits —
+/// exactly the switch the fail-closed reader exists to prevent.
+///
+/// So an unreadable record is repairable, but only by a request that states
+/// every field. Nothing is ever inherited from a record we cannot read.
+fn merge_certbot_config(
+    stored: Result<GlobalCertbotConfig>,
+    request: SetCertbotConfigRequest,
+) -> Result<GlobalCertbotConfig> {
+    let mut config = match stored {
+        Ok(config) => config,
+        Err(err) => {
+            ensure!(
+                request.renew_interval_secs.is_some()
+                    && request.renew_before_expiration_secs.is_some()
+                    && request.renew_timeout_secs.is_some()
+                    && request.acme_url.is_some(),
+                "the stored certbot config is unreadable ({err:#}), so it can only be \
+                 replaced as a whole: resend with renew_interval_secs, \
+                 renew_before_expiration_secs, renew_timeout_secs and acme_url all set"
+            );
+            warn!("certbot config is unreadable ({err:#}); replacing it wholesale");
+            GlobalCertbotConfig::default()
+        }
+    };
+
+    // Update only the fields that are specified
+    if let Some(secs) = request.renew_interval_secs {
+        config.renew_interval = Duration::from_secs(secs);
+    }
+    if let Some(secs) = request.renew_before_expiration_secs {
+        config.renew_before_expiration = Duration::from_secs(secs);
+    }
+    if let Some(secs) = request.renew_timeout_secs {
+        config.renew_timeout = Duration::from_secs(secs);
+    }
+    if let Some(url) = request.acme_url {
+        config.acme_url = url;
+    }
+    Ok(config)
+}
+
+#[cfg(test)]
+mod certbot_config_tests {
+    use super::*;
+
+    fn stored() -> GlobalCertbotConfig {
+        GlobalCertbotConfig {
+            renew_interval: Duration::from_secs(3600),
+            acme_url: "https://acme-staging.example/directory".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_partial_update_keeps_the_fields_it_does_not_mention() {
+        let merged = merge_certbot_config(
+            Ok(stored()),
+            SetCertbotConfigRequest {
+                renew_timeout_secs: Some(60),
+                ..Default::default()
+            },
+        )
+        .expect("a readable record merges");
+        assert_eq!(merged.renew_timeout, Duration::from_secs(60));
+        assert_eq!(merged.acme_url, stored().acme_url);
+    }
+
+    #[test]
+    fn a_partial_update_cannot_repair_an_unreadable_record() {
+        // Falling back to the defaults here would reset `acme_url` to empty,
+        // silently moving issuance to Let's Encrypt production.
+        let err = merge_certbot_config(
+            Err(anyhow::anyhow!("corrupt record")),
+            SetCertbotConfigRequest {
+                renew_interval_secs: Some(60),
+                ..Default::default()
+            },
+        )
+        .expect_err("a partial update must not inherit from an unreadable record");
+        assert!(err.to_string().contains("acme_url"), "{err:#}");
+    }
+
+    #[test]
+    fn a_complete_request_replaces_an_unreadable_record() {
+        // The only repair path: no field is inherited, so nothing is guessed.
+        let merged = merge_certbot_config(
+            Err(anyhow::anyhow!("corrupt record")),
+            SetCertbotConfigRequest {
+                renew_interval_secs: Some(60),
+                renew_before_expiration_secs: Some(86400),
+                renew_timeout_secs: Some(30),
+                acme_url: Some("https://acme-staging.example/directory".to_string()),
+            },
+        )
+        .expect("a complete request replaces the record");
+        assert_eq!(merged.renew_interval, Duration::from_secs(60));
+        assert_eq!(merged.acme_url, "https://acme-staging.example/directory");
     }
 }
 

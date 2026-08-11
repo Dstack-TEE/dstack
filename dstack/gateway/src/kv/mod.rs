@@ -1692,6 +1692,26 @@ mod corruption_tests {
     }
 
     #[test]
+    fn a_corrupt_certbot_config_can_still_be_replaced_by_an_operator() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+        put_raw(&kv, keys::GLOBAL_CERTBOT_CONFIG, b"not-messagepack");
+
+        // The key is a singleton with no delete RPC, so overwriting it is the
+        // only repair path there is; the write must not inherit the read's
+        // fail-closed behaviour. (Which fields an operator has to supply to be
+        // allowed to overwrite is decided one layer up, in `admin_service`.)
+        kv.set_certbot_config(&GlobalCertbotConfig {
+            acme_url: "https://acme-staging.example/directory".to_string(),
+            ..Default::default()
+        })
+        .expect("save should succeed");
+
+        let repaired = kv.get_certbot_config().expect("record should be readable");
+        assert_eq!(repaired.acme_url, "https://acme-staging.example/directory");
+    }
+
+    #[test]
     fn corrupt_global_records_fail_closed() {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let kv = test_kv(dir.path());
