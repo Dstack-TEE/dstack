@@ -15,6 +15,8 @@ use tokio::process::Command;
 use tokio::sync::RwLock;
 use tracing::warn;
 
+use crate::config::validate_open_file;
+
 #[derive(Clone)]
 pub enum ProcessManager {
     Supervisor(SupervisorClient),
@@ -62,7 +64,10 @@ impl ProcessManager {
 
     pub async fn deploy(&self, config: &ProcessConfig) -> Result<()> {
         match self {
-            Self::Supervisor(client) => client.deploy(config).await,
+            Self::Supervisor(client) => {
+                ensure_no_open_files(config)?;
+                client.deploy(config).await
+            }
             Self::Systemd(manager) => manager.deploy(config).await,
             Self::Auto(manager) => manager.deploy(config).await,
         }
@@ -99,6 +104,19 @@ impl ProcessManager {
             Self::Auto(manager) => manager.info(id).await,
         }
     }
+}
+
+/// Rejects a process that needs pre-opened file descriptors on a backend that
+/// cannot pass them. Launching it anyway would leave QEMU pointing at whatever
+/// the fd number happens to be, so this fails before anything is spawned.
+fn ensure_no_open_files(config: &ProcessConfig) -> Result<()> {
+    if !config.open_files.is_empty() {
+        bail!(
+            "process {} requires pre-opened files, which only the systemd process manager supports; set cvm.pm = \"systemd\" or \"auto\"",
+            config.id
+        );
+    }
+    Ok(())
 }
 
 pub struct AutoProcessManager {
@@ -355,6 +373,54 @@ impl SystemdProcessManager {
         Ok(output)
     }
 
+    fn run_args(&self, config: &ProcessConfig, unit: &str) -> Result<Vec<String>> {
+        let mut args = vec![
+            "--quiet".into(),
+            "--unit".into(),
+            unit.to_string(),
+            "--service-type=exec".into(),
+            "--property=KillMode=mixed".into(),
+            "--property=KillSignal=SIGTERM".into(),
+            "--property=SendSIGKILL=yes".into(),
+            format!("--property=TimeoutStopSec={}", self.stop_timeout),
+            "--property=ExitType=cgroup".into(),
+            "--property=Restart=no".into(),
+            format!("--description=dstack VM process {}", config.id),
+        ];
+
+        if !config.cwd.is_empty() {
+            args.push(format!("--working-directory={}", config.cwd));
+        }
+        if config.stdout.is_empty() {
+            args.push("--property=StandardOutput=null".into());
+        } else {
+            args.push(format!(
+                "--property=StandardOutput=append:{}",
+                config.stdout
+            ));
+        }
+        if config.stderr.is_empty() {
+            args.push("--property=StandardError=null".into());
+        } else {
+            args.push(format!("--property=StandardError=append:{}", config.stderr));
+        }
+        for (key, value) in &config.env {
+            args.push(format!("--setenv={key}={value}"));
+        }
+        // systemd opens these before exec and passes them in declaration
+        // order starting at fd 3, which is what the QEMU netdev arguments
+        // reference. No fdname and no `graceful` option: a missing device must
+        // fail the unit instead of shifting every later descriptor by one.
+        for path in &config.open_files {
+            validate_open_file("open_files entry", path)?;
+            args.push(format!("--property=OpenFile={path}"));
+        }
+        args.push("--".into());
+        args.push(config.command.clone());
+        args.extend(config.args.iter().cloned());
+        Ok(args)
+    }
+
     async fn launch(&self, config: &ProcessConfig) -> Result<()> {
         let unit = self.unit(&config.id);
         // Failed transient units remain loaded until reset and otherwise
@@ -363,39 +429,7 @@ impl SystemdProcessManager {
         reset.arg("reset-failed").arg(&unit);
         let _ = reset.output().await;
         let mut command = Command::new("systemd-run");
-        command
-            .arg("--quiet")
-            .arg("--unit")
-            .arg(&unit)
-            .arg("--service-type=exec")
-            .arg("--property=KillMode=mixed")
-            .arg("--property=KillSignal=SIGTERM")
-            .arg("--property=SendSIGKILL=yes")
-            .arg(format!("--property=TimeoutStopSec={}", self.stop_timeout))
-            .arg("--property=ExitType=cgroup")
-            .arg("--property=Restart=no")
-            .arg(format!("--description=dstack VM process {}", config.id));
-
-        if !config.cwd.is_empty() {
-            command.arg(format!("--working-directory={}", config.cwd));
-        }
-        if config.stdout.is_empty() {
-            command.arg("--property=StandardOutput=null");
-        } else {
-            command.arg(format!(
-                "--property=StandardOutput=append:{}",
-                config.stdout
-            ));
-        }
-        if config.stderr.is_empty() {
-            command.arg("--property=StandardError=null");
-        } else {
-            command.arg(format!("--property=StandardError=append:{}", config.stderr));
-        }
-        for (key, value) in &config.env {
-            command.arg(format!("--setenv={key}={value}"));
-        }
-        command.arg("--").arg(&config.command).args(&config.args);
+        command.args(self.run_args(config, &unit)?);
         Self::command(command, "systemd-run").await?;
 
         if !config.pidfile.is_empty() {
@@ -544,6 +578,30 @@ mod tests {
 
     #[test]
     fn unit_names_are_stable_and_do_not_embed_process_ids() {
+        let (_dir, manager) = test_manager();
+        assert_eq!(manager.unit("vm/one"), manager.unit("vm/one"));
+        assert_ne!(manager.unit("vm/one"), manager.unit("vm-two"));
+        assert!(!manager.unit("vm/one").contains("vm/one"));
+    }
+
+    fn test_config(open_files: &[&str]) -> ProcessConfig {
+        ProcessConfig {
+            id: "vm/one".into(),
+            name: "vm".into(),
+            command: "/usr/bin/qemu".into(),
+            args: vec!["-netdev".into(), "tap,id=net0,fd=3".into()],
+            env: HashMap::new(),
+            cwd: String::new(),
+            stdout: String::new(),
+            stderr: String::new(),
+            pidfile: String::new(),
+            cid: None,
+            note: String::new(),
+            open_files: open_files.iter().map(|path| path.to_string()).collect(),
+        }
+    }
+
+    fn test_manager() -> (tempfile::TempDir, SystemdProcessManager) {
         let dir = tempfile::tempdir().unwrap();
         let manager = SystemdProcessManager::new(
             dir.path().to_path_buf(),
@@ -551,9 +609,48 @@ mod tests {
             "infinity".into(),
         )
         .unwrap();
-        assert_eq!(manager.unit("vm/one"), manager.unit("vm/one"));
-        assert_ne!(manager.unit("vm/one"), manager.unit("vm-two"));
-        assert!(!manager.unit("vm/one").contains("vm/one"));
+        (dir, manager)
+    }
+
+    #[test]
+    fn renders_open_files_as_ordered_unit_properties() {
+        let (_dir, manager) = test_manager();
+        let args = manager
+            .run_args(
+                &test_config(&["/dev/tap7498", "/dev/tap7499"]),
+                "unit.service",
+            )
+            .unwrap();
+        let properties = args
+            .iter()
+            .take_while(|arg| *arg != "--")
+            .filter_map(|arg| arg.strip_prefix("--property=OpenFile="))
+            .collect::<Vec<_>>();
+        assert_eq!(properties, ["/dev/tap7498", "/dev/tap7499"]);
+        assert_eq!(args.last().unwrap(), "tap,id=net0,fd=3");
+
+        assert!(!manager
+            .run_args(&test_config(&[]), "unit.service")
+            .unwrap()
+            .iter()
+            .any(|arg| arg.contains("OpenFile")));
+    }
+
+    #[test]
+    fn rejects_open_files_that_would_change_the_unit_property() {
+        let (_dir, manager) = test_manager();
+        for path in ["relative/tap", "/dev/tap:0", "/dev/%i/tap"] {
+            manager
+                .run_args(&test_config(&[path]), "unit.service")
+                .unwrap_err();
+        }
+    }
+
+    #[test]
+    fn supervisor_backend_rejects_open_files() {
+        ensure_no_open_files(&test_config(&[])).unwrap();
+        let error = ensure_no_open_files(&test_config(&["/dev/tap7498"])).unwrap_err();
+        assert!(error.to_string().contains("systemd"), "{error:#}");
     }
 
     #[test]
