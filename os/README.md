@@ -7,6 +7,7 @@ produce it.
 os/
 ├── build.sh                  # backend selector
 ├── common/rootfs/            # backend-independent guest payload
+├── common/scripts/           # checks both backends run
 ├── image/                    # backend-independent release assembler
 ├── spec/                     # versioned backend artifact contract
 ├── mkosi/                    # experimental pinned Debian/mkosi backend

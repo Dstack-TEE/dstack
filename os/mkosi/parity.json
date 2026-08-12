@@ -61,6 +61,13 @@
       "etc/ssh/sshd_config.d/10-dstack.conf",
       "usr/lib/systemd/system/var-volatile.mount",
       "usr/lib/systemd/system/dstack-volatile-binds.service"
+    ],
+    "netfilter": [
+      "usr/sbin/xtables-nft-multi",
+      "usr/sbin/iptables",
+      "usr/sbin/ip6tables",
+      "usr/sbin/ebtables",
+      "usr/sbin/nft"
     ]
   },
   "required_kernel_globs": {
@@ -126,7 +133,11 @@
     "CONFIG_VT=n",
     "CONFIG_WIRELESS=n",
     "CONFIG_SOUND=n",
-    "CONFIG_USB_SUPPORT=n"
+    "CONFIG_USB_SUPPORT=n",
+    "CONFIG_NF_TABLES_BRIDGE=m",
+    "CONFIG_NFT_BRIDGE_META=m",
+    "CONFIG_NFT_BRIDGE_REJECT=m",
+    "CONFIG_NETFILTER_XT_TARGET_CHECKSUM=m"
   ],
   "prod_forbidden_paths": [
     "usr/bin/dstack-tee-simulator",
@@ -152,5 +163,10 @@
     "usr/bin/nvidia-smi",
     "usr/bin/nvidia-container-cli",
     "usr/sbin/zfs"
-  ]
+  ],
+  "required_symlink_resolutions": {
+    "usr/sbin/iptables": "xtables-nft-multi",
+    "usr/sbin/ip6tables": "xtables-nft-multi",
+    "usr/sbin/ebtables": "xtables-nft-multi"
+  }
 }

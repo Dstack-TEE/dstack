@@ -60,7 +60,8 @@ make -C "$src" O="$BUILD_DIR/kernel-build" PAHOLE="$pahole_wrapper" x86_64_defco
 "$src/scripts/kconfig/merge_config.sh" -m -O "$BUILD_DIR/kernel-build" \
     "$BUILD_DIR/kernel-build/.config" "$MKOSI_DIR/components/kernel/kernel.config"
 make -C "$src" O="$BUILD_DIR/kernel-build" PAHOLE="$pahole_wrapper" olddefconfig
-"$MKOSI_DIR/scripts/check-kernel-config.sh" "$BUILD_DIR/kernel-build/.config"
+"$ROOT/os/common/scripts/check-kernel-config.sh" "$BUILD_DIR/kernel-build/.config" \
+    "$MKOSI_DIR/components/kernel/kernel.config"
 make -C "$src" O="$BUILD_DIR/kernel-build" PAHOLE="$pahole_wrapper" -j"$JOBS" bzImage modules
 make -C "$src" O="$BUILD_DIR/kernel-build" \
     PAHOLE="$pahole_wrapper" INSTALL_MOD_PATH="$STAGING" modules_install
