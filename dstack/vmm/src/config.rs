@@ -798,6 +798,13 @@ fn validate_networking(networking: &Networking) -> Result<()> {
             "cvm.networking.mac_prefix must contain 1 to 3 two-digit hexadecimal bytes"
         );
     }
+    // A pre-opened chardev names one specific host device, so it belongs to a
+    // single VM NIC. Inheriting it as a host-wide default would attach every
+    // VM to the same tap device.
+    anyhow::ensure!(
+        networking.open_file.is_empty(),
+        "cvm.networking.open_file must be set per VM NIC, not as a host-wide default"
+    );
     match networking.mode {
         NetworkingMode::Bridge => anyhow::ensure!(
             !networking.bridge.trim().is_empty(),
@@ -809,6 +816,29 @@ fn validate_networking(networking: &Networking) -> Result<()> {
         ),
         NetworkingMode::User => {}
     }
+    Ok(())
+}
+
+/// First file descriptor systemd hands to a service, per the LISTEN_FDS
+/// convention shared by socket activation and `OpenFile=`.
+pub const SD_LISTEN_FDS_START: u32 = 3;
+
+/// Validates a `open_file` path before it reaches a systemd unit property.
+///
+/// systemd parses `OpenFile=` as `path:fdname:options` and expands `%`
+/// specifiers, so those characters would change the meaning of the property
+/// rather than name a device. The check is deliberately conservative: the only
+/// intended values are host device nodes such as `/dev/tap7498`.
+pub fn validate_open_file(name: &str, path: &str) -> Result<()> {
+    anyhow::ensure!(
+        path.starts_with('/'),
+        "{name} must be an absolute path: {path}"
+    );
+    anyhow::ensure!(
+        path.bytes()
+            .all(|byte| byte.is_ascii_graphic() && !matches!(byte, b':' | b',' | b'%' | b'\\')),
+        "{name} must not contain whitespace or any of ':' ',' '%' '\\': {path}"
+    );
     Ok(())
 }
 
@@ -849,6 +879,19 @@ pub struct Networking {
     // ── Custom fields ──────────────────────────────────────────────
     #[serde(default)]
     pub netdev: String,
+
+    // ── Pre-opened chardev ─────────────────────────────────────────
+    /// Absolute path to an already existing tap character device, e.g.
+    /// `/dev/tap7498` for a macvtap interface created by an external net
+    /// daemon. The process manager opens it before exec and QEMU inherits it
+    /// as a file descriptor, so the netdev becomes `tap,id=netN,fd=M`.
+    ///
+    /// Only the systemd process manager can pass file descriptors, so this is
+    /// rejected on every other launch path instead of being silently dropped:
+    /// QEMU would otherwise open an unrelated fd and attach the guest to the
+    /// wrong network.
+    #[serde(default)]
+    pub open_file: String,
 }
 
 impl Networking {
@@ -1155,6 +1198,17 @@ mod tests {
         assert_eq!(parse("supervisor"), ProcessManagerBackend::Supervisor);
         assert_eq!(parse("systemd"), ProcessManagerBackend::Systemd);
         assert_eq!(parse("auto"), ProcessManagerBackend::Auto);
+    }
+
+    #[test]
+    fn host_wide_open_file_is_rejected() {
+        let mut config = default_config();
+        config.cvm.networking.open_file = "/dev/tap7498".into();
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("open_file"));
     }
 
     #[test]

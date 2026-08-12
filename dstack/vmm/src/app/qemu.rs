@@ -9,7 +9,10 @@ use super::{
     hugepage_numa_nodes,
     image::Image,
     mr_config::{snp_host_data, tdx_mr_config_id},
-    network::{mac_address_for_vm_index, resolved_networks, validate_resolved_networks},
+    network::{
+        mac_address_for_vm_index, open_file_fd, open_files, resolved_networks,
+        validate_resolved_networks,
+    },
     pci_numa_node, round_up, GpuConfig, VmWorkDir,
 };
 use crate::{
@@ -354,6 +357,14 @@ impl VmConfig {
         let Some(socket) = prepared.swtpm_socket.as_deref() else {
             return Ok(vec![process]);
         };
+        if !process.open_files.is_empty() {
+            // The swtpm path puts vm-launcher between the process manager and
+            // QEMU. vm-launcher would inherit the descriptors and leak them
+            // into swtpm as well, and nothing keeps their numbers stable
+            // across the launcher's own file operations, so QEMU could be
+            // handed an unrelated fd. Reject instead of guessing.
+            bail!("networking.open_file is not supported for VMs that use swtpm");
+        }
         let swtpm_path = prepared
             .swtpm_path
             .as_ref()
@@ -414,6 +425,9 @@ impl VmConfig {
             pidfile: process.pidfile,
             cid: process.cid,
             note: process.note,
+            // Rejected above: file descriptor passing does not survive the
+            // vm-launcher indirection.
+            open_files: Vec::new(),
         };
         Ok(vec![launcher])
     }
@@ -628,12 +642,18 @@ impl QemuCommandBuilder<'_> {
                     }
                 }
                 NetworkingMode::Custom => {
-                    if !networking.netdev.contains(&format!("id={net_id}")) {
-                        bail!(
-                            "custom networking netdev must contain id={net_id} for interface index {index}"
-                        );
+                    if let Some(fd) = open_file_fd(&self.prepared.networks, index) {
+                        // The chardev is opened by the process manager, so the
+                        // fd number is the only handle QEMU gets.
+                        format!("tap,id={net_id},fd={fd}")
+                    } else {
+                        if !networking.netdev.contains(&format!("id={net_id}")) {
+                            bail!(
+                                "custom networking netdev must contain id={net_id} for interface index {index}"
+                            );
+                        }
+                        networking.netdev.clone()
                     }
-                    networking.netdev.clone()
                 }
             };
             command.arg("-netdev").arg(netdev);
@@ -781,6 +801,7 @@ impl QemuCommandBuilder<'_> {
 
     fn process_config(&self, command: Command) -> Result<ProcessConfig> {
         let workdir = &self.prepared.workdir;
+        let open_files = open_files(&self.prepared.networks);
         let mut arguments = vec![self.cfg.qemu_path.to_string_lossy().to_string()];
         arguments.extend(
             command
@@ -791,6 +812,13 @@ impl QemuCommandBuilder<'_> {
             arguments.splice(0..0, ["taskset", "-c", cpus].into_iter().map(String::from));
         }
         if !self.cfg.user.is_empty() {
+            if !open_files.is_empty() {
+                // sudo closes every descriptor above stderr before exec, so
+                // QEMU would be told to use an fd that no longer exists.
+                bail!(
+                    "networking.open_file requires cvm.user to be empty: sudo closes inherited file descriptors"
+                );
+            }
             arguments.splice(
                 0..0,
                 ["sudo", "-u", &self.cfg.user].into_iter().map(String::from),
@@ -819,6 +847,7 @@ impl QemuCommandBuilder<'_> {
             pidfile: workdir.pid_file().to_string_lossy().to_string(),
             cid: Some(self.vm.cid),
             note,
+            open_files,
         })
     }
 }
@@ -1265,5 +1294,50 @@ mod tests {
             .args
             .windows(2)
             .any(|args| args == ["-tpmdev", "emulator,id=tpm0,chardev=chrtpm"]));
+
+        // Pre-opened chardevs. The first NIC keeps user networking, so the
+        // two NICs that ask for a chardev take the first two descriptors
+        // systemd hands over.
+        prepared.swtpm_socket = None;
+        prepared.networks.push(config.cvm.networking.clone());
+        prepared.networks[0].mode = NetworkingMode::User;
+        for (index, path) in [(1, "/dev/tap7498"), (2, "/dev/tap7499")] {
+            let networking = &mut prepared.networks[index];
+            networking.mode = NetworkingMode::Custom;
+            networking.bridge = String::new();
+            networking.netdev = String::new();
+            networking.open_file = path.into();
+        }
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert!(process
+            .args
+            .windows(2)
+            .any(|args| args == ["-netdev", "tap,id=net1,fd=3"]));
+        assert!(process
+            .args
+            .windows(2)
+            .any(|args| args == ["-netdev", "tap,id=net2,fd=4"]));
+        assert_eq!(process.open_files, ["/dev/tap7498", "/dev/tap7499"]);
+
+        // sudo closes inherited descriptors, so the combination is rejected
+        // instead of launching QEMU against an fd that no longer exists.
+        let mut sudo_config = config.clone();
+        sudo_config.cvm.user = "qemu".into();
+        let error = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &sudo_config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap_err();
+        assert!(error.to_string().contains("cvm.user"), "{error:#}");
     }
 }

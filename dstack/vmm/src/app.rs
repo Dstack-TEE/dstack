@@ -2166,6 +2166,7 @@ mod tests {
             dhcp_start: String::new(),
             restrict: false,
             netdev: String::new(),
+            open_file: String::new(),
         }];
 
         workdir.put_manifest(&manifest)?;
@@ -2428,6 +2429,7 @@ mod tests {
             dhcp_start: String::new(),
             restrict: false,
             netdev: String::new(),
+            open_file: String::new(),
         }];
         let user_manifest = test_manifest(2048);
         let image = test_tdx_image(true);

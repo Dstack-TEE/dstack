@@ -370,6 +370,9 @@ fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Result<Option<Network
         dhcp_start: String::new(),
         restrict: false,
         netdev: String::new(),
+        // Not reachable over RPC: open_file pairs with custom mode, which is
+        // manifest-only.
+        open_file: String::new(),
     }))
 }
 
