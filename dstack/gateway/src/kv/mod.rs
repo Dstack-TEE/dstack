@@ -36,12 +36,7 @@ pub use https_client::{AppIdValidator, HttpsClientConfig};
 pub use sync_service::{fetch_peers_from_bootnode, WaveKvSyncService};
 use tracing::{error, warn};
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    net::Ipv4Addr,
-    path::Path,
-    time::Duration,
-};
+use std::{collections::BTreeMap, net::Ipv4Addr, path::Path, time::Duration};
 
 use anyhow::{Context, Result};
 
@@ -109,8 +104,11 @@ pub struct InstanceData {
 pub struct LoadedInstances {
     /// Records that decoded successfully, keyed by instance ID.
     pub decoded: BTreeMap<String, InstanceData>,
-    /// Instance IDs whose stored bytes are present but no longer decode.
-    pub undecodable: BTreeSet<String>,
+    /// Instance IDs whose stored bytes are present but no longer decode,
+    /// mapped to the decode error. Loading does not log these: the reload
+    /// path reports them on transitions, and read-only listings must stay
+    /// quiet no matter how often an operator runs them.
+    pub undecodable: BTreeMap<String, String>,
 }
 
 /// Gateway node status (stored separately for independent updates)
@@ -758,8 +756,9 @@ impl KvStore {
                     loaded.decoded.insert(instance_id.into(), data);
                 }
                 Err(err) => {
-                    error!("{err:#}");
-                    loaded.undecodable.insert(instance_id.into());
+                    loaded
+                        .undecodable
+                        .insert(instance_id.into(), format!("{err:#}"));
                 }
             }
         }
@@ -785,6 +784,35 @@ impl KvStore {
                 Some((node_id, data))
             })
             .collect()
+    }
+
+    /// Remove a gateway node from replicated state.
+    ///
+    /// Writes tombstones for the node's info, status, and sync address, and
+    /// drops this node's own last_seen observation of it. The `__peer_addr`
+    /// tombstone doubles as the cluster-wide removal signal: every gateway
+    /// prunes its sync peer set when it observes the deletion (see
+    /// [`Self::prune_removed_peers`]).
+    ///
+    /// Returns whether any of the node's persistent records was live before
+    /// the tombstones were written, so a node known only by its sync address
+    /// (registered via `SetNodeUrl` but never booted) still reports as
+    /// existing.
+    pub fn sync_remove_node(&self, node_id: NodeId) -> Result<bool> {
+        let previous = {
+            let mut persistent = self.persistent.write();
+            [
+                persistent.delete(keys::node_info(node_id))?,
+                persistent.delete(keys::node_status(node_id))?,
+                persistent.delete(keys::peer_addr(node_id))?,
+            ]
+        };
+        self.ephemeral
+            .write()
+            .delete(keys::last_seen_node(node_id, self.my_node_id))?;
+        Ok(previous
+            .into_iter()
+            .any(|entry| entry.is_some_and(|entry| !entry.is_deleted())))
     }
 
     // ==================== Node Status Sync ====================
@@ -946,6 +974,11 @@ impl KvStore {
         self.persistent.watch_prefix(keys::NODE_PREFIX)
     }
 
+    /// Watch for changes to replicated peer sync addresses
+    pub fn watch_peer_addrs(&self) -> watch::Receiver<()> {
+        self.persistent.watch_prefix(keys::PEER_ADDR_PREFIX)
+    }
+
     // ==================== Persistence ====================
 
     pub fn persist_if_dirty(&self) -> Result<bool> {
@@ -958,6 +991,49 @@ impl KvStore {
         self.persistent.write().add_peer(peer_id)?;
         self.ephemeral.write().add_peer(peer_id)?;
         Ok(())
+    }
+
+    /// Drop a node from the sync peer set of both stores.
+    ///
+    /// Returns whether the persistent store still had it as a peer.
+    pub fn remove_peer(&self, peer_id: NodeId) -> Result<bool> {
+        let removed = self.persistent.write().remove_peer(peer_id)?;
+        self.ephemeral.write().remove_peer(peer_id)?;
+        Ok(removed)
+    }
+
+    /// Drop peers whose sync address has been explicitly deleted.
+    ///
+    /// A tombstoned `__peer_addr/{id}` record is the replicated signal that
+    /// an operator removed the node (see [`Self::sync_remove_node`]). An
+    /// address that was never written does not count: bootstrap can add a
+    /// peer before its address record has synced in, and such a peer must
+    /// not be dropped for being early.
+    pub fn prune_removed_peers(&self) {
+        let peer_ids: Vec<NodeId> = self
+            .persistent
+            .read()
+            .status()
+            .peers
+            .iter()
+            .map(|peer| peer.id)
+            .collect();
+        for peer_id in peer_ids {
+            // `get` filters tombstones out, so the deletion signal is only
+            // visible through the tombstone-inclusive accessor.
+            let tombstoned = self
+                .persistent
+                .read()
+                .get_including_tombstones(&keys::peer_addr(peer_id))
+                .is_some_and(|entry| entry.is_deleted());
+            if !tombstoned {
+                continue;
+            }
+            warn!("dropping removed node {peer_id} from the sync peer set");
+            if let Err(err) = self.remove_peer(peer_id) {
+                warn!("failed to remove peer {peer_id}: {err:#}");
+            }
+        }
     }
 
     // ==================== Peer Address (in DB) ====================
@@ -1098,6 +1174,19 @@ impl KvStore {
         self.persistent
             .read()
             .decode(&keys::zt_domain_config(domain))
+    }
+
+    /// Whether any record — readable or not — exists for the domain's config.
+    ///
+    /// [`Self::get_zt_domain_config`] cannot distinguish a missing record
+    /// from a corrupt one; deletion must, or a corrupt record could never be
+    /// removed.
+    pub fn zt_domain_config_exists(&self, domain: &str) -> bool {
+        // `get` already excludes tombstones, so Some means a live record.
+        self.persistent
+            .read()
+            .get(&keys::zt_domain_config(domain))
+            .is_some()
     }
 
     /// Save ZT-Domain configuration

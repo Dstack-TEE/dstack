@@ -645,7 +645,7 @@ async fn an_operator_can_remove_a_cvm_whose_kv_record_is_unreadable() {
     assert!(!state.lock().state.instances.contains_key("peer-instance"));
     let loaded = state.kv_store.load_all_instances();
     assert!(!loaded.decoded.contains_key("peer-instance"));
-    assert!(!loaded.undecodable.contains("peer-instance"));
+    assert!(!loaded.undecodable.contains_key("peer-instance"));
 
     // The recovery operation is safe to retry after a timeout or lost reply,
     // and the retry tells the operator there was nothing left to remove.
@@ -662,6 +662,163 @@ async fn removing_an_unknown_cvm_reports_that_nothing_existed() {
     let removal = state.proxy.remove_cvm("no-such-instance").unwrap();
     assert!(!removal.record_existed);
     assert!(!removal.removed_locally);
+}
+
+#[tokio::test]
+async fn rejected_instance_records_are_visible_to_the_operator() {
+    let state = create_test_state().await;
+    sync_from_peer(&state, "peer-instance", "10.0.0.40", &test_pubkey("good"));
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+    assert!(state.proxy.rejected_instances().is_empty());
+
+    state
+        .kv_store
+        .persistent()
+        .write()
+        .put(
+            crate::kv::keys::inst("peer-instance"),
+            b"not-messagepack".to_vec(),
+        )
+        .unwrap();
+
+    // The operator can see what is wrong — with the actual decode error, and
+    // whether removal would also drop live routing — without grepping logs.
+    let rejected = state.proxy.rejected_instances();
+    assert_eq!(rejected.len(), 1);
+    assert_eq!(rejected[0].rejected.instance_id, "peer-instance");
+    assert!(format!("{:#}", rejected[0].rejected.reason).contains("corrupt record"));
+    assert!(rejected[0].active_locally);
+
+    // Once removed, the record no longer shows up as rejected.
+    state.proxy.remove_cvm("peer-instance").unwrap();
+    assert!(state.proxy.rejected_instances().is_empty());
+}
+
+#[tokio::test]
+async fn an_operator_can_remove_a_decommissioned_node() {
+    let state = create_test_state().await;
+    let kv = &state.kv_store;
+    kv.register_peer_url(7, "https://gw7.example.com:9202")
+        .unwrap();
+    kv.sync_node(
+        7,
+        &crate::kv::NodeData {
+            uuid: b"gw7-uuid".to_vec(),
+            url: "https://gw7.example.com:9202".to_string(),
+            wg_public_key: String::new(),
+            wg_endpoint: String::new(),
+            wg_ip: String::new(),
+        },
+    )
+    .unwrap();
+
+    let removal = state.proxy.remove_node(7).unwrap();
+    assert!(removal.record_existed);
+    assert!(removal.removed_from_peer_set);
+    assert!(kv.get_peer_url(7).is_none());
+    assert!(!kv.load_all_nodes().contains_key(&7));
+    let peers = kv.persistent().read().status().peers;
+    assert!(!peers.iter().any(|peer| peer.id == 7));
+
+    // The recovery operation is safe to retry after a timeout or lost reply,
+    // and the retry tells the operator there was nothing left to remove.
+    let retry = state.proxy.remove_node(7).unwrap();
+    assert!(!retry.record_existed);
+    assert!(!retry.removed_from_peer_set);
+
+    // A node known only by its sync address (registered via SetNodeUrl but
+    // never booted) still reports record_existed.
+    kv.register_peer_url(8, "https://gw8.example.com:9202")
+        .unwrap();
+    let removal = state.proxy.remove_node(8).unwrap();
+    assert!(removal.record_existed);
+}
+
+#[tokio::test]
+async fn a_node_cannot_remove_itself() {
+    let state = create_test_state().await;
+    let my_id = state.proxy.config.sync.node_id;
+    assert!(state.proxy.remove_node(my_id).is_err());
+}
+
+#[tokio::test]
+async fn peers_prune_nodes_removed_on_another_gateway() {
+    let state = create_test_state().await;
+    let kv = &state.kv_store;
+
+    // Simulate observing a removal performed elsewhere: the __peer_addr
+    // tombstone arrives via replication, not through this node's admin API.
+    kv.register_peer_url(9, "https://gw9.example.com:9202")
+        .unwrap();
+    kv.persistent()
+        .write()
+        .delete(crate::kv::keys::peer_addr(9))
+        .unwrap();
+    kv.prune_removed_peers();
+    let peers = kv.persistent().read().status().peers;
+    assert!(!peers.iter().any(|peer| peer.id == 9));
+
+    // A peer whose address record was never written is not dropped:
+    // bootstrap can add a peer before its address has synced in.
+    kv.add_peer(11).unwrap();
+    kv.prune_removed_peers();
+    let peers = kv.persistent().read().status().peers;
+    assert!(peers.iter().any(|peer| peer.id == 11));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn remove_node_reports_peer_membership_despite_a_racing_watcher() {
+    let state = create_test_state().await;
+    let kv = state.kv_store.clone();
+
+    // The production watch task prunes the peer set as soon as the
+    // __peer_addr tombstone lands. remove_node must capture membership
+    // before publishing the tombstone, or the answer it returns would
+    // depend on which of the two gets there first.
+    let mut rx = kv.watch_peer_addrs();
+    let kv_for_watch = kv.clone();
+    let watcher = tokio::spawn(async move {
+        while rx.changed().await.is_ok() {
+            kv_for_watch.prune_removed_peers();
+        }
+    });
+
+    for node_id in 100..120 {
+        kv.register_peer_url(node_id, "https://gw.example.com:9202")
+            .unwrap();
+        let removal = state.proxy.remove_node(node_id).unwrap();
+        assert!(removal.record_existed);
+        assert!(
+            removal.removed_from_peer_set,
+            "node {node_id}: membership must be captured before the tombstone publishes"
+        );
+        let peers = kv.persistent().read().status().peers;
+        assert!(!peers.iter().any(|peer| peer.id == node_id));
+    }
+
+    watcher.abort();
+}
+
+#[tokio::test]
+async fn a_zt_domain_with_a_corrupt_config_can_still_be_deleted() {
+    let state = create_test_state().await;
+    let kv = &state.kv_store;
+
+    kv.persistent()
+        .write()
+        .put(
+            crate::kv::keys::zt_domain_config("bad.example.com"),
+            b"not-messagepack".to_vec(),
+        )
+        .unwrap();
+
+    // The corrupt record is invisible to reads, but must still be deletable —
+    // otherwise it would be permanently stuck.
+    assert!(kv.get_zt_domain_config("bad.example.com").is_none());
+    assert!(kv.zt_domain_config_exists("bad.example.com"));
+
+    kv.delete_zt_domain_config("bad.example.com").unwrap();
+    assert!(!kv.zt_domain_config_exists("bad.example.com"));
 }
 
 #[tokio::test]

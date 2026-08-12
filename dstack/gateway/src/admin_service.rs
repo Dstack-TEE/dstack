@@ -15,9 +15,10 @@ use dstack_gateway_rpc::{
     GetInstanceHandshakesResponse, GetInstancePortPolicyRequest, GetInstancePortPolicyResponse,
     GetMetaResponse, GetNodeStatusesResponse, GetZtDomainRequest, GlobalConnectionsStats,
     HandshakeEntry, HostInfo, LastSeenEntry, ListCertAttestationsRequest,
-    ListCertAttestationsResponse, ListDnsCredentialsResponse, ListZtDomainsResponse,
-    NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus, PortAttrs as RpcPortAttrs,
-    PortPolicy as RpcPortPolicy, RemoveCvmRequest, RemoveCvmResponse, RenewCertResponse,
+    ListCertAttestationsResponse, ListDnsCredentialsResponse, ListRejectedInstancesResponse,
+    ListZtDomainsResponse, NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus,
+    PortAttrs as RpcPortAttrs, PortPolicy as RpcPortPolicy, RejectedInstanceInfo, RemoveCvmRequest,
+    RemoveCvmResponse, RemoveNodeRequest, RemoveNodeResponse, RenewCertResponse,
     RenewZtDomainCertRequest, RenewZtDomainCertResponse, RotateAcmeCredentialsResponse,
     SetCertbotConfigRequest, SetDefaultDnsCredentialRequest, SetInstancePortPolicyRequest,
     SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse, StoreSyncStatus,
@@ -30,8 +31,8 @@ use wavekv::node::NodeStatus as WaveKvNodeStatus;
 
 use crate::{
     kv::{
-        DnsCredential, DnsProvider, GlobalCertbotConfig, NodeStatus, PortFlags, PortPolicy,
-        ZtDomainConfig,
+        import::Rejection, DnsCredential, DnsProvider, GlobalCertbotConfig, NodeStatus, PortFlags,
+        PortPolicy, ZtDomainConfig,
     },
     main_service::Proxy,
     models::PortPolicyView,
@@ -325,6 +326,37 @@ impl AdminRpc for AdminRpcHandler {
         })
     }
 
+    async fn list_rejected_instances(self) -> Result<ListRejectedInstancesResponse> {
+        let rejected = self
+            .state
+            .rejected_instances()
+            .into_iter()
+            .map(|report| RejectedInstanceInfo {
+                instance_id: report.rejected.instance_id,
+                reason: format!("{:#}", report.rejected.reason),
+                rejection: match report.rejected.rejection {
+                    Rejection::Unusable => "unusable".to_string(),
+                    Rejection::LostConflict => "lost_conflict".to_string(),
+                },
+                active_locally: report.active_locally,
+            })
+            .collect();
+        Ok(ListRejectedInstancesResponse { rejected })
+    }
+
+    async fn remove_node(self, request: RemoveNodeRequest) -> Result<RemoveNodeResponse> {
+        let removal = self.state.remove_node(request.node_id)?;
+        warn!(
+            "admin removed node {} from WaveKV and the sync peer set \
+             (record existed: {}, was a sync peer: {})",
+            request.node_id, removal.record_existed, removal.removed_from_peer_set
+        );
+        Ok(RemoveNodeResponse {
+            record_existed: removal.record_existed,
+            removed_from_peer_set: removal.removed_from_peer_set,
+        })
+    }
+
     // ==================== DNS Credential Management ====================
 
     async fn list_dns_credentials(self) -> Result<ListDnsCredentialsResponse> {
@@ -556,9 +588,13 @@ impl AdminRpc for AdminRpcHandler {
         let kv_store = self.state.kv_store();
 
         let domain = normalize_zt_domain(&request.domain)?;
-        kv_store
-            .get_zt_domain_config(&domain)
-            .context("ZT-Domain config not found")?;
+        // A corrupt config must still be deletable, so check for the record
+        // itself: get_zt_domain_config cannot tell missing from unreadable,
+        // and refusing would leave a corrupt record permanently stuck.
+        ensure!(
+            kv_store.zt_domain_config_exists(&domain),
+            "ZT-Domain config not found"
+        );
 
         // Delete config (cert data, acme, attestations are kept for historical purposes)
         kv_store.delete_zt_domain_config(&domain)?;
