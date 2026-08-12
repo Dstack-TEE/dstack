@@ -290,6 +290,16 @@ Compose file content (first 200 chars):
         );
     }
 
+    if !dry_run
+        && resolved_networks(&manifest, &config.cvm)
+            .iter()
+            .any(|network| !network.open_file.is_empty())
+    {
+        anyhow::bail!(
+            "one-shot execution cannot pass pre-opened file descriptors to QEMU; run the VMM server with cvm.pm = \"systemd\" or use --dry-run"
+        );
+    }
+
     let process_configs = vm_builder_config
         .config_qemu(&workdir_path, &config.cvm, &gpus)
         .context("Failed to build QEMU configuration")?;

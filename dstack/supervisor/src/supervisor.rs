@@ -59,6 +59,12 @@ impl Supervisor {
         if id.is_empty() {
             return Err(anyhow::anyhow!("Process ID is empty"));
         }
+        if !config.open_files.is_empty() {
+            // Supervisor spawns processes without pre-opened file descriptors,
+            // so honoring the rest of the config would start a process that is
+            // missing the files it depends on.
+            bail!("open_files is not supported by supervisor");
+        }
         if self
             .info(&id)
             .is_some_and(|info| info.state.status.is_running())
