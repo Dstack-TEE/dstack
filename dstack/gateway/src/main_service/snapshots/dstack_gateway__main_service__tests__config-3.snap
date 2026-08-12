@@ -10,11 +10,11 @@ ListenPort = 51820
 
 
 [Peer]
-PublicKey = test-pubkey-0
+PublicKey = dGVzdC1wdWJrZXktMHRlc3QtcHVia2V5LTB0ZXN0LXA=
 AllowedIPs = 10.0.0.2/32
 PersistentKeepalive = 25
 
 [Peer]
-PublicKey = test-pubkey-1
+PublicKey = dGVzdC1wdWJrZXktMXRlc3QtcHVia2V5LTF0ZXN0LXA=
 AllowedIPs = 10.0.0.3/32
 PersistentKeepalive = 25

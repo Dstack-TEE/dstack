@@ -12,7 +12,6 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use auth_client::AuthClient;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use crate::distributed_certbot::DistributedCertBot;
 use cmd_lib::run_cmd as cmd;
@@ -40,27 +39,19 @@ use crate::{
     cert_store::{CertResolver, CertStoreBuilder},
     config::{Config, TlsConfig},
     kv::{
-        fetch_peers_from_bootnode, AppIdValidator, CertData, HttpsClientConfig, InstanceData,
-        KvStore, NodeData, NodeStatus, PortPolicy, WaveKvSyncService,
+        fetch_peers_from_bootnode, import, AppIdValidator, CertData, HttpsClientConfig,
+        InstanceData, KvStore, LoadedInstances, NodeData, NodeStatus, PortPolicy,
+        WaveKvSyncService,
     },
-    models::{InstanceInfo, PortPolicyView, WgConf},
+    models::{InstanceInfo, PortPolicyView, WgConf, WgPeer},
     proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo, AppAddressResolver},
+    time::{decode_ts, encode_ts, now_secs},
 };
 
 mod auth_client;
 mod handshakes;
 
 use handshakes::LatestHandshakesCache;
-
-fn validate_wireguard_public_key(public_key: &str) -> Result<()> {
-    let decoded = STANDARD
-        .decode(public_key)
-        .context("invalid WireGuard public key encoding")?;
-    if decoded.len() != 32 {
-        bail!("WireGuard public key must decode to 32 bytes");
-    }
-    Ok(())
-}
 
 #[derive(Clone)]
 pub struct Proxy {
@@ -124,6 +115,9 @@ pub(crate) struct ProxyState {
     kv_store: Arc<KvStore>,
     handshake_cache: Arc<LatestHandshakesCache>,
     admin_shutdown: Option<rocket::Shutdown>,
+    /// Reason last logged for each KV instance record this node refuses, so a
+    /// record that stays bad is reported once rather than on every reload.
+    reported_rejections: BTreeMap<String, String>,
 }
 
 /// Options for creating a Proxy instance
@@ -176,11 +170,12 @@ impl ProxyInner {
         let instances = kv_store.load_all_instances();
         let nodes = kv_store.load_all_nodes();
         info!(
-            "Loaded state from WaveKV: {} instances, {} nodes",
-            instances.len(),
+            "Loaded state from WaveKV: {} instances ({} unreadable), {} nodes",
+            instances.decoded.len(),
+            instances.undecodable.len(),
             nodes.len()
         );
-        let state = build_state_from_kv_store(instances);
+        let state = build_state_from_kv_store(&config, instances);
 
         // This node's own records are written *after* the bootstrap below, not
         // here. A local write allocates a sequence number, and after a
@@ -257,6 +252,7 @@ impl ProxyInner {
             kv_store: kv_store.clone(),
             handshake_cache: handshake_cache.clone(),
             admin_shutdown: None,
+            reported_rejections: BTreeMap::new(),
         });
         let auth_client = AuthClient::new(config.auth.clone());
         // Bootstrap WaveKV first if sync is enabled, so certbot can load certs from peers
@@ -307,10 +303,7 @@ impl ProxyInner {
             })?;
             let key_pem = std::fs::read_to_string(cert_key)
                 .with_context(|| format!("failed to read proxy cert_key {}", cert_key.display()))?;
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
+            let now = now_secs();
             let cert_data = CertData {
                 cert_pem,
                 key_pem,
@@ -467,7 +460,9 @@ impl Proxy {
         // The account URI comes from the published credentials; the attestation
         // record is written best-effort and may lag behind a rotation, so it
         // only supplies the quote when it matches the current account.
-        let attestation = kv_store.get_acme_attestation();
+        let attestation = kv_store
+            .get_acme_attestation()
+            .context("failed to read the ACME account attestation")?;
         let account_uri = kv_store
             .get_acme_credentials()
             .context("call RotateAcmeCredentials to replace the stored ACME credentials")?
@@ -529,7 +524,7 @@ impl Proxy {
         if instance_id.is_empty() {
             bail!("[{instance_id}] instance id is empty");
         }
-        validate_wireguard_public_key(client_public_key)
+        import::validate_wg_public_key(client_public_key)
             .with_context(|| format!("[{instance_id}] invalid client public key"))?;
         let client_info = state
             .new_client_by_id(
@@ -581,11 +576,63 @@ impl Proxy {
     }
 }
 
-fn build_state_from_kv_store(instances: BTreeMap<String, InstanceData>) -> ProxyStateMut {
+/// Log the records a KV import refused, one line each.
+///
+/// A refused record makes its CVM invisible to this node, so it must never be
+/// a silent skip.
+fn report_rejected_instances(rejected: &[import::RejectedInstance]) {
+    for import::RejectedInstance {
+        instance_id,
+        reason,
+        ..
+    } in rejected
+    {
+        error!("ignoring KV instance record {instance_id}: {reason:#}");
+    }
+}
+
+/// Report refused records, but only what has changed since the last reload.
+///
+/// A record is refused because of what it contains, so nothing about the next
+/// reload will make it acceptable — it stays refused until someone rewrites it.
+/// Logging the whole set every round turns one stuck record into an unbounded
+/// stream of identical `error!` lines, at whatever rate peer syncs happen to
+/// wake the watch task, which buries the very first occurrence. Report a record
+/// when it starts being refused or its reason changes, and again when it
+/// recovers, so the log carries transitions instead of a level.
+fn report_new_rejections(
+    reported: &mut BTreeMap<String, String>,
+    rejected: &[import::RejectedInstance],
+) {
+    let mut current = BTreeMap::new();
+    for import::RejectedInstance {
+        instance_id,
+        reason,
+        ..
+    } in rejected
+    {
+        let reason = format!("{reason:#}");
+        if reported.get(instance_id) != Some(&reason) {
+            error!("ignoring KV instance record {instance_id}: {reason}");
+        }
+        current.insert(instance_id.clone(), reason);
+    }
+    for instance_id in reported.keys() {
+        if !current.contains_key(instance_id) {
+            info!("KV instance record {instance_id} is usable again");
+        }
+    }
+    *reported = current;
+}
+
+fn build_state_from_kv_store(config: &Config, instances: LoadedInstances) -> ProxyStateMut {
     let mut state = ProxyStateMut::default();
 
+    let accepted = import::accept_instances(&config.wg, instances);
+    report_rejected_instances(&accepted.rejected);
+
     // Build instances
-    for (instance_id, data) in instances {
+    for (instance_id, data) in accepted.instances {
         let info = InstanceInfo {
             id: instance_id.clone(),
             app_id: data.app_id.clone(),
@@ -638,7 +685,17 @@ async fn start_certbot_task(proxy: Proxy) {
 
         loop {
             // Get current config from KV store (allows dynamic updates)
-            let renew_interval = proxy.kv_store.get_certbot_config().renew_interval;
+            let renew_interval = match proxy.kv_store.get_certbot_config() {
+                Ok(config) => config.renew_interval,
+                Err(err) => {
+                    // Falling back to the defaults here would switch acme_url
+                    // back to Let's Encrypt production; wait for an operator to
+                    // repair the record instead.
+                    error!("failed to read certbot config, skipping renewal round: {err:?}");
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    continue;
+                }
+            };
             if renew_interval.is_zero() {
                 // Check again later if disabled
                 tokio::time::sleep(Duration::from_secs(60)).await;
@@ -879,10 +936,48 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
     Ok(())
 }
 
+/// Grace period protecting a freshly registered local instance from being
+/// dropped by the "gone from KV" pass.
+///
+/// A registration writes to ProxyState and to the KV store under the same lock,
+/// so the two cannot normally disagree — but if that write failed, the instance
+/// would otherwise be evicted before the CVM's next registration refresh.
+const LOCAL_REGISTRATION_GRACE: Duration = Duration::from_secs(60);
+
 fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> {
-    let instances = store.load_all_instances();
+    let accepted = import::accept_instances(&proxy.config.wg, store.load_all_instances());
+    // An unreadable record is not a deletion. Its instance keeps whatever the
+    // data plane already holds, so it must be exempt from the removal pass
+    // below; a record that lost an IP or key conflict is not exempt, because
+    // the winner owns that IP or key and the loser has to stop being routable.
+    let unreadable: HashSet<String> = accepted
+        .unreadable()
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let instances = accepted.instances;
     let mut state = proxy.lock();
+    report_new_rejections(&mut state.reported_rejections, &accepted.rejected);
     let mut wg_changed = false;
+
+    // Instances deleted (or recycled) on another node must stop being routable
+    // here too, rather than lingering until this node's own recycle timeout.
+    let removed: Vec<String> = state
+        .state
+        .instances
+        .iter()
+        .filter(|(id, info)| {
+            !instances.contains_key(*id)
+                && !unreadable.contains(id.as_str())
+                && info.reg_time.elapsed().unwrap_or_default() > LOCAL_REGISTRATION_GRACE
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    for instance_id in removed {
+        info!("WaveKV: instance {instance_id} was deleted remotely, dropping it");
+        state.forget_instance(&instance_id);
+        wg_changed = true;
+    }
 
     for (instance_id, data) in instances {
         let new_info = InstanceInfo {
@@ -937,26 +1032,7 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
 
 impl ProxyState {
     fn valid_ip(&self, ip: Ipv4Addr) -> bool {
-        // Must be within client IP range
-        if !self.config.wg.client_ip_range.contains(&ip) {
-            return false;
-        }
-        if self.config.wg.ip.broadcast() == ip {
-            return false;
-        }
-        if self.config.wg.ip.addr() == ip {
-            return false;
-        }
-        if self
-            .config
-            .wg
-            .reserved_net
-            .iter()
-            .any(|net| net.contains(&ip))
-        {
-            return false;
-        }
-        true
+        self.config.wg.is_valid_client_ip(ip)
     }
     fn alloc_ip(&mut self) -> Option<Ipv4Addr> {
         for ip in self.config.wg.client_ip_range.hosts() {
@@ -986,9 +1062,10 @@ impl ProxyState {
         if app_id.is_empty() {
             bail!("app_id is empty");
         }
-        if public_key.is_empty() {
-            bail!("public_key is empty");
-        }
+        // Checked here as well as on the KV import path: a key `wg` refuses
+        // makes it reject the whole config file, so it must never enter the
+        // instance table in the first place.
+        import::validate_wg_public_key(public_key).context("invalid WireGuard public key")?;
         if self
             .state
             .instances
@@ -1177,10 +1254,38 @@ impl ProxyState {
     }
 
     fn generate_wg_config(&self) -> Result<String> {
+        // Last check before the values leave Rust: `wg syncconf` refuses the
+        // entire file when one peer is malformed, so a record that somehow got
+        // past the import boundary must cost only its own routing.
+        let mut peers = Vec::with_capacity(self.state.instances.len());
+        for info in self.state.instances.values() {
+            if let Err(err) = import::validate_wg_public_key(&info.public_key) {
+                error!("excluding instance {} from wg config: {err:#}", info.id);
+                continue;
+            }
+            if info.public_key == self.config.wg.public_key {
+                error!(
+                    "excluding instance {} from wg config: public key belongs to this gateway",
+                    info.id
+                );
+                continue;
+            }
+            if !self.config.wg.is_routable_client_ip(info.ip) {
+                error!(
+                    "excluding instance {} from wg config: ip {} is outside the wg network",
+                    info.id, info.ip
+                );
+                continue;
+            }
+            peers.push(WgPeer {
+                public_key: &info.public_key,
+                ip: info.ip,
+            });
+        }
         let model = WgConf {
             private_key: &self.config.wg.private_key,
             listen_port: self.config.wg.listen_port,
-            peers: (&self.state.instances).into(),
+            peers,
         };
         Ok(model.render()?)
     }
@@ -1338,18 +1443,12 @@ impl ProxyState {
         self.handshake_cache.latest(stale_timeout)
     }
 
-    fn remove_instance(&mut self, id: &str) -> Result<()> {
-        let info = self
-            .state
-            .instances
-            .remove(id)
-            .context("instance not found")?;
-
-        // Sync deletion to KvStore
-        if let Err(err) = self.kv_store.sync_delete_instance(id) {
-            error!("Failed to sync instance deletion to KvStore: {err:?}");
-        }
-
+    /// Drop an instance from the local state only.
+    ///
+    /// Used when the KV store already says the instance is gone; the syncing
+    /// counterpart is [`Self::remove_instance`].
+    fn forget_instance(&mut self, id: &str) -> Option<InstanceInfo> {
+        let info = self.state.instances.remove(id)?;
         self.state.allocated_addresses.remove(&info.ip);
         self.state.top_n.remove(&info.app_id);
         if let Some(app_instances) = self.state.apps.get_mut(&info.app_id) {
@@ -1357,6 +1456,16 @@ impl ProxyState {
             if app_instances.is_empty() {
                 self.state.apps.remove(&info.app_id);
             }
+        }
+        Some(info)
+    }
+
+    fn remove_instance(&mut self, id: &str) -> Result<()> {
+        self.forget_instance(id).context("instance not found")?;
+
+        // Sync deletion to KvStore
+        if let Err(err) = self.kv_store.sync_delete_instance(id) {
+            error!("Failed to sync instance deletion to KvStore: {err:?}");
         }
         Ok(())
     }
@@ -1450,10 +1559,7 @@ impl ProxyState {
         }
 
         // Update this node's last_seen in KvStore
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+        let now = now_secs();
         if let Err(err) = self
             .kv_store
             .sync_node_last_seen(self.config.sync.node_id, now)
@@ -1510,16 +1616,6 @@ impl ProxyState {
             })
             .collect()
     }
-}
-
-fn decode_ts(ts: u64) -> SystemTime {
-    UNIX_EPOCH
-        .checked_add(Duration::from_secs(ts))
-        .unwrap_or(UNIX_EPOCH)
-}
-
-pub(crate) fn encode_ts(ts: SystemTime) -> u64 {
-    ts.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 pub struct RpcHandler {

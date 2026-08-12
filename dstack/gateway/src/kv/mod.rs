@@ -29,15 +29,23 @@
 //! - `last_seen/node/{node_id}/{seen_by_node_id}` → u64 (timestamp)
 
 mod https_client;
+pub mod import;
 mod sync_service;
 
 pub use https_client::{AppIdValidator, HttpsClientConfig};
 pub use sync_service::{fetch_peers_from_bootnode, WaveKvSyncService};
-use tracing::warn;
+use tracing::{error, warn};
 
-use std::{collections::BTreeMap, net::Ipv4Addr, path::Path, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::Ipv4Addr,
+    path::Path,
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
+
+use crate::time::now_secs;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use wavekv::{node::NodeState, types::NodeId, Node};
@@ -87,6 +95,22 @@ pub struct InstanceData {
     /// ClearInstancePortPolicy.
     #[serde(default)]
     pub admin_port_policy: Option<PortPolicy>,
+}
+
+/// The `inst/` records currently in the KV store, split by readability.
+///
+/// A key that is absent or tombstoned does not appear here at all — that is the
+/// signal that the instance was deleted. A key whose bytes no longer decode
+/// lands in `undecodable`, which is deliberately *not* the same signal: the
+/// record still exists, we just cannot read it, and dropping the instance from
+/// the data plane on that basis would turn one unreadable record into an
+/// outage.
+#[derive(Debug, Default)]
+pub struct LoadedInstances {
+    /// Records that decoded successfully, keyed by instance ID.
+    pub decoded: BTreeMap<String, InstanceData>,
+    /// Instance IDs whose stored bytes are present but no longer decode.
+    pub undecodable: BTreeSet<String>,
 }
 
 /// Gateway node status (stored separately for independent updates)
@@ -408,6 +432,40 @@ pub fn gunzip_bounded(data: &[u8], limit: usize) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// How far into the future a replicated observation may be timestamped before
+/// this node ignores it.
+///
+/// `handshake/` and `last_seen/` records are wall-clock seconds written by
+/// whichever node made the observation, and the gateway aggregates them with
+/// `max`. Without a horizon, a single node with a fast clock — or one corrupt
+/// record near `u64::MAX` — keeps a dead CVM "alive" on every node forever:
+/// `recycle()` never fires and top-N routing keeps steering traffic at it.
+/// 5 minutes is well above the drift between NTP-synced hosts and well below
+/// the recycle timeout.
+pub const MAX_CLOCK_DRIFT_SECS: u64 = 300;
+
+/// Drop observations timestamped beyond [`MAX_CLOCK_DRIFT_SECS`] into the
+/// future, logging once per call with the number dropped.
+fn drop_future_observations<T>(
+    observations: impl Iterator<Item = T>,
+    timestamp: impl Fn(&T) -> u64,
+    kind: &str,
+) -> Vec<T> {
+    let horizon = now_secs().saturating_add(MAX_CLOCK_DRIFT_SECS);
+    let mut dropped = 0usize;
+    let kept = observations
+        .filter(|item| {
+            let plausible = timestamp(item) <= horizon;
+            dropped += usize::from(!plausible);
+            plausible
+        })
+        .collect();
+    if dropped > 0 {
+        warn!("ignored {dropped} {kind} observation(s) dated more than {MAX_CLOCK_DRIFT_SECS}s ahead of local time");
+    }
+    kept
+}
+
 /// Encode a KV value as MessagePack.
 ///
 /// Structs are encoded as maps keyed by field name rather than as positional
@@ -425,6 +483,7 @@ pub fn decode<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T> {
 
 trait GetPutCodec {
     fn decode<T: for<'de> serde::Deserialize<'de>>(&self, key: &str) -> Option<T>;
+    fn decode_strict<T: for<'de> serde::Deserialize<'de>>(&self, key: &str) -> Result<Option<T>>;
     fn put_encoded<T: serde::Serialize>(&mut self, key: String, value: &T) -> Result<()>;
     fn iter_decoded<T: for<'de> serde::Deserialize<'de>>(
         &self,
@@ -434,6 +493,10 @@ trait GetPutCodec {
         &self,
         prefix: &str,
     ) -> impl Iterator<Item = T>;
+    fn iter_decoded_strict<T: for<'de> serde::Deserialize<'de>>(
+        &self,
+        prefix: &str,
+    ) -> impl Iterator<Item = (String, Result<T>)>;
 }
 
 impl GetPutCodec for NodeState {
@@ -447,6 +510,27 @@ impl GetPutCodec for NodeState {
                     None
                 }
             })
+    }
+
+    /// Three-state read: `Ok(None)` for a key that is missing or tombstoned,
+    /// `Ok(Some)` for a decodable value, `Err` for a stored value that no
+    /// longer decodes.
+    ///
+    /// [`Self::decode`] folds corruption into `None`, which is right for
+    /// per-instance records (skip the bad one, keep serving the rest) and
+    /// wrong for global records, where "absent" means "apply the default" and
+    /// a corrupt record would silently change cluster-wide behavior.
+    fn decode_strict<T: for<'de> serde::Deserialize<'de>>(&self, key: &str) -> Result<Option<T>> {
+        let Some(entry) = self.get(key) else {
+            return Ok(None);
+        };
+        // A `None` value is a tombstone: the key was deliberately deleted.
+        let Some(value) = entry.value.as_ref() else {
+            return Ok(None);
+        };
+        decode(value)
+            .map(Some)
+            .with_context(|| format!("corrupt record at KV key {key}"))
     }
 
     fn put_encoded<T: serde::Serialize>(&mut self, key: String, value: &T) -> Result<()> {
@@ -488,6 +572,25 @@ impl GetPutCodec for NodeState {
             Some(value)
         })
     }
+
+    /// Like [`Self::iter_decoded`], but surfaces undecodable records instead of
+    /// skipping them.
+    ///
+    /// Tombstoned keys are still skipped — a deleted record and an unreadable
+    /// one call for opposite responses, and only this form lets the caller tell
+    /// them apart.
+    fn iter_decoded_strict<T: for<'de> serde::Deserialize<'de>>(
+        &self,
+        prefix: &str,
+    ) -> impl Iterator<Item = (String, Result<T>)> {
+        self.iter_by_prefix(prefix).filter_map(|(key, entry)| {
+            let value = entry.value.as_ref()?;
+            Some((
+                key.to_string(),
+                decode(value).with_context(|| format!("corrupt record at KV key {key}")),
+            ))
+        })
+    }
 }
 
 /// Sync store wrapping two WaveKV Nodes (persistent and ephemeral).
@@ -504,16 +607,84 @@ pub struct KvStore {
     my_node_id: NodeId,
 }
 
+/// Whether opening the persistent store failed because the storage is
+/// unavailable, rather than because the stored bytes are unreadable.
+///
+/// wavekv reports both through `anyhow`, so they have to be told apart by what
+/// is in the error chain. Unreadable content arrives as a decode failure, a
+/// checksum or header `bail!`, or a read that ran off the end of a truncated
+/// file — the last of which is an `io::Error`, but only ever `UnexpectedEof` or
+/// `InvalidData`. Every other `io::Error` is the storage layer talking: no
+/// space left, permission denied, too many open files, the data volume not
+/// mounted yet.
+fn is_storage_failure(err: &anyhow::Error) -> bool {
+    err.chain()
+        .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
+        .any(|io| {
+            !matches!(
+                io.kind(),
+                std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::InvalidData
+            )
+        })
+}
+
 impl KvStore {
-    /// Create a new sync store
+    /// Create a new sync store.
+    ///
+    /// If the on-disk WAL/snapshot cannot be *read*, the data directory is
+    /// moved aside and the store starts empty rather than refusing to boot: the
+    /// persistent state is replicated on every peer, a torn WAL tail is the
+    /// normal artifact of a crash, and a gateway that cannot start serves no
+    /// traffic at all. Nothing is deleted — the unreadable directory is kept
+    /// under `<data_dir>.corrupt.<unix_ts>` for inspection.
+    ///
+    /// A failure of the *storage* is a different matter and fails the boot. A
+    /// full disk, an exhausted fd table or a volume that has not finished
+    /// mounting all say nothing about the contents, so moving the directory
+    /// aside would discard intact state — and, because the condition persists
+    /// across restarts, would do it again on every attempt, burying the real
+    /// data under a pile of `.corrupt.*` directories. Failing here instead
+    /// leaves the state alone and puts the actual cause in front of the
+    /// operator, which for a single-node deployment holding the only copy of
+    /// the ACME account and DNS credentials is the difference between a restart
+    /// and a rebuild.
     pub fn new(
         my_node_id: NodeId,
         peer_ids: Vec<NodeId>,
         data_dir: impl AsRef<Path>,
     ) -> Result<Self> {
-        let persistent =
-            Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir.as_ref())
-                .context("failed to create persistent wavekv node")?;
+        let data_dir = data_dir.as_ref();
+        let persistent = match Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir) {
+            Ok(node) => node,
+            Err(err) if is_storage_failure(&err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "cannot open the WaveKV data dir {}; refusing to start rather than \
+                         quarantine a directory whose contents are most likely intact",
+                        data_dir.display()
+                    )
+                });
+            }
+            Err(err) => {
+                // Keep the original open error in the context: if moving the
+                // directory aside also fails, the reason the open failed is the
+                // more useful half of the diagnosis and is otherwise lost.
+                let quarantined = quarantine_data_dir(data_dir).with_context(|| {
+                    format!(
+                        "failed to open the WaveKV data dir ({err:#}) and failed to \
+                         move it aside for recovery"
+                    )
+                })?;
+                error!(
+                    "WaveKV data dir {} is unreadable ({err:#}); moved it to {} and started empty — \
+                     state will be re-fetched from peers",
+                    data_dir.display(),
+                    quarantined.display(),
+                );
+                Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir)
+                    .context("failed to create persistent wavekv node on a fresh data dir")?
+            }
+        };
 
         // Get peers from persistent store (may have been restored from WAL)
         // and include them when creating ephemeral store
@@ -568,16 +739,28 @@ impl KvStore {
         Ok(())
     }
 
-    /// Load all instances from sync store (for initial sync on startup)
-    pub fn load_all_instances(&self) -> BTreeMap<String, InstanceData> {
-        self.persistent
+    /// Load all instances from the sync store.
+    pub fn load_all_instances(&self) -> LoadedInstances {
+        let mut loaded = LoadedInstances::default();
+        for (key, result) in self
+            .persistent
             .read()
-            .iter_decoded(keys::INST_PREFIX)
-            .filter_map(|(key, data)| {
-                let instance_id = keys::parse_inst_key(&key)?;
-                Some((instance_id.into(), data))
-            })
-            .collect()
+            .iter_decoded_strict::<InstanceData>(keys::INST_PREFIX)
+        {
+            let Some(instance_id) = keys::parse_inst_key(&key) else {
+                continue;
+            };
+            match result {
+                Ok(data) => {
+                    loaded.decoded.insert(instance_id.into(), data);
+                }
+                Err(err) => {
+                    error!("{err:#}");
+                    loaded.undecodable.insert(instance_id.into());
+                }
+            }
+        }
+        loaded
     }
 
     // ==================== Node Sync ====================
@@ -677,9 +860,13 @@ impl KvStore {
         Ok(())
     }
 
-    /// Get all handshake observations for an instance (from all nodes)
+    /// Get all handshake observations for an instance (from all nodes).
+    ///
+    /// Observations dated into the future are dropped; see
+    /// [`MAX_CLOCK_DRIFT_SECS`].
     pub fn get_instance_handshakes(&self, instance_id: &str) -> BTreeMap<NodeId, u64> {
-        self.ephemeral
+        let observations = self
+            .ephemeral
             .read()
             .iter_decoded(&keys::handshake_prefix(instance_id))
             .filter_map(|(key, ts)| {
@@ -687,14 +874,22 @@ impl KvStore {
                 let observer: NodeId = suffix.parse().ok()?;
                 Some((observer, ts))
             })
+            .collect::<Vec<_>>();
+        drop_future_observations(observations.into_iter(), |(_, ts)| *ts, "handshake")
+            .into_iter()
             .collect()
     }
 
-    /// Get the latest handshake timestamp for an instance (max across all nodes)
+    /// Get the latest handshake timestamp for an instance (max across all
+    /// nodes), ignoring future-dated observations.
     pub fn get_instance_latest_handshake(&self, instance_id: &str) -> Option<u64> {
-        self.ephemeral
+        let observations = self
+            .ephemeral
             .read()
             .iter_decoded_values(&keys::handshake_prefix(instance_id))
+            .collect::<Vec<u64>>();
+        drop_future_observations(observations.into_iter(), |ts| *ts, "handshake")
+            .into_iter()
             .max()
     }
 
@@ -706,9 +901,10 @@ impl KvStore {
         Ok(())
     }
 
-    /// Get all observations of a node's last_seen
+    /// Get all observations of a node's last_seen, ignoring future-dated ones.
     pub fn get_node_last_seen_by_all(&self, node_id: NodeId) -> BTreeMap<NodeId, u64> {
-        self.ephemeral
+        let observations = self
+            .ephemeral
             .read()
             .iter_decoded(&keys::last_seen_node_prefix(node_id))
             .filter_map(|(key, ts)| {
@@ -716,14 +912,22 @@ impl KvStore {
                 let seen_by: NodeId = suffix.parse().ok()?;
                 Some((seen_by, ts))
             })
+            .collect::<Vec<_>>();
+        drop_future_observations(observations.into_iter(), |(_, ts)| *ts, "node last_seen")
+            .into_iter()
             .collect()
     }
 
-    /// Get the latest last_seen timestamp for a node (max across all observers)
+    /// Get the latest last_seen timestamp for a node (max across all
+    /// observers), ignoring future-dated observations.
     pub fn get_node_latest_last_seen(&self, node_id: NodeId) -> Option<u64> {
-        self.ephemeral
+        let observations = self
+            .ephemeral
             .read()
             .iter_decoded_values(&keys::last_seen_node_prefix(node_id))
+            .collect::<Vec<u64>>();
+        drop_future_observations(observations.into_iter(), |ts| *ts, "node last_seen")
+            .into_iter()
             .max()
     }
 
@@ -783,10 +987,7 @@ impl KvStore {
     }
 
     pub fn update_peer_last_seen(&self, peer_id: NodeId) {
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+        let ts = now_secs();
         let key = keys::last_seen_node(peer_id, self.my_node_id);
         if let Err(e) = self.ephemeral.write().put_encoded(key, &ts) {
             warn!("failed to update peer {peer_id} last_seen: {e}");
@@ -807,9 +1008,15 @@ impl KvStore {
 
     // ==================== DNS Credential Management ====================
 
-    /// Get a DNS credential by ID
-    pub fn get_dns_credential(&self, cred_id: &str) -> Option<DnsCredential> {
-        self.persistent.read().decode(&keys::dns_cred(cred_id))
+    /// Get a DNS credential by ID.
+    ///
+    /// Fails closed on a corrupt record: silently reading it as "no such
+    /// credential" would make the certbot fall back to the default credential
+    /// and issue the domain's certificate through the wrong DNS account.
+    pub fn get_dns_credential(&self, cred_id: &str) -> Result<Option<DnsCredential>> {
+        self.persistent
+            .read()
+            .decode_strict(&keys::dns_cred(cred_id))
     }
 
     /// Save a DNS credential
@@ -834,9 +1041,12 @@ impl KvStore {
             .collect()
     }
 
-    /// Get the default DNS credential ID
-    pub fn get_default_dns_credential_id(&self) -> Option<String> {
-        self.persistent.read().decode(keys::DNS_CRED_DEFAULT)
+    /// Get the default DNS credential ID.
+    ///
+    /// Fails closed on a corrupt record for the same reason as
+    /// [`Self::get_dns_credential`].
+    pub fn get_default_dns_credential_id(&self) -> Result<Option<String>> {
+        self.persistent.read().decode_strict(keys::DNS_CRED_DEFAULT)
     }
 
     /// Set the default DNS credential ID
@@ -848,19 +1058,26 @@ impl KvStore {
     }
 
     /// Get the default DNS credential (resolves the ID to the actual credential)
-    pub fn get_default_dns_credential(&self) -> Option<DnsCredential> {
-        let cred_id = self.get_default_dns_credential_id()?;
+    pub fn get_default_dns_credential(&self) -> Result<Option<DnsCredential>> {
+        let Some(cred_id) = self.get_default_dns_credential_id()? else {
+            return Ok(None);
+        };
         self.get_dns_credential(&cred_id)
     }
 
     // ==================== Global Certbot Config ====================
 
-    /// Get global certbot configuration (returns default if not set)
-    pub fn get_certbot_config(&self) -> GlobalCertbotConfig {
-        self.persistent
+    /// Get global certbot configuration (returns default if not set).
+    ///
+    /// Fails closed on a corrupt record: falling back to the defaults would
+    /// silently switch `acme_url` back to Let's Encrypt production and reset
+    /// every renewal interval on this node.
+    pub fn get_certbot_config(&self) -> Result<GlobalCertbotConfig> {
+        Ok(self
+            .persistent
             .read()
-            .decode(keys::GLOBAL_CERTBOT_CONFIG)
-            .unwrap_or_default()
+            .decode_strict(keys::GLOBAL_CERTBOT_CONFIG)?
+            .unwrap_or_default())
     }
 
     /// Set global certbot configuration
@@ -896,7 +1113,12 @@ impl KvStore {
         Ok(())
     }
 
-    /// List all ZT-Domain configurations
+    /// List all ZT-Domain configurations.
+    ///
+    /// A record whose `domain` disagrees with the domain in its key is
+    /// skipped: everything downstream (certificate issuance, DNS-01 challenge,
+    /// `cert/{domain}/data`) is driven by the value, so honouring it would let
+    /// one poisoned record request a certificate for an unrelated domain.
     pub fn list_zt_domain_configs(&self) -> Vec<ZtDomainConfig> {
         let state = self.persistent.read();
         state
@@ -907,14 +1129,23 @@ impl KvStore {
                     return None;
                 }
                 let value = entry.value.as_ref()?;
-                match decode(value) {
-                    Ok(config) => Some(config),
+                let config: ZtDomainConfig = match decode(value) {
+                    Ok(config) => config,
                     Err(e) => {
                         crate::metrics::record_decode_failure(key);
                         warn!("failed to decode cert config for key {key}: {e:?}");
-                        None
+                        return None;
                     }
+                };
+                let key_domain = keys::parse_cert_domain(key)?;
+                if key_domain != config.domain {
+                    warn!(
+                        "skipping cert config at key {key}: record claims domain {}",
+                        config.domain
+                    );
+                    return None;
                 }
+                Some(config)
             })
             .collect()
     }
@@ -1001,16 +1232,9 @@ impl KvStore {
     /// Treating corruption as absence would silently register a fresh ACME
     /// account that the existing account-bound CAA records refuse.
     pub fn get_acme_credentials(&self) -> Result<Option<CertCredentials>> {
-        let state = self.persistent.read();
-        let Some(entry) = state.get(keys::GLOBAL_ACME_CREDENTIALS) else {
-            return Ok(None);
-        };
-        // A `None` value is a tombstone: the key was deliberately deleted.
-        let Some(value) = entry.value.as_ref() else {
-            return Ok(None);
-        };
-        decode(value)
-            .map(Some)
+        self.persistent
+            .read()
+            .decode_strict(keys::GLOBAL_ACME_CREDENTIALS)
             .context("corrupt ACME credentials record in KvStore")
     }
 
@@ -1022,9 +1246,15 @@ impl KvStore {
         Ok(())
     }
 
-    /// Get global ACME attestation (TDX quote of account URI)
-    pub fn get_acme_attestation(&self) -> Option<AcmeAttestation> {
-        self.persistent.read().decode(keys::GLOBAL_ACME_ATTESTATION)
+    /// Get global ACME attestation (TDX quote of account URI).
+    ///
+    /// Fails closed on a corrupt record: reporting "no attestation" for an
+    /// account that does have one lets a verifier conclude the ACME account is
+    /// unattested.
+    pub fn get_acme_attestation(&self) -> Result<Option<AcmeAttestation>> {
+        self.persistent
+            .read()
+            .decode_strict(keys::GLOBAL_ACME_ATTESTATION)
     }
 
     /// Save global ACME attestation
@@ -1045,10 +1275,7 @@ impl KvStore {
     /// Try to acquire certificate renew lock
     /// Returns true if lock acquired, false if already locked by another node
     pub fn try_acquire_cert_lock(&self, domain: &str, lock_timeout_secs: u64) -> bool {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = now_secs();
 
         if let Some(existing) = self.get_cert_lock(domain) {
             // Check if lock is still valid (not expired)
@@ -1086,10 +1313,7 @@ impl KvStore {
     /// replication latency; it is not mutual exclusion. A crashed holder is
     /// covered by the timeout.
     pub fn try_acquire_rotation_lock(&self, lock_timeout_secs: u64) -> Option<CertRenewLock> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = now_secs();
 
         if let Some(existing) = self.get_rotation_lock() {
             // Check if lock is still valid (not expired)
@@ -1197,6 +1421,37 @@ impl KvStore {
     pub fn watch_all_certs(&self) -> watch::Receiver<()> {
         self.persistent.watch_prefix(keys::CERT_PREFIX)
     }
+}
+
+/// Move an unreadable WaveKV data dir aside, returning the new path.
+///
+/// Renaming keeps the bytes for post-mortem analysis and guarantees the
+/// gateway never starts on half-readable state.
+fn quarantine_data_dir(data_dir: &Path) -> Result<std::path::PathBuf> {
+    anyhow::ensure!(
+        data_dir.exists(),
+        "WaveKV data dir {} does not exist",
+        data_dir.display()
+    );
+    let stamp = now_secs();
+    for attempt in 0..u32::MAX {
+        let suffix = if attempt == 0 {
+            format!("corrupt.{stamp}")
+        } else {
+            format!("corrupt.{stamp}.{attempt}")
+        };
+        let mut target = data_dir.as_os_str().to_owned();
+        target.push(".");
+        target.push(&suffix);
+        let target = std::path::PathBuf::from(target);
+        if target.exists() {
+            continue;
+        }
+        std::fs::rename(data_dir, &target)
+            .with_context(|| format!("failed to rename {}", data_dir.display()))?;
+        return Ok(target);
+    }
+    anyhow::bail!("no free quarantine path for {}", data_dir.display())
 }
 
 fn validate_peer_url(url: &str) -> Result<()> {
@@ -1458,6 +1713,214 @@ mod decompression_tests {
         let out = gunzip_bounded(&exact, 4096).expect("must be accepted");
         assert_eq!(out.len(), 4096);
         assert!(gunzip_bounded(&gzip(&vec![7u8; 4097]), 4096).is_err());
+    }
+}
+
+#[cfg(test)]
+mod corruption_tests {
+    use super::*;
+
+    fn test_kv(data_dir: &std::path::Path) -> KvStore {
+        KvStore::new(1, vec![], data_dir).expect("failed to create kv store")
+    }
+
+    fn put_raw(kv: &KvStore, key: &str, value: &[u8]) {
+        kv.persistent
+            .write()
+            .put(key.to_string(), value.to_vec())
+            .expect("raw put should succeed");
+    }
+
+    #[test]
+    fn a_corrupt_certbot_config_does_not_read_as_the_default() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+        // Absent means "use the defaults" — that part must keep working.
+        let default = kv
+            .get_certbot_config()
+            .expect("missing key should not error");
+        assert!(default.acme_url.is_empty());
+
+        kv.set_certbot_config(&GlobalCertbotConfig {
+            acme_url: "https://acme-staging.example/directory".to_string(),
+            ..Default::default()
+        })
+        .expect("save should succeed");
+        put_raw(&kv, keys::GLOBAL_CERTBOT_CONFIG, b"not-messagepack");
+        // Reading the corrupt record as the default would silently move
+        // issuance back to Let's Encrypt production.
+        assert!(kv.get_certbot_config().is_err());
+    }
+
+    #[test]
+    fn a_corrupt_certbot_config_can_still_be_replaced_by_an_operator() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+        put_raw(&kv, keys::GLOBAL_CERTBOT_CONFIG, b"not-messagepack");
+
+        // The key is a singleton with no delete RPC, so overwriting it is the
+        // only repair path there is; the write must not inherit the read's
+        // fail-closed behaviour. (Which fields an operator has to supply to be
+        // allowed to overwrite is decided one layer up, in `admin_service`.)
+        kv.set_certbot_config(&GlobalCertbotConfig {
+            acme_url: "https://acme-staging.example/directory".to_string(),
+            ..Default::default()
+        })
+        .expect("save should succeed");
+
+        let repaired = kv.get_certbot_config().expect("record should be readable");
+        assert_eq!(repaired.acme_url, "https://acme-staging.example/directory");
+    }
+
+    #[test]
+    fn corrupt_global_records_fail_closed() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+        put_raw(&kv, keys::GLOBAL_ACME_ATTESTATION, b"not-messagepack");
+        put_raw(&kv, keys::DNS_CRED_DEFAULT, b"not-messagepack");
+        assert!(kv.get_acme_attestation().is_err());
+        assert!(kv.get_default_dns_credential_id().is_err());
+        assert!(kv.get_default_dns_credential().is_err());
+    }
+
+    #[test]
+    fn future_dated_observations_are_ignored() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+        let now = now_secs();
+
+        kv.ephemeral
+            .write()
+            .put_encoded(keys::handshake("cvm", 2), &(now.saturating_sub(30)))
+            .unwrap();
+        kv.ephemeral
+            .write()
+            .put_encoded(keys::handshake("cvm", 3), &u64::MAX)
+            .unwrap();
+        // A peer with a broken clock must not keep a dead CVM alive forever.
+        let latest = kv
+            .get_instance_latest_handshake("cvm")
+            .expect("the plausible observation should survive");
+        assert!(latest <= now, "kept a future-dated handshake: {latest}");
+        assert_eq!(kv.get_instance_handshakes("cvm").len(), 1);
+
+        kv.ephemeral
+            .write()
+            .put_encoded(keys::last_seen_node(7, 3), &u64::MAX)
+            .unwrap();
+        assert_eq!(kv.get_node_latest_last_seen(7), None);
+        assert!(kv.get_node_last_seen_by_all(7).is_empty());
+
+        // Drift within the allowance stays usable: nodes are not perfectly
+        // synchronized and dropping every slightly-ahead record would make
+        // instances look stale.
+        kv.ephemeral
+            .write()
+            .put_encoded(keys::handshake("cvm", 4), &(now + MAX_CLOCK_DRIFT_SECS / 2))
+            .unwrap();
+        assert_eq!(kv.get_instance_handshakes("cvm").len(), 2);
+    }
+
+    #[test]
+    fn a_storage_failure_fails_the_boot_instead_of_quarantining_intact_state() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        // Stand in for the storage being unusable — a full disk, an exhausted
+        // fd table, a volume that has not finished mounting. None of these say
+        // anything about the contents, and the condition survives a restart, so
+        // quarantining here would discard intact state once per boot attempt.
+        let data_dir = dir.path().join("kv");
+        std::fs::write(&data_dir, b"not a directory").expect("failed to create blocker");
+
+        let Err(err) = KvStore::new(1, vec![], &data_dir) else {
+            panic!("startup must fail when the storage is unusable");
+        };
+        assert!(
+            format!("{err:#}").contains("refusing to start"),
+            "wrong failure: {err:#}"
+        );
+        let quarantined = std::fs::read_dir(dir.path())
+            .expect("failed to read temp dir")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".corrupt."))
+            .count();
+        assert_eq!(quarantined, 0, "quarantined a directory it could not read");
+    }
+
+    #[test]
+    fn an_unreadable_data_dir_is_quarantined_instead_of_blocking_startup() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let data_dir = dir.path().join("kv");
+        {
+            let kv = test_kv(&data_dir);
+            kv.sync_instance(
+                "cvm",
+                &InstanceData {
+                    app_id: "app".to_string(),
+                    ip: "10.0.0.20".parse().unwrap(),
+                    public_key: "key".to_string(),
+                    reg_time: 1,
+                    port_policy: None,
+                    port_policy_hash: String::new(),
+                    admin_port_policy: None,
+                },
+            )
+            .expect("sync should succeed");
+            kv.persist_if_dirty().expect("persist should succeed");
+        }
+        // A torn WAL tail is the normal artifact of a crash and every record is
+        // replicated, so it must not keep the gateway from booting.
+        std::fs::write(data_dir.join("node_1.wal"), b"garbage").expect("failed to corrupt wal");
+
+        let kv = KvStore::new(1, vec![], &data_dir).expect("startup must survive a corrupt wal");
+        let loaded = kv.load_all_instances();
+        assert!(loaded.decoded.is_empty());
+        assert!(loaded.undecodable.is_empty());
+        let quarantined: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("failed to read temp dir")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".corrupt."))
+            .collect();
+        assert_eq!(
+            quarantined.len(),
+            1,
+            "the unreadable data dir must be kept for inspection"
+        );
+    }
+
+    #[test]
+    fn a_cert_config_that_disagrees_with_its_key_is_skipped() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+        kv.save_zt_domain_config(&ZtDomainConfig {
+            domain: "good.example".to_string(),
+            dns_cred_id: None,
+            port: 443,
+            node: None,
+            priority: 0,
+        })
+        .expect("save should succeed");
+        // Same record filed under another domain's key: honouring the value
+        // would request a certificate for a domain nobody configured.
+        kv.persistent
+            .write()
+            .put_encoded(
+                keys::zt_domain_config("victim.example"),
+                &ZtDomainConfig {
+                    domain: "attacker.example".to_string(),
+                    dns_cred_id: None,
+                    port: 443,
+                    node: None,
+                    priority: 100,
+                },
+            )
+            .expect("raw put should succeed");
+
+        let domains: Vec<String> = kv
+            .list_zt_domain_configs()
+            .into_iter()
+            .map(|c| c.domain)
+            .collect();
+        assert_eq!(domains, vec!["good.example".to_string()]);
     }
 }
 

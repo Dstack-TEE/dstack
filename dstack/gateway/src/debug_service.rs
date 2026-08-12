@@ -85,6 +85,7 @@ impl DebugRpc for DebugRpcHandler {
         // Get all instances
         let instances: Vec<InstanceEntry> = kv_store
             .load_all_instances()
+            .decoded
             .into_iter()
             .map(|(instance_id, data)| InstanceEntry {
                 instance_id,
@@ -117,11 +118,7 @@ impl DebugRpc for DebugRpcHandler {
             .instances
             .values()
             .map(|inst| {
-                let reg_time = inst
-                    .reg_time
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
+                let reg_time = crate::time::encode_ts(inst.reg_time);
                 ProxyStateInstance {
                     instance_id: inst.id.clone(),
                     app_id: inst.app_id.clone(),
