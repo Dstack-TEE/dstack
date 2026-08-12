@@ -219,11 +219,15 @@ impl Proxy {
             node_id != self.config.sync.node_id,
             "a node cannot remove itself"
         );
+        // Drop the peer before publishing the tombstone: the __peer_addr
+        // deletion wakes the peer-address watcher, whose prune would
+        // otherwise race this call and make the reported membership depend
+        // on scheduling.
+        let removed_from_peer_set = self.kv_store.remove_peer(node_id)?;
         let record_existed = self
             .kv_store
             .sync_remove_node(node_id)
             .with_context(|| format!("failed to delete node {node_id} from WaveKV"))?;
-        let removed_from_peer_set = self.kv_store.remove_peer(node_id)?;
         Ok(NodeRemoval {
             record_existed,
             removed_from_peer_set,

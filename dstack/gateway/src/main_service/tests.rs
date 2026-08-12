@@ -766,6 +766,39 @@ async fn peers_prune_nodes_removed_on_another_gateway() {
     assert!(peers.iter().any(|peer| peer.id == 11));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn remove_node_reports_peer_membership_despite_a_racing_watcher() {
+    let state = create_test_state().await;
+    let kv = state.kv_store.clone();
+
+    // The production watch task prunes the peer set as soon as the
+    // __peer_addr tombstone lands. remove_node must capture membership
+    // before publishing the tombstone, or the answer it returns would
+    // depend on which of the two gets there first.
+    let mut rx = kv.watch_peer_addrs();
+    let kv_for_watch = kv.clone();
+    let watcher = tokio::spawn(async move {
+        while rx.changed().await.is_ok() {
+            kv_for_watch.prune_removed_peers();
+        }
+    });
+
+    for node_id in 100..120 {
+        kv.register_peer_url(node_id, "https://gw.example.com:9202")
+            .unwrap();
+        let removal = state.proxy.remove_node(node_id).unwrap();
+        assert!(removal.record_existed);
+        assert!(
+            removal.removed_from_peer_set,
+            "node {node_id}: membership must be captured before the tombstone publishes"
+        );
+        let peers = kv.persistent().read().status().peers;
+        assert!(!peers.iter().any(|peer| peer.id == node_id));
+    }
+
+    watcher.abort();
+}
+
 #[tokio::test]
 async fn a_zt_domain_with_a_corrupt_config_can_still_be_deleted() {
     let state = create_test_state().await;
