@@ -17,7 +17,7 @@ use dstack_gateway_rpc::{
     HandshakeEntry, HostInfo, LastSeenEntry, ListCertAttestationsRequest,
     ListCertAttestationsResponse, ListDnsCredentialsResponse, ListZtDomainsResponse,
     NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus, PortAttrs as RpcPortAttrs,
-    PortPolicy as RpcPortPolicy, RenewCertResponse, RenewZtDomainCertRequest,
+    PortPolicy as RpcPortPolicy, RemoveCvmRequest, RenewCertResponse, RenewZtDomainCertRequest,
     RenewZtDomainCertResponse, RotateAcmeCredentialsResponse, SetCertbotConfigRequest,
     SetDefaultDnsCredentialRequest, SetInstancePortPolicyRequest, SetNodeStatusRequest,
     SetNodeUrlRequest, StatusResponse, StoreSyncStatus, UpdateDnsCredentialRequest,
@@ -303,6 +303,22 @@ impl AdminRpc for AdminRpcHandler {
             .collect();
 
         Ok(GetNodeStatusesResponse { statuses: entries })
+    }
+
+    async fn remove_cvm(self, request: RemoveCvmRequest) -> Result<()> {
+        let instance_id = request.instance_id.trim();
+        ensure!(!instance_id.is_empty(), "instance_id is required");
+        ensure!(
+            instance_id == request.instance_id,
+            "instance_id must not have leading or trailing whitespace"
+        );
+
+        let removed_locally = self.state.remove_cvm(instance_id)?;
+        warn!(
+            "Admin removed CVM {instance_id} from WaveKV and the local data plane \
+             (present locally: {removed_locally})"
+        );
+        Ok(())
     }
 
     // ==================== DNS Credential Management ====================

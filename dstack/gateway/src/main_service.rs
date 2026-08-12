@@ -129,6 +129,26 @@ pub struct ProxyOptions {
 }
 
 impl Proxy {
+    /// Remove one CVM by explicit operator request.
+    ///
+    /// The tombstone is written even when this node cannot decode the stored
+    /// record or no longer has the CVM in memory. This makes the operation an
+    /// idempotent recovery path for bad replicated instance records without
+    /// exposing arbitrary raw-KV deletion.
+    pub fn remove_cvm(&self, instance_id: &str) -> Result<bool> {
+        let mut state = self.lock();
+        state
+            .kv_store
+            .sync_delete_instance(instance_id)
+            .with_context(|| format!("failed to delete CVM {instance_id} from WaveKV"))?;
+
+        let removed = state.forget_instance(instance_id).is_some();
+        if removed {
+            state.reconfigure()?;
+        }
+        Ok(removed)
+    }
+
     pub async fn new(options: ProxyOptions) -> Result<Self> {
         let (port_policy_tx, port_policy_rx) = unbounded_channel();
         let inner = ProxyInner::new(options, port_policy_tx).await?;

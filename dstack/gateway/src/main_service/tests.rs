@@ -624,6 +624,32 @@ async fn an_undecodable_record_keeps_the_instance_it_describes() {
 }
 
 #[tokio::test]
+async fn an_operator_can_remove_a_cvm_whose_kv_record_is_unreadable() {
+    let state = create_test_state().await;
+    sync_from_peer(&state, "peer-instance", "10.0.0.40", &test_pubkey("good"));
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+
+    state
+        .kv_store
+        .persistent()
+        .write()
+        .put(
+            crate::kv::keys::inst("peer-instance"),
+            b"not-messagepack".to_vec(),
+        )
+        .unwrap();
+
+    assert!(state.proxy.remove_cvm("peer-instance").unwrap());
+    assert!(!state.lock().state.instances.contains_key("peer-instance"));
+    let loaded = state.kv_store.load_all_instances();
+    assert!(!loaded.decoded.contains_key("peer-instance"));
+    assert!(!loaded.undecodable.contains("peer-instance"));
+
+    // The recovery operation is safe to retry after a timeout or lost reply.
+    assert!(!state.proxy.remove_cvm("peer-instance").unwrap());
+}
+
+#[tokio::test]
 async fn an_instance_that_lost_an_ip_conflict_stops_being_routable() {
     let state = create_test_state().await;
     sync_from_peer_at(&state, "loser", "10.0.0.40", &test_pubkey("loser"), 300);
