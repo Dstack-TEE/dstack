@@ -128,6 +128,18 @@ pub struct ProxyOptions {
     pub tls_config: TlsConfig,
 }
 
+/// Outcome of an operator-initiated CVM removal.
+///
+/// Both fields are false when the instance was never known (or the removal
+/// already completed), which lets the operator distinguish a mistyped
+/// instance_id from an actual removal.
+pub struct CvmRemoval {
+    /// A live instance record (decodable or not) existed in WaveKV.
+    pub record_existed: bool,
+    /// The CVM was present in this node's local data plane.
+    pub removed_locally: bool,
+}
+
 impl Proxy {
     /// Remove one CVM by explicit operator request.
     ///
@@ -135,18 +147,23 @@ impl Proxy {
     /// record or no longer has the CVM in memory. This makes the operation an
     /// idempotent recovery path for bad replicated instance records without
     /// exposing arbitrary raw-KV deletion.
-    pub fn remove_cvm(&self, instance_id: &str) -> Result<bool> {
+    pub fn remove_cvm(&self, instance_id: &str) -> Result<CvmRemoval> {
         let mut state = self.lock();
-        state
+        let record_existed = state
             .kv_store
             .sync_delete_instance(instance_id)
             .with_context(|| format!("failed to delete CVM {instance_id} from WaveKV"))?;
 
-        let removed = state.forget_instance(instance_id).is_some();
-        if removed {
-            state.reconfigure()?;
-        }
-        Ok(removed)
+        let removed_locally = state.forget_instance(instance_id).is_some();
+        // Reconfigure unconditionally: the tombstone write and the in-memory
+        // removal are not repeated on a retry, so gating this on them would
+        // leave a failed reconfigure with no retry path and the removed CVM's
+        // WireGuard peer stuck on the interface.
+        state.reconfigure()?;
+        Ok(CvmRemoval {
+            record_existed,
+            removed_locally,
+        })
     }
 
     pub async fn new(options: ProxyOptions) -> Result<Self> {

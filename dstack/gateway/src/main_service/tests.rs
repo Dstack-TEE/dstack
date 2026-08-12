@@ -639,14 +639,29 @@ async fn an_operator_can_remove_a_cvm_whose_kv_record_is_unreadable() {
         )
         .unwrap();
 
-    assert!(state.proxy.remove_cvm("peer-instance").unwrap());
+    let removal = state.proxy.remove_cvm("peer-instance").unwrap();
+    assert!(removal.record_existed);
+    assert!(removal.removed_locally);
     assert!(!state.lock().state.instances.contains_key("peer-instance"));
     let loaded = state.kv_store.load_all_instances();
     assert!(!loaded.decoded.contains_key("peer-instance"));
     assert!(!loaded.undecodable.contains("peer-instance"));
 
-    // The recovery operation is safe to retry after a timeout or lost reply.
-    assert!(!state.proxy.remove_cvm("peer-instance").unwrap());
+    // The recovery operation is safe to retry after a timeout or lost reply,
+    // and the retry tells the operator there was nothing left to remove.
+    let retry = state.proxy.remove_cvm("peer-instance").unwrap();
+    assert!(!retry.record_existed);
+    assert!(!retry.removed_locally);
+}
+
+#[tokio::test]
+async fn removing_an_unknown_cvm_reports_that_nothing_existed() {
+    let state = create_test_state().await;
+
+    // A mistyped instance_id must not be mistaken for a successful removal.
+    let removal = state.proxy.remove_cvm("no-such-instance").unwrap();
+    assert!(!removal.record_existed);
+    assert!(!removal.removed_locally);
 }
 
 #[tokio::test]
