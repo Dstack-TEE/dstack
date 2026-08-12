@@ -307,12 +307,11 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn remove_cvm(self, request: RemoveCvmRequest) -> Result<RemoveCvmResponse> {
-        let instance_id = request.instance_id.trim();
-        ensure!(!instance_id.is_empty(), "instance_id is required");
-        ensure!(
-            instance_id == request.instance_id,
-            "instance_id must not have leading or trailing whitespace"
-        );
+        let instance_id = request.instance_id.as_str();
+        // Same bound the KV import boundary puts on identifiers. Legitimate
+        // gateways never write an instance_id outside it, so this rejects only
+        // typos — and keeps the ID safe to embed in logs and KV keys.
+        crate::kv::import::validate_id("instance_id", instance_id)?;
 
         let removal = self.state.remove_cvm(instance_id)?;
         warn!(
