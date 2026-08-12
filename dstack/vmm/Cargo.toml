@@ -25,7 +25,7 @@ sha2.workspace = true
 hex.workspace = true
 fs-err.workspace = true
 getrandom = { workspace = true, features = ["std"] }
-nix = { workspace = true, features = ["fs", "user"] }
+nix = { workspace = true, features = ["fs", "user", "dir"] }
 dirs.workspace = true
 which.workspace = true
 clap = { workspace = true, features = ["derive", "string"] }

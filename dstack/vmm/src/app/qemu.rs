@@ -28,9 +28,14 @@ use anyhow::{bail, Context, Result};
 use bon::Builder;
 use dstack_types::shared_filenames::HOST_SHARED_DISK_LABEL;
 use fs_err as fs;
-use nix::unistd::{chown, Uid, User};
+use nix::dir::Dir;
+use nix::errno::Errno;
+use nix::fcntl::{openat, AtFlags, OFlag};
+use nix::sys::stat::Mode;
+use nix::unistd::{fchownat, Uid, User};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::{
     fs::Permissions,
@@ -331,24 +336,80 @@ pub(crate) fn resolve_cvm_user(user: &str) -> Result<User> {
     }
 }
 
-/// Makes `path` and its contents writable by the unprivileged VM user.
+const DIR_OFLAGS: OFlag = OFlag::O_RDONLY
+    .union(OFlag::O_NOFOLLOW)
+    .union(OFlag::O_DIRECTORY)
+    .union(OFlag::O_CLOEXEC);
+
+/// Makes `path` and its contents owned by the unprivileged VM user.
 ///
 /// Under systemd the transient unit drops privileges before exec, so paths the
 /// VMM created as root must be handed over before launch. Supervisor keeps
 /// root for the launcher/swtpm path and only sudo's QEMU, so it does not need
 /// this.
+///
+/// The walk never follows a symlink: every entry is chowned and every descent
+/// happens relative to an `O_NOFOLLOW`-opened directory fd. The state directory
+/// is writable by the unprivileged user between boots, so a symlink planted
+/// there must not be able to redirect a root chown onto an arbitrary host path
+/// (CWE-59).
 fn chown_tree_to_user(path: &Path, user: &User) -> Result<()> {
-    chown(path, Some(user.uid), Some(user.gid))
-        .with_context(|| format!("failed to chown {}", path.display()))?;
-    if !path.is_dir() {
-        return Ok(());
-    }
-    for entry in fs::read_dir(path)
-        .with_context(|| format!("failed to read directory {}", path.display()))?
-    {
+    // Chown the top path itself without following a symlink.
+    fchownat(
+        None,
+        path,
+        Some(user.uid),
+        Some(user.gid),
+        AtFlags::AT_SYMLINK_NOFOLLOW,
+    )
+    .with_context(|| format!("failed to chown {}", path.display()))?;
+
+    // Open the directory itself without following symlinks. A non-directory or
+    // a symlink has nothing to descend into and was already chowned above.
+    let dir_fd = match openat(None, path, DIR_OFLAGS, Mode::empty()) {
+        Ok(fd) => fd,
+        Err(Errno::ENOTDIR | Errno::ELOOP) => return Ok(()),
+        Err(err) => return Err(err).with_context(|| format!("failed to open {}", path.display())),
+    };
+    chown_dir_contents(dir_fd, path, user)
+}
+
+/// Chowns every entry reachable through `dir_fd`, taking ownership of it (the
+/// fd is closed when the `Dir` drops). Every chown and descent is performed
+/// relative to the trusted fd rather than by re-resolving a path, so a symlink
+/// anywhere below `path` cannot redirect the walk outside the tree.
+fn chown_dir_contents(dir_fd: RawFd, path: &Path, user: &User) -> Result<()> {
+    let mut dir = Dir::from_fd(dir_fd)
+        .with_context(|| format!("failed to read directory {}", path.display()))?;
+    let raw = dir.as_raw_fd();
+    for entry in dir.iter() {
         let entry =
             entry.with_context(|| format!("failed to read entry under {}", path.display()))?;
-        chown_tree_to_user(&entry.path(), user)?;
+        let name = entry.file_name();
+        let bytes = name.to_bytes();
+        if bytes == b"." || bytes == b".." {
+            continue;
+        }
+        // Chown the entry relative to the trusted dir fd, never following a
+        // symlink, so a planted link cannot redirect the chown to its target.
+        fchownat(
+            Some(raw),
+            name,
+            Some(user.uid),
+            Some(user.gid),
+            AtFlags::AT_SYMLINK_NOFOLLOW,
+        )
+        .with_context(|| format!("failed to chown entry under {}", path.display()))?;
+        // Descend only into a real subdirectory, opened without following
+        // symlinks. ELOOP means the entry is a symlink; ENOTDIR a regular file.
+        match openat(Some(raw), name, DIR_OFLAGS, Mode::empty()) {
+            Ok(child) => chown_dir_contents(child, path, user)?,
+            Err(Errno::ENOTDIR | Errno::ELOOP) => {}
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("failed to open entry under {}", path.display()))
+            }
+        }
     }
     Ok(())
 }
@@ -1456,5 +1517,54 @@ mod tests {
         .unwrap();
         assert_eq!(process.user, "1000");
         assert!(!process.args.iter().any(|arg| arg == "sudo"));
+    }
+
+    fn chown_test_user() -> nix::unistd::User {
+        // The swtpm chown must succeed against a real account. Targeting the
+        // current uid keeps the chown a permitted no-op whether the suite runs
+        // as root or unprivileged, so the tests below assert traversal shape,
+        // not privilege.
+        nix::unistd::User::from_uid(nix::unistd::Uid::current())
+            .unwrap()
+            .expect("current uid resolves to a user")
+    }
+
+    #[test]
+    fn chown_tree_does_not_follow_a_symlink() {
+        // A symlink whose target does not exist must be chowned as the link
+        // itself. Following it would chase the missing target and fail — the
+        // exact primitive that let a planted link redirect a root chown onto
+        // an arbitrary host path.
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("/nonexistent/dstack-chown-victim", dir.path().join("link"))
+            .unwrap();
+        super::chown_tree_to_user(dir.path(), &chown_test_user())
+            .expect("must chown the symlink itself, not follow it");
+    }
+
+    #[test]
+    fn chown_tree_does_not_descend_into_a_symlinked_dir() {
+        // A symlink to a directory must not be walked into: the pointed-to
+        // directory holds a dangling link, so descending would chase it and
+        // fail.
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("/nonexistent/inner-victim", outside.path().join("inner"))
+            .unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("dirlink")).unwrap();
+        super::chown_tree_to_user(dir.path(), &chown_test_user())
+            .expect("must not descend into a symlinked directory");
+    }
+
+    #[test]
+    fn chown_tree_still_walks_a_real_tree() {
+        // Regression guard: the hardening must keep chowning real nested
+        // entries rather than stop at the top directory.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/file"), b"x").unwrap();
+        std::fs::write(dir.path().join("top"), b"y").unwrap();
+        super::chown_tree_to_user(dir.path(), &chown_test_user())
+            .expect("must chown a normal tree");
     }
 }
