@@ -29,6 +29,7 @@ mod debug_service;
 mod distributed_certbot;
 mod kv;
 mod main_service;
+mod metrics;
 mod models;
 mod pp;
 mod proxy;

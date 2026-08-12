@@ -845,7 +845,10 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
                 match kv_store_for_persist.persist_if_dirty() {
                     Ok(true) => info!("WaveKV: periodic persist completed"),
                     Ok(false) => {} // No changes to persist
-                    Err(err) => error!("WaveKV: periodic persist failed: {err:?}"),
+                    Err(err) => {
+                        crate::metrics::record_kv_persist_failure();
+                        error!("WaveKV: periodic persist failed: {err:?}");
+                    }
                 }
             }
         });
@@ -1183,6 +1186,20 @@ impl ProxyState {
     }
 
     pub(crate) fn reconfigure(&mut self) -> Result<()> {
+        // Every way out of here that is not a clean apply leaves the data plane
+        // on the routing table it already had, so they all feed one counter --
+        // the early returns included. A config that cannot be rendered or
+        // written never reaches `wg` at all, and both call sites of this
+        // function only log the `Err`, so a full disk would otherwise look
+        // exactly like having nothing to apply.
+        let result = self.reconfigure_inner();
+        if result.is_err() {
+            crate::metrics::record_wg_reconfigure(false);
+        }
+        result
+    }
+
+    fn reconfigure_inner(&mut self) -> Result<()> {
         let wg_config = self.generate_wg_config()?;
         // the rendered config carries the interface's WireGuard private key.
         safe_write_with_mode(&self.config.wg.config_path, wg_config, 0o600)
@@ -1192,8 +1209,18 @@ impl ProxyState {
         let config_path = &self.config.wg.config_path;
 
         match cmd!(wg syncconf $ifname $config_path) {
-            Ok(_) => info!("wg config updated"),
-            Err(err) => error!("failed to set wg config: {err:?}"),
+            Ok(_) => {
+                crate::metrics::record_wg_reconfigure(true);
+                info!("wg config updated");
+            }
+            Err(err) => {
+                // `wg syncconf` rejects the whole file when one peer stanza is
+                // bad, and this stays `Ok` for the caller as it always has, so
+                // the counter is the only signal that routing updates stopped
+                // reaching the data plane.
+                crate::metrics::record_wg_reconfigure(false);
+                error!("failed to set wg config: {err:?}");
+            }
         }
         Ok(())
     }
@@ -1469,16 +1496,9 @@ impl ProxyState {
         self.kv_store
             .load_all_nodes()
             .into_iter()
-            .filter(|(id, _)| {
-                if !exclude_down {
-                    return true;
-                }
-                // Exclude nodes with status "down"
-                match node_statuses.get(id) {
-                    Some(NodeStatus::Down) => false,
-                    _ => true, // Include Up or nodes without explicit status
-                }
-            })
+            // Shared with the metrics sampler so the gauge and the routing
+            // table cannot disagree about what "active" means.
+            .filter(|(id, _)| !exclude_down || KvStore::node_is_active(node_statuses.get(id)))
             .map(|(id, node)| GatewayNodeInfo {
                 id,
                 uuid: node.uuid,

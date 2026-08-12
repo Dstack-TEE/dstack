@@ -88,3 +88,49 @@ insecure_no_auth = false
 The admin server is fail-closed: if it is enabled with no `admin_token` and no `htpasswd_file`, and `insecure_no_auth` is `false`, it refuses to start rather than exposing an unauthenticated admin API.
 
 Clients authenticate by sending `Authorization: Bearer <token>` or the `X-Admin-Token: <token>` header.
+
+## Metrics
+
+The admin server exposes Prometheus metrics at `GET /metrics`. It is part of the
+admin API, so it is only reachable when `core.admin.enabled` is true and it
+requires the same credentials — unless `insecure_no_auth` is set, which exposes
+it along with the rest of the admin API. The series name domains, node ids and
+instance counts, which is topology that should not be readable without
+authentication.
+
+```yaml
+scrape_configs:
+  - job_name: dstack-gateway
+    static_configs:
+      - targets: ["<core.admin.address>"]
+    authorization:
+      credentials: "<the admin token>"
+```
+
+### Cluster-scoped vs node-local series
+
+`dstack_gateway_cluster_*` describes replicated state: every node in the cluster
+reports the same value, so summing across targets multiplies it by the number of
+nodes. Everything else describes what one process did and sums normally.
+
+```promql
+# Instances in the routing table — replicated, so take one node's view
+max(dstack_gateway_cluster_instances)
+
+# Connections across the fleet — node-local, so add them up
+sum(dstack_gateway_connections)
+
+# Nodes disagreeing about who is up: this is the replication-lag signal
+max(dstack_gateway_cluster_nodes_active) - min(dstack_gateway_cluster_nodes_active)
+```
+
+### Series worth alerting on
+
+| Metric | Why |
+|---|---|
+| `dstack_gateway_wg_reconfigure_failures_total` | The gateway could not push a WireGuard config: it failed to render, failed to write, or `wg syncconf` rejected the whole file over one bad peer stanza. Routing updates have stopped reaching the data plane while the gateway still looks healthy. |
+| `dstack_gateway_kv_decode_failures_total` | A replicated record that fails to decode is skipped, which makes the CVM behind it silently unroutable. Labelled by key prefix. Alert on `> 0`; the magnitude counts how often a bad record was *read*, not how many are bad, so do not read it as a severity. |
+| `dstack_gateway_kv_peer_buffered_logs` | Entries still buffered for a peer. Sustained growth means that peer stopped acknowledging and the two nodes are drifting apart. |
+| `dstack_gateway_cluster_cert_not_after_seconds` | Certificate expiry per domain; alert on `- time()` falling under the renewal window. Capped at 256 series — compare `dstack_gateway_cluster_cert_domains` to see whether the cap was hit. |
+| `dstack_gateway_kv_persist_failures_total` | Periodic snapshots are failing, so a restart replays a growing WAL. |
+| `dstack_gateway_kv_persist_failures_total` | Periodic snapshots are failing, so a restart replays a growing WAL. |

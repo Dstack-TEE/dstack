@@ -265,6 +265,8 @@ pub mod keys {
     pub const CERT_PREFIX: &str = "cert/";
     pub const DNS_CRED_PREFIX: &str = "dns_cred/";
     pub const DNS_CRED_DEFAULT: &str = "dns_cred_default";
+    /// Shared by the `GLOBAL_*` keys below; not itself a key.
+    pub const GLOBAL_PREFIX: &str = "global/";
     pub const GLOBAL_CERTBOT_CONFIG: &str = "global/certbot_config";
     pub const GLOBAL_ACME_CREDENTIALS: &str = "global/acme_credentials";
     pub const GLOBAL_ACME_ATTESTATION: &str = "global/acme_attestation";
@@ -440,6 +442,7 @@ impl GetPutCodec for NodeState {
             .and_then(|entry| match decode(entry.value.as_ref()?) {
                 Ok(value) => Some(value),
                 Err(e) => {
+                    crate::metrics::record_decode_failure(key);
                     warn!("failed to decode value for key {key}: {e:?}");
                     None
                 }
@@ -460,6 +463,7 @@ impl GetPutCodec for NodeState {
             let value = match decode(entry.value.as_ref()?) {
                 Ok(value) => value,
                 Err(e) => {
+                    crate::metrics::record_decode_failure(key);
                     warn!("failed to decode value for key {key}: {e:?}");
                     return None;
                 }
@@ -476,6 +480,7 @@ impl GetPutCodec for NodeState {
             let value = match decode(entry.value.as_ref()?) {
                 Ok(value) => value,
                 Err(e) => {
+                    crate::metrics::record_decode_failure(key);
                     warn!("failed to decode value for key {key}: {e:?}");
                     return None;
                 }
@@ -624,6 +629,32 @@ impl KvStore {
                 Some((node_id, status))
             })
             .collect()
+    }
+
+    /// Whether a node counts as active. A node with no recorded status is up.
+    ///
+    /// The routing path and the metrics sampler both filter on this, and they
+    /// have to agree: a gauge that counts a node the router has dropped is
+    /// describing a routing table that does not exist.
+    pub(crate) fn node_is_active(status: Option<&NodeStatus>) -> bool {
+        !matches!(status, Some(NodeStatus::Down))
+    }
+
+    /// Count all and active nodes, without materialising `GatewayNodeInfo`.
+    ///
+    /// A scrape wants two numbers. Reaching them through `get_all_nodes()` and
+    /// `get_active_nodes()` instead means loading the node table twice, cloning
+    /// five strings per node, and taking the ephemeral lock once per node for a
+    /// `last_seen` that the count never reads -- all of it under the proxy lock
+    /// that the data path takes on every connection.
+    pub fn count_nodes(&self) -> (u64, u64) {
+        let statuses = self.load_all_node_statuses();
+        let nodes = self.load_all_nodes();
+        let active = nodes
+            .keys()
+            .filter(|id| Self::node_is_active(statuses.get(id)))
+            .count() as u64;
+        (nodes.len() as u64, active)
     }
 
     // ==================== Connection Count Sync ====================
@@ -879,6 +910,7 @@ impl KvStore {
                 match decode(value) {
                     Ok(config) => Some(config),
                     Err(e) => {
+                        crate::metrics::record_decode_failure(key);
                         warn!("failed to decode cert config for key {key}: {e:?}");
                         None
                     }
@@ -951,6 +983,7 @@ impl KvStore {
                 match decode(value) {
                     Ok(data) => Some((domain.to_string(), data)),
                     Err(e) => {
+                        crate::metrics::record_decode_failure(key);
                         warn!("failed to decode cert data for key {key}: {e:?}");
                         None
                     }
@@ -1146,6 +1179,7 @@ impl KvStore {
                 match decode(value) {
                     Ok(att) => Some(att),
                     Err(e) => {
+                        crate::metrics::record_decode_failure(key);
                         warn!("failed to decode attestation for key {key}: {e:?}");
                         None
                     }
