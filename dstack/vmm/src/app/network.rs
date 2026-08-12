@@ -30,12 +30,15 @@ pub(crate) fn resolve_networking(networking: &Networking, cfg: &CvmConfig) -> Ne
     if !networking.dhcp_start.is_empty() {
         resolved.dhcp_start = networking.dhcp_start.clone();
     }
-    if !networking.netdev.is_empty() {
+    // Not merged from the host defaults: a pre-opened chardev names one
+    // device and belongs to exactly one NIC. When set, it also owns the
+    // netdev string (generated later from the fd number), so even an empty
+    // NIC netdev must replace a host-wide custom default.
+    resolved.open_file = networking.open_file.clone();
+    let replace_netdev = !networking.open_file.is_empty() || !networking.netdev.is_empty();
+    if replace_netdev {
         resolved.netdev = networking.netdev.clone();
     }
-    // Not merged from the host defaults: a pre-opened chardev names one
-    // device and belongs to exactly one NIC.
-    resolved.open_file = networking.open_file.clone();
     resolved
 }
 
@@ -196,6 +199,24 @@ mod tests {
         let mut with_netdev = open_file_network("/dev/tap7498");
         with_netdev.netdev = "tap,id=net0,fd=3".into();
         validate_resolved_network(&with_netdev).unwrap_err();
+    }
+
+    #[test]
+    fn open_file_does_not_inherit_host_custom_netdev() {
+        use rocket::figment::{providers::Format, providers::Toml, Figment};
+
+        let mut cfg: crate::config::Config =
+            Figment::from(Toml::string(crate::config::DEFAULT_CONFIG))
+                .extract()
+                .unwrap();
+        cfg.cvm.networking.mode = NetworkingMode::Custom;
+        cfg.cvm.networking.netdev = "tap,id=net0,ifname=legacy,script=no".into();
+
+        let nic = open_file_network("/dev/tap7498");
+        let resolved = super::resolve_networking(&nic, &cfg.cvm);
+        assert_eq!(resolved.open_file, "/dev/tap7498");
+        assert!(resolved.netdev.is_empty());
+        validate_resolved_network(&resolved).unwrap();
     }
 
     #[test]
