@@ -19,6 +19,7 @@ use crate::{
     app::Manifest,
     config::{
         CvmConfig, CvmPlatform, NetworkFilterMode, Networking, NetworkingMode, ProcessAnnotation,
+        ProcessManagerBackend,
     },
     netd::{tap_name, InterfaceIdentity},
     vm_launcher::{ChildCommand, LaunchSpec},
@@ -425,6 +426,9 @@ impl VmConfig {
             pidfile: process.pidfile,
             cid: process.cid,
             note: process.note,
+            // The launcher unit owns the privilege drop, so vm-launcher and
+            // the swtpm and QEMU children it spawns all run as this user.
+            user: process.user,
             // Rejected above: file descriptor passing does not survive the
             // vm-launcher indirection.
             open_files: Vec::new(),
@@ -811,18 +815,26 @@ impl QemuCommandBuilder<'_> {
         if let Some(cpus) = &self.prepared.numa_cpus {
             arguments.splice(0..0, ["taskset", "-c", cpus].into_iter().map(String::from));
         }
+        // The systemd backend drops privileges in the unit itself, so QEMU is
+        // exec'd directly. Supervisor has no such mechanism and keeps the sudo
+        // prefix, which is also why it cannot pass file descriptors: sudo
+        // closes every descriptor above stderr before exec, so QEMU would be
+        // told to use an fd that no longer exists.
+        let mut user = String::new();
         if !self.cfg.user.is_empty() {
-            if !open_files.is_empty() {
-                // sudo closes every descriptor above stderr before exec, so
-                // QEMU would be told to use an fd that no longer exists.
-                bail!(
-                    "networking.open_file requires cvm.user to be empty: sudo closes inherited file descriptors"
+            if self.cfg.pm == ProcessManagerBackend::Supervisor {
+                if !open_files.is_empty() {
+                    bail!(
+                        "networking.open_file requires cvm.pm = \"systemd\" or \"auto\" when cvm.user is set: sudo closes inherited file descriptors"
+                    );
+                }
+                arguments.splice(
+                    0..0,
+                    ["sudo", "-u", &self.cfg.user].into_iter().map(String::from),
                 );
+            } else {
+                user = self.cfg.user.clone();
             }
-            arguments.splice(
-                0..0,
-                ["sudo", "-u", &self.cfg.user].into_iter().map(String::from),
-            );
         }
 
         let command = arguments.remove(0);
@@ -847,6 +859,7 @@ impl QemuCommandBuilder<'_> {
             pidfile: workdir.pid_file().to_string_lossy().to_string(),
             cid: Some(self.vm.cid),
             note,
+            user,
             open_files,
         })
     }
@@ -1036,7 +1049,8 @@ mod tests {
     use crate::app::image::{Image, ImageInfo};
     use crate::app::{needs_swtpm, GpuConfig, Manifest, PortMapping, VmVolume, VmWorkDir};
     use crate::config::{
-        Config, CvmPlatform, NetworkFilterMode, NetworkingMode, Protocol, DEFAULT_CONFIG,
+        Config, CvmPlatform, NetworkFilterMode, NetworkingMode, ProcessManagerBackend, Protocol,
+        DEFAULT_CONFIG,
     };
     use crate::netd::{tap_name, InterfaceIdentity};
     use dstack_types::{KeyProviderKind, TeeVariant};
@@ -1326,8 +1340,25 @@ mod tests {
             .any(|args| args == ["-netdev", "tap,id=net2,fd=4"]));
         assert_eq!(process.open_files, ["/dev/tap7498", "/dev/tap7499"]);
 
-        // sudo closes inherited descriptors, so the combination is rejected
-        // instead of launching QEMU against an fd that no longer exists.
+        // systemd drops privileges in the unit, so QEMU is exec'd directly and
+        // keeps the descriptors it was handed.
+        let mut systemd_config = config.clone();
+        systemd_config.cvm.pm = ProcessManagerBackend::Systemd;
+        systemd_config.cvm.user = "qemu".into();
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &systemd_config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert_eq!(process.user, "qemu");
+        assert_eq!(process.command, "/not-installed/qemu-system-x86_64");
+        assert!(!process.args.iter().any(|arg| arg == "sudo"));
+
+        // Supervisor has no privilege-drop mechanism and falls back to sudo,
+        // which closes the descriptors before QEMU starts.
         let mut sudo_config = config.clone();
         sudo_config.cvm.user = "qemu".into();
         let error = QemuCommandBuilder {
@@ -1338,6 +1369,23 @@ mod tests {
         }
         .build()
         .unwrap_err();
-        assert!(error.to_string().contains("cvm.user"), "{error:#}");
+        assert!(error.to_string().contains("cvm.pm"), "{error:#}");
+
+        // Without a pre-opened chardev, Supervisor keeps the sudo prefix.
+        for networking in &mut prepared.networks {
+            networking.open_file = String::new();
+            networking.mode = NetworkingMode::User;
+        }
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &sudo_config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert_eq!(process.command, "sudo");
+        assert_eq!(&process.args[..2], ["-u", "qemu"]);
+        assert!(process.user.is_empty());
     }
 }

@@ -46,6 +46,14 @@ pub struct ProcessConfig {
     pub cid: Option<u32>,
     #[serde(default)]
     pub note: String,
+    /// User the process manager runs the process as.
+    ///
+    /// Only the VMM's systemd backend implements this, by dropping privileges
+    /// in the transient unit. Supervisor rejects a config that sets it rather
+    /// than running the process with its own privileges. Skipped when empty so
+    /// existing records and requests keep serializing byte-identically.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub user: String,
     /// Files the process manager opens before exec and passes to the process
     /// as inherited file descriptors, in declaration order starting at fd 3.
     ///

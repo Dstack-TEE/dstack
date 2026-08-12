@@ -15,7 +15,7 @@ use tokio::process::Command;
 use tokio::sync::RwLock;
 use tracing::warn;
 
-use crate::config::validate_open_file;
+use crate::config::{validate_open_file, validate_unit_user};
 
 #[derive(Clone)]
 pub enum ProcessManager {
@@ -65,7 +65,7 @@ impl ProcessManager {
     pub async fn deploy(&self, config: &ProcessConfig) -> Result<()> {
         match self {
             Self::Supervisor(client) => {
-                ensure_no_open_files(config)?;
+                ensure_supervisor_supported(config)?;
                 client.deploy(config).await
             }
             Self::Systemd(manager) => manager.deploy(config).await,
@@ -106,15 +106,23 @@ impl ProcessManager {
     }
 }
 
-/// Rejects a process that needs pre-opened file descriptors on a backend that
-/// cannot pass them. Launching it anyway would leave QEMU pointing at whatever
-/// the fd number happens to be, so this fails before anything is spawned.
-fn ensure_no_open_files(config: &ProcessConfig) -> Result<()> {
-    if !config.open_files.is_empty() {
-        bail!(
-            "process {} requires pre-opened files, which only the systemd process manager supports; set cvm.pm = \"systemd\" or \"auto\"",
-            config.id
-        );
+/// Rejects a process asking for something Supervisor cannot provide.
+///
+/// Supervisor spawns processes with its own privileges and without pre-opened
+/// file descriptors. Launching anyway would run a VM as root that asked to be
+/// confined, or leave QEMU pointing at whatever the fd number happens to be,
+/// so this fails before anything is spawned.
+fn ensure_supervisor_supported(config: &ProcessConfig) -> Result<()> {
+    for (what, unsupported) in [
+        ("pre-opened files", !config.open_files.is_empty()),
+        ("a dedicated user", !config.user.is_empty()),
+    ] {
+        if unsupported {
+            bail!(
+                "process {} requires {what}, which only the systemd process manager supports; set cvm.pm = \"systemd\" or \"auto\"",
+                config.id
+            );
+        }
     }
     Ok(())
 }
@@ -407,10 +415,20 @@ impl SystemdProcessManager {
         for (key, value) in &config.env {
             args.push(format!("--setenv={key}={value}"));
         }
+        if !config.user.is_empty() {
+            validate_unit_user("user", &config.user)?;
+            args.push(format!("--property=User={}", config.user));
+        }
         // systemd opens these before exec and passes them in declaration
         // order starting at fd 3, which is what the QEMU netdev arguments
         // reference. No fdname and no `graceful` option: a missing device must
         // fail the unit instead of shifting every later descriptor by one.
+        //
+        // systemd.exec(5): "The file or socket is opened by the service
+        // manager and the file descriptor is passed to the service." The open
+        // therefore happens with the manager's privileges, before the `User=`
+        // drop that lands just before exec, so a root-owned chardev such as
+        // /dev/tapN does not have to be chowned to the QEMU user.
         for path in &config.open_files {
             validate_open_file("open_files entry", path)?;
             args.push(format!("--property=OpenFile={path}"));
@@ -585,6 +603,10 @@ mod tests {
     }
 
     fn test_config(open_files: &[&str]) -> ProcessConfig {
+        test_config_as("", open_files)
+    }
+
+    fn test_config_as(user: &str, open_files: &[&str]) -> ProcessConfig {
         ProcessConfig {
             id: "vm/one".into(),
             name: "vm".into(),
@@ -597,6 +619,7 @@ mod tests {
             pidfile: String::new(),
             cid: None,
             note: String::new(),
+            user: user.into(),
             open_files: open_files.iter().map(|path| path.to_string()).collect(),
         }
     }
@@ -647,10 +670,35 @@ mod tests {
     }
 
     #[test]
-    fn supervisor_backend_rejects_open_files() {
-        ensure_no_open_files(&test_config(&[])).unwrap();
-        let error = ensure_no_open_files(&test_config(&["/dev/tap7498"])).unwrap_err();
-        assert!(error.to_string().contains("systemd"), "{error:#}");
+    fn renders_the_privilege_drop_as_a_unit_property() {
+        let (_dir, manager) = test_manager();
+        let args = manager
+            .run_args(&test_config_as("qemu", &["/dev/tap7498"]), "unit.service")
+            .unwrap();
+        assert!(args.iter().any(|arg| arg == "--property=User=qemu"));
+        // The privilege drop replaces the sudo prefix rather than joining it.
+        assert!(!args.iter().any(|arg| arg == "sudo"));
+
+        assert!(!manager
+            .run_args(&test_config(&[]), "unit.service")
+            .unwrap()
+            .iter()
+            .any(|arg| arg.contains("User=")));
+
+        for user in ["qemu:0", "qemu user", "%i", "-qemu"] {
+            manager
+                .run_args(&test_config_as(user, &[]), "unit.service")
+                .unwrap_err();
+        }
+    }
+
+    #[test]
+    fn supervisor_backend_rejects_what_it_cannot_provide() {
+        ensure_supervisor_supported(&test_config(&[])).unwrap();
+        for config in [test_config(&["/dev/tap7498"]), test_config_as("qemu", &[])] {
+            let error = ensure_supervisor_supported(&config).unwrap_err();
+            assert!(error.to_string().contains("systemd"), "{error:#}");
+        }
     }
 
     #[test]

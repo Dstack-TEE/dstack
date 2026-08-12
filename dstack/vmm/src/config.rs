@@ -727,6 +727,9 @@ impl Config {
         }
 
         validate_networking(&self.cvm.networking)?;
+        if !self.cvm.user.is_empty() {
+            validate_unit_user("cvm.user", &self.cvm.user)?;
+        }
         if self.cvm.pm != ProcessManagerBackend::Systemd {
             anyhow::ensure!(
                 !self.supervisor.sock.trim().is_empty(),
@@ -829,6 +832,25 @@ pub const SD_LISTEN_FDS_START: u32 = 3;
 /// specifiers, so those characters would change the meaning of the property
 /// rather than name a device. The check is deliberately conservative: the only
 /// intended values are host device nodes such as `/dev/tap7498`.
+/// Validates a user name before it reaches a systemd unit property.
+///
+/// `User=` takes a user name or a numeric UID. The charset is kept to what a
+/// POSIX user name can contain so the value cannot introduce a `%` specifier
+/// expansion or extra property syntax.
+pub fn validate_unit_user(name: &str, user: &str) -> Result<()> {
+    anyhow::ensure!(!user.is_empty(), "{name} must not be empty");
+    anyhow::ensure!(
+        !user.starts_with('-'),
+        "{name} must not start with '-': {user}"
+    );
+    anyhow::ensure!(
+        user.bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')),
+        "{name} must contain only alphanumerics, '_', '-' and '.': {user}"
+    );
+    Ok(())
+}
+
 pub fn validate_open_file(name: &str, path: &str) -> Result<()> {
     anyhow::ensure!(
         path.starts_with('/'),
@@ -1209,6 +1231,22 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("open_file"));
+    }
+
+    #[test]
+    fn unit_user_names_are_validated() {
+        validate_unit_user("cvm.user", "qemu-1.user_x").unwrap();
+        for user in ["", "-qemu", "qemu:0", "qemu user", "%i", "qemu$"] {
+            validate_unit_user("cvm.user", user).unwrap_err();
+        }
+
+        let mut config = default_config();
+        config.cvm.user = "qemu:0".into();
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("cvm.user"));
     }
 
     #[test]

@@ -322,6 +322,15 @@ Compose file content (first 200 chars):
     println!("# QEMU Command:");
     println!("{}", full_command.join(" "));
 
+    if !dry_run && !process_config.user.is_empty() {
+        // Privileges are dropped by the systemd unit, which one-shot mode does
+        // not create, and the command carries no sudo prefix either. Running it
+        // here would start QEMU with the VMM's own privileges.
+        anyhow::bail!(
+            "one-shot execution cannot drop privileges to cvm.user with cvm.pm = \"systemd\" or \"auto\"; use --dry-run or cvm.pm = \"supervisor\""
+        );
+    }
+
     if dry_run {
         println!("# Dry run mode - QEMU command not executed");
         println!(
