@@ -15,7 +15,7 @@ use tokio::process::Command;
 use tokio::sync::RwLock;
 use tracing::warn;
 
-use crate::config::{validate_open_file, validate_unit_user};
+use crate::config::{parse_unit_user, validate_open_file};
 
 #[derive(Clone)]
 pub enum ProcessManager {
@@ -416,15 +416,18 @@ impl SystemdProcessManager {
             args.push(format!("--setenv={key}={value}"));
         }
         if !config.user.is_empty() {
-            validate_unit_user("user", &config.user)?;
-            args.push(format!("--property=User={}", config.user));
+            // ProcessConfig.user is already normalized to a systemd User=
+            // value (name or bare UID). Re-parse to reject anything that
+            // would still inject property syntax.
+            let user = parse_unit_user("user", &config.user)?;
+            args.push(format!("--property=User={}", user.systemd_value()));
         }
         // systemd opens these before exec and passes them in declaration
         // order starting at fd 3, which is what the QEMU netdev arguments
         // reference. No fdname and no `graceful` option: a missing device must
         // fail the unit instead of shifting every later descriptor by one.
         //
-        // systemd.exec(5): "The file or socket is opened by the service
+        // systemd.service(5): "The file or socket is opened by the service
         // manager and the file descriptor is passed to the service." The open
         // therefore happens with the manager's privileges, before the `User=`
         // drop that lands just before exec, so a root-owned chardev such as
@@ -685,7 +688,12 @@ mod tests {
             .iter()
             .any(|arg| arg.contains("User=")));
 
-        for user in ["qemu:0", "qemu user", "%i", "-qemu"] {
+        let args = manager
+            .run_args(&test_config_as("1000", &[]), "unit.service")
+            .unwrap();
+        assert!(args.iter().any(|arg| arg == "--property=User=1000"));
+
+        for user in ["qemu:0", "qemu user", "%i", "-qemu", "#"] {
             manager
                 .run_args(&test_config_as(user, &[]), "unit.service")
                 .unwrap_err();

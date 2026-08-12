@@ -18,8 +18,8 @@ use super::{
 use crate::{
     app::Manifest,
     config::{
-        CvmConfig, CvmPlatform, NetworkFilterMode, Networking, NetworkingMode, ProcessAnnotation,
-        ProcessManagerBackend,
+        parse_unit_user, CvmConfig, CvmPlatform, NetworkFilterMode, Networking, NetworkingMode,
+        ProcessAnnotation, ProcessManagerBackend, UnitUser,
     },
     netd::{tap_name, InterfaceIdentity},
     vm_launcher::{ChildCommand, LaunchSpec},
@@ -28,7 +28,7 @@ use anyhow::{bail, Context, Result};
 use bon::Builder;
 use dstack_types::shared_filenames::HOST_SHARED_DISK_LABEL;
 use fs_err as fs;
-use nix::unistd::User;
+use nix::unistd::{Uid, User};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
@@ -312,6 +312,17 @@ fn prepare_data_disk(vm: &VmConfig, workdir: &VmWorkDir, cfg: &CvmConfig) -> Res
     Ok(())
 }
 
+pub(crate) fn resolve_cvm_user(user: &str) -> Result<User> {
+    match parse_unit_user("cvm.user", user)? {
+        UnitUser::Name(name) => User::from_name(&name)
+            .context("failed to resolve QEMU user")?
+            .with_context(|| format!("QEMU user {name} does not exist")),
+        UnitUser::Uid(uid) => User::from_uid(Uid::from_raw(uid))
+            .context("failed to resolve QEMU user")?
+            .with_context(|| format!("QEMU user uid {uid} does not exist")),
+    }
+}
+
 fn prepare_shared_dir(workdir: &VmWorkDir) -> Result<()> {
     let shared_dir = workdir.shared_dir();
     if !shared_dir.exists() {
@@ -373,9 +384,7 @@ impl VmConfig {
         let (socket_uid, socket_gid) = if cfg.user.is_empty() {
             (unsafe { libc::geteuid() }, unsafe { libc::getegid() })
         } else {
-            let user = User::from_name(&cfg.user)
-                .context("failed to resolve QEMU user")?
-                .with_context(|| format!("QEMU user {} does not exist", cfg.user))?;
+            let user = resolve_cvm_user(&cfg.user)?;
             (user.uid.as_raw(), user.gid.as_raw())
         };
 
@@ -822,18 +831,21 @@ impl QemuCommandBuilder<'_> {
         // told to use an fd that no longer exists.
         let mut user = String::new();
         if !self.cfg.user.is_empty() {
+            let unit_user = parse_unit_user("cvm.user", &self.cfg.user)?;
             if self.cfg.pm == ProcessManagerBackend::Supervisor {
                 if !open_files.is_empty() {
                     bail!(
                         "networking.open_file requires cvm.pm = \"systemd\" or \"auto\" when cvm.user is set: sudo closes inherited file descriptors"
                     );
                 }
+                let sudo_user = unit_user.sudo_value();
                 arguments.splice(
                     0..0,
-                    ["sudo", "-u", &self.cfg.user].into_iter().map(String::from),
+                    ["sudo", "-u", &sudo_user].into_iter().map(String::from),
                 );
             } else {
-                user = self.cfg.user.clone();
+                // systemd User= takes a bare name or decimal UID, not sudo's #UID.
+                user = unit_user.systemd_value();
             }
         }
 
@@ -1387,5 +1399,32 @@ mod tests {
         assert_eq!(process.command, "sudo");
         assert_eq!(&process.args[..2], ["-u", "qemu"]);
         assert!(process.user.is_empty());
+
+        // Numeric UIDs keep sudo's #UID form and systemd's bare digits.
+        sudo_config.cvm.user = "#1000".into();
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &sudo_config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert_eq!(process.command, "sudo");
+        assert_eq!(&process.args[..2], ["-u", "#1000"]);
+
+        let mut uid_config = config.clone();
+        uid_config.cvm.pm = ProcessManagerBackend::Systemd;
+        uid_config.cvm.user = "#1000".into();
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &uid_config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert_eq!(process.user, "1000");
+        assert!(!process.args.iter().any(|arg| arg == "sudo"));
     }
 }

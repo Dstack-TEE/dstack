@@ -333,7 +333,10 @@ pub struct CvmConfig {
     pub qmp_socket: bool,
     /// GPU configuration
     pub gpu: GpuConfig,
-    /// Use sudo to run the VM
+    /// User the VM process runs as. Empty keeps the VMM's own privileges.
+    /// Supervisor prefixes QEMU with `sudo -u`; systemd sets `User=` on the
+    /// transient unit. Accepts a POSIX user name, a numeric UID, or sudo's
+    /// `#UID` form.
     pub user: String,
 
     /// Auto restart configuration
@@ -824,43 +827,91 @@ fn validate_networking(networking: &Networking) -> Result<()> {
 
 /// First file descriptor systemd hands to a service, per the LISTEN_FDS
 /// convention shared by socket activation and `OpenFile=`.
-pub const SD_LISTEN_FDS_START: u32 = 3;
+pub(crate) const SD_LISTEN_FDS_START: u32 = 3;
 
-/// Validates a `open_file` path before it reaches a systemd unit property.
+/// A `cvm.user` value after syntax checks, before looking the account up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UnitUser {
+    /// POSIX user name for `User=` / `sudo -u`.
+    Name(String),
+    /// Numeric UID. systemd takes the bare digits; sudo needs `#UID`.
+    Uid(u32),
+}
+
+impl UnitUser {
+    /// Value for a systemd `User=` property.
+    pub(crate) fn systemd_value(&self) -> String {
+        match self {
+            Self::Name(name) => name.clone(),
+            Self::Uid(uid) => uid.to_string(),
+        }
+    }
+
+    /// Value for `sudo -u`.
+    pub(crate) fn sudo_value(&self) -> String {
+        match self {
+            Self::Name(name) => name.clone(),
+            Self::Uid(uid) => format!("#{uid}"),
+        }
+    }
+}
+
+/// Parses a user name or numeric UID before it reaches sudo or a unit property.
+///
+/// Accepts a POSIX user name, a bare decimal UID (systemd `User=`), or sudo's
+/// `#UID` form. The charset for names excludes `%` and property separators so
+/// the value cannot expand as a systemd specifier or inject extra syntax.
+pub(crate) fn parse_unit_user(name: &str, user: &str) -> Result<UnitUser> {
+    if user.is_empty() {
+        bail!("{name} must not be empty");
+    }
+    if let Some(digits) = user.strip_prefix('#') {
+        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            bail!("{name} must be '#<uid>' when it starts with '#': {user}");
+        }
+        let uid = digits
+            .parse::<u32>()
+            .with_context(|| format!("{name} contains an out-of-range uid: {user}"))?;
+        return Ok(UnitUser::Uid(uid));
+    }
+    if user.bytes().all(|byte| byte.is_ascii_digit()) {
+        let uid = user
+            .parse::<u32>()
+            .with_context(|| format!("{name} contains an out-of-range uid: {user}"))?;
+        return Ok(UnitUser::Uid(uid));
+    }
+    if user.starts_with('-') {
+        bail!("{name} must not start with '-': {user}");
+    }
+    if !user
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    {
+        bail!("{name} must contain only alphanumerics, '_', '-' and '.': {user}");
+    }
+    Ok(UnitUser::Name(user.to_string()))
+}
+
+pub(crate) fn validate_unit_user(name: &str, user: &str) -> Result<()> {
+    parse_unit_user(name, user).map(|_| ())
+}
+
+/// Validates an `open_file` path before it reaches a systemd unit property.
 ///
 /// systemd parses `OpenFile=` as `path:fdname:options` and expands `%`
 /// specifiers, so those characters would change the meaning of the property
 /// rather than name a device. The check is deliberately conservative: the only
 /// intended values are host device nodes such as `/dev/tap7498`.
-/// Validates a user name before it reaches a systemd unit property.
-///
-/// `User=` takes a user name or a numeric UID. The charset is kept to what a
-/// POSIX user name can contain so the value cannot introduce a `%` specifier
-/// expansion or extra property syntax.
-pub fn validate_unit_user(name: &str, user: &str) -> Result<()> {
-    anyhow::ensure!(!user.is_empty(), "{name} must not be empty");
-    anyhow::ensure!(
-        !user.starts_with('-'),
-        "{name} must not start with '-': {user}"
-    );
-    anyhow::ensure!(
-        user.bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')),
-        "{name} must contain only alphanumerics, '_', '-' and '.': {user}"
-    );
-    Ok(())
-}
-
-pub fn validate_open_file(name: &str, path: &str) -> Result<()> {
-    anyhow::ensure!(
-        path.starts_with('/'),
-        "{name} must be an absolute path: {path}"
-    );
-    anyhow::ensure!(
-        path.bytes()
-            .all(|byte| byte.is_ascii_graphic() && !matches!(byte, b':' | b',' | b'%' | b'\\')),
-        "{name} must not contain whitespace or any of ':' ',' '%' '\\': {path}"
-    );
+pub(crate) fn validate_open_file(name: &str, path: &str) -> Result<()> {
+    if !path.starts_with('/') {
+        bail!("{name} must be an absolute path: {path}");
+    }
+    if !path
+        .bytes()
+        .all(|byte| byte.is_ascii_graphic() && !matches!(byte, b':' | b',' | b'%' | b'\\'))
+    {
+        bail!("{name} must not contain whitespace or any of ':' ',' '%' '\\': {path}");
+    }
     Ok(())
 }
 
@@ -1236,7 +1287,34 @@ mod tests {
     #[test]
     fn unit_user_names_are_validated() {
         validate_unit_user("cvm.user", "qemu-1.user_x").unwrap();
-        for user in ["", "-qemu", "qemu:0", "qemu user", "%i", "qemu$"] {
+        assert_eq!(
+            parse_unit_user("cvm.user", "#1000").unwrap(),
+            UnitUser::Uid(1000)
+        );
+        assert_eq!(
+            parse_unit_user("cvm.user", "1000").unwrap(),
+            UnitUser::Uid(1000)
+        );
+        assert_eq!(
+            parse_unit_user("cvm.user", "#1000").unwrap().sudo_value(),
+            "#1000"
+        );
+        assert_eq!(
+            parse_unit_user("cvm.user", "#1000")
+                .unwrap()
+                .systemd_value(),
+            "1000"
+        );
+        for user in [
+            "",
+            "#",
+            "#-1",
+            "-qemu",
+            "qemu:0",
+            "qemu user",
+            "%i",
+            "qemu$",
+        ] {
             validate_unit_user("cvm.user", user).unwrap_err();
         }
 
@@ -1247,6 +1325,8 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("cvm.user"));
+        config.cvm.user = "#1000".into();
+        config.validate().unwrap();
     }
 
     #[test]
