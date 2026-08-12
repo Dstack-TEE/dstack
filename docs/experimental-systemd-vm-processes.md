@@ -57,7 +57,19 @@ KillSignal=SIGTERM
 SendSIGKILL=yes
 TimeoutStopSec=<systemd.stop_timeout>
 Restart=no
+User=<cvm.user>                 # when cvm.user is set
+OpenFile=/dev/tapN              # one entry per NIC with networking.open_file
 ```
+
+`User=` replaces the Supervisor `sudo -u` path. systemd opens each `OpenFile=`
+path with the manager's privileges and hands the descriptors to the service in
+declaration order starting at fd 3, which is what QEMU's generated
+`-netdev tap,id=netN,fd=M` arguments expect. That combination needs systemd
+253 or newer.
+
+When both are set, the chardev stays root-owned on the host and the unit still
+runs QEMU unprivileged. For software-TPM VMs the whole launcher unit runs as
+`cvm.user`, so the VMM chowns the swtpm state directory before start.
 
 The existing launcher remains responsible for swtpm readiness and graceful
 child shutdown. systemd owns the final cgroup lifetime. A stop request is
@@ -88,8 +100,10 @@ atomic property handling and event-driven state updates.
 
 ## Limitations
 
-- The host must run systemd with support for `ExitType=cgroup` and
-  `StandardOutput=append:`.
+- The host must run systemd 253+ with support for `OpenFile=`,
+  `ExitType=cgroup`, and `StandardOutput=append:`.
+- `networking.open_file` is manifest-only, requires `mode = "custom"`, and is
+  rejected with Supervisor, one-shot execution, and swtpm-backed VMs.
 - The VMM must be authorized to create and stop system services.
 - Transient services inherit the systemd manager environment rather than the
   VMM environment. Variables in `ProcessConfig.env` are forwarded; unrelated
