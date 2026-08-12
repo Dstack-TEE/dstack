@@ -963,7 +963,7 @@ pub struct Networking {
     /// rejected on every other launch path instead of being silently dropped:
     /// QEMU would otherwise open an unrelated fd and attach the guest to the
     /// wrong network.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub open_file: String,
 }
 
@@ -1327,6 +1327,22 @@ mod tests {
             .contains("cvm.user"));
         config.cvm.user = "#1000".into();
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn empty_open_file_is_omitted_from_json() {
+        let networking = Networking {
+            mode: NetworkingMode::User,
+            bridge: String::new(),
+            mac_prefix: String::new(),
+            net: String::new(),
+            dhcp_start: String::new(),
+            restrict: false,
+            netdev: String::new(),
+            open_file: String::new(),
+        };
+        let value = serde_json::to_value(&networking).unwrap();
+        assert!(value.get("open_file").is_none());
     }
 
     #[test]
