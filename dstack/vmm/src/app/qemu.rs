@@ -28,7 +28,7 @@ use anyhow::{bail, Context, Result};
 use bon::Builder;
 use dstack_types::shared_filenames::HOST_SHARED_DISK_LABEL;
 use fs_err as fs;
-use nix::unistd::{Uid, User};
+use nix::unistd::{chown, Uid, User};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
@@ -246,6 +246,14 @@ impl PreparedQemuLaunch {
                 .context("tpm key provider requested but swtpm is not installed")?;
             let state_dir = workdir.swtpm_state_dir();
             fs::create_dir_all(&state_dir).context("failed to create swtpm state directory")?;
+            // systemd drops privileges for the whole launcher unit, including
+            // swtpm. Hand the state directory over so socket creation and TPM
+            // state updates are not denied on a root-owned path. Existing
+            // files from earlier root-owned boots are included.
+            if !cfg.user.is_empty() && cfg.pm != ProcessManagerBackend::Supervisor {
+                let user = resolve_cvm_user(&cfg.user)?;
+                chown_tree_to_user(&state_dir, &user)?;
+            }
             let socket = workdir.swtpm_socket();
             if socket.exists() {
                 fs::remove_file(&socket).context("failed to remove stale swtpm socket")?;
@@ -321,6 +329,28 @@ pub(crate) fn resolve_cvm_user(user: &str) -> Result<User> {
             .context("failed to resolve QEMU user")?
             .with_context(|| format!("QEMU user uid {uid} does not exist")),
     }
+}
+
+/// Makes `path` and its contents writable by the unprivileged VM user.
+///
+/// Under systemd the transient unit drops privileges before exec, so paths the
+/// VMM created as root must be handed over before launch. Supervisor keeps
+/// root for the launcher/swtpm path and only sudo's QEMU, so it does not need
+/// this.
+fn chown_tree_to_user(path: &Path, user: &User) -> Result<()> {
+    chown(path, Some(user.uid), Some(user.gid))
+        .with_context(|| format!("failed to chown {}", path.display()))?;
+    if !path.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(path)
+        .with_context(|| format!("failed to read directory {}", path.display()))?
+    {
+        let entry =
+            entry.with_context(|| format!("failed to read entry under {}", path.display()))?;
+        chown_tree_to_user(&entry.path(), user)?;
+    }
+    Ok(())
 }
 
 fn prepare_shared_dir(workdir: &VmWorkDir) -> Result<()> {
