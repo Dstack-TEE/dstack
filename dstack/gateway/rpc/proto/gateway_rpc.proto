@@ -553,8 +553,8 @@ message RemoveNodeRequest {
 // (or the removal already completed), so a mistyped node_id is visible to
 // the operator instead of silently reporting success.
 message RemoveNodeResponse {
-  // Whether a live node record existed in WaveKV before the tombstone was
-  // written.
+  // Whether any of the node's records (info, status, or sync address) was
+  // live in WaveKV before the tombstones were written.
   bool record_existed = 1;
   // Whether the node was still in this gateway's sync peer set.
   bool removed_from_peer_set = 2;

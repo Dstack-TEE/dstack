@@ -36,12 +36,7 @@ pub use https_client::{AppIdValidator, HttpsClientConfig};
 pub use sync_service::{fetch_peers_from_bootnode, WaveKvSyncService};
 use tracing::{error, warn};
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    net::Ipv4Addr,
-    path::Path,
-    time::Duration,
-};
+use std::{collections::BTreeMap, net::Ipv4Addr, path::Path, time::Duration};
 
 use anyhow::{Context, Result};
 
@@ -109,8 +104,11 @@ pub struct InstanceData {
 pub struct LoadedInstances {
     /// Records that decoded successfully, keyed by instance ID.
     pub decoded: BTreeMap<String, InstanceData>,
-    /// Instance IDs whose stored bytes are present but no longer decode.
-    pub undecodable: BTreeSet<String>,
+    /// Instance IDs whose stored bytes are present but no longer decode,
+    /// mapped to the decode error. Loading does not log these: the reload
+    /// path reports them on transitions, and read-only listings must stay
+    /// quiet no matter how often an operator runs them.
+    pub undecodable: BTreeMap<String, String>,
 }
 
 /// Gateway node status (stored separately for independent updates)
@@ -758,8 +756,9 @@ impl KvStore {
                     loaded.decoded.insert(instance_id.into(), data);
                 }
                 Err(err) => {
-                    error!("{err:#}");
-                    loaded.undecodable.insert(instance_id.into());
+                    loaded
+                        .undecodable
+                        .insert(instance_id.into(), format!("{err:#}"));
                 }
             }
         }
@@ -795,16 +794,25 @@ impl KvStore {
     /// prunes its sync peer set when it observes the deletion (see
     /// [`Self::prune_removed_peers`]).
     ///
-    /// Returns whether a live node record existed before the tombstone was
-    /// written.
+    /// Returns whether any of the node's persistent records was live before
+    /// the tombstones were written, so a node known only by its sync address
+    /// (registered via `SetNodeUrl` but never booted) still reports as
+    /// existing.
     pub fn sync_remove_node(&self, node_id: NodeId) -> Result<bool> {
-        let previous = self.persistent.write().delete(keys::node_info(node_id))?;
-        self.persistent.write().delete(keys::node_status(node_id))?;
-        self.persistent.write().delete(keys::peer_addr(node_id))?;
+        let previous = {
+            let mut persistent = self.persistent.write();
+            [
+                persistent.delete(keys::node_info(node_id))?,
+                persistent.delete(keys::node_status(node_id))?,
+                persistent.delete(keys::peer_addr(node_id))?,
+            ]
+        };
         self.ephemeral
             .write()
             .delete(keys::last_seen_node(node_id, self.my_node_id))?;
-        Ok(previous.is_some_and(|entry| !entry.is_deleted()))
+        Ok(previous
+            .into_iter()
+            .any(|entry| entry.is_some_and(|entry| !entry.is_deleted())))
     }
 
     // ==================== Node Status Sync ====================

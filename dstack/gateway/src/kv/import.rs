@@ -200,9 +200,9 @@ fn accept_instances_at(wg: &WgConfig, loaded: LoadedInstances, now: u64) -> Acce
     let mut instances = BTreeMap::new();
     let mut rejected: Vec<RejectedInstance> = undecodable
         .into_iter()
-        .map(|instance_id| RejectedInstance {
+        .map(|(instance_id, reason)| RejectedInstance {
             instance_id,
-            reason: anyhow::anyhow!("record does not decode"),
+            reason: anyhow::anyhow!(reason),
             rejection: Rejection::Unusable,
         })
         .collect();
@@ -250,7 +250,6 @@ fn accept_instances_at(wg: &WgConfig, loaded: LoadedInstances, now: u64) -> Acce
 mod tests {
     use super::*;
     use ipnet::Ipv4Net;
-    use std::collections::BTreeSet;
 
     /// Wall clock the tests validate against; every fixture `reg_time` below is
     /// well under it unless the test is about the future-timestamp horizon.
@@ -292,7 +291,7 @@ mod tests {
                 .into_iter()
                 .map(|(id, data)| (id.to_string(), data))
                 .collect(),
-            undecodable: BTreeSet::new(),
+            undecodable: BTreeMap::new(),
         }
     }
 
@@ -503,7 +502,9 @@ mod tests {
                 decoded: [("good".to_string(), instance("10.0.0.20", &key(1), 100))]
                     .into_iter()
                     .collect(),
-                undecodable: ["corrupt".to_string()].into_iter().collect(),
+                undecodable: [("corrupt".to_string(), "does not decode".to_string())]
+                    .into_iter()
+                    .collect(),
             },
             NOW,
         );

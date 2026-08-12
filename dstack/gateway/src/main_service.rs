@@ -147,7 +147,8 @@ pub struct CvmRemoval {
 /// already completed), which lets the operator distinguish a mistyped
 /// node_id from an actual removal.
 pub struct NodeRemoval {
-    /// A live node record existed in WaveKV.
+    /// Any of the node's records (info, status, or sync address) was live
+    /// in WaveKV.
     pub record_existed: bool,
     /// The node was still in this gateway's sync peer set.
     pub removed_from_peer_set: bool,

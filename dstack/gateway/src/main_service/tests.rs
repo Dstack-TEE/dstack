@@ -645,7 +645,7 @@ async fn an_operator_can_remove_a_cvm_whose_kv_record_is_unreadable() {
     assert!(!state.lock().state.instances.contains_key("peer-instance"));
     let loaded = state.kv_store.load_all_instances();
     assert!(!loaded.decoded.contains_key("peer-instance"));
-    assert!(!loaded.undecodable.contains("peer-instance"));
+    assert!(!loaded.undecodable.contains_key("peer-instance"));
 
     // The recovery operation is safe to retry after a timeout or lost reply,
     // and the retry tells the operator there was nothing left to remove.
@@ -681,12 +681,12 @@ async fn rejected_instance_records_are_visible_to_the_operator() {
         )
         .unwrap();
 
-    // The operator can see what is wrong — and that removal would also drop
-    // the instance's live routing — without grepping logs.
+    // The operator can see what is wrong — with the actual decode error, and
+    // whether removal would also drop live routing — without grepping logs.
     let rejected = state.proxy.rejected_instances();
     assert_eq!(rejected.len(), 1);
     assert_eq!(rejected[0].rejected.instance_id, "peer-instance");
-    assert!(format!("{:#}", rejected[0].rejected.reason).contains("does not decode"));
+    assert!(format!("{:#}", rejected[0].rejected.reason).contains("corrupt record"));
     assert!(rejected[0].active_locally);
 
     // Once removed, the record no longer shows up as rejected.
@@ -725,6 +725,13 @@ async fn an_operator_can_remove_a_decommissioned_node() {
     let retry = state.proxy.remove_node(7).unwrap();
     assert!(!retry.record_existed);
     assert!(!retry.removed_from_peer_set);
+
+    // A node known only by its sync address (registered via SetNodeUrl but
+    // never booted) still reports record_existed.
+    kv.register_peer_url(8, "https://gw8.example.com:9202")
+        .unwrap();
+    let removal = state.proxy.remove_node(8).unwrap();
+    assert!(removal.record_existed);
 }
 
 #[tokio::test]
