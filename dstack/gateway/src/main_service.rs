@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use auth_client::AuthClient;
 
 use crate::distributed_certbot::DistributedCertBot;
@@ -34,6 +34,7 @@ use tokio::sync::{
 };
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
+use wavekv::types::NodeId;
 
 use crate::{
     cert_store::{CertResolver, CertStoreBuilder},
@@ -140,6 +141,27 @@ pub struct CvmRemoval {
     pub removed_locally: bool,
 }
 
+/// Outcome of an operator-initiated gateway node removal.
+///
+/// Both fields are false when the node was never known (or the removal
+/// already completed), which lets the operator distinguish a mistyped
+/// node_id from an actual removal.
+pub struct NodeRemoval {
+    /// A live node record existed in WaveKV.
+    pub record_existed: bool,
+    /// The node was still in this gateway's sync peer set.
+    pub removed_from_peer_set: bool,
+}
+
+/// A refused instance record plus its local data-plane footprint.
+pub struct RejectedInstanceReport {
+    pub rejected: import::RejectedInstance,
+    /// Whether the instance still holds state in this node's data plane. An
+    /// unusable record keeps whatever the data plane already had, so removing
+    /// an active instance also drops its routing.
+    pub active_locally: bool,
+}
+
 impl Proxy {
     /// Remove one CVM by explicit operator request.
     ///
@@ -163,6 +185,47 @@ impl Proxy {
         Ok(CvmRemoval {
             record_existed,
             removed_locally,
+        })
+    }
+
+    /// Instance records this node currently refuses to import.
+    ///
+    /// Recomputed from the store on every call rather than read from the
+    /// cached rejection log, so the answer is current even right after a
+    /// restart and does not depend on when the last reload ran.
+    pub fn rejected_instances(&self) -> Vec<RejectedInstanceReport> {
+        let rejected =
+            import::accept_instances(&self.config.wg, self.kv_store.load_all_instances()).rejected;
+        let state = self.lock();
+        rejected
+            .into_iter()
+            .map(|rejected| RejectedInstanceReport {
+                active_locally: state.state.instances.contains_key(&rejected.instance_id),
+                rejected,
+            })
+            .collect()
+    }
+
+    /// Remove a decommissioned gateway node by explicit operator request.
+    ///
+    /// Tombstones the node's replicated records and drops it from this
+    /// gateway's sync peer set immediately; other gateways prune their own
+    /// sets when the `__peer_addr` tombstone reaches them. A node removed by
+    /// mistake rejoins when it restarts (startup re-registers its records),
+    /// or via `SetNodeUrl` from any live gateway.
+    pub fn remove_node(&self, node_id: NodeId) -> Result<NodeRemoval> {
+        ensure!(
+            node_id != self.config.sync.node_id,
+            "a node cannot remove itself"
+        );
+        let record_existed = self
+            .kv_store
+            .sync_remove_node(node_id)
+            .with_context(|| format!("failed to delete node {node_id} from WaveKV"))?;
+        let removed_from_peer_set = self.kv_store.remove_peer(node_id)?;
+        Ok(NodeRemoval {
+            record_existed,
+            removed_from_peer_set,
         })
     }
 
@@ -925,6 +988,21 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
             if let Err(err) = proxy_for_nodes.lock().reconfigure() {
                 error!("Failed to reconfigure WireGuard: {err:?}");
             }
+        }
+    });
+
+    // Watch for peer address deletions and prune the sync peer set, so a
+    // node removed by an operator on any gateway stops being a sync target
+    // here without a restart.
+    let mut rx = kv_store.watch_peer_addrs();
+    let kv_for_peers = kv_store.clone();
+    kv_for_peers.prune_removed_peers();
+    tokio::spawn(async move {
+        loop {
+            if rx.changed().await.is_err() {
+                break;
+            }
+            kv_for_peers.prune_removed_peers();
         }
     });
 

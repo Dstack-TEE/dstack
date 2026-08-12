@@ -437,6 +437,14 @@ service Admin {
   // Remove a CVM from WaveKV and the local data plane. This is an idempotent
   // operator recovery action and also works when the stored record is unreadable.
   rpc RemoveCvm(RemoveCvmRequest) returns (RemoveCvmResponse) {}
+  // List the instance records this node currently refuses to import, with the
+  // reason for each. Pairs with RemoveCvm: list the bad records, then remove
+  // the ones that should not survive.
+  rpc ListRejectedInstances(google.protobuf.Empty) returns (ListRejectedInstancesResponse) {}
+  // Remove a decommissioned gateway node from WaveKV and this node's sync peer
+  // set. Idempotent operator recovery action; other gateways prune the node
+  // from their own peer sets when the removal replicates to them.
+  rpc RemoveNode(RemoveNodeRequest) returns (RemoveNodeResponse) {}
 
   // ==================== DNS Credential Management ====================
   // List all DNS credentials
@@ -515,6 +523,41 @@ message RemoveCvmResponse {
   bool record_existed = 1;
   // Whether the CVM was present in this node's local data plane.
   bool removed_locally = 2;
+}
+
+// One instance record this node refuses to import.
+message RejectedInstanceInfo {
+  string instance_id = 1;
+  // Why the record is refused.
+  string reason = 2;
+  // "unusable": the record fails validation or its bytes no longer decode.
+  // "lost_conflict": the record lost an IP or key conflict to an older
+  // registration.
+  string rejection = 3;
+  // Whether the instance still holds state in this node's data plane. An
+  // unusable record keeps whatever the data plane already had, so removing
+  // an active instance also drops its routing.
+  bool active_locally = 4;
+}
+
+message ListRejectedInstancesResponse {
+  repeated RejectedInstanceInfo rejected = 1;
+}
+
+// Emergency operator request to remove a decommissioned gateway node.
+message RemoveNodeRequest {
+  uint32 node_id = 1;
+}
+
+// Outcome of RemoveNode. Both fields are false when the node was never known
+// (or the removal already completed), so a mistyped node_id is visible to
+// the operator instead of silently reporting success.
+message RemoveNodeResponse {
+  // Whether a live node record existed in WaveKV before the tombstone was
+  // written.
+  bool record_existed = 1;
+  // Whether the node was still in this gateway's sync peer set.
+  bool removed_from_peer_set = 2;
 }
 
 // ==================== DNS Credential Messages ====================

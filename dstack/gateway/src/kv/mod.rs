@@ -787,6 +787,26 @@ impl KvStore {
             .collect()
     }
 
+    /// Remove a gateway node from replicated state.
+    ///
+    /// Writes tombstones for the node's info, status, and sync address, and
+    /// drops this node's own last_seen observation of it. The `__peer_addr`
+    /// tombstone doubles as the cluster-wide removal signal: every gateway
+    /// prunes its sync peer set when it observes the deletion (see
+    /// [`Self::prune_removed_peers`]).
+    ///
+    /// Returns whether a live node record existed before the tombstone was
+    /// written.
+    pub fn sync_remove_node(&self, node_id: NodeId) -> Result<bool> {
+        let previous = self.persistent.write().delete(keys::node_info(node_id))?;
+        self.persistent.write().delete(keys::node_status(node_id))?;
+        self.persistent.write().delete(keys::peer_addr(node_id))?;
+        self.ephemeral
+            .write()
+            .delete(keys::last_seen_node(node_id, self.my_node_id))?;
+        Ok(previous.is_some_and(|entry| !entry.is_deleted()))
+    }
+
     // ==================== Node Status Sync ====================
 
     /// Set node status (stored separately from NodeData)
@@ -946,6 +966,11 @@ impl KvStore {
         self.persistent.watch_prefix(keys::NODE_PREFIX)
     }
 
+    /// Watch for changes to replicated peer sync addresses
+    pub fn watch_peer_addrs(&self) -> watch::Receiver<()> {
+        self.persistent.watch_prefix(keys::PEER_ADDR_PREFIX)
+    }
+
     // ==================== Persistence ====================
 
     pub fn persist_if_dirty(&self) -> Result<bool> {
@@ -958,6 +983,49 @@ impl KvStore {
         self.persistent.write().add_peer(peer_id)?;
         self.ephemeral.write().add_peer(peer_id)?;
         Ok(())
+    }
+
+    /// Drop a node from the sync peer set of both stores.
+    ///
+    /// Returns whether the persistent store still had it as a peer.
+    pub fn remove_peer(&self, peer_id: NodeId) -> Result<bool> {
+        let removed = self.persistent.write().remove_peer(peer_id)?;
+        self.ephemeral.write().remove_peer(peer_id)?;
+        Ok(removed)
+    }
+
+    /// Drop peers whose sync address has been explicitly deleted.
+    ///
+    /// A tombstoned `__peer_addr/{id}` record is the replicated signal that
+    /// an operator removed the node (see [`Self::sync_remove_node`]). An
+    /// address that was never written does not count: bootstrap can add a
+    /// peer before its address record has synced in, and such a peer must
+    /// not be dropped for being early.
+    pub fn prune_removed_peers(&self) {
+        let peer_ids: Vec<NodeId> = self
+            .persistent
+            .read()
+            .status()
+            .peers
+            .iter()
+            .map(|peer| peer.id)
+            .collect();
+        for peer_id in peer_ids {
+            // `get` filters tombstones out, so the deletion signal is only
+            // visible through the tombstone-inclusive accessor.
+            let tombstoned = self
+                .persistent
+                .read()
+                .get_including_tombstones(&keys::peer_addr(peer_id))
+                .is_some_and(|entry| entry.is_deleted());
+            if !tombstoned {
+                continue;
+            }
+            warn!("dropping removed node {peer_id} from the sync peer set");
+            if let Err(err) = self.remove_peer(peer_id) {
+                warn!("failed to remove peer {peer_id}: {err:#}");
+            }
+        }
     }
 
     // ==================== Peer Address (in DB) ====================
@@ -1098,6 +1166,19 @@ impl KvStore {
         self.persistent
             .read()
             .decode(&keys::zt_domain_config(domain))
+    }
+
+    /// Whether any record — readable or not — exists for the domain's config.
+    ///
+    /// [`Self::get_zt_domain_config`] cannot distinguish a missing record
+    /// from a corrupt one; deletion must, or a corrupt record could never be
+    /// removed.
+    pub fn zt_domain_config_exists(&self, domain: &str) -> bool {
+        // `get` already excludes tombstones, so Some means a live record.
+        self.persistent
+            .read()
+            .get(&keys::zt_domain_config(domain))
+            .is_some()
     }
 
     /// Save ZT-Domain configuration

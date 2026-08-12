@@ -665,6 +665,123 @@ async fn removing_an_unknown_cvm_reports_that_nothing_existed() {
 }
 
 #[tokio::test]
+async fn rejected_instance_records_are_visible_to_the_operator() {
+    let state = create_test_state().await;
+    sync_from_peer(&state, "peer-instance", "10.0.0.40", &test_pubkey("good"));
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+    assert!(state.proxy.rejected_instances().is_empty());
+
+    state
+        .kv_store
+        .persistent()
+        .write()
+        .put(
+            crate::kv::keys::inst("peer-instance"),
+            b"not-messagepack".to_vec(),
+        )
+        .unwrap();
+
+    // The operator can see what is wrong — and that removal would also drop
+    // the instance's live routing — without grepping logs.
+    let rejected = state.proxy.rejected_instances();
+    assert_eq!(rejected.len(), 1);
+    assert_eq!(rejected[0].rejected.instance_id, "peer-instance");
+    assert!(format!("{:#}", rejected[0].rejected.reason).contains("does not decode"));
+    assert!(rejected[0].active_locally);
+
+    // Once removed, the record no longer shows up as rejected.
+    state.proxy.remove_cvm("peer-instance").unwrap();
+    assert!(state.proxy.rejected_instances().is_empty());
+}
+
+#[tokio::test]
+async fn an_operator_can_remove_a_decommissioned_node() {
+    let state = create_test_state().await;
+    let kv = &state.kv_store;
+    kv.register_peer_url(7, "https://gw7.example.com:9202")
+        .unwrap();
+    kv.sync_node(
+        7,
+        &crate::kv::NodeData {
+            uuid: b"gw7-uuid".to_vec(),
+            url: "https://gw7.example.com:9202".to_string(),
+            wg_public_key: String::new(),
+            wg_endpoint: String::new(),
+            wg_ip: String::new(),
+        },
+    )
+    .unwrap();
+
+    let removal = state.proxy.remove_node(7).unwrap();
+    assert!(removal.record_existed);
+    assert!(removal.removed_from_peer_set);
+    assert!(kv.get_peer_url(7).is_none());
+    assert!(!kv.load_all_nodes().contains_key(&7));
+    let peers = kv.persistent().read().status().peers;
+    assert!(!peers.iter().any(|peer| peer.id == 7));
+
+    // The recovery operation is safe to retry after a timeout or lost reply,
+    // and the retry tells the operator there was nothing left to remove.
+    let retry = state.proxy.remove_node(7).unwrap();
+    assert!(!retry.record_existed);
+    assert!(!retry.removed_from_peer_set);
+}
+
+#[tokio::test]
+async fn a_node_cannot_remove_itself() {
+    let state = create_test_state().await;
+    let my_id = state.proxy.config.sync.node_id;
+    assert!(state.proxy.remove_node(my_id).is_err());
+}
+
+#[tokio::test]
+async fn peers_prune_nodes_removed_on_another_gateway() {
+    let state = create_test_state().await;
+    let kv = &state.kv_store;
+
+    // Simulate observing a removal performed elsewhere: the __peer_addr
+    // tombstone arrives via replication, not through this node's admin API.
+    kv.register_peer_url(9, "https://gw9.example.com:9202")
+        .unwrap();
+    kv.persistent()
+        .write()
+        .delete(crate::kv::keys::peer_addr(9))
+        .unwrap();
+    kv.prune_removed_peers();
+    let peers = kv.persistent().read().status().peers;
+    assert!(!peers.iter().any(|peer| peer.id == 9));
+
+    // A peer whose address record was never written is not dropped:
+    // bootstrap can add a peer before its address has synced in.
+    kv.add_peer(11).unwrap();
+    kv.prune_removed_peers();
+    let peers = kv.persistent().read().status().peers;
+    assert!(peers.iter().any(|peer| peer.id == 11));
+}
+
+#[tokio::test]
+async fn a_zt_domain_with_a_corrupt_config_can_still_be_deleted() {
+    let state = create_test_state().await;
+    let kv = &state.kv_store;
+
+    kv.persistent()
+        .write()
+        .put(
+            crate::kv::keys::zt_domain_config("bad.example.com"),
+            b"not-messagepack".to_vec(),
+        )
+        .unwrap();
+
+    // The corrupt record is invisible to reads, but must still be deletable —
+    // otherwise it would be permanently stuck.
+    assert!(kv.get_zt_domain_config("bad.example.com").is_none());
+    assert!(kv.zt_domain_config_exists("bad.example.com"));
+
+    kv.delete_zt_domain_config("bad.example.com").unwrap();
+    assert!(!kv.zt_domain_config_exists("bad.example.com"));
+}
+
+#[tokio::test]
 async fn an_instance_that_lost_an_ip_conflict_stops_being_routable() {
     let state = create_test_state().await;
     sync_from_peer_at(&state, "loser", "10.0.0.40", &test_pubkey("loser"), 300);
