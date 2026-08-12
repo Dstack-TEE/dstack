@@ -1260,6 +1260,13 @@ impl ProxyState {
                 error!("excluding instance {} from wg config: {err:#}", info.id);
                 continue;
             }
+            if info.public_key == self.config.wg.public_key {
+                error!(
+                    "excluding instance {} from wg config: public key belongs to this gateway",
+                    info.id
+                );
+                continue;
+            }
             if !self.config.wg.is_routable_client_ip(info.ip) {
                 error!(
                     "excluding instance {} from wg config: ip {} is outside the wg network",

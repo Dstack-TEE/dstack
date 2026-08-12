@@ -140,6 +140,10 @@ fn validate_instance(
     validate_id("instance_id", instance_id)?;
     validate_id("app_id", &data.app_id)?;
     validate_wg_public_key(&data.public_key)?;
+    ensure!(
+        data.public_key != wg.public_key,
+        "public key belongs to this gateway"
+    );
     // The routable network, not this node's allocation share: in a cluster
     // every node carries peers for the CVMs registered on the other nodes, and
     // those hold addresses from the other nodes' shares by design.
@@ -337,6 +341,21 @@ mod tests {
             let accepted = accept(vec![("x", instance(ip, &key(1), 100))]);
             assert!(accepted.instances.is_empty(), "accepted ip {ip}");
         }
+    }
+
+    #[test]
+    fn rejects_the_gateways_own_public_key() {
+        let wg = wg_config();
+        let accepted = accept_instances_at(
+            &wg,
+            loaded(vec![(
+                "self-peer",
+                instance("10.0.0.20", &wg.public_key, 100),
+            )]),
+            NOW,
+        );
+        assert!(accepted.instances.is_empty());
+        assert_eq!(accepted.rejected.len(), 1);
     }
 
     #[test]
