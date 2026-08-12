@@ -53,6 +53,7 @@ pub struct ProcessConfig {
     /// than running the process with its own privileges. Skipped when empty so
     /// existing records and requests keep serializing byte-identically.
     #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[builder(default)]
     pub user: String,
     /// Files the process manager opens before exec and passes to the process
     /// as inherited file descriptors, in declaration order starting at fd 3.
@@ -62,6 +63,7 @@ pub struct ProcessConfig {
     /// descriptors it asked for. Skipped when empty so existing records and
     /// requests keep serializing byte-identically.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
     pub open_files: Vec<String>,
 }
 
