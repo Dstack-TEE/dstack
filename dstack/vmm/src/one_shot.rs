@@ -290,13 +290,12 @@ Compose file content (first 200 chars):
         );
     }
 
-    if !dry_run
-        && resolved_networks(&manifest, &config.cvm)
-            .iter()
-            .any(|network| !network.open_file.is_empty())
-    {
+    let needs_open_files = resolved_networks(&manifest, &config.cvm)
+        .iter()
+        .any(|network| !network.open_file.is_empty());
+    if !dry_run && needs_open_files {
         anyhow::bail!(
-            "one-shot execution cannot pass pre-opened file descriptors to QEMU; run the VMM server with cvm.pm = \"systemd\" or use --dry-run"
+            "one-shot execution cannot pass pre-opened file descriptors to QEMU; run the VMM server with cvm.pm = \"systemd\""
         );
     }
 
@@ -322,21 +321,35 @@ Compose file content (first 200 chars):
     println!("# QEMU Command:");
     println!("{}", full_command.join(" "));
 
-    if !dry_run && !process_config.user.is_empty() {
+    let needs_systemd_user = !process_config.user.is_empty();
+    if !dry_run && needs_systemd_user {
         // Privileges are dropped by the systemd unit, which one-shot mode does
         // not create, and the command carries no sudo prefix either. Running it
         // here would start QEMU with the VMM's own privileges.
         anyhow::bail!(
-            "one-shot execution cannot drop privileges to cvm.user with cvm.pm = \"systemd\" or \"auto\"; use --dry-run or cvm.pm = \"supervisor\""
+            "one-shot execution cannot drop privileges to cvm.user with cvm.pm = \"systemd\" or \"auto\"; use cvm.pm = \"supervisor\" or run the VMM server"
         );
     }
 
     if dry_run {
         println!("# Dry run mode - QEMU command not executed");
-        println!(
-            "# To execute, run: --one-shot {} (without --dry-run)",
-            vm_config_path
-        );
+        if needs_open_files {
+            println!(
+                "# This command needs pre-opened file descriptors from systemd OpenFile=; \
+                 run the VMM server with cvm.pm = \"systemd\" instead of removing --dry-run"
+            );
+        } else if needs_systemd_user {
+            println!(
+                "# This command expects systemd User={}; run the VMM server with cvm.pm = \"systemd\" \
+                 or \"auto\", or set cvm.pm = \"supervisor\" so one-shot can use sudo",
+                process_config.user
+            );
+        } else {
+            println!(
+                "# To execute, run: --one-shot {} (without --dry-run)",
+                vm_config_path
+            );
+        }
     } else {
         println!("# Executing QEMU...");
 
