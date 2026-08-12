@@ -17,11 +17,12 @@ use dstack_gateway_rpc::{
     HandshakeEntry, HostInfo, LastSeenEntry, ListCertAttestationsRequest,
     ListCertAttestationsResponse, ListDnsCredentialsResponse, ListZtDomainsResponse,
     NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus, PortAttrs as RpcPortAttrs,
-    PortPolicy as RpcPortPolicy, RenewCertResponse, RenewZtDomainCertRequest,
-    RenewZtDomainCertResponse, RotateAcmeCredentialsResponse, SetCertbotConfigRequest,
-    SetDefaultDnsCredentialRequest, SetInstancePortPolicyRequest, SetNodeStatusRequest,
-    SetNodeUrlRequest, StatusResponse, StoreSyncStatus, UpdateDnsCredentialRequest,
-    WaveKvStatusResponse, ZtDomainCertStatus, ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
+    PortPolicy as RpcPortPolicy, RemoveCvmRequest, RemoveCvmResponse, RenewCertResponse,
+    RenewZtDomainCertRequest, RenewZtDomainCertResponse, RotateAcmeCredentialsResponse,
+    SetCertbotConfigRequest, SetDefaultDnsCredentialRequest, SetInstancePortPolicyRequest,
+    SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse, StoreSyncStatus,
+    UpdateDnsCredentialRequest, WaveKvStatusResponse, ZtDomainCertStatus,
+    ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
 };
 use ra_rpc::{CallContext, RpcCall};
 use tracing::{info, warn};
@@ -303,6 +304,25 @@ impl AdminRpc for AdminRpcHandler {
             .collect();
 
         Ok(GetNodeStatusesResponse { statuses: entries })
+    }
+
+    async fn remove_cvm(self, request: RemoveCvmRequest) -> Result<RemoveCvmResponse> {
+        let instance_id = request.instance_id.as_str();
+        // Same bound the KV import boundary puts on identifiers. Legitimate
+        // gateways never write an instance_id outside it, so this rejects only
+        // typos — and keeps the ID safe to embed in logs and KV keys.
+        crate::kv::import::validate_id("instance_id", instance_id)?;
+
+        let removal = self.state.remove_cvm(instance_id)?;
+        warn!(
+            "admin removed CVM {instance_id} from WaveKV and the local data plane \
+             (record existed: {}, present locally: {})",
+            removal.record_existed, removal.removed_locally
+        );
+        Ok(RemoveCvmResponse {
+            record_existed: removal.record_existed,
+            removed_locally: removal.removed_locally,
+        })
     }
 
     // ==================== DNS Credential Management ====================

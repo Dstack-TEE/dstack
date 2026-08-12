@@ -113,7 +113,11 @@ pub fn validate_wg_public_key(public_key: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_id(field: &str, value: &str) -> Result<()> {
+/// Validate an identifier field: non-empty, bounded, and free of whitespace
+/// and control characters. Every identifier a legitimate gateway writes into
+/// a KV record satisfies this, so it is also the acceptance bound for
+/// operator-supplied instance IDs (e.g. `Admin.RemoveCvm`).
+pub(crate) fn validate_id(field: &str, value: &str) -> Result<()> {
     ensure!(!value.is_empty(), "{field} is empty");
     ensure!(
         value.len() <= MAX_ID_LEN,
@@ -320,6 +324,19 @@ mod tests {
             );
         }
         assert!(validate_wg_public_key(&key(3)).is_ok());
+    }
+
+    #[test]
+    fn rejects_ids_unfit_for_kv_keys_and_logs() {
+        let too_long = "a".repeat(MAX_ID_LEN + 1);
+        for bad in ["", " id", "id ", "in id", "in\nid", too_long.as_str()] {
+            assert!(
+                validate_id("instance_id", bad).is_err(),
+                "accepted id {bad:?}"
+            );
+        }
+        validate_id("instance_id", "peer-instance").unwrap();
+        validate_id("instance_id", &"a".repeat(MAX_ID_LEN)).unwrap();
     }
 
     #[test]

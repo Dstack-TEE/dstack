@@ -434,6 +434,9 @@ service Admin {
   rpc GetGlobalConnections(google.protobuf.Empty) returns (GlobalConnectionsStats) {}
   // Get all node statuses
   rpc GetNodeStatuses(google.protobuf.Empty) returns (GetNodeStatusesResponse) {}
+  // Remove a CVM from WaveKV and the local data plane. This is an idempotent
+  // operator recovery action and also works when the stored record is unreadable.
+  rpc RemoveCvm(RemoveCvmRequest) returns (RemoveCvmResponse) {}
 
   // ==================== DNS Credential Management ====================
   // List all DNS credentials
@@ -495,6 +498,23 @@ service Admin {
   // Inspect both the admin override and the instance-reported policy for an
   // instance, plus the effective policy the proxy will enforce.
   rpc GetInstancePortPolicy(GetInstancePortPolicyRequest) returns (GetInstancePortPolicyResponse) {}
+}
+
+// Emergency operator request to remove one CVM's instance record.
+message RemoveCvmRequest {
+  string instance_id = 1;
+}
+
+// Outcome of a RemoveCvm request. Both fields are false when the request
+// names an instance this cluster has never seen (or a retry of a removal
+// that already completed), so a mistyped instance_id is visible to the
+// operator instead of silently reporting success.
+message RemoveCvmResponse {
+  // Whether a live instance record existed in WaveKV before the tombstone
+  // was written. Also true for records that existed but were unreadable.
+  bool record_existed = 1;
+  // Whether the CVM was present in this node's local data plane.
+  bool removed_locally = 2;
 }
 
 // ==================== DNS Credential Messages ====================

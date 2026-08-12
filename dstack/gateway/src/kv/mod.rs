@@ -727,8 +727,11 @@ impl KvStore {
     }
 
     /// Sync instance deletion to other nodes
-    pub fn sync_delete_instance(&self, instance_id: &str) -> Result<()> {
-        self.persistent.write().delete(keys::inst(instance_id))?;
+    ///
+    /// Returns whether a live record (including an undecodable one) existed
+    /// before the tombstone was written.
+    pub fn sync_delete_instance(&self, instance_id: &str) -> Result<bool> {
+        let previous = self.persistent.write().delete(keys::inst(instance_id))?;
         self.ephemeral
             .write()
             .delete(keys::conn(instance_id, self.my_node_id))?;
@@ -736,7 +739,7 @@ impl KvStore {
         self.ephemeral
             .write()
             .delete(keys::handshake(instance_id, self.my_node_id))?;
-        Ok(())
+        Ok(previous.is_some_and(|entry| !entry.is_deleted()))
     }
 
     /// Load all instances from the sync store.
