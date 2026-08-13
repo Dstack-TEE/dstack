@@ -21,7 +21,11 @@ const PCI_BRIDGE_CLASS: u32 = 0x0604;
 const PCI_BRIDGE_CONTROL: u64 = 0x3e;
 const PCI_BRIDGE_CTL_BUS_RESET: u16 = 1 << 6;
 const SBR_ASSERT_TIME: Duration = Duration::from_millis(100);
-const SBR_RECOVERY_TIME: Duration = Duration::from_secs(1);
+// PCI config space can become visible before VFIO considers the endpoint ready.
+// H200 testing observed a transient VFIO ENODEV when QEMU attached one second
+// after SBR, so leave the link and device firmware a conservative recovery
+// window before handing the device to QEMU.
+const SBR_RECOVERY_TIME: Duration = Duration::from_secs(5);
 
 /// Clears device-internal state that can survive VFIO's attach-time FLR.
 ///
