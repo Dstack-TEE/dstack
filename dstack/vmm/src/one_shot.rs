@@ -321,6 +321,9 @@ Compose file content (first 200 chars):
     } else {
         println!("# Executing QEMU...");
 
+        crate::gpu_reset::sanitize_on_attach(&config.cvm.gpu, &gpus)
+            .context("Failed to sanitize GPUs before QEMU launch")?;
+
         let mut cmd = std::process::Command::new(&process_config.command);
         cmd.args(&process_config.args);
 

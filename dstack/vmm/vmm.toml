@@ -165,6 +165,10 @@ exclude = []
 include = []
 # Allow attach all GPUs
 allow_attach_all = true
+# Issue a Secondary Bus Reset on each GPU's dedicated upstream PCIe bridge
+# immediately before QEMU attaches the device. This clears stale GPU FSP/SPDM
+# state left by a VM that terminated during GPU firmware initialization.
+sanitize_on_attach = true
 
 [gateway]
 base_domain = "localhost"

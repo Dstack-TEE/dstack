@@ -449,6 +449,7 @@ impl App {
 
             let runtime_networks = resolved_networks(&vm_config.manifest, &self.config.cvm);
             let devices = self.try_allocate_gpus(&vm_config.manifest)?;
+            crate::gpu_reset::sanitize_on_attach(&self.config.cvm.gpu, &devices)?;
             let processes = vm_config.config_qemu(&work_dir, &self.config.cvm, &devices)?;
             work_dir.set_runtime_networks(&runtime_networks)?;
             if let Err(error) = self
