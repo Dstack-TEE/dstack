@@ -29,7 +29,7 @@ const SBR_RECOVERY_TIME: Duration = Duration::from_secs(1);
 /// a shared bridge could disrupt unrelated devices, so that topology is
 /// rejected rather than guessed at.
 pub fn sanitize_on_attach(host: &HostGpuConfig, devices: &GpuConfig) -> Result<()> {
-    if !host.sanitize_on_attach || devices.gpus.is_empty() {
+    if !host.enabled || !host.sanitize_on_attach || devices.gpus.is_empty() {
         return Ok(());
     }
     sanitize_at(Path::new(PCI_SYSFS_DEVICES), devices)
@@ -154,6 +154,8 @@ mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
 
+    use crate::app::{AttachMode, GpuSpec};
+
     #[test]
     fn normalizes_short_pci_slots() {
         assert_eq!(normalize_slot("0f:00.0"), "0000:0f:00.0");
@@ -165,6 +167,27 @@ mod tests {
         assert!(is_pci_slot("0000:0f:00.0"));
         assert!(!is_pci_slot("class"));
         assert!(!is_pci_slot("0000:0g:00.0"));
+    }
+
+    #[test]
+    fn skips_sanitization_when_gpu_passthrough_is_disabled() {
+        let host = HostGpuConfig {
+            enabled: false,
+            listing: Vec::new(),
+            exclude: Vec::new(),
+            include: Vec::new(),
+            allow_attach_all: true,
+            sanitize_on_attach: true,
+        };
+        let devices = GpuConfig {
+            attach_mode: AttachMode::Listed,
+            gpus: vec![GpuSpec {
+                slot: "ff:00.0".into(),
+            }],
+            bridges: Vec::new(),
+        };
+
+        sanitize_on_attach(&host, &devices).unwrap();
     }
 
     #[test]

@@ -449,7 +449,13 @@ impl App {
 
             let runtime_networks = resolved_networks(&vm_config.manifest, &self.config.cvm);
             let devices = self.try_allocate_gpus(&vm_config.manifest)?;
-            crate::gpu_reset::sanitize_on_attach(&self.config.cvm.gpu, &devices)?;
+            let gpu_host_config = self.config.cvm.gpu.clone();
+            let devices_to_sanitize = devices.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::gpu_reset::sanitize_on_attach(&gpu_host_config, &devices_to_sanitize)
+            })
+            .await
+            .context("GPU sanitization task failed")??;
             let processes = vm_config.config_qemu(&work_dir, &self.config.cvm, &devices)?;
             work_dir.set_runtime_networks(&runtime_networks)?;
             if let Err(error) = self
