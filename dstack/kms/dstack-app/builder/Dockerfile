@@ -30,7 +30,7 @@ FROM debian:bookworm@sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1
 COPY --from=build-shared /pin-packages.sh /config-qemu.sh /build/
 COPY ./shared/qemu-pinned-packages.txt /build/
 WORKDIR /build
-ARG QEMU_REV=dbcec07c0854bf873d346a09e87e4c993ccf2633
+ARG QEMU_REV=9de6fdfff3a84103b83ca6b2e8c4fb8e05cf9195
 RUN ./pin-packages.sh ./qemu-pinned-packages.txt && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -46,7 +46,7 @@ RUN ./pin-packages.sh ./qemu-pinned-packages.txt && \
     flex \
     bison && \
     rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
-RUN git clone https://github.com/kvinwang/qemu-tdx.git --depth 1 --branch dstack-qemu-9.2.1 --single-branch && \
+RUN git clone https://github.com/kvinwang/qemu-tdx.git --depth 1 --branch dstack-qemu-acpi-11.1-compat --single-branch && \
     cd qemu-tdx && git fetch --depth 1 origin ${QEMU_REV} && \
     git checkout ${QEMU_REV} && \
     ../config-qemu.sh ./build /usr/local && \

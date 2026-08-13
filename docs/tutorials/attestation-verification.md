@@ -259,7 +259,7 @@ sudo apt-get install -y git libslirp-dev python3-pip ninja-build \
 # Clone the custom QEMU fork
 cd ~/dstack
 git clone https://github.com/kvinwang/qemu-tdx.git --depth 1 \
-  --branch dstack-qemu-9.2.1 --single-branch
+  --branch dstack-qemu-acpi-11.1-compat --single-branch
 
 # Configure with ACPI table dumping enabled
 cd qemu-tdx
