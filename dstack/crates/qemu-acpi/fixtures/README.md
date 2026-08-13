@@ -42,10 +42,10 @@ The script compares `etc/acpi/tables`, `etc/table-loader`, and
 The dump patch is test-only instrumentation and does not change table
 construction.
 
-The trimmed `*-base.bin` files contain only the used ACPI table bytes. QEMU's
-trailing zero allocation is removed at the first all-zero table signature; the
-runtime generator restores QEMU's 128 KiB allocation. The four base variants
-for each compatibility family are the Cartesian product of:
+The trimmed `*-base.bin` files are test-only byte oracles. They are never read
+by non-test code and are not templates for generation. QEMU's trailing zero
+allocation is removed at the first all-zero table signature. The four variants
+for each compatibility family cover the Cartesian product of:
 
 - CPU hotplug enabled or disabled; and
 - ordinary Q35 or NUMA with one PXB.

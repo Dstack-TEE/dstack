@@ -27,17 +27,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     let smm = optional::<u8>(&mut args, 0)? == 1;
     let hole = optional::<u64>(&mut args, 0)?;
     let memory_size = optional(&mut args, 2u64 << 30)?;
+    let volumes = optional(&mut args, 0)?;
+    let pic = optional::<u8>(&mut args, 0)? == 1;
     let blobs = build(&MachineConfig {
         qemu_version: version,
         cpu_count: cpus,
         memory_size,
-        pic: false,
+        pic,
         smm,
         hugepages,
         num_gpus: gpus,
         num_nvswitches: nvswitches,
         num_nics: nics,
-        num_verity_volumes: 0,
+        num_verity_volumes: volumes,
         hotplug_off,
         root_verity,
         pci_hole64_size: (hole != 0).then_some(hole),
