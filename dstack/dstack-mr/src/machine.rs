@@ -50,17 +50,26 @@ pub struct Machine<'a> {
 }
 
 fn parse_version_tuple(v: &str) -> Result<(u32, u32, u32)> {
-    let parts: Vec<u32> = v
-        .split('.')
-        .map(|p| p.parse::<u32>().context("Invalid version number"))
-        .collect::<Result<Vec<_>, _>>()?;
-    if parts.len() != 3 {
-        bail!(
-            "Version string must have exactly 3 parts (major.minor.patch), got {}",
-            parts.len()
-        );
+    let mut parts = v.split('.');
+    let major = parts
+        .next()
+        .context("Version string must have exactly 3 parts (major.minor.patch)")?
+        .parse::<u32>()
+        .context("Invalid version number")?;
+    let minor = parts
+        .next()
+        .context("Version string must have exactly 3 parts (major.minor.patch)")?
+        .parse::<u32>()
+        .context("Invalid version number")?;
+    let patch = parts
+        .next()
+        .context("Version string must have exactly 3 parts (major.minor.patch)")?
+        .parse::<u32>()
+        .context("Invalid version number")?;
+    if parts.next().is_some() {
+        bail!("Version string must have exactly 3 parts (major.minor.patch)");
     }
-    Ok((parts[0], parts[1], parts[2]))
+    Ok((major, minor, patch))
 }
 
 impl Machine<'_> {

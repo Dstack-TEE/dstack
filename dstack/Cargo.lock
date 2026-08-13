@@ -2096,6 +2096,7 @@ dependencies = [
  "log",
  "object",
  "parity-scale-codec",
+ "qemu-acpi",
  "reqwest",
  "serde",
  "serde-human-bytes",
@@ -5595,6 +5596,15 @@ checksum = "6fac0855066edbf6bdcb42beb02cd9063d12d8d6d44b9a0c2f15a30e6ddd11f5"
 dependencies = [
  "proc-macro2",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "qemu-acpi"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

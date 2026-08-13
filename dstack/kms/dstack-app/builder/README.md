@@ -6,7 +6,7 @@ This directory contains the necessary files to build and run the dstack-kms Dock
 
 The builder creates a Docker image that includes:
 - The dstack-kms service compiled from Rust source code
-- Command line tool dstack-acpi-tables for generating ACPI tables for dstack CVM
+- Pure-Rust ACPI measurement support built into the dstack-kms binary
 
 ## Prerequisites
 

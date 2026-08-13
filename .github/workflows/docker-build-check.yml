@@ -88,11 +88,6 @@ jobs:
             DSTACK_REV=${{ env.DSTACK_REV }}
             DSTACK_SRC_URL=${{ env.DSTACK_SRC_URL }}
 
-      - name: Verify pinned packages (qemu stage)
-        run: |
-          dstack/build/shared/verify-pinned-packages.sh dstack-kms-check:latest \
-            dstack/kms/dstack-app/builder/shared/qemu-pinned-packages.txt
-
       - name: Build kms-builder target
         run: |
           docker buildx build \
@@ -163,21 +158,3 @@ jobs:
         run: |
           dstack/build/shared/verify-pinned-packages.sh verifier-builder-check:latest \
             dstack/verifier/builder/shared/builder-pinned-packages.txt
-
-      - name: Build acpi-builder target
-        run: |
-          docker buildx build \
-            --load \
-            --target acpi-builder \
-            --tag verifier-acpi-check:latest \
-            --provenance=false \
-            --file dstack/verifier/builder/Dockerfile \
-            --build-context build-shared=dstack/build/shared \
-            --build-arg "DSTACK_REV=${DSTACK_REV}" \
-            --build-arg "DSTACK_SRC_URL=${DSTACK_SRC_URL}" \
-            dstack/verifier
-
-      - name: Verify qemu pinned packages
-        run: |
-          dstack/build/shared/verify-pinned-packages.sh verifier-acpi-check:latest \
-            dstack/verifier/builder/shared/qemu-pinned-packages.txt

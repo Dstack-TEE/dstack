@@ -48,7 +48,6 @@ path = [
     "sdk/go/go.sum",
     "sdk/go/ratls/go.sum",
     "dstack/kms/dstack-app/builder/shared/builder-pinned-packages.txt",
-    "dstack/kms/dstack-app/builder/shared/qemu-pinned-packages.txt",
     "dstack/gateway/dstack-app/builder/shared/builder-pinned-packages.txt",
     "dstack/gateway/dstack-app/builder/shared/pinned-packages.txt",
 ]
@@ -259,5 +258,10 @@ path = [
     "dstack/gateway/test-run/e2e/configs/*",
     "dstack/gateway/test-run/e2e/pebble-config.json",
 ]
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "dstack/crates/qemu-acpi/fixtures/*.bin"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"

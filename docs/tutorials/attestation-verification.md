@@ -246,46 +246,9 @@ To verify attestation, you need to independently calculate what the measurements
 cat /var/lib/dstack/images/dstack-0.5.7/metadata.json | jq .
 ```
 
-### Build dstack-acpi-tables (required dependency)
+### ACPI generation
 
-`dstack-mr` internally runs a tool called `dstack-acpi-tables` to generate ACPI tables for RTMR0 calculation. This is a custom-patched QEMU binary compiled with `-DDUMP_ACPI_TABLES`. You need to build it once:
-
-```bash
-# Install QEMU build dependencies
-sudo apt-get update
-sudo apt-get install -y git libslirp-dev python3-pip ninja-build \
-  pkg-config libglib2.0-dev build-essential flex bison
-
-# Clone the custom QEMU fork
-cd ~/dstack
-git clone https://github.com/kvinwang/qemu-tdx.git --depth 1 \
-  --branch dstack-qemu-9.2.1 --single-branch
-
-# Configure with ACPI table dumping enabled
-cd qemu-tdx
-export SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)
-export CFLAGS="-DDUMP_ACPI_TABLES -Wno-builtin-macro-redefined -D__DATE__=\"\" -D__TIME__=\"\" -D__TIMESTAMP__=\"\""
-export LDFLAGS="-Wl,--build-id=none"
-mkdir build && cd build
-../configure --target-list=x86_64-softmmu --disable-werror
-
-# Build (this takes several minutes)
-ninja
-
-# Install the binary
-strip qemu-system-x86_64
-sudo install -m 755 qemu-system-x86_64 /usr/local/bin/dstack-acpi-tables
-
-# Install required QEMU data files
-sudo install -d /usr/local/share/qemu
-sudo install -m 644 ../pc-bios/efi-virtio.rom /usr/local/share/qemu/
-sudo install -m 644 ../pc-bios/kvmvapic.bin /usr/local/share/qemu/
-sudo install -m 644 ../pc-bios/linuxboot_dma.bin /usr/local/share/qemu/
-
-# Clean up source (optional)
-cd ~/dstack
-rm -rf qemu-tdx
-```
+`dstack-mr` generates QEMU-compatible ACPI measurement data in process. No custom QEMU binary or runtime helper is required.
 
 ### Build the measurement calculator
 
