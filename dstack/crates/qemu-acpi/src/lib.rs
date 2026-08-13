@@ -7,6 +7,11 @@
 //! This crate intentionally models the observable ACPI ABI rather than a
 //! virtual machine. Its output is expected to match QEMU byte for byte for a
 //! supported compatibility profile and machine topology.
+//!
+//! QEMU releases newer than the newest modeled profile are generated with that
+//! profile (see [`QemuVersion::compatibility`]) instead of being rejected, so a
+//! QEMU upgrade that leaves the ACPI ABI alone keeps working and one that does
+//! not surfaces as a blob mismatch the caller can act on.
 
 mod aml_patch;
 mod cpu;
@@ -33,7 +38,7 @@ pub struct AcpiBlobs {
 pub enum Error {
     #[error(transparent)]
     Topology(#[from] TopologyError),
-    #[error("unsupported QEMU compatibility profile: {0}")]
+    #[error("no ACPI compatibility profile for QEMU {0}; releases older than 8.0 are not modeled")]
     UnsupportedVersion(QemuVersion),
     #[error("malformed generated ACPI tables: missing {0}")]
     MalformedTables(String),

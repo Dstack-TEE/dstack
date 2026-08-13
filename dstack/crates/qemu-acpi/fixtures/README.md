@@ -96,3 +96,12 @@ ninja qemu-system-x86_64
 There was no genuine upstream QEMU 11.1 release at the time of this audit, so
 the `11.1` compatibility profile remains pinned to the production compatibility
 fork rather than being described as an upstream release profile.
+
+## Versions past the newest profile
+
+A QEMU version newer than the newest profile here is generated with that
+profile (`Compatibility::LATEST`) rather than rejected: most releases leave the
+Q35 ACPI ABI untouched, and when one does change it the generated blobs stop
+matching the measured ones, which is strictly more informative than refusing to
+generate. Adding a profile therefore means adding its fixtures **and** moving
+`Compatibility::LATEST` to it.
