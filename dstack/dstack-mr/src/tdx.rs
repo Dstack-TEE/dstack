@@ -62,8 +62,14 @@ fn validate_bytes_field(value: &[u8], field: &str, expected_len: usize) -> Resul
     Ok(value.to_vec())
 }
 
-fn select_mrtd(measurement: &TdxOsImageMeasurement, vm_config: &VmConfig) -> Result<Vec<u8>> {
-    let machine = crate::Machine::builder()
+/// Build the machine description the lite path measures against.
+///
+/// Only the VM-shape inputs matter here: the firmware, kernel and initrd paths
+/// stay empty because the lite path never reads image files, and the callers
+/// (MRTD candidate selection and ACPI table generation) only consume the QEMU
+/// topology knobs.
+fn machine_from_vm_config(vm_config: &VmConfig, ovmf_variant: OvmfVariant) -> crate::Machine<'_> {
+    crate::Machine::builder()
         .cpu_count(vm_config.cpu_count)
         .memory_size(vm_config.memory_size)
         .firmware("")
@@ -87,8 +93,34 @@ fn select_mrtd(measurement: &TdxOsImageMeasurement, vm_config: &VmConfig) -> Res
         .swtpm(vm_config.swtpm)
         .num_nvswitches(vm_config.num_nvswitches)
         .host_share_mode(vm_config.host_share_mode.clone())
-        .ovmf_variant(measurement.tdvf.ovmf_variant)
-        .build();
+        .ovmf_variant(ovmf_variant)
+        .build()
+}
+
+/// Recompute the three RTMR0 ACPI digests from the VM shape in `vm_config`.
+///
+/// The ACPI tables QEMU hands to OVMF depend only on the deployment topology
+/// (vCPU count, RAM size, PCI devices, QEMU version), never on the OS image, so
+/// they can be regenerated without downloading anything. The lite path
+/// otherwise replays the digests the guest reported in its event log, which
+/// makes those three RTMR0 entries self-consistent but unconstrained; comparing
+/// against these expected digests is what turns them into a verified value.
+pub fn expected_rtmr0_acpi_hashes(
+    vm_config: &VmConfig,
+    ovmf_variant: OvmfVariant,
+) -> Result<TdxRtmr0AcpiHashes> {
+    let tables = machine_from_vm_config(vm_config, ovmf_variant)
+        .build_tables()
+        .context("failed to generate expected ACPI tables")?;
+    Ok(TdxRtmr0AcpiHashes {
+        loader: measure_sha384(&tables.loader),
+        rsdp: measure_sha384(&tables.rsdp),
+        tables: measure_sha384(&tables.tables),
+    })
+}
+
+fn select_mrtd(measurement: &TdxOsImageMeasurement, vm_config: &VmConfig) -> Result<Vec<u8>> {
+    let machine = machine_from_vm_config(vm_config, measurement.tdvf.ovmf_variant);
     let opts = machine
         .versioned_options()
         .context("failed to resolve QEMU measurement options")?;
