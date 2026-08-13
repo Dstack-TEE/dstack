@@ -169,6 +169,8 @@ allow_attach_all = true
 # immediately before QEMU attaches the device. This clears stale GPU FSP/SPDM
 # state left by a VM that terminated during GPU firmware initialization.
 sanitize_on_attach = true
+# Maximum time for all reset GPUs to become continuously VFIO-ready.
+sbr_timeout_ms = 10000
 
 [gateway]
 base_domain = "localhost"

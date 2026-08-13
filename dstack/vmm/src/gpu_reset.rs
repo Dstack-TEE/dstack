@@ -8,7 +8,7 @@ use std::{
     os::unix::fs::FileExt,
     path::{Path, PathBuf},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{bail, Context, Result};
@@ -21,11 +21,8 @@ const PCI_BRIDGE_CLASS: u32 = 0x0604;
 const PCI_BRIDGE_CONTROL: u64 = 0x3e;
 const PCI_BRIDGE_CTL_BUS_RESET: u16 = 1 << 6;
 const SBR_ASSERT_TIME: Duration = Duration::from_millis(100);
-// PCI config space can become visible before VFIO considers the endpoint ready.
-// H200 testing observed a transient VFIO ENODEV when QEMU attached one second
-// after SBR, so leave the link and device firmware a conservative recovery
-// window before handing the device to QEMU.
-const SBR_RECOVERY_TIME: Duration = Duration::from_secs(5);
+const SBR_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const SBR_STABLE_TIME: Duration = Duration::from_millis(500);
 
 /// Clears device-internal state that can survive VFIO's attach-time FLR.
 ///
@@ -36,10 +33,14 @@ pub fn sanitize_on_attach(host: &HostGpuConfig, devices: &GpuConfig) -> Result<(
     if !host.enabled || !host.sanitize_on_attach || devices.gpus.is_empty() {
         return Ok(());
     }
-    sanitize_at(Path::new(PCI_SYSFS_DEVICES), devices)
+    sanitize_at(
+        Path::new(PCI_SYSFS_DEVICES),
+        devices,
+        Duration::from_millis(host.sbr_timeout_ms),
+    )
 }
 
-fn sanitize_at(sysfs_devices: &Path, devices: &GpuConfig) -> Result<()> {
+fn sanitize_at(sysfs_devices: &Path, devices: &GpuConfig, timeout: Duration) -> Result<()> {
     let selected = devices
         .gpus
         .iter()
@@ -58,7 +59,68 @@ fn sanitize_at(sysfs_devices: &Path, devices: &GpuConfig) -> Result<()> {
         secondary_bus_reset(&bridge)
             .with_context(|| format!("failed to sanitize GPU using bridge {}", bridge.display()))?;
     }
+    wait_for_vfio_ready(sysfs_devices, &selected, timeout)?;
     Ok(())
+}
+
+fn wait_for_vfio_ready(
+    sysfs_devices: &Path,
+    devices: &BTreeSet<String>,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    let mut stable_since = None;
+    loop {
+        let not_ready = devices
+            .iter()
+            .filter(|slot| !is_vfio_ready(&sysfs_devices.join(slot)))
+            .cloned()
+            .collect::<Vec<_>>();
+        if not_ready.is_empty() {
+            let since = *stable_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= SBR_STABLE_TIME {
+                info!(count = devices.len(), "all sanitized GPUs are VFIO-ready");
+                return Ok(());
+            }
+        } else {
+            stable_since = None;
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "timed out after {} ms waiting for sanitized GPUs to become VFIO-ready: {}",
+                timeout.as_millis(),
+                not_ready.join(", ")
+            );
+        }
+        thread::sleep(SBR_POLL_INTERVAL);
+    }
+}
+
+fn is_vfio_ready(device: &Path) -> bool {
+    let Ok(device) = device.canonicalize() else {
+        return false;
+    };
+    let Ok(config) = File::open(device.join("config")) else {
+        return false;
+    };
+    let Ok(vendor) = read_u16(&config, 0) else {
+        return false;
+    };
+    if matches!(vendor, 0 | 0xffff) {
+        return false;
+    }
+    let driver_is_vfio = device
+        .join("driver")
+        .canonicalize()
+        .ok()
+        .and_then(|path| path.file_name().map(|name| name == "vfio-pci"))
+        .unwrap_or(false);
+    driver_is_vfio
+        && device.join("iommu_group").canonicalize().is_ok()
+        && fs_err::read_dir(device.join("vfio-dev"))
+            .ok()
+            .and_then(|mut entries| entries.next())
+            .is_some()
 }
 
 fn normalize_slot(slot: &str) -> String {
@@ -138,7 +200,6 @@ fn secondary_bus_reset(bridge: &Path) -> Result<()> {
         PCI_BRIDGE_CONTROL,
         original & !PCI_BRIDGE_CTL_BUS_RESET,
     )?;
-    thread::sleep(SBR_RECOVERY_TIME);
     Ok(())
 }
 
@@ -182,6 +243,7 @@ mod tests {
             include: Vec::new(),
             allow_attach_all: true,
             sanitize_on_attach: true,
+            sbr_timeout_ms: 10_000,
         };
         let devices = GpuConfig {
             attach_mode: AttachMode::Listed,
