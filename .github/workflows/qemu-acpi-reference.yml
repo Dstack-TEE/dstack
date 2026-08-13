@@ -5,6 +5,8 @@ name: QEMU ACPI reference image
 
 on:
   workflow_dispatch:
+  push:
+    branches: [feat/qemu-acpi-generate-dsdt]
 
 jobs:
   publish:
