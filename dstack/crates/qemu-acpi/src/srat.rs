@@ -27,7 +27,7 @@ fn memory_affinity(base: u64, length: u64, enabled: bool) -> Vec<u8> {
     out
 }
 
-pub(crate) fn build(cpu_count: u32, memory_size: u64) -> Vec<u8> {
+pub(crate) fn build(cpu_count: u32, memory_size: u64, pci_hole64_size: Option<u64>) -> Vec<u8> {
     let mut body = Vec::new();
     for index in 0..cpu_count {
         if index < 255 {
@@ -59,7 +59,10 @@ pub(crate) fn build(cpu_count: u32, memory_size: u64) -> Vec<u8> {
     if memory_size > low {
         let high_length = memory_size - low;
         let high_end = 0x1_0000_0000u64.saturating_add(high_length);
-        let high_base = if high_end >= 0xfd_0000_0000 {
+        let address_space_end = pci_hole64_size
+            .and_then(|hole_size| hole_size.checked_add(high_length))
+            .unwrap_or(high_end);
+        let high_base = if address_space_end >= 0xfd_0000_0000 {
             0x100_0000_0000
         } else {
             0x1_0000_0000

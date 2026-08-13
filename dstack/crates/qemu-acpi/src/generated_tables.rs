@@ -25,7 +25,11 @@ pub(crate) fn build(config: &MachineConfig) -> Result<AcpiBlobs, Error> {
     ));
     let srat_offset = config.hugepages.then_some(tables.len() as u32);
     if config.hugepages {
-        tables.extend(srat::build(config.cpu_count, config.memory_size));
+        tables.extend(srat::build(
+            config.cpu_count,
+            config.memory_size,
+            config.pci_hole64_size,
+        ));
     }
     let mcfg_offset = tables.len() as u32;
     tables.extend(fixed_tables::mcfg());
