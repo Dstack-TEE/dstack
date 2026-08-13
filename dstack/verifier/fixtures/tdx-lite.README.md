@@ -3,8 +3,8 @@
 This fixture was captured from the local meta-dstack e2e stack using TDX
 `tdx_attestation_variant = "lite"`. It covers the KMS/verifier path that
 verifies the OS image from `vm_config.tdx_measurement` (`sha256sum.txt` bytes
-plus `measurement.tdx.cbor` bytes), without downloading the image and without
-running the QEMU ACPI table helper.
+plus `measurement.tdx.cbor` bytes), without downloading the image. The ACPI
+tables are regenerated in-process from the VM shape, so no QEMU is involved.
 
 Files:
 
@@ -61,6 +61,7 @@ dstack-verifier --config verifier-no-download.toml \
   --verify verifier/fixtures/tdx-lite-attestation.json
 ```
 
-Expected result: `Valid: true`, with quote, event log, and OS image hash all
-verified, and `ACPI tables verified: false` because lite mode does not validate
-ACPI table contents.
+Expected result: `Valid: true`, with quote, event log, OS image hash, and ACPI
+tables all verified. The ACPI digests are regenerated in-process from the
+fixture's VM shape (2 vCPUs, 2 GiB, QEMU 8.2.2) and must equal the ones the
+captured CVM reported.

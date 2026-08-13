@@ -253,9 +253,35 @@ The verifier performs the following verification steps:
    result as `app_info.os_image_hash_verified` (self-contained for all platforms
    except the TDX legacy full-image path, which reports `false`).
 
-`details.acpi_tables_verified` is `true` only for the full-image TDX path, where the verifier recomputes ACPI table contents and checks the resulting RTMRs against the quote. It is `false` for TDX lite, which uses the quote's named ACPI DATA digests without validating table contents, and for non-TDX platforms where ACPI table verification is not applicable.
+`details.acpi_tables_verified` is `true` for both TDX paths, which recompute the ACPI table contents and check them against the quote. It is `false` only for non-TDX platforms, where ACPI table verification is not applicable.
 
 All verification steps must pass for the verification to be considered valid.
+
+### TDX ACPI table verification
+
+RTMR0 covers three ACPI blobs QEMU hands to OVMF (`acpi-loader`, `acpi-rsdp`,
+`acpi-tables`); `acpi-tables` carries the DSDT, which is AML the guest kernel
+executes. Both TDX paths regenerate those blobs from the VM shape declared in
+`vm_config` (vCPU count, RAM size, PCI topology, QEMU version) and require the
+recomputed digests to equal the ones the quote's event log reports, before
+rebuilding the expected RTMR0 from the recomputed values.
+
+Verification fails closed in both directions:
+
+- **digest mismatch** — the tables are not the ones this VM shape produces.
+- **cannot generate** — the shape is one the ACPI generator does not model
+  (`swtpm = true`, or a QEMU older than 8.0). There is nothing to compare
+  against, so the attestation is rejected rather than accepted as unverified.
+
+The second case is deliberate. `swtpm` and `qemu_version` are host-declared
+fields that no other measurement independently constrains, so accepting an
+unverifiable shape would let a host opt out of the check by declaring one.
+CVMs using the TPM key provider (`swtpm = true`) therefore cannot be verified
+on either TDX path, which is the pre-existing behavior of the full-image path.
+
+QEMU versions newer than the newest ACPI profile the verifier models are
+generated with that profile, so a QEMU upgrade that leaves the ACPI ABI alone
+keeps verifying; one that changes it surfaces as a digest mismatch.
 
 ### Identifying the deployment
 
