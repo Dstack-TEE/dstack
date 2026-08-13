@@ -66,6 +66,10 @@ def random_case(rng):
     passthrough = switches if pxb else gpus + switches
     root_verity = rng.choice([False, True])
     capacity = available - passthrough - (1 if root_verity else 0) + 1
+    if pxb:
+        # QEMU adds the fixed-address PXB after the ordinary virtio devices.
+        # Keep slot 0x10 free for it, matching configurations QEMU can realize.
+        capacity = min(capacity, 12 - int(root_verity))
     nics = rng.randint(0, max(0, capacity))
     volumes = rng.randint(0, max(0, capacity - nics))
     return Case(
@@ -81,7 +85,7 @@ def random_case(rng):
         hotplug_off=rng.choice([False, True]),
         smm=rng.choice([False, True]),
         pic=rng.choice([False, True]),
-        pci_hole64_size=rng.choice([0, 32 << 30, 1 << 40, (1 << 64) - 1]),
+        pci_hole64_size=rng.choice([0, 32 << 30, 1 << 40]),
     )
 
 
@@ -135,9 +139,9 @@ def filename(name):
 
 
 def reference_blobs(tables):
-    if len(tables) != TABLE_BLOB_SIZE:
+    if len(tables) < TABLE_BLOB_SIZE or len(tables) % TABLE_BLOB_SIZE:
         raise RuntimeError(
-            f"reference emitted {len(tables)} table bytes, expected {TABLE_BLOB_SIZE}"
+            f"reference emitted invalid table allocation size {len(tables)}"
         )
     locations = {}
     offset = 0

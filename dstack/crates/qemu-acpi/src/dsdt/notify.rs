@@ -88,18 +88,29 @@ pub(crate) fn build(
 ) -> Vec<u8> {
     let lpc = lpc_children(modern_serial_irq);
 
-    let mut bus = Vec::new();
+    let mut devices = Vec::new();
     for slot in 0..slot_count {
-        bus.extend(pci_device((slot * 8) as u8, false, &lpc));
-    }
-    for slot in slot_count..slot_count + root_port_count {
-        bus.extend(pci_device((slot * 8) as u8, true, &lpc));
+        devices.push(((slot * 8) as u8, false));
     }
     if let Some(devfn) = pxb_devfn {
-        bus.extend(pci_device(devfn, false, &lpc));
+        devices.push((devfn, false));
+    }
+    let mut slot = slot_count;
+    for _ in 0..root_port_count {
+        if pxb_devfn == Some((slot * 8) as u8) {
+            slot += 1;
+        }
+        devices.push(((slot * 8) as u8, true));
+        slot += 1;
     }
     for &devfn in CHIPSET_DEVFNS {
-        bus.extend(pci_device(devfn, false, &lpc));
+        devices.push((devfn, false));
+    }
+    devices.sort_unstable_by_key(|(devfn, _)| *devfn);
+
+    let mut bus = Vec::new();
+    for (devfn, root_port) in devices {
+        bus.extend(pci_device(devfn, root_port, &lpc));
     }
 
     Scope::raw(Path::new("\\_SB_"), Scope::raw(Path::new("PCI0"), bus))
