@@ -42,7 +42,9 @@ fn write_bytes(data: &mut [u8], offset: usize, value: &[u8], context: &str) -> R
 /// DSDT with `iasl`, map the relevant ASL object back to its AML byte sequence,
 /// and record the package-length or insertion offset relative to the DSDT
 /// signature. Verify every offset against the reference binary and its
-/// one-device output. Never infer offsets from a Rust-generated blob.
+/// one-device output. Never infer offsets from a Rust-generated blob. A new
+/// profile also has to move `Compatibility::LATEST`, which decides what newer
+/// QEMU versions are generated with.
 struct Layout {
     /// Trimmed QEMU `etc/acpi/tables` fixture used as the immutable template.
     base: &'static [u8],
@@ -616,6 +618,18 @@ mod tests {
             root_verity: true,
             pci_hole64_size: None,
         }
+    }
+
+    /// A QEMU release past the newest modeled profile generates with that
+    /// profile instead of erroring, so an ABI-preserving upgrade keeps
+    /// verifying and an ABI-changing one surfaces as a blob mismatch.
+    #[test]
+    fn unmodeled_newer_versions_generate_with_the_latest_profile() -> Result<(), Error> {
+        let latest = build(&config(1, 0))?;
+        let mut newer = config(1, 0);
+        newer.qemu_version = QemuVersion::new(12, 0, 0);
+        assert_eq!(build(&newer)?, latest);
+        Ok(())
     }
 
     #[test]
