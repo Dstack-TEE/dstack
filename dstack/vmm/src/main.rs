@@ -24,6 +24,7 @@ use tracing::{error, info, warn};
 mod app;
 mod config;
 mod discovery;
+mod gpu_reset;
 mod guest_api_service;
 mod host_api_service;
 mod logrotate;

@@ -439,6 +439,10 @@ pub struct GpuConfig {
     pub include: Vec<String>,
     /// Allow attach all GPUs
     pub allow_attach_all: bool,
+    /// Reset each GPU's dedicated upstream PCIe bus before QEMU attaches it.
+    pub sanitize_on_attach: bool,
+    /// Shared deadline for all GPUs to become VFIO-ready after SBR.
+    pub sbr_timeout_ms: u64,
 }
 
 impl GpuConfig {
