@@ -1350,8 +1350,9 @@ pub struct VmConfig {
     ///
     /// Its presence does not select lite verification: `tdx_attestation_variant`
     /// alone does. A `Legacy` boot is verified through the image download even
-    /// when this document is attached, because only that path verifies the ACPI
-    /// tables.
+    /// when this document is attached, because the two paths disagree on what
+    /// `os_image_hash` means and honoring the document would move a boot the
+    /// app pinned to `Legacy` onto the weaker image-identity check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tdx_measurement: Option<TdxOsImageMeasurementDocument>,
     /// GCP TDX no-image-download measurement material. Present for GCP
