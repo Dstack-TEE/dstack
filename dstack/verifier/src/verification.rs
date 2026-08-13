@@ -584,6 +584,31 @@ impl CvmVerifier {
         })
     }
 
+    /// Compare recomputed ACPI digests against the ones the guest reported.
+    ///
+    /// RTMR0 alone would already fail on a mismatch, but only with an opaque
+    /// "MRs do not match": name the offending table here so an operator can
+    /// tell a tampered table apart from an unexpected VM shape.
+    fn assert_tdx_acpi_hashes_match(
+        expected: &TdxRtmr0AcpiHashes,
+        reported: &TdxRtmr0AcpiHashes,
+    ) -> Result<()> {
+        for (name, expected, reported) in [
+            (TDX_ACPI_LOADER_EVENT, &expected.loader, &reported.loader),
+            (TDX_ACPI_RSDP_EVENT, &expected.rsdp, &reported.rsdp),
+            (TDX_ACPI_TABLES_EVENT, &expected.tables, &reported.tables),
+        ] {
+            if expected != reported {
+                bail!(
+                    "TDX lite {name} digest mismatch: expected {}, reported {}",
+                    hex::encode(expected),
+                    hex::encode(reported)
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Helper method to ensure image is downloaded and return image paths
     async fn ensure_image_downloaded(&self, vm_config: &VmConfig) -> Result<ImagePaths> {
         let hex_os_image_hash = hex::encode(&vm_config.os_image_hash);
@@ -779,16 +804,14 @@ impl CvmVerifier {
             // so a new variant fails the build here instead of taking one.
             //
             // A `tdx_measurement` document must not pull a `Legacy` boot onto
-            // the lite path. The paths are not interchangeable: the legacy path
-            // recomputes the ACPI tables from `vm_config` and reports
-            // `acpi_tables_verified`, while the lite path takes the RTMR0 ACPI
-            // digests from the event log as given (see
-            // `tdx_acpi_hashes_from_event_log`) and never checks the table
-            // contents. Images attach the document whenever they have it,
-            // independent of the scheme, so honoring it here would drop ACPI
-            // table verification for a boot that resolved to `Legacy` precisely
-            // because the app asked for it (`requirements.tdx_measure_acpi_tables`,
-            // enforced guest-side in `dstack-util`'s system_setup).
+            // the lite path. Both paths now verify the ACPI tables, but they
+            // disagree on what `os_image_hash` means: legacy requires it to be
+            // the image digest and recomputes every MR from the downloaded
+            // image, while lite treats it as `sha256(sha256sum.txt)` and trusts
+            // the attached document for the image-static material. Images
+            // attach the document whenever they have it, independent of the
+            // scheme, so honoring it here would silently move a boot the app
+            // pinned to `Legacy` onto weaker image-identity checks.
             //
             // `Lite` without a document is rejected by the lite path itself,
             // rather than degraded to a download.
@@ -969,7 +992,7 @@ impl CvmVerifier {
         vm_config: &VmConfig,
         attestation: &VerifiedAttestation,
         _debug: bool,
-        _details: &mut VerificationDetails,
+        details: &mut VerificationDetails,
     ) -> Result<()> {
         let Some(report) = &attestation.report.tdx_report() else {
             bail!("No TDX report");
@@ -1016,12 +1039,26 @@ impl CvmVerifier {
 
         // Compute expected measurements. TDX lite keeps the unified image hash
         // and carries split measurement material; verify it without
-        // downloading the image or running QEMU-derived ACPI table generators.
-        // The guest labels the three RTMR0 ACPI DATA events as acpi-loader,
-        // acpi-rsdp, and acpi-tables before exposing the event log, so the
-        // verifier does not guess based on event order.
-        let acpi_hashes = Self::tdx_acpi_hashes_from_event_log(event_log)
+        // downloading the image. The guest labels the three RTMR0 ACPI DATA
+        // events as acpi-loader, acpi-rsdp, and acpi-tables before exposing the
+        // event log, so the verifier does not guess based on event order.
+        let reported_acpi_hashes = Self::tdx_acpi_hashes_from_event_log(event_log)
             .context("TDX lite attestation is missing named RTMR0 ACPI DATA digests")?;
+        // Recompute the digests from the declared VM shape instead of trusting
+        // the reported ones, and treat both failure modes as fatal: a mismatch
+        // means the tables are not the ones this shape produces, and a shape
+        // the generator cannot model (`swtpm`, a QEMU older than any profile)
+        // leaves nothing to compare against. Downgrading either case to "pass,
+        // but unverified" would make the check optional at the host's
+        // discretion, because `swtpm` and `qemu_version` are host-declared
+        // fields that no other measurement independently constrains.
+        let acpi_hashes =
+            dstack_mr::tdx::expected_rtmr0_acpi_hashes(vm_config, measurement.tdvf.ovmf_variant)
+                .context("failed to recompute expected TDX lite ACPI table digests")?;
+        Self::assert_tdx_acpi_hashes_match(&acpi_hashes, &reported_acpi_hashes)?;
+        details.acpi_tables_verified = true;
+        // RTMR0 below is rebuilt from the recomputed digests, so the expected
+        // value depends on nothing the host reported about the tables.
         let mrs = dstack_mr::tdx::tdx_measurements_from_measurement_document(
             document,
             vm_config,
@@ -2180,8 +2217,11 @@ mod tests {
         );
     }
 
+    /// The fixture was captured from a real CVM, so its RTMR0 ACPI digests are
+    /// whatever QEMU actually produced. Reproducing them without the image
+    /// proves the generator agrees with hardware, not just with itself.
     #[tokio::test]
-    async fn verifies_tdx_lite_fixture_without_acpi_table_verification() {
+    async fn verifies_tdx_lite_fixture_without_image_download() {
         let request: VerificationRequest =
             serde_json::from_str(include_str!("../fixtures/tdx-lite-attestation.json"))
                 .expect("TDX lite verifier fixture parses");
@@ -2199,7 +2239,7 @@ mod tests {
         assert!(response.details.quote_verified);
         assert!(response.details.event_log_verified);
         assert!(response.details.os_image_hash_verified);
-        assert!(!response.details.acpi_tables_verified);
+        assert!(response.details.acpi_tables_verified);
         assert_eq!(
             response.details.tee_variant,
             Some(ra_tls::attestation::TeeVariant::DstackTdx)
@@ -2208,5 +2248,56 @@ mod tests {
             !image_cache_dir.exists(),
             "TDX lite verification must not download or cache OS images"
         );
+    }
+
+    /// The captured VM ran 2 vCPUs; a VM shape that disagrees with the quote
+    /// must not reproduce its ACPI digests, which is what makes the recomputed
+    /// digests worth comparing in the first place.
+    #[test]
+    fn tdx_lite_acpi_hashes_depend_on_the_reported_vm_shape() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/tdx-lite-getquote.json"))
+                .expect("TDX lite getquote fixture parses");
+        let mut vm_config: VmConfig = serde_json::from_str(
+            fixture["vm_config"]
+                .as_str()
+                .expect("vm_config is a string"),
+        )
+        .expect("fixture vm_config parses");
+        let event_log: Vec<TdxEvent> = serde_json::from_str(
+            fixture["event_log"]
+                .as_str()
+                .expect("event_log is a string"),
+        )
+        .expect("fixture event log parses");
+        let ovmf_variant = vm_config.ovmf_variant.unwrap_or_default();
+
+        let reported = CvmVerifier::tdx_acpi_hashes_from_event_log(&event_log)
+            .expect("fixture carries named ACPI digests");
+        let expected = dstack_mr::tdx::expected_rtmr0_acpi_hashes(&vm_config, ovmf_variant)
+            .expect("ACPI tables are generated for the fixture VM shape");
+        CvmVerifier::assert_tdx_acpi_hashes_match(&expected, &reported)
+            .expect("recomputed digests match the captured CVM");
+
+        vm_config.cpu_count += 1;
+        let expected = dstack_mr::tdx::expected_rtmr0_acpi_hashes(&vm_config, ovmf_variant)
+            .expect("ACPI tables are generated for the altered VM shape");
+        CvmVerifier::assert_tdx_acpi_hashes_match(&expected, &reported)
+            .expect_err("an extra vCPU must change the ACPI tables");
+    }
+
+    #[test]
+    fn tdx_lite_acpi_hash_mismatch_names_the_table() {
+        let expected = TdxRtmr0AcpiHashes {
+            loader: vec![1; 48],
+            rsdp: vec![2; 48],
+            tables: vec![3; 48],
+        };
+        let mut reported = expected.clone();
+        reported.tables = vec![4; 48];
+        let err = CvmVerifier::assert_tdx_acpi_hashes_match(&expected, &reported)
+            .expect_err("mismatched tables digest is rejected");
+        assert!(err.to_string().contains(TDX_ACPI_TABLES_EVENT), "{err:#}");
+        assert!(CvmVerifier::assert_tdx_acpi_hashes_match(&expected, &expected).is_ok());
     }
 }

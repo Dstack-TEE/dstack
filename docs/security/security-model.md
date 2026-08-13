@@ -282,30 +282,40 @@ For TDX evidence, the event log shipped alongside an attestation is stripped dow
 
 The reason boot-time event log entries are not the verifier contract is that downstream policy compares boot measurements directly to independently reproduced expected measurements. Keeping full boot event logs would bloat evidence and expose extra detail without adding verification capability. Application identity events, by contrast, include deployment-specific values such as compose-hash, key-provider, instance-id, and runtime events. Their event log is the data a verifier needs to prove what was extended into the application measurement lane.
 
-### Why TDX lite mode does not validate ACPI table contents
+### Why ACPI table verification fails closed on both TDX paths
 
-TDX lite mode verifies the OS image without downloading the image and without
-running QEMU to regenerate ACPI tables. It still uses the three RTMR0 `ACPI
-DATA` digests from the attestation event log as measurement inputs. The guest
-labels those three events as `acpi-loader`, `acpi-rsdp`, and `acpi-tables`
-before exposing the event log, and the verifier checks that the recomputed RTMR
-values match the hardware-signed quote. What it does not do is reconstruct and
-byte-compare the full ACPI table contents.
+RTMR0 covers the three ACPI blobs QEMU hands to OVMF (`acpi-loader`,
+`acpi-rsdp`, `acpi-tables`). Both TDX paths regenerate those blobs from the VM
+shape declared in `vm_config` and require the recomputed digests to equal the
+ones the event log reports, then rebuild the expected RTMR0 from the recomputed
+values — so the expected measurement depends on nothing the host asserted about
+the table contents.
 
-This is safe for dstack's threat model because ACPI tables are treated as
-untrusted host-provided platform description, not as trusted guest code. The
-dangerous executable part of ACPI is AML (ACPI Machine Language): malicious AML
-can try to use `SystemMemory` operation regions through the Linux ACPICA
-interpreter to read or write guest physical memory. dstack kernels include the
-BadAML sandbox patch (`0002-acpi-sandbox-block-aml-systemmemory-ram-access.patch`),
-which hooks the ACPI `SystemMemory` region handler, walks the guest page tables,
-and denies AML access to encrypted/private guest RAM. AML can only access
-unencrypted/shared mappings.
+TDX lite mode did not always do this. It used to replay the three reported
+digests as measurement inputs, which made RTMR0 reconstruct consistently while
+leaving the table contents unconstrained. Regenerating them required running
+QEMU, which the lite path exists to avoid; once ACPI generation became a pure
+in-process Rust implementation, the reason for the exception disappeared.
 
-Therefore, an infrastructure operator can still provide bad ACPI data and cause
-misconfiguration or denial of service, but unvalidated ACPI/AML cannot tamper
-with confidential private memory or extract secrets. That residual availability
-risk is already outside dstack's confidentiality/integrity guarantees.
+Verification is mandatory rather than a reported outcome because the inputs are
+host-declared. `swtpm` and `qemu_version` in `vm_config` are asserted by the
+untrusted host and are not independently constrained by any other measurement,
+so a verifier that accepted "could not generate" as a pass would let a host opt
+out of the check by declaring a shape the generator does not model. Both a
+digest mismatch and an unmodelable shape therefore reject the attestation. The
+practical consequence is that CVMs using the TPM key provider (`swtpm = true`)
+cannot be verified on either TDX path, which is what the full-image path
+already did.
+
+The guest-side mitigation remains in place as defense in depth. The dangerous
+executable part of ACPI is AML (ACPI Machine Language): malicious AML can try to
+use `SystemMemory` operation regions through the Linux ACPICA interpreter to
+read or write guest physical memory. dstack kernels include the BadAML sandbox
+patch (`0002-acpi-sandbox-block-aml-systemmemory-ram-access.patch`), which hooks
+the ACPI `SystemMemory` region handler, walks the guest page tables, and denies
+AML access to encrypted/private guest RAM. Verification now rejects tampered
+tables before the CVM is trusted with keys; the sandbox bounds what tampered
+AML could have done in the first place.
 
 ### TCB status is surfaced, not gated, during verification
 
