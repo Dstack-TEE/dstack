@@ -44,8 +44,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         root_verity,
         pci_hole64_size: (hole != 0).then_some(hole),
     })?;
-    std::fs::write("/tmp/rust.bin", blobs.tables)?;
-    std::fs::write("/tmp/rust-loader.bin", blobs.loader)?;
-    std::fs::write("/tmp/rust-rsdp.bin", blobs.rsdp)?;
+    let output_dir = std::env::var_os("QEMU_ACPI_OUTPUT_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+    std::fs::create_dir_all(&output_dir)?;
+    std::fs::write(output_dir.join("tables.bin"), blobs.tables)?;
+    std::fs::write(output_dir.join("loader.bin"), blobs.loader)?;
+    std::fs::write(output_dir.join("rsdp.bin"), blobs.rsdp)?;
     Ok(())
 }
