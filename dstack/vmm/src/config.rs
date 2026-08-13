@@ -440,12 +440,7 @@ pub struct GpuConfig {
     /// Allow attach all GPUs
     pub allow_attach_all: bool,
     /// Reset each GPU's dedicated upstream PCIe bus before QEMU attaches it.
-    #[serde(default = "default_true")]
     pub sanitize_on_attach: bool,
-}
-
-const fn default_true() -> bool {
-    true
 }
 
 impl GpuConfig {
@@ -940,19 +935,6 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn gpu_sanitize_on_attach_defaults_to_enabled() {
-        let config: GpuConfig = serde_json::from_value(serde_json::json!({
-            "enabled": true,
-            "listing": ["10de:2335"],
-            "exclude": [],
-            "include": [],
-            "allow_attach_all": true
-        }))
-        .unwrap();
-        assert!(config.sanitize_on_attach);
-    }
 
     #[test]
     fn auto_restart_config_rejects_hot_loop_and_inverted_backoff() {
