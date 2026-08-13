@@ -68,12 +68,22 @@ fn wait_for_vfio_ready(
     devices: &BTreeSet<String>,
     timeout: Duration,
 ) -> Result<()> {
+    let drivers_probe = sysfs_devices
+        .parent()
+        .context("PCI sysfs devices directory has no parent")?
+        .join("drivers_probe");
     let deadline = Instant::now() + timeout;
     let mut stable_since = None;
     loop {
         let not_ready = devices
             .iter()
-            .filter(|slot| !is_vfio_ready(&sysfs_devices.join(slot)))
+            .filter(|slot| {
+                let device = sysfs_devices.join(slot);
+                if !driver_is_vfio(&device) {
+                    let _ = fs_err::write(&drivers_probe, format!("{slot}\n"));
+                }
+                !is_vfio_ready(&device)
+            })
             .cloned()
             .collect::<Vec<_>>();
         if not_ready.is_empty() {
@@ -109,18 +119,21 @@ fn is_vfio_ready(device: &Path) -> bool {
     if matches!(vendor, 0 | 0xffff) {
         return false;
     }
-    let driver_is_vfio = device
-        .join("driver")
-        .canonicalize()
-        .ok()
-        .and_then(|path| path.file_name().map(|name| name == "vfio-pci"))
-        .unwrap_or(false);
-    driver_is_vfio
+    driver_is_vfio(&device)
         && device.join("iommu_group").canonicalize().is_ok()
         && fs_err::read_dir(device.join("vfio-dev"))
             .ok()
             .and_then(|mut entries| entries.next())
             .is_some()
+}
+
+fn driver_is_vfio(device: &Path) -> bool {
+    device
+        .join("driver")
+        .canonicalize()
+        .ok()
+        .and_then(|path| path.file_name().map(|name| name == "vfio-pci"))
+        .unwrap_or(false)
 }
 
 fn normalize_slot(slot: &str) -> String {
