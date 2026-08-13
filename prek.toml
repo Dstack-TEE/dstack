@@ -65,7 +65,7 @@ hooks = [
     # The imported Yocto backend retains its upstream shell style. New common
     # OS scripts remain covered by this hook. The explicit legacy list records
     # pre-existing shellcheck debt exposed when the files moved into dstack/.
-    { id = "shellcheck", exclude = '^(os/yocto/.*|tools/(dev-stack\.sh|vm-runner/.*)|dstack/(build/shared/config-qemu\.sh|cargo-check-all\.sh|gateway/test-run/(cluster\.sh|e2e/run-e2e\.sh|test_certbot\.sh)|guest-agent-simulator/install-systemd\.sh|kms/auth-eth/run-tests\.sh|scripts/(config-fw\.sh|setup-bridge\.sh)|supervisor/tests/(test-cli\.sh|test\.sh)|test-scripts/(get-app-key\.sh|inspect-cert\.sh)|verifier/test\.sh|vmm/(src/setup-user\.sh|src/tests/test-deployment\.sh|ui/scripts/build_proto\.sh|venv\.sh)))$' },
+    { id = "shellcheck", exclude = '^(os/yocto/.*|tools/(dev-stack\.sh|vm-runner/.*)|dstack/(cargo-check-all\.sh|gateway/test-run/(cluster\.sh|e2e/run-e2e\.sh|test_certbot\.sh)|guest-agent-simulator/install-systemd\.sh|kms/auth-eth/run-tests\.sh|scripts/(config-fw\.sh|setup-bridge\.sh)|supervisor/tests/(test-cli\.sh|test\.sh)|test-scripts/(get-app-key\.sh|inspect-cert\.sh)|verifier/test\.sh|vmm/(src/setup-user\.sh|src/tests/test-deployment\.sh|ui/scripts/build_proto\.sh|venv\.sh)))$' },
 ]
 
 # --- Conventional commits (used by cliff.toml for changelog) ---

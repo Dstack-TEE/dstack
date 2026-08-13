@@ -11,7 +11,9 @@ REPO_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)
 CONTEXT_DIR="$SCRIPT_DIR"
 SHARED_DIR="$SCRIPT_DIR/shared"
 DOCKERFILE="$SCRIPT_DIR/Dockerfile"
+export CONTEXT_DIR DOCKERFILE
 
+# shellcheck source=/dev/null
 source "$REPO_ROOT/dstack/build/shared/build-lib.sh"
 
 NAME=${1:-}
@@ -28,9 +30,8 @@ DSTACK_SRC_URL=${DSTACK_SRC_URL:-https://github.com/Dstack-TEE/dstack.git}
 ensure_buildkit
 
 touch "$SHARED_DIR/builder-pinned-packages.txt"
-touch "$SHARED_DIR/qemu-pinned-packages.txt"
 
-docker_build "$NAME" "" "$SHARED_DIR/qemu-pinned-packages.txt"
+docker_build "$NAME" ""
 docker_build "kms-builder-temp" "kms-builder" "$SHARED_DIR/builder-pinned-packages.txt"
 
 check_clean_tree "$SHARED_DIR"

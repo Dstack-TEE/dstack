@@ -11,7 +11,9 @@ REPO_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)
 CONTEXT_DIR=$(dirname "$SCRIPT_DIR")
 SHARED_DIR="$SCRIPT_DIR/shared"
 DOCKERFILE="$SCRIPT_DIR/Dockerfile"
+export CONTEXT_DIR DOCKERFILE
 
+# shellcheck source=/dev/null
 source "$REPO_ROOT/dstack/build/shared/build-lib.sh"
 
 NAME=${1:-}
@@ -29,11 +31,9 @@ ensure_buildkit
 
 mkdir -p "$SHARED_DIR"
 touch "$SHARED_DIR/builder-pinned-packages.txt"
-touch "$SHARED_DIR/qemu-pinned-packages.txt"
 touch "$SHARED_DIR/pinned-packages.txt"
 
 docker_build "$NAME" "" "$SHARED_DIR/pinned-packages.txt"
 docker_build "verifier-builder-temp" "verifier-builder" "$SHARED_DIR/builder-pinned-packages.txt"
-docker_build "verifier-acpi-builder-temp" "acpi-builder" "$SHARED_DIR/qemu-pinned-packages.txt"
 
 check_clean_tree "$SHARED_DIR"

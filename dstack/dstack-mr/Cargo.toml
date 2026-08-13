@@ -35,6 +35,7 @@ bon.workspace = true
 log.workspace = true
 scale.workspace = true
 dstack-types.workspace = true
+qemu-acpi.workspace = true
 
 [dev-dependencies]
 reqwest = { workspace = true, features = ["blocking"] }

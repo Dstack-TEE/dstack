@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "qemu-acpi"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Pure Rust generator for QEMU-compatible ACPI measurement blobs"
+
+[dependencies]
+thiserror.workspace = true
+
+[dev-dependencies]
+hex = { workspace = true, features = ["alloc"] }
+sha2.workspace = true

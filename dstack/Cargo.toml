@@ -70,6 +70,7 @@ members = [
     "crates/api-auth",
     "crates/build-info",
     "crates/mock-attestation",
+    "crates/qemu-acpi",
 ]
 # Vendored third-party crates are path dependencies but deliberately not members:
 # `--all-features` applies to members, and ktls declares its `ring` and
@@ -90,6 +91,7 @@ dstack-cli-core = { path = "crates/dstack-cli-core" }
 dstack-volume = { path = "crates/dstack-volume" }
 dstack-api-auth = { path = "crates/api-auth" }
 dstack-build-info = { path = "crates/build-info" }
+qemu-acpi = { path = "crates/qemu-acpi" }
 cc-eventlog = { path = "cc-eventlog" }
 supervisor = { path = "supervisor" }
 supervisor-client = { path = "supervisor/client" }
