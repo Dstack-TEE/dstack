@@ -30,15 +30,21 @@ pub(crate) fn resolve_networking(networking: &Networking, cfg: &CvmConfig) -> Ne
     if !networking.dhcp_start.is_empty() {
         resolved.dhcp_start = networking.dhcp_start.clone();
     }
-    // Not merged from the host defaults: a pre-opened chardev names one
-    // device and belongs to exactly one NIC. When set, it also owns the
-    // netdev string (generated later from the fd number), so even an empty
-    // NIC netdev must replace a host-wide custom default.
+    // A pre-opened chardev names one host device and belongs to exactly one
+    // NIC, so it is taken from the NIC verbatim and never inherited from the
+    // host defaults.
     resolved.open_file = networking.open_file.clone();
-    let replace_netdev = !networking.open_file.is_empty() || !networking.netdev.is_empty();
-    if replace_netdev {
+    if !networking.open_file.is_empty() && networking.netdev.is_empty() {
+        // The chardev generates this NIC's netdev from the fd number later, so
+        // drop any inherited host netdev rather than leak a stale default.
+        resolved.netdev = String::new();
+    } else if !networking.netdev.is_empty() {
+        // An explicit NIC netdev overrides the host default. A netdev set
+        // together with open_file is kept here, not dropped, so that
+        // validate_resolved_network rejects the conflicting pair.
         resolved.netdev = networking.netdev.clone();
     }
+    // Neither set: inherit the host netdev unchanged.
     resolved
 }
 
