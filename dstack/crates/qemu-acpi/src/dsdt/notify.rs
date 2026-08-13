@@ -73,8 +73,8 @@ use acpi_tables::{Aml, AmlSink};
 
 use super::ops::{emit, Raw};
 
-/// Devfns populated on the root bus of the fixture machine: the MCH host
-/// bridge, four PCI slots, and the three ICH9 functions (LPC, SATA, SMBus).
+/// Devfns populated on the root bus of the baseline machine by the ICH9 chipset:
+/// LPC (which emits extra AML), SATA, and SMBus.
 const CHIPSET_DEVFNS: &[u8] = &[0xf8, 0xfa, 0xfb];
 
 /// The ICH9 LPC bridge, the only function that contributes its own AML.
