@@ -51,11 +51,12 @@ struct SimulatorState {
 
 impl SimulatorState {
     fn new(generator: Arc<TdxGenerator>, ccel: &[u8], vm_config: Option<&str>) -> Result<Self> {
-        let (mrtd, rtmrs) = measurements_for_config(ccel, vm_config)?;
+        let ccel = ccel_for_config(ccel, vm_config)?;
+        let (mrtd, rtmrs) = measurements_for_config(&ccel, vm_config)?;
         let mut state = Self {
             generator,
             mrtd,
-            ccel: ccel.to_vec(),
+            ccel,
             rtmrs,
             outblob: Vec::new(),
             generation: 0,
@@ -117,6 +118,50 @@ impl SimulatorState {
             _ => None,
         }
     }
+}
+
+fn ccel_for_config(ccel: &[u8], vm_config: Option<&str>) -> Result<Vec<u8>> {
+    let Some(vm_config) = vm_config else {
+        return Ok(ccel.to_vec());
+    };
+    let vm_config: VmConfig = serde_json::from_str(vm_config).context("invalid TDX vm_config")?;
+    let Some(document) = vm_config.tdx_measurement.as_ref() else {
+        return Ok(ccel.to_vec());
+    };
+    let measurement = document
+        .decode_measurement()
+        .map_err(anyhow::Error::msg)
+        .context("invalid TDX measurement document")?;
+    let expected =
+        dstack_mr::tdx::expected_rtmr0_acpi_hashes(&vm_config, measurement.tdvf.ovmf_variant)
+            .context("failed to generate TDX simulator ACPI measurements")?;
+    let events = cc_eventlog::tdx::decode_ccel(ccel).context("failed to decode CCEL fixture")?;
+    let mut patched = ccel.to_vec();
+
+    for (name, expected_digest) in [
+        (cc_eventlog::tdx::TDX_ACPI_LOADER_EVENT, expected.loader),
+        (cc_eventlog::tdx::TDX_ACPI_RSDP_EVENT, expected.rsdp),
+        (cc_eventlog::tdx::TDX_ACPI_TABLES_EVENT, expected.tables),
+    ] {
+        let current = events
+            .iter()
+            .find(|event| event.imr == 0 && event.event == name)
+            .with_context(|| format!("CCEL fixture is missing {name}"))?
+            .digest();
+        let offsets = patched
+            .windows(current.len())
+            .enumerate()
+            .filter_map(|(offset, bytes)| (bytes == current).then_some(offset))
+            .collect::<Vec<_>>();
+        let [offset] = offsets.as_slice() else {
+            bail!(
+                "CCEL fixture contains {} copies of the {name} digest, expected one",
+                offsets.len()
+            );
+        };
+        patched[*offset..*offset + current.len()].copy_from_slice(&expected_digest);
+    }
+    Ok(patched)
 }
 
 fn measurements_for_config(
@@ -521,7 +566,9 @@ impl TeeBackend for TdxBackend {
             seed,
         )?)?);
         let mut fs = TdxSimulatorFs::new(generator)?;
-        let (mrtd, rtmrs) = measurements_for_config(CCEL_FIXTURE, config.vm_config.as_deref())?;
+        let ccel = ccel_for_config(CCEL_FIXTURE, config.vm_config.as_deref())?;
+        let (mrtd, rtmrs) = measurements_for_config(&ccel, config.vm_config.as_deref())?;
+        fs.state.ccel = ccel;
         fs.state.mrtd = mrtd;
         fs.state.rtmrs = rtmrs;
         fs.state.outblob = fs.state.make_quote([0; 64])?;
@@ -541,6 +588,36 @@ impl TeeBackend for TdxBackend {
 mod tests {
     use super::*;
     use dcap_qvl::quote::Quote;
+
+    #[test]
+    fn configured_ccel_uses_generated_acpi_digests() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../verifier/fixtures/tdx-lite-getquote.json"
+        ))
+        .unwrap();
+        let vm_config_json = fixture["vm_config"].as_str().unwrap();
+        let vm_config: VmConfig = serde_json::from_str(vm_config_json).unwrap();
+        let measurement = vm_config
+            .tdx_measurement
+            .as_ref()
+            .unwrap()
+            .decode_measurement()
+            .unwrap();
+        let expected =
+            dstack_mr::tdx::expected_rtmr0_acpi_hashes(&vm_config, measurement.tdvf.ovmf_variant)
+                .unwrap();
+
+        let patched = ccel_for_config(CCEL_FIXTURE, Some(vm_config_json)).unwrap();
+        let events = cc_eventlog::tdx::decode_ccel(&patched).unwrap();
+        for (name, digest) in [
+            (cc_eventlog::tdx::TDX_ACPI_LOADER_EVENT, expected.loader),
+            (cc_eventlog::tdx::TDX_ACPI_RSDP_EVENT, expected.rsdp),
+            (cc_eventlog::tdx::TDX_ACPI_TABLES_EVENT, expected.tables),
+        ] {
+            let event = events.iter().find(|event| event.event == name).unwrap();
+            assert_eq!(event.digest(), digest, "{name}");
+        }
+    }
 
     #[test]
     fn quote_tracks_report_data_and_rtmr_extensions() {
