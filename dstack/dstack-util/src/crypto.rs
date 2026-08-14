@@ -7,6 +7,7 @@ use aes_gcm::{
     Aes256Gcm, KeyInit,
 };
 use anyhow::{anyhow, ensure, Context, Result};
+use scale::{Decode, Encode, IoReader};
 use std::io::{Read, Write};
 use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -14,7 +15,19 @@ pub const STREAM_MAGIC: &[u8; 9] = b"dstkscrt0";
 pub const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
 pub const MAX_CHUNK_SIZE: usize = 16 * 1024 * 1024;
 const FINAL_CHUNK: u8 = 1;
-const HEADER_LEN: usize = STREAM_MAGIC.len() + 32 + 8 + 4;
+
+#[derive(Encode, Decode)]
+struct StreamHeader {
+    ephemeral_public_key: [u8; 32],
+    nonce_prefix: [u8; 8],
+    chunk_size: u32,
+}
+
+#[derive(Encode, Decode)]
+struct FrameHeader {
+    flags: u8,
+    plaintext_len: u32,
+}
 
 pub fn dh_agree(secret: [u8; 32], their_pubkey: [u8; 32]) -> [u8; 32] {
     let secret = StaticSecret::from(secret);
@@ -58,11 +71,11 @@ fn stream_nonce(prefix: &[u8; 8], index: u32) -> [u8; 12] {
     nonce
 }
 
-fn stream_aad(header: &[u8; HEADER_LEN], index: u32, frame_header: &[u8; 5]) -> Vec<u8> {
-    let mut aad = Vec::with_capacity(HEADER_LEN + 4 + frame_header.len());
-    aad.extend_from_slice(header);
-    aad.extend_from_slice(&index.to_be_bytes());
-    aad.extend_from_slice(frame_header);
+fn stream_aad(header: &StreamHeader, index: u32, frame_header: &FrameHeader) -> Vec<u8> {
+    let mut aad = STREAM_MAGIC.to_vec();
+    header.encode_to(&mut aad);
+    index.encode_to(&mut aad);
+    frame_header.encode_to(&mut aad);
     aad
 }
 
@@ -95,13 +108,14 @@ pub fn dh_encrypt_stream(
 
     let mut nonce_prefix = [0u8; 8];
     getrandom::fill(&mut nonce_prefix).context("failed to generate nonce prefix")?;
-    let mut header = [0u8; HEADER_LEN];
-    header[..STREAM_MAGIC.len()].copy_from_slice(STREAM_MAGIC);
-    header[STREAM_MAGIC.len()..STREAM_MAGIC.len() + 32].copy_from_slice(&ephemeral_public_key);
-    header[STREAM_MAGIC.len() + 32..STREAM_MAGIC.len() + 40].copy_from_slice(&nonce_prefix);
-    header[STREAM_MAGIC.len() + 40..].copy_from_slice(&(chunk_size as u32).to_be_bytes());
+    let header = StreamHeader {
+        ephemeral_public_key,
+        nonce_prefix,
+        chunk_size: chunk_size as u32,
+    };
     output
-        .write_all(&header)
+        .write_all(STREAM_MAGIC)
+        .and_then(|_| output.write_all(&header.encode()))
         .context("failed to write header")?;
 
     let mut current = vec![0u8; chunk_size];
@@ -112,9 +126,10 @@ pub fn dh_encrypt_stream(
         let next_len = read_chunk(&mut input, &mut next)?;
         let final_chunk = next_len == 0;
         let flags = if final_chunk { FINAL_CHUNK } else { 0 };
-        let mut frame_header = [0u8; 5];
-        frame_header[0] = flags;
-        frame_header[1..].copy_from_slice(&(current_len as u32).to_be_bytes());
+        let frame_header = FrameHeader {
+            flags,
+            plaintext_len: current_len as u32,
+        };
         let aad = stream_aad(&header, index, &frame_header);
         let nonce = stream_nonce(&nonce_prefix, index);
         let encrypted = cipher
@@ -127,7 +142,7 @@ pub fn dh_encrypt_stream(
             )
             .map_err(|e| anyhow!("failed to encrypt chunk {index}: {e}"))?;
         output
-            .write_all(&frame_header)
+            .write_all(&frame_header.encode())
             .and_then(|_| output.write_all(&encrypted))
             .with_context(|| format!("failed to write chunk {index}"))?;
         if final_chunk {
@@ -161,24 +176,15 @@ pub fn dh_decrypt_stream(
     mut input: impl Read,
     mut output: impl Write,
 ) -> Result<()> {
-    let mut header = [0u8; HEADER_LEN];
-    header[..STREAM_MAGIC.len()].copy_from_slice(STREAM_MAGIC);
-    input
-        .read_exact(&mut header[STREAM_MAGIC.len()..])
-        .context("truncated stream header")?;
-    let mut ephemeral_public_key = [0u8; 32];
-    ephemeral_public_key.copy_from_slice(&header[STREAM_MAGIC.len()..STREAM_MAGIC.len() + 32]);
-    let mut nonce_prefix = [0u8; 8];
-    nonce_prefix.copy_from_slice(&header[STREAM_MAGIC.len() + 32..STREAM_MAGIC.len() + 40]);
-    let mut chunk_size_bytes = [0u8; 4];
-    chunk_size_bytes.copy_from_slice(&header[STREAM_MAGIC.len() + 40..]);
-    let chunk_size = u32::from_be_bytes(chunk_size_bytes) as usize;
+    let header =
+        StreamHeader::decode(&mut IoReader(&mut input)).context("invalid stream header")?;
+    let chunk_size = header.chunk_size as usize;
     ensure!(
         (1..=MAX_CHUNK_SIZE).contains(&chunk_size),
         "invalid chunk size: {chunk_size}"
     );
 
-    let shared_secret = dh_agree(secret, ephemeral_public_key);
+    let shared_secret = dh_agree(secret, header.ephemeral_public_key);
     ensure!(
         !shared_secret.iter().all(|byte| *byte == 0),
         "invalid X25519 shared secret"
@@ -188,15 +194,14 @@ pub fn dh_decrypt_stream(
 
     let mut index = 0u32;
     loop {
-        let mut frame_header = [0u8; 5];
-        input
-            .read_exact(&mut frame_header)
+        let frame_header = FrameHeader::decode(&mut IoReader(&mut input))
             .with_context(|| format!("missing final chunk at chunk {index}"))?;
-        ensure!(frame_header[0] & !FINAL_CHUNK == 0, "invalid chunk flags");
-        let final_chunk = frame_header[0] == FINAL_CHUNK;
-        let mut plaintext_len_bytes = [0u8; 4];
-        plaintext_len_bytes.copy_from_slice(&frame_header[1..]);
-        let plaintext_len = u32::from_be_bytes(plaintext_len_bytes) as usize;
+        ensure!(
+            frame_header.flags & !FINAL_CHUNK == 0,
+            "invalid chunk flags"
+        );
+        let final_chunk = frame_header.flags == FINAL_CHUNK;
+        let plaintext_len = frame_header.plaintext_len as usize;
         ensure!(plaintext_len <= chunk_size, "chunk {index} is too large");
         ensure!(
             final_chunk || plaintext_len == chunk_size,
@@ -207,7 +212,7 @@ pub fn dh_decrypt_stream(
         input
             .read_exact(&mut encrypted)
             .with_context(|| format!("truncated chunk {index}"))?;
-        let nonce = stream_nonce(&nonce_prefix, index);
+        let nonce = stream_nonce(&header.nonce_prefix, index);
         let aad = stream_aad(&header, index, &frame_header);
         let plaintext = cipher
             .decrypt(

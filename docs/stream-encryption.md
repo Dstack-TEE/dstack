@@ -4,7 +4,10 @@
 bounded-memory encryption of arbitrary data. It uses the same app-scoped X25519
 key pair as encrypted environment variables, but it is a separate wire format.
 
-All integers are unsigned and big-endian.
+The header and frame metadata are encoded with SCALE, the binary codec already
+used by dstack. Fixed-width integers therefore use SCALE's little-endian
+encoding. The nonce construction below deliberately uses a big-endian chunk
+index so its byte representation follows counter order.
 
 ## Header
 
