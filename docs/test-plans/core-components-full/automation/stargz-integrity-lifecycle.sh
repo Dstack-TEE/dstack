@@ -27,13 +27,20 @@ unit_override=false
 check() { "$@"; checks=$((checks + 1)); }
 clear_snapshotter_state() {
   systemctl stop "$UNIT" >/dev/null 2>&1 || true
-  { findmnt -Rno TARGET "$SNAPSHOTTER_ROOT" 2>/dev/null || true; } \
-    | sort -r \
-    | while IFS= read -r target; do
-        test "$target" = "$SNAPSHOTTER_ROOT" && continue
-        umount -l -- "$target" >/dev/null 2>&1 || true
-      done
-  rm -rf "${SNAPSHOTTER_ROOT:?}"/* /run/containerd-stargz-grpc
+  for _ in $(seq 1 20); do
+    { findmnt -Rno TARGET "$SNAPSHOTTER_ROOT" 2>/dev/null || true; } \
+      | sort -r \
+      | while IFS= read -r target; do
+          test "$target" = "$SNAPSHOTTER_ROOT" && continue
+          umount -l -- "$target" >/dev/null 2>&1 || true
+        done
+    find "${SNAPSHOTTER_ROOT:?}" -mindepth 1 -maxdepth 1 \
+      -exec rm -rf -- {} + >/dev/null 2>&1 || true
+    test -z "$(find "$SNAPSHOTTER_ROOT" -mindepth 1 -maxdepth 1 -print -quit)" && break
+    sleep 0.1
+  done
+  test -z "$(find "$SNAPSHOTTER_ROOT" -mindepth 1 -maxdepth 1 -print -quit)"
+  rm -rf /run/containerd-stargz-grpc
 }
 prepare_snapshotter_storage() {
   mkdir -p "$SNAPSHOTTER_ROOT" "$SNAPSHOTTER_STORAGE"
