@@ -206,7 +206,7 @@ if test "$corrupt_pull_rc" -eq 0; then
   fi
 fi
 check sh -c "test '$corrupt_pull_rc' -ne 0 || test '$corrupt_run_rc' -ne 0"
-check sh -c "grep -Eqi 'digest|checksum|unexpected commit|failed to copy|invalid|failed to mount' '$ROOT/corrupt.log'"
+check sh -c "grep -Eqi 'digest|checksum|unexpected commit|unexpected EOF|short read|content length|failed to copy|invalid|failed to mount' '$ROOT/corrupt.log'"
 
 # With the snapshotter unavailable, its path fails closed. The explicit overlay
 # path remains available and is the truthful fallback (there is no silent fallback).
