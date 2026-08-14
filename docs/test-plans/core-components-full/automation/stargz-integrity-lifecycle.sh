@@ -184,7 +184,8 @@ manifest=$(curl -fsS -H 'Accept: application/vnd.oci.image.manifest.v1+json' "ht
 corrupt_layer=$(printf '%s' "$manifest" | jq -r '.layers[-1].digest')
 check test "$corrupt_layer" != null
 ctr-remote -n "$CORRUPT_NS" images rm "$CORRUPT_NORMAL" "$CORRUPT_LAZY" >/dev/null
-ctr-remote -n "$CORRUPT_NS" content rm "$corrupt_layer" >/dev/null 2>&1 || true
+check ctr-remote -n "$CORRUPT_NS" content rm "$corrupt_layer" >/dev/null
+check sh -c "! ctr-remote -n '$CORRUPT_NS' content ls -q | grep -Fx '$corrupt_layer'"
 hex=${corrupt_layer#sha256:}
 blob="$ROOT/registry/docker/registry/v2/blobs/sha256/${hex:0:2}/$hex/data"
 check test -f "$blob"
