@@ -23,6 +23,15 @@ checks=0
 unit_override=false
 
 check() { "$@"; checks=$((checks + 1)); }
+clear_snapshotter_state() {
+  systemctl stop "$UNIT" >/dev/null 2>&1 || true
+  { findmnt -Rno TARGET /var/lib/containerd-stargz-grpc 2>/dev/null || true; } \
+    | sort -r \
+    | while IFS= read -r target; do
+        umount -l -- "$target" >/dev/null 2>&1 || true
+      done
+  rm -rf /var/lib/containerd-stargz-grpc/* /run/containerd-stargz-grpc
+}
 failure_diagnostics() {
   rc=$?
   printf 'stargz lifecycle failed: line=%s rc=%s checks=%s\n' "$1" "$rc" "$checks" >&2
@@ -57,8 +66,7 @@ cleanup() {
     ctr-remote namespaces rm "$ns" >/dev/null 2>&1 || true
   done
   if $unit_override; then
-    systemctl stop "$UNIT" >/dev/null 2>&1 || true
-    rm -rf /var/lib/containerd-stargz-grpc/* /run/containerd-stargz-grpc
+    clear_snapshotter_state
     rm -rf "/run/systemd/system/$UNIT.d"
     systemctl daemon-reload
     systemctl start "$UNIT" >/dev/null 2>&1 || true
@@ -68,7 +76,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$ROOT/registry"
-for binary in ctr ctr-remote nerdctl containerd-stargz-grpc curl jq sha256sum; do check command -v "$binary" >/dev/null; done
+for binary in ctr ctr-remote nerdctl containerd-stargz-grpc curl findmnt jq sha256sum umount; do check command -v "$binary" >/dev/null; done
 check test "$(docker image inspect "$PAYLOAD_IMAGE" --format '{{.Id}}')" = "$PAYLOAD_ID"
 actual_registry_id=$(docker image inspect "$REGISTRY_IMAGE" --format '{{.Id}}')
 check test "$actual_registry_id" = "$REGISTRY_ID"
@@ -88,8 +96,7 @@ ExecCondition=/bin/true
 EOT
 unit_override=true
 systemctl daemon-reload
-systemctl stop "$UNIT" >/dev/null 2>&1 || true
-rm -rf /var/lib/containerd-stargz-grpc/* /run/containerd-stargz-grpc
+clear_snapshotter_state
 check systemctl start "$UNIT"
 check wait_snapshotter
 
