@@ -59,7 +59,7 @@ Vary firmware, kernel, initrd, rootfs, cmdline ordering/quoting, CPU/QEMU versio
 <a id="tc-ver-tools-002-step-03"></a>
 ### Step 3: Exercise failure and recovery
 
-Run unsupported QEMU, swtpm, hugepage/NUMA, invalid-version, malformed-metadata, and missing-artifact rows; then repeat the valid baseline.
+Run supported hugepage/NUMA plus unsupported old-QEMU, swtpm, invalid-version, malformed-metadata, and missing-artifact rows; then repeat the valid baseline.
 
 **Expected results:**
 
