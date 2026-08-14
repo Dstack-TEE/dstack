@@ -99,6 +99,8 @@ enum Commands {
     GetKeys(GetKeysArgs),
     /// Decrypt data encrypted with the app's environment encryption public key
     Decrypt(DecryptArgs),
+    /// Encrypt data for an app using its KMS-provided environment encryption key
+    Encrypt(EncryptArgs),
 }
 
 #[derive(Parser)]
@@ -386,6 +388,34 @@ struct DecryptArgs {
     /// Decode the input as hexadecimal text before decrypting
     #[arg(long)]
     hex: bool,
+}
+
+#[derive(Parser)]
+/// Encrypt data for an app using its KMS-provided environment encryption key
+struct EncryptArgs {
+    /// KMS server URL
+    #[arg(short, long)]
+    kms_url: String,
+
+    /// Application ID (20 bytes in hex)
+    #[arg(long)]
+    app_id: String,
+
+    /// Input file (default: stdin)
+    #[arg(short, long)]
+    input: Option<PathBuf>,
+
+    /// Output file (default: stdout)
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
+    /// Plaintext bytes per independently authenticated chunk
+    #[arg(long, default_value_t = crypto::DEFAULT_CHUNK_SIZE)]
+    chunk_size: usize,
+
+    /// Root CA certificate (PEM format) used to verify the KMS TLS certificate
+    #[arg(long)]
+    root_ca: Option<PathBuf>,
 }
 
 fn pad64(data: &[u8]) -> Result<[u8; 64]> {
@@ -697,36 +727,138 @@ fn cmd_decrypt(args: DecryptArgs) -> Result<()> {
         .try_into()
         .map_err(|key: Vec<u8>| anyhow::anyhow!("Invalid env crypt key length: {}", key.len()))?;
 
-    let mut input = match args.input {
-        Some(path) => fs::read(&path)
-            .with_context(|| format!("Failed to read ciphertext from {}", path.display()))?,
-        None => {
-            let mut input = Vec::new();
-            io::stdin()
-                .read_to_end(&mut input)
-                .context("Failed to read ciphertext from stdin")?;
-            input
-        }
-    };
     if args.hex {
-        input = hex_decode(
+        let input = read_all_input(args.input.as_deref())?;
+        let input = hex_decode(
             std::str::from_utf8(&input)
                 .context("Hex ciphertext is not valid UTF-8")?
                 .trim(),
         )
         .context("Failed to decode hex ciphertext")?;
+        return decrypt_auto(
+            env_crypt_key,
+            input.as_slice(),
+            open_output(args.output.as_deref())?,
+        );
     }
 
-    let plaintext = crypto::dh_decrypt(env_crypt_key, &input).context("Failed to decrypt input")?;
-    if let Some(output) = args.output {
-        safe_write_with_mode(&output, &plaintext, 0o600)
-            .with_context(|| format!("Failed to write plaintext to {}", output.display()))?;
+    let input = open_input(args.input.as_deref())?;
+    decrypt_auto(env_crypt_key, input, open_output(args.output.as_deref())?)
+}
+
+fn decrypt_auto(
+    env_crypt_key: [u8; 32],
+    mut input: impl Read,
+    mut output: impl Write,
+) -> Result<()> {
+    let mut prefix = Vec::with_capacity(crypto::STREAM_MAGIC.len());
+    input
+        .by_ref()
+        .take(crypto::STREAM_MAGIC.len() as u64)
+        .read_to_end(&mut prefix)
+        .context("Failed to read ciphertext")?;
+    if prefix == crypto::STREAM_MAGIC {
+        crypto::dh_decrypt_stream(env_crypt_key, input, output)
+            .context("Failed to decrypt stream")?;
     } else {
-        io::stdout()
+        let mut ciphertext = prefix;
+        input
+            .read_to_end(&mut ciphertext)
+            .context("Failed to read ciphertext")?;
+        let plaintext = crypto::dh_decrypt(env_crypt_key, &ciphertext)
+            .context("Failed to decrypt legacy input")?;
+        output
             .write_all(&plaintext)
-            .context("Failed to write plaintext to stdout")?;
+            .context("Failed to write plaintext")?;
     }
     Ok(())
+}
+
+async fn cmd_encrypt(args: EncryptArgs) -> Result<()> {
+    use dstack_kms_rpc::kms_client::KmsClient;
+    use ra_rpc::client::RaClientConfig;
+
+    let app_id = decode_app_id(Some(&args.app_id))?.expect("app_id is required");
+    let kms_url = if args.kms_url.ends_with("/prpc") {
+        args.kms_url
+    } else {
+        format!("{}/prpc", args.kms_url.trim_end_matches('/'))
+    };
+    let root_ca_pem = args
+        .root_ca
+        .as_ref()
+        .map(|path| {
+            fs::read_to_string(path)
+                .with_context(|| format!("Failed to read root CA from {}", path.display()))
+        })
+        .transpose()?;
+    let client = RaClientConfig::builder()
+        .remote_uri(kms_url)
+        .tls_no_check(false)
+        .tls_built_in_root_certs(root_ca_pem.is_none())
+        .maybe_tls_ca_cert(root_ca_pem)
+        .build()
+        .into_client()
+        .context("Failed to create KMS client")?;
+    let response = KmsClient::new(client)
+        .get_app_env_encrypt_pub_key(dstack_kms_rpc::AppId {
+            app_id: app_id.to_vec(),
+        })
+        .await
+        .context("Failed to get app environment encryption public key")?;
+    let public_key: [u8; 32] = response
+        .public_key
+        .try_into()
+        .map_err(|key: Vec<u8>| anyhow::anyhow!("Invalid public key length: {}", key.len()))?;
+
+    crypto::dh_encrypt_stream(
+        public_key,
+        open_input(args.input.as_deref())?,
+        open_output(args.output.as_deref())?,
+        args.chunk_size,
+    )
+    .context("Failed to encrypt stream")
+}
+
+fn read_all_input(path: Option<&Path>) -> Result<Vec<u8>> {
+    let mut input = open_input(path)?;
+    let mut data = Vec::new();
+    input
+        .read_to_end(&mut data)
+        .context("Failed to read input")?;
+    Ok(data)
+}
+
+fn open_input(path: Option<&Path>) -> Result<Box<dyn Read>> {
+    match path {
+        Some(path) => {
+            Ok(Box::new(fs::File::open(path).with_context(|| {
+                format!("Failed to open input {}", path.display())
+            })?))
+        }
+        None => Ok(Box::new(io::stdin())),
+    }
+}
+
+fn open_output(path: Option<&Path>) -> Result<Box<dyn Write>> {
+    use fs_err::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::PermissionsExt;
+
+    match path {
+        Some(path) => {
+            let file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(path)
+                .with_context(|| format!("Failed to open output {}", path.display()))?;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .with_context(|| format!("Failed to set permissions on {}", path.display()))?;
+            Ok(Box::new(file))
+        }
+        None => Ok(Box::new(io::stdout())),
+    }
 }
 
 fn cmd_quote() -> Result<()> {
@@ -1443,6 +1575,9 @@ async fn main() -> Result<()> {
         }
         Commands::Decrypt(args) => {
             cmd_decrypt(args)?;
+        }
+        Commands::Encrypt(args) => {
+            cmd_encrypt(args).await?;
         }
     }
 
