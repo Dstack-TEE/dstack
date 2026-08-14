@@ -20,7 +20,7 @@ ROWS = (
     ("dstack-mr", "rejects_malformed_version"),
     ("dstack-verifier", "tdx_lite_acpi_hashes_are_selected_by_event_name"),
     ("dstack-verifier", "tdx_lite_acpi_hashes_reject_unlabeled_events"),
-    ("dstack-verifier", "verifies_tdx_lite_fixture_without_acpi_table_verification"),
+    ("dstack-verifier", "verifies_tdx_lite_fixture_without_image_download"),
 )
 
 

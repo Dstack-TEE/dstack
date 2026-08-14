@@ -185,7 +185,7 @@ def execute_matrix(
         "qemu-10-compatibility",
         fixture / "metadata.json",
         ["--cpu", "2", "--memory", "2G", "--qemu-version", "10.0.0"],
-        [],
+        ["rtmr0"],
     )
     accepted(
         "advanced-machine-fields",

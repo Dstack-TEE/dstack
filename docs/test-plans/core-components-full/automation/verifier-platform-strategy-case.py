@@ -15,7 +15,7 @@ from typing import Any
 
 CASE_ID = "tc-ver-strategy-006"
 TESTS = (
-    "verifies_tdx_lite_fixture_without_acpi_table_verification",
+    "verifies_tdx_lite_fixture_without_image_download",
     "verifies_sev_snp_attestation_fixture_without_image_download",
     "gcp_and_nitro_enclave_measurement_bindings_matrix",
     "aws_os_image_check_requires_measurement",
