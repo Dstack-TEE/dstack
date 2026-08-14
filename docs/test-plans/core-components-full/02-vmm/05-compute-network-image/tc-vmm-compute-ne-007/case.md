@@ -64,6 +64,10 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression matrix
+
+Generate ACPI for every supported QEMU profile and version clamp, compare seeded randomized tables against the reference implementation, cover AMD PCI-hole and high-memory relocation, and require deterministic DSDT/SRAT/MCFG output for identical VM shape.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

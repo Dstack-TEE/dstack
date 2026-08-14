@@ -7563,6 +7563,93 @@
               "repeated": false
             }
           ]
+        },
+        {
+          "service": "Admin",
+          "method": "RemoveCvm",
+          "request": "RemoveCvmRequest",
+          "response": "RemoveCvmResponse",
+          "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
+          "line": 0,
+          "case_id": "tc-gw-admin-034",
+          "request_fields": [
+            {
+              "type": "string",
+              "name": "instance_id",
+              "number": 1,
+              "optional": false,
+              "repeated": false
+            }
+          ],
+          "response_fields": [
+            {
+              "type": "bool",
+              "name": "record_existed",
+              "number": 1,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "removed_locally",
+              "number": 2,
+              "optional": false,
+              "repeated": false
+            }
+          ]
+        },
+        {
+          "service": "Admin",
+          "method": "ListRejectedInstances",
+          "request": "google.protobuf.Empty",
+          "response": "ListRejectedInstancesResponse",
+          "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
+          "line": 0,
+          "case_id": "tc-gw-admin-035",
+          "request_fields": [],
+          "response_fields": [
+            {
+              "type": "RejectedInstanceInfo",
+              "name": "rejected",
+              "number": 1,
+              "optional": false,
+              "repeated": true
+            }
+          ]
+        },
+        {
+          "service": "Admin",
+          "method": "RemoveNode",
+          "request": "RemoveNodeRequest",
+          "response": "RemoveNodeResponse",
+          "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
+          "line": 0,
+          "case_id": "tc-gw-admin-036",
+          "request_fields": [
+            {
+              "type": "uint32",
+              "name": "node_id",
+              "number": 1,
+              "optional": false,
+              "repeated": false
+            }
+          ],
+          "response_fields": [
+            {
+              "type": "bool",
+              "name": "record_existed",
+              "number": 1,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "removed_from_peer_set",
+              "number": 2,
+              "optional": false,
+              "repeated": false
+            }
+          ]
         }
       ],
       "message_schemas": [
@@ -9269,6 +9356,119 @@
               "name": "admin_override",
               "number": 4,
               "optional": true,
+              "repeated": false
+            }
+          ]
+        },
+        {
+          "name": "RemoveCvmRequest",
+          "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
+          "fields": [
+            {
+              "type": "string",
+              "name": "instance_id",
+              "number": 1,
+              "optional": false,
+              "repeated": false
+            }
+          ]
+        },
+        {
+          "name": "RemoveCvmResponse",
+          "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
+          "fields": [
+            {
+              "type": "bool",
+              "name": "record_existed",
+              "number": 1,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "removed_locally",
+              "number": 2,
+              "optional": false,
+              "repeated": false
+            }
+          ]
+        },
+        {
+          "name": "ListRejectedInstancesResponse",
+          "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
+          "fields": [
+            {
+              "type": "RejectedInstanceInfo",
+              "name": "rejected",
+              "number": 1,
+              "optional": false,
+              "repeated": true
+            }
+          ]
+        },
+        {
+          "name": "RemoveNodeRequest",
+          "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
+          "fields": [
+            {
+              "type": "uint32",
+              "name": "node_id",
+              "number": 1,
+              "optional": false,
+              "repeated": false
+            }
+          ]
+        },
+        {
+          "name": "RemoveNodeResponse",
+          "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
+          "fields": [
+            {
+              "type": "bool",
+              "name": "record_existed",
+              "number": 1,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "removed_from_peer_set",
+              "number": 2,
+              "optional": false,
+              "repeated": false
+            }
+          ]
+        },
+        {
+          "name": "RejectedInstanceInfo",
+          "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
+          "fields": [
+            {
+              "type": "string",
+              "name": "instance_id",
+              "number": 1,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "reason",
+              "number": 2,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "rejection",
+              "number": 3,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "active_locally",
+              "number": 4,
+              "optional": false,
               "repeated": false
             }
           ]

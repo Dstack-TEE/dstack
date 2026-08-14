@@ -322,46 +322,49 @@
       "component": "gateway",
       "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
       "case_ids": [
-        "tc-gw-debug-001",
-        "tc-gw-debug-004",
-        "tc-gw-debug-003",
-        "tc-gw-debug-002",
-        "tc-gw-admin-013",
-        "tc-gw-admin-026",
-        "tc-gw-admin-022",
-        "tc-gw-admin-015",
-        "tc-gw-admin-024",
-        "tc-gw-admin-023",
-        "tc-gw-admin-018",
-        "tc-gw-admin-020",
-        "tc-gw-admin-012",
-        "tc-gw-admin-025",
-        "tc-gw-admin-030",
-        "tc-gw-admin-003",
-        "tc-gw-admin-014",
-        "tc-gw-admin-021",
-        "tc-gw-admin-017",
-        "tc-gw-admin-004",
-        "tc-gw-admin-007",
-        "tc-gw-admin-002",
-        "tc-gw-admin-016",
-        "tc-gw-admin-006",
         "tc-gw-admin-001",
-        "tc-gw-admin-009",
-        "tc-gw-admin-029",
-        "tc-gw-admin-031",
-        "tc-gw-admin-008",
-        "tc-gw-admin-033",
-        "tc-gw-admin-010",
-        "tc-gw-admin-027",
-        "tc-gw-admin-011",
-        "tc-gw-admin-032",
-        "tc-gw-admin-028",
+        "tc-gw-admin-002",
+        "tc-gw-admin-003",
+        "tc-gw-admin-004",
         "tc-gw-admin-005",
+        "tc-gw-admin-006",
+        "tc-gw-admin-007",
+        "tc-gw-admin-008",
+        "tc-gw-admin-009",
+        "tc-gw-admin-010",
+        "tc-gw-admin-011",
+        "tc-gw-admin-012",
+        "tc-gw-admin-013",
+        "tc-gw-admin-014",
+        "tc-gw-admin-015",
+        "tc-gw-admin-016",
+        "tc-gw-admin-017",
+        "tc-gw-admin-018",
         "tc-gw-admin-019",
-        "tc-gw-gateway-003",
+        "tc-gw-admin-020",
+        "tc-gw-admin-021",
+        "tc-gw-admin-022",
+        "tc-gw-admin-023",
+        "tc-gw-admin-024",
+        "tc-gw-admin-025",
+        "tc-gw-admin-026",
+        "tc-gw-admin-027",
+        "tc-gw-admin-028",
+        "tc-gw-admin-029",
+        "tc-gw-admin-030",
+        "tc-gw-admin-031",
+        "tc-gw-admin-032",
+        "tc-gw-admin-033",
+        "tc-gw-admin-034",
+        "tc-gw-admin-035",
+        "tc-gw-admin-036",
+        "tc-gw-debug-001",
+        "tc-gw-debug-002",
+        "tc-gw-debug-003",
+        "tc-gw-debug-004",
         "tc-gw-gateway-001",
         "tc-gw-gateway-002",
+        "tc-gw-gateway-003",
         "tc-gw-gateway-004"
       ],
       "rationale": "direct source reference; gateway RPC generated contract"
@@ -474,9 +477,12 @@
       "component": "gateway",
       "source": "dstack/gateway/src/admin_service.rs",
       "case_ids": [
-        "tc-gw-certificat-005",
+        "tc-gw-admin-034",
+        "tc-gw-admin-035",
+        "tc-gw-admin-036",
         "tc-gw-certificat-003",
         "tc-gw-certificat-004",
+        "tc-gw-certificat-005",
         "tc-gw-cluster-ad-003",
         "tc-gw-cluster-ad-004"
       ],
@@ -5684,16 +5690,17 @@
       "component": "verifier",
       "source": "dstack/verifier/src/verification.rs",
       "case_ids": [
-        "tc-ver-input-plat-002",
-        "tc-ver-input-plat-003",
-        "tc-ver-input-plat-006",
-        "tc-ver-input-plat-005",
-        "tc-ver-input-plat-004",
         "tc-ver-cli-cert-o-003",
-        "tc-ver-tools-005",
         "tc-ver-image-meas-001",
         "tc-ver-image-meas-002",
-        "tc-ver-image-meas-005"
+        "tc-ver-image-meas-003",
+        "tc-ver-image-meas-005",
+        "tc-ver-input-plat-002",
+        "tc-ver-input-plat-003",
+        "tc-ver-input-plat-004",
+        "tc-ver-input-plat-005",
+        "tc-ver-input-plat-006",
+        "tc-ver-tools-005"
       ],
       "rationale": "direct source reference"
     },
@@ -6578,6 +6585,80 @@
         "tc-vmm-ui-observa-005"
       ],
       "rationale": "direct source reference; VMM UI workflow and build; component build/generated/existing-test gate"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/metrics.rs",
+      "case_ids": [
+        "tc-gw-cluster-ad-004"
+      ],
+      "rationale": "post-baseline merged-product regression coverage"
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/web_routes/metrics.rs",
+      "case_ids": [
+        "tc-gw-cluster-ad-004"
+      ],
+      "rationale": "post-baseline merged-product regression coverage"
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/crates/dstackup/src/cid.rs",
+      "case_ids": [
+        "tc-vmm-internal-002"
+      ],
+      "rationale": "post-baseline merged-product regression coverage"
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/scripts/check-kernel-config.sh",
+      "case_ids": [
+        "tc-gos-platform-005"
+      ],
+      "rationale": "post-baseline merged-product regression coverage"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/gpu_reset.rs",
+      "case_ids": [
+        "tc-vmm-compute-ne-004"
+      ],
+      "rationale": "post-baseline merged-product regression coverage"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/qemu-acpi/src/lib.rs",
+      "case_ids": [
+        "tc-vmm-compute-ne-007",
+        "tc-ver-image-meas-003"
+      ],
+      "rationale": "post-baseline merged-product regression coverage"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/qemu-acpi/src/tables.rs",
+      "case_ids": [
+        "tc-vmm-compute-ne-007",
+        "tc-ver-image-meas-003"
+      ],
+      "rationale": "post-baseline merged-product regression coverage"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/qemu-acpi/src/aml_encode.rs",
+      "case_ids": [
+        "tc-vmm-compute-ne-007"
+      ],
+      "rationale": "post-baseline merged-product regression coverage"
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/qemu-acpi/src/aml_patch.rs",
+      "case_ids": [
+        "tc-vmm-compute-ne-007"
+      ],
+      "rationale": "post-baseline merged-product regression coverage"
     }
   ]
 }

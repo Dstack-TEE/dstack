@@ -71,6 +71,10 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression matrix
+
+For lite TDX, derive expected ACPI digests from the declared VM CPU, memory, PCI-hole, and QEMU profile; verify RTMR0 against them; reject shape/profile/version mismatches; and cross-check generated tables against deterministic QEMU-ACPI fixtures.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

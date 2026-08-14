@@ -64,6 +64,10 @@ Query each live Gateway debug interface and compare bounded peer and node visibi
 
 - All three nodes expose the expected cluster membership and peer visibility; cleanup removes every case-owned process and data directory.
 
+## Post-baseline regression matrix
+
+Inject corrupt global and per-record values, future timestamps, key/value identity mismatch, self-referential peers, replicated tombstones, IP/key conflicts, and unreadable certbot state. Verify global corruption fails boot closed, record-local corruption is quarantined without collateral loss, and operator removal prevents resurrection.
+
 ## Postconditions
 
 Remove run-scoped evidence/state and restore trust, cache, routing and dependency baselines.
