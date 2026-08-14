@@ -644,6 +644,78 @@ mod tests {
         (dir, manager)
     }
 
+    /// Proves that a descriptor opened by the user manager reaches the child,
+    /// which is the whole point of `networking.open_file`: an external net
+    /// daemon creates the tap device, and QEMU only ever receives the fd.
+    ///
+    /// Ignored by default because it needs a real environment -- a live systemd
+    /// user manager for the calling account, reachable at
+    /// `$XDG_RUNTIME_DIR/bus` -- which a container or CI sandbox usually lacks.
+    /// It writes nothing outside a temporary directory and cleans up its unit.
+    ///
+    /// Run it on a host that has one:
+    ///
+    /// ```text
+    /// cargo test -p dstack-vmm -- --ignored user_manager_passes_open_file
+    /// ```
+    #[tokio::test]
+    #[ignore = "requires a live systemd user manager on the host"]
+    async fn user_manager_passes_open_file_descriptor_to_the_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let payload = dir.path().join("payload");
+        fs_err::write(&payload, b"payload-through-fd").unwrap();
+        let observed_path = dir.path().join("observed");
+        let manager = SystemdProcessManager::new(
+            dir.path().join("state"),
+            "dstack-vm-test".into(),
+            "infinity".into(),
+            true,
+        )
+        .unwrap();
+
+        let mut env = HashMap::new();
+        env.insert("OBSERVED".to_string(), observed_path.display().to_string());
+        let config = ProcessConfig {
+            env,
+            command: "/bin/sh".into(),
+            // systemd hands the file over as fd 3, the number the QEMU netdev
+            // arguments reference.
+            args: vec![
+                "-c".into(),
+                "{ echo listen_fds=$LISTEN_FDS; cat <&3; } > $OBSERVED".into(),
+            ],
+            ..test_config(&[payload.display().to_string().as_str()])
+        };
+        manager.deploy(&config).await.expect("deploy");
+
+        // Wait for the unit to exit rather than for the file to appear: the
+        // shell redirect creates it before the script has written anything, so
+        // watching the path reads a half-written file.
+        let mut status = None;
+        for _ in 0..50 {
+            let info = manager.info(&config.id).await.expect("info");
+            match info.map(|info| info.state.status) {
+                Some(ProcessStatus::Running) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                other => {
+                    status = other;
+                    break;
+                }
+            }
+        }
+        let observed = fs_err::read_to_string(&observed_path).unwrap_or_default();
+        let _ = manager.stop(&config.id).await;
+        let _ = manager.remove(&config.id).await;
+
+        assert!(
+            matches!(status, Some(ProcessStatus::Exited(0))),
+            "unit ended as {status:?}, output {observed:?}"
+        );
+        assert!(observed.contains("listen_fds=1"), "got {observed:?}");
+        assert!(observed.contains("payload-through-fd"), "got {observed:?}");
+    }
+
     #[test]
     fn user_manager_selects_the_calling_users_systemd() {
         let (_system_dir, system) = test_manager_with(false);
