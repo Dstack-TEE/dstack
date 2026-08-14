@@ -2219,6 +2219,7 @@ version = "0.6.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
+ "binrw",
  "bollard",
  "cc-eventlog",
  "cert-client",

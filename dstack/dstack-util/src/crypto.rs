@@ -7,8 +7,8 @@ use aes_gcm::{
     Aes256Gcm, KeyInit,
 };
 use anyhow::{anyhow, ensure, Context, Result};
-use scale::{Decode, Encode, IoReader};
-use std::io::{Read, Write};
+use binrw::{binrw, io::NoSeek, BinRead, BinWrite};
+use std::io::{Cursor, Read, Write};
 use x25519_dalek::{PublicKey, StaticSecret};
 
 pub const STREAM_MAGIC: &[u8; 9] = b"dstkscrt0";
@@ -16,14 +16,16 @@ pub const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
 pub const MAX_CHUNK_SIZE: usize = 16 * 1024 * 1024;
 const FINAL_CHUNK: u8 = 1;
 
-#[derive(Encode, Decode)]
+#[binrw]
+#[brw(little)]
 struct StreamHeader {
     ephemeral_public_key: [u8; 32],
     nonce_prefix: [u8; 8],
     chunk_size: u32,
 }
 
-#[derive(Encode, Decode)]
+#[binrw]
+#[brw(little)]
 struct FrameHeader {
     flags: u8,
     plaintext_len: u32,
@@ -71,12 +73,20 @@ fn stream_nonce(prefix: &[u8; 8], index: u32) -> [u8; 12] {
     nonce
 }
 
-fn stream_aad(header: &StreamHeader, index: u32, frame_header: &FrameHeader) -> Vec<u8> {
-    let mut aad = STREAM_MAGIC.to_vec();
-    header.encode_to(&mut aad);
-    index.encode_to(&mut aad);
-    frame_header.encode_to(&mut aad);
-    aad
+fn stream_aad(header: &StreamHeader, index: u32, frame_header: &FrameHeader) -> Result<Vec<u8>> {
+    let mut aad = Cursor::new(Vec::new());
+    aad.write_all(STREAM_MAGIC)
+        .context("failed to encode stream magic as AAD")?;
+    header
+        .write(&mut aad)
+        .context("failed to encode stream header as AAD")?;
+    index
+        .write_le(&mut aad)
+        .context("failed to encode chunk index as AAD")?;
+    frame_header
+        .write(&mut aad)
+        .context("failed to encode frame header as AAD")?;
+    Ok(aad.into_inner())
 }
 
 /// Encrypts a reader as independently authenticated chunks.
@@ -115,8 +125,10 @@ pub fn dh_encrypt_stream(
     };
     output
         .write_all(STREAM_MAGIC)
-        .and_then(|_| output.write_all(&header.encode()))
-        .context("failed to write header")?;
+        .context("failed to write stream magic")?;
+    header
+        .write(&mut NoSeek::new(&mut output))
+        .context("failed to write stream header")?;
 
     let mut current = vec![0u8; chunk_size];
     let mut next = vec![0u8; chunk_size];
@@ -130,7 +142,7 @@ pub fn dh_encrypt_stream(
             flags,
             plaintext_len: current_len as u32,
         };
-        let aad = stream_aad(&header, index, &frame_header);
+        let aad = stream_aad(&header, index, &frame_header)?;
         let nonce = stream_nonce(&nonce_prefix, index);
         let encrypted = cipher
             .encrypt(
@@ -141,9 +153,11 @@ pub fn dh_encrypt_stream(
                 },
             )
             .map_err(|e| anyhow!("failed to encrypt chunk {index}: {e}"))?;
+        frame_header
+            .write(&mut NoSeek::new(&mut output))
+            .with_context(|| format!("failed to write header for chunk {index}"))?;
         output
-            .write_all(&frame_header.encode())
-            .and_then(|_| output.write_all(&encrypted))
+            .write_all(&encrypted)
             .with_context(|| format!("failed to write chunk {index}"))?;
         if final_chunk {
             break;
@@ -177,7 +191,7 @@ pub fn dh_decrypt_stream(
     mut output: impl Write,
 ) -> Result<()> {
     let header =
-        StreamHeader::decode(&mut IoReader(&mut input)).context("invalid stream header")?;
+        StreamHeader::read(&mut NoSeek::new(&mut input)).context("invalid stream header")?;
     let chunk_size = header.chunk_size as usize;
     ensure!(
         (1..=MAX_CHUNK_SIZE).contains(&chunk_size),
@@ -194,7 +208,7 @@ pub fn dh_decrypt_stream(
 
     let mut index = 0u32;
     loop {
-        let frame_header = FrameHeader::decode(&mut IoReader(&mut input))
+        let frame_header = FrameHeader::read(&mut NoSeek::new(&mut input))
             .with_context(|| format!("missing final chunk at chunk {index}"))?;
         ensure!(
             frame_header.flags & !FINAL_CHUNK == 0,
@@ -213,7 +227,7 @@ pub fn dh_decrypt_stream(
             .read_exact(&mut encrypted)
             .with_context(|| format!("truncated chunk {index}"))?;
         let nonce = stream_nonce(&header.nonce_prefix, index);
-        let aad = stream_aad(&header, index, &frame_header);
+        let aad = stream_aad(&header, index, &frame_header)?;
         let plaintext = cipher
             .decrypt(
                 (&nonce).into(),
