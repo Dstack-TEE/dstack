@@ -16,6 +16,7 @@ use tokio::sync::RwLock;
 use tracing::warn;
 
 use crate::config::{parse_unit_user, validate_open_file};
+use nix::unistd::geteuid;
 
 #[derive(Clone)]
 pub enum ProcessManager {
@@ -33,11 +34,13 @@ impl ProcessManager {
         state_dir: PathBuf,
         unit_prefix: String,
         stop_timeout: String,
+        user_manager: bool,
     ) -> Result<Arc<SystemdProcessManager>> {
         Ok(Arc::new(SystemdProcessManager::new(
             state_dir,
             unit_prefix,
             stop_timeout,
+            user_manager,
         )?))
     }
 
@@ -320,10 +323,16 @@ pub struct SystemdProcessManager {
     state_dir: PathBuf,
     unit_prefix: String,
     stop_timeout: String,
+    user_manager: bool,
 }
 
 impl SystemdProcessManager {
-    fn new(state_dir: PathBuf, unit_prefix: String, stop_timeout: String) -> Result<Self> {
+    fn new(
+        state_dir: PathBuf,
+        unit_prefix: String,
+        stop_timeout: String,
+        user_manager: bool,
+    ) -> Result<Self> {
         anyhow::ensure!(
             !unit_prefix.is_empty(),
             "systemd unit prefix must not be empty"
@@ -339,7 +348,26 @@ impl SystemdProcessManager {
             state_dir,
             unit_prefix,
             stop_timeout,
+            user_manager,
         })
+    }
+
+    /// Builds a `systemd-run`/`systemctl` invocation aimed at the configured
+    /// manager.
+    ///
+    /// `--user` selects the caller's own manager, which is reached over the bus
+    /// at `$XDG_RUNTIME_DIR/bus`. A VMM started as a system service inherits no
+    /// session environment, so the runtime directory is filled in from the
+    /// effective uid rather than left to fail with an unhelpful bus error.
+    fn systemd_command(&self, program: &str) -> Command {
+        let mut command = Command::new(program);
+        if self.user_manager {
+            command.arg("--user");
+            if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
+                command.env("XDG_RUNTIME_DIR", format!("/run/user/{}", geteuid()));
+            }
+        }
+        command
     }
 
     fn key(id: &str) -> String {
@@ -416,6 +444,13 @@ impl SystemdProcessManager {
             args.push(format!("--setenv={key}={value}"));
         }
         if !config.user.is_empty() {
+            // A user manager runs everything as its own account and silently
+            // ignores User=, so accepting it would start QEMU with the VMM's
+            // privileges after the operator asked to confine it.
+            anyhow::ensure!(
+                !self.user_manager,
+                "cvm.user is not supported with cvm.systemd.user_manager: a user manager cannot change uid"
+            );
             // ProcessConfig.user is already normalized to a systemd User=
             // value (name or bare UID). Re-parse to reject anything that
             // would still inject property syntax.
@@ -446,10 +481,10 @@ impl SystemdProcessManager {
         let unit = self.unit(&config.id);
         // Failed transient units remain loaded until reset and otherwise
         // prevent automatic restart from reusing the unit name.
-        let mut reset = Command::new("systemctl");
+        let mut reset = self.systemd_command("systemctl");
         reset.arg("reset-failed").arg(&unit);
         let _ = reset.output().await;
-        let mut command = Command::new("systemd-run");
+        let mut command = self.systemd_command("systemd-run");
         command.args(self.run_args(config, &unit)?);
         Self::command(command, "systemd-run").await?;
 
@@ -490,7 +525,7 @@ impl SystemdProcessManager {
             .await?
             .is_some_and(|info| info.state.status.is_running())
         {
-            let mut command = Command::new("systemctl");
+            let mut command = self.systemd_command("systemctl");
             command.arg("stop").arg("--no-block").arg(self.unit(id));
             if let Err(error) = Self::command(command, "systemctl stop").await {
                 // The unit may have exited and been collected between the
@@ -519,7 +554,7 @@ impl SystemdProcessManager {
         if record.started {
             bail!("process is started");
         }
-        let mut command = Command::new("systemctl");
+        let mut command = self.systemd_command("systemctl");
         command.arg("reset-failed").arg(self.unit(id));
         let _ = command.output().await;
         fs_err::remove_file(self.record_path(id)).context("failed to remove process record")
@@ -567,7 +602,7 @@ impl SystemdProcessManager {
 
     async fn info_from_record(&self, record: ProcessRecord) -> Result<ProcessInfo> {
         let unit = self.unit(&record.config.id);
-        let mut command = Command::new("systemctl");
+        let mut command = self.systemd_command("systemctl");
         command
             .arg("show")
             .arg(&unit)
@@ -596,6 +631,49 @@ impl SystemdProcessManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_manager_with(user_manager: bool) -> (tempfile::TempDir, SystemdProcessManager) {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = SystemdProcessManager::new(
+            dir.path().to_path_buf(),
+            "dstack-vm".into(),
+            "infinity".into(),
+            user_manager,
+        )
+        .unwrap();
+        (dir, manager)
+    }
+
+    #[test]
+    fn user_manager_selects_the_calling_users_systemd() {
+        let (_system_dir, system) = test_manager_with(false);
+        let (_user_dir, user) = test_manager_with(true);
+
+        let args = |command: &tokio::process::Command| {
+            command
+                .as_std()
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        };
+
+        assert!(args(&system.systemd_command("systemctl")).is_empty());
+        // Ahead of the subcommand: `systemctl --user stop` is accepted,
+        // `systemctl stop --user` is not.
+        assert_eq!(args(&user.systemd_command("systemctl")), ["--user"]);
+        assert_eq!(args(&user.systemd_command("systemd-run")), ["--user"]);
+    }
+
+    #[test]
+    fn user_manager_rejects_a_dedicated_user_instead_of_ignoring_it() {
+        let (_dir, manager) = test_manager_with(true);
+
+        let err = manager
+            .run_args(&test_config_as("qemu", &[]), "unit.service")
+            .unwrap_err();
+
+        assert!(err.to_string().contains("cannot change uid"));
+    }
 
     #[test]
     fn unit_names_are_stable_and_do_not_embed_process_ids() {
@@ -633,6 +711,7 @@ mod tests {
             dir.path().to_path_buf(),
             "dstack-vm".into(),
             "infinity".into(),
+            false,
         )
         .unwrap();
         (dir, manager)

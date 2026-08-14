@@ -548,6 +548,22 @@ pub struct SystemdConfig {
     pub state_dir: PathBuf,
     #[serde(default = "default_systemd_stop_timeout")]
     pub stop_timeout: String,
+    /// Drive the calling user's own systemd manager (`systemd-run --user`)
+    /// instead of the system manager.
+    ///
+    /// The system manager only accepts these calls from root or through a
+    /// polkit rule, so a VMM running as an unprivileged user cannot use the
+    /// systemd backend at all without one of the two. The user manager needs
+    /// neither, at the cost of requiring lingering for the account
+    /// (`loginctl enable-linger <user>`) so the manager outlives the login
+    /// session, and of dropping `cvm.user`: a user manager cannot change uid.
+    ///
+    /// It also changes who opens `networking.open_file`. The system manager
+    /// opens the chardev as root before dropping to `User=`; the user manager
+    /// opens it as the VMM's own account, so the device must already be owned
+    /// by it.
+    #[serde(default)]
+    pub user_manager: bool,
 }
 
 impl Default for SystemdConfig {
@@ -556,6 +572,7 @@ impl Default for SystemdConfig {
             unit_prefix: default_systemd_unit_prefix(),
             state_dir: default_systemd_state_dir(),
             stop_timeout: default_systemd_stop_timeout(),
+            user_manager: false,
         }
     }
 }
