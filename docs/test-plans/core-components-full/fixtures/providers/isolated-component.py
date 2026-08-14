@@ -1401,6 +1401,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         if "Web UI deployment workflows" in actions:
             browser_command = [
                 "npx",
+                "--offline",
                 "--yes",
                 "--package",
                 "playwright@1.58.2",
