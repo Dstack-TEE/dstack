@@ -166,17 +166,13 @@ pub fn dh_decrypt_stream(
     input
         .read_exact(&mut header[STREAM_MAGIC.len()..])
         .context("Truncated stream header")?;
-    let ephemeral_public_key: [u8; 32] = header[STREAM_MAGIC.len()..STREAM_MAGIC.len() + 32]
-        .try_into()
-        .expect("fixed-size header slice");
-    let nonce_prefix: [u8; 8] = header[STREAM_MAGIC.len() + 32..STREAM_MAGIC.len() + 40]
-        .try_into()
-        .expect("fixed-size header slice");
-    let chunk_size = u32::from_be_bytes(
-        header[STREAM_MAGIC.len() + 40..]
-            .try_into()
-            .expect("fixed-size header slice"),
-    ) as usize;
+    let mut ephemeral_public_key = [0u8; 32];
+    ephemeral_public_key.copy_from_slice(&header[STREAM_MAGIC.len()..STREAM_MAGIC.len() + 32]);
+    let mut nonce_prefix = [0u8; 8];
+    nonce_prefix.copy_from_slice(&header[STREAM_MAGIC.len() + 32..STREAM_MAGIC.len() + 40]);
+    let mut chunk_size_bytes = [0u8; 4];
+    chunk_size_bytes.copy_from_slice(&header[STREAM_MAGIC.len() + 40..]);
+    let chunk_size = u32::from_be_bytes(chunk_size_bytes) as usize;
     ensure!(
         (1..=MAX_CHUNK_SIZE).contains(&chunk_size),
         "Invalid chunk size: {chunk_size}"
@@ -198,11 +194,9 @@ pub fn dh_decrypt_stream(
             .with_context(|| format!("Missing final chunk at chunk {index}"))?;
         ensure!(frame_header[0] & !FINAL_CHUNK == 0, "Invalid chunk flags");
         let final_chunk = frame_header[0] == FINAL_CHUNK;
-        let plaintext_len = u32::from_be_bytes(
-            frame_header[1..]
-                .try_into()
-                .expect("fixed-size frame header"),
-        ) as usize;
+        let mut plaintext_len_bytes = [0u8; 4];
+        plaintext_len_bytes.copy_from_slice(&frame_header[1..]);
+        let plaintext_len = u32::from_be_bytes(plaintext_len_bytes) as usize;
         ensure!(plaintext_len <= chunk_size, "Chunk {index} is too large");
         ensure!(
             final_chunk || plaintext_len == chunk_size,

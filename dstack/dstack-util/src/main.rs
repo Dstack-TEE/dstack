@@ -778,7 +778,7 @@ async fn cmd_encrypt(args: EncryptArgs) -> Result<()> {
     use dstack_kms_rpc::kms_client::KmsClient;
     use ra_rpc::client::RaClientConfig;
 
-    let app_id = decode_app_id(Some(&args.app_id))?.expect("app_id is required");
+    let app_id = decode_app_id(Some(&args.app_id))?.context("app_id is required")?;
     let kms_url = if args.kms_url.ends_with("/prpc") {
         args.kms_url
     } else {
