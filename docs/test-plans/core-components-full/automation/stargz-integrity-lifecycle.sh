@@ -191,7 +191,7 @@ blob="$ROOT/registry/docker/registry/v2/blobs/sha256/${hex:0:2}/$hex/data"
 check test -f "$blob"
 blob_size=$(stat -c %s "$blob")
 check test "$blob_size" -gt 128
-truncate -s $((blob_size / 2)) "$blob"
+truncate -s 0 "$blob"
 if ctr-remote -n "$CORRUPT_NS" images rpull --plain-http --snapshotter "$SNAPSHOTTER" "$CORRUPT_LAZY" >"$ROOT/corrupt.log" 2>&1; then
   corrupt_pull_rc=0
 else
