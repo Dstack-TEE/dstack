@@ -147,8 +147,8 @@ check test "$lazy_output" = lazy-ok
 pa=$!
 (ctr-remote -n "$CONCURRENT_B" images rpull --plain-http --snapshotter "$SNAPSHOTTER" "$LAZY" >"$ROOT/concurrent-b.log" 2>&1) &
 pb=$!
-wait "$pa"; ra=$?
-wait "$pb"; rb=$?
+if wait "$pa"; then ra=0; else ra=$?; fi
+if wait "$pb"; then rb=0; else rb=$?; fi
 check test "$ra" -eq 0
 check test "$rb" -eq 0
 
