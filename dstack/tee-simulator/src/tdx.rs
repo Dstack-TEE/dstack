@@ -148,6 +148,13 @@ fn ccel_for_config(ccel: &[u8], vm_config: Option<&str>) -> Result<Vec<u8>> {
             .find(|event| event.imr == 0 && event.event == name)
             .with_context(|| format!("CCEL fixture is missing {name}"))?
             .digest();
+        if current.len() != expected_digest.len() {
+            bail!(
+                "CCEL fixture {name} digest has length {}, expected {}",
+                current.len(),
+                expected_digest.len()
+            );
+        }
         let offsets = patched
             .windows(current.len())
             .enumerate()
@@ -614,7 +621,10 @@ mod tests {
             (cc_eventlog::tdx::TDX_ACPI_RSDP_EVENT, expected.rsdp),
             (cc_eventlog::tdx::TDX_ACPI_TABLES_EVENT, expected.tables),
         ] {
-            let event = events.iter().find(|event| event.event == name).unwrap();
+            let event = events
+                .iter()
+                .find(|event| event.imr == 0 && event.event == name)
+                .unwrap();
             assert_eq!(event.digest(), digest, "{name}");
         }
     }
