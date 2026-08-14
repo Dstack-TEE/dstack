@@ -202,6 +202,13 @@ state_dir = ""
 # guests can spend hours tearing down encrypted memory, so the safe default is
 # unbounded. Set a systemd time span such as "30min" to enable escalation.
 stop_timeout = "infinity"
+# Drive the calling user's own systemd manager instead of the system one. The
+# system manager only accepts these calls from root or through a polkit rule,
+# so an unprivileged VMM needs this to use cvm.pm = "systemd" at all. Requires
+# lingering for the account (loginctl enable-linger <user>), rules out cvm.user
+# (a user manager cannot change uid), and makes networking.open_file devices
+# open as this account rather than as root, so they must be owned by it.
+user_manager = false
 
 [host_api]
 ident = "dstack VMM"

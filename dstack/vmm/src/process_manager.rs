@@ -449,7 +449,7 @@ impl SystemdProcessManager {
             // privileges after the operator asked to confine it.
             anyhow::ensure!(
                 !self.user_manager,
-                "cvm.user is not supported with cvm.systemd.user_manager: a user manager cannot change uid"
+                "cvm.user is not supported with systemd.user_manager: a user manager cannot change uid"
             );
             // ProcessConfig.user is already normalized to a systemd User=
             // value (name or bare UID). Re-parse to reject anything that

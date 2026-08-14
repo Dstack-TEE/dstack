@@ -561,7 +561,8 @@ pub struct SystemdConfig {
     /// It also changes who opens `networking.open_file`. The system manager
     /// opens the chardev as root before dropping to `User=`; the user manager
     /// opens it as the VMM's own account, so the device must already be owned
-    /// by it.
+    /// by it. A freshly created macvtap `/dev/tapN` is root-owned, so whatever
+    /// creates it has to chown it to the VMM's account first.
     #[serde(default)]
     pub user_manager: bool,
 }
