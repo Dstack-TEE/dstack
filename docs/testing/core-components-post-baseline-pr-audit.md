@@ -31,4 +31,5 @@ The three new Gateway Admin methods were absent from the previous API inventory 
 The audit also refreshes deterministic harness expectations invalidated by the
 merged source changes: the renamed TDX simulator atomicity test, the renamed
 lite-TDX verifier test, the expanded verifier and RA-TLS unit-test totals, and
-the QEMU 10 RTMR0 delta introduced by the new compatibility profile.
+the QEMU 10 RTMR0 delta and supported hugepage/NUMA row introduced by the new
+ACPI generator.
