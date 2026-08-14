@@ -6180,7 +6180,7 @@
               "execution": {
                 "entrypoint": "automation/vmm-web-ui-deployment-capability-case.py",
                 "args": [],
-                "timeout_seconds": 120
+                "timeout_seconds": 600
               }
             },
             {
@@ -9200,7 +9200,7 @@
               "execution": {
                 "entrypoint": "automation/kms-runtime-002-capability-case.py",
                 "args": [],
-                "timeout_seconds": 120
+                "timeout_seconds": 900
               }
             },
             {

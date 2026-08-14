@@ -38,7 +38,7 @@ def command(argv: list[str], cwd: Path, env: dict[str, str]) -> dict[str, Any]:
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        timeout=180,
+        timeout=600,
         check=False,
     )
     return {
@@ -70,6 +70,18 @@ def main() -> int:
             env.get("PATH", ""),
         ]
     )
+    node_install = command(["npm", "ci", "--ignore-scripts"], node_package, env)
+    if node_install["exit_code"] != 0:
+        raise RuntimeError(
+            f"Node authorization dependency install failed: {node_install['output_tail']}"
+        )
+    bun_install = command(
+        [str(bun), "install", "--frozen-lockfile"], bun_package, env
+    )
+    if bun_install["exit_code"] != 0:
+        raise RuntimeError(
+            f"Bun authorization dependency install failed: {bun_install['output_tail']}"
+        )
     build = command(["npm", "run", "build"], node_package, env)
     if build["exit_code"] != 0:
         raise RuntimeError(f"Node authorization compile failed: {build['output_tail']}")
@@ -85,7 +97,11 @@ def main() -> int:
     rpc: subprocess.Popen[str] | None = None
     services: dict[str, tuple[subprocess.Popen[str], Any]] = {}
     checks: dict[str, bool] = {}
-    observations: dict[str, Any] = {"build": build}
+    observations: dict[str, Any] = {
+        "node_install": node_install,
+        "bun_install": bun_install,
+        "build": build,
+    }
 
     def start_rpc() -> subprocess.Popen[str]:
         proc = subprocess.Popen(
