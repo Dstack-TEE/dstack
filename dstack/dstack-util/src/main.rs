@@ -97,6 +97,8 @@ enum Commands {
     AttestStrip(AttestStripArgs),
     /// Get app keys from a KMS server
     GetKeys(GetKeysArgs),
+    /// Decrypt data encrypted with the app's environment encryption public key
+    Decrypt(DecryptArgs),
 }
 
 #[derive(Parser)]
@@ -364,6 +366,26 @@ struct GetKeysArgs {
     /// If not provided, TLS certificate verification is skipped for the initial connection.
     #[arg(long)]
     root_ca: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+/// Decrypt data encrypted with the app's environment encryption public key
+struct DecryptArgs {
+    /// Input file (default: stdin)
+    #[arg(short, long)]
+    input: Option<PathBuf>,
+
+    /// Output file (default: stdout)
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
+    /// App keys file containing env_crypt_key
+    #[arg(long)]
+    key_file: Option<PathBuf>,
+
+    /// Decode the input as hexadecimal text before decrypting
+    #[arg(long)]
+    hex: bool,
 }
 
 fn pad64(data: &[u8]) -> Result<[u8; 64]> {
@@ -659,6 +681,51 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
         println!("{json}");
     }
 
+    Ok(())
+}
+
+fn cmd_decrypt(args: DecryptArgs) -> Result<()> {
+    use dstack_types::shared_filenames::{host_shared_dir, APP_KEYS};
+
+    let key_file = args
+        .key_file
+        .unwrap_or_else(|| host_shared_dir().join(APP_KEYS));
+    let keys: AppKeys = utils::deserialize_json_file(&key_file)
+        .with_context(|| format!("Failed to load app keys from {}", key_file.display()))?;
+    let env_crypt_key: [u8; 32] = keys
+        .env_crypt_key
+        .try_into()
+        .map_err(|key: Vec<u8>| anyhow::anyhow!("Invalid env crypt key length: {}", key.len()))?;
+
+    let mut input = match args.input {
+        Some(path) => fs::read(&path)
+            .with_context(|| format!("Failed to read ciphertext from {}", path.display()))?,
+        None => {
+            let mut input = Vec::new();
+            io::stdin()
+                .read_to_end(&mut input)
+                .context("Failed to read ciphertext from stdin")?;
+            input
+        }
+    };
+    if args.hex {
+        input = hex_decode(
+            std::str::from_utf8(&input)
+                .context("Hex ciphertext is not valid UTF-8")?
+                .trim(),
+        )
+        .context("Failed to decode hex ciphertext")?;
+    }
+
+    let plaintext = crypto::dh_decrypt(env_crypt_key, &input).context("Failed to decrypt input")?;
+    if let Some(output) = args.output {
+        safe_write_with_mode(&output, &plaintext, 0o600)
+            .with_context(|| format!("Failed to write plaintext to {}", output.display()))?;
+    } else {
+        io::stdout()
+            .write_all(&plaintext)
+            .context("Failed to write plaintext to stdout")?;
+    }
     Ok(())
 }
 
@@ -1373,6 +1440,9 @@ async fn main() -> Result<()> {
         }
         Commands::GetKeys(args) => {
             cmd_get_keys(args).await?;
+        }
+        Commands::Decrypt(args) => {
+            cmd_decrypt(args)?;
         }
     }
 
