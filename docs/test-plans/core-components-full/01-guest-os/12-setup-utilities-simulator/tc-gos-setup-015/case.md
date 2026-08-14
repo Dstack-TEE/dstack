@@ -64,6 +64,10 @@ Restart the owning service or VM where permitted, re-query all affected state, t
 
 - Persistent/transient state follows policy, the adjacent identity is unchanged, no credential is exposed, and files, mounts, devices, processes, listeners, and counters return to baseline.
 
+## Post-baseline regression matrix
+
+Race startup, shutdown, stale state removal, and vTPM node replacement. The simulator must wait for the configured node, preserve configured ownership, reject unsafe node types, clean only case-owned state, and converge after retry without attaching a stale device.
+
 ## Postconditions
 
 Remove run-scoped inputs and faults; preserve redacted native outputs and required attachments.

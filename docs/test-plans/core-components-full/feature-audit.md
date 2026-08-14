@@ -447,6 +447,7 @@ This audit is derived from the repository source inventory and is the traceabili
 <a id="req-gw-gateway-003"></a><a id="risk-gw-gateway-003"></a>| `req-gw-gateway-003` | `risk-gw-gateway-003` | [tc-gw-gateway-003](04-gateway/01-rpc-gateway/tc-gw-gateway-003/case.md#tc-gw-gateway-003) — Gateway.Info | P1 |
 <a id="req-gw-gateway-004"></a><a id="risk-gw-gateway-004"></a>| `req-gw-gateway-004` | `risk-gw-gateway-004` | [tc-gw-gateway-004](04-gateway/01-rpc-gateway/tc-gw-gateway-004/case.md#tc-gw-gateway-004) — Gateway.GetPeers | P1 |
 
+
 <a id="audit-section-gateway-rpc-debug"></a>
 ### Debug RPC
 
@@ -495,6 +496,9 @@ This audit is derived from the repository source inventory and is the traceabili
 <a id="req-gw-admin-031"></a><a id="risk-gw-admin-031"></a>| `req-gw-admin-031` | `risk-gw-admin-031` | [tc-gw-admin-031](04-gateway/03-rpc-admin/tc-gw-admin-031/case.md#tc-gw-admin-031) — Admin.SetInstancePortPolicy | P1 |
 <a id="req-gw-admin-032"></a><a id="risk-gw-admin-032"></a>| `req-gw-admin-032` | `risk-gw-admin-032` | [tc-gw-admin-032](04-gateway/03-rpc-admin/tc-gw-admin-032/case.md#tc-gw-admin-032) — Admin.ClearInstancePortPolicy | P1 |
 <a id="req-gw-admin-033"></a><a id="risk-gw-admin-033"></a>| `req-gw-admin-033` | `risk-gw-admin-033` | [tc-gw-admin-033](04-gateway/03-rpc-admin/tc-gw-admin-033/case.md#tc-gw-admin-033) — Admin.GetInstancePortPolicy | P1 |
+<a id="req-gw-admin-034"></a><a id="risk-gw-admin-034"></a>| `req-gw-admin-034` | `risk-gw-admin-034` | [tc-gw-admin-034](04-gateway/03-rpc-admin/tc-gw-admin-034/case.md#tc-gw-admin-034) — Admin.RemoveCvm | P0 |
+<a id="req-gw-admin-035"></a><a id="risk-gw-admin-035"></a>| `req-gw-admin-035` | `risk-gw-admin-035` | [tc-gw-admin-035](04-gateway/03-rpc-admin/tc-gw-admin-035/case.md#tc-gw-admin-035) — Admin.ListRejectedInstances | P0 |
+<a id="req-gw-admin-036"></a><a id="risk-gw-admin-036"></a>| `req-gw-admin-036` | `risk-gw-admin-036` | [tc-gw-admin-036](04-gateway/03-rpc-admin/tc-gw-admin-036/case.md#tc-gw-admin-036) — Admin.RemoveNode | P0 |
 
 <a id="audit-section-gateway-registration-wireguard-policy"></a>
 ### Registration Wireguard Policy

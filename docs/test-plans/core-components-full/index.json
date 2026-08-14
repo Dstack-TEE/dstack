@@ -11132,6 +11132,132 @@
                 "args": [],
                 "timeout_seconds": 180
               }
+            },
+            {
+              "id": "tc-gw-admin-034",
+              "title": "Admin.RemoveCvm",
+              "order": 34,
+              "priority": "P1",
+              "path": "04-gateway/03-rpc-admin/tc-gw-admin-034",
+              "spec": {
+                "path": "04-gateway/03-rpc-admin/tc-gw-admin-034/case.md",
+                "anchor": "tc-gw-admin-034"
+              },
+              "requirements": [
+                "req-gw-admin-034"
+              ],
+              "risks": [
+                "risk-gw-admin-034"
+              ],
+              "tags": [
+                "gateway",
+                "admin-rpc"
+              ],
+              "fixture": {
+                "profile": "gateway-ready",
+                "versions": {
+                  "vmm": "candidate",
+                  "guest": "candidate",
+                  "kms": "candidate",
+                  "gateway": "candidate",
+                  "verifier": "candidate"
+                },
+                "destructive_scope": "lease-only",
+                "hardware_required": false,
+                "simulation_allowed": false
+              },
+              "actions_under_test": [
+                "Admin.RemoveCvm"
+              ],
+              "execution": {
+                "entrypoint": "automation/passed-gateway-empty-rpc-case.py",
+                "args": [],
+                "timeout_seconds": 180
+              }
+            },
+            {
+              "id": "tc-gw-admin-035",
+              "title": "Admin.ListRejectedInstances",
+              "order": 35,
+              "priority": "P1",
+              "path": "04-gateway/03-rpc-admin/tc-gw-admin-035",
+              "spec": {
+                "path": "04-gateway/03-rpc-admin/tc-gw-admin-035/case.md",
+                "anchor": "tc-gw-admin-035"
+              },
+              "requirements": [
+                "req-gw-admin-035"
+              ],
+              "risks": [
+                "risk-gw-admin-035"
+              ],
+              "tags": [
+                "gateway",
+                "admin-rpc"
+              ],
+              "fixture": {
+                "profile": "gateway-ready",
+                "versions": {
+                  "vmm": "candidate",
+                  "guest": "candidate",
+                  "kms": "candidate",
+                  "gateway": "candidate",
+                  "verifier": "candidate"
+                },
+                "destructive_scope": "lease-only",
+                "hardware_required": false,
+                "simulation_allowed": false
+              },
+              "actions_under_test": [
+                "Admin.ListRejectedInstances"
+              ],
+              "execution": {
+                "entrypoint": "automation/passed-gateway-empty-rpc-case.py",
+                "args": [],
+                "timeout_seconds": 180
+              }
+            },
+            {
+              "id": "tc-gw-admin-036",
+              "title": "Admin.RemoveNode",
+              "order": 36,
+              "priority": "P1",
+              "path": "04-gateway/03-rpc-admin/tc-gw-admin-036",
+              "spec": {
+                "path": "04-gateway/03-rpc-admin/tc-gw-admin-036/case.md",
+                "anchor": "tc-gw-admin-036"
+              },
+              "requirements": [
+                "req-gw-admin-036"
+              ],
+              "risks": [
+                "risk-gw-admin-036"
+              ],
+              "tags": [
+                "gateway",
+                "admin-rpc"
+              ],
+              "fixture": {
+                "profile": "gateway-ready",
+                "versions": {
+                  "vmm": "candidate",
+                  "guest": "candidate",
+                  "kms": "candidate",
+                  "gateway": "candidate",
+                  "verifier": "candidate"
+                },
+                "destructive_scope": "lease-only",
+                "hardware_required": false,
+                "simulation_allowed": false
+              },
+              "actions_under_test": [
+                "Admin.RemoveNode"
+              ],
+              "execution": {
+                "entrypoint": "automation/passed-gateway-empty-rpc-case.py",
+                "args": [],
+                "timeout_seconds": 180
+              }
             }
           ]
         },
