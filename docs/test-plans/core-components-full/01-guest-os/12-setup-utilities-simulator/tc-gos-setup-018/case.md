@@ -64,6 +64,10 @@ Repeat under another app/device identity and after restart; inspect outputs, log
 
 - Deterministic values are stable only within documented identity scope, random values do not repeat, cross-identity evidence/keys fail, permissions are restrictive, and no private material is logged.
 
+## Post-baseline regression matrix
+
+Replay TDX V2 events with stripped payloads and require their serialized preimages and digest banks to survive encode/decode, extension, and versioned-attestation wrapping. Tampered preimages or digests must fail before RTMR acceptance.
+
 ## Postconditions
 
 Securely remove generated private material and restore device, mount, network and filesystem state.

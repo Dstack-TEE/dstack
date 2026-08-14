@@ -73,6 +73,10 @@ Restart the affected service or VM when permitted, re-query state, and check adj
 
 - Documented state persists, transient state disappears, adjacent identities are unchanged, and no private key, credential, or plaintext sentinel appears in APIs, metrics, dashboards, journals, or artifacts.
 
+## Post-baseline regression matrix
+
+For both Yocto and mkosi images, assert the effective SELinux kernel gates plus nftables bridge/CHECKSUM capabilities and shipped modules. Start an Incus-compatible bridge workload, verify rule programming and xtables-lock handling, and fail closed by dropping the WireGuard configuration when rules cannot be applied.
+
 ## Postconditions
 
 Remove run-scoped state, undo fault injection, and verify services and devices returned to their recorded baseline.

@@ -73,6 +73,10 @@ Restart the owning service where permitted and inspect state for this and an adj
 
 - Persisted and transient state follow policy, adjacent identities are unchanged, and no private material or credential appears in output.
 
+## Post-baseline regression matrix
+
+Exercise dstackup CID windows at the minimum and maximum explicit starts, reject ranges whose pool overflows `u32`, prove random allocation does not overlap an installed window, and prove reinstall reuses its recorded window.
+
 ## Postconditions
 
 Remove run-scoped state and verify processes, files, devices, listeners, and allocations match baseline.

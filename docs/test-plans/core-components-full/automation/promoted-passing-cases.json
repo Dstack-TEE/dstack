@@ -2829,6 +2829,30 @@
       "promoted_at": "2026-07-30T09:11:30Z",
       "notes": "ten exact candidate product rows cover legacy/current attestation envelopes, event-log version selection, vm_config request precedence, image-manifest policy, RA-TLS certificate compatibility, unknown-format diagnostics, and fail-closed lossy downgrade rejection",
       "environment": "TDXLAB_CANDIDATE_VERIFIER_COMPATIBILITY_CORPUS"
+    },
+    {
+      "case_id": "tc-gw-admin-034",
+      "source_run": "post-baseline-merge-audit",
+      "source_status": "PASS",
+      "entrypoint": "automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "Candidate admin recovery RPC smoke and authorization/idempotency contract for Admin.RemoveCvm; replicated recovery matrix remains in the case execution."
+    },
+    {
+      "case_id": "tc-gw-admin-035",
+      "source_run": "post-baseline-merge-audit",
+      "source_status": "PASS",
+      "entrypoint": "automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "Candidate admin recovery RPC smoke and authorization/idempotency contract for Admin.ListRejectedInstances; replicated recovery matrix remains in the case execution."
+    },
+    {
+      "case_id": "tc-gw-admin-036",
+      "source_run": "post-baseline-merge-audit",
+      "source_status": "PASS",
+      "entrypoint": "automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "Candidate admin recovery RPC smoke and authorization/idempotency contract for Admin.RemoveNode; replicated recovery matrix remains in the case execution."
     }
   ]
 }
