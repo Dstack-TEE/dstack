@@ -1,0 +1,67 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+# SPDX-License-Identifier: Apache-2.0
+
+name: QEMU ACPI differential tests
+
+on:
+  pull_request:
+    branches: [next]
+    paths:
+      - .github/workflows/qemu-acpi-differential.yml
+      - dstack/crates/qemu-acpi/**
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: Random seed accepted by Python int(value, 0)
+        required: false
+        type: string
+      cases:
+        description: Number of random cases in addition to boundary cases
+        required: false
+        default: "32"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  differential:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: dstack
+    env:
+      REFERENCE_IMAGE: kvin/dstack-acpi-tables@sha256:54e692d8c68c6f02dd7c655bf6de6e7f3ad7a43fded6ca00d8e998918108a3b4
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.92.0
+
+      - name: Build Rust ACPI generator
+        run: cargo build -p qemu-acpi --example dump
+
+      - name: Run boundary and seeded random differential tests
+        env:
+          INPUT_SEED: ${{ inputs.seed }}
+          INPUT_CASES: ${{ inputs.cases }}
+        run: |
+          seed="${INPUT_SEED:-0x$(git rev-parse --short=16 HEAD)}"
+          cases="${INPUT_CASES:-32}"
+          echo "ACPI differential seed: $seed"
+          echo "Random case count: $cases"
+          crates/qemu-acpi/scripts/differential-random.py \
+            --image "$REFERENCE_IMAGE" \
+            --rust-dump target/debug/examples/dump \
+            --seed "$seed" \
+            --cases "$cases" \
+            --failure-dir qemu-acpi-failure
+
+      - name: Upload failing blobs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-acpi-differential-failure
+          path: dstack/qemu-acpi-failure
+          if-no-files-found: ignore

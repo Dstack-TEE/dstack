@@ -27,23 +27,29 @@ fn main() -> Result<(), Box<dyn Error>> {
     let smm = optional::<u8>(&mut args, 0)? == 1;
     let hole = optional::<u64>(&mut args, 0)?;
     let memory_size = optional(&mut args, 2u64 << 30)?;
+    let volumes = optional(&mut args, 0)?;
+    let pic = optional::<u8>(&mut args, 0)? == 1;
     let blobs = build(&MachineConfig {
         qemu_version: version,
         cpu_count: cpus,
         memory_size,
-        pic: false,
+        pic,
         smm,
         hugepages,
         num_gpus: gpus,
         num_nvswitches: nvswitches,
         num_nics: nics,
-        num_verity_volumes: 0,
+        num_verity_volumes: volumes,
         hotplug_off,
         root_verity,
         pci_hole64_size: (hole != 0).then_some(hole),
     })?;
-    std::fs::write("/tmp/rust.bin", blobs.tables)?;
-    std::fs::write("/tmp/rust-loader.bin", blobs.loader)?;
-    std::fs::write("/tmp/rust-rsdp.bin", blobs.rsdp)?;
+    let output_dir = std::env::var_os("QEMU_ACPI_OUTPUT_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+    std::fs::create_dir_all(&output_dir)?;
+    std::fs::write(output_dir.join("tables.bin"), blobs.tables)?;
+    std::fs::write(output_dir.join("loader.bin"), blobs.loader)?;
+    std::fs::write(output_dir.join("rsdp.bin"), blobs.rsdp)?;
     Ok(())
 }

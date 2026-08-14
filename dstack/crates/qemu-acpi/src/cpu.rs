@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::aml_patch::{integer, package};
+use crate::aml_encode::{integer, package};
 use crate::Error;
 
 fn hex_digit(value: u32) -> u8 {
@@ -94,15 +94,6 @@ pub(crate) fn object(index: u32, numa: bool) -> Result<Vec<u8>, Error> {
         body.extend_from_slice(&[0x08, b'_', b'P', b'X', b'M', 0x00]);
     }
     package(if x2apic { &[0x5b, 0x82] } else { &[0x5b, 0x83] }, &body)
-}
-
-pub(crate) fn notify_case(index: u32) -> Result<Vec<u8>, Error> {
-    let mut predicate = vec![0x93, 0x68]; // LEqual Arg0
-    predicate.extend_from_slice(&integer(index));
-    predicate.push(0x86); // Notify
-    predicate.extend_from_slice(&name(index));
-    predicate.push(0x69); // Arg1
-    package(&[0xa0], &predicate)
 }
 
 #[cfg(test)]

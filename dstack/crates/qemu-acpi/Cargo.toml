@@ -9,6 +9,7 @@ license = "Apache-2.0"
 description = "Pure Rust generator for QEMU-compatible ACPI measurement blobs"
 
 [dependencies]
+acpi_tables.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

@@ -274,6 +274,7 @@ enum_dispatch = "0.3.13"
 insta = "1.42.2"
 num_enum = "0.7.3"
 thiserror = "2.0.12"
+acpi_tables = "0.2.1"
 derive_more = "2.1.1"
 tempfile = "3.18.0"
 

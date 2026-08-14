@@ -13,12 +13,16 @@
 //! QEMU upgrade that leaves the ACPI ABI alone keeps working and one that does
 //! not surfaces as a blob mismatch the caller can act on.
 
-mod aml_patch;
+mod aml_encode;
 mod cpu;
+mod dsdt;
+mod fixed_tables;
 mod fw_cfg;
+mod generated_tables;
+#[cfg(test)]
+mod golden_tests;
 mod profile;
 mod srat;
-mod tables;
 mod topology;
 
 pub use profile::{Compatibility, QemuVersion};
@@ -50,5 +54,5 @@ pub enum Error {
 /// small matrices used by differential tests are not implementation limits.
 pub fn build(config: &MachineConfig) -> Result<AcpiBlobs, Error> {
     config.validate()?;
-    tables::build(config)
+    generated_tables::build(config)
 }

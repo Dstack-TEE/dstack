@@ -33,6 +33,8 @@ pub enum TopologyError {
     TooManyRootBusDevices { requested: i64, available: i64 },
     #[error("the requested topology needs {requested} GPU root ports on the PXB, but QEMU supports at most 32")]
     TooManyPxbPorts { requested: u32 },
+    #[error("the requested topology places {requested} devices before the fixed-address PXB, but QEMU has only {available} slots there")]
+    TooManyPrePxbDevices { requested: u64, available: u64 },
     #[error("NVSwitch passthrough requires an iommufd object, but no GPU creates one")]
     NvswitchWithoutIommufd,
 }
@@ -52,6 +54,18 @@ impl MachineConfig {
             return Err(TopologyError::TooManyPxbPorts {
                 requested: self.num_gpus,
             });
+        }
+        if self.hugepages && self.num_gpus > 0 {
+            let requested = 4
+                + u64::from(self.root_verity)
+                + u64::from(self.num_nics)
+                + u64::from(self.num_verity_volumes);
+            if requested > 16 {
+                return Err(TopologyError::TooManyPrePxbDevices {
+                    requested,
+                    available: 16,
+                });
+            }
         }
         let fixed_delta = i64::from(self.root_verity) - 1;
         let passthrough_ports = if self.hugepages && self.num_gpus > 0 {
@@ -78,5 +92,44 @@ impl MachineConfig {
             return Err(TopologyError::NvswitchWithoutIommufd);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pxb_config() -> MachineConfig {
+        MachineConfig {
+            qemu_version: QemuVersion::new(11, 1, 0),
+            cpu_count: 1,
+            memory_size: 2 << 30,
+            pic: false,
+            smm: false,
+            hugepages: true,
+            num_gpus: 1,
+            num_nvswitches: 0,
+            num_nics: 1,
+            num_verity_volumes: 0,
+            hotplug_off: false,
+            root_verity: true,
+            pci_hole64_size: None,
+        }
+    }
+
+    #[test]
+    fn fixed_address_pxb_slot_must_remain_free() {
+        let mut config = pxb_config();
+        config.num_nics = 11;
+        assert!(config.validate().is_ok());
+
+        config.num_nics = 12;
+        assert!(matches!(
+            config.validate(),
+            Err(TopologyError::TooManyPrePxbDevices {
+                requested: 17,
+                available: 16
+            })
+        ));
     }
 }
