@@ -416,6 +416,14 @@ struct EncryptArgs {
     /// Root CA certificate (PEM format) used to verify the KMS TLS certificate
     #[arg(long)]
     root_ca: Option<PathBuf>,
+
+    /// Trusted compressed secp256k1 KMS signer public key (hex)
+    #[arg(long)]
+    kms_pubkey: String,
+
+    /// Maximum accepted age of the KMS public-key signature in seconds
+    #[arg(long, default_value_t = 300)]
+    max_signature_age: u64,
 }
 
 fn pad64(data: &[u8]) -> Result<[u8; 64]> {
@@ -614,11 +622,7 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
     use dstack_kms_rpc::kms_client::KmsClient;
     use ra_rpc::client::RaClientConfig;
 
-    let kms_url = if args.kms_url.ends_with("/prpc") {
-        args.kms_url.clone()
-    } else {
-        format!("{}/prpc", args.kms_url.trim_end_matches('/'))
-    };
+    let kms_url = normalize_prpc_url(&args.kms_url);
 
     // Load root CA if provided for TLS pinning
     let root_ca_pem = if let Some(root_ca_path) = &args.root_ca {
@@ -725,16 +729,11 @@ fn cmd_decrypt(args: DecryptArgs) -> Result<()> {
     let env_crypt_key: [u8; 32] = keys
         .env_crypt_key
         .try_into()
-        .map_err(|key: Vec<u8>| anyhow::anyhow!("Invalid env crypt key length: {}", key.len()))?;
+        .map_err(|key: Vec<u8>| anyhow::anyhow!("invalid env crypt key length: {}", key.len()))?;
 
     if args.hex {
         let input = read_all_input(args.input.as_deref())?;
-        let input = hex_decode(
-            std::str::from_utf8(&input)
-                .context("Hex ciphertext is not valid UTF-8")?
-                .trim(),
-        )
-        .context("Failed to decode hex ciphertext")?;
+        let input = decode_hex_ciphertext(&input)?;
         return decrypt_auto(
             env_crypt_key,
             input.as_slice(),
@@ -756,20 +755,20 @@ fn decrypt_auto(
         .by_ref()
         .take(crypto::STREAM_MAGIC.len() as u64)
         .read_to_end(&mut prefix)
-        .context("Failed to read ciphertext")?;
+        .context("failed to read ciphertext")?;
     if prefix == crypto::STREAM_MAGIC {
         crypto::dh_decrypt_stream(env_crypt_key, input, output)
-            .context("Failed to decrypt stream")?;
+            .context("failed to decrypt stream")?;
     } else {
         let mut ciphertext = prefix;
         input
             .read_to_end(&mut ciphertext)
-            .context("Failed to read ciphertext")?;
+            .context("failed to read ciphertext")?;
         let plaintext = crypto::dh_decrypt(env_crypt_key, &ciphertext)
-            .context("Failed to decrypt legacy input")?;
+            .context("failed to decrypt legacy input")?;
         output
             .write_all(&plaintext)
-            .context("Failed to write plaintext")?;
+            .context("failed to write plaintext")?;
     }
     Ok(())
 }
@@ -779,17 +778,13 @@ async fn cmd_encrypt(args: EncryptArgs) -> Result<()> {
     use ra_rpc::client::RaClientConfig;
 
     let app_id = decode_app_id(Some(&args.app_id))?.context("app_id is required")?;
-    let kms_url = if args.kms_url.ends_with("/prpc") {
-        args.kms_url
-    } else {
-        format!("{}/prpc", args.kms_url.trim_end_matches('/'))
-    };
+    let kms_url = normalize_prpc_url(&args.kms_url);
     let root_ca_pem = args
         .root_ca
         .as_ref()
         .map(|path| {
             fs::read_to_string(path)
-                .with_context(|| format!("Failed to read root CA from {}", path.display()))
+                .with_context(|| format!("failed to read root CA from {}", path.display()))
         })
         .transpose()?;
     let client = RaClientConfig::builder()
@@ -799,17 +794,25 @@ async fn cmd_encrypt(args: EncryptArgs) -> Result<()> {
         .maybe_tls_ca_cert(root_ca_pem)
         .build()
         .into_client()
-        .context("Failed to create KMS client")?;
+        .context("failed to create KMS client")?;
     let response = KmsClient::new(client)
         .get_app_env_encrypt_pub_key(dstack_kms_rpc::AppId {
             app_id: app_id.to_vec(),
         })
         .await
-        .context("Failed to get app environment encryption public key")?;
+        .context("failed to get app environment encryption public key")?;
     let public_key: [u8; 32] = response
         .public_key
         .try_into()
-        .map_err(|key: Vec<u8>| anyhow::anyhow!("Invalid public key length: {}", key.len()))?;
+        .map_err(|key: Vec<u8>| anyhow::anyhow!("invalid public key length: {}", key.len()))?;
+    verify_env_encrypt_public_key(
+        &public_key,
+        &response.signature_v1,
+        &app_id,
+        response.timestamp,
+        &args.kms_pubkey,
+        args.max_signature_age,
+    )?;
 
     crypto::dh_encrypt_stream(
         public_key,
@@ -817,7 +820,80 @@ async fn cmd_encrypt(args: EncryptArgs) -> Result<()> {
         open_output(args.output.as_deref())?,
         args.chunk_size,
     )
-    .context("Failed to encrypt stream")
+    .context("failed to encrypt stream")
+}
+
+fn normalize_prpc_url(url: &str) -> String {
+    let url = url.trim_end_matches('/');
+    if url.ends_with("/prpc") {
+        url.to_string()
+    } else {
+        format!("{url}/prpc")
+    }
+}
+
+fn decode_hex_ciphertext(input: &[u8]) -> Result<Vec<u8>> {
+    hex_decode(
+        std::str::from_utf8(input)
+            .context("hex ciphertext is not valid UTF-8")?
+            .trim(),
+    )
+    .context("failed to decode hex ciphertext")
+}
+
+fn verify_env_encrypt_public_key(
+    public_key: &[u8; 32],
+    signature: &[u8],
+    app_id: &[u8; 20],
+    timestamp: u64,
+    trusted_pubkey: &str,
+    max_age: u64,
+) -> Result<()> {
+    use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
+    use sha3::{Digest, Keccak256};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    const FUTURE_SKEW: u64 = 60;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system time is before the Unix epoch")?
+        .as_secs();
+    anyhow::ensure!(
+        timestamp <= now.saturating_add(FUTURE_SKEW),
+        "kms public-key signature timestamp is too far in the future"
+    );
+    anyhow::ensure!(
+        now.saturating_sub(timestamp) <= max_age,
+        "kms public-key signature is too old"
+    );
+    anyhow::ensure!(signature.len() == 65, "invalid KMS signature length");
+
+    let signature_value =
+        Signature::from_slice(&signature[..64]).context("invalid KMS signature")?;
+    let recovery_id = RecoveryId::from_byte(signature[64]).context("invalid KMS recovery ID")?;
+    let digest = Keccak256::new_with_prefix(
+        [
+            b"dstack-env-encrypt-pubkey".as_slice(),
+            b":".as_slice(),
+            app_id.as_slice(),
+            &timestamp.to_be_bytes(),
+            public_key.as_slice(),
+        ]
+        .concat(),
+    );
+    let recovered = VerifyingKey::recover_from_digest(digest, &signature_value, recovery_id)
+        .context("failed to recover KMS signer public key")?;
+
+    let trusted_pubkey = trusted_pubkey.strip_prefix("0x").unwrap_or(trusted_pubkey);
+    let trusted_pubkey =
+        hex_decode(trusted_pubkey).context("invalid trusted KMS public key hex")?;
+    let trusted =
+        VerifyingKey::from_sec1_bytes(&trusted_pubkey).context("invalid trusted KMS public key")?;
+    anyhow::ensure!(
+        recovered == trusted,
+        "kms public-key signature was made by an untrusted signer"
+    );
+    Ok(())
 }
 
 fn read_all_input(path: Option<&Path>) -> Result<Vec<u8>> {
@@ -825,7 +901,7 @@ fn read_all_input(path: Option<&Path>) -> Result<Vec<u8>> {
     let mut data = Vec::new();
     input
         .read_to_end(&mut data)
-        .context("Failed to read input")?;
+        .context("failed to read input")?;
     Ok(data)
 }
 
@@ -833,7 +909,7 @@ fn open_input(path: Option<&Path>) -> Result<Box<dyn Read>> {
     match path {
         Some(path) => {
             Ok(Box::new(fs::File::open(path).with_context(|| {
-                format!("Failed to open input {}", path.display())
+                format!("failed to open input {}", path.display())
             })?))
         }
         None => Ok(Box::new(io::stdin())),
@@ -852,7 +928,7 @@ fn open_output(path: Option<&Path>) -> Result<Box<dyn Write>> {
                 .truncate(true)
                 .mode(0o600)
                 .open(path)
-                .with_context(|| format!("Failed to open output {}", path.display()))?;
+                .with_context(|| format!("failed to open output {}", path.display()))?;
             file.set_permissions(std::fs::Permissions::from_mode(0o600))
                 .with_context(|| format!("Failed to set permissions on {}", path.display()))?;
             Ok(Box::new(file))
@@ -1650,5 +1726,93 @@ mod tests {
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[test]
+    fn prpc_url_normalization_handles_trailing_slashes() {
+        assert_eq!(
+            normalize_prpc_url("https://kms.example.com/prpc/"),
+            "https://kms.example.com/prpc"
+        );
+        assert_eq!(
+            normalize_prpc_url("https://kms.example.com/"),
+            "https://kms.example.com/prpc"
+        );
+    }
+
+    #[test]
+    fn decrypt_auto_detects_stream_and_falls_back_to_legacy() {
+        use x25519_dalek::{PublicKey, StaticSecret};
+
+        let secret = StaticSecret::random_from_rng(rand::thread_rng());
+        let mut encrypted = Vec::new();
+        crypto::dh_encrypt_stream(
+            PublicKey::from(&secret).to_bytes(),
+            b"stream plaintext".as_slice(),
+            &mut encrypted,
+            4,
+        )
+        .unwrap();
+        let mut decrypted = Vec::new();
+        decrypt_auto(secret.to_bytes(), encrypted.as_slice(), &mut decrypted).unwrap();
+        assert_eq!(decrypted, b"stream plaintext");
+
+        let legacy_secret: [u8; 32] =
+            hex_decode("7c282bf94b35dc47801dc953bfa0896fc2bd313381d3e8eca4e42f6536d2a96f")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        let legacy_ciphertext = hex_decode("0bd18749612f4c8b9dd583c7d6a646b90abd34e3c731a7708d0caf9039095641e1f0948e775f0b7351788db7f246d51806954626dcccb6a60d64665ca3715c6bef75616cab476d27bba04080361200d6a58cec").unwrap();
+        let mut legacy_plaintext = Vec::new();
+        decrypt_auto(
+            legacy_secret,
+            legacy_ciphertext.as_slice(),
+            &mut legacy_plaintext,
+        )
+        .unwrap();
+        assert_eq!(legacy_plaintext, b"[{\"key\":\"\",\"value\":\"\"}]");
+        assert_eq!(decode_hex_ciphertext(b" 00ff\n").unwrap(), [0, 255]);
+    }
+
+    #[test]
+    fn env_encrypt_public_key_requires_the_trusted_signer() {
+        use k256::ecdsa::SigningKey as EcdsaSigningKey;
+        use sha3::{Digest, Keccak256};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let signer = EcdsaSigningKey::random(&mut rand::thread_rng());
+        let app_id = [0x11; 20];
+        let public_key = [0x22; 32];
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let digest = Keccak256::new_with_prefix(
+            [
+                b"dstack-env-encrypt-pubkey".as_slice(),
+                b":".as_slice(),
+                app_id.as_slice(),
+                &timestamp.to_be_bytes(),
+                public_key.as_slice(),
+            ]
+            .concat(),
+        );
+        let (signature, recovery_id) = signer.sign_digest_recoverable(digest).unwrap();
+        let mut signature = signature.to_vec();
+        signature.push(recovery_id.to_byte());
+        let trusted = hex::encode(signer.verifying_key().to_sec1_bytes());
+
+        verify_env_encrypt_public_key(&public_key, &signature, &app_id, timestamp, &trusted, 300)
+            .unwrap();
+        let untrusted = EcdsaSigningKey::random(&mut rand::thread_rng());
+        assert!(verify_env_encrypt_public_key(
+            &public_key,
+            &signature,
+            &app_id,
+            timestamp,
+            &hex::encode(untrusted.verifying_key().to_sec1_bytes()),
+            300,
+        )
+        .is_err());
     }
 }

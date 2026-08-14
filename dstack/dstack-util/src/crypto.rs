@@ -27,13 +27,13 @@ pub fn dh_decrypt(secret: [u8; 32], ciphertext: &[u8]) -> Result<Vec<u8>> {
     // Extract components (matching JS implementation)
     let ephemeral_pubkey = ciphertext
         .get(..32)
-        .ok_or(anyhow!("Invalid ephemeral public key length"))?
+        .ok_or(anyhow!("invalid ephemeral public key length"))?
         .try_into()
-        .map_err(|_| anyhow!("Invalid ephemeral public key length"))?;
-    let iv = &ciphertext.get(32..44).ok_or(anyhow!("Invalid IV length"))?;
+        .map_err(|_| anyhow!("invalid ephemeral public key length"))?;
+    let iv = &ciphertext.get(32..44).ok_or(anyhow!("invalid IV length"))?;
     let ciphertext = &ciphertext
         .get(44..)
-        .ok_or(anyhow!("Invalid ciphertext length"))?;
+        .ok_or(anyhow!("invalid ciphertext length"))?;
 
     // Derive shared secret using X25519
     let shared_secret = dh_agree(secret, ephemeral_pubkey);
@@ -43,7 +43,7 @@ pub fn dh_decrypt(secret: [u8; 32], ciphertext: &[u8]) -> Result<Vec<u8>> {
 
     // Create AES-GCM cipher
     let cipher = Aes256Gcm::new_from_slice(&shared_secret)
-        .map_err(|e| anyhow!("Failed to create cipher: {}", e))?;
+        .map_err(|e| anyhow!("failed to create cipher: {}", e))?;
 
     // Decrypt using AES-GCM
     cipher
@@ -75,11 +75,11 @@ pub fn dh_encrypt_stream(
 ) -> Result<()> {
     ensure!(
         (1..=MAX_CHUNK_SIZE).contains(&chunk_size),
-        "Chunk size must be between 1 and {MAX_CHUNK_SIZE} bytes"
+        "chunk size must be between 1 and {MAX_CHUNK_SIZE} bytes"
     );
 
     let mut ephemeral_secret = [0u8; 32];
-    getrandom::fill(&mut ephemeral_secret).context("Failed to generate ephemeral secret")?;
+    getrandom::fill(&mut ephemeral_secret).context("failed to generate ephemeral secret")?;
     let ephemeral_secret = StaticSecret::from(ephemeral_secret);
     let ephemeral_public_key = PublicKey::from(&ephemeral_secret).to_bytes();
     let remote_public_key = PublicKey::from(remote_public_key);
@@ -91,10 +91,10 @@ pub fn dh_encrypt_stream(
         "invalid X25519 shared secret"
     );
     let cipher = Aes256Gcm::new_from_slice(&shared_secret)
-        .map_err(|e| anyhow!("Failed to create cipher: {e}"))?;
+        .map_err(|e| anyhow!("failed to create cipher: {e}"))?;
 
     let mut nonce_prefix = [0u8; 8];
-    getrandom::fill(&mut nonce_prefix).context("Failed to generate nonce prefix")?;
+    getrandom::fill(&mut nonce_prefix).context("failed to generate nonce prefix")?;
     let mut header = [0u8; HEADER_LEN];
     header[..STREAM_MAGIC.len()].copy_from_slice(STREAM_MAGIC);
     header[STREAM_MAGIC.len()..STREAM_MAGIC.len() + 32].copy_from_slice(&ephemeral_public_key);
@@ -102,7 +102,7 @@ pub fn dh_encrypt_stream(
     header[STREAM_MAGIC.len() + 40..].copy_from_slice(&(chunk_size as u32).to_be_bytes());
     output
         .write_all(&header)
-        .context("Failed to write header")?;
+        .context("failed to write header")?;
 
     let mut current = vec![0u8; chunk_size];
     let mut next = vec![0u8; chunk_size];
@@ -125,19 +125,19 @@ pub fn dh_encrypt_stream(
                     aad: &aad,
                 },
             )
-            .map_err(|e| anyhow!("Failed to encrypt chunk {index}: {e}"))?;
+            .map_err(|e| anyhow!("failed to encrypt chunk {index}: {e}"))?;
         output
             .write_all(&frame_header)
             .and_then(|_| output.write_all(&encrypted))
-            .with_context(|| format!("Failed to write chunk {index}"))?;
+            .with_context(|| format!("failed to write chunk {index}"))?;
         if final_chunk {
             break;
         }
-        index = index.checked_add(1).context("Too many chunks")?;
+        index = index.checked_add(1).context("too many chunks")?;
         std::mem::swap(&mut current, &mut next);
         current_len = next_len;
     }
-    output.flush().context("Failed to flush encrypted output")?;
+    output.flush().context("failed to flush encrypted output")?;
     Ok(())
 }
 
@@ -146,7 +146,7 @@ fn read_chunk(input: &mut impl Read, buffer: &mut [u8]) -> Result<usize> {
     while read < buffer.len() {
         match input
             .read(&mut buffer[read..])
-            .context("Failed to read input")?
+            .context("failed to read input")?
         {
             0 => break,
             n => read += n,
@@ -165,7 +165,7 @@ pub fn dh_decrypt_stream(
     header[..STREAM_MAGIC.len()].copy_from_slice(STREAM_MAGIC);
     input
         .read_exact(&mut header[STREAM_MAGIC.len()..])
-        .context("Truncated stream header")?;
+        .context("truncated stream header")?;
     let mut ephemeral_public_key = [0u8; 32];
     ephemeral_public_key.copy_from_slice(&header[STREAM_MAGIC.len()..STREAM_MAGIC.len() + 32]);
     let mut nonce_prefix = [0u8; 8];
@@ -175,7 +175,7 @@ pub fn dh_decrypt_stream(
     let chunk_size = u32::from_be_bytes(chunk_size_bytes) as usize;
     ensure!(
         (1..=MAX_CHUNK_SIZE).contains(&chunk_size),
-        "Invalid chunk size: {chunk_size}"
+        "invalid chunk size: {chunk_size}"
     );
 
     let shared_secret = dh_agree(secret, ephemeral_public_key);
@@ -184,29 +184,29 @@ pub fn dh_decrypt_stream(
         "invalid X25519 shared secret"
     );
     let cipher = Aes256Gcm::new_from_slice(&shared_secret)
-        .map_err(|e| anyhow!("Failed to create cipher: {e}"))?;
+        .map_err(|e| anyhow!("failed to create cipher: {e}"))?;
 
     let mut index = 0u32;
     loop {
         let mut frame_header = [0u8; 5];
         input
             .read_exact(&mut frame_header)
-            .with_context(|| format!("Missing final chunk at chunk {index}"))?;
-        ensure!(frame_header[0] & !FINAL_CHUNK == 0, "Invalid chunk flags");
+            .with_context(|| format!("missing final chunk at chunk {index}"))?;
+        ensure!(frame_header[0] & !FINAL_CHUNK == 0, "invalid chunk flags");
         let final_chunk = frame_header[0] == FINAL_CHUNK;
         let mut plaintext_len_bytes = [0u8; 4];
         plaintext_len_bytes.copy_from_slice(&frame_header[1..]);
         let plaintext_len = u32::from_be_bytes(plaintext_len_bytes) as usize;
-        ensure!(plaintext_len <= chunk_size, "Chunk {index} is too large");
+        ensure!(plaintext_len <= chunk_size, "chunk {index} is too large");
         ensure!(
             final_chunk || plaintext_len == chunk_size,
-            "Non-final chunk {index} has an invalid length"
+            "non-final chunk {index} has an invalid length"
         );
 
         let mut encrypted = vec![0u8; plaintext_len + 16];
         input
             .read_exact(&mut encrypted)
-            .with_context(|| format!("Truncated chunk {index}"))?;
+            .with_context(|| format!("truncated chunk {index}"))?;
         let nonce = stream_nonce(&nonce_prefix, index);
         let aad = stream_aad(&header, index, &frame_header);
         let plaintext = cipher
@@ -217,21 +217,21 @@ pub fn dh_decrypt_stream(
                     aad: &aad,
                 },
             )
-            .map_err(|e| anyhow!("Failed to decrypt chunk {index}: {e}"))?;
+            .map_err(|e| anyhow!("failed to decrypt chunk {index}: {e}"))?;
         output
             .write_all(&plaintext)
-            .with_context(|| format!("Failed to write chunk {index}"))?;
+            .with_context(|| format!("failed to write chunk {index}"))?;
 
         if final_chunk {
             let mut trailing = [0u8; 1];
             ensure!(
-                input.read(&mut trailing).context("Failed to read input")? == 0,
-                "Trailing data after final chunk"
+                input.read(&mut trailing).context("failed to read input")? == 0,
+                "trailing data after final chunk"
             );
-            output.flush().context("Failed to flush plaintext output")?;
+            output.flush().context("failed to flush plaintext output")?;
             return Ok(());
         }
-        index = index.checked_add(1).context("Too many chunks")?;
+        index = index.checked_add(1).context("too many chunks")?;
     }
 }
 

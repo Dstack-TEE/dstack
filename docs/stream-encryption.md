@@ -49,11 +49,14 @@ Encrypt data after retrieving the app public key over verified TLS:
 dstack-util encrypt \
   --kms-url https://kms.example.com \
   --app-id "$APP_ID" \
+  --kms-pubkey "$TRUSTED_KMS_SIGNER_PUBKEY" \
   --input plaintext.bin \
   --output ciphertext.bin
 ```
 
-For a KMS using a private CA, pass `--root-ca ca.pem`. Decrypt inside the CVM:
+`--kms-pubkey` is the trusted compressed secp256k1 public key used to verify the
+KMS response's timestamped signature. For a KMS using a private CA, also pass
+`--root-ca ca.pem`. Decrypt inside the CVM:
 
 ```bash
 dstack-util decrypt --input ciphertext.bin --output plaintext.bin
@@ -63,3 +66,8 @@ dstack-util decrypt --input ciphertext.bin --output plaintext.bin
 handled as the legacy encrypted-environment format. Hex input remains available
 through `--hex`, but it is decoded in memory and should not be used for large
 files.
+
+Successfully authenticated chunks are written as they are processed. If a
+later chunk is corrupt or the final frame is missing, stdout or a file may
+therefore contain an authenticated but incomplete plaintext prefix. Callers
+must check the command's exit status and discard all output on failure.
