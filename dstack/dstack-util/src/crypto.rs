@@ -10,7 +10,7 @@ use anyhow::{anyhow, ensure, Context, Result};
 use std::io::{Read, Write};
 use x25519_dalek::{PublicKey, StaticSecret};
 
-pub const STREAM_MAGIC: &[u8; 16] = b"dstack-stream-v1";
+pub const STREAM_MAGIC: &[u8; 9] = b"dstkscrt0";
 pub const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
 pub const MAX_CHUNK_SIZE: usize = 16 * 1024 * 1024;
 const FINAL_CHUNK: u8 = 1;
