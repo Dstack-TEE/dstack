@@ -67,11 +67,24 @@ def main() -> int:
     if health.returncode:
         raise RuntimeError("VMM health probe failed before browser workflow")
     command = [str(x) for x in fixture["browser_session_argv"]]
-    browser = subprocess.run(command, text=True, capture_output=True, timeout=240, check=False, env=env)
+    if command and command[0] == "npx" and "--offline" not in command:
+        command.insert(1, "--offline")
+    browser_timeout = ""
+    try:
+        browser = subprocess.run(command, text=True, capture_output=True, timeout=240, check=False, env=env)
+    except subprocess.TimeoutExpired as error:
+        browser_timeout = "case-owned browser workflow timed out after 240 seconds"
+        browser = subprocess.CompletedProcess(
+            command,
+            124,
+            stdout=error.stdout or "",
+            stderr=error.stderr or "",
+        )
     evidence: dict[str,Any] = {"browser_returncode":browser.returncode,"browser_diagnostic_tail":(browser.stdout+browser.stderr)[-5000:],"vm_processes_started":1,"image_build_tested":False}
     failures: list[str] = []; steps: list[dict[str,Any]] = []; vm_id: str|None = None
     base = str(vmm["rpc_url"]).rstrip("/"); routes=vmm["json_prpc_routes"]; list_command=[str(x) for x in vmm["commands"]["list_vms"]]
     try:
+        if browser_timeout: raise AssertionError(browser_timeout)
         if browser.returncode or not output.is_file(): raise AssertionError("case-owned browser workflow failed")
         observed = json.loads(output.read_text()); rows={key for key,value in observed.get("rows",{}).items() if value is True}
         if rows != EXPECTED_ROWS: raise AssertionError(f"browser rows mismatch: missing={sorted(EXPECTED_ROWS-rows)}")
