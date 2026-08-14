@@ -135,10 +135,11 @@ check test "$restart_output" = restart-ok
 check docker stop "$REGISTRY" >/dev/null
 overlay_cache_output=$(ctr-remote -n "$BASELINE_NS" run --rm --snapshotter overlayfs "$NORMAL" overlay-cached sh -c 'printf overlay-cache-ok')
 check test "$overlay_cache_output" = overlay-cache-ok
-set +e
-ctr-remote -n "$NS" images rpull --plain-http --snapshotter "$SNAPSHOTTER" 127.0.0.1:5000/dstack/busybox:uncached >"$ROOT/unavailable.log" 2>&1
-unavailable_rc=$?
-set -e
+if ctr-remote -n "$NS" images rpull --plain-http --snapshotter "$SNAPSHOTTER" 127.0.0.1:5000/dstack/busybox:uncached >"$ROOT/unavailable.log" 2>&1; then
+  unavailable_rc=0
+else
+  unavailable_rc=$?
+fi
 check test "$unavailable_rc" -ne 0
 check sh -c "grep -Eq 'connect: connection refused|failed to resolve|connection refused' '$ROOT/unavailable.log'"
 check docker start "$REGISTRY" >/dev/null
@@ -167,25 +168,30 @@ check test "$blob_size" -gt 128
 for offset in $(seq 16 32 $((blob_size - 16))); do
   printf X | dd of="$blob" bs=1 seek="$offset" count=1 conv=notrunc status=none
 done
-set +e
-ctr-remote -n "$CORRUPT_NS" images rpull --plain-http --snapshotter "$SNAPSHOTTER" "$CORRUPT_LAZY" >"$ROOT/corrupt.log" 2>&1
-corrupt_pull_rc=$?
+if ctr-remote -n "$CORRUPT_NS" images rpull --plain-http --snapshotter "$SNAPSHOTTER" "$CORRUPT_LAZY" >"$ROOT/corrupt.log" 2>&1; then
+  corrupt_pull_rc=0
+else
+  corrupt_pull_rc=$?
+fi
 corrupt_run_rc=0
 if test "$corrupt_pull_rc" -eq 0; then
-  ctr-remote -n "$CORRUPT_NS" run --rm --snapshotter "$SNAPSHOTTER" "$CORRUPT_LAZY" corrupt-run cat /integrity-marker >>"$ROOT/corrupt.log" 2>&1
-  corrupt_run_rc=$?
+  if ctr-remote -n "$CORRUPT_NS" run --rm --snapshotter "$SNAPSHOTTER" "$CORRUPT_LAZY" corrupt-run cat /integrity-marker >>"$ROOT/corrupt.log" 2>&1; then
+    corrupt_run_rc=0
+  else
+    corrupt_run_rc=$?
+  fi
 fi
-set -e
 check sh -c "test '$corrupt_pull_rc' -ne 0 || test '$corrupt_run_rc' -ne 0"
 check sh -c "grep -Eqi 'digest|checksum|unexpected commit|failed to copy|invalid|failed to mount' '$ROOT/corrupt.log'"
 
 # With the snapshotter unavailable, its path fails closed. The explicit overlay
 # path remains available and is the truthful fallback (there is no silent fallback).
 check systemctl stop "$UNIT"
-set +e
-ctr-remote -n "$STOPPED_NS" images rpull --plain-http --snapshotter "$SNAPSHOTTER" "$LAZY" >"$ROOT/stopped.log" 2>&1
-stopped_rc=$?
-set -e
+if ctr-remote -n "$STOPPED_NS" images rpull --plain-http --snapshotter "$SNAPSHOTTER" "$LAZY" >"$ROOT/stopped.log" 2>&1; then
+  stopped_rc=0
+else
+  stopped_rc=$?
+fi
 check test "$stopped_rc" -ne 0
 check sh -c "grep -Eqi 'connect|snapshotter|socket|unavailable' '$ROOT/stopped.log'"
 fallback_output=$(ctr-remote -n "$BASELINE_NS" run --rm --snapshotter overlayfs "$NORMAL" overlay-fallback sh -c 'printf fallback-ok')
