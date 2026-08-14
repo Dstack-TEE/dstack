@@ -8,6 +8,8 @@ REGISTRY_ID=${4:?registry archive image id}
 UNIT=${5:?snapshotter unit}
 SNAPSHOTTER=${6:?snapshotter name}
 ROOT=/run/dstack-test-stargz
+SNAPSHOTTER_ROOT=/var/lib/containerd-stargz-grpc
+SNAPSHOTTER_STORAGE=/dstack/persistent/var/lib/containerd-stargz-grpc
 REGISTRY=dstack-stargz-registry
 NORMAL=127.0.0.1:5000/dstack/busybox:normal
 LAZY=127.0.0.1:5000/dstack/busybox:estargz
@@ -25,12 +27,19 @@ unit_override=false
 check() { "$@"; checks=$((checks + 1)); }
 clear_snapshotter_state() {
   systemctl stop "$UNIT" >/dev/null 2>&1 || true
-  { findmnt -Rno TARGET /var/lib/containerd-stargz-grpc 2>/dev/null || true; } \
+  { findmnt -Rno TARGET "$SNAPSHOTTER_ROOT" 2>/dev/null || true; } \
     | sort -r \
     | while IFS= read -r target; do
+        test "$target" = "$SNAPSHOTTER_ROOT" && continue
         umount -l -- "$target" >/dev/null 2>&1 || true
       done
-  rm -rf /var/lib/containerd-stargz-grpc/* /run/containerd-stargz-grpc
+  rm -rf "${SNAPSHOTTER_ROOT:?}"/* /run/containerd-stargz-grpc
+}
+prepare_snapshotter_storage() {
+  mkdir -p "$SNAPSHOTTER_ROOT" "$SNAPSHOTTER_STORAGE"
+  if ! mountpoint -q "$SNAPSHOTTER_ROOT"; then
+    mount --bind "$SNAPSHOTTER_STORAGE" "$SNAPSHOTTER_ROOT"
+  fi
 }
 failure_diagnostics() {
   rc=$?
@@ -67,6 +76,8 @@ cleanup() {
   done
   if $unit_override; then
     clear_snapshotter_state
+    umount -l -- "$SNAPSHOTTER_ROOT" >/dev/null 2>&1 || true
+    rm -rf "$SNAPSHOTTER_STORAGE"
     rm -rf "/run/systemd/system/$UNIT.d"
     systemctl daemon-reload
     systemctl start "$UNIT" >/dev/null 2>&1 || true
@@ -76,7 +87,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$ROOT/registry"
-for binary in ctr ctr-remote nerdctl containerd-stargz-grpc curl findmnt jq sha256sum umount; do check command -v "$binary" >/dev/null; done
+for binary in ctr ctr-remote nerdctl containerd-stargz-grpc curl findmnt jq mount mountpoint sha256sum umount; do check command -v "$binary" >/dev/null; done
 check test "$(docker image inspect "$PAYLOAD_IMAGE" --format '{{.Id}}')" = "$PAYLOAD_ID"
 actual_registry_id=$(docker image inspect "$REGISTRY_IMAGE" --format '{{.Id}}')
 check test "$actual_registry_id" = "$REGISTRY_ID"
@@ -96,6 +107,7 @@ ExecCondition=/bin/true
 EOT
 unit_override=true
 systemctl daemon-reload
+prepare_snapshotter_storage
 clear_snapshotter_state
 check systemctl start "$UNIT"
 check wait_snapshotter
