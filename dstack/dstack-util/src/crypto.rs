@@ -11,14 +11,16 @@ use binrw::{binrw, io::NoSeek, BinRead, BinWrite};
 use std::io::{Cursor, Read, Write};
 use x25519_dalek::{PublicKey, StaticSecret};
 
-pub const STREAM_MAGIC: &[u8; 9] = b"dstkscrt0";
+pub const STREAM_MAGIC: &[u8; 8] = b"dstkscrt";
 pub const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
 pub const MAX_CHUNK_SIZE: usize = 16 * 1024 * 1024;
+const STREAM_VERSION: u8 = 0;
 const FINAL_CHUNK: u8 = 1;
 
 #[binrw]
 #[brw(little)]
 struct StreamHeader {
+    version: u8,
     ephemeral_public_key: [u8; 32],
     nonce_prefix: [u8; 8],
     chunk_size: u32,
@@ -119,6 +121,7 @@ pub fn dh_encrypt_stream(
     let mut nonce_prefix = [0u8; 8];
     getrandom::fill(&mut nonce_prefix).context("failed to generate nonce prefix")?;
     let header = StreamHeader {
+        version: STREAM_VERSION,
         ephemeral_public_key,
         nonce_prefix,
         chunk_size: chunk_size as u32,
@@ -192,6 +195,11 @@ pub fn dh_decrypt_stream(
 ) -> Result<()> {
     let header =
         StreamHeader::read(&mut NoSeek::new(&mut input)).context("invalid stream header")?;
+    ensure!(
+        header.version == STREAM_VERSION,
+        "unsupported stream version: {}",
+        header.version
+    );
     let chunk_size = header.chunk_size as usize;
     ensure!(
         (1..=MAX_CHUNK_SIZE).contains(&chunk_size),
@@ -325,6 +333,15 @@ mod tests {
         let public_key = PublicKey::from(&secret).to_bytes();
         let mut encrypted = Vec::new();
         dh_encrypt_stream(public_key, b"hello".as_slice(), &mut encrypted, 4).unwrap();
+
+        let mut unknown_version = encrypted.clone();
+        unknown_version[STREAM_MAGIC.len()] = STREAM_VERSION + 1;
+        assert!(dh_decrypt_stream(
+            secret.to_bytes(),
+            &unknown_version[STREAM_MAGIC.len()..],
+            Vec::new(),
+        )
+        .is_err());
 
         let mut tampered = encrypted.clone();
         *tampered.last_mut().unwrap() ^= 1;
