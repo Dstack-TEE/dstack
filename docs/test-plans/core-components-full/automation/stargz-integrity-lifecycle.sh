@@ -192,6 +192,9 @@ check test -f "$blob"
 blob_size=$(stat -c %s "$blob")
 check test "$blob_size" -gt 128
 truncate -s 0 "$blob"
+clear_snapshotter_state
+check systemctl start "$UNIT"
+check wait_snapshotter
 if ctr-remote -n "$CORRUPT_NS" images rpull --plain-http --snapshotter "$SNAPSHOTTER" "$CORRUPT_LAZY" >"$ROOT/corrupt.log" 2>&1; then
   corrupt_pull_rc=0
 else
