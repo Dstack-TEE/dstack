@@ -7,7 +7,7 @@ use std::ops::Deref;
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use dstack_types::AppCompose;
 use dstack_vmm_rpc as rpc;
 use dstack_vmm_rpc::vmm_server::{VmmRpc, VmmServer};
@@ -39,6 +39,15 @@ fn hex_sha256(data: &str) -> String {
 
 pub struct RpcHandler {
     app: App,
+}
+
+/// Flatten an anyhow error chain before it crosses the RPC boundary.
+///
+/// Some pRPC transports only retain an error's `Display` representation. An
+/// outer context such as "Failed to start VM" would otherwise hide the GPU
+/// reset failure that operators need to diagnose the request.
+fn rpc_error(context: &str, error: anyhow::Error) -> anyhow::Error {
+    anyhow!("{context}: {error:#}")
 }
 
 impl Deref for RpcHandler {
@@ -580,7 +589,7 @@ impl VmmRpc for RpcHandler {
             if let Err(err) = fs::remove_dir_all(&work_dir) {
                 warn!("Failed to remove work dir: {}", err);
             }
-            return Err(err);
+            return Err(rpc_error("Failed to create VM", err));
         }
 
         Ok(Id { id })
@@ -590,7 +599,7 @@ impl VmmRpc for RpcHandler {
         self.app
             .start_vm(&request.id)
             .await
-            .context("Failed to start VM")?;
+            .map_err(|error| rpc_error("Failed to start VM", error))?;
         Ok(())
     }
 
@@ -1063,6 +1072,18 @@ impl RpcCall<App> for RpcHandler {
 mod tests {
     use super::*;
     use rocket::figment::Figment;
+
+    #[test]
+    fn rpc_error_preserves_the_full_error_chain_in_display() {
+        let error = anyhow!("PCI config write failed")
+            .context("failed to sanitize GPU using bridge 0000:00:01.0");
+        let error = rpc_error("Failed to start VM", error);
+
+        assert_eq!(
+            error.to_string(),
+            "Failed to start VM: failed to sanitize GPU using bridge 0000:00:01.0: PCI config write failed"
+        );
+    }
 
     fn test_cvm_config() -> CvmConfig {
         let config: crate::config::Config = Figment::from(crate::config::load_config_figment(None))
