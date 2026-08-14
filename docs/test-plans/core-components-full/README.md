@@ -3,6 +3,8 @@
 <a id="core-components-test-guide"></a>
 # dstack Core Components Full Test Plan
 
+The post-baseline merged-PR review is recorded in [`../../testing/core-components-post-baseline-pr-audit.md`](../../testing/core-components-post-baseline-pr-audit.md).
+
 ## 1. Objective and scope
 
 This plan is a source-derived, full functional audit of the dstack guest OS, VMM, KMS, gateway, verifier, and their trust and compatibility boundaries. It covers every protobuf RPC method present at authoring time plus non-RPC boot, configuration, storage, networking, cryptographic, measurement, proxy, certificate, cluster, UI, operational, recovery, upgrade, and security behavior found in the component source trees.

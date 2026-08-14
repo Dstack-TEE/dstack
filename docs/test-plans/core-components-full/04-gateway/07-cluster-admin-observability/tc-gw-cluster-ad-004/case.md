@@ -64,6 +64,10 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression matrix
+
+Scrape the admin metrics listener before and after valid, invalid, corrupt, future-dated, and recovered KV observations. Assert stable names, escaping, aggregation, no self-increment on scrape, one-shot stuck-record reporting, and no high-cardinality instance labels.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
