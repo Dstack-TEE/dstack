@@ -27,3 +27,8 @@ PR #841 was last fully exercised against `next` at `cb961ad7877b0f2f60abfba73fdc
 | #1051 | Lite-TDX ACPI verification | `tc-ver-image-meas-003`, `tc-ver-input-plat-003` |
 
 The three new Gateway Admin methods were absent from the previous API inventory and were the only newly merged public RPC surface without a dedicated case. This branch adds their complete API inventory, case specifications, deterministic authenticated smoke coverage, and recovery matrices. Existing cases are tightened below for the non-RPC regression surfaces.
+
+The audit also refreshes deterministic harness expectations invalidated by the
+merged source changes: the renamed TDX simulator atomicity test, the renamed
+lite-TDX verifier test, the expanded verifier and RA-TLS unit-test totals, and
+the QEMU 10 RTMR0 delta introduced by the new compatibility profile.

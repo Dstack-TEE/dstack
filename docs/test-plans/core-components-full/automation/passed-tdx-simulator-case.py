@@ -30,7 +30,7 @@ def atomic_json(path: pathlib.Path, value: Any) -> None:
 
 
 def main() -> int:
-    """Run TDX state, filesystem-boundary, and process-lifecycle tests."""
+    """Run TDX state, input-boundary, and process-lifecycle tests."""
     case_id = os.environ["DSTACK_TEST_CASE_ID"]
     if case_id != CASE_ID:
         raise SystemExit(f"unsupported case: {case_id}")
@@ -101,7 +101,7 @@ def main() -> int:
         "named_boundaries_executed": all(
             name in combined
             for name in (
-                "tdx::tests::filesystem_boundaries_are_failure_atomic ... ok",
+                "tdx::tests::state_updates_are_failure_atomic ... ok",
                 "tdx::tests::quote_tracks_report_data_and_rtmr_extensions ... ok",
                 "tdx::tests::only_rtmr_two_and_three_are_extensible ... ok",
                 "separate_simulator_process_imports_config_seed_for_tsm_platforms ... ok",
@@ -126,7 +126,7 @@ def main() -> int:
             {
                 "id": f"{case_id}-step-01",
                 "status": step_status,
-                "observed": "Quote, report-data, RTMR, CCEL, path, permission, and length boundaries were exercised.",
+                "observed": "Quote, report-data, RTMR, CCEL replay, generation overflow, and length boundaries were exercised.",
             },
             {
                 "id": f"{case_id}-step-02",
