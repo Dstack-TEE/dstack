@@ -126,10 +126,18 @@ message VmConfiguration {
 
 // Per-VM networking configuration.
 message NetworkingConfig {
-  // Networking mode: "bridge", "user"
+  // Networking mode: "bridge", "user", or "custom"
   string mode = 1;
-  // Per-VM bridge interface name. Empty = node default bridge.
+  // Per-VM bridge interface name. Empty = node default bridge. Bridge mode only.
   string bridge_name = 2;
+  // Explicit QEMU netdev string. Custom mode only, mutually exclusive with
+  // open_file.
+  string netdev = 3;
+  // Absolute path to a tap character device an external net daemon already
+  // created, e.g. "/dev/tap7498". The process manager opens it before exec and
+  // QEMU inherits it as a file descriptor. Custom mode only, mutually exclusive
+  // with netdev, and only the systemd process manager can pass the descriptor.
+  string open_file = 4;
 }
 
 // Requested GPU layout for a CVM.
@@ -186,7 +194,11 @@ message UpdateVmRequest {
   optional string image = 17;
   // Disable or re-enable TEE for an existing VM.
   optional bool no_tee = 18;
-  // Optional update networking.
+  // Optional update networking. Rejected while the VM is running: QEMU fixes
+  // its netdev at exec, so stop the VM, update, then start it. This RPC is the
+  // supported way to change networking; editing vm-manifest.json on disk
+  // bypasses the VMM's in-memory state and only takes effect once the whole
+  // VMM service restarts.
   bool update_networking = 19;
   // Networking list. Empty + update_networking=true resets to node default.
   repeated NetworkingConfig networks = 20;

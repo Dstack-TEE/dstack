@@ -1030,6 +1030,7 @@ class VmmCLI:
         no_gpus: bool = False,
         kms_urls: Optional[List[str]] = None,
         no_tee: Optional[bool] = None,
+        net: Optional[str] = None,
     ) -> None:
         """Update multiple aspects of a VM in one command."""
         # Validate: --env-file requires --kms-url
@@ -1161,6 +1162,27 @@ class VmmCLI:
             upgrade_params["update_kms_urls"] = True
             upgrade_params["kms_urls"] = kms_urls
             updates.append(f"KMS URLs ({len(kms_urls)})")
+
+        # Networking only takes effect at the next start, and the VMM rejects
+        # this for a running VM: stop the VM before updating it.
+        if net is not None:
+            upgrade_params["update_networking"] = True
+            if net == "default":
+                upgrade_params["networks"] = []
+                updates.append("networking (node default)")
+            else:
+                mode, _, bridge_name = net.partition(":")
+                if mode not in ("user", "bridge"):
+                    raise Exception(
+                        f"--net must be user, bridge[:<bridge-name>], or default, got {net!r}"
+                    )
+                if bridge_name and mode != "bridge":
+                    raise Exception("--net bridge name is only valid for bridge mode")
+                networking = {"mode": mode}
+                if bridge_name:
+                    networking["bridge_name"] = bridge_name
+                upgrade_params["networks"] = [networking]
+                updates.append(f"networking ({net})")
 
         # handle port updates - only update if --port or --no-ports is specified
         if no_ports or ports is not None:
@@ -1972,6 +1994,16 @@ def main():
         help="Detach all GPUs from the VM",
     )
 
+    update_parser.add_argument(
+        "--net",
+        type=str,
+        help=(
+            "Networking mode: user, bridge, bridge:<bridge-name>, or default to "
+            "fall back to the node configuration. Requires a stopped VM. "
+            "Custom mode is set through the UpdateVm RPC, not this flag."
+        ),
+    )
+
     # TDX toggle
     tee_group = update_parser.add_mutually_exclusive_group()
     tee_group.add_argument(
@@ -2077,6 +2109,7 @@ def main():
             no_gpus=args.no_gpus if hasattr(args, "no_gpus") else False,
             kms_urls=args.kms_url,
             no_tee=args.no_tee,
+            net=args.net,
         )
     elif args.command == "kms":
         if not args.kms_action:
