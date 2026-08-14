@@ -400,6 +400,7 @@ fn resolve_requested_networks(
     cvm_config: &CvmConfig,
 ) -> Result<Vec<Networking>> {
     for networking in networks {
+        ensure_bridge_allowed(&networking.bridge, cvm_config)?;
         ensure_open_file_supported(&networking.open_file, cvm_config)?;
     }
     let resolved = networks
@@ -408,6 +409,25 @@ fn resolve_requested_networks(
         .collect::<Vec<_>>();
     validate_resolved_networks(&resolved)?;
     Ok(resolved)
+}
+
+/// Checks a caller-named bridge against `cvm.bridge_allowlist`.
+///
+/// Only an explicitly requested bridge is checked. An empty name inherits the
+/// node default, which the operator already chose, so putting the default in
+/// the allowlist is not required.
+fn ensure_bridge_allowed(requested: &str, cvm_config: &CvmConfig) -> Result<()> {
+    if !cvm_config.bridge_allowlist_enabled || requested.is_empty() {
+        return Ok(());
+    }
+    if cvm_config
+        .bridge_allowlist
+        .iter()
+        .any(|pattern| bridge_pattern_matches(pattern, requested))
+    {
+        return Ok(());
+    }
+    bail!("bridge '{requested}' is not in cvm.bridge_allowlist");
 }
 
 /// Rejects a pre-opened chardev on a node that cannot hand one to QEMU.
@@ -423,6 +443,13 @@ fn ensure_open_file_supported(open_file: &str, cvm_config: &CvmConfig) -> Result
     bail!(
         "networking.open_file requires the systemd process manager; set cvm.pm = \"systemd\" or \"auto\""
     )
+}
+
+fn bridge_pattern_matches(pattern: &str, bridge: &str) -> bool {
+    match pattern.strip_suffix('*') {
+        Some(prefix) => bridge.starts_with(prefix),
+        None => pattern == bridge,
+    }
 }
 
 fn has_host_bridge_interface() -> bool {
@@ -1371,6 +1398,33 @@ mod tests {
         assert!(ensure_open_file_supported("/dev/tap7498", &config).is_ok());
         config.pm = ProcessManagerBackend::Auto;
         assert!(ensure_open_file_supported("/dev/tap7498", &config).is_ok());
+    }
+
+    #[test]
+    fn bridge_allowlist_only_applies_to_an_explicitly_named_bridge() {
+        let mut config = test_cvm_config();
+        assert!(ensure_bridge_allowed("anything", &config).is_ok());
+
+        config.bridge_allowlist_enabled = true;
+        config.bridge_allowlist = vec!["dstack-br0".to_string(), "vpc-*".to_string()];
+
+        // The node default is the operator's own choice, so it stays allowed
+        // without being listed.
+        assert!(ensure_bridge_allowed("", &config).is_ok());
+        assert!(ensure_bridge_allowed("dstack-br0", &config).is_ok());
+        assert!(ensure_bridge_allowed("vpc-tenant-a", &config).is_ok());
+
+        let err = ensure_bridge_allowed("docker0", &config).unwrap_err();
+        assert!(err.to_string().contains("not in cvm.bridge_allowlist"));
+    }
+
+    #[test]
+    fn enabled_allowlist_with_no_entries_denies_every_named_bridge() {
+        let mut config = test_cvm_config();
+        config.bridge_allowlist_enabled = true;
+
+        assert!(ensure_bridge_allowed("dstack-br0", &config).is_err());
+        assert!(ensure_bridge_allowed("", &config).is_ok());
     }
 
     #[test]

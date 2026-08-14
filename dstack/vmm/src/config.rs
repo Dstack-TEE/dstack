@@ -372,6 +372,28 @@ pub struct CvmConfig {
     #[serde(default)]
     pub network_filter: NetworkFilterConfig,
 
+    /// Restricts which bridges a VM may name through `bridge_name`.
+    ///
+    /// Without it a caller can attach any VM to any existing bridge on the
+    /// host, including another tenant's: the guest then joins that L2 domain,
+    /// leases from its DHCP, and reaches its VMs. Host firewall rules are keyed
+    /// by bridge, so none of them fire — the guest is a legitimate member of
+    /// the wrong network. Off by default to keep existing nodes working; turn
+    /// it on wherever one host carries more than one tenant.
+    ///
+    /// This is a resource boundary, not an authorization policy: it narrows
+    /// "the bridge must exist" to "the bridge must be allowed", so the VMM
+    /// still only renders an already-resolved spec.
+    #[serde(default)]
+    pub bridge_allowlist_enabled: bool,
+
+    /// Bridge names a VM may request when `bridge_allowlist_enabled` is set.
+    /// A trailing `*` matches a prefix, e.g. `vpc-*`. Kept separate from the
+    /// toggle so that "enabled with an empty list" is an explicit deny-all
+    /// instead of an ambiguous "no list means no check".
+    #[serde(default)]
+    pub bridge_allowlist: Vec<String>,
+
     /// Stable namespace for TAP names when several VMMs share one host.
     /// An empty value is derived from the absolute run directory.
     #[serde(default)]
