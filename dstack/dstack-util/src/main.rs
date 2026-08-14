@@ -721,7 +721,7 @@ fn cmd_decrypt(args: DecryptArgs) -> Result<()> {
         .key_file
         .unwrap_or_else(|| host_shared_dir().join(APP_KEYS));
     let keys: AppKeys = utils::deserialize_json_file(&key_file)
-        .with_context(|| format!("Failed to load app keys from {}", key_file.display()))?;
+        .with_context(|| format!("failed to load app keys from {}", key_file.display()))?;
     let env_crypt_key: [u8; 32] = keys
         .env_crypt_key
         .try_into()
