@@ -94,7 +94,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$ROOT/registry"
-for binary in ctr ctr-remote nerdctl containerd-stargz-grpc curl findmnt jq mount mountpoint sha256sum umount; do check command -v "$binary" >/dev/null; done
+for binary in ctr ctr-remote nerdctl containerd-stargz-grpc curl findmnt jq mount mountpoint sha256sum truncate umount; do check command -v "$binary" >/dev/null; done
 check test "$(docker image inspect "$PAYLOAD_IMAGE" --format '{{.Id}}')" = "$PAYLOAD_ID"
 actual_registry_id=$(docker image inspect "$REGISTRY_IMAGE" --format '{{.Id}}')
 check test "$actual_registry_id" = "$REGISTRY_ID"
@@ -191,9 +191,7 @@ blob="$ROOT/registry/docker/registry/v2/blobs/sha256/${hex:0:2}/$hex/data"
 check test -f "$blob"
 blob_size=$(stat -c %s "$blob")
 check test "$blob_size" -gt 128
-for offset in $(seq 16 32 $((blob_size - 16))); do
-  printf X | dd of="$blob" bs=1 seek="$offset" count=1 conv=notrunc status=none
-done
+truncate -s $((blob_size / 2)) "$blob"
 if ctr-remote -n "$CORRUPT_NS" images rpull --plain-http --snapshotter "$SNAPSHOTTER" "$CORRUPT_LAZY" >"$ROOT/corrupt.log" 2>&1; then
   corrupt_pull_rc=0
 else
