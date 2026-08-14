@@ -73,6 +73,17 @@ def run(command: list[str], cwd: pathlib.Path, env: dict[str, str]) -> dict[str,
     }
 
 
+def skipped(command: list[str], reason: str) -> dict[str, Any]:
+    """Describe a command skipped after a failed prerequisite."""
+    return {
+        "command": command,
+        "returncode": None,
+        "output_bytes": 0,
+        "output_sha256": hashlib.sha256(b"").hexdigest(),
+        "output_tail": reason,
+    }
+
+
 def main() -> int:
     """Execute native tests plus the production fail-closed gate."""
     case_id = os.environ["DSTACK_TEST_CASE_ID"]
@@ -96,9 +107,16 @@ def main() -> int:
         ]
     )
     install = run([bun, "install", "--frozen-lockfile"], package, env)
-    tests = run([bun, "run", "test:run"], package, env)
-    production_env = dict(env, NODE_ENV="production", PORT="0")
-    production = run([bun, "run", "index.ts"], package, production_env)
+    test_command = [bun, "run", "test:run"]
+    production_command = [bun, "run", "index.ts"]
+    if install["returncode"] == 0:
+        tests = run(test_command, package, env)
+        production_env = dict(env, NODE_ENV="production", PORT="0")
+        production = run(production_command, package, production_env)
+    else:
+        reason = "skipped because frozen dependency installation failed"
+        tests = skipped(test_command, reason)
+        production = skipped(production_command, reason)
     checks = {
         "frozen_install": install["returncode"] == 0,
         "native_tests": tests["returncode"] == 0,
