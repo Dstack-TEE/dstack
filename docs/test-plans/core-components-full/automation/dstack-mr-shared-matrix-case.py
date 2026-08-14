@@ -225,11 +225,11 @@ def execute_matrix(
         ],
         ["rtmr0"],
     )
-    rejected(
-        "hugepage-numa-unsupported",
+    accepted(
+        "hugepage-numa-topology",
         fixture / "metadata.json",
         [*BASE_ARGS, "--hugepages"],
-        "NUMA node binding",
+        ["rtmr0"],
     )
     rejected(
         "swtpm-unsupported",
@@ -394,7 +394,7 @@ def main() -> int:
         "focus": focus,
         "matrix": matrix,
         "workspace_retained": status != "PASS",
-        "remarks": "GPU topology is functional measurement coverage only; hugepage/NUMA is an expected unsupported row on this host. No image build is exercised.",
+        "remarks": "GPU and hugepage/NUMA topology are functional measurement coverage only. No image build is exercised.",
     }
     artifact = {
         "path": "artifacts/dstack-mr-shared-matrix.json",
