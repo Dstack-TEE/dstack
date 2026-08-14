@@ -192,6 +192,9 @@ check test -f "$blob"
 blob_size=$(stat -c %s "$blob")
 check test "$blob_size" -gt 128
 truncate -s 0 "$blob"
+check docker restart "$REGISTRY" >/dev/null
+for _ in $(seq 1 40); do curl -fsS http://127.0.0.1:5000/v2/ >/dev/null && break; sleep 0.25; done
+check curl -fsS http://127.0.0.1:5000/v2/ >/dev/null
 clear_snapshotter_state
 check systemctl start "$UNIT"
 check wait_snapshotter
