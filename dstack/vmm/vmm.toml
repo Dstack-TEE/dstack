@@ -107,6 +107,16 @@ product_name = "dstack"
 # chassis_serial = ""
 # chassis_asset_tag = ""
 
+# Restrict which bridges a VM may name through NetworkingConfig.bridge_name.
+# Off by default. Without it any caller reaching the RPC can attach a VM to any
+# bridge on the host, including another tenant's: the guest joins that L2
+# domain and no host firewall rule fires, because those rules are keyed by
+# bridge and the guest is a legitimate member of the wrong network. An empty
+# name inherits cvm.networking.bridge and is always allowed. A trailing "*"
+# matches a prefix. Enabled with an empty list is an explicit deny-all.
+bridge_allowlist_enabled = false
+bridge_allowlist = []
+
 [cvm.networking]
 mode = "user"
 
@@ -202,6 +212,13 @@ state_dir = ""
 # guests can spend hours tearing down encrypted memory, so the safe default is
 # unbounded. Set a systemd time span such as "30min" to enable escalation.
 stop_timeout = "infinity"
+# Drive the calling user's own systemd manager instead of the system one. The
+# system manager only accepts these calls from root or through a polkit rule,
+# so an unprivileged VMM needs this to use cvm.pm = "systemd" at all. Requires
+# lingering for the account (loginctl enable-linger <user>), rules out cvm.user
+# (a user manager cannot change uid), and makes networking.open_file devices
+# open as this account rather than as root, so they must be owned by it.
+user_manager = false
 
 [host_api]
 ident = "dstack VMM"

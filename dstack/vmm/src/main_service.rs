@@ -28,7 +28,7 @@ use crate::app::{
     needs_swtpm, resolve_networking, validate_resolved_network, validate_resolved_networks, App,
     AttachMode, GpuConfig, GpuSpec, Manifest, PortMapping, VmWorkDir,
 };
-use crate::config::{CvmConfig, Networking, NetworkingMode};
+use crate::config::{CvmConfig, Networking, NetworkingMode, ProcessManagerBackend};
 
 fn hex_sha256(data: &str) -> String {
     use sha2::Digest;
@@ -351,16 +351,25 @@ fn resolve_volume_source(base: &Path, source: &str) -> Result<PathBuf> {
 
 fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Result<Option<Networking>> {
     let bridge = proto.bridge_name.trim().to_string();
+    let netdev = proto.netdev.trim().to_string();
+    let open_file = proto.open_file.trim().to_string();
+    let custom_fields_set = !netdev.is_empty() || !open_file.is_empty();
     let mode = match proto.mode.as_str() {
         "bridge" => NetworkingMode::Bridge,
         "user" => NetworkingMode::User,
-        "" if bridge.is_empty() => return Ok(None),
-        "" => bail!("networking mode is required when bridge is set"),
-        "custom" => bail!("custom networking mode is manifest-only"),
+        "custom" => NetworkingMode::Custom,
+        "" if bridge.is_empty() && !custom_fields_set => return Ok(None),
+        "" => bail!("networking mode is required when bridge, netdev, or open_file is set"),
         other => bail!("unsupported networking mode '{other}'"),
     };
     if mode != NetworkingMode::Bridge && !bridge.is_empty() {
         bail!("bridge_name is only valid for bridge networking mode");
+    }
+    // Rejected rather than dropped: a netdev or open_file that silently went
+    // nowhere would attach the guest to the node default network while the
+    // caller believes it asked for its own.
+    if mode != NetworkingMode::Custom && custom_fields_set {
+        bail!("netdev and open_file are only valid for custom networking mode");
     }
     Ok(Some(Networking {
         mode,
@@ -369,7 +378,8 @@ fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Result<Option<Network
         net: String::new(),
         dhcp_start: String::new(),
         restrict: false,
-        netdev: String::new(),
+        netdev,
+        open_file,
     }))
 }
 
@@ -389,12 +399,57 @@ fn resolve_requested_networks(
     networks: &[Networking],
     cvm_config: &CvmConfig,
 ) -> Result<Vec<Networking>> {
+    for networking in networks {
+        ensure_bridge_allowed(&networking.bridge, cvm_config)?;
+        ensure_open_file_supported(&networking.open_file, cvm_config)?;
+    }
     let resolved = networks
         .iter()
         .map(|networking| resolve_networking(networking, cvm_config))
         .collect::<Vec<_>>();
     validate_resolved_networks(&resolved)?;
     Ok(resolved)
+}
+
+/// Checks a caller-named bridge against `cvm.bridge_allowlist`.
+///
+/// Only an explicitly requested bridge is checked. An empty name inherits the
+/// node default, which the operator already chose, so putting the default in
+/// the allowlist is not required.
+fn ensure_bridge_allowed(requested: &str, cvm_config: &CvmConfig) -> Result<()> {
+    if !cvm_config.bridge_allowlist_enabled || requested.is_empty() {
+        return Ok(());
+    }
+    if cvm_config
+        .bridge_allowlist
+        .iter()
+        .any(|pattern| bridge_pattern_matches(pattern, requested))
+    {
+        return Ok(());
+    }
+    bail!("bridge '{requested}' is not in cvm.bridge_allowlist");
+}
+
+/// Rejects a pre-opened chardev on a node that cannot hand one to QEMU.
+///
+/// Only systemd passes file descriptors, so Supervisor would launch QEMU
+/// against whatever fd number happens to be free and attach the guest to an
+/// unrelated network. The launcher already refuses this; failing here means the
+/// VM is never stored in a shape that can only fail at start time.
+fn ensure_open_file_supported(open_file: &str, cvm_config: &CvmConfig) -> Result<()> {
+    if open_file.is_empty() || cvm_config.pm != ProcessManagerBackend::Supervisor {
+        return Ok(());
+    }
+    bail!(
+        "networking.open_file requires the systemd process manager; set cvm.pm = \"systemd\" or \"auto\""
+    )
+}
+
+fn bridge_pattern_matches(pattern: &str, bridge: &str) -> bool {
+    match pattern.strip_suffix('*') {
+        Some(prefix) => bridge.starts_with(prefix),
+        None => pattern == bridge,
+    }
 }
 
 fn has_host_bridge_interface() -> bool {
@@ -714,14 +769,19 @@ impl VmmRpc for RpcHandler {
                 .info(&request.id)
                 .await?
                 .is_some_and(|info| info.state.status.is_running());
-            if !is_running {
-                let runtime_networks = vm_work_dir.runtime_networks();
-                self.app
-                    .remove_filtered_networks(&request.id, &runtime_networks)
-                    .await
-                    .context("failed to remove previous filtered networking")?;
-                vm_work_dir.clear_runtime_networks()?;
+            // QEMU's netdev is fixed at exec, so accepting this for a running
+            // VM would persist a manifest the running guest does not use and
+            // report success for a network that did not change. The VMM keeps
+            // no pending state, so the caller stops the VM first.
+            if is_running {
+                bail!("networking can only be updated while the VM is stopped");
             }
+            let runtime_networks = vm_work_dir.runtime_networks();
+            self.app
+                .remove_filtered_networks(&request.id, &runtime_networks)
+                .await
+                .context("failed to remove previous filtered networking")?;
+            vm_work_dir.clear_runtime_networks()?;
             manifest.networks = networks;
         }
         let compose_file = fs::read_to_string(vm_work_dir.app_compose_path())
@@ -1220,7 +1280,7 @@ mod tests {
         let mut request = test_vm_configuration();
         request.networks = vec![rpc::NetworkingConfig {
             mode: "user".to_string(),
-            bridge_name: String::new(),
+            ..Default::default()
         }];
 
         let manifest = create_manifest_from_vm_config(request, &test_cvm_config()).unwrap();
@@ -1235,6 +1295,7 @@ mod tests {
         let err = networks_from_proto(&[rpc::NetworkingConfig {
             mode: "user".to_string(),
             bridge_name: "dstack-br0".to_string(),
+            ..Default::default()
         }])
         .unwrap_err();
 
@@ -1243,9 +1304,59 @@ mod tests {
 
     #[test]
     fn repeated_networks_rejects_empty_entries() {
+        let err = networks_from_proto(&[rpc::NetworkingConfig::default()]).unwrap_err();
+
+        assert!(err.to_string().contains("networking mode is required"));
+    }
+
+    #[test]
+    fn custom_networking_carries_netdev_and_open_file() {
+        let with_netdev = networks_from_proto(&[rpc::NetworkingConfig {
+            mode: "custom".to_string(),
+            netdev: "tap,id=net0,ifname=tap-a,script=no".to_string(),
+            ..Default::default()
+        }])
+        .unwrap();
+        assert_eq!(with_netdev[0].mode, NetworkingMode::Custom);
+        assert_eq!(with_netdev[0].netdev, "tap,id=net0,ifname=tap-a,script=no");
+
+        let with_open_file = networks_from_proto(&[rpc::NetworkingConfig {
+            mode: "custom".to_string(),
+            open_file: "/dev/tap7498".to_string(),
+            ..Default::default()
+        }])
+        .unwrap();
+        assert_eq!(with_open_file[0].open_file, "/dev/tap7498");
+        assert!(with_open_file[0].netdev.is_empty());
+    }
+
+    #[test]
+    fn custom_fields_are_rejected_outside_custom_mode() {
+        for proto in [
+            rpc::NetworkingConfig {
+                mode: "bridge".to_string(),
+                bridge_name: "dstack-br0".to_string(),
+                netdev: "tap,id=net0".to_string(),
+                ..Default::default()
+            },
+            rpc::NetworkingConfig {
+                mode: "user".to_string(),
+                open_file: "/dev/tap7498".to_string(),
+                ..Default::default()
+            },
+        ] {
+            let err = networks_from_proto(&[proto]).unwrap_err();
+            assert!(err
+                .to_string()
+                .contains("only valid for custom networking mode"));
+        }
+    }
+
+    #[test]
+    fn custom_fields_without_a_mode_are_rejected_instead_of_ignored() {
         let err = networks_from_proto(&[rpc::NetworkingConfig {
-            mode: String::new(),
-            bridge_name: String::new(),
+            open_file: "/dev/tap7498".to_string(),
+            ..Default::default()
         }])
         .unwrap_err();
 
@@ -1253,14 +1364,67 @@ mod tests {
     }
 
     #[test]
-    fn repeated_networks_rejects_custom_entries() {
-        let err = networks_from_proto(&[rpc::NetworkingConfig {
+    fn netdev_and_open_file_are_mutually_exclusive() {
+        let networks = networks_from_proto(&[rpc::NetworkingConfig {
             mode: "custom".to_string(),
-            bridge_name: String::new(),
+            netdev: "tap,id=net0".to_string(),
+            open_file: "/dev/tap7498".to_string(),
+            ..Default::default()
         }])
-        .unwrap_err();
+        .unwrap();
+        let mut config = test_cvm_config();
+        config.pm = ProcessManagerBackend::Systemd;
 
-        assert!(err.to_string().contains("custom networking mode"));
+        let err = resolve_requested_networks(&networks, &config).unwrap_err();
+
+        assert!(err.to_string().contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn open_file_is_rejected_on_a_supervisor_node() {
+        let mut config = test_cvm_config();
+        config.pm = ProcessManagerBackend::Supervisor;
+        let networks = networks_from_proto(&[rpc::NetworkingConfig {
+            mode: "custom".to_string(),
+            open_file: "/dev/tap7498".to_string(),
+            ..Default::default()
+        }])
+        .unwrap();
+
+        let err = resolve_requested_networks(&networks, &config).unwrap_err();
+        assert!(err.to_string().contains("systemd process manager"));
+
+        config.pm = ProcessManagerBackend::Systemd;
+        assert!(ensure_open_file_supported("/dev/tap7498", &config).is_ok());
+        config.pm = ProcessManagerBackend::Auto;
+        assert!(ensure_open_file_supported("/dev/tap7498", &config).is_ok());
+    }
+
+    #[test]
+    fn bridge_allowlist_only_applies_to_an_explicitly_named_bridge() {
+        let mut config = test_cvm_config();
+        assert!(ensure_bridge_allowed("anything", &config).is_ok());
+
+        config.bridge_allowlist_enabled = true;
+        config.bridge_allowlist = vec!["dstack-br0".to_string(), "vpc-*".to_string()];
+
+        // The node default is the operator's own choice, so it stays allowed
+        // without being listed.
+        assert!(ensure_bridge_allowed("", &config).is_ok());
+        assert!(ensure_bridge_allowed("dstack-br0", &config).is_ok());
+        assert!(ensure_bridge_allowed("vpc-tenant-a", &config).is_ok());
+
+        let err = ensure_bridge_allowed("docker0", &config).unwrap_err();
+        assert!(err.to_string().contains("not in cvm.bridge_allowlist"));
+    }
+
+    #[test]
+    fn enabled_allowlist_with_no_entries_denies_every_named_bridge() {
+        let mut config = test_cvm_config();
+        config.bridge_allowlist_enabled = true;
+
+        assert!(ensure_bridge_allowed("dstack-br0", &config).is_err());
+        assert!(ensure_bridge_allowed("", &config).is_ok());
     }
 
     #[test]

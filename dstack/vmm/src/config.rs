@@ -333,7 +333,10 @@ pub struct CvmConfig {
     pub qmp_socket: bool,
     /// GPU configuration
     pub gpu: GpuConfig,
-    /// Use sudo to run the VM
+    /// User the VM process runs as. Empty keeps the VMM's own privileges.
+    /// Supervisor prefixes QEMU with `sudo -u`; systemd sets `User=` on the
+    /// transient unit. Accepts a POSIX user name, a numeric UID, or sudo's
+    /// `#UID` form.
     pub user: String,
 
     /// Auto restart configuration
@@ -368,6 +371,28 @@ pub struct CvmConfig {
     /// Optional host-side filtering for bridge interfaces.
     #[serde(default)]
     pub network_filter: NetworkFilterConfig,
+
+    /// Restricts which bridges a VM may name through `bridge_name`.
+    ///
+    /// Without it a caller can attach any VM to any existing bridge on the
+    /// host, including another tenant's: the guest then joins that L2 domain,
+    /// leases from its DHCP, and reaches its VMs. Host firewall rules are keyed
+    /// by bridge, so none of them fire — the guest is a legitimate member of
+    /// the wrong network. Off by default to keep existing nodes working; turn
+    /// it on wherever one host carries more than one tenant.
+    ///
+    /// This is a resource boundary, not an authorization policy: it narrows
+    /// "the bridge must exist" to "the bridge must be allowed", so the VMM
+    /// still only renders an already-resolved spec.
+    #[serde(default)]
+    pub bridge_allowlist_enabled: bool,
+
+    /// Bridge names a VM may request when `bridge_allowlist_enabled` is set.
+    /// A trailing `*` matches a prefix, e.g. `vpc-*`. Kept separate from the
+    /// toggle so that "enabled with an empty list" is an explicit deny-all
+    /// instead of an ambiguous "no list means no check".
+    #[serde(default)]
+    pub bridge_allowlist: Vec<String>,
 
     /// Stable namespace for TAP names when several VMMs share one host.
     /// An empty value is derived from the absolute run directory.
@@ -523,6 +548,23 @@ pub struct SystemdConfig {
     pub state_dir: PathBuf,
     #[serde(default = "default_systemd_stop_timeout")]
     pub stop_timeout: String,
+    /// Drive the calling user's own systemd manager (`systemd-run --user`)
+    /// instead of the system manager.
+    ///
+    /// The system manager only accepts these calls from root or through a
+    /// polkit rule, so a VMM running as an unprivileged user cannot use the
+    /// systemd backend at all without one of the two. The user manager needs
+    /// neither, at the cost of requiring lingering for the account
+    /// (`loginctl enable-linger <user>`) so the manager outlives the login
+    /// session, and of dropping `cvm.user`: a user manager cannot change uid.
+    ///
+    /// It also changes who opens `networking.open_file`. The system manager
+    /// opens the chardev as root before dropping to `User=`; the user manager
+    /// opens it as the VMM's own account, so the device must already be owned
+    /// by it. A freshly created macvtap `/dev/tapN` is root-owned, so whatever
+    /// creates it has to chown it to the VMM's account first.
+    #[serde(default)]
+    pub user_manager: bool,
 }
 
 impl Default for SystemdConfig {
@@ -531,6 +573,7 @@ impl Default for SystemdConfig {
             unit_prefix: default_systemd_unit_prefix(),
             state_dir: default_systemd_state_dir(),
             stop_timeout: default_systemd_stop_timeout(),
+            user_manager: false,
         }
     }
 }
@@ -727,6 +770,9 @@ impl Config {
         }
 
         validate_networking(&self.cvm.networking)?;
+        if !self.cvm.user.is_empty() {
+            validate_unit_user("cvm.user", &self.cvm.user)?;
+        }
         if self.cvm.pm != ProcessManagerBackend::Systemd {
             anyhow::ensure!(
                 !self.supervisor.sock.trim().is_empty(),
@@ -798,6 +844,13 @@ fn validate_networking(networking: &Networking) -> Result<()> {
             "cvm.networking.mac_prefix must contain 1 to 3 two-digit hexadecimal bytes"
         );
     }
+    // A pre-opened chardev names one specific host device, so it belongs to a
+    // single VM NIC. Inheriting it as a host-wide default would attach every
+    // VM to the same tap device.
+    anyhow::ensure!(
+        networking.open_file.is_empty(),
+        "cvm.networking.open_file must be set per VM NIC, not as a host-wide default"
+    );
     match networking.mode {
         NetworkingMode::Bridge => anyhow::ensure!(
             !networking.bridge.trim().is_empty(),
@@ -808,6 +861,96 @@ fn validate_networking(networking: &Networking) -> Result<()> {
             "cvm.networking.netdev must not be empty in custom mode"
         ),
         NetworkingMode::User => {}
+    }
+    Ok(())
+}
+
+/// First file descriptor systemd hands to a service, per the LISTEN_FDS
+/// convention shared by socket activation and `OpenFile=`.
+pub(crate) const SD_LISTEN_FDS_START: u32 = 3;
+
+/// A `cvm.user` value after syntax checks, before looking the account up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UnitUser {
+    /// POSIX user name for `User=` / `sudo -u`.
+    Name(String),
+    /// Numeric UID. systemd takes the bare digits; sudo needs `#UID`.
+    Uid(u32),
+}
+
+impl UnitUser {
+    /// Value for a systemd `User=` property.
+    pub(crate) fn systemd_value(&self) -> String {
+        match self {
+            Self::Name(name) => name.clone(),
+            Self::Uid(uid) => uid.to_string(),
+        }
+    }
+
+    /// Value for `sudo -u`.
+    pub(crate) fn sudo_value(&self) -> String {
+        match self {
+            Self::Name(name) => name.clone(),
+            Self::Uid(uid) => format!("#{uid}"),
+        }
+    }
+}
+
+/// Parses a user name or numeric UID before it reaches sudo or a unit property.
+///
+/// Accepts a POSIX user name, a bare decimal UID (systemd `User=`), or sudo's
+/// `#UID` form. The charset for names excludes `%` and property separators so
+/// the value cannot expand as a systemd specifier or inject extra syntax.
+pub(crate) fn parse_unit_user(name: &str, user: &str) -> Result<UnitUser> {
+    if user.is_empty() {
+        bail!("{name} must not be empty");
+    }
+    if let Some(digits) = user.strip_prefix('#') {
+        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            bail!("{name} must be '#<uid>' when it starts with '#': {user}");
+        }
+        let uid = digits
+            .parse::<u32>()
+            .with_context(|| format!("{name} contains an out-of-range uid: {user}"))?;
+        return Ok(UnitUser::Uid(uid));
+    }
+    if user.bytes().all(|byte| byte.is_ascii_digit()) {
+        let uid = user
+            .parse::<u32>()
+            .with_context(|| format!("{name} contains an out-of-range uid: {user}"))?;
+        return Ok(UnitUser::Uid(uid));
+    }
+    if user.starts_with('-') {
+        bail!("{name} must not start with '-': {user}");
+    }
+    if !user
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    {
+        bail!("{name} must contain only alphanumerics, '_', '-' and '.': {user}");
+    }
+    Ok(UnitUser::Name(user.to_string()))
+}
+
+pub(crate) fn validate_unit_user(name: &str, user: &str) -> Result<()> {
+    parse_unit_user(name, user).map(|_| ())
+}
+
+/// Validates an `open_file` path before it reaches a systemd unit property.
+///
+/// systemd parses `OpenFile=` as `path:fdname:options` and expands `%`
+/// specifiers, so those characters would change the meaning of the property
+/// rather than name a device. The check is deliberately conservative: the only
+/// intended values are host device nodes such as `/dev/tap7498`.
+pub(crate) fn validate_open_file(name: &str, path: &str) -> Result<()> {
+    if !path.starts_with('/') {
+        bail!("{name} must be an absolute path: {path}");
+    }
+    if !path
+        .bytes()
+        .all(|byte| byte.is_ascii_graphic() && !matches!(byte, b':' | b',' | b'%' | b'\\'))
+    {
+        bail!("{name} must not contain whitespace or any of ':' ',' '%' '\\': {path}");
     }
     Ok(())
 }
@@ -849,6 +992,19 @@ pub struct Networking {
     // ── Custom fields ──────────────────────────────────────────────
     #[serde(default)]
     pub netdev: String,
+
+    // ── Pre-opened chardev ─────────────────────────────────────────
+    /// Absolute path to an already existing tap character device, e.g.
+    /// `/dev/tap7498` for a macvtap interface created by an external net
+    /// daemon. The process manager opens it before exec and QEMU inherits it
+    /// as a file descriptor, so the netdev becomes `tap,id=netN,fd=M`.
+    ///
+    /// Only the systemd process manager can pass file descriptors, so this is
+    /// rejected on every other launch path instead of being silently dropped:
+    /// QEMU would otherwise open an unrelated fd and attach the guest to the
+    /// wrong network.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub open_file: String,
 }
 
 impl Networking {
@@ -1155,6 +1311,78 @@ mod tests {
         assert_eq!(parse("supervisor"), ProcessManagerBackend::Supervisor);
         assert_eq!(parse("systemd"), ProcessManagerBackend::Systemd);
         assert_eq!(parse("auto"), ProcessManagerBackend::Auto);
+    }
+
+    #[test]
+    fn host_wide_open_file_is_rejected() {
+        let mut config = default_config();
+        config.cvm.networking.open_file = "/dev/tap7498".into();
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("open_file"));
+    }
+
+    #[test]
+    fn unit_user_names_are_validated() {
+        validate_unit_user("cvm.user", "qemu-1.user_x").unwrap();
+        assert_eq!(
+            parse_unit_user("cvm.user", "#1000").unwrap(),
+            UnitUser::Uid(1000)
+        );
+        assert_eq!(
+            parse_unit_user("cvm.user", "1000").unwrap(),
+            UnitUser::Uid(1000)
+        );
+        assert_eq!(
+            parse_unit_user("cvm.user", "#1000").unwrap().sudo_value(),
+            "#1000"
+        );
+        assert_eq!(
+            parse_unit_user("cvm.user", "#1000")
+                .unwrap()
+                .systemd_value(),
+            "1000"
+        );
+        for user in [
+            "",
+            "#",
+            "#-1",
+            "-qemu",
+            "qemu:0",
+            "qemu user",
+            "%i",
+            "qemu$",
+        ] {
+            validate_unit_user("cvm.user", user).unwrap_err();
+        }
+
+        let mut config = default_config();
+        config.cvm.user = "qemu:0".into();
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("cvm.user"));
+        config.cvm.user = "#1000".into();
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn empty_open_file_is_omitted_from_json() {
+        let networking = Networking {
+            mode: NetworkingMode::User,
+            bridge: String::new(),
+            mac_prefix: String::new(),
+            net: String::new(),
+            dhcp_start: String::new(),
+            restrict: false,
+            netdev: String::new(),
+            open_file: String::new(),
+        };
+        let value = serde_json::to_value(&networking).unwrap();
+        assert!(value.get("open_file").is_none());
     }
 
     #[test]

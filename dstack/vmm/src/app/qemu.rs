@@ -9,13 +9,17 @@ use super::{
     hugepage_numa_nodes,
     image::Image,
     mr_config::{snp_host_data, tdx_mr_config_id},
-    network::{mac_address_for_vm_index, resolved_networks, validate_resolved_networks},
+    network::{
+        mac_address_for_vm_index, open_file_fd, open_files, resolved_networks,
+        validate_resolved_networks,
+    },
     pci_numa_node, round_up, GpuConfig, VmWorkDir,
 };
 use crate::{
     app::Manifest,
     config::{
-        CvmConfig, CvmPlatform, NetworkFilterMode, Networking, NetworkingMode, ProcessAnnotation,
+        parse_unit_user, CvmConfig, CvmPlatform, NetworkFilterMode, Networking, NetworkingMode,
+        ProcessAnnotation, ProcessManagerBackend, UnitUser,
     },
     netd::{tap_name, InterfaceIdentity},
     vm_launcher::{ChildCommand, LaunchSpec},
@@ -24,9 +28,14 @@ use anyhow::{bail, Context, Result};
 use bon::Builder;
 use dstack_types::shared_filenames::HOST_SHARED_DISK_LABEL;
 use fs_err as fs;
-use nix::unistd::User;
+use nix::dir::Dir;
+use nix::errno::Errno;
+use nix::fcntl::{openat, AtFlags, OFlag};
+use nix::sys::stat::Mode;
+use nix::unistd::{fchownat, Uid, User};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::{
     fs::Permissions,
@@ -242,6 +251,14 @@ impl PreparedQemuLaunch {
                 .context("tpm key provider requested but swtpm is not installed")?;
             let state_dir = workdir.swtpm_state_dir();
             fs::create_dir_all(&state_dir).context("failed to create swtpm state directory")?;
+            // systemd drops privileges for the whole launcher unit, including
+            // swtpm. Hand the state directory over so socket creation and TPM
+            // state updates are not denied on a root-owned path. Existing
+            // files from earlier root-owned boots are included.
+            if !cfg.user.is_empty() && cfg.pm != ProcessManagerBackend::Supervisor {
+                let user = resolve_cvm_user(&cfg.user)?;
+                chown_tree_to_user(&state_dir, &user)?;
+            }
             let socket = workdir.swtpm_socket();
             if socket.exists() {
                 fs::remove_file(&socket).context("failed to remove stale swtpm socket")?;
@@ -308,6 +325,95 @@ fn prepare_data_disk(vm: &VmConfig, workdir: &VmWorkDir, cfg: &CvmConfig) -> Res
     Ok(())
 }
 
+pub(crate) fn resolve_cvm_user(user: &str) -> Result<User> {
+    match parse_unit_user("cvm.user", user)? {
+        UnitUser::Name(name) => User::from_name(&name)
+            .context("failed to resolve QEMU user")?
+            .with_context(|| format!("QEMU user {name} does not exist")),
+        UnitUser::Uid(uid) => User::from_uid(Uid::from_raw(uid))
+            .context("failed to resolve QEMU user")?
+            .with_context(|| format!("QEMU user uid {uid} does not exist")),
+    }
+}
+
+const DIR_OFLAGS: OFlag = OFlag::O_RDONLY
+    .union(OFlag::O_NOFOLLOW)
+    .union(OFlag::O_DIRECTORY)
+    .union(OFlag::O_CLOEXEC);
+
+/// Makes `path` and its contents owned by the unprivileged VM user.
+///
+/// Under systemd the transient unit drops privileges before exec, so paths the
+/// VMM created as root must be handed over before launch. Supervisor keeps
+/// root for the launcher/swtpm path and only sudo's QEMU, so it does not need
+/// this.
+///
+/// The walk never follows a symlink: every entry is chowned and every descent
+/// happens relative to an `O_NOFOLLOW`-opened directory fd. The state directory
+/// is writable by the unprivileged user between boots, so a symlink planted
+/// there must not be able to redirect a root chown onto an arbitrary host path
+/// (CWE-59).
+fn chown_tree_to_user(path: &Path, user: &User) -> Result<()> {
+    // Chown the top path itself without following a symlink.
+    fchownat(
+        None,
+        path,
+        Some(user.uid),
+        Some(user.gid),
+        AtFlags::AT_SYMLINK_NOFOLLOW,
+    )
+    .with_context(|| format!("failed to chown {}", path.display()))?;
+
+    // Open the directory itself without following symlinks. A non-directory or
+    // a symlink has nothing to descend into and was already chowned above.
+    let dir_fd = match openat(None, path, DIR_OFLAGS, Mode::empty()) {
+        Ok(fd) => fd,
+        Err(Errno::ENOTDIR | Errno::ELOOP) => return Ok(()),
+        Err(err) => return Err(err).with_context(|| format!("failed to open {}", path.display())),
+    };
+    chown_dir_contents(dir_fd, path, user)
+}
+
+/// Chowns every entry reachable through `dir_fd`, taking ownership of it (the
+/// fd is closed when the `Dir` drops). Every chown and descent is performed
+/// relative to the trusted fd rather than by re-resolving a path, so a symlink
+/// anywhere below `path` cannot redirect the walk outside the tree.
+fn chown_dir_contents(dir_fd: RawFd, path: &Path, user: &User) -> Result<()> {
+    let mut dir = Dir::from_fd(dir_fd)
+        .with_context(|| format!("failed to read directory {}", path.display()))?;
+    let raw = dir.as_raw_fd();
+    for entry in dir.iter() {
+        let entry =
+            entry.with_context(|| format!("failed to read entry under {}", path.display()))?;
+        let name = entry.file_name();
+        let bytes = name.to_bytes();
+        if bytes == b"." || bytes == b".." {
+            continue;
+        }
+        // Chown the entry relative to the trusted dir fd, never following a
+        // symlink, so a planted link cannot redirect the chown to its target.
+        fchownat(
+            Some(raw),
+            name,
+            Some(user.uid),
+            Some(user.gid),
+            AtFlags::AT_SYMLINK_NOFOLLOW,
+        )
+        .with_context(|| format!("failed to chown entry under {}", path.display()))?;
+        // Descend only into a real subdirectory, opened without following
+        // symlinks. ELOOP means the entry is a symlink; ENOTDIR a regular file.
+        match openat(Some(raw), name, DIR_OFLAGS, Mode::empty()) {
+            Ok(child) => chown_dir_contents(child, path, user)?,
+            Err(Errno::ENOTDIR | Errno::ELOOP) => {}
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("failed to open entry under {}", path.display()))
+            }
+        }
+    }
+    Ok(())
+}
+
 fn prepare_shared_dir(workdir: &VmWorkDir) -> Result<()> {
     let shared_dir = workdir.shared_dir();
     if !shared_dir.exists() {
@@ -354,6 +460,14 @@ impl VmConfig {
         let Some(socket) = prepared.swtpm_socket.as_deref() else {
             return Ok(vec![process]);
         };
+        if !process.open_files.is_empty() {
+            // The swtpm path puts vm-launcher between the process manager and
+            // QEMU. vm-launcher would inherit the descriptors and leak them
+            // into swtpm as well, and nothing keeps their numbers stable
+            // across the launcher's own file operations, so QEMU could be
+            // handed an unrelated fd. Reject instead of guessing.
+            bail!("networking.open_file is not supported for VMs that use swtpm");
+        }
         let swtpm_path = prepared
             .swtpm_path
             .as_ref()
@@ -361,9 +475,7 @@ impl VmConfig {
         let (socket_uid, socket_gid) = if cfg.user.is_empty() {
             (unsafe { libc::geteuid() }, unsafe { libc::getegid() })
         } else {
-            let user = User::from_name(&cfg.user)
-                .context("failed to resolve QEMU user")?
-                .with_context(|| format!("QEMU user {} does not exist", cfg.user))?;
+            let user = resolve_cvm_user(&cfg.user)?;
             (user.uid.as_raw(), user.gid.as_raw())
         };
 
@@ -414,6 +526,12 @@ impl VmConfig {
             pidfile: process.pidfile,
             cid: process.cid,
             note: process.note,
+            // The launcher unit owns the privilege drop, so vm-launcher and
+            // the swtpm and QEMU children it spawns all run as this user.
+            user: process.user,
+            // Rejected above: file descriptor passing does not survive the
+            // vm-launcher indirection.
+            open_files: Vec::new(),
         };
         Ok(vec![launcher])
     }
@@ -628,12 +746,18 @@ impl QemuCommandBuilder<'_> {
                     }
                 }
                 NetworkingMode::Custom => {
-                    if !networking.netdev.contains(&format!("id={net_id}")) {
-                        bail!(
-                            "custom networking netdev must contain id={net_id} for interface index {index}"
-                        );
+                    if let Some(fd) = open_file_fd(&self.prepared.networks, index) {
+                        // The chardev is opened by the process manager, so the
+                        // fd number is the only handle QEMU gets.
+                        format!("tap,id={net_id},fd={fd}")
+                    } else {
+                        if !networking.netdev.contains(&format!("id={net_id}")) {
+                            bail!(
+                                "custom networking netdev must contain id={net_id} for interface index {index}"
+                            );
+                        }
+                        networking.netdev.clone()
                     }
-                    networking.netdev.clone()
                 }
             };
             command.arg("-netdev").arg(netdev);
@@ -781,6 +905,7 @@ impl QemuCommandBuilder<'_> {
 
     fn process_config(&self, command: Command) -> Result<ProcessConfig> {
         let workdir = &self.prepared.workdir;
+        let open_files = open_files(&self.prepared.networks);
         let mut arguments = vec![self.cfg.qemu_path.to_string_lossy().to_string()];
         arguments.extend(
             command
@@ -790,11 +915,29 @@ impl QemuCommandBuilder<'_> {
         if let Some(cpus) = &self.prepared.numa_cpus {
             arguments.splice(0..0, ["taskset", "-c", cpus].into_iter().map(String::from));
         }
+        // The systemd backend drops privileges in the unit itself, so QEMU is
+        // exec'd directly. Supervisor has no such mechanism and keeps the sudo
+        // prefix, which is also why it cannot pass file descriptors: sudo
+        // closes every descriptor above stderr before exec, so QEMU would be
+        // told to use an fd that no longer exists.
+        let mut user = String::new();
         if !self.cfg.user.is_empty() {
-            arguments.splice(
-                0..0,
-                ["sudo", "-u", &self.cfg.user].into_iter().map(String::from),
-            );
+            let unit_user = parse_unit_user("cvm.user", &self.cfg.user)?;
+            if self.cfg.pm == ProcessManagerBackend::Supervisor {
+                if !open_files.is_empty() {
+                    bail!(
+                        "networking.open_file requires cvm.pm = \"systemd\" or \"auto\" when cvm.user is set: sudo closes inherited file descriptors"
+                    );
+                }
+                let sudo_user = unit_user.sudo_value();
+                arguments.splice(
+                    0..0,
+                    ["sudo", "-u", &sudo_user].into_iter().map(String::from),
+                );
+            } else {
+                // systemd User= takes a bare name or decimal UID, not sudo's #UID.
+                user = unit_user.systemd_value();
+            }
         }
 
         let command = arguments.remove(0);
@@ -819,6 +962,8 @@ impl QemuCommandBuilder<'_> {
             pidfile: workdir.pid_file().to_string_lossy().to_string(),
             cid: Some(self.vm.cid),
             note,
+            user,
+            open_files,
         })
     }
 }
@@ -1007,7 +1152,8 @@ mod tests {
     use crate::app::image::{Image, ImageInfo};
     use crate::app::{needs_swtpm, GpuConfig, Manifest, PortMapping, VmVolume, VmWorkDir};
     use crate::config::{
-        Config, CvmPlatform, NetworkFilterMode, NetworkingMode, Protocol, DEFAULT_CONFIG,
+        Config, CvmPlatform, NetworkFilterMode, NetworkingMode, ProcessManagerBackend, Protocol,
+        DEFAULT_CONFIG,
     };
     use crate::netd::{tap_name, InterfaceIdentity};
     use dstack_types::{KeyProviderKind, TeeVariant};
@@ -1265,5 +1411,160 @@ mod tests {
             .args
             .windows(2)
             .any(|args| args == ["-tpmdev", "emulator,id=tpm0,chardev=chrtpm"]));
+
+        // Pre-opened chardevs. The first NIC keeps user networking, so the
+        // two NICs that ask for a chardev take the first two descriptors
+        // systemd hands over.
+        prepared.swtpm_socket = None;
+        prepared.networks.push(config.cvm.networking.clone());
+        prepared.networks[0].mode = NetworkingMode::User;
+        for (index, path) in [(1, "/dev/tap7498"), (2, "/dev/tap7499")] {
+            let networking = &mut prepared.networks[index];
+            networking.mode = NetworkingMode::Custom;
+            networking.bridge = String::new();
+            networking.netdev = String::new();
+            networking.open_file = path.into();
+        }
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert!(process
+            .args
+            .windows(2)
+            .any(|args| args == ["-netdev", "tap,id=net1,fd=3"]));
+        assert!(process
+            .args
+            .windows(2)
+            .any(|args| args == ["-netdev", "tap,id=net2,fd=4"]));
+        assert_eq!(process.open_files, ["/dev/tap7498", "/dev/tap7499"]);
+
+        // systemd drops privileges in the unit, so QEMU is exec'd directly and
+        // keeps the descriptors it was handed.
+        let mut systemd_config = config.clone();
+        systemd_config.cvm.pm = ProcessManagerBackend::Systemd;
+        systemd_config.cvm.user = "qemu".into();
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &systemd_config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert_eq!(process.user, "qemu");
+        assert_eq!(process.command, "/not-installed/qemu-system-x86_64");
+        assert!(!process.args.iter().any(|arg| arg == "sudo"));
+
+        // Supervisor has no privilege-drop mechanism and falls back to sudo,
+        // which closes the descriptors before QEMU starts.
+        let mut sudo_config = config.clone();
+        sudo_config.cvm.user = "qemu".into();
+        let error = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &sudo_config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap_err();
+        assert!(error.to_string().contains("cvm.pm"), "{error:#}");
+
+        // Without a pre-opened chardev, Supervisor keeps the sudo prefix.
+        for networking in &mut prepared.networks {
+            networking.open_file = String::new();
+            networking.mode = NetworkingMode::User;
+        }
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &sudo_config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert_eq!(process.command, "sudo");
+        assert_eq!(&process.args[..2], ["-u", "qemu"]);
+        assert!(process.user.is_empty());
+
+        // Numeric UIDs keep sudo's #UID form and systemd's bare digits.
+        sudo_config.cvm.user = "#1000".into();
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &sudo_config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert_eq!(process.command, "sudo");
+        assert_eq!(&process.args[..2], ["-u", "#1000"]);
+
+        let mut uid_config = config.clone();
+        uid_config.cvm.pm = ProcessManagerBackend::Systemd;
+        uid_config.cvm.user = "#1000".into();
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &uid_config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert_eq!(process.user, "1000");
+        assert!(!process.args.iter().any(|arg| arg == "sudo"));
+    }
+
+    fn chown_test_user() -> nix::unistd::User {
+        // The swtpm chown must succeed against a real account. Targeting the
+        // current uid keeps the chown a permitted no-op whether the suite runs
+        // as root or unprivileged, so the tests below assert traversal shape,
+        // not privilege.
+        nix::unistd::User::from_uid(nix::unistd::Uid::current())
+            .unwrap()
+            .expect("current uid resolves to a user")
+    }
+
+    #[test]
+    fn chown_tree_does_not_follow_a_symlink() {
+        // A symlink whose target does not exist must be chowned as the link
+        // itself. Following it would chase the missing target and fail — the
+        // exact primitive that let a planted link redirect a root chown onto
+        // an arbitrary host path.
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("/nonexistent/dstack-chown-victim", dir.path().join("link"))
+            .unwrap();
+        super::chown_tree_to_user(dir.path(), &chown_test_user())
+            .expect("must chown the symlink itself, not follow it");
+    }
+
+    #[test]
+    fn chown_tree_does_not_descend_into_a_symlinked_dir() {
+        // A symlink to a directory must not be walked into: the pointed-to
+        // directory holds a dangling link, so descending would chase it and
+        // fail.
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("/nonexistent/inner-victim", outside.path().join("inner"))
+            .unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("dirlink")).unwrap();
+        super::chown_tree_to_user(dir.path(), &chown_test_user())
+            .expect("must not descend into a symlinked directory");
+    }
+
+    #[test]
+    fn chown_tree_still_walks_a_real_tree() {
+        // Regression guard: the hardening must keep chowning real nested
+        // entries rather than stop at the top directory.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/file"), b"x").unwrap();
+        std::fs::write(dir.path().join("top"), b"y").unwrap();
+        super::chown_tree_to_user(dir.path(), &chown_test_user())
+            .expect("must chown a normal tree");
     }
 }

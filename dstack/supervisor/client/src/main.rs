@@ -74,6 +74,8 @@ async fn main() -> Result<()> {
                 pidfile: String::new(),
                 cid: None,
                 note: String::new(),
+                user: String::new(),
+                open_files: Vec::new(),
             };
             print_json(&client.deploy(&config).await?)?;
         }

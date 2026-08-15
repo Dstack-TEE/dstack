@@ -15,6 +15,9 @@ use tokio::process::Command;
 use tokio::sync::RwLock;
 use tracing::warn;
 
+use crate::config::{parse_unit_user, validate_open_file};
+use nix::unistd::geteuid;
+
 #[derive(Clone)]
 pub enum ProcessManager {
     Supervisor(SupervisorClient),
@@ -31,11 +34,13 @@ impl ProcessManager {
         state_dir: PathBuf,
         unit_prefix: String,
         stop_timeout: String,
+        user_manager: bool,
     ) -> Result<Arc<SystemdProcessManager>> {
         Ok(Arc::new(SystemdProcessManager::new(
             state_dir,
             unit_prefix,
             stop_timeout,
+            user_manager,
         )?))
     }
 
@@ -62,7 +67,10 @@ impl ProcessManager {
 
     pub async fn deploy(&self, config: &ProcessConfig) -> Result<()> {
         match self {
-            Self::Supervisor(client) => client.deploy(config).await,
+            Self::Supervisor(client) => {
+                ensure_supervisor_supported(config)?;
+                client.deploy(config).await
+            }
             Self::Systemd(manager) => manager.deploy(config).await,
             Self::Auto(manager) => manager.deploy(config).await,
         }
@@ -99,6 +107,27 @@ impl ProcessManager {
             Self::Auto(manager) => manager.info(id).await,
         }
     }
+}
+
+/// Rejects a process asking for something Supervisor cannot provide.
+///
+/// Supervisor spawns processes with its own privileges and without pre-opened
+/// file descriptors. Launching anyway would run a VM as root that asked to be
+/// confined, or leave QEMU pointing at whatever the fd number happens to be,
+/// so this fails before anything is spawned.
+fn ensure_supervisor_supported(config: &ProcessConfig) -> Result<()> {
+    for (what, unsupported) in [
+        ("pre-opened files", !config.open_files.is_empty()),
+        ("a dedicated user", !config.user.is_empty()),
+    ] {
+        if unsupported {
+            bail!(
+                "process {} requires {what}, which only the systemd process manager supports; set cvm.pm = \"systemd\" or \"auto\"",
+                config.id
+            );
+        }
+    }
+    Ok(())
 }
 
 pub struct AutoProcessManager {
@@ -294,10 +323,16 @@ pub struct SystemdProcessManager {
     state_dir: PathBuf,
     unit_prefix: String,
     stop_timeout: String,
+    user_manager: bool,
 }
 
 impl SystemdProcessManager {
-    fn new(state_dir: PathBuf, unit_prefix: String, stop_timeout: String) -> Result<Self> {
+    fn new(
+        state_dir: PathBuf,
+        unit_prefix: String,
+        stop_timeout: String,
+        user_manager: bool,
+    ) -> Result<Self> {
         anyhow::ensure!(
             !unit_prefix.is_empty(),
             "systemd unit prefix must not be empty"
@@ -313,7 +348,26 @@ impl SystemdProcessManager {
             state_dir,
             unit_prefix,
             stop_timeout,
+            user_manager,
         })
+    }
+
+    /// Builds a `systemd-run`/`systemctl` invocation aimed at the configured
+    /// manager.
+    ///
+    /// `--user` selects the caller's own manager, which is reached over the bus
+    /// at `$XDG_RUNTIME_DIR/bus`. A VMM started as a system service inherits no
+    /// session environment, so the runtime directory is filled in from the
+    /// effective uid rather than left to fail with an unhelpful bus error.
+    fn systemd_command(&self, program: &str) -> Command {
+        let mut command = Command::new(program);
+        if self.user_manager {
+            command.arg("--user");
+            if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
+                command.env("XDG_RUNTIME_DIR", format!("/run/user/{}", geteuid()));
+            }
+        }
+        command
     }
 
     fn key(id: &str) -> String {
@@ -355,47 +409,83 @@ impl SystemdProcessManager {
         Ok(output)
     }
 
-    async fn launch(&self, config: &ProcessConfig) -> Result<()> {
-        let unit = self.unit(&config.id);
-        // Failed transient units remain loaded until reset and otherwise
-        // prevent automatic restart from reusing the unit name.
-        let mut reset = Command::new("systemctl");
-        reset.arg("reset-failed").arg(&unit);
-        let _ = reset.output().await;
-        let mut command = Command::new("systemd-run");
-        command
-            .arg("--quiet")
-            .arg("--unit")
-            .arg(&unit)
-            .arg("--service-type=exec")
-            .arg("--property=KillMode=mixed")
-            .arg("--property=KillSignal=SIGTERM")
-            .arg("--property=SendSIGKILL=yes")
-            .arg(format!("--property=TimeoutStopSec={}", self.stop_timeout))
-            .arg("--property=ExitType=cgroup")
-            .arg("--property=Restart=no")
-            .arg(format!("--description=dstack VM process {}", config.id));
+    fn run_args(&self, config: &ProcessConfig, unit: &str) -> Result<Vec<String>> {
+        let mut args = vec![
+            "--quiet".into(),
+            "--unit".into(),
+            unit.to_string(),
+            "--service-type=exec".into(),
+            "--property=KillMode=mixed".into(),
+            "--property=KillSignal=SIGTERM".into(),
+            "--property=SendSIGKILL=yes".into(),
+            format!("--property=TimeoutStopSec={}", self.stop_timeout),
+            "--property=ExitType=cgroup".into(),
+            "--property=Restart=no".into(),
+            format!("--description=dstack VM process {}", config.id),
+        ];
 
         if !config.cwd.is_empty() {
-            command.arg(format!("--working-directory={}", config.cwd));
+            args.push(format!("--working-directory={}", config.cwd));
         }
         if config.stdout.is_empty() {
-            command.arg("--property=StandardOutput=null");
+            args.push("--property=StandardOutput=null".into());
         } else {
-            command.arg(format!(
+            args.push(format!(
                 "--property=StandardOutput=append:{}",
                 config.stdout
             ));
         }
         if config.stderr.is_empty() {
-            command.arg("--property=StandardError=null");
+            args.push("--property=StandardError=null".into());
         } else {
-            command.arg(format!("--property=StandardError=append:{}", config.stderr));
+            args.push(format!("--property=StandardError=append:{}", config.stderr));
         }
         for (key, value) in &config.env {
-            command.arg(format!("--setenv={key}={value}"));
+            args.push(format!("--setenv={key}={value}"));
         }
-        command.arg("--").arg(&config.command).args(&config.args);
+        if !config.user.is_empty() {
+            // A user manager runs everything as its own account and silently
+            // ignores User=, so accepting it would start QEMU with the VMM's
+            // privileges after the operator asked to confine it.
+            anyhow::ensure!(
+                !self.user_manager,
+                "cvm.user is not supported with systemd.user_manager: a user manager cannot change uid"
+            );
+            // ProcessConfig.user is already normalized to a systemd User=
+            // value (name or bare UID). Re-parse to reject anything that
+            // would still inject property syntax.
+            let user = parse_unit_user("user", &config.user)?;
+            args.push(format!("--property=User={}", user.systemd_value()));
+        }
+        // systemd opens these before exec and passes them in declaration
+        // order starting at fd 3, which is what the QEMU netdev arguments
+        // reference. No fdname and no `graceful` option: a missing device must
+        // fail the unit instead of shifting every later descriptor by one.
+        //
+        // systemd.service(5): "The file or socket is opened by the service
+        // manager and the file descriptor is passed to the service." The open
+        // therefore happens with the manager's privileges, before the `User=`
+        // drop that lands just before exec, so a root-owned chardev such as
+        // /dev/tapN does not have to be chowned to the QEMU user.
+        for path in &config.open_files {
+            validate_open_file("open_files entry", path)?;
+            args.push(format!("--property=OpenFile={path}"));
+        }
+        args.push("--".into());
+        args.push(config.command.clone());
+        args.extend(config.args.iter().cloned());
+        Ok(args)
+    }
+
+    async fn launch(&self, config: &ProcessConfig) -> Result<()> {
+        let unit = self.unit(&config.id);
+        // Failed transient units remain loaded until reset and otherwise
+        // prevent automatic restart from reusing the unit name.
+        let mut reset = self.systemd_command("systemctl");
+        reset.arg("reset-failed").arg(&unit);
+        let _ = reset.output().await;
+        let mut command = self.systemd_command("systemd-run");
+        command.args(self.run_args(config, &unit)?);
         Self::command(command, "systemd-run").await?;
 
         if !config.pidfile.is_empty() {
@@ -435,7 +525,7 @@ impl SystemdProcessManager {
             .await?
             .is_some_and(|info| info.state.status.is_running())
         {
-            let mut command = Command::new("systemctl");
+            let mut command = self.systemd_command("systemctl");
             command.arg("stop").arg("--no-block").arg(self.unit(id));
             if let Err(error) = Self::command(command, "systemctl stop").await {
                 // The unit may have exited and been collected between the
@@ -464,7 +554,7 @@ impl SystemdProcessManager {
         if record.started {
             bail!("process is started");
         }
-        let mut command = Command::new("systemctl");
+        let mut command = self.systemd_command("systemctl");
         command.arg("reset-failed").arg(self.unit(id));
         let _ = command.output().await;
         fs_err::remove_file(self.record_path(id)).context("failed to remove process record")
@@ -512,7 +602,7 @@ impl SystemdProcessManager {
 
     async fn info_from_record(&self, record: ProcessRecord) -> Result<ProcessInfo> {
         let unit = self.unit(&record.config.id);
-        let mut command = Command::new("systemctl");
+        let mut command = self.systemd_command("systemctl");
         command
             .arg("show")
             .arg(&unit)
@@ -542,18 +632,232 @@ impl SystemdProcessManager {
 mod tests {
     use super::*;
 
-    #[test]
-    fn unit_names_are_stable_and_do_not_embed_process_ids() {
+    fn test_manager_with(user_manager: bool) -> (tempfile::TempDir, SystemdProcessManager) {
         let dir = tempfile::tempdir().unwrap();
         let manager = SystemdProcessManager::new(
             dir.path().to_path_buf(),
             "dstack-vm".into(),
             "infinity".into(),
+            user_manager,
         )
         .unwrap();
+        (dir, manager)
+    }
+
+    /// Proves that a descriptor opened by the user manager reaches the child,
+    /// which is the whole point of `networking.open_file`: an external net
+    /// daemon creates the tap device, and QEMU only ever receives the fd.
+    ///
+    /// Ignored by default because it needs a real environment -- a live systemd
+    /// user manager for the calling account, reachable at
+    /// `$XDG_RUNTIME_DIR/bus` -- which a container or CI sandbox usually lacks.
+    /// It writes nothing outside a temporary directory and cleans up its unit.
+    ///
+    /// Run it on a host that has one:
+    ///
+    /// ```text
+    /// cargo test -p dstack-vmm -- --ignored user_manager_passes_open_file
+    /// ```
+    #[tokio::test]
+    #[ignore = "requires a live systemd user manager on the host"]
+    async fn user_manager_passes_open_file_descriptor_to_the_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let payload = dir.path().join("payload");
+        fs_err::write(&payload, b"payload-through-fd").unwrap();
+        let observed_path = dir.path().join("observed");
+        let manager = SystemdProcessManager::new(
+            dir.path().join("state"),
+            "dstack-vm-test".into(),
+            "infinity".into(),
+            true,
+        )
+        .unwrap();
+
+        let mut env = HashMap::new();
+        env.insert("OBSERVED".to_string(), observed_path.display().to_string());
+        let config = ProcessConfig {
+            env,
+            command: "/bin/sh".into(),
+            // systemd hands the file over as fd 3, the number the QEMU netdev
+            // arguments reference.
+            args: vec![
+                "-c".into(),
+                "{ echo listen_fds=$LISTEN_FDS; cat <&3; } > $OBSERVED".into(),
+            ],
+            ..test_config(&[payload.display().to_string().as_str()])
+        };
+        manager.deploy(&config).await.expect("deploy");
+
+        // Wait for the unit to exit rather than for the file to appear: the
+        // shell redirect creates it before the script has written anything, so
+        // watching the path reads a half-written file.
+        let mut status = None;
+        for _ in 0..50 {
+            let info = manager.info(&config.id).await.expect("info");
+            match info.map(|info| info.state.status) {
+                Some(ProcessStatus::Running) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                other => {
+                    status = other;
+                    break;
+                }
+            }
+        }
+        let observed = fs_err::read_to_string(&observed_path).unwrap_or_default();
+        let _ = manager.stop(&config.id).await;
+        let _ = manager.remove(&config.id).await;
+
+        assert!(
+            matches!(status, Some(ProcessStatus::Exited(0))),
+            "unit ended as {status:?}, output {observed:?}"
+        );
+        assert!(observed.contains("listen_fds=1"), "got {observed:?}");
+        assert!(observed.contains("payload-through-fd"), "got {observed:?}");
+    }
+
+    #[test]
+    fn user_manager_selects_the_calling_users_systemd() {
+        let (_system_dir, system) = test_manager_with(false);
+        let (_user_dir, user) = test_manager_with(true);
+
+        let args = |command: &tokio::process::Command| {
+            command
+                .as_std()
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        };
+
+        assert!(args(&system.systemd_command("systemctl")).is_empty());
+        // Ahead of the subcommand: `systemctl --user stop` is accepted,
+        // `systemctl stop --user` is not.
+        assert_eq!(args(&user.systemd_command("systemctl")), ["--user"]);
+        assert_eq!(args(&user.systemd_command("systemd-run")), ["--user"]);
+    }
+
+    #[test]
+    fn user_manager_rejects_a_dedicated_user_instead_of_ignoring_it() {
+        let (_dir, manager) = test_manager_with(true);
+
+        let err = manager
+            .run_args(&test_config_as("qemu", &[]), "unit.service")
+            .unwrap_err();
+
+        assert!(err.to_string().contains("cannot change uid"));
+    }
+
+    #[test]
+    fn unit_names_are_stable_and_do_not_embed_process_ids() {
+        let (_dir, manager) = test_manager();
         assert_eq!(manager.unit("vm/one"), manager.unit("vm/one"));
         assert_ne!(manager.unit("vm/one"), manager.unit("vm-two"));
         assert!(!manager.unit("vm/one").contains("vm/one"));
+    }
+
+    fn test_config(open_files: &[&str]) -> ProcessConfig {
+        test_config_as("", open_files)
+    }
+
+    fn test_config_as(user: &str, open_files: &[&str]) -> ProcessConfig {
+        ProcessConfig {
+            id: "vm/one".into(),
+            name: "vm".into(),
+            command: "/usr/bin/qemu".into(),
+            args: vec!["-netdev".into(), "tap,id=net0,fd=3".into()],
+            env: HashMap::new(),
+            cwd: String::new(),
+            stdout: String::new(),
+            stderr: String::new(),
+            pidfile: String::new(),
+            cid: None,
+            note: String::new(),
+            user: user.into(),
+            open_files: open_files.iter().map(|path| path.to_string()).collect(),
+        }
+    }
+
+    fn test_manager() -> (tempfile::TempDir, SystemdProcessManager) {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = SystemdProcessManager::new(
+            dir.path().to_path_buf(),
+            "dstack-vm".into(),
+            "infinity".into(),
+            false,
+        )
+        .unwrap();
+        (dir, manager)
+    }
+
+    #[test]
+    fn renders_open_files_as_ordered_unit_properties() {
+        let (_dir, manager) = test_manager();
+        let args = manager
+            .run_args(
+                &test_config(&["/dev/tap7498", "/dev/tap7499"]),
+                "unit.service",
+            )
+            .unwrap();
+        let properties = args
+            .iter()
+            .take_while(|arg| *arg != "--")
+            .filter_map(|arg| arg.strip_prefix("--property=OpenFile="))
+            .collect::<Vec<_>>();
+        assert_eq!(properties, ["/dev/tap7498", "/dev/tap7499"]);
+        assert_eq!(args.last().unwrap(), "tap,id=net0,fd=3");
+
+        assert!(!manager
+            .run_args(&test_config(&[]), "unit.service")
+            .unwrap()
+            .iter()
+            .any(|arg| arg.contains("OpenFile")));
+    }
+
+    #[test]
+    fn rejects_open_files_that_would_change_the_unit_property() {
+        let (_dir, manager) = test_manager();
+        for path in ["relative/tap", "/dev/tap:0", "/dev/%i/tap"] {
+            manager
+                .run_args(&test_config(&[path]), "unit.service")
+                .unwrap_err();
+        }
+    }
+
+    #[test]
+    fn renders_the_privilege_drop_as_a_unit_property() {
+        let (_dir, manager) = test_manager();
+        let args = manager
+            .run_args(&test_config_as("qemu", &["/dev/tap7498"]), "unit.service")
+            .unwrap();
+        assert!(args.iter().any(|arg| arg == "--property=User=qemu"));
+        // The privilege drop replaces the sudo prefix rather than joining it.
+        assert!(!args.iter().any(|arg| arg == "sudo"));
+
+        assert!(!manager
+            .run_args(&test_config(&[]), "unit.service")
+            .unwrap()
+            .iter()
+            .any(|arg| arg.contains("User=")));
+
+        let args = manager
+            .run_args(&test_config_as("1000", &[]), "unit.service")
+            .unwrap();
+        assert!(args.iter().any(|arg| arg == "--property=User=1000"));
+
+        for user in ["qemu:0", "qemu user", "%i", "-qemu", "#"] {
+            manager
+                .run_args(&test_config_as(user, &[]), "unit.service")
+                .unwrap_err();
+        }
+    }
+
+    #[test]
+    fn supervisor_backend_rejects_what_it_cannot_provide() {
+        ensure_supervisor_supported(&test_config(&[])).unwrap();
+        for config in [test_config(&["/dev/tap7498"]), test_config_as("qemu", &[])] {
+            let error = ensure_supervisor_supported(&config).unwrap_err();
+            assert!(error.to_string().contains("systemd"), "{error:#}");
+        }
     }
 
     #[test]

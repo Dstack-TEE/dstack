@@ -22,7 +22,7 @@ use dstack_vmm_rpc::{
 use fs_err as fs;
 use guest_api::client::DefaultClient as GuestClient;
 use id_pool::IdPool;
-use nix::unistd::{Uid, User};
+use nix::unistd::Uid;
 use or_panic::ResultOrPanic;
 use ra_rpc::client::RaClient;
 use serde::{Deserialize, Serialize};
@@ -521,11 +521,7 @@ impl App {
         let qemu_uid = if self.config.cvm.user.is_empty() {
             Uid::effective().as_raw()
         } else {
-            User::from_name(&self.config.cvm.user)
-                .context("failed to resolve QEMU user")?
-                .with_context(|| format!("QEMU user {} does not exist", self.config.cvm.user))?
-                .uid
-                .as_raw()
+            qemu::resolve_cvm_user(&self.config.cvm.user)?.uid.as_raw()
         };
         let mut prepared = Vec::new();
         for (nic_index, network) in networks.iter().enumerate() {
@@ -2166,6 +2162,7 @@ mod tests {
             dhcp_start: String::new(),
             restrict: false,
             netdev: String::new(),
+            open_file: String::new(),
         }];
 
         workdir.put_manifest(&manifest)?;
@@ -2428,6 +2425,7 @@ mod tests {
             dhcp_start: String::new(),
             restrict: false,
             netdev: String::new(),
+            open_file: String::new(),
         }];
         let user_manifest = test_manifest(2048);
         let image = test_tdx_image(true);

@@ -50,10 +50,23 @@ fn networking_backend_name(mode: NetworkingMode) -> &'static str {
 }
 
 fn networking_to_proto(networking: &Networking) -> pb::NetworkingConfig {
+    let is_custom = networking.mode == NetworkingMode::Custom;
     pb::NetworkingConfig {
         mode: networking_mode_name(networking.mode).into(),
         bridge_name: if networking.mode == NetworkingMode::Bridge {
             networking.bridge.clone()
+        } else {
+            String::new()
+        },
+        // Reported per mode so the round trip of a configuration keeps only the
+        // fields that mode actually accepts.
+        netdev: if is_custom {
+            networking.netdev.clone()
+        } else {
+            String::new()
+        },
+        open_file: if is_custom {
+            networking.open_file.clone()
         } else {
             String::new()
         },
