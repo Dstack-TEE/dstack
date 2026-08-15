@@ -320,6 +320,28 @@ def encrypt_env(envs, hex_public_key: str) -> str:
     return result.hex()
 
 
+def parse_net_spec(net: str) -> Optional[dict]:
+    """Parse a --net value into a NetworkingConfig, or None for the node default.
+
+    Custom mode is deliberately absent: it carries a netdev string or a device
+    path that an external net daemon owns, so it belongs to the caller that
+    created the device, not to a hand-typed flag.
+    """
+    if net == "default":
+        return None
+    mode, _, bridge_name = net.partition(":")
+    if mode not in ("user", "bridge"):
+        raise Exception(
+            f"--net must be user, bridge[:<bridge-name>], or default, got {net!r}"
+        )
+    if bridge_name and mode != "bridge":
+        raise Exception("--net bridge name is only valid for bridge mode")
+    networking = {"mode": mode}
+    if bridge_name:
+        networking["bridge_name"] = bridge_name
+    return networking
+
+
 def parse_port_mapping(port_str: str) -> Dict:
     """Parse a port mapping string into a dictionary."""
     parts = port_str.split(":")
@@ -920,7 +942,10 @@ class VmmCLI:
         if args.gateway_url:
             params["gateway_urls"] = args.gateway_url
         if args.net:
-            params["networking"] = {"mode": args.net}
+            networking = parse_net_spec(args.net)
+            # The repeated field wins over the singular one and is the shape
+            # every other caller now uses.
+            params["networks"] = [networking] if networking else []
 
         app_id = args.app_id or self.calc_app_id(compose_content)
         print(f"App ID: {app_id}")
@@ -1166,23 +1191,12 @@ class VmmCLI:
         # Networking only takes effect at the next start, and the VMM rejects
         # this for a running VM: stop the VM before updating it.
         if net is not None:
+            networking = parse_net_spec(net)
             upgrade_params["update_networking"] = True
-            if net == "default":
-                upgrade_params["networks"] = []
-                updates.append("networking (node default)")
-            else:
-                mode, _, bridge_name = net.partition(":")
-                if mode not in ("user", "bridge"):
-                    raise Exception(
-                        f"--net must be user, bridge[:<bridge-name>], or default, got {net!r}"
-                    )
-                if bridge_name and mode != "bridge":
-                    raise Exception("--net bridge name is only valid for bridge mode")
-                networking = {"mode": mode}
-                if bridge_name:
-                    networking["bridge_name"] = bridge_name
-                upgrade_params["networks"] = [networking]
-                updates.append(f"networking ({net})")
+            upgrade_params["networks"] = [networking] if networking else []
+            updates.append(
+                "networking (node default)" if networking is None else f"networking ({net})"
+            )
 
         # handle port updates - only update if --port or --no-ports is specified
         if no_ports or ports is not None:
@@ -1853,8 +1867,12 @@ def main():
     )
     deploy_parser.add_argument(
         "--net",
-        choices=["bridge", "user"],
-        help="Networking mode (default: use global config)",
+        type=str,
+        help=(
+            "Networking mode: user, bridge, bridge:<bridge-name>, or default to "
+            "use the node configuration. Custom mode is set through the CreateVm "
+            "RPC, not this flag."
+        ),
     )
 
     # Images command
