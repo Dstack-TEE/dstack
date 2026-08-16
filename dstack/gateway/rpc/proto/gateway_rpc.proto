@@ -534,6 +534,9 @@ service Admin {
   rpc GetDefaultDnsCredential(google.protobuf.Empty) returns (GetDefaultDnsCredentialResponse) {}
   // Set the default DNS credential ID
   rpc SetDefaultDnsCredential(SetDefaultDnsCredentialRequest) returns (google.protobuf.Empty) {}
+  // Verify a DNS credential's token status and granted permissions against
+  // the provider API. Read-only: it never creates or removes DNS records.
+  rpc VerifyDnsCredential(VerifyDnsCredentialRequest) returns (VerifyDnsCredentialResponse) {}
 
   // ==================== ZT-Domain Management ====================
   // List all ZT-Domain configurations
@@ -735,6 +738,43 @@ message GetDefaultDnsCredentialResponse {
 // Set default DNS credential request
 message SetDefaultDnsCredentialRequest {
   string id = 1;
+}
+
+// Verify DNS credential request
+message VerifyDnsCredentialRequest {
+  string id = 1;
+}
+
+// Zone resolution result for one domain referencing the credential
+message DomainDnsCheck {
+  string domain = 1;
+  // Whether the domain's zone resolved via the provider API
+  bool zone_ok = 2;
+  // Failure reason when zone_ok is false
+  string error = 3;
+}
+
+// Verify DNS credential response: token status plus granted permissions
+message VerifyDnsCredentialResponse {
+  // "active", "expired", "disabled", "invalid" (rejected by the provider),
+  // or "unknown" (the check itself failed; see error)
+  string token_status = 1;
+  string token_name = 2;
+  // RFC3339 timestamps reported by the provider; empty when absent
+  string expires_on = 3;
+  string not_before = 4;
+  string last_used_on = 5;
+  // Names of the permission groups granted to the token
+  repeated string permission_groups = 6;
+  // Whether the grants include what certificate issuance needs
+  bool zone_read_ok = 7;
+  bool dns_write_ok = 8;
+  // Zone resolution for each domain referencing this credential
+  repeated DomainDnsCheck domains = 9;
+  // Set when the verification itself failed (e.g. provider API unreachable)
+  string error = 10;
+  // When the check was performed (unix seconds)
+  uint64 checked_at = 11;
 }
 
 // ==================== ZT-Domain Messages ====================

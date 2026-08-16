@@ -11,11 +11,11 @@ use dstack_gateway_rpc::{
     admin_server::{AdminRpc, AdminServer},
     CertAttestationInfo, CertbotConfigResponse, ClearInstancePortPolicyRequest,
     CreateDnsCredentialRequest, DeleteDnsCredentialRequest, DeleteZtDomainRequest,
-    DnsCredentialInfo, ExitRequest, ForceReleaseCertLockRequest, GetDefaultDnsCredentialResponse,
-    GetDnsCredentialRequest, GetInfoRequest, GetInfoResponse, GetInstanceHandshakesRequest,
-    GetInstanceHandshakesResponse, GetInstancePortPolicyRequest, GetInstancePortPolicyResponse,
-    GetMetaResponse, GetNodeStatusesResponse, GetZtDomainRequest, GlobalConnectionsStats,
-    HandshakeEntry, HostInfo, LastSeenEntry, ListCertAttestationsRequest,
+    DnsCredentialInfo, DomainDnsCheck, ExitRequest, ForceReleaseCertLockRequest,
+    GetDefaultDnsCredentialResponse, GetDnsCredentialRequest, GetInfoRequest, GetInfoResponse,
+    GetInstanceHandshakesRequest, GetInstanceHandshakesResponse, GetInstancePortPolicyRequest,
+    GetInstancePortPolicyResponse, GetMetaResponse, GetNodeStatusesResponse, GetZtDomainRequest,
+    GlobalConnectionsStats, HandshakeEntry, HostInfo, LastSeenEntry, ListCertAttestationsRequest,
     ListCertAttestationsResponse, ListDnsCredentialsResponse, ListRejectedInstancesResponse,
     ListZtDomainsResponse, NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus,
     PortAttrs as RpcPortAttrs, PortPolicy as RpcPortPolicy, RejectedInstanceInfo, RemoveCvmRequest,
@@ -24,6 +24,7 @@ use dstack_gateway_rpc::{
     SetCertbotConfigRequest, SetDefaultDnsCredentialRequest, SetInstancePortPolicyRequest,
     SetInstanceReadyRequest, SetNodeStatusRequest, SetNodeUrlRequest, SetTombstoneGcConfigRequest,
     StatusResponse, StoreSyncStatus, TombstoneGcConfigResponse, UpdateDnsCredentialRequest,
+    VerifyDnsCredentialRequest, VerifyDnsCredentialResponse,
     WaveKvStatusResponse, ZtDomainCertStatus, ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
 };
 use ra_rpc::{CallContext, RpcCall};
@@ -552,6 +553,81 @@ impl AdminRpc for AdminRpcHandler {
         Ok(())
     }
 
+    async fn verify_dns_credential(
+        self,
+        request: VerifyDnsCredentialRequest,
+    ) -> Result<VerifyDnsCredentialResponse> {
+        let kv_store = self.state.kv_store();
+        let cred = kv_store
+            .get_dns_credential(&request.id)?
+            .context("dns credential not found")?;
+        let (api_token, api_url) = match &cred.provider {
+            DnsProvider::Cloudflare { api_token, api_url } => (api_token.clone(), api_url.clone()),
+        };
+
+        let mut response = VerifyDnsCredentialResponse {
+            checked_at: now_secs(),
+            ..Default::default()
+        };
+
+        let info = match certbot::verify_cloudflare_token(&api_token, api_url.as_deref()).await {
+            Ok(Some(info)) => info,
+            Ok(None) => {
+                response.token_status = "invalid".into();
+                response.error = "token rejected by cloudflare".into();
+                return Ok(response);
+            }
+            Err(err) => {
+                response.token_status = "unknown".into();
+                response.error = format!("{err:#}");
+                return Ok(response);
+            }
+        };
+
+        response.token_status = info.status;
+        response.token_name = info.name;
+        response.expires_on = info.expires_on.unwrap_or_default();
+        response.not_before = info.not_before.unwrap_or_default();
+        response.last_used_on = info.last_used_on.unwrap_or_default();
+        response.zone_read_ok = has_permission(&info.permission_groups, &["zone", "read"]);
+        response.dns_write_ok = has_permission(&info.permission_groups, &["dns", "write"])
+            || has_permission(&info.permission_groups, &["dns", "edit"]);
+        response.permission_groups = info.permission_groups;
+
+        // Resolve the zone of every domain referencing this credential, either
+        // directly or through the default-credential fallback.
+        let default_id = kv_store.get_default_dns_credential_id()?;
+        let domains = kv_store
+            .list_zt_domain_configs()
+            .into_iter()
+            .filter(|c| {
+                c.dns_cred_id.as_deref() == Some(cred.id.as_str())
+                    || (c.dns_cred_id.is_none() && default_id.as_deref() == Some(cred.id.as_str()))
+            })
+            .map(|c| c.domain);
+
+        for domain in domains {
+            let check =
+                match certbot::resolve_cloudflare_zone(&api_token, &domain, api_url.as_deref())
+                    .await
+                {
+                    Ok(_) => DomainDnsCheck {
+                        domain,
+                        zone_ok: true,
+                        error: String::new(),
+                    },
+                    Err(err) => DomainDnsCheck {
+                        domain,
+                        zone_ok: false,
+                        error: truncate_error(&format!("{err:#}")),
+                    },
+                };
+            response.domains.push(check);
+        }
+
+        Ok(response)
+    }
+
     // ==================== ZT-Domain Management ====================
 
     async fn list_zt_domains(self) -> Result<ListZtDomainsResponse> {
@@ -928,6 +1004,39 @@ fn dns_cred_to_proto(cred: DnsCredential) -> DnsCredentialInfo {
         dns_txt_ttl: Some(cred.dns_txt_ttl),
         max_dns_wait: Some(cred.max_dns_wait.as_secs() as u32),
     }
+}
+
+/// Match a Cloudflare permission group by keywords ("Zone Read" covers
+/// ["zone", "read"], "DNS Write" covers ["dns", "write"]).
+fn has_permission(permission_groups: &[String], keywords: &[&str]) -> bool {
+    permission_groups.iter().any(|group| {
+        let name = group.to_lowercase();
+        keywords.iter().all(|kw| name.contains(kw))
+    })
+}
+
+/// Cap an error chain for storage and RPC responses: an upstream gateway
+/// error can be a full HTML page. Keeps the head (outermost context) and the
+/// tail (root cause) and marks the elided middle.
+pub(crate) fn truncate_error(msg: &str) -> String {
+    const MAX_LEN: usize = 16 * 1024;
+    if msg.len() <= MAX_LEN {
+        return msg.to_string();
+    }
+    let mut head_end = MAX_LEN / 2;
+    while !msg.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = msg.len() - MAX_LEN / 2;
+    while !msg.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    let elided = tail_start - head_end;
+    format!(
+        "{}\n[... {elided} bytes truncated ...]\n{}",
+        &msg[..head_end],
+        &msg[tail_start..]
+    )
 }
 
 fn redact_token(token: &str) -> String {
@@ -1357,6 +1466,34 @@ mod zt_domain_challenge_tests {
         )
         .expect_err("an unknown challenge must be refused");
         assert!(err.to_string().contains("dns-persist-02"), "{err:#}");
+    }
+}
+
+#[cfg(test)]
+mod observability_helper_tests {
+    use super::{has_permission, truncate_error};
+
+    #[test]
+    fn permission_matching_covers_issuance_requirements() {
+        let groups = vec!["Zone Read".to_string(), "DNS Write".to_string()];
+        assert!(has_permission(&groups, &["zone", "read"]));
+        assert!(has_permission(&groups, &["dns", "write"]));
+        assert!(!has_permission(&groups, &["account", "read"]));
+    }
+
+    #[test]
+    fn truncate_error_keeps_short_messages_intact() {
+        let msg = "context: root cause";
+        assert_eq!(truncate_error(msg), msg);
+    }
+
+    #[test]
+    fn truncate_error_keeps_head_and_tail() {
+        let msg = "x".repeat(32 * 1024);
+        let truncated = truncate_error(&msg);
+        assert!(truncated.len() < msg.len());
+        assert!(truncated.contains("bytes truncated"));
+        assert!(truncated.starts_with('x') && truncated.ends_with('x'));
     }
 }
 

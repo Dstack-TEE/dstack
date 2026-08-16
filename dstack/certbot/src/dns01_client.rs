@@ -10,6 +10,28 @@ use tracing::debug;
 
 mod cloudflare;
 
+pub use cloudflare::CloudflareTokenInfo;
+
+/// Verify a Cloudflare API token and fetch its granted permission groups.
+///
+/// Returns `Ok(None)` when Cloudflare rejects the token, `Err` when the check
+/// itself failed (transport error, unexpected response).
+pub async fn verify_cloudflare_token(
+    api_token: &str,
+    api_url: Option<&str>,
+) -> Result<Option<CloudflareTokenInfo>> {
+    cloudflare::verify_token(api_token, api_url).await
+}
+
+/// Resolve the ID of the Cloudflare zone covering `base_domain`.
+pub async fn resolve_cloudflare_zone(
+    api_token: &str,
+    base_domain: &str,
+    api_url: Option<&str>,
+) -> Result<String> {
+    cloudflare::resolve_zone(api_token, base_domain, api_url).await
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 /// Represents a DNS record
 pub(crate) struct Record {
