@@ -24,8 +24,8 @@ use dstack_gateway_rpc::{
     SetCertbotConfigRequest, SetDefaultDnsCredentialRequest, SetInstancePortPolicyRequest,
     SetInstanceReadyRequest, SetNodeStatusRequest, SetNodeUrlRequest, SetTombstoneGcConfigRequest,
     StatusResponse, StoreSyncStatus, TombstoneGcConfigResponse, UpdateDnsCredentialRequest,
-    VerifyDnsCredentialRequest, VerifyDnsCredentialResponse,
-    WaveKvStatusResponse, ZtDomainCertStatus, ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
+    VerifyDnsCredentialRequest, VerifyDnsCredentialResponse, WaveKvStatusResponse,
+    ZtDomainCertStatus, ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
 };
 use ra_rpc::{CallContext, RpcCall};
 use tracing::{info, warn};
@@ -640,7 +640,7 @@ impl AdminRpc for AdminRpcHandler {
             .into_iter()
             .map(|config| {
                 let records = certbot.required_dns_records(&config);
-                zt_domain_to_proto(config, kv_store, cert_resolver, records)
+                zt_domain_to_proto(config, kv_store, cert_resolver, records, certbot)
             })
             .collect();
 
@@ -657,7 +657,13 @@ impl AdminRpc for AdminRpcHandler {
             .context("ZT-Domain config not found")?;
 
         let records = self.state.certbot.required_dns_records(&config);
-        Ok(zt_domain_to_proto(config, kv_store, cert_resolver, records))
+        Ok(zt_domain_to_proto(
+            config,
+            kv_store,
+            cert_resolver,
+            records,
+            &self.state.certbot,
+        ))
     }
 
     async fn add_zt_domain(self, request: ProtoZtDomainConfig) -> Result<ZtDomainInfo> {
@@ -677,7 +683,13 @@ impl AdminRpc for AdminRpcHandler {
         info!("Added ZT-Domain config: {}", config.domain);
 
         let records = self.state.certbot.required_dns_records(&config);
-        Ok(zt_domain_to_proto(config, kv_store, cert_resolver, records))
+        Ok(zt_domain_to_proto(
+            config,
+            kv_store,
+            cert_resolver,
+            records,
+            &self.state.certbot,
+        ))
     }
 
     async fn update_zt_domain(self, request: ProtoZtDomainConfig) -> Result<ZtDomainInfo> {
@@ -698,7 +710,13 @@ impl AdminRpc for AdminRpcHandler {
         info!("Updated ZT-Domain config: {}", config.domain);
 
         let records = self.state.certbot.required_dns_records(&config);
-        Ok(zt_domain_to_proto(config, kv_store, cert_resolver, records))
+        Ok(zt_domain_to_proto(
+            config,
+            kv_store,
+            cert_resolver,
+            records,
+            &self.state.certbot,
+        ))
     }
 
     async fn delete_zt_domain(self, request: DeleteZtDomainRequest) -> Result<()> {
@@ -1142,10 +1160,12 @@ fn zt_domain_to_proto(
     kv_store: &crate::kv::KvStore,
     cert_resolver: &crate::cert_store::CertResolver,
     required_dns_records: Vec<String>,
+    certbot: &crate::distributed_certbot::DistributedCertBot,
 ) -> ZtDomainInfo {
     // Get certificate data for status
     let cert_data = kv_store.get_cert_data(&config.domain);
     let loaded_in_memory = cert_resolver.has_cert(&config.domain);
+    let attempt = certbot.attempt_status(&config.domain);
 
     let cert_status = Some(ZtDomainCertStatus {
         has_cert: cert_data.is_some(),
@@ -1153,6 +1173,14 @@ fn zt_domain_to_proto(
         issued_by: cert_data.as_ref().map(|d| d.issued_by).unwrap_or(0),
         issued_at: cert_data.as_ref().map(|d| d.issued_at).unwrap_or(0),
         loaded_in_memory,
+        last_attempt_at: attempt.as_ref().map(|a| a.last_attempt_at).unwrap_or(0),
+        attempted_by: attempt.as_ref().map(|a| a.attempted_by).unwrap_or(0),
+        last_success_at: attempt.as_ref().map(|a| a.last_success_at).unwrap_or(0),
+        consecutive_failures: attempt
+            .as_ref()
+            .map(|a| a.consecutive_failures)
+            .unwrap_or(0),
+        last_error: attempt.map(|a| a.last_error).unwrap_or_default(),
     });
 
     let challenge = match config.challenge {

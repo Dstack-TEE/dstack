@@ -7,6 +7,7 @@
 //! This module provides distributed certificate management for multiple domains
 //! with dynamic DNS credential configuration and attestation storage.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,6 +20,7 @@ use dstack_guest_agent_rpc::v0::RawQuoteArgs;
 use ra_tls::attestation::QuoteContentType;
 use ra_tls::rcgen::KeyPair;
 use tracing::{error, info, warn};
+use wavekv::types::NodeId;
 
 use crate::cert_store::CertResolver;
 use crate::kv::{
@@ -103,11 +105,32 @@ impl DomainValidation {
     }
 }
 
+/// Node-local status of the most recent issuance/renewal attempt for a domain.
+///
+/// In-memory only: the record resets on restart and reflects only this node's
+/// view. Single-node deployment is the current target; move this into WaveKV
+/// if multi-node visibility is ever needed.
+#[derive(Debug, Clone, Default)]
+pub struct CertAttemptStatus {
+    /// When the last attempt completed (unix seconds; 0 = no attempt since restart).
+    pub last_attempt_at: u64,
+    /// Node that performed the last attempt.
+    pub attempted_by: NodeId,
+    /// When the last successful attempt completed (0 = never succeeded).
+    pub last_success_at: u64,
+    /// Failed attempts in a row since the last success.
+    pub consecutive_failures: u32,
+    /// Error chain of the last failed attempt; empty after a success.
+    pub last_error: String,
+}
+
 /// Multi-domain certificate manager
 pub struct DistributedCertBot {
     kv_store: Arc<KvStore>,
     cert_resolver: Arc<CertResolver>,
     write_notifier: Option<Arc<dyn PersistentWriteNotifier>>,
+    /// Per-domain status of the most recent attempt. Never held across await.
+    statuses: std::sync::Mutex<BTreeMap<String, CertAttemptStatus>>,
 }
 
 impl DistributedCertBot {
@@ -120,6 +143,32 @@ impl DistributedCertBot {
             kv_store,
             cert_resolver,
             write_notifier,
+            statuses: Default::default(),
+        }
+    }
+
+    /// Status of the most recent issuance/renewal attempt for a domain.
+    pub fn attempt_status(&self, domain: &str) -> Option<CertAttemptStatus> {
+        self.statuses.lock().unwrap().get(domain).cloned()
+    }
+
+    /// Record the outcome of an issuance/renewal attempt.
+    fn record_attempt<T>(&self, domain: &str, result: &Result<T>) {
+        let now = now_secs();
+        let mut statuses = self.statuses.lock().unwrap();
+        let status = statuses.entry(domain.to_string()).or_default();
+        status.last_attempt_at = now;
+        status.attempted_by = self.kv_store.my_node_id();
+        match result {
+            Ok(_) => {
+                status.last_success_at = now;
+                status.consecutive_failures = 0;
+                status.last_error.clear();
+            }
+            Err(err) => {
+                status.consecutive_failures = status.consecutive_failures.saturating_add(1);
+                status.last_error = crate::admin_service::truncate_error(&format!("{err:?}"));
+            }
         }
     }
 
@@ -492,7 +541,9 @@ impl DistributedCertBot {
 
         // No valid cert, need to request new one
         info!(domain, "no valid certificate found, requesting from ACME");
-        self.request_new_cert(domain).await
+        let result = self.request_new_cert(domain).await;
+        self.record_attempt(domain, &result);
+        result
     }
 
     /// Set CAA records for every configured ZT domain.
@@ -679,6 +730,7 @@ impl DistributedCertBot {
             info!("no existing certificate, requesting new one");
             self.do_request_new(domain, &config).await.map(|_| true)
         };
+        self.record_attempt(domain, &result);
 
         // Release lock regardless of result
         if let Err(err) = self.release_cert_lock(domain) {
@@ -1537,6 +1589,30 @@ mod tests {
             .release_rotation_lock(&current)
             .expect("owner release should succeed");
         assert!(certbot.kv_store.get_rotation_lock().is_none());
+    }
+
+    #[test]
+    fn attempt_status_tracks_failures_and_recovery() {
+        let data_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let certbot = test_certbot(data_dir.path());
+        assert!(certbot.attempt_status("example.com").is_none());
+
+        let fail: Result<bool> = Err(anyhow::anyhow!("dns provider exploded"));
+        certbot.record_attempt("example.com", &fail);
+        certbot.record_attempt("example.com", &fail);
+        let status = certbot.attempt_status("example.com").unwrap();
+        assert_eq!(status.consecutive_failures, 2);
+        assert_eq!(status.attempted_by, 1);
+        assert!(status.last_error.contains("dns provider exploded"));
+        assert_eq!(status.last_success_at, 0);
+        assert!(status.last_attempt_at > 0);
+
+        let ok: Result<bool> = Ok(true);
+        certbot.record_attempt("example.com", &ok);
+        let status = certbot.attempt_status("example.com").unwrap();
+        assert_eq!(status.consecutive_failures, 0);
+        assert!(status.last_error.is_empty());
+        assert!(status.last_success_at > 0);
     }
 
     #[test]

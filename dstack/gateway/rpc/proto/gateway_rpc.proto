@@ -832,6 +832,18 @@ message ZtDomainCertStatus {
   uint64 issued_at = 4;
   // Whether the certificate is loaded in memory
   bool loaded_in_memory = 5;
+  // Status of the most recent issuance/renewal attempt. Node-local and
+  // in-memory only: zero/empty when this node has not attempted since restart.
+  uint64 last_attempt_at = 6;
+  // Node that performed the last attempt
+  uint32 attempted_by = 7;
+  // When the last successful attempt completed (0 = never succeeded)
+  uint64 last_success_at = 8;
+  // Failed attempts in a row since the last success
+  uint32 consecutive_failures = 9;
+  // Error chain of the last failed attempt (truncated to 16 KiB); empty when
+  // the last attempt succeeded
+  string last_error = 10;
 }
 
 // List ZT-Domains response
