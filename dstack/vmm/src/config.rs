@@ -517,6 +517,9 @@ pub struct SupervisorConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SystemdConfig {
+    /// Connect to the per-user service manager instead of the system manager.
+    #[serde(default)]
+    pub user: bool,
     #[serde(default = "default_systemd_unit_prefix")]
     pub unit_prefix: String,
     #[serde(default = "default_systemd_state_dir")]
@@ -528,6 +531,7 @@ pub struct SystemdConfig {
 impl Default for SystemdConfig {
     fn default() -> Self {
         Self {
+            user: false,
             unit_prefix: default_systemd_unit_prefix(),
             state_dir: default_systemd_state_dir(),
             stop_timeout: default_systemd_stop_timeout(),

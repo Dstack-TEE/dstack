@@ -12,6 +12,7 @@ Enable it in the VMM configuration:
 pm = "auto"
 
 [systemd]
+user = false
 unit_prefix = "dstack-vm"
 state_dir = "/var/lib/dstack-vmm/systemd-processes"
 stop_timeout = "infinity"
@@ -38,6 +39,12 @@ prefix and the SHA-256 digest of the VM ID:
 ```text
 dstack-vm-<sha256(vm-id)>.service
 ```
+
+By default, the VMM connects to the system service manager. Set `user = true`
+to use the service manager of the user running the VMM instead. This passes
+`--user` to every `systemd-run` and `systemctl` invocation. The user's systemd
+manager and D-Bus session must remain available (for example, enable lingering
+with `loginctl enable-linger <user>` when services must survive logout).
 
 For a software-TPM VM, the service cgroup contains:
 
@@ -82,6 +89,10 @@ systemctl show dstack-vm-<digest>.service \
 systemd-cgls /system.slice/dstack-vm-<digest>.service
 ```
 
+In user mode, add `--user` to the `systemctl` commands. The control group is
+under the user's subtree of `user.slice`; use the `ControlGroup` value reported
+by `systemctl --user show` rather than assuming a fixed path.
+
 The implementation currently uses the `systemd-run` and `systemctl` CLIs. A
 future production implementation should use the systemd D-Bus API directly for
 atomic property handling and event-driven state updates.
@@ -90,7 +101,8 @@ atomic property handling and event-driven state updates.
 
 - The host must run systemd with support for `ExitType=cgroup` and
   `StandardOutput=append:`.
-- The VMM must be authorized to create and stop system services.
+- In system mode, the VMM must be authorized to create and stop system services.
+- In user mode, the user service manager and its D-Bus socket must be available.
 - Transient services inherit the systemd manager environment rather than the
   VMM environment. Variables in `ProcessConfig.env` are forwarded; unrelated
   inherited variables are not.

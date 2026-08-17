@@ -342,6 +342,7 @@ async fn main() -> Result<()> {
             config.systemd.state_dir.clone(),
             config.systemd.unit_prefix.clone(),
             config.systemd.stop_timeout.clone(),
+            config.systemd.user,
         )
     };
     let supervisor_config = &config.supervisor;

@@ -31,11 +31,13 @@ impl ProcessManager {
         state_dir: PathBuf,
         unit_prefix: String,
         stop_timeout: String,
+        user: bool,
     ) -> Result<Arc<SystemdProcessManager>> {
         Ok(Arc::new(SystemdProcessManager::new(
             state_dir,
             unit_prefix,
             stop_timeout,
+            user,
         )?))
     }
 
@@ -294,10 +296,16 @@ pub struct SystemdProcessManager {
     state_dir: PathBuf,
     unit_prefix: String,
     stop_timeout: String,
+    user: bool,
 }
 
 impl SystemdProcessManager {
-    fn new(state_dir: PathBuf, unit_prefix: String, stop_timeout: String) -> Result<Self> {
+    fn new(
+        state_dir: PathBuf,
+        unit_prefix: String,
+        stop_timeout: String,
+        user: bool,
+    ) -> Result<Self> {
         anyhow::ensure!(
             !unit_prefix.is_empty(),
             "systemd unit prefix must not be empty"
@@ -313,7 +321,24 @@ impl SystemdProcessManager {
             state_dir,
             unit_prefix,
             stop_timeout,
+            user,
         })
+    }
+
+    fn systemctl(&self) -> Command {
+        let mut command = Command::new("systemctl");
+        if self.user {
+            command.arg("--user");
+        }
+        command
+    }
+
+    fn systemd_run(&self) -> Command {
+        let mut command = Command::new("systemd-run");
+        if self.user {
+            command.arg("--user");
+        }
+        command
     }
 
     fn key(id: &str) -> String {
@@ -359,10 +384,10 @@ impl SystemdProcessManager {
         let unit = self.unit(&config.id);
         // Failed transient units remain loaded until reset and otherwise
         // prevent automatic restart from reusing the unit name.
-        let mut reset = Command::new("systemctl");
+        let mut reset = self.systemctl();
         reset.arg("reset-failed").arg(&unit);
         let _ = reset.output().await;
-        let mut command = Command::new("systemd-run");
+        let mut command = self.systemd_run();
         command
             .arg("--quiet")
             .arg("--unit")
@@ -435,7 +460,7 @@ impl SystemdProcessManager {
             .await?
             .is_some_and(|info| info.state.status.is_running())
         {
-            let mut command = Command::new("systemctl");
+            let mut command = self.systemctl();
             command.arg("stop").arg("--no-block").arg(self.unit(id));
             if let Err(error) = Self::command(command, "systemctl stop").await {
                 // The unit may have exited and been collected between the
@@ -464,7 +489,7 @@ impl SystemdProcessManager {
         if record.started {
             bail!("process is started");
         }
-        let mut command = Command::new("systemctl");
+        let mut command = self.systemctl();
         command.arg("reset-failed").arg(self.unit(id));
         let _ = command.output().await;
         fs_err::remove_file(self.record_path(id)).context("failed to remove process record")
@@ -512,7 +537,7 @@ impl SystemdProcessManager {
 
     async fn info_from_record(&self, record: ProcessRecord) -> Result<ProcessInfo> {
         let unit = self.unit(&record.config.id);
-        let mut command = Command::new("systemctl");
+        let mut command = self.systemctl();
         command
             .arg("show")
             .arg(&unit)
@@ -549,11 +574,33 @@ mod tests {
             dir.path().to_path_buf(),
             "dstack-vm".into(),
             "infinity".into(),
+            false,
         )
         .unwrap();
         assert_eq!(manager.unit("vm/one"), manager.unit("vm/one"));
         assert_ne!(manager.unit("vm/one"), manager.unit("vm-two"));
         assert!(!manager.unit("vm/one").contains("vm/one"));
+    }
+
+    #[test]
+    fn user_mode_targets_the_user_service_manager() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = SystemdProcessManager::new(
+            dir.path().to_path_buf(),
+            "dstack-vm".into(),
+            "infinity".into(),
+            true,
+        )
+        .unwrap();
+        let args = |command: Command| {
+            command
+                .as_std()
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(args(manager.systemctl()), ["--user"]);
+        assert_eq!(args(manager.systemd_run()), ["--user"]);
     }
 
     #[test]
