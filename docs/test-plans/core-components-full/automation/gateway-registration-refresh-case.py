@@ -26,9 +26,8 @@ TEST_FILTER = "gateway_registration_refresh_tests"
 RESULT_RE = re.compile(r"test result: ok\. (\d+) passed; 0 failed")
 VMM_MULTI_CLUSTER_FILTER = "config_validation_rejects_mixed_gateway_syntax"
 MULTI_CLUSTER_NATIVE_ROWS = {
-    "explicit_gateway_clusters_override_legacy_urls",
-    "gateway_cluster_failures_do_not_block_successful_updates",
-    "failed_cluster_apply_restores_last_known_good_config",
+    "malformed_replacement_does_not_overwrite_working_cache",
+    "wireguard_endpoint_hosts_support_dns_ipv4_and_ipv6",
 }
 
 
