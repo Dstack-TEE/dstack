@@ -10,7 +10,10 @@ use std::{
     io::Write as _,
     os::{
         fd::AsRawFd,
-        unix::{fs::PermissionsExt, net::UnixStream as StdUnixStream},
+        unix::{
+            fs::{FileTypeExt, PermissionsExt},
+            net::UnixStream as StdUnixStream,
+        },
     },
     path::Path,
     process::{Command, Stdio},
@@ -61,6 +64,14 @@ pub struct PrepareBridgeRequest {
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Request {
     PrepareBridge(PrepareBridgeRequest),
+    PrepareMacvtap {
+        #[serde(flatten)]
+        identity: InterfaceIdentity,
+        parent: String,
+        mac: String,
+        #[serde(default)]
+        mode: String,
+    },
     Remove {
         #[serde(flatten)]
         identity: InterfaceIdentity,
@@ -78,6 +89,8 @@ struct Response {
     ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -99,9 +112,14 @@ pub fn instance_id(configured: &str, run_path: &Path) -> String {
     format!("path-{}", hex::encode(&digest[..8]))
 }
 
-pub async fn request(socket: &Path, request: &Request) -> Result<String> {
+pub struct PreparedInterface {
+    pub device: Option<String>,
+}
+
+pub async fn request(socket: &Path, request: &Request) -> Result<PreparedInterface> {
     let operation = match request {
         Request::PrepareBridge(_) => "prepare_bridge",
+        Request::PrepareMacvtap { .. } => "prepare_macvtap",
         Request::Remove { .. } => "remove",
         Request::Check { .. } => "check",
     };
@@ -131,7 +149,12 @@ pub async fn request(socket: &Path, request: &Request) -> Result<String> {
                 response.error.as_deref().unwrap_or("unknown error")
             );
         }
-        response.tap.context("netd response omitted TAP name")
+        Ok(PreparedInterface {
+            device: {
+                response.tap.context("netd response omitted TAP name")?;
+                response.device
+            },
+        })
     };
     timeout(Duration::from_secs(30), exchange)
         .await
@@ -176,9 +199,10 @@ async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Resul
             .await
             .and_then(|request| handle_request(&config.libvirt_uri, request))
         {
-            Ok(tap) => Response {
+            Ok((tap, device)) => Response {
                 ok: true,
                 tap: Some(tap),
+                device,
                 error: None,
             },
             Err(error) => {
@@ -186,6 +210,7 @@ async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Resul
                 Response {
                     ok: false,
                     tap: None,
+                    device: None,
                     error: Some(format!("{error:#}")),
                 }
             }
@@ -195,6 +220,7 @@ async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Resul
         Response {
             ok: false,
             tap: None,
+            device: None,
             error: Some("caller UID is not authorized".into()),
         }
     };
@@ -216,15 +242,24 @@ async fn read_request(stream: &mut UnixStream) -> Result<Request> {
     serde_json::from_slice(&message).context("invalid netd request")
 }
 
-fn handle_request(libvirt_uri: &str, request: Request) -> Result<String> {
+fn handle_request(libvirt_uri: &str, request: Request) -> Result<(String, Option<String>)> {
     let _lock = OperationLock::acquire()?;
     match request {
-        Request::PrepareBridge(request) => prepare_bridge(libvirt_uri, &request),
+        Request::PrepareBridge(request) => {
+            prepare_bridge(libvirt_uri, &request).map(|tap| (tap, None))
+        }
+        Request::PrepareMacvtap {
+            identity,
+            parent,
+            mac,
+            mode,
+        } => prepare_macvtap(libvirt_uri, &identity, &parent, &mac, &mode)
+            .map(|(tap, device)| (tap, Some(device))),
         Request::Remove { identity } => {
             validate_identity(&identity)?;
             let tap = tap_name(&identity);
             remove_interface(libvirt_uri, &tap)?;
-            Ok(tap)
+            Ok((tap, None))
         }
         Request::Check { identity } => {
             validate_identity(&identity)?;
@@ -232,8 +267,65 @@ fn handle_request(libvirt_uri: &str, request: Request) -> Result<String> {
             if !Path::new("/sys/class/net").join(&tap).exists() {
                 bail!("TAP {tap} does not exist");
             }
-            virsh(libvirt_uri, &["nwfilter-binding-dumpxml", &tap], None)?;
-            Ok(tap)
+            if !is_macvtap(&tap) {
+                virsh(libvirt_uri, &["nwfilter-binding-dumpxml", &tap], None)?;
+            }
+            Ok((tap, None))
+        }
+    }
+}
+
+fn prepare_macvtap(
+    libvirt_uri: &str,
+    identity: &InterfaceIdentity,
+    parent: &str,
+    mac: &str,
+    mode: &str,
+) -> Result<(String, String)> {
+    validate_identity(identity)?;
+    validate_name("parent", parent, 15, "_.-")?;
+    if !Path::new("/sys/class/net").join(parent).exists() {
+        bail!("parent interface {parent} does not exist");
+    }
+    validate_mac(mac)?;
+    let mode = if mode.is_empty() { "private" } else { mode };
+    if !matches!(mode, "private" | "bridge" | "vepa" | "passthru") {
+        bail!("invalid macvtap mode");
+    }
+    let tap = tap_name(identity);
+    remove_interface(libvirt_uri, &tap)?;
+    ip(&[
+        "link", "add", "link", parent, "name", &tap, "address", mac, "type", "macvtap", "mode",
+        mode,
+    ])?;
+    let result = (|| {
+        let ifindex =
+            std::fs::read_to_string(Path::new("/sys/class/net").join(&tap).join("ifindex"))
+                .context("failed to read macvtap ifindex")?;
+        let device = format!("/dev/tap{}", ifindex.trim());
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !Path::new(&device).exists() {
+            if std::time::Instant::now() >= deadline {
+                bail!("timed out waiting for macvtap device {device}");
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let metadata = std::fs::symlink_metadata(&device)
+            .with_context(|| format!("failed to inspect macvtap device {device}"))?;
+        if !metadata.file_type().is_char_device() {
+            bail!("macvtap device {device} is not a character device");
+        }
+        ip(&["link", "set", "dev", &tap, "up"])?;
+        Ok(device)
+    })();
+    match result {
+        Ok(device) => {
+            info!(%tap, %parent, %mode, %device, "prepared macvtap");
+            Ok((tap, device))
+        }
+        Err(error) => {
+            let _ = remove_interface(libvirt_uri, &tap);
+            Err(error)
         }
     }
 }
@@ -295,15 +387,25 @@ fn prepare_bridge(libvirt_uri: &str, request: &PrepareBridgeRequest) -> Result<S
 }
 
 fn remove_interface(libvirt_uri: &str, tap: &str) -> Result<()> {
+    let macvtap = is_macvtap(tap);
     if Path::new("/sys/class/net").join(tap).exists() {
         let _ = ip(&["link", "set", "dev", tap, "down"]);
     }
-    delete_binding(libvirt_uri, tap)?;
+    if !macvtap {
+        delete_binding(libvirt_uri, tap)?;
+    }
     if Path::new("/sys/class/net").join(tap).exists() {
         ip(&["link", "delete", "dev", tap])?;
         info!(%tap, "removed filtered TAP");
     }
     Ok(())
+}
+
+fn is_macvtap(interface: &str) -> bool {
+    Path::new("/sys/class/net")
+        .join(interface)
+        .join("macvtap")
+        .exists()
 }
 
 fn delete_binding(uri: &str, tap: &str) -> Result<()> {

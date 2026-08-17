@@ -38,6 +38,7 @@ fn networking_mode_name(mode: NetworkingMode) -> &'static str {
         NetworkingMode::Bridge => "bridge",
         NetworkingMode::User => "user",
         NetworkingMode::Custom => "custom",
+        NetworkingMode::Macvtap => "macvtap",
     }
 }
 
@@ -46,6 +47,7 @@ fn networking_backend_name(mode: NetworkingMode) -> &'static str {
         NetworkingMode::Bridge => "tap_bridge",
         NetworkingMode::User => "slirp",
         NetworkingMode::Custom => "custom",
+        NetworkingMode::Macvtap => "macvtap",
     }
 }
 
@@ -57,6 +59,8 @@ fn networking_to_proto(networking: &Networking) -> pb::NetworkingConfig {
         } else {
             String::new()
         },
+        parent: networking.parent.clone(),
+        macvtap_mode: networking.macvtap_mode.clone(),
     }
 }
 

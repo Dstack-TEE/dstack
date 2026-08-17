@@ -18,7 +18,7 @@ use crate::{
         CvmConfig, CvmPlatform, NetworkFilterMode, Networking, NetworkingMode, ProcessAnnotation,
     },
     netd::{tap_name, InterfaceIdentity},
-    vm_launcher::{ChildCommand, LaunchSpec},
+    vm_launcher::{ChildCommand, LaunchSpec, OpenFile},
 };
 use anyhow::{bail, Context, Result};
 use bon::Builder;
@@ -351,7 +351,14 @@ impl VmConfig {
             prepared: &prepared,
         }
         .build()?;
+        let has_macvtap = prepared
+            .networks
+            .iter()
+            .any(|network| network.mode == NetworkingMode::Macvtap);
         let Some(socket) = prepared.swtpm_socket.as_deref() else {
+            if has_macvtap {
+                return self.wrap_launcher(cfg, &prepared, process, None, None);
+            }
             return Ok(vec![process]);
         };
         let swtpm_path = prepared
@@ -380,16 +387,63 @@ impl VmConfig {
             "--flags".into(),
             "not-need-init,startup-clear".into(),
         ];
+        self.wrap_launcher(
+            cfg,
+            &prepared,
+            process,
+            Some(ChildCommand {
+                command: swtpm_path.to_string_lossy().into_owned(),
+                args: swtpm_args,
+            }),
+            Some(socket.to_path_buf()),
+        )
+    }
+
+    fn wrap_launcher(
+        &self,
+        cfg: &CvmConfig,
+        prepared: &PreparedQemuLaunch,
+        mut process: ProcessConfig,
+        swtpm: Option<ChildCommand>,
+        swtpm_socket: Option<PathBuf>,
+    ) -> Result<Vec<ProcessConfig>> {
+        let identity = if cfg.user.is_empty() {
+            None
+        } else {
+            let user = User::from_name(&cfg.user)
+                .context("failed to resolve QEMU user")?
+                .with_context(|| format!("QEMU user {} does not exist", cfg.user))?;
+            if process.command != "sudo" || process.args.first().map(String::as_str) != Some("-u") {
+                bail!("unexpected QEMU privilege wrapper");
+            }
+            process.command = process
+                .args
+                .get(2)
+                .context("sudo command is missing")?
+                .clone();
+            process.args.drain(0..3);
+            Some((user.uid.as_raw(), user.gid.as_raw()))
+        };
+        let open_files = prepared
+            .networks
+            .iter()
+            .enumerate()
+            .filter(|(_, network)| network.mode == NetworkingMode::Macvtap)
+            .map(|(index, network)| OpenFile {
+                fd: (3 + index) as i32,
+                path: network.device.clone().into(),
+            })
+            .collect();
         let spec = LaunchSpec {
             qemu: ChildCommand {
                 command: process.command,
                 args: process.args,
             },
-            swtpm: ChildCommand {
-                command: swtpm_path.to_string_lossy().into_owned(),
-                args: swtpm_args,
-            },
-            swtpm_socket: socket.to_path_buf(),
+            swtpm,
+            swtpm_socket,
+            open_files,
+            uid: identity.map(|value| value.0),
+            gid: identity.map(|value| value.1),
             startup_timeout_ms: 5_000,
             shutdown_timeout_ms: 10_000,
         };
@@ -634,6 +688,12 @@ impl QemuCommandBuilder<'_> {
                         );
                     }
                     networking.netdev.clone()
+                }
+                NetworkingMode::Macvtap => {
+                    if networking.device.is_empty() {
+                        bail!("macvtap interface {index} has not been prepared by netd");
+                    }
+                    format!("tap,id={net_id},fd={},vhost=off", 3 + index)
                 }
             };
             command.arg("-netdev").arg(netdev);

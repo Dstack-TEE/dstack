@@ -354,6 +354,7 @@ fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Result<Option<Network
     let mode = match proto.mode.as_str() {
         "bridge" => NetworkingMode::Bridge,
         "user" => NetworkingMode::User,
+        "macvtap" => NetworkingMode::Macvtap,
         "" if bridge.is_empty() => return Ok(None),
         "" => bail!("networking mode is required when bridge is set"),
         "custom" => bail!("custom networking mode is manifest-only"),
@@ -362,9 +363,17 @@ fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Result<Option<Network
     if mode != NetworkingMode::Bridge && !bridge.is_empty() {
         bail!("bridge_name is only valid for bridge networking mode");
     }
+    if mode != NetworkingMode::Macvtap
+        && (!proto.parent.trim().is_empty() || !proto.macvtap_mode.trim().is_empty())
+    {
+        bail!("parent and macvtap_mode are only valid for macvtap networking mode");
+    }
     Ok(Some(Networking {
         mode,
         bridge,
+        parent: proto.parent.trim().to_string(),
+        macvtap_mode: proto.macvtap_mode.trim().to_string(),
+        device: String::new(),
         mac_prefix: String::new(),
         net: String::new(),
         dhcp_start: String::new(),
@@ -816,6 +825,7 @@ impl VmmRpc for RpcHandler {
         if validate_resolved_network(&bridge_networking).is_ok() || has_host_bridge_interface() {
             supported_modes.push("bridge".to_string());
         }
+        supported_modes.push("macvtap".to_string());
         Ok(GetMetaResponse {
             kms: Some(KmsSettings {
                 url: self
@@ -853,6 +863,7 @@ impl VmmRpc for RpcHandler {
                     NetworkingMode::User => "user".to_string(),
                     NetworkingMode::Bridge => "bridge".to_string(),
                     NetworkingMode::Custom => String::new(),
+                    NetworkingMode::Macvtap => "macvtap".to_string(),
                 },
                 default_bridge: default_networking.bridge.clone(),
             }),
@@ -1221,6 +1232,7 @@ mod tests {
         request.networks = vec![rpc::NetworkingConfig {
             mode: "user".to_string(),
             bridge_name: String::new(),
+            ..Default::default()
         }];
 
         let manifest = create_manifest_from_vm_config(request, &test_cvm_config()).unwrap();
@@ -1231,10 +1243,26 @@ mod tests {
     }
 
     #[test]
+    fn macvtap_networking_preserves_parent_and_mode() {
+        let networks = networks_from_proto(&[rpc::NetworkingConfig {
+            mode: "macvtap".to_string(),
+            parent: "eth0".to_string(),
+            macvtap_mode: "private".to_string(),
+            ..Default::default()
+        }])
+        .unwrap();
+
+        assert_eq!(networks[0].mode, NetworkingMode::Macvtap);
+        assert_eq!(networks[0].parent, "eth0");
+        assert_eq!(networks[0].macvtap_mode, "private");
+    }
+
+    #[test]
     fn bridge_name_is_rejected_for_user_mode() {
         let err = networks_from_proto(&[rpc::NetworkingConfig {
             mode: "user".to_string(),
             bridge_name: "dstack-br0".to_string(),
+            ..Default::default()
         }])
         .unwrap_err();
 
@@ -1246,6 +1274,7 @@ mod tests {
         let err = networks_from_proto(&[rpc::NetworkingConfig {
             mode: String::new(),
             bridge_name: String::new(),
+            ..Default::default()
         }])
         .unwrap_err();
 
@@ -1257,6 +1286,7 @@ mod tests {
         let err = networks_from_proto(&[rpc::NetworkingConfig {
             mode: "custom".to_string(),
             bridge_name: String::new(),
+            ..Default::default()
         }])
         .unwrap_err();
 
