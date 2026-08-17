@@ -5,7 +5,10 @@
 use crate::{
     config::{Config, NetworkFilterMode, Networking, NetworkingMode, ProcessAnnotation, Protocol},
     logrotate,
-    netd::{self, InterfaceIdentity, PrepareBridgeRequest, Request as NetdRequest},
+    netd::{
+        self, InterfaceIdentity, PrepareBridgeRequest, PrepareMacvtapRequest,
+        Request as NetdRequest,
+    },
 };
 
 use anyhow::{bail, Context, Result};
@@ -575,12 +578,12 @@ impl App {
                     filter: self.config.cvm.network_filter.filter.clone(),
                     parameters: self.config.cvm.network_filter.parameters.clone(),
                 }),
-                NetworkingMode::Macvtap => NetdRequest::PrepareMacvtap {
+                NetworkingMode::Macvtap => NetdRequest::PrepareMacvtap(PrepareMacvtapRequest {
                     identity: identity.clone(),
                     parent: network.parent.clone(),
                     mac,
                     mode: network.macvtap_mode.clone(),
-                },
+                }),
                 _ => unreachable!(),
             };
             let response = netd::request(&self.config.netd.socket, &request).await;

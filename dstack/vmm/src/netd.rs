@@ -61,17 +61,20 @@ pub struct PrepareBridgeRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrepareMacvtapRequest {
+    #[serde(flatten)]
+    pub identity: InterfaceIdentity,
+    pub parent: String,
+    pub mac: String,
+    #[serde(default)]
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Request {
     PrepareBridge(PrepareBridgeRequest),
-    PrepareMacvtap {
-        #[serde(flatten)]
-        identity: InterfaceIdentity,
-        parent: String,
-        mac: String,
-        #[serde(default)]
-        mode: String,
-    },
+    PrepareMacvtap(PrepareMacvtapRequest),
     Remove {
         #[serde(flatten)]
         identity: InterfaceIdentity,
@@ -119,7 +122,7 @@ pub struct PreparedInterface {
 pub async fn request(socket: &Path, request: &Request) -> Result<PreparedInterface> {
     let operation = match request {
         Request::PrepareBridge(_) => "prepare_bridge",
-        Request::PrepareMacvtap { .. } => "prepare_macvtap",
+        Request::PrepareMacvtap(_) => "prepare_macvtap",
         Request::Remove { .. } => "remove",
         Request::Check { .. } => "check",
     };
@@ -248,13 +251,14 @@ fn handle_request(libvirt_uri: &str, request: Request) -> Result<(String, Option
         Request::PrepareBridge(request) => {
             prepare_bridge(libvirt_uri, &request).map(|tap| (tap, None))
         }
-        Request::PrepareMacvtap {
-            identity,
-            parent,
-            mac,
-            mode,
-        } => prepare_macvtap(libvirt_uri, &identity, &parent, &mac, &mode)
-            .map(|(tap, device)| (tap, Some(device))),
+        Request::PrepareMacvtap(request) => prepare_macvtap(
+            libvirt_uri,
+            &request.identity,
+            &request.parent,
+            &request.mac,
+            &request.mode,
+        )
+        .map(|(tap, device)| (tap, Some(device))),
         Request::Remove { identity } => {
             validate_identity(&identity)?;
             let tap = tap_name(&identity);
@@ -714,6 +718,21 @@ mod tests {
         assert_eq!(value["operation"], "prepare_bridge");
         assert_eq!(value["instance_id"], "instance");
         assert_eq!(value["bridge"], "br0");
+        assert!(value.get("identity").is_none());
+    }
+
+    #[test]
+    fn macvtap_prepare_has_a_dedicated_operation() {
+        let request = Request::PrepareMacvtap(PrepareMacvtapRequest {
+            identity: identity("instance", "vm", 1),
+            parent: "eth0".into(),
+            mac: "02:00:00:00:00:01".into(),
+            mode: "private".into(),
+        });
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(value["operation"], "prepare_macvtap");
+        assert_eq!(value["instance_id"], "instance");
+        assert_eq!(value["parent"], "eth0");
         assert!(value.get("identity").is_none());
     }
 
