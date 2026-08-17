@@ -8,6 +8,15 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use nix::{
+    errno::Errno,
+    fcntl::{fcntl, FcntlArg, FdFlag},
+    sys::{
+        prctl,
+        signal::{kill, raise, Signal},
+    },
+    unistd::{dup2, getpid, getppid, setpgid, Pid},
+};
 use serde::{Deserialize, Serialize};
 use tokio::process::{Child, Command};
 use tokio::signal::unix::{signal, SignalKind};
@@ -93,15 +102,10 @@ fn prepare_open_files(open_files: &[OpenFile]) -> Result<PreparedOpenFiles> {
     let inherited = opened
         .iter()
         .map(|file| {
-            let fd =
-                unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD_CLOEXEC, max_target + 1) };
-            if fd < 0 {
-                Err(std::io::Error::last_os_error())
-                    .context("failed to reserve inherited file descriptor")
-            } else {
-                // SAFETY: fcntl returned a new descriptor owned by this process.
-                Ok(unsafe { OwnedFd::from_raw_fd(fd) })
-            }
+            let fd = fcntl(file.as_raw_fd(), FcntlArg::F_DUPFD_CLOEXEC(max_target + 1))
+                .context("failed to reserve inherited file descriptor")?;
+            // SAFETY: F_DUPFD_CLOEXEC returned a new descriptor owned by this process.
+            Ok(unsafe { OwnedFd::from_raw_fd(fd) })
         })
         .collect::<Result<Vec<_>>>()?;
     let mappings = open_files
@@ -117,14 +121,10 @@ fn prepare_open_files(open_files: &[OpenFile]) -> Result<PreparedOpenFiles> {
 }
 
 fn prepare_exec(expected_parent: libc::pid_t, mappings: &[(i32, i32)]) -> std::io::Result<()> {
-    if unsafe { libc::setpgid(0, 0) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    if unsafe { libc::getppid() } != expected_parent {
-        unsafe { libc::raise(libc::SIGKILL) };
+    setpgid(Pid::from_raw(0), Pid::from_raw(0))?;
+    prctl::set_pdeathsig(Signal::SIGKILL)?;
+    if getppid().as_raw() != expected_parent {
+        raise(Signal::SIGKILL)?;
     }
     for &(target, source) in mappings {
         if target < 3 {
@@ -134,18 +134,16 @@ fn prepare_exec(expected_parent: libc::pid_t, mappings: &[(i32, i32)]) -> std::i
             ));
         }
         if source == target {
-            if unsafe { libc::fcntl(target, libc::F_SETFD, 0) } < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-        } else if unsafe { libc::dup2(source, target) } < 0 {
-            return Err(std::io::Error::last_os_error());
+            fcntl(target, FcntlArg::F_SETFD(FdFlag::empty()))?;
+        } else {
+            dup2(source, target)?;
         }
     }
     Ok(())
 }
 
 fn spawn_child(spec: &ChildCommand, open_files: &[OpenFile]) -> Result<Child> {
-    let parent = unsafe { libc::getpid() };
+    let parent = getpid().as_raw();
     let mut command = Command::new(&spec.command);
     command.args(&spec.args);
     let prepared = prepare_open_files(open_files)?;
@@ -164,7 +162,7 @@ fn spawn_child(spec: &ChildCommand, open_files: &[OpenFile]) -> Result<Child> {
 
 fn exec_in_place(spec: &ChildCommand, open_files: &[OpenFile]) -> Result<()> {
     let prepared = prepare_open_files(open_files)?;
-    let parent = unsafe { libc::getppid() };
+    let parent = getppid().as_raw();
     prepare_exec(parent, &prepared.mappings).context("failed to prepare in-place QEMU exec")?;
     let mut command = std::process::Command::new(&spec.command);
     command.args(&spec.args);
@@ -176,10 +174,8 @@ async fn stop_child(child: &mut Child, name: &str, grace: Duration) {
     let Some(pid) = child.id() else {
         return;
     };
-    // SAFETY: pid comes from the live Child handle and SIGTERM has no pointer arguments.
-    if unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGTERM) } != 0 {
-        let error = std::io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::ESRCH) {
+    if let Err(error) = kill(Pid::from_raw(-(pid as libc::pid_t)), Signal::SIGTERM) {
+        if error != Errno::ESRCH {
             warn!(%pid, %name, %error, "failed to terminate child");
         }
     }
@@ -188,9 +184,8 @@ async fn stop_child(child: &mut Child, name: &str, grace: Duration) {
         Ok(Err(error)) => warn!(%pid, %name, %error, "failed to wait for child"),
         Err(_) => {
             warn!(%pid, %name, "child did not stop gracefully; killing");
-            if unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) } != 0 {
-                let error = std::io::Error::last_os_error();
-                if error.raw_os_error() != Some(libc::ESRCH) {
+            if let Err(error) = kill(Pid::from_raw(-(pid as libc::pid_t)), Signal::SIGKILL) {
+                if error != Errno::ESRCH {
                     warn!(%pid, %name, %error, "failed to kill child process group");
                 }
             }
@@ -350,9 +345,7 @@ mod tests {
     }
 
     fn process_is_gone(pid: libc::pid_t) -> bool {
-        // SAFETY: signal 0 only probes whether the PID still exists.
-        let missing = unsafe { libc::kill(pid, 0) != 0 };
-        missing && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+        matches!(kill(Pid::from_raw(pid), None), Err(Errno::ESRCH))
     }
 
     async fn create_fake_socket(path: PathBuf) {
