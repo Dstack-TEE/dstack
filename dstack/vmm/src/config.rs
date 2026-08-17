@@ -493,18 +493,6 @@ pub enum ProcessManagerBackend {
     Auto,
 }
 
-fn default_systemd_unit_prefix() -> String {
-    "dstack-vm".into()
-}
-
-fn default_systemd_state_dir() -> PathBuf {
-    PathBuf::new()
-}
-
-fn default_systemd_stop_timeout() -> String {
-    "infinity".into()
-}
-
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SupervisorConfig {
     pub exe: String,
@@ -518,29 +506,10 @@ pub struct SupervisorConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SystemdConfig {
     /// Connect to the per-user service manager instead of the system manager.
-    #[serde(default = "default_systemd_user")]
     pub user: bool,
-    #[serde(default = "default_systemd_unit_prefix")]
     pub unit_prefix: String,
-    #[serde(default = "default_systemd_state_dir")]
     pub state_dir: PathBuf,
-    #[serde(default = "default_systemd_stop_timeout")]
     pub stop_timeout: String,
-}
-
-impl Default for SystemdConfig {
-    fn default() -> Self {
-        Self {
-            user: default_systemd_user(),
-            unit_prefix: default_systemd_unit_prefix(),
-            state_dir: default_systemd_state_dir(),
-            stop_timeout: default_systemd_stop_timeout(),
-        }
-    }
-}
-
-fn default_systemd_user() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -588,7 +557,6 @@ pub struct Config {
     pub netd: NetdConfig,
 
     /// Experimental systemd process manager configuration
-    #[serde(default)]
     pub systemd: SystemdConfig,
     /// Gateway configuration
     pub gateway: GatewayConfig,
