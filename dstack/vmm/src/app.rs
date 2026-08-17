@@ -552,12 +552,6 @@ impl App {
             {
                 continue;
             }
-            if !matches!(
-                network.mode,
-                NetworkingMode::Bridge | NetworkingMode::Macvtap
-            ) {
-                continue;
-            }
             let identity = InterfaceIdentity {
                 instance_id: self.config.cvm.instance_id.clone(),
                 vm_id: vm.manifest.id.clone(),
@@ -583,7 +577,7 @@ impl App {
                     mac,
                     mode: network.macvtap_mode.clone(),
                 }),
-                _ => unreachable!(),
+                NetworkingMode::User | NetworkingMode::Custom => continue,
             };
             let response = netd::request(&self.config.netd.socket, &request).await;
             if let Err(error) = response {

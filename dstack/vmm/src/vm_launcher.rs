@@ -69,7 +69,11 @@ impl LaunchSpec {
 }
 
 struct PreparedOpenFiles {
+    // Retain the original device handles through the fork or exec handoff;
+    // they close automatically when this prepared set leaves scope.
     _opened: Vec<fs_err::File>,
+    // Own the collision-free source fds used by dup2. Dropping these before
+    // fork or exec would close the source fds while `mappings` still refers to them.
     _inherited: Vec<OwnedFd>,
     mappings: Vec<(i32, i32)>,
 }
