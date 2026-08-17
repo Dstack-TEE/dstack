@@ -327,6 +327,10 @@ cluster gets a separate WireGuard interface and key pair; their WireGuard
 address ranges must not overlap. All clusters must run the gateway app identity
 authorized by the CVM's KMS-issued app keys.
 
+Clusters refresh independently. If one cluster is unavailable, its last
+working WireGuard configuration remains active while other clusters continue
+to register and update normally.
+
 ```toml
 [cvm]
 kms_urls = ["https://kms.example.com:9201"]
@@ -337,12 +341,9 @@ urls = [
   "https://gateway-a.example.com:9202",
   "https://gateway-b.example.com:9202",
 ]
-required = true
-
 [[cvm.gateway_clusters]]
 name = "secondary"
 urls = ["https://gateway-c.example.com:9202"]
-required = false
 ```
 
 Restart dstack-vmm to apply changes.

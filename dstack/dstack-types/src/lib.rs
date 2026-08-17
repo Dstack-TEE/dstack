@@ -1129,9 +1129,6 @@ pub struct GatewayClusterConfig {
     pub name: String,
     /// Failover RPC endpoints belonging to this cluster.
     pub urls: Vec<String>,
-    /// Whether failure to register this cluster makes the refresh fail.
-    #[serde(default = "default_true")]
-    pub required: bool,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, Eq)]

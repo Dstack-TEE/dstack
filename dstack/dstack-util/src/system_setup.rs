@@ -383,7 +383,6 @@ fn gateway_rpc_url(base: &str) -> String {
 struct GatewayTarget {
     name: String,
     urls: Vec<String>,
-    required: bool,
 }
 
 struct PreparedGatewayCluster {
@@ -391,27 +390,6 @@ struct PreparedGatewayCluster {
     index: usize,
     key_store: GatewayKeyStore,
     response: RegisterCvmResponse,
-}
-
-fn validate_disjoint_wireguard_addresses(clusters: &[PreparedGatewayCluster]) -> Result<()> {
-    let mut addresses = std::collections::HashMap::<String, &str>::new();
-    for cluster in clusters {
-        let wg = cluster.response.wg.as_ref().context("Missing wg info")?;
-        for address in std::iter::once(wg.client_ip.as_str())
-            .chain(wg.servers.iter().map(|peer| peer.ip.as_str()))
-        {
-            let address = address.split('/').next().unwrap_or_default().to_string();
-            if let Some(other) = addresses.insert(address.clone(), &cluster.name) {
-                bail!(
-                    "Gateway clusters {} and {} use overlapping WireGuard address {}",
-                    other,
-                    cluster.name,
-                    address
-                );
-            }
-        }
-    }
-    Ok(())
 }
 
 struct GatewayContext<'a> {
@@ -644,13 +622,19 @@ impl<'a> GatewayContext<'a> {
             warn!("failed to save gateway cache: {err:?}");
         }
 
-        let mut prepared = Vec::new();
-        let mut required_errors = Vec::new();
+        let mut errors = Vec::new();
         for (index, target) in targets.iter().enumerate() {
-            let (key_store, cache_path) = if index == 0 && !uses_explicit_clusters {
-                (primary_key_store.clone(), PathBuf::from(GATEWAY_CACHE_PATH))
+            let key_store_result = if index == 0 && !uses_explicit_clusters {
+                Ok((primary_key_store.clone(), PathBuf::from(GATEWAY_CACHE_PATH)))
             } else {
-                self.key_store_for_additional_cluster(&target.name, &primary_key_store)?
+                self.key_store_for_additional_cluster(&target.name, &primary_key_store)
+            };
+            let (key_store, cache_path) = match key_store_result {
+                Ok(value) => value,
+                Err(err) => {
+                    errors.push(format!("{}: {err:#}", target.name));
+                    continue;
+                }
             };
             if let Err(err) = key_store.save_to(&cache_path) {
                 warn!(cluster = %target.name, "failed to save gateway cluster cache: {err:?}");
@@ -675,33 +659,29 @@ impl<'a> GatewayContext<'a> {
                     }
                 }
             }
-            match response {
-                Some(response) => prepared.push(PreparedGatewayCluster {
-                    name: target.name.clone(),
-                    index,
-                    key_store,
-                    response,
-                }),
-                None if target.required => required_errors.push(format!(
+            let Some(response) = response else {
+                errors.push(format!(
                     "{}: {:#}",
                     target.name,
                     first_error.unwrap_or_else(|| anyhow!("no gateway URLs configured"))
-                )),
-                None => warn!(cluster = %target.name, "optional gateway cluster is unavailable"),
+                ));
+                continue;
+            };
+            let cluster = PreparedGatewayCluster {
+                name: target.name.clone(),
+                index,
+                key_store,
+                response,
+            };
+            if let Err(err) = self.apply_wireguard(cluster, force) {
+                errors.push(format!("{}: {err:#}", target.name));
             }
         }
-        if !required_errors.is_empty() {
-            bail!(
-                "Failed to register required gateway clusters: {}",
-                required_errors.join("; ")
-            );
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            bail!("Failed to refresh gateway clusters: {}", errors.join("; "))
         }
-
-        validate_disjoint_wireguard_addresses(&prepared)?;
-        for cluster in prepared {
-            self.apply_wireguard(cluster, force)?;
-        }
-        Ok(())
     }
 
     fn gateway_targets(&self) -> Result<Vec<GatewayTarget>> {
@@ -709,7 +689,6 @@ impl<'a> GatewayContext<'a> {
             vec![GatewayTarget {
                 name: "default".to_string(),
                 urls: self.shared.sys_config.gateway_urls.clone(),
-                required: true,
             }]
         } else {
             self.shared
@@ -719,7 +698,6 @@ impl<'a> GatewayContext<'a> {
                 .map(|cluster| GatewayTarget {
                     name: cluster.name.clone(),
                     urls: cluster.urls.clone(),
-                    required: cluster.required,
                 })
                 .collect()
         };
@@ -3718,11 +3696,7 @@ mod kms_provider_inventory_tests {
 
 #[cfg(test)]
 mod gateway_registration_refresh_tests {
-    use super::{
-        gateway_rpc_url, validate_disjoint_wireguard_addresses, GatewayKeyStore,
-        PreparedGatewayCluster,
-    };
-    use dstack_gateway_rpc::{RegisterCvmResponse, WireGuardConfig, WireGuardPeer};
+    use super::{gateway_rpc_url, GatewayKeyStore};
     use std::os::unix::fs::PermissionsExt as _;
 
     fn key_store(cert_not_after: u64) -> GatewayKeyStore {
@@ -3788,45 +3762,5 @@ mod gateway_registration_refresh_tests {
         assert!(key_store(1_601).is_cert_valid_at(1_000));
         assert!(!key_store(1_600).is_cert_valid_at(1_000));
         assert!(!key_store(u64::MAX).is_cert_valid_at(u64::MAX));
-    }
-
-    fn prepared(
-        name: &str,
-        index: usize,
-        client_ip: &str,
-        server_ip: &str,
-    ) -> PreparedGatewayCluster {
-        PreparedGatewayCluster {
-            name: name.into(),
-            index,
-            key_store: key_store(10_000),
-            response: RegisterCvmResponse {
-                wg: Some(WireGuardConfig {
-                    client_ip: client_ip.into(),
-                    servers: vec![WireGuardPeer {
-                        pk: format!("key-{name}"),
-                        ip: server_ip.into(),
-                        endpoint: "192.0.2.1:51820".into(),
-                    }],
-                }),
-                ..Default::default()
-            },
-        }
-    }
-
-    #[test]
-    fn independent_clusters_require_disjoint_wireguard_addresses() {
-        let valid = [
-            prepared("primary", 0, "10.0.0.2", "10.0.0.1/32"),
-            prepared("secondary", 1, "10.1.0.2", "10.1.0.1/32"),
-        ];
-        validate_disjoint_wireguard_addresses(&valid).unwrap();
-
-        let overlapping = [
-            prepared("primary", 0, "10.0.0.2", "10.0.0.1"),
-            prepared("secondary", 1, "10.1.0.2", "10.0.0.1/32"),
-        ];
-        let error = validate_disjoint_wireguard_addresses(&overlapping).unwrap_err();
-        assert!(error.to_string().contains("overlapping WireGuard address"));
     }
 }
