@@ -122,6 +122,7 @@ dstack-mr = { path = "dstack-mr" }
 dstack-verifier = { path = "verifier", default-features = false }
 size-parser = { path = "size-parser" }
 wavekv = "1.0.0"
+vfio-ioctls = { git = "https://github.com/kvinwang/vfio.git", rev = "1b560c2", default-features = false }
 
 # Core dependencies
 anyhow = { version = "1.0.97", default-features = false }
