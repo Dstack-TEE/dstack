@@ -346,15 +346,11 @@ message PeerSyncStatus {
   repeated LastSeenEntry last_seen = 5;
   // Whether this peer has ever reported an ack map.
   bool heard_from = 6;
-  // Sync protocol last negotiated with this peer: "v1" or "v2".
-  string protocol = 7;
   // Consecutive quiescent rounds whose state digests disagreed. Non-zero means the
   // replicas have silently diverged; wavekv 1.x could not detect this at all.
-  uint32 digest_mismatches = 8;
-  // Consecutive sync rounds that failed outright. Only a definitive 404/405 demotes a
-  // peer to "v1"; a 5xx or a timeout leaves `protocol` untouched by design, so this is
-  // the only field that moves when a peer is failing every round.
-  uint32 consecutive_failures = 9;
+  uint32 digest_mismatches = 7;
+  // Consecutive sync rounds that failed outright.
+  uint32 consecutive_failures = 8;
 }
 
 message LastSeenEntry {

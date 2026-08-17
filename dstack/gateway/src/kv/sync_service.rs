@@ -79,29 +79,20 @@ impl ExchangeInterface for HttpSyncNetwork {
         self.kv_store.get_peer_uuid(node_id)
     }
 
-    async fn sync_to(&self, _node: &Node, peer: NodeId, msg: SyncMessage) -> Result<SyncResponse> {
-        let sync_url = self.route_for(peer, "sync")?;
-
-        // Send request with msgpack + gzip encoding
-        // app_id verification happens during TLS handshake via AppIdVerifier
-        let sync_response: SyncResponse = self
-            .client
-            .post_compressed_msg(&sync_url, &msg)
-            .await
-            .with_context(|| format!("failed to sync to peer {peer} at {sync_url}"))?;
-
-        // Update peer last_seen on successful sync
-        self.kv_store.update_peer_last_seen(peer);
-
-        Ok(sync_response)
+    async fn sync_to(
+        &self,
+        _node: &Node,
+        _peer: NodeId,
+        _msg: SyncMessage,
+    ) -> Result<SyncResponse> {
+        anyhow::bail!("wavekv v1 peer synchronization is not supported")
     }
 
     /// Native v2 exchange.
     ///
-    /// A peer still running a v1 gateway has no `/wavekv/sync2` route and answers 404,
-    /// which surfaces here as `Ok(None)`; the sync manager then records the peer as
-    /// v1-only, falls back to `/wavekv/sync`, and re-probes periodically so an upgraded
-    /// peer is picked up without a restart.
+    /// All deployed clusters use the v2 wire protocol. WaveKV 1.0 data directories are
+    /// migrated in place during a stopped single-node upgrade; no mixed-version network
+    /// protocol is exposed by the gateway.
     async fn sync_v2_to(
         &self,
         _node: &Node,
@@ -110,14 +101,11 @@ impl ExchangeInterface for HttpSyncNetwork {
     ) -> Result<Option<SyncEnvelope>> {
         let sync_url = self.route_for(peer, "sync2")?;
 
-        let Some(body) = self
+        let body = self
             .client
-            .post_bytes_probe(&sync_url, env.encode()?)
+            .post_bytes_response(&sync_url, env.encode()?)
             .await
-            .with_context(|| format!("failed to sync to peer {peer} at {sync_url}"))?
-        else {
-            return Ok(None);
-        };
+            .with_context(|| format!("failed to sync to peer {peer} at {sync_url}"))?;
 
         self.kv_store.update_peer_last_seen(peer);
         Ok(Some(SyncEnvelope::decode(&body)?))
@@ -222,16 +210,6 @@ impl WaveKvSyncService {
         info!("WaveKV sync tasks started");
     }
 
-    /// Handle incoming sync request for persistent store
-    pub fn handle_persistent_sync(&self, msg: SyncMessage) -> Result<SyncResponse> {
-        self.persistent_manager.handle_sync(msg)
-    }
-
-    /// Handle incoming sync request for ephemeral store
-    pub fn handle_ephemeral_sync(&self, msg: SyncMessage) -> Result<SyncResponse> {
-        self.ephemeral_manager.handle_sync(msg)
-    }
-
     fn manager_for(&self, store: &str) -> Option<&Arc<SyncManager<HttpSyncNetwork>>> {
         match store {
             "persistent" => Some(&self.persistent_manager),
@@ -250,7 +228,7 @@ impl WaveKvSyncService {
         Some(self.manager_for(store)?.handle_push(env))
     }
 
-    /// Per-peer protocol and digest telemetry for both stores.
+    /// Per-peer digest and failure telemetry for both stores.
     pub fn link_status(&self) -> Vec<(&'static str, Vec<PeerLinkStatus>)> {
         vec![
             ("persistent", self.persistent_manager.link_status()),

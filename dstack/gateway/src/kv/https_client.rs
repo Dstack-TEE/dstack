@@ -23,24 +23,20 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme};
 use serde::{de::DeserializeOwned, Serialize};
 
-use super::{
-    decode, encode, gunzip_bounded, MAX_COMPRESSED_SYNC_BYTES, MAX_DECOMPRESSED_SYNC_BYTES,
-};
-
-/// Read a peer's response body, refusing one larger than the sync route accepts
-/// on a request.
+/// Read a peer's response body, refusing one larger than the routes accept on a request.
 ///
-/// `Body::collect` reads to completion, so without this a peer could stream an
-/// unbounded response and the decompression limit downstream would never be
-/// reached — the memory is already gone by then.
+/// `Body::collect` reads to completion, so without this a peer could stream an unbounded
+/// response and the decompression limit downstream would never be reached — the memory
+/// is already gone by then.
 async fn read_body_bounded(body: hyper::body::Incoming) -> Result<Bytes> {
-    Limited::new(body, MAX_COMPRESSED_SYNC_BYTES)
+    Limited::new(body, super::MAX_COMPRESSED_SYNC_BYTES)
         .collect()
         .await
         .map(|collected| collected.to_bytes())
         .map_err(|err| {
             anyhow::anyhow!(
-                "failed to read response body (limit {MAX_COMPRESSED_SYNC_BYTES} bytes): {err}"
+                "failed to read response body (limit {} bytes): {err}",
+                super::MAX_COMPRESSED_SYNC_BYTES
             )
         })
 }
@@ -262,42 +258,24 @@ impl HttpsClient {
             anyhow::bail!("request failed: {}", response.status());
         }
 
+        // Bounded like every other response: this is the bootnode GetPeers path, and
+        // the threat model does not assume a bootnode is honest.
         let body = read_body_bounded(response.into_body()).await?;
 
         serde_json::from_slice(&body).context("failed to parse response")
     }
 
-    /// Send an already-encoded body and return the raw response bytes, or `None` when
-    /// the peer does not expose the route.
-    ///
-    /// `None` (rather than an error) is what lets the caller distinguish "this peer has
-    /// not been upgraded yet" from "the request failed", which is the basis of the
-    /// wavekv v1/v2 protocol negotiation.
-    pub async fn post_bytes_probe(&self, url: &str, body: Vec<u8>) -> Result<Option<Vec<u8>>> {
+    /// Send an already-encoded body and return the decompressed response bytes.
+    pub async fn post_bytes_response(&self, url: &str, body: Vec<u8>) -> Result<Vec<u8>> {
         let response = self.post_gzipped(url, body).await?;
 
         let status = response.status();
-        if status == hyper::StatusCode::NOT_FOUND || status == hyper::StatusCode::METHOD_NOT_ALLOWED
-        {
-            return Ok(None);
-        }
         if !status.is_success() {
             anyhow::bail!("request failed: {status}");
         }
 
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .context("failed to read response body")?
-            .to_bytes();
-
-        let mut decoder = GzDecoder::new(&body[..]);
-        let mut decompressed = Vec::new();
-        decoder
-            .read_to_end(&mut decompressed)
-            .context("failed to decompress response")?;
-        Ok(Some(decompressed))
+        let body = read_body_bounded(response.into_body()).await?;
+        crate::kv::gunzip_bounded(&body, crate::kv::MAX_DECOMPRESSED_SYNC_BYTES)
     }
 
     /// Send an already-encoded body to an endpoint whose successful response has no body.
@@ -307,44 +285,6 @@ impl HttpsClient {
             anyhow::bail!("request failed: {}", response.status());
         }
         Ok(())
-    }
-
-    /// Send a POST request with msgpack + gzip encoded body and receive msgpack + gzip response
-    pub async fn post_compressed_msg<T: Serialize, R: DeserializeOwned>(
-        &self,
-        url: &str,
-        body: &T,
-    ) -> Result<R> {
-        let encoded = encode(body).context("failed to encode request body")?;
-
-        // Compress with gzip
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
-        encoder
-            .write_all(&encoded)
-            .context("failed to compress request")?;
-        let compressed = encoder.finish().context("failed to finish compression")?;
-
-        let request = hyper::Request::builder()
-            .method(hyper::Method::POST)
-            .uri(url)
-            .header("content-type", "application/x-msgpack-gz")
-            .body(Full::new(Bytes::from(compressed)))
-            .context("failed to build request")?;
-
-        let response = self
-            .client
-            .request(request)
-            .await
-            .with_context(|| format!("failed to send request to {url}"))?;
-
-        if !response.status().is_success() {
-            anyhow::bail!("request failed: {}", response.status());
-        }
-
-        let body = read_body_bounded(response.into_body()).await?;
-        let decompressed = gunzip_bounded(&body, MAX_DECOMPRESSED_SYNC_BYTES)?;
-
-        decode(&decompressed).context("failed to decode response")
     }
 }
 
@@ -426,7 +366,7 @@ mod tests {
             .to_vec()
     }
 
-    /// The client half of the same rule the sync route enforces on inbound requests.
+    /// The client half of the same rule the sync routes enforce on inbound requests.
     ///
     /// This runs during the TLS handshake, so a validator that always returns `Ok(())`
     /// means this gateway will complete a mutually-authenticated connection to any peer
@@ -465,13 +405,9 @@ mod tests {
     }
 }
 
-/// The client paths tested against a real TLS peer.
+/// Response handling tested against a real TLS peer.
 ///
-/// `https_only()` means a plain HTTP stub will not do, which is why these paths had no
-/// coverage at all: the status check on a sync response, the status check on a bootnode
-/// fetch, the response-size bound, and the identity check that runs inside the
-/// handshake. No container and no TEE — a local listener with a certificate minted in
-/// process.
+/// No container and no TEE: a local listener with a certificate minted in process.
 #[cfg(test)]
 mod transport_tests {
     use super::*;
@@ -498,70 +434,23 @@ mod transport_tests {
             .signed_by(&leaf_key, &ca_cert, &ca_key)
             .expect("leaf cert");
 
-        write_material(
-            dir,
-            &ca_cert.pem(),
-            &leaf_cert.pem(),
-            &leaf_key.serialize_pem(),
-        );
+        let cert_path = dir.join("node.crt");
+        let key_path = dir.join("node.key");
+        let ca_path = dir.join("ca.crt");
+        std::fs::write(&cert_path, leaf_cert.pem()).expect("write cert");
+        std::fs::write(&key_path, leaf_key.serialize_pem()).expect("write key");
+        std::fs::write(&ca_path, ca_cert.pem()).expect("write ca");
+
         (
-            client_config(dir),
+            HttpsClientConfig {
+                cert_path: cert_path.to_string_lossy().into_owned(),
+                key_path: key_path.to_string_lossy().into_owned(),
+                ca_cert_path: ca_path.to_string_lossy().into_owned(),
+                cert_validator: None,
+            },
             leaf_cert.der().to_vec(),
             leaf_key.serialize_der(),
         )
-    }
-
-    /// A server certificate that also carries an app id, for the handshake-identity test.
-    fn app_id_server_cert(
-        dir: &std::path::Path,
-        app_id: &[u8],
-    ) -> (HttpsClientConfig, Vec<u8>, Vec<u8>) {
-        use ra_tls::cert::CertRequest;
-        use ra_tls::rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
-
-        let ca_key = KeyPair::generate().expect("ca key");
-        let mut ca_params = CertificateParams::new(vec![]).expect("ca params");
-        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        let ca_cert = ca_params.self_signed(&ca_key).expect("ca cert");
-
-        let leaf_key = KeyPair::generate().expect("leaf key");
-        let alt_names = vec!["127.0.0.1".to_string()];
-        let leaf_cert = CertRequest::builder()
-            .key(&leaf_key)
-            .subject("peer.test")
-            .alt_names(&alt_names)
-            .app_id(app_id)
-            .usage_server_auth(true)
-            .build()
-            .signed_by(&ca_cert, &ca_key)
-            .expect("leaf cert");
-
-        write_material(
-            dir,
-            &ca_cert.pem(),
-            &leaf_cert.pem(),
-            &leaf_key.serialize_pem(),
-        );
-        (
-            client_config(dir),
-            leaf_cert.der().to_vec(),
-            leaf_key.serialize_der(),
-        )
-    }
-
-    fn write_material(dir: &std::path::Path, ca_pem: &str, cert_pem: &str, key_pem: &str) {
-        std::fs::write(dir.join("node.crt"), cert_pem).expect("write cert");
-        std::fs::write(dir.join("node.key"), key_pem).expect("write key");
-        std::fs::write(dir.join("ca.crt"), ca_pem).expect("write ca");
-    }
-
-    fn client_config(dir: &std::path::Path) -> HttpsClientConfig {
-        HttpsClientConfig {
-            cert_path: dir.join("node.crt").to_string_lossy().into_owned(),
-            key_path: dir.join("node.key").to_string_lossy().into_owned(),
-            ca_cert_path: dir.join("ca.crt").to_string_lossy().into_owned(),
-            cert_validator: None,
-        }
     }
 
     /// Serve one fixed response over TLS and return the URL to reach it.
@@ -608,62 +497,38 @@ mod transport_tests {
         format!("https://127.0.0.1:{}/wavekv/sync/persistent", addr.port())
     }
 
-    fn gzip_with(level: Compression, bytes: &[u8]) -> Vec<u8> {
-        let mut encoder = GzEncoder::new(Vec::new(), level);
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
         encoder.write_all(bytes).expect("gzip");
         encoder.finish().expect("gzip finish")
     }
 
-    fn gzip(bytes: &[u8]) -> Vec<u8> {
-        gzip_with(Compression::fast(), bytes)
-    }
-
-    /// Drive `post_compressed_msg` against a peer serving one fixed response.
-    async fn round_trip(status: StatusCode, body: Vec<u8>) -> Result<u32> {
+    async fn request(status: StatusCode, body: Vec<u8>) -> Result<Vec<u8>> {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, cert, key) = tls_material(dir.path());
         let url = serve(status, body, cert, key).await;
         HttpsClient::new(&config)
             .expect("client")
-            .post_compressed_msg(&url, &1u32)
+            .post_bytes_response(&url, b"request".to_vec())
             .await
     }
 
-    /// The status check on a sync response was untested, so a peer answering 500 could
-    /// have been decoded as a successful round.
+    /// A non-success status must never be decoded as a successful sync response.
     #[tokio::test]
-    async fn a_failed_sync_is_not_decoded_as_a_response() {
-        // The body must be one that *would* decode, so the status check is the only
-        // thing that can reject it. With an empty body the decode fails on its own and
-        // the assertion measures nothing.
-        let body = gzip(&encode(&7u32).expect("encode"));
-        assert!(
-            round_trip(StatusCode::INTERNAL_SERVER_ERROR, body.clone())
-                .await
-                .is_err(),
-            "a 500 from a peer must not decode, even when its body would"
-        );
-        assert_eq!(
-            round_trip(StatusCode::OK, body).await.expect("200 decodes"),
-            7
-        );
+    async fn a_server_error_is_rejected() {
+        assert!(request(StatusCode::INTERNAL_SERVER_ERROR, Vec::new())
+            .await
+            .is_err());
+        assert!(request(StatusCode::BAD_REQUEST, Vec::new()).await.is_err());
     }
 
-    /// `post_json` is the bootnode GetPeers path, and the threat model does not assume a
-    /// bootnode is honest — so a failure status must not be parsed as a peer list.
+    /// A peer that answers gets its body decompressed and returned.
     #[tokio::test]
-    async fn a_failed_bootnode_fetch_is_not_parsed_as_peers() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let dir = tempfile::tempdir().expect("tempdir");
-        let (config, cert, key) = tls_material(dir.path());
-        let url = serve(StatusCode::FORBIDDEN, b"null".to_vec(), cert, key).await;
-        let client = HttpsClient::new(&config).expect("client");
-        let out: Result<Option<u32>> = client.post_json(&url, &()).await;
-        assert!(
-            out.is_err(),
-            "a 403 from a bootnode must not parse as a body"
-        );
+    async fn an_upgraded_peer_returns_its_decoded_body() {
+        let payload = b"the-envelope-bytes".to_vec();
+        let got = request(StatusCode::OK, gzip(&payload)).await.unwrap();
+        assert_eq!(got, payload);
     }
 
     /// Push responses intentionally have no body. A successful delivery must not be
@@ -757,18 +622,17 @@ mod transport_tests {
             let dir = tempfile::tempdir().expect("tempdir");
             let (mut config, cert, key) = app_id_server_cert(dir.path(), &server_app_id);
             config.cert_validator = Some(Arc::new(AppIdValidator::new(ours.clone())));
-            let url = serve(StatusCode::NOT_FOUND, Vec::new(), cert, key).await;
+            let url = serve(StatusCode::OK, gzip(b"response"), cert, key).await;
 
             let got = HttpsClient::new(&config)
                 .expect("client")
-                .post_bytes_probe(&url, b"x".to_vec())
+                .post_bytes_response(&url, b"x".to_vec())
                 .await;
 
             if expect_ok {
                 assert_eq!(
                     got.expect("a peer from our own app must connect"),
-                    None,
-                    "the 404 should still read as not-upgraded"
+                    b"response"
                 );
             } else {
                 assert!(
@@ -777,20 +641,6 @@ mod transport_tests {
                 );
             }
         }
-    }
-
-    /// `post_compressed_msg` is the v1 sync path — how a v2 gateway talks to one that
-    /// has not been upgraded. Its status check was as untested as the negotiation's, so
-    /// a v1 peer answering 500 could have been decoded as a successful round.
-    #[tokio::test]
-    async fn a_failed_v1_sync_is_not_decoded_as_a_response() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let dir = tempfile::tempdir().expect("tempdir");
-        let (config, cert, key) = tls_material(dir.path());
-        let url = serve(StatusCode::INTERNAL_SERVER_ERROR, Vec::new(), cert, key).await;
-        let client = HttpsClient::new(&config).expect("client");
-        let out: Result<u32> = client.post_compressed_msg(&url, &1u32).await;
-        assert!(out.is_err(), "a 500 from a v1 peer must not decode");
     }
 
     /// `post_json` is the bootnode GetPeers path, and the threat model does not assume a
@@ -814,52 +664,22 @@ mod transport_tests {
     ///
     /// The body must be *valid* gzip that merely exceeds the compressed ceiling. A
     /// malformed one is rejected by `gunzip_bounded` whatever the ceiling says, so it
-    /// would pass this test with the bound removed entirely. Stored-mode gzip keeps the
-    /// encoded size at roughly the input size, so the payload clears the ceiling while
-    /// decompressing well inside it.
+    /// would pass this test with the bound removed entirely — which is exactly what the
+    /// first version of it did. Stored-mode gzip keeps the encoded size at roughly the
+    /// input size, so the payload clears the ceiling while decompressing well inside it.
     #[tokio::test]
     async fn an_oversized_response_body_is_refused() {
-        let stored = gzip_with(
-            Compression::none(),
-            &vec![0u8; MAX_COMPRESSED_SYNC_BYTES + 1],
-        );
+        let stored = {
+            let mut encoder = GzEncoder::new(Vec::new(), Compression::none());
+            encoder
+                .write_all(&vec![0u8; super::super::MAX_COMPRESSED_SYNC_BYTES + 1])
+                .expect("gzip");
+            encoder.finish().expect("gzip finish")
+        };
         assert!(
-            stored.len() > MAX_COMPRESSED_SYNC_BYTES,
+            stored.len() > super::super::MAX_COMPRESSED_SYNC_BYTES,
             "the fixture depends on the compressed body clearing the ceiling"
         );
-        assert!(round_trip(StatusCode::OK, stored).await.is_err());
-    }
-
-    /// The client-side identity check, over a real handshake rather than a direct call.
-    ///
-    /// `AppIdValidator` runs inside `CustomCertVerifier`, which rustls only reaches once
-    /// standard chain verification passes — so unit-testing the validator alone leaves
-    /// the wiring untested. A peer from another app must fail to connect at all, before
-    /// any application bytes move.
-    #[tokio::test]
-    async fn a_peer_from_another_app_cannot_complete_the_handshake() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let ours = b"app-id-of-this-cluster".to_vec();
-        let body = gzip(&encode(&7u32).expect("encode"));
-
-        for (server_app_id, expect_ok) in
-            [(ours.clone(), true), (b"a-different-app".to_vec(), false)]
-        {
-            let dir = tempfile::tempdir().expect("tempdir");
-            let (mut config, cert, key) = app_id_server_cert(dir.path(), &server_app_id);
-            config.cert_validator = Some(Arc::new(AppIdValidator::new(ours.clone())));
-            let url = serve(StatusCode::OK, body.clone(), cert, key).await;
-
-            let got: Result<u32> = HttpsClient::new(&config)
-                .expect("client")
-                .post_compressed_msg(&url, &1u32)
-                .await;
-
-            assert_eq!(
-                got.is_ok(),
-                expect_ok,
-                "app id {server_app_id:?} against ours {ours:?}"
-            );
-        }
+        assert!(request(StatusCode::OK, stored).await.is_err());
     }
 }

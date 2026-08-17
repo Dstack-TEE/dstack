@@ -82,8 +82,10 @@ Important request paths covered by this suite:
 | `POST /prpc/Admin.SetNodeUrl` | Register peer gateway URLs. |
 | `POST /prpc/Admin.SetNodeStatus` | Mark nodes up/down and verify registration filtering. |
 | `POST /prpc/Admin.WaveKvStatus` | Inspect WaveKV store status. |
-| `POST /wavekv/sync/persistent` | Gateway-to-gateway persistent data sync. |
-| `POST /wavekv/sync/ephemeral` | Gateway-to-gateway last-seen/handshake/connection sync. |
+| `POST /wavekv/sync2/persistent` | Gateway-to-gateway persistent data sync. |
+| `POST /wavekv/sync2/ephemeral` | Gateway-to-gateway last-seen/handshake/connection sync. |
+| `POST /wavekv/push/persistent` | Opportunistic persistent-state propagation. |
+| `POST /wavekv/push/ephemeral` | Opportunistic ephemeral-state propagation. |
 
 ## Real proxy data-path smoke test
 

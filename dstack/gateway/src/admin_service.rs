@@ -214,7 +214,7 @@ impl AdminRpc for AdminRpcHandler {
                 .collect()
         };
 
-        // Per-peer protocol/digest telemetry lives on the sync manager, not the store.
+        // Per-peer digest and failure telemetry lives on the sync manager, not the store.
         let links = self
             .state
             .wavekv_sync
@@ -815,7 +815,6 @@ fn build_store_status(
                     buffered_logs: 0,
                     last_seen,
                     heard_from: p.heard_from,
-                    protocol: link.map(|l| l.protocol).unwrap_or_default().to_string(),
                     digest_mismatches: link.map(|l| l.digest_mismatches).unwrap_or(0),
                     consecutive_failures: link.map(|l| l.consecutive_failures).unwrap_or(0),
                 }

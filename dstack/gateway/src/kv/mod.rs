@@ -493,9 +493,7 @@ fn store_config(store: schema::Store) -> wavekv::NodeConfig {
 /// same reason the key schema exists (see `schema.rs`).
 ///
 /// The value is far above any legitimate payload. A v2 delta is capped by
-/// `max_delta_bytes` (4 MiB by default) and the v1 shim answers with the whole live
-/// state, which is bounded by the gateway's own key set — instances, certificates and
-/// node records — not by anything a peer controls.
+/// `max_delta_bytes` (4 MiB by default).
 pub const MAX_DECOMPRESSED_SYNC_BYTES: usize = 128 * 1024 * 1024;
 
 /// Ceiling on a compressed sync response, mirroring the 16 MiB the routes accept on a
@@ -1847,55 +1845,14 @@ mod value_encoding_tests {
     }
 }
 
-/// The gateway speaks two wavekv protocols during a rolling upgrade: the frozen v1
-/// `SyncMessage`/`SyncResponse` pair on `/wavekv/sync`, and the v2 `SyncEnvelope` on
-/// `/wavekv/sync2`. These tests pin the wire behaviour of both at the gateway layer.
+/// Gateway-layer tests for the WaveKV v2 wire and admission policy.
 #[cfg(test)]
 mod sync_wire_tests {
     use super::*;
-    use wavekv::sync::{SyncEnvelope, SyncMessage, SyncResponse};
+    use wavekv::sync::SyncEnvelope;
 
     fn store(dir: &std::path::Path, id: NodeId, peers: Vec<NodeId>) -> KvStore {
         KvStore::new(id, peers, dir).expect("failed to create kv store")
-    }
-
-    /// A gateway still on wavekv 1.x encodes `SyncMessage` positionally. The v1 route
-    /// must keep accepting that after this upgrade.
-    #[test]
-    fn a_positionally_encoded_v1_request_is_still_accepted() {
-        let msg = SyncMessage {
-            sender_id: 2,
-            sender_uuid: b"uuid".to_vec(),
-            sender_ack: [(1u32, 5u64)].into_iter().collect(),
-            entries: Vec::new(),
-        };
-        let legacy = rmp_serde::encode::to_vec(&msg).expect("legacy encode");
-        assert_eq!(
-            legacy[0] & 0xf0,
-            0x90,
-            "fixture must be positional to exercise the legacy path"
-        );
-
-        let decoded: SyncMessage = decode(&legacy).expect("the v1 wire format must still decode");
-        assert_eq!(decoded.sender_id, 2);
-        assert_eq!(decoded.sender_ack.get(&1), Some(&5));
-    }
-
-    /// ...and the response this gateway sends back must decode on that older peer,
-    /// which uses a reader built before the named-map switch.
-    #[test]
-    fn a_v1_peer_can_decode_our_sync_response() {
-        let response = SyncResponse {
-            peer_id: 1,
-            entries: Vec::new(),
-            progress: [(1u32, 7u64)].into_iter().collect(),
-            is_snapshot: true,
-        };
-        let encoded = encode(&response).expect("encode");
-        let decoded: SyncResponse =
-            rmp_serde::decode::from_slice(&encoded).expect("a v1 peer must decode this");
-        assert!(decoded.is_snapshot);
-        assert_eq!(decoded.progress.get(&1), Some(&7));
     }
 
     #[test]
@@ -1942,39 +1899,6 @@ mod sync_wire_tests {
         );
     }
 
-    /// End-to-end through the shim: a v1-shaped exchange against this gateway's store
-    /// converges it with the requester's view.
-    #[test]
-    fn the_v1_shim_serves_a_complete_delta() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let kv = store(dir.path(), 1, vec![2]);
-        for id in 1..=3 {
-            kv.persistent()
-                .write()
-                .put(keys::peer_addr(id), format!("https://n{id}").into_bytes())
-                .expect("put");
-        }
-
-        let request = SyncMessage {
-            sender_id: 2,
-            sender_uuid: Vec::new(),
-            sender_ack: Default::default(),
-            entries: Vec::new(),
-        };
-        let response = kv
-            .persistent()
-            .write()
-            .handle_sync_v1(request)
-            .expect("shim response");
-
-        assert_eq!(response.entries.len(), 3);
-        assert!(
-            response.is_snapshot,
-            "the flag is what makes a v1 client adopt our coverage before merging"
-        );
-        assert_eq!(response.progress.get(&1), Some(&3));
-    }
-
     /// A peer cannot plant keys outside the schema, in either store.
     #[test]
     fn merged_entries_outside_the_schema_are_refused() {
@@ -2003,6 +1927,53 @@ mod sync_wire_tests {
             "a rejection must park the round's acks so the peer keeps re-offering"
         );
         assert!(kv.persistent().read().get("not-a-gateway-key").is_none());
+    }
+}
+
+/// A production WaveKV 1.0 gateway is upgraded in place while stopped. There is no
+/// mixed-version cluster protocol to preserve, but its persistent snapshot and WAL are
+/// an on-disk compatibility contract.
+#[cfg(test)]
+mod wavekv_v1_migration_tests {
+    use super::*;
+
+    #[test]
+    fn a_v2_gateway_opens_and_preserves_a_v1_data_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let key = keys::peer_addr(7);
+        let value = b"https://gateway-7.example:8011".to_vec();
+        let wal_key = keys::peer_addr(8);
+        let wal_value = b"https://gateway-8.example:8011".to_vec();
+
+        {
+            let v1 = wavekv_v1::Node::new_with_persistence(1, Vec::new(), dir.path())
+                .expect("create v1 store");
+            v1.write()
+                .put(key.clone(), value.clone())
+                .expect("write v1 data");
+            v1.persist_if_dirty().expect("persist v1 snapshot");
+            v1.write()
+                .put(wal_key.clone(), wal_value.clone())
+                .expect("write trailing v1 WAL entry");
+        }
+
+        let v2 = KvStore::new(1, Vec::new(), dir.path()).expect("open v1 data as v2");
+        assert_eq!(
+            v2.persistent()
+                .read()
+                .get(&key)
+                .and_then(|entry| entry.value),
+            Some(value),
+            "the stopped single-node upgrade must preserve the replicated state"
+        );
+        assert_eq!(
+            v2.persistent()
+                .read()
+                .get(&wal_key)
+                .and_then(|entry| entry.value),
+            Some(wal_value),
+            "the upgrade must replay v1 WAL entries written after the snapshot"
+        );
     }
 }
 

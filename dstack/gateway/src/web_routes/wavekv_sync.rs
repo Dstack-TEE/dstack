@@ -7,9 +7,7 @@
 //! Sync data is encoded using msgpack + gzip compression for efficiency.
 
 use crate::{
-    kv::{
-        decode, encode, gunzip_bounded, MAX_COMPRESSED_SYNC_BYTES, MAX_DECOMPRESSED_SYNC_BYTES,
-    },
+    kv::{gunzip_bounded, MAX_COMPRESSED_SYNC_BYTES, MAX_DECOMPRESSED_SYNC_BYTES},
     main_service::Proxy,
 };
 use flate2::{write::GzEncoder, Compression};
@@ -22,7 +20,7 @@ use rocket::{
 };
 use std::io::Write;
 use tracing::warn;
-use wavekv::sync::{SyncEnvelope, SyncMessage, SyncResponse};
+use wavekv::sync::SyncEnvelope;
 
 /// Adapter implementing `CertExt` over a parsed certificate's extension list.
 ///
@@ -39,28 +37,6 @@ impl CertExt for RocketCert<'_, '_> {
         };
         Ok(Some(ext.value.to_vec()))
     }
-}
-
-/// Decode compressed msgpack data
-fn decode_sync_message(data: &[u8]) -> Result<SyncMessage, Status> {
-    let decompressed = gunzip_bounded(data, MAX_DECOMPRESSED_SYNC_BYTES).map_err(|e| {
-        warn!("failed to decompress sync message: {e:#}");
-        Status::BadRequest
-    })?;
-
-    decode(&decompressed).map_err(|e| {
-        warn!("failed to decode sync message: {e}");
-        Status::BadRequest
-    })
-}
-
-/// Encode and compress sync response
-fn encode_sync_response(response: &SyncResponse) -> Result<Vec<u8>, Status> {
-    let encoded = encode(response).map_err(|e| {
-        warn!("failed to encode sync response: {e}");
-        Status::InternalServerError
-    })?;
-    gzip(&encoded)
 }
 
 fn gzip(bytes: &[u8]) -> Result<Vec<u8>, Status> {
@@ -95,7 +71,7 @@ async fn read_compressed_body(data: Data<'_>) -> Result<Vec<u8>, Status> {
     Ok(bytes.into_inner())
 }
 
-/// Read a v2 envelope from a request body, applying the same size cap as the v1 route.
+/// Read a v2 envelope from a bounded request body.
 async fn read_envelope(data: Data<'_>) -> Result<SyncEnvelope, Status> {
     let decompressed = gunzip(&read_compressed_body(data).await?)?;
     // `SyncEnvelope::decode` enforces the schema version and rejects trailing bytes;
@@ -154,52 +130,7 @@ fn authorize_peer(cert: &impl CertExt, my_app_id: Option<&[u8]>) -> Result<(), S
     Ok(())
 }
 
-/// Handle sync request (msgpack + gzip encoded)
-#[post("/wavekv/sync/<store>", data = "<data>")]
-pub async fn sync_store(
-    state: &State<Proxy>,
-    cert: Option<Certificate<'_>>,
-    store: &str,
-    data: Data<'_>,
-) -> Result<(ContentType, Vec<u8>), Status> {
-    verify_gateway_peer(state, cert)?;
-
-    let Some(ref wavekv_sync) = state.wavekv_sync else {
-        return Err(Status::ServiceUnavailable);
-    };
-
-    // Read and decode request
-    let bytes = read_compressed_body(data).await?;
-    let msg = decode_sync_message(&bytes)?;
-
-    // Reject sync from node_id == 0
-    if msg.sender_id == 0 {
-        warn!("rejected sync from invalid node_id 0");
-        return Err(Status::BadRequest);
-    }
-
-    // Handle sync based on store type
-    let response = match store {
-        "persistent" => wavekv_sync.handle_persistent_sync(msg),
-        "ephemeral" => wavekv_sync.handle_ephemeral_sync(msg),
-        _ => return Err(Status::NotFound),
-    }
-    .map_err(|e| {
-        tracing::error!("{store} sync failed: {e}");
-        Status::InternalServerError
-    })?;
-
-    // Encode response
-    let encoded = encode_sync_response(&response)?;
-
-    Ok((ContentType::new("application", "x-msgpack-gz"), encoded))
-}
-
 /// Native v2 sync endpoint.
-///
-/// A gateway still running wavekv 1.x has no route here and answers 404, which is
-/// exactly the signal its peers use to fall back to `/wavekv/sync`. Mounting this route
-/// is therefore the whole of the server-side protocol negotiation.
 #[post("/wavekv/sync2/<store>", data = "<data>")]
 pub async fn sync_store_v2(
     state: &State<Proxy>,
@@ -391,11 +322,7 @@ mod tests {
     async fn every_sync_route_refuses_a_peer_it_cannot_identify() {
         let (client, _proxy, _tmp) = enforcing_gateway().await;
 
-        for route in [
-            "/wavekv/sync/persistent",
-            "/wavekv/sync2/persistent",
-            "/wavekv/push/persistent",
-        ] {
+        for route in ["/wavekv/sync2/persistent", "/wavekv/push/persistent"] {
             let response = client.post(route).body(Vec::new()).dispatch().await;
             assert_eq!(
                 response.status(),
@@ -610,11 +537,7 @@ mod tests {
     #[tokio::test]
     async fn an_oversized_compressed_request_is_rejected_explicitly() {
         let (client, _proxy, _tmp) = serving_gateway(true).await;
-        for path in [
-            "/wavekv/sync/persistent",
-            "/wavekv/sync2/persistent",
-            "/wavekv/push/persistent",
-        ] {
+        for path in ["/wavekv/sync2/persistent", "/wavekv/push/persistent"] {
             let response = client
                 .post(path)
                 .body(vec![0u8; 16 * 1024 * 1024 + 1])
@@ -624,10 +547,9 @@ mod tests {
         }
     }
 
-    /// 404 is the negotiation signal: it is what tells a peer "this node has no v2
-    /// route, fall back to v1". Nothing else on these routes may produce it by accident.
+    /// Unknown stores are rejected rather than being routed to either replicated store.
     #[tokio::test]
-    async fn an_unknown_store_is_a_404_because_that_is_the_v1_signal() {
+    async fn an_unknown_store_is_rejected() {
         let (client, proxy, _tmp) = serving_gateway(true).await;
         register_peer(&proxy);
 
@@ -640,109 +562,12 @@ mod tests {
         assert_eq!(response.status(), Status::NotFound);
     }
 
-    fn v1_body(msg: &SyncMessage) -> Vec<u8> {
-        gzip(&encode(msg).expect("encode v1 message")).expect("gzip")
-    }
-
-    fn v1_request() -> SyncMessage {
-        SyncMessage {
-            sender_id: PEER,
-            sender_uuid: peer_uuid(),
-            // Empty coverage, so the shim answers with everything it holds.
-            sender_ack: Default::default(),
-            entries: Vec::new(),
-        }
-    }
-
-    /// The v1 shim is how a gateway that has not been upgraded still receives state, and
-    /// nothing exercised it at the route level: the store dispatch could be deleted, the
-    /// node-id-zero guard inverted, and the response body replaced with three bytes,
-    /// all without turning the suite red.
-    ///
-    /// Deleting the `"persistent"` arm is the sharpest of those. It falls through to
-    /// `_ => 404`, and a 404 on a sync route is precisely the signal a v2 peer reads as
-    /// "this node does not speak that protocol" — so the failure would not look like an
-    /// error, it would look like a successful protocol downgrade.
+    /// A node with synchronization disabled reports that the service is unavailable.
     #[tokio::test]
-    async fn a_v1_round_trip_serves_the_state_this_node_holds() {
-        let (client, proxy, _tmp) = serving_gateway(true).await;
-        register_peer(&proxy);
-        proxy
-            .kv_store()
-            .persistent()
-            .write()
-            .put("node/7".to_string(), b"v".to_vec())
-            .expect("seed");
-
-        let response = client
-            .post("/wavekv/sync/persistent")
-            .body(v1_body(&v1_request()))
-            .dispatch()
-            .await;
-
-        assert_eq!(response.status(), Status::Ok);
-        let bytes = response.into_bytes().await.expect("body");
-        let decoded: SyncResponse =
-            decode(&gunzip(&bytes).expect("gunzip")).expect("decode v1 response");
-
-        assert_eq!(decoded.peer_id, ME);
-        assert!(
-            decoded.entries.iter().any(|e| e.key == "node/7"),
-            "a peer with no coverage must receive the state this node holds"
-        );
-    }
-
-    /// Both stores are reachable over the v1 route. The ephemeral arm carries the
-    /// liveness data a stale peer needs most, and losing it would read as a downgrade
-    /// rather than a fault, exactly as above.
-    #[tokio::test]
-    async fn the_v1_route_serves_the_ephemeral_store_as_well() {
-        let (client, proxy, _tmp) = serving_gateway(true).await;
-        register_peer(&proxy);
-
-        let response = client
-            .post("/wavekv/sync/ephemeral")
-            .body(v1_body(&v1_request()))
-            .dispatch()
-            .await;
-
-        assert_eq!(
-            response.status(),
-            Status::Ok,
-            "a 404 here would demote this node to no-such-route in the caller's cache"
-        );
-    }
-
-    /// Node id 0 is the unset value, so an entry authored by it collides with every
-    /// other unset sender. The v1 route rejects it, as the push and v2 routes do.
-    #[tokio::test]
-    async fn a_v1_sync_from_node_id_zero_is_refused() {
-        let (client, proxy, _tmp) = serving_gateway(true).await;
-        register_peer(&proxy);
-
-        let mut msg = v1_request();
-        msg.sender_id = 0;
-        let response = client
-            .post("/wavekv/sync/persistent")
-            .body(v1_body(&msg))
-            .dispatch()
-            .await;
-
-        assert_eq!(response.status(), Status::BadRequest);
-    }
-
-    /// ...which is why a node with sync switched off must answer 503 and not 404. A 404
-    /// here would demote this node to v1 in every peer's cache for a whole reprobe
-    /// window — silently, and without sync being on to fix it.
-    #[tokio::test]
-    async fn a_sync_disabled_node_answers_503_rather_than_404() {
+    async fn a_sync_disabled_node_answers_503() {
         let (client, _proxy, _tmp) = serving_gateway(false).await;
 
-        for path in [
-            "/wavekv/sync/persistent",
-            "/wavekv/sync2/persistent",
-            "/wavekv/push/persistent",
-        ] {
+        for path in ["/wavekv/sync2/persistent", "/wavekv/push/persistent"] {
             let response = client
                 .post(path)
                 .body(body(&SyncEnvelope::new(PEER, peer_uuid())))
@@ -772,11 +597,7 @@ mod tests {
             bomb.len()
         );
 
-        for path in [
-            "/wavekv/sync/persistent",
-            "/wavekv/sync2/persistent",
-            "/wavekv/push/persistent",
-        ] {
+        for path in ["/wavekv/sync2/persistent", "/wavekv/push/persistent"] {
             let response = client.post(path).body(bomb.clone()).dispatch().await;
             assert_eq!(
                 response.status(),
@@ -799,8 +620,7 @@ mod tests {
     #[allow(clippy::assertions_on_constants)]
     #[test]
     fn the_sync_limits_admit_the_largest_message_the_protocol_can_produce() {
-        // A v2 delta is capped by wavekv's `max_delta_bytes` (4 MiB by default), and the
-        // v1 shim answers with the whole live state.
+        // A v2 delta is capped by wavekv's `max_delta_bytes` (4 MiB by default).
         const MAX_DELTA_BYTES: usize = 4 * 1024 * 1024;
         assert!(
             MAX_DECOMPRESSED_SYNC_BYTES >= 8 * MAX_DELTA_BYTES,

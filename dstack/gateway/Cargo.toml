@@ -74,6 +74,7 @@ socket2.workspace = true
 [dev-dependencies]
 insta.workspace = true
 tempfile.workspace = true
+wavekv-v1 = { package = "wavekv", version = "=1.0.0" }
 # `test-util` gives the idle-watchdog tests a paused clock, so they assert on
 # the window without waiting for it in wall-clock time.
 tokio = { workspace = true, features = ["test-util"] }
