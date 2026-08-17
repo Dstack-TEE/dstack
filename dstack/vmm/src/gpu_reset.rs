@@ -29,17 +29,17 @@
 
 use std::{
     collections::BTreeSet,
-    fs::{File, OpenOptions},
-    mem::size_of,
-    os::fd::{AsRawFd, FromRawFd, OwnedFd},
+    fs::File,
     os::unix::fs::FileExt,
     path::{Path, PathBuf},
+    sync::Arc,
     thread,
     time::{Duration, Instant},
 };
 
 use anyhow::{bail, Context, Result};
 use tracing::info;
+use vfio_ioctls::{PciHotResetDevice, VfioContainer, VfioDevice};
 
 use crate::{app::GpuConfig, config::GpuConfig as HostGpuConfig};
 
@@ -47,41 +47,6 @@ const PCI_SYSFS_DEVICES: &str = "/sys/bus/pci/devices";
 const PCI_BRIDGE_CLASS: u32 = 0x0604;
 const SBR_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const SBR_STABLE_TIME: Duration = Duration::from_millis(500);
-
-const VFIO_CONTAINER: &str = "/dev/vfio/vfio";
-const VFIO_GROUP_DIR: &str = "/dev/vfio";
-const VFIO_API_VERSION: i32 = 0;
-const VFIO_TYPE1_IOMMU: usize = 1;
-const VFIO_TYPE1V2_IOMMU: usize = 3;
-const VFIO_GROUP_FLAGS_VIABLE: u32 = 1;
-
-// _IO(';', 100 + n) from <linux/vfio.h>: no argument size is encoded.
-const fn vfio_io(nr: u64) -> libc::c_ulong {
-    ((b';' as u64) << 8 | (100 + nr)) as libc::c_ulong
-}
-const VFIO_GET_API_VERSION: libc::c_ulong = vfio_io(0);
-const VFIO_CHECK_EXTENSION: libc::c_ulong = vfio_io(1);
-const VFIO_SET_IOMMU: libc::c_ulong = vfio_io(2);
-const VFIO_GROUP_GET_STATUS: libc::c_ulong = vfio_io(3);
-const VFIO_GROUP_SET_CONTAINER: libc::c_ulong = vfio_io(4);
-const VFIO_GROUP_GET_DEVICE_FD: libc::c_ulong = vfio_io(6);
-const VFIO_DEVICE_PCI_GET_HOT_RESET_INFO: libc::c_ulong = vfio_io(12);
-const VFIO_DEVICE_PCI_HOT_RESET: libc::c_ulong = vfio_io(13);
-
-#[repr(C)]
-struct VfioGroupStatus {
-    argsz: u32,
-    flags: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct VfioPciDependentDevice {
-    group_id: u32,
-    segment: u16,
-    bus: u8,
-    devfn: u8,
-}
 
 /// Clears device-internal state that can survive VFIO's attach-time FLR.
 ///
@@ -133,11 +98,16 @@ fn sanitize_at(sysfs_devices: &Path, selected: &BTreeSet<String>, timeout: Durat
 /// All fds are dropped on return so that QEMU can open the group afterwards.
 fn hot_reset(sysfs_devices: &Path, slot: &str) -> Result<()> {
     let group_id = iommu_group_id(sysfs_devices, slot)?;
-    let container = open_container()?;
-    let group = open_group(&container, group_id)?;
-    let device = open_device(&group, slot)?;
+    let container = Arc::new(VfioContainer::new(None).context("failed to open VFIO container")?);
+    let group = container
+        .get_group(group_id)
+        .with_context(|| format!("failed to open VFIO group {group_id}"))?;
+    let device = VfioDevice::new(&sysfs_devices.join(slot), container)
+        .with_context(|| format!("failed to open VFIO device {slot}"))?;
 
-    let dependents = hot_reset_dependents(&device)?;
+    let dependents = device
+        .pci_hot_reset_info()
+        .context("VFIO_DEVICE_GET_PCI_HOT_RESET_INFO failed")?;
     let foreign = dependents
         .iter()
         .filter(|dep| dep.group_id != group_id)
@@ -156,136 +126,13 @@ fn hot_reset(sysfs_devices: &Path, slot: &str) -> Result<()> {
         "issuing VFIO PCI hot reset"
     );
 
-    // struct vfio_pci_hot_reset { argsz, flags, count, group_fds[] }
-    let mut request = [0_u32; 4];
-    request[0] = (size_of::<[u32; 4]>()) as u32;
-    request[2] = 1;
-    request[3] = group.as_raw_fd() as u32;
-    vfio_ioctl(
-        &device,
-        VFIO_DEVICE_PCI_HOT_RESET,
-        request.as_mut_ptr() as usize,
-        "VFIO_DEVICE_PCI_HOT_RESET",
-    )?;
+    device
+        .pci_hot_reset(&[&group])
+        .context("VFIO_DEVICE_PCI_HOT_RESET failed")?;
     Ok(())
 }
 
-fn open_container() -> Result<File> {
-    let container = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(VFIO_CONTAINER)
-        .with_context(|| format!("failed to open {VFIO_CONTAINER}"))?;
-    let version = vfio_ioctl(&container, VFIO_GET_API_VERSION, 0, "VFIO_GET_API_VERSION")?;
-    if version != VFIO_API_VERSION {
-        bail!("unsupported VFIO API version {version}");
-    }
-    Ok(container)
-}
-
-fn open_group(container: &File, group_id: u32) -> Result<File> {
-    let path = format!("{VFIO_GROUP_DIR}/{group_id}");
-    let group = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&path)
-        .with_context(|| format!("failed to open {path} (is the VMM user in its group?)"))?;
-
-    let mut status = VfioGroupStatus {
-        argsz: size_of::<VfioGroupStatus>() as u32,
-        flags: 0,
-    };
-    vfio_ioctl(
-        &group,
-        VFIO_GROUP_GET_STATUS,
-        &mut status as *mut _ as usize,
-        "VFIO_GROUP_GET_STATUS",
-    )?;
-    if status.flags & VFIO_GROUP_FLAGS_VIABLE == 0 {
-        bail!("IOMMU group {group_id} is not viable; are all of its devices bound to vfio-pci?");
-    }
-
-    let container_fd = container.as_raw_fd();
-    vfio_ioctl(
-        &group,
-        VFIO_GROUP_SET_CONTAINER,
-        &container_fd as *const _ as usize,
-        "VFIO_GROUP_SET_CONTAINER",
-    )?;
-    // An IOMMU backend must be set before device fds can be handed out. No
-    // DMA mappings are created; the container exists only for this reset.
-    let type1v2 = vfio_ioctl(
-        container,
-        VFIO_CHECK_EXTENSION,
-        VFIO_TYPE1V2_IOMMU,
-        "VFIO_CHECK_EXTENSION",
-    )?;
-    let iommu = if type1v2 > 0 {
-        VFIO_TYPE1V2_IOMMU
-    } else {
-        VFIO_TYPE1_IOMMU
-    };
-    vfio_ioctl(container, VFIO_SET_IOMMU, iommu, "VFIO_SET_IOMMU")?;
-    Ok(group)
-}
-
-fn open_device(group: &File, slot: &str) -> Result<OwnedFd> {
-    let name = std::ffi::CString::new(slot).context("invalid PCI slot name")?;
-    let fd = vfio_ioctl(
-        group,
-        VFIO_GROUP_GET_DEVICE_FD,
-        name.as_ptr() as usize,
-        "VFIO_GROUP_GET_DEVICE_FD",
-    )?;
-    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
-}
-
-/// Returns the devices the kernel reports as affected by a hot reset.
-fn hot_reset_dependents(device: &OwnedFd) -> Result<Vec<VfioPciDependentDevice>> {
-    // struct vfio_pci_hot_reset_info { argsz, flags, count, devices[] }
-    const HEADER: usize = size_of::<[u32; 3]>();
-    const ENTRY: usize = size_of::<VfioPciDependentDevice>();
-
-    let mut probe = [HEADER as u32, 0, 0];
-    let ret = unsafe {
-        libc::ioctl(
-            device.as_raw_fd(),
-            VFIO_DEVICE_PCI_GET_HOT_RESET_INFO,
-            probe.as_mut_ptr(),
-        )
-    };
-    if ret < 0 {
-        let err = std::io::Error::last_os_error();
-        // ENOSPC is the expected way to learn the entry count.
-        if err.raw_os_error() != Some(libc::ENOSPC) {
-            return Err(err).context("VFIO_DEVICE_PCI_GET_HOT_RESET_INFO failed");
-        }
-    }
-    let count = probe[2] as usize;
-
-    // u64 storage keeps the buffer aligned for the header and entries.
-    let mut buffer = vec![0_u64; (HEADER + count * ENTRY).div_ceil(size_of::<u64>())];
-    let header = buffer.as_mut_ptr() as *mut u32;
-    unsafe {
-        *header = (HEADER + count * ENTRY) as u32;
-    }
-    vfio_ioctl(
-        device,
-        VFIO_DEVICE_PCI_GET_HOT_RESET_INFO,
-        buffer.as_mut_ptr() as usize,
-        "VFIO_DEVICE_PCI_GET_HOT_RESET_INFO",
-    )?;
-    let filled = unsafe { *header.add(2) } as usize;
-    let entries = unsafe {
-        std::slice::from_raw_parts(
-            (buffer.as_ptr() as *const u8).add(HEADER) as *const VfioPciDependentDevice,
-            filled.min(count),
-        )
-    };
-    Ok(entries.to_vec())
-}
-
-fn format_dependent(dep: &VfioPciDependentDevice) -> String {
+fn format_dependent(dep: &PciHotResetDevice) -> String {
     format!(
         "{:04x}:{:02x}:{:02x}.{:x} (group {})",
         dep.segment,
@@ -294,14 +141,6 @@ fn format_dependent(dep: &VfioPciDependentDevice) -> String {
         dep.devfn & 0x7,
         dep.group_id
     )
-}
-
-fn vfio_ioctl(fd: &impl AsRawFd, request: libc::c_ulong, arg: usize, what: &str) -> Result<i32> {
-    let ret = unsafe { libc::ioctl(fd.as_raw_fd(), request, arg) };
-    if ret < 0 {
-        return Err(std::io::Error::last_os_error()).with_context(|| format!("{what} failed"));
-    }
-    Ok(ret)
 }
 
 fn iommu_group_id(sysfs_devices: &Path, slot: &str) -> Result<u32> {
@@ -470,11 +309,11 @@ mod tests {
 
     #[test]
     fn formats_dependent_devices_with_pci_slot_and_function() {
-        let dep = VfioPciDependentDevice {
+        let dep = PciHotResetDevice {
             group_id: 46,
             segment: 0,
             bus: 0x0f,
-            devfn: (0x00 << 3) | 0x1,
+            devfn: 0x1,
         };
         assert_eq!(format_dependent(&dep), "0000:0f:00.1 (group 46)");
     }

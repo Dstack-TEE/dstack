@@ -68,6 +68,7 @@ tar.workspace = true
 tempfile.workspace = true
 wait-timeout.workspace = true
 listenfd.workspace = true
+vfio-ioctls.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
