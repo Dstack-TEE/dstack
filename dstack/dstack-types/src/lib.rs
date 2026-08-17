@@ -1093,6 +1093,11 @@ pub struct SysConfig {
     pub kms_urls: Vec<String>,
     #[serde(default, alias = "tproxy_urls")]
     pub gateway_urls: Vec<String>,
+    /// Independently operated gateway clusters. URLs within one entry are
+    /// failover endpoints for the same cluster. When empty, `gateway_urls` is
+    /// treated as one legacy cluster.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gateway_clusters: Vec<GatewayClusterConfig>,
     /// Backward-compatible input for sys-config files produced by older hosts.
     #[serde(default, rename = "pccs_url", skip_serializing)]
     legacy_pccs_url: Option<String>,
@@ -1115,6 +1120,18 @@ pub struct SysConfig {
     pub mr_config: Option<String>,
     // JSON serialized VmConfig
     pub vm_config: String,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GatewayClusterConfig {
+    /// Stable local name used for the per-cluster key cache.
+    pub name: String,
+    /// Failover RPC endpoints belonging to this cluster.
+    pub urls: Vec<String>,
+    /// Whether failure to register this cluster makes the refresh fail.
+    #[serde(default = "default_true")]
+    pub required: bool,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, Eq)]

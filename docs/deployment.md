@@ -321,6 +321,30 @@ kms_urls = ["https://kms.example.com:9201"]
 gateway_urls = ["https://gateway.example.com:9202"]
 ```
 
+`gateway_urls` is a failover list for one gateway cluster. To register a CVM
+with independently operated clusters, configure explicit groups instead. Each
+cluster gets a separate WireGuard interface and key pair; their WireGuard
+address ranges must not overlap. All clusters must run the gateway app identity
+authorized by the CVM's KMS-issued app keys.
+
+```toml
+[cvm]
+kms_urls = ["https://kms.example.com:9201"]
+
+[[cvm.gateway_clusters]]
+name = "primary"
+urls = [
+  "https://gateway-a.example.com:9202",
+  "https://gateway-b.example.com:9202",
+]
+required = true
+
+[[cvm.gateway_clusters]]
+name = "secondary"
+urls = ["https://gateway-c.example.com:9202"]
+required = false
+```
+
 Restart dstack-vmm to apply changes.
 
 ---

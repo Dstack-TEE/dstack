@@ -305,6 +305,10 @@ pub struct CvmConfig {
     /// The URL of the dstack-gateway server
     #[serde(alias = "tproxy_urls")]
     pub gateway_urls: Vec<String>,
+    /// Independently operated gateway clusters. URLs in each entry are
+    /// failover endpoints for that cluster.
+    #[serde(default)]
+    pub gateway_clusters: Vec<dstack_types::GatewayClusterConfig>,
     /// The URL of the PCCS server
     #[serde(default)]
     pub pccs_url: String,
@@ -702,6 +706,31 @@ impl Config {
         ] {
             for value in values {
                 validate_http_url(name, value)?;
+            }
+        }
+        let mut cluster_names = std::collections::HashSet::new();
+        for cluster in &self.cvm.gateway_clusters {
+            anyhow::ensure!(
+                !cluster.name.is_empty()
+                    && cluster
+                        .name
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'),
+                "invalid cvm.gateway_clusters name: {}",
+                cluster.name
+            );
+            anyhow::ensure!(
+                cluster_names.insert(cluster.name.as_str()),
+                "duplicate cvm.gateway_clusters name: {}",
+                cluster.name
+            );
+            anyhow::ensure!(
+                !cluster.urls.is_empty(),
+                "cvm.gateway_clusters.{} must contain at least one URL",
+                cluster.name
+            );
+            for url in &cluster.urls {
+                validate_http_url("cvm.gateway_clusters.urls", url)?;
             }
         }
         for (name, value) in [
