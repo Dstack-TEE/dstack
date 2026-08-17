@@ -90,5 +90,18 @@ describe('viem support', () => {
 
       consoleSpy.mockRestore()
     })
+
+    it('should hash the full key material for GetKeyResponse (regression: previously fell through unhashed)', async () => {
+      const client = new DstackClient()
+      const result = await client.getKey('/', 'test')
+
+      const legacyAccount = toViemAccount(result)
+      const secureAccount = toViemAccountSecure(result)
+
+      // toViemAccountSecure must apply SHA256 to the full key material, as its
+      // docstring promises. If it silently falls through to the raw key (the
+      // bug this test guards against), both addresses are identical.
+      expect(secureAccount.address).not.toBe(legacyAccount.address)
+    })
   })
 })

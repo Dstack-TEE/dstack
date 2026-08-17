@@ -76,3 +76,17 @@ def test_to_keypair_secure_with_tls_key():
         assert len(w) == 1
         assert issubclass(w[0].category, DeprecationWarning)
         assert "Please don't use getTlsKey method" in str(w[0].message)
+
+
+def test_to_keypair_secure_hashes_full_key_material_for_get_key_response():
+    """Regression: the GetKeyResponse branch previously fell through unhashed,
+    silently contradicting the "SHA256 of full key material" docstring."""
+    mock_result = GetKeyResponse(
+        key="1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        signature_chain=["sig1", "sig2"],
+    )
+
+    legacy_keypair = to_keypair(mock_result)
+    secure_keypair = to_keypair_secure(mock_result)
+
+    assert bytes(secure_keypair.pubkey()) != bytes(legacy_keypair.pubkey())

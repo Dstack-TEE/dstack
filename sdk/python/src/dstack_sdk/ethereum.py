@@ -63,4 +63,5 @@ def to_account_secure(
                 "to_account_secure: missing SHA256 support, please upgrade your system"
             ) from e
     else:  # GetKeyResponse
-        return Account.from_key(get_key_response.decode_key())  # type: ignore[no-any-return]
+        hashed_key = hashlib.sha256(get_key_response.decode_key()).digest()
+        return Account.from_key(hashed_key)  # type: ignore[no-any-return]
