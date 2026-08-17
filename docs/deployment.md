@@ -331,6 +331,11 @@ Clusters refresh independently. If one cluster is unavailable, its last
 working WireGuard configuration remains active while other clusters continue
 to register and update normally.
 
+`gateway_urls` and `gateway_clusters` are mutually exclusive in the VMM
+configuration. The VMM refuses to start if both are non-empty. For compatibility
+with sys-config files produced elsewhere, the guest prefers `gateway_clusters`
+and logs a warning when both forms are present.
+
 ```toml
 [cvm]
 kms_urls = ["https://kms.example.com:9201"]

@@ -708,6 +708,10 @@ impl Config {
                 validate_http_url(name, value)?;
             }
         }
+        anyhow::ensure!(
+            self.cvm.gateway_urls.is_empty() || self.cvm.gateway_clusters.is_empty(),
+            "cvm.gateway_urls and cvm.gateway_clusters cannot both be configured"
+        );
         let mut cluster_names = std::collections::HashSet::new();
         for cluster in &self.cvm.gateway_clusters {
             anyhow::ensure!(
@@ -1185,6 +1189,20 @@ mod tests {
         let mut config = default_config();
         config.host_api.address = "vsock:not-a-cid".into();
         assert!(format!("{:#}", config.validate().unwrap_err()).contains("invalid CID"));
+    }
+
+    #[test]
+    fn config_validation_rejects_mixed_gateway_syntax() {
+        let mut config = default_config();
+        config.cvm.gateway_urls = vec!["https://legacy-gateway.example.com".into()];
+        config.cvm.gateway_clusters = vec![dstack_types::GatewayClusterConfig {
+            name: "primary".into(),
+            urls: vec!["https://gateway.example.com".into()],
+        }];
+        let error = config.validate().unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("gateway_urls and cvm.gateway_clusters cannot both"));
     }
 
     #[test]

@@ -709,6 +709,11 @@ impl<'a> GatewayContext<'a> {
     }
 
     fn gateway_targets(&self) -> Result<Vec<GatewayTarget>> {
+        if !self.shared.sys_config.gateway_urls.is_empty()
+            && !self.shared.sys_config.gateway_clusters.is_empty()
+        {
+            warn!("both gateway_urls and gateway_clusters are configured; ignoring gateway_urls");
+        }
         let targets = if self.shared.sys_config.gateway_clusters.is_empty() {
             vec![GatewayTarget {
                 name: "default".to_string(),
