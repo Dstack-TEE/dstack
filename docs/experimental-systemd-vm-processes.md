@@ -12,7 +12,7 @@ Enable it in the VMM configuration:
 pm = "auto"
 
 [systemd]
-user = false
+user = true
 unit_prefix = "dstack-vm"
 state_dir = "/var/lib/dstack-vmm/systemd-processes"
 stop_timeout = "infinity"
@@ -40,11 +40,11 @@ prefix and the SHA-256 digest of the VM ID:
 dstack-vm-<sha256(vm-id)>.service
 ```
 
-By default, the VMM connects to the system service manager. Set `user = true`
-to use the service manager of the user running the VMM instead. This passes
-`--user` to every `systemd-run` and `systemctl` invocation. The user's systemd
-manager and D-Bus session must remain available (for example, enable lingering
-with `loginctl enable-linger <user>` when services must survive logout).
+By default, the VMM connects to the service manager of the user running the
+VMM. This passes `--user` to every `systemd-run` and `systemctl` invocation.
+The user's systemd manager and D-Bus session must remain available (for example,
+enable lingering with `loginctl enable-linger <user>` when services must survive
+logout). Set `user = false` to connect to the system service manager instead.
 
 For a software-TPM VM, the service cgroup contains:
 

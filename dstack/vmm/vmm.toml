@@ -195,7 +195,7 @@ auto_start = true
 # Used when cvm.pm = "systemd" or "auto". Transient services are named
 # <unit_prefix>-<sha256(vm-id)>.service.
 # Connect to the per-user service manager instead of the system manager.
-user = false
+user = true
 unit_prefix = "dstack-vm"
 # Process metadata used to reconcile transient services after a VMM restart.
 # Empty defaults to ~/.dstack-vmm/systemd-processes.
