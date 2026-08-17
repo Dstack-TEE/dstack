@@ -88,9 +88,9 @@ impl ExchangeInterface for HttpSyncNetwork {
         anyhow::bail!("wavekv v1 peer synchronization is not supported")
     }
 
-    /// Native v2 exchange.
+    /// Native WaveKV exchange.
     ///
-    /// All deployed clusters use the v2 wire protocol. WaveKV 1.0 data directories are
+    /// All deployed clusters use this wire protocol. WaveKV 1.0 data directories are
     /// migrated in place during a stopped single-node upgrade; no mixed-version network
     /// protocol is exposed by the gateway.
     async fn sync_v2_to(
@@ -99,7 +99,7 @@ impl ExchangeInterface for HttpSyncNetwork {
         peer: NodeId,
         env: SyncEnvelope,
     ) -> Result<Option<SyncEnvelope>> {
-        let sync_url = self.route_for(peer, "sync2")?;
+        let sync_url = self.route_for(peer, "sync")?;
 
         let body = self
             .client
@@ -218,7 +218,7 @@ impl WaveKvSyncService {
         }
     }
 
-    /// Handle an inbound v2 sync envelope.
+    /// Handle an inbound sync envelope.
     pub fn handle_envelope(&self, store: &str, env: SyncEnvelope) -> Option<Result<SyncEnvelope>> {
         Some(self.manager_for(store)?.handle_envelope(env))
     }

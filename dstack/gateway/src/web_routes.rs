@@ -44,7 +44,7 @@ pub fn health_routes() -> Vec<Route> {
 
 /// WaveKV sync endpoint (for main server, requires mTLS gateway auth)
 pub fn wavekv_sync_routes() -> Vec<Route> {
-    routes![wavekv_sync::sync_store_v2, wavekv_sync::push_store]
+    routes![wavekv_sync::sync_store, wavekv_sync::push_store]
 }
 #[cfg(test)]
 mod tests {
@@ -72,7 +72,7 @@ mod tests {
             .map(|route| route.uri.to_string())
             .collect();
 
-        for expected in ["/wavekv/sync2/<store>", "/wavekv/push/<store>"] {
+        for expected in ["/wavekv/sync/<store>", "/wavekv/push/<store>"] {
             assert!(
                 mounted.iter().any(|uri| uri == expected),
                 "{expected} is not mounted; peers would be unable to synchronize. \

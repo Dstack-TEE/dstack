@@ -71,7 +71,7 @@ async fn read_compressed_body(data: Data<'_>) -> Result<Vec<u8>, Status> {
     Ok(bytes.into_inner())
 }
 
-/// Read a v2 envelope from a bounded request body.
+/// Read a sync envelope from a bounded request body.
 async fn read_envelope(data: Data<'_>) -> Result<SyncEnvelope, Status> {
     let decompressed = gunzip(&read_compressed_body(data).await?)?;
     // `SyncEnvelope::decode` enforces the schema version and rejects trailing bytes;
@@ -130,9 +130,9 @@ fn authorize_peer(cert: &impl CertExt, my_app_id: Option<&[u8]>) -> Result<(), S
     Ok(())
 }
 
-/// Native v2 sync endpoint.
-#[post("/wavekv/sync2/<store>", data = "<data>")]
-pub async fn sync_store_v2(
+/// WaveKV sync endpoint.
+#[post("/wavekv/sync/<store>", data = "<data>")]
+pub async fn sync_store(
     state: &State<Proxy>,
     cert: Option<Certificate<'_>>,
     store: &str,
@@ -146,7 +146,7 @@ pub async fn sync_store_v2(
 
     let env = read_envelope(data).await?;
     if env.sender_id == 0 {
-        warn!("rejected v2 sync from invalid node_id 0");
+        warn!("rejected sync from invalid node_id 0");
         return Err(Status::BadRequest);
     }
 
@@ -154,7 +154,7 @@ pub async fn sync_store_v2(
         return Err(Status::NotFound);
     };
     let response = result.map_err(|e| {
-        tracing::error!("{store} v2 sync failed: {e:#}");
+        tracing::error!("{store} sync failed: {e:#}");
         Status::InternalServerError
     })?;
 
@@ -322,7 +322,7 @@ mod tests {
     async fn every_sync_route_refuses_a_peer_it_cannot_identify() {
         let (client, _proxy, _tmp) = enforcing_gateway().await;
 
-        for route in ["/wavekv/sync2/persistent", "/wavekv/push/persistent"] {
+        for route in ["/wavekv/sync/persistent", "/wavekv/push/persistent"] {
             let response = client.post(route).body(Vec::new()).dispatch().await;
             assert_eq!(
                 response.status(),
@@ -507,7 +507,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_v2_round_trip_returns_a_decodable_envelope() {
+    async fn a_sync_round_trip_returns_a_decodable_envelope() {
         let (client, proxy, _tmp) = serving_gateway(true).await;
         register_peer(&proxy);
         proxy
@@ -519,7 +519,7 @@ mod tests {
 
         let request = SyncEnvelope::new(PEER, peer_uuid());
         let response = client
-            .post("/wavekv/sync2/persistent")
+            .post("/wavekv/sync/persistent")
             .body(body(&request))
             .dispatch()
             .await;
@@ -537,7 +537,7 @@ mod tests {
     #[tokio::test]
     async fn an_oversized_compressed_request_is_rejected_explicitly() {
         let (client, _proxy, _tmp) = serving_gateway(true).await;
-        for path in ["/wavekv/sync2/persistent", "/wavekv/push/persistent"] {
+        for path in ["/wavekv/sync/persistent", "/wavekv/push/persistent"] {
             let response = client
                 .post(path)
                 .body(vec![0u8; 16 * 1024 * 1024 + 1])
@@ -554,7 +554,7 @@ mod tests {
         register_peer(&proxy);
 
         let response = client
-            .post("/wavekv/sync2/bogus")
+            .post("/wavekv/sync/bogus")
             .body(body(&SyncEnvelope::new(PEER, peer_uuid())))
             .dispatch()
             .await;
@@ -567,7 +567,7 @@ mod tests {
     async fn a_sync_disabled_node_answers_503() {
         let (client, _proxy, _tmp) = serving_gateway(false).await;
 
-        for path in ["/wavekv/sync2/persistent", "/wavekv/push/persistent"] {
+        for path in ["/wavekv/sync/persistent", "/wavekv/push/persistent"] {
             let response = client
                 .post(path)
                 .body(body(&SyncEnvelope::new(PEER, peer_uuid())))
@@ -597,7 +597,7 @@ mod tests {
             bomb.len()
         );
 
-        for path in ["/wavekv/sync2/persistent", "/wavekv/push/persistent"] {
+        for path in ["/wavekv/sync/persistent", "/wavekv/push/persistent"] {
             let response = client.post(path).body(bomb.clone()).dispatch().await;
             assert_eq!(
                 response.status(),

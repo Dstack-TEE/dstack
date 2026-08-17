@@ -1845,7 +1845,7 @@ mod value_encoding_tests {
     }
 }
 
-/// Gateway-layer tests for the WaveKV v2 wire and admission policy.
+/// Gateway-layer tests for the WaveKV sync wire and admission policy.
 #[cfg(test)]
 mod sync_wire_tests {
     use super::*;
@@ -1938,7 +1938,7 @@ mod wavekv_v1_migration_tests {
     use super::*;
 
     #[test]
-    fn a_v2_gateway_opens_and_preserves_a_v1_data_directory() {
+    fn an_upgraded_gateway_opens_and_preserves_a_v1_data_directory() {
         let dir = tempfile::tempdir().expect("tempdir");
         let key = keys::peer_addr(7);
         let value = b"https://gateway-7.example:8011".to_vec();
@@ -1957,9 +1957,10 @@ mod wavekv_v1_migration_tests {
                 .expect("write trailing v1 WAL entry");
         }
 
-        let v2 = KvStore::new(1, Vec::new(), dir.path()).expect("open v1 data as v2");
+        let upgraded = KvStore::new(1, Vec::new(), dir.path()).expect("open v1 data after upgrade");
         assert_eq!(
-            v2.persistent()
+            upgraded
+                .persistent()
                 .read()
                 .get(&key)
                 .and_then(|entry| entry.value),
@@ -1967,7 +1968,8 @@ mod wavekv_v1_migration_tests {
             "the stopped single-node upgrade must preserve the replicated state"
         );
         assert_eq!(
-            v2.persistent()
+            upgraded
+                .persistent()
                 .read()
                 .get(&wal_key)
                 .and_then(|entry| entry.value),
