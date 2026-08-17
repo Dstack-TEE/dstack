@@ -262,6 +262,7 @@ This audit is derived from the repository source inventory and is the traceabili
 <a id="req-vmm-compute-ne-006"></a><a id="risk-vmm-compute-ne-006"></a>| `req-vmm-compute-ne-006` | `risk-vmm-compute-ne-006` | [tc-vmm-compute-ne-006](02-vmm/05-compute-network-image/tc-vmm-compute-ne-006/case.md#tc-vmm-compute-ne-006) — Registry authentication pull and extraction | P1 |
 <a id="req-vmm-compute-ne-007"></a><a id="risk-vmm-compute-ne-007"></a>| `req-vmm-compute-ne-007` | `risk-vmm-compute-ne-007` | [tc-vmm-compute-ne-007](02-vmm/05-compute-network-image/tc-vmm-compute-ne-007/case.md#tc-vmm-compute-ne-007) — QEMU command and platform matrix | P0 |
 <a id="req-vmm-volume-008"></a><a id="risk-vmm-volume-008"></a>| `req-vmm-volume-008` | `risk-vmm-volume-008` | [tc-vmm-volume-008](02-vmm/05-compute-network-image/tc-vmm-volume-008/case.md#tc-vmm-volume-008) — Measured verity volume extraction resolution and path safety | P0 |
+<a id="req-vmm-compute-ne-009"></a><a id="risk-vmm-compute-ne-009"></a>| `req-vmm-compute-ne-009` | `risk-vmm-compute-ne-009` | [tc-vmm-compute-ne-009](02-vmm/05-compute-network-image/tc-vmm-compute-ne-009/case.md#tc-vmm-compute-ne-009) — Macvtap simulator launch and external connectivity | P1 |
 
 <a id="audit-section-vmm-ui-observability-host"></a>
 ### Ui Observability Host
