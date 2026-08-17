@@ -392,6 +392,30 @@ struct PreparedGatewayCluster {
     response: RegisterCvmResponse,
 }
 
+fn wireguard_endpoint_hosts(config: &str) -> Result<Vec<String>> {
+    config
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("Endpoint = "))
+        .map(|endpoint| {
+            endpoint
+                .rsplit_once(':')
+                .map(|(host, _)| host.trim_matches(['[', ']']).to_string())
+                .context("invalid WireGuard endpoint")
+        })
+        .collect()
+}
+
+fn remove_partial_wireguard_config(path: &str, cluster: &str) {
+    if let Err(error) = fs::remove_file(path) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            warn!(
+                cluster = cluster,
+                "failed to remove partially applied WireGuard config: {error}"
+            );
+        }
+    }
+}
+
 struct GatewayContext<'a> {
     shared: &'a HostShared,
     keys: &'a AppKeys,
@@ -680,7 +704,7 @@ impl<'a> GatewayContext<'a> {
         if errors.is_empty() {
             Ok(())
         } else {
-            bail!("Failed to refresh gateway clusters: {}", errors.join("; "))
+            bail!("failed to refresh gateway clusters: {}", errors.join("; "))
         }
     }
 
@@ -709,13 +733,13 @@ impl<'a> GatewayContext<'a> {
                     .bytes()
                     .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
             {
-                bail!("Invalid gateway cluster name: {}", target.name);
+                bail!("invalid gateway cluster name: {}", target.name);
             }
             if !names.insert(target.name.as_str()) {
-                bail!("Duplicate gateway cluster name: {}", target.name);
+                bail!("duplicate gateway cluster name: {}", target.name);
             }
             if target.urls.is_empty() {
-                bail!("Gateway cluster {} has no URLs", target.name);
+                bail!("gateway cluster {} has no URLs", target.name);
             }
         }
         Ok(targets)
@@ -732,7 +756,7 @@ impl<'a> GatewayContext<'a> {
                     .context("too many gateway clusters")?,
             )
             .context("too many gateway clusters")?;
-        let mut wg_info = cluster.response.wg.take().context("Missing wg info")?;
+        let mut wg_info = cluster.response.wg.take().context("missing wg info")?;
         wg_info.servers.sort_by(|a, b| a.pk.cmp(&b.pk));
         let mut new_config = format!(
             "[Interface]\nPrivateKey = {}\nListenPort = {listen_port}\nAddress = {}/32\n\n",
@@ -744,29 +768,83 @@ impl<'a> GatewayContext<'a> {
                 "[Peer]\nPublicKey = {pk}\nAllowedIPs = {ip}/32\nEndpoint = {endpoint}\nPersistentKeepalive = 25\n"
             ));
         }
-        if !force && fs::read_to_string(&config_path).ok().as_ref() == Some(&new_config) {
+        let old_config = fs::read_to_string(&config_path).ok();
+        if !force && old_config.as_ref() == Some(&new_config) {
             info!(cluster = %cluster.name, "WireGuard config unchanged");
             return Ok(());
         }
-        safe_write_with_mode(&config_path, &new_config, 0o600)
-            .context("Failed to write WireGuard config")?;
+        let new_endpoints = wireguard_endpoint_hosts(&new_config)?;
+        let applied = self.apply_wireguard_config(
+            &interface,
+            &config_path,
+            listen_port,
+            &new_config,
+            &new_endpoints,
+        );
+        if let Err(error) = applied {
+            // Registration and refresh are independent per cluster. Preserve
+            // this cluster's last-known-good config if applying its replacement
+            // fails; a cluster with no prior config removes the false marker so
+            // the checker takes its fast missing-config retry path.
+            if let Some(old_config) = old_config {
+                match wireguard_endpoint_hosts(&old_config).and_then(|endpoints| {
+                    self.apply_wireguard_config(
+                        &interface,
+                        &config_path,
+                        listen_port,
+                        &old_config,
+                        &endpoints,
+                    )
+                }) {
+                    Ok(()) => {
+                        warn!(cluster = %cluster.name, "restored previous WireGuard config after refresh failure")
+                    }
+                    Err(rollback_error) => {
+                        warn!(cluster = %cluster.name, "failed to restore previous WireGuard config: {rollback_error:#}");
+                        remove_partial_wireguard_config(&config_path, &cluster.name);
+                    }
+                }
+            } else {
+                remove_partial_wireguard_config(&config_path, &cluster.name);
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn apply_wireguard_config(
+        &self,
+        interface: &str,
+        config_path: &str,
+        listen_port: u16,
+        config: &str,
+        endpoint_hosts: &[String],
+    ) -> Result<()> {
+        safe_write_with_mode(config_path, config, 0o600)
+            .context("failed to write WireGuard config")?;
         cmd!(ignore wg-quick down $interface)?;
 
-        let chain = format!("DSTACK_WG{}", cluster.index);
-        cmd!(ignore iptables -N $chain 2>/dev/null)?;
-        cmd!(iptables -F $chain)?;
-        cmd!(ignore iptables -D INPUT -p udp --dport $listen_port -j $chain 2>/dev/null)?;
-        cmd!(iptables -I INPUT -p udp --dport $listen_port -j $chain)?;
-        for peer in &wg_info.servers {
-            let endpoint_ip = peer
-                .endpoint
-                .rsplit_once(':')
-                .map(|(host, _)| host.trim_matches(['[', ']']))
-                .context("Invalid wireguard endpoint")?;
-            cmd!(iptables -A $chain -s $endpoint_ip -j ACCEPT)?;
+        // Docker also updates iptables throughout boot. Bound every lock wait
+        // so a transient xtables.lock holder neither breaks the cluster update
+        // nor stalls the checker indefinitely.
+        let xtables_wait = "5";
+        let chain = format!("DSTACK_WG{}", interface.trim_start_matches("dstack-wg"));
+        if interface == "dstack-wg0" {
+            // Remove the pre-multi-cluster chain after upgrading. The new
+            // per-interface chain below owns the same listen port.
+            cmd!(ignore iptables -w $xtables_wait -D INPUT -p udp --dport $listen_port -j DSTACK_WG 2>/dev/null)?;
+            cmd!(ignore iptables -w $xtables_wait -F DSTACK_WG 2>/dev/null)?;
+            cmd!(ignore iptables -w $xtables_wait -X DSTACK_WG 2>/dev/null)?;
         }
-        cmd!(iptables -A $chain -j DROP)?;
-        info!(cluster = %cluster.name, %interface, "Starting WireGuard");
+        cmd!(ignore iptables -w $xtables_wait -N $chain 2>/dev/null)?;
+        cmd!(iptables -w $xtables_wait -F $chain)?;
+        cmd!(ignore iptables -w $xtables_wait -D INPUT -p udp --dport $listen_port -j $chain 2>/dev/null)?;
+        cmd!(iptables -w $xtables_wait -I INPUT -p udp --dport $listen_port -j $chain)?;
+        for endpoint_host in endpoint_hosts {
+            cmd!(iptables -w $xtables_wait -A $chain -s $endpoint_host -j ACCEPT)?;
+        }
+        cmd!(iptables -w $xtables_wait -A $chain -j DROP)?;
+        info!(%interface, "starting WireGuard");
         cmd!(wg-quick up $interface)?;
         Ok(())
     }
@@ -3696,7 +3774,7 @@ mod kms_provider_inventory_tests {
 
 #[cfg(test)]
 mod gateway_registration_refresh_tests {
-    use super::{gateway_rpc_url, GatewayKeyStore};
+    use super::{gateway_rpc_url, wireguard_endpoint_hosts, GatewayKeyStore};
     use std::os::unix::fs::PermissionsExt as _;
 
     fn key_store(cert_not_after: u64) -> GatewayKeyStore {
@@ -3762,5 +3840,19 @@ mod gateway_registration_refresh_tests {
         assert!(key_store(1_601).is_cert_valid_at(1_000));
         assert!(!key_store(1_600).is_cert_valid_at(1_000));
         assert!(!key_store(u64::MAX).is_cert_valid_at(u64::MAX));
+    }
+
+    #[test]
+    fn wireguard_endpoint_hosts_support_dns_ipv4_and_ipv6() {
+        let config = r#"
+Endpoint = gateway.example.com:51820
+Endpoint = 192.0.2.1:51821
+Endpoint = [2001:db8::1]:51822
+"#;
+        assert_eq!(
+            wireguard_endpoint_hosts(config).unwrap(),
+            ["gateway.example.com", "192.0.2.1", "2001:db8::1"]
+        );
+        assert!(wireguard_endpoint_hosts("Endpoint = missing-port").is_err());
     }
 }
