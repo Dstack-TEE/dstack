@@ -28,7 +28,7 @@
 //! unit tested without a gateway, a KMS, or a WireGuard interface; all I/O
 //! lives in [`cmd_gateway_checker`].
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -36,7 +36,7 @@ use cmd_lib::run_fun as cmd;
 use sd_notify::NotifyState;
 use tracing::{error, info, warn};
 
-use crate::system_setup::{GatewayRefresher, WG_CONFIG_PATH, WG_INTERFACE};
+use crate::system_setup::GatewayRefresher;
 
 /// How often the loop samples the world.
 const POLL_INTERVAL: Duration = Duration::from_secs(10);
@@ -104,7 +104,7 @@ impl Backoff {
 struct Observation {
     /// Seconds since the UNIX epoch.
     now: i64,
-    /// Whether `/etc/wireguard/dstack-wg0.conf` exists.
+    /// Whether at least one `/etc/wireguard/dstack-wg*.conf` exists.
     config_present: bool,
     /// Most recent handshake as a UNIX timestamp; `None` if the interface has
     /// never completed one (or does not exist yet).
@@ -258,12 +258,28 @@ fn parse_latest_handshake(output: &str) -> Option<i64> {
         .max()
 }
 
-fn wg_config_present() -> bool {
-    Path::new(WG_CONFIG_PATH).exists()
+fn configured_gateway_interfaces() -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir("/etc/wireguard") else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter_map(|name| {
+            name.strip_suffix(".conf")
+                .filter(|name| name.starts_with("dstack-wg"))
+                .map(str::to_string)
+        })
+        .collect()
 }
 
 fn observe(now: i64) -> Observation {
-    let config_present = wg_config_present();
+    let interfaces = configured_gateway_interfaces();
+    let config_present = !interfaces.is_empty();
+    let handshakes = interfaces
+        .iter()
+        .map(|interface| latest_handshake(interface))
+        .collect::<Option<Vec<_>>>();
     Observation {
         now,
         config_present,
@@ -272,9 +288,10 @@ fn observe(now: i64) -> Observation {
         // the probe matters because that is precisely the state a gateway
         // outage parks the CVM in: otherwise we would fork `wg` every poll for
         // the entire outage to answer a question nobody asks.
-        latest_handshake: config_present
-            .then(|| latest_handshake(WG_INTERFACE))
-            .flatten(),
+        // The least healthy cluster drives recovery. A missing handshake on
+        // any configured interface is represented as None; otherwise the
+        // oldest cluster handshake is the staleness boundary.
+        latest_handshake: handshakes.and_then(|values| values.into_iter().min()),
     }
 }
 
@@ -349,7 +366,7 @@ pub async fn cmd_gateway_checker(args: GatewayCheckerArgs) -> Result<()> {
     // has been told, which is state this loop should not have to carry. The
     // consequence is that a boot error stays on the VMM after the checker
     // recovers, until the VM restarts.
-    let mut checker = Checker::starting(now_secs(), wg_config_present());
+    let mut checker = Checker::starting(now_secs(), !configured_gateway_interfaces().is_empty());
     loop {
         // Ping before the work, not after, so a refresh that never returns
         // stops the pings. Nothing else can do this for us: a refresh spends

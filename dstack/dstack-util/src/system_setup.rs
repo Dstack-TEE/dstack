@@ -59,7 +59,7 @@ use cert_client::CertRequestClient;
 use cmd_lib::run_fun as cmd;
 use dstack_gateway_rpc::{
     gateway_client::GatewayClient, PortAttrs as RpcPortAttrs, PortPolicy as RpcPortPolicy,
-    RegisterCvmRequest, RegisterCvmResponse, WireGuardConfig, WireGuardPeer,
+    RegisterCvmRequest, RegisterCvmResponse, WireGuardPeer,
 };
 use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
 use serde_human_bytes as hex_bytes;
@@ -314,9 +314,7 @@ impl HostShared {
 }
 
 const GATEWAY_CACHE_PATH: &str = "/run/dstack/gateway-cache.json";
-/// Name of the WireGuard interface linking this CVM to dstack-gateway.
-pub const WG_INTERFACE: &str = "dstack-wg0";
-pub const WG_CONFIG_PATH: &str = "/etc/wireguard/dstack-wg0.conf";
+const GATEWAY_CACHE_PREFIX: &str = "/run/dstack/gateway-cache-";
 /// Certificate validity period in seconds (10 days)
 const CERT_VALIDITY_SECS: u64 = 10 * 24 * 3600;
 const MAX_SUPPORTED_MANIFEST_VERSION: u32 = 3;
@@ -344,7 +342,7 @@ impl GatewayKeyStore {
         serde_json::from_str(&content).ok()
     }
 
-    fn load() -> Option<Self> {
+    fn load_from_default() -> Option<Self> {
         Self::load_from(Path::new(GATEWAY_CACHE_PATH))
     }
 
@@ -354,7 +352,7 @@ impl GatewayKeyStore {
         Ok(())
     }
 
-    fn save(&self) -> Result<()> {
+    fn save_to_default(&self) -> Result<()> {
         self.save_to(Path::new(GATEWAY_CACHE_PATH))
     }
 
@@ -381,6 +379,43 @@ fn gateway_rpc_url(base: &str) -> String {
     }
 }
 
+#[derive(Debug)]
+struct GatewayTarget {
+    name: String,
+    urls: Vec<String>,
+}
+
+struct PreparedGatewayCluster {
+    name: String,
+    index: usize,
+    key_store: GatewayKeyStore,
+    response: RegisterCvmResponse,
+}
+
+fn wireguard_endpoint_hosts(config: &str) -> Result<Vec<String>> {
+    config
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("Endpoint = "))
+        .map(|endpoint| {
+            endpoint
+                .rsplit_once(':')
+                .map(|(host, _)| host.trim_matches(['[', ']']).to_string())
+                .context("invalid WireGuard endpoint")
+        })
+        .collect()
+}
+
+fn remove_partial_wireguard_config(path: &str, cluster: &str) {
+    if let Err(error) = fs::remove_file(path) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            warn!(
+                cluster = cluster,
+                "failed to remove partially applied WireGuard config: {error}"
+            );
+        }
+    }
+}
+
 struct GatewayContext<'a> {
     shared: &'a HostShared,
     keys: &'a AppKeys,
@@ -397,11 +432,12 @@ impl<'a> GatewayContext<'a> {
         gateway_url: &str,
         client_key: &str,
         client_cert: &str,
+        gateway_app_id: &str,
     ) -> Result<GatewayClient<RaClient>> {
         let url = gateway_rpc_url(gateway_url);
         let ca_cert = self.keys.ca_cert.clone();
         let cert_validator = AppIdValidator {
-            allowed_app_id: self.keys.gateway_app_id.clone(),
+            allowed_app_id: gateway_app_id.to_string(),
         };
         let client = RaClientConfig::builder()
             .remote_uri(url)
@@ -409,7 +445,7 @@ impl<'a> GatewayContext<'a> {
             .tls_client_key(client_key.to_string())
             .tls_ca_cert(ca_cert)
             .tls_built_in_root_certs(false)
-            .tls_no_check(self.keys.gateway_app_id == "any")
+            .tls_no_check(gateway_app_id == "any")
             .verify_server_attestation(false)
             .cert_validator(Box::new(move |cert| cert_validator.validate(cert)))
             .build()
@@ -422,6 +458,7 @@ impl<'a> GatewayContext<'a> {
         &self,
         gateway_url: &str,
         key_store: &GatewayKeyStore,
+        gateway_app_id: &str,
     ) -> Result<RegisterCvmResponse> {
         let port_policy = RpcPortPolicy {
             ports: self
@@ -437,8 +474,12 @@ impl<'a> GatewayContext<'a> {
                 .collect(),
             restrict_mode: self.shared.app_compose.port_policy.restrict_mode,
         };
-        let client =
-            self.create_gateway_client(gateway_url, &key_store.client_key, &key_store.client_cert)?;
+        let client = self.create_gateway_client(
+            gateway_url,
+            &key_store.client_key,
+            &key_store.client_cert,
+            gateway_app_id,
+        )?;
         let result = client
             .register_cvm(RegisterCvmRequest {
                 client_public_key: key_store.wg_pk.clone(),
@@ -459,6 +500,7 @@ impl<'a> GatewayContext<'a> {
             gateway_url,
             &key_store.client_key,
             &key_store.client_cert_with_quote,
+            gateway_app_id,
         )?;
         client
             .register_cvm(RegisterCvmRequest {
@@ -471,7 +513,7 @@ impl<'a> GatewayContext<'a> {
 
     async fn get_or_generate_key_store(&self) -> Result<GatewayKeyStore> {
         // Try to load existing cache
-        let cache = GatewayKeyStore::load();
+        let cache = GatewayKeyStore::load_from_default();
 
         // If cache is fully valid, return it
         if let Some(ref cache) = cache {
@@ -557,6 +599,33 @@ impl<'a> GatewayContext<'a> {
         })
     }
 
+    fn key_store_for_additional_cluster(
+        &self,
+        name: &str,
+        certificate_source: &GatewayKeyStore,
+    ) -> Result<(GatewayKeyStore, PathBuf)> {
+        let path = PathBuf::from(format!("{GATEWAY_CACHE_PREFIX}{name}.json"));
+        if let Some(cache) = GatewayKeyStore::load_from(&path) {
+            if cache.is_cert_valid() {
+                info!(cluster = name, "Using cached gateway cluster key store");
+                return Ok((cache, path));
+            }
+        }
+        let old = GatewayKeyStore::load_from(&path);
+        let (wg_sk, wg_pk) = if let Some(old) = old {
+            (old.wg_sk, old.wg_pk)
+        } else {
+            let sk = cmd!(wg genkey)?;
+            let pk =
+                cmd!(echo $sk | wg pubkey).or(Err(anyhow!("Failed to generate public key")))?;
+            (sk, pk)
+        };
+        let mut key_store = certificate_source.clone();
+        key_store.wg_sk = wg_sk;
+        key_store.wg_pk = wg_pk;
+        Ok((key_store, path))
+    }
+
     async fn setup(&self, force: bool) -> Result<()> {
         if !self.shared.app_compose.gateway_enabled() {
             info!("dstack-gateway is not enabled");
@@ -566,163 +635,222 @@ impl<'a> GatewayContext<'a> {
             bail!("Missing allowed dstack-gateway app id");
         }
 
-        info!("Setting up dstack-gateway");
+        let targets = self.gateway_targets()?;
+        let uses_explicit_clusters = !self.shared.sys_config.gateway_clusters.is_empty();
+        info!(clusters = targets.len(), "Setting up dstack-gateway");
 
-        // Get or generate key store (includes WireGuard keys and client certificate)
-        let key_store = self.get_or_generate_key_store().await?;
-
-        // Persist the key store before attempting registration. Minting it costs a
-        // KMS round-trip, two cert signing requests and a TDX quote, so a gateway
-        // outage would otherwise make every retry pay that price again and turn a
-        // gateway outage into a KMS load spike across the whole fleet.
-        if let Err(e) = key_store.save() {
-            warn!("failed to save gateway cache: {e:?}");
+        // Certificates are valid for every gateway identity authorized by KMS,
+        // while each cluster receives a distinct WireGuard identity.
+        let primary_key_store = self.get_or_generate_key_store().await?;
+        if let Err(err) = primary_key_store.save_to_default() {
+            warn!("failed to save gateway cache: {err:?}");
         }
 
-        if self.shared.sys_config.gateway_urls.is_empty() {
-            bail!("Missing gateway urls");
-        }
-        // Read config and make API call
-        let response = 'out: {
-            let mut error = anyhow!("unknown error");
-            for (i, url) in self.shared.sys_config.gateway_urls.iter().enumerate() {
-                let response = self.register_cvm(url, &key_store).await;
-                match response {
-                    Ok(response) => {
-                        break 'out response;
+        let mut errors = Vec::new();
+        for (index, target) in targets.iter().enumerate() {
+            let key_store_result = if index == 0 && !uses_explicit_clusters {
+                Ok((primary_key_store.clone(), PathBuf::from(GATEWAY_CACHE_PATH)))
+            } else {
+                self.key_store_for_additional_cluster(&target.name, &primary_key_store)
+            };
+            let (key_store, cache_path) = match key_store_result {
+                Ok(value) => value,
+                Err(err) => {
+                    errors.push(format!("{}: {err:#}", target.name));
+                    continue;
+                }
+            };
+            if let Err(err) = key_store.save_to(&cache_path) {
+                warn!(cluster = %target.name, "failed to save gateway cluster cache: {err:?}");
+            }
+
+            let mut first_error = None;
+            let mut response = None;
+            for url in &target.urls {
+                match self
+                    .register_cvm(url, &key_store, &self.keys.gateway_app_id)
+                    .await
+                {
+                    Ok(value) => {
+                        response = Some(value);
+                        break;
                     }
                     Err(err) => {
-                        warn!("Failed to register CVM: {err:?}, retrying with next dstack-gateway");
-                        if i == 0 {
-                            error = err;
+                        warn!(cluster = %target.name, %url, "Failed to register CVM: {err:?}");
+                        if first_error.is_none() {
+                            first_error = Some(err);
                         }
                     }
                 }
             }
-            return Err(error).context("Failed to register CVM, all dstack-gateway urls are down");
+            let Some(response) = response else {
+                errors.push(format!(
+                    "{}: {:#}",
+                    target.name,
+                    first_error.unwrap_or_else(|| anyhow!("no gateway URLs configured"))
+                ));
+                continue;
+            };
+            let cluster = PreparedGatewayCluster {
+                name: target.name.clone(),
+                index,
+                key_store,
+                response,
+            };
+            if let Err(err) = self.apply_wireguard(cluster, force) {
+                errors.push(format!("{}: {err:#}", target.name));
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            bail!("failed to refresh gateway clusters: {}", errors.join("; "))
+        }
+    }
+
+    fn gateway_targets(&self) -> Result<Vec<GatewayTarget>> {
+        if !self.shared.sys_config.gateway_urls.is_empty()
+            && !self.shared.sys_config.gateway_clusters.is_empty()
+        {
+            warn!("both gateway_urls and gateway_clusters are configured; ignoring gateway_urls");
+        }
+        let targets = if self.shared.sys_config.gateway_clusters.is_empty() {
+            vec![GatewayTarget {
+                name: "default".to_string(),
+                urls: self.shared.sys_config.gateway_urls.clone(),
+            }]
+        } else {
+            self.shared
+                .sys_config
+                .gateway_clusters
+                .iter()
+                .map(|cluster| GatewayTarget {
+                    name: cluster.name.clone(),
+                    urls: cluster.urls.clone(),
+                })
+                .collect()
         };
-        let mut wg_info = response.wg.context("Missing wg info")?;
+        let mut names = std::collections::HashSet::new();
+        for target in &targets {
+            if target.name.is_empty()
+                || !target
+                    .name
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+            {
+                bail!("invalid gateway cluster name: {}", target.name);
+            }
+            if !names.insert(target.name.as_str()) {
+                bail!("duplicate gateway cluster name: {}", target.name);
+            }
+            if target.urls.is_empty() {
+                bail!("gateway cluster {} has no URLs", target.name);
+            }
+        }
+        Ok(targets)
+    }
 
-        let client_ip = &wg_info.client_ip;
-
-        // Sort peers by public key for consistent config generation
+    fn apply_wireguard(&self, mut cluster: PreparedGatewayCluster, force: bool) -> Result<()> {
+        let interface = format!("dstack-wg{}", cluster.index);
+        let config_path = format!("/etc/wireguard/{interface}.conf");
+        let listen_port = 9182_u16
+            .checked_add(
+                cluster
+                    .index
+                    .try_into()
+                    .context("too many gateway clusters")?,
+            )
+            .context("too many gateway clusters")?;
+        let mut wg_info = cluster.response.wg.take().context("missing wg info")?;
         wg_info.servers.sort_by(|a, b| a.pk.cmp(&b.pk));
-
-        // Create WireGuard config
-        let wg_listen_port = "9182";
         let mut new_config = format!(
-            "[Interface]\n\
-            PrivateKey = {}\n\
-            ListenPort = {wg_listen_port}\n\
-            Address = {client_ip}/32\n\n",
-            key_store.wg_sk
+            "[Interface]\nPrivateKey = {}\nListenPort = {listen_port}\nAddress = {}/32\n\n",
+            cluster.key_store.wg_sk, wg_info.client_ip
         );
         for WireGuardPeer { pk, ip, endpoint } in &wg_info.servers {
             let ip = ip.split('/').next().unwrap_or_default();
             new_config.push_str(&format!(
-                "[Peer]\n\
-                PublicKey = {pk}\n\
-                AllowedIPs = {ip}/32\n\
-                Endpoint = {endpoint}\n\
-                PersistentKeepalive = 25\n",
+                "[Peer]\nPublicKey = {pk}\nAllowedIPs = {ip}/32\nEndpoint = {endpoint}\nPersistentKeepalive = 25\n"
             ));
         }
-
-        // Check if config has changed (skip check if force is set)
-        if !force {
-            let current_config = fs::read_to_string(WG_CONFIG_PATH).ok();
-            if current_config.as_ref() == Some(&new_config) {
-                info!("WireGuard config unchanged, skipping reconfiguration");
-                return Ok(());
-            }
+        let old_config = fs::read_to_string(&config_path).ok();
+        if !force && old_config.as_ref() == Some(&new_config) {
+            info!(cluster = %cluster.name, "WireGuard config unchanged");
+            return Ok(());
         }
-
-        // The config file is also the "already applied" marker the check above
-        // reads, so it must not outlive a failed apply: the rules and the
-        // interface are what it stands for, and leaving it behind makes every
-        // later refresh take the early return and skip the setup it never
-        // finished. Nothing else repairs that -- the refresher only re-applies
-        // when the rendered config differs -- so the CVM would keep running with
-        // a half-built DSTACK_WG chain until the gateway list happened to change.
-        // Removing it is safe because it is rewritten before the `wg-quick down`
-        // below on the next attempt, and correct because /etc is a tmpfs overlay
-        // (see mount_overlay in dstack-prepare.sh), so the file already shares
-        // the reboot lifetime of the iptables rules rather than outliving them.
-        let applied = self
-            .apply_wg_config(&new_config, &wg_info, wg_listen_port)
-            .await;
-        if applied.is_err() {
-            if let Err(err) = fs::remove_file(WG_CONFIG_PATH) {
-                warn!("failed to drop the partially applied WireGuard config: {err:?}");
+        let new_endpoints = wireguard_endpoint_hosts(&new_config)?;
+        let applied = self.apply_wireguard_config(
+            &interface,
+            &config_path,
+            listen_port,
+            &new_config,
+            &new_endpoints,
+        );
+        if let Err(error) = applied {
+            // Registration and refresh are independent per cluster. Preserve
+            // this cluster's last-known-good config if applying its replacement
+            // fails; a cluster with no prior config removes the false marker so
+            // the checker takes its fast missing-config retry path.
+            if let Some(old_config) = old_config {
+                match wireguard_endpoint_hosts(&old_config).and_then(|endpoints| {
+                    self.apply_wireguard_config(
+                        &interface,
+                        &config_path,
+                        listen_port,
+                        &old_config,
+                        &endpoints,
+                    )
+                }) {
+                    Ok(()) => {
+                        warn!(cluster = %cluster.name, "restored previous WireGuard config after refresh failure")
+                    }
+                    Err(rollback_error) => {
+                        warn!(cluster = %cluster.name, "failed to restore previous WireGuard config: {rollback_error:#}");
+                        remove_partial_wireguard_config(&config_path, &cluster.name);
+                    }
+                }
+            } else {
+                remove_partial_wireguard_config(&config_path, &cluster.name);
             }
+            return Err(error);
         }
-        applied
+        Ok(())
     }
 
-    /// Write the rendered WireGuard config, program the DSTACK_WG chain that
-    /// restricts its listen port to the gateway peers, and bring the interface
-    /// up.
-    ///
-    /// Best-effort: an error can leave the chain partly built and the jump from
-    /// INPUT already installed. What the caller guarantees is not that the
-    /// kernel state is untouched, but that the next refresh will redo the whole
-    /// sequence -- it removes the config file this wrote, so the "config
-    /// unchanged" early return cannot skip the retry.
-    async fn apply_wg_config(
+    fn apply_wireguard_config(
         &self,
-        new_config: &str,
-        wg_info: &WireGuardConfig,
-        wg_listen_port: &str,
+        interface: &str,
+        config_path: &str,
+        listen_port: u16,
+        config: &str,
+        endpoint_hosts: &[String],
     ) -> Result<()> {
-        safe_write_with_mode(WG_CONFIG_PATH, new_config, 0o600)
-            .context("Failed to write WireGuard config")?;
+        safe_write_with_mode(config_path, config, 0o600)
+            .context("failed to write WireGuard config")?;
+        cmd!(ignore wg-quick down $interface)?;
 
-        cmd! {
-            ignore wg-quick down dstack-wg0;
-        }?;
-
-        // Every rule change takes /run/xtables.lock, and dockerd rewrites its own
-        // rules on each container start/stop -- which happens throughout boot,
-        // exactly when this runs. Without -w, iptables does not wait for the lock;
-        // it exits immediately with "another app is currently holding the xtables
-        // lock", aborting this sequence part-way.
-        //
-        // The bound is per invocation, not for the sequence: with four fixed
-        // calls plus one per peer, a lock held throughout could cost roughly
-        // 5s * (4 + peers). That is deliberate -- it stays well inside the
-        // gateway checker's 600s WatchdogSec, whose unit comment already
-        // accounts for blocking iptables shell-outs, while still bounding each
-        // wait so a wedged holder cannot stall the caller indefinitely the way
-        // a bare -w would.
+        // Docker also updates iptables throughout boot. Bound every lock wait
+        // so a transient xtables.lock holder neither breaks the cluster update
+        // nor stalls the checker indefinitely.
         let xtables_wait = "5";
-
-        // Setup WireGuard iptables rules
-        cmd! {
-            // Create the chain if it doesn't exist
-            ignore iptables -w $xtables_wait -N DSTACK_WG 2>/dev/null;
-            // Flush the chain
-            iptables -w $xtables_wait -F DSTACK_WG;
-            // Remove any existing jump rule
-            ignore iptables -w $xtables_wait -D INPUT -p udp --dport $wg_listen_port -j DSTACK_WG 2>/dev/null;
-            // Insert the new jump rule at the beginning of the INPUT chain
-            iptables -w $xtables_wait -I INPUT -p udp --dport $wg_listen_port -j DSTACK_WG
-        }?;
-
-        for peer in &wg_info.servers {
-            // Avoid issues with field-access in the macro by binding the IP to a local variable.
-            let endpoint_ip = peer
-                .endpoint
-                .split(':')
-                .next()
-                .context("Invalid wireguard endpoint")?;
-            cmd!(iptables -w $xtables_wait -A DSTACK_WG -s $endpoint_ip -j ACCEPT)?;
+        let chain = format!("DSTACK_WG{}", interface.trim_start_matches("dstack-wg"));
+        if interface == "dstack-wg0" {
+            // Remove the pre-multi-cluster chain after upgrading. The new
+            // per-interface chain below owns the same listen port.
+            cmd!(ignore iptables -w $xtables_wait -D INPUT -p udp --dport $listen_port -j DSTACK_WG 2>/dev/null)?;
+            cmd!(ignore iptables -w $xtables_wait -F DSTACK_WG 2>/dev/null)?;
+            cmd!(ignore iptables -w $xtables_wait -X DSTACK_WG 2>/dev/null)?;
         }
-
-        // Drop any UDP packets that don't come from an allowed IP.
-        cmd!(iptables -w $xtables_wait -A DSTACK_WG -j DROP)?;
-
-        info!("Starting WireGuard");
-        cmd!(wg-quick up dstack-wg0)?;
+        cmd!(ignore iptables -w $xtables_wait -N $chain 2>/dev/null)?;
+        cmd!(iptables -w $xtables_wait -F $chain)?;
+        cmd!(ignore iptables -w $xtables_wait -D INPUT -p udp --dport $listen_port -j $chain 2>/dev/null)?;
+        cmd!(iptables -w $xtables_wait -I INPUT -p udp --dport $listen_port -j $chain)?;
+        for endpoint_host in endpoint_hosts {
+            cmd!(iptables -w $xtables_wait -A $chain -s $endpoint_host -j ACCEPT)?;
+        }
+        cmd!(iptables -w $xtables_wait -A $chain -j DROP)?;
+        info!(%interface, "starting WireGuard");
+        cmd!(wg-quick up $interface)?;
         Ok(())
     }
 }
@@ -2039,7 +2167,9 @@ impl GatewayRefresher {
         if self.keys.gateway_app_id.is_empty() {
             bail!("Missing allowed dstack-gateway app id");
         }
-        if self.shared.sys_config.gateway_urls.is_empty() {
+        if self.shared.sys_config.gateway_urls.is_empty()
+            && self.shared.sys_config.gateway_clusters.is_empty()
+        {
             bail!("Missing gateway urls");
         }
         Ok(())
@@ -3649,7 +3779,7 @@ mod kms_provider_inventory_tests {
 
 #[cfg(test)]
 mod gateway_registration_refresh_tests {
-    use super::{gateway_rpc_url, GatewayKeyStore};
+    use super::{gateway_rpc_url, wireguard_endpoint_hosts, GatewayKeyStore};
     use std::os::unix::fs::PermissionsExt as _;
 
     fn key_store(cert_not_after: u64) -> GatewayKeyStore {
@@ -3715,5 +3845,19 @@ mod gateway_registration_refresh_tests {
         assert!(key_store(1_601).is_cert_valid_at(1_000));
         assert!(!key_store(1_600).is_cert_valid_at(1_000));
         assert!(!key_store(u64::MAX).is_cert_valid_at(u64::MAX));
+    }
+
+    #[test]
+    fn wireguard_endpoint_hosts_support_dns_ipv4_and_ipv6() {
+        let config = r#"
+Endpoint = gateway.example.com:51820
+Endpoint = 192.0.2.1:51821
+Endpoint = [2001:db8::1]:51822
+"#;
+        assert_eq!(
+            wireguard_endpoint_hosts(config).unwrap(),
+            ["gateway.example.com", "192.0.2.1", "2001:db8::1"]
+        );
+        assert!(wireguard_endpoint_hosts("Endpoint = missing-port").is_err());
     }
 }

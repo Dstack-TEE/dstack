@@ -1565,6 +1565,7 @@ pub(crate) fn make_sys_config(
     } else {
         manifest.gateway_urls.clone()
     };
+    let gateway_clusters = cfg.cvm.gateway_clusters.clone();
     if img_ver < (0, 5, 0) {
         bail!("Unsupported image version: {img_ver:?}");
     }
@@ -1580,6 +1581,7 @@ pub(crate) fn make_sys_config(
     let mut sys_config = json!({
         "kms_urls": kms_urls,
         "gateway_urls": gateway_urls,
+        "gateway_clusters": gateway_clusters,
         "pccs_url": cfg.cvm.pccs_url,
         "collateral_urls": { "pccs": cfg.cvm.pccs_url },
         "nvidia_attestation_proxy_url": cfg.cvm.nvidia_attestation_proxy_url,

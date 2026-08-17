@@ -305,6 +305,10 @@ pub struct CvmConfig {
     /// The URL of the dstack-gateway server
     #[serde(alias = "tproxy_urls")]
     pub gateway_urls: Vec<String>,
+    /// Independently operated gateway clusters. URLs in each entry are
+    /// failover endpoints for that cluster.
+    #[serde(default)]
+    pub gateway_clusters: Vec<dstack_types::GatewayClusterConfig>,
     /// The URL of the PCCS server
     #[serde(default)]
     pub pccs_url: String,
@@ -702,6 +706,35 @@ impl Config {
         ] {
             for value in values {
                 validate_http_url(name, value)?;
+            }
+        }
+        anyhow::ensure!(
+            self.cvm.gateway_urls.is_empty() || self.cvm.gateway_clusters.is_empty(),
+            "cvm.gateway_urls and cvm.gateway_clusters cannot both be configured"
+        );
+        let mut cluster_names = std::collections::HashSet::new();
+        for cluster in &self.cvm.gateway_clusters {
+            anyhow::ensure!(
+                !cluster.name.is_empty()
+                    && cluster
+                        .name
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'),
+                "invalid cvm.gateway_clusters name: {}",
+                cluster.name
+            );
+            anyhow::ensure!(
+                cluster_names.insert(cluster.name.as_str()),
+                "duplicate cvm.gateway_clusters name: {}",
+                cluster.name
+            );
+            anyhow::ensure!(
+                !cluster.urls.is_empty(),
+                "cvm.gateway_clusters.{} must contain at least one URL",
+                cluster.name
+            );
+            for url in &cluster.urls {
+                validate_http_url("cvm.gateway_clusters.urls", url)?;
             }
         }
         for (name, value) in [
@@ -1156,6 +1189,20 @@ mod tests {
         let mut config = default_config();
         config.host_api.address = "vsock:not-a-cid".into();
         assert!(format!("{:#}", config.validate().unwrap_err()).contains("invalid CID"));
+    }
+
+    #[test]
+    fn config_validation_rejects_mixed_gateway_syntax() {
+        let mut config = default_config();
+        config.cvm.gateway_urls = vec!["https://legacy-gateway.example.com".into()];
+        config.cvm.gateway_clusters = vec![dstack_types::GatewayClusterConfig {
+            name: "primary".into(),
+            urls: vec!["https://gateway.example.com".into()],
+        }];
+        let error = config.validate().unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("gateway_urls and cvm.gateway_clusters cannot both"));
     }
 
     #[test]
