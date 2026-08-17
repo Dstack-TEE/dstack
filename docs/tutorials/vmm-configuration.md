@@ -113,7 +113,6 @@ cid_pool_size = 1000
 max_allocable_vcpu = 124                        # Adjust: total cores - 4
 max_allocable_memory_in_mb = 990616             # Adjust: total MB - 16384
 qmp_socket = false
-user = ""
 use_mrconfigid = true
 qemu_pci_hole64_size = 0
 qemu_hotplug_off = false

@@ -33,9 +33,9 @@ and the same deterministic MAC address passed to QEMU. Netd then:
 4. reads its kernel-assigned ifindex and waits for `/dev/tap<ifindex>`; and
 5. returns that runtime device path to the VMM.
 
-The per-VM launcher opens the root-owned character device before dropping to
-`cvm.user`, places it at the fd referenced by QEMU's `-netdev tap,fd=...`
-argument, and then execs QEMU. This keeps device paths out of persistent VM
+The per-VM launcher opens the character device, places it at the fd referenced
+by QEMU's `-netdev tap,fd=...` argument, and then execs QEMU. This keeps device
+paths out of persistent VM
 configuration, works with both Supervisor and systemd process managers, and
 does not pass network fds through `sudo`.
 

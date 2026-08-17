@@ -30,10 +30,6 @@ pub struct LaunchSpec {
     pub swtpm_socket: Option<PathBuf>,
     #[serde(default)]
     pub open_files: Vec<OpenFile>,
-    #[serde(default)]
-    pub uid: Option<u32>,
-    #[serde(default)]
-    pub gid: Option<u32>,
     #[serde(default = "default_startup_timeout_ms")]
     pub startup_timeout_ms: u64,
     #[serde(default = "default_shutdown_timeout_ms")]
@@ -66,11 +62,7 @@ impl Drop for SocketCleanup {
     }
 }
 
-fn spawn_child(
-    spec: &ChildCommand,
-    open_files: &[OpenFile],
-    identity: Option<(u32, u32)>,
-) -> Result<Child> {
+fn spawn_child(spec: &ChildCommand, open_files: &[OpenFile]) -> Result<Child> {
     let parent = unsafe { libc::getpid() };
     let mut command = Command::new(&spec.command);
     command.args(&spec.args);
@@ -130,21 +122,6 @@ fn spawn_child(
                     }
                 } else if libc::dup2(source, target) < 0 {
                     return Err(std::io::Error::last_os_error());
-                }
-            }
-            if let Some((uid, gid)) = identity {
-                if libc::geteuid() == 0 {
-                    if libc::setgroups(0, std::ptr::null()) != 0
-                        || libc::setgid(gid) != 0
-                        || libc::setuid(uid) != 0
-                    {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                } else if libc::geteuid() != uid || libc::getegid() != gid {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "launcher cannot switch to the configured QEMU user",
-                    ));
                 }
             }
             Ok(())
@@ -216,7 +193,7 @@ pub async fn run(spec_path: &Path) -> Result<()> {
     let mut terminate = signal(SignalKind::terminate()).context("failed to watch SIGTERM")?;
     let mut interrupt = signal(SignalKind::interrupt()).context("failed to watch SIGINT")?;
     let mut swtpm = if let Some(command) = &spec.swtpm {
-        Some(spawn_child(command, &[], None)?)
+        Some(spawn_child(command, &[])?)
     } else {
         None
     };
@@ -259,7 +236,7 @@ pub async fn run(spec_path: &Path) -> Result<()> {
         }
     }
 
-    let mut qemu = match spawn_child(&spec.qemu, &spec.open_files, spec.uid.zip(spec.gid)) {
+    let mut qemu = match spawn_child(&spec.qemu, &spec.open_files) {
         Ok(child) => child,
         Err(error) => {
             if let Some(child) = &mut swtpm {
@@ -353,8 +330,6 @@ mod tests {
             swtpm: None,
             swtpm_socket: None,
             open_files: vec![OpenFile { fd: 3, path: input }],
-            uid: None,
-            gid: None,
             startup_timeout_ms: 1_000,
             shutdown_timeout_ms: 1_000,
         };
@@ -379,8 +354,6 @@ mod tests {
             ))),
             swtpm_socket: Some(socket.clone()),
             open_files: vec![],
-            uid: None,
-            gid: None,
             startup_timeout_ms: 2_000,
             shutdown_timeout_ms: 500,
         };
@@ -407,8 +380,6 @@ mod tests {
             swtpm: Some(shell("sleep 0.2; exit 9".into())),
             swtpm_socket: Some(socket.clone()),
             open_files: vec![],
-            uid: None,
-            gid: None,
             startup_timeout_ms: 2_000,
             shutdown_timeout_ms: 500,
         };
@@ -438,8 +409,6 @@ mod tests {
             ))),
             swtpm_socket: Some(socket.clone()),
             open_files: vec![],
-            uid: None,
-            gid: None,
             startup_timeout_ms: 100,
             shutdown_timeout_ms: 500,
         };
@@ -469,8 +438,6 @@ mod tests {
             ))),
             swtpm_socket: Some(socket.clone()),
             open_files: vec![],
-            uid: None,
-            gid: None,
             startup_timeout_ms: 2_000,
             shutdown_timeout_ms: 500,
         };
@@ -502,8 +469,6 @@ mod tests {
             }),
             swtpm_socket: Some(socket.clone()),
             open_files: vec![],
-            uid: None,
-            gid: None,
             startup_timeout_ms: 100,
             shutdown_timeout_ms: 100,
         };
