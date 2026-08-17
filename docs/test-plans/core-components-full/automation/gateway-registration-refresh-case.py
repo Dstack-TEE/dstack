@@ -25,6 +25,14 @@ def free_ports(count:int)->list[int]:
  finally:
   for s in sockets:s.close()
 
+def free_octets(count:int)->list[int]:
+ selected=[]
+ for octet in range(120,250):
+  route=run(["ip","route","show",f"10.{octet}.0.0/24"],timeout=10)
+  if route.returncode==0 and not route.stdout.strip():selected.append(octet)
+  if len(selected)==count:return selected
+ raise RuntimeError("no unused Gateway test subnets are available")
+
 def ssh(ssh_argv:list[str],script:str,timeout:int=60)->subprocess.CompletedProcess[str]:
  return run([*ssh_argv,script],timeout=timeout)
 
@@ -64,21 +72,23 @@ def main()->int:
  runtime=json.loads(Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text());manifest=json.loads(Path(os.environ["DSTACK_TEST_CASE_MANIFEST"]).read_text());values=manifest["values"]
  ssh_argv=[str(x) for x in values["ssh_argv"]];guest_url=str(values["services"]["DstackGuest"]["url"]).replace("/{method}","")
  repo=Path(runtime["repository"]);binary=Path(runtime["prepared_binaries"]["dstack_gateway"]["path"]);root=Path(tempfile.mkdtemp(prefix="dstack-multicluster-"))
- processes=[];interfaces=["dtmc-p","dtmc-s"];observations={};status="FAIL";failure=""
+ processes=[];configs=[];interfaces=["dtmc-p","dtmc-s"];observations={};status="FAIL";failure=""
  try:
   native=run(["cargo","test","--locked","-p","dstack-util","gateway_registration_refresh_tests","--","--nocapture"],cwd=repo/"dstack",env={**os.environ,"CARGO_TARGET_DIR":runtime["cargo_target_dir"]},timeout=600)
   (art/"native-tests.log").write_text(native.stdout+native.stderr)
   if native.returncode:raise RuntimeError("candidate multi-cluster native tests failed")
-  ports=free_ports(10);configs=[]
-  for row in (("primary",ports[:5],210,interfaces[0]),("secondary",ports[5:],211,interfaces[1])):
+  ports=free_ports(10);octets=free_octets(2)
+  for row in (("primary",ports[:5],octets[0],interfaces[0]),("secondary",ports[5:],octets[1],interfaces[1])):
    config,_=gateway_config(repo/"dstack/gateway/gateway.toml",root,*row,guest_url);configs.append(config)
    log=(config.parent/"logs/gateway.log").open("w")
    p=subprocess.Popen(["sudo","-n","-E","env",f"DSTACK_AGENT_ADDRESS={guest_url}",str(binary),"--config",str(config)],stdout=log,stderr=subprocess.STDOUT,start_new_session=True);processes.append(p)
+   time.sleep(3)
+   if p.poll() is not None:raise RuntimeError(f"{row[0]} Gateway exited during startup")
   time.sleep(5)
   primary_rpc,primary_proxy,primary_wg=ports[0],ports[3],ports[4];secondary_rpc,secondary_proxy,secondary_wg=ports[5],ports[8],ports[9]
   sysconfig=json.dumps([{"name":"primary","urls":[f"https://10.0.2.2:{primary_rpc}"]},{"name":"secondary","urls":[f"https://10.0.2.2:{secondary_rpc}"]}],separators=(",",":"))
   setup=f'''set -eu
-jq '.gateway_enabled=true' /dstack/.host-shared/app-compose.json >/tmp/app-compose.json
+jq '.gateway_enabled=true | .port_policy={{"ports":[{{"port":80,"pp":false}}],"restrict_mode":true}}' /dstack/.host-shared/app-compose.json >/tmp/app-compose.json
 mv /tmp/app-compose.json /dstack/.host-shared/app-compose.json
 jq '.gateway_urls=[] | .gateway_clusters={sysconfig}' /dstack/.host-shared/.sys-config.json >/tmp/sys-config.json
 mv /tmp/sys-config.json /dstack/.host-shared/.sys-config.json
@@ -87,24 +97,31 @@ for i in $(seq 1 30); do ip link show dstack-wg0 >/dev/null 2>&1 && ip link show
 systemctl is-active --quiet dstack-gateway-checker.service
 mkdir -p /tmp/proxy-workload
 echo same-cvm-via-two-gateway-clusters >/tmp/proxy-workload/identity
-nohup python3 -m http.server 80 --bind 0.0.0.0 --directory /tmp/proxy-workload >/tmp/proxy-workload/http.log 2>&1 </dev/null &
-echo $! >/tmp/proxy-workload/http.pid
-sleep 1
+systemctl stop dstack-test-proxy-workload.service 2>/dev/null || true
+systemd-run --unit=dstack-test-proxy-workload.service --property=Restart=no python3 -m http.server 80 --bind 0.0.0.0 --directory /tmp/proxy-workload
+for i in $(seq 1 10); do test "$(curl -sf http://127.0.0.1/identity)" = same-cvm-via-two-gateway-clusters && break; sleep 1; done
+test "$(curl -sf http://127.0.0.1/identity)" = same-cvm-via-two-gateway-clusters
 '''
   ready=ssh(ssh_argv,setup,120)
   if ready.returncode:raise RuntimeError("CVM multi-cluster setup failed: "+ready.stderr[-1000:])
   info=json.loads(urllib_request(guest_url+"/Info?json"));app_id=info["app_id"]
   responses=[]
   for cluster,proxy in (("primary",primary_proxy),("secondary",secondary_proxy)):
-   probe=run(["curl","--noproxy","*","-skf","--max-time","10","--resolve",f"{app_id}.localhost:{proxy}:127.0.0.1",f"https://{app_id}.localhost:{proxy}/identity"],timeout=15)
-   if probe.returncode or probe.stdout.strip()!="same-cvm-via-two-gateway-clusters":raise RuntimeError(f"{cluster} Gateway proxy did not reach CVM")
+   for _ in range(30):
+    probe=run(["curl","--noproxy","*","-skf","--max-time","10","--resolve",f"{app_id}.localhost:{proxy}:127.0.0.1",f"https://{app_id}.localhost:{proxy}/identity"],timeout=15)
+    if probe.returncode==0 and probe.stdout.strip()=="same-cvm-via-two-gateway-clusters":break
+    time.sleep(1)
+   if probe.returncode or probe.stdout.strip()!="same-cvm-via-two-gateway-clusters":raise RuntimeError(f"{cluster} Gateway proxy did not reach CVM (curl exit {probe.returncode}: {probe.stderr.strip()[-300:]})")
    responses.append({"cluster":cluster,"proxy_port":proxy,"response_sha256":hashlib.sha256(probe.stdout.encode()).hexdigest()})
   wg=ssh(ssh_argv,"wg show dstack-wg0 latest-handshakes; wg show dstack-wg1 latest-handshakes",30)
   if wg.returncode or len([x for x in wg.stdout.splitlines() if x.strip()])<2:raise RuntimeError("both CVM WireGuard handshakes were not observed")
   observations={"status":"PASS","clusters":responses,"interfaces":["dstack-wg0","dstack-wg1"],"same_cvm_app_id_hash":hashlib.sha256(app_id.encode()).hexdigest(),"wireguard_handshakes_observed":True};status="PASS"
  except Exception as error:failure=str(error);observations={"status":"FAIL","failure":failure}
  finally:
-  ssh(ssh_argv,"test ! -f /tmp/proxy-workload/http.pid || kill $(cat /tmp/proxy-workload/http.pid) 2>/dev/null || true",20)
+  for config in configs:
+   log=config.parent/"logs/gateway.log"
+   if log.is_file():shutil.copy2(log,art/f"{config.parent.name}-gateway.log")
+  ssh(ssh_argv,"systemctl stop dstack-test-proxy-workload.service 2>/dev/null || true",20)
   for p in processes:
    run(["sudo","-n","kill","--",f"-{p.pid}"],timeout=10)
   for interface in interfaces:run(["sudo","-n","ip","link","del",interface],timeout=10)
