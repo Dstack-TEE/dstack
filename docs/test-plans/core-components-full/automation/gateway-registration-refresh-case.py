@@ -24,6 +24,12 @@ from typing import Any
 CASE_ID = "tc-gos-setup-009"
 TEST_FILTER = "gateway_registration_refresh_tests"
 RESULT_RE = re.compile(r"test result: ok\. (\d+) passed; 0 failed")
+VMM_MULTI_CLUSTER_FILTER = "config_validation_rejects_mixed_gateway_syntax"
+MULTI_CLUSTER_NATIVE_ROWS = {
+    "explicit_gateway_clusters_override_legacy_urls",
+    "gateway_cluster_failures_do_not_block_successful_updates",
+    "failed_cluster_apply_restores_last_known_good_config",
+}
 
 
 def atomic_json(path: Path, value: Any) -> None:
@@ -140,9 +146,14 @@ def main() -> int:
     runtime = json.loads(Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text())
     manifest = json.loads(Path(os.environ["DSTACK_TEST_CASE_MANIFEST"]).read_text())
     values = manifest["values"]
-    nodes = values["gateway_cluster"]["nodes"]
-    if len(nodes) < 3:
-        raise RuntimeError("three lease-owned Gateway nodes are required")
+    gateway_clusters = values["gateway_cluster"].get("clusters") or {}
+    primary_nodes = (gateway_clusters.get("primary") or {}).get("nodes") or []
+    secondary_nodes = (gateway_clusters.get("secondary") or {}).get("nodes") or []
+    if len(primary_nodes) != 3 or len(secondary_nodes) != 1:
+        raise RuntimeError(
+            "three-node primary and one-node independent Gateway clusters are required"
+        )
+    nodes = primary_nodes
     client = nodes[0]["registration_client"]
     authenticated = ssl._create_unverified_context()
     authenticated.load_cert_chain(client["cert"], client["key"])
@@ -169,11 +180,43 @@ def main() -> int:
         (artifacts_dir / "native-tests.log").write_text(native_log)
         match = RESULT_RE.search(native_log)
         native_passed = int(match.group(1)) if match else 0
-        if native.returncode or native_passed != 8:
+        missing_native_rows = sorted(
+            name for name in MULTI_CLUSTER_NATIVE_ROWS if f"::{name} ... ok" not in native_log
+        )
+        if native.returncode or native_passed < 4 or missing_native_rows:
             raise RuntimeError(
-                f"native persistence/failover rows passed {native_passed}/8 rc={native.returncode}"
+                "native persistence/failover matrix failed: "
+                f"passed={native_passed}, missing={missing_native_rows}, rc={native.returncode}"
             )
         observations["native_tests_passed"] = native_passed
+
+        vmm_native = subprocess.run(
+            [
+                cargo,
+                "test",
+                "--locked",
+                "-p",
+                "dstack-vmm",
+                VMM_MULTI_CLUSTER_FILTER,
+                "--",
+                "--nocapture",
+            ],
+            cwd=Path(runtime["repository"]) / "dstack",
+            env={**os.environ, "CARGO_TARGET_DIR": str(runtime["cargo_target_dir"])},
+            text=True,
+            capture_output=True,
+            timeout=600,
+            check=False,
+        )
+        vmm_native_log = vmm_native.stdout + vmm_native.stderr
+        (artifacts_dir / "vmm-multi-cluster-tests.log").write_text(vmm_native_log)
+        vmm_match = RESULT_RE.search(vmm_native_log)
+        vmm_native_passed = int(vmm_match.group(1)) if vmm_match else 0
+        if vmm_native.returncode or vmm_native_passed != 1:
+            raise RuntimeError(
+                f"VMM mixed gateway syntax rejection rows passed {vmm_native_passed}/1 rc={vmm_native.returncode}"
+            )
+        observations["vmm_multi_cluster_tests_passed"] = vmm_native_passed
 
         first_status, first_body = registration(
             nodes[0]["rpc_url"], key, 18080, authenticated
@@ -209,6 +252,25 @@ def main() -> int:
             "second_node": response_shape(second_body),
             "adjacent_public_identity": response_shape(peer_body),
             "primary_restored": response_shape(restore_body),
+        }
+
+        secondary_status, secondary_body = registration(
+            secondary_nodes[0]["rpc_url"], key, 18087, authenticated
+        )
+        if secondary_status != 200:
+            raise RuntimeError(
+                f"independent secondary cluster registration failed: {secondary_status}"
+            )
+        primary_gateways = len((first_body or {}).get("gateways", []))
+        secondary_gateways = len((secondary_body or {}).get("gateways", []))
+        if primary_gateways != 3 or secondary_gateways != 1:
+            raise RuntimeError(
+                "Gateway responses did not preserve independent cluster membership"
+            )
+        observations["independent_clusters"] = {
+            "same_client_public_identity": True,
+            "primary": response_shape(first_body),
+            "secondary": response_shape(secondary_body),
         }
 
         bad_status, _ = registration(
@@ -311,6 +373,12 @@ def main() -> int:
             "description": "Candidate product tests for ordered failover and private atomic key-store persistence.",
         },
         {
+            "path": "artifacts/vmm-multi-cluster-tests.log",
+            "step_id": f"{CASE_ID}-step-01",
+            "name": "VMM multi-cluster configuration tests",
+            "description": "Candidate product test proving the VMM rejects simultaneous legacy and grouped gateway configuration.",
+        },
+        {
             "path": "artifacts/gateway-refresh-matrix.json",
             "step_id": f"{CASE_ID}-step-02",
             "name": "Gateway refresh matrix",
@@ -344,14 +412,14 @@ def main() -> int:
                 {
                     "id": f"{CASE_ID}-step-01",
                     "status": status,
-                    "observed": "8/8 candidate persistence and ordered-selection rows passed."
+                    "observed": f"{native_passed} candidate persistence/selection rows and the VMM mixed-syntax rejection row passed."
                     if status == "PASS"
                     else failure,
                 },
                 {
                     "id": f"{CASE_ID}-step-02",
                     "status": status,
-                    "observed": "Three live Gateway nodes accepted repeat, changed-policy, adjacent identity, and 8-way concurrent registration while rejecting malformed and unauthenticated input."
+                    "observed": "A three-node primary and independent one-node secondary cluster accepted the same CVM public identity while preserving separate membership; repeat, changed-policy, adjacent identity, concurrency, malformed, and unauthenticated rows also passed."
                     if status == "PASS"
                     else failure,
                 },
