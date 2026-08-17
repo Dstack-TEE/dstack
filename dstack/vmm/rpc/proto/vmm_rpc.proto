@@ -126,10 +126,14 @@ message VmConfiguration {
 
 // Per-VM networking configuration.
 message NetworkingConfig {
-  // Networking mode: "bridge", "user"
+  // Networking mode: "bridge", "user", "macvtap"
   string mode = 1;
   // Per-VM bridge interface name. Empty = node default bridge.
   string bridge_name = 2;
+  // Parent host interface for macvtap mode.
+  string parent = 3;
+  // macvtap forwarding mode. Empty selects "private".
+  string macvtap_mode = 4;
 }
 
 // Requested GPU layout for a CVM.

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -23,12 +24,26 @@ pub struct ChildCommand {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LaunchSpec {
     pub qemu: ChildCommand,
-    pub swtpm: ChildCommand,
-    pub swtpm_socket: PathBuf,
+    #[serde(default)]
+    pub swtpm: Option<ChildCommand>,
+    #[serde(default)]
+    pub swtpm_socket: Option<PathBuf>,
+    #[serde(default)]
+    pub open_files: Vec<OpenFile>,
+    #[serde(default)]
+    pub uid: Option<u32>,
+    #[serde(default)]
+    pub gid: Option<u32>,
     #[serde(default = "default_startup_timeout_ms")]
     pub startup_timeout_ms: u64,
     #[serde(default = "default_shutdown_timeout_ms")]
     pub shutdown_timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenFile {
+    pub fd: i32,
+    pub path: PathBuf,
 }
 
 fn default_startup_timeout_ms() -> u64 {
@@ -51,10 +66,44 @@ impl Drop for SocketCleanup {
     }
 }
 
-fn spawn_child(spec: &ChildCommand) -> Result<Child> {
+fn spawn_child(
+    spec: &ChildCommand,
+    open_files: &[OpenFile],
+    identity: Option<(u32, u32)>,
+) -> Result<Child> {
     let parent = unsafe { libc::getpid() };
     let mut command = Command::new(&spec.command);
     command.args(&spec.args);
+    let opened = open_files
+        .iter()
+        .map(|file| {
+            fs_err::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&file.path)
+                .with_context(|| format!("failed to open {}", file.path.display()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let max_target = open_files.iter().map(|file| file.fd).max().unwrap_or(2);
+    let inherited = opened
+        .iter()
+        .map(|file| {
+            let fd =
+                unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD_CLOEXEC, max_target + 1) };
+            if fd < 0 {
+                Err(std::io::Error::last_os_error())
+                    .context("failed to reserve inherited file descriptor")
+            } else {
+                // SAFETY: fcntl returned a new descriptor owned by this process.
+                Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let fds = open_files
+        .iter()
+        .zip(&inherited)
+        .map(|(file, opened)| (file.fd, opened.as_raw_fd()))
+        .collect::<Vec<_>>();
     // SAFETY: pre_exec only invokes async-signal-safe libc operations. Checking
     // the parent after PR_SET_PDEATHSIG closes the fork/parent-exit race.
     unsafe {
@@ -67,6 +116,36 @@ fn spawn_child(spec: &ChildCommand) -> Result<Child> {
             }
             if libc::getppid() != parent {
                 libc::raise(libc::SIGKILL);
+            }
+            for &(target, source) in &fds {
+                if target < 3 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "open file target fd must be at least 3",
+                    ));
+                }
+                if source == target {
+                    if libc::fcntl(target, libc::F_SETFD, 0) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                } else if libc::dup2(source, target) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            if let Some((uid, gid)) = identity {
+                if libc::geteuid() == 0 {
+                    if libc::setgroups(0, std::ptr::null()) != 0
+                        || libc::setgid(gid) != 0
+                        || libc::setuid(uid) != 0
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                } else if libc::geteuid() != uid || libc::getegid() != gid {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "launcher cannot switch to the configured QEMU user",
+                    ));
+                }
             }
             Ok(())
         });
@@ -126,24 +205,30 @@ pub async fn run(spec_path: &Path) -> Result<()> {
     let raw = fs_err::read(spec_path)
         .with_context(|| format!("failed to read launch spec {}", spec_path.display()))?;
     let spec: LaunchSpec = serde_json::from_slice(&raw).context("failed to parse launch spec")?;
-    let _socket_cleanup = SocketCleanup(spec.swtpm_socket.clone());
-    if spec.swtpm_socket.exists() {
-        fs_err::remove_file(&spec.swtpm_socket).context("failed to remove stale swtpm socket")?;
+    let _socket_cleanup = spec.swtpm_socket.clone().map(SocketCleanup);
+    if let Some(socket) = &spec.swtpm_socket {
+        if socket.exists() {
+            fs_err::remove_file(socket).context("failed to remove stale swtpm socket")?;
+        }
     }
 
     let grace = Duration::from_millis(spec.shutdown_timeout_ms);
     let mut terminate = signal(SignalKind::terminate()).context("failed to watch SIGTERM")?;
     let mut interrupt = signal(SignalKind::interrupt()).context("failed to watch SIGINT")?;
-    let mut swtpm = spawn_child(&spec.swtpm)?;
+    let mut swtpm = if let Some(command) = &spec.swtpm {
+        Some(spawn_child(command, &[], None)?)
+    } else {
+        None
+    };
     enum StartupExit {
         Ready,
         Error(anyhow::Error),
         Signal,
     }
-    let startup_exit = {
+    let startup_exit = if let (Some(swtpm), Some(socket)) = (&mut swtpm, &spec.swtpm_socket) {
         let startup = wait_for_swtpm(
-            &mut swtpm,
-            &spec.swtpm_socket,
+            swtpm,
+            socket,
             Instant::now() + Duration::from_millis(spec.startup_timeout_ms),
         );
         tokio::pin!(startup);
@@ -155,29 +240,37 @@ pub async fn run(spec_path: &Path) -> Result<()> {
             _ = terminate.recv() => StartupExit::Signal,
             _ = interrupt.recv() => StartupExit::Signal,
         }
+    } else {
+        StartupExit::Ready
     };
     match startup_exit {
         StartupExit::Ready => {}
         StartupExit::Error(error) => {
-            stop_child(&mut swtpm, "swtpm", grace).await;
+            if let Some(child) = &mut swtpm {
+                stop_child(child, "swtpm", grace).await;
+            }
             return Err(error);
         }
         StartupExit::Signal => {
-            stop_child(&mut swtpm, "swtpm", grace).await;
+            if let Some(child) = &mut swtpm {
+                stop_child(child, "swtpm", grace).await;
+            }
             return Ok(());
         }
     }
 
-    let mut qemu = match spawn_child(&spec.qemu) {
+    let mut qemu = match spawn_child(&spec.qemu, &spec.open_files, spec.uid.zip(spec.gid)) {
         Ok(child) => child,
         Err(error) => {
-            stop_child(&mut swtpm, "swtpm", grace).await;
+            if let Some(child) = &mut swtpm {
+                stop_child(child, "swtpm", grace).await;
+            }
             return Err(error);
         }
     };
     info!(
         qemu_pid = qemu.id(),
-        swtpm_pid = swtpm.id(),
+        swtpm_pid = swtpm.as_ref().and_then(|child| child.id()),
         "VM processes started"
     );
 
@@ -190,19 +283,26 @@ pub async fn run(spec_path: &Path) -> Result<()> {
         _ = terminate.recv() => Exit::Signal,
         _ = interrupt.recv() => Exit::Signal,
         status = qemu.wait() => Exit::Qemu(status.context("failed to wait for QEMU")?),
-        status = swtpm.wait() => Exit::Swtpm(status.context("failed to wait for swtpm")?),
+        status = async {
+            match &mut swtpm {
+                Some(child) => child.wait().await,
+                None => std::future::pending().await,
+            }
+        } => Exit::Swtpm(status.context("failed to wait for swtpm")?),
     };
 
     match exit {
         Exit::Signal => {
-            tokio::join!(
-                stop_child(&mut qemu, "qemu", grace),
-                stop_child(&mut swtpm, "swtpm", grace)
-            );
+            stop_child(&mut qemu, "qemu", grace).await;
+            if let Some(child) = &mut swtpm {
+                stop_child(child, "swtpm", grace).await;
+            }
             Ok(())
         }
         Exit::Qemu(status) => {
-            stop_child(&mut swtpm, "swtpm", grace).await;
+            if let Some(child) = &mut swtpm {
+                stop_child(child, "swtpm", grace).await;
+            }
             if status.success() {
                 Ok(())
             } else {
@@ -242,14 +342,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn passes_open_file_to_qemu_without_swtpm() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let input = dir.path().join("input");
+        let output = dir.path().join("output");
+        fs_err::write(&input, b"macvtap-fd")?;
+        let spec_path = dir.path().join("spec.json");
+        let spec = LaunchSpec {
+            qemu: shell(format!("cat <&3 > {}", output.display())),
+            swtpm: None,
+            swtpm_socket: None,
+            open_files: vec![OpenFile { fd: 3, path: input }],
+            uid: None,
+            gid: None,
+            startup_timeout_ms: 1_000,
+            shutdown_timeout_ms: 1_000,
+        };
+        fs_err::write(&spec_path, serde_json::to_vec(&spec)?)?;
+
+        run(&spec_path).await?;
+
+        assert_eq!(fs_err::read(output)?, b"macvtap-fd");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn qemu_failure_stops_and_reaps_swtpm() {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("swtpm.sock");
         let swtpm_pid = dir.path().join("swtpm.pid");
         let spec = LaunchSpec {
             qemu: shell("exit 7".into()),
-            swtpm: shell(format!("echo $$ > {}; sleep 30", swtpm_pid.display())),
-            swtpm_socket: socket.clone(),
+            swtpm: Some(shell(format!(
+                "echo $$ > {}; sleep 30",
+                swtpm_pid.display()
+            ))),
+            swtpm_socket: Some(socket.clone()),
+            open_files: vec![],
+            uid: None,
+            gid: None,
             startup_timeout_ms: 2_000,
             shutdown_timeout_ms: 500,
         };
@@ -273,8 +404,11 @@ mod tests {
         let qemu_pid = dir.path().join("qemu.pid");
         let spec = LaunchSpec {
             qemu: shell(format!("echo $$ > {}; sleep 30", qemu_pid.display())),
-            swtpm: shell("sleep 0.2; exit 9".into()),
-            swtpm_socket: socket.clone(),
+            swtpm: Some(shell("sleep 0.2; exit 9".into())),
+            swtpm_socket: Some(socket.clone()),
+            open_files: vec![],
+            uid: None,
+            gid: None,
             startup_timeout_ms: 2_000,
             shutdown_timeout_ms: 500,
         };
@@ -298,8 +432,14 @@ mod tests {
         let swtpm_pid = dir.path().join("swtpm.pid");
         let spec = LaunchSpec {
             qemu: shell("exit 0".into()),
-            swtpm: shell(format!("echo $$ > {}; sleep 30", swtpm_pid.display())),
-            swtpm_socket: socket.clone(),
+            swtpm: Some(shell(format!(
+                "echo $$ > {}; sleep 30",
+                swtpm_pid.display()
+            ))),
+            swtpm_socket: Some(socket.clone()),
+            open_files: vec![],
+            uid: None,
+            gid: None,
             startup_timeout_ms: 100,
             shutdown_timeout_ms: 500,
         };
@@ -323,8 +463,14 @@ mod tests {
         let swtpm_pid = dir.path().join("swtpm.pid");
         let spec = LaunchSpec {
             qemu: shell("sleep 0.1; exit 0".into()),
-            swtpm: shell(format!("echo $$ > {}; sleep 30", swtpm_pid.display())),
-            swtpm_socket: socket.clone(),
+            swtpm: Some(shell(format!(
+                "echo $$ > {}; sleep 30",
+                swtpm_pid.display()
+            ))),
+            swtpm_socket: Some(socket.clone()),
+            open_files: vec![],
+            uid: None,
+            gid: None,
             startup_timeout_ms: 2_000,
             shutdown_timeout_ms: 500,
         };
@@ -350,11 +496,14 @@ mod tests {
         let qemu_marker = dir.path().join("qemu-started");
         let spec = LaunchSpec {
             qemu: shell(format!("touch {}", qemu_marker.display())),
-            swtpm: ChildCommand {
+            swtpm: Some(ChildCommand {
                 command: dir.path().join("missing-swtpm").display().to_string(),
                 args: vec![],
-            },
-            swtpm_socket: socket.clone(),
+            }),
+            swtpm_socket: Some(socket.clone()),
+            open_files: vec![],
+            uid: None,
+            gid: None,
             startup_timeout_ms: 100,
             shutdown_timeout_ms: 100,
         };
