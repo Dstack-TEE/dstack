@@ -1232,6 +1232,11 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                     "boot_progress": ready.get("boot_progress"),
                     "boot_error": ready.get("boot_error", ""),
                 },
+                "services": {
+                    "DstackGuest": {
+                        "url": f"http://127.0.0.1:{guest_port}/{{method}}"
+                    }
+                },
                 "destructive_actions_allowed": True,
             }
             if ssh_guest_requested:
