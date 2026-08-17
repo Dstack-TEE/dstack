@@ -6,7 +6,8 @@ use crate::{
     config::{Config, NetworkFilterMode, Networking, NetworkingMode, ProcessAnnotation, Protocol},
     logrotate,
     netd::{
-        self, InterfaceIdentity, PrepareMacvtapRequest, PrepareRequest, Request as NetdRequest,
+        self, InterfaceIdentity, PrepareBridgeRequest, PrepareMacvtapRequest,
+        Request as NetdRequest,
     },
 };
 
@@ -563,7 +564,7 @@ impl App {
                 nic_index,
             );
             let request = match network.mode {
-                NetworkingMode::Bridge => NetdRequest::Prepare(PrepareRequest {
+                NetworkingMode::Bridge => NetdRequest::PrepareBridge(PrepareBridgeRequest {
                     identity: identity.clone(),
                     bridge: network.bridge.clone(),
                     mac,

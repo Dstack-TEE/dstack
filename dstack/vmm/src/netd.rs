@@ -49,7 +49,7 @@ pub struct InterfaceIdentity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PrepareRequest {
+pub struct PrepareBridgeRequest {
     #[serde(flatten)]
     pub identity: InterfaceIdentity,
     pub bridge: String,
@@ -73,7 +73,7 @@ pub struct PrepareMacvtapRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Request {
-    Prepare(PrepareRequest),
+    PrepareBridge(PrepareBridgeRequest),
     PrepareMacvtap(PrepareMacvtapRequest),
     Remove {
         #[serde(flatten)]
@@ -121,7 +121,7 @@ pub struct PreparedInterface {
 
 pub async fn request(socket: &Path, request: &Request) -> Result<PreparedInterface> {
     let operation = match request {
-        Request::Prepare(_) => "prepare",
+        Request::PrepareBridge(_) => "prepare_bridge",
         Request::PrepareMacvtap(_) => "prepare_macvtap",
         Request::Remove { .. } => "remove",
         Request::Check { .. } => "check",
@@ -248,8 +248,8 @@ async fn read_request(stream: &mut UnixStream) -> Result<Request> {
 fn handle_request(libvirt_uri: &str, request: Request) -> Result<(String, Option<String>)> {
     let _lock = OperationLock::acquire()?;
     match request {
-        Request::Prepare(request) => {
-            prepare_interface(libvirt_uri, &request).map(|tap| (tap, None))
+        Request::PrepareBridge(request) => {
+            prepare_bridge(libvirt_uri, &request).map(|tap| (tap, None))
         }
         Request::PrepareMacvtap(request) => prepare_macvtap(
             libvirt_uri,
@@ -362,8 +362,8 @@ impl Drop for OperationLock {
     }
 }
 
-fn prepare_interface(libvirt_uri: &str, request: &PrepareRequest) -> Result<String> {
-    validate_prepare(request)?;
+fn prepare_bridge(libvirt_uri: &str, request: &PrepareBridgeRequest) -> Result<String> {
+    validate_prepare_bridge(request)?;
     let tap = tap_name(&request.identity);
     // A failed VMM start may leave a deterministic resource behind. Replacing
     // it makes prepare idempotent without accepting a caller-selected TAP.
@@ -430,7 +430,7 @@ fn delete_binding(uri: &str, tap: &str) -> Result<()> {
     bail!("virsh failed to delete binding {tap}: {}", error.trim())
 }
 
-fn binding_xml(request: &PrepareRequest, tap: &str) -> String {
+fn binding_xml(request: &PrepareBridgeRequest, tap: &str) -> String {
     let owner_uuid = stable_uuid(&request.identity);
     let owner_name = format!(
         "dstack:{}:{}:{}",
@@ -472,7 +472,7 @@ fn stable_uuid(identity: &InterfaceIdentity) -> Uuid {
     Uuid::from_bytes(bytes)
 }
 
-fn validate_prepare(request: &PrepareRequest) -> Result<()> {
+fn validate_prepare_bridge(request: &PrepareBridgeRequest) -> Result<()> {
     validate_identity(&request.identity)?;
     validate_name("bridge", &request.bridge, 15, "_.-")?;
     if !Path::new("/sys/class/net")
@@ -670,7 +670,7 @@ mod tests {
 
     #[test]
     fn binding_xml_escapes_values() {
-        let request = PrepareRequest {
+        let request = PrepareBridgeRequest {
             identity: identity("instance<&", "vm", 0),
             bridge: "br0".into(),
             mac: "02:00:00:00:00:01".into(),
@@ -716,6 +716,23 @@ mod tests {
         assert_eq!(value["operation"], "prepare_macvtap");
         assert_eq!(value["instance_id"], "instance");
         assert_eq!(value["parent"], "eth0");
+        assert!(value.get("identity").is_none());
+    }
+
+    #[test]
+    fn bridge_prepare_has_a_dedicated_operation() {
+        let request = Request::PrepareBridge(PrepareBridgeRequest {
+            identity: identity("instance", "vm", 0),
+            bridge: "br0".into(),
+            mac: "02:00:00:00:00:01".into(),
+            qemu_uid: 1000,
+            filter: "clean-traffic".into(),
+            parameters: BTreeMap::new(),
+        });
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(value["operation"], "prepare_bridge");
+        assert_eq!(value["instance_id"], "instance");
+        assert_eq!(value["bridge"], "br0");
         assert!(value.get("identity").is_none());
     }
 
