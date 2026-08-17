@@ -3153,7 +3153,7 @@
               "fixture": {
                 "destructive_scope": "lease-only",
                 "hardware_required": false,
-                "profile": "gateway-cluster",
+                "profile": "no-tee-guest-lifecycle",
                 "simulation_allowed": true,
                 "versions": {
                   "gateway": "candidate",
@@ -3164,7 +3164,9 @@
                 }
               },
               "actions_under_test": [
-                "Gateway registration refresh and key-store persistence"
+                "System and user configuration materialization",
+                "Gateway registration refresh and key-store persistence",
+                "Multi-cluster Gateway proxy data plane"
               ],
               "execution": {
                 "entrypoint": "automation/gateway-registration-refresh-case.py",
