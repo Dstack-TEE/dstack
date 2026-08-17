@@ -24,6 +24,7 @@ use anyhow::{bail, Context, Result};
 use bon::Builder;
 use dstack_types::shared_filenames::HOST_SHARED_DISK_LABEL;
 use fs_err as fs;
+use nix::unistd::{Gid, Uid};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::{
@@ -359,7 +360,7 @@ impl VmConfig {
             .swtpm_path
             .as_ref()
             .context("missing swtpm executable for configured socket")?;
-        let (socket_uid, socket_gid) = (unsafe { libc::geteuid() }, unsafe { libc::getegid() });
+        let (socket_uid, socket_gid) = (Uid::effective().as_raw(), Gid::effective().as_raw());
 
         let swtpm_args = vec![
             "socket".into(),
