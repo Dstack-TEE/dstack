@@ -1102,3 +1102,62 @@ mod zt_domain_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod wavekv_status_tests {
+    use super::{build_store_status, WaveKvNodeStatus};
+    use wavekv::{node::PeerStatus, sync::PeerLinkStatus};
+
+    #[test]
+    fn wavekv_status_preserves_store_and_peer_telemetry() {
+        let status = WaveKvNodeStatus {
+            id: 1,
+            n_kvs: 3,
+            next_seq: 11,
+            dirty: true,
+            wal: true,
+            digest: "deadbeef".to_string(),
+            entries_merged: 17,
+            entries_rejected: 2,
+            peers: vec![PeerStatus {
+                id: 7,
+                ack: 5,
+                peer_ack: 4,
+                heard_from: true,
+            }],
+        };
+        let links = vec![PeerLinkStatus {
+            id: 7,
+            protocol: "v2",
+            digest_mismatches: 3,
+            consecutive_failures: 6,
+        }];
+
+        let proto = build_store_status("persistent", status, &links, &|peer| {
+            assert_eq!(peer, 7);
+            vec![(2, 1234)]
+        });
+
+        assert_eq!(proto.name, "persistent");
+        assert_eq!(proto.node_id, 1);
+        assert_eq!(proto.n_keys, 3);
+        assert_eq!(proto.next_seq, 11);
+        assert!(proto.dirty);
+        assert!(proto.wal_enabled);
+        assert_eq!(proto.digest, "deadbeef");
+        assert_eq!(proto.entries_merged, 17);
+        assert_eq!(proto.entries_rejected, 2);
+        assert_eq!(proto.peers.len(), 1);
+
+        let peer = &proto.peers[0];
+        assert_eq!(peer.id, 7);
+        assert_eq!(peer.local_ack, 5);
+        assert_eq!(peer.peer_ack, 4);
+        assert!(peer.heard_from);
+        assert_eq!(peer.digest_mismatches, 3);
+        assert_eq!(peer.consecutive_failures, 6);
+        assert_eq!(peer.last_seen.len(), 1);
+        assert_eq!(peer.last_seen[0].node_id, 2);
+        assert_eq!(peer.last_seen[0].timestamp, 1234);
+    }
+}

@@ -33,6 +33,8 @@ pub mod import;
 mod schema;
 mod sync_service;
 
+#[cfg(test)]
+pub(crate) use https_client::HttpsClient;
 pub use https_client::{AppIdValidator, HttpsClientConfig};
 pub use sync_service::{fetch_peers_from_bootnode, WaveKvSyncService};
 use tracing::{error, warn};
@@ -1856,7 +1858,7 @@ mod sync_wire_tests {
     }
 
     #[test]
-    fn a_v2_envelope_survives_the_transport_framing() {
+    fn a_sync_envelope_survives_the_transport_framing() {
         use flate2::{read::GzDecoder, write::GzEncoder, Compression};
         use std::io::{Read, Write};
 
@@ -1964,7 +1966,7 @@ mod wavekv_v1_migration_tests {
                 .read()
                 .get(&key)
                 .and_then(|entry| entry.value),
-            Some(value),
+            Some(value.clone()),
             "the stopped single-node upgrade must preserve the replicated state"
         );
         assert_eq!(
@@ -1973,9 +1975,32 @@ mod wavekv_v1_migration_tests {
                 .read()
                 .get(&wal_key)
                 .and_then(|entry| entry.value),
-            Some(wal_value),
+            Some(wal_value.clone()),
             "the upgrade must replay v1 WAL entries written after the snapshot"
         );
+
+        let new_key = keys::peer_addr(9);
+        let new_value = b"https://gateway-9.example:8011".to_vec();
+        upgraded
+            .persistent()
+            .write()
+            .put(new_key.clone(), new_value.clone())
+            .expect("write data after upgrade");
+        upgraded.persist_if_dirty().expect("persist upgraded data");
+        drop(upgraded);
+
+        let restarted = KvStore::new(1, Vec::new(), dir.path()).expect("restart upgraded store");
+        for (key, expected) in [(key, value), (wal_key, wal_value), (new_key, new_value)] {
+            assert_eq!(
+                restarted
+                    .persistent()
+                    .read()
+                    .get(&key)
+                    .and_then(|entry| entry.value),
+                Some(expected),
+                "all migrated and post-upgrade data must survive an upgraded restart: {key}"
+            );
+        }
     }
 }
 

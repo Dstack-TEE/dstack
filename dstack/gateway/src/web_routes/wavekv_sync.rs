@@ -206,7 +206,7 @@ pub async fn push_store(
 mod tests {
     use super::*;
     use crate::config::{load_config_figment, Config, MutualConfig, TlsConfig};
-    use crate::kv::NodeData;
+    use crate::kv::{HttpsClient, NodeData};
     use crate::main_service::{Proxy, ProxyOptions};
     use rocket::local::asynchronous::Client;
     use tempfile::TempDir;
@@ -232,7 +232,7 @@ mod tests {
 
         let leaf_key = KeyPair::generate().expect("leaf key");
         let leaf_params =
-            CertificateParams::new(vec!["gateway.test".to_string()]).expect("leaf params");
+            CertificateParams::new(vec!["127.0.0.1".to_string()]).expect("leaf params");
         let leaf_cert = leaf_params
             .signed_by(&leaf_key, &ca_cert, &ca_key)
             .expect("leaf cert");
@@ -532,6 +532,104 @@ mod tests {
             decoded.entries.iter().any(|e| e.key == "node/7"),
             "an empty ack map must draw the whole live state"
         );
+    }
+
+    /// Exercise the composed transport rather than testing the HTTPS client and Rocket
+    /// routes in isolation: a real TLS listener requires a CA-signed client certificate,
+    /// receives a compressed envelope, merges it, and returns a decodable response.
+    #[tokio::test]
+    async fn sync_and_push_cross_a_real_mutually_authenticated_tls_connection() {
+        use rocket::{mtls::MtlsConfig, tls::TlsConfig as RocketTlsConfig};
+
+        let (_local, proxy, tmp) = serving_gateway(true).await;
+        register_peer(&proxy);
+        let tls = write_tls_material(tmp.path());
+
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve port");
+            listener.local_addr().expect("local address").port()
+        };
+        let server_tls = RocketTlsConfig::from_paths(&tls.certs, &tls.key)
+            .with_mutual(MtlsConfig::from_path(&tls.mutual.ca_certs).mandatory(true));
+        let figment = rocket::Config::figment()
+            .merge(("address", "127.0.0.1"))
+            .merge(("port", port))
+            .merge(("tls", server_tls));
+        let rocket = rocket::custom(figment)
+            .manage(proxy.clone())
+            .mount("/", crate::web_routes::wavekv_sync_routes())
+            .ignite()
+            .await
+            .expect("ignite TLS Rocket server");
+        let shutdown = rocket.shutdown();
+        let server = tokio::spawn(async move {
+            rocket.launch().await.expect("TLS Rocket server");
+        });
+
+        let client = HttpsClient::new(&crate::kv::HttpsClientConfig {
+            cert_path: tls.certs.clone(),
+            key_path: tls.key.clone(),
+            ca_cert_path: tls.mutual.ca_certs.clone(),
+            cert_validator: None,
+        })
+        .expect("HTTPS client");
+        let base = format!("https://127.0.0.1:{port}");
+
+        let mut request = SyncEnvelope::new(PEER, peer_uuid());
+        request.entries.push(Entry::new(
+            "node/21".to_string(),
+            Some(b"sync".to_vec()),
+            Metadata::new(PEER, 21, 1),
+        ));
+
+        let response = {
+            let mut last = None;
+            let mut response = None;
+            for _ in 0..50 {
+                match client
+                    .post_bytes_response(
+                        &format!("{base}/wavekv/sync/persistent"),
+                        request.encode().expect("encode sync request"),
+                    )
+                    .await
+                {
+                    Ok(bytes) => {
+                        response = Some(bytes);
+                        break;
+                    }
+                    Err(err) => {
+                        last = Some(err);
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    }
+                }
+            }
+            response.unwrap_or_else(|| panic!("server did not become ready: {last:?}"))
+        };
+        SyncEnvelope::decode(&response).expect("decode sync response");
+        assert!(proxy
+            .kv_store()
+            .persistent()
+            .read()
+            .get("node/21")
+            .is_some());
+
+        let push = push_envelope(peer_uuid(), "node/22");
+        client
+            .post_bytes_no_response(
+                &format!("{base}/wavekv/push/persistent"),
+                push.encode().expect("encode push"),
+            )
+            .await
+            .expect("push over mTLS");
+        assert!(proxy
+            .kv_store()
+            .persistent()
+            .read()
+            .get("node/22")
+            .is_some());
+
+        shutdown.notify();
+        server.await.expect("server task");
     }
 
     #[tokio::test]
