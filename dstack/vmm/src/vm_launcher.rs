@@ -62,10 +62,19 @@ impl Drop for SocketCleanup {
     }
 }
 
-fn spawn_child(spec: &ChildCommand, open_files: &[OpenFile]) -> Result<Child> {
-    let parent = unsafe { libc::getpid() };
-    let mut command = Command::new(&spec.command);
-    command.args(&spec.args);
+impl LaunchSpec {
+    fn is_single_process(&self) -> bool {
+        self.swtpm.is_none()
+    }
+}
+
+struct PreparedOpenFiles {
+    _opened: Vec<fs_err::File>,
+    _inherited: Vec<OwnedFd>,
+    mappings: Vec<(i32, i32)>,
+}
+
+fn prepare_open_files(open_files: &[OpenFile]) -> Result<PreparedOpenFiles> {
     let opened = open_files
         .iter()
         .map(|file| {
@@ -91,45 +100,72 @@ fn spawn_child(spec: &ChildCommand, open_files: &[OpenFile]) -> Result<Child> {
             }
         })
         .collect::<Result<Vec<_>>>()?;
-    let fds = open_files
+    let mappings = open_files
         .iter()
         .zip(&inherited)
         .map(|(file, opened)| (file.fd, opened.as_raw_fd()))
         .collect::<Vec<_>>();
+    Ok(PreparedOpenFiles {
+        _opened: opened,
+        _inherited: inherited,
+        mappings,
+    })
+}
+
+fn prepare_exec(expected_parent: libc::pid_t, mappings: &[(i32, i32)]) -> std::io::Result<()> {
+    if unsafe { libc::setpgid(0, 0) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe { libc::getppid() } != expected_parent {
+        unsafe { libc::raise(libc::SIGKILL) };
+    }
+    for &(target, source) in mappings {
+        if target < 3 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "open file target fd must be at least 3",
+            ));
+        }
+        if source == target {
+            if unsafe { libc::fcntl(target, libc::F_SETFD, 0) } < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        } else if unsafe { libc::dup2(source, target) } < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+fn spawn_child(spec: &ChildCommand, open_files: &[OpenFile]) -> Result<Child> {
+    let parent = unsafe { libc::getpid() };
+    let mut command = Command::new(&spec.command);
+    command.args(&spec.args);
+    let prepared = prepare_open_files(open_files)?;
+    let mappings = prepared.mappings.clone();
     // SAFETY: pre_exec only invokes async-signal-safe libc operations. Checking
     // the parent after PR_SET_PDEATHSIG closes the fork/parent-exit race.
     unsafe {
-        command.as_std_mut().pre_exec(move || {
-            if libc::setpgid(0, 0) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if libc::getppid() != parent {
-                libc::raise(libc::SIGKILL);
-            }
-            for &(target, source) in &fds {
-                if target < 3 {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "open file target fd must be at least 3",
-                    ));
-                }
-                if source == target {
-                    if libc::fcntl(target, libc::F_SETFD, 0) < 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                } else if libc::dup2(source, target) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-            }
-            Ok(())
-        });
+        command
+            .as_std_mut()
+            .pre_exec(move || prepare_exec(parent, &mappings));
     }
     command
         .spawn()
         .with_context(|| format!("failed to start {}", spec.command))
+}
+
+fn exec_in_place(spec: &ChildCommand, open_files: &[OpenFile]) -> Result<()> {
+    let prepared = prepare_open_files(open_files)?;
+    let parent = unsafe { libc::getppid() };
+    prepare_exec(parent, &prepared.mappings).context("failed to prepare in-place QEMU exec")?;
+    let mut command = std::process::Command::new(&spec.command);
+    command.args(&spec.args);
+    let error = command.exec();
+    Err(error).with_context(|| format!("failed to exec {}", spec.command))
 }
 
 async fn stop_child(child: &mut Child, name: &str, grace: Duration) {
@@ -182,6 +218,9 @@ pub async fn run(spec_path: &Path) -> Result<()> {
     let raw = fs_err::read(spec_path)
         .with_context(|| format!("failed to read launch spec {}", spec_path.display()))?;
     let spec: LaunchSpec = serde_json::from_slice(&raw).context("failed to parse launch spec")?;
+    if spec.is_single_process() {
+        return exec_in_place(&spec.qemu, &spec.open_files);
+    }
     let _socket_cleanup = spec.swtpm_socket.clone().map(SocketCleanup);
     if let Some(socket) = &spec.swtpm_socket {
         if socket.exists() {
@@ -319,26 +358,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn passes_open_file_to_qemu_without_swtpm() -> Result<()> {
+    async fn passes_open_file_to_child() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let input = dir.path().join("input");
         let output = dir.path().join("output");
         fs_err::write(&input, b"macvtap-fd")?;
-        let spec_path = dir.path().join("spec.json");
-        let spec = LaunchSpec {
-            qemu: shell(format!("cat <&3 > {}", output.display())),
-            swtpm: None,
-            swtpm_socket: None,
-            open_files: vec![OpenFile { fd: 3, path: input }],
-            startup_timeout_ms: 1_000,
-            shutdown_timeout_ms: 1_000,
-        };
-        fs_err::write(&spec_path, serde_json::to_vec(&spec)?)?;
-
-        run(&spec_path).await?;
+        let command = shell(format!("cat <&3 > {}", output.display()));
+        let open_files = vec![OpenFile { fd: 3, path: input }];
+        let mut child = spawn_child(&command, &open_files)?;
+        assert!(child.wait().await?.success());
 
         assert_eq!(fs_err::read(output)?, b"macvtap-fd");
         Ok(())
+    }
+
+    #[test]
+    fn single_process_requires_no_swtpm() {
+        let mut spec = LaunchSpec {
+            qemu: shell("exit 0".into()),
+            swtpm: None,
+            swtpm_socket: None,
+            open_files: vec![],
+            startup_timeout_ms: 1_000,
+            shutdown_timeout_ms: 1_000,
+        };
+        assert!(spec.is_single_process());
+        spec.swtpm = Some(shell("exit 0".into()));
+        assert!(!spec.is_single_process());
     }
 
     #[tokio::test]
