@@ -2354,6 +2354,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "vfio-ioctls",
  "wait-timeout",
  "which 7.0.3",
 ]
@@ -8186,10 +8187,50 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "vfio-bindings"
+version = "0.6.2"
+source = "git+https://github.com/kvinwang/vfio.git?rev=d509db2#d509db2b403d258659c8dcf597a7b189d9512940"
+
+[[package]]
+name = "vfio-ioctls"
+version = "0.8.0"
+source = "git+https://github.com/kvinwang/vfio.git?rev=d509db2#d509db2b403d258659c8dcf597a7b189d9512940"
+dependencies = [
+ "byteorder",
+ "libc",
+ "log",
+ "thiserror 2.0.18",
+ "vfio-bindings",
+ "vm-memory",
+ "vmm-sys-util",
+]
+
+[[package]]
 name = "virtue"
 version = "0.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "051eb1abcf10076295e815102942cc58f9d5e3b4560e46e53c21e8ff6f3af7b1"
+
+[[package]]
+name = "vm-memory"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b55e753c7725603745cb32b2287ef7ef3da05c03c7702cda3fa8abe25ae0465"
+dependencies = [
+ "libc",
+ "thiserror 2.0.18",
+ "winapi",
+]
+
+[[package]]
+name = "vmm-sys-util"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "506c62fdf617a5176827c2f9afbcf1be155b03a9b4bf9617a60dbc07e3a1642f"
+dependencies = [
+ "bitflags 1.3.2",
+ "libc",
+]
 
 [[package]]
 name = "void"
