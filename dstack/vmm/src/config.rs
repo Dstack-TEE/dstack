@@ -330,9 +330,6 @@ pub struct CvmConfig {
     pub qmp_socket: bool,
     /// GPU configuration
     pub gpu: GpuConfig,
-    /// Use sudo to run the VM
-    pub user: String,
-
     /// Auto restart configuration
     pub auto_restart: AutoRestartConfig,
 

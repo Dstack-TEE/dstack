@@ -24,12 +24,9 @@ use anyhow::{bail, Context, Result};
 use bon::Builder;
 use dstack_types::shared_filenames::HOST_SHARED_DISK_LABEL;
 use fs_err as fs;
-use nix::unistd::User;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::os::unix::fs::PermissionsExt;
 use std::{
-    fs::Permissions,
     io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -203,7 +200,7 @@ impl PreparedQemuLaunch {
         gpus: &GpuConfig,
     ) -> Result<Self> {
         let workdir = VmWorkDir::new(workdir);
-        prepare_data_disk(vm, &workdir, cfg)?;
+        prepare_data_disk(vm, &workdir)?;
         prepare_shared_dir(&workdir)?;
         let app_compose = workdir.app_compose().context("failed to get app compose")?;
         let platform = cfg.resolved_platform();
@@ -293,7 +290,7 @@ impl PreparedQemuLaunch {
     }
 }
 
-fn prepare_data_disk(vm: &VmConfig, workdir: &VmWorkDir, cfg: &CvmConfig) -> Result<()> {
+fn prepare_data_disk(vm: &VmConfig, workdir: &VmWorkDir) -> Result<()> {
     let hda_path = workdir.hda_path();
     if !hda_path.exists() {
         create_hd(
@@ -301,9 +298,6 @@ fn prepare_data_disk(vm: &VmConfig, workdir: &VmWorkDir, cfg: &CvmConfig) -> Res
             vm.image.hda.as_ref(),
             &format!("{}G", vm.manifest.disk_size),
         )?;
-    }
-    if !cfg.user.is_empty() {
-        fs::set_permissions(&hda_path, Permissions::from_mode(0o660))?;
     }
     Ok(())
 }
@@ -357,7 +351,7 @@ impl VmConfig {
             .any(|network| network.mode == NetworkingMode::Macvtap);
         let Some(socket) = prepared.swtpm_socket.as_deref() else {
             if has_macvtap {
-                return self.wrap_launcher(cfg, &prepared, process, None, None);
+                return self.wrap_launcher(&prepared, process, None, None);
             }
             return Ok(vec![process]);
         };
@@ -365,14 +359,7 @@ impl VmConfig {
             .swtpm_path
             .as_ref()
             .context("missing swtpm executable for configured socket")?;
-        let (socket_uid, socket_gid) = if cfg.user.is_empty() {
-            (unsafe { libc::geteuid() }, unsafe { libc::getegid() })
-        } else {
-            let user = User::from_name(&cfg.user)
-                .context("failed to resolve QEMU user")?
-                .with_context(|| format!("QEMU user {} does not exist", cfg.user))?;
-            (user.uid.as_raw(), user.gid.as_raw())
-        };
+        let (socket_uid, socket_gid) = (unsafe { libc::geteuid() }, unsafe { libc::getegid() });
 
         let swtpm_args = vec![
             "socket".into(),
@@ -388,7 +375,6 @@ impl VmConfig {
             "not-need-init,startup-clear".into(),
         ];
         self.wrap_launcher(
-            cfg,
             &prepared,
             process,
             Some(ChildCommand {
@@ -401,29 +387,11 @@ impl VmConfig {
 
     fn wrap_launcher(
         &self,
-        cfg: &CvmConfig,
         prepared: &PreparedQemuLaunch,
-        mut process: ProcessConfig,
+        process: ProcessConfig,
         swtpm: Option<ChildCommand>,
         swtpm_socket: Option<PathBuf>,
     ) -> Result<Vec<ProcessConfig>> {
-        let identity = if cfg.user.is_empty() {
-            None
-        } else {
-            let user = User::from_name(&cfg.user)
-                .context("failed to resolve QEMU user")?
-                .with_context(|| format!("QEMU user {} does not exist", cfg.user))?;
-            if process.command != "sudo" || process.args.first().map(String::as_str) != Some("-u") {
-                bail!("unexpected QEMU privilege wrapper");
-            }
-            process.command = process
-                .args
-                .get(2)
-                .context("sudo command is missing")?
-                .clone();
-            process.args.drain(0..3);
-            Some((user.uid.as_raw(), user.gid.as_raw()))
-        };
         let open_files = prepared
             .networks
             .iter()
@@ -442,8 +410,6 @@ impl VmConfig {
             swtpm,
             swtpm_socket,
             open_files,
-            uid: identity.map(|value| value.0),
-            gid: identity.map(|value| value.1),
             startup_timeout_ms: 5_000,
             shutdown_timeout_ms: 10_000,
         };
@@ -849,12 +815,6 @@ impl QemuCommandBuilder<'_> {
         );
         if let Some(cpus) = &self.prepared.numa_cpus {
             arguments.splice(0..0, ["taskset", "-c", cpus].into_iter().map(String::from));
-        }
-        if !self.cfg.user.is_empty() {
-            arguments.splice(
-                0..0,
-                ["sudo", "-u", &self.cfg.user].into_iter().map(String::from),
-            );
         }
 
         let command = arguments.remove(0);

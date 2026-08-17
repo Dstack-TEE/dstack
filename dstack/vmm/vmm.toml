@@ -43,7 +43,6 @@ max_allocable_memory_in_mb = 100_000 # MB
 # Enable QMP socket
 qmp_socket = false
 # The user to run the VM as. If empty, the VM will be run as the current user.
-user = ""
 # Unique namespace when multiple dstack-vmm instances share one host. When
 # empty, a stable value is derived from run_path.
 instance_id = ""
