@@ -806,13 +806,10 @@ fn build_store_status(
                     .map(|(node_id, timestamp)| LastSeenEntry { node_id, timestamp })
                     .collect();
                 let link = links.iter().find(|l| l.id == p.id);
-                #[allow(deprecated)]
                 ProtoPeerSyncStatus {
                     id: p.id,
                     local_ack: p.ack,
                     peer_ack: p.peer_ack,
-                    // wavekv 2.0 keeps no per-peer log buffers.
-                    buffered_logs: 0,
                     last_seen,
                     heard_from: p.heard_from,
                     digest_mismatches: link.map(|l| l.digest_mismatches).unwrap_or(0),

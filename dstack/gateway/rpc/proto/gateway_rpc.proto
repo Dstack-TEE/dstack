@@ -339,18 +339,15 @@ message PeerSyncStatus {
   uint32 id = 1;
   uint64 local_ack = 2;
   uint64 peer_ack = 3;
-  // Always 0 since wavekv 2.0, which replicates state instead of operation logs and
-  // keeps no per-peer log buffers. Retained so existing clients keep decoding.
-  uint64 buffered_logs = 4 [deprecated = true];
   // Last seen timestamps: [(observer_node_id, timestamp), ...]
-  repeated LastSeenEntry last_seen = 5;
+  repeated LastSeenEntry last_seen = 4;
   // Whether this peer has ever reported an ack map.
-  bool heard_from = 6;
+  bool heard_from = 5;
   // Consecutive quiescent rounds whose state digests disagreed. Non-zero means the
   // replicas have silently diverged; wavekv 1.x could not detect this at all.
-  uint32 digest_mismatches = 7;
+  uint32 digest_mismatches = 6;
   // Consecutive sync rounds that failed outright.
-  uint32 consecutive_failures = 8;
+  uint32 consecutive_failures = 7;
 }
 
 message LastSeenEntry {
