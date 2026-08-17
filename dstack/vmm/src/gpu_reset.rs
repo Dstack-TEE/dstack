@@ -99,15 +99,12 @@ fn sanitize_at(sysfs_devices: &Path, selected: &BTreeSet<String>, timeout: Durat
 fn hot_reset(sysfs_devices: &Path, slot: &str) -> Result<()> {
     let group_id = iommu_group_id(sysfs_devices, slot)?;
     let container = Arc::new(VfioContainer::new(None).context("failed to open VFIO container")?);
-    let group = container
-        .get_group(group_id)
-        .with_context(|| format!("failed to open VFIO group {group_id}"))?;
     let device = VfioDevice::new(&sysfs_devices.join(slot), container)
         .with_context(|| format!("failed to open VFIO device {slot}"))?;
 
     let dependents = device
         .pci_hot_reset_info()
-        .context("VFIO_DEVICE_GET_PCI_HOT_RESET_INFO failed")?;
+        .context("failed to query PCI hot reset scope")?;
     let foreign = dependents
         .iter()
         .filter(|dep| dep.group_id != group_id)
@@ -127,8 +124,8 @@ fn hot_reset(sysfs_devices: &Path, slot: &str) -> Result<()> {
     );
 
     device
-        .pci_hot_reset(&[&group])
-        .context("VFIO_DEVICE_PCI_HOT_RESET failed")?;
+        .pci_hot_reset_own_group()
+        .context("failed to perform PCI hot reset")?;
     Ok(())
 }
 
