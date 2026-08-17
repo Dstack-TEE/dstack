@@ -24,7 +24,9 @@
 
 ## Objective
 
-Verify gateway registration refresh and key-store persistence for documented success, boundary, failure, concurrency, and recovery behavior.
+Verify single- and multi-cluster gateway registration refresh and key-store
+persistence for documented success, boundary, failure, concurrency, and
+recovery behavior.
 
 ## Preconditions
 
@@ -33,27 +35,51 @@ Verify gateway registration refresh and key-store persistence for documented suc
 
 ## Test Data
 
-Include valid values, empty/minimum/maximum values, malformed input, duplicate invocation, a dependency outage, and an adjacent app or node identity.
+Include legacy `gateway_urls`, grouped `gateway_clusters`, simultaneous legacy
+and grouped configuration, valid and duplicate cluster names, multiple URLs in
+one cluster, two independent clusters, malformed input, duplicate invocation,
+a per-cluster dependency outage, and an adjacent app or node identity.
 
 ## Steps
 
 <a id="tc-gos-setup-009-step-01"></a>
 ### Step 1: Exercise the complete behavior matrix
 
-Register and refresh across multiple gateway URLs, persisted WireGuard key store, changed instance policy, gateway outage, wrong identity and repeated boot.
+Register and refresh across multiple failover URLs in one cluster and across a
+second independently operated cluster. Verify persisted per-cluster WireGuard
+keys, distinct interfaces and listen ports, changed instance policy, wrong
+identity, and repeated boot. Configure both `gateway_urls` and
+`gateway_clusters` at the VMM boundary and through a guest sys-config input.
 
 **Expected results:**
 
-- Stable key material and instance identity are reused securely, configuration updates atomically, and invalid gateway responses never replace working state.
+- URLs grouped under one cluster behave only as failover endpoints and produce
+  one local cluster configuration.
+- Independent clusters use distinct WireGuard keys, interfaces, caches, and
+  listen ports while registering the same CVM identity.
+- The VMM rejects simultaneous non-empty `gateway_urls` and
+  `gateway_clusters`; a guest receiving both prefers `gateway_clusters` and
+  emits a warning.
+- Stable per-cluster key material and instance identity are reused securely,
+  configuration updates atomically, and invalid gateway responses never
+  replace working state.
 
 <a id="tc-gos-setup-009-step-02"></a>
 ### Step 2: Verify failure atomicity and recovery
 
-Interrupt each external dependency before and after its commit point, issue a duplicate/concurrent request, restore the dependency, and retry.
+Interrupt one cluster before and after its commit point while leaving the other
+cluster healthy. Issue duplicate and concurrent requests, fail an apply after
+the replacement configuration is written, restore the dependency, and retry.
 
 **Expected results:**
 
-- Uncertain input fails closed, no partial trusted output is consumed, resources are released, retry converges once, and diagnostics identify the exact phase without secrets.
+- A failed cluster retains its last-known-good interface and configuration;
+  successful clusters update independently in the same refresh.
+- A first-time apply failure removes its false configuration marker, and a
+  replacement apply failure restores the previous working configuration.
+- Uncertain input fails closed, no partial trusted output is consumed, retry
+  converges once, and diagnostics identify the exact cluster and phase without
+  secrets.
 
 <a id="tc-gos-setup-009-step-03"></a>
 ### Step 3: Verify persistence, isolation, and cleanup
@@ -62,7 +88,9 @@ Restart the owning service or VM where permitted, re-query all affected state, t
 
 **Expected results:**
 
-- Persistent/transient state follows policy, the adjacent identity is unchanged, no credential is exposed, and files, mounts, devices, processes, listeners, and counters return to baseline.
+- Reordering or retrying does not cause clusters to share cached private keys;
+  the adjacent identity is unchanged, no credential is exposed, and files,
+  mounts, devices, processes, listeners, and counters return to baseline.
 
 ## Postconditions
 

@@ -1879,8 +1879,12 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
             workspace / "data/registration-client",
             usage_ra_tls=case_id == "tc-gw-cluster-ad-002",
         )
-        node_count = {"gateway-cluster": 3, "gateway-exit-cluster": 4}.get(
-            str(requested.get("profile")), 1
+        node_count = (
+            4
+            if case_id == "tc-gos-setup-009"
+            else {"gateway-cluster": 3, "gateway-exit-cluster": 4}.get(
+                str(requested.get("profile")), 1
+            )
         )
         allocated = reserve_ports(node_count * 4)
         node_ports = [
@@ -1912,6 +1916,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         )
         bootnode = ""
         for node_id, ports_for_node in enumerate(node_ports, start=1):
+            independent_cluster = case_id == "tc-gos-setup-009" and node_id == 4
             node_workspace = workspace / f"gateway-node-{node_id}"
             for name in ("config", "data", "logs", "run"):
                 (node_workspace / name).mkdir(parents=True)
@@ -1996,8 +2001,10 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                 node_workspace,
                 ports_for_node,
                 admin_token,
-                sync_node_id=node_id if node_count > 1 else None,
-                sync_bootnode=bootnode,
+                sync_node_id=(
+                    None if independent_cluster else node_id if node_count > 1 else None
+                ),
+                sync_bootnode="" if independent_cluster else bootnode,
                 tls_identity=registration_client,
                 app_address_dns_servers=(
                     [
@@ -2184,6 +2191,11 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                 "bootnode": bootnode,
                 "admin_auth_token_file": str(admin_token_path),
             }
+            if case_id == "tc-gos-setup-009":
+                values["gateway_cluster"]["clusters"] = {
+                    "primary": {"nodes": nodes[:3]},
+                    "secondary": {"nodes": nodes[3:]},
+                }
         values["services"].update(
             {
                 "rpc": {"url": values["gateway"]["rpc_url"], "tls_verify": False},
