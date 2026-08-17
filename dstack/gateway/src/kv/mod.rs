@@ -522,6 +522,13 @@ pub fn gunzip_bounded(data: &[u8], limit: usize) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Encode a KV value as MessagePack.
+///
+/// Structs are encoded as maps keyed by field name rather than as positional
+/// arrays. Field-name keys let a reader skip fields it does not know and fill
+/// in `#[serde(default)]` fields it does not receive, so the value types below
+/// can gain fields without breaking gateways running an older build. Decoding
+/// accepts both forms, so values written by older releases stay readable.
 pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     rmp_serde::encode::to_vec_named(value).context("failed to encode value")
 }

@@ -7,7 +7,9 @@
 //! Sync data is encoded using msgpack + gzip compression for efficiency.
 
 use crate::{
-    kv::{decode, encode, gunzip_bounded, MAX_DECOMPRESSED_SYNC_BYTES},
+    kv::{
+        decode, encode, gunzip_bounded, MAX_COMPRESSED_SYNC_BYTES, MAX_DECOMPRESSED_SYNC_BYTES,
+    },
     main_service::Proxy,
 };
 use flate2::{write::GzEncoder, Compression};
@@ -80,14 +82,22 @@ fn gunzip(data: &[u8]) -> Result<Vec<u8>, Status> {
     })
 }
 
-/// Read a v2 envelope from a request body, applying the same size cap as the v1 route.
-async fn read_envelope(data: Data<'_>) -> Result<SyncEnvelope, Status> {
+async fn read_compressed_body(data: Data<'_>) -> Result<Vec<u8>, Status> {
     let bytes = data
-        .open(16.mebibytes())
+        .open(MAX_COMPRESSED_SYNC_BYTES.bytes())
         .into_bytes()
         .await
         .map_err(|_| Status::BadRequest)?;
-    let decompressed = gunzip(&bytes)?;
+    if !bytes.is_complete() {
+        warn!("sync payload exceeds the {MAX_COMPRESSED_SYNC_BYTES}-byte compressed-size limit");
+        return Err(Status::PayloadTooLarge);
+    }
+    Ok(bytes.into_inner())
+}
+
+/// Read a v2 envelope from a request body, applying the same size cap as the v1 route.
+async fn read_envelope(data: Data<'_>) -> Result<SyncEnvelope, Status> {
+    let decompressed = gunzip(&read_compressed_body(data).await?)?;
     // `SyncEnvelope::decode` enforces the schema version and rejects trailing bytes;
     // it is deliberately not the generic `decode` used for KV values.
     SyncEnvelope::decode(&decompressed).map_err(|e| {
@@ -159,11 +169,7 @@ pub async fn sync_store(
     };
 
     // Read and decode request
-    let bytes = data
-        .open(16.mebibytes())
-        .into_bytes()
-        .await
-        .map_err(|_| Status::BadRequest)?;
+    let bytes = read_compressed_body(data).await?;
     let msg = decode_sync_message(&bytes)?;
 
     // Reject sync from node_id == 0
@@ -599,6 +605,23 @@ mod tests {
             decoded.entries.iter().any(|e| e.key == "node/7"),
             "an empty ack map must draw the whole live state"
         );
+    }
+
+    #[tokio::test]
+    async fn an_oversized_compressed_request_is_rejected_explicitly() {
+        let (client, _proxy, _tmp) = serving_gateway(true).await;
+        for path in [
+            "/wavekv/sync/persistent",
+            "/wavekv/sync2/persistent",
+            "/wavekv/push/persistent",
+        ] {
+            let response = client
+                .post(path)
+                .body(vec![0u8; 16 * 1024 * 1024 + 1])
+                .dispatch()
+                .await;
+            assert_eq!(response.status(), Status::PayloadTooLarge, "{path}");
+        }
     }
 
     /// 404 is the negotiation signal: it is what tells a peer "this node has no v2
