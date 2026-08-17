@@ -5,7 +5,7 @@
 use crate::{
     config::{Config, NetworkFilterMode, Networking, NetworkingMode, ProcessAnnotation, Protocol},
     logrotate,
-    netd::{self, InterfaceIdentity, PrepareRequest, Request as NetdRequest},
+    netd::{self, InterfaceIdentity, PrepareBridgeRequest, Request as NetdRequest},
 };
 
 use anyhow::{bail, Context, Result};
@@ -544,7 +544,7 @@ impl App {
                 vm_id: vm.manifest.id.clone(),
                 nic_index,
             };
-            let request = PrepareRequest {
+            let request = PrepareBridgeRequest {
                 identity: identity.clone(),
                 bridge: network.bridge.clone(),
                 mac: network::mac_address_for_vm_index(
@@ -556,8 +556,11 @@ impl App {
                 filter: self.config.cvm.network_filter.filter.clone(),
                 parameters: self.config.cvm.network_filter.parameters.clone(),
             };
-            if let Err(error) =
-                netd::request(&self.config.netd.socket, &NetdRequest::Prepare(request)).await
+            if let Err(error) = netd::request(
+                &self.config.netd.socket,
+                &NetdRequest::PrepareBridge(request),
+            )
+            .await
             {
                 // The client may have timed out while netd was still finishing
                 // this Prepare. Remove the in-flight identity first; netd's
