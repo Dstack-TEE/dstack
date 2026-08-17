@@ -736,6 +736,23 @@ mod tests {
         assert!(value.get("identity").is_none());
     }
 
+    #[test]
+    fn bridge_prepare_has_a_dedicated_operation() {
+        let request = Request::PrepareBridge(PrepareBridgeRequest {
+            identity: identity("instance", "vm", 0),
+            bridge: "br0".into(),
+            mac: "02:00:00:00:00:01".into(),
+            qemu_uid: 1000,
+            filter: "clean-traffic".into(),
+            parameters: BTreeMap::new(),
+        });
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(value["operation"], "prepare_bridge");
+        assert_eq!(value["instance_id"], "instance");
+        assert_eq!(value["bridge"], "br0");
+        assert!(value.get("identity").is_none());
+    }
+
     #[tokio::test]
     async fn disconnected_client_is_confined_to_one_connection() {
         let (mut server, client) = UnixStream::pair().unwrap();

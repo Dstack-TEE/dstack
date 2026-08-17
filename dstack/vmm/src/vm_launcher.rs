@@ -71,12 +71,6 @@ impl Drop for SocketCleanup {
     }
 }
 
-impl LaunchSpec {
-    fn is_single_process(&self) -> bool {
-        self.swtpm.is_none()
-    }
-}
-
 struct PreparedOpenFiles {
     // Retain the original device handles through the fork or exec handoff;
     // they close automatically when this prepared set leaves scope.
@@ -120,7 +114,7 @@ fn prepare_open_files(open_files: &[OpenFile]) -> Result<PreparedOpenFiles> {
     })
 }
 
-fn prepare_exec(expected_parent: libc::pid_t, mappings: &[(i32, i32)]) -> std::io::Result<()> {
+fn prepare_child(expected_parent: libc::pid_t, mappings: &[(i32, i32)]) -> std::io::Result<()> {
     setpgid(Pid::from_raw(0), Pid::from_raw(0))?;
     prctl::set_pdeathsig(Signal::SIGKILL)?;
     if getppid().as_raw() != expected_parent {
@@ -153,21 +147,11 @@ fn spawn_child(spec: &ChildCommand, open_files: &[OpenFile]) -> Result<Child> {
     unsafe {
         command
             .as_std_mut()
-            .pre_exec(move || prepare_exec(parent, &mappings));
+            .pre_exec(move || prepare_child(parent, &mappings));
     }
     command
         .spawn()
         .with_context(|| format!("failed to start {}", spec.command))
-}
-
-fn exec_in_place(spec: &ChildCommand, open_files: &[OpenFile]) -> Result<()> {
-    let prepared = prepare_open_files(open_files)?;
-    let parent = getppid().as_raw();
-    prepare_exec(parent, &prepared.mappings).context("failed to prepare in-place QEMU exec")?;
-    let mut command = std::process::Command::new(&spec.command);
-    command.args(&spec.args);
-    let error = command.exec();
-    Err(error).with_context(|| format!("failed to exec {}", spec.command))
 }
 
 async fn stop_child(child: &mut Child, name: &str, grace: Duration) {
@@ -217,9 +201,6 @@ pub async fn run(spec_path: &Path) -> Result<()> {
     let raw = fs_err::read(spec_path)
         .with_context(|| format!("failed to read launch spec {}", spec_path.display()))?;
     let spec: LaunchSpec = serde_json::from_slice(&raw).context("failed to parse launch spec")?;
-    if spec.is_single_process() {
-        return exec_in_place(&spec.qemu, &spec.open_files);
-    }
     let _socket_cleanup = spec.swtpm_socket.clone().map(SocketCleanup);
     if let Some(socket) = &spec.swtpm_socket {
         if socket.exists() {
@@ -367,21 +348,6 @@ mod tests {
 
         assert_eq!(fs_err::read(output)?, b"macvtap-fd");
         Ok(())
-    }
-
-    #[test]
-    fn single_process_requires_no_swtpm() {
-        let mut spec = LaunchSpec {
-            qemu: shell("exit 0".into()),
-            swtpm: None,
-            swtpm_socket: None,
-            open_files: vec![],
-            startup_timeout_ms: 1_000,
-            shutdown_timeout_ms: 1_000,
-        };
-        assert!(spec.is_single_process());
-        spec.swtpm = Some(shell("exit 0".into()));
-        assert!(!spec.is_single_process());
     }
 
     #[tokio::test]
