@@ -397,6 +397,28 @@ except Exception:
 " 2>/dev/null
 }
 
+get_persistent_digest() {
+	local admin_port=$1
+	get_status "$admin_port" | python3 -c "import sys,json; print(json.load(sys.stdin)['persistent']['digest'])" 2>/dev/null || true
+}
+
+get_node_uuid() {
+	local admin_port=$1
+	admin_get_status "$admin_port" | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin)['uuid']))" 2>/dev/null || true
+}
+
+wait_for_instances() {
+	local debug_port=$1
+	local expected=$2
+	local timeout_seconds=$3
+	local attempts=$((timeout_seconds * 10))
+	for _ in $(seq 1 "$attempts"); do
+		if [[ "$(get_n_instances "$debug_port")" -ge "$expected" ]]; then return 0; fi
+		sleep 0.1
+	done
+	return 1
+}
+
 # Get Proxy State from debug port (in-memory state)
 # Usage: debug_get_proxy_state <debug_port>
 # Returns: JSON response with instances and allocated_addresses
@@ -682,7 +704,7 @@ test_cross_node_data_sync() {
 
 	# Register a client on node 1 via debug port
 	log_info "Registering client on node 1 via debug port..."
-	local register_response=$(debug_register_cvm $debug_port1 "testkey12345678901234567890123456789012345=" "app1" "inst1")
+	local register_response=$(debug_register_cvm $debug_port1 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" "app1" "inst1")
 	log_info "Register response: $register_response"
 
 	# Verify registration succeeded
@@ -742,6 +764,102 @@ test_cross_node_data_sync() {
 		log_info "ProxyState from node 2: $(debug_get_proxy_state $debug_port2)"
 		return 1
 	fi
+}
+
+# =============================================================================
+# Push fast path: propagation must happen before the periodic interval
+# =============================================================================
+test_push_fast_path() {
+	log_info "========== Push Fast Path =========="
+	cleanup
+	rm -rf "$RUN_DIR/wavekv_node1" "$RUN_DIR/wavekv_node2"
+	rm -f "$RUN_DIR/gateway-state-node1.json" "$RUN_DIR/gateway-state-node2.json"
+	generate_config 1; generate_config 2
+	start_node 1; start_node 2; setup_peers 1 2; sleep 6
+
+	local before=$(get_n_instances 13025)
+	local response=$(debug_register_cvm 13015 \
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" "push_app" "push_instance")
+	verify_register_response "$response" >/dev/null || return 1
+	# The periodic interval is 5 seconds. Arrival within 3 seconds exercises push.
+	wait_for_instances 13025 $((before + 1)) 3 || {
+		log_error "Node 2 did not receive the write before the periodic interval"; return 1; }
+	for _ in $(seq 1 30); do
+		local digest1=$(get_persistent_digest 13016)
+		local digest2=$(get_persistent_digest 13026)
+		if [[ -n "$digest1" && "$digest1" == "$digest2" ]]; then
+			log_info "Push fast-path and digest convergence test PASSED"; return 0
+		fi
+		sleep 0.1
+	done
+	log_error "Persistent digests did not converge after push"
+	return 1
+}
+
+# =============================================================================
+# Periodic anti-entropy must repair a write whose push could not be delivered
+# =============================================================================
+test_periodic_repair_after_missed_push() {
+	log_info "========== Periodic Repair After Missed Push =========="
+	cleanup
+	rm -rf "$RUN_DIR/wavekv_node1" "$RUN_DIR/wavekv_node2"
+	rm -f "$RUN_DIR/gateway-state-node1.json" "$RUN_DIR/gateway-state-node2.json"
+	generate_config 1; generate_config 2
+	start_node 1; start_node 2; setup_peers 1 2; sleep 6
+
+	local before=$(get_n_instances 13025)
+	stop_node 2
+	local response=$(debug_register_cvm 13015 \
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" "repair_app" "repair_instance")
+	verify_register_response "$response" >/dev/null || return 1
+	sleep 1
+	start_node 2; setup_peers 1 2
+	wait_for_instances 13025 $((before + 1)) 15 || {
+		log_error "Periodic sync did not repair the missed write"; return 1; }
+	log_info "Periodic repair test PASSED"
+}
+
+# =============================================================================
+# A node that loses its local store files must bootstrap before local writes
+# =============================================================================
+test_bootstrap_after_data_dir_loss() {
+	log_info "========== Bootstrap After Data Directory Loss =========="
+	cleanup
+	rm -rf "$RUN_DIR/wavekv_node1" "$RUN_DIR/wavekv_node2"
+	rm -f "$RUN_DIR/gateway-state-node1.json" "$RUN_DIR/gateway-state-node2.json"
+	generate_config 1
+	generate_config 2 "https://localhost:13012"
+	start_node 1; start_node 2; setup_peers 1 2; sleep 6
+
+	local response=$(debug_register_cvm 13015 \
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" "bootstrap_app" "bootstrap_instance")
+	verify_register_response "$response" >/dev/null || return 1
+	wait_for_instances 13025 1 10 || return 1
+	local old_uuid=$(get_node_uuid 13026)
+	if [[ -z "$old_uuid" || "$old_uuid" == "null" ]]; then
+		log_error "Node 2 did not report its identity before recovery"; return 1
+	fi
+
+	stop_node 2
+	cp "$RUN_DIR/wavekv_node2/node_uuid" "$RUN_DIR/node2.uuid"
+	rm -rf "$RUN_DIR/wavekv_node2"
+	mkdir -p "$RUN_DIR/wavekv_node2"
+	mv "$RUN_DIR/node2.uuid" "$RUN_DIR/wavekv_node2/node_uuid"
+	start_node 2
+	wait_for_instances 13025 1 15 || {
+		log_error "Node 2 did not bootstrap after losing its local store"; return 1; }
+	if [[ "$(get_persistent_digest 13016)" != "$(get_persistent_digest 13026)" ]]; then
+		log_error "Persistent digests differ after bootstrap"; return 1
+	fi
+	setup_peers 1 2; sleep 6
+	local new_uuid=$(get_node_uuid 13026)
+	if [[ -z "$new_uuid" || "$new_uuid" == "null" ]]; then
+		log_error "Node 2 did not report its post-recovery identity"; return 1
+	fi
+	if [[ "$old_uuid" != "$new_uuid" ]]; then
+		log_error "Losing the WaveKV store unexpectedly changed the node UUID"; return 1
+	fi
+	log_info "Data-directory-loss bootstrap test PASSED"
 }
 
 # =============================================================================
@@ -1977,6 +2095,9 @@ main() {
 		echo "  test_multi_node_sync                  - Multi-node sync"
 		echo "  test_node_recovery                    - Node recovery after disconnect"
 		echo "  test_cross_node_data_sync             - Cross-node data sync verification"
+		echo "  test_push_fast_path                   - Push propagation before periodic sync"
+		echo "  test_periodic_repair_after_missed_push - Periodic repair after a missed push"
+		echo "  test_bootstrap_after_data_dir_loss    - Bootstrap after local store loss"
 		echo ""
 		echo "Advanced tests:"
 		echo "  test_client_registration_persistence  - Client registration and persistence"
@@ -2087,6 +2208,9 @@ main() {
 		run_test test_multi_node_sync
 		run_test test_node_recovery
 		run_test test_cross_node_data_sync
+		run_test test_push_fast_path
+		run_test test_periodic_repair_after_missed_push
+		run_test test_bootstrap_after_data_dir_loss
 	fi
 
 	if [[ "$test_filter" == "all" ]] || [[ "$test_filter" == "advanced" ]]; then
