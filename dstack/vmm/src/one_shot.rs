@@ -290,8 +290,9 @@ Compose file content (first 200 chars):
         );
     }
 
+    let runtime_networks = resolved_networks(&manifest, &config.cvm);
     let process_configs = vm_builder_config
-        .config_qemu(&workdir_path, &config.cvm, &gpus)
+        .config_qemu(&workdir_path, &config.cvm, &gpus, &runtime_networks)
         .context("Failed to build QEMU configuration")?;
 
     // Get the main QEMU process config (first in the list)

@@ -66,6 +66,7 @@ pub struct PrepareMacvtapRequest {
     pub identity: InterfaceIdentity,
     pub parent: String,
     pub mac: String,
+    pub qemu_uid: u32,
     #[serde(default)]
     pub mode: String,
 }
@@ -256,6 +257,7 @@ fn handle_request(libvirt_uri: &str, request: Request) -> Result<(String, Option
             &request.identity,
             &request.parent,
             &request.mac,
+            request.qemu_uid,
             &request.mode,
         )
         .map(|(tap, device)| (tap, Some(device))),
@@ -284,6 +286,7 @@ fn prepare_macvtap(
     identity: &InterfaceIdentity,
     parent: &str,
     mac: &str,
+    qemu_uid: u32,
     mode: &str,
 ) -> Result<(String, String)> {
     validate_identity(identity)?;
@@ -319,6 +322,8 @@ fn prepare_macvtap(
         if !metadata.file_type().is_char_device() {
             bail!("macvtap device {device} is not a character device");
         }
+        std::os::unix::fs::chown(&device, Some(qemu_uid), None)
+            .with_context(|| format!("failed to set owner of macvtap device {device}"))?;
         ip(&["link", "set", "dev", &tap, "up"])?;
         Ok(device)
     })();
@@ -727,6 +732,7 @@ mod tests {
             identity: identity("instance", "vm", 1),
             parent: "eth0".into(),
             mac: "02:00:00:00:00:01".into(),
+            qemu_uid: 1000,
             mode: "private".into(),
         });
         let value = serde_json::to_value(request).unwrap();

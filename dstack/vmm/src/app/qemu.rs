@@ -9,7 +9,7 @@ use super::{
     hugepage_numa_nodes,
     image::Image,
     mr_config::{snp_host_data, tdx_mr_config_id},
-    network::{mac_address_for_vm_index, resolved_networks, validate_resolved_networks},
+    network::{mac_address_for_vm_index, validate_resolved_networks},
     pci_numa_node, round_up, GpuConfig, VmWorkDir,
 };
 use crate::{
@@ -199,13 +199,14 @@ impl PreparedQemuLaunch {
         workdir: impl AsRef<Path>,
         cfg: &CvmConfig,
         gpus: &GpuConfig,
+        networks: &[Networking],
     ) -> Result<Self> {
         let workdir = VmWorkDir::new(workdir);
         prepare_data_disk(vm, &workdir)?;
         prepare_shared_dir(&workdir)?;
         let app_compose = workdir.app_compose().context("failed to get app compose")?;
         let platform = cfg.resolved_platform();
-        let networks = resolved_networks(&vm.manifest, cfg);
+        let networks = networks.to_vec();
         validate_resolved_networks(&networks)?;
         let volumes = vm
             .manifest
@@ -337,8 +338,9 @@ impl VmConfig {
         workdir: impl AsRef<Path>,
         cfg: &CvmConfig,
         gpus: &GpuConfig,
+        networks: &[Networking],
     ) -> Result<Vec<ProcessConfig>> {
-        let prepared = PreparedQemuLaunch::prepare(self, workdir, cfg, gpus)?;
+        let prepared = PreparedQemuLaunch::prepare(self, workdir, cfg, gpus, networks)?;
         let process = QemuCommandBuilder {
             vm: self,
             cfg,

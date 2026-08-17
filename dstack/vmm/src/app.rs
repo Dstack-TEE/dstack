@@ -466,7 +466,12 @@ impl App {
                 let _ = work_dir.clear_runtime_networks();
                 return Err(error);
             }
-            let processes = match vm_config.config_qemu(&work_dir, &self.config.cvm, &devices) {
+            let processes = match vm_config.config_qemu(
+                &work_dir,
+                &self.config.cvm,
+                &devices,
+                &runtime_networks,
+            ) {
                 Ok(processes) => processes,
                 Err(error) => {
                     let _ = self
@@ -576,6 +581,7 @@ impl App {
                     identity: identity.clone(),
                     parent: network.parent.clone(),
                     mac,
+                    qemu_uid,
                     mode: network.macvtap_mode.clone(),
                 }),
                 NetworkingMode::User | NetworkingMode::Custom => continue,
