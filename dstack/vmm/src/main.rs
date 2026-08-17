@@ -33,6 +33,7 @@ mod main_service;
 mod netd;
 mod one_shot;
 mod openapi;
+mod process_manager;
 mod vm_launcher;
 
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -40,6 +41,14 @@ const GIT_REV: &str = dstack_build_info::git_revision!();
 
 fn app_version() -> String {
     dstack_build_info::app_version!()
+}
+
+fn is_connection_refused(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::ConnectionRefused)
+    })
 }
 
 #[derive(Parser)]
@@ -329,8 +338,17 @@ async fn main() -> Result<()> {
              token, or bind `address` to localhost / a Unix socket."
         );
     }
-    let supervisor = {
-        let cfg = &config.supervisor;
+    let systemd_manager = || {
+        process_manager::ProcessManager::systemd_backend(
+            config.systemd.state_dir.clone(),
+            config.systemd.unit_prefix.clone(),
+            config.systemd.stop_timeout.clone(),
+            config.systemd.user,
+        )
+    };
+    let supervisor_config = &config.supervisor;
+    let connect_supervisor = |auto_start| async move {
+        let cfg = supervisor_config;
         let abs_exe = Path::new(&cfg.exe).absolutize()?;
         SupervisorClient::start_and_connect_uds(
             &abs_exe,
@@ -338,12 +356,59 @@ async fn main() -> Result<()> {
             &cfg.pid_file,
             &cfg.log_file,
             cfg.detached,
-            cfg.auto_start,
+            auto_start,
         )
         .await
-        .context("Failed to connect to supervisor")?
+        .context("failed to connect to supervisor")
     };
-    let state = app::App::new(config, supervisor);
+    let legacy_socket_exists = Path::new(&supervisor_config.sock).exists();
+    let process_manager = match config.cvm.pm {
+        config::ProcessManagerBackend::Supervisor => process_manager::ProcessManager::supervisor(
+            connect_supervisor(supervisor_config.auto_start).await?,
+        ),
+        config::ProcessManagerBackend::Systemd => {
+            if legacy_socket_exists {
+                match connect_supervisor(false).await {
+                    Ok(client) => anyhow::ensure!(
+                        !client
+                            .list()
+                            .await?
+                            .iter()
+                            .any(|process| process.state.status.is_running()),
+                        "running Supervisor VMs detected; use cvm.pm = \"auto\" for migration"
+                    ),
+                    Err(error) if is_connection_refused(&error) => {
+                        warn!(%error, "ignoring stale legacy Supervisor socket")
+                    }
+                    Err(error) => return Err(error).context(
+                        "supervisor socket exists but its state cannot be verified in systemd mode; \
+                         if Supervisor is definitely not running, remove the stale socket and restart",
+                    ),
+                }
+            }
+            process_manager::ProcessManager::systemd(systemd_manager()?)
+        }
+        config::ProcessManagerBackend::Auto => {
+            let legacy_supervisor = if legacy_socket_exists {
+                match connect_supervisor(false).await {
+                    Ok(client) => Some(client),
+                    Err(error) if is_connection_refused(&error) => {
+                        warn!(%error, "ignoring stale legacy Supervisor socket");
+                        None
+                    }
+                    Err(error) => return Err(error).context(
+                        "supervisor socket exists but its state cannot be verified in auto mode; \
+                         if Supervisor is definitely not running, remove the stale socket and restart",
+                    ),
+                }
+            } else {
+                info!("legacy supervisor socket is absent; using systemd for all VMs");
+                None
+            };
+            process_manager::ProcessManager::auto(systemd_manager()?, legacy_supervisor).await?
+        }
+    };
+    let state = app::App::new(config, process_manager);
     state.reload_vms().await.context("Failed to reload VMs")?;
     tokio::spawn(auto_restart_task(state.clone()));
     tokio::spawn(log_rotation_task(state.clone()));

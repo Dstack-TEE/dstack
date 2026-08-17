@@ -21,6 +21,12 @@ node_name = ""
 registry = ""
 
 [cvm]
+# Process manager modes:
+# - "supervisor": launch and manage every VM through standalone Supervisor.
+# - "systemd": launch and manage every VM as a transient systemd service.
+# - "auto": use systemd for new launches, but keep VMs already running in
+#   Supervisor there until each VM is restarted.
+pm = "supervisor"
 # TEE platform: "auto", "tdx", or "amd-sev-snp". Auto selects AMD SEV-SNP when host CPU flags include sev_snp, otherwise TDX.
 platform = "auto"
 qemu_path = ""
@@ -190,6 +196,20 @@ pid_file = "./run/supervisor.pid"
 log_file = "./run/supervisor.log"
 detached = false
 auto_start = true
+
+[systemd]
+# Used when cvm.pm = "systemd" or "auto". Transient services are named
+# <unit_prefix>-<sha256(vm-id)>.service.
+# Connect to the per-user service manager instead of the system manager.
+user = true
+unit_prefix = "dstack-vm"
+# Process metadata used to reconcile transient services after a VMM restart.
+# Empty defaults to ~/.dstack-vmm/systemd-processes.
+state_dir = ""
+# How long systemd waits after SIGTERM before escalating to SIGKILL. Large TDX
+# guests can spend hours tearing down encrypted memory, so the safe default is
+# unbounded. Set a systemd time span such as "30min" to enable escalation.
+stop_timeout = "infinity"
 
 [host_api]
 ident = "dstack VMM"

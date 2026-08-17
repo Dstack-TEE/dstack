@@ -33,12 +33,15 @@ impl SupervisorClient {
     ) -> Result<Self> {
         let uri = format!("unix:{}", uds.as_ref().display());
         let client = Self::new(&uri);
-        if client.probe(Duration::from_millis(100)).await.is_ok() {
-            info!("Connected to supervisor at {uri}");
-            return Ok(client);
-        }
+        let probe_error = match client.probe(Duration::from_millis(100)).await {
+            Ok(()) => {
+                info!("Connected to supervisor at {uri}");
+                return Ok(client);
+            }
+            Err(error) => error,
+        };
         if !auto_start {
-            anyhow::bail!("Failed to connect to supervisor at {uri}");
+            return Err(probe_error).with_context(|| format!("failed to connect to {uri}"));
         }
         info!("Failed to connect to supervisor at {uri}, trying to start supervisor");
         // if the uds exists, remove it
@@ -146,11 +149,9 @@ impl SupervisorClient {
     }
 
     pub async fn probe(&self, timeout: Duration) -> Result<()> {
-        let response = tokio::time::timeout(timeout, self.ping()).await;
-        if matches!(response, Ok(Ok(_))) {
-            Ok(())
-        } else {
-            anyhow::bail!("failed to probe supervisor")
+        match tokio::time::timeout(timeout, self.ping()).await {
+            Ok(result) => result.map(|_| ()).context("failed to probe supervisor"),
+            Err(error) => Err(error).context("supervisor probe timed out"),
         }
     }
 
