@@ -26,7 +26,8 @@
 
 Verify single- and multi-cluster gateway registration refresh and key-store
 persistence for documented success, boundary, failure, concurrency, and
-recovery behavior.
+recovery behavior, then prove that every independent cluster can proxy traffic
+to the same CVM workload.
 
 ## Preconditions
 
@@ -82,7 +83,26 @@ the replacement configuration is written, restore the dependency, and retry.
   secrets.
 
 <a id="tc-gos-setup-009-step-03"></a>
-### Step 3: Verify persistence, isolation, and cleanup
+### Step 3: Verify both Gateway proxy data paths
+
+Boot a candidate development CVM with a case-scoped KMS, start one real
+Gateway node in each independent cluster, and enable gateway registration only
+after both Gateway identities are available. Start a bounded HTTP workload in
+the CVM. Address the same app ID through each Gateway proxy with an explicit
+TLS SNI mapping.
+
+**Expected results:**
+
+- The CVM creates `dstack-wg0` and `dstack-wg1` with distinct client keys,
+  addresses, listen ports, peers, and last-known-good files.
+- Both interfaces record a current WireGuard handshake with their own cluster.
+- A request through the primary Gateway proxy and a request through the
+  secondary Gateway proxy both return the same workload marker from the same
+  CVM app identity.
+- Direct CVM-IP requests are not accepted as proxy-path evidence.
+
+<a id="tc-gos-setup-009-step-04"></a>
+### Step 4: Verify persistence, isolation, and cleanup
 
 Restart the owning service or VM where permitted, re-query all affected state, test the adjacent identity, and perform documented cleanup.
 

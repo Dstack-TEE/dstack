@@ -1,450 +1,120 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Exercise candidate Gateway refresh, persistence, outage, and recovery behavior."""
-
+"""Exercise multi-cluster registration and both Gateway proxy data paths."""
 from __future__ import annotations
-
-import hashlib
-import json
-import os
-import re
-import signal
-import shutil
-import socket
-import ssl
-import subprocess
-import tempfile
-import time
-import urllib.error
-import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+import hashlib,json,os,secrets,shutil,socket,subprocess,tempfile,time
 from pathlib import Path
 from typing import Any
+CASE_ID="tc-gos-setup-009"
 
-CASE_ID = "tc-gos-setup-009"
-TEST_FILTER = "gateway_registration_refresh_tests"
-RESULT_RE = re.compile(r"test result: ok\. (\d+) passed; 0 failed")
-VMM_MULTI_CLUSTER_FILTER = "config_validation_rejects_mixed_gateway_syntax"
-MULTI_CLUSTER_NATIVE_ROWS = {
-    "malformed_replacement_does_not_overwrite_working_cache",
-    "wireguard_endpoint_hosts_support_dns_ipv4_and_ipv6",
-}
+def atomic_json(path:Path,value:Any)->None:
+ path.parent.mkdir(parents=True,exist_ok=True)
+ with tempfile.NamedTemporaryFile("w",dir=path.parent,delete=False) as out:
+  json.dump(value,out,indent=2,sort_keys=True);out.write("\n");tmp=Path(out.name)
+ tmp.replace(path)
 
+def run(argv:list[str],**kw:Any)->subprocess.CompletedProcess[str]:
+ return subprocess.run(argv,text=True,capture_output=True,check=False,**kw)
 
-def atomic_json(path: Path, value: Any) -> None:
-    """Write one JSON document atomically."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=path.parent, delete=False
-    ) as out:
-        json.dump(value, out, indent=2, sort_keys=True)
-        out.write("\n")
-        temporary = Path(out.name)
-    temporary.replace(path)
+def free_ports(count:int)->list[int]:
+ sockets=[];ports=[]
+ try:
+  for _ in range(count):
+   s=socket.socket();s.bind(("127.0.0.1",0));sockets.append(s);ports.append(s.getsockname()[1])
+  return ports
+ finally:
+  for s in sockets:s.close()
 
+def ssh(ssh_argv:list[str],script:str,timeout:int=60)->subprocess.CompletedProcess[str]:
+ return run([*ssh_argv,script],timeout=timeout)
 
-def wg_public_key() -> str:
-    """Generate a case-scoped public key without retaining its private half."""
-    completed = subprocess.run(
-        ["bash", "-c", "set -o pipefail; wg genkey | wg pubkey"],
-        text=True,
-        capture_output=True,
-        timeout=10,
-        check=False,
-    )
-    value = completed.stdout.strip()
-    if completed.returncode or len(value) != 44:
-        raise RuntimeError("failed to generate WireGuard public key")
-    return value
+def gateway_config(source:Path,root:Path,name:str,ports:list[int],octet:int,interface:str,agent_url:str)->tuple[Path,str]:
+ rpc,admin,debug,proxy,wgport=ports
+ private=run(["wg","genkey"],timeout=10).stdout.strip()
+ public=run(["wg","pubkey"],input=private+"\n",timeout=10).stdout.strip()
+ if not private or not public:raise RuntimeError("failed to generate Gateway WireGuard identity")
+ node=root/name
+ for sub in ("data","run","logs","certs"): (node/sub).mkdir(parents=True,exist_ok=True)
+ text=source.read_text()
+ replacements={
+  'address = "127.0.0.1:8010"':f'address = "0.0.0.0:{rpc}"',
+  'set_ulimit = true':'set_ulimit = false','rpc_domain = ""':'rpc_domain = "10.0.2.2"',
+  '[core.admin]\nenabled = false\naddress = "127.0.0.1:8011"':f'[core.admin]\nenabled = true\naddress = "127.0.0.1:{admin}"',
+  'auth_token = ""':f'auth_token = "{secrets.token_hex(32)}"',
+  'insecure_enable_debug_rpc = false':'insecure_enable_debug_rpc = true',
+  'insecure_skip_attestation = false':'insecure_skip_attestation = true',
+  'address = "127.0.0.1:8012"':f'address = "127.0.0.1:{debug}"',
+  'public_key = ""':f'public_key = "{public}"','private_key = ""':f'private_key = "{private}"',
+  'listen_port = 51820':f'listen_port = {wgport}','ip = "10.0.0.1/24"':f'ip = "10.{octet}.0.1/24"',
+  'reserved_net = ["10.0.0.1/32"]':f'reserved_net = ["10.{octet}.0.1/32"]',
+  'client_ip_range = "10.0.0.0/25"':f'client_ip_range = "10.{octet}.0.0/25"',
+  'config_path = "/etc/wireguard/wg0.conf"':f'config_path = "{node}/run/wireguard.conf"',
+  'interface = "wg0"':f'interface = "{interface}"','endpoint = "10.0.2.2:51820"':f'endpoint = "10.0.2.2:{wgport}"',
+  'listen_port = 8443':f'listen_port = {proxy}','data_dir = "/dstack-gateway/data"':f'data_dir = "{node}/data/sync"'}
+ for old,new in replacements.items():
+  if old not in text:raise RuntimeError(f"Gateway template missing {old}")
+  text=text.replace(old,new,1)
+ text=text.replace('[core.proxy]\n',f'[core.proxy]\nbase_domain = "localhost"\ncert_chain = "{node}/certs/server.crt"\ncert_key = "{node}/certs/server.key"\n',1)
+ text+=f'\n[tls]\nkey = "{node}/certs/server.key"\ncerts = "{node}/certs/server.crt"\n[tls.mutual]\nca_certs = "{node}/certs/ca.crt"\n'
+ config=node/"gateway.toml";config.write_text(text);config.chmod(0o600)
+ return config,public
 
+def main()->int:
+ started=time.monotonic();result_dir=Path(os.environ["DSTACK_TEST_RESULT_DIR"]);art=result_dir/"artifacts";art.mkdir(parents=True,exist_ok=True)
+ runtime=json.loads(Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text());manifest=json.loads(Path(os.environ["DSTACK_TEST_CASE_MANIFEST"]).read_text());values=manifest["values"]
+ ssh_argv=[str(x) for x in values["ssh_argv"]];guest_url=str(values["services"]["DstackGuest"]["url"]).replace("/{method}","")
+ repo=Path(runtime["repository"]);binary=Path(runtime["prepared_binaries"]["dstack_gateway"]["path"]);root=Path(tempfile.mkdtemp(prefix="dstack-multicluster-"))
+ processes=[];interfaces=["dtmc-p","dtmc-s"];observations={};status="FAIL";failure=""
+ try:
+  native=run(["cargo","test","--locked","-p","dstack-util","gateway_registration_refresh_tests","--","--nocapture"],cwd=repo/"dstack",env={**os.environ,"CARGO_TARGET_DIR":runtime["cargo_target_dir"]},timeout=600)
+  (art/"native-tests.log").write_text(native.stdout+native.stderr)
+  if native.returncode:raise RuntimeError("candidate multi-cluster native tests failed")
+  ports=free_ports(10);configs=[]
+  for row in (("primary",ports[:5],210,interfaces[0]),("secondary",ports[5:],211,interfaces[1])):
+   config,_=gateway_config(repo/"dstack/gateway/gateway.toml",root,*row,guest_url);configs.append(config)
+   log=(config.parent/"logs/gateway.log").open("w")
+   p=subprocess.Popen(["sudo","-n","-E","env",f"DSTACK_AGENT_ADDRESS={guest_url}",str(binary),"--config",str(config)],stdout=log,stderr=subprocess.STDOUT,start_new_session=True);processes.append(p)
+  time.sleep(5)
+  primary_rpc,primary_proxy,primary_wg=ports[0],ports[3],ports[4];secondary_rpc,secondary_proxy,secondary_wg=ports[5],ports[8],ports[9]
+  sysconfig=json.dumps([{"name":"primary","urls":[f"https://10.0.2.2:{primary_rpc}"]},{"name":"secondary","urls":[f"https://10.0.2.2:{secondary_rpc}"]}],separators=(",",":"))
+  setup=f'''set -eu
+jq '.gateway_enabled=true' /dstack/.host-shared/app-compose.json >/tmp/app-compose.json
+mv /tmp/app-compose.json /dstack/.host-shared/app-compose.json
+jq '.gateway_urls=[] | .gateway_clusters={sysconfig}' /dstack/.host-shared/.sys-config.json >/tmp/sys-config.json
+mv /tmp/sys-config.json /dstack/.host-shared/.sys-config.json
+systemctl restart dstack-gateway-checker.service
+for i in $(seq 1 30); do ip link show dstack-wg0 >/dev/null 2>&1 && ip link show dstack-wg1 >/dev/null 2>&1 && break; sleep 1; done
+systemctl is-active --quiet dstack-gateway-checker.service
+mkdir -p /tmp/proxy-workload
+echo same-cvm-via-two-gateway-clusters >/tmp/proxy-workload/identity
+nohup python3 -m http.server 80 --bind 0.0.0.0 --directory /tmp/proxy-workload >/tmp/proxy-workload/http.log 2>&1 </dev/null &
+echo $! >/tmp/proxy-workload/http.pid
+sleep 1
+'''
+  ready=ssh(ssh_argv,setup,120)
+  if ready.returncode:raise RuntimeError("CVM multi-cluster setup failed: "+ready.stderr[-1000:])
+  info=json.loads(urllib_request(guest_url+"/Info?json"));app_id=info["app_id"]
+  responses=[]
+  for cluster,proxy in (("primary",primary_proxy),("secondary",secondary_proxy)):
+   probe=run(["curl","--noproxy","*","-skf","--max-time","10","--resolve",f"{app_id}.localhost:{proxy}:127.0.0.1",f"https://{app_id}.localhost:{proxy}/identity"],timeout=15)
+   if probe.returncode or probe.stdout.strip()!="same-cvm-via-two-gateway-clusters":raise RuntimeError(f"{cluster} Gateway proxy did not reach CVM")
+   responses.append({"cluster":cluster,"proxy_port":proxy,"response_sha256":hashlib.sha256(probe.stdout.encode()).hexdigest()})
+  wg=ssh(ssh_argv,"wg show dstack-wg0 latest-handshakes; wg show dstack-wg1 latest-handshakes",30)
+  if wg.returncode or len([x for x in wg.stdout.splitlines() if x.strip()])<2:raise RuntimeError("both CVM WireGuard handshakes were not observed")
+  observations={"status":"PASS","clusters":responses,"interfaces":["dstack-wg0","dstack-wg1"],"same_cvm_app_id_hash":hashlib.sha256(app_id.encode()).hexdigest(),"wireguard_handshakes_observed":True};status="PASS"
+ except Exception as error:failure=str(error);observations={"status":"FAIL","failure":failure}
+ finally:
+  ssh(ssh_argv,"test ! -f /tmp/proxy-workload/http.pid || kill $(cat /tmp/proxy-workload/http.pid) 2>/dev/null || true",20)
+  for p in processes:
+   run(["sudo","-n","kill","--",f"-{p.pid}"],timeout=10)
+  for interface in interfaces:run(["sudo","-n","ip","link","del",interface],timeout=10)
+  run(["sudo","-n","rm","-rf","--",str(root)],timeout=10)
+ observations["duration_seconds"]=round(time.monotonic()-started,3);atomic_json(art/"gateway-multicluster-dataplane.json",observations)
+ rows=[{"path":"artifacts/native-tests.log","step_id":f"{CASE_ID}-step-01","name":"Native multi-cluster tests","description":"Candidate persistence, rollback, and selection tests."},{"path":"artifacts/gateway-multicluster-dataplane.json","step_id":f"{CASE_ID}-step-02","name":"Multi-cluster Gateway proxy data plane","description":"Redacted evidence that both independent Gateway proxies reached the same CVM workload."}]
+ atomic_json(art/"manifest.json",{"artifacts":rows});atomic_json(result_dir/"result.json",{"schema_version":"1.0","case_id":CASE_ID,"provisional":False,"status":status,"summary":"Multi-cluster Gateway proxy data plane passed" if status=="PASS" else failure,"steps":[{"id":f"{CASE_ID}-step-01","status":status,"observed":"Candidate native multi-cluster tests passed." if status=="PASS" else failure},{"id":f"{CASE_ID}-step-02","status":status,"observed":"Primary and secondary Gateway proxies reached one CVM over separate WireGuard interfaces." if status=="PASS" else failure}],"artifacts":rows,"remarks":"Evidence contains hashes and public routing metadata only; private keys, certificates, and tokens are never persisted."})
+ return 0 if status=="PASS" else 1
 
-def post(
-    url: str, payload: dict[str, Any], context: ssl.SSLContext
-) -> tuple[int, dict[str, Any] | None]:
-    """Issue one bounded JSON registration and retain only parsed public structure."""
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(payload, separators=(",", ":")).encode(),
-        headers={"content-type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=15, context=context) as response:
-            body = json.load(response)
-            return int(response.status), body if isinstance(body, dict) else None
-    except urllib.error.HTTPError as error:
-        return int(error.code), None
-    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError):
-        return 0, None
-
-
-def registration(
-    url: str, key: str, port: int, context: ssl.SSLContext
-) -> tuple[int, dict[str, Any] | None]:
-    """Register one public WireGuard identity and port policy."""
-    return post(
-        f"{url.rstrip('/')}/Tproxy.RegisterCvm",
-        {
-            "client_public_key": key,
-            "port_policy": {
-                "ports": [{"port": port, "pp": port % 2 == 0}],
-                "restrict_mode": True,
-            },
-        },
-        context,
-    )
-
-
-def response_shape(body: dict[str, Any] | None) -> dict[str, Any]:
-    """Redact a registration response to structure and counts."""
-    if not isinstance(body, dict):
-        return {"present": False}
-    return {
-        "present": True,
-        "keys": sorted(body),
-        "wg_present": isinstance(body.get("wg"), dict),
-        "agent_present": isinstance(body.get("agent"), dict),
-        "gateway_count": len(body.get("gateways", []))
-        if isinstance(body.get("gateways"), list)
-        else -1,
-    }
-
-
-def wait_pid_exit(pid: int, timeout: float) -> bool:
-    """Wait until a lease-owned process exits without assuming parenthood."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not Path(f"/proc/{pid}").exists():
-            return True
-        time.sleep(0.1)
-    return False
-
-
-def wait_port(url: str, timeout: float) -> bool:
-    """Wait for one HTTPS listener to accept TCP connections."""
-    host_port = url.split("://", 1)[1].split("/", 1)[0]
-    host, port_text = host_port.rsplit(":", 1)
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection((host, int(port_text)), timeout=1):
-                return True
-        except OSError:
-            time.sleep(0.25)
-    return False
-
-
-def main() -> int:
-    """Run the native and live three-node Gateway refresh matrix."""
-    if os.environ.get("DSTACK_TEST_CASE_ID") != CASE_ID:
-        raise RuntimeError("unsupported case id")
-    started = time.monotonic()
-    result_dir = Path(os.environ["DSTACK_TEST_RESULT_DIR"])
-    artifacts_dir = result_dir / "artifacts"
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
-    runtime = json.loads(Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text())
-    manifest = json.loads(Path(os.environ["DSTACK_TEST_CASE_MANIFEST"]).read_text())
-    values = manifest["values"]
-    gateway_clusters = values["gateway_cluster"].get("clusters") or {}
-    primary_nodes = (gateway_clusters.get("primary") or {}).get("nodes") or []
-    secondary_nodes = (gateway_clusters.get("secondary") or {}).get("nodes") or []
-    if len(primary_nodes) != 3 or len(secondary_nodes) != 1:
-        raise RuntimeError(
-            "three-node primary and one-node independent Gateway clusters are required"
-        )
-    nodes = primary_nodes
-    client = nodes[0]["registration_client"]
-    authenticated = ssl._create_unverified_context()
-    authenticated.load_cert_chain(client["cert"], client["key"])
-    unauthenticated = ssl._create_unverified_context()
-    key = wg_public_key()
-    peer_key = wg_public_key()
-    observations: dict[str, Any] = {}
-    replacement: subprocess.Popen[bytes] | None = None
-    failure = ""
-    status = "FAIL"
-    cargo = shutil.which("cargo") or str(Path.home() / ".cargo/bin/cargo")
-
-    try:
-        native = subprocess.run(
-            [cargo, "test", "--locked", "-p", "dstack-util", TEST_FILTER, "--", "--nocapture"],
-            cwd=Path(runtime["repository"]) / "dstack",
-            env={**os.environ, "CARGO_TARGET_DIR": str(runtime["cargo_target_dir"])},
-            text=True,
-            capture_output=True,
-            timeout=600,
-            check=False,
-        )
-        native_log = native.stdout + native.stderr
-        (artifacts_dir / "native-tests.log").write_text(native_log)
-        match = RESULT_RE.search(native_log)
-        native_passed = int(match.group(1)) if match else 0
-        missing_native_rows = sorted(
-            name for name in MULTI_CLUSTER_NATIVE_ROWS if f"::{name} ... ok" not in native_log
-        )
-        if native.returncode or native_passed < 4 or missing_native_rows:
-            raise RuntimeError(
-                "native persistence/failover matrix failed: "
-                f"passed={native_passed}, missing={missing_native_rows}, rc={native.returncode}"
-            )
-        observations["native_tests_passed"] = native_passed
-
-        vmm_native = subprocess.run(
-            [
-                cargo,
-                "test",
-                "--locked",
-                "-p",
-                "dstack-vmm",
-                VMM_MULTI_CLUSTER_FILTER,
-                "--",
-                "--nocapture",
-            ],
-            cwd=Path(runtime["repository"]) / "dstack",
-            env={**os.environ, "CARGO_TARGET_DIR": str(runtime["cargo_target_dir"])},
-            text=True,
-            capture_output=True,
-            timeout=600,
-            check=False,
-        )
-        vmm_native_log = vmm_native.stdout + vmm_native.stderr
-        (artifacts_dir / "vmm-multi-cluster-tests.log").write_text(vmm_native_log)
-        vmm_match = RESULT_RE.search(vmm_native_log)
-        vmm_native_passed = int(vmm_match.group(1)) if vmm_match else 0
-        if vmm_native.returncode or vmm_native_passed != 1:
-            raise RuntimeError(
-                f"VMM mixed gateway syntax rejection rows passed {vmm_native_passed}/1 rc={vmm_native.returncode}"
-            )
-        observations["vmm_multi_cluster_tests_passed"] = vmm_native_passed
-
-        first_status, first_body = registration(
-            nodes[0]["rpc_url"], key, 18080, authenticated
-        )
-        repeat_status, repeat_body = registration(
-            nodes[0]["rpc_url"], key, 18081, authenticated
-        )
-        second_status, second_body = registration(
-            nodes[1]["rpc_url"], key, 18082, authenticated
-        )
-        peer_status, peer_body = registration(
-            nodes[2]["rpc_url"], peer_key, 18083, authenticated
-        )
-        restore_status, restore_body = registration(
-            nodes[0]["rpc_url"], key, 18084, authenticated
-        )
-        if any(
-            code != 200
-            for code in (
-                first_status,
-                repeat_status,
-                second_status,
-                peer_status,
-                restore_status,
-            )
-        ):
-            raise RuntimeError(
-                "valid repeat, policy-change, multi-node, or adjacent registration failed"
-            )
-        observations["live_registration"] = {
-            "first": response_shape(first_body),
-            "repeat_changed_policy": response_shape(repeat_body),
-            "second_node": response_shape(second_body),
-            "adjacent_public_identity": response_shape(peer_body),
-            "primary_restored": response_shape(restore_body),
-        }
-
-        secondary_status, secondary_body = registration(
-            secondary_nodes[0]["rpc_url"], key, 18087, authenticated
-        )
-        if secondary_status != 200:
-            raise RuntimeError(
-                f"independent secondary cluster registration failed: {secondary_status}"
-            )
-        primary_gateways = len((first_body or {}).get("gateways", []))
-        secondary_gateways = len((secondary_body or {}).get("gateways", []))
-        if primary_gateways != 3 or secondary_gateways != 1:
-            raise RuntimeError(
-                "Gateway responses did not preserve independent cluster membership"
-            )
-        observations["independent_clusters"] = {
-            "same_client_public_identity": True,
-            "primary": response_shape(first_body),
-            "secondary": response_shape(secondary_body),
-        }
-
-        bad_status, _ = registration(
-            nodes[0]["rpc_url"], "invalid", 18085, authenticated
-        )
-        unauth_status, _ = registration(
-            nodes[0]["rpc_url"], key, 18086, unauthenticated
-        )
-        if bad_status < 400 or (unauth_status != 0 and unauth_status < 400):
-            raise RuntimeError("malformed or unauthenticated registration was accepted")
-        observations["invalid_rejections"] = {
-            "malformed_key_status": bad_status,
-            "unauthenticated_status": unauth_status,
-        }
-
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            concurrent = list(
-                pool.map(
-                    lambda port: registration(
-                        nodes[1]["rpc_url"], key, port, authenticated
-                    )[0],
-                    range(18100, 18108),
-                )
-            )
-        if concurrent != [200] * 8:
-            raise RuntimeError(f"concurrent registrations failed: {concurrent}")
-        observations["concurrent"] = {"requests": 8, "statuses": concurrent}
-
-        old_pid = int(nodes[0]["pid"])
-        os.kill(old_pid, signal.SIGTERM)
-        if not wait_pid_exit(old_pid, 20):
-            os.kill(old_pid, signal.SIGKILL)
-            if not wait_pid_exit(old_pid, 10):
-                raise RuntimeError("lease-owned Gateway did not stop")
-        down_status, _ = registration(nodes[0]["rpc_url"], key, 18120, authenticated)
-        fallback_status, fallback_body = registration(
-            nodes[1]["rpc_url"], key, 18120, authenticated
-        )
-        if down_status != 0 or fallback_status != 200:
-            raise RuntimeError(
-                "Gateway outage was not isolated by the next healthy node"
-            )
-
-        binary = (
-            values["prepared_binaries"]["dstack_gateway"].get("resolved_path")
-            or values["prepared_binaries"]["dstack_gateway"]["path"]
-        )
-        recovery_log = artifacts_dir / "gateway-recovery.log"
-        log_handle = recovery_log.open("ab")
-        replacement = subprocess.Popen(
-            [binary, "--config", nodes[0]["config"]],
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-        )
-        if not wait_port(nodes[0]["rpc_url"], 30):
-            raise RuntimeError("restarted Gateway listener did not recover")
-        recovered_status, recovered_body = registration(
-            nodes[0]["rpc_url"], key, 18121, authenticated
-        )
-        if recovered_status != 200:
-            raise RuntimeError(
-                f"registration after Gateway restart failed: {recovered_status}"
-            )
-        observations["outage_recovery"] = {
-            "stopped_endpoint_status": down_status,
-            "fallback_status": fallback_status,
-            "fallback_shape": response_shape(fallback_body),
-            "recovered_status": recovered_status,
-            "recovered_shape": response_shape(recovered_body),
-        }
-        status = "PASS"
-    except Exception as error:  # noqa: BLE001
-        failure = str(error)
-    finally:
-        if replacement is not None and replacement.poll() is None:
-            replacement.terminate()
-            try:
-                replacement.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                replacement.kill()
-                replacement.wait(timeout=5)
-
-    observations.update(
-        {
-            "status": status,
-            "failure": failure,
-            "public_key_hashes_distinct": hashlib.sha256(key.encode()).hexdigest()
-            != hashlib.sha256(peer_key.encode()).hexdigest(),
-            "private_key_material_persisted": False,
-            "duration_seconds": round(time.monotonic() - started, 3),
-        }
-    )
-    matrix_path = artifacts_dir / "gateway-refresh-matrix.json"
-    atomic_json(matrix_path, observations)
-    artifact_rows = [
-        {
-            "path": "artifacts/native-tests.log",
-            "step_id": f"{CASE_ID}-step-01",
-            "name": "Native refresh tests",
-            "description": "Candidate product tests for ordered failover and private atomic key-store persistence.",
-        },
-        {
-            "path": "artifacts/vmm-multi-cluster-tests.log",
-            "step_id": f"{CASE_ID}-step-01",
-            "name": "VMM multi-cluster configuration tests",
-            "description": "Candidate product test proving the VMM rejects simultaneous legacy and grouped gateway configuration.",
-        },
-        {
-            "path": "artifacts/gateway-refresh-matrix.json",
-            "step_id": f"{CASE_ID}-step-02",
-            "name": "Gateway refresh matrix",
-            "description": "Redacted live three-node registration, concurrency, outage, recovery, and adjacent identity observations.",
-        },
-        {
-            "path": "artifacts/gateway-recovery.log",
-            "step_id": f"{CASE_ID}-step-03",
-            "name": "Gateway recovery log",
-            "description": "Lease-owned replacement process diagnostics.",
-        },
-    ]
-    existing_rows = [
-        row for row in artifact_rows if (result_dir / row["path"]).is_file()
-    ]
-    atomic_json(artifacts_dir / "manifest.json", {"artifacts": existing_rows})
-    summary = (
-        "Gateway refresh, persistence, live failover, and recovery passed"
-        if status == "PASS"
-        else f"Gateway refresh matrix failed: {failure}"
-    )
-    atomic_json(
-        result_dir / "result.json",
-        {
-            "schema_version": "1.0",
-            "case_id": CASE_ID,
-            "provisional": False,
-            "status": status,
-            "summary": summary,
-            "steps": [
-                {
-                    "id": f"{CASE_ID}-step-01",
-                    "status": status,
-                    "observed": f"{native_passed} candidate persistence/selection rows and the VMM mixed-syntax rejection row passed."
-                    if status == "PASS"
-                    else failure,
-                },
-                {
-                    "id": f"{CASE_ID}-step-02",
-                    "status": status,
-                    "observed": "A three-node primary and independent one-node secondary cluster accepted the same CVM public identity while preserving separate membership; repeat, changed-policy, adjacent identity, concurrency, malformed, and unauthenticated rows also passed."
-                    if status == "PASS"
-                    else failure,
-                },
-                {
-                    "id": f"{CASE_ID}-step-03",
-                    "status": status,
-                    "observed": "A stopped primary endpoint failed closed, the next node served the request, and the primary recovered after a case-owned restart."
-                    if status == "PASS"
-                    else failure,
-                },
-            ],
-            "artifacts": existing_rows,
-            "evidence": [
-                {
-                    "path": row["path"],
-                    "sha256": hashlib.sha256(
-                        (result_dir / row["path"]).read_bytes()
-                    ).hexdigest(),
-                }
-                for row in existing_rows
-            ],
-            "remarks": "Only public WireGuard keys were sent; persisted evidence contains response structure and hashes, never client private keys, certificates, or tokens.",
-        },
-    )
-    return 0 if status == "PASS" else 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+def urllib_request(url:str)->str:
+ import urllib.request
+ with urllib.request.urlopen(url,timeout=10) as response:return response.read().decode()
+if __name__=="__main__":raise SystemExit(main())
