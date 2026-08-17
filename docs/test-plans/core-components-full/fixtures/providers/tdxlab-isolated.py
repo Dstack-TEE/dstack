@@ -990,6 +990,12 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         ),
         storage_fs="ext4" if data_disk_requested else "zfs",
     )
+    # The multi-cluster case enables ingress after its two case-owned Gateway
+    # nodes have obtained certificates from this guest. Keeping it disabled at
+    # boot avoids a circular dependency while KMS still grants the Gateway app
+    # identity needed by the later refresh.
+    if case_id == "tc-gos-setup-009":
+        compose_value["gateway_enabled"] = False
     if simulator_guest_requested:
         compose_value["key_provider"] = "none"
         compose_value["local_key_provider_enabled"] = False
