@@ -54,7 +54,9 @@ def sanitize(value: Any) -> Any:
 
 def inventory_entry(root: pathlib.Path, service: str, method: str) -> dict[str, Any]:
     """Load the authoritative field matrix for one RPC method."""
-    document = json.loads((root / "api-inventory.json").read_text(encoding="utf-8"))
+    document = json.loads(
+        (root / "catalog" / "api-inventory.json").read_text(encoding="utf-8")
+    )
     matches: list[dict[str, Any]] = []
 
     def walk(value: Any) -> None:

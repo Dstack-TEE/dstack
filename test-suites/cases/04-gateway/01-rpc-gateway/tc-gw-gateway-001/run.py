@@ -135,7 +135,7 @@ def wire_numbers(data: bytes) -> list[int]:
 
 def inventory(root: pathlib.Path) -> dict[str, Any]:
     """Load the authoritative Gateway.RegisterCvm field matrix."""
-    document = json.loads((root / "api-inventory.json").read_text())
+    document = json.loads((root / "catalog" / "api-inventory.json").read_text())
     found: list[dict[str, Any]] = []
 
     def walk(value: Any) -> None:

@@ -24,7 +24,7 @@
 
 ## Objective
 
-Verify state and identity survive sequential restart of old/new KMS and gateway nodes while candidate VMM keeps all guest generations running.
+Verify state and identity survive sequential restart of old/new KMS nodes and the candidate Gateway while candidate VMM keeps all guest generations running.
 
 ## Preconditions
 
@@ -55,7 +55,7 @@ Maintain continuous key/cert/traffic probes while restarting one node at a time 
 
 **Expected results:**
 
-- Quorum/availability remain within policy, one trust identity persists, cluster state converges, and probes reveal no version-dependent data loss or cross-app routing.
+- Quorum and availability remain within policy, one trust identity persists, KMS state converges, and probes reveal no version-dependent data loss or cross-app routing.
 
 <a id="tc-int-mixed-006-step-03"></a>
 ### Step 3: Verify key, CA, application, and service continuity
@@ -77,4 +77,4 @@ Interrupt one hop before and after key transfer, remove the incomplete target, r
 
 ## Postconditions
 
-Keep the old nodes for the configured rollback window, remove failed bridge/target instances, and retain only redacted fingerprints, quotes, configs, and diagnostics.
+Keep the old KMS nodes for the configured rollback window, remove failed target instances, and retain only redacted fingerprints, quotes, configs, and diagnostics.

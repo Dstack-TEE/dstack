@@ -74,9 +74,7 @@ def verify_legacy_tdx(
     cache = workspace / "cache"
     shutil.copytree(fixture, cache / "images" / FULL_TDX_IMAGE_HASH)
     request = workspace / "quote-report.json"
-    shutil.copy2(
-        repository / "dstack/verifier/shared/fixtures/quote-report.json", request
-    )
+    shutil.copy2(repository / "dstack/verifier/fixtures/quote-report.json", request)
     config = workspace / "verifier.toml"
     config.write_text(
         f'''address = "127.0.0.1"

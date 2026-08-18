@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Bridge current Gateway sync traffic with a legacy-compatible RA identity."""
+"""Proxy legacy Gateway RPC traffic with a compatible RA identity."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def tappd(method: str, body: dict[str, object]) -> dict[str, object]:
 
 
 class Bridge(http.server.BaseHTTPRequestHandler):
-    """Forward Gateway RPC and WaveKV requests with the bridge identity."""
+    """Forward legacy Gateway RPC requests with the proxy identity."""
 
     upstream = ""
     advertised_url = ""
@@ -86,7 +86,7 @@ class Bridge(http.server.BaseHTTPRequestHandler):
 
 
 def main() -> int:
-    """Prepare a compatibility identity and run the case-scoped bridge."""
+    """Prepare a compatibility identity and run the case-scoped proxy."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--listen", default="127.0.0.1:7999")
     parser.add_argument("--upstream", default=os.environ.get("UPSTREAM_URL", ""))
@@ -105,7 +105,7 @@ def main() -> int:
     identity = tappd(
         "DeriveKey",
         {
-            "path": "gateway-upgrade-sync-bridge",
+            "path": "gateway-legacy-ra-proxy",
             "subject": "dstack-gateway",
             "alt_names": [host],
             "usage_ra_tls": True,

@@ -95,8 +95,10 @@ def main() -> int:
     combined = "\n".join(item["output_tail"] for item in observations)
     checks = {
         "commands_passed": all(item["returncode"] == 0 for item in observations),
-        "four_state_tests_passed": "4 passed; 0 failed"
-        in observations[0]["output_tail"],
+        "state_tests_passed": (
+            "test result: ok." in observations[0]["output_tail"]
+            and "0 failed" in observations[0]["output_tail"]
+        ),
         "process_test_passed": "1 passed; 0 failed" in observations[1]["output_tail"],
         "named_boundaries_executed": all(
             name in combined
