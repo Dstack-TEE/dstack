@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-keys-certs-001",
+  "title": "Per-app key hierarchy isolation",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-keys-certs-001"
+  ],
+  "risks": [
+    "risk-kms-keys-certs-001"
+  ],
+  "tags": [
+    "kms",
+    "keys-certs-operations"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Per-app key hierarchy isolation"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-app-key-isolation-capability-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

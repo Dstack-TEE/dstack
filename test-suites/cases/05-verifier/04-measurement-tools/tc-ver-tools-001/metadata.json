@@ -1,0 +1,36 @@
+{
+  "id": "tc-ver-tools-001",
+  "title": "dstack-mr supported platform CLI matrix",
+  "priority": "P0",
+  "requirements": [
+    "req-ver-tools-001"
+  ],
+  "risks": [
+    "risk-ver-tools-001"
+  ],
+  "tags": [
+    "ver",
+    "measurement-tools-and-library-apis"
+  ],
+  "fixture": {
+    "profile": "verifier-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "dstack-mr supported platform CLI matrix"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/dstack-mr-shared-matrix-case.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-gateway-002",
+  "title": "Gateway.AcmeInfo",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-gateway-002"
+  ],
+  "risks": [
+    "risk-gw-gateway-002"
+  ],
+  "tags": [
+    "gateway",
+    "gateway-rpc"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Gateway.AcmeInfo"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+    "args": [],
+    "timeout_seconds": 180
+  }
+}

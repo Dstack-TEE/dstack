@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-compute-ne-001",
+  "title": "User bridge and custom networking",
+  "priority": "P1",
+  "requirements": [
+    "req-vmm-compute-ne-001"
+  ],
+  "risks": [
+    "risk-vmm-compute-ne-001"
+  ],
+  "tags": [
+    "vmm",
+    "compute-network-image"
+  ],
+  "fixture": {
+    "profile": "vmm-raw-substrate",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "User bridge and custom networking"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

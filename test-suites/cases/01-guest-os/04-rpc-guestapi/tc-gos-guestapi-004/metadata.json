@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-guestapi-004",
+  "title": "GuestApi.ListContainers",
+  "priority": "P1",
+  "requirements": [
+    "req-gos-guestapi-004"
+  ],
+  "risks": [
+    "risk-gos-guestapi-004"
+  ],
+  "tags": [
+    "guest",
+    "guestapi-rpc"
+  ],
+  "fixture": {
+    "profile": "no-tee-dev",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "GuestApi.ListContainers"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-rpc-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

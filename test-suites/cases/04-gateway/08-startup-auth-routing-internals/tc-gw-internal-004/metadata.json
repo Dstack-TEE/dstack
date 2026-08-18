@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-internal-004",
+  "title": "Raw TLS ClientHello SNI parser boundaries",
+  "priority": "P0",
+  "requirements": [
+    "req-gw-internal-004"
+  ],
+  "risks": [
+    "risk-gw-internal-004"
+  ],
+  "tags": [
+    "gw",
+    "startup-authorization-and-routing-internals"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Raw TLS ClientHello SNI parser boundaries"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 240
+  }
+}

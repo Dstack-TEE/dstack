@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-attestatio-003",
+  "title": "GCP TDX and Nitro TPM authorization",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-attestatio-003"
+  ],
+  "risks": [
+    "risk-kms-attestatio-003"
+  ],
+  "tags": [
+    "kms",
+    "attestation-authorization"
+  ],
+  "fixture": {
+    "profile": "cross-platform-attestation",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "GCP TDX and Nitro TPM authorization"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-cross-platform-attestation-case.py",
+    "args": [],
+    "timeout_seconds": 1800
+  }
+}

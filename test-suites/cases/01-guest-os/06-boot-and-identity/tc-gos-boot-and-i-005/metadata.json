@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-boot-and-i-005",
+  "title": "Host notification boot and shutdown events",
+  "priority": "P1",
+  "requirements": [
+    "req-gos-boot-and-i-005"
+  ],
+  "risks": [
+    "risk-gos-boot-and-i-005"
+  ],
+  "tags": [
+    "guest",
+    "boot-and-identity"
+  ],
+  "fixture": {
+    "profile": "guest-lifecycle",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Host notification boot and shutdown events"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

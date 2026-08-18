@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-debug-001",
+  "title": "Debug.RegisterCvm",
+  "priority": "P0",
+  "requirements": [
+    "req-gw-debug-001"
+  ],
+  "risks": [
+    "risk-gw-debug-001"
+  ],
+  "tags": [
+    "gateway",
+    "debug-rpc"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Debug.RegisterCvm"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 180
+  }
+}

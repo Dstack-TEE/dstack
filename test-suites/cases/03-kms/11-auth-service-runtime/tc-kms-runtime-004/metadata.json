@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-runtime-004",
+  "title": "Authorization service container deployment",
+  "priority": "P1",
+  "requirements": [
+    "req-kms-runtime-004"
+  ],
+  "risks": [
+    "risk-kms-runtime-004"
+  ],
+  "tags": [
+    "kms",
+    "authorization-service-runtime-and-deployment"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Authorization service container deployment"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-attestatio-001",
+  "title": "TDX full and lite app authorization",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-attestatio-001"
+  ],
+  "risks": [
+    "risk-kms-attestatio-001"
+  ],
+  "tags": [
+    "kms",
+    "attestation-authorization"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "TDX full and lite app authorization"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-tdx-authorization-capability-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

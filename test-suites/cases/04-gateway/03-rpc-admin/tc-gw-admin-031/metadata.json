@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-admin-031",
+  "title": "Admin.SetInstancePortPolicy",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-admin-031"
+  ],
+  "risks": [
+    "risk-gw-admin-031"
+  ],
+  "tags": [
+    "gateway",
+    "admin-rpc"
+  ],
+  "fixture": {
+    "profile": "gateway-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Admin.SetInstancePortPolicy"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-gateway-port-policy-case.py",
+    "args": [],
+    "timeout_seconds": 180
+  }
+}
