@@ -5,7 +5,10 @@
 use crate::{
     config::{Config, NetworkFilterMode, Networking, NetworkingMode, ProcessAnnotation, Protocol},
     logrotate,
-    netd::{self, InterfaceIdentity, PrepareBridgeRequest, Request as NetdRequest},
+    netd::{
+        self, InterfaceIdentity, PrepareBridgeRequest, PrepareMacvtapRequest,
+        Request as NetdRequest,
+    },
 };
 
 use anyhow::{bail, Context, Result};
@@ -21,7 +24,7 @@ use dstack_vmm_rpc::{
 use fs_err as fs;
 use guest_api::client::DefaultClient as GuestClient;
 use id_pool::IdPool;
-use nix::unistd::{Uid, User};
+use nix::unistd::Uid;
 use or_panic::ResultOrPanic;
 use ra_rpc::client::RaClient;
 use serde::{Deserialize, Serialize};
@@ -447,7 +450,7 @@ impl App {
                 append_boot_separator(&path);
             }
 
-            let runtime_networks = resolved_networks(&vm_config.manifest, &self.config.cvm);
+            let mut runtime_networks = resolved_networks(&vm_config.manifest, &self.config.cvm);
             let devices = self.try_allocate_gpus(&vm_config.manifest)?;
             let gpu_host_config = self.config.cvm.gpu.clone();
             let devices_to_sanitize = devices.clone();
@@ -456,13 +459,31 @@ impl App {
             })
             .await
             .context("GPU sanitization task failed")??;
-            let processes = vm_config.config_qemu(&work_dir, &self.config.cvm, &devices)?;
-            work_dir.set_runtime_networks(&runtime_networks)?;
             if let Err(error) = self
-                .prepare_filtered_networks(&vm_config, &runtime_networks)
+                .prepare_filtered_networks(&vm_config, &mut runtime_networks)
                 .await
             {
                 let _ = work_dir.clear_runtime_networks();
+                return Err(error);
+            }
+            let processes = match vm_config.config_qemu(
+                &work_dir,
+                &self.config.cvm,
+                &devices,
+                &runtime_networks,
+            ) {
+                Ok(processes) => processes,
+                Err(error) => {
+                    let _ = self
+                        .remove_filtered_networks(&vm_config.manifest.id, &runtime_networks)
+                        .await;
+                    return Err(error);
+                }
+            };
+            if let Err(error) = work_dir.set_runtime_networks(&runtime_networks) {
+                let _ = self
+                    .remove_filtered_networks(&vm_config.manifest.id, &runtime_networks)
+                    .await;
                 return Err(error);
             }
             {
@@ -520,23 +541,21 @@ impl App {
     async fn prepare_filtered_networks(
         &self,
         vm: &VmConfig,
-        networks: &[Networking],
+        networks: &mut [Networking],
     ) -> Result<()> {
-        if self.config.cvm.network_filter.mode == NetworkFilterMode::None {
+        if self.config.cvm.network_filter.mode == NetworkFilterMode::None
+            && !networks
+                .iter()
+                .any(|network| network.mode == NetworkingMode::Macvtap)
+        {
             return Ok(());
         }
-        let qemu_uid = if self.config.cvm.user.is_empty() {
-            Uid::effective().as_raw()
-        } else {
-            User::from_name(&self.config.cvm.user)
-                .context("failed to resolve QEMU user")?
-                .with_context(|| format!("QEMU user {} does not exist", self.config.cvm.user))?
-                .uid
-                .as_raw()
-        };
+        let qemu_uid = Uid::effective().as_raw();
         let mut prepared = Vec::new();
-        for (nic_index, network) in networks.iter().enumerate() {
-            if network.mode != NetworkingMode::Bridge {
+        for (nic_index, network) in networks.iter_mut().enumerate() {
+            if network.mode == NetworkingMode::Bridge
+                && self.config.cvm.network_filter.mode == NetworkFilterMode::None
+            {
                 continue;
             }
             let identity = InterfaceIdentity {
@@ -544,46 +563,62 @@ impl App {
                 vm_id: vm.manifest.id.clone(),
                 nic_index,
             };
-            let request = PrepareBridgeRequest {
-                identity: identity.clone(),
-                bridge: network.bridge.clone(),
-                mac: network::mac_address_for_vm_index(
-                    &vm.manifest.id,
-                    &network.mac_prefix_bytes(),
-                    nic_index,
-                ),
-                qemu_uid,
-                filter: self.config.cvm.network_filter.filter.clone(),
-                parameters: self.config.cvm.network_filter.parameters.clone(),
+            let mac = network::mac_address_for_vm_index(
+                &vm.manifest.id,
+                &network.mac_prefix_bytes(),
+                nic_index,
+            );
+            let request = match network.mode {
+                NetworkingMode::Bridge => NetdRequest::PrepareBridge(PrepareBridgeRequest {
+                    identity: identity.clone(),
+                    bridge: network.bridge.clone(),
+                    mac,
+                    qemu_uid,
+                    filter: self.config.cvm.network_filter.filter.clone(),
+                    parameters: self.config.cvm.network_filter.parameters.clone(),
+                }),
+                NetworkingMode::Macvtap => NetdRequest::PrepareMacvtap(PrepareMacvtapRequest {
+                    identity: identity.clone(),
+                    parent: network.parent.clone(),
+                    mac,
+                    qemu_uid,
+                    mode: network.macvtap_mode.clone(),
+                }),
+                NetworkingMode::User | NetworkingMode::Custom => continue,
             };
-            if let Err(error) = netd::request(
-                &self.config.netd.socket,
-                &NetdRequest::PrepareBridge(request),
-            )
-            .await
-            {
-                // The client may have timed out while netd was still finishing
-                // this Prepare. Remove the in-flight identity first; netd's
-                // serialized accept loop processes it after Prepare completes.
-                if let Err(cleanup_error) = netd::request(
-                    &self.config.netd.socket,
-                    &NetdRequest::Remove {
-                        identity: identity.clone(),
-                    },
-                )
-                .await
-                {
-                    warn!(%cleanup_error, "failed to roll back in-flight filtered network");
-                }
-                for identity in prepared.into_iter().rev() {
-                    if let Err(cleanup_error) =
-                        netd::request(&self.config.netd.socket, &NetdRequest::Remove { identity })
-                            .await
+            let response = match netd::request(&self.config.netd.socket, &request).await {
+                Ok(response) => response,
+                Err(error) => {
+                    // The client may have timed out while netd was still finishing
+                    // this Prepare. Remove the in-flight identity first; netd's
+                    // serialized accept loop processes it after Prepare completes.
+                    if let Err(cleanup_error) = netd::request(
+                        &self.config.netd.socket,
+                        &NetdRequest::Remove {
+                            identity: identity.clone(),
+                        },
+                    )
+                    .await
                     {
-                        warn!(%cleanup_error, "failed to roll back prepared filtered network");
+                        warn!(%cleanup_error, "failed to roll back in-flight filtered network");
                     }
+                    for identity in prepared.into_iter().rev() {
+                        if let Err(cleanup_error) = netd::request(
+                            &self.config.netd.socket,
+                            &NetdRequest::Remove { identity },
+                        )
+                        .await
+                        {
+                            warn!(%cleanup_error, "failed to roll back prepared filtered network");
+                        }
+                    }
+                    return Err(error).context("failed to prepare libvirt-filtered networking");
                 }
-                return Err(error).context("failed to prepare libvirt-filtered networking");
+            };
+            if network.mode == NetworkingMode::Macvtap {
+                network.device = response
+                    .device
+                    .context("netd response omitted macvtap device")?;
             }
             prepared.push(identity);
         }
@@ -595,12 +630,24 @@ impl App {
         vm_id: &str,
         networks: &[Networking],
     ) -> Result<()> {
-        if self.config.cvm.network_filter.mode == NetworkFilterMode::None {
+        if self.config.cvm.network_filter.mode == NetworkFilterMode::None
+            && !networks
+                .iter()
+                .any(|network| network.mode == NetworkingMode::Macvtap)
+        {
             return Ok(());
         }
         let mut first_error = None;
         for (nic_index, network) in networks.iter().enumerate().rev() {
-            if network.mode != NetworkingMode::Bridge {
+            if network.mode == NetworkingMode::Bridge
+                && self.config.cvm.network_filter.mode == NetworkFilterMode::None
+            {
+                continue;
+            }
+            if !matches!(
+                network.mode,
+                NetworkingMode::Bridge | NetworkingMode::Macvtap
+            ) {
                 continue;
             }
             let identity = InterfaceIdentity {
@@ -2166,6 +2213,9 @@ mod tests {
         manifest.networks = vec![Networking {
             mode: NetworkingMode::Bridge,
             bridge: "dstack-br0".to_string(),
+            parent: String::new(),
+            macvtap_mode: String::new(),
+            device: String::new(),
             mac_prefix: String::new(),
             net: String::new(),
             dhcp_start: String::new(),
@@ -2428,6 +2478,9 @@ mod tests {
         bridge_manifest.networks = vec![Networking {
             mode: NetworkingMode::Bridge,
             bridge: "dstack-br0".to_string(),
+            parent: String::new(),
+            macvtap_mode: String::new(),
+            device: String::new(),
             mac_prefix: "02:aa:bb".to_string(),
             net: String::new(),
             dhcp_start: String::new(),

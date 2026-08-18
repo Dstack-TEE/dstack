@@ -334,9 +334,6 @@ pub struct CvmConfig {
     pub qmp_socket: bool,
     /// GPU configuration
     pub gpu: GpuConfig,
-    /// Use sudo to run the VM
-    pub user: String,
-
     /// Auto restart configuration
     pub auto_restart: AutoRestartConfig,
 
@@ -786,6 +783,19 @@ fn validate_networking(networking: &Networking) -> Result<()> {
             !networking.netdev.trim().is_empty(),
             "cvm.networking.netdev must not be empty in custom mode"
         ),
+        NetworkingMode::Macvtap => {
+            anyhow::ensure!(
+                !networking.parent.trim().is_empty(),
+                "cvm.networking.parent must not be empty in macvtap mode"
+            );
+            anyhow::ensure!(
+                matches!(
+                    networking.macvtap_mode.as_str(),
+                    "" | "private" | "bridge" | "vepa" | "passthru"
+                ),
+                "cvm.networking.macvtap_mode must be private, bridge, vepa, or passthru"
+            );
+        }
         NetworkingMode::User => {}
     }
     Ok(())
@@ -797,6 +807,7 @@ pub enum NetworkingMode {
     User,
     Bridge,
     Custom,
+    Macvtap,
 }
 
 /// Flat networking configuration. The `mode` field selects which backend is
@@ -810,6 +821,17 @@ pub struct Networking {
     /// Bridge interface to attach TAP device to (e.g., "virbr0")
     #[serde(default)]
     pub bridge: String,
+
+    // ── Macvtap fields ────────────────────────────────────────────
+    /// Parent host interface for macvtap (e.g., "eth0").
+    #[serde(default)]
+    pub parent: String,
+    /// macvtap forwarding mode. Empty selects "private".
+    #[serde(default)]
+    pub macvtap_mode: String,
+    /// Runtime-only character device returned by netd.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub device: String,
 
     // ── MAC prefix ─────────────────────────────────────────────────
     /// Fixed MAC address prefix (0-3 colon-separated hex bytes, e.g. "02:ab:cd").

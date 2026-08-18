@@ -151,7 +151,14 @@ impl VmWorkDir {
     }
 
     pub fn set_runtime_networks(&self, networks: &[Networking]) -> Result<()> {
-        let serialized = serde_json::to_vec(networks)?;
+        // A macvtap device path is valid only while its host interface exists.
+        // Keep it in memory for launch preparation, but never persist it across
+        // VMM restarts where the same /dev/tapN may identify another device.
+        let mut persistent_networks = networks.to_vec();
+        for network in &mut persistent_networks {
+            network.device.clear();
+        }
+        let serialized = serde_json::to_vec(&persistent_networks)?;
         safe_write::safe_write(self.runtime_networks_path(), serialized)
             .context("failed to write runtime networks")
     }
@@ -254,6 +261,7 @@ mod tests {
     use fs_err as fs;
 
     use super::VmWorkDir;
+    use crate::config::Networking;
 
     #[test]
     fn runtime_networks_snapshot_replaces_target_instead_of_following_it() -> Result<()> {
@@ -272,6 +280,32 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&external)?, "sentinel");
         assert_eq!(fs::read_to_string(workdir.runtime_networks_path())?, "[]");
+        fs::remove_dir_all(temp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_networks_snapshot_omits_ephemeral_device_paths() -> Result<()> {
+        let temp = std::env::temp_dir().join(format!(
+            "dstack-vmm-runtime-networks-device-test-{}",
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        let workdir = VmWorkDir::new(temp.join("vm"));
+        fs::create_dir_all(workdir.path())?;
+        let network: Networking = serde_json::from_value(serde_json::json!({
+            "mode": "macvtap",
+            "parent": "br0",
+            "macvtap_mode": "private",
+            "device": "/dev/tap42"
+        }))?;
+
+        workdir.set_runtime_networks(&[network])?;
+
+        let persisted = workdir.runtime_networks();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].parent, "br0");
+        assert!(persisted[0].device.is_empty());
+        assert!(!fs::read_to_string(workdir.runtime_networks_path())?.contains("/dev/tap42"));
         fs::remove_dir_all(temp)?;
         Ok(())
     }

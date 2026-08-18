@@ -9,7 +9,7 @@ use super::{
     hugepage_numa_nodes,
     image::Image,
     mr_config::{snp_host_data, tdx_mr_config_id},
-    network::{mac_address_for_vm_index, resolved_networks, validate_resolved_networks},
+    network::{mac_address_for_vm_index, validate_resolved_networks},
     pci_numa_node, round_up, GpuConfig, VmWorkDir,
 };
 use crate::{
@@ -18,18 +18,16 @@ use crate::{
         CvmConfig, CvmPlatform, NetworkFilterMode, Networking, NetworkingMode, ProcessAnnotation,
     },
     netd::{tap_name, InterfaceIdentity},
-    vm_launcher::{ChildCommand, LaunchSpec},
+    vm_launcher::{ChildCommand, LaunchSpec, OpenFile},
 };
 use anyhow::{bail, Context, Result};
 use bon::Builder;
 use dstack_types::shared_filenames::HOST_SHARED_DISK_LABEL;
 use fs_err as fs;
-use nix::unistd::User;
+use nix::unistd::{Gid, Uid};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::os::unix::fs::PermissionsExt;
 use std::{
-    fs::Permissions,
     io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -201,13 +199,14 @@ impl PreparedQemuLaunch {
         workdir: impl AsRef<Path>,
         cfg: &CvmConfig,
         gpus: &GpuConfig,
+        networks: &[Networking],
     ) -> Result<Self> {
         let workdir = VmWorkDir::new(workdir);
-        prepare_data_disk(vm, &workdir, cfg)?;
+        prepare_data_disk(vm, &workdir)?;
         prepare_shared_dir(&workdir)?;
         let app_compose = workdir.app_compose().context("failed to get app compose")?;
         let platform = cfg.resolved_platform();
-        let networks = resolved_networks(&vm.manifest, cfg);
+        let networks = networks.to_vec();
         validate_resolved_networks(&networks)?;
         let volumes = vm
             .manifest
@@ -293,7 +292,7 @@ impl PreparedQemuLaunch {
     }
 }
 
-fn prepare_data_disk(vm: &VmConfig, workdir: &VmWorkDir, cfg: &CvmConfig) -> Result<()> {
+fn prepare_data_disk(vm: &VmConfig, workdir: &VmWorkDir) -> Result<()> {
     let hda_path = workdir.hda_path();
     if !hda_path.exists() {
         create_hd(
@@ -301,9 +300,6 @@ fn prepare_data_disk(vm: &VmConfig, workdir: &VmWorkDir, cfg: &CvmConfig) -> Res
             vm.image.hda.as_ref(),
             &format!("{}G", vm.manifest.disk_size),
         )?;
-    }
-    if !cfg.user.is_empty() {
-        fs::set_permissions(&hda_path, Permissions::from_mode(0o660))?;
     }
     Ok(())
 }
@@ -342,8 +338,9 @@ impl VmConfig {
         workdir: impl AsRef<Path>,
         cfg: &CvmConfig,
         gpus: &GpuConfig,
+        networks: &[Networking],
     ) -> Result<Vec<ProcessConfig>> {
-        let prepared = PreparedQemuLaunch::prepare(self, workdir, cfg, gpus)?;
+        let prepared = PreparedQemuLaunch::prepare(self, workdir, cfg, gpus, networks)?;
         let process = QemuCommandBuilder {
             vm: self,
             cfg,
@@ -351,21 +348,21 @@ impl VmConfig {
             prepared: &prepared,
         }
         .build()?;
+        let has_macvtap = prepared
+            .networks
+            .iter()
+            .any(|network| network.mode == NetworkingMode::Macvtap);
         let Some(socket) = prepared.swtpm_socket.as_deref() else {
+            if has_macvtap {
+                return self.wrap_launcher(&prepared, process, None, None);
+            }
             return Ok(vec![process]);
         };
         let swtpm_path = prepared
             .swtpm_path
             .as_ref()
             .context("missing swtpm executable for configured socket")?;
-        let (socket_uid, socket_gid) = if cfg.user.is_empty() {
-            (unsafe { libc::geteuid() }, unsafe { libc::getegid() })
-        } else {
-            let user = User::from_name(&cfg.user)
-                .context("failed to resolve QEMU user")?
-                .with_context(|| format!("QEMU user {} does not exist", cfg.user))?;
-            (user.uid.as_raw(), user.gid.as_raw())
-        };
+        let (socket_uid, socket_gid) = (Uid::effective().as_raw(), Gid::effective().as_raw());
 
         let swtpm_args = vec![
             "socket".into(),
@@ -380,16 +377,42 @@ impl VmConfig {
             "--flags".into(),
             "not-need-init,startup-clear".into(),
         ];
+        self.wrap_launcher(
+            &prepared,
+            process,
+            Some(ChildCommand {
+                command: swtpm_path.to_string_lossy().into_owned(),
+                args: swtpm_args,
+            }),
+            Some(socket.to_path_buf()),
+        )
+    }
+
+    fn wrap_launcher(
+        &self,
+        prepared: &PreparedQemuLaunch,
+        process: ProcessConfig,
+        swtpm: Option<ChildCommand>,
+        swtpm_socket: Option<PathBuf>,
+    ) -> Result<Vec<ProcessConfig>> {
+        let open_files = prepared
+            .networks
+            .iter()
+            .enumerate()
+            .filter(|(_, network)| network.mode == NetworkingMode::Macvtap)
+            .map(|(index, network)| OpenFile {
+                fd: (3 + index) as i32,
+                path: network.device.clone().into(),
+            })
+            .collect();
         let spec = LaunchSpec {
             qemu: ChildCommand {
                 command: process.command,
                 args: process.args,
             },
-            swtpm: ChildCommand {
-                command: swtpm_path.to_string_lossy().into_owned(),
-                args: swtpm_args,
-            },
-            swtpm_socket: socket.to_path_buf(),
+            swtpm,
+            swtpm_socket,
+            open_files,
             startup_timeout_ms: 5_000,
             shutdown_timeout_ms: 10_000,
         };
@@ -635,6 +658,12 @@ impl QemuCommandBuilder<'_> {
                     }
                     networking.netdev.clone()
                 }
+                NetworkingMode::Macvtap => {
+                    if networking.device.is_empty() {
+                        bail!("macvtap interface {index} has not been prepared by netd");
+                    }
+                    format!("tap,id={net_id},fd={},vhost=off", 3 + index)
+                }
             };
             command.arg("-netdev").arg(netdev);
             command.arg("-device").arg(net_device);
@@ -789,12 +818,6 @@ impl QemuCommandBuilder<'_> {
         );
         if let Some(cpus) = &self.prepared.numa_cpus {
             arguments.splice(0..0, ["taskset", "-c", cpus].into_iter().map(String::from));
-        }
-        if !self.cfg.user.is_empty() {
-            arguments.splice(
-                0..0,
-                ["sudo", "-u", &self.cfg.user].into_iter().map(String::from),
-            );
         }
 
         let command = arguments.remove(0);
