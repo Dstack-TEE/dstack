@@ -66,13 +66,18 @@ The suite starts real gateway processes and exercises:
 - periodic anti-entropy repair after a push is missed while a peer is offline;
 - bootstrap recovery after a node loses its local WaveKV store while retaining
   its node identity;
+- convergence of divergent writes made on both sides of a partition;
+- idempotence when opportunistic pushes overlap a periodic sync round;
+- bootnode discovery retry, interrupted-sync recovery, and partial-cluster
+  bootstrap while another peer is unavailable;
+- ephemeral-store convergence after a peer restart;
 - node restart, network partition recovery, periodic persistence, and node
   up/down filtering.
 
 Expected result:
 
 ```text
-Tests passed: 22
+Tests passed: 28
 ```
 
 Important request paths covered by this suite:

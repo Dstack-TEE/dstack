@@ -402,9 +402,19 @@ get_persistent_digest() {
 	get_status "$admin_port" | python3 -c "import sys,json; print(json.load(sys.stdin)['persistent']['digest'])" 2>/dev/null || true
 }
 
+get_ephemeral_digest() {
+	local admin_port=$1
+	get_status "$admin_port" | python3 -c "import sys,json; print(json.load(sys.stdin)['ephemeral']['digest'])" 2>/dev/null || true
+}
+
 get_node_uuid() {
 	local admin_port=$1
 	admin_get_status "$admin_port" | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin)['uuid']))" 2>/dev/null || true
+}
+
+test_public_key() {
+	local seed=$1
+	python3 -c "import base64; print(base64.b64encode(int($seed).to_bytes(32, 'big')).decode())"
 }
 
 wait_for_instances() {
@@ -414,6 +424,21 @@ wait_for_instances() {
 	local attempts=$((timeout_seconds * 10))
 	for _ in $(seq 1 "$attempts"); do
 		if [[ "$(get_n_instances "$debug_port")" -ge "$expected" ]]; then return 0; fi
+		sleep 0.1
+	done
+	return 1
+}
+
+wait_for_digest_match() {
+	local store=$1
+	local port1=$2
+	local port2=$3
+	local timeout_seconds=$4
+	local getter="get_${store}_digest"
+	for _ in $(seq 1 $((timeout_seconds * 10))); do
+		local digest1=$($getter "$port1")
+		local digest2=$($getter "$port2")
+		if [[ -n "$digest1" && "$digest1" == "$digest2" ]]; then return 0; fi
 		sleep 0.1
 	done
 	return 1
@@ -860,6 +885,134 @@ test_bootstrap_after_data_dir_loss() {
 		log_error "Losing the WaveKV store unexpectedly changed the node UUID"; return 1
 	fi
 	log_info "Data-directory-loss bootstrap test PASSED"
+}
+
+# =============================================================================
+# Divergent writes made from the same base must merge after both nodes return
+# =============================================================================
+test_divergent_partition_writes() {
+	log_info "========== Divergent Partition Writes =========="
+	cleanup
+	generate_config 1; generate_config 2
+	start_node 1; start_node 2; setup_peers 1 2; sleep 6
+
+	stop_node 2
+	verify_register_response "$(debug_register_cvm 13015 \
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" "left_app" "left_instance")" >/dev/null || return 1
+	stop_node 1; start_node 2
+	verify_register_response "$(debug_register_cvm 13025 \
+		"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=" "right_app" "right_instance")" >/dev/null || return 1
+	start_node 1; setup_peers 1 2
+	wait_for_instances 13015 2 15 && wait_for_instances 13025 2 15 || {
+		log_error "Divergent partition writes did not merge"; return 1; }
+	wait_for_digest_match persistent 13016 13026 10 || {
+		log_error "Persistent digests did not converge after divergent writes"; return 1; }
+	log_info "Divergent partition write test PASSED"
+}
+
+# =============================================================================
+# Pushes racing the periodic round must remain idempotent and converge
+# =============================================================================
+test_push_periodic_overlap() {
+	log_info "========== Push and Periodic Sync Overlap =========="
+	cleanup
+	generate_config 1; generate_config 2
+	start_node 1; start_node 2; setup_peers 1 2; sleep 4
+	local before=$(get_n_instances 13015)
+	for i in $(seq 1 6); do
+		verify_register_response "$(debug_register_cvm 13015 \
+			"$(test_public_key $((100 + i)))" "overlap_app_$i" "overlap_instance_$i")" >/dev/null || {
+			log_error "Overlap write $i was rejected"; return 1; }
+		sleep 0.2
+	done
+	wait_for_instances 13025 $((before + 6)) 15 || {
+		log_error "Writes racing periodic sync did not arrive"; return 1; }
+	[[ "$(get_n_instances 13015)" -eq $((before + 6)) ]] || {
+		log_error "Overlapping push and sync produced duplicate instances"; return 1; }
+	wait_for_digest_match persistent 13016 13026 10 || return 1
+	log_info "Push/periodic overlap test PASSED"
+}
+
+# =============================================================================
+# A node started before its bootnode must discover it on a later retry
+# =============================================================================
+test_delayed_bootnode_recovery() {
+	log_info "========== Delayed Bootnode Recovery =========="
+	cleanup
+	generate_config 1
+	generate_config 2 "https://localhost:13012"
+	start_node 2
+	verify_register_response "$(debug_register_cvm 13025 \
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" "delayed_app" "delayed_instance")" >/dev/null || return 1
+	sleep 2; start_node 1
+	for _ in $(seq 1 25); do
+		has_peer_addr 13015 2 && has_peer_addr 13025 1 && break
+		sleep 1
+	done
+	has_peer_addr 13015 2 && has_peer_addr 13025 1 || {
+		log_error "Bootnode retry did not form the cluster"; return 1; }
+	wait_for_instances 13015 1 15 || {
+		log_error "Data did not converge after delayed bootnode recovery"; return 1; }
+	log_info "Delayed bootnode recovery test PASSED"
+}
+
+# =============================================================================
+# Interrupting a recovery round must not prevent a later round from converging
+# =============================================================================
+test_interrupted_sync_recovery() {
+	log_info "========== Interrupted Sync Recovery =========="
+	cleanup
+	generate_config 1; generate_config 2
+	start_node 1; start_node 2; setup_peers 1 2; sleep 6
+	stop_node 2
+	for i in $(seq 1 20); do
+		verify_register_response "$(debug_register_cvm 13015 \
+			"$(test_public_key $((200 + i)))" "interrupt_app_$i" "interrupt_instance_$i")" >/dev/null || {
+			log_error "Interrupted-sync fixture write $i was rejected"; return 1; }
+	done
+	start_node 2; setup_peers 1 2; sleep 0.2; stop_node 2
+	start_node 2; setup_peers 1 2
+	wait_for_instances 13025 20 20 || {
+		log_error "Sync did not recover after interruption"; return 1; }
+	wait_for_digest_match persistent 13016 13026 10 || return 1
+	log_info "Interrupted sync recovery test PASSED"
+}
+
+# =============================================================================
+# Ephemeral state must resume converging after a peer outage
+# =============================================================================
+test_ephemeral_recovery() {
+	log_info "========== Ephemeral Store Recovery =========="
+	cleanup
+	generate_config 1; generate_config 2
+	start_node 1; start_node 2; setup_peers 1 2; sleep 8
+	stop_node 2; sleep 2; start_node 2; setup_peers 1 2
+	for _ in $(seq 1 20); do
+		local keys1=$(debug_get_sync_data 13015 | python3 -c "import sys,json; print(json.load(sys.stdin)['ephemeral_keys'])")
+		local keys2=$(debug_get_sync_data 13025 | python3 -c "import sys,json; print(json.load(sys.stdin)['ephemeral_keys'])")
+		if [[ "$keys1" -gt 0 && "$keys2" -gt 0 ]]; then break; fi
+		sleep 1
+	done
+	wait_for_digest_match ephemeral 13016 13026 15 || {
+		log_error "Ephemeral store did not converge after restart"; return 1; }
+	log_info "Ephemeral recovery test PASSED"
+}
+
+# =============================================================================
+# A fresh third node must bootstrap while another non-bootnode peer is down
+# =============================================================================
+test_partial_cluster_bootstrap() {
+	log_info "========== Partial Cluster Bootstrap =========="
+	cleanup
+	generate_config 1; generate_config 2; generate_config 3 "https://localhost:13012"
+	start_node 1; start_node 2; setup_peers 1 2; sleep 6
+	verify_register_response "$(debug_register_cvm 13015 \
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" "partial_app" "partial_instance")" >/dev/null || return 1
+	wait_for_instances 13025 1 10 || return 1
+	stop_node 2; start_node 3
+	wait_for_instances 13035 1 20 || {
+		log_error "Node 3 did not bootstrap while node 2 was unavailable"; return 1; }
+	log_info "Partial-cluster bootstrap test PASSED"
 }
 
 # =============================================================================
@@ -2098,6 +2251,12 @@ main() {
 		echo "  test_push_fast_path                   - Push propagation before periodic sync"
 		echo "  test_periodic_repair_after_missed_push - Periodic repair after a missed push"
 		echo "  test_bootstrap_after_data_dir_loss    - Bootstrap after local store loss"
+		echo "  test_divergent_partition_writes       - Merge writes from divergent partitions"
+		echo "  test_push_periodic_overlap            - Push racing periodic synchronization"
+		echo "  test_delayed_bootnode_recovery        - Bootnode discovery retry"
+		echo "  test_interrupted_sync_recovery        - Recovery after interrupted sync"
+		echo "  test_ephemeral_recovery               - Ephemeral convergence after restart"
+		echo "  test_partial_cluster_bootstrap        - Bootstrap with one cluster peer down"
 		echo ""
 		echo "Advanced tests:"
 		echo "  test_client_registration_persistence  - Client registration and persistence"
@@ -2211,6 +2370,12 @@ main() {
 		run_test test_push_fast_path
 		run_test test_periodic_repair_after_missed_push
 		run_test test_bootstrap_after_data_dir_loss
+		run_test test_divergent_partition_writes
+		run_test test_push_periodic_overlap
+		run_test test_delayed_bootnode_recovery
+		run_test test_interrupted_sync_recovery
+		run_test test_ephemeral_recovery
+		run_test test_partial_cluster_bootstrap
 	fi
 
 	if [[ "$test_filter" == "all" ]] || [[ "$test_filter" == "advanced" ]]; then
