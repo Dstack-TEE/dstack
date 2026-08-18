@@ -164,9 +164,55 @@ This allows a simple deployment order:
 3. Gateway-2 fetches peers from gateway-1 and starts syncing
 4. Gateway-1 auto-discovers gateway-2 from the incoming sync request
 
+### 2.5 Consistency Model and Operational Constraints
+
+WaveKV provides per-key, last-writer-wins eventual consistency. It does not
+provide transactions, compare-and-swap, quorum writes, or linearizable reads.
+Operate the Gateway cluster with the following constraints:
+
+- A `node_id` identifies one sequence-number writer. It must be unique among
+  all live nodes and must never be used concurrently by a replacement node.
+  UUID conflict detection catches many accidental reuses, but it is not a node
+  ID lease. Permanently stop the old writer before reusing its ID.
+- Keep each node's WaveKV data directory on persistent storage. If an existing
+  node loses that directory, do not let it accept writes under its old
+  `node_id` until it has recovered from at least one up-to-date peer. If no peer
+  is reachable, restore the directory from backup or provision the node with a
+  new `node_id`; starting an isolated writer from an empty sequence history can
+  reuse sequence numbers already observed by the cluster.
+- Keep system clocks synchronized. Conflict resolution uses wall-clock time,
+  with node ID and sequence number as tie-breakers. Instance and telemetry
+  records more than five minutes in the future are ignored, but a clock that is
+  behind can still cause a legitimate update to lose to an older value.
+- Client IP allocation is local to each Gateway. The configured client address
+  pools must not overlap.
+- WireGuard public-key uniqueness is not an atomic cluster-wide reservation.
+  During a partition, two nodes can register the same key for different
+  instances. After synchronization, every Gateway deterministically routes
+  only the conflict winner, but the losing CVM can be temporarily routable
+  before convergence. Workloads must retry registration and tolerate this
+  reconciliation.
+- Certificate renewal and ACME credential-rotation coordination uses
+  best-effort WaveKV records, not a distributed mutex. A partition can allow
+  more than one node to perform the operation. These operations must remain
+  idempotent, and external DNS/ACME side effects must tolerate duplicate work.
+- A successful WaveKV sync or matching digest describes replicated KV state,
+  not instantaneous data-plane state. The Gateway asynchronously reconciles
+  its in-memory `ProxyState`, WireGuard peers, certificates, and other
+  materialized views. Monitoring and maintenance automation should allow a
+  reconciliation interval and verify the relevant data-plane/admin endpoint,
+  rather than treating the sync result alone as readiness.
+- Concurrent administrator updates to the same key have LWW semantics rather
+  than causal ordering. Serialize security-sensitive configuration changes at
+  the operational layer when losing an update would be unsafe.
+
+For a brand-new node, an empty local store and temporarily empty peer list are
+expected. The stricter recovery rule above applies when a previously active
+node loses its store while retaining its identity.
+
 > Note: `bootnode` is only used for initial discovery. Once peers are discovered, they are persisted in the KV store and survive restarts.
 
-### 2.5 Configuration File Examples
+### 2.6 Configuration File Examples
 
 > **Note:** A non-empty `rpc_domain` makes the gateway request its RPC TLS key and certificate from the local dstack Guest Agent. Ensure `/var/run/dstack/dstack.sock` is available, or set `DSTACK_AGENT_ADDRESS` to another Guest Agent endpoint. Set `rpc_domain = ""` when supplying pre-generated certificates.
 
@@ -269,7 +315,7 @@ listen_port = 9014
 external_port = 443
 ```
 
-### 2.6 Single-Host Deployment Notes
+### 2.7 Single-Host Deployment Notes
 
 If you run multiple gateway nodes on the same physical host (for example, multiple CVMs on one teepod / dstack-vmm host), the default example ports above will conflict. You must assign distinct host-facing ports per node.
 
@@ -287,7 +333,7 @@ Important:
 - Each gateway VM must have a **unique name** when deployed to the same VMM (e.g., `dstack-gateway-1` and `dstack-gateway-2`)
 - Create DNS records for the RPC hostnames before bootstrapping the cluster
 
-### 2.7 Verify Cluster Sync
+### 2.8 Verify Cluster Sync
 
 The admin API requires a bearer token (see `core.admin.auth_token` in `gateway.toml`,
 or the `ADMIN_API_TOKEN` env injected by `deploy-to-vmm.sh`). Export it once:
