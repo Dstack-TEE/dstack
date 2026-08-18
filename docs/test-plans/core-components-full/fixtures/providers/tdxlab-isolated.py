@@ -1792,6 +1792,8 @@ def destroy(value: dict[str, Any]) -> dict[str, Any]:
             errors.append("cleanup handle has no valid VMM CLI command")
         release_vmm(handle, state)
         shutil.rmtree(state, ignore_errors=True)
+        if state.exists():
+            errors.append(f"lease workspace still exists after cleanup: {state}")
     if errors:
         fail("; ".join(errors))
     return {"released": True}

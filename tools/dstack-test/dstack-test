@@ -1407,6 +1407,7 @@ def scripted_sweep(
     workers: int,
     runtime_manifest: Path | None = None,
     retain_on_failure: bool = False,
+    preflight_case_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Re-execute every case that owns a checked-in entrypoint, in parallel.
 
@@ -1429,6 +1430,16 @@ def scripted_sweep(
         selected = [case for case in selected if case.id in wanted]
     if not selected:
         raise DstackTestError("no case in this plan has an execution entrypoint")
+    preflight_case_ids = preflight_case_ids or []
+    selected_by_id = {case.id: case for case in selected}
+    invalid_preflight = set(preflight_case_ids).difference(selected_by_id)
+    if invalid_preflight:
+        raise DstackTestError(
+            "preflight cases must be selected scripted cases: "
+            + ", ".join(sorted(invalid_preflight))
+        )
+    preflight = [selected_by_id[case_id] for case_id in preflight_case_ids]
+    remaining = [case for case in selected if case.id not in set(preflight_case_ids)]
     run_dir = plan.root / "results" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     # Scripted cases resolve prepared binaries through the run's runtime
@@ -1468,12 +1479,61 @@ def scripted_sweep(
                 flush=True,
             )
 
-    if workers <= 1:
-        for case in selected:
-            execute(case)
-    else:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            list(pool.map(execute, selected))
+    for case in preflight:
+        execute(case)
+        if results[case.id]["status"] != "PASS":
+            break
+    preflight_passed = all(
+        results.get(case.id, {}).get("status") == "PASS" for case in preflight
+    )
+    if preflight_passed:
+        if workers <= 1:
+            for case in remaining:
+                execute(case)
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                list(pool.map(execute, remaining))
+
+    postflight_findings = []
+    leases_dir = run_dir / "leases"
+    for path in sorted(leases_dir.glob("*.json")) if leases_dir.is_dir() else []:
+        try:
+            lease_value = render.load_json(path)
+        except (OSError, render.ReportError) as error:
+            postflight_findings.append(
+                {"lease": path.stem, "reason": f"invalid lease journal: {error}"}
+            )
+            continue
+        state = str(lease_value.get("state", ""))
+        case_id = str(lease_value.get("case_id", ""))
+        retained = (
+            retain_on_failure
+            and state == "READY"
+            and results.get(case_id, {}).get("status") not in (None, "PASS")
+        )
+        if state != "RELEASED" and not retained:
+            postflight_findings.append(
+                {
+                    "lease": path.stem,
+                    "case_id": case_id,
+                    "reason": f"lease state is {state!r}",
+                }
+            )
+        if state == "RELEASED":
+            unreleased = [
+                str(resource.get("type", "unknown"))
+                for resource in lease_value.get("resources", [])
+                if resource.get("state") != "RELEASED"
+            ]
+            if unreleased:
+                postflight_findings.append(
+                    {
+                        "lease": path.stem,
+                        "case_id": case_id,
+                        "reason": "released lease owns unreleased resources: "
+                        + ", ".join(unreleased),
+                    }
+                )
     counts = collections.Counter(value["status"] for value in results.values())
     summary = {
         "schema_version": "1.0",
@@ -1481,7 +1541,8 @@ def scripted_sweep(
         "finished_at": utc_now(),
         "workers": workers,
         "duration_ms": int((time.monotonic() - started) * 1000),
-        "total": len(selected),
+        "total": len(results),
+        "scheduled_total": len(selected),
         # A sweep only covers cases that own a harness. Reporting the scripted
         # count alone reads as though the whole plan passed.
         "plan_total": len(plan.cases),
@@ -1496,7 +1557,17 @@ def scripted_sweep(
             case_id
             for case_id, value in results.items()
             if value["status"] not in ("PASS", "SKIPPED", "BLOCKED")
-        ),
+        )
+        + (["<postflight>"] if postflight_findings else []),
+        "preflight": {
+            "cases": preflight_case_ids,
+            "status": "PASS" if preflight_passed else "FAIL",
+            "completed": sum(case.id in results for case in preflight),
+        },
+        "postflight": {
+            "status": "PASS" if not postflight_findings else "FAIL",
+            "findings": postflight_findings,
+        },
         # Preserve bounded failure diagnostics. Previously fixture exceptions
         # were reduced to a bare ERROR count, which made an individual rerun
         # impossible to diagnose after the worker returned.
@@ -2780,6 +2851,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="retain failed case fixtures and leases for interactive debugging",
     )
+    sweep.add_argument(
+        "--preflight-case",
+        action="append",
+        default=[],
+        help=(
+            "run this selected scripted case serially before the parallel round; "
+            "stop the round when a preflight case fails"
+        ),
+    )
 
     verify_registry_parser = sub.add_parser(
         "verify-registry",
@@ -3572,6 +3652,7 @@ def main(argv: list[str] | None = None) -> int:
             args.workers,
             args.runtime_manifest,
             args.retain_on_failure,
+            args.preflight_case,
         )
     elif args.subcommand == "finalize":
         value = finalize_run(plan, args.run_id, context_value(args.context))

@@ -101,6 +101,64 @@ class DstackTestTests(unittest.TestCase):
         self.assertEqual(args.skip, ["PASS", "SKIPPED"])
         self.assertEqual(args.control_token, "stable-token")
 
+    def test_sweep_accepts_serial_preflight_cases(self) -> None:
+        args = dstack_test.build_parser().parse_args(
+            [
+                "sweep",
+                "--plan",
+                str(FIXTURE),
+                "--preflight-case",
+                "tc-gw-pp-001",
+            ]
+        )
+        self.assertEqual(args.preflight_case, ["tc-gw-pp-001"])
+
+    def test_sweep_postflight_rejects_unreleased_lease(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            plan_path = self.copy_fixture(Path(temporary))
+            self.add_script_executor(
+                plan_path,
+                "import json, os, pathlib\n"
+                "result = pathlib.Path(os.environ['DSTACK_TEST_RESULT_DIR'])\n"
+                "value = {'schema_version':'1.0','case_id':'tc-gw-pp-001',"
+                "'status':'PASS','summary':'ok','steps':[],"
+                "'artifacts':[],'remarks':''}\n"
+                "(result / 'result.json').write_text(json.dumps(value))\n",
+            )
+            plan = render.load_plan(plan_path)
+            run_id = "leaked-sweep"
+            runtime = plan.root / "runtime.json"
+            runtime.write_text("{}\n", encoding="utf-8")
+
+            def leaked_run(*_args: object, **_kwargs: object) -> dict[str, str]:
+                leases = plan.root / "results" / run_id / "leases"
+                leases.mkdir(parents=True, exist_ok=True)
+                (leases / "lease-leaked.json").write_text(
+                    json.dumps(
+                        {
+                            "case_id": "tc-gw-pp-001",
+                            "state": "READY",
+                            "resources": [],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return {"case": "tc-gw-pp-001", "status": "PASS"}
+
+            with mock.patch.object(dstack_test, "run_case", side_effect=leaked_run):
+                summary = dstack_test.scripted_sweep(
+                    plan,
+                    run_id,
+                    None,
+                    1,
+                    runtime,
+                    False,
+                    ["tc-gw-pp-001"],
+                )
+            self.assertEqual(summary["preflight"]["status"], "PASS")
+            self.assertEqual(summary["postflight"]["status"], "FAIL")
+            self.assertEqual(summary["failed"], ["<postflight>"])
+
     def test_resume_appends_existing_orchestrator_session(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             session = Path(temporary) / "orchestrator.jsonl"
