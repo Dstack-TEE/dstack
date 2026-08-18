@@ -106,13 +106,7 @@ def start_bootstrap_server(state: Path) -> tuple[subprocess.Popen[str], str]:
     bridge_image = "dstack-test/tappd-bridge:v2"
     inspected = subprocess.run(
         [
-            os.environ.get(
-                "DSTACK_TEST_DOCKER_SHELL_RUNNER",
-                os.path.join(
-                    os.environ["DSTACK_TEST_PLAN_DIR"],
-                    "shared/automation/run-docker-shell",
-                ),
-            ),
+            os.environ.get("DSTACK_TEST_DOCKER_SHELL_RUNNER", "run-docker-shell"),
             f"docker image inspect {bridge_image}",
         ],
         capture_output=True,

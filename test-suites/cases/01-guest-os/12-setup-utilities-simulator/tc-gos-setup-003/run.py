@@ -35,13 +35,7 @@ def docker(*arguments: str, check: bool = True) -> subprocess.CompletedProcess[s
     command = "docker " + " ".join(shlex.quote(value) for value in arguments)
     return subprocess.run(
         [
-            os.environ.get(
-                "DSTACK_TEST_DOCKER_SHELL_RUNNER",
-                os.path.join(
-                    os.environ["DSTACK_TEST_PLAN_DIR"],
-                    "shared/automation/run-docker-shell",
-                ),
-            ),
+            os.environ.get("DSTACK_TEST_DOCKER_SHELL_RUNNER", "run-docker-shell"),
             command,
         ],
         text=True,

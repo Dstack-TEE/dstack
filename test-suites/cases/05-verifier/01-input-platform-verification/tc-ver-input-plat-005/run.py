@@ -24,13 +24,7 @@ def run_docker_shell(command: str, timeout: int) -> subprocess.CompletedProcess[
     safe_command = f"mkdir -p {docker_tmp} && export TMPDIR={docker_tmp} && {command}"
     return subprocess.run(
         [
-            os.environ.get(
-                "DSTACK_TEST_DOCKER_SHELL_RUNNER",
-                os.path.join(
-                    os.environ["DSTACK_TEST_PLAN_DIR"],
-                    "shared/automation/run-docker-shell",
-                ),
-            ),
+            os.environ.get("DSTACK_TEST_DOCKER_SHELL_RUNNER", "run-docker-shell"),
             safe_command,
         ],
         text=True,
