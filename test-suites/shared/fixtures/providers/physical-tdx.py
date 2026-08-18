@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 # SPDX-License-Identifier: Apache-2.0
-"""Lease-owned tdxlab guest provider for the core component test plan."""
+"""Lease-owned physical TDX host guest provider for the core component test plan."""
 
 from __future__ import annotations
 
@@ -36,13 +36,13 @@ STATE_ROOT = Path(
     os.environ.get("DSTACK_TEST_STATE_ROOT", "").strip()
     or str(Path.home() / ".cache/dstack-test/runtime-state")
 )
-PROVIDER_ROOT = STATE_ROOT / "tdxlab-fixtures"
+PROVIDER_ROOT = STATE_ROOT / "physical-tdx-fixtures"
 RUN_LINK_ROOT = STATE_ROOT / "r"
 # Guest disks and per-VM state live outside /tmp: the lab root filesystem is
 # nearly full, while the home volume has terabytes free.
 VM_DATA_ROOT = Path(
-    os.environ.get("DSTACK_TEST_TDXLAB_VM_ROOT", "").strip()
-    or str(Path.home() / ".cache/dstack-test-tdxlab-vms")
+    os.environ.get("DSTACK_TEST_PHYSICAL_TDX_VM_ROOT", "").strip()
+    or str(Path.home() / ".cache/dstack-test-physical-tdx-vms")
 )
 # Host ports forwarded into lease-owned guests. The lease-owned VMM only allows
 # port mappings inside this block.
@@ -67,8 +67,11 @@ SSHD_STRICT_MODES_RELAXATION = (
     "  systemctl restart sshd || true\n"
     "fi\n"
 )
+OPENSSH_INSTALLER_IMAGE = os.environ.get(
+    "DSTACK_TEST_OPENSSH_INSTALLER_IMAGE", ""
+).strip()
 BOOTSTRAP_IMAGES = (
-    "kvin/dstack-openssh-installer:latest",
+    OPENSSH_INSTALLER_IMAGE,
     "ubuntu:latest",
     "dstack-test/tappd-bridge:v2",
     "dstacktee/dstack-verifier:0.5.4",
@@ -102,7 +105,16 @@ def start_bootstrap_server(state: Path) -> tuple[subprocess.Popen[str], str]:
     INSTALLER_ARCHIVE.parent.mkdir(parents=True, exist_ok=True)
     bridge_image = "dstack-test/tappd-bridge:v2"
     inspected = subprocess.run(
-        ["sudo", "su", "kvin", "-c", f"docker image inspect {bridge_image}"],
+        [
+            os.environ.get(
+                "DSTACK_TEST_DOCKER_SHELL_RUNNER",
+                os.path.join(
+                    os.environ["DSTACK_TEST_PLAN_DIR"],
+                    "shared/automation/run-docker-shell",
+                ),
+            ),
+            f"docker image inspect {bridge_image}",
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -130,10 +142,13 @@ def start_bootstrap_server(state: Path) -> tuple[subprocess.Popen[str], str]:
             fail(f"failed to compile prepared Tappd bridge: {compiled.stderr[-500:]}")
         built = subprocess.run(
             [
-                "sudo",
-                "su",
-                "kvin",
-                "-c",
+                os.environ.get(
+                    "DSTACK_TEST_DOCKER_SHELL_RUNNER",
+                    os.path.join(
+                        os.environ["DSTACK_TEST_PLAN_DIR"],
+                        "shared/automation/run-docker-shell",
+                    ),
+                ),
                 f"docker build -t {bridge_image} {context}",
             ],
             capture_output=True,
@@ -146,7 +161,16 @@ def start_bootstrap_server(state: Path) -> tuple[subprocess.Popen[str], str]:
         temporary = INSTALLER_ARCHIVE.with_suffix(f".tmp-{os.getpid()}")
         command = f"docker save --output {temporary} {' '.join(BOOTSTRAP_IMAGES)}"
         exported = subprocess.run(
-            ["sudo", "su", "kvin", "-c", command],
+            [
+                os.environ.get(
+                    "DSTACK_TEST_DOCKER_SHELL_RUNNER",
+                    os.path.join(
+                        os.environ["DSTACK_TEST_PLAN_DIR"],
+                        "shared/automation/run-docker-shell",
+                    ),
+                ),
+                command,
+            ],
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -797,6 +821,8 @@ def wait_running(
 
 
 def prepare(value: dict[str, Any]) -> dict[str, Any]:
+    if not OPENSSH_INSTALLER_IMAGE:
+        fail("DSTACK_TEST_OPENSSH_INSTALLER_IMAGE is required")
     settings = config(value)
     image = settings["image"]
     request_value = value.get("request", {})
@@ -1065,15 +1091,12 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         if case_kms:
             deploy_inputs.extend(["--kms-encrypt-url", str(case_kms["controller_url"])])
         else:
-            deploy_inputs.extend(
-                [
-                    "--kms-url",
-                    os.environ.get(
-                        "DSTACK_TEST_KMS_URL",
-                        "https://kms.tdxlab.dstack.org:13001",
-                    ),
-                ]
-            )
+            kms_url = os.environ.get("DSTACK_TEST_KMS_URL", "").strip()
+            if not kms_url:
+                fail(
+                    "DSTACK_TEST_KMS_URL is required for KMS-backed physical TDX guests"
+                )
+            deploy_inputs.extend(["--kms-url", kms_url])
     try:
         vmm = start_vmm(
             state,
@@ -1795,7 +1818,7 @@ def destroy(value: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> None:
     if len(sys.argv) != 2 or sys.argv[1] not in {"prepare", "verify", "destroy"}:
-        fail("usage: tdxlab-isolated.py prepare|verify|destroy")
+        fail("usage: physical-tdx.py prepare|verify|destroy")
     value = request()
     result = {"prepare": prepare, "verify": verify, "destroy": destroy}[sys.argv[1]](
         value

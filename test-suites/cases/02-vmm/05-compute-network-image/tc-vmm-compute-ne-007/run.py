@@ -65,7 +65,14 @@ def main() -> int:
     target = os.environ.get(
         "DSTACK_TEST_SHARED_CARGO_TARGET",
         runtime.get("cargo_target_dir")
-        or "/home/kvin/.cache/dstack-test/vmm-internal-batch/target",
+        or str(
+            Path(
+                os.environ.get(
+                    "DSTACK_TEST_CACHE_ROOT", Path.home() / ".cache/dstack-test"
+                )
+            )
+            / "vmm-internal-batch/target"
+        ),
     )
     process = subprocess.run(
         [

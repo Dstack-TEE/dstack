@@ -31,12 +31,23 @@ SIMULATOR_SERVICES = (
 FULL_TDX_IMAGE_HASH = "14ad42d0270b444eaeb53918a5a94d9b17eec7a817cd336173b17c5327541c67"
 
 
-def run_as_kvin(command: str, timeout: int) -> subprocess.CompletedProcess[str]:
-    """Launch Docker through kvin with temporary files on the home volume."""
-    docker_tmp = "/home/kvin/.cache/dstack-test/docker-tmp"
+def run_docker_shell(command: str, timeout: int) -> subprocess.CompletedProcess[str]:
+    """Launch Docker through the operator-configured shell wrapper."""
+    docker_tmp = os.environ.get(
+        "DSTACK_TEST_DOCKER_TMP", str(Path.home() / ".cache/dstack-test/docker-tmp")
+    )
     safe_command = f"mkdir -p {docker_tmp} && export TMPDIR={docker_tmp} && {command}"
     return subprocess.run(
-        ["sudo", "su", "kvin", "-c", safe_command],
+        [
+            os.environ.get(
+                "DSTACK_TEST_DOCKER_SHELL_RUNNER",
+                os.path.join(
+                    os.environ["DSTACK_TEST_PLAN_DIR"],
+                    "shared/automation/run-docker-shell",
+                ),
+            ),
+            safe_command,
+        ],
         text=True,
         capture_output=True,
         timeout=timeout,
@@ -387,7 +398,7 @@ def main() -> int:
             + "\n"
         )
 
-        build = run_as_kvin(f"cd {quoted_suite} && docker compose build", 1800)
+        build = run_docker_shell(f"cd {quoted_suite} && docker compose build", 1800)
         (artifacts / "compose-build.log").write_text(build.stdout + build.stderr)
         if build.returncode:
             raise RuntimeError(
@@ -395,7 +406,7 @@ def main() -> int:
             )
         simulated = [verify_legacy_tdx(runtime, repository, artifacts)]
         for service in SIMULATOR_SERVICES:
-            completed = run_as_kvin(
+            completed = run_docker_shell(
                 f"cd {quoted_suite} && docker compose run --rm {service}", 600
             )
             log = completed.stdout + completed.stderr
@@ -437,7 +448,7 @@ def main() -> int:
         failure = f"{type(error).__name__}: {error}"
         steps.append(emit(f"{case_id}-step-{len(steps) + 1:02d}", "FAIL", failure))
     finally:
-        down = run_as_kvin(
+        down = run_docker_shell(
             f"cd {quoted_suite} && docker compose down --remove-orphans", 180
         )
         (artifacts / "compose-down.log").write_text(down.stdout + down.stderr)

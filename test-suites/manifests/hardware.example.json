@@ -1,0 +1,17 @@
+{
+  "environment": {
+    "DSTACK_TEST_IMAGE_STORE": "/path/to/candidate-images",
+    "DSTACK_TEST_STATE_ROOT": "/path/to/runtime-state",
+    "DSTACK_TEST_PHYSICAL_TDX_VM_ROOT": "/path/to/vm-state",
+    "DSTACK_TEST_SSH_GITHUB_USER": "operator-github-login",
+    "DSTACK_TEST_KMS_URL": "https://kms.example.test:443",
+    "DSTACK_TEST_DOCKER_SHELL_WRAPPER": "/path/to/docker-shell-wrapper",
+    "DSTACK_TEST_OPENSSH_INSTALLER_IMAGE": "registry.example.test/dstack-openssh-installer:tag",
+    "DSTACK_TEST_MOCK_CF_DNS_IMAGE": "registry.example.test/mock-cf-dns-api:tag",
+    "DSTACK_TEST_PEBBLE_IMAGE": "registry.example.test/pebble:tag",
+    "DSTACK_TEST_DOCKER_TMP": "/path/to/docker-tmp"
+  },
+  "environment_path_prepend": [
+    "/path/to/operator-tools"
+  ]
+}

@@ -54,7 +54,16 @@ def start_guest_image_server(
         temporary = GUEST_CONTAINER_ARCHIVE.with_suffix(f".tmp-{os.getpid()}")
         command = f"docker save --output {temporary} {GUEST_CONTAINER_IMAGE}"
         exported = subprocess.run(
-            ["sudo", "su", "kvin", "-c", command],
+            [
+                os.environ.get(
+                    "DSTACK_TEST_DOCKER_SHELL_RUNNER",
+                    os.path.join(
+                        os.environ["DSTACK_TEST_PLAN_DIR"],
+                        "shared/automation/run-docker-shell",
+                    ),
+                ),
+                command,
+            ],
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

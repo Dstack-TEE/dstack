@@ -519,7 +519,16 @@ class MatrixRun:
             ]
         )
         completed = subprocess.run(
-            ["sudo", "su", "kvin", "-c", command],
+            [
+                os.environ.get(
+                    "DSTACK_TEST_DOCKER_SHELL_RUNNER",
+                    os.path.join(
+                        os.environ["DSTACK_TEST_PLAN_DIR"],
+                        "shared/automation/run-docker-shell",
+                    ),
+                ),
+                command,
+            ],
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -732,6 +741,14 @@ class MatrixRun:
         gateway_dns = ""
         certbot_services = ""
         if version == "candidate":
+            mock_cf_dns_image = os.environ.get(
+                "DSTACK_TEST_MOCK_CF_DNS_IMAGE", ""
+            ).strip()
+            pebble_image = os.environ.get("DSTACK_TEST_PEBBLE_IMAGE", "").strip()
+            if not mock_cf_dns_image or not pebble_image:
+                raise RuntimeError(
+                    "DSTACK_TEST_MOCK_CF_DNS_IMAGE and DSTACK_TEST_PEBBLE_IMAGE are required"
+                )
             gateway_dns = """    depends_on:
       mock-cf-dns-api:
         condition: service_started
@@ -740,8 +757,8 @@ class MatrixRun:
       pebble:
         condition: service_started
 """
-            certbot_services = """  mock-cf-dns-api:
-    image: kvin/mock-cf-dns-api:latest
+            certbot_services = f"""  mock-cf-dns-api:
+    image: {mock_cf_dns_image}
     network_mode: host
     environment:
       - DEBUG=true
@@ -763,7 +780,7 @@ class MatrixRun:
       retries: 15
     restart: unless-stopped
   pebble:
-    image: kvin/pebble:latest
+    image: {pebble_image}
     network_mode: host
     command: ["-http", "-dnsserver", "127.0.0.1:53"]
     environment:
