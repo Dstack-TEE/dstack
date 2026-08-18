@@ -7,7 +7,7 @@
 //! Sync data is encoded using msgpack + gzip compression for efficiency.
 
 use crate::{
-    kv::{decode, encode, gunzip_bounded, MAX_DECOMPRESSED_SYNC_BYTES},
+    kv::{gunzip_bounded, MAX_COMPRESSED_SYNC_BYTES, MAX_DECOMPRESSED_SYNC_BYTES},
     main_service::Proxy,
 };
 use flate2::{write::GzEncoder, Compression};
@@ -20,7 +20,7 @@ use rocket::{
 };
 use std::io::Write;
 use tracing::warn;
-use wavekv::sync::{SyncMessage, SyncResponse};
+use wavekv::sync::SyncEnvelope;
 
 /// Adapter implementing `CertExt` over a parsed certificate's extension list.
 ///
@@ -39,35 +39,46 @@ impl CertExt for RocketCert<'_, '_> {
     }
 }
 
-/// Decode compressed msgpack data
-fn decode_sync_message(data: &[u8]) -> Result<SyncMessage, Status> {
-    let decompressed = gunzip_bounded(data, MAX_DECOMPRESSED_SYNC_BYTES).map_err(|e| {
-        warn!("failed to decompress sync message: {e:#}");
-        Status::BadRequest
-    })?;
-
-    decode(&decompressed).map_err(|e| {
-        warn!("failed to decode sync message: {e}");
-        Status::BadRequest
-    })
-}
-
-/// Encode and compress sync response
-fn encode_sync_response(response: &SyncResponse) -> Result<Vec<u8>, Status> {
-    let encoded = encode(response).map_err(|e| {
-        warn!("failed to encode sync response: {e}");
-        Status::InternalServerError
-    })?;
-
-    // Compress
+fn gzip(bytes: &[u8]) -> Result<Vec<u8>, Status> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
-    encoder.write_all(&encoded).map_err(|e| {
+    encoder.write_all(bytes).map_err(|e| {
         warn!("failed to compress sync response: {e}");
         Status::InternalServerError
     })?;
     encoder.finish().map_err(|e| {
         warn!("failed to finish compression: {e}");
         Status::InternalServerError
+    })
+}
+
+fn gunzip(data: &[u8]) -> Result<Vec<u8>, Status> {
+    gunzip_bounded(data, MAX_DECOMPRESSED_SYNC_BYTES).map_err(|e| {
+        warn!("failed to decompress sync payload: {e:#}");
+        Status::BadRequest
+    })
+}
+
+async fn read_compressed_body(data: Data<'_>) -> Result<Vec<u8>, Status> {
+    let bytes = data
+        .open(MAX_COMPRESSED_SYNC_BYTES.bytes())
+        .into_bytes()
+        .await
+        .map_err(|_| Status::BadRequest)?;
+    if !bytes.is_complete() {
+        warn!("sync payload exceeds the {MAX_COMPRESSED_SYNC_BYTES}-byte compressed-size limit");
+        return Err(Status::PayloadTooLarge);
+    }
+    Ok(bytes.into_inner())
+}
+
+/// Read a sync envelope from a bounded request body.
+async fn read_envelope(data: Data<'_>) -> Result<SyncEnvelope, Status> {
+    let decompressed = gunzip(&read_compressed_body(data).await?)?;
+    // `SyncEnvelope::decode` enforces the schema version and rejects trailing bytes;
+    // it is deliberately not the generic `decode` used for KV values.
+    SyncEnvelope::decode(&decompressed).map_err(|e| {
+        warn!("failed to decode sync envelope: {e:#}");
+        Status::BadRequest
     })
 }
 
@@ -119,7 +130,7 @@ fn authorize_peer(cert: &impl CertExt, my_app_id: Option<&[u8]>) -> Result<(), S
     Ok(())
 }
 
-/// Handle sync request (msgpack + gzip encoded)
+/// WaveKV sync endpoint.
 #[post("/wavekv/sync/<store>", data = "<data>")]
 pub async fn sync_store(
     state: &State<Proxy>,
@@ -133,45 +144,73 @@ pub async fn sync_store(
         return Err(Status::ServiceUnavailable);
     };
 
-    // Read and decode request
-    let bytes = data
-        .open(16.mebibytes())
-        .into_bytes()
-        .await
-        .map_err(|_| Status::BadRequest)?;
-    let msg = decode_sync_message(&bytes)?;
-
-    // Reject sync from node_id == 0
-    if msg.sender_id == 0 {
+    let env = read_envelope(data).await?;
+    if env.sender_id == 0 {
         warn!("rejected sync from invalid node_id 0");
         return Err(Status::BadRequest);
     }
 
-    // Handle sync based on store type
-    let response = match store {
-        "persistent" => wavekv_sync.handle_persistent_sync(msg),
-        "ephemeral" => wavekv_sync.handle_ephemeral_sync(msg),
-        _ => return Err(Status::NotFound),
-    }
-    .map_err(|e| {
-        tracing::error!("{store} sync failed: {e}");
+    let Some(result) = wavekv_sync.handle_envelope(store, env) else {
+        return Err(Status::NotFound);
+    };
+    let response = result.map_err(|e| {
+        tracing::error!("{store} sync failed: {e:#}");
         Status::InternalServerError
     })?;
 
-    // Encode response
-    let encoded = encode_sync_response(&response)?;
+    let encoded = response.encode().map_err(|e| {
+        warn!("failed to encode sync envelope: {e:#}");
+        Status::InternalServerError
+    })?;
+    Ok((
+        ContentType::new("application", "x-msgpack-gz"),
+        gzip(&encoded)?,
+    ))
+}
 
-    Ok((ContentType::new("application", "x-msgpack-gz"), encoded))
+/// Opportunistic push endpoint (wavekv RFC 0001 section 3.9).
+///
+/// Entries only: the receiver merges data but never moves its ack coverage from this
+/// channel, so loss, duplication and reordering here are all harmless and the periodic
+/// round remains the anti-entropy backstop.
+#[post("/wavekv/push/<store>", data = "<data>")]
+pub async fn push_store(
+    state: &State<Proxy>,
+    cert: Option<Certificate<'_>>,
+    store: &str,
+    data: Data<'_>,
+) -> Result<Status, Status> {
+    verify_gateway_peer(state, cert)?;
+
+    let Some(ref wavekv_sync) = state.wavekv_sync else {
+        return Err(Status::ServiceUnavailable);
+    };
+
+    let env = read_envelope(data).await?;
+    if env.sender_id == 0 {
+        warn!("rejected push from invalid node_id 0");
+        return Err(Status::BadRequest);
+    }
+
+    let Some(result) = wavekv_sync.handle_push(store, env) else {
+        return Err(Status::NotFound);
+    };
+    result.map_err(|e| {
+        tracing::error!("{store} push failed: {e:#}");
+        Status::InternalServerError
+    })?;
+    Ok(Status::Ok)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{load_config_figment, Config, MutualConfig, TlsConfig};
-    use crate::kv::NodeData;
+    use crate::kv::{HttpsClient, NodeData};
     use crate::main_service::{Proxy, ProxyOptions};
     use rocket::local::asynchronous::Client;
     use tempfile::TempDir;
+    use wavekv::types::{Entry, Metadata};
 
     const ME: u32 = 1;
     const PEER: u32 = 2;
@@ -193,7 +232,7 @@ mod tests {
 
         let leaf_key = KeyPair::generate().expect("leaf key");
         let leaf_params =
-            CertificateParams::new(vec!["gateway.test".to_string()]).expect("leaf params");
+            CertificateParams::new(vec!["127.0.0.1".to_string()]).expect("leaf params");
         let leaf_cert = leaf_params
             .signed_by(&leaf_key, &ca_cert, &ca_key)
             .expect("leaf cert");
@@ -214,13 +253,13 @@ mod tests {
         }
     }
 
-    /// A gateway serving the real sync route over Rocket's local client.
+    /// A gateway serving the real sync routes over Rocket's local client.
     ///
     /// `insecure_skip_attestation` is on, which makes `verify_gateway_peer` return
     /// immediately: these tests are about everything below it — route dispatch, the gzip
-    /// framing, the store split. `enforcing_gateway` covers the gate itself, which this
-    /// fixture cannot, because Rocket's local client speaks no TLS and so can never
-    /// present a certificate.
+    /// framing, the store split, the uuid check. `enforcing_gateway` covers the gate
+    /// itself, which this fixture cannot, because Rocket's local client speaks no TLS
+    /// and so can never present a certificate.
     async fn serving_gateway(sync_enabled: bool) -> (Client, Proxy, TempDir) {
         serving_gateway_with(sync_enabled, true).await
     }
@@ -270,27 +309,9 @@ mod tests {
         (client, proxy, temp_dir)
     }
 
-    /// Register the peer so `query_uuid` returns something: the uuid check is opt-in and
-    /// an unknown sender bypasses it entirely.
-    fn register_peer(proxy: &Proxy) {
-        proxy
-            .kv_store()
-            .sync_node(
-                PEER,
-                &NodeData {
-                    uuid: peer_uuid(),
-                    url: "https://peer.test:8011".to_string(),
-                    wg_public_key: String::new(),
-                    wg_endpoint: String::new(),
-                    wg_ip: String::new(),
-                },
-            )
-            .expect("register peer");
-    }
-
-    /// The sync route is the cluster's write surface: anything that reaches it can
+    /// The sync routes are the cluster's write surface: anything that reaches them can
     /// insert entries that replicate to every gateway. `verify_gateway_peer` is the only
-    /// thing standing in front of it, and with `insecure_skip_attestation` set — which
+    /// thing standing in front of them, and with `insecure_skip_attestation` set — which
     /// every other test here sets — its first statement returns `Ok(())`, so the gate
     /// itself was never executed by any test. Replacing the whole function body with
     /// `Ok(())` did not turn the suite red.
@@ -298,19 +319,17 @@ mod tests {
     /// Rocket's local client speaks no TLS and so presents no certificate, which is
     /// exactly the case that must be refused.
     #[tokio::test]
-    async fn the_sync_route_refuses_a_peer_it_cannot_identify() {
+    async fn every_sync_route_refuses_a_peer_it_cannot_identify() {
         let (client, _proxy, _tmp) = enforcing_gateway().await;
 
-        let response = client
-            .post("/wavekv/sync/persistent")
-            .body(Vec::new())
-            .dispatch()
-            .await;
-        assert_eq!(
-            response.status(),
-            Status::Unauthorized,
-            "the sync route served a request from an unauthenticated caller"
-        );
+        for route in ["/wavekv/sync/persistent", "/wavekv/push/persistent"] {
+            let response = client.post(route).body(Vec::new()).dispatch().await;
+            assert_eq!(
+                response.status(),
+                Status::Unauthorized,
+                "{route} served a request from an unauthenticated caller"
+            );
+        }
     }
 
     /// A real certificate carrying `PHALA_RATLS_APP_ID`, minted locally.
@@ -354,7 +373,7 @@ mod tests {
         authorize_peer(&RocketCert(parsed.extensions()), my_app_id)
     }
 
-    /// The rule the sync route is defended by: same app id or nothing.
+    /// The rule the sync routes are defended by: same app id or nothing.
     ///
     /// Every case below was previously unreachable, because the only tests that touched
     /// this code set `insecure_skip_attestation` and returned before it. Inverting the
@@ -368,7 +387,7 @@ mod tests {
         assert_eq!(
             authorize(&cert_with_app_id(b"a-different-app"), Some(&ours)),
             Err(Status::Forbidden),
-            "a valid certificate from another app must not reach the sync route"
+            "a valid certificate from another app must not reach the sync routes"
         );
     }
 
@@ -415,32 +434,80 @@ mod tests {
         );
     }
 
-    /// The request framing the route expects: msgpack, then gzip.
-    fn gzip(bytes: &[u8]) -> Vec<u8> {
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
-        encoder.write_all(bytes).expect("compress");
-        encoder.finish().expect("finish")
+    /// Register the peer so `query_uuid` returns something: the uuid check is opt-in and
+    /// an unknown sender bypasses it entirely.
+    fn register_peer(proxy: &Proxy) {
+        proxy
+            .kv_store()
+            .sync_node(
+                PEER,
+                &NodeData {
+                    uuid: peer_uuid(),
+                    url: "https://peer.test:8011".to_string(),
+                    wg_public_key: String::new(),
+                    wg_endpoint: String::new(),
+                    wg_ip: String::new(),
+                },
+            )
+            .expect("register peer");
     }
 
-    fn sync_body(msg: &SyncMessage) -> Vec<u8> {
-        gzip(&encode(msg).expect("encode sync message"))
+    fn push_envelope(uuid: Vec<u8>, key: &str) -> SyncEnvelope {
+        let mut env = SyncEnvelope::new(PEER, uuid);
+        env.push_only = true;
+        env.entries.push(Entry::new(
+            key.to_string(),
+            Some(b"v".to_vec()),
+            Metadata::new(PEER, 1, 1),
+        ));
+        env
     }
 
-    fn sync_request() -> SyncMessage {
-        SyncMessage {
-            sender_id: PEER,
-            sender_uuid: peer_uuid(),
-            // Empty coverage, so the route answers with everything it holds.
-            sender_ack: Default::default(),
-            entries: Vec::new(),
-        }
+    fn body(env: &SyncEnvelope) -> Vec<u8> {
+        gzip(&env.encode().expect("encode envelope")).expect("gzip")
     }
 
-    /// Nothing exercised the sync route end to end: the store dispatch could be deleted,
-    /// the node-id-zero guard inverted, and the response body replaced with three bytes,
-    /// all without turning the suite red.
     #[tokio::test]
-    async fn a_sync_round_trip_serves_the_state_this_node_holds() {
+    async fn a_stamped_push_is_accepted_and_lands_in_the_store() {
+        let (client, proxy, _tmp) = serving_gateway(true).await;
+        register_peer(&proxy);
+
+        let response = client
+            .post("/wavekv/push/persistent")
+            .body(body(&push_envelope(peer_uuid(), "node/9")))
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), Status::Ok);
+        assert!(
+            proxy.kv_store().persistent().read().get("node/9").is_some(),
+            "a well-formed push must reach the store"
+        );
+    }
+
+    /// The route-level view of the bug that made every opportunistic push fail: the
+    /// sender built its envelope without stamping `sender_uuid`, and the receiver's
+    /// `check_uuid` — which only the manager runs, not `merge_push` — rejected it.
+    #[tokio::test]
+    async fn an_unstamped_push_is_refused_at_the_route() {
+        let (client, proxy, _tmp) = serving_gateway(true).await;
+        register_peer(&proxy);
+
+        let response = client
+            .post("/wavekv/push/persistent")
+            .body(body(&push_envelope(Vec::new(), "node/9")))
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), Status::InternalServerError);
+        assert!(
+            proxy.kv_store().persistent().read().get("node/9").is_none(),
+            "a push that fails the identity check must not write anything"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sync_round_trip_returns_a_decodable_envelope() {
         let (client, proxy, _tmp) = serving_gateway(true).await;
         register_peer(&proxy);
         proxy
@@ -450,132 +517,249 @@ mod tests {
             .put("node/7".to_string(), b"v".to_vec())
             .expect("seed");
 
+        let request = SyncEnvelope::new(PEER, peer_uuid());
         let response = client
             .post("/wavekv/sync/persistent")
-            .body(sync_body(&sync_request()))
+            .body(body(&request))
             .dispatch()
             .await;
 
         assert_eq!(response.status(), Status::Ok);
         let bytes = response.into_bytes().await.expect("body");
-        let decoded: SyncResponse =
-            decode(&gunzip_bounded(&bytes, MAX_DECOMPRESSED_SYNC_BYTES).expect("gunzip"))
-                .expect("decode sync response");
-
-        assert_eq!(decoded.peer_id, ME);
+        let decoded = SyncEnvelope::decode(&gunzip(&bytes).expect("gunzip")).expect("decode");
+        assert_eq!(decoded.sender_id, ME);
         assert!(
             decoded.entries.iter().any(|e| e.key == "node/7"),
-            "a peer with no coverage must receive the state this node holds"
+            "an empty ack map must draw the whole live state"
         );
     }
 
-    /// Both stores are reachable over the route. The ephemeral arm carries the liveness
-    /// data a stale peer needs most.
+    /// Exercise the composed transport rather than testing the HTTPS client and Rocket
+    /// routes in isolation: a real TLS listener requires a CA-signed client certificate,
+    /// receives a compressed envelope, merges it, and returns a decodable response.
     #[tokio::test]
-    async fn the_route_serves_the_ephemeral_store_as_well() {
+    async fn sync_and_push_cross_a_real_mutually_authenticated_tls_connection() {
+        use rocket::{mtls::MtlsConfig, tls::TlsConfig as RocketTlsConfig};
+
+        let (_local, proxy, tmp) = serving_gateway(true).await;
+        register_peer(&proxy);
+        let tls = write_tls_material(tmp.path());
+
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve port");
+            listener.local_addr().expect("local address").port()
+        };
+        let server_tls = RocketTlsConfig::from_paths(&tls.certs, &tls.key)
+            .with_mutual(MtlsConfig::from_path(&tls.mutual.ca_certs).mandatory(true));
+        let figment = rocket::Config::figment()
+            .merge(("address", "127.0.0.1"))
+            .merge(("port", port))
+            .merge(("tls", server_tls));
+        let rocket = rocket::custom(figment)
+            .manage(proxy.clone())
+            .mount("/", crate::web_routes::wavekv_sync_routes())
+            .ignite()
+            .await
+            .expect("ignite TLS Rocket server");
+        let shutdown = rocket.shutdown();
+        let server = tokio::spawn(async move {
+            rocket.launch().await.expect("TLS Rocket server");
+        });
+
+        let client = HttpsClient::new(&crate::kv::HttpsClientConfig {
+            cert_path: tls.certs.clone(),
+            key_path: tls.key.clone(),
+            ca_cert_path: tls.mutual.ca_certs.clone(),
+            cert_validator: None,
+        })
+        .expect("HTTPS client");
+        let base = format!("https://127.0.0.1:{port}");
+
+        let mut request = SyncEnvelope::new(PEER, peer_uuid());
+        request.entries.push(Entry::new(
+            "node/21".to_string(),
+            Some(b"sync".to_vec()),
+            Metadata::new(PEER, 21, 1),
+        ));
+
+        let response = {
+            let mut last = None;
+            let mut response = None;
+            for _ in 0..50 {
+                match client
+                    .post_bytes_response(
+                        &format!("{base}/wavekv/sync/persistent"),
+                        request.encode().expect("encode sync request"),
+                    )
+                    .await
+                {
+                    Ok(bytes) => {
+                        response = Some(bytes);
+                        break;
+                    }
+                    Err(err) => {
+                        last = Some(err);
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    }
+                }
+            }
+            response.unwrap_or_else(|| panic!("server did not become ready: {last:?}"))
+        };
+        SyncEnvelope::decode(&response).expect("decode sync response");
+        assert!(proxy
+            .kv_store()
+            .persistent()
+            .read()
+            .get("node/21")
+            .is_some());
+
+        let push = push_envelope(peer_uuid(), "node/22");
+        client
+            .post_bytes_no_response(
+                &format!("{base}/wavekv/push/persistent"),
+                push.encode().expect("encode push"),
+            )
+            .await
+            .expect("push over mTLS");
+        assert!(proxy
+            .kv_store()
+            .persistent()
+            .read()
+            .get("node/22")
+            .is_some());
+
+        shutdown.notify();
+        server.await.expect("server task");
+    }
+
+    #[tokio::test]
+    async fn an_oversized_compressed_request_is_rejected_explicitly() {
+        let (client, _proxy, _tmp) = serving_gateway(true).await;
+        for path in ["/wavekv/sync/persistent", "/wavekv/push/persistent"] {
+            let response = client
+                .post(path)
+                .body(vec![0u8; 16 * 1024 * 1024 + 1])
+                .dispatch()
+                .await;
+            assert_eq!(response.status(), Status::PayloadTooLarge, "{path}");
+        }
+    }
+
+    /// Unknown stores are rejected rather than being routed to either replicated store.
+    #[tokio::test]
+    async fn an_unknown_store_is_rejected() {
         let (client, proxy, _tmp) = serving_gateway(true).await;
         register_peer(&proxy);
 
         let response = client
-            .post("/wavekv/sync/ephemeral")
-            .body(sync_body(&sync_request()))
+            .post("/wavekv/sync/bogus")
+            .body(body(&SyncEnvelope::new(PEER, peer_uuid())))
             .dispatch()
             .await;
 
-        assert_eq!(response.status(), Status::Ok);
+        assert_eq!(response.status(), Status::NotFound);
     }
 
-    /// Node id 0 is the unset value, so an entry authored by it collides with every
-    /// other unset sender.
+    /// A node with synchronization disabled reports that the service is unavailable.
     #[tokio::test]
-    async fn a_sync_from_node_id_zero_is_refused() {
-        let (client, proxy, _tmp) = serving_gateway(true).await;
-        register_peer(&proxy);
-
-        let mut msg = sync_request();
-        msg.sender_id = 0;
-        let response = client
-            .post("/wavekv/sync/persistent")
-            .body(sync_body(&msg))
-            .dispatch()
-            .await;
-
-        assert_eq!(response.status(), Status::BadRequest);
-    }
-
-    /// A node with sync switched off answers 503 — an unavailable service, not a missing
-    /// route. The distinction is load-bearing for a caller deciding whether the peer is
-    /// down or simply does not have this endpoint.
-    #[tokio::test]
-    async fn a_sync_disabled_node_answers_503_rather_than_404() {
+    async fn a_sync_disabled_node_answers_503() {
         let (client, _proxy, _tmp) = serving_gateway(false).await;
 
-        let response = client
-            .post("/wavekv/sync/persistent")
-            .body(sync_body(&sync_request()))
-            .dispatch()
-            .await;
-        assert_eq!(response.status(), Status::ServiceUnavailable);
-    }
-
-    /// An unknown store is a 404 rather than a 500 or a silent success.
-    #[tokio::test]
-    async fn an_unknown_store_is_a_404() {
-        let (client, proxy, _tmp) = serving_gateway(true).await;
-        register_peer(&proxy);
-
-        let response = client
-            .post("/wavekv/sync/nonesuch")
-            .body(sync_body(&sync_request()))
-            .dispatch()
-            .await;
-        assert_eq!(response.status(), Status::NotFound);
+        for path in ["/wavekv/sync/persistent", "/wavekv/push/persistent"] {
+            let response = client
+                .post(path)
+                .body(body(&SyncEnvelope::new(PEER, peer_uuid())))
+                .dispatch()
+                .await;
+            assert_eq!(
+                response.status(),
+                Status::ServiceUnavailable,
+                "{path} must not look like a missing v2 route"
+            );
+        }
     }
 
     /// gzip expands by three orders of magnitude on attacker-chosen input, so the
     /// 16 MiB cap on the request body bounds the *compressed* size and nothing else.
-    /// The RA-TLS gate proves only that the sender is some gateway of this deployment.
+    /// mTLS proves only that the sender is some gateway of this deployment, which is
+    /// the same trust level the key schema already assumes is insufficient.
     #[tokio::test]
     async fn a_compression_bomb_is_refused_before_it_is_decompressed() {
         let (client, _proxy, _tmp) = serving_gateway(true).await;
 
-        // ~128 MiB of zeroes compresses to well under the request cap.
-        let bomb = gzip(&vec![0u8; MAX_DECOMPRESSED_SYNC_BYTES + 1]);
+        // ~130 MiB of zeroes compresses to well under the request cap.
+        let bomb = gzip(&vec![0u8; MAX_DECOMPRESSED_SYNC_BYTES + 1]).expect("gzip");
         assert!(
             bomb.len() < 16 * 1024 * 1024,
             "the fixture has to fit through the body cap to be testing anything: {} bytes",
             bomb.len()
         );
 
-        let response = client
-            .post("/wavekv/sync/persistent")
-            .body(bomb)
-            .dispatch()
-            .await;
-        assert_eq!(
-            response.status(),
-            Status::BadRequest,
-            "the route must refuse an over-sized expansion"
-        );
+        for path in ["/wavekv/sync/persistent", "/wavekv/push/persistent"] {
+            let response = client.post(path).body(bomb.clone()).dispatch().await;
+            assert_eq!(
+                response.status(),
+                Status::BadRequest,
+                "{path} must refuse an over-sized expansion"
+            );
+        }
     }
 
-    /// The limits have to admit the largest message the protocol can produce, or they
-    /// would reject ordinary sync traffic rather than a bomb.
+    /// The limits must leave room for the largest legitimate message.
+    ///
+    /// The boundary test below asserts a payload of exactly `MAX_DECOMPRESSED_SYNC_BYTES`
+    /// is accepted — but it builds that payload *from the same constant*, so it holds
+    /// whatever the constant says. Shrinking the limit to a few kilobytes keeps it green
+    /// while rejecting every real delta. Pin the values against what production sends,
+    /// which is the property that actually matters.
+    // Deliberately runtime assertions rather than `const { assert!(..) }`: a const block
+    // would fail the build, which mutation testing scores as "unviable" rather than
+    // "caught", and would lose the message explaining what the number is for.
+    #[allow(clippy::assertions_on_constants)]
     #[test]
     fn the_sync_limits_admit_the_largest_message_the_protocol_can_produce() {
-        // A sync response carries the whole live state of one store.
+        // A v2 delta is capped by wavekv's `max_delta_bytes` (4 MiB by default).
+        const MAX_DELTA_BYTES: usize = 4 * 1024 * 1024;
         assert!(
-            MAX_DECOMPRESSED_SYNC_BYTES >= 32 * 1024 * 1024,
-            "a decompression limit of {MAX_DECOMPRESSED_SYNC_BYTES} bytes is too tight \
-             for a full-state response"
+            MAX_DECOMPRESSED_SYNC_BYTES >= 8 * MAX_DELTA_BYTES,
+            "a decompression limit of {MAX_DECOMPRESSED_SYNC_BYTES} bytes would reject \
+             ordinary sync traffic, not just a bomb"
         );
 
-        // The compressed ceiling mirrors what the route accepts on a request, so a peer
+        // The compressed ceiling mirrors what the routes accept on a request, so a peer
         // cannot answer with more than it would have been allowed to ask.
         assert_eq!(
             crate::kv::MAX_COMPRESSED_SYNC_BYTES,
             16 * 1024 * 1024,
-            "this must stay equal to the 16 MiB the route accepts on a request body"
+            "this must stay equal to the 16 MiB the routes accept on a request body"
         );
+    }
+
+    /// The limit is inclusive, so a payload landing exactly on it still decodes. Without
+    /// this the bound could tighten by a byte and only the bomb test would still pass.
+    #[test]
+    fn a_payload_exactly_on_the_limit_still_decompresses() {
+        let exact = gzip(&vec![7u8; MAX_DECOMPRESSED_SYNC_BYTES]).expect("gzip");
+        let out = gunzip_bounded(&exact, MAX_DECOMPRESSED_SYNC_BYTES).expect("must be accepted");
+        assert_eq!(out.len(), MAX_DECOMPRESSED_SYNC_BYTES);
+
+        let one_over = gzip(&vec![7u8; MAX_DECOMPRESSED_SYNC_BYTES + 1]).expect("gzip");
+        assert!(gunzip_bounded(&one_over, MAX_DECOMPRESSED_SYNC_BYTES).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_push_from_node_id_zero_is_refused() {
+        let (client, proxy, _tmp) = serving_gateway(true).await;
+        register_peer(&proxy);
+
+        let mut env = push_envelope(peer_uuid(), "node/9");
+        env.sender_id = 0;
+        let response = client
+            .post("/wavekv/push/persistent")
+            .body(body(&env))
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), Status::BadRequest);
     }
 }

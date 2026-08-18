@@ -171,13 +171,10 @@ pub(crate) struct StoreSnapshot {
 
 pub(crate) struct PeerSnapshot {
     pub id: u32,
-    /// How far we have consumed this peer's log.
+    /// Highest sequence from this peer that the local store covers.
     pub local_ack: u64,
-    /// How far the peer says it has consumed ours.
+    /// Highest local sequence that the peer reports covering.
     pub peer_ack: u64,
-    /// Entries still buffered for the peer. A number that only grows is a peer
-    /// that stopped acknowledging.
-    pub buffered_logs: u64,
 }
 
 /// Render the Prometheus text exposition format.
@@ -317,21 +314,6 @@ pub(crate) fn render(snapshot: &Snapshot) -> String {
             peer.peer_ack,
         );
     }
-    header(
-        &mut out,
-        "dstack_gateway_kv_peer_buffered_logs",
-        "Log entries still buffered for a peer. Sustained growth means the peer stopped acknowledging.",
-        "gauge",
-    );
-    for (store, peer) in peers(snapshot) {
-        line(
-            &mut out,
-            "dstack_gateway_kv_peer_buffered_logs",
-            &peer_label(store, peer),
-            peer.buffered_logs,
-        );
-    }
-
     header(
         &mut out,
         "dstack_gateway_kv_decode_failures_total",
@@ -493,7 +475,6 @@ mod tests {
                     id: 2,
                     local_ack: 9,
                     peer_ack: 8,
-                    buffered_logs: 1,
                 }],
             }],
             cert_not_after: vec![("app.example.com".to_string(), 1_800_000_000)],
@@ -535,7 +516,6 @@ mod tests {
             "dstack_gateway_ktls_offload_failed_total 1",
             "dstack_gateway_cluster_kv_keys{store=\"persistent\"} 42",
             "dstack_gateway_kv_dirty{store=\"persistent\"} 1",
-            "dstack_gateway_kv_peer_buffered_logs{store=\"persistent\",peer=\"2\"} 1",
             "dstack_gateway_cluster_cert_not_after_seconds{domain=\"app.example.com\"} 1800000000",
         ] {
             assert!(rendered.contains(expected), "missing sample: {expected}");

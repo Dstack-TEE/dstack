@@ -847,7 +847,6 @@ SPDX-License-Identifier: Apache-2.0
                             <th>Peer ID</th>
                             <th>Local Ack</th>
                             <th>Peer Ack</th>
-                            <th>Buffered</th>
                             <th>Last Seen</th>
                         </tr>
                 `;
@@ -863,14 +862,12 @@ SPDX-License-Identifier: Apache-2.0
                         : 'N/A';
                     const localAck = peer.local_ack || peer.localAck || 0;
                     const peerAck = peer.peer_ack || peer.peerAck || 0;
-                    const bufferedLogs = peer.buffered_logs || peer.bufferedLogs || 0;
 
                     html += `
                         <tr>
                             <td class="truncated-id" title="${peer.id}">${peer.id}</td>
                             <td>${localAck}</td>
                             <td>${peerAck}</td>
-                            <td>${bufferedLogs}</td>
                             <td class="last-seen-cell">${lastSeenStr}</td>
                         </tr>
                     `;

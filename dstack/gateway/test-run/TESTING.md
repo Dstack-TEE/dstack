@@ -62,13 +62,24 @@ The suite starts real gateway processes and exercises:
 - admin RPCs such as `Admin.SetNodeUrl`, `Admin.SetNodeStatus`, and
   `Admin.WaveKvStatus`;
 - WaveKV persistent and ephemeral sync between gateway nodes;
+- push propagation before the five-second periodic sync interval;
+- periodic anti-entropy repair after a push is missed while a peer is offline;
+- bootstrap recovery after a node loses its local WaveKV store while retaining
+  its node identity;
+- convergence of divergent writes made on both sides of a partition;
+- idempotence when opportunistic pushes overlap a periodic sync round;
+- bootnode discovery retry, interrupted-sync recovery, and partial-cluster
+  bootstrap while another peer is unavailable;
+- ephemeral-store convergence after a peer restart;
+- node-ID conflict rejection followed by convergence under the replacement
+  node's fresh UUID;
 - node restart, network partition recovery, periodic persistence, and node
   up/down filtering.
 
 Expected result:
 
 ```text
-Tests passed: 19
+Tests passed: 28
 ```
 
 Important request paths covered by this suite:
@@ -84,6 +95,8 @@ Important request paths covered by this suite:
 | `POST /prpc/Admin.WaveKvStatus` | Inspect WaveKV store status. |
 | `POST /wavekv/sync/persistent` | Gateway-to-gateway persistent data sync. |
 | `POST /wavekv/sync/ephemeral` | Gateway-to-gateway last-seen/handshake/connection sync. |
+| `POST /wavekv/push/persistent` | Opportunistic persistent-state propagation. |
+| `POST /wavekv/push/ephemeral` | Opportunistic ephemeral-state propagation. |
 
 ## Real proxy data-path smoke test
 

@@ -13,7 +13,10 @@ use anyhow::{Context, Result};
 use dstack_gateway_rpc::GetPeersResponse;
 use tracing::{info, warn};
 use wavekv::{
-    sync::{ExchangeInterface, SyncConfig as KvSyncConfig, SyncManager, SyncMessage, SyncResponse},
+    sync::{
+        ExchangeInterface, PeerLinkStatus, SyncConfig as KvSyncConfig, SyncEnvelope, SyncManager,
+        SyncMessage, SyncResponse,
+    },
     types::NodeId,
     Node,
 };
@@ -76,29 +79,60 @@ impl ExchangeInterface for HttpSyncNetwork {
         self.kv_store.get_peer_uuid(node_id)
     }
 
-    async fn sync_to(&self, _node: &Node, peer: NodeId, msg: SyncMessage) -> Result<SyncResponse> {
-        let url = self
-            .get_peer_url(peer)
-            .ok_or_else(|| anyhow::anyhow!("peer {} address not found in DB", peer))?;
+    async fn sync_to(
+        &self,
+        _node: &Node,
+        _peer: NodeId,
+        _msg: SyncMessage,
+    ) -> Result<SyncResponse> {
+        anyhow::bail!("wavekv v1 peer synchronization is not supported")
+    }
 
-        let sync_url = format!(
-            "{}/wavekv/sync/{}",
-            url.trim_end_matches('/'),
-            self.store_path
-        );
+    /// Native WaveKV exchange.
+    ///
+    /// All deployed clusters use this wire protocol. WaveKV 1.0 data directories are
+    /// migrated in place during a stopped single-node upgrade; no mixed-version network
+    /// protocol is exposed by the gateway.
+    async fn sync_v2_to(
+        &self,
+        _node: &Node,
+        peer: NodeId,
+        env: SyncEnvelope,
+    ) -> Result<Option<SyncEnvelope>> {
+        let sync_url = self.route_for(peer, "sync")?;
 
-        // Send request with msgpack + gzip encoding
-        // app_id verification happens during TLS handshake via AppIdVerifier
-        let sync_response: SyncResponse = self
+        let body = self
             .client
-            .post_compressed_msg(&sync_url, &msg)
+            .post_bytes_response(&sync_url, env.encode()?)
             .await
             .with_context(|| format!("failed to sync to peer {peer} at {sync_url}"))?;
 
-        // Update peer last_seen on successful sync
         self.kv_store.update_peer_last_seen(peer);
+        Ok(Some(SyncEnvelope::decode(&body)?))
+    }
 
-        Ok(sync_response)
+    /// Opportunistic push. Best-effort by design: the periodic round remains the
+    /// anti-entropy backstop and the only ack authority.
+    async fn push_to(&self, _node: &Node, peer: NodeId, env: SyncEnvelope) -> Result<()> {
+        let push_url = self.route_for(peer, "push")?;
+        self.client
+            .post_bytes_no_response(&push_url, env.encode()?)
+            .await
+            .with_context(|| format!("failed to push to peer {peer} at {push_url}"))?;
+        Ok(())
+    }
+}
+
+impl HttpSyncNetwork {
+    fn route_for(&self, peer: NodeId, verb: &str) -> Result<String> {
+        let url = self
+            .get_peer_url(peer)
+            .ok_or_else(|| anyhow::anyhow!("peer {peer} address not found in DB"))?;
+        Ok(format!(
+            "{}/wavekv/{verb}/{}",
+            url.trim_end_matches('/'),
+            self.store_path
+        ))
     }
 }
 
@@ -106,6 +140,17 @@ impl ExchangeInterface for HttpSyncNetwork {
 pub struct WaveKvSyncService {
     pub persistent_manager: Arc<SyncManager<HttpSyncNetwork>>,
     pub ephemeral_manager: Arc<SyncManager<HttpSyncNetwork>>,
+}
+
+/// Wake the opportunistic push path after a latency-sensitive persistent write.
+pub trait PersistentWriteNotifier: Send + Sync {
+    fn notify_persistent_write(&self);
+}
+
+impl PersistentWriteNotifier for WaveKvSyncService {
+    fn notify_persistent_write(&self) {
+        self.persistent_manager.notify_local_write();
+    }
 }
 
 impl WaveKvSyncService {
@@ -125,6 +170,7 @@ impl WaveKvSyncService {
         let sync_config = KvSyncConfig {
             interval: sync_config.interval,
             timeout: sync_config.timeout,
+            ..Default::default()
         };
 
         // Both networks use the same persistent node for URL lookup, but different paths
@@ -175,14 +221,30 @@ impl WaveKvSyncService {
         info!("WaveKV sync tasks started");
     }
 
-    /// Handle incoming sync request for persistent store
-    pub fn handle_persistent_sync(&self, msg: SyncMessage) -> Result<SyncResponse> {
-        self.persistent_manager.handle_sync(msg)
+    fn manager_for(&self, store: &str) -> Option<&Arc<SyncManager<HttpSyncNetwork>>> {
+        match store {
+            "persistent" => Some(&self.persistent_manager),
+            "ephemeral" => Some(&self.ephemeral_manager),
+            _ => None,
+        }
     }
 
-    /// Handle incoming sync request for ephemeral store
-    pub fn handle_ephemeral_sync(&self, msg: SyncMessage) -> Result<SyncResponse> {
-        self.ephemeral_manager.handle_sync(msg)
+    /// Handle an inbound sync envelope.
+    pub fn handle_envelope(&self, store: &str, env: SyncEnvelope) -> Option<Result<SyncEnvelope>> {
+        Some(self.manager_for(store)?.handle_envelope(env))
+    }
+
+    /// Handle an inbound opportunistic push (merges data only; never moves acks).
+    pub fn handle_push(&self, store: &str, env: SyncEnvelope) -> Option<Result<()>> {
+        Some(self.manager_for(store)?.handle_push(env))
+    }
+
+    /// Per-peer digest and failure telemetry for both stores.
+    pub fn link_status(&self) -> Vec<(&'static str, Vec<PeerLinkStatus>)> {
+        vec![
+            ("persistent", self.persistent_manager.link_status()),
+            ("ephemeral", self.ephemeral_manager.link_status()),
+        ]
     }
 }
 

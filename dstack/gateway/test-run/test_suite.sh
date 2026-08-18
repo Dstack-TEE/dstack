@@ -397,6 +397,53 @@ except Exception:
 " 2>/dev/null
 }
 
+get_persistent_digest() {
+	local admin_port=$1
+	get_status "$admin_port" | python3 -c "import sys,json; print(json.load(sys.stdin)['persistent']['digest'])" 2>/dev/null || true
+}
+
+get_ephemeral_digest() {
+	local admin_port=$1
+	get_status "$admin_port" | python3 -c "import sys,json; print(json.load(sys.stdin)['ephemeral']['digest'])" 2>/dev/null || true
+}
+
+get_node_uuid() {
+	local admin_port=$1
+	admin_get_status "$admin_port" | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin)['uuid']))" 2>/dev/null || true
+}
+
+test_public_key() {
+	local seed=$1
+	python3 -c "import base64; print(base64.b64encode(int($seed).to_bytes(32, 'big')).decode())"
+}
+
+wait_for_instances() {
+	local debug_port=$1
+	local expected=$2
+	local timeout_seconds=$3
+	local attempts=$((timeout_seconds * 10))
+	for _ in $(seq 1 "$attempts"); do
+		if [[ "$(get_n_instances "$debug_port")" -ge "$expected" ]]; then return 0; fi
+		sleep 0.1
+	done
+	return 1
+}
+
+wait_for_digest_match() {
+	local store=$1
+	local port1=$2
+	local port2=$3
+	local timeout_seconds=$4
+	local getter="get_${store}_digest"
+	for _ in $(seq 1 $((timeout_seconds * 10))); do
+		local digest1=$($getter "$port1")
+		local digest2=$($getter "$port2")
+		if [[ -n "$digest1" && "$digest1" == "$digest2" ]]; then return 0; fi
+		sleep 0.1
+	done
+	return 1
+}
+
 # Get Proxy State from debug port (in-memory state)
 # Usage: debug_get_proxy_state <debug_port>
 # Returns: JSON response with instances and allocated_addresses
@@ -682,7 +729,7 @@ test_cross_node_data_sync() {
 
 	# Register a client on node 1 via debug port
 	log_info "Registering client on node 1 via debug port..."
-	local register_response=$(debug_register_cvm $debug_port1 "testkey12345678901234567890123456789012345=" "app1" "inst1")
+	local register_response=$(debug_register_cvm $debug_port1 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" "app1" "inst1")
 	log_info "Register response: $register_response"
 
 	# Verify registration succeeded
@@ -742,6 +789,230 @@ test_cross_node_data_sync() {
 		log_info "ProxyState from node 2: $(debug_get_proxy_state $debug_port2)"
 		return 1
 	fi
+}
+
+# =============================================================================
+# Push fast path: propagation must happen before the periodic interval
+# =============================================================================
+test_push_fast_path() {
+	log_info "========== Push Fast Path =========="
+	cleanup
+	rm -rf "$RUN_DIR/wavekv_node1" "$RUN_DIR/wavekv_node2"
+	rm -f "$RUN_DIR/gateway-state-node1.json" "$RUN_DIR/gateway-state-node2.json"
+	generate_config 1; generate_config 2
+	start_node 1; start_node 2; setup_peers 1 2; sleep 6
+
+	local before=$(get_n_instances 13025)
+	local response=$(debug_register_cvm 13015 \
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" "push_app" "push_instance")
+	verify_register_response "$response" >/dev/null || return 1
+	# The periodic interval is 5 seconds. Arrival within 3 seconds exercises push.
+	wait_for_instances 13025 $((before + 1)) 3 || {
+		log_error "Node 2 did not receive the write before the periodic interval"; return 1; }
+	for _ in $(seq 1 30); do
+		local digest1=$(get_persistent_digest 13016)
+		local digest2=$(get_persistent_digest 13026)
+		if [[ -n "$digest1" && "$digest1" == "$digest2" ]]; then
+			log_info "Push fast-path and digest convergence test PASSED"; return 0
+		fi
+		sleep 0.1
+	done
+	log_error "Persistent digests did not converge after push"
+	return 1
+}
+
+# =============================================================================
+# Periodic anti-entropy must repair a write whose push could not be delivered
+# =============================================================================
+test_periodic_repair_after_missed_push() {
+	log_info "========== Periodic Repair After Missed Push =========="
+	cleanup
+	rm -rf "$RUN_DIR/wavekv_node1" "$RUN_DIR/wavekv_node2"
+	rm -f "$RUN_DIR/gateway-state-node1.json" "$RUN_DIR/gateway-state-node2.json"
+	generate_config 1; generate_config 2
+	start_node 1; start_node 2; setup_peers 1 2; sleep 6
+
+	local before=$(get_n_instances 13025)
+	stop_node 2
+	local response=$(debug_register_cvm 13015 \
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" "repair_app" "repair_instance")
+	verify_register_response "$response" >/dev/null || return 1
+	sleep 1
+	start_node 2; setup_peers 1 2
+	wait_for_instances 13025 $((before + 1)) 15 || {
+		log_error "Periodic sync did not repair the missed write"; return 1; }
+	log_info "Periodic repair test PASSED"
+}
+
+# =============================================================================
+# A node that loses its local store files must bootstrap before local writes
+# =============================================================================
+test_bootstrap_after_data_dir_loss() {
+	log_info "========== Bootstrap After Data Directory Loss =========="
+	cleanup
+	rm -rf "$RUN_DIR/wavekv_node1" "$RUN_DIR/wavekv_node2"
+	rm -f "$RUN_DIR/gateway-state-node1.json" "$RUN_DIR/gateway-state-node2.json"
+	generate_config 1
+	generate_config 2 "https://localhost:13012"
+	start_node 1; start_node 2; setup_peers 1 2; sleep 6
+
+	local response=$(debug_register_cvm 13015 \
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" "bootstrap_app" "bootstrap_instance")
+	verify_register_response "$response" >/dev/null || return 1
+	wait_for_instances 13025 1 10 || return 1
+	local old_uuid=$(get_node_uuid 13026)
+	if [[ -z "$old_uuid" || "$old_uuid" == "null" ]]; then
+		log_error "Node 2 did not report its identity before recovery"; return 1
+	fi
+
+	stop_node 2
+	cp "$RUN_DIR/wavekv_node2/node_uuid" "$RUN_DIR/node2.uuid"
+	rm -rf "$RUN_DIR/wavekv_node2"
+	mkdir -p "$RUN_DIR/wavekv_node2"
+	mv "$RUN_DIR/node2.uuid" "$RUN_DIR/wavekv_node2/node_uuid"
+	start_node 2
+	wait_for_instances 13025 1 15 || {
+		log_error "Node 2 did not bootstrap after losing its local store"; return 1; }
+	if [[ "$(get_persistent_digest 13016)" != "$(get_persistent_digest 13026)" ]]; then
+		log_error "Persistent digests differ after bootstrap"; return 1
+	fi
+	setup_peers 1 2; sleep 6
+	local new_uuid=$(get_node_uuid 13026)
+	if [[ -z "$new_uuid" || "$new_uuid" == "null" ]]; then
+		log_error "Node 2 did not report its post-recovery identity"; return 1
+	fi
+	if [[ "$old_uuid" != "$new_uuid" ]]; then
+		log_error "Losing the WaveKV store unexpectedly changed the node UUID"; return 1
+	fi
+	log_info "Data-directory-loss bootstrap test PASSED"
+}
+
+# =============================================================================
+# Divergent writes made from the same base must merge after both nodes return
+# =============================================================================
+test_divergent_partition_writes() {
+	log_info "========== Divergent Partition Writes =========="
+	cleanup
+	generate_config 1; generate_config 2
+	start_node 1; start_node 2; setup_peers 1 2; sleep 6
+
+	stop_node 2
+	verify_register_response "$(debug_register_cvm 13015 \
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" "left_app" "left_instance")" >/dev/null || return 1
+	stop_node 1; start_node 2
+	verify_register_response "$(debug_register_cvm 13025 \
+		"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=" "right_app" "right_instance")" >/dev/null || return 1
+	start_node 1; setup_peers 1 2
+	wait_for_instances 13015 2 15 && wait_for_instances 13025 2 15 || {
+		log_error "Divergent partition writes did not merge"; return 1; }
+	wait_for_digest_match persistent 13016 13026 10 || {
+		log_error "Persistent digests did not converge after divergent writes"; return 1; }
+	log_info "Divergent partition write test PASSED"
+}
+
+# =============================================================================
+# Pushes racing the periodic round must remain idempotent and converge
+# =============================================================================
+test_push_periodic_overlap() {
+	log_info "========== Push and Periodic Sync Overlap =========="
+	cleanup
+	generate_config 1; generate_config 2
+	start_node 1; start_node 2; setup_peers 1 2; sleep 4
+	local before=$(get_n_instances 13015)
+	for i in $(seq 1 6); do
+		verify_register_response "$(debug_register_cvm 13015 \
+			"$(test_public_key $((100 + i)))" "overlap_app_$i" "overlap_instance_$i")" >/dev/null || {
+			log_error "Overlap write $i was rejected"; return 1; }
+		sleep 0.2
+	done
+	wait_for_instances 13025 $((before + 6)) 15 || {
+		log_error "Writes racing periodic sync did not arrive"; return 1; }
+	[[ "$(get_n_instances 13015)" -eq $((before + 6)) ]] || {
+		log_error "Overlapping push and sync produced duplicate instances"; return 1; }
+	wait_for_digest_match persistent 13016 13026 10 || return 1
+	log_info "Push/periodic overlap test PASSED"
+}
+
+# =============================================================================
+# A node started before its bootnode must discover it on a later retry
+# =============================================================================
+test_delayed_bootnode_recovery() {
+	log_info "========== Delayed Bootnode Recovery =========="
+	cleanup
+	generate_config 1
+	generate_config 2 "https://localhost:13012"
+	start_node 2
+	verify_register_response "$(debug_register_cvm 13025 \
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" "delayed_app" "delayed_instance")" >/dev/null || return 1
+	sleep 2; start_node 1
+	for _ in $(seq 1 25); do
+		has_peer_addr 13015 2 && has_peer_addr 13025 1 && break
+		sleep 1
+	done
+	has_peer_addr 13015 2 && has_peer_addr 13025 1 || {
+		log_error "Bootnode retry did not form the cluster"; return 1; }
+	wait_for_instances 13015 1 15 || {
+		log_error "Data did not converge after delayed bootnode recovery"; return 1; }
+	log_info "Delayed bootnode recovery test PASSED"
+}
+
+# =============================================================================
+# Interrupting a recovery round must not prevent a later round from converging
+# =============================================================================
+test_interrupted_sync_recovery() {
+	log_info "========== Interrupted Sync Recovery =========="
+	cleanup
+	generate_config 1; generate_config 2
+	start_node 1; start_node 2; setup_peers 1 2; sleep 6
+	stop_node 2
+	for i in $(seq 1 20); do
+		verify_register_response "$(debug_register_cvm 13015 \
+			"$(test_public_key $((200 + i)))" "interrupt_app_$i" "interrupt_instance_$i")" >/dev/null || {
+			log_error "Interrupted-sync fixture write $i was rejected"; return 1; }
+	done
+	start_node 2; setup_peers 1 2; sleep 0.2; stop_node 2
+	start_node 2; setup_peers 1 2
+	wait_for_instances 13025 20 20 || {
+		log_error "Sync did not recover after interruption"; return 1; }
+	wait_for_digest_match persistent 13016 13026 10 || return 1
+	log_info "Interrupted sync recovery test PASSED"
+}
+
+# =============================================================================
+# Ephemeral state must resume converging after a peer outage
+# =============================================================================
+test_ephemeral_recovery() {
+	log_info "========== Ephemeral Store Recovery =========="
+	cleanup
+	generate_config 1; generate_config 2
+	start_node 1; start_node 2; setup_peers 1 2; sleep 8
+	stop_node 2; sleep 2; start_node 2; setup_peers 1 2
+	for _ in $(seq 1 20); do
+		local keys1=$(debug_get_sync_data 13015 | python3 -c "import sys,json; print(json.load(sys.stdin)['ephemeral_keys'])")
+		local keys2=$(debug_get_sync_data 13025 | python3 -c "import sys,json; print(json.load(sys.stdin)['ephemeral_keys'])")
+		if [[ "$keys1" -gt 0 && "$keys2" -gt 0 ]]; then break; fi
+		sleep 1
+	done
+	wait_for_digest_match ephemeral 13016 13026 15 || {
+		log_error "Ephemeral store did not converge after restart"; return 1; }
+	log_info "Ephemeral recovery test PASSED"
+}
+
+# =============================================================================
+# A fresh third node must bootstrap while another non-bootnode peer is down
+# =============================================================================
+test_partial_cluster_bootstrap() {
+	log_info "========== Partial Cluster Bootstrap =========="
+	cleanup
+	generate_config 1; generate_config 2; generate_config 3 "https://localhost:13012"
+	start_node 1; start_node 2; setup_peers 1 2; sleep 6
+	verify_register_response "$(debug_register_cvm 13015 \
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" "partial_app" "partial_instance")" >/dev/null || return 1
+	wait_for_instances 13025 1 10 || return 1
+	stop_node 2; start_node 3
+	wait_for_instances 13035 1 20 || {
+		log_error "Node 3 did not bootstrap while node 2 was unavailable"; return 1; }
+	log_info "Partial-cluster bootstrap test PASSED"
 }
 
 # =============================================================================
@@ -1307,7 +1578,7 @@ test_three_node_bootnode() {
 # Test 14: Node ID reuse rejection
 # =============================================================================
 test_node_id_reuse_rejected() {
-	log_info "========== Test 14: Node ID Reuse Rejected =========="
+	log_info "========== Node ID Reuse Rejection and Recovery =========="
 	cleanup
 
 	# Clean up all state files to ensure fresh start
@@ -1342,6 +1613,11 @@ test_node_id_reuse_rejected() {
 		return 1
 	fi
 	log_info "Initial sync completed successfully"
+	verify_register_response "$(debug_register_cvm $debug_port1 \
+		"$(test_public_key 400)" "reuse_app" "reuse_fixture")" >/dev/null || return 1
+	wait_for_instances $debug_port2 1 10 || {
+		log_error "Node 2 did not receive the recovery fixture"; return 1; }
+	local old_uuid=$(get_node_uuid 13026)
 
 	# Get initial key count on node 1
 	local keys_before=$(get_n_keys $admin_port1)
@@ -1356,19 +1632,31 @@ test_node_id_reuse_rejected() {
 	# Restart node 2 - it will have a new UUID but same node_id
 	log_info "Restarting node 2 with fresh data (new UUID, same node_id)..."
 	start_node 2
+	local new_uuid=$(get_node_uuid 13026)
+	if [[ -z "$old_uuid" || -z "$new_uuid" || "$old_uuid" == "$new_uuid" ]]; then
+		log_error "Fresh node 2 did not receive a new UUID"
+		return 1
+	fi
 
 	# Re-register peers
 	setup_peers 1 2
 
-	# Wait for sync attempt
-	sleep 15
-
-	# Check node 2's log for UUID mismatch error
-	local log_file="${LOG_DIR}/${CURRENT_TEST}_node2.log"
-	if grep -q "UUID mismatch" "$log_file" 2>/dev/null; then
-		log_info "Found UUID mismatch error in node 2 log (expected)"
-	else
-		log_warn "UUID mismatch error not found in log (may still be rejected)"
+	# The first exchange must reject the conflicting identity. A response from the
+	# established peer then carries the fresh identity record so subsequent rounds
+	# can converge instead of leaving the pair permanently wedged.
+	local log_file1="${LOG_DIR}/${CURRENT_TEST}_node1.log"
+	local log_file2="${LOG_DIR}/${CURRENT_TEST}_node2.log"
+	local mismatch_seen=false
+	for _ in $(seq 1 15); do
+		if grep -q "UUID mismatch" "$log_file1" "$log_file2" 2>/dev/null; then
+			mismatch_seen=true
+			break
+		fi
+		sleep 1
+	done
+	if [[ "$mismatch_seen" != "true" ]]; then
+		log_error "Reused node ID was not rejected"
+		return 1
 	fi
 
 	# Node 1 should have rejected sync from new node 2
@@ -1376,21 +1664,22 @@ test_node_id_reuse_rejected() {
 	local keys_after=$(get_n_keys $admin_port1)
 	log_info "Keys on node 1 after node 2 restart: $keys_after"
 
-	# The new node 2 should NOT have received data from node 1
-	# because node 1 should reject sync due to UUID mismatch
-	local kv2=$(get_n_instances $debug_port2)
-	log_info "Node 2 instances after restart: $kv2"
-
 	# Verify node 1's data is intact
 	if [[ "$keys_after" -lt "$keys_before" ]]; then
 		log_error "Node 1 lost data after node 2 restart with reused ID"
 		return 1
 	fi
 
-	# The test passes if:
-	# 1. Node 1's data is intact
-	# 2. Either UUID mismatch was logged OR node 2 didn't get full sync
-	log_info "Node ID reuse rejection test PASSED"
+	wait_for_instances $debug_port2 1 20 || {
+		log_error "Fresh node did not recover after the UUID rejection"; return 1; }
+	wait_for_digest_match persistent 13016 13026 15 || {
+		log_error "Stores did not converge after UUID recovery"; return 1; }
+	verify_register_response "$(debug_register_cvm $debug_port2 \
+		"$(test_public_key 401)" "reuse_app" "post_recovery")" >/dev/null || return 1
+	wait_for_instances $debug_port1 2 15 || {
+		log_error "Post-recovery write did not propagate"; return 1; }
+	wait_for_digest_match persistent 13016 13026 10 || return 1
+	log_info "Node ID reuse rejection and recovery test PASSED"
 	return 0
 }
 
@@ -1977,6 +2266,16 @@ main() {
 		echo "  test_multi_node_sync                  - Multi-node sync"
 		echo "  test_node_recovery                    - Node recovery after disconnect"
 		echo "  test_cross_node_data_sync             - Cross-node data sync verification"
+		echo "  test_push_fast_path                   - Push propagation before periodic sync"
+		echo "  test_periodic_repair_after_missed_push - Periodic repair after a missed push"
+		echo "  test_bootstrap_after_data_dir_loss    - Bootstrap after local store loss"
+		echo "  test_divergent_partition_writes       - Merge writes from divergent partitions"
+		echo "  test_push_periodic_overlap            - Push racing periodic synchronization"
+		echo "  test_delayed_bootnode_recovery        - Bootnode discovery retry"
+		echo "  test_interrupted_sync_recovery        - Recovery after interrupted sync"
+		echo "  test_ephemeral_recovery               - Ephemeral convergence after restart"
+		echo "  test_partial_cluster_bootstrap        - Bootstrap with one cluster peer down"
+		echo "  test_node_id_reuse_rejected           - Node ID conflict rejection and recovery"
 		echo ""
 		echo "Advanced tests:"
 		echo "  test_client_registration_persistence  - Client registration and persistence"
@@ -1984,7 +2283,6 @@ main() {
 		echo "  test_network_partition                - Network partition simulation"
 		echo "  test_three_node_cluster               - Three-node cluster"
 		echo "  test_three_node_bootnode              - Three-node cluster with bootnode"
-		echo "  test_node_id_reuse_rejected           - Node ID reuse rejection"
 		echo "  test_periodic_persistence             - Periodic persistence"
 		echo ""
 		echo "Admin RPC tests:"
@@ -2087,6 +2385,16 @@ main() {
 		run_test test_multi_node_sync
 		run_test test_node_recovery
 		run_test test_cross_node_data_sync
+		run_test test_push_fast_path
+		run_test test_periodic_repair_after_missed_push
+		run_test test_bootstrap_after_data_dir_loss
+		run_test test_divergent_partition_writes
+		run_test test_push_periodic_overlap
+		run_test test_delayed_bootnode_recovery
+		run_test test_interrupted_sync_recovery
+		run_test test_ephemeral_recovery
+		run_test test_partial_cluster_bootstrap
+		run_test test_node_id_reuse_rejected
 	fi
 
 	if [[ "$test_filter" == "all" ]] || [[ "$test_filter" == "advanced" ]]; then
@@ -2095,7 +2403,6 @@ main() {
 		run_test test_network_partition
 		run_test test_three_node_cluster
 		run_test test_three_node_bootnode
-		run_test test_node_id_reuse_rejected
 		run_test test_periodic_persistence
 	fi
 

@@ -30,10 +30,13 @@
 
 mod https_client;
 pub mod import;
+mod schema;
 mod sync_service;
 
+#[cfg(test)]
+pub(crate) use https_client::HttpsClient;
 pub use https_client::{AppIdValidator, HttpsClientConfig};
-pub use sync_service::{fetch_peers_from_bootnode, WaveKvSyncService};
+pub use sync_service::{fetch_peers_from_bootnode, PersistentWriteNotifier, WaveKvSyncService};
 use tracing::{error, warn};
 
 use std::{collections::BTreeMap, net::Ipv4Addr, path::Path, time::Duration};
@@ -391,45 +394,6 @@ pub mod keys {
     }
 }
 
-/// Ceiling on a decompressed sync payload.
-///
-/// The wire is gzipped, and gzip expands by three orders of magnitude on
-/// attacker-chosen input: the 16 MiB cap the sync route puts on a request body
-/// is a cap on the *compressed* size, which bounds nothing useful on its own.
-/// Every gateway in a cluster shares one app_id, so the RA-TLS check on the
-/// route proves the sender is *some* gateway of this deployment — not that its
-/// payload is well-formed.
-///
-/// The value is far above any legitimate payload: a sync response carries the
-/// whole live state, which is bounded by the gateway's own key set (instances,
-/// nodes, certificates) rather than by anything a peer controls.
-pub const MAX_DECOMPRESSED_SYNC_BYTES: usize = 128 * 1024 * 1024;
-
-/// Ceiling on a compressed sync body, mirroring the 16 MiB the route accepts on
-/// a request. Without it a peer's *response* is read to completion before any
-/// decompression bound applies, and the memory is already spent.
-pub const MAX_COMPRESSED_SYNC_BYTES: usize = 16 * 1024 * 1024;
-
-/// Decompress gzip, refusing anything that expands past `limit`.
-///
-/// Reads one byte past the limit so a payload landing exactly on it is still
-/// accepted and a larger one is rejected rather than silently truncated —
-/// `Read::take` alone would hand back a short buffer that then fails to decode,
-/// reporting the wrong fault.
-pub fn gunzip_bounded(data: &[u8], limit: usize) -> Result<Vec<u8>> {
-    use std::io::Read;
-
-    let mut out = Vec::new();
-    flate2::read::GzDecoder::new(data)
-        .take(limit as u64 + 1)
-        .read_to_end(&mut out)
-        .context("failed to decompress payload")?;
-    if out.len() > limit {
-        anyhow::bail!("decompressed payload exceeds {limit} bytes");
-    }
-    Ok(out)
-}
-
 /// How far into the future a replicated observation may be timestamped before
 /// this node ignores it.
 ///
@@ -462,6 +426,61 @@ fn drop_future_observations<T>(
         warn!("ignored {dropped} {kind} observation(s) dated more than {MAX_CLOCK_DRIFT_SECS}s ahead of local time");
     }
     kept
+}
+
+/// Encode a KV value as MessagePack.
+///
+/// Structs are encoded as maps keyed by field name rather than as positional
+/// arrays. Field-name keys let a reader skip fields it does not know and fill
+/// in `#[serde(default)]` fields it does not receive, so the value types below
+/// can gain fields without breaking gateways running an older build. Decoding
+/// accepts both forms, so values written by older releases stay readable.
+/// wavekv configuration shared by both stores.
+///
+/// The admission policy is the important part: it confines a peer to the key shapes
+/// this gateway actually defines, so a compromised or buggy node in the cluster cannot
+/// plant arbitrary keys that every other node would then replicate and persist forever.
+fn store_config(store: schema::Store) -> wavekv::NodeConfig {
+    wavekv::NodeConfig {
+        admission: Some(std::sync::Arc::new(schema::GatewaySchema::new(store))),
+        ..Default::default()
+    }
+}
+
+/// Ceiling on a decompressed sync payload.
+///
+/// The wire is gzipped, and gzip expands by three orders of magnitude on
+/// attacker-chosen input: the 16 MiB cap on a request body is a cap on the *compressed*
+/// size, which bounds nothing useful on its own. Every gateway in the cluster shares one
+/// app_id, so mTLS proves only that a peer is *some* gateway of this deployment — the
+/// same reason the key schema exists (see `schema.rs`).
+///
+/// The value is far above any legitimate payload. A v2 delta is capped by
+/// `max_delta_bytes` (4 MiB by default).
+pub const MAX_DECOMPRESSED_SYNC_BYTES: usize = 128 * 1024 * 1024;
+
+/// Ceiling on a compressed sync response, mirroring the 16 MiB the routes accept on a
+/// request. Without it a peer's response body is read to completion before any decoding
+/// bound applies.
+pub const MAX_COMPRESSED_SYNC_BYTES: usize = 16 * 1024 * 1024;
+
+/// Decompress gzip, refusing anything that expands past `limit`.
+///
+/// Reads one byte past the limit so a payload landing exactly on it is still accepted
+/// and a larger one is rejected rather than silently truncated — `Read::take` alone
+/// would hand back a short buffer that then fails to decode, reporting the wrong fault.
+pub fn gunzip_bounded(data: &[u8], limit: usize) -> Result<Vec<u8>> {
+    use std::io::Read;
+
+    let mut out = Vec::new();
+    flate2::read::GzDecoder::new(data)
+        .take(limit as u64 + 1)
+        .read_to_end(&mut out)
+        .context("failed to decompress payload")?;
+    if out.len() > limit {
+        anyhow::bail!("decompressed payload exceeds {limit} bytes");
+    }
+    Ok(out)
 }
 
 /// Encode a KV value as MessagePack.
@@ -652,7 +671,12 @@ impl KvStore {
         data_dir: impl AsRef<Path>,
     ) -> Result<Self> {
         let data_dir = data_dir.as_ref();
-        let persistent = match Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir) {
+        let persistent = match Node::with_persistence_and_config(
+            my_node_id,
+            peer_ids.clone(),
+            data_dir,
+            store_config(schema::Store::Persistent),
+        ) {
             Ok(node) => node,
             Err(err) if is_storage_failure(&err) => {
                 return Err(err).with_context(|| {
@@ -679,8 +703,13 @@ impl KvStore {
                     data_dir.display(),
                     quarantined.display(),
                 );
-                Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir)
-                    .context("failed to create persistent wavekv node on a fresh data dir")?
+                Node::with_persistence_and_config(
+                    my_node_id,
+                    peer_ids.clone(),
+                    data_dir,
+                    store_config(schema::Store::Persistent),
+                )
+                .context("failed to create persistent wavekv node on a fresh data dir")?
             }
         };
 
@@ -694,7 +723,11 @@ impl KvStore {
             }
         }
 
-        let ephemeral = Node::new(my_node_id, all_peer_ids);
+        let ephemeral = Node::with_config(
+            my_node_id,
+            all_peer_ids,
+            store_config(schema::Store::Ephemeral),
+        );
 
         Ok(Self {
             persistent,
@@ -1770,6 +1803,163 @@ mod value_encoding_tests {
                 api_url.as_deref(),
                 Some("https://api.cloudflare.com/client/v4"),
                 "{label}"
+            );
+        }
+    }
+}
+
+/// Gateway-layer tests for the WaveKV sync wire and admission policy.
+#[cfg(test)]
+mod sync_wire_tests {
+    use super::*;
+    use wavekv::sync::SyncEnvelope;
+
+    fn store(dir: &std::path::Path, id: NodeId, peers: Vec<NodeId>) -> KvStore {
+        KvStore::new(id, peers, dir).expect("failed to create kv store")
+    }
+
+    #[test]
+    fn a_sync_envelope_survives_the_transport_framing() {
+        use flate2::{read::GzDecoder, write::GzEncoder, Compression};
+        use std::io::{Read, Write};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let kv = store(dir.path(), 1, vec![2]);
+        kv.persistent()
+            .write()
+            .put(keys::peer_addr(1), b"https://a.example".to_vec())
+            .expect("put");
+
+        // Requests deliberately carry no digest: sending it would let any responder
+        // echo it back and forge agreement forever. So frame a *response*, which is
+        // the direction the digest actually travels.
+        assert!(kv
+            .persistent()
+            .read()
+            .prepare_sync(2, Vec::new())
+            .digest
+            .is_none());
+        let env = kv
+            .persistent()
+            .write()
+            .handle_envelope(SyncEnvelope::new(2, Vec::new()), Vec::new())
+            .expect("respond");
+        assert!(!env.entries.is_empty());
+
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(&env.encode().expect("encode")).unwrap();
+        let wire = encoder.finish().unwrap();
+
+        let mut plain = Vec::new();
+        GzDecoder::new(&wire[..]).read_to_end(&mut plain).unwrap();
+        let decoded = SyncEnvelope::decode(&plain).expect("decode");
+
+        assert_eq!(decoded.sender_id, 1);
+        assert_eq!(decoded.entries.len(), env.entries.len());
+        assert!(
+            decoded.digest.is_some(),
+            "the digest drives divergence detection"
+        );
+    }
+
+    /// A peer cannot plant keys outside the schema, in either store.
+    #[test]
+    fn merged_entries_outside_the_schema_are_refused() {
+        use wavekv::types::{Entry, Metadata};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let kv = store(dir.path(), 1, vec![2]);
+
+        let mut env = SyncEnvelope::new(2, Vec::new());
+        env.entries.push(Entry::new(
+            "not-a-gateway-key".to_string(),
+            Some(b"x".to_vec()),
+            Metadata::new(2, 1, 1),
+        ));
+        env.acks.insert(2, 1);
+
+        let outcome = kv
+            .persistent()
+            .write()
+            .apply_envelope(env)
+            .expect("apply should not fail the whole round");
+
+        assert_eq!(outcome.rejected, 1);
+        assert!(
+            !outcome.acks_adopted,
+            "a rejection must park the round's acks so the peer keeps re-offering"
+        );
+        assert!(kv.persistent().read().get("not-a-gateway-key").is_none());
+    }
+}
+
+/// A production WaveKV 1.0 gateway is upgraded in place while stopped. There is no
+/// mixed-version cluster protocol to preserve, but its persistent snapshot and WAL are
+/// an on-disk compatibility contract.
+#[cfg(test)]
+mod wavekv_v1_migration_tests {
+    use super::*;
+
+    #[test]
+    fn an_upgraded_gateway_opens_and_preserves_a_v1_data_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let key = keys::peer_addr(7);
+        let value = b"https://gateway-7.example:8011".to_vec();
+        let wal_key = keys::peer_addr(8);
+        let wal_value = b"https://gateway-8.example:8011".to_vec();
+
+        {
+            let v1 = wavekv_v1::Node::new_with_persistence(1, Vec::new(), dir.path())
+                .expect("create v1 store");
+            v1.write()
+                .put(key.clone(), value.clone())
+                .expect("write v1 data");
+            v1.persist_if_dirty().expect("persist v1 snapshot");
+            v1.write()
+                .put(wal_key.clone(), wal_value.clone())
+                .expect("write trailing v1 WAL entry");
+        }
+
+        let upgraded = KvStore::new(1, Vec::new(), dir.path()).expect("open v1 data after upgrade");
+        assert_eq!(
+            upgraded
+                .persistent()
+                .read()
+                .get(&key)
+                .and_then(|entry| entry.value),
+            Some(value.clone()),
+            "the stopped single-node upgrade must preserve the replicated state"
+        );
+        assert_eq!(
+            upgraded
+                .persistent()
+                .read()
+                .get(&wal_key)
+                .and_then(|entry| entry.value),
+            Some(wal_value.clone()),
+            "the upgrade must replay v1 WAL entries written after the snapshot"
+        );
+
+        let new_key = keys::peer_addr(9);
+        let new_value = b"https://gateway-9.example:8011".to_vec();
+        upgraded
+            .persistent()
+            .write()
+            .put(new_key.clone(), new_value.clone())
+            .expect("write data after upgrade");
+        upgraded.persist_if_dirty().expect("persist upgraded data");
+        drop(upgraded);
+
+        let restarted = KvStore::new(1, Vec::new(), dir.path()).expect("restart upgraded store");
+        for (key, expected) in [(key, value), (wal_key, wal_value), (new_key, new_value)] {
+            assert_eq!(
+                restarted
+                    .persistent()
+                    .read()
+                    .get(&key)
+                    .and_then(|entry| entry.value),
+                Some(expected),
+                "all migrated and post-upgrade data must survive an upgraded restart: {key}"
             );
         }
     }

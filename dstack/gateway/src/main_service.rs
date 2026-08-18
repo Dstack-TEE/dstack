@@ -426,6 +426,9 @@ impl ProxyInner {
         let certbot = Arc::new(DistributedCertBot::new(
             kv_store.clone(),
             cert_resolver.clone(),
+            wavekv_sync
+                .clone()
+                .map(|service| service as Arc<dyn crate::kv::PersistentWriteNotifier>),
         ));
         // Initialize any configured domains
         if let Err(err) = certbot.init_all().await {

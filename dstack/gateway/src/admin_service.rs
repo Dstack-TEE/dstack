@@ -214,16 +214,33 @@ impl AdminRpc for AdminRpcHandler {
                 .collect()
         };
 
+        // Per-peer digest and failure telemetry lives on the sync manager, not the store.
+        let links = self
+            .state
+            .wavekv_sync
+            .as_ref()
+            .map(|s| s.link_status())
+            .unwrap_or_default();
+        let links_for = |name: &str| -> Vec<wavekv::sync::PeerLinkStatus> {
+            links
+                .iter()
+                .find(|(store, _)| *store == name)
+                .map(|(_, l)| l.clone())
+                .unwrap_or_default()
+        };
+
         Ok(WaveKvStatusResponse {
             enabled: self.state.config.sync.enabled,
             persistent: Some(build_store_status(
                 "persistent",
                 persistent_status,
+                &links_for("persistent"),
                 &get_peer_last_seen,
             )),
             ephemeral: Some(build_store_status(
                 "ephemeral",
                 ephemeral_status,
+                &links_for("ephemeral"),
                 &get_peer_last_seen,
             )),
         })
@@ -767,6 +784,7 @@ fn port_policy_view_to_proto(view: PortPolicyView) -> GetInstancePortPolicyRespo
 fn build_store_status(
     name: &str,
     status: WaveKvNodeStatus,
+    links: &[wavekv::sync::PeerLinkStatus],
     get_peer_last_seen: &impl Fn(u32) -> Vec<(u32, u64)>,
 ) -> StoreSyncStatus {
     StoreSyncStatus {
@@ -776,6 +794,9 @@ fn build_store_status(
         next_seq: status.next_seq,
         dirty: status.dirty,
         wal_enabled: status.wal,
+        digest: status.digest,
+        entries_merged: status.entries_merged,
+        entries_rejected: status.entries_rejected,
         peers: status
             .peers
             .into_iter()
@@ -784,12 +805,15 @@ fn build_store_status(
                     .into_iter()
                     .map(|(node_id, timestamp)| LastSeenEntry { node_id, timestamp })
                     .collect();
+                let link = links.iter().find(|l| l.id == p.id);
                 ProtoPeerSyncStatus {
                     id: p.id,
                     local_ack: p.ack,
-                    peer_ack: p.pack,
-                    buffered_logs: p.logs as u64,
+                    peer_ack: p.peer_ack,
                     last_seen,
+                    heard_from: p.heard_from,
+                    digest_mismatches: link.map(|l| l.digest_mismatches).unwrap_or(0),
+                    consecutive_failures: link.map(|l| l.consecutive_failures).unwrap_or(0),
                 }
             })
             .collect(),
@@ -1076,5 +1100,64 @@ mod zt_domain_tests {
                 "{domain} should be rejected"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod wavekv_status_tests {
+    use super::{build_store_status, WaveKvNodeStatus};
+    use wavekv::{node::PeerStatus, sync::PeerLinkStatus};
+
+    #[test]
+    fn wavekv_status_preserves_store_and_peer_telemetry() {
+        let status = WaveKvNodeStatus {
+            id: 1,
+            n_kvs: 3,
+            next_seq: 11,
+            dirty: true,
+            wal: true,
+            digest: "deadbeef".to_string(),
+            entries_merged: 17,
+            entries_rejected: 2,
+            peers: vec![PeerStatus {
+                id: 7,
+                ack: 5,
+                peer_ack: 4,
+                heard_from: true,
+            }],
+        };
+        let links = vec![PeerLinkStatus {
+            id: 7,
+            protocol: "v2",
+            digest_mismatches: 3,
+            consecutive_failures: 6,
+        }];
+
+        let proto = build_store_status("persistent", status, &links, &|peer| {
+            assert_eq!(peer, 7);
+            vec![(2, 1234)]
+        });
+
+        assert_eq!(proto.name, "persistent");
+        assert_eq!(proto.node_id, 1);
+        assert_eq!(proto.n_keys, 3);
+        assert_eq!(proto.next_seq, 11);
+        assert!(proto.dirty);
+        assert!(proto.wal_enabled);
+        assert_eq!(proto.digest, "deadbeef");
+        assert_eq!(proto.entries_merged, 17);
+        assert_eq!(proto.entries_rejected, 2);
+        assert_eq!(proto.peers.len(), 1);
+
+        let peer = &proto.peers[0];
+        assert_eq!(peer.id, 7);
+        assert_eq!(peer.local_ack, 5);
+        assert_eq!(peer.peer_ack, 4);
+        assert!(peer.heard_from);
+        assert_eq!(peer.digest_mismatches, 3);
+        assert_eq!(peer.consecutive_failures, 6);
+        assert_eq!(peer.last_seen.len(), 1);
+        assert_eq!(peer.last_seen[0].node_id, 2);
+        assert_eq!(peer.last_seen[0].timestamp, 1234);
     }
 }

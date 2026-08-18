@@ -21,7 +21,7 @@ use tracing::{error, info, warn};
 use crate::cert_store::CertResolver;
 use crate::kv::{
     AcmeAttestation, CertAttestation, CertCredentials, CertData, DnsCredential, DnsProvider,
-    KvStore, ZtDomainConfig,
+    KvStore, PersistentWriteNotifier, ZtDomainConfig,
 };
 use crate::time::now_secs;
 
@@ -38,6 +38,7 @@ const DEFAULT_ACME_URL: &str = "https://acme-v02.api.letsencrypt.org/directory";
 pub struct DistributedCertBot {
     kv_store: Arc<KvStore>,
     cert_resolver: Arc<CertResolver>,
+    write_notifier: Option<Arc<dyn PersistentWriteNotifier>>,
     /// Serializes CAA reconciliation and credential rotation within this process.
     ///
     /// Credential rotation is additionally guarded across nodes by a
@@ -46,12 +47,53 @@ pub struct DistributedCertBot {
 }
 
 impl DistributedCertBot {
-    pub fn new(kv_store: Arc<KvStore>, cert_resolver: Arc<CertResolver>) -> Self {
+    pub fn new(
+        kv_store: Arc<KvStore>,
+        cert_resolver: Arc<CertResolver>,
+        write_notifier: Option<Arc<dyn PersistentWriteNotifier>>,
+    ) -> Self {
         Self {
             kv_store,
             cert_resolver,
+            write_notifier,
             caa_lock: Default::default(),
         }
+    }
+
+    fn notify_lock_write(&self) {
+        if let Some(notifier) = &self.write_notifier {
+            notifier.notify_persistent_write();
+        }
+    }
+
+    fn try_acquire_rotation_lock(&self) -> Option<crate::kv::CertRenewLock> {
+        let lock = self
+            .kv_store
+            .try_acquire_rotation_lock(ROTATION_LOCK_TIMEOUT_SECS)?;
+        self.notify_lock_write();
+        Some(lock)
+    }
+
+    fn release_rotation_lock(&self, lock: &crate::kv::CertRenewLock) -> Result<()> {
+        self.kv_store.release_rotation_lock(lock)?;
+        self.notify_lock_write();
+        Ok(())
+    }
+
+    fn try_acquire_cert_lock(&self, domain: &str) -> bool {
+        let acquired = self
+            .kv_store
+            .try_acquire_cert_lock(domain, RENEW_LOCK_TIMEOUT_SECS);
+        if acquired {
+            self.notify_lock_write();
+        }
+        acquired
+    }
+
+    fn release_cert_lock(&self, domain: &str) -> Result<()> {
+        self.kv_store.release_cert_lock(domain)?;
+        self.notify_lock_write();
+        Ok(())
     }
 
     async fn dns_client(&self, domain: &str, dns_cred: &DnsCredential) -> Result<Dns01Client> {
@@ -86,14 +128,11 @@ impl DistributedCertBot {
         let Ok(_guard) = self.caa_lock.try_lock() else {
             bail!("ACME credential rotation or CAA reconciliation is already in progress");
         };
-        let Some(rotation_lock) = self
-            .kv_store
-            .try_acquire_rotation_lock(ROTATION_LOCK_TIMEOUT_SECS)
-        else {
+        let Some(rotation_lock) = self.try_acquire_rotation_lock() else {
             bail!("another node is rotating ACME credentials; retry after it finishes");
         };
         let result = self.do_rotate_acme_credentials().await;
-        if let Err(err) = self.kv_store.release_rotation_lock(&rotation_lock) {
+        if let Err(err) = self.release_rotation_lock(&rotation_lock) {
             error!("failed to release ACME rotation lock: {err:?}");
         }
         result
@@ -353,10 +392,7 @@ impl DistributedCertBot {
         }
 
         // Try to acquire lock
-        if !self
-            .kv_store
-            .try_acquire_cert_lock(domain, RENEW_LOCK_TIMEOUT_SECS)
-        {
+        if !self.try_acquire_cert_lock(domain) {
             info!("another node is renewing, skipping");
             return Ok(false);
         }
@@ -373,7 +409,7 @@ impl DistributedCertBot {
         };
 
         // Release lock regardless of result
-        if let Err(err) = self.kv_store.release_cert_lock(domain) {
+        if let Err(err) = self.release_cert_lock(domain) {
             error!("failed to release lock: {err:?}");
         }
 
@@ -389,10 +425,7 @@ impl DistributedCertBot {
             .context("ZT-Domain config not found")?;
 
         // Try to acquire lock first
-        if !self
-            .kv_store
-            .try_acquire_cert_lock(domain, RENEW_LOCK_TIMEOUT_SECS)
-        {
+        if !self.try_acquire_cert_lock(domain) {
             // Another node is requesting, wait for it
             info!("another node is requesting, waiting...");
             tokio::time::sleep(Duration::from_secs(30)).await;
@@ -405,7 +438,7 @@ impl DistributedCertBot {
 
         let result = self.do_request_new(domain, &config).await;
 
-        if let Err(err) = self.kv_store.release_cert_lock(domain) {
+        if let Err(err) = self.release_cert_lock(domain) {
             error!("failed to release lock: {err:?}");
         }
 
@@ -761,11 +794,56 @@ pub(crate) fn extract_account_uri(credentials_json: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Default)]
+    struct CountingNotifier(AtomicUsize);
+
+    impl PersistentWriteNotifier for CountingNotifier {
+        fn notify_persistent_write(&self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 
     fn test_certbot(data_dir: &std::path::Path) -> DistributedCertBot {
         let kv_store =
             Arc::new(KvStore::new(1, vec![], data_dir).expect("failed to create kv store"));
-        DistributedCertBot::new(kv_store, Arc::new(CertResolver::new()))
+        DistributedCertBot::new(kv_store, Arc::new(CertResolver::new()), None)
+    }
+
+    #[test]
+    fn lock_writes_wake_the_persistent_push_path() {
+        let data_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv_store =
+            Arc::new(KvStore::new(1, vec![], data_dir.path()).expect("failed to create kv store"));
+        let notifier = Arc::new(CountingNotifier::default());
+        let certbot = DistributedCertBot::new(
+            kv_store,
+            Arc::new(CertResolver::new()),
+            Some(notifier.clone()),
+        );
+
+        let rotation = certbot
+            .try_acquire_rotation_lock()
+            .expect("rotation lock should be free");
+        assert_eq!(notifier.0.load(Ordering::Relaxed), 1);
+        certbot
+            .release_rotation_lock(&rotation)
+            .expect("rotation lock release should succeed");
+        assert_eq!(notifier.0.load(Ordering::Relaxed), 2);
+
+        assert!(certbot.try_acquire_cert_lock("example.com"));
+        assert_eq!(notifier.0.load(Ordering::Relaxed), 3);
+        assert!(!certbot.try_acquire_cert_lock("example.com"));
+        assert_eq!(
+            notifier.0.load(Ordering::Relaxed),
+            3,
+            "a rejected acquisition did not write and must not wake push"
+        );
+        certbot
+            .release_cert_lock("example.com")
+            .expect("renewal lock release should succeed");
+        assert_eq!(notifier.0.load(Ordering::Relaxed), 4);
     }
 
     #[tokio::test]
