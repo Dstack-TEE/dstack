@@ -43,13 +43,7 @@ def docker(command: str, timeout: int = 1800) -> str:
     """Run Docker through the operator-configured shell wrapper."""
     return run(
         [
-            os.environ.get(
-                "DSTACK_TEST_DOCKER_SHELL_RUNNER",
-                os.path.join(
-                    os.environ["DSTACK_TEST_PLAN_DIR"],
-                    "shared/automation/run-docker-shell",
-                ),
-            ),
+            os.environ.get("DSTACK_TEST_DOCKER_SHELL_RUNNER", "run-docker-shell"),
             f"docker {command}",
         ],
         timeout=timeout,
@@ -218,13 +212,7 @@ def main() -> int:
     registry = f"dstack-upgrade-registry-{suffix}"
     docker(f"rm -f {shlex.quote(registry)}", timeout=60) if subprocess.run(
         [
-            os.environ.get(
-                "DSTACK_TEST_DOCKER_SHELL_RUNNER",
-                os.path.join(
-                    os.environ["DSTACK_TEST_PLAN_DIR"],
-                    "shared/automation/run-docker-shell",
-                ),
-            ),
+            os.environ.get("DSTACK_TEST_DOCKER_SHELL_RUNNER", "run-docker-shell"),
             f"docker inspect {shlex.quote(registry)}",
         ],
         stdout=subprocess.DEVNULL,
