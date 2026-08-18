@@ -79,10 +79,17 @@ systemctl start sysbox-mgr.service
 if docker run --name "$FAULT" --runtime=sysbox-runc "$PAYLOAD_IMAGE" true >"$ROOT/partial.out" 2>"$ROOT/partial.err"; then exit 22; fi
 docker rm -f "$FAULT" >/dev/null 2>&1 || true
 PARTIAL_CLOSED=true
-systemctl start sysbox-fs.service sysbox.service
+RECOVERY_RETRIED=false
+if ! systemctl start sysbox-fs.service sysbox.service; then
+  # Sysbox-fs can lose its first bounded startup race while releasing the
+  # nested container's FUSE state. A clean retry must still converge.
+  RECOVERY_RETRIED=true
+  systemctl reset-failed sysbox-fs.service sysbox.service
+  systemctl start sysbox-fs.service sysbox.service
+fi
 for unit in sysbox-mgr.service sysbox-fs.service sysbox.service; do systemctl is-active --quiet "$unit"; done
 docker run --name "$FAULT" --runtime=sysbox-runc "$PAYLOAD_IMAGE" true
 docker rm "$FAULT" >/dev/null
 RECOVERED=true
-printf '{"baseline":%s,"lifecycle":%s,"nested_boundary":%s,"failure_closed":%s,"partial_recovery_closed":%s,"recovered":%s,"cleanup":true}\n' \
- "$BASELINE" "$LIFECYCLE" "$NESTED_BOUNDARY" "$FAIL_CLOSED" "$PARTIAL_CLOSED" "$RECOVERED"
+printf '{"baseline":%s,"lifecycle":%s,"nested_boundary":%s,"failure_closed":%s,"partial_recovery_closed":%s,"recovery_retried":%s,"recovered":%s,"cleanup":true}\n' \
+ "$BASELINE" "$LIFECYCLE" "$NESTED_BOUNDARY" "$FAIL_CLOSED" "$PARTIAL_CLOSED" "$RECOVERY_RETRIED" "$RECOVERED"
