@@ -54,10 +54,10 @@ def main() -> int:
         env = runtime.get("environment") or {}
         store = pathlib.Path(str(env.get("DSTACK_TEST_IMAGE_STORE", "")))
         metadata = json.loads((store / image / "metadata.json").read_text())
-        if metadata.get("backend") != "mkosi" or metadata.get("is_dev") is not True:
+        if metadata.get("builder") != "mkosi" or metadata.get("is_dev") is not True:
             raise RuntimeError("fixture did not boot a mkosi development image")
         evidence["mkosi"] = {
-            k: metadata.get(k) for k in ("backend", "is_dev", "git_revision")
+            k: metadata.get(k) for k in ("builder", "is_dev", "git_revision")
         }
         repo = pathlib.Path(str(runtime["repository"]))
         payloads = [

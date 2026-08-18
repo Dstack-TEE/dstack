@@ -73,10 +73,10 @@ def main() -> int:
             str((runtime.get("environment") or {}).get("DSTACK_TEST_IMAGE_STORE", ""))
         )
         metadata = json.loads((store / image / "metadata.json").read_text())
-        if metadata.get("backend") != "mkosi" or metadata.get("is_dev") is not True:
+        if metadata.get("builder") != "mkosi" or metadata.get("is_dev") is not True:
             raise RuntimeError("fixture did not boot a mkosi development image")
         evidence["mkosi"] = {
-            key: metadata.get(key) for key in ("backend", "is_dev", "git_revision")
+            key: metadata.get(key) for key in ("builder", "is_dev", "git_revision")
         }
         inventory_before = run(list_vms, timeout=30)
         if inventory_before.returncode:

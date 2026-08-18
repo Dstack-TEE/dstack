@@ -23,7 +23,7 @@
 - If a mismatch occurs, write the provisional result first. Perform narrow source-level root-cause analysis only when failure investigation is enabled.
 - The lease-owned guest's `values.ssh_argv` is the fault controller for this case. Run `chronyc tracking`, `chronyc sources`, and `timedatectl` or BusyBox-compatible `date` inside that guest; stop/start only the guest's chrony service, temporarily replace only its lease-owned chrony source configuration, and restore it before cleanup. No separate clock-fault handle is required. Use `values.vm_info_argv` and `values.list_vms_argv` for VM and adjacent-inventory observations. Never alter or reboot the physical host.
 
-- Execute image behavior only when the fixture-provided image provenance reports `backend: mkosi`; an older Yocto image with the same `dstack-0.6.0` or `dstack-dev-0.6.0` name is not valid evidence for this run.
+- Execute image behavior only when the fixture-provided image provenance reports `builder: mkosi`; an older Yocto image with the same `dstack-0.6.0` or `dstack-dev-0.6.0` name is not valid evidence for this run.
 
 ## Objective
 

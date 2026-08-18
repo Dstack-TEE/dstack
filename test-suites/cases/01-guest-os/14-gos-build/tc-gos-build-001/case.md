@@ -21,7 +21,7 @@ that the mkosi output contract rejects metadata that does not identify mkosi.
 ## Preconditions
 
 1. Provide a protected candidate image store through the `image-assembly` fixture.
-2. Record the expected builder in `DSTACK_TEST_GUEST_IMAGE_BACKEND`.
+2. Record the expected builder in `DSTACK_TEST_GUEST_IMAGE_BUILDER`.
 
 <a id="tc-gos-build-001-step-01"></a>
 ### Step 1: Validate the assembly and output-check scripts
@@ -35,7 +35,7 @@ output checker.
 ### Step 2: Inspect candidate artifact provenance
 
 Read the fixture-selected candidate image's `metadata.json` and compare its
-`builder` field with the expected build backend.
+`builder` field with the expected image builder.
 
 **Expected results:** `builder` is present, non-empty, and equals the selected
 backend; a legacy-only `backend` field is not accepted as provenance.

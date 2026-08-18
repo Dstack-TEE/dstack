@@ -102,7 +102,7 @@ fixture providers. Boundary cases additionally name the immutable inputs with
 build directory, component cache, output root, and `TMPDIR` on a filesystem
 with verified free space.
 
-The mkosi formatter emits the same VMM image-directory contract as the release backend, but that format compatibility does not change its provenance: result artifacts must identify the backend as mkosi and retain the candidate revision.
+The mkosi formatter emits the same VMM image-directory contract as the release backend, but that format compatibility does not change its provenance: result artifacts must identify the builder as mkosi and retain the candidate revision.
 
 ## Simulator versus VM image coverage
 
@@ -132,7 +132,7 @@ Verify that `candidate_commit` is the clean worktree HEAD,
 `prepared_binaries.dstack_tee_simulator` names an executable immutable file,
 and both `environment.DSTACK_TEST_GUEST_IMAGE` and
 `environment.DSTACK_TEST_NO_TEE_GUEST_IMAGE` name mkosi images. The latter must
-have `backend: mkosi` and `is_dev: true` in `metadata.json` when a case needs
+have `builder: mkosi` and `is_dev: true` in `metadata.json` when a case needs
 SSH access or installs the current-HEAD binary into the guest.
 
 The Compose commands below are only an auxiliary, containerized platform

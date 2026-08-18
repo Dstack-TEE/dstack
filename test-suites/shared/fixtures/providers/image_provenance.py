@@ -11,11 +11,11 @@ from pathlib import Path
 from typing import Any
 
 
-def require_image_backend(image_store: str | Path, image_name: str) -> dict[str, Any]:
-    """Load image metadata and require the configured build backend."""
-    expected = os.environ.get("DSTACK_TEST_GUEST_IMAGE_BACKEND", "mkosi").strip()
+def require_image_builder(image_store: str | Path, image_name: str) -> dict[str, Any]:
+    """Load image metadata and require the configured image builder."""
+    expected = os.environ.get("DSTACK_TEST_GUEST_IMAGE_BUILDER", "mkosi").strip()
     if not expected:
-        raise RuntimeError("DSTACK_TEST_GUEST_IMAGE_BACKEND must not be empty")
+        raise RuntimeError("DSTACK_TEST_GUEST_IMAGE_BUILDER must not be empty")
     metadata_path = Path(image_store).resolve() / image_name / "metadata.json"
     try:
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
