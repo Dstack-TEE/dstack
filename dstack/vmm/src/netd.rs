@@ -405,7 +405,7 @@ fn remove_interface(libvirt_uri: &str, tap: &str) -> Result<()> {
     }
     if Path::new("/sys/class/net").join(tap).exists() {
         ip(&["link", "delete", "dev", tap])?;
-        info!(%tap, "removed filtered TAP");
+        info!(%tap, "removed managed network interface");
     }
     Ok(())
 }

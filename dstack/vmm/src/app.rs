@@ -586,33 +586,37 @@ impl App {
                 }),
                 NetworkingMode::User | NetworkingMode::Custom => continue,
             };
-            let response = netd::request(&self.config.netd.socket, &request).await;
-            if let Err(error) = response {
-                // The client may have timed out while netd was still finishing
-                // this Prepare. Remove the in-flight identity first; netd's
-                // serialized accept loop processes it after Prepare completes.
-                if let Err(cleanup_error) = netd::request(
-                    &self.config.netd.socket,
-                    &NetdRequest::Remove {
-                        identity: identity.clone(),
-                    },
-                )
-                .await
-                {
-                    warn!(%cleanup_error, "failed to roll back in-flight filtered network");
-                }
-                for identity in prepared.into_iter().rev() {
-                    if let Err(cleanup_error) =
-                        netd::request(&self.config.netd.socket, &NetdRequest::Remove { identity })
-                            .await
+            let response = match netd::request(&self.config.netd.socket, &request).await {
+                Ok(response) => response,
+                Err(error) => {
+                    // The client may have timed out while netd was still finishing
+                    // this Prepare. Remove the in-flight identity first; netd's
+                    // serialized accept loop processes it after Prepare completes.
+                    if let Err(cleanup_error) = netd::request(
+                        &self.config.netd.socket,
+                        &NetdRequest::Remove {
+                            identity: identity.clone(),
+                        },
+                    )
+                    .await
                     {
-                        warn!(%cleanup_error, "failed to roll back prepared filtered network");
+                        warn!(%cleanup_error, "failed to roll back in-flight filtered network");
                     }
+                    for identity in prepared.into_iter().rev() {
+                        if let Err(cleanup_error) = netd::request(
+                            &self.config.netd.socket,
+                            &NetdRequest::Remove { identity },
+                        )
+                        .await
+                        {
+                            warn!(%cleanup_error, "failed to roll back prepared filtered network");
+                        }
+                    }
+                    return Err(error).context("failed to prepare libvirt-filtered networking");
                 }
-                return Err(error).context("failed to prepare libvirt-filtered networking");
-            }
+            };
             if network.mode == NetworkingMode::Macvtap {
-                network.device = response?
+                network.device = response
                     .device
                     .context("netd response omitted macvtap device")?;
             }
