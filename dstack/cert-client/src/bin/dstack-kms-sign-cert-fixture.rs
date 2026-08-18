@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 // SPDX-License-Identifier: Apache-2.0
 //! Generate a v2 KMS CSR whose key is bound to fresh guest attestation.
 
