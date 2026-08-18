@@ -249,7 +249,7 @@ def cleanup_upgrade_registries(workspace: Path) -> None:
                 os.environ.get(
                     "DSTACK_TEST_DOCKER_SHELL_RUNNER",
                     os.path.join(
-                        os.environ["DSTACK_TEST_PLAN_DIR"],
+                        str(Path(__file__).resolve().parents[2]),
                         "shared/automation/run-docker-shell",
                     ),
                 ),
@@ -271,7 +271,7 @@ def cleanup_upgrade_registries(workspace: Path) -> None:
                     os.environ.get(
                         "DSTACK_TEST_DOCKER_SHELL_RUNNER",
                         os.path.join(
-                            os.environ["DSTACK_TEST_PLAN_DIR"],
+                            str(Path(__file__).resolve().parents[2]),
                             "shared/automation/run-docker-shell",
                         ),
                     ),
