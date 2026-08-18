@@ -56,7 +56,7 @@ def main() -> int:
     repository = Path(runtime["repository"])
     binary = runtime["prepared_binaries"]["dstack_vmm"]["path"]
     source = repository / "dstack/vmm/vmm.toml"
-    inventory_path = repository / "test-suites/configuration-inventory.json"
+    inventory_path = repository / "test-suites/catalog/configuration-inventory.json"
     source_text = source.read_text()
     parsed = tomllib.loads(source_text)
     management_port_prepared = "port" not in parsed

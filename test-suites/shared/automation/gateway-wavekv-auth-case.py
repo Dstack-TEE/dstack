@@ -63,21 +63,48 @@ def pack_bin(value: bytes) -> bytes:
     return b"\xc4" + bytes([len(value)]) + value
 
 
-def sync_message(sender: int, entries: list[tuple[str, bytes, int, int]]) -> bytes:
-    """Encode the WaveKV tuple representation used by rmp-serde."""
-    encoded_entries = bytearray(
-        b"\x90" if not entries else bytes([0x90 + len(entries)])
+def pack_map(values: list[tuple[str, bytes]]) -> bytes:
+    """Encode a small MessagePack map with string keys."""
+    if len(values) >= 16:
+        raise ValueError("map is too large for the bounded encoder")
+    return bytes([0x80 + len(values)]) + b"".join(
+        pack_text(key) + value for key, value in values
     )
+
+
+def sync_message(sender: int, entries: list[tuple[str, bytes, int, int]]) -> bytes:
+    """Encode the current named-map WaveKV v2 envelope."""
+    encoded_entries = bytearray(bytes([0x90 + len(entries)]))
     for key, value, seq, timestamp in entries:
-        encoded_entries.extend(b"\x93")
-        encoded_entries.extend(pack_text(key))
-        encoded_entries.extend(pack_bin(value))
-        encoded_entries.extend(b"\x93")
-        encoded_entries.extend(pack_uint(sender))
-        encoded_entries.extend(pack_uint(seq))
-        encoded_entries.extend(pack_uint(timestamp))
-    return (
-        b"\x94" + pack_uint(sender) + pack_bin(b"") + b"\x80" + bytes(encoded_entries)
+        metadata = pack_map(
+            [
+                ("node", pack_uint(sender)),
+                ("seq", pack_uint(seq)),
+                ("timestamp", pack_uint(timestamp)),
+            ]
+        )
+        encoded_entries.extend(
+            pack_map(
+                [
+                    ("key", pack_text(key)),
+                    ("value", pack_bin(value)),
+                    ("meta", metadata),
+                ]
+            )
+        )
+    return pack_map(
+        [
+            ("version", pack_uint(1)),
+            ("sender_id", pack_uint(sender)),
+            ("sender_uuid", pack_bin(b"")),
+            ("acks", b"\x80"),
+            ("entries", bytes(encoded_entries)),
+            ("digest", b"\xc0"),
+            ("page", b"\xc0"),
+            ("resume_from", b"\xc0"),
+            ("reset_acks", b"\xc2"),
+            ("push_only", b"\xc2"),
+        ]
     )
 
 
@@ -172,7 +199,7 @@ def main() -> int:
     origin = urllib.parse.urlunsplit((public.scheme, public.netloc, "", "", ""))
     sync_url = f"{origin}/wavekv/sync/persistent"
     suffix = str(manifest["lease_id"])[-10:]
-    key = f"_case/wavekv/{suffix}"
+    key = f"cert/_case-wavekv-{suffix}"
     timestamp = int(__import__("time").time() * 1000)
     steps: list[dict[str, str]] = []
     artifacts: list[dict[str, str]] = []
@@ -204,7 +231,9 @@ def main() -> int:
             and oversize_code in {400, 413}
         )
 
-        gap = gzip.compress(sync_message(99, [(key, b"gap", 2, timestamp)]))
+        gap = gzip.compress(
+            sync_message(99, [(f"outside-schema/{suffix}", b"rejected", 1, timestamp)])
+        )
         gap_code = send(sync_url, gap, identity)
         _, after_gap = persistent_keys(node, token)
         valid = gzip.compress(sync_message(99, [(key, b"accepted", 1, timestamp)]))
@@ -213,7 +242,7 @@ def main() -> int:
         replay_code = send(sync_url, valid, identity)
         _, after_replay = persistent_keys(node, token)
         recovery_code = send(sync_url, gzip.compress(sync_message(100, [])), identity)
-        checks["ordering_replay_and_recovery"] = (
+        checks["schema_rejection_replay_and_recovery"] = (
             gap_code == 200
             and after_gap == baseline_keys
             and valid_code == 200
@@ -236,12 +265,12 @@ def main() -> int:
             {
                 "id": f"{CASE_ID}-step-02",
                 "status": "PASS",
-                "observed": "Malformed compression, invalid sender/store, and oversized input failed within bounded limits; a sequence gap caused no mutation.",
+                "observed": "Malformed compression, invalid sender/store, and oversized input failed within bounded limits; an out-of-schema entry caused no mutation.",
             },
             {
                 "id": f"{CASE_ID}-step-03",
                 "status": "PASS",
-                "observed": "The next valid entry applied exactly once, replay was idempotent, and a later valid synchronization still succeeded.",
+                "observed": "A valid WaveKV v2 entry applied exactly once, replay was idempotent, and a later valid synchronization still succeeded.",
             },
         ]
         observation = {

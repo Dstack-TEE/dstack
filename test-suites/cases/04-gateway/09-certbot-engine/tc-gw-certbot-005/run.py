@@ -41,8 +41,17 @@ def main() -> int:
         for command in commands
     ]
     output = "".join(result.stdout + result.stderr for result in completed)
-    passed_count = max(
-        (int(v) for v in re.findall(r"(\d+) passed; 0 failed", output)), default=0
+    passed_count = sum(
+        max(
+            (
+                int(v)
+                for v in re.findall(
+                    r"(\d+) passed; 0 failed", result.stdout + result.stderr
+                )
+            ),
+            default=0,
+        )
+        for result in completed
     )
     checks = {
         "candidate_tests_passed": all(result.returncode == 0 for result in completed)

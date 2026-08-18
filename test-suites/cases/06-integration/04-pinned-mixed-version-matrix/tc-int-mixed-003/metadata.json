@@ -1,6 +1,6 @@
 {
   "id": "tc-int-mixed-003",
-  "title": "Mixed gateway versions route old and new guests",
+  "title": "Gateway v0.5.11 to candidate in-place disk migration",
   "priority": "P0",
   "requirements": [
     "req-int-mixed-003"
@@ -27,7 +27,7 @@
     "simulation_allowed": false
   },
   "actions_under_test": [
-    "Mixed gateway versions route old and new guests"
+    "Migrate v0.5.11 Gateway disk state during an in-place candidate upgrade"
   ],
   "execution": {
     "entrypoint": "shared/automation/integration-mixed-003-capability-case.py",

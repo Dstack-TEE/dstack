@@ -129,7 +129,7 @@ def call(socket: str, route: str, content_type: str, body: bytes) -> tuple[int, 
 
 def inventory_entry(root: pathlib.Path, service: str, method: str) -> dict[str, Any]:
     """Load the authoritative API inventory entry for one method."""
-    document = json.loads((root / "api-inventory.json").read_text())
+    document = json.loads((root / "catalog" / "api-inventory.json").read_text())
     matches: list[dict[str, Any]] = []
 
     def walk(value: Any) -> None:

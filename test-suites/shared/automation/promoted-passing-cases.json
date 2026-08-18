@@ -1440,12 +1440,12 @@
     },
     {
       "case_id": "tc-int-compatibil-004",
-      "source_run": "int-compatibil-004-retained-006",
+      "source_run": "pr841-ad6f2fd12-gateway-inplace6",
       "source_status": "PASS",
       "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
-      "promoted_at": "2026-07-30T19:55:21Z",
-      "notes": "six real TDX VMs exercise a shared-identity v0.5.11 and candidate Gateway cluster, bidirectional native WireGuard registration propagation, legacy TXT route resolution, old-node forced outage, candidate-only registration, old-node healing, invalid-registration rejection, and WaveKV/certificate-lock persistence",
-      "environment": "TDXLAB_REAL_TDX_ROLLING_GATEWAY_CLUSTER"
+      "promoted_at": "2026-08-18T16:30:00Z",
+      "notes": "A real v0.5.11 Gateway writes WaveKV and routing state, then the same stopped VM starts the candidate compose on its retained disk; candidate startup proves nonzero legacy rows loaded before client restart, post-migration registration succeeds, candidate state survives restart, and malformed registration remains rejected",
+      "environment": "TDXLAB_REAL_TDX_GATEWAY_IN_PLACE_DISK_MIGRATION"
     },
     {
       "case_id": "tc-int-compatibil-005",
@@ -1593,12 +1593,12 @@
     },
     {
       "case_id": "tc-int-mixed-003",
-      "source_run": "int-mixed-003-retained-001",
+      "source_run": "pr841-ad6f2fd12-mixed003-composeonly",
       "source_status": "PASS",
       "entrypoint": "shared/automation/integration-mixed-003-capability-case.py",
-      "promoted_at": "2026-07-30T20:59:22Z",
-      "notes": "a shared-identity v0.5.11/candidate Gateway cluster routes old and candidate Guests bidirectionally through native WireGuard, resolves legacy TXT routes, survives old-node forced outage, accepts candidate-only registration, heals, rejects malformed registration, and preserves certificate/WaveKV state",
-      "environment": "TDXLAB_REAL_TDX_MIXED_GATEWAY_GUEST_CLUSTER"
+      "promoted_at": "2026-08-18T16:30:00Z",
+      "notes": "The candidate upgrades the same stopped v0.5.11 Gateway VM on its retained disk, proves nonzero legacy WaveKV rows were loaded before client restart, accepts post-migration candidate registration, survives restart, and does not assume cross-version sync compatibility",
+      "environment": "TDXLAB_REAL_TDX_GATEWAY_IN_PLACE_VERSION_MATRIX"
     },
     {
       "case_id": "tc-int-mixed-004",
@@ -1620,11 +1620,11 @@
     },
     {
       "case_id": "tc-int-mixed-006",
-      "source_run": "int-mixed-006-retained-008",
+      "source_run": "pr841-ad6f2fd12-mixed006",
       "source_status": "PASS",
       "entrypoint": "shared/automation/integration-mixed-006-capability-case.py",
-      "promoted_at": "2026-07-31T01:00:33Z",
-      "notes": "six physical-TDX KMS nodes across v0.5.4, bridge, v0.5.11, and candidate; two Gateways; and four Guest generations pass failed-transfer boundaries, stable root/app/trust identities, forward/reverse KMS and Gateway restarts, traffic continuity, and bounded legacy retirement",
+      "promoted_at": "2026-08-18T16:30:00Z",
+      "notes": "Six physical-TDX KMS nodes across v0.5.4, bridge, v0.5.11, and candidate; one candidate Gateway; and four Guest generations exercise failed-transfer boundaries, stable root/app/trust identities, forward/reverse KMS restarts, candidate Gateway restart recovery, traffic continuity, and bounded legacy retirement without cross-version Gateway sync",
       "environment": "TDXLAB_PHYSICAL_TDX_FOUR_VERSION_ROLLING_RESTART"
     },
     {

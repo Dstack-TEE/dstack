@@ -142,6 +142,8 @@ edition = "2021"
 [dependencies]
 aes-gcm = "0.10"
 anyhow = "1"
+binrw = { version = "0.15.1", default-features = false, features = ["std"] }
+getrandom = { version = "0.3.1", features = ["std"] }
 hex = "0.4"
 rand = "0.8"
 x25519-dalek = { version = "2", features = ["static_secrets"] }

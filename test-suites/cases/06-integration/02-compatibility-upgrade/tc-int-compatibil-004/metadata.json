@@ -1,6 +1,6 @@
 {
   "id": "tc-int-compatibil-004",
-  "title": "Rolling gateway cluster upgrade",
+  "title": "In-place Gateway upgrade with persisted disk state",
   "priority": "P0",
   "requirements": [
     "req-int-compatibil-004"
@@ -26,7 +26,7 @@
     "simulation_allowed": false
   },
   "actions_under_test": [
-    "Rolling gateway cluster upgrade"
+    "Upgrade a v0.5.11 Gateway in place on its retained data disk"
   ],
   "execution": {
     "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",

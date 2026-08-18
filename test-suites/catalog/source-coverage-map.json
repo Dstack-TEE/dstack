@@ -5661,7 +5661,7 @@
     },
     {
       "component": "verifier",
-      "source": "dstack/verifier/shared/fixtures/quote-report.json",
+      "source": "dstack/verifier/fixtures/quote-report.json",
       "case_ids": [
         "tc-ver-cli-cert-o-006"
       ],
@@ -5669,7 +5669,7 @@
     },
     {
       "component": "verifier",
-      "source": "dstack/verifier/shared/fixtures/sev-snp-attestation.json",
+      "source": "dstack/verifier/fixtures/sev-snp-attestation.json",
       "case_ids": [
         "tc-ver-cli-cert-o-006"
       ],
@@ -5677,7 +5677,7 @@
     },
     {
       "component": "verifier",
-      "source": "dstack/verifier/shared/fixtures/sev-snp.README.md",
+      "source": "dstack/verifier/fixtures/sev-snp.README.md",
       "case_ids": [
         "tc-ver-cli-cert-o-006"
       ],
@@ -5685,7 +5685,7 @@
     },
     {
       "component": "verifier",
-      "source": "dstack/verifier/shared/fixtures/tdx-lite-attestation.json",
+      "source": "dstack/verifier/fixtures/tdx-lite-attestation.json",
       "case_ids": [
         "tc-ver-cli-cert-o-006"
       ],
@@ -5693,7 +5693,7 @@
     },
     {
       "component": "verifier",
-      "source": "dstack/verifier/shared/fixtures/tdx-lite-getquote.json",
+      "source": "dstack/verifier/fixtures/tdx-lite-getquote.json",
       "case_ids": [
         "tc-ver-cli-cert-o-006"
       ],
@@ -5701,7 +5701,7 @@
     },
     {
       "component": "verifier",
-      "source": "dstack/verifier/shared/fixtures/tdx-lite.README.md",
+      "source": "dstack/verifier/fixtures/tdx-lite.README.md",
       "case_ids": [
         "tc-ver-cli-cert-o-006"
       ],

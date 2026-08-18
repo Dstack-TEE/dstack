@@ -5,7 +5,7 @@
 
 The host API is not reachable over TCP like the VMM RPC listener: it answers on
 vsock CID 2 at a lease-allocated port. The fixture publishes that endpoint and
-its routes under `host_api`, and `shared/automation/vsock-http.py` performs one bounded
+its routes under `host_api`, and `automation/vsock-http.py` performs one bounded
 request against it.
 
 Each case checks that the documented response fields are present, that an

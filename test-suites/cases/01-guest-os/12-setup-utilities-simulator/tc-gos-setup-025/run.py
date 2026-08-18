@@ -46,7 +46,11 @@ def main() -> int:
     artifacts.mkdir(parents=True, exist_ok=True)
     evidence = artifacts / "stream-encryption-tests.json"
     evidence.write_text(
-        json.dumps({"candidate_commit": runtime.get("candidate_commit"), "checks": checks}, indent=2) + "\n"
+        json.dumps(
+            {"candidate_commit": runtime.get("candidate_commit"), "checks": checks},
+            indent=2,
+        )
+        + "\n"
     )
     status = "PASS" if passed else "FAIL"
     observed = (
@@ -55,10 +59,21 @@ def main() -> int:
         else f"Streaming encryption checks failed: {sorted(k for k, value in checks.items() if not value)}"
     )
     result = {
-        "schema_version": "1.0", "case_id": CASE_ID, "provisional": False,
-        "status": status, "summary": observed,
-        "steps": [{"id": f"{CASE_ID}-step-{n:02d}", "status": status, "observed": observed} for n in range(1, 4)],
-        "evidence": [{"path": "artifacts/stream-encryption-tests.json", "sha256": hashlib.sha256(evidence.read_bytes()).hexdigest()}],
+        "schema_version": "1.0",
+        "case_id": CASE_ID,
+        "provisional": False,
+        "status": status,
+        "summary": observed,
+        "steps": [
+            {"id": f"{CASE_ID}-step-{n:02d}", "status": status, "observed": observed}
+            for n in range(1, 4)
+        ],
+        "evidence": [
+            {
+                "path": "artifacts/stream-encryption-tests.json",
+                "sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+            }
+        ],
         "remarks": "No plaintext, key, or ciphertext is retained.",
         "duration_seconds": round(time.monotonic() - started, 3),
     }

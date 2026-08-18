@@ -94,7 +94,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$ROOT/registry"
-for binary in ctr ctr-remote nerdctl containerd-stargz-grpc curl findmnt jq mount mountpoint sha256sum truncate umount; do check command -v "$binary" >/dev/null; done
+for binary in ctr ctr-remote nerdctl containerd-stargz-grpc curl findmnt jq mount mountpoint python3 sha256sum umount; do check command -v "$binary" >/dev/null; done
 check test "$(docker image inspect "$PAYLOAD_IMAGE" --format '{{.Id}}')" = "$PAYLOAD_ID"
 actual_registry_id=$(docker image inspect "$REGISTRY_IMAGE" --format '{{.Id}}')
 check test "$actual_registry_id" = "$REGISTRY_ID"
@@ -191,7 +191,21 @@ blob="$ROOT/registry/docker/registry/v2/blobs/sha256/${hex:0:2}/$hex/data"
 check test -f "$blob"
 blob_size=$(stat -c %s "$blob")
 check test "$blob_size" -gt 128
-truncate -s 0 "$blob"
+original_blob_sha=$(sha256sum "$blob" | awk '{print $1}')
+check test "sha256:$original_blob_sha" = "$corrupt_layer"
+python3 - "$blob" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+data = bytearray(path.read_bytes())
+offset = len(data) // 2
+data[offset] ^= 0xFF
+path.write_bytes(data)
+PY
+mutated_blob_sha=$(sha256sum "$blob" | awk '{print $1}')
+check test "$(stat -c %s "$blob")" -eq "$blob_size"
+check test "$mutated_blob_sha" != "$original_blob_sha"
 check docker restart "$REGISTRY" >/dev/null
 for _ in $(seq 1 40); do curl -fsS http://127.0.0.1:5000/v2/ >/dev/null && break; sleep 0.25; done
 check curl -fsS http://127.0.0.1:5000/v2/ >/dev/null
