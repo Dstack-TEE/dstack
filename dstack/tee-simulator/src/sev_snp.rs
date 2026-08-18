@@ -96,12 +96,12 @@ impl SevSnpFs {
         let report_data: [u8; 64] = data
             .try_into()
             .context("SEV-SNP report data must be exactly 64 bytes")?;
-        let measurement = self
+        let measurement: [u8; 48] = self
             .report
             .get(0x90..0xc0)
             .context("SEV-SNP report does not contain a measurement")?
             .try_into()
-            .expect("the measurement range is exactly 48 bytes");
+            .context("SEV-SNP measurement has an invalid length")?;
         let evidence =
             self.generator
                 .attest_with_measurement(report_data, self.host_data, measurement)?;
