@@ -1578,7 +1578,7 @@ test_three_node_bootnode() {
 # Test 14: Node ID reuse rejection
 # =============================================================================
 test_node_id_reuse_rejected() {
-	log_info "========== Test 14: Node ID Reuse Rejected =========="
+	log_info "========== Node ID Reuse Rejection and Recovery =========="
 	cleanup
 
 	# Clean up all state files to ensure fresh start
@@ -1613,6 +1613,11 @@ test_node_id_reuse_rejected() {
 		return 1
 	fi
 	log_info "Initial sync completed successfully"
+	verify_register_response "$(debug_register_cvm $debug_port1 \
+		"$(test_public_key 400)" "reuse_app" "reuse_fixture")" >/dev/null || return 1
+	wait_for_instances $debug_port2 1 10 || {
+		log_error "Node 2 did not receive the recovery fixture"; return 1; }
+	local old_uuid=$(get_node_uuid 13026)
 
 	# Get initial key count on node 1
 	local keys_before=$(get_n_keys $admin_port1)
@@ -1627,19 +1632,31 @@ test_node_id_reuse_rejected() {
 	# Restart node 2 - it will have a new UUID but same node_id
 	log_info "Restarting node 2 with fresh data (new UUID, same node_id)..."
 	start_node 2
+	local new_uuid=$(get_node_uuid 13026)
+	if [[ -z "$old_uuid" || -z "$new_uuid" || "$old_uuid" == "$new_uuid" ]]; then
+		log_error "Fresh node 2 did not receive a new UUID"
+		return 1
+	fi
 
 	# Re-register peers
 	setup_peers 1 2
 
-	# Wait for sync attempt
-	sleep 15
-
-	# Check node 2's log for UUID mismatch error
-	local log_file="${LOG_DIR}/${CURRENT_TEST}_node2.log"
-	if grep -q "UUID mismatch" "$log_file" 2>/dev/null; then
-		log_info "Found UUID mismatch error in node 2 log (expected)"
-	else
-		log_warn "UUID mismatch error not found in log (may still be rejected)"
+	# The first exchange must reject the conflicting identity. A response from the
+	# established peer then carries the fresh identity record so subsequent rounds
+	# can converge instead of leaving the pair permanently wedged.
+	local log_file1="${LOG_DIR}/${CURRENT_TEST}_node1.log"
+	local log_file2="${LOG_DIR}/${CURRENT_TEST}_node2.log"
+	local mismatch_seen=false
+	for _ in $(seq 1 15); do
+		if grep -q "UUID mismatch" "$log_file1" "$log_file2" 2>/dev/null; then
+			mismatch_seen=true
+			break
+		fi
+		sleep 1
+	done
+	if [[ "$mismatch_seen" != "true" ]]; then
+		log_error "Reused node ID was not rejected"
+		return 1
 	fi
 
 	# Node 1 should have rejected sync from new node 2
@@ -1647,21 +1664,22 @@ test_node_id_reuse_rejected() {
 	local keys_after=$(get_n_keys $admin_port1)
 	log_info "Keys on node 1 after node 2 restart: $keys_after"
 
-	# The new node 2 should NOT have received data from node 1
-	# because node 1 should reject sync due to UUID mismatch
-	local kv2=$(get_n_instances $debug_port2)
-	log_info "Node 2 instances after restart: $kv2"
-
 	# Verify node 1's data is intact
 	if [[ "$keys_after" -lt "$keys_before" ]]; then
 		log_error "Node 1 lost data after node 2 restart with reused ID"
 		return 1
 	fi
 
-	# The test passes if:
-	# 1. Node 1's data is intact
-	# 2. Either UUID mismatch was logged OR node 2 didn't get full sync
-	log_info "Node ID reuse rejection test PASSED"
+	wait_for_instances $debug_port2 1 20 || {
+		log_error "Fresh node did not recover after the UUID rejection"; return 1; }
+	wait_for_digest_match persistent 13016 13026 15 || {
+		log_error "Stores did not converge after UUID recovery"; return 1; }
+	verify_register_response "$(debug_register_cvm $debug_port2 \
+		"$(test_public_key 401)" "reuse_app" "post_recovery")" >/dev/null || return 1
+	wait_for_instances $debug_port1 2 15 || {
+		log_error "Post-recovery write did not propagate"; return 1; }
+	wait_for_digest_match persistent 13016 13026 10 || return 1
+	log_info "Node ID reuse rejection and recovery test PASSED"
 	return 0
 }
 
@@ -2257,6 +2275,7 @@ main() {
 		echo "  test_interrupted_sync_recovery        - Recovery after interrupted sync"
 		echo "  test_ephemeral_recovery               - Ephemeral convergence after restart"
 		echo "  test_partial_cluster_bootstrap        - Bootstrap with one cluster peer down"
+		echo "  test_node_id_reuse_rejected           - Node ID conflict rejection and recovery"
 		echo ""
 		echo "Advanced tests:"
 		echo "  test_client_registration_persistence  - Client registration and persistence"
@@ -2264,7 +2283,6 @@ main() {
 		echo "  test_network_partition                - Network partition simulation"
 		echo "  test_three_node_cluster               - Three-node cluster"
 		echo "  test_three_node_bootnode              - Three-node cluster with bootnode"
-		echo "  test_node_id_reuse_rejected           - Node ID reuse rejection"
 		echo "  test_periodic_persistence             - Periodic persistence"
 		echo ""
 		echo "Admin RPC tests:"
@@ -2376,6 +2394,7 @@ main() {
 		run_test test_interrupted_sync_recovery
 		run_test test_ephemeral_recovery
 		run_test test_partial_cluster_bootstrap
+		run_test test_node_id_reuse_rejected
 	fi
 
 	if [[ "$test_filter" == "all" ]] || [[ "$test_filter" == "advanced" ]]; then
@@ -2384,7 +2403,6 @@ main() {
 		run_test test_network_partition
 		run_test test_three_node_cluster
 		run_test test_three_node_bootnode
-		run_test test_node_id_reuse_rejected
 		run_test test_periodic_persistence
 	fi
 

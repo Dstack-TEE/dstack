@@ -71,6 +71,8 @@ The suite starts real gateway processes and exercises:
 - bootnode discovery retry, interrupted-sync recovery, and partial-cluster
   bootstrap while another peer is unavailable;
 - ephemeral-store convergence after a peer restart;
+- node-ID conflict rejection followed by convergence under the replacement
+  node's fresh UUID;
 - node restart, network partition recovery, periodic persistence, and node
   up/down filtering.
 
