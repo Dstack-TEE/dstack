@@ -1100,7 +1100,7 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
     }
 
     for (instance_id, data) in instances {
-        let new_info = InstanceInfo {
+        let mut new_info = InstanceInfo {
             id: instance_id.clone(),
             app_id: data.app_id.clone(),
             ip: data.ip,
@@ -1114,24 +1114,32 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
             connections: Default::default(),
         };
 
-        let old_ip = state.state.instances.get(&instance_id).map(|e| e.ip);
-        if let Some(existing) = state.state.instances.get(&instance_id) {
+        let existing = state.state.instances.get(&instance_id).cloned();
+        if let Some(existing) = &existing {
             // Check if wg config needs update
             if existing.public_key != data.public_key || existing.ip != data.ip {
                 wg_changed = true;
             }
-            // Only update if remote is newer (based on reg_time)
-            if data.reg_time <= encode_ts(existing.reg_time) {
-                continue;
-            }
+            // WaveKV has already selected the winning value. Materialize it
+            // unconditionally instead of applying another LWW rule here.
+            new_info.connections = existing.connections.clone();
         } else {
             wg_changed = true;
         }
 
         // Release old IP if it changed (prevent IP leak)
-        if let Some(old_ip) = old_ip {
-            if old_ip != data.ip {
-                state.state.allocated_addresses.remove(&old_ip);
+        if let Some(existing) = &existing {
+            if existing.ip != data.ip {
+                state.state.allocated_addresses.remove(&existing.ip);
+            }
+            if existing.app_id != data.app_id {
+                if let Some(app_instances) = state.state.apps.get_mut(&existing.app_id) {
+                    app_instances.remove(&instance_id);
+                    if app_instances.is_empty() {
+                        state.state.apps.remove(&existing.app_id);
+                        state.state.top_n.remove(&existing.app_id);
+                    }
+                }
             }
         }
         state.state.allocated_addresses.insert(data.ip);
