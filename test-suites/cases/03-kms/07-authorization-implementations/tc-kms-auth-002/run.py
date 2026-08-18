@@ -94,8 +94,8 @@ def main() -> int:
         pathlib.Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text()
     )
     package = pathlib.Path(runtime["repository"]) / "dstack/kms/auth-mock"
-    bun = shutil.which("bun") or str(pathlib.Path.home() / ".bun/bin/bun")
-    if not pathlib.Path(bun).is_file():
+    bun = shutil.which("bun")
+    if bun is None or not pathlib.Path(bun).is_file():
         raise RuntimeError("Bun is unavailable")
     env = os.environ.copy()
     env["PATH"] = os.pathsep.join(

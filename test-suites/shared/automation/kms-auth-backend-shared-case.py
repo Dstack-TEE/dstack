@@ -206,8 +206,8 @@ def lifecycle(package: Path, bun: str, env: dict[str, str]) -> dict[str, Any]:
 
 
 def run_matrix(repo: Path, cache: Path) -> dict[str, Any]:
-    bun = shutil.which("bun") or str(Path.home() / ".bun/bin/bun")
-    if not Path(bun).is_file():
+    bun = shutil.which("bun")
+    if bun is None or not Path(bun).is_file():
         raise RuntimeError("Bun is unavailable")
     base_env = os.environ.copy()
     base_env["PATH"] = os.pathsep.join(
