@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from image_provenance import require_image_backend
+from image_provenance import require_image_builder
 from vmm_fixture import (
     fail,
     link_image_store,
@@ -679,7 +679,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
             "DSTACK_TEST_NO_TEE_GUEST_IMAGE", "dstack-dev-0.6.0"
         )
         try:
-            image_provenance = require_image_backend(source_image_store, test_image)
+            image_provenance = require_image_builder(source_image_store, test_image)
         except RuntimeError as error:
             fail(str(error))
         values["guest_image"] = image_provenance
@@ -2245,7 +2245,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         image_store = Path(image_store_text).resolve()
         image_name = os.environ.get("DSTACK_TEST_GUEST_IMAGE", "dstack-0.6.0")
         try:
-            image_provenance = require_image_backend(image_store, image_name)
+            image_provenance = require_image_builder(image_store, image_name)
         except RuntimeError as error:
             fail(str(error))
         image_dir = image_store / image_name

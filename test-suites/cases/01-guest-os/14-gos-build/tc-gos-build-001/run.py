@@ -36,7 +36,7 @@ def main() -> int:
     )
     metadata_path = Path(str(values.get("input_dir", ""))) / "metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    expected = os.environ.get("DSTACK_TEST_GUEST_IMAGE_BACKEND", "mkosi").strip()
+    expected = os.environ.get("DSTACK_TEST_GUEST_IMAGE_BUILDER", "mkosi").strip()
     checker = check_output.read_text(encoding="utf-8")
     checks = {
         "scripts_parse": syntax.returncode == 0,
