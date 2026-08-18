@@ -91,6 +91,35 @@ impl SevSnpFs {
             _ => None,
         }
     }
+
+    fn update_report(&mut self, data: &[u8]) -> Result<()> {
+        let report_data: [u8; 64] = data
+            .try_into()
+            .context("SEV-SNP report data must be exactly 64 bytes")?;
+        let measurement = self
+            .report
+            .get(0x90..0xc0)
+            .context("SEV-SNP report does not contain a measurement")?
+            .try_into()
+            .expect("the measurement range is exactly 48 bytes");
+        let evidence =
+            self.generator
+                .attest_with_measurement(report_data, self.host_data, measurement)?;
+        let certs = encode_cert_table(&evidence.cert_chain)?;
+        self.report = evidence.report;
+        self.certs = certs;
+        Ok(())
+    }
+}
+
+fn bounded_read(data: &[u8], offset: i64, size: u32) -> Result<&[u8], i32> {
+    if offset < 0 {
+        return Err(libc::EINVAL);
+    }
+    let start = offset as usize;
+    Ok(data
+        .get(start..start.saturating_add(size as usize).min(data.len()))
+        .unwrap_or_default())
 }
 
 impl Filesystem for SevSnpFs {
@@ -214,11 +243,10 @@ impl Filesystem for SevSnpFs {
                 return;
             }
         };
-        let start = offset.max(0) as usize;
-        reply.data(
-            data.get(start..start.saturating_add(size as usize).min(data.len()))
-                .unwrap_or_default(),
-        );
+        match bounded_read(data, offset, size) {
+            Ok(data) => reply.data(data),
+            Err(errno) => reply.error(errno),
+        }
     }
     fn write(
         &mut self,
@@ -232,33 +260,13 @@ impl Filesystem for SevSnpFs {
         _lock: Option<u64>,
         reply: ReplyWrite,
     ) {
-        if ino != INBLOB || offset != 0 || data.len() != 64 {
+        if ino != INBLOB || offset != 0 {
             reply.error(libc::EINVAL);
             return;
         }
-        let Ok(report_data) = data.try_into() else {
-            reply.error(libc::EINVAL);
-            return;
-        };
-        let Ok(measurement) = self.report[0x90..0xc0].try_into() else {
-            reply.error(libc::EIO);
-            return;
-        };
-        match self
-            .generator
-            .attest_with_measurement(report_data, self.host_data, measurement)
-        {
-            Ok(evidence) => {
-                self.report = evidence.report;
-                self.certs = match encode_cert_table(&evidence.cert_chain) {
-                    Ok(certs) => certs,
-                    Err(_) => {
-                        reply.error(libc::EIO);
-                        return;
-                    }
-                };
-                reply.written(data.len() as u32);
-            }
+        match self.update_report(data) {
+            Ok(()) => reply.written(data.len() as u32),
+            Err(_) if data.len() != 64 => reply.error(libc::EINVAL),
             Err(_) => reply.error(libc::EIO),
         }
     }
@@ -333,5 +341,80 @@ impl TeeBackend for SevSnpBackend {
     }
     fn real_tee_available() -> bool {
         Path::new("/dev/sev-guest").exists()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture() -> (Arc<SevSnpGenerator>, SevSnpFs) {
+        let generator = Arc::new(SevSnpGenerator::from_seed([0x42; 32]).unwrap());
+        let fs = SevSnpFs::new(generator.clone(), [0x22; 32], [0x33; 48]).unwrap();
+        (generator, fs)
+    }
+
+    #[test]
+    fn report_update_is_verified_and_failure_atomic() {
+        let (generator, mut fs) = fixture();
+        let original_report = fs.report.clone();
+        let original_certs = fs.certs.clone();
+        assert!(fs.update_report(&[0x11; 63]).is_err());
+        assert_eq!(fs.report, original_report);
+        assert_eq!(fs.certs, original_certs);
+
+        let report_data = [0x55; 64];
+        fs.update_report(&report_data).unwrap();
+        let evidence = generator
+            .attest_with_measurement(report_data, [0x22; 32], [0x33; 48])
+            .unwrap();
+        let verifier = sev_snp_qvl::QuoteVerifier::new(
+            generator.root_ca_pem().into_bytes(),
+            generator.root_ca_pem().into_bytes(),
+            generator.root_ca_pem().into_bytes(),
+        );
+        verifier
+            .verify(&fs.report, &evidence.cert_chain, &report_data)
+            .unwrap();
+
+        let first_report = fs.report.clone();
+        fs.update_report(&[0x77; 64]).unwrap();
+        assert_ne!(fs.report, first_report);
+    }
+
+    #[test]
+    fn filesystem_aliases_and_permissions_are_bounded() {
+        let (_, fs) = fixture();
+        for alias in ["inblob", "reportdata", "report_data"] {
+            assert_eq!(SevSnpFs::child(ENTRY, OsStr::new(alias)), Some(INBLOB));
+        }
+        for alias in ["outblob", "report"] {
+            assert_eq!(SevSnpFs::child(ENTRY, OsStr::new(alias)), Some(OUTBLOB));
+        }
+        for alias in ["certs", "cert_chain", "auxblob"] {
+            assert_eq!(SevSnpFs::child(ENTRY, OsStr::new(alias)), Some(CERTS));
+        }
+        assert_eq!(fs.attr(INBLOB).unwrap().perm, 0o200);
+        assert_eq!(fs.attr(OUTBLOB).unwrap().perm, 0o400);
+        assert_eq!(fs.attr(CERTS).unwrap().perm, 0o400);
+        assert_eq!(bounded_read(&fs.report, -1, 1), Err(libc::EINVAL));
+        assert_eq!(bounded_read(&fs.report, 0, 8).unwrap(), &fs.report[..8]);
+        assert!(bounded_read(&fs.report, i64::MAX, u32::MAX)
+            .unwrap()
+            .is_empty());
+        assert_eq!(SevSnpFs::child(ENTRY, OsStr::new("unknown")), None);
+    }
+
+    #[test]
+    fn malformed_certificate_chains_fail_closed() {
+        assert!(encode_cert_table(&[]).is_err());
+        assert!(
+            encode_cert_table(&[b"not a certificate".to_vec(), b"also invalid".to_vec()]).is_err()
+        );
+        assert!(encode_cert_table(&[
+            b"-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----".to_vec(),
+            b"-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----".to_vec(),
+        ])
+        .is_err());
     }
 }
