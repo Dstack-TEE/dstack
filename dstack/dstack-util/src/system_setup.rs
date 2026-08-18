@@ -2262,6 +2262,15 @@ fn validate_key_provider_inputs(kind: KeyProviderKind, kms_urls: &[String]) -> R
     Ok(())
 }
 
+fn kms_rpc_url(base: &str) -> String {
+    let base = base.trim_end_matches('/');
+    if base.ends_with("/prpc") {
+        base.to_string()
+    } else {
+        format!("{base}/prpc")
+    }
+}
+
 impl<'a> Stage0<'a> {
     fn host_api(&self) -> HostApi {
         HostApi::new(
@@ -2361,7 +2370,7 @@ impl<'a> Stage0<'a> {
         let keys = 'out: {
             let mut error = anyhow!("unknown error");
             for (i, kms_url) in self.shared.sys_config.kms_urls.iter().enumerate() {
-                let kms_url = format!("{kms_url}/prpc");
+                let kms_url = kms_rpc_url(kms_url);
                 let response = self.request_app_keys_from_kms_url(kms_url.clone()).await;
                 match response {
                     Ok(response) => {
@@ -3763,8 +3772,22 @@ fn test_unquote_os_release_value_handles_quoting_styles() {
 
 #[cfg(test)]
 mod kms_provider_inventory_tests {
-    use super::validate_key_provider_inputs;
+    use super::{kms_rpc_url, validate_key_provider_inputs};
     use dstack_types::KeyProviderKind;
+
+    #[test]
+    fn normalizes_kms_rpc_urls_once() {
+        assert_eq!(kms_rpc_url("https://kms.test"), "https://kms.test/prpc");
+        assert_eq!(kms_rpc_url("https://kms.test/"), "https://kms.test/prpc");
+        assert_eq!(
+            kms_rpc_url("https://kms.test/prpc"),
+            "https://kms.test/prpc"
+        );
+        assert_eq!(
+            kms_rpc_url("https://kms.test/prpc/"),
+            "https://kms.test/prpc"
+        );
+    }
 
     #[test]
     fn local_key_providers_do_not_require_kms_inventory() {
