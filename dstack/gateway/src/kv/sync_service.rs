@@ -142,6 +142,17 @@ pub struct WaveKvSyncService {
     pub ephemeral_manager: Arc<SyncManager<HttpSyncNetwork>>,
 }
 
+/// Wake the opportunistic push path after a latency-sensitive persistent write.
+pub trait PersistentWriteNotifier: Send + Sync {
+    fn notify_persistent_write(&self);
+}
+
+impl PersistentWriteNotifier for WaveKvSyncService {
+    fn notify_persistent_write(&self) {
+        self.persistent_manager.notify_local_write();
+    }
+}
+
 impl WaveKvSyncService {
     /// Create a new WaveKV sync service
     ///

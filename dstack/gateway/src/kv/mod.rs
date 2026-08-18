@@ -36,7 +36,7 @@ mod sync_service;
 #[cfg(test)]
 pub(crate) use https_client::HttpsClient;
 pub use https_client::{AppIdValidator, HttpsClientConfig};
-pub use sync_service::{fetch_peers_from_bootnode, WaveKvSyncService};
+pub use sync_service::{fetch_peers_from_bootnode, PersistentWriteNotifier, WaveKvSyncService};
 use tracing::{error, warn};
 
 use std::{collections::BTreeMap, net::Ipv4Addr, path::Path, time::Duration};
