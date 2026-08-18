@@ -1,0 +1,38 @@
+{
+  "id": "tc-gos-setup-010",
+  "title": "Host API notify and sealing-key client",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-setup-010"
+  ],
+  "risks": [
+    "risk-gos-setup-010"
+  ],
+  "tags": [
+    "gos",
+    "system-setup-utilities-and-tee-simulator"
+  ],
+  "fixture": {
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "profile": "vmm-empty-control-plane",
+    "simulation_allowed": false,
+    "versions": {
+      "gateway": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "verifier": "candidate",
+      "vmm": "candidate"
+    }
+  },
+  "actions_under_test": [
+    "Host API notify and sealing-key client",
+    "HostApi.Notify",
+    "HostApi.GetSealingKey"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-hostapi-sealing-key-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

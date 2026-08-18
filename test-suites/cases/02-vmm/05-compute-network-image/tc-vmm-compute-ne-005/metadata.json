@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-compute-ne-005",
+  "title": "Local image discovery metadata and deletion",
+  "priority": "P1",
+  "requirements": [
+    "req-vmm-compute-ne-005"
+  ],
+  "risks": [
+    "risk-vmm-compute-ne-005"
+  ],
+  "tags": [
+    "vmm",
+    "compute-network-image"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Local image discovery metadata and deletion"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

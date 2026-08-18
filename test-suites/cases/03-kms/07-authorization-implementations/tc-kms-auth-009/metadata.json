@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-auth-009",
+  "title": "Contract event audit completeness",
+  "priority": "P1",
+  "requirements": [
+    "req-kms-auth-009"
+  ],
+  "risks": [
+    "risk-kms-auth-009"
+  ],
+  "tags": [
+    "kms",
+    "authorization-implementations-and-contract"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Contract event audit completeness"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

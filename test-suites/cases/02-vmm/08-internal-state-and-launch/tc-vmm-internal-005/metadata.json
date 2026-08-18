@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-internal-005",
+  "title": "VM status protobuf projection and URL construction",
+  "priority": "P1",
+  "requirements": [
+    "req-vmm-internal-005"
+  ],
+  "risks": [
+    "risk-vmm-internal-005"
+  ],
+  "tags": [
+    "vmm",
+    "internal-state-measurement-and-launch-helpers"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "VM status protobuf projection and URL construction"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/vmm-internal-unit-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-certificat-004",
+  "title": "ZT domain CRUD and certificate lifecycle",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-certificat-004"
+  ],
+  "risks": [
+    "risk-gw-certificat-004"
+  ],
+  "tags": [
+    "gateway",
+    "certificates-dns"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "ZT domain CRUD and certificate lifecycle"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/gateway-zt-domain-lifecycle-case.py",
+    "args": [],
+    "timeout_seconds": 360
+  }
+}

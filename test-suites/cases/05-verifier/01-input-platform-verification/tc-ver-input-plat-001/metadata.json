@@ -1,0 +1,36 @@
+{
+  "id": "tc-ver-input-plat-001",
+  "title": "Verification input precedence and canonicalization",
+  "priority": "P1",
+  "requirements": [
+    "req-ver-input-plat-001"
+  ],
+  "risks": [
+    "risk-ver-input-plat-001"
+  ],
+  "tags": [
+    "verifier",
+    "input-platform-verification"
+  ],
+  "fixture": {
+    "profile": "verifier-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Verification input precedence and canonicalization"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-verifier-case.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

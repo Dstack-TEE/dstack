@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-observabil-005",
+  "title": "Guest-agent watchdog recovery",
+  "priority": "P1",
+  "requirements": [
+    "req-gos-observabil-005"
+  ],
+  "risks": [
+    "risk-gos-observabil-005"
+  ],
+  "tags": [
+    "guest",
+    "observability-and-network"
+  ],
+  "fixture": {
+    "profile": "network-lifecycle",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Guest-agent watchdog recovery"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 240
+  }
+}

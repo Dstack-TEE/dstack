@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-yocto-004",
+  "title": "Containerd stargz snapshotter integrity and fallback",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-yocto-004"
+  ],
+  "risks": [
+    "risk-gos-yocto-004"
+  ],
+  "tags": [
+    "gos",
+    "yocto-image-runtime-and-hardening"
+  ],
+  "fixture": {
+    "profile": "container-observability",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Containerd stargz snapshotter integrity and fallback"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 60
+  }
+}
