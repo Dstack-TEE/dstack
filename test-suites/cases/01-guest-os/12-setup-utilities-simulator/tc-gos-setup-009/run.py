@@ -64,6 +64,20 @@ def ssh(
     return run([*ssh_argv, script], timeout=timeout)
 
 
+def wait_guest_api_ready(guest_url: str, timeout: int = 180) -> None:
+    """Wait until the forwarded guest API serves complete HTTP responses."""
+    deadline = time.monotonic() + timeout
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            json.loads(urllib_request(guest_url + "/Info?json"))
+            return
+        except (OSError, ValueError) as error:
+            last_error = error
+            time.sleep(2)
+    raise RuntimeError(f"guest API did not become ready: {last_error}")
+
+
 def gateway_config(
     source: Path,
     root: Path,
@@ -157,6 +171,7 @@ def main() -> int:
         (art / "native-tests.log").write_text(native.stdout + native.stderr)
         if native.returncode:
             raise RuntimeError("candidate multi-cluster native tests failed")
+        wait_guest_api_ready(guest_url)
         ports = free_ports(10)
         octets = free_octets(2)
         for row in (
