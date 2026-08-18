@@ -61,9 +61,10 @@ def main() -> int:
     node_package = repo / "dstack/kms/auth-eth"
     bun_package = repo / "dstack/kms/auth-eth-bun"
     node_bin = Path.home() / ".local/share/fnm/node-versions/v20.19.6/installation/bin"
-    bun = shutil.which("bun")
-    if bun is None:
+    bun_command = shutil.which("bun")
+    if bun_command is None:
         raise RuntimeError("missing required command: bun")
+    bun = Path(bun_command)
     env = dict(os.environ)
     env["PATH"] = os.pathsep.join(
         [
