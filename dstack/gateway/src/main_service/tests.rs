@@ -7,6 +7,7 @@ use crate::config::{load_config_figment, Config, MutualConfig};
 use crate::kv::PortFlags;
 use crate::proxy::port_policy::is_port_allowed;
 use base64::Engine as _;
+use std::sync::atomic::Ordering;
 use tempfile::TempDir;
 
 struct TestState {
@@ -551,6 +552,50 @@ async fn an_instance_deleted_on_another_node_stops_being_routable_here() {
     let proxy = state.lock();
     assert!(!proxy.state.instances.contains_key("peer-instance"));
     assert!(!proxy.state.apps.contains_key("peer-app"));
+    assert!(!proxy
+        .state
+        .allocated_addresses
+        .contains(&"10.0.0.40".parse().unwrap()));
+}
+
+#[tokio::test]
+async fn proxy_state_adopts_the_wavekv_winner_regardless_of_value_reg_time() {
+    let state = create_test_state().await;
+    sync_from_peer_at(
+        &state,
+        "contended",
+        "10.0.0.40",
+        &test_pubkey("old-key"),
+        300,
+    );
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+    state
+        .lock()
+        .state
+        .instances
+        .get("contended")
+        .unwrap()
+        .connections
+        .store(7, Ordering::Relaxed);
+
+    // This is the value WaveKV selected using its own entry metadata. Its
+    // payload timestamp is older, so comparing reg_time again would leave the
+    // data plane permanently materializing a losing value.
+    sync_from_peer_at(
+        &state,
+        "contended",
+        "10.0.0.41",
+        &test_pubkey("winner-key"),
+        100,
+    );
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+
+    let proxy = state.lock();
+    let instance = &proxy.state.instances["contended"];
+    assert_eq!(instance.ip, "10.0.0.41".parse::<Ipv4Addr>().unwrap());
+    assert_eq!(instance.public_key, test_pubkey("winner-key"));
+    assert_eq!(encode_ts(instance.reg_time), 100);
+    assert_eq!(instance.num_connections(), 7);
     assert!(!proxy
         .state
         .allocated_addresses
