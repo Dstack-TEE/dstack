@@ -10,6 +10,7 @@ import hashlib
 import http.server
 import json
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -171,9 +172,9 @@ def main() -> int:
     runtime = json.loads(Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text())
     repo = Path(runtime["repository"])
     package = repo / "dstack/kms/auth-eth-bun"
-    bun = Path.home() / ".bun/bin/bun"
-    if not bun.is_file():
-        raise RuntimeError("Bun is unavailable")
+    bun = shutil.which("bun")
+    if bun is None:
+        raise RuntimeError("missing required command: bun")
 
     rpc_port, service_port = free_port(), free_port()
     root = Path(tempfile.mkdtemp(prefix="dstack-auth-eth-listener-"))

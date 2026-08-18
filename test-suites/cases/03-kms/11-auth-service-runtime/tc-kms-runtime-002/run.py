@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -60,7 +61,9 @@ def main() -> int:
     node_package = repo / "dstack/kms/auth-eth"
     bun_package = repo / "dstack/kms/auth-eth-bun"
     node_bin = Path.home() / ".local/share/fnm/node-versions/v20.19.6/installation/bin"
-    bun = Path.home() / ".bun/bin/bun"
+    bun = shutil.which("bun")
+    if bun is None:
+        raise RuntimeError("missing required command: bun")
     env = dict(os.environ)
     env["PATH"] = os.pathsep.join(
         [
