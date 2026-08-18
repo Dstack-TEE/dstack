@@ -363,7 +363,23 @@ pub struct CvmConfig {
     /// Networking configuration
     pub networking: Networking,
 
-    /// Optional host-side filtering for bridge interfaces.
+    /// Network backends that deployment RPC callers may request explicitly.
+    /// The node default is still used when a request omits networking.
+    #[serde(default = "default_allowed_network_modes")]
+    pub allowed_network_modes: Vec<NetworkingMode>,
+
+    /// Host bridges that deployment RPC callers may select explicitly.
+    /// An empty list permits only the node's default bridge.
+    #[serde(default)]
+    pub allowed_bridges: Vec<String>,
+
+    /// Host interfaces that deployment RPC callers may select explicitly as
+    /// macvtap parents. An empty list permits only the node default parent.
+    #[serde(default)]
+    pub allowed_macvtap_parents: Vec<String>,
+
+    /// Optional host-side filtering for bridge interfaces. This filter does
+    /// not apply to macvtap interfaces.
     #[serde(default)]
     pub network_filter: NetworkFilterConfig,
 
@@ -681,6 +697,25 @@ impl Config {
 
         validate_networking(&self.cvm.networking)?;
         anyhow::ensure!(
+            !self
+                .cvm
+                .allowed_network_modes
+                .contains(&NetworkingMode::Custom),
+            "cvm.allowed_network_modes cannot contain custom"
+        );
+        for (name, values) in [
+            ("cvm.allowed_bridges", &self.cvm.allowed_bridges),
+            (
+                "cvm.allowed_macvtap_parents",
+                &self.cvm.allowed_macvtap_parents,
+            ),
+        ] {
+            anyhow::ensure!(
+                values.iter().all(|value| !value.trim().is_empty()),
+                "{name} cannot contain empty interface names"
+            );
+        }
+        anyhow::ensure!(
             !self.supervisor.sock.trim().is_empty(),
             "supervisor.sock must not be empty"
         );
@@ -799,6 +834,10 @@ fn validate_networking(networking: &Networking) -> Result<()> {
         NetworkingMode::User => {}
     }
     Ok(())
+}
+
+fn default_allowed_network_modes() -> Vec<NetworkingMode> {
+    vec![NetworkingMode::User, NetworkingMode::Bridge]
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

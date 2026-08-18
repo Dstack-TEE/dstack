@@ -349,7 +349,10 @@ fn resolve_volume_source(base: &Path, source: &str) -> Result<PathBuf> {
     Ok(real)
 }
 
-fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Result<Option<Networking>> {
+fn networking_from_proto(
+    proto: &rpc::NetworkingConfig,
+    cvm_config: &CvmConfig,
+) -> Result<Option<Networking>> {
     let bridge = proto.bridge_name.trim().to_string();
     let mode = match proto.mode.as_str() {
         "bridge" => NetworkingMode::Bridge,
@@ -360,19 +363,34 @@ fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Result<Option<Network
         "custom" => bail!("custom networking mode is manifest-only"),
         other => bail!("unsupported networking mode '{other}'"),
     };
+    if !cvm_config.allowed_network_modes.contains(&mode) {
+        bail!(
+            "networking mode '{}' is not allowed by node policy",
+            proto.mode
+        );
+    }
     if mode != NetworkingMode::Bridge && !bridge.is_empty() {
         bail!("bridge_name is only valid for bridge networking mode");
     }
-    if mode != NetworkingMode::Macvtap
-        && (!proto.parent.trim().is_empty() || !proto.macvtap_mode.trim().is_empty())
-    {
-        bail!("parent and macvtap_mode are only valid for macvtap networking mode");
+    if mode != NetworkingMode::Macvtap && !proto.parent.trim().is_empty() {
+        bail!("parent is only valid for macvtap networking mode");
+    }
+    if !proto.macvtap_mode.trim().is_empty() {
+        bail!("macvtap_mode is node-controlled and cannot be set by deployment RPCs");
+    }
+    if !bridge.is_empty() && !cvm_config.allowed_bridges.contains(&bridge) {
+        bail!("bridge_name '{bridge}' is not allowed by node policy");
+    }
+    let parent = proto.parent.trim().to_string();
+    if !parent.is_empty() && !cvm_config.allowed_macvtap_parents.contains(&parent) {
+        bail!("macvtap parent '{parent}' is not allowed by node policy");
     }
     Ok(Some(Networking {
         mode,
         bridge,
-        parent: proto.parent.trim().to_string(),
-        macvtap_mode: proto.macvtap_mode.trim().to_string(),
+        parent,
+        // The forwarding mode is always inherited from node configuration.
+        macvtap_mode: String::new(),
         device: String::new(),
         mac_prefix: String::new(),
         net: String::new(),
@@ -382,12 +400,21 @@ fn networking_from_proto(proto: &rpc::NetworkingConfig) -> Result<Option<Network
     }))
 }
 
-fn network_from_required_proto(proto: &rpc::NetworkingConfig) -> Result<Networking> {
-    networking_from_proto(proto)?.context("networking mode is required")
+fn network_from_required_proto(
+    proto: &rpc::NetworkingConfig,
+    cvm_config: &CvmConfig,
+) -> Result<Networking> {
+    networking_from_proto(proto, cvm_config)?.context("networking mode is required")
 }
 
-fn networks_from_proto(networks: &[rpc::NetworkingConfig]) -> Result<Vec<Networking>> {
-    networks.iter().map(network_from_required_proto).collect()
+fn networks_from_proto(
+    networks: &[rpc::NetworkingConfig],
+    cvm_config: &CvmConfig,
+) -> Result<Vec<Networking>> {
+    networks
+        .iter()
+        .map(|network| network_from_required_proto(network, cvm_config))
+        .collect()
 }
 
 fn validate_default_network(cvm_config: &CvmConfig) -> Result<()> {
@@ -420,10 +447,10 @@ fn networks_from_vm_config(
     cvm_config: &CvmConfig,
 ) -> Result<Vec<Networking>> {
     if !request.networks.is_empty() {
-        let networks = networks_from_proto(&request.networks)?;
+        let networks = networks_from_proto(&request.networks, cvm_config)?;
         resolve_requested_networks(&networks, cvm_config)
     } else if let Some(networking) = request.networking.as_ref() {
-        match networking_from_proto(networking)? {
+        match networking_from_proto(networking, cvm_config)? {
             Some(networking) => resolve_requested_networks(&[networking], cvm_config),
             None => Ok(vec![]),
         }
@@ -714,7 +741,7 @@ impl VmmRpc for RpcHandler {
                 validate_default_network(&self.app.config.cvm)?;
                 vec![]
             } else {
-                let networks = networks_from_proto(&request.networks)?;
+                let networks = networks_from_proto(&request.networks, &self.app.config.cvm)?;
                 resolve_requested_networks(&networks, &self.app.config.cvm)?
             };
             let is_running = self
@@ -1243,27 +1270,113 @@ mod tests {
     }
 
     #[test]
-    fn macvtap_networking_preserves_parent_and_mode() {
-        let networks = networks_from_proto(&[rpc::NetworkingConfig {
-            mode: "macvtap".to_string(),
-            parent: "eth0".to_string(),
-            macvtap_mode: "private".to_string(),
-            ..Default::default()
-        }])
+    fn authorized_macvtap_preserves_parent_and_inherits_forwarding_mode() {
+        let mut cvm_config = test_cvm_config();
+        cvm_config
+            .allowed_network_modes
+            .push(NetworkingMode::Macvtap);
+        cvm_config.allowed_macvtap_parents.push("eth0".to_string());
+        cvm_config.networking.parent = "node-default".to_string();
+        cvm_config.networking.macvtap_mode = "private".to_string();
+        let networks = networks_from_proto(
+            &[rpc::NetworkingConfig {
+                mode: "macvtap".to_string(),
+                parent: "eth0".to_string(),
+                ..Default::default()
+            }],
+            &cvm_config,
+        )
         .unwrap();
 
         assert_eq!(networks[0].mode, NetworkingMode::Macvtap);
         assert_eq!(networks[0].parent, "eth0");
-        assert_eq!(networks[0].macvtap_mode, "private");
+        assert!(networks[0].macvtap_mode.is_empty());
+
+        let resolved = resolve_requested_networks(&networks, &cvm_config).unwrap();
+        assert_eq!(resolved[0].parent, "eth0");
+        assert_eq!(resolved[0].macvtap_mode, "private");
+    }
+
+    #[test]
+    fn macvtap_is_denied_by_default_rpc_policy() {
+        let err = networks_from_proto(
+            &[rpc::NetworkingConfig {
+                mode: "macvtap".to_string(),
+                ..Default::default()
+            }],
+            &test_cvm_config(),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("not allowed by node policy"));
+    }
+
+    #[test]
+    fn bridge_override_requires_allowlist_entry() {
+        let request = [rpc::NetworkingConfig {
+            mode: "bridge".to_string(),
+            bridge_name: "tenant-br0".to_string(),
+            ..Default::default()
+        }];
+        let mut cvm_config = test_cvm_config();
+
+        let err = networks_from_proto(&request, &cvm_config).unwrap_err();
+        assert!(err.to_string().contains("bridge_name 'tenant-br0'"));
+
+        cvm_config.allowed_bridges.push("tenant-br0".to_string());
+        let networks = networks_from_proto(&request, &cvm_config).unwrap();
+        assert_eq!(networks[0].bridge, "tenant-br0");
+    }
+
+    #[test]
+    fn macvtap_parent_requires_allowlist_entry() {
+        let request = [rpc::NetworkingConfig {
+            mode: "macvtap".to_string(),
+            parent: "eth1".to_string(),
+            ..Default::default()
+        }];
+        let mut cvm_config = test_cvm_config();
+        cvm_config
+            .allowed_network_modes
+            .push(NetworkingMode::Macvtap);
+
+        let err = networks_from_proto(&request, &cvm_config).unwrap_err();
+        assert!(err.to_string().contains("macvtap parent 'eth1'"));
+
+        cvm_config.allowed_macvtap_parents.push("eth1".to_string());
+        let networks = networks_from_proto(&request, &cvm_config).unwrap();
+        assert_eq!(networks[0].parent, "eth1");
+    }
+
+    #[test]
+    fn deployment_rpc_cannot_select_macvtap_forwarding_mode() {
+        let mut cvm_config = test_cvm_config();
+        cvm_config
+            .allowed_network_modes
+            .push(NetworkingMode::Macvtap);
+        let err = networks_from_proto(
+            &[rpc::NetworkingConfig {
+                mode: "macvtap".to_string(),
+                macvtap_mode: "passthru".to_string(),
+                ..Default::default()
+            }],
+            &cvm_config,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("node-controlled"));
     }
 
     #[test]
     fn bridge_name_is_rejected_for_user_mode() {
-        let err = networks_from_proto(&[rpc::NetworkingConfig {
-            mode: "user".to_string(),
-            bridge_name: "dstack-br0".to_string(),
-            ..Default::default()
-        }])
+        let err = networks_from_proto(
+            &[rpc::NetworkingConfig {
+                mode: "user".to_string(),
+                bridge_name: "dstack-br0".to_string(),
+                ..Default::default()
+            }],
+            &test_cvm_config(),
+        )
         .unwrap_err();
 
         assert!(err.to_string().contains("bridge_name is only valid"));
@@ -1271,11 +1384,14 @@ mod tests {
 
     #[test]
     fn repeated_networks_rejects_empty_entries() {
-        let err = networks_from_proto(&[rpc::NetworkingConfig {
-            mode: String::new(),
-            bridge_name: String::new(),
-            ..Default::default()
-        }])
+        let err = networks_from_proto(
+            &[rpc::NetworkingConfig {
+                mode: String::new(),
+                bridge_name: String::new(),
+                ..Default::default()
+            }],
+            &test_cvm_config(),
+        )
         .unwrap_err();
 
         assert!(err.to_string().contains("networking mode is required"));
@@ -1283,11 +1399,14 @@ mod tests {
 
     #[test]
     fn repeated_networks_rejects_custom_entries() {
-        let err = networks_from_proto(&[rpc::NetworkingConfig {
-            mode: "custom".to_string(),
-            bridge_name: String::new(),
-            ..Default::default()
-        }])
+        let err = networks_from_proto(
+            &[rpc::NetworkingConfig {
+                mode: "custom".to_string(),
+                bridge_name: String::new(),
+                ..Default::default()
+            }],
+            &test_cvm_config(),
+        )
         .unwrap_err();
 
         assert!(err.to_string().contains("custom networking mode"));

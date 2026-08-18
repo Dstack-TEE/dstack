@@ -132,7 +132,8 @@ message NetworkingConfig {
   string bridge_name = 2;
   // Parent host interface for macvtap mode.
   string parent = 3;
-  // macvtap forwarding mode. Empty selects "private".
+  // Effective macvtap forwarding mode in responses. Deployment requests must
+  // leave this empty because the mode is controlled by node configuration.
   string macvtap_mode = 4;
 }
 

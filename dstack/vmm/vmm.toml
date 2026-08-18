@@ -46,6 +46,12 @@ qmp_socket = false
 # Unique namespace when multiple dstack-vmm instances share one host. When
 # empty, a stable value is derived from run_path.
 instance_id = ""
+# Network choices that deployment RPC callers may make. Macvtap is excluded
+# by default because libvirt nwfilter applies only to bridge interfaces.
+allowed_network_modes = ["user", "bridge"]
+# Empty allowlists mean callers can only use the node networking defaults.
+allowed_bridges = []
+allowed_macvtap_parents = []
 use_mrconfigid = true
 
 # QEMU flags
@@ -111,8 +117,9 @@ restrict = false
 # for mode = "bridge"
 # bridge = "virbr0"
 
-# Optional filtering for bridge interfaces. "none" preserves the existing
-# QEMU bridge-helper behavior and has no netd/libvirt dependency.
+# Optional filtering for bridge interfaces only. It does not apply to macvtap.
+# "none" preserves the existing QEMU bridge-helper behavior and has no
+# netd/libvirt dependency.
 [cvm.network_filter]
 mode = "none"
 filter = "clean-traffic"
