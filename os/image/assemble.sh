@@ -456,6 +456,7 @@ cat <<EOF > "${OUTPUT_DIR}/metadata.json"
     "rootfs": "rootfs.img.parted.verity",
     "version": "$DSTACK_VERSION",
     "git_revision": "$GIT_REVISION",
+    "builder": "$BACKEND",
     "shared_ro": true,
     "is_dev": ${IS_DEV},
     "ovmf_variant": "$OVMF_VARIANT"
