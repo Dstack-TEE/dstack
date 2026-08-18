@@ -263,9 +263,15 @@ def _reclaimable(marker: Path, base: int, count: int) -> bool:
     """Report whether a marker is left over from a lease that is gone."""
     try:
         age = time.time() - marker.stat().st_mtime
+        owner_text = marker.read_text(encoding="utf-8").strip()
     except OSError:
         return False
     if age < PORT_RESERVATION_STALE_SECONDS:
+        return False
+    # Current markers name their owning lease workspace. A stopped guest may
+    # temporarily leave all of its forwarded ports bindable while its lease is
+    # still active, so bindability alone must never release those ports.
+    if owner_text and Path(owner_text).exists():
         return False
     probes = []
     try:
@@ -281,7 +287,7 @@ def _reclaimable(marker: Path, base: int, count: int) -> bool:
     return True
 
 
-def find_port_block(count: int = 4) -> int:
+def find_port_block(owner: Path, count: int = 4) -> int:
     """Reserve consecutive loopback ports for one lease-owned guest.
 
     Reserve every port in the block, not the block's base. Keying the marker on
@@ -301,7 +307,8 @@ def find_port_block(count: int = 4) -> int:
                 handle = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
             except OSError:
                 break
-            os.close(handle)
+            with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                stream.write(str(owner.resolve()) + "\n")
             claimed.append(marker)
         if len(claimed) == count and _bindable(base, count):
             return base
@@ -977,7 +984,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
     state = PROVIDER_ROOT / lease_id
     state.mkdir(parents=True, exist_ok=False)
     bootstrap_process, bootstrap_url = start_bootstrap_server(state)
-    port_base = find_port_block(5)
+    port_base = find_port_block(state, 5)
     ssh_port, tappd_port, guest_port, verifier_port, dashboard_port = range(
         port_base, port_base + 5
     )
@@ -1579,7 +1586,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         or guest_agent_startup_requested
         or systemd_graph_requested
     ):
-        peer_ssh_port = find_port_block(3)
+        peer_ssh_port = find_port_block(state, 3)
         peer_tappd_port = peer_ssh_port + 1
         peer_guest_port = peer_ssh_port + 2
         peer_compose_path = state / "peer-app-compose.json"
