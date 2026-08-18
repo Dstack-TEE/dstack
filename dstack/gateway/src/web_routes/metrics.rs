@@ -79,8 +79,7 @@ fn store_snapshot(name: &'static str, node: &wavekv::node::Node) -> StoreSnapsho
             .map(|peer| PeerSnapshot {
                 id: peer.id,
                 local_ack: peer.ack,
-                peer_ack: peer.pack,
-                buffered_logs: peer.logs as u64,
+                peer_ack: peer.peer_ack,
             })
             .collect(),
     }

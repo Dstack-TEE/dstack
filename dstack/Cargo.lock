@@ -1918,7 +1918,8 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
- "wavekv",
+ "wavekv 1.0.0",
+ "wavekv 2.0.0",
  "x509-parser",
 ]
 
@@ -8368,6 +8369,28 @@ name = "wavekv"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf9b73bc556dfdb7ef33617a9d477b803198db43ea3df25463efaf43d4986fe8"
+dependencies = [
+ "anyhow",
+ "bincode 2.0.1",
+ "chrono",
+ "crc32fast",
+ "dashmap",
+ "fs-err",
+ "futures",
+ "hex",
+ "rmp-serde",
+ "serde",
+ "serde-human-bytes",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "wavekv"
+version = "2.0.0"
+source = "git+https://github.com/Phala-Network/wavekv?branch=feat%2Fdelta-state-sync#a95014ae79c4f95f1e869125c777fe253b12a79d"
 dependencies = [
  "anyhow",
  "bincode 2.0.1",

@@ -394,45 +394,6 @@ pub mod keys {
     }
 }
 
-/// Ceiling on a decompressed sync payload.
-///
-/// The wire is gzipped, and gzip expands by three orders of magnitude on
-/// attacker-chosen input: the 16 MiB cap the sync route puts on a request body
-/// is a cap on the *compressed* size, which bounds nothing useful on its own.
-/// Every gateway in a cluster shares one app_id, so the RA-TLS check on the
-/// route proves the sender is *some* gateway of this deployment — not that its
-/// payload is well-formed.
-///
-/// The value is far above any legitimate payload: a sync response carries the
-/// whole live state, which is bounded by the gateway's own key set (instances,
-/// nodes, certificates) rather than by anything a peer controls.
-pub const MAX_DECOMPRESSED_SYNC_BYTES: usize = 128 * 1024 * 1024;
-
-/// Ceiling on a compressed sync body, mirroring the 16 MiB the route accepts on
-/// a request. Without it a peer's *response* is read to completion before any
-/// decompression bound applies, and the memory is already spent.
-pub const MAX_COMPRESSED_SYNC_BYTES: usize = 16 * 1024 * 1024;
-
-/// Decompress gzip, refusing anything that expands past `limit`.
-///
-/// Reads one byte past the limit so a payload landing exactly on it is still
-/// accepted and a larger one is rejected rather than silently truncated —
-/// `Read::take` alone would hand back a short buffer that then fails to decode,
-/// reporting the wrong fault.
-pub fn gunzip_bounded(data: &[u8], limit: usize) -> Result<Vec<u8>> {
-    use std::io::Read;
-
-    let mut out = Vec::new();
-    flate2::read::GzDecoder::new(data)
-        .take(limit as u64 + 1)
-        .read_to_end(&mut out)
-        .context("failed to decompress payload")?;
-    if out.len() > limit {
-        anyhow::bail!("decompressed payload exceeds {limit} bytes");
-    }
-    Ok(out)
-}
-
 /// How far into the future a replicated observation may be timestamped before
 /// this node ignores it.
 ///
@@ -748,7 +709,7 @@ impl KvStore {
                     data_dir,
                     store_config(schema::Store::Persistent),
                 )
-                    .context("failed to create persistent wavekv node on a fresh data dir")?
+                .context("failed to create persistent wavekv node on a fresh data dir")?
             }
         };
 
