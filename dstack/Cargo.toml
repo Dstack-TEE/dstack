@@ -121,8 +121,7 @@ serde-duration = { path = "serde-duration" }
 dstack-mr = { path = "dstack-mr" }
 dstack-verifier = { path = "verifier", default-features = false }
 size-parser = { path = "size-parser" }
-# TODO: repoint to `wavekv = "2.0"` once Phala-Network/wavekv#3 is released to crates.io.
-wavekv = { git = "https://github.com/Phala-Network/wavekv", branch = "feat/delta-state-sync" }
+wavekv = "2.0"
 
 # Core dependencies
 anyhow = { version = "1.0.97", default-features = false }
