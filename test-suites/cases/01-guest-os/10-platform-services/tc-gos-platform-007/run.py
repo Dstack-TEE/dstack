@@ -66,10 +66,10 @@ def main() -> int:
         metadata = json.loads(
             (store / str(values["image"]) / "metadata.json").read_text()
         )
-        if metadata.get("backend") != "mkosi":
+        if metadata.get("builder") != "mkosi":
             raise RuntimeError("fixture did not boot a mkosi image")
         evidence["mkosi"] = {
-            k: metadata.get(k) for k in ("backend", "is_dev", "git_revision")
+            k: metadata.get(k) for k in ("builder", "is_dev", "git_revision")
         }
         script = (
             pathlib.Path(str(runtime["repository"]))

@@ -23,7 +23,7 @@
 - If a mismatch occurs, write the provisional result first. Perform narrow source-level root-cause analysis only when failure investigation is enabled.
 - The guest image is BusyBox based: it does not provide an in-guest `timeout` command, GNU short `head -8` syntax, or procps `ps -p`. Apply timeouts around each host-side invocation of `values.ssh_argv`; inside the guest use BusyBox-compatible `head -n 8`, `ps -o`, `systemctl`, `ctr`, `nerdctl`, and `containerd-stargz-grpc` commands. A missing convenience utility or incompatible probe syntax is a test-probe defect and must be corrected before grading the candidate. Stop/start only lease-owned guest services and restore their configuration.
 
-- Execute image behavior only when the fixture-provided image provenance reports `backend: mkosi`; an older Yocto image with the same `dstack-0.6.0` or `dstack-dev-0.6.0` name is not valid evidence for this run.
+- Execute image behavior only when the fixture-provided image provenance reports `builder: mkosi`; an older Yocto image with the same `dstack-0.6.0` or `dstack-dev-0.6.0` name is not valid evidence for this run.
 
 ## Objective
 
