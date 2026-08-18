@@ -43,6 +43,7 @@ SUPPORTED = {f"tc-kms-upgrade-{index:03d}" for index in range(1, 13)} | {
     "tc-int-failure-se-007",
 }
 COMPATIBILITY_ACTION = "Persisted state migration from v0.5.4, v0.5.8, and v0.5.11"
+IN_PLACE_GATEWAY_ACTION = "Upgrade a v0.5.11 Gateway in place on its retained data disk"
 
 RELEASES = {
     "0.5.4": ("dstacktee/dstack-kms:0.5.4", "dstack-dev-0.5.4", "legacy"),
@@ -118,7 +119,7 @@ def http(
         return error.code, error.read()
     except (
         urllib.error.URLError,
-        stdlib_http_client.RemoteDisconnected,
+        stdlib_http_client.HTTPException,
         ConnectionResetError,
         TimeoutError,
     ):
@@ -704,9 +705,9 @@ class MatrixRun:
         node_id: int,
         name_suffix: str = "",
         evidence_observer: bool = False,
-        bootnode_guest_url: str = "",
         source_app_id: str = "",
         client_range: str = "",
+        compose_only: bool = False,
     ) -> dict[str, Any]:
         """Deploy one real Gateway CVM after the selected KMS endpoints are healthy."""
         self.counter += 1
@@ -730,43 +731,8 @@ class MatrixRun:
         dns_config = ""
         gateway_dns = ""
         certbot_services = ""
-        sync_bridge_service = ""
-        sync_bridge_config = ""
-        sync_bridge_dependency = ""
-        effective_bootnode_url = bootnode_guest_url
-        compatibility_bridge = pathlib.Path(
-            json.loads(self.runtime_path.read_text())["repository"]
-        ) / ("test-suites/shared/automation/gateway-upgrade-sync-bridge.py")
-        if version == "candidate" and bootnode_guest_url:
-            effective_bootnode_url = "https://127.0.0.1:7999"
-            sync_bridge_dependency = """      gateway-sync-bridge:
-        condition: service_healthy
-"""
-            sync_bridge_service = f"""  gateway-sync-bridge:
-    image: dstacktee/dstack-kms:0.5.8
-    network_mode: host
-    entrypoint: ["python3", "/opt/gateway-upgrade-sync-bridge.py"]
-    environment:
-      - UPSTREAM_URL={bootnode_guest_url}
-      - ADVERTISED_URL=https://127.0.0.1:7999
-    volumes:
-      - /var/run/tappd.sock:/var/run/tappd.sock
-    configs:
-      - source: gateway-upgrade-sync-bridge
-        target: /opt/gateway-upgrade-sync-bridge.py
-    healthcheck:
-      test: ["CMD", "python3", "/opt/gateway-upgrade-sync-bridge.py", "--check"]
-      interval: 1s
-      timeout: 3s
-      retries: 30
-    restart: unless-stopped
-"""
-            sync_bridge_config = f"""  gateway-upgrade-sync-bridge:
-    content: |
-{"".join(f"      {line}\n" for line in compatibility_bridge.read_text().splitlines())}"""
         if version == "candidate":
-            gateway_dns = (
-                """    depends_on:
+            gateway_dns = """    depends_on:
       mock-cf-dns-api:
         condition: service_started
       cloudflare-zone-proxy:
@@ -774,8 +740,6 @@ class MatrixRun:
       pebble:
         condition: service_started
 """
-                + sync_bridge_dependency
-            )
             certbot_services = """  mock-cf-dns-api:
     image: kvin/mock-cf-dns-api:latest
     network_mode: host
@@ -853,10 +817,8 @@ class MatrixRun:
     content: |
 {"".join(f"      {line}\n" for line in observer.read_text().splitlines())}"""
         configs_section = ""
-        if dns_config or observer_config or sync_bridge_config:
-            configs_section = (
-                f"configs:\n{dns_config}{observer_config}{sync_bridge_config}"
-            )
+        if dns_config or observer_config:
+            configs_section = f"configs:\n{dns_config}{observer_config}"
         compose_yaml.write_text(
             f"""services:
   gateway:
@@ -880,7 +842,7 @@ class MatrixRun:
       - NODE_ID=${{NODE_ID}}
       - PROXY_LISTEN_PORT=${{PROXY_LISTEN_PORT}}
     restart: unless-stopped
-{dns_service}{certbot_services}{sync_bridge_service}{observer_service}volumes:
+{dns_service}{certbot_services}{observer_service}volumes:
   gateway-data: {{}}
 {configs_section}"""
         )
@@ -923,6 +885,11 @@ class MatrixRun:
                 str(app),
             ]
         )
+        if compose_only:
+            return {
+                "version": f"gateway-{version}-compose-only",
+                "app_compose": str(app),
+            }
         with pathlib.Path("/tmp/dstack-kms-upgrade-port-allocation.lock").open(
             "a+"
         ) as allocation_lock:
@@ -942,7 +909,6 @@ class MatrixRun:
                     f"MY_URL=https://10.0.2.2:{8000 + node_id}",
                     f"MY_URL=https://10.0.2.2:{service_port}",
                 )
-                .replace("BOOTNODE_URL=", f"BOOTNODE_URL={effective_bootnode_url}")
             )
             command = [
                 *self.cli,
@@ -1106,6 +1072,7 @@ class MatrixRun:
             "health_http": status,
             "kms_versions": [item["version"] for item in kms_rows],
             "app_id": source_app_id,
+            "rpc_domain": f"gateway-{version}.test",
         }
         self.rows.append(row)
         return row
@@ -1126,31 +1093,31 @@ class MatrixRun:
         )
         compatibility_bridge = pathlib.Path(
             json.loads(self.runtime_path.read_text())["repository"]
-        ) / ("test-suites/shared/automation/gateway-upgrade-sync-bridge.py")
+        ) / ("test-suites/shared/automation/gateway-legacy-ra-proxy.py")
         compose_yaml = self.workspace / f"{name}.compose.yml"
         compose_yaml.write_text(
             f"""services:
   gateway-client-bridge:
     image: dstacktee/dstack-kms:0.5.8
     network_mode: host
-    entrypoint: ["python3", "/opt/gateway-upgrade-sync-bridge.py"]
+    entrypoint: ["python3", "/opt/gateway-legacy-ra-proxy.py"]
     environment:
       - UPSTREAM_URL=${{UPSTREAM_URL}}
       - ADVERTISED_URL=${{ADVERTISED_URL}}
     volumes:
       - /var/run/tappd.sock:/var/run/tappd.sock
     configs:
-      - source: gateway-upgrade-sync-bridge
-        target: /opt/gateway-upgrade-sync-bridge.py
+      - source: gateway-legacy-ra-proxy
+        target: /opt/gateway-legacy-ra-proxy.py
     healthcheck:
-      test: ["CMD", "python3", "/opt/gateway-upgrade-sync-bridge.py", "--check", "--listen", "127.0.0.1:7998"]
+      test: ["CMD", "python3", "/opt/gateway-legacy-ra-proxy.py", "--check", "--listen", "127.0.0.1:7998"]
       interval: 1s
       timeout: 3s
       retries: 30
     command: ["--listen", "0.0.0.0:7998"]
     restart: unless-stopped
 configs:
-  gateway-upgrade-sync-bridge:
+  gateway-legacy-ra-proxy:
     content: |
 {"".join(f"      {line}\n" for line in compatibility_bridge.read_text().splitlines())}"""
         )
@@ -1549,7 +1516,8 @@ configs:
     ) -> dict[str, Any] | None:
         """Send one TLS request through the real Gateway and decode the app marker."""
         self.last_gateway_route_error = "route probe did not run"
-        server_name = f"{app_id}-{port}s.gateway-candidate.test"
+        rpc_domain = gateway.get("rpc_domain", "gateway-candidate.test")
+        server_name = f"{app_id}-{port}s.{rpc_domain}"
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.check_hostname = False
@@ -3334,22 +3302,13 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             "candidate", initialized=True, domain_override="10-0-2-2.sslip.io"
         )
         gateway_app_id = hashlib.sha1(  # noqa: S324 - opaque case identity, not cryptography
-            f"{case_id}:rolling-gateway-cluster".encode()
+            f"{case_id}:gateway-in-place-upgrade".encode()
         ).hexdigest()
         old_gateway = matrix.deploy_gateway(
             "0.5.11",
             [kms],
             node_id=1,
-            name_suffix="old",
-            source_app_id=gateway_app_id,
-            client_range="10.8.0.0/16",
-        )
-        candidate_gateway = matrix.deploy_gateway(
-            "candidate",
-            [kms],
-            node_id=2,
-            name_suffix="candidate",
-            bootnode_guest_url=old_gateway["guest_url"],
+            name_suffix="in-place",
             source_app_id=gateway_app_id,
             client_range="10.8.0.0/16",
         )
@@ -3366,80 +3325,126 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
                 time.sleep(1)
             diagnostic = getattr(matrix, "last_gateway_route_error", "unavailable")
             raise RuntimeError(
-                f"Gateway cluster did not converge app={app_id}: {last}; "
+                f"Gateway route did not become ready app={app_id}: {last}; "
                 f"last_route_error={diagnostic}"
             )
 
-        old_client = matrix.deploy_client(
+        baseline_client = matrix.deploy_client(
             [kms],
-            identity="old-gateway-client",
-            gateway_rows=[candidate_gateway, old_gateway],
+            identity="pre-upgrade-client",
+            gateway_rows=[old_gateway],
             trust_chain=True,
             restricted_ports=[8443],
             native_gateway=True,
         )
-        old_to_candidate = wait_route(
-            candidate_gateway,
-            old_client["app_id"],
-            old_client["route_instance"],
-        )
-        candidate_client = matrix.deploy_client(
-            [kms],
-            identity="candidate-gateway-client",
-            gateway_rows=[candidate_gateway, old_gateway],
-            trust_chain=True,
-            restricted_ports=[8443],
-            native_gateway=True,
-        )
-        candidate_to_old = wait_route(
+        baseline_route = wait_route(
             old_gateway,
-            candidate_client["app_id"],
-            candidate_client["route_instance"],
+            baseline_client["app_id"],
+            baseline_client["route_instance"],
+        )
+        before_info = json.loads(
+            run([*matrix.cli, "info", "--json", old_gateway["vm_id"]])
+        )
+        # Prevent the client from recreating its registration after the upgrade;
+        # candidate startup must first prove it loaded the legacy disk state.
+        run(
+            [*matrix.cli, "stop", baseline_client["vm_id"], "--force"],
+            timeout=120,
         )
 
-        before_restart = matrix.gateway_tls_identity(candidate_gateway)
+        # Build the candidate compose through the same repository entrypoint
+        # without booting a throwaway VM, then apply it to the stopped legacy VM.
+        candidate_template = matrix.deploy_gateway(
+            "candidate",
+            [kms],
+            node_id=2,
+            name_suffix="template",
+            source_app_id=gateway_app_id,
+            client_range="10.8.0.0/16",
+            compose_only=True,
+        )
+        candidate_compose = pathlib.Path(candidate_template["app_compose"])
+
         run([*matrix.cli, "stop", old_gateway["vm_id"], "--force"], timeout=120)
-        failover_client = matrix.deploy_client(
+        run(
+            [
+                *matrix.cli,
+                "update-app-compose",
+                old_gateway["vm_id"],
+                str(candidate_compose),
+            ],
+            timeout=180,
+        )
+        run([*matrix.cli, "start", old_gateway["vm_id"]], timeout=180)
+        old_gateway["version"] = "gateway-candidate-in-place"
+        old_gateway["rpc_domain"] = "gateway-candidate.test"
+        old_gateway["wg_ip"] = "10.8.1.1"
+        if wait_http(old_gateway["url"], tls=True, timeout=180) <= 0:
+            raise RuntimeError("in-place upgraded Gateway did not become healthy")
+        after_info = json.loads(
+            run([*matrix.cli, "info", "--json", old_gateway["vm_id"]])
+        )
+        if before_info.get("id") != after_info.get("id"):
+            raise RuntimeError("in-place Gateway upgrade changed the VM identity")
+
+        dashboard_code, dashboard = http(f"http://127.0.0.1:{old_gateway['log_port']}/")
+        if dashboard_code != 200:
+            raise RuntimeError(
+                f"candidate Gateway log dashboard returned HTTP {dashboard_code}"
+            )
+        links = re.findall(rb'href="([^"]*gateway[^"]*\?text[^"]*)', dashboard)
+        if not links:
+            raise RuntimeError("candidate Gateway dashboard omitted its log link")
+        log_code, startup_log = http(
+            f"http://127.0.0.1:{old_gateway['log_port']}"
+            + links[0].decode().split("?", 1)[0]
+            + "?text&bare&timestamps&tail=500"
+        )
+        loaded_rows = [
+            int(value)
+            for value in re.findall(
+                rb"Node status after bootstrap: NodeStatus \{.*?n_kvs: (\d+),",
+                startup_log,
+                re.DOTALL,
+            )
+        ]
+        if log_code != 200 or not any(value > 0 for value in loaded_rows):
+            raise RuntimeError(
+                "candidate Gateway did not prove legacy WaveKV rows were loaded "
+                f"before client restart: http={log_code} n_kvs={loaded_rows}"
+            )
+        # After proving that the candidate loaded the legacy on-disk WaveKV rows,
+        # exercise a fresh registration without assuming cross-version sync APIs.
+        post_upgrade_client = matrix.deploy_client(
             [kms],
-            identity="candidate-only-client",
-            gateway_rows=[candidate_gateway],
+            identity="post-upgrade-client",
+            gateway_rows=[old_gateway],
             trust_chain=True,
             restricted_ports=[8443],
             native_gateway=True,
         )
-        candidate_failover = wait_route(
-            candidate_gateway,
-            failover_client["app_id"],
-            failover_client["route_instance"],
-        )
-        run([*matrix.cli, "start", old_gateway["vm_id"]], timeout=120)
+        post_upgrade_registrations = post_upgrade_client["observation"][
+            "gateway_registrations"
+        ]
+        if not post_upgrade_registrations or any(
+            item["http"] != 200 for item in post_upgrade_registrations
+        ):
+            raise RuntimeError(
+                "candidate Gateway registration failed after in-place migration: "
+                f"{post_upgrade_registrations}"
+            )
+        candidate_identity = matrix.gateway_tls_identity(old_gateway)
+        run([*matrix.cli, "stop", old_gateway["vm_id"], "--force"], timeout=120)
+        run([*matrix.cli, "start", old_gateway["vm_id"]], timeout=180)
         wait_http(old_gateway["url"], tls=True, timeout=180)
-        healed_to_old = wait_route(
-            old_gateway,
-            failover_client["app_id"],
-            failover_client["route_instance"],
-        )
-        after_restart = matrix.gateway_tls_identity(candidate_gateway)
+        restarted_identity = matrix.gateway_tls_identity(old_gateway)
 
-        invalid_rows = []
-        for gateway in (old_gateway, candidate_gateway):
-            code, raw = http(f"{gateway['url']}/prpc/Tproxy.RegisterCvm?json", b"{}")
-            if 0 < code < 400:
-                raise RuntimeError(
-                    f"{gateway['version']} accepted invalid registration"
-                )
-            health, _ = http(gateway["url"])
-            if health == 0:
-                raise RuntimeError(
-                    f"{gateway['version']} lost availability after rejection"
-                )
-            invalid_rows.append(
-                {
-                    "version": gateway["version"],
-                    "http": code,
-                    "response_sha256": hashlib.sha256(raw).hexdigest(),
-                    "healthy_after": True,
-                }
+        invalid_code, invalid_raw = http(
+            f"{old_gateway['url']}/prpc/Tproxy.RegisterCvm?json", b"{}"
+        )
+        if 0 < invalid_code < 400:
+            raise RuntimeError(
+                "candidate accepted invalid registration after migration"
             )
 
         runtime = json.loads(matrix.runtime_path.read_text())
@@ -3464,26 +3469,32 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
         )
         if completed.returncode:
             raise RuntimeError(
-                "Gateway WaveKV/certificate-lock regression failed; "
+                "Gateway WaveKV persistence regression failed; "
                 f"output_sha256={hashlib.sha256(completed.stdout).hexdigest()}"
             )
         return {
             "path": [
-                "v0.5.11-gateway-bootnode",
-                "candidate-gateway-join",
-                "dual-version-client-registrations",
-                "old-node-outage",
-                "candidate-only-registration",
-                "old-node-heal-and-convergence",
-                "certificate-lock-and-persistence-regression",
+                "v0.5.11-persisted-state",
+                "same-vm-stop",
+                "candidate-compose-in-place-update",
+                "same-data-disk-migration",
+                "legacy-persistent-state-loaded",
+                "post-migration-registration",
+                "candidate-state-mutation",
+                "candidate-restart-persistence",
             ],
-            "expected": "mixed Gateway nodes accept compatible client registrations, preserve policy and certificate identity, survive one-node loss, and converge after healing",
-            "old_to_candidate": old_to_candidate,
-            "candidate_to_old": candidate_to_old,
-            "candidate_failover": candidate_failover,
-            "healed_to_old": healed_to_old,
-            "candidate_certificate_identity_stable": before_restart == after_restart,
-            "invalid_registrations": invalid_rows,
+            "expected": "the candidate upgrades the stopped v0.5.11 Gateway in place on the same VM disk without requiring cross-version WaveKV sync compatibility",
+            "vm_id_preserved": before_info.get("id") == after_info.get("id"),
+            "legacy_wavekv_rows_loaded_before_client_restart": loaded_rows,
+            "cross_version_sync_required": False,
+            "baseline_route": baseline_route,
+            "post_upgrade_registrations": post_upgrade_registrations,
+            "candidate_certificate_identity_stable": candidate_identity
+            == restarted_identity,
+            "invalid_registration": {
+                "http": invalid_code,
+                "response_sha256": hashlib.sha256(invalid_raw).hexdigest(),
+            },
             "exact_gateway_test": {
                 "name": exact_test,
                 "passed": True,

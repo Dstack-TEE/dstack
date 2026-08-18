@@ -32,7 +32,7 @@ def main() -> int:
     if case_id != CASE_ID:
         raise ValueError(f"unsupported case: {case_id}")
     result_dir = pathlib.Path(os.environ["DSTACK_TEST_RESULT_DIR"])
-    repo = pathlib.Path(__file__).resolve().parents[4]
+    repo = pathlib.Path(__file__).resolve().parents[3]
     guest_agent = repo / "dstack/guest-agent"
 
     with tempfile.TemporaryDirectory(prefix="dstack-dashboard-model-") as directory:

@@ -348,7 +348,7 @@ def run_cli(argv: list[str]) -> tuple[int, str]:
 
 def inventory(root: pathlib.Path, method: str) -> tuple[list, dict]:
     """Return the indexed response fields and guest message schemas."""
-    document = json.loads((root / "api-inventory.json").read_text())
+    document = json.loads((root / "catalog" / "api-inventory.json").read_text())
     component = document["components"]["guest-os"]
     matches = [
         entry

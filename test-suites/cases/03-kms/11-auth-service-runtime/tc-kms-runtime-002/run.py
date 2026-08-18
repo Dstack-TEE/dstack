@@ -54,7 +54,7 @@ def main() -> int:
     result_dir = Path(os.environ["DSTACK_TEST_RESULT_DIR"])
     runtime = json.loads(Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text())
     repo = Path(runtime["repository"])
-    automation = repo / "test-suites/automation"
+    automation = repo / "test-suites/shared/automation"
     helper_path = automation / "kms-runtime-001-capability-case.py"
     helper = load_helpers(helper_path)
     node_package = repo / "dstack/kms/auth-eth"

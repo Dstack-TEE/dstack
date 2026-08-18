@@ -242,9 +242,7 @@ def main() -> int:
         row["passed"] = True
         rows.append(row)
 
-        request_source = (
-            repository / "dstack/verifier/shared/fixtures/quote-report.json"
-        )
+        request_source = repository / "dstack/verifier/fixtures/quote-report.json"
         request = workspace / "valid-request.json"
         shutil.copy2(request_source, request)
         cache = workspace / "cached-image"

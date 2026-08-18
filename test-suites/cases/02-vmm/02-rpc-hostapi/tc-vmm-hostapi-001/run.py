@@ -47,7 +47,7 @@ def atomic_json(path: pathlib.Path, value: Any) -> None:
 
 def inventory_entry(plan_root: pathlib.Path, method: str) -> dict[str, Any]:
     """Load the authoritative HostApi contract for the method."""
-    document = json.loads((plan_root / "api-inventory.json").read_text())
+    document = json.loads((plan_root / "catalog" / "api-inventory.json").read_text())
     matches: list[dict[str, Any]] = []
 
     def walk(value: Any) -> None:
@@ -76,7 +76,7 @@ def vsock_call(
     """Perform one bounded host-API request and return its structural result."""
     argv = [
         "/usr/bin/python3",
-        str(plan_root / "automation" / "vsock-http.py"),
+        str(plan_root / "shared" / "automation" / "vsock-http.py"),
         "--cid",
         str(endpoint.get("cid", 2)),
         "--port",

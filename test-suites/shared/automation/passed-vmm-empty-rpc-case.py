@@ -83,7 +83,7 @@ def atomic_json(path: pathlib.Path, value: Any) -> None:
 
 def inventory_entry(root: pathlib.Path, method: str) -> dict[str, Any]:
     """Load the API inventory entry."""
-    document = json.loads((root / "api-inventory.json").read_text())
+    document = json.loads((root / "catalog" / "api-inventory.json").read_text())
     matches: list[dict[str, Any]] = []
 
     def walk(value: Any) -> None:

@@ -165,39 +165,26 @@ def main() -> int:
             raise RuntimeError(f"four-generation KMS identity mismatch: {identities}")
         evidence["kms_identities"] = identities
 
-        gateway_app_id = hashlib.sha1(f"{CASE_ID}:gateway-cluster".encode()).hexdigest()  # noqa: S324
-        old_gateway = matrix.deploy_gateway(
-            "0.5.11",
-            kms_rows,
-            node_id=1,
-            name_suffix="old",
-            source_app_id=gateway_app_id,
-            client_range="10.8.0.0/16",
-        )
+        gateway_app_id = hashlib.sha1(  # noqa: S324
+            f"{CASE_ID}:candidate-gateway".encode()
+        ).hexdigest()
         candidate_gateway = matrix.deploy_gateway(
             "candidate",
             kms_rows,
-            node_id=2,
+            node_id=1,
             name_suffix="candidate",
-            bootnode_guest_url=old_gateway["guest_url"],
             source_app_id=gateway_app_id,
             client_range="10.8.0.0/16",
         )
-        gateways = [old_gateway, candidate_gateway]
+        gateways = [candidate_gateway]
         candidate_client_app_id = hashlib.sha1(  # noqa: S324
             f"{CASE_ID}:candidate-client".encode()
         ).hexdigest()
-        legacy_client_bridge = matrix.deploy_legacy_client_bridge(
-            kms_rows,
-            old_gateway,
-            source_app_id=candidate_client_app_id,
-            guest_image=guest_images["0.5.11"],
-        )
-        old_gateway["client_guest_url"] = legacy_client_bridge["guest_url"]
         evidence["gateway_wireguard_cluster"] = {
-            "peer_count": len(gateways),
-            "distinct_endpoints": len({row["wg_port"] for row in gateways}),
-            "shared_client_range": "10.8.0.0/16",
+            "peer_count": 1,
+            "distinct_endpoints": 1,
+            "cross_version_sync_required": False,
+            "client_range": "10.8.0.0/16",
             "private_material_exported": False,
         }
         gateway_identities = [matrix.gateway_tls_identity(row) for row in gateways]
@@ -217,7 +204,7 @@ def main() -> int:
                 kms_encrypt_row=candidate_primary,
                 guest_image=guest_images[version],
                 legacy_vmm_wire=version != "0.6.0-candidate",
-                gateway_rows=[candidate_gateway, old_gateway]
+                gateway_rows=[candidate_gateway]
                 if version == "0.6.0-candidate"
                 else None,
                 native_gateway=version == "0.6.0-candidate",
@@ -330,77 +317,51 @@ def main() -> int:
                     }
                 )
 
-        for direction, ordered in (
-            ("forward", gateways),
-            ("reverse", list(reversed(gateways))),
+        # Gateway releases do not provide cross-version WaveKV synchronization.
+        # Exercise restart continuity on the candidate node only; in-place legacy
+        # disk migration is covered by tc-int-compatibil-004/tc-int-mixed-003.
+        row = candidate_gateway
+        SUPPORT.run([*matrix.cli, "stop", row["vm_id"], "--force"], timeout=120)
+        SUPPORT.run([*matrix.cli, "start", row["vm_id"]], timeout=120)
+        SUPPORT.wait_http(row["url"], tls=True, timeout=180)
+        matrix.prepare_client_gateway_wireguard(
+            next(guest for version, guest in guests if version == "0.6.0-candidate"),
+            row,
+        )
+        recovered_probe = probe("candidate-gateway-recovered")
+        baseline_gateway = gateway_identities[0]
+        current_gateway = matrix.gateway_tls_identity(row)
+        stable_fields = (
+            "issuer",
+            "certificate_chain_length",
+            "chain_private_material_exported",
+        )
+        if any(
+            current_gateway[field] != baseline_gateway[field] for field in stable_fields
+        ) or (
+            current_gateway["certificate_chain_public_key_sha256"][1:]
+            != baseline_gateway["certificate_chain_public_key_sha256"][1:]
         ):
-            for row in ordered:
-                SUPPORT.run([*matrix.cli, "stop", row["vm_id"], "--force"], timeout=120)
-                survivor = next(
-                    item for item in gateways if item["vm_id"] != row["vm_id"]
-                )
-                for version, guest in guests:
-                    candidate_guest = version == "0.6.0-candidate"
-                    if candidate_guest:
-                        matrix.prepare_client_gateway_wireguard(guest, survivor)
-                    deadline = time.monotonic() + (180 if candidate_guest else 1)
-                    route = None
-                    while time.monotonic() < deadline:
-                        route = matrix.gateway_route(survivor, guest["app_id"])
-                        if not candidate_guest or (
-                            route and route.get("instance") == guest["route_instance"]
-                        ):
-                            break
-                        time.sleep(1)
-                    if candidate_guest:
-                        if (
-                            not route
-                            or route.get("instance") != guest["route_instance"]
-                        ):
-                            raise RuntimeError(
-                                f"{direction}: Gateway failover lost candidate traffic"
-                            )
-                    elif route is not None:
-                        raise RuntimeError(
-                            f"{direction}: legacy app crossed a Gateway route"
-                        )
-                SUPPORT.run([*matrix.cli, "start", row["vm_id"]], timeout=120)
-                SUPPORT.wait_http(row["url"], tls=True, timeout=180)
-                baseline_gateway = gateway_identities[gateways.index(row)]
-                current_gateway = matrix.gateway_tls_identity(row)
-                stable_fields = (
-                    "issuer",
-                    "certificate_chain_length",
-                    "chain_private_material_exported",
-                )
-                if any(
-                    current_gateway[field] != baseline_gateway[field]
-                    for field in stable_fields
-                ) or (
-                    current_gateway["certificate_chain_public_key_sha256"][1:]
-                    != baseline_gateway["certificate_chain_public_key_sha256"][1:]
-                ):
-                    raise RuntimeError(
-                        f"{direction}: Gateway TLS trust identity changed"
-                    )
-                current_info = json.loads(
-                    SUPPORT.run([*matrix.cli, "info", "--json", row["vm_id"]])
-                )
-                if current_info.get("app_id") != row["app_id"]:
-                    raise RuntimeError(f"{direction}: Gateway app identity changed")
-                evidence["restart_rows"].append(
-                    {
-                        "direction": direction,
-                        "version": f"gateway-{row['version']}",
-                        "surviving_gateway_traffic": True,
-                        "app_identity_stable": True,
-                        "tls_trust_identity_stable": True,
-                        "leaf_certificate_reissued": current_gateway["leaf_sha256"]
-                        != baseline_gateway["leaf_sha256"],
-                        "leaf_service_key_rotated": current_gateway["public_key_sha256"]
-                        != baseline_gateway["public_key_sha256"],
-                    }
-                )
+            raise RuntimeError("candidate Gateway TLS trust identity changed")
+        current_info = json.loads(
+            SUPPORT.run([*matrix.cli, "info", "--json", row["vm_id"]])
+        )
+        if current_info.get("app_id") != row["app_id"]:
+            raise RuntimeError("candidate Gateway app identity changed")
+        evidence["restart_rows"].append(
+            {
+                "direction": "candidate-only",
+                "version": f"gateway-{row['version']}",
+                "cross_version_sync_required": False,
+                "recovered_probe": recovered_probe,
+                "app_identity_stable": True,
+                "tls_trust_identity_stable": True,
+                "leaf_certificate_reissued": current_gateway["leaf_sha256"]
+                != baseline_gateway["leaf_sha256"],
+                "leaf_service_key_rotated": current_gateway["public_key_sha256"]
+                != baseline_gateway["public_key_sha256"],
+            }
+        )
 
         candidate_roots = [
             matrix.metadata(row) for row in (candidate_primary, candidate_secondary)
@@ -433,7 +394,7 @@ def main() -> int:
         json.dumps({"artifacts": [artifact]}, indent=2) + "\n"
     )
     summary = (
-        "Four KMS generations, two Gateways, and four Guest generations survived forward/reverse rolling restarts and bounded retirement"
+        "Four KMS generations, one candidate Gateway, and four Guest generations survived rolling restarts and bounded retirement"
         if status == "PASS"
         else failure
     )

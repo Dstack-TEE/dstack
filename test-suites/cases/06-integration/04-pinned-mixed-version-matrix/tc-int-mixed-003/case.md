@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <a id="tc-int-mixed-003"></a>
-# TC-INT-MIXED-003: Mixed gateway versions route old and new guests
+# TC-INT-MIXED-003: Gateway v0.5.11 to candidate in-place disk migration
 
 ## Metadata
 
@@ -24,7 +24,7 @@
 
 ## Objective
 
-Verify gateway v0.5.4, v0.5.8, v0.5.11 and candidate nodes can coexist only in the combinations/protocols documented as supported.
+Verify the candidate supports the documented v0.5.11 Gateway in-place upgrade by migrating persisted disk state, without requiring cross-version sync API compatibility.
 
 ## Preconditions
 
@@ -51,11 +51,11 @@ Capture source/target metadata, allowlists, image availability, `vm_config`, quo
 <a id="tc-int-mixed-003-step-02"></a>
 ### Step 2: Execute the compatibility path
 
-Register each pinned guest generation, synchronize/reroute traffic across gateway versions, exercise old missing port-policy fields and candidate policies, then fail nodes.
+Create legacy Gateway state, stop the VM, update the same VM to the candidate compose on the retained disk, restart it, and exercise migrated plus candidate-native state.
 
 **Expected results:**
 
-- Supported routing remains app-isolated with correct WireGuard/certificate identity; incompatible cluster-sync or policy combinations are detected and handled by deployment/cutover rather than silently weakening enforcement.
+- Migrated routing remains app-isolated with correct WireGuard and certificate identity; candidate-native writes survive restart, and no cross-version cluster-sync compatibility is assumed.
 
 <a id="tc-int-mixed-003-step-03"></a>
 ### Step 3: Verify key, CA, application, and service continuity

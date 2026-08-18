@@ -116,6 +116,7 @@ def make_config(
         'pid_file = "./run/supervisor.pid"': f'pid_file = "{runtime_root}/supervisor.pid"',
         'log_file = "./run/supervisor.log"': f'log_file = "{runtime_root}/supervisor.log"',
         "detached = false": "detached = true",
+        "allowed_bridges = []": 'allowed_bridges = ["virbr0"]',
         "port = 10000": f"port = {port + 1000}",
         "[key_provider]\nenabled = true": "[key_provider]\nenabled = false",
     }
@@ -225,15 +226,19 @@ def main() -> int:
         if start_code != 200:
             raise RuntimeError(f"bridge VM start failed with HTTP {start_code}")
         manifest = wait_for(
-            lambda: json.loads((bridge_dir / "vm-manifest.json").read_text())
-            if (bridge_dir / "vm-manifest.json").is_file()
-            else None,
+            lambda: (
+                json.loads((bridge_dir / "vm-manifest.json").read_text())
+                if (bridge_dir / "vm-manifest.json").is_file()
+                else None
+            ),
             "bridge VM manifest missing",
         )
         bridge_pid = wait_for(
-            lambda: int((bridge_dir / "qemu.pid").read_text())
-            if (bridge_dir / "qemu.pid").is_file()
-            else None,
+            lambda: (
+                int((bridge_dir / "qemu.pid").read_text())
+                if (bridge_dir / "qemu.pid").is_file()
+                else None
+            ),
             "bridge VM did not start",
             120,
         )
@@ -269,9 +274,11 @@ def main() -> int:
         if start_code != 200:
             raise RuntimeError(f"user VM start failed with HTTP {start_code}")
         old_pid = wait_for(
-            lambda: int((user_dir / "qemu.pid").read_text())
-            if (user_dir / "qemu.pid").is_file()
-            else None,
+            lambda: (
+                int((user_dir / "qemu.pid").read_text())
+                if (user_dir / "qemu.pid").is_file()
+                else None
+            ),
             "user VM did not start",
             120,
         )
@@ -296,10 +303,12 @@ def main() -> int:
 
         os.kill(old_pid, signal.SIGKILL)
         new_pid = wait_for(
-            lambda: int((user_dir / "qemu.pid").read_text())
-            if (user_dir / "qemu.pid").is_file()
-            and int((user_dir / "qemu.pid").read_text()) != old_pid
-            else None,
+            lambda: (
+                int((user_dir / "qemu.pid").read_text())
+                if (user_dir / "qemu.pid").is_file()
+                and int((user_dir / "qemu.pid").read_text()) != old_pid
+                else None
+            ),
             "automatic restart did not replace QEMU",
             120,
         )

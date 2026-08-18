@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <a id="tc-int-compatibil-004"></a>
-# TC-INT-COMPATIBIL-004: Rolling gateway cluster upgrade
+# TC-INT-COMPATIBIL-004: In-place Gateway upgrade with persisted disk state
 
 ## Metadata
 
@@ -24,7 +24,7 @@
 
 ## Objective
 
-Verify rolling gateway cluster upgrade across success, boundary, failure, security, and recovery conditions.
+Verify a stopped v0.5.11 Gateway can be upgraded in place to the candidate while preserving and migrating its on-disk state.
 
 ## Preconditions
 
@@ -40,7 +40,7 @@ Use a unique run-scoped identifier and non-production credentials.
 <a id="tc-int-compatibil-004-step-01"></a>
 ### Step 1: Inspect the effective prerequisite
 
-Query the relevant health, configuration, and baseline state for rolling gateway cluster upgrade.
+Query the legacy Gateway health and create run-scoped routing, registration, certificate-lock, and WaveKV state before the upgrade.
 
 **Expected results:**
 
@@ -49,11 +49,11 @@ Query the relevant health, configuration, and baseline state for rolling gateway
 <a id="tc-int-compatibil-004-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Mix previous/current gateway nodes while registering old/new guests, proxying traffic, syncing state, and renewing certificates.
+Stop the legacy Gateway VM, update that same VM to the candidate compose while retaining its data disk, then restart it and exercise both migrated and new state.
 
 **Expected results:**
 
-- WireGuard, registration fallback, WaveKV protocol, port policy, traffic, and certificate locks interoperate without split brain.
+- The candidate reads and migrates the legacy disk state, loads persisted state, accepts refreshed and new registrations, and preserves candidate-written state across restart without cross-version sync.
 
 <a id="tc-int-compatibil-004-step-03"></a>
 ### Step 3: Verify state, isolation, and diagnostics
