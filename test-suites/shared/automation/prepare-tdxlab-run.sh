@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
-export PATH="$HOME/.cargo/bin:$HOME/.bun/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$PATH"
 
 repo=${1:-$(git rev-parse --show-toplevel)}
 output=${2:?usage: prepare-tdxlab-run.sh REPOSITORY OUTPUT_JSON [CACHE_ROOT]}
@@ -17,6 +17,10 @@ image_hash=14ad42d0270b444eaeb53918a5a94d9b17eec7a817cd336173b17c5327541c67
 foundry_version=v1.7.1
 foundry_sha256=cf7e688ed0c4c48adffca788b496076e31060b67ac5afe1e43dbb5499c20c88b
 foundry_bin="$cache_root/tools/foundry-$foundry_version"
+bun_version=1.2.18
+bun_sha256=90e032a982ae299c62d645dac6caaa8eb00b69092bc8501bf13a590de8d099c8
+bun_bin_dir="$cache_root/tools/bun-v$bun_version"
+bun_bin="$bun_bin_dir/bun"
 mkdir -p "$cache_root/tmp"
 
 require_command() {
@@ -26,7 +30,7 @@ require_command() {
   }
 }
 
-for command in cargo curl docker dstack-acpi-tables git jq mkosi npm python3 tar unshare; do
+for command in cargo curl docker dstack-acpi-tables git jq mkosi npm python3 tar unshare unzip; do
   require_command "$command"
 done
 
@@ -68,10 +72,6 @@ acpi_tables_bin=$(realpath -e -- "$(command -v dstack-acpi-tables)")
 qemu_data_dir=$(realpath -e -- "$(dirname "$acpi_tables_bin")/../share/qemu")
 test -d "$qemu_data_dir" || {
   printf 'missing required dstack-acpi-tables data directory: %s\n' "$qemu_data_dir" >&2
-  exit 1
-}
-test -x "$HOME/.bun/bin/bun" || {
-  printf 'missing required command: %s\n' "$HOME/.bun/bin/bun" >&2
   exit 1
 }
 
@@ -230,6 +230,29 @@ if ! identity_image_matches; then
   rm -rf -- "$identity_tmp"
   trap - EXIT
 fi
+if [[ ! -x "$bun_bin" ]]; then
+  archive=$(mktemp "$cache_root/tmp/bun.XXXXXX.zip")
+  extract_dir=$(mktemp -d "$cache_root/tmp/bun.XXXXXX")
+  cleanup_bun_archive() {
+    rm -f "$archive"
+    rm -rf "$extract_dir"
+  }
+  trap cleanup_bun_archive EXIT
+  curl --fail --location --retry 3 --output "$archive" \
+    "https://github.com/oven-sh/bun/releases/download/bun-v$bun_version/bun-linux-x64.zip"
+  echo "$bun_sha256  $archive" | sha256sum --check --status
+  unzip -q "$archive" -d "$extract_dir"
+  mkdir -p "$bun_bin_dir"
+  install -m 0755 "$extract_dir/bun-linux-x64/bun" "$bun_bin"
+  cleanup_bun_archive
+  trap - EXIT
+fi
+[[ $("$bun_bin" --version) == "$bun_version" ]] || {
+  printf 'pinned Bun version mismatch: %s\n' "$bun_bin" >&2
+  exit 1
+}
+export PATH="$bun_bin_dir:$PATH"
+
 if [[ ! -x "$foundry_bin/forge" ]]; then
   archive=$(mktemp "$cache_root/tmp/foundry.XXXXXX.tar.gz")
   trap 'rm -f "$archive"' EXIT
@@ -260,11 +283,11 @@ test -s "$repo/dstack/kms/auth-eth/lib/openzeppelin-foundry-upgrades/src/Upgrade
 # left auth services without tsc or a healthy listener.
 (
   cd "$repo/dstack/kms/auth-simple"
-  "$HOME/.bun/bin/bun" install --frozen-lockfile
+  "$bun_bin" install --frozen-lockfile
 )
 (
   cd "$repo/dstack/kms/auth-eth-bun"
-  "$HOME/.bun/bin/bun" install --frozen-lockfile
+  "$bun_bin" install --frozen-lockfile
 )
 (
   cd "$repo/dstack/kms/auth-eth"
@@ -295,7 +318,7 @@ docker_subnet_pool=$(
   "$plan/shared/automation/prepare-docker-network-pool.py"
 )
 
-python3 - "$template" "$generated_lab" "$plan" "$fixture_root" "$foundry_bin" \
+python3 - "$template" "$generated_lab" "$plan" "$fixture_root" "$foundry_bin" "$bun_bin_dir" \
   "$acpi_tables_bin" "$qemu_data_dir" "$prod_image" "$dev_image" \
   "$identity_image" \
   "$docker_subnet_pool" <<'PY'
@@ -303,10 +326,10 @@ import json
 import pathlib
 import sys
 
-template, output, plan, full_tdx, foundry_bin, acpi_tables, qemu_data = map(
-    pathlib.Path, sys.argv[1:8]
+template, output, plan, full_tdx, foundry_bin, bun_bin, acpi_tables, qemu_data = map(
+    pathlib.Path, sys.argv[1:9]
 )
-prod_image, dev_image, identity_image, docker_subnet_pool = sys.argv[8:]
+prod_image, dev_image, identity_image, docker_subnet_pool = sys.argv[9:]
 value = json.loads(template.read_text())
 environment = value.setdefault("environment", {})
 providers = {
@@ -332,9 +355,10 @@ environment["DSTACK_TEST_GUEST_DEV_IMAGE"] = dev_image
 environment["DSTACK_TEST_IDENTITY_ALT_IMAGE"] = identity_image
 environment["DSTACK_TEST_DOCKER_SUBNET_POOL"] = docker_subnet_pool
 path_prepend = value.setdefault("environment_path_prepend", [])
-foundry_path = str(foundry_bin.resolve(strict=True))
-if foundry_path not in path_prepend:
-    path_prepend.insert(0, foundry_path)
+for tool_path in (foundry_bin, bun_bin):
+    resolved = str(tool_path.resolve(strict=True))
+    if resolved not in path_prepend:
+        path_prepend.insert(0, resolved)
 output.parent.mkdir(parents=True, exist_ok=True)
 output.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 PY

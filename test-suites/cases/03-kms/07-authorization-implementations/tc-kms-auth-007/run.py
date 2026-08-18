@@ -9,6 +9,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import tempfile
 from typing import Any
@@ -50,7 +51,9 @@ def main() -> int:
         pathlib.Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text()
     )
     source = pathlib.Path(runtime["repository"]) / "dstack/kms/auth-eth-bun"
-    bun = pathlib.Path.home() / ".bun/bin/bun"
+    bun = shutil.which("bun")
+    if bun is None:
+        raise RuntimeError("missing required command: bun")
     rows: list[dict[str, Any]] = []
     status = "PASS"
     summary = "Ethereum finalized snapshot, reorg refresh, fail-closed recovery, and process isolation passed."
