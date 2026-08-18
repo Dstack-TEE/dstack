@@ -16,14 +16,14 @@ fixture output as product evidence.
 Provider names have these meanings:
 
 - `local-simulator`: the checked simulator helper lifecycle, scoped by lease;
-- `tdxlab-isolated`: a lab adapter that creates a new case-owned guest;
+- `physical-tdx`: a lab adapter that creates a new case-owned guest;
 - `isolated-component`: a case-owned component process and data directory;
 - `version-matrix`: pinned 0.5.4, 0.5.8, 0.5.11, and candidate components;
 - `hardware-pool`: an exclusive allocation with TTL and explicit labeling.
 
 The four non-local providers use the external provider command protocol. The
 controller reads only an executable path from the matching environment
-variable, for example `DSTACK_TEST_PROVIDER_TDXLAB_ISOLATED`. It invokes that
+variable, for example `DSTACK_TEST_PROVIDER_PHYSICAL_TDX`. It invokes that
 file with `prepare`, `verify`, and `destroy`; requests and responses are JSON
 objects. Shell fragments are not accepted. Missing providers produce a bounded
 `BLOCKED` result without starting an Agent or script.
@@ -34,19 +34,20 @@ Run the contract audit after changing the index or registry:
 python3 shared/fixtures/validate-contracts.py .
 ```
 
-## tdxlab isolated guest adapter
+## physical TDX host isolated guest adapter
 
-The checked adapter at `shared/fixtures/providers/tdxlab-isolated.py` creates a new
+The checked adapter at `shared/fixtures/providers/physical-tdx.py` creates a new
 lease-owned candidate CVM, waits for guest boot and SSH-over-gateway readiness,
 publishes the case-scoped SSH and RPC inventory, and removes the VM during
 fixture cleanup. It never restarts the physical host and never selects an
-existing VM. Prepare a complete tdxlab run with the checked preflight wrapper:
+existing VM. Prepare a complete physical TDX host run with the checked preflight wrapper:
 
 ```bash
 plan=$PWD/test-suites
 run_id=<run-id>
-"$plan/shared/automation/prepare-tdxlab-run.sh" \
-  "$PWD" "$plan/results/$run_id/runtime-manifest.json"
+lab_manifest=/path/to/operator-owned-hardware.json
+"$plan/shared/automation/prepare-hardware-run.sh" \
+  "$PWD" "$plan/results/$run_id/runtime-manifest.json" "$lab_manifest"
 ```
 
 The wrapper validates and prepares the pinned Foundry toolchain, KMS JavaScript
@@ -55,10 +56,10 @@ image, and all external provider paths. It records those non-secret inputs in
 the runtime manifest so case execution does not depend on the launching shell
 retaining exports.
 
-Run the scripted suite through the checked tdxlab wrapper:
+Run the scripted suite through the checked physical TDX host wrapper:
 
 ```bash
-"$plan/shared/automation/run-tdxlab-sweep.sh" \
+"$plan/shared/automation/run-hardware-sweep.sh" \
   "$PWD" "$run_id" "$plan/results/$run_id/runtime-manifest.json" 4
 ```
 
@@ -73,17 +74,15 @@ For provider development without the wrapper, configure it explicitly before
 starting the controller:
 
 ```bash
-export DSTACK_TEST_PROVIDER_TDXLAB_ISOLATED="$PWD/shared/fixtures/providers/tdxlab-isolated.py"
-export DSTACK_TEST_SSH_GITHUB_USER=kvinwang
+export DSTACK_TEST_PROVIDER_PHYSICAL_TDX="$PWD/shared/fixtures/providers/physical-tdx.py"
+export DSTACK_TEST_SSH_GITHUB_USER=<operator-github-login>
 export DSTACK_TEST_VMM_URL=http://127.0.0.1:12000
 export DSTACK_TEST_GUEST_IMAGE=dstack-0.6.0
 export DSTACK_TEST_IMAGE_STORE=/var/lib/dstack-test/candidate-images
 ```
 
 `DSTACK_TEST_SSH_GITHUB_USER` must identify the test operator whose public SSH
-keys are installed by the lab's development-image bootstrap. Optional
-`DSTACK_TEST_GATEWAY_DOMAIN` and `DSTACK_TEST_GATEWAY_PORT` override
-`tdxlab.dstack.org:13004`. The provider stores no private key or bearer token in
+keys are installed by the lab's development-image bootstrap. The provider stores no private key or bearer token in
 the fixture manifest.
 
 `DSTACK_TEST_IMAGE_STORE` is mandatory for image-assembly cases. It must point

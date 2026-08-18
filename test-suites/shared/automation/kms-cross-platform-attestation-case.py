@@ -49,15 +49,20 @@ MATRIX = {
 TEST_RESULT = re.compile(r"test result: ok\. (\d+) passed; 0 failed")
 
 
-def run_as_kvin(command: str, timeout: int) -> subprocess.CompletedProcess[str]:
-    """Run Docker only through the required kvin identity."""
-    docker_tmp = "/home/kvin/.cache/dstack-test/docker-tmp"
+def run_docker_shell(command: str, timeout: int) -> subprocess.CompletedProcess[str]:
+    """Run Docker only through the configured Docker shell wrapper."""
+    docker_tmp = os.environ.get(
+        "DSTACK_TEST_DOCKER_TMP", str(Path.home() / ".cache/dstack-test/docker-tmp")
+    )
     return subprocess.run(
         [
-            "sudo",
-            "su",
-            "kvin",
-            "-c",
+            os.environ.get(
+                "DSTACK_TEST_DOCKER_SHELL_RUNNER",
+                os.path.join(
+                    os.environ["DSTACK_TEST_PLAN_DIR"],
+                    "shared/automation/run-docker-shell",
+                ),
+            ),
             f"mkdir -p {docker_tmp} && export TMPDIR={docker_tmp} && {command}",
         ],
         text=True,
@@ -107,7 +112,7 @@ def main() -> int:
     status = "FAIL"
 
     try:
-        build = run_as_kvin(
+        build = run_docker_shell(
             f"cd {shlex.quote(str(suite))} && docker compose -p {project} build", 1800
         )
         (artifacts / "compose-build.log").write_text(build.stdout + build.stderr)
@@ -123,7 +128,7 @@ def main() -> int:
 
         for service in spec["services"]:
             row_started = time.monotonic()
-            completed = run_as_kvin(
+            completed = run_docker_shell(
                 f"cd {shlex.quote(str(suite))} && docker compose -p {project} run --rm {shlex.quote(service)}",
                 600,
             )
@@ -192,7 +197,7 @@ def main() -> int:
         failure = f"{type(error).__name__}: {error}"
         steps.append(emit(f"{case_id}-step-{len(steps) + 1:02d}", "FAIL", failure))
     finally:
-        down = run_as_kvin(
+        down = run_docker_shell(
             f"cd {shlex.quote(str(suite))} && docker compose -p {project} down --remove-orphans",
             180,
         )

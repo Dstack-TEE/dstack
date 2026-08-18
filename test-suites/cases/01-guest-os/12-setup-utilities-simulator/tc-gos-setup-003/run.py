@@ -31,10 +31,19 @@ def atomic_json(path: pathlib.Path, value: Any) -> None:
 
 
 def docker(*arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    """Run Docker through the mandatory kvin privilege boundary."""
+    """Run Docker through the operator-configured shell wrapper."""
     command = "docker " + " ".join(shlex.quote(value) for value in arguments)
     return subprocess.run(
-        ["sudo", "su", "kvin", "-c", command],
+        [
+            os.environ.get(
+                "DSTACK_TEST_DOCKER_SHELL_RUNNER",
+                os.path.join(
+                    os.environ["DSTACK_TEST_PLAN_DIR"],
+                    "shared/automation/run-docker-shell",
+                ),
+            ),
+            command,
+        ],
         text=True,
         capture_output=True,
         timeout=60,
@@ -284,7 +293,7 @@ volumes:
             ],
             "artifacts": [artifact],
             "remarks": (
-                "Every Docker CLI operation uses sudo su kvin -c; offline mode "
+                "Every Docker CLI operation uses the configured shell wrapper; offline mode "
                 "uses only a temporary fake Docker root."
             ),
         },

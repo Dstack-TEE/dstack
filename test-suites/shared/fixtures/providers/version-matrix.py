@@ -245,7 +245,16 @@ def cleanup_upgrade_registries(workspace: Path) -> None:
                 fail(f"unsafe upgrade image handle: {image}")
             images.append(f"{host}/{image.removeprefix(f'{guest}/')}")
         completed = subprocess.run(
-            ["sudo", "su", "kvin", "-c", f"docker rm -f {container}"],
+            [
+                os.environ.get(
+                    "DSTACK_TEST_DOCKER_SHELL_RUNNER",
+                    os.path.join(
+                        os.environ["DSTACK_TEST_PLAN_DIR"],
+                        "shared/automation/run-docker-shell",
+                    ),
+                ),
+                f"docker rm -f {container}",
+            ],
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -258,7 +267,16 @@ def cleanup_upgrade_registries(workspace: Path) -> None:
             )
         for image in images:
             completed = subprocess.run(
-                ["sudo", "su", "kvin", "-c", f"docker image rm {image}"],
+                [
+                    os.environ.get(
+                        "DSTACK_TEST_DOCKER_SHELL_RUNNER",
+                        os.path.join(
+                            os.environ["DSTACK_TEST_PLAN_DIR"],
+                            "shared/automation/run-docker-shell",
+                        ),
+                    ),
+                    f"docker image rm {image}",
+                ],
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

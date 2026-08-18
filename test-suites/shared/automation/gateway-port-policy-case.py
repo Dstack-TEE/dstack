@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -49,7 +50,7 @@ def main() -> int:
     for index, test_filter in enumerate(spec["filters"], start=1):
         completed = subprocess.run(
             [
-                "/home/kvin/.cargo/bin/cargo",
+                shutil.which("cargo") or "cargo",
                 "test",
                 "-p",
                 "dstack-gateway",

@@ -71,7 +71,7 @@ def start(
     images: list[str],
 ) -> dict[str, Any]:
     """Start one lease-owned dependency stack and return public fixture handles."""
-    tdx = load_provider("tdxlab-isolated.py")
+    tdx = load_provider("physical-tdx.py")
     isolated = load_provider("isolated-component.py")
     repository = pathlib.Path(str(runtime["repository"])).resolve()
     image_store = pathlib.Path(os.environ["DSTACK_TEST_IMAGE_STORE"]).resolve()
@@ -346,4 +346,4 @@ def start(
 
 def stop(workspace: pathlib.Path, handle: dict[str, Any]) -> None:
     """Stop every process and remove all VM state owned by the stack."""
-    load_provider("tdxlab-isolated.py").release_vmm(handle, workspace)
+    load_provider("physical-tdx.py").release_vmm(handle, workspace)

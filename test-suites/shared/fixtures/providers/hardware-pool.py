@@ -23,10 +23,10 @@ STATE_ROOT = Path(
 ROOT = STATE_ROOT / "hardware-pool"
 
 
-def load_tdxlab_provider() -> Any:
+def load_physical_tdx_provider() -> Any:
     """Load the sibling isolated-VMM provider without relying on import paths."""
-    path = Path(__file__).resolve().parent / "tdxlab-isolated.py"
-    spec = importlib.util.spec_from_file_location("dstack_test_tdxlab_isolated", path)
+    path = Path(__file__).resolve().parent / "physical-tdx.py"
+    spec = importlib.util.spec_from_file_location("dstack_test_physical_tdx", path)
     if spec is None or spec.loader is None:
         fail(f"cannot load isolated VMM provider: {path}")
     module = importlib.util.module_from_spec(spec)
@@ -175,7 +175,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
     cli = repository / "dstack/vmm/src/vmm-cli.py"
     stack_handle: dict[str, Any] | None = None
     if str(lease.get("profile", "")) == "cross-platform-attestation":
-        tdxlab = load_tdxlab_provider()
+        physical_tdx = load_physical_tdx_provider()
         image_store = Path(os.environ["DSTACK_TEST_IMAGE_STORE"]).resolve()
         candidate_image = os.environ.get("DSTACK_TEST_GUEST_IMAGE", "dstack-0.6.0")
         development_image = os.environ.get(
@@ -190,7 +190,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
             "cli": cli,
         }
         try:
-            stack_handle = tdxlab.start_vmm(
+            stack_handle = physical_tdx.start_vmm(
                 workspace,
                 lease_id,
                 settings,
@@ -418,7 +418,7 @@ def destroy(value: dict[str, Any]) -> dict[str, Any]:
                 errors.append(process.stderr[-1000:])
         stack_handle = handle.get("stack_handle")
         if isinstance(stack_handle, dict):
-            load_tdxlab_provider().release_vmm(stack_handle, workspace)
+            load_physical_tdx_provider().release_vmm(stack_handle, workspace)
         shutil.rmtree(workspace, ignore_errors=True)
     if errors:
         fail("; ".join(errors))

@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -27,7 +28,7 @@ def main() -> int:
     target = Path(runtime["cargo_target_dir"])
     started = time.monotonic()
     command = [
-        "/home/kvin/.cargo/bin/cargo",
+        shutil.which("cargo") or "cargo",
         "test",
         "-p",
         "dstack-gateway",

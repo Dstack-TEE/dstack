@@ -19,9 +19,9 @@ controller that:
 
 ## 2. Current run state and immediate safety decision
 
-The active tdxlab round was stopped before this refactor:
+The active physical TDX host round was stopped before this refactor:
 
-- Run ID: `tdxlab-optimized-20260723T182727Z`
+- Run ID: `physical-tdx-optimized-20260723T182727Z`
 - Last observed counts after Stop: PASS 19, FAIL 9, BLOCKED 37,
   INCOMPLETE 1, PENDING 295.
 - The interrupted case was `tc-gos-setup-001`.
@@ -265,7 +265,7 @@ Add fixture metadata to reports:
   "fixture": {
     "profile": "storage-lifecycle",
     "lease_id": "...",
-    "provider": "tdxlab-vmm",
+    "provider": "physical-tdx-vmm",
     "versions": {},
     "initial_state": {},
     "provision_status": "PASS",
@@ -346,7 +346,7 @@ Add coverage for:
   cleanup reconciliation, and fixture/report/UI surfaces.
 - Initially provide `noop`, `process`, and local simulator providers.
 
-### Phase 3 — tdxlab isolated providers
+### Phase 3 — physical TDX host isolated providers
 
 Implement `guest-lifecycle`, `no-tee-dev`, `storage-lifecycle`,
 `container-observability`, and `network-lifecycle`. Never reuse the two current
@@ -371,7 +371,7 @@ entrypoints. Retain Agent execution for exploratory, hardware-variable, and
 root-cause-oriented cases. Validate source/requirement/config/API traceability
 again after migration.
 
-## 16. Acceptance gates before resuming tdxlab
+## 16. Acceptance gates before resuming physical TDX host
 
 - all `test-suites/runner` tests pass;
 - sample Agent and script plans both execute and render;

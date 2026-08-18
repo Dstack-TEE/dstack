@@ -13,8 +13,8 @@ from pathlib import Path
 
 CASE_ID = "tc-gw-internal-003"
 ACTION = "Gateway authorization client allow deny and outage"
-OLD_ROOT = "/home/kvin/src/dstack.worktrees/candidate-b79ab31"
-OLD_COMMIT = "b79ab31dd4dbf20b0991a218e5568e313307d095"
+REPOSITORY_PLACEHOLDER = "@REPOSITORY@"
+COMMIT_PLACEHOLDER = "@CANDIDATE_COMMIT@"
 
 
 def main() -> int:
@@ -32,8 +32,8 @@ def main() -> int:
         for path in (root / "Cargo.toml.template", root / "src/main.rs"):
             text = (
                 path.read_text()
-                .replace(OLD_ROOT, str(repo))
-                .replace(OLD_COMMIT, str(runtime.get("candidate_commit", "")))
+                .replace(REPOSITORY_PLACEHOLDER, str(repo))
+                .replace(COMMIT_PLACEHOLDER, str(runtime.get("candidate_commit", "")))
             )
             path.write_text(text)
         (root / "Cargo.toml").write_text((root / "Cargo.toml.template").read_text())

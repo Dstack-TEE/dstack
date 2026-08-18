@@ -3,7 +3,7 @@
   "profiles": {
     "guest-readonly": {
       "classification": "ready-target",
-      "provider": "tdxlab-isolated",
+      "provider": "physical-tdx",
       "ttl_seconds": 1800,
       "destructive_scope": "lease-only",
       "initial_state": {
@@ -32,7 +32,7 @@
     },
     "guest-lifecycle": {
       "classification": "specified-initial-state",
-      "provider": "tdxlab-isolated",
+      "provider": "physical-tdx",
       "ttl_seconds": 3600,
       "destructive_scope": "lease-only",
       "initial_state": {
@@ -91,7 +91,7 @@
     },
     "no-tee-guest-lifecycle": {
       "classification": "specified-initial-state",
-      "provider": "tdxlab-isolated",
+      "provider": "physical-tdx",
       "ttl_seconds": 3600,
       "destructive_scope": "lease-only",
       "initial_state": {
@@ -122,7 +122,7 @@
     },
     "storage-lifecycle": {
       "classification": "specified-initial-state",
-      "provider": "tdxlab-isolated",
+      "provider": "physical-tdx",
       "ttl_seconds": 3600,
       "destructive_scope": "lease-only",
       "initial_state": {
@@ -151,7 +151,7 @@
     },
     "network-lifecycle": {
       "classification": "specified-initial-state",
-      "provider": "tdxlab-isolated",
+      "provider": "physical-tdx",
       "ttl_seconds": 3600,
       "destructive_scope": "lease-only",
       "initial_state": {
@@ -180,7 +180,7 @@
     },
     "container-observability": {
       "classification": "specified-initial-state",
-      "provider": "tdxlab-isolated",
+      "provider": "physical-tdx",
       "ttl_seconds": 3600,
       "destructive_scope": "lease-only",
       "initial_state": {
@@ -209,7 +209,7 @@
     },
     "multi-identity": {
       "classification": "specified-initial-state",
-      "provider": "tdxlab-isolated",
+      "provider": "physical-tdx",
       "ttl_seconds": 3600,
       "destructive_scope": "lease-only",
       "initial_state": {
@@ -601,7 +601,7 @@
     },
     "identity-matrix": {
       "classification": "specified-initial-state",
-      "provider": "tdxlab-isolated",
+      "provider": "physical-tdx",
       "ttl_seconds": 3600,
       "destructive_scope": "lease-only",
       "initial_state": {

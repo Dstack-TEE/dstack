@@ -27,7 +27,16 @@ def docker(args: list[str], timeout: int = 300) -> dict[str, Any]:
     command = "docker " + " ".join(shlex.quote(v) for v in args)
     started = time.monotonic()
     done = subprocess.run(
-        ["sudo", "su", "kvin", "-c", command],
+        [
+            os.environ.get(
+                "DSTACK_TEST_DOCKER_SHELL_RUNNER",
+                os.path.join(
+                    os.environ["DSTACK_TEST_PLAN_DIR"],
+                    "shared/automation/run-docker-shell",
+                ),
+            ),
+            command,
+        ],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -353,7 +362,7 @@ def main() -> int:
                 "sha256": hashlib.sha256(detail.read_bytes()).hexdigest(),
             }
         ],
-        "remarks": "All Docker operations use sudo su kvin -c; failures retain named containers, network, image, workspace, and host port for command-level debugging.",
+        "remarks": "All Docker operations use the configured shell wrapper; failures retain named containers, network, image, workspace, and host port for command-level debugging.",
     }
     (result_dir / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     return 0 if status == "PASS" else 1
