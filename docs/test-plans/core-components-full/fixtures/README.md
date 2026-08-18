@@ -55,6 +55,20 @@ image, and all external provider paths. It records those non-secret inputs in
 the runtime manifest so case execution does not depend on the launching shell
 retaining exports.
 
+Run the scripted suite through the checked tdxlab wrapper:
+
+```bash
+"$plan/automation/run-tdxlab-sweep.sh" \
+  "$PWD" "$run_id" "$plan/results/$run_id/runtime-manifest.json" 4
+```
+
+The wrapper serializes a small substrate-sensitive preflight before starting
+the parallel round. A preflight failure stops the round, while successful
+preflight cases are not repeated. Every sweep also audits its lease journal;
+an unexpected non-released lease or resource is reported as a `<postflight>`
+infrastructure failure. `--retain-on-failure` remains an explicit exception for
+interactive debugging and retained leases must later be reconciled normally.
+
 For provider development without the wrapper, configure it explicitly before
 starting the controller:
 
