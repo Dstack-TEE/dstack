@@ -397,7 +397,7 @@ class FixtureManager:
         for provider in (NoopProvider(), ProcessProvider(), LocalSimulatorProvider()):
             self.providers[provider.name] = provider
         for name in (
-            "tdxlab-isolated",
+            "physical-tdx",
             "isolated-component",
             "hardware-pool",
             "version-matrix",

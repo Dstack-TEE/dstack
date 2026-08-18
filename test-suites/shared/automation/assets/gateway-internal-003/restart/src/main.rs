@@ -15,7 +15,7 @@ mod config {
     }
 }
 mod candidate_auth_client {
-    include!("/home/kvin/src/dstack.worktrees/candidate-b79ab31/dstack/gateway/src/main_service/auth_client.rs");
+    include!("@REPOSITORY@/dstack/gateway/src/main_service/auth_client.rs");
 }
 use candidate_auth_client::AuthClient;
 use config::AuthConfig;
@@ -121,7 +121,7 @@ async fn main() -> Result<()> {
     println!(
         "{}",
         serde_json::to_string_pretty(
-            &json!({"candidate_commit":"b79ab31dd4dbf20b0991a218e5568e313307d095","source_under_test":"/home/kvin/src/dstack.worktrees/candidate-b79ab31/dstack/gateway/src/main_service/auth_client.rs","first_allow_before_restart":first,"adjacent_identity_authorized":adjacent,"allow_after_client_restart":after_restart,"auth_request_identity_order":seen,"passed":passed})
+            &json!({"candidate_commit":"@CANDIDATE_COMMIT@","source_under_test":"@REPOSITORY@/dstack/gateway/src/main_service/auth_client.rs","first_allow_before_restart":first,"adjacent_identity_authorized":adjacent,"allow_after_client_restart":after_restart,"auth_request_identity_order":seen,"passed":passed})
         )?
     );
     if !passed {

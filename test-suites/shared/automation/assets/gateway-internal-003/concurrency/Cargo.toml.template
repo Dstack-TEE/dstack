@@ -5,7 +5,7 @@ edition="2021"
 
 [dependencies]
 anyhow="1"
-ra-tls={ path="/home/kvin/src/dstack.worktrees/candidate-b79ab31/dstack/ra-tls" }
+ra-tls={ path="@REPOSITORY@/dstack/ra-tls" }
 reqwest={ version="0.12", features=["json"] }
 tokio={ version="1", features=["full"] }
 serde={ version="1", features=["derive"] }

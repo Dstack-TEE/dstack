@@ -257,7 +257,7 @@ def main() -> int:
         }
         cid_unit = subprocess.run(
             [
-                "/home/kvin/.cargo/bin/cargo",
+                shutil.which("cargo") or "cargo",
                 "test",
                 "-p",
                 "dstack-vmm",
