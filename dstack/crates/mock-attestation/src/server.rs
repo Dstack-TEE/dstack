@@ -287,6 +287,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tdx_quote_collateral_and_tcb_matrix() {
+        let state = Arc::new(MockCollateralState::new().unwrap());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let base = format!("http://{addr}");
+        let mut task = tokio::spawn(serve_listener(listener, state.clone()));
+        let evidence = state.tdx.attest([0x42; 64]).unwrap();
+        let client = dcap_qvl::collateral::CollateralClient::with_default_http(&base).unwrap();
+        let current = client.fetch(&evidence.quote).await.unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let verifier = dcap_qvl::verify::QuoteVerifier::new(state.tdx.root_ca_der());
+        assert_eq!(
+            verifier
+                .verify(&evidence.quote, &current, now)
+                .unwrap()
+                .status,
+            "UpToDate"
+        );
+
+        let mut tampered_quote = evidence.quote.clone();
+        tampered_quote[200] ^= 1;
+        assert!(verifier.verify(&tampered_quote, &current, now).is_err());
+
+        task.abort();
+        let _ = task.await;
+        assert!(verifier.verify(&evidence.quote, &current, now).is_ok());
+        assert!(client.fetch(&evidence.quote).await.is_err());
+
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        task = tokio::spawn(serve_listener(listener, state.clone()));
+        let recovered = client.fetch(&evidence.quote).await.unwrap();
+        assert!(verifier.verify(&evidence.quote, &recovered, now).is_ok());
+
+        let mut outdated = state
+            .tdx
+            .sample_collateral_with_tcb_status("OutOfDate")
+            .unwrap();
+        outdated.pck_certificate_chain = recovered.pck_certificate_chain.clone();
+        assert_eq!(
+            verifier
+                .verify(&evidence.quote, &outdated, now)
+                .unwrap()
+                .status,
+            "OutOfDate"
+        );
+
+        let mut revoked = state
+            .tdx
+            .sample_collateral_with_tcb_status("Revoked")
+            .unwrap();
+        revoked.pck_certificate_chain = recovered.pck_certificate_chain.clone();
+        assert!(verifier.verify(&evidence.quote, &revoked, now).is_err());
+
+        let expired_time = 4_200_000_000;
+        assert!(verifier
+            .verify(&evidence.quote, &recovered, expired_time)
+            .is_err());
+
+        let mut signature_invalid = recovered.clone();
+        signature_invalid.tcb_info_signature[0] ^= 1;
+        assert!(verifier
+            .verify(&evidence.quote, &signature_invalid, now)
+            .is_err());
+
+        let mut malformed = recovered.clone();
+        malformed.tcb_info = "{".into();
+        assert!(verifier.verify(&evidence.quote, &malformed, now).is_err());
+        task.abort();
+    }
+
+    #[tokio::test]
     async fn tpm_aia_and_crl_service_builds_verifiable_collateral() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();

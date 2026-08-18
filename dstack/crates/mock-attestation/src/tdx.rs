@@ -175,6 +175,14 @@ impl TdxGenerator {
         self.collateral()
     }
 
+    #[cfg(test)]
+    pub(crate) fn sample_collateral_with_tcb_status(
+        &self,
+        tcb_status: &str,
+    ) -> Result<QuoteCollateralV3> {
+        self.collateral_with_tcb_status(tcb_status)
+    }
+
     pub fn root_crl_der(&self) -> Vec<u8> {
         self.root_crl.clone()
     }
@@ -296,6 +304,10 @@ impl TdxGenerator {
     }
 
     fn collateral(&self) -> Result<QuoteCollateralV3> {
+        self.collateral_with_tcb_status("UpToDate")
+    }
+
+    fn collateral_with_tcb_status(&self, tcb_status: &str) -> Result<QuoteCollateralV3> {
         let now = chrono::Utc::now();
         let issue =
             (now - chrono::Duration::days(1)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -305,7 +317,7 @@ impl TdxGenerator {
             "id":"TDX", "version":3, "issueDate":issue, "nextUpdate":next,
             "fmspc":"000000000000", "pceId":"0000", "tcbType":0, "tcbEvaluationDataNumber":1,
             "tdxModule":{"mrsigner":"00".repeat(48),"attributes":"00".repeat(8),"attributesMask":"00".repeat(8)},
-            "tcbLevels":[{"tcb":{"sgxtcbcomponents":vec![json!({"svn":0});16],"pcesvn":0,"tdxtcbcomponents":vec![json!({"svn":0});16]},"tcbDate":issue,"tcbStatus":"UpToDate"}]
+            "tcbLevels":[{"tcb":{"sgxtcbcomponents":vec![json!({"svn":0});16],"pcesvn":0,"tdxtcbcomponents":vec![json!({"svn":0});16]},"tcbDate":issue,"tcbStatus":tcb_status}]
         }).to_string();
         let qe_identity = json!({
             "id":"TD_QE", "version":2, "issueDate":issue, "nextUpdate":next,
