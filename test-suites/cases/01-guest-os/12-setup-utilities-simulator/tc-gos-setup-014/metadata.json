@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-setup-014",
+  "title": "SEV-SNP simulator device ABI",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-setup-014"
+  ],
+  "risks": [
+    "risk-gos-setup-014"
+  ],
+  "tags": [
+    "gos",
+    "system-setup-utilities-and-tee-simulator"
+  ],
+  "fixture": {
+    "profile": "cross-platform-attestation",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "SEV-SNP simulator device ABI"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-tee-simulator-case.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

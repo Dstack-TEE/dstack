@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-attestatio-002",
+  "title": "SEV-SNP app authorization",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-attestatio-002"
+  ],
+  "risks": [
+    "risk-kms-attestatio-002"
+  ],
+  "tags": [
+    "kms",
+    "attestation-authorization"
+  ],
+  "fixture": {
+    "profile": "cross-platform-attestation",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "SEV-SNP app authorization"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-cross-platform-attestation-case.py",
+    "args": [],
+    "timeout_seconds": 1800
+  }
+}

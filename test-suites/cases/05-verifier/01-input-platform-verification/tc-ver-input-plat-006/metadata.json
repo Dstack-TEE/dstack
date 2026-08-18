@@ -1,0 +1,36 @@
+{
+  "id": "tc-ver-input-plat-006",
+  "title": "Cloud TDX and Nitro TPM verification",
+  "priority": "P0",
+  "requirements": [
+    "req-ver-input-plat-006"
+  ],
+  "risks": [
+    "risk-ver-input-plat-006"
+  ],
+  "tags": [
+    "verifier",
+    "input-platform-verification"
+  ],
+  "fixture": {
+    "profile": "cross-platform-attestation",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Cloud TDX and Nitro TPM verification"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 2700
+  }
+}

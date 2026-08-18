@@ -1,0 +1,36 @@
+{
+  "id": "tc-int-failure-se-008",
+  "title": "Simulator versus hardware evidence separation",
+  "priority": "P0",
+  "requirements": [
+    "req-int-failure-se-008"
+  ],
+  "risks": [
+    "risk-int-failure-se-008"
+  ],
+  "tags": [
+    "integration",
+    "failure-security"
+  ],
+  "fixture": {
+    "profile": "cross-platform-attestation",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Simulator versus hardware evidence separation"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/integration-failure-008-capability-case.py",
+    "args": [],
+    "timeout_seconds": 3600
+  }
+}

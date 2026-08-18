@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-yocto-006",
+  "title": "Docker daemon CPU/GPU configuration variants",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-yocto-006"
+  ],
+  "risks": [
+    "risk-gos-yocto-006"
+  ],
+  "tags": [
+    "gos",
+    "yocto-image-runtime-and-hardening"
+  ],
+  "fixture": {
+    "profile": "gpu-policy",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Docker daemon CPU/GPU configuration variants"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/capability-probe-case.py",
+    "args": [],
+    "timeout_seconds": 60
+  }
+}

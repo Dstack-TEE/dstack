@@ -1,0 +1,23 @@
+{
+  "id": "tc-ver-image-meas-001",
+  "title": "Image download digest and extraction security",
+  "priority": "P1",
+  "requirements": [
+    "req-ver-image-meas-001"
+  ],
+  "risks": [
+    "risk-ver-image-meas-001"
+  ],
+  "tags": [
+    "verifier",
+    "image-measurements"
+  ],
+  "actions_under_test": [
+    "Image download digest and extraction security"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

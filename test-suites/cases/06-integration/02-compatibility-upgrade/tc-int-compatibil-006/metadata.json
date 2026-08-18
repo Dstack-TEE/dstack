@@ -1,0 +1,36 @@
+{
+  "id": "tc-int-compatibil-006",
+  "title": "RPC unknown-field and optional-field compatibility",
+  "priority": "P0",
+  "requirements": [
+    "req-int-compatibil-006"
+  ],
+  "risks": [
+    "risk-int-compatibil-006"
+  ],
+  "tags": [
+    "integration",
+    "compatibility-upgrade"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "RPC unknown-field and optional-field compatibility"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

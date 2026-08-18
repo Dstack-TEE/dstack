@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-proxy-prot-006",
+  "title": "Connection limits timeouts and recycling",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-proxy-prot-006"
+  ],
+  "risks": [
+    "risk-gw-proxy-prot-006"
+  ],
+  "tags": [
+    "gateway",
+    "proxy-protocol-routing"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Connection limits timeouts and recycling"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

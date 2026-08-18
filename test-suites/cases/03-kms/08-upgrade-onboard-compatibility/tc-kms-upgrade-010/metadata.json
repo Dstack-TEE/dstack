@@ -1,0 +1,37 @@
+{
+  "id": "tc-kms-upgrade-010",
+  "title": "KMS replacement cutover and rollback window",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-upgrade-010"
+  ],
+  "risks": [
+    "risk-kms-upgrade-010"
+  ],
+  "tags": [
+    "kms",
+    "upgrade",
+    "compatibility"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "KMS replacement cutover and rollback window"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 1200
+  }
+}
