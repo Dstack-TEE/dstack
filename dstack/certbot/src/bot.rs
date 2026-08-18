@@ -257,6 +257,7 @@ pub fn list_certs(workdir: impl AsRef<Path>) -> Result<Vec<PathBuf>> {
             certs.push(cert_path);
         }
     }
+    certs.sort();
     Ok(certs)
 }
 
@@ -272,3 +273,37 @@ pub fn list_cert_public_keys(workdir: impl AsRef<Path>) -> Result<BTreeSet<Vec<u
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod listing_tests {
+    use super::list_certs;
+    use fs_err as fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn certificate_directories_are_listed_in_stable_order() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "dstack-certbot-list-{}-{nonce}",
+            std::process::id()
+        ));
+        for name in ["0002", "0001"] {
+            let directory = root.join(name);
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(directory.join("cert.pem"), name).unwrap();
+        }
+
+        let listed = list_certs(&root).unwrap();
+
+        assert_eq!(
+            listed,
+            ["0001", "0002"]
+                .map(|name| root.join(name).join("cert.pem"))
+                .to_vec()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+}
