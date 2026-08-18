@@ -7,6 +7,11 @@ allowing libvirt to create or launch the QEMU domain. QEMU remains entirely
 owned by `dstack-vmm`, so its command line and attestation inputs do not change
 outside the explicitly selected network backend.
 
+This integration applies only to bridge interfaces. It does not filter user,
+custom, or macvtap networking. In particular, macvtap bypasses the Linux
+bridge and requires policy enforcement in the physical network or a separate
+host mechanism.
+
 The measurable acceptance criteria are:
 
 - `network_filter = "none"` preserves the existing QEMU `-netdev bridge`
@@ -36,6 +41,23 @@ socket = "/run/dstack/netd.sock"
 allowed_uids = [] # empty means root only
 libvirt_uri = "qemu:///system"
 ```
+
+Deployment RPC network choices are separately constrained by node policy:
+
+```toml
+[cvm]
+allowed_network_modes = ["user", "bridge"]
+allowed_bridges = ["tenant-br0"]
+allowed_macvtap_parents = []
+```
+
+Macvtap is excluded from `allowed_network_modes` by default. Empty bridge and
+macvtap-parent allowlists prevent RPC callers from overriding the respective
+node defaults. If macvtap is explicitly enabled, callers may select only a
+parent in `allowed_macvtap_parents`; the macvtap forwarding mode always comes
+from `[cvm.networking].macvtap_mode` and cannot be selected through deployment
+RPCs. These allowlists authorize attachment targets; an nwfilter is not a
+substitute for that authorization.
 
 Each VMM instance also has an `instance_id`. It must be unique among VMMs that
 share a host. If omitted, the VMM derives a stable namespace from its absolute

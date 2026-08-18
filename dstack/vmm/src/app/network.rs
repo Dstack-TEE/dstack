@@ -19,6 +19,9 @@ pub(crate) fn resolve_networking(networking: &Networking, cfg: &CvmConfig) -> Ne
     if !networking.bridge.is_empty() {
         resolved.bridge = networking.bridge.clone();
     }
+    if !networking.parent.is_empty() {
+        resolved.parent = networking.parent.clone();
+    }
     if !networking.mac_prefix.is_empty() {
         resolved.mac_prefix = networking.mac_prefix.clone();
     }

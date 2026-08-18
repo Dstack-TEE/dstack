@@ -7,7 +7,7 @@ the unstable `/dev/tapN` device path.
 
 ## Configuration
 
-Configure a NIC through the manifest or VMM RPC:
+Configure a NIC through node configuration or an authorized VMM RPC request:
 
 ```json
 {
@@ -21,6 +21,22 @@ Configure a NIC through the manifest or VMM RPC:
 `private`, `bridge`, `vepa`, or `passthru`; an empty value selects `private`.
 The configured netd socket and caller allowlist apply in the same way as for
 libvirt-filtered bridge networking.
+
+Deployment RPC callers cannot select `macvtap_mode`; it is inherited from the
+node's `[cvm.networking]` configuration. Macvtap is also excluded from the
+default RPC policy. A node operator must explicitly enable it and enumerate
+the host interfaces callers may select:
+
+```toml
+[cvm]
+allowed_network_modes = ["user", "bridge", "macvtap"]
+allowed_macvtap_parents = ["eth0"]
+
+[cvm.networking]
+mode = "user"
+parent = "eth0"
+macvtap_mode = "private"
+```
 
 ## Lifecycle
 
@@ -48,7 +64,8 @@ identity or cleanup key.
 - The host and a macvtap guest do not communicate directly through the parent
   interface by default. Add a host macvlan/macvtap endpoint if that path is
   required.
-- Libvirt nwfilter bindings apply only to bridge mode. Macvtap deployments
+- Libvirt nwfilter bindings apply only to bridge mode and are never installed
+  for macvtap interfaces. Macvtap deployments
   must enforce network policy in the physical network or with another host
   mechanism.
 - Real-host testing requires `CAP_NET_ADMIN`, a working udev setup for
