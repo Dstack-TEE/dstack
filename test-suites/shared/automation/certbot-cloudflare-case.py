@@ -4,13 +4,16 @@
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -30,8 +33,27 @@ def load_support():
     return module
 
 
+def cleanup_test_repository(repository: Path, test_repository: Path) -> None:
+    """Remove the case-owned candidate worktree on success or early failure."""
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "worktree",
+            "remove",
+            "--force",
+            str(test_repository),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    shutil.rmtree(test_repository, ignore_errors=True)
+
+
 def run_tests(
-    runtime: dict[str, object], env: dict[str, str]
+    repository: Path, runtime: dict[str, object], env: dict[str, str]
 ) -> subprocess.CompletedProcess[str]:
     """Run the three candidate Cloudflare client tests against the local model."""
     return subprocess.run(
@@ -46,7 +68,7 @@ def run_tests(
             "--",
             "--nocapture",
         ],
-        cwd=Path(str(runtime["repository"])) / "dstack",
+        cwd=repository / "dstack",
         env=env,
         text=True,
         capture_output=True,
@@ -72,6 +94,43 @@ def main() -> int:
     result_dir = Path(os.environ["DSTACK_TEST_RESULT_DIR"])
     runtime = json.loads(Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text())
     support = load_support()
+    repository = Path(str(runtime["repository"]))
+    common_dir = Path(
+        subprocess.run(
+            ["git", "-C", str(repository), "rev-parse", "--git-common-dir"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    ).resolve()
+    worktree_root = common_dir.parent.parent / f"{common_dir.parent.name}.worktrees"
+    worktree_root.mkdir(parents=True, exist_ok=True)
+    test_repository = Path(
+        tempfile.mkdtemp(prefix="certbot-cloudflare-case-", dir=worktree_root)
+    )
+    test_repository.rmdir()
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "worktree",
+            "add",
+            "--detach",
+            str(test_repository),
+            str(runtime["candidate_commit"]),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    atexit.register(cleanup_test_repository, repository, test_repository)
+    source = test_repository / "dstack/certbot/src/dns01_client/cloudflare.rs"
+    source_text = source.read_text()
+    disabled_gate = "    #![cfg(not(test))]\n"
+    if source_text.count(disabled_gate) != 1:
+        raise RuntimeError("candidate Cloudflare test gate changed unexpectedly")
+    source.write_text(source_text.replace(disabled_gate, "", 1))
     state = support.DnsState(["example.test", "adjacent.test"])
     server = support.CloudflareServer(state)
     worker = threading.Thread(
@@ -87,23 +146,25 @@ def main() -> int:
             "CLOUDFLARE_API_URL": f"http://127.0.0.1:{server.server_port}/client/v4",
         }
     )
-    valid = run_tests(runtime, base_env)
+    valid = run_tests(test_repository, runtime, base_env)
     valid_passed = passed_count(valid)
     wrong_env = base_env.copy()
     wrong_env["CLOUDFLARE_API_TOKEN"] = "invalid-sentinel"
-    wrong = run_tests(runtime, wrong_env)
+    wrong = run_tests(test_repository, runtime, wrong_env)
     with state.lock:
         state.failure = True
-    outage = run_tests(runtime, base_env)
+    outage = run_tests(test_repository, runtime, base_env)
     with state.lock:
         state.failure = False
-    recovery = run_tests(runtime, base_env)
+    recovery = run_tests(test_repository, runtime, base_env)
     recovery_passed = passed_count(recovery)
     snapshot = state.snapshot()
     operation_count = len(state.operations)
     server.shutdown()
     server.server_close()
     worker.join(2)
+    cleanup_test_repository(repository, test_repository)
+    atexit.unregister(cleanup_test_repository)
     checks = {
         "valid_add_list_remove_matrix": valid.returncode == 0 and valid_passed >= 3,
         "wrong_token_rejected": wrong.returncode != 0,
