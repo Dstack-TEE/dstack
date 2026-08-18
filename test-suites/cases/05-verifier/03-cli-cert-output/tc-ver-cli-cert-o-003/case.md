@@ -35,7 +35,7 @@ Verify os image hash verification modes across success, boundary, failure, secur
 
 ## Test Data
 
-Use the checked-in `dstack/verifier/shared/fixtures/quote-report.json`, the manifest-declared image directory, isolated caches, an ephemeral loopback HTTP server, and allow/deny sets containing only public image hashes.
+Use the checked-in `dstack/verifier/fixtures/quote-report.json`, the manifest-declared image directory, isolated caches, an ephemeral loopback HTTP server, and allow/deny sets containing only public image hashes.
 
 ## Steps
 

@@ -132,7 +132,7 @@ def vm_state(argv: list[str]) -> dict[str, Any]:
 
 def inventory(root: pathlib.Path) -> dict[str, Any]:
     """Return the indexed ProxiedGuestApi.Shutdown contract."""
-    document = json.loads((root / "api-inventory.json").read_text())
+    document = json.loads((root / "catalog" / "api-inventory.json").read_text())
     matches = [
         entry
         for entry in document["components"]["guest-os"]["rpc_methods"]

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -99,6 +100,7 @@ def main() -> int:
     repository = Path(str(runtime["repository"]))
     suite = repository / "dstack/tests/e2e/attestation"
     started = time.monotonic()
+    project = "dts-" + hashlib.sha256(str(result_dir).encode()).hexdigest()[:12]
     steps: list[dict[str, str]] = []
     rows: list[dict[str, object]] = []
     failure = ""
@@ -106,7 +108,7 @@ def main() -> int:
 
     try:
         build = run_as_kvin(
-            f"cd {shlex.quote(str(suite))} && docker compose build", 1800
+            f"cd {shlex.quote(str(suite))} && docker compose -p {project} build", 1800
         )
         (artifacts / "compose-build.log").write_text(build.stdout + build.stderr)
         if build.returncode:
@@ -122,7 +124,7 @@ def main() -> int:
         for service in spec["services"]:
             row_started = time.monotonic()
             completed = run_as_kvin(
-                f"cd {shlex.quote(str(suite))} && docker compose run --rm {shlex.quote(service)}",
+                f"cd {shlex.quote(str(suite))} && docker compose -p {project} run --rm {shlex.quote(service)}",
                 600,
             )
             log = completed.stdout + completed.stderr
@@ -191,7 +193,7 @@ def main() -> int:
         steps.append(emit(f"{case_id}-step-{len(steps) + 1:02d}", "FAIL", failure))
     finally:
         down = run_as_kvin(
-            f"cd {shlex.quote(str(suite))} && docker compose down --remove-orphans",
+            f"cd {shlex.quote(str(suite))} && docker compose -p {project} down --remove-orphans",
             180,
         )
         (artifacts / "compose-down.log").write_text(down.stdout + down.stderr)

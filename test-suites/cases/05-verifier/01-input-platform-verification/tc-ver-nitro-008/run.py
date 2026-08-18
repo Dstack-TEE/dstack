@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -70,10 +71,10 @@ def emit(step_id: str, status: str, observed: str) -> dict[str, str]:
     return {"id": step_id, "status": status, "observed": observed}
 
 
-def run_control(suite: str, artifact: Path, phase: str) -> None:
+def run_control(suite: str, project: str, artifact: Path, phase: str) -> None:
     """Run one fresh simulator-to-verifier Nitro Enclave control."""
     completed = run_as_kvin(
-        f"cd {suite} && docker compose run --rm aws-nitro-enclave", 600
+        f"cd {suite} && docker compose -p {project} run --rm aws-nitro-enclave", 600
     )
     artifact.write_text(completed.stdout + completed.stderr)
     if completed.returncode:
@@ -103,15 +104,16 @@ def main() -> int:
     failure = ""
     status = "FAIL"
     started = time.monotonic()
+    project = "dts-" + hashlib.sha256(str(result_dir).encode()).hexdigest()[:12]
 
     try:
-        build = run_as_kvin(f"cd {suite} && docker compose build", 1800)
+        build = run_as_kvin(f"cd {suite} && docker compose -p {project} build", 1800)
         (artifacts / "compose-build.log").write_text(build.stdout + build.stderr)
         if build.returncode:
             raise RuntimeError(
                 f"attestation image build failed with rc={build.returncode}"
             )
-        run_control(suite, artifacts / "nitro-control-before.log", "baseline")
+        run_control(suite, project, artifacts / "nitro-control-before.log", "baseline")
         steps.append(
             emit(
                 f"{CASE_ID}-step-01",
@@ -139,7 +141,9 @@ def main() -> int:
             )
         )
 
-        run_control(suite, artifacts / "nitro-control-after-restart.log", "restarted")
+        run_control(
+            suite, project, artifacts / "nitro-control-after-restart.log", "restarted"
+        )
         steps.append(
             emit(
                 f"{CASE_ID}-step-03",
@@ -152,7 +156,9 @@ def main() -> int:
         failure = f"{type(error).__name__}: {error}"
         steps.append(emit(f"{CASE_ID}-step-{len(steps) + 1:02d}", "FAIL", failure))
     finally:
-        down = run_as_kvin(f"cd {suite} && docker compose down --remove-orphans", 180)
+        down = run_as_kvin(
+            f"cd {suite} && docker compose -p {project} down --remove-orphans", 180
+        )
         (artifacts / "compose-down.log").write_text(down.stdout + down.stderr)
         if down.returncode and status == "PASS":
             status = "FAIL"

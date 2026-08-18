@@ -153,7 +153,7 @@ def main() -> int:
         runtime["environment"]["DSTACK_TEST_VERIFIER_FULL_TDX_IMAGE_DIR"]
     )
     binary = prepared_binary(runtime, "dstack_verifier")
-    request = repository / "dstack/verifier/shared/fixtures/quote-report.json"
+    request = repository / "dstack/verifier/fixtures/quote-report.json"
     workspace = result_dir / "debug-workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, Any]] = []
