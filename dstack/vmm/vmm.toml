@@ -122,6 +122,9 @@ parameters = {}
 # "libvirt". An empty allowed_uids list permits root only.
 [netd]
 socket = "/run/dstack/netd.sock"
+# Applied when netd creates the socket itself. A systemd socket unit controls
+# its own SocketMode instead.
+socket_mode = 0o660
 allowed_uids = []
 libvirt_uri = "qemu:///system"
 

@@ -588,6 +588,9 @@ fn default_libvirt_filter() -> String {
 pub struct NetdConfig {
     #[serde(default = "default_netd_socket")]
     pub socket: PathBuf,
+    /// Filesystem permissions applied when netd creates its own socket.
+    /// Systemd-activated sockets use `SocketMode` from the socket unit.
+    pub socket_mode: u32,
     #[serde(default)]
     pub allowed_uids: Vec<u32>,
     #[serde(default = "default_libvirt_uri")]
@@ -598,9 +601,20 @@ impl Default for NetdConfig {
     fn default() -> Self {
         Self {
             socket: default_netd_socket(),
+            socket_mode: 0o660,
             allowed_uids: Vec::new(),
             libvirt_uri: default_libvirt_uri(),
         }
+    }
+}
+
+impl NetdConfig {
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.socket_mode & !0o777 == 0,
+            "netd.socket_mode must contain only Unix permission bits"
+        );
+        Ok(())
     }
 }
 
@@ -649,6 +663,8 @@ impl Config {
         self.host_api
             .validate()
             .context("Invalid host_api configuration")?;
+
+        self.netd.validate()?;
 
         anyhow::ensure!(self.cvm.cid_start >= 3, "cvm.cid_start must be at least 3");
         anyhow::ensure!(
@@ -1142,11 +1158,21 @@ mod tests {
 
     #[test]
     fn config_validation_accepts_defaults() {
-        default_config().validate().unwrap();
+        let config = default_config();
+        assert_eq!(config.netd.socket_mode, 0o660);
+        config.validate().unwrap();
     }
 
     #[test]
     fn config_validation_rejects_invalid_static_invariants() {
+        let mut config = default_config();
+        config.netd.socket_mode = 0o1660;
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("socket_mode"));
+
         let mut config = default_config();
         config.cvm.cid_pool_size = 0;
         assert!(config

@@ -21,6 +21,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use listenfd::ListenFd;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::{
@@ -169,19 +170,14 @@ pub async fn serve(config: NetdConfig) -> Result<()> {
     if !nix::unistd::Uid::effective().is_root() {
         bail!("netd must run as root");
     }
+    config.validate()?;
     require_executable(IP_PATH)?;
     require_executable(VIRSH_PATH)?;
-    let listener = {
-        let _lock = OperationLock::acquire()?;
-        prepare_socket_path(&config.socket)?;
-        UnixListener::bind(&config.socket)
-            .with_context(|| format!("failed to bind netd socket {}", config.socket.display()))?
+    let listener = match activated_listener()? {
+        Some(listener) => listener,
+        None => bind_listener(&config)?,
     };
-    // Access control is based on SO_PEERCRED rather than filesystem groups so
-    // one shared service can authorize VMM instances running under different
-    // UIDs and development mode needs no system group setup.
-    std::fs::set_permissions(&config.socket, Permissions::from_mode(0o666))?;
-    info!(socket = %config.socket.display(), "netd listening");
+    info!(address = ?listener.local_addr()?, "netd listening");
     loop {
         let (mut stream, _) = listener.accept().await?;
         // This timeout bounds async socket reads and writes. handle_request is
@@ -193,6 +189,37 @@ pub async fn serve(config: NetdConfig) -> Result<()> {
             Err(_) => warn!("netd connection timed out"),
         }
     }
+}
+
+fn activated_listener() -> Result<Option<UnixListener>> {
+    let mut listenfd = ListenFd::from_env();
+    if listenfd.len() == 0 {
+        return Ok(None);
+    }
+    if listenfd.len() != 1 {
+        bail!(
+            "netd requires exactly one systemd-activated socket, received {}",
+            listenfd.len()
+        );
+    }
+    let listener = listenfd
+        .take_unix_listener(0)
+        .context("systemd fd 0 is not a Unix stream listener")?
+        .context("systemd did not provide fd 0")?;
+    listener.set_nonblocking(true)?;
+    info!("using systemd-activated socket");
+    Ok(Some(UnixListener::from_std(listener)?))
+}
+
+fn bind_listener(config: &NetdConfig) -> Result<UnixListener> {
+    let listener = {
+        let _lock = OperationLock::acquire()?;
+        prepare_socket_path(&config.socket)?;
+        UnixListener::bind(&config.socket)
+            .with_context(|| format!("failed to bind netd socket {}", config.socket.display()))?
+    };
+    std::fs::set_permissions(&config.socket, Permissions::from_mode(config.socket_mode))?;
+    Ok(listener)
 }
 
 async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Result<()> {

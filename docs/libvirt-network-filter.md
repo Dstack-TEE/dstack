@@ -33,6 +33,7 @@ parameters = {}
 
 [netd]
 socket = "/run/dstack/netd.sock"
+socket_mode = 0o660 # used when netd binds the socket itself
 allowed_uids = [] # empty means root only
 libvirt_uri = "qemu:///system"
 ```
@@ -47,6 +48,12 @@ run directory.
 protocol over a Unix stream socket and authorizes clients with `SO_PEERCRED`.
 A single process can serve multiple VMMs; a dedicated process can use another
 socket for development or isolation.
+
+When netd creates the socket itself, `socket_mode` defaults to `0o660`.
+Filesystem permissions provide the first access-control layer, while
+`SO_PEERCRED` and `allowed_uids` remain mandatory authorization checks. Ensure
+that each authorized VMM process can reach the socket through its owning group
+or another deliberately configured ownership arrangement.
 
 For libvirt mode, startup is:
 
@@ -81,8 +88,29 @@ VMM instance:
 # /etc/dstack/netd.toml
 [netd]
 socket = "/run/dstack/netd.sock"
+socket_mode = 0o660
 allowed_uids = [991, 992]
 libvirt_uri = "qemu:///system"
+```
+
+Production deployments can use systemd socket activation. The socket unit
+owns the filesystem mode and ownership; `netd.socket_mode` applies only to the
+standalone bind path.
+
+```ini
+# /etc/systemd/system/dstack-netd.socket
+[Unit]
+Description=dstack host networking socket
+
+[Socket]
+ListenStream=/run/dstack/netd.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=dstack-vmm
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target
 ```
 
 ```ini
@@ -94,10 +122,12 @@ After=libvirtd.service
 [Service]
 ExecStart=/usr/bin/dstack-vmm --config /etc/dstack/netd.toml netd
 Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
 ```
+
+The service accepts exactly one Unix stream listener through the systemd
+`LISTEN_FDS` protocol. With no activated descriptor it falls back to binding
+`netd.socket` itself. More than one descriptor, or a descriptor of the wrong
+socket type, is rejected.
 
 All VMM instance configurations point to the same socket and use distinct
 `cvm.instance_id` values. A dedicated netd uses a different socket. A
