@@ -16,7 +16,16 @@ CANDIDATES = ("10.240.0.0/12", "10.224.0.0/12", "10.208.0.0/12", "10.192.0.0/12"
 def docker(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     """Run Docker through the required unprivileged identity."""
     return subprocess.run(
-        ["sudo", "su", "kvin", "-c", shlex.join(["docker", *args])],
+        [
+            os.environ.get(
+                "DSTACK_TEST_DOCKER_SHELL_RUNNER",
+                os.path.join(
+                    os.environ["DSTACK_TEST_PLAN_DIR"],
+                    "shared/automation/run-docker-shell",
+                ),
+            ),
+            shlex.join(["docker", *args]),
+        ],
         text=True,
         capture_output=True,
         check=check,

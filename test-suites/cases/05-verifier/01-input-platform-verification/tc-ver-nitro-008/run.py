@@ -17,12 +17,23 @@ CASE_ID = "tc-ver-nitro-008"
 MATRIX_TEST = "generated_document_passes_real_qvl_and_negative_cases_fail"
 
 
-def run_as_kvin(command: str, timeout: int) -> subprocess.CompletedProcess[str]:
-    """Launch Docker through kvin with temporary files on the home volume."""
-    docker_tmp = "/home/kvin/.cache/dstack-test/docker-tmp"
+def run_docker_shell(command: str, timeout: int) -> subprocess.CompletedProcess[str]:
+    """Launch Docker through the operator-configured shell wrapper."""
+    docker_tmp = os.environ.get(
+        "DSTACK_TEST_DOCKER_TMP", str(Path.home() / ".cache/dstack-test/docker-tmp")
+    )
     safe_command = f"mkdir -p {docker_tmp} && export TMPDIR={docker_tmp} && {command}"
     return subprocess.run(
-        ["sudo", "su", "kvin", "-c", safe_command],
+        [
+            os.environ.get(
+                "DSTACK_TEST_DOCKER_SHELL_RUNNER",
+                os.path.join(
+                    os.environ["DSTACK_TEST_PLAN_DIR"],
+                    "shared/automation/run-docker-shell",
+                ),
+            ),
+            safe_command,
+        ],
         text=True,
         capture_output=True,
         timeout=timeout,
@@ -73,7 +84,7 @@ def emit(step_id: str, status: str, observed: str) -> dict[str, str]:
 
 def run_control(suite: str, project: str, artifact: Path, phase: str) -> None:
     """Run one fresh simulator-to-verifier Nitro Enclave control."""
-    completed = run_as_kvin(
+    completed = run_docker_shell(
         f"cd {suite} && docker compose -p {project} run --rm aws-nitro-enclave", 600
     )
     artifact.write_text(completed.stdout + completed.stderr)
@@ -107,7 +118,9 @@ def main() -> int:
     project = "dts-" + hashlib.sha256(str(result_dir).encode()).hexdigest()[:12]
 
     try:
-        build = run_as_kvin(f"cd {suite} && docker compose -p {project} build", 1800)
+        build = run_docker_shell(
+            f"cd {suite} && docker compose -p {project} build", 1800
+        )
         (artifacts / "compose-build.log").write_text(build.stdout + build.stderr)
         if build.returncode:
             raise RuntimeError(
@@ -156,7 +169,7 @@ def main() -> int:
         failure = f"{type(error).__name__}: {error}"
         steps.append(emit(f"{CASE_ID}-step-{len(steps) + 1:02d}", "FAIL", failure))
     finally:
-        down = run_as_kvin(
+        down = run_docker_shell(
             f"cd {suite} && docker compose -p {project} down --remove-orphans", 180
         )
         (artifacts / "compose-down.log").write_text(down.stdout + down.stderr)

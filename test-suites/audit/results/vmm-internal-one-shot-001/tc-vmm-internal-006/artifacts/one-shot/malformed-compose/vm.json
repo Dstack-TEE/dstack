@@ -1,1 +1,0 @@
-{"name": "oneshot-case", "image": "dstack-mkosi-repro-a-19a0b20cd", "compose_file": "{invalid", "vcpu": 1, "memory": 1024, "disk_size": 1, "no_tee": true}

@@ -46,10 +46,10 @@ The same evidence and roots must be rejected when the explicit opt-in is removed
 - Place Cargo targets and Docker build caches on a filesystem with verified free space; do not use a full root-backed `/tmp` volume.
 - No production credentials. Seeds, private development keys, device nodes, mounts, and work files remain inside disposable containers.
 
-On managed hosts, launch every Docker command through the `kvin` identity:
+On managed hosts, launch every Docker command through the configured shell wrapper:
 
 ```console
-sudo su kvin -c "docker ..."
+$DSTACK_TEST_DOCKER_SHELL_RUNNER "docker ..."
 ```
 
 ## Running the suite
@@ -58,11 +58,11 @@ From the candidate checkout:
 
 ```console
 cd dstack/tests/e2e/attestation
-sudo su kvin -c "docker compose build"
+$DSTACK_TEST_DOCKER_SHELL_RUNNER "docker compose build"
 for service in dstack-tdx-legacy dstack-tdx-lite gcp-tdx amd-sev-snp aws-nitro-enclave aws-nitro-tpm; do
-  sudo su kvin -c "docker compose run --rm $service"
+  $DSTACK_TEST_DOCKER_SHELL_RUNNER "docker compose run --rm $service"
 done
-sudo su kvin -c "docker compose down --remove-orphans"
+$DSTACK_TEST_DOCKER_SHELL_RUNNER "docker compose down --remove-orphans"
 ```
 
 Run the promoted case through the plan runner rather than invoking its Python harness directly. The harness writes one log per platform plus `platform-policy-matrix.json` under the run's case artifact directory.
@@ -121,7 +121,7 @@ snapshot includes both `dstack-simulator` (guest-agent RPC simulator) and
 `dstack-tee-simulator` (Linux TEE ABI simulator):
 
 ```console
-export DSTACK_TEST_LAB_MANIFEST="$PWD/test-suites/manifests/tdxlab.json"
+export DSTACK_TEST_LAB_MANIFEST=/path/to/operator-owned-lab.json
 export TMPDIR="$HOME/.cache/dstack-test/tmp"
 test-suites/shared/automation/prepare-run.sh \
   "$PWD" "$HOME/.cache/dstack-test/runtime-<commit>.json" \
@@ -138,7 +138,7 @@ SSH access or installs the current-HEAD binary into the guest.
 The Compose commands below are only an auxiliary, containerized platform
 check. They do **not** boot or validate the mkosi image and must not be cited as
 mkosi Guest OS evidence. A Guest OS lifecycle case must acquire a
-`tdxlab-isolated` lease, boot the fixture-declared mkosi image with VMM, and run
+`physical-tdx` lease, boot the fixture-declared mkosi image with VMM, and run
 its operations through the recorded `ssh_argv`.
 
 On a host whose root-backed `/tmp` lacks space, put Compose metadata on the
@@ -146,10 +146,10 @@ home volume. The assignment must be inside `su -c`, because `su` can reset the
 outer environment:
 
 ```console
-sudo su kvin -c "mkdir -p /home/kvin/.cache/dstack-test/docker-tmp && \
-  export TMPDIR=/home/kvin/.cache/dstack-test/docker-tmp && docker compose build"
-sudo su kvin -c "export TMPDIR=/home/kvin/.cache/dstack-test/docker-tmp && \
+$DSTACK_TEST_DOCKER_SHELL_RUNNER "mkdir -p $DSTACK_TEST_DOCKER_TMP && \
+  export TMPDIR=$DSTACK_TEST_DOCKER_TMP && docker compose build"
+$DSTACK_TEST_DOCKER_SHELL_RUNNER "export TMPDIR=$DSTACK_TEST_DOCKER_TMP && \
   docker compose run --rm dstack-tdx-legacy"
-sudo su kvin -c "export TMPDIR=/home/kvin/.cache/dstack-test/docker-tmp && \
+$DSTACK_TEST_DOCKER_SHELL_RUNNER "export TMPDIR=$DSTACK_TEST_DOCKER_TMP && \
   docker compose down --remove-orphans"
 ```

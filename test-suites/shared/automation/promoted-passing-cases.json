@@ -36,7 +36,7 @@
     },
     {
       "case_id": "tc-gos-attestatio-005",
-      "source_run": "tdxlab-optimized-20260723T182727Z",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-hardware-case.py",
       "environment": "HARDWARE"
@@ -51,7 +51,7 @@
     },
     {
       "case_id": "tc-gos-boot-and-i-001",
-      "source_run": "tdxlab-optimized-20260723T182727Z",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-hardware-case.py",
       "environment": "HARDWARE"
@@ -106,49 +106,49 @@
     },
     {
       "case_id": "tc-gos-dstackguest-001",
-      "source_run": "tdxlab-optimized-20260723T182727Z",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-rpc-case.py",
       "environment": "SIMULATION"
     },
     {
       "case_id": "tc-gos-dstackguest-002",
-      "source_run": "tdxlab-optimized-20260723T182727Z",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-rpc-case.py",
       "environment": "SIMULATION"
     },
     {
       "case_id": "tc-gos-dstackguest-003",
-      "source_run": "tdxlab-optimized-20260723T182727Z",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-rpc-case.py",
       "environment": "SIMULATION"
     },
     {
       "case_id": "tc-gos-dstackguest-004",
-      "source_run": "tdxlab-optimized-20260723T182727Z",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-rpc-case.py",
       "environment": "SIMULATION"
     },
     {
       "case_id": "tc-gos-dstackguest-005",
-      "source_run": "tdxlab-optimized-20260723T182727Z",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-rpc-case.py",
       "environment": "SIMULATION"
     },
     {
       "case_id": "tc-gos-dstackguest-006",
-      "source_run": "tdxlab-optimized-20260723T182727Z",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-rpc-case.py",
       "environment": "SIMULATION"
     },
     {
       "case_id": "tc-gos-dstackguest-007",
-      "source_run": "tdxlab-optimized-20260723T182727Z",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-rpc-case.py",
       "environment": "SIMULATION"
@@ -163,7 +163,7 @@
     },
     {
       "case_id": "tc-gos-dstackguest-009",
-      "source_run": "tdxlab-optimized-20260723T182727Z",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-rpc-case.py",
       "environment": "SIMULATION"
@@ -211,14 +211,14 @@
     },
     {
       "case_id": "tc-gos-guestapi-001",
-      "source_run": "tdxlab-optimized-20260723T182727Z",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-rpc-case.py",
       "environment": "SIMULATION"
     },
     {
       "case_id": "tc-gos-guestapi-002",
-      "source_run": "tdxlab-optimized-20260723T182727Z",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-rpc-case.py",
       "environment": "SIMULATION"
@@ -266,7 +266,7 @@
       "source_run": "gateway-checker-official-001",
       "source_status": "PASS",
       "entrypoint": "cases/01-guest-os/09-observability-and-network/tc-gos-observabil-003/run.py",
-      "environment": "MKOSI_TDXLAB",
+      "environment": "MKOSI_PHYSICAL_TDX",
       "notes": "checks cover a real namespace-isolated WireGuard interface/peer/address/route/DNS baseline and zero-handshake shape, then the checker's startup contract: exit 0 when the app never enabled dstack-gateway, the pinned misconfigured exit code for a missing gateway app id and for a missing gateway URL, and the installed unit honouring both through Restart=on-failure plus RestartPreventExitStatus; refresh timing moved to dstack-util gateway_checker unit tests when the checker stopped being a shell script"
     },
     {
@@ -308,7 +308,7 @@
       "source_run": "host-shared-official-001",
       "source_status": "PASS",
       "entrypoint": "cases/01-guest-os/10-platform-services/tc-gos-platform-003/run.py",
-      "environment": "MKOSI_TDXLAB",
+      "environment": "MKOSI_PHYSICAL_TDX",
       "notes": "24/24 checks cover DSTACKSHR labeled-disk priority and read-only mount, invalid-disk 9p fallback with content equality, duplicate unmount, injected mount-dependency failure, recovery, invalid target rejection, loop/mount cleanup, and adjacent VM inventory stability"
     },
     {
@@ -333,7 +333,7 @@
       "source_run": "journal-mkosi-official-004",
       "source_status": "PASS",
       "entrypoint": "cases/01-guest-os/10-platform-services/tc-gos-platform-007/run.py",
-      "environment": "MKOSI_TDXLAB",
+      "environment": "MKOSI_PHYSICAL_TDX",
       "notes": "bounded journald policy, rotation, producer-side redaction, unprivileged isolation, invalid-input closure, outage, recovery, cleanup, and adjacent-VM isolation"
     },
     {
@@ -358,7 +358,7 @@
       "source_run": "pending-physical-tdx-rerun",
       "source_status": "PASS",
       "entrypoint": "cases/01-guest-os/10-platform-services/tc-gos-platform-010/run.py",
-      "environment": "TDXLAB_PHYSICAL_TDX_FOUR_GUEST_MATRIX",
+      "environment": "PHYSICAL_TDX_FOUR_GUEST_MATRIX",
       "notes": "Four official guest versions use one case-owned physical-TDX VMM and product PCCS collateral to test current KMS, Gateway, and VMM configuration compatibility."
     },
     {
@@ -421,7 +421,7 @@
       "source_status": "PASS",
       "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-003/run.py",
       "environment": "SIMULATOR",
-      "notes": "temporary fake-Docker-root offline matrix plus preloaded-image online Docker API behavior; dry-run/active, malformed compose, live service, adjacent project, unlabeled metadata, and cleanup; every Docker CLI setup/inspect/cleanup operation uses sudo su kvin -c"
+      "notes": "temporary fake-Docker-root offline matrix plus preloaded-image online Docker API behavior; dry-run/active, malformed compose, live service, adjacent project, unlabeled metadata, and cleanup; every Docker CLI setup/inspect/cleanup operation uses the configured shell wrapper"
     },
     {
       "case_id": "tc-gos-setup-004",
@@ -476,7 +476,7 @@
       "source_run": "gos-hostapi-sealing-retained-002",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-hostapi-sealing-key-case.py",
-      "environment": "TDXLAB_REAL_TDX_HOST_API_LOCAL_PROVIDER",
+      "environment": "PHYSICAL_TDX_HOST_API_LOCAL_PROVIDER",
       "notes": "one real-TDX local-provider guest proves guest-originated Notify, SGX-backed sealing success, CID-bound host rejection, malformed/unknown request rejection, unchanged healthy state, complete VM cleanup, and no persisted quote or key material",
       "promoted_at": "2026-07-30T04:18:20Z"
     },
@@ -641,14 +641,14 @@
     },
     {
       "case_id": "tc-gos-tappd-001",
-      "source_run": "tdxlab-optimized-20260723T182727Z",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-rpc-case.py",
       "environment": "SIMULATION"
     },
     {
       "case_id": "tc-gos-tappd-002",
-      "source_run": "tdxlab-optimized-20260723T182727Z",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-rpc-case.py",
       "environment": "SIMULATION"
@@ -662,7 +662,7 @@
     },
     {
       "case_id": "tc-gos-tappd-004",
-      "source_run": "tdxlab-optimized-20260723T182727Z",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-rpc-case.py",
       "environment": "SIMULATION"
@@ -676,28 +676,28 @@
     },
     {
       "case_id": "tc-gos-tappd-006",
-      "source_run": "tdxlab-optimized-20260723T182727Z",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-rpc-case.py",
       "environment": "SIMULATION"
     },
     {
       "case_id": "tc-gos-worker-001",
-      "source_run": "tdxlab-optimized-20260723T182727Z",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-rpc-case.py",
       "environment": "SIMULATION"
     },
     {
       "case_id": "tc-gos-worker-002",
-      "source_run": "tdxlab-optimized-20260723T182727Z",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-rpc-case.py",
       "environment": "SIMULATION"
     },
     {
       "case_id": "tc-gos-worker-003",
-      "source_run": "tdxlab-optimized-20260723T182727Z",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
       "entrypoint": "shared/automation/passed-rpc-case.py",
       "environment": "SIMULATION"
@@ -723,7 +723,7 @@
       "source_run": "stargz-mkosi-official-001",
       "source_status": "PASS",
       "entrypoint": "cases/01-guest-os/13-yocto-runtime-hardening/tc-gos-yocto-004/run.py",
-      "environment": "MKOSI_TDXLAB",
+      "environment": "MKOSI_PHYSICAL_TDX",
       "notes": "57/57 checks cover pinned OCI provenance, overlay baseline, eStargz conversion and execution, two concurrent pulls, snapshotter restart, overlay cache during registry outage, unavailable-registry and corrupted-layer rejection, stopped-snapshotter closure, explicit overlay fallback, and lease-owned cleanup without claiming silent fallback"
     },
     {
@@ -731,7 +731,7 @@
       "source_run": "sysbox-mkosi-official-004",
       "source_status": "PASS",
       "entrypoint": "cases/01-guest-os/13-yocto-runtime-hardening/tc-gos-yocto-005/run.py",
-      "environment": "MKOSI_TDXLAB",
+      "environment": "MKOSI_PHYSICAL_TDX",
       "notes": "mkosi Sysbox baseline, remapped lifecycle, true nested container boundary, failure closure, partial recovery closure, full recovery, cleanup, and adjacent-VM isolation"
     },
     {
@@ -1418,7 +1418,7 @@
       "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
       "promoted_at": "2026-07-30T17:13:42Z",
       "notes": "three physical-TDX migration paths covered v0.5.4 through the v0.5.7 bridge plus direct v0.5.8 and v0.5.11 candidate migrations with stable public trust identity; six exact VMM, Guest, and Gateway tests preserved rollback, unknown, default, and legacy state",
-      "environment": "TDXLAB_PHYSICAL_TDX_7_VM_STATE_MIGRATION"
+      "environment": "PHYSICAL_TDX_7_VM_STATE_MIGRATION"
     },
     {
       "case_id": "tc-int-compatibil-002",
@@ -1427,7 +1427,7 @@
       "entrypoint": "shared/automation/integration-vmm-rolling-upgrade-case.py",
       "promoted_at": "2026-07-30T18:12:00Z",
       "notes": "physical-TDX rolling handoff preserved one running v0.5.8 Guest and one stopped v0.5.11 Guest across a v0.5.11-to-candidate VMM daemon replacement, loaded all three persisted workdirs, launched a candidate Guest, and preserved public identities through start-stop-start lifecycle operations",
-      "environment": "TDXLAB_PHYSICAL_TDX_4_VM_ROLLING_VMM_UPGRADE"
+      "environment": "PHYSICAL_TDX_4_VM_ROLLING_VMM_UPGRADE"
     },
     {
       "case_id": "tc-int-compatibil-003",
@@ -1436,7 +1436,7 @@
       "entrypoint": "shared/automation/integration-compatibility-003-capability-case.py",
       "promoted_at": "2026-07-30T03:51:43Z",
       "notes": "ten real TDX VMs execute two-node 0.5.8 to two-node candidate KMS rollout, old/candidate Gateway traffic, existing/new app and environment-key continuity, endpoint loss/recovery, rollback, and fail-closed malformed input without private-key export",
-      "environment": "TDXLAB_REAL_TDX_SHARED_KMS_GATEWAY_MATRIX"
+      "environment": "PHYSICAL_TDX_SHARED_KMS_GATEWAY_MATRIX"
     },
     {
       "case_id": "tc-int-compatibil-004",
@@ -1445,7 +1445,7 @@
       "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
       "promoted_at": "2026-08-18T16:30:00Z",
       "notes": "A real v0.5.11 Gateway writes WaveKV and routing state, then the same stopped VM starts the candidate compose on its retained disk; candidate startup proves nonzero legacy rows loaded before client restart, post-migration registration succeeds, candidate state survives restart, and malformed registration remains rejected",
-      "environment": "TDXLAB_REAL_TDX_GATEWAY_IN_PLACE_DISK_MIGRATION"
+      "environment": "PHYSICAL_TDX_GATEWAY_IN_PLACE_DISK_MIGRATION"
     },
     {
       "case_id": "tc-int-compatibil-005",
@@ -1454,7 +1454,7 @@
       "entrypoint": "cases/06-integration/02-compatibility-upgrade/tc-int-compatibil-005/run.py",
       "promoted_at": "2026-07-30T09:11:30Z",
       "notes": "ten exact candidate product rows cover legacy/current attestation envelopes, event-log version selection, vm_config request precedence, image-manifest policy, RA-TLS certificate compatibility, unknown-format diagnostics, and fail-closed lossy downgrade rejection",
-      "environment": "TDXLAB_CANDIDATE_VERIFIER_COMPATIBILITY_CORPUS"
+      "environment": "PHYSICAL_TDX_CANDIDATE_VERIFIER_COMPATIBILITY_CORPUS"
     },
     {
       "case_id": "tc-int-compatibil-006",
@@ -1463,7 +1463,7 @@
       "entrypoint": "cases/06-integration/02-compatibility-upgrade/tc-int-compatibil-006/run.py",
       "promoted_at": "2026-07-30T20:13:09Z",
       "notes": "v0.5.11/current protoc matrix compiles all seven RPC schemas and verifies 104 shared methods, 145 shared messages, 37 optional scalar fields, 290 unknown-field acceptance rows, 290 malformed-field rejection rows, and 290 post-error recovery rows while explicitly inventorying intentionally removed APIs",
-      "environment": "TDXLAB_IMMUTABLE_V0511_CURRENT_PROTO_WIRE_MATRIX"
+      "environment": "PHYSICAL_TDX_IMMUTABLE_V0511_CURRENT_PROTO_WIRE_MATRIX"
     },
     {
       "case_id": "tc-int-end-to-end-001",
@@ -1520,7 +1520,7 @@
       "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
       "promoted_at": "2026-07-30T15:20:07Z",
       "notes": "one shared candidate KMS, Gateway, and two Guest topology verifies unavailable and wrong-identity Gateway paths, independent app/KMS boot, background registration recovery, partitioned restart continuity, one current peer mapping, and malformed registration rejection with liveness",
-      "environment": "TDXLAB_REAL_TDX_GATEWAY_FAILURE_RECOVERY"
+      "environment": "PHYSICAL_TDX_GATEWAY_FAILURE_RECOVERY"
     },
     {
       "case_id": "tc-int-failure-se-003",
@@ -1529,7 +1529,7 @@
       "entrypoint": "cases/06-integration/03-failure-security/tc-int-failure-se-003/run.py",
       "promoted_at": "2026-07-30T15:45:21Z",
       "notes": "one restartable case-owned VMM injects routed SIGKILL faults around create, start, update, resize, stop, and remove; every restart converges to the prior or complete new state with unique VM/CID allocations, retryable cleanup, invalid-input rejection, and API liveness",
-      "environment": "TDXLAB_CASE_OWNED_VMM_TRANSACTION_CRASH"
+      "environment": "PHYSICAL_TDX_CASE_OWNED_VMM_TRANSACTION_CRASH"
     },
     {
       "case_id": "tc-int-failure-se-004",
@@ -1562,7 +1562,7 @@
       "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
       "promoted_at": "2026-07-30T16:50:16Z",
       "notes": "one shared physical-TDX fixture exercised all ten pairs among VMM, Guest, KMS, Gateway, and verifier/image source through seven KMS and six Gateway outage/failover/convergence paths plus verifier timeout/retry/digest/atomic-promotion checks; all eleven VMs and nine fixture processes were released",
-      "environment": "TDXLAB_PHYSICAL_TDX_11_VM_PARTITION_MATRIX"
+      "environment": "PHYSICAL_TDX_11_VM_PARTITION_MATRIX"
     },
     {
       "case_id": "tc-int-failure-se-008",
@@ -1571,7 +1571,7 @@
       "entrypoint": "shared/automation/integration-failure-008-capability-case.py",
       "promoted_at": "2026-07-30T04:07:44Z",
       "notes": "one physical TDX guest and six simulated platform rows verify challenge binding, exact development-root acceptance and production-root rejection, malformed/oversized input rejection, recovery, and hardware-unconfirmed scope without private material",
-      "environment": "TDXLAB_PHYSICAL_TDX_AND_SIX_PLATFORM_SIMULATION"
+      "environment": "PHYSICAL_TDX_AND_SIX_PLATFORM_SIMULATION"
     },
     {
       "case_id": "tc-int-mixed-001",
@@ -1580,7 +1580,7 @@
       "entrypoint": "shared/automation/integration-mixed-001-capability-case.py",
       "promoted_at": "2026-07-30T20:43:49Z",
       "notes": "candidate VMM and KMS host physical-TDX v0.5.4, v0.5.8, v0.5.11, and candidate mkosi Guests; all four expose public identities, become unreachable when stopped, recover after restart, and retain identity before complete VM cleanup",
-      "environment": "TDXLAB_PHYSICAL_TDX_CANDIDATE_VMM_FOUR_GUEST_MATRIX"
+      "environment": "PHYSICAL_TDX_CANDIDATE_VMM_FOUR_GUEST_MATRIX"
     },
     {
       "case_id": "tc-int-mixed-002",
@@ -1589,7 +1589,7 @@
       "entrypoint": "shared/automation/integration-mixed-002-capability-case.py",
       "promoted_at": "2026-07-30T21:39:50Z",
       "notes": "ten physical-TDX VMs execute two-node old/candidate KMS cutover, old/candidate Gateway replacement, baseline/cutover/rollback/new application traffic, root/CA/app/environment-key continuity, old-endpoint loss/recovery, and fail-closed malformed input without private-key export",
-      "environment": "TDXLAB_REAL_TDX_KMS_CUTOVER_GATEWAY_REPLACEMENT"
+      "environment": "PHYSICAL_TDX_KMS_CUTOVER_GATEWAY_REPLACEMENT"
     },
     {
       "case_id": "tc-int-mixed-003",
@@ -1598,7 +1598,7 @@
       "entrypoint": "shared/automation/integration-mixed-003-capability-case.py",
       "promoted_at": "2026-08-18T16:30:00Z",
       "notes": "The candidate upgrades the same stopped v0.5.11 Gateway VM on its retained disk, proves nonzero legacy WaveKV rows were loaded before client restart, accepts post-migration candidate registration, survives restart, and does not assume cross-version sync compatibility",
-      "environment": "TDXLAB_REAL_TDX_GATEWAY_IN_PLACE_VERSION_MATRIX"
+      "environment": "PHYSICAL_TDX_GATEWAY_IN_PLACE_VERSION_MATRIX"
     },
     {
       "case_id": "tc-int-mixed-004",
@@ -1607,7 +1607,7 @@
       "entrypoint": "shared/automation/integration-mixed-004-capability-case.py",
       "promoted_at": "2026-07-30T21:17:35Z",
       "notes": "ten physical-TDX VMs execute two-node old/candidate KMS cutover, old/candidate Gateway replacement, baseline/cutover/rollback/new application traffic, root/CA/app/environment-key continuity, old-endpoint loss/recovery, and fail-closed malformed input without private-key export",
-      "environment": "TDXLAB_REAL_TDX_KMS_CUTOVER_GATEWAY_REPLACEMENT"
+      "environment": "PHYSICAL_TDX_KMS_CUTOVER_GATEWAY_REPLACEMENT"
     },
     {
       "case_id": "tc-int-mixed-005",
@@ -1616,7 +1616,7 @@
       "entrypoint": "shared/automation/integration-mixed-005-capability-case.py",
       "promoted_at": "2026-07-30T20:16:38Z",
       "notes": "the shared candidate verifier controller passes all ten legacy/current evidence envelope, event-log selection, vm_config precedence, image-manifest policy, RA-TLS certificate, malformed-version, and fail-closed downgrade rows",
-      "environment": "TDXLAB_CANDIDATE_VERIFIER_COMPATIBILITY_CORPUS"
+      "environment": "PHYSICAL_TDX_CANDIDATE_VERIFIER_COMPATIBILITY_CORPUS"
     },
     {
       "case_id": "tc-int-mixed-006",
@@ -1625,7 +1625,7 @@
       "entrypoint": "shared/automation/integration-mixed-006-capability-case.py",
       "promoted_at": "2026-08-18T16:30:00Z",
       "notes": "Six physical-TDX KMS nodes across v0.5.4, bridge, v0.5.11, and candidate; one candidate Gateway; and four Guest generations exercise failed-transfer boundaries, stable root/app/trust identities, forward/reverse KMS restarts, candidate Gateway restart recovery, traffic continuity, and bounded legacy retirement without cross-version Gateway sync",
-      "environment": "TDXLAB_PHYSICAL_TDX_FOUR_VERSION_ROLLING_RESTART"
+      "environment": "PHYSICAL_TDX_FOUR_VERSION_ROLLING_RESTART"
     },
     {
       "case_id": "tc-int-mixed-007",
@@ -1634,7 +1634,7 @@
       "entrypoint": "shared/automation/integration-mixed-007-capability-case.py",
       "promoted_at": "2026-07-30T20:22:58Z",
       "notes": "immutable v0.5.4, v0.5.8, and v0.5.11 schemas cross-decode against current across 259 shared RPC methods, 360 shared messages, 89 optional fields, and 720 each unknown-field acceptance, malformed-field rejection, and post-error recovery rows; release-absent files and intentional API removals are explicit",
-      "environment": "TDXLAB_PINNED_RELEASE_CURRENT_PROTO_WIRE_MATRIX"
+      "environment": "PHYSICAL_TDX_PINNED_RELEASE_CURRENT_PROTO_WIRE_MATRIX"
     },
     {
       "case_id": "tc-kms-admin-001",

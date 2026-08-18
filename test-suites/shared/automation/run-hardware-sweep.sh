@@ -3,8 +3,8 @@
 set -Eeuo pipefail
 
 repo=${1:-$(git rev-parse --show-toplevel)}
-run_id=${2:?usage: run-tdxlab-sweep.sh REPOSITORY RUN_ID RUNTIME_MANIFEST [WORKERS]}
-runtime_manifest=${3:?usage: run-tdxlab-sweep.sh REPOSITORY RUN_ID RUNTIME_MANIFEST [WORKERS]}
+run_id=${2:?usage: run-hardware-sweep.sh REPOSITORY RUN_ID RUNTIME_MANIFEST [WORKERS]}
+runtime_manifest=${3:?usage: run-hardware-sweep.sh REPOSITORY RUN_ID RUNTIME_MANIFEST [WORKERS]}
 workers=${4:-4}
 
 repo=$(realpath -e -- "$repo")

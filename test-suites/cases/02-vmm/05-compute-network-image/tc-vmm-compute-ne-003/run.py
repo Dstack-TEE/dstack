@@ -236,7 +236,7 @@ def main() -> int:
                 "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
             }
         ],
-        "remarks": "The official tdxlab preparation script provisions the bounded 2 MiB hugepage pool before fixture inventory.",
+        "remarks": "The official physical TDX host preparation script provisions the bounded 2 MiB hugepage pool before fixture inventory.",
     }
     (result_dir / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     return 0 if status == "PASS" else 1

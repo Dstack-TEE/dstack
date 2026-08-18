@@ -40,8 +40,20 @@ def run(
 
 
 def docker(command: str, timeout: int = 1800) -> str:
-    """Run Docker through the required unprivileged kvin identity."""
-    return run(["sudo", "su", "kvin", "-c", f"docker {command}"], timeout=timeout)
+    """Run Docker through the operator-configured shell wrapper."""
+    return run(
+        [
+            os.environ.get(
+                "DSTACK_TEST_DOCKER_SHELL_RUNNER",
+                os.path.join(
+                    os.environ["DSTACK_TEST_PLAN_DIR"],
+                    "shared/automation/run-docker-shell",
+                ),
+            ),
+            f"docker {command}",
+        ],
+        timeout=timeout,
+    )
 
 
 def free_port() -> int:
@@ -205,7 +217,16 @@ def main() -> int:
     suffix = hashlib.sha256(str(workspace).encode()).hexdigest()[:12]
     registry = f"dstack-upgrade-registry-{suffix}"
     docker(f"rm -f {shlex.quote(registry)}", timeout=60) if subprocess.run(
-        ["sudo", "su", "kvin", "-c", f"docker inspect {shlex.quote(registry)}"],
+        [
+            os.environ.get(
+                "DSTACK_TEST_DOCKER_SHELL_RUNNER",
+                os.path.join(
+                    os.environ["DSTACK_TEST_PLAN_DIR"],
+                    "shared/automation/run-docker-shell",
+                ),
+            ),
+            f"docker inspect {shlex.quote(registry)}",
+        ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     ).returncode == 0 else None

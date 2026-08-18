@@ -5,12 +5,15 @@ set -euo pipefail
 export PATH="$HOME/.cargo/bin:$PATH"
 
 repo=${1:-$(git rev-parse --show-toplevel)}
-output=${2:?usage: prepare-tdxlab-run.sh REPOSITORY OUTPUT_JSON [CACHE_ROOT]}
-cache_root=${3:-${DSTACK_TEST_CACHE_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/dstack-test}}
+output=${2:?usage: prepare-hardware-run.sh REPOSITORY OUTPUT_JSON LAB_MANIFEST [CACHE_ROOT]}
+lab_manifest=${3:?usage: prepare-hardware-run.sh REPOSITORY OUTPUT_JSON LAB_MANIFEST [CACHE_ROOT]}
+cache_root=${4:-${DSTACK_TEST_CACHE_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/dstack-test}}
 
 repo=$(realpath -e -- "$repo")
 plan="$repo/test-suites"
-template="$plan/manifests/tdxlab.json"
+docker_shell_runner="$plan/shared/automation/run-docker-shell"
+export DSTACK_TEST_DOCKER_SHELL_RUNNER="$docker_shell_runner"
+template=$(realpath -e -- "$lab_manifest")
 generated_lab="${output%.json}.lab.json"
 fixture_root="$cache_root/shared/fixtures/verifier/full-tdx-0.5.4.1"
 image_hash=14ad42d0270b444eaeb53918a5a94d9b17eec7a817cd336173b17c5327541c67
@@ -30,7 +33,7 @@ require_command() {
   }
 }
 
-for command in cargo curl docker dstack-acpi-tables git jq mkosi npm python3 tar unshare unzip; do
+for command in cargo curl dstack-acpi-tables git jq mkosi npm python3 tar unshare unzip; do
   require_command "$command"
 done
 
@@ -50,8 +53,30 @@ if ! user_namespace_ready; then
   }
 fi
 
+docker_shell_wrapper=$(jq -r '.environment.DSTACK_TEST_DOCKER_SHELL_WRAPPER // empty' "$template")
+if [[ -n $docker_shell_wrapper ]]; then
+  docker_shell_wrapper=$(realpath -e -- "$docker_shell_wrapper")
+  test -x "$docker_shell_wrapper" || {
+    printf 'Docker shell wrapper is not executable: %s\n' "$docker_shell_wrapper" >&2
+    exit 1
+  }
+else
+  require_command docker
+fi
+export DSTACK_TEST_DOCKER_SHELL_WRAPPER="$docker_shell_wrapper"
+
+docker_run() {
+  if [[ -n $docker_shell_wrapper ]]; then
+    local command
+    printf -v command '%q ' docker "$@"
+    "$docker_shell_wrapper" "$command"
+  else
+    docker "$@"
+  fi
+}
+
 docker_ready() {
-  sudo su kvin -c "docker info --format '{{.ServerVersion}}'" >/dev/null 2>&1
+  docker_run info --format '{{.ServerVersion}}' >/dev/null 2>&1
 }
 
 if ! docker_ready; then
@@ -310,8 +335,8 @@ fi
 
 # The compose-validation case deliberately runs without registry access and
 # therefore needs this public base image present before fixture isolation.
-if ! sudo su kvin -c "docker image inspect alpine:latest" >/dev/null 2>&1; then
-  sudo su kvin -c "docker pull alpine:latest"
+if ! docker_run image inspect alpine:latest >/dev/null 2>&1; then
+  docker_run pull alpine:latest
 fi
 
 docker_subnet_pool=$(
@@ -333,7 +358,7 @@ prod_image, dev_image, identity_image, docker_subnet_pool = sys.argv[9:]
 value = json.loads(template.read_text())
 environment = value.setdefault("environment", {})
 providers = {
-    "DSTACK_TEST_PROVIDER_TDXLAB_ISOLATED": "tdxlab-isolated.py",
+    "DSTACK_TEST_PROVIDER_PHYSICAL_TDX": "physical-tdx.py",
     "DSTACK_TEST_PROVIDER_ISOLATED_COMPONENT": "isolated-component.py",
     "DSTACK_TEST_PROVIDER_HARDWARE_POOL": "hardware-pool.py",
     "DSTACK_TEST_PROVIDER_VERSION_MATRIX": "version-matrix.py",
@@ -354,6 +379,9 @@ environment["DSTACK_TEST_GUEST_PROD_IMAGE"] = prod_image
 environment["DSTACK_TEST_GUEST_DEV_IMAGE"] = dev_image
 environment["DSTACK_TEST_IDENTITY_ALT_IMAGE"] = identity_image
 environment["DSTACK_TEST_DOCKER_SUBNET_POOL"] = docker_subnet_pool
+environment["DSTACK_TEST_DOCKER_SHELL_RUNNER"] = str(
+    (plan / "shared/automation/run-docker-shell").resolve(strict=True)
+)
 path_prepend = value.setdefault("environment_path_prepend", [])
 for tool_path in (foundry_bin, bun_bin):
     resolved = str(tool_path.resolve(strict=True))
@@ -365,4 +393,4 @@ PY
 
 export DSTACK_TEST_LAB_MANIFEST="$generated_lab"
 "$plan/shared/automation/prepare-run.sh" "$repo" "$output" "$cache_root"
-printf 'prepared tdxlab prerequisites and runtime manifest: %s\n' "$output"
+printf 'prepared hardware prerequisites and runtime manifest: %s\n' "$output"

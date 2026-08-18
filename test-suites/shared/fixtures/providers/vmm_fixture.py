@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Shared helpers for fixture providers that own a dstack-vmm instance.
 
-Both `isolated-component.py` and `tdxlab-isolated.py` provision a lease-owned
+Both `isolated-component.py` and `physical-tdx.py` provision a lease-owned
 VMM from the candidate tree. Keeping the config rewriting, port reservation,
 process supervision, and teardown primitives here prevents the two providers
 from drifting apart.

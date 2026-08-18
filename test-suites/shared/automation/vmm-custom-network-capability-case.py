@@ -170,7 +170,15 @@ def main():
                     "--target-dir",
                     os.environ.get(
                         "DSTACK_TEST_SHARED_CARGO_TARGET",
-                        "/home/kvin/.cache/dstack-test/vmm-internal-batch/target",
+                        str(
+                            Path(
+                                os.environ.get(
+                                    "DSTACK_TEST_CACHE_ROOT",
+                                    Path.home() / ".cache/dstack-test",
+                                )
+                            )
+                            / "vmm-internal-batch/target"
+                        ),
                     ),
                     "--",
                     "--nocapture",

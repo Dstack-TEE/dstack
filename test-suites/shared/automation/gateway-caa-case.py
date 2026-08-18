@@ -23,8 +23,8 @@ import urllib.request
 from typing import Any
 
 CASE_ID = "tc-gw-admin-006"
-CF_IMAGE = "kvin/mock-cf-dns-api:latest"
-PEBBLE_IMAGE = "kvin/pebble:latest"
+CF_IMAGE = os.environ.get("DSTACK_TEST_MOCK_CF_DNS_IMAGE", "")
+PEBBLE_IMAGE = os.environ.get("DSTACK_TEST_PEBBLE_IMAGE", "")
 SENTINEL_TOKEN = "dstack-caa-case-sentinel"
 
 
@@ -41,10 +41,19 @@ def atomic_json(path: pathlib.Path, value: Any) -> None:
 
 
 def docker(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    """Run Docker through the required unprivileged fleet identity."""
+    """Run Docker through the operator-configured shell wrapper."""
     command = shlex.join(("docker", *args))
     return subprocess.run(
-        ["sudo", "su", "kvin", "-c", command],
+        [
+            os.environ.get(
+                "DSTACK_TEST_DOCKER_SHELL_RUNNER",
+                os.path.join(
+                    os.environ["DSTACK_TEST_PLAN_DIR"],
+                    "shared/automation/run-docker-shell",
+                ),
+            ),
+            command,
+        ],
         text=True,
         capture_output=True,
         timeout=60,
@@ -333,6 +342,10 @@ def record_facts(state: DnsState) -> dict[str, Any]:
 
 
 def main() -> int:
+    if not CF_IMAGE or not PEBBLE_IMAGE:
+        raise RuntimeError(
+            "DSTACK_TEST_MOCK_CF_DNS_IMAGE and DSTACK_TEST_PEBBLE_IMAGE are required"
+        )
     """Run multi-domain CAA success, transport, fault, concurrency, and cleanup coverage."""
     global CASE_ID  # noqa: PLW0603
     requested_case = os.environ["DSTACK_TEST_CASE_ID"]

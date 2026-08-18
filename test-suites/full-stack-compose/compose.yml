@@ -78,7 +78,7 @@ services:
   pebble:
     # Custom Pebble build used by the existing gateway E2E suite. It supports
     # plain HTTP ACME URLs, which keeps the host-side Gateway bootstrap simple.
-    image: ${DSTACK_E2E_PEBBLE_IMAGE:-kvin/pebble:latest}
+    image: ${DSTACK_E2E_PEBBLE_IMAGE:?DSTACK_E2E_PEBBLE_IMAGE is required}
     command: ["-http", "-dnsserver", "172.31.0.10:53"]
     networks:
       e2e-net:
