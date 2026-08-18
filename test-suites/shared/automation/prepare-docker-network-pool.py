@@ -17,13 +17,7 @@ def docker(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     """Run Docker through the required unprivileged identity."""
     return subprocess.run(
         [
-            os.environ.get(
-                "DSTACK_TEST_DOCKER_SHELL_RUNNER",
-                os.path.join(
-                    os.environ["DSTACK_TEST_PLAN_DIR"],
-                    "shared/automation/run-docker-shell",
-                ),
-            ),
+            os.environ.get("DSTACK_TEST_DOCKER_SHELL_RUNNER", "run-docker-shell"),
             shlex.join(["docker", *args]),
         ],
         text=True,
