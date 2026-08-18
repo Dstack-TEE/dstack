@@ -795,12 +795,15 @@ name = "cert-client"
 version = "0.6.0"
 dependencies = [
  "anyhow",
+ "dstack-guest-agent-rpc",
  "dstack-kms-rpc",
  "dstack-types",
+ "http-client",
  "ra-rpc",
  "ra-tls",
  "serde_json",
  "tdx-attest",
+ "tokio",
 ]
 
 [[package]]
@@ -822,6 +825,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "time",
  "tokio",
  "tracing",
@@ -2283,6 +2287,7 @@ dependencies = [
  "hex-literal",
  "nsm-attest",
  "ra-tls",
+ "rcgen",
  "reqwest",
  "rocket",
  "serde",

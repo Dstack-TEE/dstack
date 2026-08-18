@@ -59,3 +59,42 @@ pub(crate) fn sign_message_with_timestamp(
     signature_bytes.push(recid.to_byte());
     Ok(signature_bytes)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn environment_public_key_signatures_bind_domain_app_key_and_timestamp() {
+        let key = SigningKey::from_slice(&[7_u8; 32]).unwrap();
+        let prefix = b"dstack-env-encrypt-pubkey";
+        let app_id = b"app-a";
+        let timestamp = 1_786_194_000;
+        let public_key = [0x42_u8; 32];
+        let baseline =
+            sign_message_with_timestamp(&key, prefix, app_id, timestamp, &public_key).unwrap();
+
+        assert_eq!(baseline.len(), 65);
+        assert_eq!(
+            baseline,
+            sign_message_with_timestamp(&key, prefix, app_id, timestamp, &public_key).unwrap()
+        );
+        assert_ne!(
+            baseline,
+            sign_message_with_timestamp(&key, b"other-domain", app_id, timestamp, &public_key)
+                .unwrap()
+        );
+        assert_ne!(
+            baseline,
+            sign_message_with_timestamp(&key, prefix, b"app-b", timestamp, &public_key).unwrap()
+        );
+        assert_ne!(
+            baseline,
+            sign_message_with_timestamp(&key, prefix, app_id, timestamp + 1, &public_key).unwrap()
+        );
+        assert_ne!(
+            baseline,
+            sign_message_with_timestamp(&key, prefix, app_id, timestamp, &[0x43_u8; 32]).unwrap()
+        );
+    }
+}

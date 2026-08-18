@@ -1028,9 +1028,10 @@ mod tests {
         PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder, VmConfig,
     };
     use crate::app::image::{Image, ImageInfo};
-    use crate::app::{needs_swtpm, GpuConfig, Manifest, PortMapping, VmVolume, VmWorkDir};
+    use crate::app::{needs_swtpm, GpuConfig, GpuSpec, Manifest, PortMapping, VmVolume, VmWorkDir};
     use crate::config::{
-        Config, CvmPlatform, NetworkFilterMode, NetworkingMode, Protocol, DEFAULT_CONFIG,
+        Config, CvmPlatform, NetworkFilterMode, Networking, NetworkingMode, Protocol,
+        DEFAULT_CONFIG,
     };
     use crate::netd::{tap_name, InterfaceIdentity};
     use dstack_types::{KeyProviderKind, TeeVariant};
@@ -1288,5 +1289,62 @@ mod tests {
             .args
             .windows(2)
             .any(|args| args == ["-tpmdev", "emulator,id=tpm0,chardev=chrtpm"]));
+
+        assert!(process
+            .args
+            .iter()
+            .any(|arg| arg.starts_with("local,path=") && arg.contains("mount_tag=host-shared")));
+
+        prepared.swtpm_socket = None;
+        prepared.networks = vec![Networking {
+            mode: NetworkingMode::Custom,
+            bridge: String::new(),
+            parent: String::new(),
+            macvtap_mode: String::new(),
+            device: String::new(),
+            mac_prefix: String::new(),
+            net: String::new(),
+            dhcp_start: String::new(),
+            restrict: false,
+            netdev: "tap,id=wrong".into(),
+        }];
+        let error = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap_err();
+        assert!(error.to_string().contains("must contain id=net0"));
+        prepared.networks[0].netdev = "tap,id=net0,fd=3".into();
+        QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+
+        let gpu = GpuConfig {
+            gpus: vec![GpuSpec {
+                slot: "0000:02:00.0".into(),
+            }],
+            ..Default::default()
+        };
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &gpu,
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert!(process.args.iter().any(|arg| arg == "iommufd,id=iommufd0"));
+        assert!(process
+            .args
+            .iter()
+            .any(|arg| arg.contains("vfio-pci,host=0000:02:00.0")));
     }
 }

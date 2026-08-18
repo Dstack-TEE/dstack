@@ -433,3 +433,47 @@ image_download_timeout_secs = 7
         assert_eq!(load_config(&config_figment(&path)).unwrap().port, 18080);
     }
 }
+
+#[cfg(test)]
+mod certificate_profile_tests {
+    use super::*;
+    use ra_tls::cert::CertRequest;
+    use rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
+    use std::time::{Duration, SystemTime};
+
+    fn certificate(not_before: SystemTime, not_after: SystemTime) -> Vec<u8> {
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let alt_names = vec!["clock-boundary.example.test".to_string()];
+        CertRequest::builder()
+            .key(&key)
+            .subject("clock-boundary.example.test")
+            .alt_names(&alt_names)
+            .usage_server_auth(true)
+            .not_before(not_before)
+            .not_after(not_after)
+            .build()
+            .self_signed()
+            .unwrap()
+            .der()
+            .to_vec()
+    }
+
+    #[test]
+    fn certificate_profile_rejects_expired_and_future_certificates() {
+        let now = SystemTime::now();
+        let hour = Duration::from_secs(60 * 60);
+
+        let expired = certificate(now - hour * 2, now - hour);
+        let future = certificate(now + hour, now + hour * 2);
+        let current = certificate(now - hour, now + hour);
+
+        for invalid in [&expired, &future] {
+            let error = verify_certificate_profile(invalid).unwrap_err();
+            assert!(
+                format!("{error:#}").contains("outside its validity period"),
+                "unexpected validity diagnostic: {error:#}"
+            );
+        }
+        verify_certificate_profile(&current).unwrap();
+    }
+}
