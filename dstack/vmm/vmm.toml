@@ -126,10 +126,12 @@ filter = "clean-traffic"
 parameters = {}
 
 # Shared privileged networking service. Only used when network_filter.mode is
-# "libvirt". An empty allowed_uids list permits root only.
+# "libvirt". Socket filesystem permissions authorize clients.
 [netd]
 socket = "/run/dstack/netd.sock"
-allowed_uids = []
+# Applied when netd creates the socket itself. A systemd socket unit controls
+# its own SocketMode instead.
+socket_mode = 0o660
 libvirt_uri = "qemu:///system"
 
 [cvm.port_mapping]

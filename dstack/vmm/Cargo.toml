@@ -64,6 +64,7 @@ flate2.workspace = true
 tar.workspace = true
 tempfile.workspace = true
 wait-timeout.workspace = true
+listenfd.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

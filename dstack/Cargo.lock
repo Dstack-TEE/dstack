@@ -2327,6 +2327,7 @@ dependencies = [
  "insta",
  "key-provider-client",
  "libc",
+ "listenfd",
  "load_config",
  "lspci",
  "mock-attestation",
