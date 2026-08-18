@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-auth-008",
+  "title": "Authorization API schema and error compatibility",
+  "priority": "P1",
+  "requirements": [
+    "req-kms-auth-008"
+  ],
+  "risks": [
+    "risk-kms-auth-008"
+  ],
+  "tags": [
+    "kms",
+    "authorization-implementations-and-contract"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Authorization API schema and error compatibility"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-auth-schema-capability-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

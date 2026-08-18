@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-runtime-001",
+  "title": "Ethereum authorization HTTP server schema and listener",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-runtime-001"
+  ],
+  "risks": [
+    "risk-kms-runtime-001"
+  ],
+  "tags": [
+    "kms",
+    "authorization-service-runtime-and-deployment"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Ethereum authorization HTTP server schema and listener"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-runtime-001-capability-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

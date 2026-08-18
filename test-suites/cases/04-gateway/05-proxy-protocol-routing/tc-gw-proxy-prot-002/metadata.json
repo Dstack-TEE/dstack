@@ -1,0 +1,32 @@
+{
+  "id": "tc-gw-proxy-prot-002",
+  "title": "Outbound Proxy Protocol per-port opt-in",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-proxy-prot-002"
+  ],
+  "risks": [
+    "risk-gw-proxy-prot-002"
+  ],
+  "tags": [
+    "gateway",
+    "proxy-protocol-routing"
+  ],
+  "fixture": {
+    "profile": "component-raw-substrate",
+    "versions": {
+      "gateway": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Outbound Proxy Protocol per-port opt-in"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 180
+  }
+}

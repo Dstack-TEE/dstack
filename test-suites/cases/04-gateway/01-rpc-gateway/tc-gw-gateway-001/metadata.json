@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-gateway-001",
+  "title": "Gateway.RegisterCvm",
+  "priority": "P0",
+  "requirements": [
+    "req-gw-gateway-001"
+  ],
+  "risks": [
+    "risk-gw-gateway-001"
+  ],
+  "tags": [
+    "gateway",
+    "gateway-rpc"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Gateway.RegisterCvm"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 180
+  }
+}

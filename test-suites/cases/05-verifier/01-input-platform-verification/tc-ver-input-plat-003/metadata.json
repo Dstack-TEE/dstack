@@ -1,0 +1,23 @@
+{
+  "id": "tc-ver-input-plat-003",
+  "title": "TDX event log replay and RTMR status",
+  "priority": "P0",
+  "requirements": [
+    "req-ver-input-plat-003"
+  ],
+  "risks": [
+    "risk-ver-input-plat-003"
+  ],
+  "tags": [
+    "verifier",
+    "input-platform-verification"
+  ],
+  "actions_under_test": [
+    "TDX event log replay and RTMR status"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "id": "tc-vmm-tdxvariant-005",
+  "title": "TDX legacy lite and auto variant resolution matrix",
+  "priority": "P0",
+  "requirements": [
+    "req-vmm-tdxvariant-005"
+  ],
+  "risks": [
+    "risk-vmm-tdxvariant-005"
+  ],
+  "tags": [
+    "semantic-review"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "TDX legacy lite and auto variant resolution matrix"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/vmm-internal-unit-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

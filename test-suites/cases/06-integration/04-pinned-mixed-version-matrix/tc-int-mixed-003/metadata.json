@@ -1,0 +1,37 @@
+{
+  "id": "tc-int-mixed-003",
+  "title": "Mixed gateway versions route old and new guests",
+  "priority": "P0",
+  "requirements": [
+    "req-int-mixed-003"
+  ],
+  "risks": [
+    "risk-int-mixed-003"
+  ],
+  "tags": [
+    "kms",
+    "upgrade",
+    "compatibility"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Mixed gateway versions route old and new guests"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/integration-mixed-003-capability-case.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

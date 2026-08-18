@@ -268,24 +268,27 @@ SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
 
 [[annotations]]
-path = [
-    "docs/test-plans/core-components-full/index.json",
-    "docs/test-plans/core-components-full/source-inventory.json",
-]
+path = "test-suites/catalog/source-inventory.json"
 SPDX-FileCopyrightText = "© 2026 Phala Network <dstack@phala.network>"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
-path = "docs/test-plans/core-components-full/configuration-inventory.json"
+path = "test-suites/catalog/configuration-inventory.json"
 SPDX-FileCopyrightText = "© 2026 Phala Network <dstack@phala.network>"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
-path = "docs/test-plans/core-components-full/api-inventory.json"
+path = "test-suites/catalog/api-inventory.json"
 SPDX-FileCopyrightText = "© 2026 Phala Network <dstack@phala.network>"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
-path = "docs/test-plans/core-components-full/source-coverage-map.json"
+path = "test-suites/catalog/source-coverage-map.json"
+SPDX-FileCopyrightText = "© 2026 Phala Network <dstack@phala.network>"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "test-suites/**"
+precedence = "aggregate"
 SPDX-FileCopyrightText = "© 2026 Phala Network <dstack@phala.network>"
 SPDX-License-Identifier = "Apache-2.0"

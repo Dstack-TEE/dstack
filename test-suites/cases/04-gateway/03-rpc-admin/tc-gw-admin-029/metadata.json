@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-admin-029",
+  "title": "Admin.GetCertbotConfig",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-admin-029"
+  ],
+  "risks": [
+    "risk-gw-admin-029"
+  ],
+  "tags": [
+    "gateway",
+    "admin-rpc"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Admin.GetCertbotConfig"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+    "args": [],
+    "timeout_seconds": 180
+  }
+}

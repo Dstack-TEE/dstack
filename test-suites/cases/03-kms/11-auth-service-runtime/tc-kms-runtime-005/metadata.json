@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-runtime-005",
+  "title": "DstackApp device compose TCB and upgrade-disable policy",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-runtime-005"
+  ],
+  "risks": [
+    "risk-kms-runtime-005"
+  ],
+  "tags": [
+    "kms",
+    "authorization-service-runtime-and-deployment"
+  ],
+  "fixture": {
+    "profile": "kms-onboard",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "DstackApp device compose TCB and upgrade-disable policy"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-runtime-005-capability-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

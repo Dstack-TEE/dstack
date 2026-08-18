@@ -1,0 +1,36 @@
+{
+  "id": "tc-int-failure-se-007",
+  "title": "Network partition consistency matrix",
+  "priority": "P0",
+  "requirements": [
+    "req-int-failure-se-007"
+  ],
+  "risks": [
+    "risk-int-failure-se-007"
+  ],
+  "tags": [
+    "integration",
+    "failure-security"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Network partition consistency matrix"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
+    "args": [],
+    "timeout_seconds": 2400
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-attestatio-002",
+  "title": "Cross-platform versioned attestation",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-attestatio-002"
+  ],
+  "risks": [
+    "risk-gos-attestatio-002"
+  ],
+  "tags": [
+    "guest",
+    "attestation-and-crypto"
+  ],
+  "fixture": {
+    "profile": "cross-platform-attestation",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Cross-platform versioned attestation"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 3600
+  }
+}

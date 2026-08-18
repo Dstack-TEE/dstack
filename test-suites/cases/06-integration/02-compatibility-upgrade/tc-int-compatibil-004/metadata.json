@@ -1,0 +1,36 @@
+{
+  "id": "tc-int-compatibil-004",
+  "title": "Rolling gateway cluster upgrade",
+  "priority": "P0",
+  "requirements": [
+    "req-int-compatibil-004"
+  ],
+  "risks": [
+    "risk-int-compatibil-004"
+  ],
+  "tags": [
+    "integration",
+    "compatibility-upgrade"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Rolling gateway cluster upgrade"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
+    "args": [],
+    "timeout_seconds": 1800
+  }
+}

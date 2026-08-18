@@ -1,0 +1,20 @@
+{
+  "id": "tc-gos-setup-025",
+  "title": "Streaming environment encryption and decryption",
+  "priority": "P0",
+  "requirements": ["req-gos-setup-025"],
+  "risks": ["risk-gos-setup-025"],
+  "tags": ["gos", "dstack-util", "stream-encryption"],
+  "fixture": {
+    "profile": "component-raw-substrate",
+    "versions": {
+      "vmm": "candidate", "guest": "candidate", "kms": "candidate",
+      "gateway": "candidate", "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": ["Streaming environment encryption and decryption"],
+  "execution": {"entrypoint": "run.py", "args": [], "timeout_seconds": 600}
+}

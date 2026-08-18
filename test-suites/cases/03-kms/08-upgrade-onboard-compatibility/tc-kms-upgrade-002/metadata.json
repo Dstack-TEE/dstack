@@ -1,0 +1,37 @@
+{
+  "id": "tc-kms-upgrade-002",
+  "title": "Direct 0.5.4 to 0.6.0 incompatibility is explicit",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-upgrade-002"
+  ],
+  "risks": [
+    "risk-kms-upgrade-002"
+  ],
+  "tags": [
+    "kms",
+    "upgrade",
+    "compatibility"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Direct 0.5.4 to 0.6.0 incompatibility is explicit"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 360
+  }
+}

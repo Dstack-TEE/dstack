@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-internal-002",
+  "title": "Numeric ID pool allocation reuse and exhaustion",
+  "priority": "P1",
+  "requirements": [
+    "req-vmm-internal-002"
+  ],
+  "risks": [
+    "risk-vmm-internal-002"
+  ],
+  "tags": [
+    "vmm",
+    "internal-state-measurement-and-launch-helpers"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Numeric ID pool allocation reuse and exhaustion"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/vmm-internal-unit-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

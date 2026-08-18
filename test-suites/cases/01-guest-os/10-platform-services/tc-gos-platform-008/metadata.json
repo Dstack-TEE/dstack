@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-platform-008",
+  "title": "Docker daemon and container privilege boundary",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-platform-008"
+  ],
+  "risks": [
+    "risk-gos-platform-008"
+  ],
+  "tags": [
+    "gos",
+    "platform-services-and-image-integrity"
+  ],
+  "fixture": {
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "profile": "multi-identity",
+    "simulation_allowed": false,
+    "versions": {
+      "gateway": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "verifier": "candidate",
+      "vmm": "candidate"
+    }
+  },
+  "actions_under_test": [
+    "Docker daemon and container privilege boundary"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

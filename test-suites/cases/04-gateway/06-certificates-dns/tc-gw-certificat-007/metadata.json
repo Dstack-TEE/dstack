@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-certificat-007",
+  "title": "Certificate attestation history and ACME info",
+  "priority": "P0",
+  "requirements": [
+    "req-gw-certificat-007"
+  ],
+  "risks": [
+    "risk-gw-certificat-007"
+  ],
+  "tags": [
+    "gateway",
+    "certificates-dns"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Certificate attestation history and ACME info"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/gateway-renew-zt-domain-case.py",
+    "args": [],
+    "timeout_seconds": 360
+  }
+}

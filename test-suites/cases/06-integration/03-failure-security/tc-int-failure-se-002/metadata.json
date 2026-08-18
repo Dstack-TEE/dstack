@@ -1,0 +1,36 @@
+{
+  "id": "tc-int-failure-se-002",
+  "title": "Gateway unavailable registration and recovery",
+  "priority": "P0",
+  "requirements": [
+    "req-int-failure-se-002"
+  ],
+  "risks": [
+    "risk-int-failure-se-002"
+  ],
+  "tags": [
+    "integration",
+    "failure-security"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Gateway unavailable registration and recovery"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
+    "args": [],
+    "timeout_seconds": 1500
+  }
+}

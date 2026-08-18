@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-build-001",
+  "title": "KMS Build, Image, Auth, Contract, and Existing Regression Suite",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-build-001"
+  ],
+  "risks": [
+    "risk-kms-build-001"
+  ],
+  "tags": [
+    "build",
+    "regression"
+  ],
+  "fixture": {
+    "profile": "component-raw-substrate",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "KMS Build, Image, Auth, Contract, and Existing Regression Suite"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

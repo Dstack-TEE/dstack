@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-setup-012",
+  "title": "Supervisor client full API lifecycle",
+  "priority": "P1",
+  "requirements": [
+    "req-gos-setup-012"
+  ],
+  "risks": [
+    "risk-gos-setup-012"
+  ],
+  "tags": [
+    "gos",
+    "system-setup-utilities-and-tee-simulator"
+  ],
+  "fixture": {
+    "profile": "component-raw-substrate",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Supervisor client full API lifecycle"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 180
+  }
+}

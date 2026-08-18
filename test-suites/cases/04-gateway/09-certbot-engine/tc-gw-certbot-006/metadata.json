@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-certbot-006",
+  "title": "Certbot CLI once daemon config and signal lifecycle",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-certbot-006"
+  ],
+  "risks": [
+    "risk-gw-certbot-006"
+  ],
+  "tags": [
+    "gw",
+    "certbot-acme-and-dns-engine"
+  ],
+  "fixture": {
+    "profile": "component-raw-substrate",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Certbot CLI once daemon config and signal lifecycle"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/certbot-cli-lifecycle-case.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

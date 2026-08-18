@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-registrati-002",
+  "title": "WireGuard IP allocation and peer lifecycle",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-registrati-002"
+  ],
+  "risks": [
+    "risk-gw-registrati-002"
+  ],
+  "tags": [
+    "gateway",
+    "registration-wireguard-policy"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "WireGuard IP allocation and peer lifecycle"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/gateway-registration-allocation-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

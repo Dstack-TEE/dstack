@@ -1,0 +1,35 @@
+{
+  "id": "tc-vmm-volume-008",
+  "title": "Measured verity volume extraction resolution and path safety",
+  "priority": "P0",
+  "requirements": [
+    "req-vmm-volume-008"
+  ],
+  "risks": [
+    "risk-vmm-volume-008"
+  ],
+  "tags": [
+    "semantic-review"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Measured verity volume extraction resolution and path safety"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/vmm-internal-unit-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

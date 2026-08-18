@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-dstackguest-006",
+  "title": "DstackGuest.GpuInfo",
+  "priority": "P1",
+  "requirements": [
+    "req-gos-dstackguest-006"
+  ],
+  "risks": [
+    "risk-gos-dstackguest-006"
+  ],
+  "tags": [
+    "guest",
+    "dstackguest-rpc"
+  ],
+  "fixture": {
+    "profile": "no-tee-dev",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "DstackGuest.GpuInfo"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-rpc-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}
