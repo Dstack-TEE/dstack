@@ -19,7 +19,7 @@ Configure a NIC through the manifest or VMM RPC:
 
 `parent` must name an existing host interface. `macvtap_mode` may be
 `private`, `bridge`, `vepa`, or `passthru`; an empty value selects `private`.
-The configured netd socket and caller allowlist apply in the same way as for
+The configured netd socket permissions apply in the same way as for
 libvirt-filtered bridge networking.
 
 ## Lifecycle

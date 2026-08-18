@@ -591,8 +591,6 @@ pub struct NetdConfig {
     /// Filesystem permissions applied when netd creates its own socket.
     /// Systemd-activated sockets use `SocketMode` from the socket unit.
     pub socket_mode: u32,
-    #[serde(default)]
-    pub allowed_uids: Vec<u32>,
     #[serde(default = "default_libvirt_uri")]
     pub libvirt_uri: String,
 }
@@ -602,7 +600,6 @@ impl Default for NetdConfig {
         Self {
             socket: default_netd_socket(),
             socket_mode: 0o660,
-            allowed_uids: Vec::new(),
             libvirt_uri: default_libvirt_uri(),
         }
     }

@@ -77,9 +77,6 @@ struct NetdArgs {
     /// Override the Unix socket configured in [netd].
     #[arg(long)]
     socket: Option<String>,
-    /// Authorize an additional client UID. May be repeated.
-    #[arg(long = "allow-uid")]
-    allow_uids: Vec<u32>,
 }
 
 #[derive(ClapArgs)]
@@ -222,11 +219,6 @@ async fn main() -> Result<()> {
         if let Some(socket) = netd_args.socket.as_deref() {
             netd_config.socket = socket.into();
         }
-        netd_config
-            .allowed_uids
-            .extend(netd_args.allow_uids.iter().copied());
-        netd_config.allowed_uids.sort_unstable();
-        netd_config.allowed_uids.dedup();
         return netd::serve(netd_config).await;
     }
 

@@ -223,36 +223,26 @@ fn bind_listener(config: &NetdConfig) -> Result<UnixListener> {
 }
 
 async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Result<()> {
-    let uid = peer_uid(stream)?;
-    let allowed = uid == 0 || config.allowed_uids.contains(&uid);
-    let response = if allowed {
-        match read_request(stream)
-            .await
-            .and_then(|request| handle_request(&config.libvirt_uri, request))
-        {
-            Ok((tap, device)) => Response {
-                ok: true,
-                tap: Some(tap),
-                device,
-                error: None,
-            },
-            Err(error) => {
-                warn!(%uid, %error, "netd request failed");
-                Response {
-                    ok: false,
-                    tap: None,
-                    device: None,
-                    error: Some(format!("{error:#}")),
-                }
+    // Access is authorized by the Unix socket's owner, group, and mode. Any
+    // process that can connect is trusted with the complete netd protocol.
+    let response = match read_request(stream)
+        .await
+        .and_then(|request| handle_request(&config.libvirt_uri, request))
+    {
+        Ok((tap, device)) => Response {
+            ok: true,
+            tap: Some(tap),
+            device,
+            error: None,
+        },
+        Err(error) => {
+            warn!(%error, "netd request failed");
+            Response {
+                ok: false,
+                tap: None,
+                device: None,
+                error: Some(format!("{error:#}")),
             }
-        }
-    } else {
-        warn!(%uid, "rejected unauthorized netd client");
-        Response {
-            ok: false,
-            tap: None,
-            device: None,
-            error: Some("caller UID is not authorized".into()),
         }
     };
     let encoded = serde_json::to_vec(&response)?;
@@ -653,30 +643,6 @@ fn prepare_socket_path(socket: &Path) -> Result<()> {
             .with_context(|| format!("failed to remove stale socket {}", socket.display()))?;
     }
     Ok(())
-}
-
-fn peer_uid(stream: &UnixStream) -> Result<u32> {
-    let mut credentials = libc::ucred {
-        pid: 0,
-        uid: 0,
-        gid: 0,
-    };
-    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-    // SAFETY: credentials and length point to valid writable storage of the
-    // exact size passed to getsockopt, and the stream owns a valid socket FD.
-    let result = unsafe {
-        libc::getsockopt(
-            stream.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            (&mut credentials as *mut libc::ucred).cast(),
-            &mut length,
-        )
-    };
-    if result != 0 {
-        return Err(std::io::Error::last_os_error()).context("failed to read peer credentials");
-    }
-    Ok(credentials.uid)
 }
 
 #[cfg(test)]
