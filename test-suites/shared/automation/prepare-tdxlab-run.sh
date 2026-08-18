@@ -91,7 +91,7 @@ image_matches() {
   local metadata="$image/metadata.json"
   [[ -f $metadata ]] &&
     [[ $(jq -r '.git_revision' "$metadata") == "$revision" ]] &&
-    [[ $(jq -r '.backend' "$metadata") == mkosi ]] &&
+    [[ $(jq -r '.builder' "$metadata") == mkosi ]] &&
     [[ $(jq -r '.is_dev' "$metadata") == "$expected_dev" ]] &&
     [[ $(sha256sum "$image/sha256sum.txt" | cut -d' ' -f1) == \
       "$(tr -d '[:space:]' <"$image/digest.txt")" ]] &&
@@ -162,8 +162,8 @@ if ! image_matches "$prod_image" false || ! image_matches "$dev_image" true; the
       printf 'mkosi output flavor mismatch: %s\n' "$source" >&2
       exit 1
     }
-    [[ $(jq -r '.backend' "$metadata") == mkosi ]] || {
-      printf 'mkosi output backend mismatch: %s\n' "$source" >&2
+    [[ $(jq -r '.builder' "$metadata") == mkosi ]] || {
+      printf 'mkosi output builder mismatch: %s\n' "$source" >&2
       exit 1
     }
     (cd "$source" && sha256sum --check --status sha256sum.txt) || {
@@ -191,7 +191,7 @@ identity_image_matches() {
   [[ -f $image/identity-variant.txt ]] &&
     [[ $(cat "$image/identity-variant.txt") == dstack-test-identity-variant-v1 ]] &&
     [[ $(jq -r '.git_revision' "$image/metadata.json") == "$revision" ]] &&
-    [[ $(jq -r '.backend' "$image/metadata.json") == mkosi ]] &&
+    [[ $(jq -r '.builder' "$image/metadata.json") == mkosi ]] &&
     [[ $(jq -r '.is_dev' "$image/metadata.json") == true ]] &&
     [[ $(sha256sum "$image/sha256sum.txt" | cut -d' ' -f1) == \
       "$(tr -d '[:space:]' <"$image/digest.txt")" ]] &&

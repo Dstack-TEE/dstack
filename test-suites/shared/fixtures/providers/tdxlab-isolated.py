@@ -21,7 +21,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from image_provenance import require_image_backend
+from image_provenance import require_image_builder
 from vmm_fixture import (
     fail,
     link_image_store,
@@ -319,7 +319,7 @@ def config(value: dict[str, Any]) -> dict[str, Any]:
     if not image_store:
         fail("DSTACK_TEST_IMAGE_STORE is required for mkosi image provenance")
     try:
-        image_provenance = require_image_backend(image_store, image)
+        image_provenance = require_image_builder(image_store, image)
     except RuntimeError as error:
         fail(str(error))
     return {
@@ -918,7 +918,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         image = os.environ.get("DSTACK_TEST_NO_TEE_GUEST_IMAGE", "dstack-dev-0.6.0")
         deploy_mode = ["--no-tee", "--simulated-tee", "dstack-tdx"]
         try:
-            selected_image_provenance = require_image_backend(
+            selected_image_provenance = require_image_builder(
                 settings["image_store"], image
             )
         except RuntimeError as error:
@@ -936,7 +936,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         if identity_alternate_image == image:
             fail("identity-matrix alternate image must differ from the base image")
         try:
-            alternate_provenance = require_image_backend(
+            alternate_provenance = require_image_builder(
                 settings["image_store"], identity_alternate_image
             )
         except RuntimeError as error:
