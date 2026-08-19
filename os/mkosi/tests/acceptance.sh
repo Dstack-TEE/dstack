@@ -13,6 +13,23 @@ done
 source "$D/versions.env"
 [[ $KERNEL_VERSION != *-rc* ]]
 [[ $KERNEL_SHA256 =~ ^[0-9a-f]{64}$ ]]
+[[ $DSTACK_CODENAME == trixie ]]
+release_root=$(mktemp -d)
+"$D/scripts/write-os-release.sh" \
+  "$release_root" "$DSTACK_VERSION" "$DSTACK_CODENAME"
+grep -qx 'ID=dstack' "$release_root/usr/lib/os-release"
+grep -qx 'ID_LIKE=debian' "$release_root/usr/lib/os-release"
+grep -qx 'NAME="dstack"' "$release_root/usr/lib/os-release"
+grep -qx "VERSION_ID=\"$DSTACK_VERSION\"" "$release_root/usr/lib/os-release"
+grep -qx "VERSION_CODENAME=\"$DSTACK_CODENAME\"" \
+  "$release_root/usr/lib/os-release"
+grep -qx "PRETTY_NAME=\"dstack $DSTACK_VERSION ($DSTACK_CODENAME)\"" \
+  "$release_root/usr/lib/os-release"
+[[ $(readlink "$release_root/etc/os-release") == ../usr/lib/os-release ]]
+rm -rf "$release_root"
+
+grep -qx 'DISTRO_NAME = "dstack"' \
+  "$D/../yocto/layers/meta-dstack/conf/distro/dstack.conf"
 # The guest kernel must track the same series as the production Yocto backend.
 # A different major/minor reintroduces the out-of-tree NVIDIA and ZFS
 # compatibility patches that parity with Yocto exists to avoid.
@@ -30,6 +47,13 @@ grep -q '^Output=%i-%v-rootfs$' "$D/mkosi.conf"
 grep -q "^ImageVersion=$DSTACK_VERSION\$" "$D/mkosi.conf"
 awk '/^ImageVersion=/{v=NR} /^Output=/{o=NR} END{exit !(v && o && v < o)}' "$D/mkosi.conf"
 grep -q '^Bootable=no$' "$D/mkosi.conf"
+for package in iputils-ping dnsutils traceroute netcat-openbsd wget fdisk \
+  dosfstools pciutils usbutils cpio; do
+  grep -Eq "^[[:space:]]+$package$" "$D/mkosi.conf" || {
+    echo "missing runtime diagnostic package: $package" >&2
+    exit 1
+  }
+done
 # SplitArtifacts must stay empty: the kernel split is produced even with
 # Bootable=no and would drop a stray .vmlinuz beside the release artifacts.
 grep -q '^SplitArtifacts=$' "$D/mkosi.conf"
