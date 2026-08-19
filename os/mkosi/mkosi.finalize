@@ -9,8 +9,12 @@ FLAVOR=${DSTACK_BUILD_FLAVOR:?}
 WORK="$OUTPUTDIR/.dstack-$FLAVOR"
 KSTAGE="$WORK/kernel-stage"
 ARTIFACTS="$WORK/artifacts"
+# shellcheck source=/dev/null
+source "$SELF/versions.env"
 
 "$SELF/scripts/normalize-skeleton-modes.sh" "$TREE" "$FLAVOR"
+"$SELF/scripts/write-os-release.sh" \
+	"$TREE" "$DSTACK_VERSION" "$DSTACK_CODENAME"
 mkdir -p "$KSTAGE/usr/lib" "$OUTPUTDIR/.image-tools"
 cp -a "$TREE/usr/lib/modules" "$KSTAGE/usr/lib/"
 install -m0644 "$TREE/usr/lib/dstack/firmware/ovmf.fd" "$KSTAGE/ovmf.fd"
