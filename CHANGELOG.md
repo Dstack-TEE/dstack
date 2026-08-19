@@ -7,8 +7,164 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - TBD
+
+> [!IMPORTANT]
+> dstack 0.6.0 is the first monorepo release. Guest OS releases now use the
+> `guest-os-v0.6.0` tag in `Dstack-TEE/dstack`. Releases before 0.6.0 remain
+> archived in `Dstack-TEE/meta-dstack`.
+
+### Highlights
+
+- added a unified attestation model for Intel TDX, AMD SEV-SNP, AWS Nitro
+  Enclaves, GCP Confidential VMs, and development simulators
+- introduced canonical event log v2 and manifest-based OS and workload policy
+  verification
+- added VMM-managed networking with netd, macvtap, libvirt network filters,
+  and explicit guest networking policies
+- added local key providers, external attestation root CA support, and
+  dm-verity-backed volumes
+- added shared authentication across the VMM, Gateway, and KMS administrative
+  APIs
+- added WaveKV v2 with dual-stack compatibility
+- added simultaneous connections from a CVM to multiple Gateway clusters for
+  improved availability and failover (#1060)
+- consolidated the dstack runtime and guest OS sources into a single monorepo
+
 ### Added
-- shared API authentication (`dstack-api-auth`) protecting the full VMM HTTP/pRPC/UI surface and unifying Gateway/KMS admin auth: bearer/`X-Admin-Token`/HTTP Basic/bcrypt htpasswd, constant-time verification (#796)
+
+#### Attestation and platform support
+
+- AMD SEV-SNP image conversion, measurement, verification, and simulator
+  support (#703)
+- AWS Nitro Enclave attestation platform specification and simulator support
+  (#753)
+- GCP instance identity binding and unified OS image hash verification
+  (#726, #757)
+- native TEE interfaces and a common TEE variant API (#743, #808)
+- unified Intel TDX measurement and attestation handling, including ACPI
+  measurement support (#742, #762, #769)
+- manifest-versioned OS policy, launch token, and GPU verification requirements
+  (#754, #763, #765)
+- canonical JSON event log v2 with stricter event integrity validation
+  (#646, #879, #1038)
+- external attestation root CA support (#806)
+- seeded and deterministic simulator attestation for reproducible tests (#964)
+- ACPI measurement and diagnosis implemented in Rust, including DSDT
+  generation for lite TDX images (#943, #1048, #1051, #1052, #1053)
+
+#### VMM and networking
+
+- VMM networking RPCs for preparing and managing guest networking (#756)
+- a netd-based macvtap networking backend with systemd socket activation
+  (#1061, #1068, #1069)
+- libvirt network filters and guest netfilter support (#837, #1042)
+- validation and restriction of requested guest networking modes (#1068)
+- local key provider support (#788)
+- development TDX and software TPM environments (#780, #798)
+- TSM provider configuration through environment variables (#782)
+- release discovery API for `dstackup` (#805)
+- array-form `init_script` support (#975)
+- image backend provenance tracking (#1073)
+
+#### Gateway
+
+- WaveKV v2 with dual-stack compatibility and deterministic conflict
+  resolution (#1031, #1067)
+- simultaneous CVM connections to multiple Gateway clusters (#1060)
+- Prometheus metrics endpoint (#1037)
+- administrative recovery APIs (#1046)
+- DNS-based application address resolution (#921)
+- Certbot DNS API endpoint (#925)
+
+#### Storage and guest OS
+
+- integrity-protected dm-verity volumes (#752)
+- production and development OS image flavors
+- experimental mkosi-based OS image builds with Docker caching and parallel
+  SquashFS generation (#816, #828, #833, #834)
+- SELinux policy parity for guest services (#1043)
+- reproducible NVIDIA attestation tooling and improved GPU certificate
+  verification (#789, #791, #813)
+
+#### SDKs and tooling
+
+- API parity improvements for the JavaScript and Python SDKs (#690, #695)
+- tag-driven release workflows for the Rust, JavaScript, Python, and Go SDKs
+  (#686, #691, #692)
+- Rust SDK releases decoupled from the main workspace (#785)
+- `dstack-util decrypt` for decrypting protected payloads (#1054)
+- measured boot and attestation diagnostics (#943)
+
+### Changed
+
+- merged the former dstack and guest OS repositories into one monorepo (#770)
+- renamed the default development branch to `next` and updated CI accordingly
+  (#1025, #1026)
+- unified platform-specific attestation paths behind common verification and
+  policy interfaces
+- moved KMS administrative APIs to a dedicated administration listener (#802)
+- made Gateway and KMS administration use shared API authentication
+  (#796, #804)
+- allowed application IDs to be derived without KMS availability (#714)
+- added failover and multiple-service support to Gateway and KMS endpoint
+  configuration
+- changed event serialization to canonical, named encodings with stricter
+  validation
+- added explicit release identity and backend provenance to OS artifacts
+
+### Security
+
+- added shared API authentication (`dstack-api-auth`) for the complete VMM
+  HTTP, pRPC, and UI surface and for Gateway and KMS administration, supporting
+  bearer tokens, `X-Admin-Token`, HTTP Basic, and bcrypt htpasswd entries (#796)
+- added LUKS2 keyslot bounds checking and stopped passing storage keys through
+  process arguments (#799, #886)
+- enforced restrictive permissions and atomic updates for KMS, guest, Gateway,
+  certificate, attestation, and TPM key material
+- added archive extraction, image artifact, console log, registry layer, and
+  filesystem path confinement
+- strengthened RA-TLS validation, including certificate/key matching, security
+  profiles, application extensions, and unattested certificate rejection
+- hardened KMS node authorization, finalized Ethereum authentication, policy
+  auditing, endpoint redaction, and bootstrap behavior
+- removed the Gateway debug key and restricted private host APIs
+- added stricter quote size, report-data, trailing-byte, event ordering, and
+  event-preimage validation
+- improved WireGuard public key validation and Gateway registration collision
+  handling
+
+### Fixed
+
+- fixed VMM CID allocation and reload behavior, including stopped VMs and
+  bounded allocation windows
+- fixed VM restart policies, one-shot failure handling, stopped-VM resizing,
+  host port conflicts, serial log limits, and encrypted KMS URL propagation
+- fixed simulator races and measurement inconsistencies across TPM, NitroTPM,
+  Intel TDX, AMD SEV-SNP, and GCP vTPM environments
+- fixed guest startup and credential refresh during temporary Gateway or KMS
+  outages
+- fixed Gateway certificate reload, certificate ordering, ACME credential
+  recovery, CAA reconciliation, DNS timing, peer synchronization, and
+  registration consistency
+- fixed KMS CA persistence across restarts, repeated onboarding, authorization
+  locking, endpoint failover, and certificate log handling
+- fixed verifier configuration precedence, cache versioning, archive
+  confinement, development trust labels, one-shot output, and historical image
+  verification
+- fixed GPU reset and VFIO sanitization, including PCI secondary bus reset
+  handling
+- fixed OS image release metadata so `/etc/os-release` and release artifacts
+  consistently identify dstack 0.6.0 (#1076)
+
+### Removed
+
+- removed the guest-agent `EmitEvent` API in favor of the canonical event log
+  flow (#768)
+- removed legacy VMM port-forward management in favor of VMM-managed
+  networking (#795)
+- removed the legacy Gateway debug key (#999)
+- removed obsolete SEV text digest handling (#764)
 
 ## [0.5.5] - 2025-10-20
 
@@ -1275,7 +1431,8 @@ New contributors in this release:
 * @Leechael made their first contribution
 * @nanometerzhu made their first contribution
 * @h4x3rotab made their first contribution
-[unreleased]: https://github.com/Dstack-TEE/dstack/compare/v0.5.5..HEAD
+[unreleased]: https://github.com/Dstack-TEE/dstack/compare/v0.6.0..HEAD
+[0.6.0]: https://github.com/Dstack-TEE/dstack/compare/v0.5.11..v0.6.0
 [0.5.5]: https://github.com/Dstack-TEE/dstack/compare/v0.5.4..v0.5.5
 [0.5.4]: https://github.com/Dstack-TEE/dstack/compare/v0.5.3..v0.5.4
 [0.5.3]: https://github.com/Dstack-TEE/dstack/compare/v0.5.2..v0.5.3
