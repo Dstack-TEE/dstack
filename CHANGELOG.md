@@ -7,107 +7,372 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-28
+
+> [!IMPORTANT]
+> dstack 0.6.0 is the first release from the monorepo. Each component is
+> released under its own tag in `Dstack-TEE/dstack`: `mkosi-os-v0.6.0` for the
+> guest OS image, and `kms-v0.6.0`, `gateway-v0.6.0` and `verifier-v0.6.0` for
+> the services, whose container images now publish to `ghcr.io/dstack-tee`.
+> Guest OS releases before 0.6.0 remain in `Dstack-TEE/meta-dstack`.
+
+### Highlights
+
+- a versioned guest API, `dstack.guest.v1`, with domain-separated key
+  derivation, GPU evidence, and one attestation entry point on every platform.
+  The v0 API is frozen at v0.5.11 and keeps working unchanged
+- a unified attestation model for Intel TDX, AMD SEV-SNP, AWS Nitro Enclaves,
+  AWS NitroTPM, GCP Confidential VMs, and development simulators
+- canonical event log v2 and manifest-based OS and workload policy
+  verification
+- a Debian/mkosi guest OS as the default, reproducible build backend,
+  superseding Yocto
+- VMM-managed networking with netd, macvtap, vhost-net multiqueue, and libvirt
+  network filters
+- Gateway application health checks, WaveKV v2, simultaneous CVM connections
+  to multiple Gateway clusters, and credential-free certificate issuance with
+  `dns-persist-01` (experimental)
+- local key providers, external attestation root CAs, dm-verity volumes, and
+  data disks that return deleted blocks to the host
+- shared authentication across the VMM, Gateway, and KMS administrative APIs
+- a security hardening pass across every component
+
+### Upgrade notes
+
+- **Every measurement changes.** Register the new `os_image_hash` on chain
+  before deploying 0.6.0 images. The VMM now defaults `qemu_hotplug_off` to
+  `true`, which changes the ACPI tables and RTMRs of every CVM on its next
+  start, whatever its image; update any allowlist that pins MRs, or set it
+  back to `false` on hosts without GPUs (#1387)
+- **v1 keys differ from v0 keys.** Existing apps keep their keys on the
+  unversioned (v0) paths. Moving to v1 `GetKey` needs an asset migration
+  signed by the old key; see `docs/guest-api-v1.md`. v1 attestations and
+  v1-issued RA-TLS certificates need KMS and verifiers 0.5.9 or later
+- **SDKs:** `DstackClient` now means `DstackClientV1`; name `DstackClientV0`
+  to stay on v0. Deep imports of the v0 modules gain a `_v0` suffix, and the
+  Python v0 client emits a `DeprecationWarning`
+- **Guest agent:** `EmitEvent` always fails; bind app data through
+  `report_data` instead. `GetQuote` answers on Intel TDX only; use `Attest`
+  elsewhere
+- **KMS:** Nitro Enclave key release needs `nitro_enclave_key_release = true`
+  (#1303), and the Nitro Enclave `device_id` is now `sha256(PCR4)`, so
+  `DstackApp` contracts with `allowAnyDevice = false` must add the new value
+  (#1302). Root-key handover moves to the admin listener; turn off
+  `core.onboard.public_key_handover` once every node is upgraded (#1307)
+- **Gateway:** `core.debug.insecure_skip_attestation` is gone, and a gateway
+  without a guest agent no longer starts (#1148). A certificate configured in
+  `[core.proxy]` is ignored; install it with `Admin.ImportCert` (#1239)
+- **VMM:** upgrade netd together with the VMM, and before it on hosts running
+  bridge or macvtap VMs (#1145, #1217)
+- **Images:** component images publish to `ghcr.io/dstack-tee/<component>`
+  (#1222). `dstackup` digest-pins its default KMS image, so fresh installs
+  register a different KMS app id
+- **certbot:** every renewal uses a new private key; update DANE/TLSA or SPKI
+  pins on each renewal
+
 ### Added
-- dstack-util: the measured `gpu-attestation` event now exposes aggregate `dbgstat` and `secboot` values from the NVIDIA-signed claims. `dbgstat` is `enabled` if any attested GPU reports enabled, while `secboot` is true only if every attested GPU reports secure boot; the event schema version is bumped to 3.
-- sdk: every SDK ships two clients, one per guest-agent surface, and nothing else. `DstackClientV0` speaks the frozen v0.5.11 API on the unversioned paths -- every method a v0.5.x SDK had, including `verify()` (which calls the server `Verify` RPC) and `emit_event()` (which surfaces the agent's removal error verbatim). `DstackClientV1` speaks `dstack.guest.v1` at `/v1` and has exactly its six methods: `issue_cert`, `get_key`, `attest`, `attest_gpu`, `info`, `version`. They are transport mirrors, not a compatibility layer: neither translates a call to the other, and each one's method set is its surface's method set. **v1 derives different key material than v0 for the same inputs** -- see `docs/guest-api-v1.md` for the migration. `TappdClient` is untouched.
 
-  The blockchain adapters (Ethereum/viem, Solana) remain **v0-only** and stay typed against the v0 `GetKeyResponse`. v1 has no chain-related surface, deliberately: it returns key material, and what an application builds from those bytes is its own business rather than something the SDKs model.
+#### Guest API v1 and SDKs
 
-  **The unsuffixed client name now means v1** in every SDK -- `DstackClient` is `DstackClientV1`, and it is the recommended default rather than a deprecated alias. Code that used the unsuffixed client for v0 calls fails loudly on upgrade, because the v1 method signatures differ and `get_key` requires `algorithm` explicitly; it does not silently derive different keys. To stay on the frozen surface, name `DstackClientV0`, which remains available and is marked legacy.
+- guest-agent: the versioned API `dstack.guest.v1`, served at `/v1` on the
+  internal socket (`IssueCert`, `GetKey`, `Attest`, `AttestGpu`, `Info`,
+  `Version`) and at `/prpc/v1` on the external listener (`Info`, `Version`,
+  `Health`). Specified byte for byte in `docs/guest-api-v1.md` (#1116)
+- guest-agent: v1 `GetKey` derives keys with a domain-separated KDF, so the
+  two curves no longer share a secret, and its signature-chain claim cannot be
+  forged through the v0 surface (#1116)
+- guest-agent: v1 `Attest` returns the boot-time GPU attestation evidence on
+  request, and `AttestGpu` collects fresh GPU evidence against a caller's
+  nonce (#1111, #1112)
+- guest-agent: v1 `Attest` and `IssueCert` always use the MessagePack
+  attestation schema (#1207)
+- guest-agent: a `GpuInfo` RPC for GPU telemetry (#1178)
+- sdk: every SDK ships `DstackClientV0` for the frozen v0 surface and
+  `DstackClientV1` for v1. Neither verifies signature chains locally; relying
+  parties verify against `docs/guest-api-v1.md` (#1110, #1120)
+- sdk: the Go SDK's `AppCompose` gains `init_script`, `storage_fs`,
+  `swap_size`, `event_log_version`, `port_policy` and `verity_volumes`, and
+  Go and Python gain `gpu_policy` (#1092)
 
-  Neither client ships a local signature-chain verifier. An SDK mirrors an API surface, and verifying needs no client and no connection -- `docs/guest-api-v1.md` specifies the rules normatively, down to the trust anchor, which is what a relying party implements against rather than four hand-ports of one byte format. `DstackClientV0.verify()` remains for single signatures, because that is what the frozen surface offers; v1 has no counterpart
-- guest-agent: a versioned API, `dstack.guest.v1`, covering both trust surfaces. `DstackGuest` is served at `/v1` on the internal socket (`IssueCert`, `GetKey`, `Attest`, `AttestGpu`, `Info`, `Version`); `Worker` at `/prpc/v1` on the external listener (`Info`, `Version`, `Health`). They are two services rather than one mounted twice because the two listeners have different reachability: the internal socket answers only the app itself and hands out key material, the external one answers anyone who can route to the CVM and never does. The scheme is uniform across both listeners: `/v0` and `/v1` on the internal socket, `/prpc/v0` and `/prpc/v1` on the external one, where `v0` is the frozen v0.5.11 surface. The historical unversioned paths (`/` and `/prpc`) stay mounted as aliases onto the same frozen handlers, so a pre-0.6 client keeps working unchanged and cannot drift from `/v0` -- they are additional mounts, not a parallel implementation. Version selection is by URL path alone -- no header negotiation, no default-version redirect -- so a request URL is the whole record of which contract the caller asked for. `Tappd` predates this scheme and is untouched. Specified byte-for-byte in `docs/guest-api-v1.md`, which is the normative reference an implementation is written from, and the constants it specifies -- salt, both context tags, the length-prefixed encoding, the claim -- live in `ra-tls`'s `api_v1` module so the agent, the verifier and the coming SDK support link against one definition instead of three transcriptions of the prose
-- guest-agent: v1 derives application keys under a real domain-separated KDF. v0 fed the path alone into HKDF and handed the same 32 bytes to both secp256k1 and ed25519, so the two curves shared one secret and the algorithm a caller asked for changed nothing about the key it got. v1 derives under its own HKDF salt (`dstack-guest-v1`, against the legacy `RATLS`) and binds a versioned context tag, the algorithm and the caller's `domain` as length-prefixed fields, so the curves never collide and no two names encode alike -- a path is arbitrary caller-chosen bytes, so any delimiter it could also contain is a collision waiting to happen. **v1 keys are therefore not v0 keys for the same name**, deliberately and with no compatibility mode; an app holding assets under a v0 key migrates them with a transaction signed by the old key. The separate salt matters because the legacy HKDF `info` is the caller's `path` verbatim: under a shared salt, a caller passing the v1 `info` byte string as a v0 `path` reproduced a v1 key exactly. That was never a privilege boundary -- same app, same root key, either surface reachable -- but a KDF whose separation depends on nobody choosing an awkward input is one refactor from separating nothing, and it costs nothing to close on a surface with no deployed keys. The derivation is flat: `a/b` is not a child of `a`, and there is no BIP-32-style hierarchy. Committed test vectors pin the output bytes
-- guest-agent: v1's signature-chain claim cannot be forged through the v0 surface. v0's first link signs `keccak256("{purpose}:{hex(pubkey)}")` over a caller-chosen `purpose`, which lets a malicious app steer the app root key into signing nearly any ASCII string ending in `:` plus hex. The v1 claim is length-prefixed and binds the raw public key bytes, so it always contains `00` bytes inside the region a v0 preimage requires to be hex-only. The exclusion is structural rather than probabilistic, and a regression test builds the strongest available forgery and asserts it fails
-- guest-agent: v1 ships no `Sign` and no `Verify`. The agent is not an HSM: anything that can reach this socket can ask `GetKey` for the private key, so a server-side `Sign` grants no capability its caller lacks and buys an IPC round trip and another entry point to audit. Verifying needs neither key nor attestation, and the agent's answer arrives unattested. Apps sign locally with a standard library; relying parties verify locally against the normative rules in `docs/guest-api-v1.md`, which specify the KDF, the claim encoding, and every verification step down to the trust anchor. Both RPCs stay on the unversioned surface for 0.5.x clients
-- guest-agent: v1 `GetTlsKey` is renamed `IssueCert`, because certificate issuance is the operation -- the agent builds a CSR and relays it to the KMS `SignCert` flow. The returned private key is incidental: freshly generated per call, fed by none of the request fields, and unrelated to the app identity. Only the integrated one-step mode ships; a caller-supplied-CSR mode would arrive as new fields
-- guest-agent: v1 `Info` returns identity and configuration only. The `tcb_info` JSON blob is gone: its measurement values are typed top-level fields that each appear exactly once, and the documents it nested (`app_compose`, `vm_config`) are served directly instead of through two layers of JSON parsing. MRTD, RTMR0-3 and the event log are deliberately absent -- they are attestation data, and `Info` handing out unattested copies invited relying parties to trust values nothing vouched for. Ask `Attest` and verify. The demo `app_cert` is dropped as well
-- guest-agent: `AttestGpu` collects vendor-native GPU evidence on demand against a caller-supplied 32-byte nonce. It returns opaque, versioned evidence bundles identified by vendor and format for independent appraisal, and the response format is extensible to additional GPU vendors. v1 only
-- guest-agent: v1 `Attest` accepts `include_boottime_gpu_evidence` and returns the boot-time GPU attestation evidence in `AttestResponse.boottime_gpu_evidence`, so a verifier fetches the attestation and the GPU evidence in one round trip. It arrives as a `GpuEvidenceBundle` list -- the same shape `AttestGpu` returns, so a consumer writes one bundle parser and dispatches on `format`: `nvidia-nvattest-boottime-json-v1` is the record written at boot, `nvidia-nvattest-collect-evidence-json-v1` is collected on demand against a caller's nonce, and a verifier for one does not appraise the other. Absence is the empty list. The bundle's `evidence` is the nvattest output byte for byte as read from disk, because the only thing binding it to the boot is sha256 over precisely those bytes against the measured `gpu-attestation` event. `Attest` is also v1's sole CVM attestation entry point: the `VersionedAttestation` it returns already carries the TDX quote and event log, and unlike `GetQuote` it answers on every supported platform
-- guest-agent: v1 `Attest` and `IssueCert` always use the MessagePack V1 attestation schema. `Attest` returns it, and `IssueCert` puts it in the CSR, which the signer embeds in the RA-TLS certificate in the same form. Until now the encoding followed the attestation's contents: a TDX CVM whose runtime events were all V1 got the legacy SCALE form, and one with V2 events or a pod payload got MessagePack. That left every v1 client implementing two decoders for a surface that has no released client to stay compatible with. The frozen v0 `Attest` and `GetTlsKey` keep the content-dependent choice: relying parties before 0.5.9 decode only SCALE, and KMS onboarding embeds v0 `Attest` bytes in the certificate an older source KMS verifies. **Requires 0.5.9 or later** of the KMS signing a v1 `IssueCert` CSR and of anything verifying a v1 `Attest` result or a v1-issued RA-TLS certificate
-- sdk: `AppCompose` in the Go SDK gained `init_script`, `storage_fs`, `swap_size`, `event_log_version`, `port_policy` and `verity_volumes`, and `Requirements` gained `gpu_policy` in the Go and Python SDKs
-- shared API authentication (`dstack-api-auth`) protecting the full VMM HTTP/pRPC/UI surface and unifying Gateway/KMS admin auth: bearer/`X-Admin-Token`/HTTP Basic/bcrypt htpasswd, constant-time verification (#796)
-- certbot/gateway: opt-in `dns-persist-01` certificate validation ([draft-ietf-acme-dns-persist-01](https://datatracker.ietf.org/doc/html/draft-ietf-acme-dns-persist-01)), which issues without a DNS provider credential at all. `dns-01` needs write access to the zone on every order, so a gateway CVM holds a Cloudflare API token for the life of the deployment -- a token that rewrites the whole zone, not just `_acme-challenge`. Under `dns-persist-01` the zone owner publishes one `_validation-persist.<name>` TXT record naming the CA and the ACME account; nothing about it changes between orders, so certbot only ever reads DNS and the zone can be hosted anywhere, with no provider integration. Set `challenge = "dns-persist-01"` in `certbot.toml`, or `challenge` on a gateway ZT domain; the default stays `dns-01` and existing deployments are untouched. `certbot dns-records` prints the records to publish, `GetZtDomain`/`ListZtDomains` return them in `required_dns_records`, and the gateway logs them wherever it would otherwise have written DNS. CAA records carry `validationmethods=dns-persist-01` to match, so switching methods means republishing both. Two gateway operations change shape for such a domain: `SetCaa` skips it, having nothing to reconcile without write access, and `RotateAcmeCredentials` leaves it broken until the operator republishes -- the record still names the old account -- so the response now returns the new records in `required_dns_records`. A rotation that registers the account but fails to re-pin some domain's CAA now reports those domains in `repin_failed_domains` instead of failing the call: the account exists and the cluster is using it, so raising an error there reads as "nothing happened" and invites a retry that registers another account. **Experimental**: the draft is still changing, and Let's Encrypt serves the challenge on staging only pending an open working-group issue. Documented in `docs/certbot-dns-persist-01.md`.
+#### Attestation and platform support
 
-  Two settings changed shape for every deployment, not only `dns-persist-01` ones. `issuer_domain_name` now names the CA in the CAA records written for `dns-01` too -- its default is `letsencrypt.org`, so an untouched configuration writes exactly what it wrote before -- and it is validated where it is set, since it lands verbatim in an RFC 8659 `issue-value` and CAA is republished by deleting the old records first. The pre-order DNS self-check is now capped at half of `renew_timeout` rather than at its own configured value: both defaulted to 300s in the gateway, and the CLI wrapped a 300s wait in a 120s budget, so the timeout around the order always fired first and a missing record was reported as `certificate request timed out` instead of by name
-- gateway: `Admin.Status` reports `health_gating`, so an operator can see whether this node's health polling is switched on. With it off, instances that opted in sit at `unknown` forever and are all in rotation, which is otherwise indistinguishable on the dashboard from being held out pending a first answer
-- gateway: `Admin.SetInstanceReady` takes a CVM instance out of its app's load-balancing rotation without stopping it; instance-id routing stays open so the instance can still be investigated, and the setting survives re-registration
-- gateway: operator-set per-instance overrides now live under their own KV keys — `admin/<instance_id>/ready` and `admin/<instance_id>/port_policy` — instead of inside the instance record, so a CVM re-registration can no longer drop them and setting one cannot discard a peer's unsynced change to the other. An override left in an instance record by an earlier build is moved across on load
-- gateway: opt-in application-level health polling. An app sets `requirements.health_check` in its app-compose; the gateway then asks that CVM's guest agent (new `Health` RPC on the v1 external surface, polled at `/prpc/v1/Health`) whether the app is serving, and keeps instances that say no -- or that have not answered since registering -- out of app-id load balancing. Apps that do not opt in are never polled. Instance-id routing is never gated, and an app whose every instance reports unhealthy is routed to anyway rather than blackholed. Verdicts are per-node and not persisted: a gateway restart puts the whole app back at `unknown` at once, which is exactly the case the fail-open covers. Documented in `docs/app-health-checks.md`. One unreleased skew: an interim `next` build that served `Health` at `/prpc` and registered with `health_check = true` will 404 every poll and drop out of app-id rotation after `failure_threshold` failures. Instance-id routing is unaffected and restarting on a current build clears it; no released agent is involved, since `Health` never shipped in a release
-- app-compose: `requirements.health_status_file` names a file the app writes its own verdict into -- two lines, `healthy`/`unhealthy` and the unix timestamp it was written at, treated as unhealthy once older than 60s. It must be a regular file (a FIFO would park a thread of the agent's blocking pool on every refresh); symlinks are followed, and its contents are never quoted back into a report. Without it the agent judges the app's own Compose project: every container that declares a `healthcheck` must be running and healthy, and a project where *no* container declares one reports unhealthy rather than passing silently
-- guest-agent: container health also covers the `nerdctl-compose` runner, read through `nerdctl inspect` (its output is Docker-compatible). Requires nerdctl >= 2.3.1 for Compose `healthcheck:` to be honoured; the mkosi backend is pinned to 2.3.5
-- http-client: a caller can bound the response body (`http_request_bounded`, `PrpcClient::with_max_response_bytes`). Nothing is bounded by default — `dstack vmm logs --lines 100000` is a legitimate multi-megabyte fetch — but every client that talks to a guest agent opts in, in the gateway and in the VMM, because a CVM is untrusted and one of them polls on a timer against the whole fleet
+- AMD SEV-SNP image conversion, measurement, verification, and simulator
+  support (#703)
+- AWS Nitro Enclave attestation platform specification and simulator support
+  (#753)
+- GCP instance identity binding and unified OS image hash verification
+  (#726, #757)
+- native TEE interfaces and a common TEE variant API (#743, #808)
+- unified Intel TDX measurement and attestation handling, including ACPI
+  measurement support (#742, #762, #769)
+- manifest-versioned OS policy, launch token, and GPU verification requirements
+  (#754, #763, #765)
+- canonical JSON event log v2 with stricter event integrity validation
+  (#646, #879, #1038)
+- external attestation root CA support (#806)
+- seeded and deterministic simulator attestation for reproducible tests (#964)
+- ACPI measurement and diagnosis implemented in Rust, including DSDT
+  generation for lite TDX images (#943, #1048, #1051, #1052, #1053)
+- the TDX measurement document carries the kernel command line, and `auto`
+  TDX attestation follows the image rather than guest RAM (#1199, #1200)
+- guest images normalize the Linux setup header, so the kernel measurement no
+  longer depends on the host's QEMU (#1189, #1229)
+- the measured `gpu-attestation` event reports the GPUs' debug and secure
+  boot status (#1318), and a measured event records whether the data disk is
+  encrypted (#1326)
 
-### Fixed
-- dstack-util: a GPU CVM using the TPM key provider can reboot again. The `gpu-attestation` event hashes `nvattest` output made with a fresh nonce on every boot, and it was extended into PCR14 before the TPM unsealed the seed sealed to PCR14, so every boot after the first failed with a TPM policy error. The GPU gate still runs before the keys are requested; only the event is now measured after key provisioning, after `boot-mr-done` and before `key-provider`.
-- verifier/kms/gateway: issuer certificates and CRLs named by a GCP TPM AK certificate are fetched only from an allowlist of hosts, including across redirects. Those URLs come from a certificate checked only after the fetch, so an unauthenticated `/verify` caller could make the verifier issue requests to any host, including internal ones. The default allows `privateca-content-*.storage.googleapis.com`, where Google's Private CA publishes them; `attestation.allowed_collateral_hosts` replaces it, and `*` matches within one DNS label
-- sdk: Python and JavaScript blockchain adapters now reject TLS-key responses. The deprecated conversion path read fixed PKCS#8 framing as private-key bytes, causing different TLS keys to derive the same Ethereum and Solana wallets. Use `get_key()` / `getKey()` for wallet keys.
-- data disks: discard now propagates through ZFS or ext4, dm-crypt, virtio-blk, and QEMU so encrypted qcow2 images release deleted blocks instead of growing with lifetime writes. Discard defaults on and can be disabled with `storage_discard: false` when allocation-pattern leakage is unacceptable; upgrading an existing ZFS pool also starts a one-time trim for historical free space
-- certbot: a certificate covering both a name and its wildcard (`example.com` and `*.example.com`) could never be issued over dns-01. The two authorizations are answered under one `_acme-challenge.example.com`, each with its own TXT value, and the publish step cleared every TXT record at that name before writing its own -- so the second authorization deleted the record answering the first, and the order failed with `Correct value not found for DNS challenge`. Clearing leftovers from an aborted run is now done once per challenge name per issuance, and the records for one name accumulate instead of replacing each other; cleanup afterwards is unchanged, deleting each record this run created by id
-- certbot: editing `domains` in `certbot.toml` had no effect once a certificate existed. Issuance was skipped whenever `live/cert.pem` was present, whatever names it carried, and renewal read its name list back off that certificate rather than the configuration -- so an added or removed name never reached the CA, and the mismatch survived every renewal. The live certificate's DNS names are now compared against the configured list (as sets, case- and trailing-dot-insensitive) and a mismatch reissues, logging both lists. A reissue that fails does not take the renewal check down with it: a name the CA will not validate is reported on every cycle, while the certificate actually being served keeps renewing, and the failure is still what the run returns unless the renewal committed something of its own
-- certbot: `certbot cfg` attached every comment after `cf_api_url` to the wrong key, because an absent optional field shifts the generated document's keys out of step with the struct's. The template's documentation is now looked up by key name
-- gateway: a fresh cluster could register several ACME accounts at once. The shared account was registered lazily, on whichever renewal first found the credentials record empty, under no lock but the per-domain renewal lock -- so two domains, or two nodes, starting together each spent a rate-limited registration, and the last-writer-wins credentials record kept exactly one of them. The attestation written beside it races under its own key, so the account the cluster ends up using need not be the one it can prove it holds. One lock in the KV store now covers every operation over the shared account -- rotation, CAA reconciliation, and first-use registration -- so they are ordered across nodes and not merely within one process, as CAA reconciliation was before. Registration re-reads the record under that lock and adopts an account another node registered while it waited, and builds the DNS provider client only after the lock is granted, so a refused attempt costs no provider API call
-- gateway: a node removed via `RemoveNode` silently rejoined the cluster the next time it started, because every node re-registers its own sync address on boot. Once tombstone GC is collecting, that comeback is worse than an annoyance: a stale data directory diverges from every digest, and the divergence repair's full re-exchange resurrects records whose deletes the cluster already collected. Removal now writes a durable marker — a live record, so the GC can never eat it — that every gateway's sync endpoints enforce; a removed node's envelopes are refused until an operator re-admits it with `SetNodeUrl`. The refused node counts HTTP 403 sync rejections (`dstack_gateway_sync_rejected_total`), including removal lockouts and app-identity mismatches. Every gateway also exposes `dstack_gateway_node_last_seen_timestamp_seconds` per known node, so a long-offline gateway is a one-line alert instead of an ack-watermark puzzle
-- gateway: deleted KV records left a tombstone that nothing ever collected, so every deregistered CVM stayed on disk for the life of the deployment. Tombstones every peer has acknowledged are now dropped once every `tombstone_gc_writes` replicated writes (default 10000, zero disables); the trigger counts replicated writes rather than reading a clock, so nodes in a cluster collect in the same window without depending on time synchronization. A `SetTombstoneGcConfig` admin RPC stores an operator override in the KV itself, replicating one pace to every node
-- gateway: `Admin.RemoveCvm` now reports the outcome of the `inst/` tombstone alone. A failure to delete associated override or telemetry records is logged instead of failing the call, so a removal that did take effect is no longer reported as failed — which also aborted the local routing cleanup that follows it. Re-issuing a removal still sweeps up override and telemetry records orphaned by an earlier partial failure
-- sdk: `get_compose_hash` in the Python SDK mutated the dictionary it was given, stripping `docker_config` and `requirements` from it, so hashing the same manifest twice returned two different digests -- the second one for a manifest missing those blocks
-- sdk: the Go compose-hash helper HTML-escaped `<`, `>` and `&`, so an app-compose carrying an `os_version` bound such as `">=0.6.1"` hashed differently in Go than in Rust, Python and JavaScript. Any digest Go produced for such a manifest was wrong, and that digest is what gets whitelisted on chain
-- sdk: the Go SDK's `gpu_policy` silently dropped sub-fields it did not declare on a decode/re-hash round trip; it now carries them through like the rest of `Requirements`
-- bound VMM-to-guest RPCs and guest-agent dependency calls to prevent stalled peers from retaining request resources indefinitely
-- sdk: the Go and Python compose-hash helpers silently dropped every app-compose field they did not declare, so `getComposeHash` returned a digest for an app-compose that was not the one being deployed — and that digest is what gets whitelisted on chain. The missing fields are named above; both now keep unrecognised keys as well, so a guest that gains a field before the SDK does still hashes correctly
-- sdk: the JavaScript and Rust clients report a non-2xx answer with its status *and* the server's message. The JS transport ignored the status entirely, and its unix-socket branch never even parsed the status line, so an agent with no `/v1` mount — every pre-0.6 agent — answered a v1 call with an HTML 404 page that reached the caller as `failed to parse response`, which names neither the status nor the cause. The Rust clients discarded the other half: `error_for_status()` keeps the status line and throws away the body the agent puts its reason in, and on the unix path the crate's JSON helper insists on deserializing the *error* body too, so the same HTML page came back as a JSON parse failure. Both now raise `HTTP <status>: <what the server said>` — the prpc `error` field when the body is one, otherwise the body itself, bounded so an error page cannot become the whole message. Python and Go already reported both halves, in their own wording; this aligns JS with Rust rather than all four with each other.
+#### VMM and networking
 
-  **This changes two things beyond the error text.** In JS, six v0 methods that never checked the response body — `getKey`, `getTlsKey`, `info`, `version`, `sign`, and `TappdClient.deriveKey` — used to *resolve* on a prpc failure, handing back an object whose every field was `undefined` next to an `error` string. They now reject. `version()`, whose own documentation says it throws against an agent too old to have the RPC, previously resolved there; it now does what it says. In Rust, neither transport sends a duplicated `Content-Type` header any more: on the unix path the crate's JSON helper appended its own on top of the one the client passed, and on the HTTP path `reqwest`'s `json()` did the same, since `header()` appends rather than replaces. Rocket reads the first value, so the agent never noticed, but a stricter intermediary is entitled to refuse a request carrying the field twice.
+- VMM networking RPCs for preparing and managing guest networking (#756)
+- a netd-based macvtap networking backend with systemd socket activation
+  (#1061, #1068, #1069)
+- libvirt network filters and guest netfilter support (#837, #1042)
+- validation and restriction of requested guest networking modes (#1068)
+- virtio-net on vhost-net with configurable queue pairs, off by default
+  (#1145)
+- port mappings can name a NIC index (#1213)
+- local key provider support (#788)
+- development TDX and software TPM environments (#780, #798)
+- TSM provider configuration through environment variables (#782)
+- release discovery API for `dstackup` (#805)
+- array-form `init_script` support (#975)
+- image backend provenance tracking (#1073)
+- a host-side data disk preallocation option (#1230)
+- GPU listing for Hopper and Blackwell GPUs (#1161)
+- a status filter in the console instance list (#1193)
+- shared API authentication (`dstack-api-auth`) for the VMM HTTP, pRPC and UI
+  surface and for Gateway and KMS administration (#796)
 
-- sdk: fix two encoding defects in the JavaScript transport, both of which corrupted or stalled real calls. The unix-socket branch declared `Content-Length` as `payload.length` — UTF-16 code units — while writing UTF-8, so a request carrying any non-ASCII field sent more bytes than it declared: the agent parsed truncated JSON and the surplus poisoned the connection. `getKey`'s `domain` is specified to accept any byte string a proto3 `string` can carry, so this was reachable by design rather than by accident. On the read path the same branch compared that byte-counted `Content-Length` against a JS string's `.length`, a condition a multi-byte body can never satisfy, so the client waited out the agent's ten-second keep-alive instead of returning — one accented character in an app-compose comment turned `info()` into a ten-second call and made `isReachable()` report a healthy agent as unreachable. That branch no longer speaks HTTP by hand: it uses node's client over `socketPath`, which frames the request, de-chunks the response, and counts bytes where bytes are meant. Responses on both branches are now assembled as bytes and decoded once, so a UTF-8 sequence split across two TCP reads no longer decodes to replacement characters on each side — which the old code did while resolving successfully, handing back quietly wrong data. A timed-out call also says so: the timeout aborted the request before rejecting, and `abort()` runs its listener synchronously, so the abort's `request aborted` always won the race and `request timed out` was unreachable — leaving `isReachable()` unable to tell a hung agent from any other failure
+#### Gateway and certificates
+
+- opt-in application health checks: an app sets
+  `requirements.health_check`, and the Gateway keeps instances that report
+  unhealthy out of app-id load balancing. Health comes from the app's Compose
+  healthchecks or from a `health_status_file` the app writes. See
+  `docs/app-health-checks.md` (#1079)
+- `Admin.SetInstanceReady` takes an instance out of rotation without stopping
+  it, and `Admin.Status` reports whether health gating is on (#1078)
+- opt-in `dns-persist-01` certificate validation, which issues certificates
+  without DNS provider credentials. Experimental; see
+  `docs/certbot-dns-persist-01.md` (#1132)
+- WaveKV v2 with dual-stack compatibility and deterministic conflict
+  resolution (#1031, #1067)
+- simultaneous CVM connections to multiple Gateway clusters (#1060)
+- a Prometheus metrics endpoint (#1037), with sync rejection and node
+  liveness metrics (#1100, #1102)
+- administrative recovery APIs (#1046)
+- DNS-based application address resolution (#921)
+- Certbot DNS API endpoint (#925)
+- `Admin.ImportCert` installs a certificate issued elsewhere into the
+  replicated store (#1239)
+
+#### Storage and guest OS
+
+- integrity-protected dm-verity volumes (#752)
+- production and development OS image flavors
+- a Debian/mkosi guest OS build with Docker caching and parallel SquashFS
+  generation, now the default backend (#816, #828, #833, #834, #1208)
+- the guest kernel build tree and a matching kernel module builder image,
+  `ghcr.io/dstack-tee/dstack-kernel-builder`, for out-of-tree modules (#1226)
+- NVIDIA kernel module options derived from the GPU topology (#1157)
+- TDX guest scaling knobs: batched wake-queue IPIs and paravirtual single
+  IPIs, on by default (#1219)
+- the traffic control and checkpoint/restore kernel features Incus needs
+  (#1182)
+- SELinux policy parity for guest services (#1043)
+- reproducible NVIDIA attestation tooling and improved GPU certificate
+  verification (#789, #791, #813)
+
+#### Tooling
+
+- tag-driven release workflows for the Rust, JavaScript, Python, and Go SDKs
+  (#686, #691, #692)
+- Rust SDK releases decoupled from the main workspace (#785)
+- API parity improvements for the JavaScript and Python SDKs (#690, #695)
+- `dstack-util decrypt` for decrypting protected payloads (#1054)
+- measured boot and attestation diagnostics (#943)
+- OCI source metadata on published images (#1190)
 
 ### Changed
-- gateway: WireGuard config is applied by one background worker instead of under the routing lock. `RegisterCvm` returns before the kernel has the peer, and every registration, removal, reload and startup queues a full apply that the worker coalesces and retries with backoff. A failure to render or write the config no longer stops the gateway from starting and is no longer returned by `Admin.RemoveCvm`; it is retried like a failed `wg syncconf`, so watch the WireGuard reconfigure failure counter instead
-- vmm: `qemu_hotplug_off` defaults to `true`, and ACPI table generation (verifier, KMS, `dstack-mr`) rejects PCI hotplug with GPU or NVSwitch root ports. QEMU emits hotplug AML for those root ports that the generator does not model, so such CVMs failed lite verification with an ACPI digest mismatch. **Breaking for hosts that relied on the default:** every CVM gets different ACPI tables, and so different RTMR values, on its next start, so anything pinning those measurements (such as the KMS aggregated-MR allowlist) must be updated. Hosts without GPUs can set `qemu_hotplug_off = false` to keep their current measurements. `dstack-mr measure --hotplug-off` defaults to `true` to match, so a measurement of a VMM-default CVM, including one with GPUs, needs no extra flag
-- certbot: the standalone `certbot` issues every renewal under a new private key, as the gateway already does, instead of reusing `live/key.pem`. Anything pinning the certificate's public key (DANE/TLSA, SPKI pins) must be updated on each renewal. `live/cert.pem` and `live/key.pem` now resolve through a `live/.current` symlink that is swapped atomically; existing layouts migrate on the next publish
-- dstackup: the default KMS image is digest-pinned (`dstacktee/dstack-kms:0.5.11@sha256:84b793fe…`) instead of a mutable tag, since it is measured into the compose hash. Fresh installs therefore register a different KMS app id; existing deployments are unaffected
-- kms: client certificates are authenticated by the attestation they carry rather than by their issuer. Rocket configures mutual TLS through rustls' `WebPkiClientVerifier`, which pins a CA — but an RA-TLS certificate is self-issued and carries its identity in a TEE quote, so there is nothing to chain to. `GetTempCaCert` bridged the gap by handing every caller a shared CA private key purely so the minted certificate would chain somewhere; the CA established nothing (its key is public by design, and the endpoint is unauthenticated) and the check that has always carried the meaning is the quote verification that runs afterwards. The KMS now hands rustls a verifier that requires an attestation and ignores the issuer. Nothing changes for callers: guests and KMS-to-KMS onboarding still mint their client certificates from the temp CA, and those are now accepted for the attestation they carry. What changes is that the TLS layer went from admitting any certificate signed by a public key to requiring an attested one, and that a self-issued certificate is now accepted — which is what lets callers be migrated off `GetTempCaCert` in a follow-up. `[rpc.tls.mutual]` is no longer the trust anchor and is dropped from `kms.toml` and the KMS config templates; leaving it in an existing deployment's config is inert. The gateway's `[tls.mutual]` is unaffected — it pins the KMS root CA, which is a real trust anchor
-- guest-agent: the `/metrics` exposition gains a conventions-compliant `dstack_guest_*` series set (application prefix; `_bytes`/`_seconds` unit suffixes; no `_total` suffix on gauges, which reads as a counter to every tool; the four OS/kernel/CPU gauges folded into one `dstack_guest_info`; `disk_used_ratio` 0–1 instead of a percentage). The old `system_*`/`disk_*` names are still emitted verbatim, marked deprecated, and will be removed in a future release — this endpoint is tenant-facing, so existing dashboards get a migration window
-- dstack-util: a CVM re-registers with the gateway node that last accepted it, before falling back to the configured order. The list used to be walked from the top every time, so every CVM piled onto the first URL and the whole fleet snapped back to it the moment it recovered from an outage — and each move rewrites the instance record from a different node's memory
-- vmm: optionally randomize the KMS and gateway URL orders written to each CVM's system configuration so new CVMs distribute their initial requests across service nodes; both are enabled by default in `vmm.toml`
-- http-client: HTTP clients are built once and shared instead of per request, which is what every `http_request*` call did until now -- each one paid for a connection pool, a DNS resolver and a TLS configuration it then threw away. Callers choose whether requests may reuse a connection (`RequestOptions::connection_reuse`, `PrpcClient::with_connection_reuse`); the default is to reuse. The gateway's health poller opts out: opening the connection is half of what a probe asks, since an agent that has run out of file descriptors keeps serving connections it already has while refusing every new one -- and every connection the gateway proxies to an app is a new one
-- os/yocto: nerdctl 2.2.1 → 2.3.5, so `nerdctl compose` honours the Compose `healthcheck:` field (only translated into `--health-*` flags from 2.3.1 on). Requires openembedded-core to move to `wrynose` head for go 1.26.5, which also brings gcc 15.2 → 15.3 — every guest image measurement changes, so the new image hashes need whitelisting in KMS
-- guest-agent: both unversioned surfaces are closed at exactly v0.5.11, and every new capability goes to `dstack.guest.v1` instead. Everything added to them after v0.5.11 never shipped in a release, so it is removed rather than frozen in: `AttestGpu` and `Attest`'s GPU-evidence field on the internal service, `AttestAppKey` and `Health` on the external one. All of those are v1 features now. No released client is affected -- both services are now byte-identical to v0.5.11 apart from doc comments and `reserved` statements holding the interim field numbers, so an unreleased `next` build in a dev environment cannot have one of them silently absorbed by a future field. "Frozen except for additions" is how all of them arrived in the first place
-- guest-agent: `GetQuote` is restricted to Intel TDX. It used to answer on every platform, returning an empty `quote` plus a `GetQuoteResponse.attestation` field carrying the versioned attestation — a shape only that one RPC produced, and one `Attest` already covers. Platforms without TDX now get an error telling them to call `Attest`, and the `attestation` field is gone from the RPC and from the Rust, Python, Go and JS SDKs. GCP Confidential VMs still get an answer — the gate is whether the platform has a TDX quote — but only the TDX half of one: `GetQuoteResponse` has no field for the vTPM quote GCP's verification also binds, so relying parties there want `Attest`, and the docs say so. `Tappd.TdxQuote`/`RawQuote` share the same backend path, so they fail closed there too instead of returning an empty quote
-- guest-agent: `Worker.GetAttestationForAppKey` is **retained**, unchanged and frozen, and v1 ships no counterpart. The method attests the key v0's KDF derives at path `vms` with purpose `signing`, and no v1 `GetKey(domain, algorithm)` can return that key -- different salt, different `info`, no `purpose` input -- so a v1 counterpart would have handed a pure-v1 app an attestation of a public key whose private half it could not obtain, which is worse than having no method because it looks like it works. A v1 app attests its own key instead: derive it at `/v1/GetKey`, commit the public key into `report_data`, call `/v1/Attest`, and serve the result to relying parties itself. That is strictly more capable, since the app chooses which key and which commitment format rather than being limited to the one the agent would derive. Legacy flows keep using the frozen method; it remains Intel TDX only, because it returns a `GetQuoteResponse`
-- sdk: the Go SDK's v1 `IssueCert` defaults `usage_server_auth` to true, as the Rust, Python and JavaScript v1 clients already did. Go was the odd one out, so the same argument-free call produced a certificate that could serve TLS in three languages and one that could not in the fourth — and a certificate you cannot serve with is useless to most callers. `WithCertUsageServerAuth(false)` opts out. v0's `GetTlsKey` keeps its `false` default deliberately: that is what the released 0.5.x Go SDK sent, and `DstackClientV0` mirrors released behaviour rather than the better choice
-- sdk: the JavaScript v1 `issueCert` response no longer carries a raw-bytes accessor. `asUint8Array()` is **removed rather than renamed**: it existed to feed the private key into the blockchain adapters, and v1 has no chain-flavoured surface. `IssueCert` returns TLS material, PEM is the form a TLS stack takes, and a caller who genuinely needs DER converts it with a standard library. The Rust, Python and Go v1 clients already returned the PEM string and the chain alone, so all four now agree. v0's `GetTlsKeyResponse.asUint8Array` is untouched — released API, and the viem and solana adapters depend on its truncating behaviour
-- sdk: the JavaScript v1 GPU evidence bundle's `asUint8Array()` accessor is gone, and `evidence` is the vendor's bytes directly, as Go's `Evidence` always was. Byte-exact off the wire, because sha256 over precisely those bytes is what the measured `gpu-attestation` event commits to
-- sdk: every field the `dstack.guest.v1` proto declares `bytes` is now that language's byte type on the v1 clients — Rust `Vec<u8>`, Python `bytes`, JavaScript `Uint8Array`, Go `[]byte` — and the `decode_*` helpers are gone along with the hex strings they decoded. Eleven fields move: `GetKeyResponse`'s `key`, `public_key` and `signature_chain`; `AttestResponse.attestation`; `GpuEvidenceBundle.evidence`; and `InfoResponse`'s `app_id`, `instance_id`, `compose_hash`, `device_id`, `os_image_hash` and `mr_aggregated`. Rust's `AttestConfig.report_data` moves with them, so the public builder and `attest()` finally agree on a type. **The JSON wire is unchanged** — it still carries lowercase hex; the encoding moved into the serialization layer, as serde's `hex::serde` in Rust, an annotated pydantic type in Python, and the client's decode step in JavaScript. Go already did this and is untouched.
 
-  The old typing did quiet damage. `docs/guest-api-v1.md` says of the v1 key claim that `public_key` is the raw derived public key, *not* a hex string, and its verification steps rebuild the claim from raw bytes — so a Rust or Python caller passing `response.public_key` straight into a claim builder built it over 66 ASCII characters instead of 33 bytes. No type error, no exception, just a chain that never verifies. `evidence` had the same shape of problem: three separate documents had to keep repeating "hash the decoded bytes, not the string as returned", precisely because the type did not say it. In Go the mistake was unspellable, and now it is unspellable everywhere -- which is why Rust's `report_data` is a `ReportData` newtype rather than a bare `Vec<u8>`: `&str` and `String` both implement `Into<Vec<u8>>`, so under the builder's `into` coercion `.report_data("00ff")` would still compile and attest the four ASCII bytes of that string. The newtype converts from a `Vec<u8>`, an array or a slice and from nothing else, so the ergonomics survive and the string does not. A `compile_fail` doctest keeps it that way. Nor was there one line to learn: before this, three of the eleven fields had no decoder at all in Rust, six had none in Python, and JavaScript had decoded three of them for a while.
-
-  Decoding got stricter where it was silently lenient. JavaScript relied on `Buffer.from(value, 'hex')`, which stops at the first pair it cannot parse and returns the prefix, so a corrupted `app_id` became a short `Uint8Array` and a signature chain with one bad link came back quietly one link short; it now throws and names the field, as Rust, Python and Go already did. A required field that is absent altogether is an error rather than empty bytes -- `os_image_hash` and `mr_aggregated` are the two exceptions, read as empty so a degraded `Info` stays parseable, which is what Rust's `#[serde(default)]` already did and what Python now does instead of rejecting the response. Python also stops accepting hex with embedded whitespace, which `bytes.fromhex` skips and Rust refuses.
-
-  The `borsh` encoding of these structs does change, since borsh writes a `Vec<u8>` as length-prefixed bytes where it wrote a hex `String` before. The v1 types shipped in no 0.5.x release, so the window is between 0.6 prereleases: a blob written by an earlier one deserializes without error into these types and yields the ASCII of the hex string. Only the JSON wire is compatible.
-
-  The request direction follows: v1's `attest` and `attest_gpu` take bytes and nothing else in all four SDKs. Rust and Go always did; Python and JavaScript also accepted a string and UTF-8 encoded it, so `attest("deadbeef")` committed to the eight ASCII characters rather than the four bytes they spell, and `attestGpu` on a 32-character string passed the length check on its way to attesting the wrong nonce. Both now raise, and say whether to `encode()` the text or decode the hex. **Breaking for a v1 caller passing a string** -- but v1 has not shipped, and the v0 clients keep the old signature, so a 0.5.x program is unaffected.
-
-  Decoding a malformed response now reaches the same verdict in all four SDKs. Differential testing -- 194 identical JSON bodies through four real clients -- found them agreeing on 143 and diverging on 51, every divergence in absence, `null`, or JSON type confusion rather than bad hex. Go read an absent or null `bytes` field as empty and returned a nil error, so an error body arriving with a 200 handed back a zero-length private key that looked like an answer; JavaScript's hex check stringified its argument, so `app_id: ["00112233"]` decoded to one attacker-chosen byte. Required fields are now required, an absent `os_image_hash` or `mr_aggregated` is still empty, an explicit `null` is malformed everywhere, and a bundle without the `vendor` a caller dispatches on is an error rather than evidence routed to no verifier. All 194 bodies now agree. None of them is reachable from a conforming agent, which emits every field, always lowercase hex, never `null` -- they are reachable from a compromised or non-dstack server, which is the threat model these fields already take seriously.
-
-  **v0 deliberately keeps its hex strings and `decode_*` helpers.** That surface mirrors the released 0.5.x SDK so a 0.5.x program keeps working by changing only the class name; retyping every byte field would break that promise on an API that is frozen anyway. The blockchain adapters are v0-typed and unaffected
-- sdk: the v0 modules carry a `_v0` suffix, so the file a reader opens matches the client it holds. Rust's `dstack_sdk::dstack_client` becomes `dstack_sdk::dstack_client_v0` and `dstack_sdk_types::dstack` becomes `dstack_sdk_types::dstack_v0`; Python's `dstack_sdk.dstack_client` becomes `dstack_sdk.dstack_client_v0`; Go's `client.go`/`client_test.go` become `client_v0.go`/`client_v0_test.go`; and the JavaScript `index.ts`, which held both surfaces in one file, splits into `client-v0.ts`, `client-v1.ts` and a `shared.ts`, leaving `index.ts` as a barrel that re-exports exactly the names it always did. Until now the unsuffixed *file* meant v0 while the unsuffixed *class* meant v1, so a reader opening `dstack_client.rs` for the recommended client found the legacy one instead. **There are deliberately no backward-compat module aliases**: 0.6.0 is the loud-break release, and an import of an old module path fails at build time rather than silently binding the frozen surface under a name that now means something else. Package-level exports are untouched in every SDK — `dstack_sdk::DstackClient`, `from dstack_sdk import DstackClientV0` and `@phala/dstack-sdk`'s public surface are exactly what they were; only a deep import of the module path moves. In Go this is file naming alone, since it is all one `package dstack`
-- sdk: the v0 clients are deprecated in the way each language's tooling understands, not only in prose. Rust's `DstackClientV0` and `TappdClient` carry `#[deprecated(since = "0.6.0")]`, so a downstream build warns at every mention of the type — the `use`, the constructor, any signature naming it. Method calls on an already-built client stay silent, because Rust does not propagate the attribute to inherent methods. Python's `DstackClientV0` and `AsyncDstackClientV0` emit a `DeprecationWarning` on construction, through the same helper `TappdClient` already used, alongside the `.. deprecated:: 0.6.0` docstring note they already carried. JavaScript's `DstackClientV0` already had its `@deprecated` JSDoc and `TappdClient` gains one. Go's `// Deprecated:` markers were in place but seven sat mid-comment rather than as their own trailing paragraph, which is the only form gopls and pkg.go.dev recognise, and are repaired.
-
-  Nothing is removed and the wire behaviour is unchanged, but Python's marker is a runtime warning rather than a build-time one: a downstream test suite that turns `DeprecationWarning` into an error (`filterwarnings = error`, which is a common setting) will fail on `DstackClientV0()` until it adds a filter. The frozen surface stays reachable under its explicit name; it just says what it is now
-
-- release: component images (`gateway`, `kms`, `verifier`, `local-key-provider`) publish to `ghcr.io/dstack-tee/<component>` instead of the `dstacktee` Docker Hub org, starting with 0.6.0-rc5. Existing 0.5.x images stay on Docker Hub and are not mirrored
+- merged the former dstack and guest OS repositories into one monorepo (#770)
+- renamed the default development branch to `next` and updated CI accordingly
+  (#1025, #1026)
+- unified platform-specific attestation paths behind common verification and
+  policy interfaces
+- moved KMS administrative APIs to a dedicated administration listener (#802)
+- allowed application IDs to be derived without KMS availability (#714)
+- added failover and multiple-service support to Gateway and KMS endpoint
+  configuration
+- changed event serialization to canonical, named encodings with stricter
+  validation
+- added explicit release identity and backend provenance to OS artifacts
+- guest-agent: the unversioned API is frozen at v0.5.11. Additions made after
+  v0.5.11 that never shipped in a release moved to v1 (#1116)
+- guest-agent: `GetQuote` answers on Intel TDX only, and its `attestation`
+  field is removed; use `Attest` on other platforms (#1107)
+- guest-agent: the `/metrics` endpoint adds conventional `dstack_guest_*`
+  names; the old names remain for one release (#1103)
+- sdk: v1 byte fields use each language's byte type instead of hex strings;
+  the JSON wire format is unchanged (#1124)
+- sdk: the v0 modules are renamed with a `_v0` suffix, and the v0 clients are
+  marked deprecated in each language's tooling (#1122)
+- sdk: the v1 SDKs agree with each other: Go's `IssueCert` defaults
+  `usage_server_auth` to true, and JavaScript drops its `asUint8Array()`
+  accessors (#1120)
+- vmm: `qemu_hotplug_off` defaults to `true`, and ACPI generation rejects PCI
+  hotplug with GPU or NVSwitch root ports (#1387)
+- vmm: the KMS and Gateway URL lists written to each CVM are shuffled, so new
+  CVMs spread their requests across service nodes (#1097)
+- vmm: netd is served as a pRPC service with one method per operation (#1217)
+- dstack-util: a CVM re-registers with the Gateway node that last accepted it
+  before trying the others (#1093)
+- kms: RA-TLS clients are authenticated by their attestation rather than by
+  certificate issuer; `[rpc.tls.mutual]` is dropped from `kms.toml` (#1106)
+- kms: root-key handover is served as `Admin.GetKmsKey`, and onboarding takes
+  the source operator's token (#1307)
+- kms: key release for AWS Nitro Enclaves is opt-in, like SEV-SNP and NitroTPM
+  (#1303)
+- attest: the AWS Nitro Enclave `device_id` is derived from the attested PCR4
+  (#1302)
+- gateway: WireGuard configuration is applied by a background worker instead
+  of under the routing lock (#1308)
+- certbot: every renewal is issued under a new private key, and the live
+  certificate and key are swapped atomically (#1241)
+- http-client: HTTP clients are shared instead of built per request (#1079)
+- dstackup: the default KMS image is pinned by digest (#1250)
+- release: component images publish to `ghcr.io/dstack-tee` instead of
+  Docker Hub (#1222)
+- os: the guest kernel's SWIOTLB bounce buffer grows at runtime, and upstream
+  DMA fixes for confidential guests are backported (#1192, #1194)
+- os: mkosi images use an NTS-only chrony configuration (#1354)
+- os/yocto: nerdctl 2.3.5, which honours Compose `healthcheck:` (#1083)
 
 ### Deprecated
-- os: the Yocto guest-OS backend (`os/yocto/`) is deprecated in favor of mkosi (`os/mkosi/`), which is now the default and recommended backend. `os/build.sh` defaults to `--backend mkosi`, and `make os-image` / `make os-repro-check` build with mkosi. The Yocto builds move to `make os-image-yocto` / `make os-repro-check-yocto`; `make os-image-mkosi` / `make os-repro-check-mkosi` remain as aliases. Every Yocto entrypoint prints a deprecation warning, and the backend is kept only to rebuild existing Yocto images. The mkosi build still reads patches, units and scripts from `os/yocto/`, so the directory stays until those files move
+
+- os: the Yocto guest OS backend (`os/yocto/`), in favor of mkosi. `make
+  os-image` builds with mkosi; Yocto builds move to `make os-image-yocto`
+  (#1208)
 
 ### Removed
-- vmm: pulling guest images from an OCI registry, together with the `[image] registry` setting, the `ListRegistryImages` and `PullRegistryImage` RPCs, the registry section of the Images panel, and `os/image/dstack-image-oci.sh`. Guest images are not published to a registry, so the feature had no users. A leftover `registry` line in `vmm.toml` is ignored; install images into the local image directory instead
-- verifier: the `debug` request field and the `acpi_tables` / `rtmr_debug` response fields. The per-event RTMR diff never had the events it diffed, so it reported every expected digest as missing. Requests that still send `debug` are accepted and the field is ignored.
-- sdk: `TlsKeyOptions.path` in the JavaScript SDK. `GetTlsKeyArgs` has no such field and `getTlsKey` never read it, so a caller who set it was silently ignored. Breaking at the type level only, and only for code whose value was already being discarded. `deriveKey`'s `path` is a real, deprecated Tappd-era parameter and stays; the Python, Rust and Go v0 TLS-key options never carried one
-- guest-agent: the `EmitEvent` RPC no longer records anything -- runtime RTMR3 events are system-owned in 0.6.0, so an app can no longer extend the measurement chain. The method itself stays on the unversioned path and always fails with an error naming the removal, rather than being deleted outright: a deleted method answers HTTP 404 `Service not found: EmitEvent`, which tells a 0.5.x caller nothing about why its events stopped being recorded, while the kept stub fails with a message naming the removal and pointing at `report_data`. **Breaking:** any app extending RTMR3 at runtime must stop; bind app data through `report_data` instead, which is what most callers wanted anyway
-- gateway: `core.debug.insecure_skip_attestation`. It turned off both checks that make a gateway cluster a trust boundary: the node stopped asking its guest agent for its own app id, and every WaveKV sync and push, plus `ensure_from_gateway`, stopped checking the peer's. With it set, anything that could reach the sync routes could insert entries that replicated to every gateway in the cluster. It existed only because the integration suites could not run without it; they now run against a guest agent simulator and verify quotes through the production path, so nothing sets it. `docs/security/security-model.md` argues dstack's development switches are acceptable because they are visible in attestation measurements or public contract state -- that argument cannot cover the switch deciding whether attestation happens at all, which is why this one is deleted rather than documented. There is no replacement. **Breaking:** the config struct does not use `deny_unknown_fields`, so a leftover line is ignored rather than rejected, and what follows depends on why it was set. On a TDX host with a guest agent the gateway starts normally and peers that cannot present a verifiable app id stop being accepted. On a host with no guest agent -- the usual reason to have set it -- the gateway no longer starts at all, failing with `Failed to get app info`, because `my_app_id` is what every peer check compares against and a node that cannot learn its own identity must not come up without one. Remove the line and make sure every node can attest
 
+- guest-agent: `EmitEvent` no longer records anything and always fails, since
+  runtime RTMR3 events are system-owned (#1116)
+- gateway: `core.debug.insecure_skip_attestation` (#1148)
+- gateway: the `[core.proxy]` `cert_chain`, `cert_key`, `base_domain`,
+  `external_port` and `tappd_port` settings, none of which took effect any
+  more (#1239, #1375)
+- gateway: the legacy debug key (#999)
+- vmm: legacy port-forward management, in favor of VMM-managed networking
+  (#795)
+- vmm: pulling guest images from an OCI registry (#1282)
+- verifier: the `debug` request field and the `acpi_tables` and `rtmr_debug`
+  response fields (#1332)
+- sdk: `TlsKeyOptions.path` in the JavaScript SDK, which was never read
+  (#1120)
+- obsolete SEV text digest handling (#764)
+
+### Security
+
+- added LUKS2 keyslot bounds checking and stopped passing storage keys through
+  process arguments (#799, #886)
+- enforced restrictive permissions and atomic updates for KMS, guest, Gateway,
+  certificate, attestation, and TPM key material, including boot-time secrets,
+  certbot keys and the `vmm-cli` credential file (#1233, #1241, #1390)
+- added archive extraction, image artifact, console log, registry layer, and
+  filesystem path confinement
+- strengthened RA-TLS validation, including certificate/key matching, security
+  profiles, application extensions, and unattested certificate rejection; an
+  app certificate can no longer authenticate as the KMS (#1255)
+- hardened KMS node authorization, Ethereum authentication, policy auditing,
+  endpoint redaction, and bootstrap. The KMS refuses to auto-bootstrap over
+  existing root keys (#1305), bounds its inputs to the auth backend (#1310,
+  #1311, #1365), reads each auth-eth decision from a single block (#1314), and
+  fails closed on an empty device allowlist or an unknown `MOCK_POLICY`
+  (#1344, #1391)
+- removed the Gateway debug key and restricted private host APIs
+- added stricter quote size, report-data, trailing-byte, event ordering, and
+  event-preimage validation
+- improved WireGuard public key validation and Gateway registration collision
+  handling
+- bounded parsing of untrusted bytes in `dstack-mr`, SEV-SNP and TPM
+  verification, and collateral fetching, which only reaches allowlisted hosts
+  (#1231, #1236, #1238, #1267, #1279, #1404)
+- the verifier rejects SEV-SNP guests with unsupported `SEV_FEATURES` such as
+  `DebugSwap`, and checks downloaded OS images end to end before caching them
+  (#1275, #1337)
+- the key provider re-checks TD attributes before provisioning (#1242)
+- the guest fails closed when an encrypted environment cannot be decrypted
+  (#1340), and a container can no longer crash the guest agent or make an
+  anonymous `Info` call trigger a quote (#1256, #1263)
+- `docker compose --remove-orphans` no longer deletes live containers when a
+  compose file uses `include` (#1254)
+- the Gateway rejects malformed SNI values and sync envelopes that claim its
+  own node id, and a short TLS record on port 443 no longer aborts it (#1278,
+  #1284, #1380)
+- the VMM enforces the port mapping policy on `update_vm`, restricts listed
+  GPUs to the node's offered devices, and bounds guest-reported event names
+  (#1286, #1346, #1363)
+- guest-agent calls from the VMM and the Gateway are bounded in time and
+  response size (#1095)
+- caller-supplied text can no longer forge log lines (#1401, #1407)
+- release builds use `--locked`, CI actions and the release BuildKit image are
+  pinned by digest, and the KMS onboarding page and VMM console pin their
+  front-end dependencies by integrity (#1389, #1393, #1395, #1396, #1398,
+  #1403)
+
+### Fixed
+
+- data disks release deleted blocks back to the host through ZFS or ext4,
+  dm-crypt and QEMU. Discard is on by default; set `storage_discard: false`
+  to disable it (#1175)
+- a GPU CVM using the TPM key provider can reboot again (#1410)
+- sdk: compose-hash helpers in Go and Python no longer drop unknown
+  app-compose fields, Go no longer HTML-escapes `<`, `>` and `&`, and Python
+  no longer mutates its input, so every SDK produces the digest that is
+  whitelisted on chain (#1079, #1092)
+- sdk: the Python and JavaScript wallet adapters reject TLS-key responses,
+  which derived the same wallet from different keys (#1283)
+- sdk: the JavaScript and Rust clients report HTTP errors with the status and
+  the server's message, and JavaScript v0 methods reject on failure instead
+  of resolving to empty objects (#1120)
+- sdk: the JavaScript transport sends and reads non-ASCII payloads correctly
+  and reports timeouts as timeouts (#1120)
+- certbot: a certificate for both a name and its wildcard can be issued over
+  `dns-01`, and editing `domains` triggers a reissue (#1136, #1137)
+- gateway: a new cluster registers a single ACME account (#1138)
+- gateway: a node removed with `RemoveNode` stays out until an operator
+  re-admits it (#1100)
+- gateway: KV tombstones are garbage-collected (#1099)
+- gateway: `Admin.RemoveCvm` no longer reports a successful removal as failed
+  (#1088)
+- fixed VMM CID allocation and reload behavior, including stopped VMs and
+  bounded allocation windows
+- fixed VM restart policies, one-shot failure handling, stopped-VM resizing,
+  host port conflicts, serial log limits, and encrypted KMS URL propagation;
+  a VM that is still stopping starts once QEMU has exited (#1414)
+- fixed simulator races and measurement inconsistencies across TPM, NitroTPM,
+  Intel TDX, AMD SEV-SNP, and GCP vTPM environments
+- fixed guest startup and credential refresh during temporary Gateway or KMS
+  outages
+- fixed Gateway certificate reload, certificate ordering, ACME credential
+  recovery, CAA reconciliation, DNS timing, peer synchronization, and
+  registration consistency, and moved KV store access off the routing lock
+  (#1253, #1262, #1265, #1385, #1386)
+- fixed KMS CA persistence across restarts, repeated onboarding, authorization
+  locking, endpoint failover, and certificate log handling; an interrupted
+  bootstrap can be redone (#1309)
+- fixed verifier configuration precedence, cache versioning, archive
+  confinement, development trust labels, one-shot output, and historical image
+  verification; the measurement cache is bounded and downloads are retried
+  (#1334, #1369, #1388)
+- fixed GPU reset and VFIO sanitization, including PCI secondary bus reset
+  handling (#1065)
+- fixed guest boot ordering, so the app starts only after `dstack-prepare`
+  and the guest agent, and an interrupted data disk initialization is redone
+  (#1322, #1324, #1328, #1339)
+- fixed OS image release metadata so `/etc/os-release` and release artifacts
+  consistently identify dstack 0.6.0 (#1076)
 
 ## [0.5.5] - 2025-10-20
 
@@ -1374,7 +1639,8 @@ New contributors in this release:
 * @Leechael made their first contribution
 * @nanometerzhu made their first contribution
 * @h4x3rotab made their first contribution
-[unreleased]: https://github.com/Dstack-TEE/dstack/compare/v0.5.5..HEAD
+[unreleased]: https://github.com/Dstack-TEE/dstack/compare/v0.6.0..HEAD
+[0.6.0]: https://github.com/Dstack-TEE/dstack/compare/v0.5.11..v0.6.0
 [0.5.5]: https://github.com/Dstack-TEE/dstack/compare/v0.5.4..v0.5.5
 [0.5.4]: https://github.com/Dstack-TEE/dstack/compare/v0.5.3..v0.5.4
 [0.5.3]: https://github.com/Dstack-TEE/dstack/compare/v0.5.2..v0.5.3
