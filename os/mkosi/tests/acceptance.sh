@@ -199,7 +199,7 @@ grep -q '^NVIDIA_VERSION=595.58.03$' "$D/versions.env"
 # toolchain when a module's go.mod names a newer release.
 grep -q '^export GOTOOLCHAIN=local$' "$D/mkosi.build"
 grep -q '^STARGZ_VERSION=0.18.2$' "$D/versions.env"
-grep -q '^NERDCTL_VERSION=2.2.1$' "$D/versions.env"
+grep -q '^NERDCTL_VERSION=2.3.5$' "$D/versions.env"
 grep -q '^[[:space:]]*docker-cli$' "$D/mkosi.conf"
 grep -q '^SYSBOX_VERSION=0.6.7$' "$D/versions.env"
 grep -q '^ZFS_VERSION=2.4.0$' "$D/versions.env"
