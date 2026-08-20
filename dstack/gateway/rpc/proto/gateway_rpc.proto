@@ -142,6 +142,10 @@ message ProxyAccelStatus {
 
 // HostInfo is the information of a host.
 message HostInfo {
+  // Field 5 was used and dropped before this repo's visible history, without a
+  // marker. Reserved now so the next person to extend this message cannot
+  // silently reuse it and break every older client that still sends it.
+  reserved 5;
   // The Instance id
   string instance_id = 1;
   // The IP address of the host.
