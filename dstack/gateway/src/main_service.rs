@@ -1319,7 +1319,11 @@ impl ProxyState {
             return;
         };
         info.port_policy = Some(policy);
-        self.persist_instance_record(instance_id);
+        // Pre-existing behaviour: the lazy fetch retries on its own schedule,
+        // so a failed write here is logged rather than surfaced.
+        if let Err(err) = self.persist_instance_record(instance_id) {
+            error!("{err:?}");
+        }
     }
 
     /// Snapshot view of an instance's port-policy state for inspection.
@@ -1349,7 +1353,11 @@ impl ProxyState {
             policy.ports.len(),
             prev.is_some(),
         );
-        self.persist_instance_record(instance_id);
+        // Pre-existing behaviour: a failed write is logged, not returned.
+        // Left alone here so this change stays about the traffic gate.
+        if let Err(err) = self.persist_instance_record(instance_id) {
+            error!("{err:?}");
+        }
         Ok(())
     }
 
@@ -1362,7 +1370,9 @@ impl ProxyState {
         let had_override = info.admin_port_policy.take().is_some();
         info!("admin cleared port_policy for instance {instance_id} (was set: {had_override})");
         if had_override {
-            self.persist_instance_record(instance_id);
+            if let Err(err) = self.persist_instance_record(instance_id) {
+                error!("{err:?}");
+            }
         }
         Ok(())
     }
@@ -1399,7 +1409,17 @@ impl ProxyState {
         // The selection cache holds a pre-gate snapshot. Drop it so the change
         // applies to the next connection rather than up to `cache_top_n` later.
         self.state.top_n.remove(&app_id);
-        self.persist_instance_record(instance_id);
+        // Deliberately not rolled back on a failed write. The gate is already
+        // in force on this node, and for an emergency cut-off partial
+        // protection beats undoing it; what the operator must not be told is
+        // that it succeeded everywhere.
+        self.persist_instance_record(instance_id).with_context(|| {
+            format!(
+                "instance {instance_id} is now ready={ready} on this node only: \
+                 the setting could not be persisted, so it will not reach the \
+                 other gateways and will be lost when this one restarts"
+            )
+        })?;
         Ok(())
     }
 
@@ -1416,9 +1436,12 @@ impl ProxyState {
     }
 
     /// Persist the current in-memory `InstanceInfo` snapshot to WaveKV.
-    fn persist_instance_record(&self, instance_id: &str) {
+    ///
+    /// Returns the store error rather than only logging it, so callers whose
+    /// API promises the change is durable can say otherwise when it is not.
+    fn persist_instance_record(&self, instance_id: &str) -> Result<()> {
         let Some(info) = self.state.instances.get(instance_id) else {
-            return;
+            return Ok(());
         };
         let data = InstanceData {
             app_id: info.app_id.clone(),
@@ -1430,9 +1453,9 @@ impl ProxyState {
             admin_port_policy: info.admin_port_policy.clone(),
             admin_ready: info.admin_ready,
         };
-        if let Err(err) = self.kv_store.sync_instance(instance_id, &data) {
-            error!("failed to sync instance {instance_id} to KvStore: {err:?}");
-        }
+        self.kv_store
+            .sync_instance(instance_id, &data)
+            .with_context(|| format!("failed to sync instance {instance_id} to KvStore"))
     }
 
     fn add_instance(&mut self, info: InstanceInfo) {
