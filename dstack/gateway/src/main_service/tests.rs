@@ -664,6 +664,7 @@ async fn a_gate_arriving_through_kv_invalidates_the_cached_selection() {
             port_policy_hash: existing.port_policy_hash.clone(),
             admin_port_policy: None,
             admin_ready: Some(false),
+            has_health_endpoint: existing.has_health_endpoint,
         }
     };
     state.kv_store.sync_instance("peer-app-0", &gated).unwrap();
@@ -857,6 +858,53 @@ async fn re_registration_resets_health_to_unknown() {
     assert_eq!(
         selected_ids(&proxy.select_top_n_hosts("restart-app").unwrap()),
         vec!["restart-app-1"]
+    );
+}
+
+/// Turning polling off must restore the old behaviour exactly. Nothing ever
+/// leaves `Unknown` once the poller is not running, and in a fleet that still
+/// has older images -- `Unsupported`, which counts as healthy -- the filter
+/// would otherwise drop every instance that supports the feature, forever.
+#[tokio::test]
+async fn disabling_polling_keeps_both_old_and_new_instances_eligible() {
+    let state = create_test_state_with(|config| config.proxy.health_check.enabled = false).await;
+    let mut proxy = state.lock();
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    // One legacy instance and one that declares the endpoint but, with the
+    // poller off, will never answer.
+    let mut handshakes = BTreeMap::new();
+    for (index, has_endpoint) in [false, true].into_iter().enumerate() {
+        let id = format!("off-app-{index}");
+        let key = test_pubkey(&format!("off-app-key-{index}"));
+        proxy
+            .new_client_by_id(
+                &id,
+                "off-app",
+                &key,
+                "",
+                ReportedCapabilities {
+                    port_policy: Some(policy(false, &[])),
+                    has_health_endpoint: has_endpoint,
+                },
+            )
+            .unwrap();
+        handshakes.insert(key, now);
+    }
+    proxy.handshake_cache.set_for_test(handshakes);
+
+    assert_eq!(
+        proxy.state.instances["off-app-1"].health,
+        HealthState::Unknown,
+        "the state is still tracked; it just must not be allowed to gate"
+    );
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("off-app").unwrap()).len(),
+        2,
+        "with polling disabled every instance stays eligible"
     );
 }
 
