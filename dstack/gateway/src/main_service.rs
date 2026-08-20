@@ -1133,6 +1133,16 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
             // WaveKV has already selected the winning value. Materialize it
             // unconditionally instead of applying another LWW rule here.
             new_info.connections = existing.connections.clone();
+            // Health is this node's own observation and WaveKV does not carry
+            // it, so it has to survive a reload the same way the connection
+            // counter does. Re-deriving it from the record would reset every
+            // instance to `Unknown` on every sync round -- dropping the whole
+            // fleet out of rotation until the next poll, over and over.
+            // The one case that must reset is the capability changing, which
+            // means the image was replaced.
+            if existing.has_health_endpoint == data.has_health_endpoint {
+                new_info.health = existing.health;
+            }
         } else {
             wg_changed = true;
         }

@@ -1009,6 +1009,44 @@ async fn disabling_polling_keeps_both_old_and_new_instances_eligible() {
     );
 }
 
+/// Health is this node's own observation and WaveKV does not carry it. A sync
+/// round must not reset it, or the whole fleet drops to `Unknown` every time a
+/// peer writes anything.
+#[tokio::test]
+async fn a_kv_reload_does_not_reset_this_node_s_health_observations() {
+    let state = create_test_state().await;
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    {
+        let mut proxy = state.lock();
+        register_instances(&mut proxy, "sync-app", 2, true);
+        observe(&mut proxy, "sync-app-0", HealthState::Healthy);
+        observe(&mut proxy, "sync-app-1", HealthState::Unhealthy);
+    }
+
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+
+    let mut proxy = state.lock();
+    assert_eq!(
+        proxy.state.instances["sync-app-0"].health,
+        HealthState::Healthy
+    );
+    assert_eq!(
+        proxy.state.instances["sync-app-1"].health,
+        HealthState::Unhealthy
+    );
+    proxy.handshake_cache.set_for_test(BTreeMap::from([
+        (test_pubkey("sync-app-key-0"), now),
+        (test_pubkey("sync-app-key-1"), now),
+    ]));
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("sync-app").unwrap()),
+        vec!["sync-app-0"]
+    );
+}
+
 /// `connect_top_n = 0` takes the random path, which filters separately.
 #[tokio::test]
 async fn the_random_selection_path_honours_health_and_fails_open() {
