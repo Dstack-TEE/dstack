@@ -681,8 +681,8 @@ mod tests {
 
     /// gzip expands by three orders of magnitude on attacker-chosen input, so the
     /// 16 MiB cap on the request body bounds the *compressed* size and nothing else.
-    /// mTLS proves only that the sender is some gateway of this deployment, which is
-    /// the same trust level the key schema already assumes is insufficient.
+    /// mTLS proves only that the sender is some gateway of this deployment, so the bound
+    /// has to hold against a peer running a buggy build, not just against a stranger.
     #[tokio::test]
     async fn a_compression_bomb_is_refused_before_it_is_decompressed() {
         let (client, _proxy, _tmp) = serving_gateway(true).await;
