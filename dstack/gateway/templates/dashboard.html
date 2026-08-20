@@ -187,6 +187,15 @@ SPDX-License-Identifier: Apache-2.0
             font-weight: bold;
         }
 
+        .health-unhealthy {
+            color: #f44336;
+            font-weight: bold;
+        }
+
+        .health-unknown {
+            color: #999;
+        }
+
         .status-controls {
             display: flex;
             gap: 5px;
@@ -614,6 +623,7 @@ SPDX-License-Identifier: Apache-2.0
             <th>IP</th>
             <th>Last Seen</th>
             <th>Connections</th>
+            <th>Health</th>
             <th>Traffic</th>
         </tr>
         {% for host in status.hosts %}
@@ -623,6 +633,15 @@ SPDX-License-Identifier: Apache-2.0
             <td>{{ host.ip }}</td>
             <td class="timestamp">{{ host.latest_handshake }}</td>
             <td>{{ host.num_connections }}</td>
+            {% if host.health == "unhealthy" %}
+            <td class="health-unhealthy" title="The guest agent reports a container that declares a healthcheck is not healthy.">unhealthy</td>
+            {% else if host.health == "unknown" %}
+            <td class="health-unknown" title="Registered, but no health poll has answered yet. Held out of rotation until one does.">unknown</td>
+            {% else if host.health == "unsupported" %}
+            <td class="health-unknown" title="This guest agent has no Worker.Health method, so it is never polled and always eligible.">not polled</td>
+            {% else %}
+            <td>{{ host.health }}</td>
+            {% endif %}
             {% if host.admin_ready.unwrap_or(true) %}
             <td>in rotation</td>
             {% else %}
