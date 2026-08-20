@@ -67,6 +67,21 @@ impl InstanceInfo {
     pub fn is_admin_ready(&self) -> bool {
         self.admin_ready.unwrap_or(true)
     }
+
+    /// Whether replacing `self` with `other` could invalidate a cached
+    /// selection.
+    ///
+    /// `ip` is copied straight into the cached `AddressInfo`; `app_id` decides
+    /// which cache entry the instance belongs to; `public_key` is the key the
+    /// handshake freshness filter looks up; `admin_ready` gates eligibility.
+    /// A change to any of them means a cached `top_n` was computed against a
+    /// record that no longer exists.
+    pub fn routing_inputs_differ(&self, other: &Self) -> bool {
+        self.ip != other.ip
+            || self.app_id != other.app_id
+            || self.public_key != other.public_key
+            || self.admin_ready != other.admin_ready
+    }
 }
 
 /// Snapshot of an instance's port-policy state for admin inspection.

@@ -1147,6 +1147,22 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
                 }
             }
         }
+        // Drop any cached selection this record could invalidate. WaveKV is how
+        // an operator's traffic gate reaches the other nodes, and a cached
+        // `top_n` computed before it arrived would keep feeding the gated
+        // instance for up to `cache_top_n` -- on every node except the one that
+        // took the RPC.
+        let selection_is_stale = match &existing {
+            Some(existing) => existing.routing_inputs_differ(&new_info),
+            // A record this node has not seen before is a new candidate.
+            None => true,
+        };
+        if selection_is_stale {
+            state.state.top_n.remove(&data.app_id);
+            if let Some(existing) = &existing {
+                state.state.top_n.remove(&existing.app_id);
+            }
+        }
         state.state.allocated_addresses.insert(data.ip);
         state
             .state

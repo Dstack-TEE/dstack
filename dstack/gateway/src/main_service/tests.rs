@@ -593,6 +593,56 @@ async fn the_random_selection_path_honours_the_gate() {
     }
 }
 
+/// The gate reaches other gateways through WaveKV, not through the RPC. A node
+/// that learns about it on a reload has to drop the selection it cached before
+/// the change, or it keeps feeding the gated instance for up to `cache_top_n`.
+#[tokio::test]
+async fn a_gate_arriving_through_kv_invalidates_the_cached_selection() {
+    let state = create_test_state().await;
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    {
+        let mut proxy = state.lock();
+        register_ready_instances(&mut proxy, "peer-app", 2);
+        proxy.select_top_n_hosts("peer-app").unwrap();
+        assert_eq!(proxy.state.top_n.len(), 1, "selection should be cached");
+    }
+
+    // A peer gated peer-app-0 and the record reached us through sync.
+    let gated = {
+        let proxy = state.lock();
+        let existing = proxy.state.instances["peer-app-0"].clone();
+        InstanceData {
+            app_id: existing.app_id.clone(),
+            ip: existing.ip,
+            public_key: existing.public_key.clone(),
+            reg_time: now,
+            port_policy: existing.port_policy.clone(),
+            port_policy_hash: existing.port_policy_hash.clone(),
+            admin_port_policy: None,
+            admin_ready: Some(false),
+        }
+    };
+    state.kv_store.sync_instance("peer-app-0", &gated).unwrap();
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+
+    let mut proxy = state.lock();
+    assert!(
+        proxy.state.top_n.is_empty(),
+        "a gate arriving through KV must drop the cached selection"
+    );
+    proxy.handshake_cache.set_for_test(BTreeMap::from([
+        (test_pubkey("peer-app-key-0"), now),
+        (test_pubkey("peer-app-key-1"), now),
+    ]));
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("peer-app").unwrap()),
+        vec!["peer-app-1"]
+    );
+}
+
 #[tokio::test]
 async fn gating_an_unregistered_instance_is_an_error() {
     let state = create_test_state().await;
