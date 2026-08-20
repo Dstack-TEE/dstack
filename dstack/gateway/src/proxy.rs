@@ -44,6 +44,7 @@ pub(crate) type AddressGroup = smallvec::SmallVec<[AddressInfo; 4]>;
 
 mod adaptive_ktls;
 mod balance;
+pub(crate) mod health_check;
 mod idle;
 mod io_bridge;
 pub(crate) mod port_policy;

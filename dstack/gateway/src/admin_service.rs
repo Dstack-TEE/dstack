@@ -70,6 +70,7 @@ impl AdminRpcHandler {
                     latest_handshake,
                     num_connections: instance.num_connections(),
                     admin_ready: Some(instance.is_admin_ready()),
+                    health: instance.health.as_str().to_string(),
                 }
             })
             .collect::<Vec<_>>();
@@ -143,6 +144,7 @@ impl AdminRpc for AdminRpcHandler {
                 },
                 num_connections: instance.num_connections(),
                 admin_ready: Some(instance.is_admin_ready()),
+                health: instance.health.as_str().to_string(),
             };
             Ok(GetInfoResponse {
                 found: true,
