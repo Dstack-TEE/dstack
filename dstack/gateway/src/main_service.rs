@@ -752,6 +752,7 @@ fn build_state_from_kv_store(config: &Config, instances: LoadedInstances) -> Pro
             port_policy: data.port_policy,
             port_policy_hash: data.port_policy_hash,
             admin_port_policy: data.admin_port_policy,
+            admin_ready: data.admin_ready,
             connections: Default::default(),
         };
         state.allocated_addresses.insert(data.ip);
@@ -1114,6 +1115,7 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
             port_policy: data.port_policy.clone(),
             port_policy_hash: data.port_policy_hash.clone(),
             admin_port_policy: data.admin_port_policy.clone(),
+            admin_ready: data.admin_ready,
             connections: Default::default(),
         };
 
@@ -1205,10 +1207,16 @@ impl ProxyState {
         {
             bail!("WireGuard public key is already registered to another instance");
         }
+        // Carried across the rebuild path below. When the recorded IP is no
+        // longer inside the configured range the instance is reconstructed
+        // from scratch, and an operator's traffic gate must not fall open just
+        // because the address pool moved under it.
+        let mut carried_admin_ready = None;
         if let Some(existing) = self.state.instances.get_mut(id) {
             if existing.app_id != app_id {
                 bail!("instance_id is already registered to a different app");
             }
+            carried_admin_ready = existing.admin_ready;
             let pubkey_changed = existing.public_key != public_key;
             if pubkey_changed {
                 info!("public key changed for instance {id}, new key: {public_key}");
@@ -1244,6 +1252,7 @@ impl ProxyState {
                     port_policy: existing.port_policy.clone(),
                     port_policy_hash: existing.port_policy_hash.clone(),
                     admin_port_policy: existing.admin_port_policy.clone(),
+                    admin_ready: existing.admin_ready,
                 };
                 if let Err(err) = self.kv_store.sync_instance(&existing.id, &data) {
                     error!("failed to sync existing instance to KvStore: {err:?}");
@@ -1265,6 +1274,7 @@ impl ProxyState {
             port_policy,
             port_policy_hash: compose_hash.to_string(),
             admin_port_policy: None,
+            admin_ready: carried_admin_ready,
             connections: Default::default(),
         };
         self.add_instance(host_info.clone());
@@ -1341,6 +1351,54 @@ impl ProxyState {
         Ok(())
     }
 
+    /// Open or close the operator traffic gate for an instance.
+    ///
+    /// Closing it removes the instance from app-id load balancing but leaves it
+    /// running and still reachable by instance id, which is the point: an
+    /// operator investigating a misbehaving instance needs it out of rotation
+    /// and reachable at the same time.
+    ///
+    /// Existing connections are deliberately left alone. They are already
+    /// bridged, and tearing them down would turn "stop sending it new work"
+    /// into a second, louder outage.
+    ///
+    /// Errors if the instance is not registered.
+    pub(crate) fn set_admin_ready(&mut self, instance_id: &str, ready: bool) -> Result<()> {
+        let Some(info) = self.state.instances.get_mut(instance_id) else {
+            bail!("instance {instance_id} not found");
+        };
+        let prev = info.is_admin_ready();
+        info.admin_ready = Some(ready);
+        let app_id = info.app_id.clone();
+        info!("admin set ready={ready} for instance {instance_id} (prev: {prev})");
+        if !ready && self.count_ready_instances(&app_id) == 0 {
+            // Not an error -- an operator may well mean to drain an app
+            // entirely -- but silently refusing every connection to an app is
+            // the kind of thing someone should be told about once.
+            warn!(
+                "instance {instance_id} was the last ready instance of app {app_id}; \
+                 the app will refuse new connections until one is set ready again"
+            );
+        }
+        // The selection cache holds a pre-gate snapshot. Drop it so the change
+        // applies to the next connection rather than up to `cache_top_n` later.
+        self.state.top_n.remove(&app_id);
+        self.persist_instance_record(instance_id);
+        Ok(())
+    }
+
+    /// How many of an app's instances the operator has left open to traffic.
+    fn count_ready_instances(&self, app_id: &str) -> usize {
+        let Some(instances) = self.state.apps.get(app_id) else {
+            return 0;
+        };
+        instances
+            .iter()
+            .filter_map(|id| self.state.instances.get(id))
+            .filter(|info| info.is_admin_ready())
+            .count()
+    }
+
     /// Persist the current in-memory `InstanceInfo` snapshot to WaveKV.
     fn persist_instance_record(&self, instance_id: &str) {
         let Some(info) = self.state.instances.get(instance_id) else {
@@ -1354,6 +1412,7 @@ impl ProxyState {
             port_policy: info.port_policy.clone(),
             port_policy_hash: info.port_policy_hash.clone(),
             admin_port_policy: info.admin_port_policy.clone(),
+            admin_ready: info.admin_ready,
         };
         if let Err(err) = self.kv_store.sync_instance(instance_id, &data) {
             error!("failed to sync instance {instance_id} to KvStore: {err:?}");
@@ -1371,6 +1430,7 @@ impl ProxyState {
             port_policy: info.port_policy.clone(),
             port_policy_hash: info.port_policy_hash.clone(),
             admin_port_policy: info.admin_port_policy.clone(),
+            admin_ready: info.admin_ready,
         };
         if let Err(err) = self.kv_store.sync_instance(&info.id, &data) {
             error!("failed to sync instance to KvStore: {err:?}");
@@ -1498,6 +1558,12 @@ impl ProxyState {
                 .iter()
                 .filter_map(|instance_id| {
                     let instance = self.state.instances.get(instance_id)?;
+                    // Operator gate. Only applied here, on the app-id path --
+                    // the instance-id lookup above returns before this point so
+                    // a gated instance stays directly reachable.
+                    if !instance.is_admin_ready() {
+                        return None;
+                    }
                     let (_, elapsed) = handshakes.get(&instance.public_key)?;
                     (*elapsed < self.config.proxy.timeouts.handshake_stale).then(|| {
                         (
@@ -1544,11 +1610,13 @@ impl ProxyState {
         // Filter healthy instances and choose randomly among them
         let healthy_instances = app_instances.iter().filter(|instance_id| {
             if let Some(instance) = self.state.instances.get(*instance_id) {
-                // Consider instance healthy if it had a recent handshake
-                handshakes
-                    .get(&instance.public_key)
-                    .map(|(_, elapsed)| *elapsed < self.config.proxy.timeouts.handshake_stale)
-                    .unwrap_or(false)
+                // Consider instance healthy if it had a recent handshake, and
+                // only if the operator has not gated it out of rotation.
+                instance.is_admin_ready()
+                    && handshakes
+                        .get(&instance.public_key)
+                        .map(|(_, elapsed)| *elapsed < self.config.proxy.timeouts.handshake_stale)
+                        .unwrap_or(false)
             } else {
                 false
             }

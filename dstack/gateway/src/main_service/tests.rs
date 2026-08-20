@@ -23,6 +23,10 @@ impl std::ops::Deref for TestState {
 }
 
 async fn create_test_state() -> TestState {
+    create_test_state_with(|_| {}).await
+}
+
+async fn create_test_state_with(tweak: impl FnOnce(&mut Config)) -> TestState {
     let figment = load_config_figment(None);
     let mut config = figment.focus("core").extract::<Config>().unwrap();
     let temp_dir = TempDir::new().expect("failed to create temp dir");
@@ -34,6 +38,7 @@ async fn create_test_state() -> TestState {
         .join("wg.conf")
         .to_string_lossy()
         .into_owned();
+    tweak(&mut config);
     let options = ProxyOptions {
         config,
         my_app_id: None,
@@ -446,6 +451,155 @@ async fn gateway_top_n_batch_007_cache_health_and_invalidation() {
     }
 }
 
+/// Register `count` instances of `app` and mark every handshake fresh, so the
+/// only thing that can keep an instance out of a selection is the gate.
+fn register_ready_instances(proxy: &mut ProxyState, app: &str, count: usize) {
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut handshakes = BTreeMap::new();
+    for index in 0..count {
+        let id = format!("{app}-{index}");
+        let key = test_pubkey(&format!("{app}-key-{index}"));
+        proxy
+            .new_client_by_id(&id, app, &key, "", Some(policy(false, &[])))
+            .unwrap();
+        handshakes.insert(key, now);
+    }
+    proxy.handshake_cache.set_for_test(handshakes);
+}
+
+fn selected_ids(group: &AddressGroup) -> Vec<String> {
+    group
+        .iter()
+        .map(|row| row.instance_id.clone())
+        .collect::<Vec<_>>()
+}
+
+/// The gate exists so an operator can pull a misbehaving instance out of the
+/// rotation *and still reach it*. Dropping it from app-id selection while
+/// leaving instance-id routing untouched is the whole feature.
+#[tokio::test]
+async fn gating_an_instance_removes_it_from_rotation_but_keeps_it_directly_reachable() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_ready_instances(&mut proxy, "gated-app", 3);
+
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("gated-app").unwrap()).len(),
+        3
+    );
+
+    proxy.set_admin_ready("gated-app-1", false).unwrap();
+
+    let after = selected_ids(&proxy.select_top_n_hosts("gated-app").unwrap());
+    assert_eq!(after, vec!["gated-app-0", "gated-app-2"]);
+
+    // ... but addressing it directly still resolves, which is what makes
+    // debugging a quarantined instance possible.
+    let direct = proxy.select_top_n_hosts("gated-app-1").unwrap();
+    assert_eq!(selected_ids(&direct), vec!["gated-app-1"]);
+}
+
+/// The selection cache holds a pre-gate snapshot for up to `cache_top_n`.
+/// An emergency cut-off that takes 30s to apply is not an emergency cut-off.
+#[tokio::test]
+async fn gating_an_instance_invalidates_the_selection_cache() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_ready_instances(&mut proxy, "cache-app", 2);
+
+    proxy.select_top_n_hosts("cache-app").unwrap();
+    assert_eq!(proxy.state.top_n.len(), 1, "selection should be cached");
+
+    proxy.set_admin_ready("cache-app-0", false).unwrap();
+    assert!(
+        proxy.state.top_n.is_empty(),
+        "closing the gate must drop the cached selection"
+    );
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("cache-app").unwrap()),
+        vec!["cache-app-1"]
+    );
+}
+
+/// Health checks are inference and may be wrong, so they fail open. The
+/// operator gate is an instruction, so it does not: gating every instance
+/// means the app refuses new connections rather than quietly serving them.
+#[tokio::test]
+async fn gating_every_instance_refuses_traffic_instead_of_failing_open() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_ready_instances(&mut proxy, "drained-app", 2);
+
+    proxy.set_admin_ready("drained-app-0", false).unwrap();
+    proxy.set_admin_ready("drained-app-1", false).unwrap();
+
+    assert!(
+        proxy.select_top_n_hosts("drained-app").unwrap().is_empty(),
+        "an operator draining every instance must be obeyed, not overridden"
+    );
+
+    proxy.set_admin_ready("drained-app-1", true).unwrap();
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("drained-app").unwrap()),
+        vec!["drained-app-1"]
+    );
+}
+
+/// Instance ids are derived from attestation and survive reboots, so a
+/// re-registration is usually the same box coming back. It must not rejoin the
+/// rotation on its own.
+#[tokio::test]
+async fn the_gate_survives_re_registration() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_ready_instances(&mut proxy, "reboot-app", 2);
+    proxy.set_admin_ready("reboot-app-0", false).unwrap();
+
+    // Same instance id, same key: a reboot re-running registration.
+    proxy
+        .new_client_by_id(
+            "reboot-app-0",
+            "reboot-app",
+            &test_pubkey("reboot-app-key-0"),
+            "",
+            Some(policy(false, &[])),
+        )
+        .unwrap();
+
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("reboot-app").unwrap()),
+        vec!["reboot-app-1"],
+        "a rebooted instance must stay out of rotation until an operator says otherwise"
+    );
+}
+
+/// `connect_top_n = 0` takes the random-selection path, which carries its own
+/// copy of the filter.
+#[tokio::test]
+async fn the_random_selection_path_honours_the_gate() {
+    let state = create_test_state_with(|config| config.proxy.connect_top_n = 0).await;
+    let mut proxy = state.lock();
+    register_ready_instances(&mut proxy, "random-app", 2);
+    proxy.set_admin_ready("random-app-0", false).unwrap();
+
+    for _ in 0..16 {
+        assert_eq!(
+            selected_ids(&proxy.select_top_n_hosts("random-app").unwrap()),
+            vec!["random-app-1"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn gating_an_unregistered_instance_is_an_error() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    assert!(proxy.set_admin_ready("never-registered", false).is_err());
+}
+
 /// Write a record straight into the KV store, bypassing registration, the way
 /// a peer's sync round would.
 fn sync_from_peer(state: &TestState, instance_id: &str, ip: &str, public_key: &str) {
@@ -471,6 +625,7 @@ fn sync_from_peer_at(
                 port_policy: None,
                 port_policy_hash: String::new(),
                 admin_port_policy: None,
+                admin_ready: None,
             },
         )
         .unwrap();

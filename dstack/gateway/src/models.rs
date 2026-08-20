@@ -41,6 +41,10 @@ pub struct InstanceInfo {
     /// when set; survives app upgrades.
     #[serde(default)]
     pub admin_port_policy: Option<PortPolicy>,
+    /// Operator-set traffic gate (Admin RPC). `None` means no operator ever
+    /// touched it. See [`InstanceInfo::is_admin_ready`].
+    #[serde(default)]
+    pub admin_ready: Option<bool>,
     #[serde(skip)]
     pub connections: Arc<AtomicU64>,
 }
@@ -48,6 +52,20 @@ pub struct InstanceInfo {
 impl InstanceInfo {
     pub fn num_connections(&self) -> u64 {
         self.connections.load(Ordering::Relaxed)
+    }
+
+    /// Whether an operator has left this instance eligible for traffic.
+    ///
+    /// Defaults to ready, so the gate is invisible until someone explicitly
+    /// closes it -- an instance that predates this field, or one nobody has
+    /// touched, keeps serving exactly as before.
+    ///
+    /// This only gates *multi-target* selection, i.e. connections addressed to
+    /// the app id. Routing to the instance id directly ignores it on purpose:
+    /// the point of taking an instance out of rotation is to investigate it
+    /// while it is still running, which needs the instance to stay reachable.
+    pub fn is_admin_ready(&self) -> bool {
+        self.admin_ready.unwrap_or(true)
     }
 }
 

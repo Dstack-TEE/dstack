@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - shared API authentication (`dstack-api-auth`) protecting the full VMM HTTP/pRPC/UI surface and unifying Gateway/KMS admin auth: bearer/`X-Admin-Token`/HTTP Basic/bcrypt htpasswd, constant-time verification (#796)
+- gateway: `Admin.SetInstanceReady` takes a CVM instance out of its app's load-balancing rotation without stopping it; instance-id routing stays open so the instance can still be investigated, and the setting survives re-registration
 
 ## [0.5.5] - 2025-10-20
 

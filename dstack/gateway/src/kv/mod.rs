@@ -93,6 +93,16 @@ pub struct InstanceData {
     /// ClearInstancePortPolicy.
     #[serde(default)]
     pub admin_port_policy: Option<PortPolicy>,
+    /// Operator-set traffic gate applied via SetInstanceReady. `None` means no
+    /// operator ever set it, which reads as ready.
+    ///
+    /// Persisted rather than kept in memory so that taking an instance out of
+    /// rotation survives a re-registration: instance ids are derived from
+    /// attestation and are stable across reboots, and an instance quietly
+    /// rejoining the rotation because it rebooted is the opposite of what the
+    /// operator asked for.
+    #[serde(default)]
+    pub admin_ready: Option<bool>,
 }
 
 /// The `inst/` records currently in the KV store, split by readability.
@@ -2144,6 +2154,7 @@ mod corruption_tests {
                     port_policy: None,
                     port_policy_hash: String::new(),
                     admin_port_policy: None,
+                    admin_ready: None,
                 },
             )
             .expect("sync should succeed");

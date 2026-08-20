@@ -21,8 +21,8 @@ use dstack_gateway_rpc::{
     RemoveCvmResponse, RemoveNodeRequest, RemoveNodeResponse, RenewCertResponse,
     RenewZtDomainCertRequest, RenewZtDomainCertResponse, RotateAcmeCredentialsResponse,
     SetCertbotConfigRequest, SetDefaultDnsCredentialRequest, SetInstancePortPolicyRequest,
-    SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse, StoreSyncStatus,
-    UpdateDnsCredentialRequest, WaveKvStatusResponse, ZtDomainCertStatus,
+    SetInstanceReadyRequest, SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse,
+    StoreSyncStatus, UpdateDnsCredentialRequest, WaveKvStatusResponse, ZtDomainCertStatus,
     ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
 };
 use ra_rpc::{CallContext, RpcCall};
@@ -69,6 +69,7 @@ impl AdminRpcHandler {
                     base_domain: base_domain.clone(),
                     latest_handshake,
                     num_connections: instance.num_connections(),
+                    admin_ready: Some(instance.is_admin_ready()),
                 }
             })
             .collect::<Vec<_>>();
@@ -141,6 +142,7 @@ impl AdminRpc for AdminRpcHandler {
                     ts
                 },
                 num_connections: instance.num_connections(),
+                admin_ready: Some(instance.is_admin_ready()),
             };
             Ok(GetInfoResponse {
                 found: true,
@@ -740,6 +742,12 @@ impl AdminRpc for AdminRpcHandler {
             .instance_port_policy_view(&request.instance_id)
             .with_context(|| format!("instance {} not found", request.instance_id))?;
         Ok(port_policy_view_to_proto(view))
+    }
+
+    async fn set_instance_ready(self, request: SetInstanceReadyRequest) -> Result<()> {
+        self.state
+            .lock()
+            .set_admin_ready(&request.instance_id, request.ready)
     }
 }
 
