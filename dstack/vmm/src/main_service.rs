@@ -587,6 +587,7 @@ impl VmmRpc for RpcHandler {
         let manifest = create_manifest_from_vm_config(request.clone(), &self.app.config.cvm)?;
         self.validate_port_mapping_conflicts(None, &manifest.port_map)?;
         let id = manifest.id.clone();
+        info!(vm_id = %id, "create_vm RPC called");
         let app_id = manifest.app_id.clone();
         let vm_work_dir = self.app.work_dir(&id)?;
         vm_work_dir
@@ -619,7 +620,6 @@ impl VmmRpc for RpcHandler {
             return Err(err);
         }
 
-        info!(vm_id = %id, "create_vm RPC completed");
         Ok(Id { id })
     }
 
@@ -813,9 +813,16 @@ impl VmmRpc for RpcHandler {
         }
     }
 
-    #[tracing::instrument(skip(self, request), fields(id = request.id))]
+    #[tracing::instrument(skip_all)]
     async fn resize_vm(self, request: ResizeVmRequest) -> Result<()> {
-        info!(vm_id = %request.id, "resize_vm RPC called");
+        info!(
+            vm_id = %request.id,
+            vcpu = ?request.vcpu,
+            memory = ?request.memory,
+            disk_size = ?request.disk_size,
+            image = ?request.image,
+            "resize_vm RPC called"
+        );
         validate_resize_request(&request)?;
         let vm_work_dir = self.app.work_dir(&request.id)?;
         let mut manifest = vm_work_dir.manifest().context("failed to read manifest")?;
@@ -954,6 +961,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn sv_stop(self, request: Id) -> Result<()> {
+        info!(vm_id = %request.id, "sv_stop RPC called");
         // VM launcher processes own QEMU and swtpm children. Route them through
         // the VM-aware stop path so the launcher can reap those children; the
         // same helper preserves generic Supervisor stop semantics for every
@@ -967,6 +975,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn sv_remove(self, request: Id) -> Result<()> {
+        info!(vm_id = %request.id, "sv_remove RPC called");
         self.app.supervisor.remove(&request.id).await?;
         Ok(())
     }
