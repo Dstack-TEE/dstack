@@ -91,6 +91,15 @@ pub fn carry_unknown_fields<T: serde::de::DeserializeOwned>(
     let Some((_, stored_fields)) = split_map(stored) else {
         return encoded;
     };
+    // The steady state is a single-version cluster, where the stored record
+    // holds nothing this binary has not heard of. Settle that before parsing
+    // the outgoing encoding, so the common write pays for one walk, not two.
+    if stored_fields
+        .iter()
+        .all(|field| declared.contains(&field.name))
+    {
+        return encoded;
+    }
     let Some((header_len, encoded_fields)) = split_map(&encoded) else {
         return encoded;
     };
