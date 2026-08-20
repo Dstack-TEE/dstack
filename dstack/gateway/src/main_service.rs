@@ -1662,9 +1662,24 @@ impl ProxyState {
         Ok(())
     }
 
-    /// Whether this node's last health observation lets an instance serve.
-    /// Unknown instances -- never registered, or recycled mid-round -- do not.
+    /// Whether health observations are allowed to affect routing at all.
+    ///
+    /// With polling switched off nothing ever leaves `Unknown`, and `Unknown`
+    /// is not healthy -- so the filter has to be skipped outright rather than
+    /// merely left unfed. Otherwise disabling the feature would drop exactly
+    /// the instances that support it, and in a fleet still running some older
+    /// images (`Unsupported`, which counts as healthy) it would drop them
+    /// permanently.
+    fn health_gating_enabled(&self) -> bool {
+        self.config.proxy.health_check.enabled
+    }
+
+    /// Whether health lets an instance serve. Unknown instances -- never
+    /// registered, or recycled mid-round -- do not.
     fn instance_is_healthy(&self, instance_id: &str) -> bool {
+        if !self.health_gating_enabled() {
+            return true;
+        }
         self.state
             .instances
             .get(instance_id)
@@ -1698,6 +1713,7 @@ impl ProxyState {
             }
         }
 
+        let health_gating = self.health_gating_enabled();
         let handshakes = self.latest_handshakes(None);
         let mut instances = match handshakes {
             Err(err) => {
@@ -1720,7 +1736,7 @@ impl ProxyState {
                         handshake_age: *elapsed,
                         counter: instance.connections.clone(),
                         instance_id: instance.id.clone(),
-                        healthy: instance.is_healthy(),
+                        healthy: !health_gating || instance.is_healthy(),
                     })
                 })
                 .collect::<SmallVec<[_; 4]>>(),
