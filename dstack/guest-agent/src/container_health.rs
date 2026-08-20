@@ -14,6 +14,9 @@
 //! rather than behind a Docker-compatible socket. The two report the same four
 //! health strings -- nerdctl's inspect output is generated from its
 //! `dockercompat` types -- so the rule itself is shared.
+//!
+//! What they do not agree on is what happens to that string once the container
+//! stops, which is why the run state is read alongside it. See [`judge`].
 
 use std::collections::HashMap;
 
@@ -37,6 +40,19 @@ const NERDCTL_NAMESPACE: &str = "dstack";
 pub(crate) struct UnhealthyContainer {
     pub name: String,
     pub status: String,
+}
+
+/// One container as the runtime described it.
+#[derive(Debug, PartialEq)]
+struct Observed {
+    name: String,
+    /// `State.Health.Status`. Absent when the container declares no
+    /// healthcheck: both runtimes populate this field only for containers that
+    /// do.
+    health: Option<String>,
+    /// `State.Status`: `running`, `exited`, `paused`, `restarting`, ... Absent
+    /// when the runtime did not report one.
+    state: Option<String>,
 }
 
 /// Health of the app's containers.
@@ -94,12 +110,21 @@ async fn collect_docker() -> Result<HealthReport> {
             .inspect_container(id, None)
             .await
             .with_context(|| format!("failed to inspect container {id}"))?;
-        let status = details
-            .state
-            .and_then(|state| state.health)
+        let state = details.state;
+        let health = state
+            .as_ref()
+            .and_then(|state| state.health.as_ref())
             .and_then(|health| health.status)
             .map(|status| status.to_string());
-        observed.push((container_name(summary.names.as_deref(), id), status));
+        let run_state = state
+            .as_ref()
+            .and_then(|state| state.status)
+            .map(|status| status.to_string());
+        observed.push(Observed {
+            name: container_name(summary.names.as_deref(), id),
+            health,
+            state: run_state,
+        });
     }
     Ok(judge(observed))
 }
@@ -125,22 +150,7 @@ async fn collect_nerdctl() -> Result<HealthReport> {
     let containers: Vec<NerdctlContainer> =
         serde_json::from_str(&raw).context("failed to parse nerdctl inspect output")?;
 
-    let observed = containers
-        .into_iter()
-        .map(|container| {
-            let status = container
-                .state
-                .and_then(|state| state.health)
-                .map(|health| health.status);
-            let name = if container.name.is_empty() {
-                container.id
-            } else {
-                container.name
-            };
-            (name.trim_start_matches('/').to_string(), status)
-        })
-        .collect();
-    Ok(judge(observed))
+    Ok(judge(containers.into_iter().map(observe_nerdctl).collect()))
 }
 
 async fn nerdctl(args: &[&str]) -> Result<String> {
@@ -172,8 +182,31 @@ struct NerdctlContainer {
 
 #[derive(Deserialize)]
 struct NerdctlState {
+    #[serde(rename = "Status", default)]
+    status: String,
     #[serde(rename = "Health", default)]
     health: Option<NerdctlHealth>,
+}
+
+/// Reshape one `nerdctl inspect` entry into what [`judge`] reads.
+fn observe_nerdctl(container: NerdctlContainer) -> Observed {
+    let name = if container.name.is_empty() {
+        container.id
+    } else {
+        container.name
+    };
+    let (health, state) = match container.state {
+        Some(state) => (
+            state.health.map(|health| health.status),
+            (!state.status.is_empty()).then_some(state.status),
+        ),
+        None => (None, None),
+    };
+    Observed {
+        name: name.trim_start_matches('/').to_string(),
+        health,
+        state,
+    }
 }
 
 #[derive(Deserialize)]
@@ -191,7 +224,29 @@ struct NerdctlHealth {
 /// `starting` counts as not healthy: that state is exactly the boot window this
 /// is meant to keep traffic out of. So does finding no container at all, which
 /// means Compose has not yet got as far as creating one.
-fn judge(containers: Vec<(String, Option<String>)>) -> HealthReport {
+///
+/// A container that declares a healthcheck and is not running is not healthy
+/// either, whatever its last recorded verdict says. That verdict cannot be
+/// trusted across a stop, because the two runtimes disagree about it:
+///
+/// - Docker's daemon re-marks the container `unhealthy` when it leaves the
+///   running state (verified on 29.5.3 for `stop`, `kill`, `pause`, and a
+///   container exiting on its own).
+/// - nerdctl leaves the last result in place. Its `container healthcheck`
+///   returns early with "container is not running" *without* writing a new
+///   state, and `nerdctl inspect` renders `State.Health` out of the stored
+///   state regardless of run state. Verified on 2.3.5: a container that passed
+///   its check and then exited -- by `nerdctl stop` or by crashing -- still
+///   reports `"Status": "healthy"` with `"Running": false`.
+///
+/// nerdctl is what the guest image runs, so without this an app whose container
+/// crashed after one passing check keeps its instance in the rotation
+/// indefinitely: exactly the state this feature exists to detect.
+///
+/// Containers that declare no healthcheck stay unjudged even when they have
+/// exited. A one-shot init container that ran and stopped is normal, and the
+/// app has not said how to tell the difference.
+fn judge(containers: Vec<Observed>) -> HealthReport {
     // No container exists yet. Registration happens in
     // `dstack-prepare.service` and `app-compose.service` is ordered after it,
     // so this is the window where the image may still be pulling -- exactly
@@ -208,10 +263,22 @@ fn judge(containers: Vec<(String, Option<String>)>) -> HealthReport {
     }
 
     let mut unhealthy = Vec::new();
-    for (name, status) in containers {
-        match status.as_deref() {
+    for container in containers {
+        let Observed {
+            name,
+            health,
+            state,
+        } = container;
+        match health.as_deref() {
             // No healthcheck declared, or none reported yet.
             None | Some("") | Some("none") => {}
+            Some(health) if !is_running(state.as_deref()) => unhealthy.push(UnhealthyContainer {
+                name,
+                status: format!(
+                    "{} (last health check: {health})",
+                    state.as_deref().unwrap_or("not running")
+                ),
+            }),
             Some("healthy") => {}
             // "starting", "unhealthy", and anything a future runtime version
             // invents. Unknown states hold traffic back rather than pass.
@@ -225,6 +292,19 @@ fn judge(containers: Vec<(String, Option<String>)>) -> HealthReport {
     HealthReport {
         healthy: unhealthy.is_empty(),
         unhealthy,
+    }
+}
+
+/// Whether the runtime says this container is running.
+///
+/// A container the runtime gave no state for is judged on its health alone: a
+/// missing field is not evidence that it stopped, and inventing a failure from
+/// one would take an app out of rotation over a shape change in the runtime's
+/// output.
+fn is_running(state: Option<&str>) -> bool {
+    match state {
+        None => true,
+        Some(state) => state == "running",
     }
 }
 
@@ -242,8 +322,23 @@ fn container_name(names: Option<&[String]>, id: &str) -> String {
 mod tests {
     use super::*;
 
-    fn named(name: &str, status: Option<&str>) -> (String, Option<String>) {
-        (name.to_string(), status.map(str::to_string))
+    /// A running container reporting `status`.
+    fn named(name: &str, status: Option<&str>) -> Observed {
+        Observed {
+            name: name.to_string(),
+            health: status.map(str::to_string),
+            state: Some("running".to_string()),
+        }
+    }
+
+    /// A container that is no longer running, with whatever health verdict the
+    /// runtime left behind.
+    fn stopped(name: &str, state: &str, status: Option<&str>) -> Observed {
+        Observed {
+            name: name.to_string(),
+            health: status.map(str::to_string),
+            state: Some(state.to_string()),
+        }
     }
 
     /// The window this whole feature exists for: the CVM has registered, the
@@ -285,6 +380,57 @@ mod tests {
         assert!(!report.healthy);
         assert_eq!(report.unhealthy[0].name, "api");
         assert_eq!(report.unhealthy[0].status, "starting");
+    }
+
+    /// The case the run-state check exists for. Captured behaviour, not a
+    /// hypothesis: on nerdctl 2.3.5 a container that passed its check and then
+    /// exited still reports `healthy`, so judging on the health string alone
+    /// keeps a dead app in the rotation.
+    #[test]
+    fn a_container_that_passed_its_check_and_then_exited_is_not_healthy() {
+        let report = judge(vec![stopped("web", "exited", Some("healthy"))]);
+        assert!(!report.healthy);
+        assert_eq!(report.unhealthy[0].name, "web");
+        assert_eq!(
+            report.unhealthy[0].status,
+            "exited (last health check: healthy)"
+        );
+    }
+
+    /// Not running covers more than exited: a paused or endlessly restarting
+    /// container is not serving either, and neither runtime is relied on to
+    /// have rewritten the verdict.
+    #[test]
+    fn a_paused_or_restarting_container_is_not_healthy() {
+        for state in ["paused", "restarting", "created", "dead"] {
+            let report = judge(vec![stopped("web", state, Some("healthy"))]);
+            assert!(!report.healthy, "{state} should not count as healthy");
+        }
+    }
+
+    /// The carve-out that must survive: an app that declares no healthcheck for
+    /// a one-shot init container is not failed when that container exits, which
+    /// is what it was written to do.
+    #[test]
+    fn a_container_without_a_healthcheck_may_exit() {
+        let report = judge(vec![
+            named("web", Some("healthy")),
+            stopped("init", "exited", None),
+        ]);
+        assert!(report.healthy);
+    }
+
+    /// A runtime that stops reporting `State.Status` must not take every
+    /// instance out of rotation; the health string still decides.
+    #[test]
+    fn a_missing_run_state_falls_back_to_the_health_status() {
+        let unknown = |name: &str, status: Option<&str>| Observed {
+            name: name.to_string(),
+            health: status.map(str::to_string),
+            state: None,
+        };
+        assert!(judge(vec![unknown("web", Some("healthy"))]).healthy);
+        assert!(!judge(vec![unknown("web", Some("unhealthy"))]).healthy);
     }
 
     #[test]
@@ -374,23 +520,9 @@ mod tests {
     ]"#;
 
     /// Parse the real payload the way `collect_nerdctl` does.
-    fn parse_nerdctl(raw: &str) -> Vec<(String, Option<String>)> {
+    fn parse_nerdctl(raw: &str) -> Vec<Observed> {
         let containers: Vec<NerdctlContainer> = serde_json::from_str(raw).unwrap();
-        containers
-            .into_iter()
-            .map(|container| {
-                let status = container
-                    .state
-                    .and_then(|state| state.health)
-                    .map(|health| health.status);
-                let name = if container.name.is_empty() {
-                    container.id
-                } else {
-                    container.name
-                };
-                (name.trim_start_matches('/').to_string(), status)
-            })
-            .collect()
+        containers.into_iter().map(observe_nerdctl).collect()
     }
 
     #[test]
@@ -399,14 +531,60 @@ mod tests {
         assert_eq!(
             observed,
             vec![
-                (
-                    "nchp-failcheck-1".to_string(),
-                    Some("unhealthy".to_string())
-                ),
+                named("nchp-failcheck-1", Some("unhealthy")),
                 // No healthcheck declared: no Health object at all.
-                ("nchp-nocheck-1".to_string(), None),
-                ("nchp-withcheck-1".to_string(), Some("healthy".to_string())),
+                named("nchp-nocheck-1", None),
+                named("nchp-withcheck-1", Some("healthy")),
             ]
+        );
+    }
+
+    /// Captured from the same nerdctl 2.3.5 after `nerdctl stop`, and the
+    /// reason [`is_running`] exists: the container is `exited` with
+    /// `"Running": false`, and `State.Health.Status` is still `healthy` --
+    /// nerdctl never rewrites the stored verdict, because
+    /// `container healthcheck` returns "container is not running" before it
+    /// gets that far. A container that crashes on its own produces the same
+    /// pair, which is the shape this actually has to catch in production.
+    const NERDCTL_INSPECT_2_3_5_STOPPED: &str = r#"[
+      {
+        "Id": "28e06fc13e2a6c487949b3291e319b7a8e88e155b00eb8cce33c620d95e87d03",
+        "Created": "2026-08-20T15:15:36.647689318Z",
+        "Name": "hc",
+        "Image": "docker.io/library/busybox:latest",
+        "Platform": "linux",
+        "State": {
+          "Status": "exited", "Running": false, "Paused": false,
+          "Restarting": false, "Pid": 0, "ExitCode": 137, "Error": "",
+          "StartedAt": "2026-08-20T15:15:36.968241457Z",
+          "FinishedAt": "2026-08-20T15:16:08.374095926Z",
+          "Health": {
+            "Status": "healthy", "FailingStreak": 0,
+            "Log": [{"Start": "2026-08-20T08:15:37.102770955-07:00",
+                     "End": "2026-08-20T08:15:37.162666079-07:00",
+                     "ExitCode": 0, "Output": ""}]
+          }
+        }
+      }
+    ]"#;
+
+    /// Over the captured payload rather than a hand-built one: the guest agent
+    /// must not report this instance healthy.
+    #[test]
+    fn a_real_stopped_nerdctl_container_keeps_its_healthy_verdict_but_is_judged_by_run_state() {
+        let observed = parse_nerdctl(NERDCTL_INSPECT_2_3_5_STOPPED);
+        assert_eq!(
+            observed,
+            vec![stopped("hc", "exited", Some("healthy"))],
+            "nerdctl still reports the stale verdict; that is the point"
+        );
+
+        let report = judge(observed);
+        assert!(!report.healthy);
+        assert_eq!(report.unhealthy[0].name, "hc");
+        assert_eq!(
+            report.unhealthy[0].status,
+            "exited (last health check: healthy)"
         );
     }
 
