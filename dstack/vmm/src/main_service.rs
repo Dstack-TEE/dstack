@@ -587,6 +587,7 @@ impl VmmRpc for RpcHandler {
         let manifest = create_manifest_from_vm_config(request.clone(), &self.app.config.cvm)?;
         self.validate_port_mapping_conflicts(None, &manifest.port_map)?;
         let id = manifest.id.clone();
+        info!(vm_id = %id, "create_vm RPC called");
         let app_id = manifest.app_id.clone();
         let vm_work_dir = self.app.work_dir(&id)?;
         vm_work_dir
@@ -623,6 +624,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn start_vm(self, request: Id) -> Result<()> {
+        info!(vm_id = %request.id, "start_vm RPC called");
         self.app
             .start_vm(&request.id)
             .await
@@ -631,6 +633,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn stop_vm(self, request: Id) -> Result<()> {
+        info!(vm_id = %request.id, "stop_vm RPC called");
         self.app
             .stop_vm(&request.id)
             .await
@@ -639,6 +642,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn remove_vm(self, request: Id) -> Result<()> {
+        info!(vm_id = %request.id, "remove_vm RPC called");
         self.app
             .remove_vm(&request.id)
             .await
@@ -667,10 +671,12 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn upgrade_app(self, request: UpdateVmRequest) -> Result<Id> {
+        info!(vm_id = %request.id, "upgrade_app RPC called");
         self.update_vm(request).await
     }
 
     async fn update_vm(self, request: UpdateVmRequest) -> Result<Id> {
+        info!(vm_id = %request.id, "update_vm RPC called");
         let new_id = if !request.compose_file.is_empty() {
             // check the compose file is valid
             let _app_compose: AppCompose =
@@ -793,6 +799,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn get_info(self, request: Id) -> Result<GetInfoResponse> {
+        info!(vm_id = %request.id, "get_info RPC called");
         if let Some(vm) = self.app.vm_info(&request.id).await? {
             Ok(GetInfoResponse {
                 found: true,
@@ -806,9 +813,15 @@ impl VmmRpc for RpcHandler {
         }
     }
 
-    #[tracing::instrument(skip(self, request), fields(id = request.id))]
     async fn resize_vm(self, request: ResizeVmRequest) -> Result<()> {
-        info!("Resizing VM: {:?}", request);
+        info!(
+            vm_id = %request.id,
+            vcpu = ?request.vcpu,
+            memory = ?request.memory,
+            disk_size = ?request.disk_size,
+            image = ?request.image,
+            "resize_vm RPC called"
+        );
         validate_resize_request(&request)?;
         let vm_work_dir = self.app.work_dir(&request.id)?;
         let mut manifest = vm_work_dir.manifest().context("failed to read manifest")?;
@@ -833,6 +846,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn shutdown_vm(self, request: Id) -> Result<()> {
+        info!(vm_id = %request.id, "shutdown_vm RPC called");
         self.guest_agent_client(&request.id)?.shutdown().await?;
         Ok(())
     }
@@ -946,6 +960,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn sv_stop(self, request: Id) -> Result<()> {
+        info!(vm_id = %request.id, "sv_stop RPC called");
         // VM launcher processes own QEMU and swtpm children. Route them through
         // the VM-aware stop path so the launcher can reap those children; the
         // same helper preserves generic Supervisor stop semantics for every
@@ -959,6 +974,7 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn sv_remove(self, request: Id) -> Result<()> {
+        info!(vm_id = %request.id, "sv_remove RPC called");
         self.app.supervisor.remove(&request.id).await?;
         Ok(())
     }
