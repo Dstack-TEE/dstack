@@ -15,10 +15,10 @@ use dstack_guest_agent_rpc::{
     dstack_guest_server::{DstackGuestRpc, DstackGuestServer},
     tappd_server::{TappdRpc, TappdServer},
     worker_server::{WorkerRpc, WorkerServer},
-    AppInfo, AttestResponse, DeriveK256KeyResponse, DeriveKeyArgs, GetAttestationForAppKeyRequest,
-    GetKeyArgs, GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse,
-    GpuInfoResponse, RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse,
-    VerifyRequest, VerifyResponse, WorkerVersion,
+    AppInfo, AttestResponse, ContainerHealth, DeriveK256KeyResponse, DeriveKeyArgs,
+    GetAttestationForAppKeyRequest, GetKeyArgs, GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs,
+    GetTlsKeyResponse, GpuInfoResponse, HealthResponse, RawQuoteArgs, SignRequest, SignResponse,
+    TdxQuoteArgs, TdxQuoteResponse, VerifyRequest, VerifyResponse, WorkerVersion,
 };
 use dstack_types::{AppKeys, SysConfig, GPU_ATTESTATION_OUTPUT};
 use ed25519_dalek::ed25519::signature::hazmat::{PrehashSigner, PrehashVerifier};
@@ -621,6 +621,34 @@ impl WorkerRpc for ExternalRpcHandler {
         Ok(WorkerVersion {
             version: crate::CARGO_PKG_VERSION.to_string(),
             rev: crate::GIT_REV.to_string(),
+        })
+    }
+
+    async fn health(self) -> Result<HealthResponse> {
+        // Deliberately infallible: see `HealthResponse.error`. A failure to
+        // reach Docker has to come back as a verdict, because an RPC error is
+        // indistinguishable from an agent that predates this method.
+        Ok(match crate::container_health::collect().await {
+            Ok(report) => HealthResponse {
+                healthy: report.healthy,
+                unhealthy: report
+                    .unhealthy
+                    .into_iter()
+                    .map(|container| ContainerHealth {
+                        name: container.name,
+                        status: container.status,
+                    })
+                    .collect(),
+                error: String::new(),
+            },
+            Err(err) => {
+                warn!("failed to collect container health: {err:#}");
+                HealthResponse {
+                    healthy: false,
+                    unhealthy: vec![],
+                    error: format!("{err:#}"),
+                }
+            }
         })
     }
 
