@@ -628,7 +628,8 @@ impl WorkerRpc for ExternalRpcHandler {
         // Deliberately infallible: see `HealthResponse.error`. A failure to
         // reach Docker has to come back as a verdict, because an RPC error is
         // indistinguishable from an agent that predates this method.
-        Ok(match crate::container_health::collect().await {
+        let runner = self.state.config().app_compose.runner.clone();
+        Ok(match crate::container_health::collect(&runner).await {
             Ok(report) => HealthResponse {
                 healthy: report.healthy,
                 unhealthy: report
