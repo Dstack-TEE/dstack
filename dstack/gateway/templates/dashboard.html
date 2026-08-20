@@ -182,6 +182,11 @@ SPDX-License-Identifier: Apache-2.0
             color: #f44336;
         }
 
+        .traffic-gated {
+            color: #f44336;
+            font-weight: bold;
+        }
+
         .status-controls {
             display: flex;
             gap: 5px;
@@ -609,6 +614,7 @@ SPDX-License-Identifier: Apache-2.0
             <th>IP</th>
             <th>Last Seen</th>
             <th>Connections</th>
+            <th>Traffic</th>
         </tr>
         {% for host in status.hosts %}
         <tr>
@@ -617,6 +623,11 @@ SPDX-License-Identifier: Apache-2.0
             <td>{{ host.ip }}</td>
             <td class="timestamp">{{ host.latest_handshake }}</td>
             <td>{{ host.num_connections }}</td>
+            {% if host.admin_ready.unwrap_or(true) %}
+            <td>in rotation</td>
+            {% else %}
+            <td class="traffic-gated" title="Removed from app-id load balancing by an operator. Still reachable by instance id.">gated off</td>
+            {% endif %}
         </tr>
         {% endfor %}
     </table>
