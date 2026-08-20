@@ -1112,6 +1112,15 @@ impl KvStore {
     ///
     /// Returns whether a live record (including an undecodable one) existed
     /// before the tombstone was written.
+    ///
+    /// All five deletes are issued unconditionally, including when no `inst/`
+    /// record was there to tombstone. Re-issuing removal is the only way to
+    /// clean up records orphaned by an earlier partial failure.
+    ///
+    /// Only failure to tombstone `inst/` is returned. Failures deleting the
+    /// associated overrides or this node's ephemeral observations are logged:
+    /// they do not change whether the CVM was removed, and must not prevent the
+    /// local routing and WireGuard cleanup that follows this call.
     pub fn sync_delete_instance(&self, instance_id: &str) -> Result<bool> {
         // Every delete is attempted even if an earlier one fails. Short-circuiting
         // on `?` would leave the later keys behind while the `inst/` tombstone is
@@ -1133,9 +1142,20 @@ impl KvStore {
         let observations = self.sync_forget_local_observations(instance_id);
 
         let previous = previous?;
-        gate?;
-        override_policy?;
-        observations?;
+        for result in [gate, override_policy] {
+            if let Err(err) = result {
+                error!(
+                    "failed to delete an override while removing instance \
+                     {instance_id}, leaving an orphan record: {err:?}"
+                );
+            }
+        }
+        if let Err(err) = observations {
+            error!(
+                "failed to delete local observations while removing instance \
+                 {instance_id}, leaving orphan telemetry records: {err:?}"
+            );
+        }
         Ok(previous.is_some_and(|entry| !entry.is_deleted()))
     }
 
@@ -2643,17 +2663,20 @@ mod corruption_tests {
         kv.sync_instance_handshake(id, 1).expect("seed handshake");
     }
 
-    /// Short-circuiting on `?` would publish the `inst/` tombstone and then
-    /// leave the ephemeral keys behind, and nothing garbage-collects orphans.
+    /// A telemetry failure must neither abandon the remaining keys nor report
+    /// that durable instance removal failed.
     #[test]
-    fn a_failed_delete_does_not_abandon_the_remaining_keys() {
+    fn a_failed_telemetry_delete_does_not_fail_or_abandon_the_remaining_keys() {
         let dir = tempfile::tempdir().expect("temp dir");
         let kv = test_kv(dir.path());
         seed_instance(&kv, "cvm");
 
         kv.fail_writes_for_test(&[InstanceKey::Connections]);
-        kv.sync_delete_instance("cvm")
-            .expect_err("the conn delete was made to fail");
+        assert!(
+            kv.sync_delete_instance("cvm")
+                .expect("a telemetry failure must not fail removal"),
+            "the live instance record was removed"
+        );
         kv.fail_writes_for_test(&[]);
 
         assert!(

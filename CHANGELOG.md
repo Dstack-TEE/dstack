@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - gateway: operator-set per-instance overrides now live under their own KV keys — `admin/<instance_id>/ready` and `admin/<instance_id>/port_policy` — instead of inside the instance record, so a CVM re-registration can no longer drop them and setting one cannot discard a peer's unsynced change to the other. An override left in an instance record by an earlier build is moved across on load
 
 ### Fixed
+- gateway: `Admin.RemoveCvm` now reports the outcome of the `inst/` tombstone alone. A failure to delete associated override or telemetry records is logged instead of failing the call, so a removal that did take effect is no longer reported as failed — which also aborted the local routing cleanup that follows it. Re-issuing a removal still sweeps up telemetry records orphaned by an earlier partial failure
 - sdk: the Go and Python compose-hash helpers silently dropped every app-compose field they did not declare, so `getComposeHash` returned a digest for an app-compose that was not the one being deployed — and that digest is what gets whitelisted on chain. The missing fields are named above; both now keep unrecognised keys as well, so a guest that gains a field before the SDK does still hashes correctly
 
 ### Changed
