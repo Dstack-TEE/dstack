@@ -27,10 +27,19 @@
 //! - `conn/{instance_id}/{node_id}` → u64 (connection count)
 //! - `last_seen/inst/{instance_id}` → u64 (timestamp)
 //! - `last_seen/node/{node_id}/{seen_by_node_id}` → u64 (timestamp)
+//!
+//! The key list above is documentation, not an enforced allowlist, and deliberately so.
+//! A gateway terminates TLS, so a peer with code execution already holds the mesh
+//! WireGuard keys, the base-domain certificate and every proxied request in plaintext;
+//! restricting which keys it may replicate protects nothing that is still standing. It
+//! also would not bound the store, since key shape says nothing about volume -- that is
+//! what wavekv `Limits` (entry size, clock drift, capacity) is for. What such a check
+//! does reach is our own rolling upgrades: a refused entry parks ack adoption for the
+//! whole node pair, so a node writing a key its peer does not know silently stops the
+//! two from converging. Bound what a peer can consume; do not police what it means.
 
 mod https_client;
 pub mod import;
-mod schema;
 mod sync_service;
 
 #[cfg(test)]
@@ -428,32 +437,14 @@ fn drop_future_observations<T>(
     kept
 }
 
-/// Encode a KV value as MessagePack.
-///
-/// Structs are encoded as maps keyed by field name rather than as positional
-/// arrays. Field-name keys let a reader skip fields it does not know and fill
-/// in `#[serde(default)]` fields it does not receive, so the value types below
-/// can gain fields without breaking gateways running an older build. Decoding
-/// accepts both forms, so values written by older releases stay readable.
-/// wavekv configuration shared by both stores.
-///
-/// The admission policy is the important part: it confines a peer to the key shapes
-/// this gateway actually defines, so a compromised or buggy node in the cluster cannot
-/// plant arbitrary keys that every other node would then replicate and persist forever.
-fn store_config(store: schema::Store) -> wavekv::NodeConfig {
-    wavekv::NodeConfig {
-        admission: Some(std::sync::Arc::new(schema::GatewaySchema::new(store))),
-        ..Default::default()
-    }
-}
-
 /// Ceiling on a decompressed sync payload.
 ///
 /// The wire is gzipped, and gzip expands by three orders of magnitude on
 /// attacker-chosen input: the 16 MiB cap on a request body is a cap on the *compressed*
 /// size, which bounds nothing useful on its own. Every gateway in the cluster shares one
-/// app_id, so mTLS proves only that a peer is *some* gateway of this deployment — the
-/// same reason the key schema exists (see `schema.rs`).
+/// app_id, so mTLS proves only that a peer is *some* gateway of this deployment, and a
+/// peer running a buggy build can send a body that decompresses to more memory than the
+/// node has.
 ///
 /// The value is far above any legitimate payload. A v2 delta is capped by
 /// `max_delta_bytes` (4 MiB by default).
@@ -671,12 +662,7 @@ impl KvStore {
         data_dir: impl AsRef<Path>,
     ) -> Result<Self> {
         let data_dir = data_dir.as_ref();
-        let persistent = match Node::with_persistence_and_config(
-            my_node_id,
-            peer_ids.clone(),
-            data_dir,
-            store_config(schema::Store::Persistent),
-        ) {
+        let persistent = match Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir) {
             Ok(node) => node,
             Err(err) if is_storage_failure(&err) => {
                 return Err(err).with_context(|| {
@@ -703,13 +689,8 @@ impl KvStore {
                     data_dir.display(),
                     quarantined.display(),
                 );
-                Node::with_persistence_and_config(
-                    my_node_id,
-                    peer_ids.clone(),
-                    data_dir,
-                    store_config(schema::Store::Persistent),
-                )
-                .context("failed to create persistent wavekv node on a fresh data dir")?
+                Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir)
+                    .context("failed to create persistent wavekv node on a fresh data dir")?
             }
         };
 
@@ -723,11 +704,7 @@ impl KvStore {
             }
         }
 
-        let ephemeral = Node::with_config(
-            my_node_id,
-            all_peer_ids,
-            store_config(schema::Store::Ephemeral),
-        );
+        let ephemeral = Node::new(my_node_id, all_peer_ids);
 
         Ok(Self {
             persistent,
@@ -1860,36 +1837,6 @@ mod sync_wire_tests {
             decoded.digest.is_some(),
             "the digest drives divergence detection"
         );
-    }
-
-    /// A peer cannot plant keys outside the schema, in either store.
-    #[test]
-    fn merged_entries_outside_the_schema_are_refused() {
-        use wavekv::types::{Entry, Metadata};
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let kv = store(dir.path(), 1, vec![2]);
-
-        let mut env = SyncEnvelope::new(2, Vec::new());
-        env.entries.push(Entry::new(
-            "not-a-gateway-key".to_string(),
-            Some(b"x".to_vec()),
-            Metadata::new(2, 1, 1),
-        ));
-        env.acks.insert(2, 1);
-
-        let outcome = kv
-            .persistent()
-            .write()
-            .apply_envelope(env)
-            .expect("apply should not fail the whole round");
-
-        assert_eq!(outcome.rejected, 1);
-        assert!(
-            !outcome.acks_adopted,
-            "a rejection must park the round's acks so the peer keeps re-offering"
-        );
-        assert!(kv.persistent().read().get("not-a-gateway-key").is_none());
     }
 }
 
