@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - shared API authentication (`dstack-api-auth`) protecting the full VMM HTTP/pRPC/UI surface and unifying Gateway/KMS admin auth: bearer/`X-Admin-Token`/HTTP Basic/bcrypt htpasswd, constant-time verification (#796)
 - gateway: `Admin.SetInstanceReady` takes a CVM instance out of its app's load-balancing rotation without stopping it; instance-id routing stays open so the instance can still be investigated, and the setting survives re-registration
 - gateway: application-level health polling. The gateway asks each CVM's guest agent (new `Worker.Health` RPC) whether every container declaring a Compose `healthcheck` is healthy, and keeps instances that say no -- or that have not answered since registering -- out of app-id load balancing. Legacy images, apps without healthchecks, and apps where no instance reports healthy are unaffected
+- guest-agent: container health also covers the `nerdctl-compose` runner, read through `nerdctl inspect` (its output is Docker-compatible). Requires nerdctl >= 2.3.1 for Compose `healthcheck:` to be honoured; the mkosi backend is pinned to 2.3.5
 
 ## [0.5.5] - 2025-10-20
 
