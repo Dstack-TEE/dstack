@@ -315,32 +315,109 @@ mod tests {
         assert_eq!(container_name(None, "fallback-id"), "fallback-id");
     }
 
-    /// nerdctl's inspect output is generated from its `dockercompat` types, so
-    /// the fields this depends on line up with Docker's.
-    #[test]
-    fn nerdctl_inspect_output_parses() {
-        let raw = r#"[
-          {"Id":"abc123","Name":"/dstack-web-1",
-           "State":{"Status":"running","Running":true,
-                    "Health":{"Status":"healthy","FailingStreak":0}}},
-          {"Id":"def456","Name":"dstack-db-1",
-           "State":{"Status":"running","Running":true}}
-        ]"#;
+    /// Captured from a real `nerdctl --namespace ... inspect` on nerdctl 2.3.5,
+    /// trimmed of the fields this does not read.
+    ///
+    /// Two details this pins, both confirmed on hardware rather than assumed:
+    /// `Name` has **no** leading slash (Docker's does), and `State.Health` is
+    /// absent entirely -- not `"none"` -- for a container that declares no
+    /// healthcheck.
+    const NERDCTL_INSPECT_2_3_5: &str = r#"[
+      {
+        "Id": "aed39a5956f7cf11bb438296e804c712d038678a05627ff97f70d5f691eafe17",
+        "Created": "2026-08-20T04:50:32.726557612Z",
+        "Name": "nchp-failcheck-1",
+        "Image": "docker.io/library/busybox:latest",
+        "Platform": "linux",
+        "State": {
+          "Status": "running", "Running": true, "Paused": false,
+          "Restarting": false, "Pid": 5157, "ExitCode": 0, "Error": "",
+          "StartedAt": "2026-08-20T04:50:32.817445652Z", "FinishedAt": "",
+          "Health": {
+            "Status": "unhealthy", "FailingStreak": 17,
+            "Log": [{"Start": "2026-08-20T04:51:17.56949457Z",
+                     "End": "2026-08-20T04:51:17.602166707Z",
+                     "ExitCode": 1, "Output": ""}]
+          }
+        }
+      },
+      {
+        "Id": "8b92c5ef3f1855d5c35f37b8e7dd3ffe6b928e919a8b749409f707bf0addee05",
+        "Created": "2026-08-20T04:50:32.52880536Z",
+        "Name": "nchp-nocheck-1",
+        "Image": "docker.io/library/busybox:latest",
+        "Platform": "linux",
+        "State": {
+          "Status": "running", "Running": true, "Paused": false,
+          "Restarting": false, "Pid": 5063, "ExitCode": 0, "Error": "",
+          "StartedAt": "2026-08-20T04:50:32.627815194Z", "FinishedAt": ""
+        }
+      },
+      {
+        "Id": "6e7d785b3b5b05fe55f2b0ec07762aa387435b359bda185f925d44f00381f3b5",
+        "Created": "2026-08-20T04:50:32.294111652Z",
+        "Name": "nchp-withcheck-1",
+        "Image": "docker.io/library/busybox:latest",
+        "Platform": "linux",
+        "State": {
+          "Status": "running", "Running": true, "Paused": false,
+          "Restarting": false, "Pid": 4921, "ExitCode": 0, "Error": "",
+          "StartedAt": "2026-08-20T04:50:32.401211753Z", "FinishedAt": "",
+          "Health": {
+            "Status": "healthy", "FailingStreak": 0,
+            "Log": [{"Start": "2026-08-20T04:51:18.12Z",
+                     "End": "2026-08-20T04:51:18.15Z",
+                     "ExitCode": 0, "Output": ""}]
+          }
+        }
+      }
+    ]"#;
+
+    /// Parse the real payload the way `collect_nerdctl` does.
+    fn parse_nerdctl(raw: &str) -> Vec<(String, Option<String>)> {
         let containers: Vec<NerdctlContainer> = serde_json::from_str(raw).unwrap();
-        assert_eq!(containers.len(), 2);
+        containers
+            .into_iter()
+            .map(|container| {
+                let status = container
+                    .state
+                    .and_then(|state| state.health)
+                    .map(|health| health.status);
+                let name = if container.name.is_empty() {
+                    container.id
+                } else {
+                    container.name
+                };
+                (name.trim_start_matches('/').to_string(), status)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn real_nerdctl_inspect_output_parses() {
+        let observed = parse_nerdctl(NERDCTL_INSPECT_2_3_5);
         assert_eq!(
-            containers[0]
-                .state
-                .as_ref()
-                .and_then(|s| s.health.as_ref())
-                .map(|h| h.status.as_str()),
-            Some("healthy")
+            observed,
+            vec![
+                (
+                    "nchp-failcheck-1".to_string(),
+                    Some("unhealthy".to_string())
+                ),
+                // No healthcheck declared: no Health object at all.
+                ("nchp-nocheck-1".to_string(), None),
+                ("nchp-withcheck-1".to_string(), Some("healthy".to_string())),
+            ]
         );
-        // A container with no healthcheck has no Health object at all.
-        assert!(containers[1]
-            .state
-            .as_ref()
-            .and_then(|s| s.health.as_ref())
-            .is_none());
+    }
+
+    /// End to end over the real payload: one failing healthcheck holds the
+    /// instance out, and the container without one does not save it.
+    #[test]
+    fn a_real_nerdctl_project_with_a_failing_check_is_not_healthy() {
+        let report = judge(parse_nerdctl(NERDCTL_INSPECT_2_3_5));
+        assert!(!report.healthy);
+        assert_eq!(report.unhealthy.len(), 1);
+        assert_eq!(report.unhealthy[0].name, "nchp-failcheck-1");
+        assert_eq!(report.unhealthy[0].status, "unhealthy");
     }
 }
