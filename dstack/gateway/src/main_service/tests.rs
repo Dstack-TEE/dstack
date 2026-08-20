@@ -1047,6 +1047,43 @@ async fn a_kv_reload_does_not_reset_this_node_s_health_observations() {
     );
 }
 
+/// The two selection paths express the "polling off means no gating" rule
+/// through different mechanisms -- the top-n path folds it into the candidate
+/// flag, the random path checks it inside `instance_is_healthy` -- so a
+/// refactor could easily fix one and miss the other. This pins the combination
+/// the other disabled-polling test does not reach.
+#[tokio::test]
+async fn disabling_polling_also_keeps_the_random_path_open() {
+    let state = create_test_state_with(|config| {
+        config.proxy.health_check.enabled = false;
+        config.proxy.connect_top_n = 0;
+    })
+    .await;
+    let mut proxy = state.lock();
+    register_instances(&mut proxy, "off-rand-app", 2, true);
+
+    // Both declare the endpoint, so with polling on they would sit in
+    // `Unknown` and be excluded. With it off they must both stay selectable.
+    for index in 0..2 {
+        assert_eq!(
+            proxy.state.instances[&format!("off-rand-app-{index}")].health,
+            HealthState::Unknown
+        );
+    }
+
+    let mut seen = std::collections::BTreeSet::new();
+    for _ in 0..32 {
+        let picked = selected_ids(&proxy.select_top_n_hosts("off-rand-app").unwrap());
+        assert_eq!(picked.len(), 1, "the random path returns a single host");
+        seen.insert(picked[0].clone());
+    }
+    assert_eq!(
+        seen.len(),
+        2,
+        "both instances must remain reachable, got {seen:?}"
+    );
+}
+
 /// `connect_top_n = 0` takes the random path, which filters separately.
 #[tokio::test]
 async fn the_random_selection_path_honours_health_and_fails_open() {
