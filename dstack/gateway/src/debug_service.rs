@@ -36,6 +36,11 @@ impl DebugRpc for DebugRpcHandler {
             &request.instance_id,
             &request.client_public_key,
             "",
+            // Reports nothing about itself: no port policy, and no health
+            // endpoint, so a debug-registered instance is never polled and
+            // always counts as healthy. That keeps this path usable for
+            // testing routing without standing up a guest agent, but it also
+            // means health gating cannot be exercised through it.
             Default::default(),
         )
     }
