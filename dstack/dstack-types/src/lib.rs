@@ -225,6 +225,14 @@ pub struct AppCompose {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub init_script: Vec<String>,
+    /// An app-declared health probe, run periodically by the guest agent.
+    ///
+    /// When present it replaces whatever the runner would otherwise report --
+    /// including the container runners, whose per-container `healthcheck`
+    /// declarations it overrides. For a runner that has no containers to
+    /// inspect (`bash`) it is the only way to report health at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_check: Option<HealthCheck>,
     #[serde(default)]
     pub public_logs: bool,
     #[serde(default)]
@@ -602,6 +610,41 @@ pub struct PortAttrs {
     /// connections to this port.
     #[serde(default)]
     pub pp: bool,
+}
+
+/// A health probe the app declares in `app-compose.json`.
+///
+/// The guest agent runs it on its own schedule and caches the verdict; the
+/// gateway reads the cache through `Worker.Health`. Running it locally on a
+/// timer rather than on each gateway poll keeps the two cadences independent:
+/// several gateway nodes polling the same instance must not turn into several
+/// executions of the app's probe.
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct HealthCheck {
+    /// Path of the program to run.
+    ///
+    /// Executed directly, not through a shell, so nothing here is word-split,
+    /// glob-expanded or variable-substituted. Put arguments in `args`; if you
+    /// need shell semantics, point this at a script.
+    pub path: String,
+    /// Arguments passed to `path`, verbatim.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Seconds between runs.
+    #[serde(default = "default_health_interval_secs")]
+    pub interval_secs: u64,
+    /// Seconds a single run may take before it is killed and counted as a
+    /// failure. A probe that hangs is not a probe that passes.
+    #[serde(default = "default_health_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+fn default_health_interval_secs() -> u64 {
+    10
+}
+
+fn default_health_timeout_secs() -> u64 {
+    5
 }
 
 fn default_true() -> bool {
