@@ -7,6 +7,7 @@ pub const GIT_REV: &str = dstack_build_info::git_revision!();
 
 pub mod backend;
 pub mod config;
+mod container_health;
 mod guest_api_service;
 mod http_routes;
 mod models;
