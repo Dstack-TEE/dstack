@@ -118,6 +118,20 @@ inbound_pp_enabled = false
 # [core.proxy.ktls]
 # after_bytes = 65536
 
+# Application-level health polling. The gateway asks each CVM's guest agent
+# whether the app's containers are serving, and keeps instances that say no out
+# of app-id load balancing. Instances stay reachable by instance id regardless.
+#
+# Safe to leave on: a guest agent without the RPC (older image) is treated as
+# healthy, an app that declares no `healthcheck` in its compose file is treated
+# as healthy, and if every instance of an app reports unhealthy the gateway
+# routes to all of them anyway rather than blackholing the app.
+[core.proxy.health_check]
+enabled = true
+interval = "5s"
+timeout = "2s"
+concurrency = 16
+
 [core.proxy.port_policy_fetch]
 # Background lazy-fetch of port_policy from legacy CVM agents.
 # Single Info() RPC timeout.

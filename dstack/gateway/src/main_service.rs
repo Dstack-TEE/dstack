@@ -44,7 +44,7 @@ use crate::{
         InstanceData, KvStore, LoadedInstances, NodeData, NodeStatus, PortPolicy,
         WaveKvSyncService,
     },
-    models::{InstanceInfo, PortPolicyView, WgConf, WgPeer},
+    models::{HealthState, InstanceInfo, PortPolicyView, ReportedCapabilities, WgConf, WgPeer},
     proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo, AppAddressResolver},
     time::{decode_ts, encode_ts, now_secs},
 };
@@ -502,6 +502,7 @@ impl Proxy {
         start_cert_store_watch_task(self.clone());
         start_zt_domain_watch_task(self.clone());
         start_bootnode_discovery_task(self.clone());
+        crate::proxy::health_check::spawn_poller(self.clone());
         Ok(())
     }
 
@@ -616,7 +617,7 @@ impl Proxy {
         instance_id: &str,
         client_public_key: &str,
         compose_hash: &str,
-        port_policy: Option<PortPolicy>,
+        reported: ReportedCapabilities,
     ) -> Result<RegisterCvmResponse> {
         let mut state = self.lock();
 
@@ -640,7 +641,7 @@ impl Proxy {
                 app_id,
                 client_public_key,
                 compose_hash,
-                port_policy,
+                reported,
             )
             .context("failed to allocate IP address for client")?;
         if let Err(err) = state.reconfigure() {
@@ -753,6 +754,8 @@ fn build_state_from_kv_store(config: &Config, instances: LoadedInstances) -> Pro
             port_policy_hash: data.port_policy_hash,
             admin_port_policy: data.admin_port_policy,
             admin_ready: data.admin_ready,
+            has_health_endpoint: data.has_health_endpoint,
+            health: HealthState::initial(data.has_health_endpoint),
             connections: Default::default(),
         };
         state.allocated_addresses.insert(data.ip);
@@ -1116,6 +1119,8 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
             port_policy_hash: data.port_policy_hash.clone(),
             admin_port_policy: data.admin_port_policy.clone(),
             admin_ready: data.admin_ready,
+            has_health_endpoint: data.has_health_endpoint,
+            health: HealthState::initial(data.has_health_endpoint),
             connections: Default::default(),
         };
 
@@ -1179,6 +1184,40 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
     Ok(())
 }
 
+/// One instance still in the running for a connection.
+struct Candidate {
+    ip: Ipv4Addr,
+    handshake_age: Duration,
+    counter: Arc<std::sync::atomic::AtomicU64>,
+    instance_id: String,
+    healthy: bool,
+}
+
+/// Drop unhealthy candidates -- unless that would drop all of them.
+///
+/// Health is inference: a probe can be misconfigured, an agent can die, a whole
+/// fleet can report badly at once for a reason that has nothing to do with
+/// whether the app works. Blackholing an app on the strength of that is worse
+/// than sending traffic to instances that might be fine. The operator gate in
+/// `is_admin_ready` deliberately does *not* get this treatment: that one is an
+/// instruction, not a guess.
+fn retain_healthy(app_id: &str, candidates: &mut SmallVec<[Candidate; 4]>) {
+    if candidates.iter().any(|candidate| candidate.healthy) {
+        candidates.retain(|candidate| candidate.healthy);
+    } else if !candidates.is_empty() {
+        warn_all_unhealthy(app_id, candidates.len());
+    }
+}
+
+/// Bounded by the `cache_top_n` recomputation interval, so an app stuck in this
+/// state costs a couple of lines a minute rather than one per connection.
+fn warn_all_unhealthy(app_id: &str, candidates: usize) {
+    warn!(
+        "app {app_id}: no instance reports healthy; routing to all {candidates} \
+         reachable instance(s) anyway rather than refusing the app"
+    );
+}
+
 impl ProxyState {
     fn valid_ip(&self, ip: Ipv4Addr) -> bool {
         self.config.wg.is_valid_client_ip(ip)
@@ -1203,8 +1242,12 @@ impl ProxyState {
         app_id: &str,
         public_key: &str,
         compose_hash: &str,
-        port_policy: Option<PortPolicy>,
+        reported: ReportedCapabilities,
     ) -> Result<InstanceInfo> {
+        let ReportedCapabilities {
+            port_policy,
+            has_health_endpoint,
+        } = reported;
         if id.is_empty() {
             bail!("instance_id is empty (no_instance_id is set?)");
         }
@@ -1237,6 +1280,13 @@ impl ProxyState {
             }
             carried_admin_ready = existing.admin_ready;
             carried_admin_port_policy = existing.admin_port_policy.clone();
+            // Registration only runs at boot, so seeing it again means the CVM
+            // restarted: whatever health was last observed describes the
+            // previous run, and its containers are starting over. Reset rather
+            // than let a stale "healthy" carry a rebooting instance straight
+            // back into rotation.
+            existing.has_health_endpoint = has_health_endpoint;
+            existing.health = HealthState::initial(has_health_endpoint);
             let pubkey_changed = existing.public_key != public_key;
             if pubkey_changed {
                 info!("public key changed for instance {id}, new key: {public_key}");
@@ -1273,6 +1323,7 @@ impl ProxyState {
                     port_policy_hash: existing.port_policy_hash.clone(),
                     admin_port_policy: existing.admin_port_policy.clone(),
                     admin_ready: existing.admin_ready,
+                    has_health_endpoint: existing.has_health_endpoint,
                 };
                 if let Err(err) = self.kv_store.sync_instance(&existing.id, &data) {
                     error!("failed to sync existing instance to KvStore: {err:?}");
@@ -1295,6 +1346,8 @@ impl ProxyState {
             port_policy_hash: compose_hash.to_string(),
             admin_port_policy: carried_admin_port_policy,
             admin_ready: carried_admin_ready,
+            has_health_endpoint,
+            health: HealthState::initial(has_health_endpoint),
             connections: Default::default(),
         };
         self.add_instance(host_info.clone());
@@ -1432,6 +1485,44 @@ impl ProxyState {
         Ok(())
     }
 
+    /// Record this node's latest health observation for an instance.
+    ///
+    /// Logs only when the verdict changes. Every instance is polled every few
+    /// seconds, so an app that stays unhealthy for an hour should cost one
+    /// line, not several hundred.
+    pub(crate) fn record_instance_health(
+        &mut self,
+        instance_id: &str,
+        observation: crate::proxy::health_check::Observation,
+    ) {
+        let Some(info) = self.state.instances.get_mut(instance_id) else {
+            // Recycled or deregistered while the round was in flight.
+            return;
+        };
+        let previous = info.health;
+        if previous == observation.state {
+            return;
+        }
+        info.health = observation.state;
+        let app_id = info.app_id.clone();
+        let next = observation.state.as_str();
+        if observation.reason.is_empty() {
+            info!(
+                "instance {instance_id} is now {next} (was {})",
+                previous.as_str()
+            );
+        } else {
+            info!(
+                "instance {instance_id} is now {next} (was {}): {}",
+                previous.as_str(),
+                observation.reason
+            );
+        }
+        // Same reason as the operator gate: the cached selection was computed
+        // before this change and would outlive it by up to `cache_top_n`.
+        self.state.top_n.remove(&app_id);
+    }
+
     /// How many of an app's instances the operator has left open to traffic.
     fn count_ready_instances(&self, app_id: &str) -> usize {
         let Some(instances) = self.state.apps.get(app_id) else {
@@ -1461,6 +1552,7 @@ impl ProxyState {
             port_policy_hash: info.port_policy_hash.clone(),
             admin_port_policy: info.admin_port_policy.clone(),
             admin_ready: info.admin_ready,
+            has_health_endpoint: info.has_health_endpoint,
         };
         self.kv_store
             .sync_instance(instance_id, &data)
@@ -1479,6 +1571,7 @@ impl ProxyState {
             port_policy_hash: info.port_policy_hash.clone(),
             admin_port_policy: info.admin_port_policy.clone(),
             admin_ready: info.admin_ready,
+            has_health_endpoint: info.has_health_endpoint,
         };
         if let Err(err) = self.kv_store.sync_instance(&info.id, &data) {
             error!("failed to sync instance to KvStore: {err:?}");
@@ -1569,6 +1662,15 @@ impl ProxyState {
         Ok(())
     }
 
+    /// Whether this node's last health observation lets an instance serve.
+    /// Unknown instances -- never registered, or recycled mid-round -- do not.
+    fn instance_is_healthy(&self, instance_id: &str) -> bool {
+        self.state
+            .instances
+            .get(instance_id)
+            .is_some_and(|instance| instance.is_healthy())
+    }
+
     pub(crate) fn select_top_n_hosts(&mut self, id: &str) -> Result<AddressGroup> {
         if self.config.debug.insecure_localhost_backend && id == "localhost" {
             return Ok(smallvec![AddressInfo {
@@ -1613,25 +1715,25 @@ impl ProxyState {
                         return None;
                     }
                     let (_, elapsed) = handshakes.get(&instance.public_key)?;
-                    (*elapsed < self.config.proxy.timeouts.handshake_stale).then(|| {
-                        (
-                            instance.ip,
-                            *elapsed,
-                            instance.connections.clone(),
-                            instance.id.clone(),
-                        )
+                    (*elapsed < self.config.proxy.timeouts.handshake_stale).then(|| Candidate {
+                        ip: instance.ip,
+                        handshake_age: *elapsed,
+                        counter: instance.connections.clone(),
+                        instance_id: instance.id.clone(),
+                        healthy: instance.is_healthy(),
                     })
                 })
                 .collect::<SmallVec<[_; 4]>>(),
         };
-        instances.sort_by(|a, b| a.1.cmp(&b.1));
+        retain_healthy(id, &mut instances);
+        instances.sort_by(|a, b| a.handshake_age.cmp(&b.handshake_age));
         instances.truncate(n);
         let selected: AddressGroup = instances
             .into_iter()
-            .map(|(ip, _, counter, instance_id)| AddressInfo {
-                ip,
-                counter,
-                instance_id,
+            .map(|candidate| AddressInfo {
+                ip: candidate.ip,
+                counter: candidate.counter,
+                instance_id: candidate.instance_id,
             })
             .collect();
         self.state
@@ -1655,22 +1757,35 @@ impl ProxyState {
         // Get latest handshakes to check instance health
         let handshakes = self.latest_handshakes(None).ok()?;
 
-        // Filter healthy instances and choose randomly among them
-        let healthy_instances = app_instances.iter().filter(|instance_id| {
-            if let Some(instance) = self.state.instances.get(*instance_id) {
-                // Consider instance healthy if it had a recent handshake, and
-                // only if the operator has not gated it out of rotation.
-                instance.is_admin_ready()
-                    && handshakes
-                        .get(&instance.public_key)
-                        .map(|(_, elapsed)| *elapsed < self.config.proxy.timeouts.handshake_stale)
-                        .unwrap_or(false)
-            } else {
-                false
-            }
-        });
+        // Instances that are reachable and not gated out by an operator.
+        let mut eligible = app_instances
+            .iter()
+            .filter(|instance_id| {
+                if let Some(instance) = self.state.instances.get(*instance_id) {
+                    // A recent handshake means the tunnel is up, and the
+                    // operator must not have gated the instance out.
+                    instance.is_admin_ready()
+                        && handshakes
+                            .get(&instance.public_key)
+                            .map(|(_, elapsed)| {
+                                *elapsed < self.config.proxy.timeouts.handshake_stale
+                            })
+                            .unwrap_or(false)
+                } else {
+                    false
+                }
+            })
+            .collect::<SmallVec<[_; 4]>>();
+        let any_healthy = eligible
+            .iter()
+            .any(|instance_id| self.instance_is_healthy(instance_id));
+        if any_healthy {
+            eligible.retain(|instance_id| self.instance_is_healthy(instance_id));
+        } else if !eligible.is_empty() {
+            warn_all_unhealthy(id, eligible.len());
+        }
 
-        let selected = healthy_instances.choose(&mut rand::thread_rng())?;
+        let selected = eligible.into_iter().choose(&mut rand::thread_rng())?;
         self.state.instances.get(selected).map(|info| {
             smallvec![AddressInfo {
                 ip: info.ip,
@@ -1933,7 +2048,10 @@ impl GatewayRpc for RpcHandler {
             &instance_id,
             &request.client_public_key,
             &compose_hash,
-            port_policy,
+            ReportedCapabilities {
+                port_policy,
+                has_health_endpoint: request.has_health_endpoint,
+            },
         )
     }
 

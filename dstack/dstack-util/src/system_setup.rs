@@ -484,6 +484,9 @@ impl<'a> GatewayContext<'a> {
             .register_cvm(RegisterCvmRequest {
                 client_public_key: key_store.wg_pk.clone(),
                 port_policy: Some(port_policy.clone()),
+                // This binary ships alongside the guest agent that serves
+                // `Worker.Health`, so the capability is a build-time fact.
+                has_health_endpoint: true,
             })
             .await
             .context("Failed to register CVM");
@@ -506,6 +509,7 @@ impl<'a> GatewayContext<'a> {
             .register_cvm(RegisterCvmRequest {
                 client_public_key: key_store.wg_pk.clone(),
                 port_policy: Some(port_policy),
+                has_health_endpoint: true,
             })
             .await
             .context("Failed to register CVM")

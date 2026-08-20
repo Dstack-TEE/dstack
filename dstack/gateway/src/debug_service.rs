@@ -36,7 +36,7 @@ impl DebugRpc for DebugRpcHandler {
             &request.instance_id,
             &request.client_public_key,
             "",
-            None,
+            Default::default(),
         )
     }
 

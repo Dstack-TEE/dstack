@@ -49,8 +49,97 @@ pub struct InstanceInfo {
     /// of its own.
     #[serde(default)]
     pub admin_ready: Option<bool>,
+    /// Whether the guest agent implements `Worker.Health`, as declared at
+    /// registration. Persisted, so a gateway restart does not start polling a
+    /// legacy image and conclude from the failures that it is unhealthy.
+    #[serde(default)]
+    pub has_health_endpoint: bool,
+    /// Application-level health, as last observed by *this* gateway node.
+    ///
+    /// Deliberately not persisted and not shared through WaveKV. Every node
+    /// polls for itself, the same way each node reads its own WireGuard
+    /// handshakes -- a shared "healthy" flag would outlive the instance that
+    /// set it, and "I could not reach it" is a per-node fact anyway.
+    #[serde(skip)]
+    pub health: HealthState,
     #[serde(skip)]
     pub connections: Arc<AtomicU64>,
+}
+
+/// What a CVM reported about itself when it registered.
+///
+/// Bundled rather than passed as positional arguments: every one of these is a
+/// self-declared capability, and the list has already grown once. A struct
+/// keeps the next addition from rippling through every call site.
+#[derive(Debug, Clone, Default)]
+pub struct ReportedCapabilities {
+    /// Per-port behaviour declared by the app. `None` means "not reported"
+    /// (legacy CVM), and the gateway fetches it lazily instead.
+    pub port_policy: Option<PortPolicy>,
+    /// Whether the guest agent implements `Worker.Health`. False for images
+    /// that predate it, which the gateway then never polls.
+    pub has_health_endpoint: bool,
+}
+
+impl From<Option<PortPolicy>> for ReportedCapabilities {
+    /// Convenience for callers that only have a port policy to report --
+    /// notably the debug registration path, which has no CVM to ask.
+    fn from(port_policy: Option<PortPolicy>) -> Self {
+        Self {
+            port_policy,
+            has_health_endpoint: false,
+        }
+    }
+}
+
+/// What this gateway node knows about an instance's application-level health.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HealthState {
+    /// No poll has completed yet. Reads as *not* healthy: a CVM registers
+    /// during boot, before its containers exist, so "not asked yet" is far
+    /// more often "not up yet" than "fine".
+    #[default]
+    Unknown,
+    /// The guest agent reported that every container declaring a healthcheck
+    /// is healthy.
+    Healthy,
+    /// The guest agent reported at least one container not healthy, or could
+    /// not be reached at all.
+    Unhealthy,
+    /// The guest agent has no `Worker.Health` method. Reads as healthy: an
+    /// image that predates the RPC has to keep serving exactly as before.
+    Unsupported,
+}
+
+impl HealthState {
+    /// The state an instance starts in, given whether it can answer at all.
+    ///
+    /// An instance with the endpoint starts `Unknown` -- held out of rotation
+    /// until a poll answers -- because registration happens during boot,
+    /// before the containers exist. One without it starts `Unsupported` and
+    /// stays eligible, so old images keep working.
+    pub fn initial(has_health_endpoint: bool) -> Self {
+        if has_health_endpoint {
+            HealthState::Unknown
+        } else {
+            HealthState::Unsupported
+        }
+    }
+
+    /// Whether this state permits traffic.
+    pub fn is_healthy(self) -> bool {
+        matches!(self, HealthState::Healthy | HealthState::Unsupported)
+    }
+
+    /// Stable lowercase name, as reported over the admin API.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HealthState::Unknown => "unknown",
+            HealthState::Healthy => "healthy",
+            HealthState::Unhealthy => "unhealthy",
+            HealthState::Unsupported => "unsupported",
+        }
+    }
 }
 
 impl InstanceInfo {
@@ -70,6 +159,14 @@ impl InstanceInfo {
     /// while it is still running, which needs the instance to stay reachable.
     pub fn is_admin_ready(&self) -> bool {
         self.admin_ready.unwrap_or(true)
+    }
+
+    /// Whether this node's last health observation permits traffic.
+    ///
+    /// Unlike [`InstanceInfo::is_admin_ready`], this is an inference and can be
+    /// wrong, so callers fail open when it would empty an app's candidate set.
+    pub fn is_healthy(&self) -> bool {
+        self.health.is_healthy()
     }
 
     /// Whether replacing `self` with `other` could invalidate a cached

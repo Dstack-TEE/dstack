@@ -130,6 +130,12 @@ pub struct InstanceData {
     /// rewrites the record and fixes it.
     #[serde(default)]
     pub admin_ready: Option<bool>,
+    /// Whether the CVM declared, at registration, that its guest agent serves
+    /// `Worker.Health`. Persisted so a restarted gateway (or a peer learning
+    /// this instance through sync) does not poll an image that cannot answer
+    /// and read the failures as an unhealthy app.
+    #[serde(default)]
+    pub has_health_endpoint: bool,
 }
 
 /// The `inst/` records currently in the KV store, split by readability.
@@ -2173,6 +2179,7 @@ mod corruption_tests {
                     port_policy_hash: String::new(),
                     admin_port_policy: None,
                     admin_ready: None,
+                    has_health_endpoint: false,
                 },
             )
             .expect("sync should succeed");

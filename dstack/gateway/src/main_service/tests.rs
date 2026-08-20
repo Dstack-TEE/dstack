@@ -131,7 +131,7 @@ fn test_validate_wireguard_public_key() {
 #[tokio::test]
 async fn test_invalid_wireguard_public_key_does_not_register() {
     let state = create_test_state().await;
-    let result = state.do_register_cvm("app", "instance", "invalid", "compose", None);
+    let result = state.do_register_cvm("app", "instance", "invalid", "compose", Default::default());
 
     assert!(result.is_err());
     assert!(!state.lock().state.instances.contains_key("instance"));
@@ -143,10 +143,22 @@ async fn test_wireguard_public_key_cannot_be_reused_by_another_instance() {
     let state = create_test_state().await;
     state
         .lock()
-        .new_client_by_id("instance-1", "app", PUBLIC_KEY, "compose", None)
+        .new_client_by_id(
+            "instance-1",
+            "app",
+            PUBLIC_KEY,
+            "compose",
+            Default::default(),
+        )
         .unwrap();
 
-    let result = state.do_register_cvm("app", "instance-2", PUBLIC_KEY, "compose", None);
+    let result = state.do_register_cvm(
+        "app",
+        "instance-2",
+        PUBLIC_KEY,
+        "compose",
+        Default::default(),
+    );
 
     assert!(result.is_err());
     assert!(!state.lock().state.instances.contains_key("instance-2"));
@@ -162,7 +174,7 @@ async fn test_port_policy_restrict_mode_allows_listed_only() {
             "app-allow",
             &test_pubkey("pubkey-allow"),
             "hash-allow",
-            Some(policy(true, &[8080, 9090])),
+            Some(policy(true, &[8080, 9090])).into(),
         )
         .unwrap();
     assert!(is_port_allowed(&state.proxy, "inst-allow", 8080).is_ok());
@@ -181,7 +193,7 @@ async fn test_port_policy_disabled_allows_all() {
             &test_pubkey("pubkey-open"),
             "hash-open",
             // restrict_mode = false, but with `ports` listed: still open.
-            Some(policy(false, &[8080])),
+            Some(policy(false, &[8080])).into(),
         )
         .unwrap();
     assert!(is_port_allowed(&state.proxy, "inst-open", 8080).is_ok());
@@ -199,7 +211,7 @@ async fn test_port_policy_unknown_fails_closed() {
             "app-legacy",
             &test_pubkey("pubkey-legacy"),
             "hash-legacy",
-            None,
+            Default::default(),
         )
         .unwrap();
     assert!(is_port_allowed(&state.proxy, "inst-legacy", 8080).is_err());
@@ -224,7 +236,7 @@ async fn test_admin_override_takes_precedence() {
             "app-ovr",
             &test_pubkey("pubkey-ovr"),
             "hash-ovr",
-            Some(policy(true, &[8080])),
+            Some(policy(true, &[8080])).into(),
         )
         .unwrap();
     assert!(is_port_allowed(&state.proxy, "inst-ovr", 8080).is_ok());
@@ -248,7 +260,7 @@ async fn test_admin_override_can_open_what_instance_restricts() {
             "app-lock",
             &test_pubkey("pubkey-lock"),
             "hash-lock",
-            Some(policy(true, &[])),
+            Some(policy(true, &[])).into(),
         )
         .unwrap();
     assert!(is_port_allowed(&state.proxy, "inst-lock", 8080).is_err());
@@ -270,7 +282,7 @@ async fn test_clear_admin_override_reverts_to_instance_policy() {
             "app-revert",
             &test_pubkey("pubkey-revert"),
             "hash-revert",
-            Some(policy(true, &[8080])),
+            Some(policy(true, &[8080])).into(),
         )
         .unwrap();
     state
@@ -310,7 +322,7 @@ async fn test_admin_override_survives_compose_hash_change() {
             "app-upgrade",
             &test_pubkey("pubkey-upgrade"),
             "hash-v1",
-            Some(policy(true, &[8080])),
+            Some(policy(true, &[8080])).into(),
         )
         .unwrap();
     state
@@ -326,7 +338,7 @@ async fn test_admin_override_survives_compose_hash_change() {
             "app-upgrade",
             &test_pubkey("pubkey-upgrade"),
             "hash-v2",
-            Some(policy(true, &[7070, 8080])),
+            Some(policy(true, &[7070, 8080])).into(),
         )
         .unwrap();
     // Admin override must still be in effect.
@@ -345,7 +357,7 @@ async fn test_config() {
             "app-id-0",
             &test_pubkey("test-pubkey-0"),
             "",
-            None,
+            Default::default(),
         )
         .unwrap();
 
@@ -358,7 +370,7 @@ async fn test_config() {
             "app-id-1",
             &test_pubkey("test-pubkey-1"),
             "",
-            None,
+            Default::default(),
         )
         .unwrap();
     info1.reg_time = SystemTime::UNIX_EPOCH;
@@ -383,7 +395,7 @@ async fn gateway_top_n_batch_007_cache_health_and_invalidation() {
                     "top-app",
                     &test_pubkey(&format!("top-key-{index}")),
                     "",
-                    Some(policy(false, &[])),
+                    Some(policy(false, &[])).into(),
                 )
                 .unwrap();
         }
@@ -425,7 +437,7 @@ async fn gateway_top_n_batch_007_cache_health_and_invalidation() {
                 "top-app",
                 &test_pubkey("top-key-4"),
                 "",
-                Some(policy(false, &[])),
+                Some(policy(false, &[])).into(),
             )
             .unwrap();
         assert!(proxy.state.top_n.is_empty());
@@ -454,6 +466,15 @@ async fn gateway_top_n_batch_007_cache_health_and_invalidation() {
 /// Register `count` instances of `app` and mark every handshake fresh, so the
 /// only thing that can keep an instance out of a selection is the gate.
 fn register_ready_instances(proxy: &mut ProxyState, app: &str, count: usize) {
+    register_instances(proxy, app, count, false);
+}
+
+/// Register `count` instances of `app` and mark every handshake fresh.
+///
+/// `has_health_endpoint` mirrors what the CVM declares at registration: false is a
+/// legacy image the gateway never polls, true is one that starts out `Unknown`
+/// and has to be polled before it can serve.
+fn register_instances(proxy: &mut ProxyState, app: &str, count: usize, has_health_endpoint: bool) {
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
@@ -463,11 +484,31 @@ fn register_ready_instances(proxy: &mut ProxyState, app: &str, count: usize) {
         let id = format!("{app}-{index}");
         let key = test_pubkey(&format!("{app}-key-{index}"));
         proxy
-            .new_client_by_id(&id, app, &key, "", Some(policy(false, &[])))
+            .new_client_by_id(
+                &id,
+                app,
+                &key,
+                "",
+                ReportedCapabilities {
+                    port_policy: Some(policy(false, &[])),
+                    has_health_endpoint,
+                },
+            )
             .unwrap();
         handshakes.insert(key, now);
     }
     proxy.handshake_cache.set_for_test(handshakes);
+}
+
+/// Feed the poller's verdict in directly, standing in for a round of RPCs.
+fn observe(proxy: &mut ProxyState, instance_id: &str, state: HealthState) {
+    proxy.record_instance_health(
+        instance_id,
+        crate::proxy::health_check::Observation {
+            state,
+            reason: String::new(),
+        },
+    );
 }
 
 fn selected_ids(group: &AddressGroup) -> Vec<String> {
@@ -565,7 +606,7 @@ async fn the_gate_survives_re_registration() {
             "reboot-app",
             &test_pubkey("reboot-app-key-0"),
             "",
-            Some(policy(false, &[])),
+            Some(policy(false, &[])).into(),
         )
         .unwrap();
 
@@ -623,6 +664,7 @@ async fn a_gate_arriving_through_kv_invalidates_the_cached_selection() {
             port_policy_hash: existing.port_policy_hash.clone(),
             admin_port_policy: None,
             admin_ready: Some(false),
+            has_health_endpoint: existing.has_health_endpoint,
         }
     };
     state.kv_store.sync_instance("peer-app-0", &gated).unwrap();
@@ -751,6 +793,202 @@ async fn gating_an_unregistered_instance_is_an_error() {
     assert!(proxy.set_admin_ready("never-registered", false).is_err());
 }
 
+/// The bug this whole mechanism exists for: an instance registers during boot,
+/// before its containers are up, and is immediately eligible for traffic.
+#[tokio::test]
+async fn a_newly_registered_instance_waits_for_its_first_health_poll() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_instances(&mut proxy, "boot-app", 2, true);
+    observe(&mut proxy, "boot-app-0", HealthState::Healthy);
+
+    // boot-app-1 has registered but not yet answered a poll, so it is not
+    // serving traffic on the strength of having finished a WireGuard handshake.
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("boot-app").unwrap()),
+        vec!["boot-app-0"]
+    );
+
+    observe(&mut proxy, "boot-app-1", HealthState::Healthy);
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("boot-app").unwrap()).len(),
+        2
+    );
+}
+
+/// An image with no `Worker.Health` is never polled and must keep serving, or
+/// upgrading a fleet one instance at a time would drain the un-upgraded half.
+#[tokio::test]
+async fn an_agent_that_cannot_report_health_stays_eligible() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_instances(&mut proxy, "legacy-app", 2, false);
+
+    for index in 0..2 {
+        let id = format!("legacy-app-{index}");
+        assert_eq!(
+            proxy.state.instances[&id].health,
+            HealthState::Unsupported,
+            "an agent that never declared the capability must not sit in Unknown"
+        );
+    }
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("legacy-app").unwrap()).len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn an_unhealthy_instance_drops_out_of_rotation() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_instances(&mut proxy, "sick-app", 3, true);
+    for index in 0..3 {
+        observe(
+            &mut proxy,
+            &format!("sick-app-{index}"),
+            HealthState::Healthy,
+        );
+    }
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("sick-app").unwrap()).len(),
+        3
+    );
+
+    observe(&mut proxy, "sick-app-1", HealthState::Unhealthy);
+    let after = selected_ids(&proxy.select_top_n_hosts("sick-app").unwrap());
+    assert_eq!(after, vec!["sick-app-0", "sick-app-2"]);
+}
+
+/// Health is a guess. A probe misconfigured across a whole app, or an agent
+/// bug that lands everywhere at once, must not take the app offline.
+#[tokio::test]
+async fn an_app_with_no_healthy_instance_fails_open() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_instances(&mut proxy, "open-app", 2, true);
+    observe(&mut proxy, "open-app-0", HealthState::Unhealthy);
+    observe(&mut proxy, "open-app-1", HealthState::Unhealthy);
+
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("open-app").unwrap()).len(),
+        2,
+        "every instance unhealthy should route to all of them, not to none"
+    );
+}
+
+/// Fail-open applies to health only. The operator gate is an instruction and
+/// still wins, even when the surviving instance is perfectly healthy.
+#[tokio::test]
+async fn failing_open_on_health_does_not_reopen_the_operator_gate() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_instances(&mut proxy, "mixed-app", 2, true);
+    observe(&mut proxy, "mixed-app-0", HealthState::Unhealthy);
+    observe(&mut proxy, "mixed-app-1", HealthState::Unhealthy);
+    proxy.set_admin_ready("mixed-app-0", false).unwrap();
+
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("mixed-app").unwrap()),
+        vec!["mixed-app-1"],
+        "the gated instance must stay out even when health fails open"
+    );
+}
+
+/// A health change has to beat the `cache_top_n` window, same as the gate.
+#[tokio::test]
+async fn a_health_change_invalidates_the_selection_cache() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_instances(&mut proxy, "cached-app", 2, true);
+    observe(&mut proxy, "cached-app-0", HealthState::Healthy);
+    observe(&mut proxy, "cached-app-1", HealthState::Healthy);
+
+    proxy.select_top_n_hosts("cached-app").unwrap();
+    assert_eq!(proxy.state.top_n.len(), 1);
+
+    observe(&mut proxy, "cached-app-0", HealthState::Unhealthy);
+    assert!(proxy.state.top_n.is_empty());
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("cached-app").unwrap()),
+        vec!["cached-app-1"]
+    );
+}
+
+/// Same rule as the operator gate: an unhealthy instance is exactly the one an
+/// operator needs to open a connection to.
+#[tokio::test]
+async fn an_unhealthy_instance_is_still_reachable_by_instance_id() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_instances(&mut proxy, "direct-app", 2, true);
+    observe(&mut proxy, "direct-app-0", HealthState::Healthy);
+    observe(&mut proxy, "direct-app-1", HealthState::Unhealthy);
+
+    let direct = proxy.select_top_n_hosts("direct-app-1").unwrap();
+    assert_eq!(selected_ids(&direct), vec!["direct-app-1"]);
+}
+
+/// Registration only runs at boot, so seeing it again means the CVM restarted
+/// and the last verdict describes a process that no longer exists.
+#[tokio::test]
+async fn re_registration_resets_health_to_unknown() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_instances(&mut proxy, "restart-app", 2, true);
+    observe(&mut proxy, "restart-app-0", HealthState::Healthy);
+    observe(&mut proxy, "restart-app-1", HealthState::Healthy);
+
+    proxy
+        .new_client_by_id(
+            "restart-app-0",
+            "restart-app",
+            &test_pubkey("restart-app-key-0"),
+            "",
+            ReportedCapabilities {
+                port_policy: Some(policy(false, &[])),
+                has_health_endpoint: true,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(
+        proxy.state.instances["restart-app-0"].health,
+        HealthState::Unknown
+    );
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("restart-app").unwrap()),
+        vec!["restart-app-1"]
+    );
+}
+
+/// `connect_top_n = 0` takes the random path, which filters separately.
+#[tokio::test]
+async fn the_random_selection_path_honours_health_and_fails_open() {
+    let state = create_test_state_with(|config| config.proxy.connect_top_n = 0).await;
+    let mut proxy = state.lock();
+    register_instances(&mut proxy, "rand-app", 2, true);
+    observe(&mut proxy, "rand-app-0", HealthState::Unhealthy);
+    observe(&mut proxy, "rand-app-1", HealthState::Healthy);
+
+    for _ in 0..16 {
+        assert_eq!(
+            selected_ids(&proxy.select_top_n_hosts("rand-app").unwrap()),
+            vec!["rand-app-1"]
+        );
+    }
+
+    // With nothing healthy left, the random path must fail open too.
+    observe(&mut proxy, "rand-app-1", HealthState::Unhealthy);
+    for _ in 0..16 {
+        assert_eq!(
+            proxy.select_top_n_hosts("rand-app").unwrap().len(),
+            1,
+            "fail-open should still yield a host on the random path"
+        );
+    }
+}
+
 /// Write a record straight into the KV store, bypassing registration, the way
 /// a peer's sync round would.
 fn sync_from_peer(state: &TestState, instance_id: &str, ip: &str, public_key: &str) {
@@ -777,6 +1015,7 @@ fn sync_from_peer_at(
                 port_policy_hash: String::new(),
                 admin_port_policy: None,
                 admin_ready: None,
+                has_health_endpoint: false,
             },
         )
         .unwrap();
@@ -913,7 +1152,13 @@ async fn a_local_registration_survives_a_reload_that_cannot_see_it_yet() {
     let state = create_test_state().await;
     state
         .lock()
-        .new_client_by_id("fresh", "fresh-app", &test_pubkey("fresh-key"), "", None)
+        .new_client_by_id(
+            "fresh",
+            "fresh-app",
+            &test_pubkey("fresh-key"),
+            "",
+            Default::default(),
+        )
         .unwrap();
     // Stand in for a KV write that failed: the instance exists locally only.
     // Evicting it would black-hole a live CVM until it re-registers.
