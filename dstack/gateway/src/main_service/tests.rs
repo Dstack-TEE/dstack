@@ -643,6 +643,30 @@ async fn a_gate_arriving_through_kv_invalidates_the_cached_selection() {
     );
 }
 
+/// Whether this node's `conn/` record for the fixture instance is live.
+///
+/// Reads the raw entry because `KvStore` exposes no conn accessor, and uses the
+/// store's own node id rather than the config's so the key matches whatever
+/// `sync_connections` wrote -- the two agree today, and this keeps the
+/// assertions honest if they ever stop agreeing.
+fn conn_is_live(state: &TestState) -> bool {
+    let key = crate::kv::keys::conn("gone-app-0", state.kv_store.my_node_id());
+    state
+        .kv_store
+        .ephemeral()
+        .read()
+        .get(&key)
+        .is_some_and(|entry| !entry.is_deleted())
+}
+
+/// Whether this node's `handshake/` observation for the fixture instance is live.
+fn handshake_is_live(state: &TestState) -> bool {
+    state
+        .kv_store
+        .get_instance_handshakes("gone-app-0")
+        .contains_key(&state.kv_store.my_node_id())
+}
+
 /// Removing an instance must take its gate with it, or a later instance
 /// reusing the id would inherit a quarantine nobody asked for.
 #[tokio::test]
@@ -656,13 +680,28 @@ async fn removing_an_instance_removes_its_gate() {
             state.kv_store.load_all_instances().decoded["gone-app-0"].admin_ready,
             Some(false)
         );
+        // Seed the two ephemeral records as well, or the assertions below pass
+        // whether or not the deletes are issued.
+        state.kv_store.sync_connections("gone-app-0", 3).unwrap();
+        state
+            .kv_store
+            .sync_instance_handshake("gone-app-0", 1)
+            .unwrap();
+        // Assert they are live first. Without this the post-delete assertions
+        // go quietly vacuous again the moment the seeds stop landing on the
+        // keys they are checked against -- which is the failure this test
+        // exists to rule out.
+        assert!(conn_is_live(&state), "seeded conn/ record should be live");
+        assert!(
+            handshake_is_live(&state),
+            "seeded handshake/ record should be live"
+        );
         proxy.remove_instance("gone-app-0").unwrap();
     }
     // The gate lives in the instance record, so removing the instance takes it
     // with it. The deletes are issued unconditionally so a failure in one
     // cannot strand the others, which is only worth anything if they are all
     // actually issued.
-    let node = state.config.sync.node_id;
     let key = crate::kv::keys::inst("gone-app-0");
     let live = state
         .kv_store
@@ -671,10 +710,11 @@ async fn removing_an_instance_removes_its_gate() {
         .get(&key)
         .is_some_and(|entry| !entry.is_deleted());
     assert!(!live, "{key} should be gone");
-    assert!(!state
-        .kv_store
-        .get_instance_handshakes("gone-app-0")
-        .contains_key(&node));
+    assert!(
+        !handshake_is_live(&state),
+        "handshake/ record should be gone"
+    );
+    assert!(!conn_is_live(&state), "conn/ record should be gone");
 }
 
 /// Selection handing over an empty group means every instance was ruled out
