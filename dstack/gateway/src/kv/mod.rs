@@ -38,6 +38,7 @@
 //! whole node pair, so a node writing a key its peer does not know silently stops the
 //! two from converging. Bound what a peer can consume; do not police what it means.
 
+mod compat;
 mod https_client;
 pub mod import;
 mod sync_service;
@@ -481,6 +482,10 @@ pub fn gunzip_bounded(data: &[u8], limit: usize) -> Result<Vec<u8>> {
 /// in `#[serde(default)]` fields it does not receive, so the value types below
 /// can gain fields without breaking gateways running an older build. Decoding
 /// accepts both forms, so values written by older releases stay readable.
+///
+/// Skipping on read is only half of a rolling upgrade: this encoding contains
+/// exactly the fields the writing binary declares, so an older node rewriting a
+/// record would drop the rest. [`compat`] puts them back on the way out.
 pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     rmp_serde::encode::to_vec_named(value).context("failed to encode value")
 }
@@ -492,7 +497,11 @@ pub fn decode<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T> {
 trait GetPutCodec {
     fn decode<T: for<'de> serde::Deserialize<'de>>(&self, key: &str) -> Option<T>;
     fn decode_strict<T: for<'de> serde::Deserialize<'de>>(&self, key: &str) -> Result<Option<T>>;
-    fn put_encoded<T: serde::Serialize>(&mut self, key: String, value: &T) -> Result<()>;
+    fn put_encoded<T: serde::Serialize + serde::de::DeserializeOwned>(
+        &mut self,
+        key: String,
+        value: &T,
+    ) -> Result<()>;
     fn iter_decoded<T: for<'de> serde::Deserialize<'de>>(
         &self,
         prefix: &str,
@@ -541,8 +550,23 @@ impl GetPutCodec for NodeState {
             .with_context(|| format!("corrupt record at KV key {key}"))
     }
 
-    fn put_encoded<T: serde::Serialize>(&mut self, key: String, value: &T) -> Result<()> {
-        self.put(key.clone(), encode(value)?)
+    /// Write a value, keeping any field of the stored record that this binary
+    /// does not declare — see [`compat`] for why that is not the same as
+    /// keeping every field the encoding happens to be missing.
+    fn put_encoded<T: serde::Serialize + serde::de::DeserializeOwned>(
+        &mut self,
+        key: String,
+        value: &T,
+    ) -> Result<()> {
+        let encoded = encode(value)?;
+        let stored = compat::is_long_lived_record(&key)
+            .then(|| self.get(&key).and_then(|entry| entry.value))
+            .flatten();
+        let bytes = match stored {
+            Some(stored) => compat::carry_unknown_fields::<T>(&key, &stored, encoded),
+            None => encoded,
+        };
+        self.put(key.clone(), bytes)
             .with_context(|| format!("failed to put key {key}"))?;
         Ok(())
     }
@@ -1055,10 +1079,11 @@ impl KvStore {
     pub fn register_peer_url(&self, node_id: NodeId, url: &str) -> Result<()> {
         validate_peer_url(url)?;
 
-        // Store URL in persistent KvStore
+        // Store URL in persistent KvStore. Owned, because the value has to be a
+        // type a reader can name: `&str` borrows from the buffer it decodes.
         self.persistent
             .write()
-            .put_encoded(keys::peer_addr(node_id), &url)?;
+            .put_encoded(keys::peer_addr(node_id), &url.to_string())?;
 
         let _ = self.add_peer(node_id);
         Ok(())
@@ -1142,7 +1167,7 @@ impl KvStore {
     pub fn set_default_dns_credential_id(&self, cred_id: &str) -> Result<()> {
         self.persistent
             .write()
-            .put_encoded(keys::DNS_CRED_DEFAULT.to_string(), &cred_id)?;
+            .put_encoded(keys::DNS_CRED_DEFAULT.to_string(), &cred_id.to_string())?;
         Ok(())
     }
 
@@ -1782,6 +1807,135 @@ mod value_encoding_tests {
                 "{label}"
             );
         }
+    }
+
+    /// An instance record as some later release will declare it.
+    #[derive(Debug, Serialize, Deserialize)]
+    struct FutureInstanceData {
+        app_id: String,
+        ip: Ipv4Addr,
+        public_key: String,
+        reg_time: u64,
+        /// The field this build has never heard of.
+        health_probe_path: String,
+    }
+
+    /// The write-path half of the mixed-version contract. Skipping an unknown
+    /// field on read is not enough: this build re-encodes the record from the
+    /// fields it declares, so without the merge a single re-registration by an
+    /// older node erases a newer node's field for the entire cluster.
+    #[test]
+    fn a_record_keeps_the_fields_its_writer_does_not_know() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = KvStore::new(1, vec![], dir.path()).expect("failed to create kv store");
+
+        let written_by_a_newer_node = encode(&FutureInstanceData {
+            app_id: "app".to_string(),
+            ip: Ipv4Addr::new(10, 0, 0, 1),
+            public_key: "pubkey".to_string(),
+            reg_time: 1_700_000_000,
+            health_probe_path: "/healthz".to_string(),
+        })
+        .expect("encode should succeed");
+        kv.persistent
+            .write()
+            .put(keys::inst("app"), written_by_a_newer_node)
+            .expect("put should succeed");
+
+        // This build re-registers the instance, knowing nothing of the new field.
+        kv.sync_instance(
+            "app",
+            &InstanceData {
+                app_id: "app".to_string(),
+                ip: Ipv4Addr::new(10, 0, 0, 2),
+                public_key: "pubkey".to_string(),
+                reg_time: 1_700_000_100,
+                port_policy: None,
+                port_policy_hash: String::new(),
+                admin_port_policy: None,
+            },
+        )
+        .expect("sync should succeed");
+
+        let stored = kv
+            .persistent
+            .read()
+            .get(&keys::inst("app"))
+            .and_then(|entry| entry.value)
+            .expect("record should exist");
+        let seen_by_a_newer_node: FutureInstanceData =
+            decode(&stored).expect("the newer node must still read its own field");
+        assert_eq!(
+            seen_by_a_newer_node.health_probe_path, "/healthz",
+            "the unknown field must survive a write by a build that cannot see it"
+        );
+        assert_eq!(
+            seen_by_a_newer_node.ip,
+            Ipv4Addr::new(10, 0, 0, 2),
+            "the writer's own fields must still take effect"
+        );
+        let seen_by_this_build: InstanceData =
+            decode(&stored).expect("this build must still read the record");
+        assert_eq!(seen_by_this_build.reg_time, 1_700_000_100);
+    }
+
+    /// A certificate is a complete new fact on every write, so nothing may be
+    /// carried across one. Attributing a previous certificate's field to the one
+    /// just issued is worse than dropping the field: absent is a case the newer
+    /// reader already handles, stale is not.
+    #[test]
+    fn a_snapshot_does_not_inherit_the_previous_writes_fields() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = KvStore::new(1, vec![], dir.path()).expect("failed to create kv store");
+
+        #[derive(Debug, Serialize, Deserialize)]
+        struct FutureCertData {
+            cert_pem: String,
+            key_pem: String,
+            not_after: u64,
+            issued_by: NodeId,
+            issued_at: u64,
+            chain_pem: String,
+        }
+
+        kv.persistent
+            .write()
+            .put(
+                keys::cert_data("a.example"),
+                encode(&FutureCertData {
+                    cert_pem: "old-cert".to_string(),
+                    key_pem: "old-key".to_string(),
+                    not_after: 1_700_000_000,
+                    issued_by: 2,
+                    issued_at: 1_600_000_000,
+                    chain_pem: "old-chain".to_string(),
+                })
+                .expect("encode should succeed"),
+            )
+            .expect("put should succeed");
+
+        kv.save_cert_data(
+            "a.example",
+            &CertData {
+                cert_pem: "new-cert".to_string(),
+                key_pem: "new-key".to_string(),
+                not_after: 1_800_000_000,
+                issued_by: 1,
+                issued_at: 1_700_000_100,
+            },
+        )
+        .expect("save should succeed");
+
+        let stored = kv
+            .persistent
+            .read()
+            .get(&keys::cert_data("a.example"))
+            .and_then(|entry| entry.value)
+            .expect("record should exist");
+        assert!(
+            decode::<FutureCertData>(&stored).is_err(),
+            "the previous certificate's chain must not be attached to the new one"
+        );
     }
 }
 
