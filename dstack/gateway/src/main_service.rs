@@ -1290,14 +1290,30 @@ impl ProxyState {
             }
             carried_admin_ready = existing.admin_ready;
             carried_admin_port_policy = existing.admin_port_policy.clone();
-            // Registration only runs at boot, so seeing it again means the CVM
-            // restarted: whatever health was last observed describes the
-            // previous run, and its containers are starting over. Reset rather
-            // than let a stale "healthy" carry a rebooting instance straight
-            // back into rotation.
-            existing.has_health_endpoint = has_health_endpoint;
-            existing.health = HealthState::initial(has_health_endpoint);
+            // A restarted CVM's health verdict describes a process that no
+            // longer exists, so it has to be dropped -- but "registered again"
+            // does not mean "restarted". `dstack-util`'s gateway-checker
+            // re-registers every `REFRESH_INTERVAL` (180s) and again whenever
+            // the WireGuard handshake goes stale, so resetting on every
+            // registration would drop a healthy instance to `Unknown` -- out of
+            // the rotation until the next poll -- every three minutes, for a
+            // CVM that never went anywhere.
+            //
+            // A new WireGuard key is what distinguishes the two. The guest
+            // caches its key store in `/run/dstack/gateway-cache.json`, which
+            // is tmpfs: a boot finds no cache and generates a fresh key, while
+            // every refresh within that boot reuses it. A changed capability
+            // means a different image, which also means a boot.
+            //
+            // This leans on where that cache lives. If it ever moves onto
+            // persistent storage -- to keep a CVM's WireGuard IP across
+            // reboots, say -- a reboot stops being visible here and the reset
+            // has to move to an explicit boot id in `RegisterCvmRequest`.
             let pubkey_changed = existing.public_key != public_key;
+            if pubkey_changed || existing.has_health_endpoint != has_health_endpoint {
+                existing.health = HealthState::initial(has_health_endpoint);
+            }
+            existing.has_health_endpoint = has_health_endpoint;
             if pubkey_changed {
                 info!("public key changed for instance {id}, new key: {public_key}");
                 existing.public_key = public_key.to_string();

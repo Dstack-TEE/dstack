@@ -929,28 +929,53 @@ async fn an_unhealthy_instance_is_still_reachable_by_instance_id() {
     assert_eq!(selected_ids(&direct), vec!["direct-app-1"]);
 }
 
-/// Registration only runs at boot, so seeing it again means the CVM restarted
-/// and the last verdict describes a process that no longer exists.
+/// Re-register one instance the way a CVM does, with the key it presents.
+fn re_register(
+    proxy: &mut ProxyState,
+    instance_id: &str,
+    app: &str,
+    public_key: &str,
+    has_health_endpoint: bool,
+) {
+    proxy
+        .new_client_by_id(
+            instance_id,
+            app,
+            public_key,
+            "",
+            ReportedCapabilities {
+                port_policy: Some(policy(false, &[])),
+                has_health_endpoint,
+            },
+        )
+        .unwrap();
+}
+
+/// A boot regenerates the CVM's WireGuard key -- its key store is cached in
+/// `/run`, which is tmpfs -- so a changed key is how a restart is told apart
+/// from a refresh. The old verdict describes a process that no longer exists.
 #[tokio::test]
-async fn re_registration_resets_health_to_unknown() {
+async fn a_reboot_resets_health_to_unknown() {
     let state = create_test_state().await;
     let mut proxy = state.lock();
     register_instances(&mut proxy, "restart-app", 2, true);
     observe(&mut proxy, "restart-app-0", HealthState::Healthy);
     observe(&mut proxy, "restart-app-1", HealthState::Healthy);
 
-    proxy
-        .new_client_by_id(
-            "restart-app-0",
-            "restart-app",
-            &test_pubkey("restart-app-key-0"),
-            "",
-            ReportedCapabilities {
-                port_policy: Some(policy(false, &[])),
-                has_health_endpoint: true,
-            },
-        )
-        .unwrap();
+    let rebooted_key = test_pubkey("restart-app-key-0-second-boot");
+    re_register(
+        &mut proxy,
+        "restart-app-0",
+        "restart-app",
+        &rebooted_key,
+        true,
+    );
+    // The tunnel is rebuilt under the new key, so keep both handshakes fresh:
+    // this test is about health, not about handshake staleness.
+    proxy.handshake_cache.set_for_test(BTreeMap::from([
+        (rebooted_key, now_secs()),
+        (test_pubkey("restart-app-key-1"), now_secs()),
+    ]));
 
     assert_eq!(
         proxy.state.instances["restart-app-0"].health,
@@ -959,6 +984,59 @@ async fn re_registration_resets_health_to_unknown() {
     assert_eq!(
         selected_ids(&proxy.select_top_n_hosts("restart-app").unwrap()),
         vec!["restart-app-1"]
+    );
+}
+
+/// Registration is not boot-only: the gateway-checker re-registers every 180s
+/// and whenever the handshake goes stale, reusing the key cached in `/run`.
+/// Resetting on those would take a healthy instance out of the rotation every
+/// three minutes for no reason.
+#[tokio::test]
+async fn a_periodic_re_registration_keeps_the_last_health_verdict() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_instances(&mut proxy, "refresh-app", 2, true);
+    observe(&mut proxy, "refresh-app-0", HealthState::Healthy);
+    observe(&mut proxy, "refresh-app-1", HealthState::Healthy);
+
+    re_register(
+        &mut proxy,
+        "refresh-app-0",
+        "refresh-app",
+        &test_pubkey("refresh-app-key-0"),
+        true,
+    );
+
+    assert_eq!(
+        proxy.state.instances["refresh-app-0"].health,
+        HealthState::Healthy
+    );
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("refresh-app").unwrap()),
+        vec!["refresh-app-0", "refresh-app-1"]
+    );
+}
+
+/// A different capability means a different image, so the verdict belongs to
+/// something that is no longer running even if the key survived.
+#[tokio::test]
+async fn a_changed_health_capability_resets_health() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_instances(&mut proxy, "swap-app", 1, true);
+    observe(&mut proxy, "swap-app-0", HealthState::Healthy);
+
+    re_register(
+        &mut proxy,
+        "swap-app-0",
+        "swap-app",
+        &test_pubkey("swap-app-key-0"),
+        false,
+    );
+
+    assert_eq!(
+        proxy.state.instances["swap-app-0"].health,
+        HealthState::Unsupported
     );
 }
 
