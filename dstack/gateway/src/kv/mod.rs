@@ -102,6 +102,16 @@ pub struct InstanceData {
     /// ClearInstancePortPolicy.
     #[serde(default)]
     pub admin_port_policy: Option<PortPolicy>,
+    /// Operator traffic gate (`Admin.SetInstanceReady`). `None` means no
+    /// operator ever set one, which reads as ready.
+    ///
+    /// Carried in the instance record rather than a key of its own. A separate
+    /// key would only buy protection against a node whose build predates this
+    /// field rewriting the record and dropping it -- and that needs a cluster
+    /// containing a pre-feature node, which cannot happen: multi-node has never
+    /// been deployed, so by the time it is, every node will know this field.
+    #[serde(default)]
+    pub admin_ready: Option<bool>,
 }
 
 /// The `inst/` records currently in the KV store, split by readability.
@@ -739,15 +749,23 @@ impl KvStore {
     /// Returns whether a live record (including an undecodable one) existed
     /// before the tombstone was written.
     pub fn sync_delete_instance(&self, instance_id: &str) -> Result<bool> {
-        let previous = self.persistent.write().delete(keys::inst(instance_id))?;
-        self.ephemeral
+        // Every delete is attempted even if an earlier one fails, and the first
+        // error is returned afterwards. Short-circuiting on `?` would leave the
+        // later keys behind while the `inst/` tombstone is already published,
+        // and nothing garbage-collects orphans.
+        let previous = self.persistent.write().delete(keys::inst(instance_id));
+        let conn = self
+            .ephemeral
             .write()
-            .delete(keys::conn(instance_id, self.my_node_id))?;
-        // Delete this node's handshake record
-        self.ephemeral
+            .delete(keys::conn(instance_id, self.my_node_id));
+        let handshake = self
+            .ephemeral
             .write()
-            .delete(keys::handshake(instance_id, self.my_node_id))?;
-        Ok(previous.is_some_and(|entry| !entry.is_deleted()))
+            .delete(keys::handshake(instance_id, self.my_node_id));
+
+        conn?;
+        handshake?;
+        Ok(previous?.is_some_and(|entry| !entry.is_deleted()))
     }
 
     /// Load all instances from the sync store.
@@ -1960,6 +1978,47 @@ mod corruption_tests {
             .expect("raw put should succeed");
     }
 
+    /// The gate rides in the instance record, so its forward compatibility is
+    /// the record's. A build that adds a field must not make the record
+    /// unreadable to one that does not know it: msgpack named maps let the
+    /// older reader skip what it does not recognise. If this ever fails,
+    /// widening `InstanceData` has stopped being a no-op for older nodes.
+    #[test]
+    fn an_instance_record_with_an_unknown_field_still_decodes() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+
+        #[derive(serde::Serialize)]
+        struct FutureRecord<'a> {
+            app_id: &'a str,
+            ip: std::net::Ipv4Addr,
+            public_key: &'a str,
+            reg_time: u64,
+            port_policy: Option<PortPolicy>,
+            port_policy_hash: &'a str,
+            admin_port_policy: Option<PortPolicy>,
+            admin_ready: Option<bool>,
+            reason: &'a str,
+        }
+        let widened = encode(&FutureRecord {
+            app_id: "app",
+            ip: "10.0.0.5".parse().unwrap(),
+            public_key: "k",
+            reg_time: 1,
+            port_policy: None,
+            port_policy_hash: "",
+            admin_port_policy: None,
+            admin_ready: Some(false),
+            reason: "under investigation",
+        })
+        .expect("encode should succeed");
+        put_raw(&kv, &keys::inst("future"), &widened);
+
+        let loaded = kv.load_all_instances();
+        assert!(loaded.undecodable.is_empty(), "{:?}", loaded.undecodable);
+        assert_eq!(loaded.decoded["future"].admin_ready, Some(false));
+    }
+
     #[test]
     fn a_corrupt_certbot_config_does_not_read_as_the_default() {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
@@ -2091,6 +2150,7 @@ mod corruption_tests {
                     port_policy: None,
                     port_policy_hash: String::new(),
                     admin_port_policy: None,
+                    admin_ready: None,
                 },
             )
             .expect("sync should succeed");

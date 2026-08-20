@@ -100,6 +100,13 @@ pub(crate) fn filter_allowed_addresses(
     port: u16,
 ) -> Result<AddressGroup> {
     let total = addresses.len();
+    // Nothing was offered, so nothing was denied here. Selection already ruled
+    // every instance out -- an operator gated them, or none passed the
+    // handshake-freshness filter -- and claiming the port policy rejected them
+    // would send whoever reads this log at the wrong subsystem entirely.
+    if total == 0 {
+        bail!("no instance of app {app_id} is eligible to serve port {port}");
+    }
     let allowed: AddressGroup = addresses
         .into_iter()
         .filter(|a| match is_port_allowed(state, &a.instance_id, port) {

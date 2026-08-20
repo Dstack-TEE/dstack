@@ -41,6 +41,14 @@ pub struct InstanceInfo {
     /// when set; survives app upgrades.
     #[serde(default)]
     pub admin_port_policy: Option<PortPolicy>,
+    /// Operator-set traffic gate (Admin RPC). `None` means no operator ever
+    /// touched it. See [`InstanceInfo::is_admin_ready`].
+    ///
+    /// Persisted under its own `admin_ready/` key rather than inside the
+    /// shared instance record, so that a node which does not know about the
+    /// gate cannot drop it when it rewrites that record.
+    #[serde(default)]
+    pub admin_ready: Option<bool>,
     #[serde(skip)]
     pub connections: Arc<AtomicU64>,
 }
@@ -48,6 +56,35 @@ pub struct InstanceInfo {
 impl InstanceInfo {
     pub fn num_connections(&self) -> u64 {
         self.connections.load(Ordering::Relaxed)
+    }
+
+    /// Whether an operator has left this instance eligible for traffic.
+    ///
+    /// Defaults to ready, so the gate is invisible until someone explicitly
+    /// closes it -- an instance that predates this field, or one nobody has
+    /// touched, keeps serving exactly as before.
+    ///
+    /// This only gates *multi-target* selection, i.e. connections addressed to
+    /// the app id. Routing to the instance id directly ignores it on purpose:
+    /// the point of taking an instance out of rotation is to investigate it
+    /// while it is still running, which needs the instance to stay reachable.
+    pub fn is_admin_ready(&self) -> bool {
+        self.admin_ready.unwrap_or(true)
+    }
+
+    /// Whether replacing `self` with `other` could invalidate a cached
+    /// selection.
+    ///
+    /// `ip` is copied straight into the cached `AddressInfo`; `app_id` decides
+    /// which cache entry the instance belongs to; `public_key` is the key the
+    /// handshake freshness filter looks up; `admin_ready` gates eligibility.
+    /// A change to any of them means a cached `top_n` was computed against a
+    /// record that no longer exists.
+    pub fn routing_inputs_differ(&self, other: &Self) -> bool {
+        self.ip != other.ip
+            || self.app_id != other.app_id
+            || self.public_key != other.public_key
+            || self.admin_ready != other.admin_ready
     }
 }
 
