@@ -685,6 +685,69 @@ async fn a_gate_arriving_through_kv_invalidates_the_cached_selection() {
     );
 }
 
+/// The reload resets health when the declared capability changes, which flips
+/// eligibility. That has to drop the cached selection for the same reason a
+/// gate arriving through KV does, or the stale `top_n` keeps routing to an
+/// instance the reload just took out of the running.
+#[tokio::test]
+async fn a_capability_change_arriving_through_kv_invalidates_the_cached_selection() {
+    let state = create_test_state().await;
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    {
+        let mut proxy = state.lock();
+        // No health endpoint declared: both instances read as `Unsupported`,
+        // so both are eligible and the selection caches them.
+        register_instances(&mut proxy, "swap-app", 2, false);
+        proxy.select_top_n_hosts("swap-app").unwrap();
+        assert_eq!(proxy.state.top_n.len(), 1, "selection should be cached");
+    }
+
+    // The instance came back on an image that does serve `Worker.Health`, and
+    // the record reached us through sync. It starts `Unknown` until a poll
+    // answers, so it is no longer eligible.
+    let upgraded = {
+        let proxy = state.lock();
+        let existing = proxy.state.instances["swap-app-0"].clone();
+        InstanceData {
+            app_id: existing.app_id.clone(),
+            ip: existing.ip,
+            public_key: existing.public_key.clone(),
+            reg_time: now,
+            port_policy: existing.port_policy.clone(),
+            port_policy_hash: existing.port_policy_hash.clone(),
+            admin_port_policy: None,
+            admin_ready: existing.admin_ready,
+            has_health_endpoint: true,
+        }
+    };
+    state
+        .kv_store
+        .sync_instance("swap-app-0", &upgraded)
+        .unwrap();
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+
+    let mut proxy = state.lock();
+    assert_eq!(
+        proxy.state.instances["swap-app-0"].health,
+        HealthState::Unknown
+    );
+    assert!(
+        proxy.state.top_n.is_empty(),
+        "a capability change arriving through KV must drop the cached selection"
+    );
+    proxy.handshake_cache.set_for_test(BTreeMap::from([
+        (test_pubkey("swap-app-key-0"), now),
+        (test_pubkey("swap-app-key-1"), now),
+    ]));
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("swap-app").unwrap()),
+        vec!["swap-app-1"]
+    );
+}
+
 /// Whether this node's `conn/` record for the fixture instance is live.
 ///
 /// Reads the raw entry because `KvStore` exposes no conn accessor, and uses the
