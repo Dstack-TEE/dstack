@@ -813,7 +813,6 @@ impl VmmRpc for RpcHandler {
         }
     }
 
-    #[tracing::instrument(skip_all)]
     async fn resize_vm(self, request: ResizeVmRequest) -> Result<()> {
         info!(
             vm_id = %request.id,
