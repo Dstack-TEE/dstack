@@ -767,10 +767,13 @@ impl KvStore {
     /// Returns whether a live record (including an undecodable one) existed
     /// before the tombstone was written.
     pub fn sync_delete_instance(&self, instance_id: &str) -> Result<bool> {
-        // Every delete is attempted even if an earlier one fails, and the first
-        // error is returned afterwards. Short-circuiting on `?` would leave the
-        // later keys behind while the `inst/` tombstone is already published,
-        // and nothing garbage-collects orphans.
+        // Every delete is attempted even if an earlier one fails. Short-circuiting
+        // on `?` would leave the later keys behind while the `inst/` tombstone is
+        // already published, and nothing garbage-collects orphans. They are then
+        // reported in the order they were issued, so a failure to tombstone
+        // `inst/` -- the only one of the three that is persistent, and the one an
+        // operator needs to know about -- is not masked by an ephemeral key that
+        // also happened to fail.
         let previous = self.persistent.write().delete(keys::inst(instance_id));
         let conn = self
             .ephemeral
@@ -781,9 +784,10 @@ impl KvStore {
             .write()
             .delete(keys::handshake(instance_id, self.my_node_id));
 
+        let previous = previous?;
         conn?;
         handshake?;
-        Ok(previous?.is_some_and(|entry| !entry.is_deleted()))
+        Ok(previous.is_some_and(|entry| !entry.is_deleted()))
     }
 
     /// Load all instances from the sync store.
