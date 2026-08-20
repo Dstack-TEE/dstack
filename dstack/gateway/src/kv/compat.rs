@@ -77,8 +77,9 @@ pub fn is_long_lived_record(key: &str) -> bool {
 ///
 /// Returns `encoded` untouched — today's behavior — whenever the merge cannot be
 /// made safely: `T` is not a plain struct, either side is not a string-keyed
-/// map, or either side does not parse cleanly. Preserving unknown fields is an
-/// improvement on the write path, never a precondition for the write.
+/// map, either side does not parse cleanly, or the merged bytes do not read
+/// back as `T`. Preserving unknown fields is an improvement on the write path,
+/// never a precondition for the write.
 pub fn carry_unknown_fields<T: serde::de::DeserializeOwned>(
     key: &str,
     stored: &[u8],
@@ -114,6 +115,18 @@ pub fn carry_unknown_fields<T: serde::de::DeserializeOwned>(
     for field in &carried {
         out.extend_from_slice(field.raw);
     }
+
+    // Never write a record this binary cannot read back. The field list says
+    // which names `T` knows, not what it tolerates next to them: a
+    // `deny_unknown_fields` type, or a stored record that repeats a key, would
+    // otherwise turn a healthy write into a record its own writer can no longer
+    // decode. Dropping a newer peer's field is the lesser failure — it is the
+    // one this module exists to reduce, not one it may introduce.
+    if let Err(err) = super::decode::<T>(&out) {
+        debug!("declining to carry unknown fields for key {key}: {err:#}");
+        return encoded;
+    }
+
     debug!(
         "carried {} unknown field(s) forward for key {key}: {:?}",
         carried.len(),
@@ -472,6 +485,81 @@ mod tests {
         assert_eq!(declared_fields::<u64>(), None);
         assert_eq!(declared_fields::<Vec<u8>>(), None);
         assert_eq!(declared_fields::<Option<Old>>(), None);
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Strict {
+        app_id: String,
+        ip: String,
+    }
+
+    /// The declared field list says which names `T` knows, not what it tolerates
+    /// beside them. Carrying a field into a `deny_unknown_fields` type would
+    /// leave a record its own writer can no longer decode — strictly worse than
+    /// the field being dropped, which is the failure this module already
+    /// accepts everywhere else.
+    #[test]
+    fn a_merge_that_would_not_read_back_is_abandoned() {
+        let stored = stored_by_a_newer_build();
+        let encoded = rmp_serde::to_vec_named(&Strict {
+            app_id: "app".into(),
+            ip: "10.0.0.2".into(),
+        })
+        .unwrap();
+
+        let written = carry_unknown_fields::<Strict>("inst/app", &stored, encoded.clone());
+        assert_eq!(
+            written, encoded,
+            "the write must stay decodable by its writer"
+        );
+        rmp_serde::from_slice::<Strict>(&written).expect("writer reads its own record");
+    }
+
+    /// A `BTreeMap` value and an externally tagged enum both encode as maps, so
+    /// the byte walker alone cannot tell them apart from a struct: carrying a
+    /// "missing" key into a map would resurrect an entry that was deliberately
+    /// removed, and into an enum it would graft one variant's fields onto
+    /// another. The declared-field probe is what refuses them.
+    #[test]
+    fn map_shaped_values_that_are_not_structs_are_refused() {
+        #[derive(Debug, Serialize, Deserialize)]
+        enum Tagless {
+            Cloudflare { api_token: String },
+            Route53 { access_key: String },
+        }
+
+        let stored_map = rmp_serde::to_vec_named(&BTreeMap::from([
+            ("keep".to_string(), 1u8),
+            ("drop".to_string(), 2u8),
+        ]))
+        .unwrap();
+        assert!(
+            matches!(stored_map[0], 0x80..=0x8f),
+            "the fixture must be a map on the wire for this test to mean anything"
+        );
+
+        let encoded =
+            rmp_serde::to_vec_named(&BTreeMap::from([("keep".to_string(), 1u8)])).unwrap();
+        assert_eq!(
+            carry_unknown_fields::<BTreeMap<String, u8>>("inst/app", &stored_map, encoded.clone()),
+            encoded,
+            "a removed map entry must stay removed"
+        );
+
+        let stored_enum = rmp_serde::to_vec_named(&Tagless::Cloudflare {
+            api_token: "secret".into(),
+        })
+        .unwrap();
+        let encoded = rmp_serde::to_vec_named(&Tagless::Route53 {
+            access_key: "key".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            carry_unknown_fields::<Tagless>("dns_cred/x", &stored_enum, encoded.clone()),
+            encoded,
+            "one variant's fields must not follow a change of variant"
+        );
     }
 
     #[derive(Debug, Serialize, Deserialize)]
