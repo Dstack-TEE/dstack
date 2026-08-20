@@ -5,6 +5,7 @@
 pub const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const GIT_REV: &str = dstack_build_info::git_revision!();
 
+mod app_health;
 pub mod backend;
 pub mod config;
 mod container_health;
