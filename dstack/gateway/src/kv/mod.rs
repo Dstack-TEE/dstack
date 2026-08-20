@@ -105,11 +105,29 @@ pub struct InstanceData {
     /// Operator traffic gate (`Admin.SetInstanceReady`). `None` means no
     /// operator ever set one, which reads as ready.
     ///
-    /// Carried in the instance record rather than a key of its own. A separate
-    /// key would only buy protection against a node whose build predates this
-    /// field rewriting the record and dropping it -- and that needs a cluster
-    /// containing a pre-feature node, which cannot happen: multi-node has never
-    /// been deployed, so by the time it is, every node will know this field.
+    /// Carried in the instance record rather than under a key of its own. Every
+    /// writer rewrites the whole record from its own in-memory copy, so a copy
+    /// that does not carry the gate drops it. Two paths get there:
+    ///
+    /// - A build that predates the field. Records are msgpack named maps, so it
+    ///   reads the record fine and just does not write the field back. This
+    ///   needs no cluster -- a single node rolled back is enough.
+    /// - A node on the *current* build that has not seen the gate yet. The lazy
+    ///   port-policy fetch rewrites the record on the first proxied connection,
+    ///   so between `SetInstanceReady` landing on one node and the sync reaching
+    ///   another, that other node can clobber it. Normally the window is one
+    ///   sync round; under a partition it is as long as the partition.
+    ///
+    /// A key of its own would survive both. It is still not worth one:
+    /// `port_policy` and `admin_port_policy` ride in the same record, are
+    /// rewritten by the same code, and are lost the same two ways, so guarding
+    /// one field of three buys inconsistency rather than safety.
+    ///
+    /// What differs is the cost, and it is worth being explicit that this is
+    /// not free: a lost `port_policy` is re-fetched and a lost
+    /// `admin_port_policy` falls back to what the instance reports, whereas a
+    /// lost gate silently returns an instance to rotation. Re-issuing the gate
+    /// rewrites the record and fixes it.
     #[serde(default)]
     pub admin_ready: Option<bool>,
 }

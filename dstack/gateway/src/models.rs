@@ -44,9 +44,9 @@ pub struct InstanceInfo {
     /// Operator-set traffic gate (Admin RPC). `None` means no operator ever
     /// touched it. See [`InstanceInfo::is_admin_ready`].
     ///
-    /// Persisted under its own `admin_ready/` key rather than inside the
-    /// shared instance record, so that a node which does not know about the
-    /// gate cannot drop it when it rewrites that record.
+    /// Persisted as a field of the instance record; see
+    /// [`crate::kv::InstanceData::admin_ready`] for why it does not get a key
+    /// of its own.
     #[serde(default)]
     pub admin_ready: Option<bool>,
     #[serde(skip)]
