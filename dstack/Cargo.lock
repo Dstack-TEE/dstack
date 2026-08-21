@@ -3375,6 +3375,7 @@ dependencies = [
  "hyperlocal",
  "log",
  "pin-project-lite",
+ "prost 0.13.5",
  "prpc",
  "reqwest",
  "serde",
