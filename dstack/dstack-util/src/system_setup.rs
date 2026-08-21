@@ -334,6 +334,21 @@ struct GatewayKeyStore {
     wg_sk: String,
     /// WireGuard public key
     wg_pk: String,
+    /// The gateway URL that last accepted a registration for this cluster.
+    ///
+    /// Tried first on the next refresh. Without it the list is walked in
+    /// configured order every time, which is sticky in the wrong way: every CVM
+    /// piles onto the first URL, and when that one has an outage the whole
+    /// fleet moves to the second and then moves *back* the moment the first
+    /// recovers. Each of those moves rewrites the instance record from a
+    /// different node's memory, which is exactly what loses per-instance state
+    /// that only lives there.
+    ///
+    /// Scoped to a boot, because the cache is on tmpfs. That is the right
+    /// scope: a boot regenerates the WireGuard key and re-registers from
+    /// scratch anyway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_url: Option<String>,
 }
 
 impl GatewayKeyStore {
@@ -596,6 +611,7 @@ impl<'a> GatewayContext<'a> {
             cert_not_after,
             wg_sk,
             wg_pk,
+            last_url: None,
         })
     }
 
@@ -653,26 +669,33 @@ impl<'a> GatewayContext<'a> {
             } else {
                 self.key_store_for_additional_cluster(&target.name, &primary_key_store)
             };
-            let (key_store, cache_path) = match key_store_result {
+            let (mut key_store, cache_path) = match key_store_result {
                 Ok(value) => value,
                 Err(err) => {
                     errors.push(format!("{}: {err:#}", target.name));
                     continue;
                 }
             };
+            // Carry the last accepting URL across the rebuild above, which
+            // constructs a fresh key store whenever the certificate is renewed.
+            key_store.last_url = GatewayKeyStore::load_from(&cache_path)
+                .and_then(|cached| cached.last_url)
+                .filter(|url| target.urls.iter().any(|configured| configured == url));
             if let Err(err) = key_store.save_to(&cache_path) {
                 warn!(cluster = %target.name, "failed to save gateway cluster cache: {err:?}");
             }
 
             let mut first_error = None;
             let mut response = None;
-            for url in &target.urls {
+            let mut accepted_by = None;
+            for url in order_by_stickiness(&target.urls, key_store.last_url.as_deref()) {
                 match self
                     .register_cvm(url, &key_store, &self.keys.gateway_app_id)
                     .await
                 {
                     Ok(value) => {
                         response = Some(value);
+                        accepted_by = Some(url.clone());
                         break;
                     }
                     Err(err) => {
@@ -681,6 +704,15 @@ impl<'a> GatewayContext<'a> {
                             first_error = Some(err);
                         }
                     }
+                }
+            }
+            if accepted_by != key_store.last_url {
+                if let Some(url) = &accepted_by {
+                    info!(cluster = %target.name, %url, "gateway registration moved");
+                }
+                key_store.last_url = accepted_by;
+                if let Err(err) = key_store.save_to(&cache_path) {
+                    warn!(cluster = %target.name, "failed to record the accepting gateway: {err:?}");
                 }
             }
             let Some(response) = response else {
@@ -973,6 +1005,30 @@ fn verify_app_compose_policy(shared: &HostShared) -> Result<()> {
         verify_launch_token_requirement(launch_token_hash, &token)?;
     }
     Ok(())
+}
+
+/// The order to try a cluster's gateway URLs in, last accepting one first.
+///
+/// Walking the configured list every time is sticky in the wrong way. Every CVM
+/// piles onto the first URL, so one node takes all registration traffic; and
+/// when that node has an outage the whole fleet moves to the second URL and
+/// then moves *back* the instant the first recovers. Every one of those moves
+/// rewrites the instance record from a different node's memory, which is how
+/// per-instance state that lives only there gets lost.
+///
+/// Preferring the last node that accepted turns both into one-time events: a
+/// CVM that moved stays moved, and the fleet spreads over the outage rather
+/// than snapping back together.
+///
+/// `last` is only a preference. Everything else still follows in configured
+/// order, so a URL that is down costs one failed attempt and nothing more.
+fn order_by_stickiness<'a>(urls: &'a [String], last: Option<&str>) -> Vec<&'a String> {
+    let mut ordered = Vec::with_capacity(urls.len());
+    if let Some(last) = last {
+        ordered.extend(urls.iter().filter(|url| url.as_str() == last));
+    }
+    ordered.extend(urls.iter().filter(|url| Some(url.as_str()) != last));
+    ordered
 }
 
 fn verify_manifest_feature_requirements(app_compose: &AppCompose) -> Result<()> {
@@ -3802,7 +3858,7 @@ mod kms_provider_inventory_tests {
 
 #[cfg(test)]
 mod gateway_registration_refresh_tests {
-    use super::{gateway_rpc_url, wireguard_endpoint_hosts, GatewayKeyStore};
+    use super::{gateway_rpc_url, order_by_stickiness, wireguard_endpoint_hosts, GatewayKeyStore};
     use std::os::unix::fs::PermissionsExt as _;
 
     fn key_store(cert_not_after: u64) -> GatewayKeyStore {
@@ -3813,7 +3869,100 @@ mod gateway_registration_refresh_tests {
             cert_not_after,
             wg_sk: "sentinel-wg-private".into(),
             wg_pk: "sentinel-wg-public".into(),
+            last_url: None,
         }
+    }
+
+    fn urls(list: &[&str]) -> Vec<String> {
+        list.iter().map(|url| url.to_string()).collect()
+    }
+
+    fn ordered(list: &[String], last: Option<&str>) -> Vec<String> {
+        order_by_stickiness(list, last)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// With nothing remembered the configured order stands, which is the
+    /// behaviour every existing deployment already has.
+    #[test]
+    fn without_a_remembered_url_the_configured_order_stands() {
+        let list = urls(&["https://a", "https://b", "https://c"]);
+        assert_eq!(ordered(&list, None), list);
+    }
+
+    /// The point: a CVM that moved to the second gateway during an outage stays
+    /// there instead of snapping back the moment the first recovers. Each move
+    /// rewrites the instance record from a different node's memory.
+    #[test]
+    fn the_last_accepting_url_is_tried_first() {
+        let list = urls(&["https://a", "https://b", "https://c"]);
+        assert_eq!(
+            ordered(&list, Some("https://b")),
+            urls(&["https://b", "https://a", "https://c"])
+        );
+    }
+
+    /// A preference, not a pin: if the remembered one is down it costs one
+    /// failed attempt and the rest follow in configured order.
+    #[test]
+    fn the_remaining_urls_keep_their_configured_order() {
+        let list = urls(&["https://a", "https://b", "https://c", "https://d"]);
+        assert_eq!(
+            ordered(&list, Some("https://c")),
+            urls(&["https://c", "https://a", "https://b", "https://d"])
+        );
+    }
+
+    /// An operator removing a URL from the config must not resurrect it.
+    #[test]
+    fn a_remembered_url_no_longer_configured_is_ignored() {
+        let list = urls(&["https://a", "https://b"]);
+        assert_eq!(ordered(&list, Some("https://gone")), list);
+    }
+
+    #[test]
+    fn every_url_is_tried_exactly_once() {
+        let list = urls(&["https://a", "https://b", "https://c"]);
+        for last in [
+            None,
+            Some("https://a"),
+            Some("https://b"),
+            Some("https://c"),
+        ] {
+            let mut seen = ordered(&list, last);
+            assert_eq!(seen.len(), list.len(), "last={last:?}");
+            seen.sort();
+            let mut expected = list.clone();
+            expected.sort();
+            assert_eq!(seen, expected, "last={last:?}");
+        }
+    }
+
+    /// The cache is what carries the preference across a refresh, so it has to
+    /// survive the round trip -- and an older cache without the field must
+    /// still load.
+    #[test]
+    fn the_remembered_url_round_trips_through_the_cache() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("gateway-cache.json");
+        let mut store = key_store(u64::MAX);
+        store.last_url = Some("https://b".into());
+        store.save_to(&path).expect("save");
+        let loaded = GatewayKeyStore::load_from(&path).expect("load");
+        assert_eq!(loaded.last_url.as_deref(), Some("https://b"));
+
+        let legacy = serde_json::to_value(key_store(u64::MAX))
+            .map(|mut value| {
+                value.as_object_mut().unwrap().remove("last_url");
+                value
+            })
+            .expect("serialize");
+        std::fs::write(&path, legacy.to_string()).expect("write");
+        let loaded =
+            GatewayKeyStore::load_from(&path).expect("a cache without the field must load");
+        assert_eq!(loaded.last_url, None);
     }
 
     #[test]
