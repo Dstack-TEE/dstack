@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - os/yocto: nerdctl 2.2.1 → 2.3.5, so `nerdctl compose` honours the Compose `healthcheck:` field (only translated into `--health-*` flags from 2.3.1 on). Requires openembedded-core to move to `wrynose` head for go 1.26.5, which also brings gcc 15.2 → 15.3 — every guest image measurement changes, so the new image hashes need whitelisting in KMS
 
+### Fixed
+- bound VMM-to-guest RPCs and guest-agent dependency calls to prevent stalled peers from retaining request resources indefinitely
+
 ## [0.5.5] - 2025-10-20
 
 ### Added
