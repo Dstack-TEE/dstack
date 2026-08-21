@@ -60,6 +60,7 @@ fscommon.workspace = true
 or-panic.workspace = true
 url.workspace = true
 reqwest.workspace = true
+rand.workspace = true
 flate2.workspace = true
 tar.workspace = true
 tempfile.workspace = true

@@ -27,6 +27,7 @@ use id_pool::IdPool;
 use nix::unistd::Uid;
 use or_panic::ResultOrPanic;
 use ra_rpc::client::RaClient;
+use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -1605,17 +1606,29 @@ pub(crate) fn make_sys_config(
     let image_path = cfg.image.path.join(&manifest.image);
     let image = Image::load(image_path).context("Failed to load image info")?;
     let img_ver = image.info.version_tuple().unwrap_or((0, 0, 0));
-    let kms_urls = if manifest.kms_urls.is_empty() {
+    let mut kms_urls = if manifest.kms_urls.is_empty() {
         cfg.cvm.kms_urls.clone()
     } else {
         manifest.kms_urls.clone()
     };
-    let gateway_urls = if manifest.gateway_urls.is_empty() {
+    if cfg.cvm.shuffle_kms_urls {
+        kms_urls.shuffle(&mut rand::thread_rng());
+    }
+    let mut gateway_urls = if manifest.gateway_urls.is_empty() {
         cfg.cvm.gateway_urls.clone()
     } else {
         manifest.gateway_urls.clone()
     };
-    let gateway_clusters = cfg.cvm.gateway_clusters.clone();
+    let mut gateway_clusters = cfg.cvm.gateway_clusters.clone();
+    if cfg.cvm.shuffle_gateway_urls {
+        // Give each CVM an independent starting gateway. The guest preserves
+        // these orders when it has no previously successful gateway to prefer.
+        let mut rng = rand::thread_rng();
+        gateway_urls.shuffle(&mut rng);
+        for cluster in &mut gateway_clusters {
+            cluster.urls.shuffle(&mut rng);
+        }
+    }
     if img_ver < (0, 5, 0) {
         bail!("Unsupported image version: {img_ver:?}");
     }

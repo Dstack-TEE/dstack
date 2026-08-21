@@ -302,6 +302,9 @@ pub struct CvmConfig {
     pub qemu_path: PathBuf,
     /// The URL of the KMS server
     pub kms_urls: Vec<String>,
+    /// Randomize KMS failover order independently for each CVM.
+    #[serde(default)]
+    pub shuffle_kms_urls: bool,
     /// The URL of the dstack-gateway server
     #[serde(alias = "tproxy_urls")]
     pub gateway_urls: Vec<String>,
@@ -309,6 +312,9 @@ pub struct CvmConfig {
     /// failover endpoints for that cluster.
     #[serde(default)]
     pub gateway_clusters: Vec<dstack_types::GatewayClusterConfig>,
+    /// Randomize gateway failover order independently for each CVM.
+    #[serde(default)]
+    pub shuffle_gateway_urls: bool,
     /// The URL of the PCCS server
     #[serde(default)]
     pub pccs_url: String,
@@ -1196,6 +1202,8 @@ mod tests {
     fn config_validation_accepts_defaults() {
         let config = default_config();
         assert_eq!(config.netd.socket_mode, 0o660);
+        assert!(config.cvm.shuffle_kms_urls);
+        assert!(config.cvm.shuffle_gateway_urls);
         config.validate().unwrap();
     }
 
