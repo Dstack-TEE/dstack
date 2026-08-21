@@ -66,12 +66,17 @@ validate_runner() {
 #
 # `docker compose config` is the resolver in both branches: it applies the same
 # precedence, and the nerdctl branch already shells out to it below.
+#
+# The snapshotter goes in for the same reason: every nerdctl call here passes
+# it, so the agent's calls have to as well rather than assuming the default.
 record_compose_runtime() {
     local project
     project=$(docker compose -f "$COMPOSE_FILE" config --format json | jq -r '.name')
     mkdir -p "$(dirname "$COMPOSE_RUNTIME_FILE")"
     jq -n --arg namespace "$NERDCTL_NAMESPACE" --arg project "$project" \
-        '{namespace: $namespace, project: $project}' >"$COMPOSE_RUNTIME_FILE"
+        --arg snapshotter "$snapshotter" \
+        '{namespace: $namespace, project: $project, snapshotter: $snapshotter}' \
+        >"$COMPOSE_RUNTIME_FILE"
 }
 
 compose_start() {

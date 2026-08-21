@@ -139,6 +139,15 @@ pub(crate) struct ComposeRuntime {
     pub namespace: String,
     /// The Compose project name, as Compose itself resolved it.
     pub project: String,
+    /// The snapshotter nerdctl was run with.
+    ///
+    /// Every nerdctl call in `app-compose.sh` passes `--snapshotter`, so these
+    /// ones do too. Whether `ps` and `inspect` actually need it for a stargz
+    /// app is not something this could be tested against here, and matching the
+    /// runner costs nothing -- for the default `overlayfs` the flag is a no-op,
+    /// and for anything else guessing wrong is a permanently unhealthy app.
+    #[serde(default)]
+    pub snapshotter: Option<String>,
 }
 
 impl ComposeRuntime {
@@ -223,7 +232,7 @@ async fn collect_docker(project: &str) -> Result<HealthReport> {
 
 async fn collect_nerdctl(runtime: &ComposeRuntime) -> Result<HealthReport> {
     let filter = format!("label={}", compose_filter(&runtime.project));
-    let ids = nerdctl(&runtime.namespace, &["ps", "-a", "-q", "--filter", &filter])
+    let ids = nerdctl(runtime, &["ps", "-a", "-q", "--filter", &filter])
         .await
         .context("failed to list nerdctl containers")?;
     let ids = ids
@@ -234,7 +243,7 @@ async fn collect_nerdctl(runtime: &ComposeRuntime) -> Result<HealthReport> {
     if ids.is_empty() {
         return Ok(judge(vec![]));
     }
-    Ok(judge(inspect_nerdctl(&runtime.namespace, &ids).await?))
+    Ok(judge(inspect_nerdctl(runtime, &ids).await?))
 }
 
 /// Inspect every id, tolerating the ones that vanished under us.
@@ -250,16 +259,16 @@ async fn collect_nerdctl(runtime: &ComposeRuntime) -> Result<HealthReport> {
 /// -- would otherwise fail the entire report and drop the instance out of
 /// rotation. The batch stays the fast path; only when it fails do we pay for
 /// one call per container and skip the ones that no longer exist.
-async fn inspect_nerdctl(namespace: &str, ids: &[&str]) -> Result<Vec<Observed>> {
+async fn inspect_nerdctl(runtime: &ComposeRuntime, ids: &[&str]) -> Result<Vec<Observed>> {
     let mut args = vec!["inspect"];
     args.extend_from_slice(ids);
-    match nerdctl(namespace, &args).await {
+    match nerdctl(runtime, &args).await {
         Ok(raw) => Ok(parse_nerdctl(&raw)?),
         Err(err) => {
             debug!("batch inspect failed, falling back to one call per container: {err:#}");
             let mut observed = Vec::with_capacity(ids.len());
             for id in ids {
-                match nerdctl(namespace, &["inspect", id]).await {
+                match nerdctl(runtime, &["inspect", id]).await {
                     Ok(raw) => observed.extend(parse_nerdctl(&raw)?),
                     Err(err) => debug!("skipping container {id}: {err:#}"),
                 }
@@ -282,10 +291,13 @@ fn parse_nerdctl(raw: &str) -> Result<Vec<Observed>> {
     Ok(containers.into_iter().map(observe_nerdctl).collect())
 }
 
-async fn nerdctl(namespace: &str, args: &[&str]) -> Result<String> {
-    let run = Command::new("nerdctl")
-        .arg("--namespace")
-        .arg(namespace)
+async fn nerdctl(runtime: &ComposeRuntime, args: &[&str]) -> Result<String> {
+    let mut command = Command::new("nerdctl");
+    command.arg("--namespace").arg(&runtime.namespace);
+    if let Some(snapshotter) = &runtime.snapshotter {
+        command.arg("--snapshotter").arg(snapshotter);
+    }
+    let run = command
         .args(args)
         // Without this, abandoning the future on timeout leaves the child
         // running: `tokio::process` does not kill it on drop by default.
@@ -494,6 +506,36 @@ mod tests {
             .expect("present");
         assert_eq!(runtime.project, "envwins");
         assert_eq!(runtime.namespace, "dstack");
+    }
+
+    /// Every nerdctl call in `app-compose.sh` passes `--snapshotter`, so these
+    /// have to as well; assuming the default would be a guess that shows up as
+    /// a permanently unhealthy stargz app.
+    #[tokio::test]
+    async fn the_recorded_snapshotter_is_carried_through() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = runtime_file(
+            &dir,
+            r#"{"namespace":"dstack","project":"app","snapshotter":"stargz"}"#,
+        );
+        let runtime = ComposeRuntime::read_from(&path)
+            .await
+            .expect("read")
+            .expect("present");
+        assert_eq!(runtime.snapshotter.as_deref(), Some("stargz"));
+    }
+
+    /// A runtime file written before the snapshotter was recorded still works;
+    /// nerdctl then uses its own default, which is what it did before.
+    #[tokio::test]
+    async fn an_absent_snapshotter_is_not_an_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = runtime_file(&dir, r#"{"namespace":"dstack","project":"app"}"#);
+        let runtime = ComposeRuntime::read_from(&path)
+            .await
+            .expect("read")
+            .expect("present");
+        assert_eq!(runtime.snapshotter, None);
     }
 
     /// An app is free to move its containers to another namespace. Everything
