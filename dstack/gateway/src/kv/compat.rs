@@ -27,15 +27,23 @@
 //! the declaration, so it stays cleared instead of being resurrected from the
 //! stored copy. Aliases count as declared, so `#[serde(alias)]` is safe here too.
 //!
-//! # Records, not snapshots
+//! # The caller says whether a write updates or replaces
 //!
-//! Only long-lived records carry fields forward — see [`is_long_lived_record`].
-//! A snapshot key (a certificate, an attestation, a lock) is a complete new fact
-//! on every write, and carrying a field across those writes would attribute the
-//! previous snapshot's value to the new one. An older gateway renewing a
-//! certificate would then publish, say, a stale chain alongside the key it just
-//! issued: worse than the field being absent, because absent is a case the newer
-//! reader already has to handle.
+//! [`UnknownFields::Keep`] is for a write that updates a record which outlives
+//! it — an instance, a node, a credential, a config. [`UnknownFields::Drop`] is
+//! for one that states a complete new fact: a certificate, an attestation, a
+//! lock, a counter. Carrying a field across one of those would attribute the
+//! previous fact's value to the new one — an older gateway renewing a
+//! certificate would publish a stale chain beside the key it just issued, and
+//! one writing an attestation would hang a stale field off a quote about a
+//! different public key. That is worse than the field being absent, because
+//! absent is a case the newer reader already handles — older gateways exist —
+//! while stale is one it will silently trust.
+//!
+//! The choice is a parameter rather than a table of key prefixes because the
+//! code performing the write is the code that knows which of the two it is
+//! doing, and because a parameter cannot be forgotten: a new write does not
+//! compile until it says.
 //!
 //! # Top-level only
 //!
@@ -56,21 +64,16 @@ use serde::de::{self, Deserializer, Visitor};
 use std::fmt;
 use tracing::debug;
 
-use super::keys;
-
-/// Whether writes to `key` preserve fields this binary does not declare.
-///
-/// True for records with an identity that outlives any single write — an
-/// instance, a node, a DNS credential, a domain or the certbot config — where a
-/// write updates a record that already existed. False for snapshots, counters
-/// and locks, where each write replaces the whole fact and a carried-over field
-/// would describe the write before it.
-pub fn is_long_lived_record(key: &str) -> bool {
-    key.starts_with(keys::INST_PREFIX)
-        || key.starts_with(keys::NODE_INFO_PREFIX)
-        || key.starts_with(keys::DNS_CRED_PREFIX)
-        || key == keys::GLOBAL_CERTBOT_CONFIG
-        || (key.starts_with(keys::CERT_PREFIX) && key.ends_with("/config"))
+/// What a write means for the fields it does not carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnknownFields {
+    /// The write updates a record that outlives it, so anything in the stored
+    /// copy that this binary does not declare belongs to a newer peer and is
+    /// carried through.
+    Keep,
+    /// The write states a complete new fact, so nothing from the previous one
+    /// may follow it.
+    Drop,
 }
 
 /// Append the fields of `stored` that `T` does not declare to `encoded`.
@@ -82,12 +85,10 @@ pub fn is_long_lived_record(key: &str) -> bool {
 /// never a precondition for the write.
 pub fn carry_unknown_fields<T: serde::de::DeserializeOwned>(
     key: &str,
+    declared: &[&str],
     stored: &[u8],
     encoded: Vec<u8>,
 ) -> Vec<u8> {
-    let Some(declared) = declared_fields::<T>() else {
-        return encoded;
-    };
     let Some((_, stored_fields)) = split_map(stored) else {
         return encoded;
     };
@@ -152,7 +153,7 @@ pub fn carry_unknown_fields<T: serde::de::DeserializeOwned>(
 /// across a variant change would mix them), and a type using
 /// `#[serde(flatten)]`, which reads as a map and already preserves what it does
 /// not know.
-fn declared_fields<T: serde::de::DeserializeOwned>() -> Option<&'static [&'static str]> {
+pub fn declared_fields<T: serde::de::DeserializeOwned>() -> Option<&'static [&'static str]> {
     let mut fields = None;
     let _ = T::deserialize(FieldProbe { out: &mut fields });
     fields
@@ -398,7 +399,12 @@ mod tests {
         record.ip = "10.0.0.2".into();
         let encoded = rmp_serde::to_vec_named(&record).unwrap();
 
-        let written = carry_unknown_fields::<Old>("inst/app", &stored, encoded);
+        let written = carry_unknown_fields::<Old>(
+            "inst/app",
+            declared_fields::<Old>().unwrap(),
+            &stored,
+            encoded,
+        );
         let seen_by_new: New = rmp_serde::from_slice(&written).unwrap();
         assert_eq!(
             seen_by_new.ip, "10.0.0.2",
@@ -426,7 +432,12 @@ mod tests {
         record.note = None;
         let encoded = rmp_serde::to_vec_named(&record).unwrap();
 
-        let written = carry_unknown_fields::<Old>("inst/app", &stored, encoded);
+        let written = carry_unknown_fields::<Old>(
+            "inst/app",
+            declared_fields::<Old>().unwrap(),
+            &stored,
+            encoded,
+        );
         let seen_by_new: New = rmp_serde::from_slice(&written).unwrap();
         assert_eq!(seen_by_new.note, None, "the clear must stick");
         assert_eq!(
@@ -449,20 +460,20 @@ mod tests {
             b"not msgpack at all".to_vec(),
             Vec::new(),
         ] {
-            let written = carry_unknown_fields::<Old>("inst/app", &stored, encoded.clone());
+            let written = carry_unknown_fields::<Old>(
+                "inst/app",
+                declared_fields::<Old>().unwrap(),
+                &stored,
+                encoded.clone(),
+            );
             assert_eq!(
                 written, encoded,
                 "stored {stored:?} must not change the write"
             );
         }
 
-        // The same holds when it is the value being written that is a scalar.
-        let scalar = rmp_serde::to_vec_named(&7u64).unwrap();
-        let stored = stored_by_a_newer_build();
-        assert_eq!(
-            carry_unknown_fields::<u64>("conn/app/1", &stored, scalar.clone()),
-            scalar
-        );
+        // A scalar value type never gets as far as the merge.
+        assert!(declared_fields::<u64>().is_none());
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -517,7 +528,8 @@ mod tests {
         })
         .unwrap();
 
-        let written = carry_unknown_fields::<Strict>("inst/app", &stored, encoded.clone());
+        let written =
+            carry_unknown_fields::<Strict>("inst/app", &["app_id", "ip"], &stored, encoded.clone());
         assert_eq!(
             written, encoded,
             "the write must stay decodable by its writer"
@@ -538,35 +550,26 @@ mod tests {
             Route53 { access_key: String },
         }
 
-        let stored_map = rmp_serde::to_vec_named(&BTreeMap::from([
-            ("keep".to_string(), 1u8),
-            ("drop".to_string(), 2u8),
-        ]))
-        .unwrap();
-        assert!(
-            matches!(stored_map[0], 0x80..=0x8f),
-            "the fixture must be a map on the wire for this test to mean anything"
-        );
+        // Both are maps on the wire, which is all the byte walker can see.
+        for bytes in [
+            rmp_serde::to_vec_named(&BTreeMap::from([("k".to_string(), 1u8)])).unwrap(),
+            rmp_serde::to_vec_named(&Tagless::Cloudflare {
+                api_token: "secret".into(),
+            })
+            .unwrap(),
+        ] {
+            assert!(
+                matches!(bytes[0], 0x80..=0x8f),
+                "the fixture must be a map on the wire for this test to mean anything"
+            );
+        }
 
-        let encoded =
-            rmp_serde::to_vec_named(&BTreeMap::from([("keep".to_string(), 1u8)])).unwrap();
-        assert_eq!(
-            carry_unknown_fields::<BTreeMap<String, u8>>("inst/app", &stored_map, encoded.clone()),
-            encoded,
+        assert!(
+            declared_fields::<BTreeMap<String, u8>>().is_none(),
             "a removed map entry must stay removed"
         );
-
-        let stored_enum = rmp_serde::to_vec_named(&Tagless::Cloudflare {
-            api_token: "secret".into(),
-        })
-        .unwrap();
-        let encoded = rmp_serde::to_vec_named(&Tagless::Route53 {
-            access_key: "key".into(),
-        })
-        .unwrap();
-        assert_eq!(
-            carry_unknown_fields::<Tagless>("dns_cred/x", &stored_enum, encoded.clone()),
-            encoded,
+        assert!(
+            declared_fields::<Tagless>().is_none(),
             "one variant's fields must not follow a change of variant"
         );
     }
@@ -591,40 +594,6 @@ mod tests {
         );
     }
 
-    /// Records keep unknown fields; snapshots must not, or an older gateway
-    /// would describe the certificate it just issued with the previous one's
-    /// fields.
-    #[test]
-    fn only_long_lived_records_carry_unknown_fields() {
-        for key in [
-            keys::inst("app"),
-            keys::node_info(1),
-            keys::dns_cred("cred"),
-            keys::zt_domain_config("a.example"),
-            keys::GLOBAL_CERTBOT_CONFIG.to_string(),
-        ] {
-            assert!(is_long_lived_record(&key), "{key} is a record");
-        }
-
-        for key in [
-            keys::cert_data("a.example"),
-            keys::cert_lock("a.example"),
-            keys::cert_attestation_latest("a.example"),
-            keys::cert_attestation_history("a.example", 1),
-            keys::node_status(1),
-            keys::conn("app", 1),
-            keys::handshake("app", 1),
-            keys::last_seen_node(1, 2),
-            keys::peer_addr(1),
-            keys::DNS_CRED_DEFAULT.to_string(),
-            keys::GLOBAL_ACME_CREDENTIALS.to_string(),
-            keys::GLOBAL_ACME_ATTESTATION.to_string(),
-            keys::GLOBAL_ACME_ROTATION_LOCK.to_string(),
-        ] {
-            assert!(!is_long_lived_record(&key), "{key} is a snapshot");
-        }
-    }
-
     /// A map with more than 15 entries needs a wider header than the one it
     /// started with, so the rewrite has to widen it rather than patch the
     /// original byte.
@@ -635,7 +604,12 @@ mod tests {
         assert_eq!(stored[0], 0x8f, "15 fields still fit a fixmap");
 
         let encoded = rmp_serde::to_vec_named(&Old::default()).unwrap();
-        let written = carry_unknown_fields::<Old>("inst/app", &stored, encoded);
+        let written = carry_unknown_fields::<Old>(
+            "inst/app",
+            declared_fields::<Old>().unwrap(),
+            &stored,
+            encoded,
+        );
         assert_eq!(written[0], 0xde, "17 fields need a map16 header");
         assert_eq!(split_map(&written).unwrap().1.len(), 15 + 2);
     }
