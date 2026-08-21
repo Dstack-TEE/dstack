@@ -1054,6 +1054,7 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
             loop {
                 ticker.tick().await;
                 if let Err(err) = kv_store_for_wal.sync_wal_if_due() {
+                    crate::metrics::record_kv_wal_sync_failure();
                     error!("WaveKV: forcing the write-ahead log failed: {err:?}");
                 }
             }

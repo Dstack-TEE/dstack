@@ -1870,13 +1870,18 @@ mod value_encoding_tests {
     /// An fsync per write runs under the store lock, so it bounds how fast this
     /// gateway accepts registrations; the window is what buys that back, and it
     /// buys nothing if the interval stops at `SyncConfig`.
+    ///
+    /// The window here is long enough that no scheduling delay can end it
+    /// mid-test: the property is "not yet due", and a stalled runner must not be
+    /// able to turn that into a failure.
     #[test]
-    fn a_configured_window_holds_writes_out_of_the_disk_until_it_elapses() {
+    fn a_configured_window_holds_writes_out_of_the_disk() {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
-        let window = Duration::from_millis(20);
-        let kv = KvStore::new(1, vec![], dir.path(), Some(window)).expect("kv store");
+        let kv = KvStore::new(1, vec![], dir.path(), Some(Duration::from_secs(3_600)))
+            .expect("kv store");
 
         kv.set_node_status(1, NodeStatus::Up).expect("write");
+
         assert_eq!(
             kv.persistent().read().wal_sync_count(),
             0,
@@ -1886,10 +1891,25 @@ mod value_encoding_tests {
             !kv.sync_wal_if_due().expect("sync check"),
             "nothing is due before the window elapses"
         );
+    }
 
-        std::thread::sleep(window * 3);
+    /// And the window has to end. The only timing this depends on is sleeping
+    /// for longer than the window, which is safe in the direction that matters.
+    #[test]
+    fn an_elapsed_window_forces_the_log() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let window = Duration::from_millis(20);
+        let kv = KvStore::new(1, vec![], dir.path(), Some(window)).expect("kv store");
+
+        kv.set_node_status(1, NodeStatus::Up).expect("write");
+        std::thread::sleep(window * 5);
+
         assert!(kv.sync_wal_if_due().expect("sync"), "the window elapsed");
         assert_eq!(kv.persistent().read().wal_sync_count(), 1);
+        assert!(
+            !kv.sync_wal_if_due().expect("sync check"),
+            "a second call with nothing written must not force the disk again"
+        );
     }
 
     /// Without a window every write is on the disk before it returns, which is
