@@ -263,8 +263,13 @@ impl ProxyInner {
 
         // Initialize WaveKV store without peers (peers will be added dynamically from bootnode)
         let kv_store = Arc::new(
-            KvStore::new(config.sync.node_id, vec![], &config.sync.data_dir)
-                .context("failed to initialize WaveKV store")?,
+            KvStore::new(
+                config.sync.node_id,
+                vec![],
+                &config.sync.data_dir,
+                (!config.sync.wal_sync_interval.is_zero()).then_some(config.sync.wal_sync_interval),
+            )
+            .context("failed to initialize WaveKV store")?,
         );
         info!(
             "WaveKV store initialized: node_id={}, sync_enabled={}",
@@ -1033,6 +1038,27 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
             }
         });
         info!("WaveKV: periodic persistence enabled (interval: {persist_interval:?})");
+    }
+
+    // Force the write-ahead log on the window the operator configured. Nothing
+    // else forces it on a schedule — a snapshot does, but that is minutes apart
+    // — so without this the window would be a hope rather than a bound. Ticking
+    // at the window itself is enough to make it one: the store measures from
+    // its last fsync, so a write is forced at the first tick that finds the
+    // window elapsed, never more than one window after it landed.
+    let wal_sync_interval = proxy.config.sync.wal_sync_interval;
+    if !wal_sync_interval.is_zero() {
+        let kv_store_for_wal = kv_store.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(wal_sync_interval);
+            loop {
+                ticker.tick().await;
+                if let Err(err) = kv_store_for_wal.sync_wal_if_due() {
+                    error!("WaveKV: forcing the write-ahead log failed: {err:?}");
+                }
+            }
+        });
+        info!("WaveKV: deferred WAL sync enabled (window: {wal_sync_interval:?})");
     }
 
     // Start periodic connection sync task

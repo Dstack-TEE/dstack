@@ -688,13 +688,28 @@ impl KvStore {
     /// operator, which for a single-node deployment holding the only copy of
     /// the ACME account and DNS credentials is the difference between a restart
     /// and a rebuild.
+    ///
+    /// `wal_sync_interval` is how long a write may sit in the page cache before
+    /// the log is forced to disk; `None` forces every write before it returns.
+    /// It applies only to the persistent store — the ephemeral one keeps no log
+    /// and never touches the disk.
     pub fn new(
         my_node_id: NodeId,
         peer_ids: Vec<NodeId>,
         data_dir: impl AsRef<Path>,
+        wal_sync_interval: Option<Duration>,
     ) -> Result<Self> {
         let data_dir = data_dir.as_ref();
-        let persistent = match Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir) {
+        let node_config = wavekv::NodeConfig {
+            wal_sync_interval,
+            ..Default::default()
+        };
+        let persistent = match Node::with_persistence_and_config(
+            my_node_id,
+            peer_ids.clone(),
+            data_dir,
+            node_config.clone(),
+        ) {
             Ok(node) => node,
             Err(err) if is_storage_failure(&err) => {
                 return Err(err).with_context(|| {
@@ -721,8 +736,13 @@ impl KvStore {
                     data_dir.display(),
                     quarantined.display(),
                 );
-                Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir)
-                    .context("failed to create persistent wavekv node on a fresh data dir")?
+                Node::with_persistence_and_config(
+                    my_node_id,
+                    peer_ids.clone(),
+                    data_dir,
+                    node_config,
+                )
+                .context("failed to create persistent wavekv node on a fresh data dir")?
             }
         };
 
@@ -1031,6 +1051,15 @@ impl KvStore {
 
     pub fn persist_if_dirty(&self) -> Result<bool> {
         self.persistent.persist_if_dirty()
+    }
+
+    /// Force the write-ahead log to disk if the configured window has elapsed.
+    ///
+    /// Returns whether an fsync happened. A no-op when no window is configured
+    /// — every write was already forced — or when nothing has been written
+    /// since the last one, so an idle gateway costs a lock acquisition.
+    pub fn sync_wal_if_due(&self) -> Result<bool> {
+        self.persistent.sync_wal_if_due()
     }
 
     // ==================== Peer Management ====================
@@ -1625,7 +1654,7 @@ mod acme_credentials_tests {
     use super::*;
 
     fn test_kv(data_dir: &std::path::Path) -> KvStore {
-        KvStore::new(1, vec![], data_dir).expect("failed to create kv store")
+        KvStore::new(1, vec![], data_dir, None).expect("failed to create kv store")
     }
 
     #[test]
@@ -1772,7 +1801,7 @@ mod value_encoding_tests {
     #[test]
     fn legacy_positional_records_are_still_readable() {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
-        let kv = KvStore::new(1, vec![], dir.path()).expect("failed to create kv store");
+        let kv = KvStore::new(1, vec![], dir.path(), None).expect("failed to create kv store");
 
         let legacy = rmp_serde::encode::to_vec(&CertRenewLock {
             started_at: 1_700_000_000,
@@ -1836,6 +1865,51 @@ mod value_encoding_tests {
         }
     }
 
+    /// The configured window has to reach the store, not just the config file.
+    ///
+    /// An fsync per write runs under the store lock, so it bounds how fast this
+    /// gateway accepts registrations; the window is what buys that back, and it
+    /// buys nothing if the interval stops at `SyncConfig`.
+    #[test]
+    fn a_configured_window_holds_writes_out_of_the_disk_until_it_elapses() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let window = Duration::from_millis(20);
+        let kv = KvStore::new(1, vec![], dir.path(), Some(window)).expect("kv store");
+
+        kv.set_node_status(1, NodeStatus::Up).expect("write");
+        assert_eq!(
+            kv.persistent().read().wal_sync_count(),
+            0,
+            "a write inside the window must not reach the disk"
+        );
+        assert!(
+            !kv.sync_wal_if_due().expect("sync check"),
+            "nothing is due before the window elapses"
+        );
+
+        std::thread::sleep(window * 3);
+        assert!(kv.sync_wal_if_due().expect("sync"), "the window elapsed");
+        assert_eq!(kv.persistent().read().wal_sync_count(), 1);
+    }
+
+    /// Without a window every write is on the disk before it returns, which is
+    /// what every release before this one did and what a single-node gateway
+    /// holding the only copy of its ACME account still wants.
+    #[test]
+    fn without_a_window_every_write_reaches_the_disk_before_it_returns() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = KvStore::new(1, vec![], dir.path(), None).expect("kv store");
+
+        kv.set_node_status(1, NodeStatus::Up).expect("write");
+        kv.set_node_status(2, NodeStatus::Down).expect("write");
+
+        assert_eq!(kv.persistent().read().wal_sync_count(), 2);
+        assert!(
+            !kv.sync_wal_if_due().expect("sync check"),
+            "with no window there is never anything owing"
+        );
+    }
+
     /// An instance record as some later release will declare it.
     #[derive(Debug, Serialize, Deserialize)]
     struct FutureInstanceData {
@@ -1854,7 +1928,7 @@ mod value_encoding_tests {
     #[test]
     fn a_record_keeps_the_fields_its_writer_does_not_know() {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
-        let kv = KvStore::new(1, vec![], dir.path()).expect("failed to create kv store");
+        let kv = KvStore::new(1, vec![], dir.path(), None).expect("failed to create kv store");
 
         let written_by_a_newer_node = encode(&FutureInstanceData {
             app_id: "app".to_string(),
@@ -1913,7 +1987,7 @@ mod value_encoding_tests {
     #[test]
     fn a_snapshot_does_not_inherit_the_previous_writes_fields() {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
-        let kv = KvStore::new(1, vec![], dir.path()).expect("failed to create kv store");
+        let kv = KvStore::new(1, vec![], dir.path(), None).expect("failed to create kv store");
 
         #[derive(Debug, Serialize, Deserialize)]
         struct FutureCertData {
@@ -1973,7 +2047,7 @@ mod sync_wire_tests {
     use wavekv::sync::SyncEnvelope;
 
     fn store(dir: &std::path::Path, id: NodeId, peers: Vec<NodeId>) -> KvStore {
-        KvStore::new(id, peers, dir).expect("failed to create kv store")
+        KvStore::new(id, peers, dir, None).expect("failed to create kv store")
     }
 
     #[test]
@@ -2048,7 +2122,8 @@ mod wavekv_v1_migration_tests {
                 .expect("write trailing v1 WAL entry");
         }
 
-        let upgraded = KvStore::new(1, Vec::new(), dir.path()).expect("open v1 data after upgrade");
+        let upgraded =
+            KvStore::new(1, Vec::new(), dir.path(), None).expect("open v1 data after upgrade");
         assert_eq!(
             upgraded
                 .persistent()
@@ -2078,7 +2153,8 @@ mod wavekv_v1_migration_tests {
         upgraded.persist_if_dirty().expect("persist upgraded data");
         drop(upgraded);
 
-        let restarted = KvStore::new(1, Vec::new(), dir.path()).expect("restart upgraded store");
+        let restarted =
+            KvStore::new(1, Vec::new(), dir.path(), None).expect("restart upgraded store");
         for (key, expected) in [(key, value), (wal_key, wal_value), (new_key, new_value)] {
             assert_eq!(
                 restarted
@@ -2131,7 +2207,7 @@ mod corruption_tests {
     use super::*;
 
     fn test_kv(data_dir: &std::path::Path) -> KvStore {
-        KvStore::new(1, vec![], data_dir).expect("failed to create kv store")
+        KvStore::new(1, vec![], data_dir, None).expect("failed to create kv store")
     }
 
     fn put_raw(kv: &KvStore, key: &str, value: &[u8]) {
@@ -2245,7 +2321,7 @@ mod corruption_tests {
         let data_dir = dir.path().join("kv");
         std::fs::write(&data_dir, b"not a directory").expect("failed to create blocker");
 
-        let Err(err) = KvStore::new(1, vec![], &data_dir) else {
+        let Err(err) = KvStore::new(1, vec![], &data_dir, None) else {
             panic!("startup must fail when the storage is unusable");
         };
         assert!(
@@ -2285,7 +2361,8 @@ mod corruption_tests {
         // replicated, so it must not keep the gateway from booting.
         std::fs::write(data_dir.join("node_1.wal"), b"garbage").expect("failed to corrupt wal");
 
-        let kv = KvStore::new(1, vec![], &data_dir).expect("startup must survive a corrupt wal");
+        let kv =
+            KvStore::new(1, vec![], &data_dir, None).expect("startup must survive a corrupt wal");
         let loaded = kv.load_all_instances();
         assert!(loaded.decoded.is_empty());
         assert!(loaded.undecodable.is_empty());
