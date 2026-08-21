@@ -190,6 +190,20 @@ The dstack-guest-agent runs an HTTP server on port 8090 inside the CVM. This por
 |--------|-------------|------------|
 | Info | Get application information | AppInfo |
 | Version | Get guest agent version | WorkerVersion |
+| GetAttestationForAppKey | Attest a key the app derived | GetQuoteResponse |
+| Health | Report whether the application is serving | HealthResponse |
+
+Everything on this listener is unauthenticated, so each method is bounded in
+what it costs and in what it says:
+
+- `Health` answers from a cache the agent refreshes on its own timer, so a call
+  costs a lock and a clone however many callers there are. It reveals whether
+  the app opted into health gating, its current verdict, and — when the app
+  declared a `health_file` — the path it named and which parsing rule failed.
+  The file's *contents* are never quoted back. Container names and statuses were
+  already public through the dashboard below.
+- `GetAttestationForAppKey` generates a TDX quote per call and is by far the
+  most expensive method here.
 
 The service also provides a web dashboard at the root URL (`/`) showing basic CVM information. View the dashboard template [here](../../dstack/guest-agent/templates/dashboard.html).
 
