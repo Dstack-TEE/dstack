@@ -38,6 +38,7 @@
 //! whole node pair, so a node writing a key its peer does not know silently stops the
 //! two from converging. Bound what a peer can consume; do not police what it means.
 
+mod compat;
 mod https_client;
 pub mod import;
 mod sync_service;
@@ -513,6 +514,10 @@ pub fn gunzip_bounded(data: &[u8], limit: usize) -> Result<Vec<u8>> {
 /// in `#[serde(default)]` fields it does not receive, so the value types below
 /// can gain fields without breaking gateways running an older build. Decoding
 /// accepts both forms, so values written by older releases stay readable.
+///
+/// Skipping on read is only half of a rolling upgrade: this encoding contains
+/// exactly the fields the writing binary declares, so an older node rewriting a
+/// record would drop the rest. [`compat`] puts them back on the way out.
 pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     rmp_serde::encode::to_vec_named(value).context("failed to encode value")
 }
@@ -524,7 +529,12 @@ pub fn decode<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T> {
 trait GetPutCodec {
     fn decode<T: for<'de> serde::Deserialize<'de>>(&self, key: &str) -> Option<T>;
     fn decode_strict<T: for<'de> serde::Deserialize<'de>>(&self, key: &str) -> Result<Option<T>>;
-    fn put_encoded<T: serde::Serialize>(&mut self, key: String, value: &T) -> Result<()>;
+    fn put_encoded<T: serde::Serialize + serde::de::DeserializeOwned>(
+        &mut self,
+        key: String,
+        value: &T,
+        update: bool,
+    ) -> Result<()>;
     fn iter_decoded<T: for<'de> serde::Deserialize<'de>>(
         &self,
         prefix: &str,
@@ -573,8 +583,30 @@ impl GetPutCodec for NodeState {
             .with_context(|| format!("corrupt record at KV key {key}"))
     }
 
-    fn put_encoded<T: serde::Serialize>(&mut self, key: String, value: &T) -> Result<()> {
-        self.put(key.clone(), encode(value)?)
+    /// Write a value.
+    ///
+    /// `update` is true when the write modifies a record that outlives it, and
+    /// false when it states a complete new fact. An update keeps the fields the
+    /// stored record holds and this binary does not declare; a replacement does
+    /// not, because they describe the fact being replaced. See [`compat`] for
+    /// why that is the caller's call, and why keeping a field is not the same
+    /// as keeping every field the encoding happens to be missing.
+    fn put_encoded<T: serde::Serialize + serde::de::DeserializeOwned>(
+        &mut self,
+        key: String,
+        value: &T,
+        update: bool,
+    ) -> Result<()> {
+        let encoded = encode(value)?;
+        let declared = update.then(compat::declared_fields::<T>).flatten();
+        let bytes = match declared {
+            Some(declared) => match self.get(&key).and_then(|entry| entry.value) {
+                Some(stored) => compat::carry_unknown_fields::<T>(&key, declared, &stored, encoded),
+                None => encoded,
+            },
+            None => encoded,
+        };
+        self.put(key.clone(), bytes)
             .with_context(|| format!("failed to put key {key}"))?;
         Ok(())
     }
@@ -717,13 +749,28 @@ impl KvStore {
     /// operator, which for a single-node deployment holding the only copy of
     /// the ACME account and DNS credentials is the difference between a restart
     /// and a rebuild.
+    ///
+    /// `wal_sync_interval` is how long a write may sit in the page cache before
+    /// the log is forced to disk; `None` forces every write before it returns.
+    /// It applies only to the persistent store — the ephemeral one keeps no log
+    /// and never touches the disk.
     pub fn new(
         my_node_id: NodeId,
         peer_ids: Vec<NodeId>,
         data_dir: impl AsRef<Path>,
+        wal_sync_interval: Option<Duration>,
     ) -> Result<Self> {
         let data_dir = data_dir.as_ref();
-        let persistent = match Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir) {
+        let node_config = wavekv::NodeConfig {
+            wal_sync_interval,
+            ..Default::default()
+        };
+        let persistent = match Node::with_persistence_and_config(
+            my_node_id,
+            peer_ids.clone(),
+            data_dir,
+            node_config.clone(),
+        ) {
             Ok(node) => node,
             Err(err) if is_storage_failure(&err) => {
                 return Err(err).with_context(|| {
@@ -750,8 +797,13 @@ impl KvStore {
                     data_dir.display(),
                     quarantined.display(),
                 );
-                Node::new_with_persistence(my_node_id, peer_ids.clone(), data_dir)
-                    .context("failed to create persistent wavekv node on a fresh data dir")?
+                Node::with_persistence_and_config(
+                    my_node_id,
+                    peer_ids.clone(),
+                    data_dir,
+                    node_config,
+                )
+                .context("failed to create persistent wavekv node on a fresh data dir")?
             }
         };
 
@@ -796,7 +848,7 @@ impl KvStore {
         self.injected_failure(FailWrite::INST)?;
         self.persistent
             .write()
-            .put_encoded(keys::inst(instance_id), data)
+            .put_encoded(keys::inst(instance_id), data, true)
     }
 
     /// See [`KvStore::injected_failures`].
@@ -885,7 +937,7 @@ impl KvStore {
     pub fn sync_node(&self, node_id: NodeId, data: &NodeData) -> Result<()> {
         self.persistent
             .write()
-            .put_encoded(keys::node_info(node_id), data)
+            .put_encoded(keys::node_info(node_id), data, true)
     }
 
     /// Load all nodes from sync store
@@ -935,7 +987,7 @@ impl KvStore {
     pub fn set_node_status(&self, node_id: NodeId, status: NodeStatus) -> Result<()> {
         self.persistent
             .write()
-            .put_encoded(keys::node_status(node_id), &status)?;
+            .put_encoded(keys::node_status(node_id), &status, false)?;
         Ok(())
     }
 
@@ -989,9 +1041,11 @@ impl KvStore {
 
     /// Sync connection count for an instance (from this node)
     pub fn sync_connections(&self, instance_id: &str, count: u64) -> Result<()> {
-        self.ephemeral
-            .write()
-            .put_encoded(keys::conn(instance_id, self.my_node_id), &count)?;
+        self.ephemeral.write().put_encoded(
+            keys::conn(instance_id, self.my_node_id),
+            &count,
+            false,
+        )?;
         Ok(())
     }
 
@@ -999,9 +1053,11 @@ impl KvStore {
 
     /// Sync handshake timestamp for an instance (as observed by this node)
     pub fn sync_instance_handshake(&self, instance_id: &str, timestamp: u64) -> Result<()> {
-        self.ephemeral
-            .write()
-            .put_encoded(keys::handshake(instance_id, self.my_node_id), &timestamp)?;
+        self.ephemeral.write().put_encoded(
+            keys::handshake(instance_id, self.my_node_id),
+            &timestamp,
+            false,
+        )?;
         Ok(())
     }
 
@@ -1040,9 +1096,11 @@ impl KvStore {
 
     /// Sync node last_seen (as observed by this node)
     pub fn sync_node_last_seen(&self, node_id: NodeId, timestamp: u64) -> Result<()> {
-        self.ephemeral
-            .write()
-            .put_encoded(keys::last_seen_node(node_id, self.my_node_id), &timestamp)?;
+        self.ephemeral.write().put_encoded(
+            keys::last_seen_node(node_id, self.my_node_id),
+            &timestamp,
+            false,
+        )?;
         Ok(())
     }
 
@@ -1097,6 +1155,15 @@ impl KvStore {
 
     pub fn persist_if_dirty(&self) -> Result<bool> {
         self.persistent.persist_if_dirty()
+    }
+
+    /// Force the write-ahead log to disk if the configured window has elapsed.
+    ///
+    /// Returns whether an fsync happened. A no-op when no window is configured
+    /// — every write was already forced — or when nothing has been written
+    /// since the last one, so an idle gateway costs a lock acquisition.
+    pub fn sync_wal_if_due(&self) -> Result<bool> {
+        self.persistent.sync_wal_if_due()
     }
 
     // ==================== Peer Management ====================
@@ -1159,10 +1226,11 @@ impl KvStore {
     pub fn register_peer_url(&self, node_id: NodeId, url: &str) -> Result<()> {
         validate_peer_url(url)?;
 
-        // Store URL in persistent KvStore
+        // Store URL in persistent KvStore. Owned, because the value has to be a
+        // type a reader can name: `&str` borrows from the buffer it decodes.
         self.persistent
             .write()
-            .put_encoded(keys::peer_addr(node_id), &url)?;
+            .put_encoded(keys::peer_addr(node_id), &url.to_string(), false)?;
 
         let _ = self.add_peer(node_id);
         Ok(())
@@ -1182,7 +1250,7 @@ impl KvStore {
     pub fn update_peer_last_seen(&self, peer_id: NodeId) {
         let ts = now_secs();
         let key = keys::last_seen_node(peer_id, self.my_node_id);
-        if let Err(e) = self.ephemeral.write().put_encoded(key, &ts) {
+        if let Err(e) = self.ephemeral.write().put_encoded(key, &ts, false) {
             warn!("failed to update peer {peer_id} last_seen: {e}");
         }
     }
@@ -1216,7 +1284,7 @@ impl KvStore {
     pub fn save_dns_credential(&self, cred: &DnsCredential) -> Result<()> {
         self.persistent
             .write()
-            .put_encoded(keys::dns_cred(&cred.id), cred)?;
+            .put_encoded(keys::dns_cred(&cred.id), cred, true)?;
         Ok(())
     }
 
@@ -1244,9 +1312,11 @@ impl KvStore {
 
     /// Set the default DNS credential ID
     pub fn set_default_dns_credential_id(&self, cred_id: &str) -> Result<()> {
-        self.persistent
-            .write()
-            .put_encoded(keys::DNS_CRED_DEFAULT.to_string(), &cred_id)?;
+        self.persistent.write().put_encoded(
+            keys::DNS_CRED_DEFAULT.to_string(),
+            &cred_id.to_string(),
+            false,
+        )?;
         Ok(())
     }
 
@@ -1275,9 +1345,11 @@ impl KvStore {
 
     /// Set global certbot configuration
     pub fn set_certbot_config(&self, config: &GlobalCertbotConfig) -> Result<()> {
-        self.persistent
-            .write()
-            .put_encoded(keys::GLOBAL_CERTBOT_CONFIG.to_string(), config)?;
+        self.persistent.write().put_encoded(
+            keys::GLOBAL_CERTBOT_CONFIG.to_string(),
+            config,
+            true,
+        )?;
         Ok(())
     }
 
@@ -1305,9 +1377,11 @@ impl KvStore {
 
     /// Save ZT-Domain configuration
     pub fn save_zt_domain_config(&self, config: &ZtDomainConfig) -> Result<()> {
-        self.persistent
-            .write()
-            .put_encoded(keys::zt_domain_config(&config.domain), config)?;
+        self.persistent.write().put_encoded(
+            keys::zt_domain_config(&config.domain),
+            config,
+            true,
+        )?;
         Ok(())
     }
 
@@ -1401,7 +1475,7 @@ impl KvStore {
     pub fn save_cert_data(&self, domain: &str, data: &CertData) -> Result<()> {
         self.persistent
             .write()
-            .put_encoded(keys::cert_data(domain), data)?;
+            .put_encoded(keys::cert_data(domain), data, false)?;
         Ok(())
     }
 
@@ -1446,9 +1520,11 @@ impl KvStore {
 
     /// Save global ACME credentials
     pub fn save_acme_credentials(&self, creds: &CertCredentials) -> Result<()> {
-        self.persistent
-            .write()
-            .put_encoded(keys::GLOBAL_ACME_CREDENTIALS.to_string(), creds)?;
+        self.persistent.write().put_encoded(
+            keys::GLOBAL_ACME_CREDENTIALS.to_string(),
+            creds,
+            false,
+        )?;
         Ok(())
     }
 
@@ -1465,9 +1541,11 @@ impl KvStore {
 
     /// Save global ACME attestation
     pub fn save_acme_attestation(&self, attestation: &AcmeAttestation) -> Result<()> {
-        self.persistent
-            .write()
-            .put_encoded(keys::GLOBAL_ACME_ATTESTATION.to_string(), attestation)?;
+        self.persistent.write().put_encoded(
+            keys::GLOBAL_ACME_ATTESTATION.to_string(),
+            attestation,
+            false,
+        )?;
         Ok(())
     }
 
@@ -1497,7 +1575,7 @@ impl KvStore {
         };
         self.persistent
             .write()
-            .put_encoded(keys::cert_lock(domain), &lock)
+            .put_encoded(keys::cert_lock(domain), &lock, false)
             .is_ok()
     }
 
@@ -1534,7 +1612,7 @@ impl KvStore {
         };
         self.persistent
             .write()
-            .put_encoded(keys::GLOBAL_ACME_ROTATION_LOCK.to_string(), &lock)
+            .put_encoded(keys::GLOBAL_ACME_ROTATION_LOCK.to_string(), &lock, false)
             .ok()?;
         Some(lock)
     }
@@ -1587,9 +1665,10 @@ impl KvStore {
         state.put_encoded(
             keys::cert_attestation_history(domain, attestation.generated_at),
             attestation,
+            false,
         )?;
         // Update latest
-        state.put_encoded(keys::cert_attestation_latest(domain), attestation)?;
+        state.put_encoded(keys::cert_attestation_latest(domain), attestation, false)?;
         Ok(())
     }
 
@@ -1679,7 +1758,7 @@ mod acme_credentials_tests {
     use super::*;
 
     fn test_kv(data_dir: &std::path::Path) -> KvStore {
-        KvStore::new(1, vec![], data_dir).expect("failed to create kv store")
+        KvStore::new(1, vec![], data_dir, None).expect("failed to create kv store")
     }
 
     #[test]
@@ -1737,6 +1816,7 @@ mod acme_credentials_tests {
                     started_at: u64::MAX,
                     started_by: 2,
                 },
+                false,
             )
             .expect("lock write should succeed");
 
@@ -1753,6 +1833,7 @@ mod acme_credentials_tests {
                     started_at: u64::MAX,
                     started_by: 2,
                 },
+                false,
             )
             .expect("certificate lock write should succeed");
         assert!(
@@ -1824,7 +1905,7 @@ mod value_encoding_tests {
     #[test]
     fn legacy_positional_records_are_still_readable() {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
-        let kv = KvStore::new(1, vec![], dir.path()).expect("failed to create kv store");
+        let kv = KvStore::new(1, vec![], dir.path(), None).expect("failed to create kv store");
 
         let legacy = rmp_serde::encode::to_vec(&CertRenewLock {
             started_at: 1_700_000_000,
@@ -1887,6 +1968,200 @@ mod value_encoding_tests {
             );
         }
     }
+
+    /// The configured window has to reach the store, not just the config file.
+    ///
+    /// An fsync per write runs under the store lock, so it bounds how fast this
+    /// gateway accepts registrations; the window is what buys that back, and it
+    /// buys nothing if the interval stops at `SyncConfig`.
+    ///
+    /// The window here is long enough that no scheduling delay can end it
+    /// mid-test: the property is "not yet due", and a stalled runner must not be
+    /// able to turn that into a failure.
+    #[test]
+    fn a_configured_window_holds_writes_out_of_the_disk() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = KvStore::new(1, vec![], dir.path(), Some(Duration::from_secs(3_600)))
+            .expect("kv store");
+
+        kv.set_node_status(1, NodeStatus::Up).expect("write");
+
+        assert_eq!(
+            kv.persistent().read().wal_sync_count(),
+            0,
+            "a write inside the window must not reach the disk"
+        );
+        assert!(
+            !kv.sync_wal_if_due().expect("sync check"),
+            "nothing is due before the window elapses"
+        );
+    }
+
+    /// And the window has to end. The only timing this depends on is sleeping
+    /// for longer than the window, which is safe in the direction that matters.
+    #[test]
+    fn an_elapsed_window_forces_the_log() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let window = Duration::from_millis(20);
+        let kv = KvStore::new(1, vec![], dir.path(), Some(window)).expect("kv store");
+
+        kv.set_node_status(1, NodeStatus::Up).expect("write");
+        std::thread::sleep(window * 5);
+
+        assert!(kv.sync_wal_if_due().expect("sync"), "the window elapsed");
+        assert_eq!(kv.persistent().read().wal_sync_count(), 1);
+        assert!(
+            !kv.sync_wal_if_due().expect("sync check"),
+            "a second call with nothing written must not force the disk again"
+        );
+    }
+
+    /// Without a window every write is on the disk before it returns, which is
+    /// what every release before this one did and what a single-node gateway
+    /// holding the only copy of its ACME account still wants.
+    #[test]
+    fn without_a_window_every_write_reaches_the_disk_before_it_returns() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = KvStore::new(1, vec![], dir.path(), None).expect("kv store");
+
+        kv.set_node_status(1, NodeStatus::Up).expect("write");
+        kv.set_node_status(2, NodeStatus::Down).expect("write");
+
+        assert_eq!(kv.persistent().read().wal_sync_count(), 2);
+        assert!(
+            !kv.sync_wal_if_due().expect("sync check"),
+            "with no window there is never anything owing"
+        );
+    }
+
+    /// An instance record as some later release will declare it.
+    #[derive(Debug, Serialize, Deserialize)]
+    struct FutureInstanceData {
+        app_id: String,
+        ip: Ipv4Addr,
+        public_key: String,
+        reg_time: u64,
+        /// The field this build has never heard of.
+        health_probe_path: String,
+    }
+
+    /// The write-path half of the mixed-version contract. Skipping an unknown
+    /// field on read is not enough: this build re-encodes the record from the
+    /// fields it declares, so without the merge a single re-registration by an
+    /// older node erases a newer node's field for the entire cluster.
+    #[test]
+    fn a_record_keeps_the_fields_its_writer_does_not_know() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = KvStore::new(1, vec![], dir.path(), None).expect("failed to create kv store");
+
+        let written_by_a_newer_node = encode(&FutureInstanceData {
+            app_id: "app".to_string(),
+            ip: Ipv4Addr::new(10, 0, 0, 1),
+            public_key: "pubkey".to_string(),
+            reg_time: 1_700_000_000,
+            health_probe_path: "/healthz".to_string(),
+        })
+        .expect("encode should succeed");
+        kv.persistent
+            .write()
+            .put(keys::inst("app"), written_by_a_newer_node)
+            .expect("put should succeed");
+
+        // This build re-registers the instance, knowing nothing of the new field.
+        kv.sync_instance(
+            "app",
+            &InstanceData {
+                app_id: "app".to_string(),
+                ip: Ipv4Addr::new(10, 0, 0, 2),
+                public_key: "pubkey".to_string(),
+                reg_time: 1_700_000_100,
+                port_policy: None,
+                port_policy_hash: String::new(),
+                admin_port_policy: None,
+            },
+        )
+        .expect("sync should succeed");
+
+        let stored = kv
+            .persistent
+            .read()
+            .get(&keys::inst("app"))
+            .and_then(|entry| entry.value)
+            .expect("record should exist");
+        let seen_by_a_newer_node: FutureInstanceData =
+            decode(&stored).expect("the newer node must still read its own field");
+        assert_eq!(
+            seen_by_a_newer_node.health_probe_path, "/healthz",
+            "the unknown field must survive a write by a build that cannot see it"
+        );
+        assert_eq!(
+            seen_by_a_newer_node.ip,
+            Ipv4Addr::new(10, 0, 0, 2),
+            "the writer's own fields must still take effect"
+        );
+        let seen_by_this_build: InstanceData =
+            decode(&stored).expect("this build must still read the record");
+        assert_eq!(seen_by_this_build.reg_time, 1_700_000_100);
+    }
+
+    /// A certificate is a complete new fact on every write, so nothing may be
+    /// carried across one. Attributing a previous certificate's field to the one
+    /// just issued is worse than dropping the field: absent is a case the newer
+    /// reader already handles, stale is not.
+    #[test]
+    fn a_snapshot_does_not_inherit_the_previous_writes_fields() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = KvStore::new(1, vec![], dir.path(), None).expect("failed to create kv store");
+
+        #[derive(Debug, Serialize, Deserialize)]
+        struct FutureCertData {
+            cert_pem: String,
+            key_pem: String,
+            not_after: u64,
+            issued_by: NodeId,
+            issued_at: u64,
+            chain_pem: String,
+        }
+
+        kv.persistent
+            .write()
+            .put(
+                keys::cert_data("a.example"),
+                encode(&FutureCertData {
+                    cert_pem: "old-cert".to_string(),
+                    key_pem: "old-key".to_string(),
+                    not_after: 1_700_000_000,
+                    issued_by: 2,
+                    issued_at: 1_600_000_000,
+                    chain_pem: "old-chain".to_string(),
+                })
+                .expect("encode should succeed"),
+            )
+            .expect("put should succeed");
+
+        kv.save_cert_data(
+            "a.example",
+            &CertData {
+                cert_pem: "new-cert".to_string(),
+                key_pem: "new-key".to_string(),
+                not_after: 1_800_000_000,
+                issued_by: 1,
+                issued_at: 1_700_000_100,
+            },
+        )
+        .expect("save should succeed");
+
+        let stored = kv
+            .persistent
+            .read()
+            .get(&keys::cert_data("a.example"))
+            .and_then(|entry| entry.value)
+            .expect("record should exist");
+        assert!(
+            decode::<FutureCertData>(&stored).is_err(),
+            "the previous certificate's chain must not be attached to the new one"
+        );
+    }
 }
 
 /// Gateway-layer tests for the WaveKV sync wire and admission policy.
@@ -1896,7 +2171,7 @@ mod sync_wire_tests {
     use wavekv::sync::SyncEnvelope;
 
     fn store(dir: &std::path::Path, id: NodeId, peers: Vec<NodeId>) -> KvStore {
-        KvStore::new(id, peers, dir).expect("failed to create kv store")
+        KvStore::new(id, peers, dir, None).expect("failed to create kv store")
     }
 
     #[test]
@@ -1971,7 +2246,8 @@ mod wavekv_v1_migration_tests {
                 .expect("write trailing v1 WAL entry");
         }
 
-        let upgraded = KvStore::new(1, Vec::new(), dir.path()).expect("open v1 data after upgrade");
+        let upgraded =
+            KvStore::new(1, Vec::new(), dir.path(), None).expect("open v1 data after upgrade");
         assert_eq!(
             upgraded
                 .persistent()
@@ -2001,7 +2277,8 @@ mod wavekv_v1_migration_tests {
         upgraded.persist_if_dirty().expect("persist upgraded data");
         drop(upgraded);
 
-        let restarted = KvStore::new(1, Vec::new(), dir.path()).expect("restart upgraded store");
+        let restarted =
+            KvStore::new(1, Vec::new(), dir.path(), None).expect("restart upgraded store");
         for (key, expected) in [(key, value), (wal_key, wal_value), (new_key, new_value)] {
             assert_eq!(
                 restarted
@@ -2054,7 +2331,7 @@ mod corruption_tests {
     use super::*;
 
     fn test_kv(data_dir: &std::path::Path) -> KvStore {
-        KvStore::new(1, vec![], data_dir).expect("failed to create kv store")
+        KvStore::new(1, vec![], data_dir, None).expect("failed to create kv store")
     }
 
     fn put_raw(kv: &KvStore, key: &str, value: &[u8]) {
@@ -2246,11 +2523,11 @@ mod corruption_tests {
 
         kv.ephemeral
             .write()
-            .put_encoded(keys::handshake("cvm", 2), &(now.saturating_sub(30)))
+            .put_encoded(keys::handshake("cvm", 2), &(now.saturating_sub(30)), false)
             .unwrap();
         kv.ephemeral
             .write()
-            .put_encoded(keys::handshake("cvm", 3), &u64::MAX)
+            .put_encoded(keys::handshake("cvm", 3), &u64::MAX, false)
             .unwrap();
         // A peer with a broken clock must not keep a dead CVM alive forever.
         let latest = kv
@@ -2261,7 +2538,7 @@ mod corruption_tests {
 
         kv.ephemeral
             .write()
-            .put_encoded(keys::last_seen_node(7, 3), &u64::MAX)
+            .put_encoded(keys::last_seen_node(7, 3), &u64::MAX, false)
             .unwrap();
         assert_eq!(kv.get_node_latest_last_seen(7), None);
         assert!(kv.get_node_last_seen_by_all(7).is_empty());
@@ -2271,7 +2548,11 @@ mod corruption_tests {
         // instances look stale.
         kv.ephemeral
             .write()
-            .put_encoded(keys::handshake("cvm", 4), &(now + MAX_CLOCK_DRIFT_SECS / 2))
+            .put_encoded(
+                keys::handshake("cvm", 4),
+                &(now + MAX_CLOCK_DRIFT_SECS / 2),
+                false,
+            )
             .unwrap();
         assert_eq!(kv.get_instance_handshakes("cvm").len(), 2);
     }
@@ -2286,7 +2567,7 @@ mod corruption_tests {
         let data_dir = dir.path().join("kv");
         std::fs::write(&data_dir, b"not a directory").expect("failed to create blocker");
 
-        let Err(err) = KvStore::new(1, vec![], &data_dir) else {
+        let Err(err) = KvStore::new(1, vec![], &data_dir, None) else {
             panic!("startup must fail when the storage is unusable");
         };
         assert!(
@@ -2327,7 +2608,8 @@ mod corruption_tests {
         // replicated, so it must not keep the gateway from booting.
         std::fs::write(data_dir.join("node_1.wal"), b"garbage").expect("failed to corrupt wal");
 
-        let kv = KvStore::new(1, vec![], &data_dir).expect("startup must survive a corrupt wal");
+        let kv =
+            KvStore::new(1, vec![], &data_dir, None).expect("startup must survive a corrupt wal");
         let loaded = kv.load_all_instances();
         assert!(loaded.decoded.is_empty());
         assert!(loaded.undecodable.is_empty());
@@ -2368,6 +2650,7 @@ mod corruption_tests {
                     node: None,
                     priority: 100,
                 },
+                true,
             )
             .expect("raw put should succeed");
 

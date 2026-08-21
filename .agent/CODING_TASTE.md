@@ -257,6 +257,11 @@ not just the symptom:
 
 ## Readability and idioms
 
+- **Import for readability, not minimum path length.** Import specific types and
+  frequently repeated operations when their short names remain unambiguous
+  (`TcpListener::bind`, `timeout`, `Command::new`). Keep qualifiers that carry useful
+  semantic context (`serde_json::from_slice`, `tokio::spawn`, `anyhow::bail!`). Follow
+  the surrounding module when either form is equally clear.
 - **Errors**: `anyhow` everywhere in services — `thiserror` only in library crates whose
   callers match on error variants. `bail!` inside an `if` is the guard idiom; **`ensure!`
   is never used in this codebase** (0 occurrences) and reads as foreign. `let ... else

@@ -28,11 +28,13 @@ class DockerConfig:
         registry: Optional[str] = None,
         username: Optional[str] = None,
         token_key: Optional[str] = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize a new ``DockerConfig`` instance."""
         self.registry = registry
         self.username = username
         self.token_key = token_key
+        self._extra = dict(kwargs)
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a dictionary representation excluding ``None`` fields."""
@@ -43,6 +45,7 @@ class DockerConfig:
             result["username"] = self.username
         if self.token_key is not None:
             result["token_key"] = self.token_key
+        result.update(self._extra)
         return result
 
 
@@ -55,12 +58,16 @@ class Requirements:
         platforms: Optional[List[str]] = None,
         tdx_measure_acpi_tables: Optional[bool] = None,
         launch_token_hash: Optional[str] = None,
+        gpu_policy: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize a new ``Requirements`` instance."""
         self.os_version = os_version
         self.platforms = platforms
         self.tdx_measure_acpi_tables = tdx_measure_acpi_tables
         self.launch_token_hash = launch_token_hash
+        self.gpu_policy = gpu_policy
+        self._extra = dict(kwargs)
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a dictionary representation excluding ``None`` fields."""
@@ -73,6 +80,9 @@ class Requirements:
             result["tdx_measure_acpi_tables"] = self.tdx_measure_acpi_tables
         if self.launch_token_hash is not None:
             result["launch_token_hash"] = self.launch_token_hash
+        if self.gpu_policy is not None:
+            result["gpu_policy"] = self.gpu_policy
+        result.update(self._extra)
         return result
 
 

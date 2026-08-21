@@ -55,6 +55,7 @@ static DECODE_FAILURES: [AtomicU64; METERED_PREFIXES.len() + 1] =
 static WG_RECONFIGURE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static WG_RECONFIGURE_FAILURES: AtomicU64 = AtomicU64::new(0);
 static KV_PERSIST_FAILURES: AtomicU64 = AtomicU64::new(0);
+static KV_WAL_SYNC_FAILURES: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
     /// Set while a scrape is sampling live state.
@@ -121,6 +122,10 @@ pub(crate) fn record_wg_reconfigure(ok: bool) {
 /// never managed to snapshot.
 pub(crate) fn record_kv_persist_failure() {
     KV_PERSIST_FAILURES.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_kv_wal_sync_failure() {
+    KV_WAL_SYNC_FAILURES.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Index of the longest prefix in `prefixes` that `key` starts with.
@@ -349,6 +354,13 @@ pub(crate) fn render(snapshot: &Snapshot) -> String {
         "Periodic WaveKV snapshots that failed.",
         "",
         KV_PERSIST_FAILURES.load(Ordering::Relaxed),
+    );
+    counter(
+        &mut out,
+        "dstack_gateway_kv_wal_sync_failures_total",
+        "Attempts to force the WaveKV write-ahead log to disk that failed. While this is rising, writes accepted in the last wal_sync_interval are not durable.",
+        "",
+        KV_WAL_SYNC_FAILURES.load(Ordering::Relaxed),
     );
 
     gauge(

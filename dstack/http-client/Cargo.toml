@@ -25,6 +25,7 @@ tokio-vsock.workspace = true
 tower-service = "0.3.3"
 
 [dev-dependencies]
+prost.workspace = true
 tokio = { workspace = true, features = ["full"] }
 
 [features]

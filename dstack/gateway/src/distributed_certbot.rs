@@ -807,15 +807,16 @@ mod tests {
 
     fn test_certbot(data_dir: &std::path::Path) -> DistributedCertBot {
         let kv_store =
-            Arc::new(KvStore::new(1, vec![], data_dir).expect("failed to create kv store"));
+            Arc::new(KvStore::new(1, vec![], data_dir, None).expect("failed to create kv store"));
         DistributedCertBot::new(kv_store, Arc::new(CertResolver::new()), None)
     }
 
     #[test]
     fn lock_writes_wake_the_persistent_push_path() {
         let data_dir = tempfile::tempdir().expect("failed to create temp dir");
-        let kv_store =
-            Arc::new(KvStore::new(1, vec![], data_dir.path()).expect("failed to create kv store"));
+        let kv_store = Arc::new(
+            KvStore::new(1, vec![], data_dir.path(), None).expect("failed to create kv store"),
+        );
         let notifier = Arc::new(CountingNotifier::default());
         let certbot = DistributedCertBot::new(
             kv_store,

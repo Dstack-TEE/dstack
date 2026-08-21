@@ -2418,3 +2418,92 @@ mod vm_config_device_count_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod appcompose_sdk_parity {
+    use super::*;
+
+    /// Every field `AppCompose` serializes, in sorted order.
+    ///
+    /// This exists to break when someone adds a field, so that the SDKs get
+    /// updated in the same change. What the SDKs compute is a compose hash that
+    /// gets whitelisted on chain, so a field they drop means the digest
+    /// describes an app-compose that is not the one being deployed -- and
+    /// nothing anywhere notices.
+    ///
+    /// All four are now *correct* without help: Go and Python keep unrecognised
+    /// keys in a catch-all, and JS's interface has an index signature and is
+    /// hashed from the object at runtime. So a missed field costs ergonomics
+    /// rather than correctness -- a user cannot name it with a type. That is
+    /// still worth fixing, in the same change, which is what this test is for.
+    ///
+    /// If it fails: add the field to `sdk/go/dstack/compose_hash.go`,
+    /// `sdk/js/src/get-compose-hash.ts` and
+    /// `sdk/python/src/dstack_sdk/get_compose_hash.py`, then update the list.
+    #[test]
+    fn every_serialized_field_is_accounted_for() {
+        let expected = [
+            "allowed_envs",
+            "event_log_version",
+            "features",
+            "gateway_enabled",
+            "init_script",
+            "key_provider",
+            "key_provider_id",
+            "kms_enabled",
+            "local_key_provider_enabled",
+            "manifest_version",
+            "name",
+            "no_instance_id",
+            "port_policy",
+            "public_logs",
+            "public_sysinfo",
+            "public_tcbinfo",
+            "requirements",
+            "runner",
+            "secure_time",
+            "storage_fs",
+            "swap_size",
+            "verity_volumes",
+        ];
+
+        // Every optional field populated, so nothing is skipped by
+        // `skip_serializing_if`.
+        let populated: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": "3",
+            "name": "demo",
+            "runner": "docker-compose",
+            "docker_compose_file": "services: {}\n",
+            "init_script": ["a.sh"],
+            "storage_fs": "ext4",
+            "swap_size": "2G",
+            "event_log_version": 2,
+            "port_policy": {"ports": [{"port": 8080, "pp": true}], "restrict_mode": true},
+            "verity_volumes": [{
+                "source": "v.img",
+                "verity_root": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+                "target": "/mnt/v",
+            }],
+            "requirements": {"os_version": ">=0.6.1"},
+            "snapshotter": "overlayfs",
+        }))
+        .expect("the fixture must stay parseable");
+
+        let serde_json::Value::Object(map) = serde_json::to_value(&populated).expect("serialize")
+        else {
+            panic!("AppCompose must serialize as an object");
+        };
+        let mut actual = map.keys().cloned().collect::<Vec<_>>();
+        actual.sort();
+        // Fields whose presence depends on the fixture rather than on the type.
+        actual.retain(|key| !matches!(key.as_str(), "docker_compose_file" | "snapshotter"));
+
+        assert_eq!(
+            actual, expected,
+            "AppCompose gained or lost a field. The Go and JS SDKs declare this \
+             type as a closed struct, so a field they do not know is silently \
+             dropped from the compose hash they compute -- and that hash is what \
+             gets whitelisted on chain. Update sdk/go and sdk/js, then this list."
+        );
+    }
+}
