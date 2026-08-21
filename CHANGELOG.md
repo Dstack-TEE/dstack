@@ -14,16 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - gateway: opt-in application-level health polling. An app sets `requirements.health_check.enabled` in its app-compose; the gateway then asks that CVM's guest agent (new `Worker.Health` RPC) whether the app is serving, and keeps instances that say no -- or that have not answered since registering -- out of app-id load balancing. Apps that do not opt in are never polled. Instance-id routing is never gated, and an app whose every instance reports unhealthy is routed to anyway rather than blackholed. Documented in `docs/app-health-checks.md`
 - app-compose: `requirements.health_check.health_file` names a file the app writes its own verdict into -- two lines, `healthy`/`unhealthy` and the unix timestamp it was written at, treated as unhealthy once older than 60s. It must be a regular file and is opened `O_NOFOLLOW`, and its contents are never quoted back into a report. Without it the agent judges the app's own Compose project: every container that declares a `healthcheck` must be running and healthy
 - guest-agent: container health also covers the `nerdctl-compose` runner, read through `nerdctl inspect` (its output is Docker-compatible). Requires nerdctl >= 2.3.1 for Compose `healthcheck:` to be honoured; the mkosi backend is pinned to 2.3.5
-- http-client: a caller can bound the response body (`http_request_bounded`, `PrpcClient::with_max_response_bytes`). Nothing is bounded by default — `dstack vmm logs --lines 100000` is a legitimate multi-megabyte fetch — but the gateway's two guest-agent clients opt in, because a CVM is untrusted and one of them polls on a timer against the whole fleet
+- http-client: a caller can bound the response body (`http_request_bounded`, `PrpcClient::with_max_response_bytes`). Nothing is bounded by default — `dstack vmm logs --lines 100000` is a legitimate multi-megabyte fetch — but every client that talks to a guest agent opts in, in the gateway and in the VMM, because a CVM is untrusted and one of them polls on a timer against the whole fleet
 
 ### Fixed
+- bound VMM-to-guest RPCs and guest-agent dependency calls to prevent stalled peers from retaining request resources indefinitely
 - sdk: the Go and Python compose-hash helpers silently dropped every app-compose field they did not declare, so `getComposeHash` returned a digest for an app-compose that was not the one being deployed — and that digest is what gets whitelisted on chain. The missing fields are named above; both now keep unrecognised keys as well, so a guest that gains a field before the SDK does still hashes correctly
 
 ### Changed
 - os/yocto: nerdctl 2.2.1 → 2.3.5, so `nerdctl compose` honours the Compose `healthcheck:` field (only translated into `--health-*` flags from 2.3.1 on). Requires openembedded-core to move to `wrynose` head for go 1.26.5, which also brings gcc 15.2 → 15.3 — every guest image measurement changes, so the new image hashes need whitelisting in KMS
 
-### Fixed
-- bound VMM-to-guest RPCs and guest-agent dependency calls to prevent stalled peers from retaining request resources indefinitely
 
 ## [0.5.5] - 2025-10-20
 
