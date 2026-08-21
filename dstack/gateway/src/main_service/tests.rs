@@ -646,6 +646,95 @@ async fn the_gate_survives_re_registration() {
     );
 }
 
+/// The test above takes the early-return branch of `new_client_by_id`, where
+/// the in-memory record is reused untouched -- so it says nothing about the
+/// `carried_ready` / `carried_admin_port_policy` locals, which only exist
+/// for the *other* branch. Replacing both with `None` left the whole suite
+/// green, which is why this test exists.
+///
+/// That branch runs when the recorded IP is no longer inside
+/// `wg.client_ip_range` -- an operator renumbering the range, or a record
+/// restored from a differently-configured gateway. The instance is rebuilt from
+/// scratch, and anything held only in the record has to be carried by hand.
+#[tokio::test]
+async fn both_operator_overrides_survive_the_ip_rebuild_path() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_ready_instances(&mut proxy, "rebuild-app", 2);
+    proxy.set_ready("rebuild-app-0", false).unwrap();
+    proxy
+        .set_admin_port_policy("rebuild-app-0", policy(true, &[8443]))
+        .unwrap();
+
+    // Put the recorded IP outside the configured range, so re-registering takes
+    // the rebuild branch instead of the early return.
+    let stale_ip: Ipv4Addr = "192.0.2.7".parse().unwrap();
+    assert!(
+        !proxy.valid_ip(stale_ip),
+        "the test IP must be out of range"
+    );
+    let old_ip = proxy.state.instances["rebuild-app-0"].ip;
+    proxy.state.instances.get_mut("rebuild-app-0").unwrap().ip = stale_ip;
+    proxy.state.allocated_addresses.remove(&old_ip);
+    proxy.state.allocated_addresses.insert(stale_ip);
+
+    proxy
+        .new_client_by_id(
+            "rebuild-app-0",
+            "rebuild-app",
+            &test_pubkey("rebuild-app-key-0"),
+            "",
+            ReportedCapabilities {
+                port_policy: Some(policy(false, &[])),
+                health_check: Some(false),
+            },
+        )
+        .unwrap();
+
+    let rebuilt = proxy.state.instances["rebuild-app-0"].clone();
+    assert!(
+        proxy.valid_ip(rebuilt.ip),
+        "the rebuild path should have reallocated an in-range IP"
+    );
+    assert_eq!(
+        rebuilt.ready,
+        Some(false),
+        "the operator's traffic gate was dropped by the rebuild"
+    );
+    assert_eq!(
+        rebuilt.admin_port_policy,
+        Some(policy(true, &[8443])),
+        "the operator's port-policy override was dropped by the rebuild"
+    );
+}
+
+/// `persist_instance_record` was changed to return a `Result` for exactly one
+/// caller: `set_ready`, whose API tells an operator the gate is in force.
+/// Swallowing that error left the whole suite green, so nothing pinned the one
+/// behaviour the signature change existed for.
+#[tokio::test]
+async fn a_gate_that_could_not_be_stored_is_reported_as_such() {
+    let state = create_test_state().await;
+    state
+        .kv_store
+        .fail_writes_for_test(crate::kv::FailWrite::INST);
+    let mut proxy = state.lock();
+    register_ready_instances(&mut proxy, "durable-app", 1);
+
+    let err = proxy
+        .set_ready("durable-app-0", false)
+        .expect_err("a failed store write must not be reported as success");
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("not durable"),
+        "the operator has to be told the setting did not stick: {message}"
+    );
+
+    // Still in force locally, deliberately: the operator's intent applies to
+    // the next connection even though it is not durable.
+    assert_eq!(proxy.state.instances["durable-app-0"].ready, Some(false));
+}
+
 /// `connect_top_n = 0` takes the random-selection path, which carries its own
 /// copy of the filter.
 #[tokio::test]
@@ -1138,56 +1227,6 @@ async fn recording_reports_whether_anything_changed() {
     );
 }
 
-/// A peer on a build predating the capability field rewrites `inst/` without
-/// it. Across a process restart there is no in-memory record to inherit from,
-/// so reading that as "opted out" would switch off a gate the app paid for
-/// until the CVM re-registers. The snapshot is the second witness.
-#[tokio::test]
-async fn a_restart_does_not_ungate_an_instance_an_older_peer_rewrote() {
-    let state = create_test_state().await;
-    let path = state.config.proxy.health_check.state_file.clone();
-    let rewritten = {
-        let mut proxy = state.lock();
-        register_instances(&mut proxy, "restart-mixed-app", 1, true);
-        observe(&mut proxy, "restart-mixed-app-0", HealthState::Healthy);
-        let existing = proxy.state.instances["restart-mixed-app-0"].clone();
-        InstanceData {
-            app_id: existing.app_id.clone(),
-            ip: existing.ip,
-            public_key: existing.public_key.clone(),
-            reg_time: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            port_policy: existing.port_policy.clone(),
-            port_policy_hash: existing.port_policy_hash.clone(),
-            admin_port_policy: None,
-            ready: existing.ready,
-            // The older peer does not know the field exists.
-            health_check: None,
-        }
-    };
-    crate::proxy::health_check::save_snapshot(&state.proxy);
-    state
-        .kv_store
-        .sync_instance("restart-mixed-app-0", &rewritten)
-        .unwrap();
-
-    // What a restarted process does.
-    let store = crate::proxy::health_store::HealthStore::load(&path);
-    let rebuilt =
-        build_state_from_kv_store(&state.config, state.kv_store.load_all_instances(), &store);
-
-    assert!(
-        rebuilt.instances["restart-mixed-app-0"].health_check,
-        "a restart must not read an older peer's rewrite as an opt-out"
-    );
-    assert_eq!(
-        rebuilt.instances["restart-mixed-app-0"].health,
-        HealthState::Healthy
-    );
-}
-
 /// The snapshot module is unit-tested on its own, but nothing verified that the
 /// gateway actually writes to it and reads from it. Deleting either side left
 /// the whole suite green, so a feature that is inert in production would have
@@ -1270,13 +1309,13 @@ async fn a_reboot_arriving_through_kv_resets_health_on_this_node_too() {
     );
 }
 
-/// A node running a build that predates the capability field rewrites `inst/`
-/// records without it -- it does that on every re-registration it handles. That
-/// record says nothing about the app's intent, so reading it as "opted out"
-/// would reset health, drop the app's cached selection, and flap the instance
-/// back on the next sync round, for as long as the cluster is mixed.
+/// A build predating the capability field reads the record fine and rewrites it
+/// without the field -- which needs no cluster, a single node rolled back and
+/// forward again is enough. That record says nothing about the app's intent, so
+/// reading it as "opted out" would reset health and drop the app's cached
+/// selection on a record that never said so.
 #[tokio::test]
-async fn a_record_from_an_older_peer_does_not_clear_the_capability() {
+async fn a_record_written_without_the_capability_field_does_not_clear_it() {
     let state = create_test_state().await;
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -1300,7 +1339,7 @@ async fn a_record_from_an_older_peer_does_not_clear_the_capability() {
             port_policy_hash: existing.port_policy_hash.clone(),
             admin_port_policy: None,
             ready: existing.ready,
-            // The older peer does not know the field exists.
+            // The older build does not know the field exists.
             health_check: None,
         }
     };

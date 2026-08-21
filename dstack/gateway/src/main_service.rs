@@ -769,17 +769,12 @@ fn build_state_from_kv_store(
         // local observation, so without the snapshot every instance would drop
         // to `Unknown` and wait for its next poll. A reboot is a different
         // matter and the store refuses to answer across one.
-        // `None` means the node that last wrote this record predates the field,
-        // not that the app opted out. There is no in-memory record to inherit
-        // from at startup, unlike the reload path below -- but the snapshot is
-        // a second witness: it only ever holds gated instances, so a hit for
-        // this instance under this WireGuard key is proof it was gated earlier
-        // in this same boot. Without that, one peer on an older build would
-        // switch a gate off for up to a re-registration interval every time
-        // this process restarted.
-        let health_check = data
-            .health_check
-            .unwrap_or_else(|| health_store.was_gated(&instance_id, &data.public_key));
+        // `None` is a record written before this field existed -- a node rolled
+        // back and forward again, which needs no cluster. At startup there is
+        // no in-memory record to inherit from, unlike the reload path below, so
+        // `false` is the only answer available. It fails open (routable,
+        // unpolled) and the CVM's next re-registration writes `Some(..)` back.
+        let health_check = data.health_check.unwrap_or(false);
         let health = health_store.restore(&instance_id, &data.public_key, health_check);
         let info = InstanceInfo {
             id: instance_id.clone(),
@@ -1158,12 +1153,11 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
             port_policy_hash: data.port_policy_hash.clone(),
             admin_port_policy: data.admin_port_policy.clone(),
             ready: data.ready,
-            // A record written by a node that predates the field says nothing
-            // about the app's intent, so it inherits whatever this node already
-            // knows rather than reading as "opted out". Without that, one older
-            // peer re-registering a CVM would reset its health to `Ungated`,
-            // drop the app's cached selection, and flap it back on the next
-            // sync round -- every round, for as long as the cluster is mixed.
+            // A record written before this field existed says nothing about the
+            // app's intent, so it inherits whatever this node already knows
+            // rather than reading as "opted out". Reading `false` there would
+            // reset health to `Ungated` and drop the app's cached selection on
+            // a record that never claimed the app had opted out.
             health_check: data.health_check.unwrap_or_else(|| {
                 state
                     .state
@@ -1591,20 +1585,20 @@ impl ProxyState {
         // The selection cache holds a pre-gate snapshot. Drop it so the change
         // applies to the next connection rather than up to `cache_top_n` later.
         self.state.top_n.remove(&app_id);
-        // Not rolled back, but do not read that as "it still took effect
-        // locally". `reload_instances_from_kv_store` rebuilds every instance
-        // from the store, and any peer writing an unrelated `inst/` record
-        // triggers it -- so the next reload reads back the very record this
-        // write failed to update, and the gate reverts. A failed write survives
-        // in memory only until then: seconds, not until restart. Rolling back
-        // here would just reach the same end state sooner while losing the brief
+        // Not rolled back, but do not read that as "it took effect". The gate
+        // is in memory and nowhere else: it is gone on restart, and any reload
+        // that rebuilds instances from the store reads back the very record
+        // this write failed to update. How long it survives depends on when
+        // that next happens, which is not something to predict in an error
+        // message -- so the message says what is known instead. Rolling back
+        // here would reach the same end state sooner while throwing away the
         // window in which the operator's intent is at least locally in force.
         self.persist_instance_record(instance_id).with_context(|| {
             format!(
-                "instance {instance_id} is set to ready={ready} on this node \
-                 only and not durably: the write to the store failed, so it \
-                 will not reach the other gateways and will be undone here by \
-                 the next reload. Retry before relying on it"
+                "instance {instance_id} is set to ready={ready} in memory on \
+                 this node only: the write to the store failed, so the setting \
+                 is not durable and has not been shared. Retry before relying \
+                 on it"
             )
         })?;
         Ok(())

@@ -112,11 +112,15 @@ pub struct InstanceData {
     /// - A build that predates the field. Records are msgpack named maps, so it
     ///   reads the record fine and just does not write the field back. This
     ///   needs no cluster -- a single node rolled back is enough.
-    /// - A node on the *current* build that has not seen the gate yet. The lazy
-    ///   port-policy fetch rewrites the record on the first proxied connection,
-    ///   so between `SetInstanceReady` landing on one node and the sync reaching
-    ///   another, that other node can clobber it. Normally the window is one
-    ///   sync round; under a partition it is as long as the partition.
+    /// - A node on the *current* build that has not seen the gate yet, once
+    ///   there is more than one node. The rewrite that reaches it first is the
+    ///   CVM's own re-registration: `gateway_checker` re-registers every 180s,
+    ///   and `new_client_by_id` writes the whole record from that node's memory.
+    ///   So between `SetInstanceReady` landing on one node and the sync reaching
+    ///   another, the CVM hitting that other node clobbers it. (The lazy
+    ///   port-policy fetch rewrites the record too, but it only fires when no
+    ///   policy is cached, which a current-build CVM never leaves true -- it
+    ///   reports one at registration.)
     ///
     /// A key of its own would survive both. It is still not worth one:
     /// `port_policy` and `admin_port_policy` ride in the same record, are
@@ -135,12 +139,12 @@ pub struct InstanceData {
     /// learning this instance through sync) does not poll an app that never
     /// opted in and read the failures as an unhealthy one.
     ///
-    /// `Option` for the same reason as `ready` above: a node running a
-    /// build that predates this field rewrites the record without it on every
-    /// re-registration it handles, and `None` has to mean "this writer did not
-    /// know" rather than "the app opted out". Reading `false` there would reset
-    /// health to `Ungated`, drop the app's cached selection, and flap the
-    /// instance back on the next sync round.
+    /// `Option` for the same reason as `ready` above: a build that predates
+    /// this field reads the record fine and does not write the field back, so
+    /// `None` has to mean "this writer did not know" rather than "the app opted
+    /// out". As with `ready`, this needs no cluster -- a single node rolled back
+    /// is enough. Reading `false` there would reset health to `Ungated` and drop
+    /// the app's cached selection on a record that never said so.
     #[serde(default)]
     pub health_check: Option<bool>,
 }
@@ -642,6 +646,22 @@ impl GetPutCodec for NodeState {
     }
 }
 
+/// Which write [`KvStore::fail_writes_for_test`] should fail.
+///
+/// Named at every call site rather than only under `cfg(test)`, so the deletes
+/// below read the same in both builds.
+pub(crate) struct FailWrite;
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl FailWrite {
+    /// The persistent `inst/` record, and its tombstone.
+    pub(crate) const INST: u8 = 0b001;
+    /// The ephemeral `conn/` key.
+    pub(crate) const CONN: u8 = 0b010;
+    /// The ephemeral `handshake/` key.
+    pub(crate) const HANDSHAKE: u8 = 0b100;
+}
+
 /// Sync store wrapping two WaveKV Nodes (persistent and ephemeral).
 ///
 /// This is the sync layer - not the primary data store.
@@ -654,6 +674,19 @@ pub struct KvStore {
     ephemeral: Node,
     /// This gateway's node ID
     my_node_id: NodeId,
+    /// Which instance writes to fail, so the paths that report a failure can
+    /// be tested at all.
+    ///
+    /// The real failures here are WAL I/O -- no space, permission denied, the
+    /// data volume unmounted -- and none of them can be provoked from a test
+    /// without a filesystem to sabotage. Faking the outcome is the only way to
+    /// cover the code that reports them, which is the whole reason
+    /// `persist_instance_record` returns a `Result` and the whole reason
+    /// `sync_delete_instance` does not short-circuit.
+    ///
+    /// A bitmask of [`FailWrite`].
+    #[cfg(test)]
+    injected_failures: std::sync::Arc<std::sync::atomic::AtomicU8>,
 }
 
 /// Whether opening the persistent store failed because the storage is
@@ -751,6 +784,8 @@ impl KvStore {
             persistent,
             ephemeral,
             my_node_id,
+            #[cfg(test)]
+            injected_failures: Default::default(),
         })
     }
 
@@ -770,9 +805,29 @@ impl KvStore {
 
     /// Sync instance data to other nodes
     pub fn sync_instance(&self, instance_id: &str, data: &InstanceData) -> Result<()> {
+        #[cfg(test)]
+        self.injected_failure(FailWrite::INST)?;
         self.persistent
             .write()
             .put_encoded(keys::inst(instance_id), data)
+    }
+
+    /// See [`KvStore::injected_failures`].
+    #[cfg(test)]
+    pub(crate) fn fail_writes_for_test(&self, mask: u8) {
+        self.injected_failures
+            .store(mask, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    fn injected_failure(&self, which: u8) -> Result<()> {
+        let mask = self
+            .injected_failures
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if mask & which != 0 {
+            anyhow::bail!("injected store failure for {which:#04b}");
+        }
+        Ok(())
     }
 
     /// Sync instance deletion to other nodes
@@ -787,20 +842,29 @@ impl KvStore {
         // `inst/` -- the only one of the three that is persistent, and the one an
         // operator needs to know about -- is not masked by an ephemeral key that
         // also happened to fail.
-        let previous = self.persistent.write().delete(keys::inst(instance_id));
-        let conn = self
-            .ephemeral
-            .write()
-            .delete(keys::conn(instance_id, self.my_node_id));
-        let handshake = self
-            .ephemeral
-            .write()
-            .delete(keys::handshake(instance_id, self.my_node_id));
+        let previous = self.delete_persistent(keys::inst(instance_id));
+        let conn = self.delete_ephemeral(keys::conn(instance_id, self.my_node_id), FailWrite::CONN);
+        let handshake = self.delete_ephemeral(
+            keys::handshake(instance_id, self.my_node_id),
+            FailWrite::HANDSHAKE,
+        );
 
         let previous = previous?;
         conn?;
         handshake?;
         Ok(previous.is_some_and(|entry| !entry.is_deleted()))
+    }
+
+    fn delete_persistent(&self, key: String) -> Result<Option<wavekv::types::Entry>> {
+        #[cfg(test)]
+        self.injected_failure(FailWrite::INST)?;
+        self.persistent.write().delete(key)
+    }
+
+    fn delete_ephemeral(&self, key: String, _which: u8) -> Result<Option<wavekv::types::Entry>> {
+        #[cfg(test)]
+        self.injected_failure(_which)?;
+        self.ephemeral.write().delete(key)
     }
 
     /// Load all instances from the sync store.
@@ -2011,6 +2075,88 @@ mod corruption_tests {
             .write()
             .put(key.to_string(), value.to_vec())
             .expect("raw put should succeed");
+    }
+
+    fn seed_instance(kv: &KvStore, id: &str) {
+        kv.sync_instance(
+            id,
+            &InstanceData {
+                app_id: "app".to_string(),
+                ip: "10.0.0.20".parse().unwrap(),
+                public_key: "key".to_string(),
+                reg_time: 1,
+                port_policy: None,
+                port_policy_hash: String::new(),
+                admin_port_policy: None,
+                ready: None,
+                health_check: None,
+            },
+        )
+        .expect("seed");
+        kv.sync_connections(id, 0).expect("seed conn");
+        kv.sync_instance_handshake(id, 1).expect("seed handshake");
+    }
+
+    /// Short-circuiting on `?` would publish the `inst/` tombstone and then
+    /// leave the ephemeral keys behind, and nothing garbage-collects orphans.
+    #[test]
+    fn a_failed_delete_does_not_abandon_the_remaining_keys() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let kv = test_kv(dir.path());
+        seed_instance(&kv, "cvm");
+
+        kv.fail_writes_for_test(FailWrite::CONN);
+        kv.sync_delete_instance("cvm")
+            .expect_err("the conn delete was made to fail");
+        kv.fail_writes_for_test(0);
+
+        assert!(
+            kv.persistent
+                .read()
+                .get(&keys::inst("cvm"))
+                .is_none_or(|entry| entry.is_deleted()),
+            "the inst/ tombstone should still have been written"
+        );
+        assert!(
+            kv.ephemeral
+                .read()
+                .get(&keys::handshake("cvm", kv.my_node_id))
+                .is_none_or(|entry| entry.is_deleted()),
+            "the handshake delete must be attempted even after conn/ failed"
+        );
+    }
+
+    /// `inst/` is the only one of the three that is persistent, and the only
+    /// one an operator can do anything about, so its failure must not be
+    /// masked by an ephemeral key that also happened to fail.
+    #[test]
+    fn the_persistent_failure_is_the_one_reported() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let kv = test_kv(dir.path());
+        seed_instance(&kv, "cvm");
+
+        kv.fail_writes_for_test(FailWrite::INST | FailWrite::CONN | FailWrite::HANDSHAKE);
+        let err = kv
+            .sync_delete_instance("cvm")
+            .expect_err("all three were made to fail");
+        kv.fail_writes_for_test(0);
+
+        assert!(
+            format!("{err:#}").contains(&format!("{:#04b}", FailWrite::INST)),
+            "expected the inst/ failure, got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn a_clean_delete_still_reports_that_the_record_existed() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let kv = test_kv(dir.path());
+        seed_instance(&kv, "cvm");
+        assert!(kv.sync_delete_instance("cvm").expect("delete"));
+        assert!(
+            !kv.sync_delete_instance("cvm").expect("second delete"),
+            "a tombstone is not a live record"
+        );
     }
 
     /// The gate rides in the instance record, so its forward compatibility is
