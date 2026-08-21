@@ -284,3 +284,51 @@ def test_health_check_health_file_is_part_of_the_hash():
     assert get_compose_hash(compose(None)) != get_compose_hash(
         compose("/dstack/health")
     )
+
+
+def test_port_policy_reaches_the_hash():
+    """A field the SDK does not name must still reach the digest."""
+    from dstack_sdk.get_compose_hash import AppCompose
+
+    plain = AppCompose(runner="docker-compose", docker_compose_file="services: {}\n")
+    with_policy = AppCompose(
+        runner="docker-compose",
+        docker_compose_file="services: {}\n",
+        port_policy={"ports": [{"port": 8080, "pp": True}], "restrict_mode": True},
+    )
+
+    assert get_compose_hash(plain) != get_compose_hash(with_policy)
+
+
+def test_gpu_policy_reaches_the_hash():
+    """`Requirements` is a closed shape, so this one had to be named."""
+    from dstack_sdk.get_compose_hash import AppCompose
+    from dstack_sdk.get_compose_hash import Requirements
+
+    plain = AppCompose(
+        runner="docker-compose", requirements=Requirements(os_version=">=0.6.1")
+    )
+    gated = AppCompose(
+        runner="docker-compose",
+        requirements=Requirements(
+            os_version=">=0.6.1", gpu_policy={"attest_gpu": False}
+        ),
+    )
+
+    assert get_compose_hash(plain) != get_compose_hash(gated)
+
+
+def test_an_unknown_requirement_still_reaches_the_hash():
+    """A guest that gains a field before this SDK does must still hash right."""
+    from dstack_sdk.get_compose_hash import AppCompose
+    from dstack_sdk.get_compose_hash import Requirements
+
+    plain = AppCompose(
+        runner="docker-compose", requirements=Requirements(os_version=">=0.6.1")
+    )
+    future = AppCompose(
+        runner="docker-compose",
+        requirements=Requirements(os_version=">=0.6.1", some_future_field=True),
+    )
+
+    assert get_compose_hash(plain) != get_compose_hash(future)

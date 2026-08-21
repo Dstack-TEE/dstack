@@ -280,8 +280,13 @@ impl ProxyInner {
 
         // Initialize WaveKV store without peers (peers will be added dynamically from bootnode)
         let kv_store = Arc::new(
-            KvStore::new(config.sync.node_id, vec![], &config.sync.data_dir)
-                .context("failed to initialize WaveKV store")?,
+            KvStore::new(
+                config.sync.node_id,
+                vec![],
+                &config.sync.data_dir,
+                (!config.sync.wal_sync_interval.is_zero()).then_some(config.sync.wal_sync_interval),
+            )
+            .context("failed to initialize WaveKV store")?,
         );
         info!(
             "WaveKV store initialized: node_id={}, sync_enabled={}",
@@ -1052,7 +1057,16 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
         }
     });
 
-    // Start periodic persistence task
+    // Start periodic persistence task.
+    //
+    // Both this and the WAL sync below run on the blocking pool. Each ends in a
+    // synchronous fsync — a snapshot plus its directory entry here, the log
+    // there — which is tens of microseconds on an NVMe host and milliseconds on
+    // the virtio disk a CVM gets. On a runtime worker that would park every
+    // other future assigned to it for the duration, which is the one thing a
+    // proxy's event loop cannot afford. It does not make the store lock any
+    // shorter: a reader still waits on the writer. It stops one slow disk from
+    // being a slow gateway.
     let persist_interval = proxy.config.sync.persist_interval;
     if !persist_interval.is_zero() {
         let kv_store_for_persist = kv_store.clone();
@@ -1060,17 +1074,52 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
             let mut ticker = tokio::time::interval(persist_interval);
             loop {
                 ticker.tick().await;
-                match kv_store_for_persist.persist_if_dirty() {
-                    Ok(true) => info!("WaveKV: periodic persist completed"),
-                    Ok(false) => {} // No changes to persist
-                    Err(err) => {
+                let kv = kv_store_for_persist.clone();
+                match tokio::task::spawn_blocking(move || kv.persist_if_dirty()).await {
+                    Ok(Ok(true)) => info!("WaveKV: periodic persist completed"),
+                    Ok(Ok(false)) => {} // No changes to persist
+                    Ok(Err(err)) => {
                         crate::metrics::record_kv_persist_failure();
                         error!("WaveKV: periodic persist failed: {err:?}");
+                    }
+                    Err(err) => {
+                        crate::metrics::record_kv_persist_failure();
+                        error!("WaveKV: the persist task did not finish: {err}");
                     }
                 }
             }
         });
         info!("WaveKV: periodic persistence enabled (interval: {persist_interval:?})");
+    }
+
+    // Force the write-ahead log on the window the operator configured. Nothing
+    // else forces it on a schedule — a snapshot does, but that is minutes apart
+    // — so without this the window would be a hope rather than a bound. Ticking
+    // at the window itself is enough to make it one: the store measures from
+    // its last fsync, so a write is forced at the first tick that finds the
+    // window elapsed, never more than one window after it landed.
+    let wal_sync_interval = proxy.config.sync.wal_sync_interval;
+    if !wal_sync_interval.is_zero() {
+        let kv_store_for_wal = kv_store.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(wal_sync_interval);
+            loop {
+                ticker.tick().await;
+                let kv = kv_store_for_wal.clone();
+                match tokio::task::spawn_blocking(move || kv.sync_wal_if_due()).await {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(err)) => {
+                        crate::metrics::record_kv_wal_sync_failure();
+                        error!("WaveKV: forcing the write-ahead log failed: {err:?}");
+                    }
+                    Err(err) => {
+                        crate::metrics::record_kv_wal_sync_failure();
+                        error!("WaveKV: the write-ahead log sync did not finish: {err}");
+                    }
+                }
+            }
+        });
+        info!("WaveKV: deferred WAL sync enabled (window: {wal_sync_interval:?})");
     }
 
     // Start periodic connection sync task

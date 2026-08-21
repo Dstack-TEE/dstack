@@ -412,6 +412,11 @@ get_node_uuid() {
 	admin_get_status "$admin_port" | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin)['uuid']))" 2>/dev/null || true
 }
 
+# A deterministic, *valid* WireGuard public key: 32 bytes, so 44 base64
+# characters. Registration rejects anything else (see WG_PUBLIC_KEY_B64_LEN in
+# gateway/src/kv/import.rs), so a hand-written placeholder is not a shortcut —
+# it is a test that can only fail. Use a distinct seed per registration; two
+# instances sharing a public key are refused as a conflict.
 test_public_key() {
 	local seed=$1
 	python3 -c "import base64; print(base64.b64encode(int($seed).to_bytes(32, 'big')).decode())"
@@ -1035,7 +1040,7 @@ test_prpc_register() {
 	log_info "Debug service is available"
 
 	# Register via debug port
-	local register_response=$(debug_register_cvm $debug_port "prpctest12345678901234567890123456789012=" "deadbeef" "cafebabe")
+	local register_response=$(debug_register_cvm $debug_port "$(test_public_key 501)" "deadbeef" "cafebabe")
 	log_info "Register response: $register_response"
 
 	# Verify registration succeeded
@@ -1113,7 +1118,7 @@ test_client_registration_persistence() {
 
 	# Register a client via debug port
 	log_info "Registering client..."
-	local register_response=$(debug_register_cvm $debug_port "persisttest1234567890123456789012345678901=" "persist_app" "persist_inst")
+	local register_response=$(debug_register_cvm $debug_port "$(test_public_key 502)" "persist_app" "persist_inst")
 	log_info "Register response: $register_response"
 
 	# Verify registration succeeded
@@ -1169,7 +1174,7 @@ test_stress_writes() {
 
 	log_info "Registering $num_clients clients via debug port..."
 	for i in $(seq 1 $num_clients); do
-		local key=$(printf "stresstest%02d12345678901234567890123456=" "$i")
+		local key=$(test_public_key $((600 + i)))
 		local app_id=$(printf "stressapp%02d" "$i")
 		local inst_id=$(printf "stressinst%02d" "$i")
 		local response=$(debug_register_cvm $debug_port "$key" "$app_id" "$inst_id")
@@ -1235,7 +1240,7 @@ test_network_partition() {
 	log_info "Registering clients on node 1 during partition..."
 	local success_count=0
 	for i in $(seq 1 3); do
-		local key=$(printf "partition%02d123456789012345678901234567=" "$i")
+		local key=$(test_public_key $((700 + i)))
 		local response=$(debug_register_cvm $debug_port1 "$key" "partition_app$i" "partition_inst$i")
 		if verify_register_response "$response" >/dev/null 2>&1; then
 			((success_count++))
@@ -1343,7 +1348,7 @@ test_three_node_cluster() {
 
 	# Register client on node 1
 	log_info "Registering client on node 1..."
-	local response=$(debug_register_cvm $debug_port1 "threenode12345678901234567890123456789=" "threenode_app" "threenode_inst")
+	local response=$(debug_register_cvm $debug_port1 "$(test_public_key 503)" "threenode_app" "threenode_inst")
 	local client_ip=$(verify_register_response "$response")
 	if [[ -z "$client_ip" ]]; then
 		log_error "Registration failed"
@@ -1425,7 +1430,7 @@ test_wal_integrity() {
 
 	# Register some clients via debug port
 	for i in $(seq 1 5); do
-		local key=$(printf "waltest%02d1234567890123456789012345678901=" "$i")
+		local key=$(test_public_key $((800 + i)))
 		local response=$(debug_register_cvm $debug_port "$key" "wal_app$i" "wal_inst$i")
 		if verify_register_response "$response" >/dev/null 2>&1; then
 			((success_count++))
@@ -1512,7 +1517,7 @@ test_three_node_bootnode() {
 
 	# Register client on node 2 (not the bootnode)
 	log_info "Registering client on node 2..."
-	local response=$(debug_register_cvm $debug_port2 "bootnode12345678901234567890123456789=" "bootnode_app" "bootnode_inst")
+	local response=$(debug_register_cvm $debug_port2 "$(test_public_key 504)" "bootnode_app" "bootnode_inst")
 	local client_ip=$(verify_register_response "$response")
 	if [[ -z "$client_ip" ]]; then
 		log_error "Registration failed"
@@ -1708,7 +1713,7 @@ test_periodic_persistence() {
 	log_info "Registering clients to create data..."
 	local success_count=0
 	for i in $(seq 1 3); do
-		local key=$(printf "persist%02d123456789012345678901234567890=" "$i")
+		local key=$(test_public_key $((900 + i)))
 		local response=$(debug_register_cvm $debug_port "$key" "persist_app$i" "persist_inst$i")
 		if verify_register_response "$response" >/dev/null 2>&1; then
 			((success_count++))
@@ -1995,7 +2000,7 @@ test_node_status_register_exclude() {
 
 	# Register a client on node 1
 	log_info "Registering client on node 1 (node 2 is down)..."
-	local response=$(debug_register_cvm $debug_port1 "downtest12345678901234567890123456789012=" "downtest_app" "downtest_inst")
+	local response=$(debug_register_cvm $debug_port1 "$(test_public_key 505)" "downtest_app" "downtest_inst")
 	log_info "Register response: $response"
 
 	# Verify registration succeeded
@@ -2035,7 +2040,7 @@ except Exception:
 
 	# Register another client
 	log_info "Registering client on node 1 (node 2 is now up)..."
-	response=$(debug_register_cvm $debug_port1 "uptest123456789012345678901234567890123=" "uptest_app" "uptest_inst2")
+	response=$(debug_register_cvm $debug_port1 "$(test_public_key 506)" "uptest_app" "uptest_inst2")
 
 	# Check gateways list - should now include node 2
 	has_node2=$(echo "$response" | python3 -c "
@@ -2086,7 +2091,7 @@ test_node_status_register_reject() {
 
 	# Register a client when node is up (should succeed)
 	log_info "Registering client when node 1 is up..."
-	local response=$(debug_register_cvm $debug_port "upnode123456789012345678901234567890123=" "upnode_app" "upnode_inst")
+	local response=$(debug_register_cvm $debug_port "$(test_public_key 507)" "upnode_app" "upnode_inst")
 	local client_ip=$(verify_register_response "$response")
 	if [[ -z "$client_ip" ]]; then
 		log_error "Registration failed when node was up"
@@ -2101,7 +2106,7 @@ test_node_status_register_reject() {
 
 	# Try to register a client when node is down (should fail)
 	log_info "Attempting to register client when node 1 is down..."
-	response=$(debug_register_cvm $debug_port "downnode12345678901234567890123456789012=" "downnode_app" "downnode_inst")
+	response=$(debug_register_cvm $debug_port "$(test_public_key 508)" "downnode_app" "downnode_inst")
 	log_info "Register response: $response"
 
 	# Check if response contains error about node being down
@@ -2123,7 +2128,7 @@ test_node_status_register_reject() {
 
 	# Register a client again (should succeed)
 	log_info "Registering client when node 1 is back up..."
-	response=$(debug_register_cvm $debug_port "backup123456789012345678901234567890123=" "backup_app" "backup_inst")
+	response=$(debug_register_cvm $debug_port "$(test_public_key 509)" "backup_app" "backup_inst")
 	client_ip=$(verify_register_response "$response")
 	if [[ -z "$client_ip" ]]; then
 		log_error "Registration failed when node was back up"

@@ -593,6 +593,10 @@ pub struct SyncConfig {
     /// Interval for periodic WAL persistence (default: 10s)
     #[serde(with = "serde_duration")]
     pub persist_interval: Duration,
+    /// How long a KV write may sit in the page cache before the write-ahead log
+    /// is forced to disk. Zero forces every write before it returns.
+    #[serde(with = "serde_duration")]
+    pub wal_sync_interval: Duration,
     /// Enable periodic sync of instance connections to KV store
     pub sync_connections_enabled: bool,
     /// Interval for syncing instance connections to KV store

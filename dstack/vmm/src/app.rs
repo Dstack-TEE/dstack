@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 use supervisor_client::SupervisorClient;
 use tracing::{debug, error, info, warn};
 
@@ -299,6 +299,8 @@ pub struct App {
     /// Pull status for registry images: tag → status.
     pub(crate) pull_status: Arc<Mutex<std::collections::HashMap<String, PullStatus>>>,
 }
+
+const GUEST_AGENT_RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl App {
     pub(crate) fn lock(&self) -> MutexGuard<'_, AppState> {
@@ -1326,9 +1328,10 @@ impl App {
 
     pub(crate) fn guest_agent_client(&self, id: &str) -> Result<GuestClient> {
         let cid = self.lock().get(id).context("vm not found")?.config.cid;
-        Ok(guest_api::client::new_client(format!(
-            "vsock://{cid}:8000/api"
-        )))
+        Ok(guest_api::client::new_client_with_timeout(
+            format!("vsock://{cid}:8000/api"),
+            GUEST_AGENT_RPC_TIMEOUT,
+        ))
     }
 
     fn try_allocate_gpus(&self, manifest: &Manifest) -> Result<GpuConfig> {

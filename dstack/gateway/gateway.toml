@@ -191,6 +191,21 @@ bootnode = ""
 data_dir = "/dstack-gateway/data"
 # Interval for periodic persistence of WaveKV data (e.g., "5s", "1m", "1h")
 persist_interval = "5m"
+# How long a KV write may sit in the page cache before the write-ahead log is
+# forced to disk.
+#
+# An fsync costs about 100us on an NVMe host and milliseconds on the virtio disk
+# a CVM gets, and it runs under the store lock, so paying one per write bounds
+# how fast this gateway can accept registrations and stalls its readers while it
+# does. Deferring it bounds what losing the *machine* costs — writes made in the
+# last window — and changes nothing about losing the process: a panic, an OOM
+# kill or a restart loses nothing either way, because the bytes are already with
+# the kernel.
+#
+# A cluster recovers the window from its peers on restart. A single-node gateway
+# does not, which is the case for setting this to "0s" — force every write
+# before it returns, as releases before WaveKV 2.1 always did.
+wal_sync_interval = "5s"
 # Enable periodic sync of instance connections to KV store
 sync_connections_enabled = true
 # Interval for syncing instance connections to KV store

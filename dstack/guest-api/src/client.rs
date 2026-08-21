@@ -4,6 +4,7 @@
 
 use crate::guest_api_client::GuestApiClient;
 use http_client::prpc::PrpcClient;
+use std::time::Duration;
 
 pub type DefaultClient = GuestApiClient<PrpcClient>;
 
@@ -17,4 +18,8 @@ pub const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn new_client(base_url: String) -> DefaultClient {
     DefaultClient::new(PrpcClient::new(base_url).with_max_response_bytes(MAX_RESPONSE_BYTES))
+}
+
+pub fn new_client_with_timeout(base_url: String, timeout: Duration) -> DefaultClient {
+    DefaultClient::new(PrpcClient::new(base_url).with_request_timeout(timeout))
 }

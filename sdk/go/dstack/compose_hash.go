@@ -8,7 +8,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"reflect"
 	"sort"
+	"strings"
 )
 
 // KeyProviderKind represents the key provider type
@@ -49,6 +51,15 @@ type HealthCheck struct {
 	HealthFile *string `json:"health_file,omitempty"`
 }
 
+// GpuPolicy is the application GPU policy applied before key provisioning.
+type GpuPolicy struct {
+	AttestGpu         *bool   `json:"attest_gpu,omitempty"`
+	Rego              *string `json:"rego,omitempty"`
+	AllowDevtools     *bool   `json:"allow_devtools,omitempty"`
+	AllowDebug        *bool   `json:"allow_debug,omitempty"`
+	AllowInsecureBoot *bool   `json:"allow_insecure_boot,omitempty"`
+}
+
 // Requirements represents guest-side requirements.
 type Requirements struct {
 	OsVersion            string                 `json:"os_version,omitempty"`
@@ -56,6 +67,30 @@ type Requirements struct {
 	TdxMeasureAcpiTables *bool                  `json:"tdx_measure_acpi_tables,omitempty"`
 	LaunchTokenHash      string                 `json:"launch_token_hash,omitempty"`
 	HealthCheck          *HealthCheck           `json:"health_check,omitempty"`
+	GpuPolicy            *GpuPolicy             `json:"gpu_policy,omitempty"`
+
+	// Extra carries fields this SDK does not know; see AppCompose.Extra.
+	Extra map[string]interface{} `json:"-"`
+}
+
+// PortAttrs is the per-port policy the gateway applies.
+type PortAttrs struct {
+	Port uint16 `json:"port"`
+	Pp   bool   `json:"pp,omitempty"`
+}
+
+// PortPolicy is the per-port policy consumed by the gateway.
+type PortPolicy struct {
+	Ports        []PortAttrs `json:"ports,omitempty"`
+	RestrictMode bool        `json:"restrict_mode,omitempty"`
+}
+
+// VerityVolume is a read-only, dm-verity-protected volume pre-seeded into the CVM.
+type VerityVolume struct {
+	Source string `json:"source"`
+	// VerityRoot is the dm-verity root hash, hex encoded.
+	VerityRoot string `json:"verity_root"`
+	Target     string `json:"target"`
 }
 
 // AppCompose represents the application composition structure
@@ -80,8 +115,28 @@ type AppCompose struct {
 	NoInstanceID            *bool           `json:"no_instance_id,omitempty"`
 	SecureTime              *bool           `json:"secure_time,omitempty"`
 	Requirements            *Requirements   `json:"requirements,omitempty"`
-	BashScript              string          `json:"bash_script,omitempty"`       // Legacy
-	PreLaunchScript         string          `json:"pre_launch_script,omitempty"` // Legacy
+	InitScript              []string        `json:"init_script,omitempty"`
+	StorageFs               string          `json:"storage_fs,omitempty"`
+	// SwapSize is a human size string, e.g. "2G", matching what the guest reads.
+	SwapSize        string         `json:"swap_size,omitempty"`
+	EventLogVersion *uint32        `json:"event_log_version,omitempty"`
+	PortPolicy      *PortPolicy    `json:"port_policy,omitempty"`
+	VerityVolumes   []VerityVolume `json:"verity_volumes,omitempty"`
+	BashScript      string         `json:"bash_script,omitempty"`       // Legacy
+	PreLaunchScript string         `json:"pre_launch_script,omitempty"` // Legacy
+
+	// Extra carries fields this SDK does not have a typed name for.
+	//
+	// A closed struct silently drops what it does not know, and the value this
+	// package computes is a compose hash that gets whitelisted on chain -- so a
+	// dropped field means the digest describes an app-compose that is not the
+	// one being deployed, with nothing anywhere to notice. Unmarshalling puts
+	// unrecognised keys here and marshalling puts them back, so a guest that
+	// gains a field before this SDK does still hashes correctly.
+	//
+	// Keys that collide with a declared field are ignored on marshal; the typed
+	// field wins.
+	Extra map[string]interface{} `json:"-"`
 }
 
 // preprocessAppCompose removes conflicting fields based on runner type
@@ -160,4 +215,107 @@ func GetComposeHash(appCompose AppCompose, normalize ...bool) (string, error) {
 
 	hash := sha256.Sum256([]byte(manifestStr))
 	return hex.EncodeToString(hash[:]), nil
+}
+
+// marshalWithExtra merges a struct's declared fields with its Extra map.
+//
+// `inner` is a type alias to avoid recursing into the custom MarshalJSON.
+func marshalWithExtra(declared interface{}, extra map[string]interface{}) ([]byte, error) {
+	encoded, err := json.Marshal(declared)
+	if err != nil {
+		return nil, err
+	}
+	if len(extra) == 0 {
+		return encoded, nil
+	}
+	merged := map[string]interface{}{}
+	if err := json.Unmarshal(encoded, &merged); err != nil {
+		return nil, err
+	}
+	for key, value := range extra {
+		if _, declared := merged[key]; declared {
+			continue
+		}
+		merged[key] = value
+	}
+	return json.Marshal(merged)
+}
+
+// unmarshalWithExtra fills `declared` and collects everything it did not claim.
+func unmarshalWithExtra(data []byte, declared interface{}, known map[string]struct{}) (map[string]interface{}, error) {
+	if err := json.Unmarshal(data, declared); err != nil {
+		return nil, err
+	}
+	var all map[string]interface{}
+	if err := json.Unmarshal(data, &all); err != nil {
+		return nil, err
+	}
+	var extra map[string]interface{}
+	for key, value := range all {
+		if _, ok := known[key]; ok {
+			continue
+		}
+		if extra == nil {
+			extra = map[string]interface{}{}
+		}
+		extra[key] = value
+	}
+	return extra, nil
+}
+
+func jsonFieldNames(v interface{}) map[string]struct{} {
+	names := map[string]struct{}{}
+	t := reflect.TypeOf(v)
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	for i := 0; i < t.NumField(); i++ {
+		tag := t.Field(i).Tag.Get("json")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		name := strings.Split(tag, ",")[0]
+		if name != "" {
+			names[name] = struct{}{}
+		}
+	}
+	return names
+}
+
+// MarshalJSON writes the declared fields plus anything in Extra.
+func (a AppCompose) MarshalJSON() ([]byte, error) {
+	type inner AppCompose
+	return marshalWithExtra(inner(a), a.Extra)
+}
+
+// UnmarshalJSON fills the declared fields and keeps the rest in Extra.
+func (a *AppCompose) UnmarshalJSON(data []byte) error {
+	type inner AppCompose
+	var decoded inner
+	extra, err := unmarshalWithExtra(data, &decoded, jsonFieldNames(AppCompose{}))
+	if err != nil {
+		return err
+	}
+	*a = AppCompose(decoded)
+	a.Extra = extra
+	return nil
+}
+
+// MarshalJSON writes the declared fields plus anything in Extra.
+func (r Requirements) MarshalJSON() ([]byte, error) {
+	type inner Requirements
+	return marshalWithExtra(inner(r), r.Extra)
+}
+
+// UnmarshalJSON fills the declared fields and keeps the rest in Extra.
+func (r *Requirements) UnmarshalJSON(data []byte) error {
+	type inner Requirements
+	var decoded inner
+	extra, err := unmarshalWithExtra(data, &decoded, jsonFieldNames(Requirements{}))
+	if err != nil {
+		return err
+	}
+	*r = Requirements(decoded)
+	r.Extra = extra
+	return nil
 }
