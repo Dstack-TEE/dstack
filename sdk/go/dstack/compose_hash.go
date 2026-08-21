@@ -38,9 +38,15 @@ const (
 )
 
 // HealthCheck represents application health reporting, read by the gateway.
+//
+// HealthFile is a pointer because `omitempty` on a string cannot tell an absent
+// field from an empty one, and Rust, Python and JS all can. Re-hashing an
+// existing app-compose that carries `"health_file": ""` would otherwise yield a
+// different digest here than in the other SDKs -- and that digest is what gets
+// whitelisted on chain. TdxMeasureAcpiTables is a pointer for the same reason.
 type HealthCheck struct {
-	Enabled    bool   `json:"enabled"`
-	HealthFile string `json:"health_file,omitempty"`
+	Enabled    bool    `json:"enabled"`
+	HealthFile *string `json:"health_file,omitempty"`
 }
 
 // Requirements represents guest-side requirements.

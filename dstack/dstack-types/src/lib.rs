@@ -556,6 +556,63 @@ pub struct HealthCheck {
     pub health_file: Option<String>,
 }
 
+/// Make a string that came from an untrusted party safe to put in a log line,
+/// and bound its length.
+///
+/// Both ends of the health path need this and neither can rely on the other:
+/// the guest agent sanitizes what an app wrote before reporting it, and the
+/// gateway sanitizes what a guest agent reported before logging it, because a
+/// guest agent is exactly the party the gateway does not trust.
+///
+/// "Unsafe" is wider than [`char::is_control`], which is only Unicode category
+/// Cc. It misses two families that do the same damage:
+///
+/// - `U+2028` LINE SEPARATOR and `U+2029` PARAGRAPH SEPARATOR, which many log
+///   viewers -- and every JavaScript or JSON consumer downstream of one --
+///   treat as a line break. That is the log-forging that stripping `\n` was
+///   meant to prevent.
+/// - The bidirectional formatting characters (`U+202A`..`U+202E`,
+///   `U+2066`..`U+2069`, `U+200E`, `U+200F`) and `U+FEFF`. `U+202E` reverses
+///   the rendering of everything after it, so an attacker controls how the
+///   rest of the line reads in a terminal without controlling its bytes.
+///
+/// Truncation is by bytes, and it says so when it happens: a bound that
+/// silently cuts a reason is worse than a short one, because the reader cannot
+/// tell a complete message from a clipped one.
+pub fn sanitize_for_log(text: &str, max_bytes: usize) -> String {
+    const MARKER: &str = "... (truncated)";
+    let mut cleaned = String::with_capacity(text.len().min(max_bytes));
+    let mut truncated = false;
+    for ch in text.chars() {
+        let ch = if is_unsafe_to_log(ch) { ' ' } else { ch };
+        if cleaned.len() + ch.len_utf8() > max_bytes {
+            truncated = true;
+            break;
+        }
+        cleaned.push(ch);
+    }
+    if truncated {
+        cleaned.push_str(MARKER);
+    }
+    cleaned
+}
+
+/// Whether a character must not survive into a log line. See
+/// [`sanitize_for_log`].
+fn is_unsafe_to_log(ch: char) -> bool {
+    ch.is_control()
+        || matches!(
+            ch,
+            '\u{2028}'
+                | '\u{2029}'
+                | '\u{200E}'
+                | '\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{FEFF}'
+        )
+}
+
 /// How old a `health_file` may be before it is read as unhealthy.
 ///
 /// Fixed rather than configurable: this is a liveness bound, and an app that
@@ -2482,5 +2539,73 @@ mod vm_config_device_count_tests {
             serialized.get("swtpm").and_then(|v| v.as_bool()),
             Some(true)
         );
+    }
+}
+
+#[cfg(test)]
+mod log_sanitize_tests {
+    use super::sanitize_for_log;
+
+    #[test]
+    fn strips_the_characters_that_forge_a_log_line() {
+        let forged = sanitize_for_log("web\nJan 01 INFO all good", 512);
+        assert!(!forged.contains('\n'), "{forged:?}");
+        let escaped = sanitize_for_log("\u{1b}[2Jcleared", 512);
+        assert!(!escaped.contains('\u{1b}'), "{escaped:?}");
+    }
+
+    /// `char::is_control` is category Cc only, so these get through it -- and a
+    /// log viewer, or anything JSON downstream of one, treats them as breaks.
+    #[test]
+    fn strips_the_unicode_line_separators() {
+        for separator in ['\u{2028}', '\u{2029}', '\u{85}'] {
+            let out = sanitize_for_log(&format!("web{separator}forged"), 512);
+            assert!(!out.contains(separator), "{separator:?} survived: {out:?}");
+        }
+    }
+
+    /// U+202E reverses how everything after it renders, so an attacker decides
+    /// what a reader sees without controlling the bytes.
+    #[test]
+    fn strips_bidi_overrides() {
+        for bidi in ['\u{202E}', '\u{202A}', '\u{2066}', '\u{200F}', '\u{FEFF}'] {
+            let out = sanitize_for_log(&format!("web{bidi}txet"), 512);
+            assert!(!out.contains(bidi), "{bidi:?} survived: {out:?}");
+        }
+    }
+
+    /// Bounded in bytes, not characters. Counting characters lets a multi-byte
+    /// string reach four times the intended size.
+    #[test]
+    fn bounds_bytes_not_characters() {
+        let wide = "\u{1d54f}".repeat(400);
+        assert_eq!(wide.chars().count(), 400);
+        assert_eq!(wide.len(), 1600);
+        let out = sanitize_for_log(&wide, 512);
+        assert!(out.len() <= 512 + "... (truncated)".len(), "{}", out.len());
+    }
+
+    /// A bound that silently clips is worse than a short one: the reader cannot
+    /// tell a complete reason from a cut one.
+    #[test]
+    fn says_when_it_truncated() {
+        let wide = "\u{1d54f}".repeat(400);
+        assert!(sanitize_for_log(&wide, 512).ends_with("(truncated)"));
+        assert!(!sanitize_for_log("web is starting", 512).ends_with("(truncated)"));
+    }
+
+    #[test]
+    fn never_splits_a_character() {
+        // 512 is not a multiple of 4, so a naive byte cut would split one.
+        let wide = "\u{1d54f}".repeat(400);
+        let out = sanitize_for_log(&wide, 512);
+        let body = out.trim_end_matches("... (truncated)");
+        assert!(body.is_char_boundary(body.len()));
+        assert_eq!(body.len() % 4, 0);
+    }
+
+    #[test]
+    fn ordinary_text_is_left_alone() {
+        assert_eq!(sanitize_for_log("web is starting", 512), "web is starting");
     }
 }

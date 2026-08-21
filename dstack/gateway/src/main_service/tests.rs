@@ -1109,6 +1109,35 @@ async fn a_periodic_re_registration_keeps_the_last_health_verdict() {
     );
 }
 
+/// `record_instance_health`'s return value is the only thing that makes the
+/// poller write the snapshot, so a mutation to it silently disables restart
+/// survival with every other test still green.
+#[tokio::test]
+async fn recording_reports_whether_anything_changed() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_instances(&mut proxy, "changed-app", 1, true);
+    let info = proxy.state.instances["changed-app-0"].clone();
+    let target = crate::proxy::health_check::Target {
+        id: info.id.clone(),
+        ip: info.ip,
+        public_key: info.public_key.clone(),
+    };
+
+    assert!(
+        observe_from(&mut proxy, &target, HealthState::Healthy),
+        "a new verdict is a change"
+    );
+    assert!(
+        !observe_from(&mut proxy, &target, HealthState::Healthy),
+        "the same verdict again is not"
+    );
+    assert!(
+        observe_from(&mut proxy, &target, HealthState::Unhealthy),
+        "a different verdict is"
+    );
+}
+
 /// The snapshot module is unit-tested on its own, but nothing verified that the
 /// gateway actually writes to it and reads from it. Deleting either side left
 /// the whole suite green, so a feature that is inert in production would have

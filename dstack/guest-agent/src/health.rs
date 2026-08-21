@@ -31,7 +31,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use dstack_types::{HealthCheck, HEALTH_FILE_MAX_AGE_SECS};
 use or_panic::ResultOrPanic;
-use tokio::io::AsyncReadExt;
 use tracing::{debug, info, warn};
 
 use crate::container_health::{self, HealthReport, UnhealthyContainer};
@@ -65,11 +64,13 @@ const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 /// attempt to make the agent allocate on the app's behalf.
 const MAX_HEALTH_FILE_BYTES: u64 = 4096;
 
-/// Longest state token echoed back into a report.
+/// Longest app-authored text echoed back into a report.
 ///
-/// The token is a word. Bounding it keeps app-controlled bytes from reaching
-/// the gateway's logs in quantity; [`sanitize`] handles the rest.
-const MAX_STATE_BYTES: usize = 64;
+/// Only the `health_file` path reaches a report now -- the file's *contents*
+/// deliberately do not, since whatever sits at that path is not what was
+/// measured. A path is short; bounding it keeps app-controlled bytes out of the
+/// gateway's logs in quantity, and [`sanitize`] handles the rest.
+const MAX_REPORTED_BYTES: usize = 256;
 
 /// Reported in place of a container name, so an operator reading gateway logs
 /// can tell an app-written verdict from a container that failed its healthcheck.
@@ -144,25 +145,6 @@ impl Verdict {
     }
 }
 
-/// What the container fallback needs to find the app's own containers.
-#[derive(Clone, Debug)]
-pub(crate) struct ContainerSource {
-    /// `app_compose.runner`: which runtime started them.
-    runner: String,
-    /// The Compose project the app's containers carry, so only they are judged.
-    project: String,
-}
-
-impl ContainerSource {
-    /// Resolve the project name once, from the compose file the app shipped.
-    pub(crate) fn new(runner: String, compose_file: Option<&str>) -> Self {
-        Self {
-            runner,
-            project: container_health::compose_project(compose_file),
-        }
-    }
-}
-
 /// The cached verdict plus the loop that refreshes it.
 pub(crate) struct HealthMonitor {
     latest: RwLock<Verdict>,
@@ -173,13 +155,12 @@ impl HealthMonitor {
     ///
     /// Only called when the app opted in; an app that did not is never polled
     /// by the gateway, so there is nothing to keep up to date.
-    pub(crate) fn spawn(check: HealthCheck, source: ContainerSource) -> Arc<Self> {
+    pub(crate) fn spawn(check: HealthCheck, runner: String) -> Arc<Self> {
         match &check.health_file {
             Some(path) => info!("app health is read from {path} every {REFRESH_INTERVAL:?}"),
-            None => info!(
-                "app health is judged from {} containers every {REFRESH_INTERVAL:?}",
-                source.runner
-            ),
+            None => {
+                info!("app health is judged from {runner} containers every {REFRESH_INTERVAL:?}")
+            }
         }
         let monitor = Arc::new(Self {
             // The same rule the gateway applies to an instance that has
@@ -192,28 +173,17 @@ impl HealthMonitor {
         });
         let task = monitor.clone();
         tokio::spawn(async move {
-            let mut failures = 0;
+            // Supervised, for the same reason the gateway's poller is: if this
+            // task ever died, `report()` would keep serving the last verdict
+            // forever and nothing in the response says how old it is, so an
+            // instance frozen on `healthy` would stay in rotation through any
+            // later failure.
             loop {
-                match refresh(&check, &source).await {
-                    Ok(verdict) => {
-                        failures = 0;
-                        task.store(verdict);
-                    }
-                    Err(err) => {
-                        // Hold the previous verdict for a few rounds: a
-                        // container being recreated underneath us looks exactly
-                        // like this, and it resolves itself by the next tick.
-                        failures += 1;
-                        let error = format!("{err:#}");
-                        if failures < MAX_CONSECUTIVE_FAILURES {
-                            debug!(
-                                "health refresh failed ({failures}), keeping last verdict: {error}"
-                            );
-                        } else {
-                            warn!("health refresh has failed {failures} times: {error}");
-                            task.store(Verdict::failed(error));
-                        }
-                    }
+                let refresher =
+                    tokio::spawn(refresh_forever(check.clone(), runner.clone(), task.clone()));
+                match refresher.await {
+                    Ok(()) => warn!("health refresh loop returned unexpectedly; restarting"),
+                    Err(err) => warn!("health refresh loop died: {err}; restarting"),
                 }
                 tokio::time::sleep(REFRESH_INTERVAL).await;
             }
@@ -238,15 +208,49 @@ impl HealthMonitor {
     }
 }
 
+/// The refresh loop itself, in its own task so a panic in it is observable to
+/// the supervisor above rather than ending health reporting silently.
+async fn refresh_forever(check: HealthCheck, runner: String, monitor: Arc<HealthMonitor>) {
+    let mut failures = 0;
+    loop {
+        match refresh(&check, &runner).await {
+            Ok(verdict) => {
+                failures = 0;
+                monitor.store(verdict);
+            }
+            Err(err) => {
+                // Hold the previous verdict for a few rounds: a container being
+                // recreated underneath us looks exactly like this, and it
+                // resolves itself by the next tick.
+                failures += 1;
+                let error = format!("{err:#}");
+                if failures < MAX_CONSECUTIVE_FAILURES {
+                    debug!("health refresh failed ({failures}), keeping last verdict: {error}");
+                } else {
+                    // Once, on the way in. A runtime that stays down would
+                    // otherwise be a warning every interval, forever --
+                    // `store` deduplicates the verdict it logs, and this has
+                    // to do the same.
+                    if failures == MAX_CONSECUTIVE_FAILURES {
+                        warn!("health refresh has failed {failures} times: {error}");
+                    }
+                    monitor.store(Verdict::failed(error));
+                }
+            }
+        }
+        tokio::time::sleep(REFRESH_INTERVAL).await;
+    }
+}
+
 /// One refresh, from whichever source the app declared.
 ///
 /// `Err` means "could not tell", which the caller tolerates for a few rounds.
 /// A verdict of unhealthy is a different thing and comes back as `Ok`.
-async fn refresh(check: &HealthCheck, source: &ContainerSource) -> anyhow::Result<Verdict> {
+async fn refresh(check: &HealthCheck, runner: &str) -> anyhow::Result<Verdict> {
     let work = async {
         match &check.health_file {
             Some(path) => Ok(read_health_file(path).await),
-            None => container_health::collect(&source.runner, &source.project)
+            None => container_health::collect(runner)
                 .await
                 .map(Verdict::from_report),
         }
@@ -265,22 +269,64 @@ async fn read_health_file(path: &str) -> Verdict {
     let contents = match read_bounded(path).await {
         Ok(contents) => contents,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Verdict::unhealthy(HEALTH_FILE_NAME, format!("{path} has not been written yet"))
+            return Verdict::unhealthy(
+                HEALTH_FILE_NAME,
+                format!("{} has not been written yet", sanitize(path)),
+            )
         }
         Err(err) => {
-            return Verdict::unhealthy(HEALTH_FILE_NAME, format!("cannot read {path}: {err}"))
+            // The path is measured into the compose hash, so echoing it tells
+            // an anonymous caller nothing it could not read there -- but it is
+            // still app-authored text on its way to a log line.
+            return Verdict::unhealthy(
+                HEALTH_FILE_NAME,
+                format!("cannot read {}: {err}", sanitize(path)),
+            );
         }
     };
     judge_health_file(&contents, now_secs())
 }
 
+/// Open and read the health file, refusing anything that is not a plain file.
+///
+/// `O_NOFOLLOW` and the regular-file check are both load-bearing, and neither is
+/// paranoia about a hostile app -- the path is measured into the compose hash,
+/// but what sits *at* that path at runtime is not:
+///
+/// - A symlink would make this root process read whatever it points at, and the
+///   two-line parser reports what it found (see [`judge_health_file`], which is
+///   careful never to echo the contents back).
+/// - A FIFO is worse than it looks. `tokio::fs` opens on the blocking pool, and
+///   a blocking task cannot be cancelled, so `open(2)` on a reader-less FIFO
+///   parks that thread forever while the outer timeout merely abandons the
+///   future. One thread leaks per refresh, silently -- the systemd watchdog
+///   probes over HTTP and never touches the pool -- until the agent can no
+///   longer do any filesystem work at all. `O_NONBLOCK` makes that open return
+///   immediately instead.
 async fn read_bounded(path: &str) -> std::io::Result<String> {
-    let file = tokio::fs::File::open(path).await?;
-    let mut contents = String::new();
-    file.take(MAX_HEALTH_FILE_BYTES)
-        .read_to_string(&mut contents)
-        .await?;
-    Ok(contents)
+    let path = path.to_string();
+    tokio::task::spawn_blocking(move || {
+        use std::io::Read as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&path)?;
+        let kind = file.metadata()?.file_type();
+        if !kind.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "health file is not a regular file",
+            ));
+        }
+        let mut contents = String::new();
+        file.take(MAX_HEALTH_FILE_BYTES)
+            .read_to_string(&mut contents)?;
+        Ok(contents)
+    })
+    .await
+    .unwrap_or_else(|err| Err(std::io::Error::other(err)))
 }
 
 /// Apply the two-line contract to what the file actually contained.
@@ -299,12 +345,13 @@ fn judge_health_file(contents: &str, now: u64) -> Verdict {
         );
     };
     let Ok(written) = timestamp.parse::<u64>() else {
+        // Deliberately not quoting the line. The report is served to anonymous
+        // callers on the external listener, and the bytes on line 2 are
+        // whatever was at that path -- which, if something replaced the file,
+        // is not what the app wrote and not what was measured.
         return Verdict::unhealthy(
             HEALTH_FILE_NAME,
-            format!(
-                "health file timestamp is not a unix time in seconds: {}",
-                sanitize(timestamp)
-            ),
+            "health file line 2 is not a unix time in seconds".to_string(),
         );
     };
     // A clock that ran backwards, or an app stamping slightly ahead, is not
@@ -322,38 +369,29 @@ fn judge_health_file(contents: &str, now: u64) -> Verdict {
         "healthy" => Verdict::healthy(),
         "unhealthy" => Verdict::unhealthy(HEALTH_FILE_NAME, "app reports unhealthy".to_string()),
         // Anything else is the app saying something this agent does not
-        // understand, which is not a pass.
+        // understand, which is not a pass. Not quoted, for the same reason as
+        // the timestamp above.
         _ => Verdict::unhealthy(
             HEALTH_FILE_NAME,
-            format!("unrecognized health state: {}", sanitize(state)),
+            "health file line 1 is neither healthy nor unhealthy".to_string(),
         ),
     }
 }
 
-/// Make an app-controlled token safe to put in a report.
+/// Make app-authored text safe to put in a report.
 ///
 /// The report is served to anonymous callers on the external listener and is
 /// logged by the gateway, so control characters -- newlines that forge a log
-/// line, ANSI escapes that rewrite a terminal -- must not survive, and the
-/// length must be bounded.
+/// line, escapes that repaint a terminal, bidi overrides that reverse what a
+/// reader sees -- must not survive, and the length must be bounded. The gateway
+/// does the same again on receipt, because it does not trust this agent to have
+/// done it.
 fn sanitize(token: &str) -> String {
-    let cleaned = token
-        .chars()
-        .map(|ch| if ch.is_control() { ' ' } else { ch })
-        .collect::<String>();
-    let cleaned = cleaned.trim();
+    let cleaned = dstack_types::sanitize_for_log(token.trim(), MAX_REPORTED_BYTES);
     if cleaned.is_empty() {
         return "<empty>".to_string();
     }
-    if cleaned.len() <= MAX_STATE_BYTES {
-        return cleaned.to_string();
-    }
-    // Slice on a char boundary so a multi-byte character is never cut in half.
-    let mut end = MAX_STATE_BYTES;
-    while end > 0 && !cleaned.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}...", &cleaned[..end])
+    cleaned
 }
 
 fn now_secs() -> u64 {
@@ -440,6 +478,21 @@ mod tests {
         assert!(reason(&verdict).contains("unix time"));
     }
 
+    /// The report goes to anonymous callers on the external listener, and the
+    /// bytes at that path are not the bytes that were measured -- a symlink or
+    /// a replaced file makes them something else entirely. Naming the rule that
+    /// failed is enough to debug with; quoting the line is an exfiltration
+    /// channel.
+    #[test]
+    fn a_malformed_file_is_never_quoted_back() {
+        let secret = "AKIAIOSFODNN7EXAMPLE";
+        let verdict = file(&format!("healthy\n{secret}"));
+        assert!(!reason(&verdict).contains(secret), "{}", reason(&verdict));
+
+        let verdict = file(&format!("{secret}\n{NOW}"));
+        assert!(!reason(&verdict).contains(secret), "{}", reason(&verdict));
+    }
+
     #[test]
     fn an_empty_file_is_not_healthy() {
         let verdict = file("");
@@ -453,27 +506,79 @@ mod tests {
     fn an_unrecognized_state_is_not_healthy() {
         let verdict = file(&format!("degraded\n{NOW}"));
         assert!(!verdict.healthy);
-        assert!(reason(&verdict).contains("degraded"));
+        assert!(reason(&verdict).contains("neither healthy nor unhealthy"));
     }
 
-    /// The state reaches anonymous callers and the gateway's logs, so it must
-    /// not be able to carry a newline or an escape sequence there.
-    #[test]
-    fn control_characters_in_the_state_are_stripped() {
-        let verdict = file(&format!("\x1b[31mbad\r\n{NOW}"));
+    /// The `health_file` path is app-authored and reaches both an anonymous
+    /// caller and a log line, so it is bounded and stripped like anything else
+    /// that crosses that boundary.
+    #[tokio::test]
+    async fn a_hostile_path_cannot_forge_a_log_line() {
+        let forged = "/nonexistent/\u{1b}[31mx\nlevel=fatal msg=owned";
+        let verdict = read_health_file(forged).await;
         let reason = reason(&verdict);
-        assert!(!reason.contains('\x1b'), "escape survived: {reason:?}");
+        assert!(!reason.contains('\n'), "newline survived: {reason:?}");
+        assert!(!reason.contains('\u{1b}'), "escape survived: {reason:?}");
+    }
+
+    #[tokio::test]
+    async fn a_very_long_path_is_truncated() {
+        let long = format!("/nonexistent/{}", "x".repeat(MAX_REPORTED_BYTES * 4));
+        let verdict = read_health_file(&long).await;
+        assert!(reason(&verdict).len() < MAX_REPORTED_BYTES * 2);
+    }
+
+    /// The path is measured into the compose hash; whatever sits at it at
+    /// runtime is not. A symlink would make this root process read the target
+    /// and report on it.
+    #[tokio::test]
+    async fn a_symlinked_health_file_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("target");
+        // Deliberately a file that *would* read healthy, so refusing to follow
+        // the link is the only thing that can make this verdict unhealthy.
+        std::fs::write(&target, format!("healthy\n{}\n", now_secs())).expect("write");
         assert!(
-            !reason.contains('\r'),
-            "carriage return survived: {reason:?}"
+            read_health_file(target.to_str().expect("utf8"))
+                .await
+                .healthy,
+            "the target must read healthy, or this test proves nothing"
+        );
+
+        let link = dir.path().join("health");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink");
+        let verdict = read_health_file(link.to_str().expect("utf8")).await;
+        assert!(
+            !verdict.healthy,
+            "a symlink must not be followed: {verdict:?}"
         );
     }
 
-    #[test]
-    fn a_long_state_is_truncated() {
-        let long = "x".repeat(MAX_STATE_BYTES * 4);
-        let verdict = file(&format!("{long}\n{NOW}"));
-        assert!(reason(&verdict).len() < MAX_STATE_BYTES * 2);
+    /// `tokio::fs` opens on the blocking pool and a blocking task cannot be
+    /// cancelled, so a reader-less FIFO would park a thread forever -- one per
+    /// refresh, until the agent can do no filesystem work at all. `O_NONBLOCK`
+    /// makes the open fail instead. This test hangs if that flag is dropped.
+    #[tokio::test]
+    async fn a_fifo_health_file_does_not_park_a_thread() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fifo = dir.path().join("health");
+        let path = std::ffi::CString::new(fifo.to_str().expect("utf8")).expect("cstring");
+        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+
+        let verdict = tokio::time::timeout(
+            Duration::from_secs(5),
+            read_health_file(fifo.to_str().expect("utf8")),
+        )
+        .await
+        .expect("opening a FIFO must not block");
+        assert!(!verdict.healthy, "{verdict:?}");
+    }
+
+    #[tokio::test]
+    async fn a_directory_is_not_a_health_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let verdict = read_health_file(dir.path().to_str().expect("utf8")).await;
+        assert!(!verdict.healthy, "{verdict:?}");
     }
 
     #[tokio::test]
@@ -519,7 +624,7 @@ mod tests {
                 enabled: true,
                 health_file: Some("/nonexistent/dstack-health-test".to_string()),
             },
-            ContainerSource::new("docker-compose".to_string(), None),
+            "docker-compose".to_string(),
         );
         let verdict = monitor.report();
         assert!(!verdict.healthy, "{verdict:?}");

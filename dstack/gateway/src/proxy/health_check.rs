@@ -33,9 +33,8 @@ use std::time::Duration;
 
 use dstack_guest_agent_rpc::worker_client::WorkerClient;
 use futures::StreamExt;
-use http_client::prpc::PrpcClient;
 use tokio::time::MissedTickBehavior;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::config::HealthCheckConfig;
 use crate::main_service::Proxy;
@@ -45,6 +44,16 @@ use super::health_store;
 
 /// How long to wait before restarting the poll loop after it dies.
 const RESTART_DELAY: Duration = Duration::from_secs(5);
+
+/// Shortest gap between two writes of the health snapshot.
+///
+/// The snapshot holds the whole fleet, so any one verdict changing rewrites
+/// every entry. One instance flapping each round would otherwise rewrite the
+/// file every interval: measured at 2000 instances that is ~39 KB/s sustained,
+/// paid by the operator, triggered by whichever tenant flips. Losing up to this
+/// much is free -- what it protects is a process restart, and anything missing
+/// is re-derived by the next poll.
+const SNAPSHOT_MIN_INTERVAL: Duration = Duration::from_secs(30);
 
 /// One poll's verdict, plus why, for the line logged when the verdict changes.
 pub(crate) struct Observation {
@@ -116,9 +125,12 @@ async fn poll_forever(state: Proxy, config: HealthCheckConfig) {
     // not eject an instance. Rebuilt from the round's own targets each time, so
     // it cannot outlive the instances it describes.
     let mut failures = BTreeMap::<String, u32>::new();
+    // Where the next round starts in the target list. See `poll_round`.
+    let mut cursor = 0usize;
+    let mut last_snapshot: Option<tokio::time::Instant> = None;
     loop {
         ticker.tick().await;
-        poll_round(&state, &config, &mut failures).await;
+        cursor = poll_round(&state, &config, &mut failures, cursor, &mut last_snapshot).await;
     }
 }
 
@@ -126,15 +138,24 @@ async fn poll_round(
     state: &Proxy,
     config: &HealthCheckConfig,
     failures: &mut BTreeMap<String, u32>,
-) {
+    cursor: usize,
+    last_snapshot: &mut Option<tokio::time::Instant>,
+) -> usize {
     // Snapshot under the lock and poll outside it. These are network round
     // trips, and holding `ProxyState` across them would stall every connection
     // being routed.
-    let targets = select_targets(state);
+    let mut targets = select_targets(state);
     failures.retain(|id, _| targets.iter().any(|target| &target.id == id));
     if targets.is_empty() {
-        return;
+        return 0;
     }
+    // Start where the last round stopped. The round is bounded below, so
+    // without rotating, the instances past the budget would never be polled at
+    // all -- and which instances those are is decided by `BTreeMap` ordering,
+    // i.e. by instance id, which a tenant chooses.
+    let total = targets.len();
+    targets.rotate_left(cursor % total);
+
     let agent_port = state.config.proxy.agent_port;
     let timeout = config.timeout;
     let mut polls = futures::stream::iter(targets)
@@ -144,22 +165,53 @@ async fn poll_round(
         })
         .buffer_unordered(config.concurrency.max(1));
 
-    // Each verdict is applied as its poll lands, not batched at the end of the
-    // round. A batch would hold the first instance's answer for as long as the
-    // slowest one takes and then write it onto whatever record exists by then
-    // -- which, for a CVM that rebooted in between, is a different boot of the
-    // app being told it is healthy on the strength of the previous one.
+    // The round gets one interval, no more. A poll that never answers costs a
+    // full `timeout` slot, so a fleet with enough of them takes
+    // `ceil(n / concurrency) * timeout` -- and `MissedTickBehavior::Delay` then
+    // makes that the *interval*, so one tenant's mute CVMs become every other
+    // tenant's detection latency. Measured on this transport: 256 such
+    // instances take a 33s round at the shipped defaults.
+    let deadline = tokio::time::Instant::now() + config.interval;
     let mut changed = false;
-    while let Some((target, result)) = polls.next().await {
+    let mut polled = 0usize;
+    loop {
+        let landed = tokio::select! {
+            biased;
+            landed = polls.next() => landed,
+            _ = tokio::time::sleep_until(deadline) => break,
+        };
+        let Some((target, result)) = landed else {
+            break;
+        };
+        polled += 1;
+        // Each verdict is applied as its poll lands, not batched at the end of
+        // the round. A batch would hold the first instance's answer for as long
+        // as the slowest one takes and then write it onto whatever record
+        // exists by then -- which, for a CVM that rebooted in between, is a
+        // different boot of the app being told it is healthy on the strength of
+        // the previous one.
         let Some(observation) = apply_hysteresis(result, &target, config, failures) else {
             // Not enough evidence yet; the instance keeps the verdict it has.
             continue;
         };
         changed |= state.lock().record_instance_health(&target, observation);
     }
-    if changed {
-        save_snapshot(state);
+    if polled < total {
+        // Never silently. An operator whose fleet is not being fully polled has
+        // to be able to see that, and the number is the signal that something
+        // is absorbing the budget.
+        warn!(
+            "health round polled {polled} of {total} instances before its {:?} budget ran out; \
+             the rest are first in line next round",
+            config.interval
+        );
     }
+    let due = last_snapshot.is_none_or(|at| at.elapsed() >= SNAPSHOT_MIN_INTERVAL);
+    if changed && due {
+        save_snapshot(state);
+        *last_snapshot = Some(tokio::time::Instant::now());
+    }
+    cursor.wrapping_add(polled)
 }
 
 /// The instances worth polling this round.
@@ -171,8 +223,12 @@ pub(crate) fn select_targets(state: &Proxy) -> Vec<Target> {
     // them stretch the round past the interval and slow health detection down
     // for every live instance in the fleet.
     let stale_after = state.config.proxy.timeouts.handshake_stale;
+    // Fetched before the lock, not under it. Building this map clones every
+    // peer's public key, and on a cold cache it shells out to `wg show`
+    // synchronously -- neither belongs inside the mutex the routing path takes
+    // once per connection.
+    let handshakes = state.latest_handshakes(None).unwrap_or_default();
     let guard = state.lock();
-    let handshakes = guard.latest_handshakes(None).unwrap_or_default();
     guard
         .state
         .instances
@@ -283,12 +339,10 @@ pub(crate) fn save_snapshot(state: &Proxy) {
 /// amount to one.
 async fn poll_instance(ip: Ipv4Addr, agent_port: u16, timeout: Duration) -> PollResult {
     let url = format!("http://{ip}:{agent_port}/prpc");
-    // Bounded: the peer is a CVM, `health_check` is self-declared, and this
-    // runs on a timer against the whole fleet. An unbounded body here is an
-    // out-of-memory the guest gets to schedule.
-    let client = WorkerClient::new(
-        PrpcClient::new(url).with_max_response_bytes(http_client::MAX_RESPONSE_BYTES),
-    );
+    // `guest_agent_client` bounds the response: `health_check` is self-declared
+    // by the CVM and this runs on a timer against the whole fleet, so an
+    // unbounded body here is an out-of-memory the guest gets to schedule.
+    let client = WorkerClient::new(super::guest_agent_client(url));
     let response = match tokio::time::timeout(timeout, client.health()).await {
         Err(_) => {
             return PollResult::Unreachable(format!("health poll timed out after {timeout:?}"))
@@ -339,34 +393,32 @@ fn describe_unhealthy(response: &dstack_guest_agent_rpc::HealthResponse) -> Stri
 /// Make an agent's answer safe to log.
 ///
 /// The guest agent sanitizes what it puts in a report, but a guest agent is
-/// exactly the party this gateway does not trust -- that assumption is the
-/// reason `health_check` is polled rather than pushed. So the bytes are
-/// re-bounded and stripped here, where the log line is actually emitted.
-/// Otherwise a hostile CVM alternating healthy and unhealthy gets one
-/// attacker-chosen log line per interval, newlines and escapes included.
+/// exactly the party this gateway does not trust -- that assumption is why
+/// health is polled rather than pushed. So the bytes are re-bounded and
+/// stripped here, where the log line is actually emitted. Otherwise a hostile
+/// CVM alternating healthy and unhealthy gets one attacker-chosen log line per
+/// interval, newlines and escapes included.
 fn sanitize(reason: &str) -> String {
-    let mut cleaned = reason
-        .chars()
-        .map(|ch| if ch.is_control() { ' ' } else { ch })
-        .take(MAX_REASON_BYTES)
-        .collect::<String>();
-    if cleaned.len() > MAX_REASON_BYTES {
-        // `take` counts characters, so a multi-byte tail can still overshoot.
-        let mut end = MAX_REASON_BYTES;
-        while end > 0 && !cleaned.is_char_boundary(end) {
-            end -= 1;
-        }
-        cleaned.truncate(end);
-    }
-    if reason.chars().count() > MAX_REASON_BYTES {
-        cleaned.push_str("... (truncated)");
-    }
-    cleaned
+    dstack_types::sanitize_for_log(reason, MAX_REASON_BYTES)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bound is a per-call-site opt-in now, not a property of the
+    /// transport, so nothing but a test stops a refactor from dropping it --
+    /// and dropping it restores an out-of-memory a hostile guest gets to
+    /// schedule, since `health_check` is self-declared and this runs on a timer
+    /// against the whole fleet.
+    #[test]
+    fn every_guest_agent_client_bounds_the_response() {
+        let client = crate::proxy::guest_agent_client("http://10.0.0.2:8090/prpc".to_string());
+        assert!(
+            client.max_response_bytes().is_some(),
+            "a guest agent is untrusted; its response must be bounded"
+        );
+    }
 
     fn config(failure_threshold: u32) -> HealthCheckConfig {
         HealthCheckConfig {
@@ -524,6 +576,21 @@ mod tests {
             !described.contains('\x1b'),
             "escape survived: {described:?}"
         );
+    }
+
+    /// `char::is_control` alone lets these through, and both change what a
+    /// reader sees: U+2028 is a line break to most log viewers, U+202E reverses
+    /// the rendering of everything after it.
+    #[test]
+    fn line_separators_and_bidi_overrides_are_stripped_too() {
+        let response = dstack_guest_agent_rpc::HealthResponse {
+            healthy: false,
+            unhealthy: vec![],
+            error: "web\u{2028}Jan 01 INFO ok\u{202E}desrever".to_string(),
+        };
+        let described = describe_unhealthy(&response);
+        assert!(!described.contains('\u{2028}'), "{described:?}");
+        assert!(!described.contains('\u{202E}'), "{described:?}");
     }
 
     /// The only bound on the response body is a megabyte, and this line is

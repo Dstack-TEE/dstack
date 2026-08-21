@@ -20,7 +20,6 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 use dstack_guest_agent_rpc::dstack_guest_client::DstackGuestClient;
 use dstack_types::AppCompose;
-use http_client::prpc::PrpcClient;
 use or_panic::ResultOrPanic;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{debug, warn};
@@ -234,10 +233,8 @@ async fn fetch_and_store(state: &Proxy, instance_id: &str) -> Result<(), FetchEr
 
 async fn fetch_port_policy(ip: Ipv4Addr, agent_port: u16) -> Result<PortPolicy, FetchError> {
     let url = format!("http://{ip}:{agent_port}/prpc");
-    // Same untrusted peer as the health poller; see the note there.
-    let client = DstackGuestClient::new(
-        PrpcClient::new(url).with_max_response_bytes(http_client::MAX_RESPONSE_BYTES),
-    );
+    // Same untrusted peer as the health poller; see `guest_agent_client`.
+    let client = DstackGuestClient::new(super::guest_agent_client(url));
     // Network/RPC errors here are transient: agent might still be coming up.
     let info = client
         .info()

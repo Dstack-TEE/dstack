@@ -1964,6 +1964,7 @@ dependencies = [
  "hex",
  "host-api",
  "k256",
+ "libc",
  "listenfd",
  "load_config",
  "or-panic",
@@ -1989,7 +1990,6 @@ dependencies = [
  "tpm-attest",
  "tracing",
  "tracing-subscriber",
- "yaml-rust2",
 ]
 
 [[package]]

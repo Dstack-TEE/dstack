@@ -18,6 +18,23 @@ pub struct ComposeInfo {
     pub service_names: std::collections::HashSet<String>,
 }
 
+/// Whether any service in a compose file declares a `healthcheck:`.
+///
+/// `None` means the file could not be parsed, which is not the same as "no" --
+/// the caller must not turn an unreadable file into a verdict about its
+/// contents.
+pub fn compose_declares_a_healthcheck(compose_content: &str) -> Option<bool> {
+    let docs = YamlLoader::load_from_str(compose_content).ok()?;
+    let Yaml::Hash(services) = &docs.first()?["services"] else {
+        return None;
+    };
+    Some(
+        services
+            .values()
+            .any(|service| !service["healthcheck"].is_badvalue()),
+    )
+}
+
 /// Parse a docker-compose file and extract project name and service names
 pub fn parse_docker_compose_file(compose_file: impl AsRef<Path>) -> Result<ComposeInfo> {
     let compose_content =

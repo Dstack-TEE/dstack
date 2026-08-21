@@ -20,7 +20,7 @@ func TestHealthCheckRequirementChangesTheHash(t *testing.T) {
 		DockerComposeFile: "docker-compose.yml",
 		Requirements: &Requirements{
 			OsVersion:   ">=0.6.1",
-			HealthCheck: &HealthCheck{Enabled: true, HealthFile: "/dstack/health"},
+			HealthCheck: &HealthCheck{Enabled: true, HealthFile: strPtr("/dstack/health")},
 		},
 	}
 	a, err := GetComposeHash(plain)
@@ -39,17 +39,17 @@ func TestHealthCheckRequirementChangesTheHash(t *testing.T) {
 // health_file selects which source the verdict comes from, so it is not
 // cosmetic.
 func TestHealthFileIsPartOfTheHash(t *testing.T) {
-	mk := func(file string) AppCompose {
+	mk := func(file *string) AppCompose {
 		return AppCompose{
 			Runner:       "docker-compose",
 			Requirements: &Requirements{HealthCheck: &HealthCheck{Enabled: true, HealthFile: file}},
 		}
 	}
-	a, err := GetComposeHash(mk(""))
+	a, err := GetComposeHash(mk(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := GetComposeHash(mk("/dstack/health"))
+	b, err := GetComposeHash(mk(strPtr("/dstack/health")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,3 +57,28 @@ func TestHealthFileIsPartOfTheHash(t *testing.T) {
 		t.Fatal("health_file does not reach the compose hash")
 	}
 }
+
+// `omitempty` on a plain string collapses these two, which Rust, Python and JS
+// keep distinct -- so a Go user re-hashing an app-compose that carries an empty
+// health_file would get a digest the other SDKs disagree with.
+func TestEmptyHealthFileIsDistinctFromAbsent(t *testing.T) {
+	mk := func(file *string) AppCompose {
+		return AppCompose{
+			Runner:       "docker-compose",
+			Requirements: &Requirements{HealthCheck: &HealthCheck{Enabled: true, HealthFile: file}},
+		}
+	}
+	absent, err := GetComposeHash(mk(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty, err := GetComposeHash(mk(strPtr("")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if absent == empty {
+		t.Fatal("an empty health_file must not hash the same as an absent one")
+	}
+}
+
+func strPtr(s string) *string { return &s }

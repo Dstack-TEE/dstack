@@ -11,6 +11,9 @@ SYS_CONFIG_FILE="$HOST_SHARED_DIR/.sys-config.json"
 APP_COMPOSE_FILE="${APP_COMPOSE_FILE:-app-compose.json}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yaml}"
 NERDCTL_NAMESPACE="${NERDCTL_NAMESPACE:-dstack}"
+# Where the guest agent looks for what this script actually used. On tmpfs, so
+# it describes the deployment that is running now and nothing older.
+COMPOSE_RUNTIME_FILE="${COMPOSE_RUNTIME_FILE:-/run/dstack/app-compose-runtime.json}"
 ACTION="${1:-start}"
 
 CFG_PCCS_URL=$([ -f "$SYS_CONFIG_FILE" ] && jq -r '.pccs_url//""' "$SYS_CONFIG_FILE" || echo "")
@@ -50,8 +53,30 @@ validate_runner() {
     esac
 }
 
+# Record the containerd namespace and Compose project this deployment uses, so
+# the guest agent can judge *these* containers rather than guessing at them.
+#
+# Guessing does not work. Compose resolves the project name from
+# COMPOSE_PROJECT_NAME first, then the compose file's top-level `name:`, then
+# the directory -- verified on docker compose 5.1.4 and nerdctl 2.3.5, where
+# both honour the env var and both reject a name that is not already lowercase.
+# The app supplies that env through `.decrypted-env`, so reading the compose
+# file alone gets it wrong exactly when an app sets it. The namespace is not in
+# the compose file at all.
+#
+# `docker compose config` is the resolver in both branches: it applies the same
+# precedence, and the nerdctl branch already shells out to it below.
+record_compose_runtime() {
+    local project
+    project=$(docker compose -f "$COMPOSE_FILE" config --format json | jq -r '.name')
+    mkdir -p "$(dirname "$COMPOSE_RUNTIME_FILE")"
+    jq -n --arg namespace "$NERDCTL_NAMESPACE" --arg project "$project" \
+        '{namespace: $namespace, project: $project}' >"$COMPOSE_RUNTIME_FILE"
+}
+
 compose_start() {
     ensure_compose_file
+    record_compose_runtime
     case "$runner" in
     docker-compose)
         docker compose -f "$COMPOSE_FILE" up --remove-orphans -d --build

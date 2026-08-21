@@ -107,6 +107,10 @@ pub(crate) struct ProxyStateMut {
     pub(crate) allocated_addresses: BTreeSet<Ipv4Addr>,
     #[serde(skip)]
     pub(crate) top_n: BTreeMap<String, (AddressGroup, Instant)>,
+    /// When each app was last warned that its whole fleet reads unhealthy.
+    /// Bounded by the number of apps; see [`warn_all_unhealthy`].
+    #[serde(skip)]
+    pub(crate) all_unhealthy_warned: BTreeMap<String, Instant>,
 }
 
 pub(crate) struct ProxyState {
@@ -248,6 +252,19 @@ impl Proxy {
 impl ProxyInner {
     pub(crate) fn lock(&self) -> MutexGuard<'_, ProxyState> {
         self.state.lock().or_panic("Failed to lock AppState")
+    }
+
+    /// WireGuard handshake ages, without taking the routing lock.
+    ///
+    /// The cache is its own synchronization, so a caller that only needs
+    /// handshakes has no reason to hold `ProxyState` while this builds its map
+    /// -- which clones every peer's public key, and on a cold cache shells out
+    /// to `wg show` synchronously.
+    pub(crate) fn latest_handshakes(
+        &self,
+        stale_timeout: Option<Duration>,
+    ) -> Result<BTreeMap<String, (u64, Duration)>> {
+        self.handshake_cache.latest(stale_timeout)
     }
 
     pub async fn new(
@@ -1253,11 +1270,15 @@ struct Candidate {
 /// than sending traffic to instances that might be fine. The operator gate in
 /// `is_admin_ready` deliberately does *not* get this treatment: that one is an
 /// instruction, not a guess.
-fn retain_healthy(app_id: &str, candidates: &mut SmallVec<[Candidate; 4]>) {
+fn retain_healthy(
+    state: &mut ProxyStateMut,
+    app_id: &str,
+    candidates: &mut SmallVec<[Candidate; 4]>,
+) {
     if candidates.iter().any(|candidate| candidate.healthy) {
         candidates.retain(|candidate| candidate.healthy);
     } else if !candidates.is_empty() {
-        warn_all_unhealthy(app_id, candidates.len());
+        warn_all_unhealthy(state, app_id, candidates.len());
     }
 }
 
@@ -1271,20 +1292,21 @@ const ALL_UNHEALTHY_WARN_INTERVAL: Duration = Duration::from_secs(60);
 /// cache and runs per connection -- and a fleet that is entirely unhealthy is
 /// exactly the sustained state, so an unlimited warning would be one log line
 /// per inbound connection for as long as it lasts.
-fn warn_all_unhealthy(app_id: &str, candidates: usize) {
-    static LAST_WARNED: Mutex<Option<BTreeMap<String, Instant>>> = Mutex::new(None);
-    {
-        let mut guard = LAST_WARNED
-            .lock()
-            .or_panic("all-unhealthy warn lock poisoned");
-        let last = guard.get_or_insert_with(BTreeMap::new);
-        if let Some(at) = last.get(app_id) {
-            if at.elapsed() < ALL_UNHEALTHY_WARN_INTERVAL {
-                return;
-            }
+///
+/// The state rides in `ProxyStateMut`, which the caller is already holding,
+/// rather than in a `static`. A process-global mutex here would be a new
+/// serialization point on the per-connection routing path, shared across every
+/// tenant -- one app's fail-open would contend with an unrelated app's
+/// connections.
+fn warn_all_unhealthy(state: &mut ProxyStateMut, app_id: &str, candidates: usize) {
+    if let Some(at) = state.all_unhealthy_warned.get(app_id) {
+        if at.elapsed() < ALL_UNHEALTHY_WARN_INTERVAL {
+            return;
         }
-        last.insert(app_id.to_string(), Instant::now());
     }
+    state
+        .all_unhealthy_warned
+        .insert(app_id.to_string(), Instant::now());
     warn!(
         "app {app_id}: no instance reports healthy; routing to all {candidates} \
          reachable instance(s) anyway rather than refusing the app"
@@ -1857,7 +1879,7 @@ impl ProxyState {
                 })
                 .collect::<SmallVec<[_; 4]>>(),
         };
-        retain_healthy(id, &mut instances);
+        retain_healthy(&mut self.state, id, &mut instances);
         instances.sort_by(|a, b| a.handshake_age.cmp(&b.handshake_age));
         instances.truncate(n);
         let selected: AddressGroup = instances
@@ -1874,7 +1896,7 @@ impl ProxyState {
         Ok(selected)
     }
 
-    fn random_select_a_host(&self, id: &str) -> Option<AddressGroup> {
+    fn random_select_a_host(&mut self, id: &str) -> Option<AddressGroup> {
         // Direct instance lookup first
         if let Some(info) = self.state.instances.get(id).cloned() {
             return Some(smallvec![AddressInfo {
@@ -1907,18 +1929,19 @@ impl ProxyState {
                     false
                 }
             })
-            .collect::<SmallVec<[_; 4]>>();
+            .cloned()
+            .collect::<SmallVec<[String; 4]>>();
         let any_healthy = eligible
             .iter()
             .any(|instance_id| self.instance_is_healthy(instance_id));
         if any_healthy {
             eligible.retain(|instance_id| self.instance_is_healthy(instance_id));
         } else if !eligible.is_empty() {
-            warn_all_unhealthy(id, eligible.len());
+            warn_all_unhealthy(&mut self.state, id, eligible.len());
         }
 
         let selected = eligible.into_iter().choose(&mut rand::thread_rng())?;
-        self.state.instances.get(selected).map(|info| {
+        self.state.instances.get(&selected).map(|info| {
             smallvec![AddressInfo {
                 ip: info.ip,
                 counter: info.connections.clone(),

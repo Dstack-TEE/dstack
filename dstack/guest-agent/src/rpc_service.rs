@@ -181,13 +181,7 @@ impl AppState {
             .and_then(|requirements| requirements.health_check.clone())
             .filter(|check| check.enabled)
             .map(|check| {
-                crate::health::HealthMonitor::spawn(
-                    check,
-                    crate::health::ContainerSource::new(
-                        config.app_compose.runner.clone(),
-                        config.app_compose.docker_compose_file.as_deref(),
-                    ),
-                )
+                crate::health::HealthMonitor::spawn(check, config.app_compose.runner.clone())
             });
         let me = Self {
             inner: Arc::new(AppStateInner {

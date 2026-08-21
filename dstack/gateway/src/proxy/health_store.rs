@@ -106,6 +106,18 @@ impl HealthStore {
         public_key: &str,
         health_check: bool,
     ) -> HealthState {
+        if !health_check {
+            // An instance that is not gated must read `Ungated`, whatever the
+            // snapshot says. The snapshot only ever holds gated instances, so a
+            // hit here means the record now says otherwise -- an app that opted
+            // out, or, in a mixed-version cluster, a peer on an older build
+            // rewriting the record without the field. Trusting the snapshot
+            // then would leave the instance both out of rotation (`Unhealthy`
+            // is not routable) and out of the poll set (`select_targets`
+            // filters on the same flag), with nothing on this node able to lift
+            // it until the CVM re-registers.
+            return HealthState::Ungated;
+        }
         self.entries
             .get(instance_id)
             .filter(|stored| stored.public_key == public_key)
@@ -242,6 +254,26 @@ mod tests {
         );
         let store = HealthStore::load(&path);
         assert_eq!(store.restore("inst-1", "key-2", true), HealthState::Unknown);
+    }
+
+    /// The snapshot only ever holds gated instances, so a hit for one the
+    /// record now says is ungated means the record changed underneath it. The
+    /// record wins: believing the snapshot would leave the instance out of
+    /// rotation *and* out of the poll set, with nothing able to lift it.
+    #[test]
+    fn a_verdict_is_not_restored_onto_an_instance_that_is_no_longer_gated() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = snapshot_file(&dir);
+        save(
+            &path,
+            [("inst-1", "key-1", HealthState::Unhealthy)].into_iter(),
+        );
+        let store = HealthStore::load(&path);
+        assert_eq!(
+            store.restore("inst-1", "key-1", false),
+            HealthState::Ungated,
+            "an ungated instance must stay routable and pollable"
+        );
     }
 
     #[test]

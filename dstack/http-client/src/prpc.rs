@@ -48,6 +48,11 @@ impl PrpcClient {
         self
     }
 
+    /// The bound in force, if any. Lets a caller assert it set one.
+    pub fn max_response_bytes(&self) -> Option<usize> {
+        self.max_response_bytes
+    }
+
     /// Send `Authorization: Bearer <token>` with every request.
     pub fn with_bearer_token(mut self, token: impl Into<String>) -> Self {
         let token = token.into();

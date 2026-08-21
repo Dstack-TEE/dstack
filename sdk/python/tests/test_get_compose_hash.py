@@ -281,4 +281,6 @@ def test_health_check_health_file_is_part_of_the_hash():
             ),
         )
 
-    assert get_compose_hash(compose(None)) != get_compose_hash(compose("/dstack/health"))
+    assert get_compose_hash(compose(None)) != get_compose_hash(
+        compose("/dstack/health")
+    )

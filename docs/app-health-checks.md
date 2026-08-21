@@ -32,10 +32,16 @@ That flag reaches the gateway at registration. An app that does not set it is
 never polled and is routed to exactly as it was before this feature existed.
 
 It lives under `requirements` rather than at the top level for a reason:
-`requirements` is rejected outright by guest images older than
-`manifest_version` 3, and unknown fields inside it are a hard error. A
-deployment that asks for health gating therefore cannot silently land on an
-image that would ignore it.
+`requirements` is rejected by guest images older than `manifest_version` 3, and
+unknown fields *inside* it are a hard error. So a deployment that asks for
+health gating does not silently land on an image that would ignore it.
+
+That protection is conditional, and the condition is yours: write
+`"manifest_version": "3"` — **the string form**, as above. `AppCompose` itself
+is not `deny_unknown_fields`, so an app-compose left at `"manifest_version": 2`
+with a `requirements` block is *rejected* by a current guest and *silently
+accepted, minus the requirements*, by an older one. The string form is what an
+older guest chokes on.
 
 ## Where the verdict comes from
 
@@ -125,10 +131,28 @@ to take yourself out of rotation a minute later.
 
 Anything else is not healthy: a missing file, a malformed one, an unparseable
 timestamp, or a state word the agent does not recognise. Writing it atomically
-(write a temporary file, then rename) avoids being judged on a half-written one.
+(write a temporary file in the same directory, then rename) avoids being judged
+on a half-written one.
 
-For a container to write this file, bind-mount the path into it. The agent reads
-it from the guest rootfs, not from inside any container.
+It must be a **regular file**, and the agent will not follow a symlink to it.
+The path is measured into the compose hash; what sits at that path at runtime is
+not, so a symlink would let a container redirect a root-owned read after the
+fact, and a FIFO would park one of the agent's threads on every refresh. Neither
+is reported as unhealthy-with-a-reason so much as refused outright.
+
+For the same reason the agent never quotes the file's contents back. A verdict
+names the rule that failed — "line 1 is neither healthy nor unhealthy" — because
+the report is served to anonymous callers and the bytes at that path may not be
+the bytes the app wrote.
+
+The agent reads the file from the guest rootfs, not from inside any container,
+so a container that writes it needs the path bind-mounted in. **Mount the
+directory, not the file.** A single-file bind mount pins an inode: a rename
+inside the container replaces the container's own directory entry and never
+touches the file the agent is reading, so the agent sees the original contents
+forever, the timestamp ages past the limit, and the instance goes permanently
+unhealthy. With the directory mounted, either write-then-rename or a plain
+in-place write works.
 
 Before the first refresh completes, the app reports **not** healthy.
 Registration happens long before the application is up, so "not determined yet"

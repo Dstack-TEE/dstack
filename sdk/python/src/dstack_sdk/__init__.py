@@ -22,7 +22,8 @@ from .encrypt_env_vars import encrypt_env_vars
 from .encrypt_env_vars import encrypt_env_vars_sync
 from .get_compose_hash import AppCompose
 from .get_compose_hash import DockerConfig
-from .get_compose_hash import HealthCheck, Requirements
+from .get_compose_hash import HealthCheck
+from .get_compose_hash import Requirements
 from .get_compose_hash import get_compose_hash
 from .verify_env_encrypt_public_key import verify_env_encrypt_public_key
 from .verify_env_encrypt_public_key import verify_env_encrypt_public_key_legacy

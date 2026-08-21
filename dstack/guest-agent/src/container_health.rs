@@ -35,7 +35,6 @@ use bollard::Docker;
 use serde::Deserialize;
 use tokio::process::Command;
 use tracing::debug;
-use yaml_rust2::YamlLoader;
 
 /// The label Compose stamps on every container it starts.
 ///
@@ -48,19 +47,22 @@ use yaml_rust2::YamlLoader;
 /// the runner the guest image actually uses.
 const COMPOSE_PROJECT_LABEL: &str = "com.docker.compose.project";
 
-/// The project name Compose derives when the compose file does not name one.
+/// Where `app-compose.sh` records the namespace and project it used.
 ///
-/// Compose uses the basename of the directory it was brought up from, and
-/// `app-compose.service` sets `WorkingDirectory=/dstack`.
-const DEFAULT_COMPOSE_PROJECT: &str = "dstack";
-
-/// The containerd namespace `app-compose.sh` runs nerdctl in by default.
+/// Read rather than derived. Compose resolves the project name from
+/// `COMPOSE_PROJECT_NAME` before the compose file's top-level `name:` --
+/// verified on docker compose 5.1.4 and nerdctl 2.3.5, where both honour the
+/// env var -- and the app supplies that env through `.decrypted-env`. Deriving
+/// the name from the compose file therefore gets it wrong exactly when an app
+/// sets it, and the containerd namespace is not in the compose file at all.
+/// Both mistakes look identical from here: an empty container list, which
+/// `judge` reads as "nothing started yet", i.e. permanently unhealthy with a
+/// message that says the opposite of what happened.
 ///
-/// An app is free to override `NERDCTL_NAMESPACE` in its own environment. That
-/// is not a hole -- everything the app does is measured -- but it does mean an
-/// app that overrides it and asks for health gating gets an empty container
-/// list, so the label filter below is what carries the meaning either way.
-const NERDCTL_NAMESPACE: &str = "dstack";
+/// On tmpfs, and written by `app-compose.sh` before it starts anything, so its
+/// absence means the app has not been started yet -- which is the truth, and is
+/// what gets reported.
+const COMPOSE_RUNTIME_FILE: &str = "/run/dstack/app-compose-runtime.json";
 
 /// How long a single container-runtime call may take.
 ///
@@ -111,40 +113,52 @@ impl HealthReport {
 /// the app saying "I have not told you how to test this one" rather than a
 /// pass. That keeps this from failing an app for a one-shot init container
 /// that exited cleanly.
-pub(crate) async fn collect(runner: &str, project: &str) -> Result<HealthReport> {
+pub(crate) async fn collect(runner: &str) -> Result<HealthReport> {
     match runner {
-        "docker-compose" => collect_docker(project).await,
-        "nerdctl-compose" => collect_nerdctl(project).await,
+        "docker-compose" | "nerdctl-compose" => {}
         // The `bash` runner runs a script, not containers. There is nothing to
         // inspect and never will be, so it must not sit at "not started yet".
-        _ => Ok(HealthReport::not_judged()),
+        _ => return Ok(HealthReport::not_judged()),
+    }
+    let Some(runtime) = ComposeRuntime::read().await? else {
+        // `app-compose.sh` writes this before it starts anything, so its
+        // absence is the boot window this feature exists to keep traffic out
+        // of -- not an error, and not a pass.
+        return Ok(judge(vec![]));
+    };
+    match runner {
+        "docker-compose" => collect_docker(&runtime.project).await,
+        _ => collect_nerdctl(&runtime).await,
     }
 }
 
-/// The Compose project name the app's containers carry.
-///
-/// Compose takes the top-level `name:` from the compose file and falls back to
-/// the basename of the working directory, lowercasing either way. Verified
-/// identical on docker compose 5.1.4 and nerdctl 2.3.5: `name: MyApp_X` becomes
-/// `myapp_x` on both, and `--filter label=com.docker.compose.project=myapp_x`
-/// matches while the un-normalized spelling does not.
-///
-/// Getting this wrong in the safe direction -- guessing a project that does not
-/// exist -- shows up immediately as "no container has been created yet", not as
-/// an app being silently waved through.
-///
-/// Resolved once, when the monitor starts. The compose file is immutable for the
-/// life of the CVM, and re-parsing YAML on every refresh would be both waste and
-/// a way for an app to spend the agent's CPU: alias expansion is exponential and
-/// synchronous, so a crafted file blocks a tokio worker thread past any timeout
-/// wrapped around it.
-pub(crate) fn compose_project(compose_file: Option<&str>) -> String {
-    compose_file
-        .and_then(|contents| YamlLoader::load_from_str(contents).ok())
-        .and_then(|docs| docs.first()?["name"].as_str().map(str::to_string))
-        .map(|name| name.trim().to_ascii_lowercase())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| DEFAULT_COMPOSE_PROJECT.to_string())
+/// What `app-compose.sh` recorded about the deployment it started.
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+pub(crate) struct ComposeRuntime {
+    /// The containerd namespace nerdctl was run under.
+    pub namespace: String,
+    /// The Compose project name, as Compose itself resolved it.
+    pub project: String,
+}
+
+impl ComposeRuntime {
+    async fn read() -> Result<Option<Self>> {
+        Self::read_from(COMPOSE_RUNTIME_FILE).await
+    }
+
+    async fn read_from(path: &str) -> Result<Option<Self>> {
+        let raw = match tokio::fs::read_to_string(path).await {
+            Ok(raw) => raw,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err).with_context(|| format!("failed to read {path}")),
+        };
+        let runtime: Self =
+            serde_json::from_str(&raw).with_context(|| format!("failed to parse {path}"))?;
+        if runtime.project.is_empty() {
+            bail!("{path} names no compose project");
+        }
+        Ok(Some(runtime))
+    }
 }
 
 /// The label filter both runners are queried with, as `key=value`.
@@ -207,9 +221,9 @@ async fn collect_docker(project: &str) -> Result<HealthReport> {
     Ok(judge(observed))
 }
 
-async fn collect_nerdctl(project: &str) -> Result<HealthReport> {
-    let filter = format!("label={}", compose_filter(project));
-    let ids = nerdctl(&["ps", "-a", "-q", "--filter", &filter])
+async fn collect_nerdctl(runtime: &ComposeRuntime) -> Result<HealthReport> {
+    let filter = format!("label={}", compose_filter(&runtime.project));
+    let ids = nerdctl(&runtime.namespace, &["ps", "-a", "-q", "--filter", &filter])
         .await
         .context("failed to list nerdctl containers")?;
     let ids = ids
@@ -220,7 +234,7 @@ async fn collect_nerdctl(project: &str) -> Result<HealthReport> {
     if ids.is_empty() {
         return Ok(judge(vec![]));
     }
-    Ok(judge(inspect_nerdctl(&ids).await?))
+    Ok(judge(inspect_nerdctl(&runtime.namespace, &ids).await?))
 }
 
 /// Inspect every id, tolerating the ones that vanished under us.
@@ -236,16 +250,16 @@ async fn collect_nerdctl(project: &str) -> Result<HealthReport> {
 /// -- would otherwise fail the entire report and drop the instance out of
 /// rotation. The batch stays the fast path; only when it fails do we pay for
 /// one call per container and skip the ones that no longer exist.
-async fn inspect_nerdctl(ids: &[&str]) -> Result<Vec<Observed>> {
+async fn inspect_nerdctl(namespace: &str, ids: &[&str]) -> Result<Vec<Observed>> {
     let mut args = vec!["inspect"];
     args.extend_from_slice(ids);
-    match nerdctl(&args).await {
+    match nerdctl(namespace, &args).await {
         Ok(raw) => Ok(parse_nerdctl(&raw)?),
         Err(err) => {
             debug!("batch inspect failed, falling back to one call per container: {err:#}");
             let mut observed = Vec::with_capacity(ids.len());
             for id in ids {
-                match nerdctl(&["inspect", id]).await {
+                match nerdctl(namespace, &["inspect", id]).await {
                     Ok(raw) => observed.extend(parse_nerdctl(&raw)?),
                     Err(err) => debug!("skipping container {id}: {err:#}"),
                 }
@@ -268,10 +282,10 @@ fn parse_nerdctl(raw: &str) -> Result<Vec<Observed>> {
     Ok(containers.into_iter().map(observe_nerdctl).collect())
 }
 
-async fn nerdctl(args: &[&str]) -> Result<String> {
+async fn nerdctl(namespace: &str, args: &[&str]) -> Result<String> {
     let run = Command::new("nerdctl")
         .arg("--namespace")
-        .arg(NERDCTL_NAMESPACE)
+        .arg(namespace)
         .args(args)
         // Without this, abandoning the future on timeout leaves the child
         // running: `tokio::process` does not kill it on drop by default.
@@ -461,42 +475,59 @@ mod tests {
         }
     }
 
-    /// The literal, not the constant: what this pins is that the default agrees
-    /// with `WorkingDirectory=/dstack` in `app-compose.service`, which Compose
-    /// derives the project name from. Comparing against the constant would pass
-    /// no matter what the constant said.
-    #[test]
-    fn a_compose_file_without_a_name_uses_the_working_directory() {
-        let compose = "services:\n  web:\n    image: my-app:1.0\n";
-        assert_eq!(compose_project(Some(compose)), "dstack");
+    fn runtime_file(dir: &tempfile::TempDir, contents: &str) -> String {
+        let path = dir.path().join("app-compose-runtime.json");
+        std::fs::write(&path, contents).expect("write");
+        path.to_str().expect("utf8").to_string()
     }
 
-    #[test]
-    fn no_compose_file_at_all_uses_the_working_directory() {
-        assert_eq!(compose_project(None), "dstack");
+    /// The project name is whatever Compose resolved, not whatever the compose
+    /// file says: `COMPOSE_PROJECT_NAME` outranks the file's `name:`, and an
+    /// app supplies that env through `.decrypted-env`.
+    #[tokio::test]
+    async fn the_recorded_project_is_used_verbatim() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = runtime_file(&dir, r#"{"namespace":"dstack","project":"envwins"}"#);
+        let runtime = ComposeRuntime::read_from(&path)
+            .await
+            .expect("read")
+            .expect("present");
+        assert_eq!(runtime.project, "envwins");
+        assert_eq!(runtime.namespace, "dstack");
     }
 
-    /// Compose lowercases the project name and both runtimes filter on the
-    /// normalized value -- measured on docker compose 5.1.4 and nerdctl 2.3.5,
-    /// where `name: MyApp_X` becomes `myapp_x` and matching on the original
-    /// spelling returns nothing.
-    #[test]
-    fn a_declared_name_is_lowercased_the_way_compose_does() {
-        let compose = "name: MyApp_X\nservices:\n  web:\n    image: my-app:1.0\n";
-        assert_eq!(compose_project(Some(compose)), "myapp_x");
+    /// An app is free to move its containers to another namespace. Everything
+    /// it does is measured, so that is its choice -- but the agent has to look
+    /// where they actually are rather than where it assumed.
+    #[tokio::test]
+    async fn a_non_default_namespace_is_honoured() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = runtime_file(&dir, r#"{"namespace":"tenant-ns","project":"app"}"#);
+        let runtime = ComposeRuntime::read_from(&path)
+            .await
+            .expect("read")
+            .expect("present");
+        assert_eq!(runtime.namespace, "tenant-ns");
     }
 
-    /// Guessing a project that does not exist shows up immediately as "no
-    /// container has been created yet"; guessing nothing and judging everything
-    /// is what lets a previous deployment's leftovers hold an instance down.
-    #[test]
-    fn an_unparseable_compose_file_falls_back_rather_than_judging_everything() {
-        assert_eq!(compose_project(Some("\tname: [unbalanced")), "dstack");
-        assert_eq!(compose_project(Some("")), "dstack");
-        assert_eq!(
-            compose_project(Some("name: '  '\nservices: {}\n")),
-            "dstack"
-        );
+    /// `app-compose.sh` writes this before it starts anything, so its absence
+    /// is the boot window -- reported as "nothing created yet", not as an error
+    /// and not as a pass.
+    #[tokio::test]
+    async fn an_absent_runtime_file_is_the_boot_window() {
+        let missing = ComposeRuntime::read_from("/nonexistent/app-compose-runtime.json")
+            .await
+            .expect("absence is not an error");
+        assert!(missing.is_none());
+        let report = judge(vec![]);
+        assert!(!report.healthy);
+    }
+
+    #[tokio::test]
+    async fn a_runtime_file_naming_no_project_is_an_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = runtime_file(&dir, r#"{"namespace":"dstack","project":""}"#);
+        assert!(ComposeRuntime::read_from(&path).await.is_err());
     }
 
     #[test]
