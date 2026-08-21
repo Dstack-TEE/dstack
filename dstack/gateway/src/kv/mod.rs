@@ -43,7 +43,6 @@ mod https_client;
 pub mod import;
 mod sync_service;
 
-pub use compat::UnknownFields;
 #[cfg(test)]
 pub(crate) use https_client::HttpsClient;
 pub use https_client::{AppIdValidator, HttpsClientConfig};
@@ -502,7 +501,7 @@ trait GetPutCodec {
         &mut self,
         key: String,
         value: &T,
-        unknown: compat::UnknownFields,
+        update: bool,
     ) -> Result<()>;
     fn iter_decoded<T: for<'de> serde::Deserialize<'de>>(
         &self,
@@ -554,29 +553,26 @@ impl GetPutCodec for NodeState {
 
     /// Write a value.
     ///
-    /// `unknown` says what becomes of the fields the stored record holds and
-    /// this binary does not declare: [`compat::UnknownFields::Keep`] for a
-    /// write that updates a record, `Drop` for one that states a complete new
-    /// fact. See [`compat`] for why that is the caller's call, and why keeping
-    /// them is not the same as keeping every field the encoding happens to be
-    /// missing.
+    /// `update` is true when the write modifies a record that outlives it, and
+    /// false when it states a complete new fact. An update keeps the fields the
+    /// stored record holds and this binary does not declare; a replacement does
+    /// not, because they describe the fact being replaced. See [`compat`] for
+    /// why that is the caller's call, and why keeping a field is not the same
+    /// as keeping every field the encoding happens to be missing.
     fn put_encoded<T: serde::Serialize + serde::de::DeserializeOwned>(
         &mut self,
         key: String,
         value: &T,
-        unknown: compat::UnknownFields,
+        update: bool,
     ) -> Result<()> {
         let encoded = encode(value)?;
-        let bytes = match (unknown, compat::declared_fields::<T>()) {
-            (compat::UnknownFields::Keep, Some(declared)) => {
-                match self.get(&key).and_then(|entry| entry.value) {
-                    Some(stored) => {
-                        compat::carry_unknown_fields::<T>(&key, declared, &stored, encoded)
-                    }
-                    None => encoded,
-                }
-            }
-            _ => encoded,
+        let declared = update.then(compat::declared_fields::<T>).flatten();
+        let bytes = match declared {
+            Some(declared) => match self.get(&key).and_then(|entry| entry.value) {
+                Some(stored) => compat::carry_unknown_fields::<T>(&key, declared, &stored, encoded),
+                None => encoded,
+            },
+            None => encoded,
         };
         self.put(key.clone(), bytes)
             .with_context(|| format!("failed to put key {key}"))?;
@@ -767,7 +763,7 @@ impl KvStore {
     pub fn sync_instance(&self, instance_id: &str, data: &InstanceData) -> Result<()> {
         self.persistent
             .write()
-            .put_encoded(keys::inst(instance_id), data, UnknownFields::Keep)
+            .put_encoded(keys::inst(instance_id), data, true)
     }
 
     /// Sync instance deletion to other nodes
@@ -817,7 +813,7 @@ impl KvStore {
     pub fn sync_node(&self, node_id: NodeId, data: &NodeData) -> Result<()> {
         self.persistent
             .write()
-            .put_encoded(keys::node_info(node_id), data, UnknownFields::Keep)
+            .put_encoded(keys::node_info(node_id), data, true)
     }
 
     /// Load all nodes from sync store
@@ -865,11 +861,9 @@ impl KvStore {
 
     /// Set node status (stored separately from NodeData)
     pub fn set_node_status(&self, node_id: NodeId, status: NodeStatus) -> Result<()> {
-        self.persistent.write().put_encoded(
-            keys::node_status(node_id),
-            &status,
-            UnknownFields::Drop,
-        )?;
+        self.persistent
+            .write()
+            .put_encoded(keys::node_status(node_id), &status, false)?;
         Ok(())
     }
 
@@ -926,7 +920,7 @@ impl KvStore {
         self.ephemeral.write().put_encoded(
             keys::conn(instance_id, self.my_node_id),
             &count,
-            UnknownFields::Drop,
+            false,
         )?;
         Ok(())
     }
@@ -938,7 +932,7 @@ impl KvStore {
         self.ephemeral.write().put_encoded(
             keys::handshake(instance_id, self.my_node_id),
             &timestamp,
-            UnknownFields::Drop,
+            false,
         )?;
         Ok(())
     }
@@ -981,7 +975,7 @@ impl KvStore {
         self.ephemeral.write().put_encoded(
             keys::last_seen_node(node_id, self.my_node_id),
             &timestamp,
-            UnknownFields::Drop,
+            false,
         )?;
         Ok(())
     }
@@ -1101,11 +1095,9 @@ impl KvStore {
 
         // Store URL in persistent KvStore. Owned, because the value has to be a
         // type a reader can name: `&str` borrows from the buffer it decodes.
-        self.persistent.write().put_encoded(
-            keys::peer_addr(node_id),
-            &url.to_string(),
-            UnknownFields::Drop,
-        )?;
+        self.persistent
+            .write()
+            .put_encoded(keys::peer_addr(node_id), &url.to_string(), false)?;
 
         let _ = self.add_peer(node_id);
         Ok(())
@@ -1125,11 +1117,7 @@ impl KvStore {
     pub fn update_peer_last_seen(&self, peer_id: NodeId) {
         let ts = now_secs();
         let key = keys::last_seen_node(peer_id, self.my_node_id);
-        if let Err(e) = self
-            .ephemeral
-            .write()
-            .put_encoded(key, &ts, UnknownFields::Drop)
-        {
+        if let Err(e) = self.ephemeral.write().put_encoded(key, &ts, false) {
             warn!("failed to update peer {peer_id} last_seen: {e}");
         }
     }
@@ -1163,7 +1151,7 @@ impl KvStore {
     pub fn save_dns_credential(&self, cred: &DnsCredential) -> Result<()> {
         self.persistent
             .write()
-            .put_encoded(keys::dns_cred(&cred.id), cred, UnknownFields::Keep)?;
+            .put_encoded(keys::dns_cred(&cred.id), cred, true)?;
         Ok(())
     }
 
@@ -1194,7 +1182,7 @@ impl KvStore {
         self.persistent.write().put_encoded(
             keys::DNS_CRED_DEFAULT.to_string(),
             &cred_id.to_string(),
-            UnknownFields::Drop,
+            false,
         )?;
         Ok(())
     }
@@ -1227,7 +1215,7 @@ impl KvStore {
         self.persistent.write().put_encoded(
             keys::GLOBAL_CERTBOT_CONFIG.to_string(),
             config,
-            UnknownFields::Keep,
+            true,
         )?;
         Ok(())
     }
@@ -1259,7 +1247,7 @@ impl KvStore {
         self.persistent.write().put_encoded(
             keys::zt_domain_config(&config.domain),
             config,
-            UnknownFields::Keep,
+            true,
         )?;
         Ok(())
     }
@@ -1354,7 +1342,7 @@ impl KvStore {
     pub fn save_cert_data(&self, domain: &str, data: &CertData) -> Result<()> {
         self.persistent
             .write()
-            .put_encoded(keys::cert_data(domain), data, UnknownFields::Drop)?;
+            .put_encoded(keys::cert_data(domain), data, false)?;
         Ok(())
     }
 
@@ -1402,7 +1390,7 @@ impl KvStore {
         self.persistent.write().put_encoded(
             keys::GLOBAL_ACME_CREDENTIALS.to_string(),
             creds,
-            UnknownFields::Drop,
+            false,
         )?;
         Ok(())
     }
@@ -1423,7 +1411,7 @@ impl KvStore {
         self.persistent.write().put_encoded(
             keys::GLOBAL_ACME_ATTESTATION.to_string(),
             attestation,
-            UnknownFields::Drop,
+            false,
         )?;
         Ok(())
     }
@@ -1454,7 +1442,7 @@ impl KvStore {
         };
         self.persistent
             .write()
-            .put_encoded(keys::cert_lock(domain), &lock, UnknownFields::Drop)
+            .put_encoded(keys::cert_lock(domain), &lock, false)
             .is_ok()
     }
 
@@ -1491,11 +1479,7 @@ impl KvStore {
         };
         self.persistent
             .write()
-            .put_encoded(
-                keys::GLOBAL_ACME_ROTATION_LOCK.to_string(),
-                &lock,
-                UnknownFields::Drop,
-            )
+            .put_encoded(keys::GLOBAL_ACME_ROTATION_LOCK.to_string(), &lock, false)
             .ok()?;
         Some(lock)
     }
@@ -1548,14 +1532,10 @@ impl KvStore {
         state.put_encoded(
             keys::cert_attestation_history(domain, attestation.generated_at),
             attestation,
-            UnknownFields::Drop,
+            false,
         )?;
         // Update latest
-        state.put_encoded(
-            keys::cert_attestation_latest(domain),
-            attestation,
-            UnknownFields::Drop,
-        )?;
+        state.put_encoded(keys::cert_attestation_latest(domain), attestation, false)?;
         Ok(())
     }
 
@@ -1703,7 +1683,7 @@ mod acme_credentials_tests {
                     started_at: u64::MAX,
                     started_by: 2,
                 },
-                UnknownFields::Drop,
+                false,
             )
             .expect("lock write should succeed");
 
@@ -1720,7 +1700,7 @@ mod acme_credentials_tests {
                     started_at: u64::MAX,
                     started_by: 2,
                 },
-                UnknownFields::Drop,
+                false,
             )
             .expect("certificate lock write should succeed");
         assert!(
@@ -2221,15 +2201,11 @@ mod corruption_tests {
 
         kv.ephemeral
             .write()
-            .put_encoded(
-                keys::handshake("cvm", 2),
-                &(now.saturating_sub(30)),
-                UnknownFields::Drop,
-            )
+            .put_encoded(keys::handshake("cvm", 2), &(now.saturating_sub(30)), false)
             .unwrap();
         kv.ephemeral
             .write()
-            .put_encoded(keys::handshake("cvm", 3), &u64::MAX, UnknownFields::Drop)
+            .put_encoded(keys::handshake("cvm", 3), &u64::MAX, false)
             .unwrap();
         // A peer with a broken clock must not keep a dead CVM alive forever.
         let latest = kv
@@ -2240,7 +2216,7 @@ mod corruption_tests {
 
         kv.ephemeral
             .write()
-            .put_encoded(keys::last_seen_node(7, 3), &u64::MAX, UnknownFields::Drop)
+            .put_encoded(keys::last_seen_node(7, 3), &u64::MAX, false)
             .unwrap();
         assert_eq!(kv.get_node_latest_last_seen(7), None);
         assert!(kv.get_node_last_seen_by_all(7).is_empty());
@@ -2253,7 +2229,7 @@ mod corruption_tests {
             .put_encoded(
                 keys::handshake("cvm", 4),
                 &(now + MAX_CLOCK_DRIFT_SECS / 2),
-                UnknownFields::Drop,
+                false,
             )
             .unwrap();
         assert_eq!(kv.get_instance_handshakes("cvm").len(), 2);
@@ -2350,7 +2326,7 @@ mod corruption_tests {
                     node: None,
                     priority: 100,
                 },
-                UnknownFields::Keep,
+                true,
             )
             .expect("raw put should succeed");
 

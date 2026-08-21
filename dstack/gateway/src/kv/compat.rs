@@ -27,23 +27,23 @@
 //! the declaration, so it stays cleared instead of being resurrected from the
 //! stored copy. Aliases count as declared, so `#[serde(alias)]` is safe here too.
 //!
-//! # The caller says whether a write updates or replaces
+//! # The caller says whether the write is an update
 //!
-//! [`UnknownFields::Keep`] is for a write that updates a record which outlives
-//! it — an instance, a node, a credential, a config. [`UnknownFields::Drop`] is
-//! for one that states a complete new fact: a certificate, an attestation, a
-//! lock, a counter. Carrying a field across one of those would attribute the
-//! previous fact's value to the new one — an older gateway renewing a
-//! certificate would publish a stale chain beside the key it just issued, and
-//! one writing an attestation would hang a stale field off a quote about a
-//! different public key. That is worse than the field being absent, because
-//! absent is a case the newer reader already handles — older gateways exist —
-//! while stale is one it will silently trust.
+//! A write that updates a record outliving it — an instance, a node, a
+//! credential, a config — keeps the fields it does not declare. A write that
+//! states a complete new fact does not: a certificate, an attestation, a lock,
+//! a counter. Carrying a field across one of those would attribute the previous
+//! fact's value to the new one — an older gateway renewing a certificate would
+//! publish a stale chain beside the key it just issued, and one writing an
+//! attestation would hang a stale field off a quote about a different public
+//! key. That is worse than the field being absent, because absent is a case the
+//! newer reader already handles — older gateways exist — while stale is one it
+//! will silently trust.
 //!
-//! The choice is a parameter rather than a table of key prefixes because the
-//! code performing the write is the code that knows which of the two it is
-//! doing, and because a parameter cannot be forgotten: a new write does not
-//! compile until it says.
+//! It is a parameter rather than a table of key prefixes because the code
+//! performing the write is the code that knows which of the two it is doing,
+//! and because a parameter cannot be forgotten: a new write does not compile
+//! until it says.
 //!
 //! # Top-level only
 //!
@@ -63,18 +63,6 @@ use rmp::Marker;
 use serde::de::{self, Deserializer, Visitor};
 use std::fmt;
 use tracing::debug;
-
-/// What a write means for the fields it does not carry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UnknownFields {
-    /// The write updates a record that outlives it, so anything in the stored
-    /// copy that this binary does not declare belongs to a newer peer and is
-    /// carried through.
-    Keep,
-    /// The write states a complete new fact, so nothing from the previous one
-    /// may follow it.
-    Drop,
-}
 
 /// Append the fields of `stored` that `T` does not declare to `encoded`.
 ///
