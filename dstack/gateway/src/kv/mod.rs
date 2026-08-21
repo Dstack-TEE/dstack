@@ -108,25 +108,28 @@ pub struct InstanceData {
     ///
     /// Carried in the instance record rather than under a key of its own. Every
     /// writer rewrites the whole record from its own in-memory copy, so a copy
-    /// that does not carry the gate drops it. Two paths get there:
+    /// that does not carry the gate drops it.
     ///
-    /// - A build that predates the field. Records are msgpack named maps, so it
-    ///   reads the record fine and just does not write the field back. This
-    ///   needs no cluster -- a single node rolled back is enough.
-    /// - A node on the *current* build that has not seen the gate yet, once
-    ///   there is more than one node. The rewrite that reaches it first is the
-    ///   CVM's own re-registration: `gateway_checker` re-registers every 180s,
-    ///   and `new_client_by_id` writes the whole record from that node's memory.
-    ///   So between `SetInstanceReady` landing on one node and the sync reaching
-    ///   another, the CVM hitting that other node clobbers it. (The lazy
-    ///   port-policy fetch rewrites the record too, but it only fires when no
-    ///   policy is cached, which a current-build CVM never leaves true -- it
-    ///   reports one at registration.)
+    /// A build that predates the field is not one of those copies:
+    /// `sync_instance` writes as an update, and [`compat::carry_unknown_fields`]
+    /// re-appends the fields the writer does not declare, so a rolled-back node
+    /// round-trips the gate without understanding it.
     ///
-    /// A key of its own would survive both. It is still not worth one:
+    /// What the merge cannot cover is a node on the *current* build that has not
+    /// seen the gate yet, because that node does declare the field -- it just
+    /// holds `None`. That needs more than one node. The rewrite that reaches it
+    /// first is the CVM's own re-registration: `gateway_checker` re-registers
+    /// every 180s, and `new_client_by_id` writes the whole record from that
+    /// node's memory. So between `SetInstanceReady` landing on one node and the
+    /// sync reaching another, the CVM hitting that other node clobbers it. (The
+    /// lazy port-policy fetch rewrites the record too, but it only fires when no
+    /// policy is cached, which a current-build CVM never leaves true -- it
+    /// reports one at registration.)
+    ///
+    /// A key of its own would survive that. It is still not worth one:
     /// `port_policy` and `admin_port_policy` ride in the same record, are
-    /// rewritten by the same code, and are lost the same two ways, so guarding
-    /// one field of three buys inconsistency rather than safety.
+    /// rewritten by the same code, and are lost the same way, so guarding one
+    /// field of three buys inconsistency rather than safety.
     ///
     /// What differs is the cost, and it is worth being explicit that this is
     /// not free: a lost `port_policy` is re-fetched and a lost
@@ -2091,6 +2094,7 @@ mod value_encoding_tests {
                 port_policy: None,
                 port_policy_hash: String::new(),
                 admin_port_policy: None,
+                ready: None,
             },
         )
         .expect("sync should succeed");
