@@ -95,6 +95,22 @@ impl HealthStore {
         }
     }
 
+    /// Whether this instance was gated when the snapshot was taken.
+    ///
+    /// Only gated instances are ever written, so a hit is proof -- and that is
+    /// worth something at startup, where the record is the only other source
+    /// and a peer on a build predating the field leaves it absent. Reading
+    /// absent as "not gated" there would silently switch off a gate the app
+    /// paid for until the CVM re-registers.
+    ///
+    /// Scoped to this boot by the same rule as everything else in here: across
+    /// a reboot the snapshot is gone and the record is all there is.
+    pub(crate) fn was_gated(&self, instance_id: &str, public_key: &str) -> bool {
+        self.entries
+            .get(instance_id)
+            .is_some_and(|stored| stored.public_key == public_key)
+    }
+
     /// The verdict to start an instance at, given what was remembered.
     ///
     /// Falls back to [`HealthState::initial`], so an instance the snapshot does
@@ -274,6 +290,22 @@ mod tests {
             HealthState::Ungated,
             "an ungated instance must stay routable and pollable"
         );
+    }
+
+    /// Only gated instances are written, so a hit is evidence the record's
+    /// absent field means "an older writer" rather than "opted out".
+    #[test]
+    fn a_snapshot_hit_is_proof_the_instance_was_gated() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = snapshot_file(&dir);
+        save(
+            &path,
+            [("inst-1", "key-1", HealthState::Healthy)].into_iter(),
+        );
+        let store = HealthStore::load(&path);
+        assert!(store.was_gated("inst-1", "key-1"));
+        assert!(!store.was_gated("inst-1", "key-2"), "a different boot");
+        assert!(!store.was_gated("inst-2", "key-1"), "a different instance");
     }
 
     #[test]

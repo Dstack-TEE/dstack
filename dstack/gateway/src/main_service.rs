@@ -770,12 +770,16 @@ fn build_state_from_kv_store(
         // to `Unknown` and wait for its next poll. A reboot is a different
         // matter and the store refuses to answer across one.
         // `None` means the node that last wrote this record predates the field,
-        // not that the app opted out -- but at startup there is no in-memory
-        // record to inherit from, unlike the reload path below, so `false` is
-        // the only answer available. It fails open (the instance is routable and
-        // unpolled) and it is self-correcting: the CVM re-registers every 180s,
-        // and whichever node takes it writes `Some(..)` back.
-        let health_check = data.health_check.unwrap_or(false);
+        // not that the app opted out. There is no in-memory record to inherit
+        // from at startup, unlike the reload path below -- but the snapshot is
+        // a second witness: it only ever holds gated instances, so a hit for
+        // this instance under this WireGuard key is proof it was gated earlier
+        // in this same boot. Without that, one peer on an older build would
+        // switch a gate off for up to a re-registration interval every time
+        // this process restarted.
+        let health_check = data
+            .health_check
+            .unwrap_or_else(|| health_store.was_gated(&instance_id, &data.public_key));
         let health = health_store.restore(&instance_id, &data.public_key, health_check);
         let info = InstanceInfo {
             id: instance_id.clone(),

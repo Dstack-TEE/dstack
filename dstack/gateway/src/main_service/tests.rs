@@ -1138,6 +1138,56 @@ async fn recording_reports_whether_anything_changed() {
     );
 }
 
+/// A peer on a build predating the capability field rewrites `inst/` without
+/// it. Across a process restart there is no in-memory record to inherit from,
+/// so reading that as "opted out" would switch off a gate the app paid for
+/// until the CVM re-registers. The snapshot is the second witness.
+#[tokio::test]
+async fn a_restart_does_not_ungate_an_instance_an_older_peer_rewrote() {
+    let state = create_test_state().await;
+    let path = state.config.proxy.health_check.state_file.clone();
+    let rewritten = {
+        let mut proxy = state.lock();
+        register_instances(&mut proxy, "restart-mixed-app", 1, true);
+        observe(&mut proxy, "restart-mixed-app-0", HealthState::Healthy);
+        let existing = proxy.state.instances["restart-mixed-app-0"].clone();
+        InstanceData {
+            app_id: existing.app_id.clone(),
+            ip: existing.ip,
+            public_key: existing.public_key.clone(),
+            reg_time: SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            port_policy: existing.port_policy.clone(),
+            port_policy_hash: existing.port_policy_hash.clone(),
+            admin_port_policy: None,
+            admin_ready: existing.admin_ready,
+            // The older peer does not know the field exists.
+            health_check: None,
+        }
+    };
+    crate::proxy::health_check::save_snapshot(&state.proxy);
+    state
+        .kv_store
+        .sync_instance("restart-mixed-app-0", &rewritten)
+        .unwrap();
+
+    // What a restarted process does.
+    let store = crate::proxy::health_store::HealthStore::load(&path);
+    let rebuilt =
+        build_state_from_kv_store(&state.config, state.kv_store.load_all_instances(), &store);
+
+    assert!(
+        rebuilt.instances["restart-mixed-app-0"].health_check,
+        "a restart must not read an older peer's rewrite as an opt-out"
+    );
+    assert_eq!(
+        rebuilt.instances["restart-mixed-app-0"].health,
+        HealthState::Healthy
+    );
+}
+
 /// The snapshot module is unit-tested on its own, but nothing verified that the
 /// gateway actually writes to it and reads from it. Deleting either side left
 /// the whole suite green, so a feature that is inert in production would have
