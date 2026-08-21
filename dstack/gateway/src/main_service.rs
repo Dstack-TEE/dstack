@@ -1019,7 +1019,16 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
         }
     });
 
-    // Start periodic persistence task
+    // Start periodic persistence task.
+    //
+    // Both this and the WAL sync below run on the blocking pool. Each ends in a
+    // synchronous fsync — a snapshot plus its directory entry here, the log
+    // there — which is tens of microseconds on an NVMe host and milliseconds on
+    // the virtio disk a CVM gets. On a runtime worker that would park every
+    // other future assigned to it for the duration, which is the one thing a
+    // proxy's event loop cannot afford. It does not make the store lock any
+    // shorter: a reader still waits on the writer. It stops one slow disk from
+    // being a slow gateway.
     let persist_interval = proxy.config.sync.persist_interval;
     if !persist_interval.is_zero() {
         let kv_store_for_persist = kv_store.clone();
@@ -1027,12 +1036,17 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
             let mut ticker = tokio::time::interval(persist_interval);
             loop {
                 ticker.tick().await;
-                match kv_store_for_persist.persist_if_dirty() {
-                    Ok(true) => info!("WaveKV: periodic persist completed"),
-                    Ok(false) => {} // No changes to persist
-                    Err(err) => {
+                let kv = kv_store_for_persist.clone();
+                match tokio::task::spawn_blocking(move || kv.persist_if_dirty()).await {
+                    Ok(Ok(true)) => info!("WaveKV: periodic persist completed"),
+                    Ok(Ok(false)) => {} // No changes to persist
+                    Ok(Err(err)) => {
                         crate::metrics::record_kv_persist_failure();
                         error!("WaveKV: periodic persist failed: {err:?}");
+                    }
+                    Err(err) => {
+                        crate::metrics::record_kv_persist_failure();
+                        error!("WaveKV: the persist task did not finish: {err}");
                     }
                 }
             }
@@ -1053,9 +1067,17 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
             let mut ticker = tokio::time::interval(wal_sync_interval);
             loop {
                 ticker.tick().await;
-                if let Err(err) = kv_store_for_wal.sync_wal_if_due() {
-                    crate::metrics::record_kv_wal_sync_failure();
-                    error!("WaveKV: forcing the write-ahead log failed: {err:?}");
+                let kv = kv_store_for_wal.clone();
+                match tokio::task::spawn_blocking(move || kv.sync_wal_if_due()).await {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(err)) => {
+                        crate::metrics::record_kv_wal_sync_failure();
+                        error!("WaveKV: forcing the write-ahead log failed: {err:?}");
+                    }
+                    Err(err) => {
+                        crate::metrics::record_kv_wal_sync_failure();
+                        error!("WaveKV: the write-ahead log sync did not finish: {err}");
+                    }
                 }
             }
         });
