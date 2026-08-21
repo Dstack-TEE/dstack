@@ -48,11 +48,17 @@ export interface DockerConfig extends SortableObject {
   token_key?: string;
 }
 
+export interface HealthCheck extends SortableObject {
+  enabled: boolean;
+  health_file?: string;
+}
+
 export interface Requirements extends SortableObject {
   os_version?: string;
   platforms?: RequirementPlatform[];
   tdx_measure_acpi_tables?: boolean;
   launch_token_hash?: string;
+  health_check?: HealthCheck;
 }
 
 export interface AppCompose extends SortableObject {

@@ -244,3 +244,41 @@ def test_sort_object_function():
     # Nested keys should also be sorted
     nested_keys = list(sorted_obj["nested"].keys())
     assert nested_keys == ["a", "z"]
+
+
+def test_health_check_requirement_changes_the_hash():
+    """A dropped field would silently produce the wrong on-chain hash."""
+    from dstack_sdk.get_compose_hash import HealthCheck
+    from dstack_sdk.get_compose_hash import Requirements
+
+    plain = AppCompose(
+        runner="docker-compose",
+        docker_compose_file="docker-compose.yml",
+        requirements=Requirements(os_version=">=0.6.1"),
+    )
+    gated = AppCompose(
+        runner="docker-compose",
+        docker_compose_file="docker-compose.yml",
+        requirements=Requirements(
+            os_version=">=0.6.1",
+            health_check=HealthCheck(enabled=True, health_file="/dstack/health"),
+        ),
+    )
+
+    assert get_compose_hash(plain) != get_compose_hash(gated)
+
+
+def test_health_check_health_file_is_part_of_the_hash():
+    """`health_file` selects the verdict source, so it is not cosmetic."""
+    from dstack_sdk.get_compose_hash import HealthCheck
+    from dstack_sdk.get_compose_hash import Requirements
+
+    def compose(health_file):
+        return AppCompose(
+            runner="docker-compose",
+            requirements=Requirements(
+                health_check=HealthCheck(enabled=True, health_file=health_file)
+            ),
+        )
+
+    assert get_compose_hash(compose(None)) != get_compose_hash(compose("/dstack/health"))

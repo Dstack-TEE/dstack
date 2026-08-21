@@ -37,12 +37,19 @@ const (
 	RequirementPlatformNitro     RequirementPlatform = "dstack-nitro-enclave"
 )
 
+// HealthCheck represents application health reporting, read by the gateway.
+type HealthCheck struct {
+	Enabled    bool   `json:"enabled"`
+	HealthFile string `json:"health_file,omitempty"`
+}
+
 // Requirements represents guest-side requirements.
 type Requirements struct {
 	OsVersion            string                 `json:"os_version,omitempty"`
 	Platforms            *[]RequirementPlatform `json:"platforms,omitempty"`
 	TdxMeasureAcpiTables *bool                  `json:"tdx_measure_acpi_tables,omitempty"`
 	LaunchTokenHash      string                 `json:"launch_token_hash,omitempty"`
+	HealthCheck          *HealthCheck           `json:"health_check,omitempty"`
 }
 
 // AppCompose represents the application composition structure

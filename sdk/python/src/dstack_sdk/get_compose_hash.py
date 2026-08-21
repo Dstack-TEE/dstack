@@ -46,6 +46,26 @@ class DockerConfig:
         return result
 
 
+class HealthCheck:
+    """Application health reporting, read by the gateway."""
+
+    def __init__(
+        self,
+        enabled: bool = False,
+        health_file: Optional[str] = None,
+    ) -> None:
+        """Initialize a new ``HealthCheck`` instance."""
+        self.enabled = enabled
+        self.health_file = health_file
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a dictionary representation excluding ``None`` fields."""
+        result: Dict[str, Any] = {"enabled": self.enabled}
+        if self.health_file is not None:
+            result["health_file"] = self.health_file
+        return result
+
+
 class Requirements:
     """Guest-side requirements for app compose."""
 
@@ -55,12 +75,14 @@ class Requirements:
         platforms: Optional[List[str]] = None,
         tdx_measure_acpi_tables: Optional[bool] = None,
         launch_token_hash: Optional[str] = None,
+        health_check: Optional[HealthCheck] = None,
     ) -> None:
         """Initialize a new ``Requirements`` instance."""
         self.os_version = os_version
         self.platforms = platforms
         self.tdx_measure_acpi_tables = tdx_measure_acpi_tables
         self.launch_token_hash = launch_token_hash
+        self.health_check = health_check
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a dictionary representation excluding ``None`` fields."""
@@ -73,6 +95,8 @@ class Requirements:
             result["tdx_measure_acpi_tables"] = self.tdx_measure_acpi_tables
         if self.launch_token_hash is not None:
             result["launch_token_hash"] = self.launch_token_hash
+        if self.health_check is not None:
+            result["health_check"] = self.health_check.to_dict()
         return result
 
 
