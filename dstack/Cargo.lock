@@ -2342,6 +2342,7 @@ dependencies = [
  "or-panic",
  "path-absolutize",
  "ra-rpc",
+ "rand 0.8.6",
  "reqwest",
  "rocket",
  "rocket-vsock-listener",

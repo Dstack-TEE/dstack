@@ -25,7 +25,9 @@ registry = ""
 platform = "auto"
 qemu_path = ""
 kms_urls = ["http://127.0.0.1:8081"]
+shuffle_kms_urls = true
 gateway_urls = ["http://127.0.0.1:8082"]
+shuffle_gateway_urls = true
 # PCCS URL used by guest to verify the quote from local key provider
 pccs_url = ""
 # Optional dstack GPU attestation proxy. When configured, guests use its

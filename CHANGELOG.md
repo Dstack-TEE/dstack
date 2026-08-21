@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - dstack-util: a CVM re-registers with the gateway node that last accepted it, before falling back to the configured order. The list used to be walked from the top every time, so every CVM piled onto the first URL and the whole fleet snapped back to it the moment it recovered from an outage — and each move rewrites the instance record from a different node's memory
+- vmm: optionally randomize the KMS and gateway URL orders written to each CVM's system configuration so new CVMs distribute their initial requests across service nodes; both are enabled by default in `vmm.toml`
 - os/yocto: nerdctl 2.2.1 → 2.3.5, so `nerdctl compose` honours the Compose `healthcheck:` field (only translated into `--health-*` flags from 2.3.1 on). Requires openembedded-core to move to `wrynose` head for go 1.26.5, which also brings gcc 15.2 → 15.3 — every guest image measurement changes, so the new image hashes need whitelisting in KMS
 
 ### Fixed
