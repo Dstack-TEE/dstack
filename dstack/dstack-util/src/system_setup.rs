@@ -714,13 +714,21 @@ impl<'a> GatewayContext<'a> {
                     }
                 }
             }
-            if accepted_by != key_store.last_url {
-                if let Some(url) = &accepted_by {
-                    info!(cluster = %target.name, %url, "gateway registration moved");
-                }
-                key_store.last_url = accepted_by;
-                if let Err(err) = key_store.save_to(&cache_path) {
-                    warn!(cluster = %target.name, "failed to record the accepting gateway: {err:?}");
+            // Only an acceptance updates the preference. A refresh where every
+            // URL failed says nothing about where the instance record lives,
+            // and clearing on it would have one bad tick — a full-cluster
+            // outage, or a blip in this CVM's own networking — erase the
+            // fleet's spread and pile everyone back onto the first configured
+            // URL at recovery.
+            if let Some(url) = accepted_by {
+                if key_store.last_url.as_deref() != Some(url.as_str()) {
+                    if key_store.last_url.is_some() {
+                        info!(cluster = %target.name, %url, "gateway registration moved");
+                    }
+                    key_store.last_url = Some(url);
+                    if let Err(err) = key_store.save_to(&cache_path) {
+                        warn!(cluster = %target.name, "failed to record the accepting gateway: {err:?}");
+                    }
                 }
             }
             let Some(response) = response else {
