@@ -611,7 +611,12 @@ impl<'a> GatewayContext<'a> {
             cert_not_after,
             wg_sk,
             wg_pk,
-            last_url: None,
+            // Carry the registration preference through the renewal. This
+            // fresh store is saved over the cache before the per-cluster loop
+            // reads the preference back, so dropping the field here would
+            // drop it on disk too and the fleet would drift back onto the
+            // first configured URL at every certificate renewal.
+            last_url: cache.and_then(|cache| cache.last_url),
         })
     }
 
@@ -676,8 +681,11 @@ impl<'a> GatewayContext<'a> {
                     continue;
                 }
             };
-            // Carry the last accepting URL across the rebuild above, which
-            // constructs a fresh key store whenever the certificate is renewed.
+            // The preference is per cluster. An additional cluster's store is
+            // cloned from the primary's, so read this cluster's own cache
+            // rather than inherit the primary's preference — and drop a URL
+            // the operator has removed from the config instead of
+            // resurrecting it.
             key_store.last_url = GatewayKeyStore::load_from(&cache_path)
                 .and_then(|cached| cached.last_url)
                 .filter(|url| target.urls.iter().any(|configured| configured == url));
