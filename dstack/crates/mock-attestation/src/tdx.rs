@@ -23,6 +23,12 @@ use time::OffsetDateTime;
 const MOCK_PKI_NOT_BEFORE: i64 = 1_577_836_800; // 2020-01-01T00:00:00Z
 const MOCK_PKI_NOT_AFTER: i64 = 4_102_444_800; // 2100-01-01T00:00:00Z
 
+/// Collateral validity, matching the mock PKI window above so a seeded
+/// generator's output is fully deterministic. A test asserts the two stay in
+/// sync.
+const COLLATERAL_ISSUE_DATE: &str = "2020-01-01T00:00:00Z";
+const COLLATERAL_NEXT_UPDATE: &str = "2100-01-01T00:00:00Z";
+
 const INTEL_QE_VENDOR_ID: [u8; 16] = [
     0x93, 0x9a, 0x72, 0x33, 0xf7, 0x9c, 0x4c, 0xa9, 0x94, 0x0a, 0x0d, 0xb3, 0x95, 0x7f, 0x06, 0x07,
 ];
@@ -308,11 +314,15 @@ impl TdxGenerator {
     }
 
     fn collateral_with_tcb_status(&self, tcb_status: &str) -> Result<QuoteCollateralV3> {
-        let now = chrono::Utc::now();
-        let issue =
-            (now - chrono::Duration::days(1)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let next =
-            (now + chrono::Duration::days(30)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        // The collateral must be as deterministic as the certificates: two
+        // generators built from the same seed have to produce byte-identical
+        // collateral — same JSON, and therefore same signatures — no matter
+        // when or in which process they run. Wall-clock stamps here made that
+        // equality depend on both generations landing in the same second.
+        // Use the mock PKI's fixed validity window instead; dcap-qvl only
+        // requires issueDate <= now <= nextUpdate.
+        let issue = COLLATERAL_ISSUE_DATE;
+        let next = COLLATERAL_NEXT_UPDATE;
         let tcb_info = json!({
             "id":"TDX", "version":3, "issueDate":issue, "nextUpdate":next,
             "fmspc":"000000000000", "pceId":"0000", "tcbType":0, "tcbEvaluationDataNumber":1,
@@ -462,6 +472,32 @@ fn sign_raw(key: &SigningKey, message: &[u8]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The collateral advertises the same validity window the mock PKI
+    /// certificates carry; if one side moves, this pins the other to follow.
+    #[test]
+    fn collateral_validity_matches_the_mock_pki_window() {
+        let issue = chrono::DateTime::parse_from_rfc3339(COLLATERAL_ISSUE_DATE).unwrap();
+        let next = chrono::DateTime::parse_from_rfc3339(COLLATERAL_NEXT_UPDATE).unwrap();
+        assert_eq!(issue.timestamp(), MOCK_PKI_NOT_BEFORE);
+        assert_eq!(next.timestamp(), MOCK_PKI_NOT_AFTER);
+    }
+
+    /// The collateral must not embed the wall clock: two generations from
+    /// the same seed have to be byte-identical even when they straddle a
+    /// second boundary — that was a real CI flake in
+    /// `seeded_hierarchies_are_cross_process_compatible`, which only holds
+    /// per-run. Asserting the fixed stamps guards against `now()` creeping
+    /// back in.
+    #[test]
+    fn collateral_timestamps_are_fixed_not_wall_clock() {
+        let generator = TdxGenerator::from_seed([0x31; 32]).unwrap();
+        let collateral = generator.sample_collateral().unwrap();
+        for doc in [&collateral.tcb_info, &collateral.qe_identity] {
+            assert!(doc.contains("\"issueDate\":\"2020-01-01T00:00:00Z\""));
+            assert!(doc.contains("\"nextUpdate\":\"2100-01-01T00:00:00Z\""));
+        }
+    }
 
     #[test]
     fn seeded_hierarchies_are_cross_process_compatible() {
