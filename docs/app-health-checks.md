@@ -1,8 +1,8 @@
 # Application health checks
 
 The gateway keeps an instance out of its app's load-balancing rotation while the
-application is not able to serve. This page describes where that verdict comes
-from and how an app influences it.
+application is not able to serve. This page describes how an app opts into that
+and where the verdict comes from.
 
 ## Why this exists
 
@@ -13,22 +13,43 @@ may still be pulling. Without a health signal the only thing standing between a
 freshly booted instance and a real request is the WireGuard handshake, which
 says the tunnel is up and nothing about whether anything is listening behind it.
 
+## Opting in
+
+Health gating is off unless the app asks for it, in `requirements`:
+
+```json
+{
+  "manifest_version": "3",
+  "name": "my-app",
+  "runner": "docker-compose",
+  "requirements": {
+    "health_check": { "enabled": true }
+  }
+}
+```
+
+That flag reaches the gateway at registration. An app that does not set it is
+never polled and is routed to exactly as it was before this feature existed.
+
+It lives under `requirements` rather than at the top level for a reason:
+`requirements` is rejected outright by guest images older than
+`manifest_version` 3, and unknown fields inside it are a hard error. A
+deployment that asks for health gating therefore cannot silently land on an
+image that would ignore it.
+
 ## Where the verdict comes from
 
-The guest agent answers `Worker.Health`; the gateway polls it. Sources are
-consulted in this order:
+The guest agent recomputes a verdict every 5 seconds and caches it; the gateway
+polls `Worker.Health`, which only reads that cache. The two cadences are
+independent on purpose — a fleet of gateway nodes polling the same instance must
+not multiply into that many container-runtime queries inside the CVM, and the
+RPC is served on the CVM's publicly reachable listener.
 
-1. **`health_check` in `app-compose.json`** — if declared, it decides, for every
-   runner.
-2. **Container healthchecks** — for `docker-compose` and `nerdctl-compose`,
-   every container that declares a Compose `healthcheck` must be reporting
-   healthy.
-3. **Nothing** — the app is treated as healthy. This is where an app lands when
-   it declares no probe and none of its containers declare a healthcheck.
+There are two sources, and the app picks one.
 
-### Container healthchecks
+### Default: container healthchecks
 
-Nothing to configure beyond what a Compose file already says:
+With no `health_file`, the agent judges the app's own Compose project:
 
 ```yaml
 services:
@@ -46,57 +67,72 @@ is not evidence either way — the app has not said how to test it — so it is
 skipped rather than counted as passing. `starting` counts as *not* healthy: that
 state is precisely the boot window this exists to keep traffic out of.
 
+A container that declares a healthcheck and is **not running** is not healthy
+either, whatever verdict the runtime last recorded for it. Docker re-marks a
+stopped container `unhealthy`; nerdctl leaves the last result in place, so a
+container that passed one check and then crashed still reports `healthy` with
+`Running: false`.
+
 Finding **no containers at all** is not healthy either. A runtime that answers
 while having nothing to show means Compose has not got as far as creating
 anything.
+
+Only the app's own Compose project is judged, matched on the
+`com.docker.compose.project` label. Container state lives on the persistent data
+disk and outlives reboots and upgrades, so without that filter one exited
+container left behind by an earlier deployment under a different project name
+would hold the instance out of rotation permanently.
 
 The `nerdctl-compose` runner needs **nerdctl >= 2.3.1** for Compose
 `healthcheck:` to be honoured; earlier versions parse the field and discard it.
 Container presence is still detected on older versions, so the boot-window gate
 works regardless.
 
-### `health_check` in `app-compose.json`
+### `health_file`: the app answers for itself
 
 For the `bash` runner there are no containers to inspect, and an app may anyway
-want to answer the question itself. Declare a program and the guest agent runs
-it on a timer:
+want to give one whole-application answer rather than have every container
+judged separately. Name a file and the agent reads it:
 
 ```json
 {
-  "manifest_version": 1,
-  "name": "my-app",
-  "runner": "bash",
-  "bash_script": "/opt/my-app/run.sh &",
-  "health_check": {
-    "path": "/opt/my-app/healthz.sh",
-    "args": ["--strict"],
-    "interval_secs": 10,
-    "timeout_secs": 5
+  "requirements": {
+    "health_check": {
+      "enabled": true,
+      "health_file": "/dstack/health"
+    }
   }
 }
 ```
 
-| Field | Default | Meaning |
-|---|---|---|
-| `path` | required | Program to run. Executed directly, **not** through a shell |
-| `args` | `[]` | Arguments, passed verbatim |
-| `interval_secs` | `10` | Seconds between runs |
-| `timeout_secs` | `5` | A run that exceeds this is killed and counted as a failure |
+The file is two lines:
 
-Exit status 0 means healthy; anything else, including a timeout or a program
-that cannot be executed, means not. The exit code and up to 512 bytes of stderr
-are reported to the gateway for logging.
+```text
+healthy
+1771234567
+```
 
-`path` is not a shell command line: nothing in it is word-split, glob-expanded
-or variable-substituted. If you need shell semantics, point it at a script.
+| Line | Meaning |
+|---|---|
+| 1 | `healthy` or `unhealthy`, case-insensitive |
+| 2 | Unix timestamp, in seconds, at which the app wrote the file |
 
-Declaring `health_check` **overrides** container healthchecks, so a Compose app
-that wants one whole-application answer can give one instead of having every
-container judged separately.
+The timestamp is not decoration. A file older than **60 seconds** counts as
+unhealthy, which is what turns a wedged app — still running, no longer updating
+anything — into a verdict rather than a stale `healthy` that never expires.
+Refresh it at least twice per that window; writing it once at startup is a way
+to take yourself out of rotation a minute later.
 
-Before the first run completes, the app reports **not** healthy. Registration
-happens long before the application is up, so "has not run yet" must not read as
-a pass.
+Anything else is not healthy: a missing file, a malformed one, an unparseable
+timestamp, or a state word the agent does not recognise. Writing it atomically
+(write a temporary file, then rename) avoids being judged on a half-written one.
+
+For a container to write this file, bind-mount the path into it. The agent reads
+it from the guest rootfs, not from inside any container.
+
+Before the first refresh completes, the app reports **not** healthy.
+Registration happens long before the application is up, so "not determined yet"
+must not read as a pass.
 
 ## How the gateway uses it
 
@@ -107,12 +143,21 @@ a pass.
   anyway.** Health is inference and can be wrong — a misconfigured probe, an
   agent that died, a whole fleet failing for a reason unrelated to the app.
   Blackholing an app on that basis is worse than sending traffic to instances
-  that might be fine.
+  that might be fine. Note the consequence: for a **single-instance** app, or a
+  fleet that boots together, this rule routes traffic while every instance is
+  still `unknown`. Health gating shifts traffic away from a bad instance; it
+  does not hold an app offline until one is good.
+- A poll that cannot reach the agent is not immediately a verdict. It takes
+  `failure_threshold` consecutive failures to demote an instance, so one dropped
+  packet does not eject it. An agent that *answers* "unhealthy" is believed on
+  the spot.
 - Health is a *per-node observation*. Each gateway node polls for itself and
   does not share the result, the same way each node reads its own WireGuard
-  handshakes.
-- An agent that predates `Worker.Health` is never polled and is always treated
-  as healthy, so older guest images keep serving.
+  handshakes. A node remembers its verdicts across a restart of the process, and
+  discards them across a reboot of the machine.
+- Instances whose WireGuard handshake has gone stale are not polled. They are
+  already excluded from routing, and polling them would spend the round's budget
+  on CVMs that are gone.
 
 Operators can also take an instance out of rotation by hand with
 `Admin.SetInstanceReady`, independently of health. That one is an instruction
@@ -127,6 +172,8 @@ enabled = true
 interval = "5s"
 timeout = "2s"
 concurrency = 16
+failure_threshold = 2
+state_file = "/dstack-gateway/data/instance-health.json"
 ```
 
 `enabled = false` restores the behaviour from before health polling existed:

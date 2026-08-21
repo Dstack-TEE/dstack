@@ -280,7 +280,9 @@ impl ProxyInner {
             instances.undecodable.len(),
             nodes.len()
         );
-        let state = build_state_from_kv_store(&config, instances);
+        let health_store =
+            crate::proxy::health_store::HealthStore::load(&config.proxy.health_check.state_file);
+        let state = build_state_from_kv_store(&config, instances, &health_store);
 
         // This node's own records are written *after* the bootstrap below, not
         // here. A local write allocates a sequence number, and after a
@@ -734,7 +736,11 @@ fn report_new_rejections(
     *reported = current;
 }
 
-fn build_state_from_kv_store(config: &Config, instances: LoadedInstances) -> ProxyStateMut {
+fn build_state_from_kv_store(
+    config: &Config,
+    instances: LoadedInstances,
+    health_store: &crate::proxy::health_store::HealthStore,
+) -> ProxyStateMut {
     let mut state = ProxyStateMut::default();
 
     let accepted = import::accept_instances(&config.wg, instances);
@@ -742,6 +748,18 @@ fn build_state_from_kv_store(config: &Config, instances: LoadedInstances) -> Pro
 
     // Build instances
     for (instance_id, data) in accepted.instances {
+        // Restarting the process must not blackhole the fleet: health is a
+        // local observation, so without the snapshot every instance would drop
+        // to `Unknown` and wait for its next poll. A reboot is a different
+        // matter and the store refuses to answer across one.
+        // `None` means the node that last wrote this record predates the field,
+        // not that the app opted out -- but at startup there is no in-memory
+        // record to inherit from, unlike the reload path below, so `false` is
+        // the only answer available. It fails open (the instance is routable and
+        // unpolled) and it is self-correcting: the CVM re-registers every 180s,
+        // and whichever node takes it writes `Some(..)` back.
+        let health_check = data.health_check.unwrap_or(false);
+        let health = health_store.restore(&instance_id, &data.public_key, health_check);
         let info = InstanceInfo {
             id: instance_id.clone(),
             app_id: data.app_id.clone(),
@@ -754,8 +772,8 @@ fn build_state_from_kv_store(config: &Config, instances: LoadedInstances) -> Pro
             port_policy_hash: data.port_policy_hash,
             admin_port_policy: data.admin_port_policy,
             admin_ready: data.admin_ready,
-            has_health_endpoint: data.has_health_endpoint,
-            health: HealthState::initial(data.has_health_endpoint),
+            health_check,
+            health,
             connections: Default::default(),
         };
         state.allocated_addresses.insert(data.ip);
@@ -1119,10 +1137,23 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
             port_policy_hash: data.port_policy_hash.clone(),
             admin_port_policy: data.admin_port_policy.clone(),
             admin_ready: data.admin_ready,
-            has_health_endpoint: data.has_health_endpoint,
-            health: HealthState::initial(data.has_health_endpoint),
+            // A record written by a node that predates the field says nothing
+            // about the app's intent, so it inherits whatever this node already
+            // knows rather than reading as "opted out". Without that, one older
+            // peer re-registering a CVM would reset its health to `Ungated`,
+            // drop the app's cached selection, and flap it back on the next
+            // sync round -- every round, for as long as the cluster is mixed.
+            health_check: data.health_check.unwrap_or_else(|| {
+                state
+                    .state
+                    .instances
+                    .get(&instance_id)
+                    .is_some_and(|existing| existing.health_check)
+            }),
+            health: HealthState::Unknown,
             connections: Default::default(),
         };
+        new_info.health = HealthState::initial(new_info.health_check);
 
         let existing = state.state.instances.get(&instance_id).cloned();
         if let Some(existing) = &existing {
@@ -1138,9 +1169,20 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
             // counter does. Re-deriving it from the record would reset every
             // instance to `Unknown` on every sync round -- dropping the whole
             // fleet out of rotation until the next poll, over and over.
-            // The one case that must reset is the capability changing, which
-            // means the image was replaced.
-            if existing.has_health_endpoint == data.has_health_endpoint {
+            //
+            // Two things must not survive it. A changed capability means the
+            // image was replaced. And a changed WireGuard key means the CVM
+            // rebooted: the guest caches its key store in `/run`, which is
+            // tmpfs, so a fresh key is a fresh boot. Without the second check
+            // the reboot reset is only applied on whichever node took the
+            // registration -- every *other* node learns about the new boot
+            // through sync and quietly copies its own pre-reboot verdict onto
+            // it, routing traffic to a CVM whose containers are not up. That is
+            // the same hole `record_instance_health` guards against for an
+            // in-flight poll, reachable through a slower path.
+            if existing.health_check == new_info.health_check
+                && existing.public_key == data.public_key
+            {
                 new_info.health = existing.health;
             }
         } else {
@@ -1219,9 +1261,30 @@ fn retain_healthy(app_id: &str, candidates: &mut SmallVec<[Candidate; 4]>) {
     }
 }
 
-/// Bounded by the `cache_top_n` recomputation interval, so an app stuck in this
-/// state costs a couple of lines a minute rather than one per connection.
+/// How often one app may report that its whole fleet looks unhealthy.
+const ALL_UNHEALTHY_WARN_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Warn that an app is being routed to on fail-open, at most once a minute.
+///
+/// Rate-limited here rather than relying on a caller's cache. The top-n path
+/// recomputes at most every `cache_top_n`, but `random_select_a_host` has no
+/// cache and runs per connection -- and a fleet that is entirely unhealthy is
+/// exactly the sustained state, so an unlimited warning would be one log line
+/// per inbound connection for as long as it lasts.
 fn warn_all_unhealthy(app_id: &str, candidates: usize) {
+    static LAST_WARNED: Mutex<Option<BTreeMap<String, Instant>>> = Mutex::new(None);
+    {
+        let mut guard = LAST_WARNED
+            .lock()
+            .or_panic("all-unhealthy warn lock poisoned");
+        let last = guard.get_or_insert_with(BTreeMap::new);
+        if let Some(at) = last.get(app_id) {
+            if at.elapsed() < ALL_UNHEALTHY_WARN_INTERVAL {
+                return;
+            }
+        }
+        last.insert(app_id.to_string(), Instant::now());
+    }
     warn!(
         "app {app_id}: no instance reports healthy; routing to all {candidates} \
          reachable instance(s) anyway rather than refusing the app"
@@ -1256,7 +1319,7 @@ impl ProxyState {
     ) -> Result<InstanceInfo> {
         let ReportedCapabilities {
             port_policy,
-            has_health_endpoint,
+            health_check,
         } = reported;
         if id.is_empty() {
             bail!("instance_id is empty (no_instance_id is set?)");
@@ -1284,6 +1347,10 @@ impl ProxyState {
         // the instance reports about itself.
         let mut carried_admin_ready = None;
         let mut carried_admin_port_policy = None;
+        // Same rule as above for the rebuild path below: a caller that did not
+        // report the capability inherits whatever the instance declared, and a
+        // brand-new instance defaults to "not gated".
+        let mut carried_health_check = health_check.unwrap_or(false);
         if let Some(existing) = self.state.instances.get_mut(id) {
             if existing.app_id != app_id {
                 bail!("instance_id is already registered to a different app");
@@ -1310,10 +1377,16 @@ impl ProxyState {
             // reboots, say -- a reboot stops being visible here and the reset
             // has to move to an explicit boot id in `RegisterCvmRequest`.
             let pubkey_changed = existing.public_key != public_key;
-            if pubkey_changed || existing.has_health_endpoint != has_health_endpoint {
-                existing.health = HealthState::initial(has_health_endpoint);
+            // A caller with nothing to say about the capability -- the debug
+            // path -- must not be able to downgrade a real CVM's declaration.
+            // Doing so would reset its health, then exclude it from polling for
+            // good, on the strength of a request that never asked about it.
+            let health_check = health_check.unwrap_or(existing.health_check);
+            if pubkey_changed || existing.health_check != health_check {
+                existing.health = HealthState::initial(health_check);
             }
-            existing.has_health_endpoint = has_health_endpoint;
+            existing.health_check = health_check;
+            carried_health_check = health_check;
             if pubkey_changed {
                 info!("public key changed for instance {id}, new key: {public_key}");
                 existing.public_key = public_key.to_string();
@@ -1349,7 +1422,7 @@ impl ProxyState {
                     port_policy_hash: existing.port_policy_hash.clone(),
                     admin_port_policy: existing.admin_port_policy.clone(),
                     admin_ready: existing.admin_ready,
-                    has_health_endpoint: existing.has_health_endpoint,
+                    health_check: Some(existing.health_check),
                 };
                 if let Err(err) = self.kv_store.sync_instance(&existing.id, &data) {
                     error!("failed to sync existing instance to KvStore: {err:?}");
@@ -1372,8 +1445,8 @@ impl ProxyState {
             port_policy_hash: compose_hash.to_string(),
             admin_port_policy: carried_admin_port_policy,
             admin_ready: carried_admin_ready,
-            has_health_endpoint,
-            health: HealthState::initial(has_health_endpoint),
+            health_check: carried_health_check,
+            health: HealthState::initial(carried_health_check),
             connections: Default::default(),
         };
         self.add_instance(host_info.clone());
@@ -1513,21 +1586,37 @@ impl ProxyState {
 
     /// Record this node's latest health observation for an instance.
     ///
+    /// Returns whether anything changed, so the caller knows when the on-disk
+    /// snapshot is worth rewriting.
+    ///
     /// Logs only when the verdict changes. Every instance is polled every few
     /// seconds, so an app that stays unhealthy for an hour should cost one
     /// line, not several hundred.
     pub(crate) fn record_instance_health(
         &mut self,
-        instance_id: &str,
+        target: &crate::proxy::health_check::Target,
         observation: crate::proxy::health_check::Observation,
-    ) {
+    ) -> bool {
+        let instance_id = target.id.as_str();
         let Some(info) = self.state.instances.get_mut(instance_id) else {
             // Recycled or deregistered while the round was in flight.
-            return;
+            return false;
         };
+        // The record still exists, but is it the same one that was polled? A
+        // round takes as long as its slowest instance, and a CVM can reboot and
+        // re-register inside that window -- new WireGuard key, health reset to
+        // `Unknown`, containers not up yet. Writing a verdict from before that
+        // would put the previous boot's answer on the new one and let it serve
+        // immediately, which is exactly what `Unknown` exists to prevent. The
+        // IP is checked for the same reason: it can be reallocated to another
+        // instance entirely.
+        if info.public_key != target.public_key || info.ip != target.ip {
+            debug!("dropping stale health observation for instance {instance_id}");
+            return false;
+        }
         let previous = info.health;
         if previous == observation.state {
-            return;
+            return false;
         }
         info.health = observation.state;
         let app_id = info.app_id.clone();
@@ -1547,6 +1636,7 @@ impl ProxyState {
         // Same reason as the operator gate: the cached selection was computed
         // before this change and would outlive it by up to `cache_top_n`.
         self.state.top_n.remove(&app_id);
+        true
     }
 
     /// How many of an app's instances the operator has left open to traffic.
@@ -1578,7 +1668,7 @@ impl ProxyState {
             port_policy_hash: info.port_policy_hash.clone(),
             admin_port_policy: info.admin_port_policy.clone(),
             admin_ready: info.admin_ready,
-            has_health_endpoint: info.has_health_endpoint,
+            health_check: Some(info.health_check),
         };
         self.kv_store
             .sync_instance(instance_id, &data)
@@ -1597,7 +1687,7 @@ impl ProxyState {
             port_policy_hash: info.port_policy_hash.clone(),
             admin_port_policy: info.admin_port_policy.clone(),
             admin_ready: info.admin_ready,
-            has_health_endpoint: info.has_health_endpoint,
+            health_check: Some(info.health_check),
         };
         if let Err(err) = self.kv_store.sync_instance(&info.id, &data) {
             error!("failed to sync instance to KvStore: {err:?}");
@@ -1693,9 +1783,9 @@ impl ProxyState {
     /// With polling switched off nothing ever leaves `Unknown`, and `Unknown`
     /// is not healthy -- so the filter has to be skipped outright rather than
     /// merely left unfed. Otherwise disabling the feature would drop exactly
-    /// the instances that support it, and in a fleet still running some older
-    /// images (`Unsupported`, which counts as healthy) it would drop them
-    /// permanently.
+    /// the instances that opted into it, and in a fleet that also has apps
+    /// which did not (`Ungated`, which counts as healthy) it would drop the
+    /// opted-in ones permanently.
     fn health_gating_enabled(&self) -> bool {
         self.config.proxy.health_check.enabled
     }
@@ -2092,7 +2182,8 @@ impl GatewayRpc for RpcHandler {
             &compose_hash,
             ReportedCapabilities {
                 port_policy,
-                has_health_endpoint: request.has_health_endpoint,
+                // A real CVM always states its intent, either way.
+                health_check: Some(request.health_check),
             },
         )
     }

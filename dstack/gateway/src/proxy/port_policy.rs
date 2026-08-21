@@ -234,7 +234,10 @@ async fn fetch_and_store(state: &Proxy, instance_id: &str) -> Result<(), FetchEr
 
 async fn fetch_port_policy(ip: Ipv4Addr, agent_port: u16) -> Result<PortPolicy, FetchError> {
     let url = format!("http://{ip}:{agent_port}/prpc");
-    let client = DstackGuestClient::new(PrpcClient::new(url));
+    // Same untrusted peer as the health poller; see the note there.
+    let client = DstackGuestClient::new(
+        PrpcClient::new(url).with_max_response_bytes(http_client::MAX_RESPONSE_BYTES),
+    );
     // Network/RPC errors here are transient: agent might still be coming up.
     let info = client
         .info()

@@ -480,10 +480,11 @@ pub struct PortPolicyFetchConfig {
 
 /// Application-level health polling of registered CVMs.
 ///
-/// The gateway asks each guest agent whether the app's containers are serving,
-/// rather than having the CVM push the answer. A wedged agent then shows up as
-/// a failed poll instead of as silence that has to be told apart from "nothing
-/// changed", and a legacy image identifies itself by not implementing the RPC.
+/// The gateway asks each guest agent whether the app is serving, rather than
+/// having the CVM push the answer. A wedged agent then shows up as a failed
+/// poll instead of as silence that has to be told apart from "nothing changed",
+/// and only CVMs that asked to be gated (`RegisterCvmRequest.health_check`) are
+/// polled at all.
 #[derive(Debug, Clone, Deserialize)]
 pub struct HealthCheckConfig {
     /// Poll instances at all. Turning this off leaves every instance eligible,
@@ -504,6 +505,26 @@ pub struct HealthCheckConfig {
     /// How many instances to poll at once, so a large fleet does not arrive as
     /// one burst of connections.
     pub concurrency: usize,
+    /// Consecutive failures to *reach* an agent before a healthy instance is
+    /// demoted.
+    ///
+    /// Only unreachability is counted. An agent that answers "unhealthy" is
+    /// believed on the spot -- it can see the app and this gateway cannot.
+    /// Without this, one dropped packet ejects an instance and recomputes the
+    /// whole app's selection, and it costs a second invalidation coming back.
+    pub failure_threshold: u32,
+    /// Where this node remembers its verdicts across a restart of the process.
+    ///
+    /// Health is a local observation, so a restart would otherwise reset the
+    /// fleet to `Unknown` and hold every instance out of rotation until the
+    /// next round -- for an app whose instances have staggered poll times, long
+    /// enough to matter. The snapshot is stamped with the machine's boot id and
+    /// discarded when that changes, so a *reboot* still re-derives everything:
+    /// nothing the gateway believed before the reboot is evidence about what is
+    /// running after it.
+    ///
+    /// Empty disables the snapshot.
+    pub state_file: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

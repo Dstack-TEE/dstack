@@ -15,28 +15,61 @@
 //! health strings -- nerdctl's inspect output is generated from its
 //! `dockercompat` types -- so the rule itself is shared.
 //!
+//! Only the app's own Compose project is judged. Container state lives on the
+//! persistent data disk (`/var/lib/{docker,containerd,nerdctl}` are rbind
+//! mounted there by `dstack-prepare.sh`), so it outlives reboots and app
+//! upgrades: without the filter, one exited container left behind by a previous
+//! deployment under a different project name would hold the instance out of
+//! rotation forever, and nothing cleans it up -- `--remove-orphans` only ever
+//! touches the project it was invoked for.
+//!
 //! What they do not agree on is what happens to that string once the container
 //! stops, which is why the run state is read alongside it. See [`judge`].
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use bollard::container::ListContainersOptions;
 use bollard::Docker;
 use serde::Deserialize;
 use tokio::process::Command;
+use tracing::debug;
+use yaml_rust2::YamlLoader;
 
-/// The label `docker compose` stamps on every container it starts.
+/// The label Compose stamps on every container it starts.
+///
+/// This is the only project label both runners agree on. Measured on docker
+/// compose 5.1.4 and nerdctl 2.3.5: docker also writes
+/// `com.docker.compose.project.working_dir` and `.config_files`, nerdctl writes
+/// neither -- it sets exactly `project`, `service` and `config-hash`. Filtering
+/// on a docker-only label would return an empty list under nerdctl, which
+/// `judge` reads as "nothing has started yet", i.e. permanently unhealthy on
+/// the runner the guest image actually uses.
 const COMPOSE_PROJECT_LABEL: &str = "com.docker.compose.project";
 
-/// The containerd namespace `app-compose.sh` runs nerdctl in.
+/// The project name Compose derives when the compose file does not name one.
 ///
-/// Kept in sync with `NERDCTL_NAMESPACE` there. The namespace is dedicated to
-/// the app, which is why the nerdctl path needs no label filter: everything in
-/// it belongs to the app by construction.
+/// Compose uses the basename of the directory it was brought up from, and
+/// `app-compose.service` sets `WorkingDirectory=/dstack`.
+const DEFAULT_COMPOSE_PROJECT: &str = "dstack";
+
+/// The containerd namespace `app-compose.sh` runs nerdctl in by default.
+///
+/// An app is free to override `NERDCTL_NAMESPACE` in its own environment. That
+/// is not a hole -- everything the app does is measured -- but it does mean an
+/// app that overrides it and asks for health gating gets an empty container
+/// list, so the label filter below is what carries the meaning either way.
 const NERDCTL_NAMESPACE: &str = "dstack";
 
+/// How long a single container-runtime call may take.
+///
+/// Without this a wedged containerd stalls the refresh loop indefinitely; with
+/// it, plus `kill_on_drop`, an abandoned call also reclaims its child process.
+const RUNTIME_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// One container that is not reporting healthy.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct UnhealthyContainer {
     pub name: String,
     pub status: String,
@@ -78,20 +111,52 @@ impl HealthReport {
 /// the app saying "I have not told you how to test this one" rather than a
 /// pass. That keeps this from failing an app for a one-shot init container
 /// that exited cleanly.
-pub(crate) async fn collect(runner: &str) -> Result<HealthReport> {
+pub(crate) async fn collect(runner: &str, project: &str) -> Result<HealthReport> {
     match runner {
-        "docker-compose" => collect_docker().await,
-        "nerdctl-compose" => collect_nerdctl().await,
+        "docker-compose" => collect_docker(project).await,
+        "nerdctl-compose" => collect_nerdctl(project).await,
         // The `bash` runner runs a script, not containers. There is nothing to
         // inspect and never will be, so it must not sit at "not started yet".
         _ => Ok(HealthReport::not_judged()),
     }
 }
 
-async fn collect_docker() -> Result<HealthReport> {
+/// The Compose project name the app's containers carry.
+///
+/// Compose takes the top-level `name:` from the compose file and falls back to
+/// the basename of the working directory, lowercasing either way. Verified
+/// identical on docker compose 5.1.4 and nerdctl 2.3.5: `name: MyApp_X` becomes
+/// `myapp_x` on both, and `--filter label=com.docker.compose.project=myapp_x`
+/// matches while the un-normalized spelling does not.
+///
+/// Getting this wrong in the safe direction -- guessing a project that does not
+/// exist -- shows up immediately as "no container has been created yet", not as
+/// an app being silently waved through.
+///
+/// Resolved once, when the monitor starts. The compose file is immutable for the
+/// life of the CVM, and re-parsing YAML on every refresh would be both waste and
+/// a way for an app to spend the agent's CPU: alias expansion is exponential and
+/// synchronous, so a crafted file blocks a tokio worker thread past any timeout
+/// wrapped around it.
+pub(crate) fn compose_project(compose_file: Option<&str>) -> String {
+    compose_file
+        .and_then(|contents| YamlLoader::load_from_str(contents).ok())
+        .and_then(|docs| docs.first()?["name"].as_str().map(str::to_string))
+        .map(|name| name.trim().to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| DEFAULT_COMPOSE_PROJECT.to_string())
+}
+
+/// The label filter both runners are queried with, as `key=value`.
+fn compose_filter(project: &str) -> String {
+    format!("{COMPOSE_PROJECT_LABEL}={project}")
+}
+
+async fn collect_docker(project: &str) -> Result<HealthReport> {
     let docker = Docker::connect_with_defaults().context("failed to connect to docker")?;
+    let filter = compose_filter(project);
     let mut filters = HashMap::new();
-    filters.insert("label", vec![COMPOSE_PROJECT_LABEL]);
+    filters.insert("label", vec![filter.as_str()]);
     let containers = docker
         .list_containers(Some(ListContainersOptions {
             all: true,
@@ -106,10 +171,23 @@ async fn collect_docker() -> Result<HealthReport> {
         let Some(id) = summary.id.as_deref() else {
             continue;
         };
-        let details = docker
-            .inspect_container(id, None)
-            .await
-            .with_context(|| format!("failed to inspect container {id}"))?;
+        let details = match docker.inspect_container(id, None).await {
+            Ok(details) => details,
+            // The container went away between the list and the inspect.
+            // `docker compose up` recreates containers on every redeploy and
+            // `app-compose.sh` prunes right after, so this window is raced
+            // routinely. Judging the rest is strictly better than failing the
+            // whole report and dropping the instance out of rotation.
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => {
+                debug!("container {id} disappeared between list and inspect");
+                continue;
+            }
+            Err(err) => {
+                return Err(err).with_context(|| format!("failed to inspect container {id}"))
+            }
+        };
         let state = details.state;
         let health = state
             .as_ref()
@@ -129,8 +207,9 @@ async fn collect_docker() -> Result<HealthReport> {
     Ok(judge(observed))
 }
 
-async fn collect_nerdctl() -> Result<HealthReport> {
-    let ids = nerdctl(&["ps", "-a", "-q"])
+async fn collect_nerdctl(project: &str) -> Result<HealthReport> {
+    let filter = format!("label={}", compose_filter(project));
+    let ids = nerdctl(&["ps", "-a", "-q", "--filter", &filter])
         .await
         .context("failed to list nerdctl containers")?;
     let ids = ids
@@ -141,26 +220,67 @@ async fn collect_nerdctl() -> Result<HealthReport> {
     if ids.is_empty() {
         return Ok(judge(vec![]));
     }
+    Ok(judge(inspect_nerdctl(&ids).await?))
+}
 
+/// Inspect every id, tolerating the ones that vanished under us.
+///
+/// `nerdctl inspect a b c` exits non-zero if *any* id is gone, and -- unlike
+/// docker, which still writes the entries it did find -- it writes **nothing**
+/// to stdout. Measured on 2.3.5 with one bogus id in a batch of three: exit 1,
+/// 0 bytes of stdout, `level=fatal msg="1 errors: [no such object ...]"` on
+/// stderr, regardless of where in the batch the bogus id sits.
+///
+/// So one container recreated between `ps` and `inspect` -- which every
+/// redeploy does, and `app-compose.sh`'s prune right after start makes routine
+/// -- would otherwise fail the entire report and drop the instance out of
+/// rotation. The batch stays the fast path; only when it fails do we pay for
+/// one call per container and skip the ones that no longer exist.
+async fn inspect_nerdctl(ids: &[&str]) -> Result<Vec<Observed>> {
     let mut args = vec!["inspect"];
-    args.extend_from_slice(&ids);
-    let raw = nerdctl(&args)
-        .await
-        .context("failed to inspect nerdctl containers")?;
-    let containers: Vec<NerdctlContainer> =
-        serde_json::from_str(&raw).context("failed to parse nerdctl inspect output")?;
+    args.extend_from_slice(ids);
+    match nerdctl(&args).await {
+        Ok(raw) => Ok(parse_nerdctl(&raw)?),
+        Err(err) => {
+            debug!("batch inspect failed, falling back to one call per container: {err:#}");
+            let mut observed = Vec::with_capacity(ids.len());
+            for id in ids {
+                match nerdctl(&["inspect", id]).await {
+                    Ok(raw) => observed.extend(parse_nerdctl(&raw)?),
+                    Err(err) => debug!("skipping container {id}: {err:#}"),
+                }
+            }
+            // Every single inspect failing too means the runtime itself is the
+            // problem, not a raced container. Report the original error rather
+            // than an empty list, which `judge` would read as "nothing started
+            // yet".
+            if observed.is_empty() {
+                return Err(err);
+            }
+            Ok(observed)
+        }
+    }
+}
 
-    Ok(judge(containers.into_iter().map(observe_nerdctl).collect()))
+fn parse_nerdctl(raw: &str) -> Result<Vec<Observed>> {
+    let containers: Vec<NerdctlContainer> =
+        serde_json::from_str(raw).context("failed to parse nerdctl inspect output")?;
+    Ok(containers.into_iter().map(observe_nerdctl).collect())
 }
 
 async fn nerdctl(args: &[&str]) -> Result<String> {
-    let output = Command::new("nerdctl")
+    let run = Command::new("nerdctl")
         .arg("--namespace")
         .arg(NERDCTL_NAMESPACE)
         .args(args)
-        .output()
-        .await
-        .context("failed to run nerdctl")?;
+        // Without this, abandoning the future on timeout leaves the child
+        // running: `tokio::process` does not kill it on drop by default.
+        .kill_on_drop(true)
+        .output();
+    let output = match tokio::time::timeout(RUNTIME_TIMEOUT, run).await {
+        Ok(output) => output.context("failed to run nerdctl")?,
+        Err(_) => bail!("nerdctl {} timed out after {RUNTIME_TIMEOUT:?}", args[0]),
+    };
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         bail!("nerdctl {} failed: {}", args.join(" "), stderr.trim());
@@ -339,6 +459,54 @@ mod tests {
             health: status.map(str::to_string),
             state: Some(state.to_string()),
         }
+    }
+
+    /// The literal, not the constant: what this pins is that the default agrees
+    /// with `WorkingDirectory=/dstack` in `app-compose.service`, which Compose
+    /// derives the project name from. Comparing against the constant would pass
+    /// no matter what the constant said.
+    #[test]
+    fn a_compose_file_without_a_name_uses_the_working_directory() {
+        let compose = "services:\n  web:\n    image: my-app:1.0\n";
+        assert_eq!(compose_project(Some(compose)), "dstack");
+    }
+
+    #[test]
+    fn no_compose_file_at_all_uses_the_working_directory() {
+        assert_eq!(compose_project(None), "dstack");
+    }
+
+    /// Compose lowercases the project name and both runtimes filter on the
+    /// normalized value -- measured on docker compose 5.1.4 and nerdctl 2.3.5,
+    /// where `name: MyApp_X` becomes `myapp_x` and matching on the original
+    /// spelling returns nothing.
+    #[test]
+    fn a_declared_name_is_lowercased_the_way_compose_does() {
+        let compose = "name: MyApp_X\nservices:\n  web:\n    image: my-app:1.0\n";
+        assert_eq!(compose_project(Some(compose)), "myapp_x");
+    }
+
+    /// Guessing a project that does not exist shows up immediately as "no
+    /// container has been created yet"; guessing nothing and judging everything
+    /// is what lets a previous deployment's leftovers hold an instance down.
+    #[test]
+    fn an_unparseable_compose_file_falls_back_rather_than_judging_everything() {
+        assert_eq!(compose_project(Some("\tname: [unbalanced")), "dstack");
+        assert_eq!(compose_project(Some("")), "dstack");
+        assert_eq!(
+            compose_project(Some("name: '  '\nservices: {}\n")),
+            "dstack"
+        );
+    }
+
+    #[test]
+    fn the_filter_is_the_label_both_runtimes_set() {
+        assert_eq!(
+            compose_filter("myapp"),
+            "com.docker.compose.project=myapp",
+            "nerdctl sets only project/service/config-hash, so this is the only \
+             project label the two runtimes agree on"
+        );
     }
 
     /// The window this whole feature exists for: the CVM has registered, the

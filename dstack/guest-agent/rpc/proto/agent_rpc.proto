@@ -259,18 +259,20 @@ message ContainerHealth {
   string status = 2;
 }
 
-// Aggregate health of the app's containers.
+// Aggregate application health, as the agent last determined it.
 message HealthResponse {
-  // False when any container that declares a Compose `healthcheck` is not
-  // reporting healthy.
+  // False when the app's own health file says so or has gone stale, or -- when
+  // no health file was declared -- when any container that declares a Compose
+  // `healthcheck` is not running and healthy.
   bool healthy = 1;
   // The containers that made `healthy` false, so an operator reading gateway
   // logs can tell which one is holding the instance out of rotation. Purely
   // diagnostic -- the gateway routes on `healthy` alone.
   repeated ContainerHealth unhealthy = 2;
-  // Set when the agent could not inspect containers at all (Docker
-  // unreachable, permission denied). `healthy` is false in that case: an
-  // agent that cannot see the app is in no position to vouch for it.
+  // Set when the agent could not see the app at all for several refreshes in
+  // a row (container runtime unreachable, permission denied). `healthy` is
+  // false in that case: an agent that cannot see the app is in no position to
+  // vouch for it.
   //
   // Reported in the response rather than as an RPC error on purpose. prpc
   // answers both "no such method" and "the handler failed" with HTTP 400 and
@@ -286,10 +288,16 @@ service Worker {
   rpc Version(google.protobuf.Empty) returns (WorkerVersion) {}
   // Get attestation
   rpc GetAttestationForAppKey(GetAttestationForAppKeyRequest) returns (GetQuoteResponse) {}
-  // Report whether the app's containers are serving. Polled by the gateway to
-  // decide whether this instance should be in its app's load-balancing
-  // rotation. A guest agent that predates this method answers "method not
-  // found", which the gateway reads as "cannot report" and treats as healthy.
+  // Report whether the app is serving. Polled by the gateway to decide whether
+  // this instance should be in its app's load-balancing rotation.
+  //
+  // Answers from a cache the agent refreshes on its own timer, so the cost of
+  // one call is a lock and a clone however many gateway nodes are polling.
+  //
+  // Only instances that asked for gating (`RegisterCvmRequest.health_check`)
+  // are ever polled. That flag, not this method's absence, is what protects an
+  // older image: the gateway counts *any* failed poll as unhealthy, so probing
+  // to discover support would blackhole every guest agent that predates this.
   rpc Health(google.protobuf.Empty) returns (HealthResponse) {}
 }
 

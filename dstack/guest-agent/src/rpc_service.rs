@@ -79,8 +79,8 @@ struct AppStateInner {
     cert_client: CertRequestClient,
     demo_cert: RwLock<String>,
     platform: Arc<dyn PlatformBackend>,
-    /// Present only when the app declared its own probe; see `app_health`.
-    app_health: Option<Arc<crate::app_health::AppHealthProbe>>,
+    /// Present only when the app opted into health gating; see `health`.
+    health: Option<Arc<crate::health::HealthMonitor>>,
 }
 
 impl AppStateInner {
@@ -171,11 +171,24 @@ impl AppState {
         let cert_client = CertRequestClient::create(&keys, verifier, vm_config.clone())
             .await
             .context("Failed to create cert signer")?;
-        let app_health = config
+        // Only run the refresh loop when the app asked the gateway to gate on
+        // its health. Nothing polls an app that did not, so recomputing a
+        // verdict nobody reads would be pure cost inside the CVM.
+        let health = config
             .app_compose
-            .health_check
-            .clone()
-            .map(crate::app_health::AppHealthProbe::spawn);
+            .requirements
+            .as_ref()
+            .and_then(|requirements| requirements.health_check.clone())
+            .filter(|check| check.enabled)
+            .map(|check| {
+                crate::health::HealthMonitor::spawn(
+                    check,
+                    crate::health::ContainerSource::new(
+                        config.app_compose.runner.clone(),
+                        config.app_compose.docker_compose_file.as_deref(),
+                    ),
+                )
+            });
         let me = Self {
             inner: Arc::new(AppStateInner {
                 config,
@@ -184,7 +197,7 @@ impl AppState {
                 demo_cert: RwLock::new(String::new()),
                 vm_config,
                 platform,
-                app_health,
+                health,
             }),
         };
         me.maybe_request_demo_cert();
@@ -199,8 +212,8 @@ impl AppState {
         &self.inner.config
     }
 
-    fn app_health(&self) -> Option<&crate::app_health::AppHealthProbe> {
-        self.inner.app_health.as_deref()
+    fn health(&self) -> Option<&crate::health::HealthMonitor> {
+        self.inner.health.as_deref()
     }
 
     fn quote_response(&self, report_data: [u8; 64]) -> Result<GetQuoteResponse> {
@@ -614,11 +627,10 @@ impl RpcCall<AppState> for InternalRpcHandlerV0 {
     }
 }
 
-/// Shared conversion so both health sources report the same shape.
-fn health_response(report: crate::container_health::HealthReport, error: String) -> HealthResponse {
+fn health_response(verdict: crate::health::Verdict) -> HealthResponse {
     HealthResponse {
-        healthy: report.healthy,
-        unhealthy: report
+        healthy: verdict.healthy,
+        unhealthy: verdict
             .unhealthy
             .into_iter()
             .map(|container| ContainerHealth {
@@ -626,7 +638,7 @@ fn health_response(report: crate::container_health::HealthReport, error: String)
                 status: container.status,
             })
             .collect(),
-        error,
+        error: verdict.error,
     }
 }
 
@@ -653,29 +665,25 @@ impl WorkerRpc for ExternalRpcHandler {
     }
 
     async fn health(self) -> Result<HealthResponse> {
-        // An app-declared probe replaces whatever the runner would say. It is
-        // the app's own statement about itself, which beats anything inferred
-        // from container state -- and for a runner with no containers to
-        // inspect it is the only signal there is.
-        if let Some(probe) = self.state.app_health() {
-            return Ok(health_response(probe.report(), String::new()));
-        }
-        // Deliberately infallible: see `HealthResponse.error`. A failure to
-        // reach the container runtime has to come back as a verdict, because an
-        // RPC error is indistinguishable from an agent that predates this
-        // method.
-        let runner = self.state.config().app_compose.runner.clone();
-        Ok(match crate::container_health::collect(&runner).await {
-            Ok(report) => health_response(report, String::new()),
-            Err(err) => {
-                warn!("failed to collect container health: {err:#}");
-                HealthResponse {
-                    healthy: false,
-                    unhealthy: vec![],
-                    error: format!("{err:#}"),
-                }
-            }
-        })
+        // One lock and one clone. Everything that costs anything happens on the
+        // agent's own timer in `health`, because this method is served on the
+        // publicly reachable listener and is polled by every gateway node in
+        // the cluster: any work done here is work an anonymous caller can ask
+        // for at an arbitrary rate, multiplied by the operator's fleet size.
+        let Some(monitor) = self.state.health() else {
+            // The app did not opt in, so it registered as "do not poll me" and
+            // no gateway asks. Anything that does ask gets the same answer the
+            // gateway would have assumed.
+            return Ok(HealthResponse {
+                healthy: true,
+                unhealthy: vec![],
+                error: String::new(),
+            });
+        };
+        // Deliberately infallible: see `HealthResponse.error`. A failure to see
+        // the app has to come back as a verdict, because an RPC error is
+        // indistinguishable from an agent that predates this method.
+        Ok(health_response(monitor.report()))
     }
 
     async fn get_attestation_for_app_key(
@@ -824,7 +832,6 @@ mod tests {
             port_policy: Default::default(),
             requirements: None,
             verity_volumes: Vec::new(),
-            health_check: None,
         };
 
         let dummy_appcompose_wrapper = AppComposeWrapper {
@@ -977,7 +984,7 @@ pNs85uhOZE8z2jr8Pg==
                 )
                 .unwrap(),
             }),
-            app_health: None,
+            health: None,
         };
 
         (

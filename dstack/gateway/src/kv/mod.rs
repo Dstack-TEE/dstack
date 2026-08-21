@@ -130,12 +130,19 @@ pub struct InstanceData {
     /// rewrites the record and fixes it.
     #[serde(default)]
     pub admin_ready: Option<bool>,
-    /// Whether the CVM declared, at registration, that its guest agent serves
-    /// `Worker.Health`. Persisted so a restarted gateway (or a peer learning
-    /// this instance through sync) does not poll an image that cannot answer
-    /// and read the failures as an unhealthy app.
+    /// Whether the CVM declared, at registration, that its traffic should be
+    /// gated on app health. Persisted so a restarted gateway (or a peer
+    /// learning this instance through sync) does not poll an app that never
+    /// opted in and read the failures as an unhealthy one.
+    ///
+    /// `Option` for the same reason as `admin_ready` above: a node running a
+    /// build that predates this field rewrites the record without it on every
+    /// re-registration it handles, and `None` has to mean "this writer did not
+    /// know" rather than "the app opted out". Reading `false` there would reset
+    /// health to `Ungated`, drop the app's cached selection, and flap the
+    /// instance back on the next sync round.
     #[serde(default)]
-    pub has_health_endpoint: bool,
+    pub health_check: Option<bool>,
 }
 
 /// The `inst/` records currently in the KV store, split by readability.
@@ -2179,7 +2186,7 @@ mod corruption_tests {
                     port_policy_hash: String::new(),
                     admin_port_policy: None,
                     admin_ready: None,
-                    has_health_endpoint: false,
+                    health_check: None,
                 },
             )
             .expect("sync should succeed");

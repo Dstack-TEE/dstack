@@ -634,11 +634,11 @@ SPDX-License-Identifier: Apache-2.0
             <td class="timestamp">{{ host.latest_handshake }}</td>
             <td>{{ host.num_connections }}</td>
             {% if host.health == "unhealthy" %}
-            <td class="health-unhealthy" title="The guest agent reports a container that declares a healthcheck is not healthy.">unhealthy</td>
+            <td class="health-unhealthy" title="The guest agent reports the app is not serving.">unhealthy</td>
             {% else if host.health == "unknown" %}
             <td class="health-unknown" title="Registered, but no health poll has answered yet. Held out of rotation until one does.">unknown</td>
-            {% else if host.health == "unsupported" %}
-            <td class="health-unknown" title="This guest agent has no Worker.Health method, so it is never polled and always eligible.">not polled</td>
+            {% else if host.health == "ungated" %}
+            <td class="health-unknown" title="This app did not set requirements.health_check.enabled, so it is never polled and always eligible.">not polled</td>
             {% else %}
             <td>{{ host.health }}</td>
             {% endif %}

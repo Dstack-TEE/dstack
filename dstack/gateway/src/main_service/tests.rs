@@ -38,6 +38,13 @@ async fn create_test_state_with(tweak: impl FnOnce(&mut Config)) -> TestState {
         .join("wg.conf")
         .to_string_lossy()
         .into_owned();
+    // Same reason: the default points at a real deployment path, and a stray
+    // snapshot there would seed tests with verdicts they never observed.
+    config.proxy.health_check.state_file = temp_dir
+        .path()
+        .join("instance-health.json")
+        .to_string_lossy()
+        .into_owned();
     tweak(&mut config);
     let options = ProxyOptions {
         config,
@@ -471,10 +478,10 @@ fn register_ready_instances(proxy: &mut ProxyState, app: &str, count: usize) {
 
 /// Register `count` instances of `app` and mark every handshake fresh.
 ///
-/// `has_health_endpoint` mirrors what the CVM declares at registration: false is a
+/// `health_check` mirrors what the CVM declares at registration: false is a
 /// legacy image the gateway never polls, true is one that starts out `Unknown`
 /// and has to be polled before it can serve.
-fn register_instances(proxy: &mut ProxyState, app: &str, count: usize, has_health_endpoint: bool) {
+fn register_instances(proxy: &mut ProxyState, app: &str, count: usize, health_check: bool) {
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
@@ -491,7 +498,7 @@ fn register_instances(proxy: &mut ProxyState, app: &str, count: usize, has_healt
                 "",
                 ReportedCapabilities {
                     port_policy: Some(policy(false, &[])),
-                    has_health_endpoint,
+                    health_check: Some(health_check),
                 },
             )
             .unwrap();
@@ -501,14 +508,36 @@ fn register_instances(proxy: &mut ProxyState, app: &str, count: usize, has_healt
 }
 
 /// Feed the poller's verdict in directly, standing in for a round of RPCs.
+///
+/// Builds the target from the instance's current record, i.e. the case where
+/// nothing changed under the poller. `observe_from` covers the case where
+/// something did.
 fn observe(proxy: &mut ProxyState, instance_id: &str, state: HealthState) {
+    let info = proxy.state.instances[instance_id].clone();
+    observe_from(
+        proxy,
+        &crate::proxy::health_check::Target {
+            id: info.id,
+            ip: info.ip,
+            public_key: info.public_key,
+        },
+        state,
+    );
+}
+
+/// Feed a verdict in against a specific target, so a stale one can be tested.
+fn observe_from(
+    proxy: &mut ProxyState,
+    target: &crate::proxy::health_check::Target,
+    state: HealthState,
+) -> bool {
     proxy.record_instance_health(
-        instance_id,
+        target,
         crate::proxy::health_check::Observation {
             state,
             reason: String::new(),
         },
-    );
+    )
 }
 
 fn selected_ids(group: &AddressGroup) -> Vec<String> {
@@ -664,7 +693,7 @@ async fn a_gate_arriving_through_kv_invalidates_the_cached_selection() {
             port_policy_hash: existing.port_policy_hash.clone(),
             admin_port_policy: None,
             admin_ready: Some(false),
-            has_health_endpoint: existing.has_health_endpoint,
+            health_check: Some(existing.health_check),
         }
     };
     state.kv_store.sync_instance("peer-app-0", &gated).unwrap();
@@ -698,14 +727,14 @@ async fn a_capability_change_arriving_through_kv_invalidates_the_cached_selectio
         .as_secs();
     {
         let mut proxy = state.lock();
-        // No health endpoint declared: both instances read as `Unsupported`,
-        // so both are eligible and the selection caches them.
+        // Neither opted in, so both read as `Ungated`: both are eligible and
+        // the selection caches them.
         register_instances(&mut proxy, "swap-app", 2, false);
         proxy.select_top_n_hosts("swap-app").unwrap();
         assert_eq!(proxy.state.top_n.len(), 1, "selection should be cached");
     }
 
-    // The instance came back on an image that does serve `Worker.Health`, and
+    // The instance came back on an image whose app does ask to be gated, and
     // the record reached us through sync. It starts `Unknown` until a poll
     // answers, so it is no longer eligible.
     let upgraded = {
@@ -720,7 +749,7 @@ async fn a_capability_change_arriving_through_kv_invalidates_the_cached_selectio
             port_policy_hash: existing.port_policy_hash.clone(),
             admin_port_policy: None,
             admin_ready: existing.admin_ready,
-            has_health_endpoint: true,
+            health_check: Some(true),
         }
     };
     state
@@ -891,7 +920,7 @@ async fn an_agent_that_cannot_report_health_stays_eligible() {
         let id = format!("legacy-app-{index}");
         assert_eq!(
             proxy.state.instances[&id].health,
-            HealthState::Unsupported,
+            HealthState::Ungated,
             "an agent that never declared the capability must not sit in Unknown"
         );
     }
@@ -998,7 +1027,7 @@ fn re_register(
     instance_id: &str,
     app: &str,
     public_key: &str,
-    has_health_endpoint: bool,
+    health_check: bool,
 ) {
     proxy
         .new_client_by_id(
@@ -1008,7 +1037,7 @@ fn re_register(
             "",
             ReportedCapabilities {
                 port_policy: Some(policy(false, &[])),
-                has_health_endpoint,
+                health_check: Some(health_check),
             },
         )
         .unwrap();
@@ -1080,6 +1109,287 @@ async fn a_periodic_re_registration_keeps_the_last_health_verdict() {
     );
 }
 
+/// The snapshot module is unit-tested on its own, but nothing verified that the
+/// gateway actually writes to it and reads from it. Deleting either side left
+/// the whole suite green, so a feature that is inert in production would have
+/// looked fine here.
+#[tokio::test]
+async fn a_verdict_survives_rebuilding_state_from_the_store() {
+    let state = create_test_state().await;
+    let path = state.config.proxy.health_check.state_file.clone();
+    {
+        let mut proxy = state.lock();
+        register_instances(&mut proxy, "persist-app", 2, true);
+        observe(&mut proxy, "persist-app-0", HealthState::Healthy);
+        observe(&mut proxy, "persist-app-1", HealthState::Unhealthy);
+    }
+    crate::proxy::health_check::save_snapshot(&state.proxy);
+
+    // What a restarted process does: read the snapshot, then rebuild every
+    // instance from the store.
+    let store = crate::proxy::health_store::HealthStore::load(&path);
+    let rebuilt =
+        build_state_from_kv_store(&state.config, state.kv_store.load_all_instances(), &store);
+
+    assert_eq!(
+        rebuilt.instances["persist-app-0"].health,
+        HealthState::Healthy,
+        "a restart re-derived a verdict it had already observed"
+    );
+    assert_eq!(
+        rebuilt.instances["persist-app-1"].health,
+        HealthState::Unhealthy
+    );
+}
+
+/// The reboot reset is applied by whichever node took the re-registration.
+/// Every other node learns about the new boot through sync, and must not carry
+/// its own pre-reboot verdict across -- otherwise the guard in
+/// `record_instance_health` closes a two-second window while this leaves a
+/// whole-poll-interval one open on every peer.
+#[tokio::test]
+async fn a_reboot_arriving_through_kv_resets_health_on_this_node_too() {
+    let state = create_test_state().await;
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    {
+        let mut proxy = state.lock();
+        register_instances(&mut proxy, "peer-reboot-app", 1, true);
+        observe(&mut proxy, "peer-reboot-app-0", HealthState::Healthy);
+    }
+
+    // The CVM rebooted and re-registered somewhere else, so it comes back with
+    // a fresh WireGuard key. Everything else about the record is unchanged.
+    let rebooted = {
+        let proxy = state.lock();
+        let existing = proxy.state.instances["peer-reboot-app-0"].clone();
+        InstanceData {
+            app_id: existing.app_id.clone(),
+            ip: existing.ip,
+            public_key: test_pubkey("peer-reboot-app-key-0-second-boot"),
+            reg_time: now,
+            port_policy: existing.port_policy.clone(),
+            port_policy_hash: existing.port_policy_hash.clone(),
+            admin_port_policy: None,
+            admin_ready: existing.admin_ready,
+            health_check: Some(true),
+        }
+    };
+    state
+        .kv_store
+        .sync_instance("peer-reboot-app-0", &rebooted)
+        .unwrap();
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+
+    let proxy = state.lock();
+    assert_eq!(
+        proxy.state.instances["peer-reboot-app-0"].health,
+        HealthState::Unknown,
+        "the pre-reboot verdict was carried onto the new boot"
+    );
+}
+
+/// A node running a build that predates the capability field rewrites `inst/`
+/// records without it -- it does that on every re-registration it handles. That
+/// record says nothing about the app's intent, so reading it as "opted out"
+/// would reset health, drop the app's cached selection, and flap the instance
+/// back on the next sync round, for as long as the cluster is mixed.
+#[tokio::test]
+async fn a_record_from_an_older_peer_does_not_clear_the_capability() {
+    let state = create_test_state().await;
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    {
+        let mut proxy = state.lock();
+        register_instances(&mut proxy, "mixed-app", 1, true);
+        observe(&mut proxy, "mixed-app-0", HealthState::Healthy);
+    }
+
+    let rewritten = {
+        let proxy = state.lock();
+        let existing = proxy.state.instances["mixed-app-0"].clone();
+        InstanceData {
+            app_id: existing.app_id.clone(),
+            ip: existing.ip,
+            public_key: existing.public_key.clone(),
+            reg_time: now,
+            port_policy: existing.port_policy.clone(),
+            port_policy_hash: existing.port_policy_hash.clone(),
+            admin_port_policy: None,
+            admin_ready: existing.admin_ready,
+            // The older peer does not know the field exists.
+            health_check: None,
+        }
+    };
+    state
+        .kv_store
+        .sync_instance("mixed-app-0", &rewritten)
+        .unwrap();
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+
+    let proxy = state.lock();
+    assert!(
+        proxy.state.instances["mixed-app-0"].health_check,
+        "an absent field must not read as an opt-out"
+    );
+    assert_eq!(
+        proxy.state.instances["mixed-app-0"].health,
+        HealthState::Healthy,
+        "and must not reset the verdict this node observed"
+    );
+}
+
+/// A CVM that is powered off sits in `state.instances` for up to
+/// `recycle.timeout` -- ten hours by default -- while already being excluded
+/// from routing by handshake age. Polling it every round would spend a full
+/// timeout slot on a machine that is gone, and enough of them stretch the round
+/// past the interval and slow detection down for every live instance.
+#[tokio::test]
+async fn an_instance_whose_handshake_went_stale_is_not_polled() {
+    let state = create_test_state().await;
+    {
+        let mut proxy = state.lock();
+        register_instances(&mut proxy, "stale-app", 2, true);
+        let stale = now_secs() - proxy.config.proxy.timeouts.handshake_stale.as_secs() - 60;
+        proxy.handshake_cache.set_for_test(BTreeMap::from([
+            (test_pubkey("stale-app-key-0"), now_secs()),
+            (test_pubkey("stale-app-key-1"), stale),
+        ]));
+    }
+
+    let targets = crate::proxy::health_check::select_targets(&state.proxy);
+    let ids = targets.iter().map(|t| t.id.clone()).collect::<Vec<_>>();
+    assert_eq!(ids, vec!["stale-app-0"]);
+}
+
+/// A CVM that just registered has not completed a handshake yet. Absent is not
+/// the same as stale, and reading it that way would mean an instance is never
+/// polled until it has already carried traffic.
+#[tokio::test]
+async fn an_instance_with_no_handshake_yet_is_still_polled() {
+    let state = create_test_state().await;
+    {
+        let mut proxy = state.lock();
+        register_instances(&mut proxy, "fresh-app", 1, true);
+        proxy.handshake_cache.set_for_test(BTreeMap::new());
+    }
+
+    let targets = crate::proxy::health_check::select_targets(&state.proxy);
+    assert_eq!(
+        targets.len(),
+        1,
+        "a CVM with no handshake yet must be polled"
+    );
+}
+
+/// An app that never opted in cannot be gated on the answer, so asking would
+/// only produce failures to misread.
+#[tokio::test]
+async fn an_app_that_did_not_opt_in_is_not_polled() {
+    let state = create_test_state().await;
+    {
+        let mut proxy = state.lock();
+        register_instances(&mut proxy, "opt-out-app", 2, false);
+    }
+
+    assert!(crate::proxy::health_check::select_targets(&state.proxy).is_empty());
+}
+
+/// A round takes as long as its slowest instance, and a CVM can reboot inside
+/// that window. The verdict polled from the previous boot must not land on the
+/// new one -- it would let an instance whose containers are not up serve
+/// immediately, which is the whole thing `Unknown` exists to prevent.
+#[tokio::test]
+async fn a_verdict_polled_before_a_reboot_is_not_applied_after_it() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_instances(&mut proxy, "race-app", 1, true);
+
+    // What the poller snapshotted at the start of the round.
+    let polled = crate::proxy::health_check::Target {
+        id: "race-app-0".to_string(),
+        ip: proxy.state.instances["race-app-0"].ip,
+        public_key: proxy.state.instances["race-app-0"].public_key.clone(),
+    };
+
+    // The CVM reboots and re-registers mid-round.
+    let rebooted_key = test_pubkey("race-app-key-0-second-boot");
+    re_register(&mut proxy, "race-app-0", "race-app", &rebooted_key, true);
+    assert_eq!(
+        proxy.state.instances["race-app-0"].health,
+        HealthState::Unknown
+    );
+
+    // The in-flight poll finally lands.
+    let applied = observe_from(&mut proxy, &polled, HealthState::Healthy);
+
+    assert!(!applied, "a stale observation must not count as a change");
+    assert_eq!(
+        proxy.state.instances["race-app-0"].health,
+        HealthState::Unknown,
+        "the previous boot's verdict was applied to the new one"
+    );
+}
+
+/// The IP can be reallocated to a different instance entirely, so it is checked
+/// for the same reason the key is.
+#[tokio::test]
+async fn a_verdict_polled_from_a_stale_address_is_not_applied() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_instances(&mut proxy, "addr-app", 1, true);
+
+    let polled = crate::proxy::health_check::Target {
+        id: "addr-app-0".to_string(),
+        ip: "10.99.99.99".parse().unwrap(),
+        public_key: proxy.state.instances["addr-app-0"].public_key.clone(),
+    };
+
+    assert!(!observe_from(&mut proxy, &polled, HealthState::Healthy));
+    assert_eq!(
+        proxy.state.instances["addr-app-0"].health,
+        HealthState::Unknown
+    );
+}
+
+/// The debug registration path has no CVM to ask, so it reports nothing about
+/// the capability. It must not be able to take a real instance out of polling
+/// for good by re-registering its id.
+#[tokio::test]
+async fn a_registration_that_reports_no_capability_leaves_it_alone() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_instances(&mut proxy, "debug-app", 1, true);
+    observe(&mut proxy, "debug-app-0", HealthState::Healthy);
+
+    proxy
+        .new_client_by_id(
+            "debug-app-0",
+            "debug-app",
+            &test_pubkey("debug-app-key-0"),
+            "",
+            ReportedCapabilities {
+                port_policy: Some(policy(false, &[])),
+                health_check: None,
+            },
+        )
+        .unwrap();
+
+    assert!(
+        proxy.state.instances["debug-app-0"].health_check,
+        "a caller with nothing to say must not clear the declaration"
+    );
+    assert_eq!(
+        proxy.state.instances["debug-app-0"].health,
+        HealthState::Healthy,
+        "and must not reset the verdict either"
+    );
+}
+
 /// A different capability means a different image, so the verdict belongs to
 /// something that is no longer running even if the key survived.
 #[tokio::test]
@@ -1099,14 +1409,14 @@ async fn a_changed_health_capability_resets_health() {
 
     assert_eq!(
         proxy.state.instances["swap-app-0"].health,
-        HealthState::Unsupported
+        HealthState::Ungated
     );
 }
 
 /// Turning polling off must restore the old behaviour exactly. Nothing ever
-/// leaves `Unknown` once the poller is not running, and in a fleet that still
-/// has older images -- `Unsupported`, which counts as healthy -- the filter
-/// would otherwise drop every instance that supports the feature, forever.
+/// leaves `Unknown` once the poller is not running, and in a fleet that also
+/// has apps which never opted in -- `Ungated`, which counts as healthy -- the
+/// filter would otherwise drop every opted-in instance, forever.
 #[tokio::test]
 async fn disabling_polling_keeps_both_old_and_new_instances_eligible() {
     let state = create_test_state_with(|config| config.proxy.health_check.enabled = false).await;
@@ -1130,7 +1440,7 @@ async fn disabling_polling_keeps_both_old_and_new_instances_eligible() {
                 "",
                 ReportedCapabilities {
                     port_policy: Some(policy(false, &[])),
-                    has_health_endpoint: has_endpoint,
+                    health_check: Some(has_endpoint),
                 },
             )
             .unwrap();
@@ -1193,6 +1503,13 @@ async fn a_kv_reload_does_not_reset_this_node_s_health_observations() {
 /// flag, the random path checks it inside `instance_is_healthy` -- so a
 /// refactor could easily fix one and miss the other. This pins the combination
 /// the other disabled-polling test does not reach.
+///
+/// The fleet is deliberately mixed. With two `Unknown` instances the fail-open
+/// branch keeps both regardless, so the switch is never reached and the test
+/// passes whether or not the code under test still exists -- which is exactly
+/// what it did before, verified by deleting the check in `instance_is_healthy`
+/// and watching every test still pass. One healthy peer makes `any_healthy`
+/// true and forces the filter to actually run.
 #[tokio::test]
 async fn disabling_polling_also_keeps_the_random_path_open() {
     let state = create_test_state_with(|config| {
@@ -1202,15 +1519,19 @@ async fn disabling_polling_also_keeps_the_random_path_open() {
     .await;
     let mut proxy = state.lock();
     register_instances(&mut proxy, "off-rand-app", 2, true);
+    observe(&mut proxy, "off-rand-app-0", HealthState::Healthy);
 
-    // Both declare the endpoint, so with polling on they would sit in
-    // `Unknown` and be excluded. With it off they must both stay selectable.
-    for index in 0..2 {
-        assert_eq!(
-            proxy.state.instances[&format!("off-rand-app-{index}")].health,
-            HealthState::Unknown
-        );
-    }
+    // One is healthy and one is `Unknown`, so with polling on the `Unknown` one
+    // would be filtered out rather than saved by fail-open. With polling off
+    // both must stay selectable.
+    assert_eq!(
+        proxy.state.instances["off-rand-app-0"].health,
+        HealthState::Healthy
+    );
+    assert_eq!(
+        proxy.state.instances["off-rand-app-1"].health,
+        HealthState::Unknown
+    );
 
     let mut seen = std::collections::BTreeSet::new();
     for _ in 0..32 {
@@ -1278,7 +1599,7 @@ fn sync_from_peer_at(
                 port_policy_hash: String::new(),
                 admin_port_policy: None,
                 admin_ready: None,
-                has_health_endpoint: false,
+                health_check: Some(false),
             },
         )
         .unwrap();

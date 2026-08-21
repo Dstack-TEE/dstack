@@ -49,11 +49,12 @@ pub struct InstanceInfo {
     /// of its own.
     #[serde(default)]
     pub admin_ready: Option<bool>,
-    /// Whether the guest agent implements `Worker.Health`, as declared at
-    /// registration. Persisted, so a gateway restart does not start polling a
-    /// legacy image and conclude from the failures that it is unhealthy.
+    /// Whether this CVM asked for its traffic to be gated on app health, as
+    /// declared at registration. Persisted, so a gateway restart does not start
+    /// polling an app that never opted in and conclude from the failures that
+    /// it is unhealthy.
     #[serde(default)]
-    pub has_health_endpoint: bool,
+    pub health_check: bool,
     /// Application-level health, as last observed by *this* gateway node.
     ///
     /// Deliberately not persisted and not shared through WaveKV. Every node
@@ -76,18 +77,23 @@ pub struct ReportedCapabilities {
     /// Per-port behaviour declared by the app. `None` means "not reported"
     /// (legacy CVM), and the gateway fetches it lazily instead.
     pub port_policy: Option<PortPolicy>,
-    /// Whether the guest agent implements `Worker.Health`. False for images
-    /// that predate it, which the gateway then never polls.
-    pub has_health_endpoint: bool,
+    /// Whether the app asked for its traffic to be gated on its health
+    /// (`requirements.health_check.enabled`).
+    ///
+    /// `None` means the caller has nothing to say about it -- the debug
+    /// registration path, which has no CVM to ask -- and leaves whatever the
+    /// instance already declared in place. `Some(false)` is an app that did not
+    /// opt in, or an image that predates the field; the gateway polls neither.
+    pub health_check: Option<bool>,
 }
 
 impl From<Option<PortPolicy>> for ReportedCapabilities {
-    /// Convenience for callers that only have a port policy to report --
-    /// notably the debug registration path, which has no CVM to ask.
+    /// Convenience for callers that only have a port policy to report and
+    /// nothing to say about health gating.
     fn from(port_policy: Option<PortPolicy>) -> Self {
         Self {
             port_policy,
-            has_health_endpoint: false,
+            health_check: None,
         }
     }
 }
@@ -106,29 +112,30 @@ pub enum HealthState {
     /// The guest agent reported at least one container not healthy, or could
     /// not be reached at all.
     Unhealthy,
-    /// The guest agent has no `Worker.Health` method. Reads as healthy: an
-    /// image that predates the RPC has to keep serving exactly as before.
-    Unsupported,
+    /// This instance never asked to be gated -- an app that did not set
+    /// `requirements.health_check.enabled`, or an image that predates the
+    /// field. Reads as healthy: it has to keep serving exactly as before.
+    Ungated,
 }
 
 impl HealthState {
-    /// The state an instance starts in, given whether it can answer at all.
+    /// The state an instance starts in, given whether it asked to be gated.
     ///
-    /// An instance with the endpoint starts `Unknown` -- held out of rotation
-    /// until a poll answers -- because registration happens during boot,
-    /// before the containers exist. One without it starts `Unsupported` and
-    /// stays eligible, so old images keep working.
-    pub fn initial(has_health_endpoint: bool) -> Self {
-        if has_health_endpoint {
+    /// An instance that opted in starts `Unknown` -- held out of rotation until
+    /// a poll answers -- because registration happens during boot, before the
+    /// app exists. One that did not starts `Ungated` and stays eligible, so
+    /// apps that never asked for this keep working.
+    pub fn initial(health_check: bool) -> Self {
+        if health_check {
             HealthState::Unknown
         } else {
-            HealthState::Unsupported
+            HealthState::Ungated
         }
     }
 
     /// Whether this state permits traffic.
     pub fn is_healthy(self) -> bool {
-        matches!(self, HealthState::Healthy | HealthState::Unsupported)
+        matches!(self, HealthState::Healthy | HealthState::Ungated)
     }
 
     /// Stable lowercase name, as reported over the admin API.
@@ -137,7 +144,7 @@ impl HealthState {
             HealthState::Unknown => "unknown",
             HealthState::Healthy => "healthy",
             HealthState::Unhealthy => "unhealthy",
-            HealthState::Unsupported => "unsupported",
+            HealthState::Ungated => "ungated",
         }
     }
 }

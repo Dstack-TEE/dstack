@@ -132,6 +132,17 @@ shutdown = "${TIMEOUT_SHUTDOWN:-5s}"
 total = "${TIMEOUT_TOTAL:-5h}"
 pp_header = "${TIMEOUT_PP_HEADER:-5s}"
 
+[core.proxy.health_check]
+enabled = ${HEALTH_CHECK_ENABLED:-true}
+interval = "${HEALTH_CHECK_INTERVAL:-5s}"
+timeout = "${HEALTH_CHECK_TIMEOUT:-2s}"
+concurrency = ${HEALTH_CHECK_CONCURRENCY:-16}
+failure_threshold = ${HEALTH_CHECK_FAILURE_THRESHOLD:-2}
+# On the data volume, so verdicts survive a restart of this container. The file
+# is stamped with the host's boot id and discarded when that changes, so a
+# reboot still re-derives everything.
+state_file = "$DATA_DIR/instance-health.json"
+
 [core.proxy.port_policy_fetch]
 timeout = "${PORT_POLICY_FETCH_TIMEOUT:-10s}"
 max_retries = ${PORT_POLICY_FETCH_MAX_RETRIES:-5}

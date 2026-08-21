@@ -225,14 +225,6 @@ pub struct AppCompose {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub init_script: Vec<String>,
-    /// An app-declared health probe, run periodically by the guest agent.
-    ///
-    /// When present it replaces whatever the runner would otherwise report --
-    /// including the container runners, whose per-container `healthcheck`
-    /// declarations it overrides. For a runner that has no containers to
-    /// inspect (`bash`) it is the only way to report health at all.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub health_check: Option<HealthCheck>,
     #[serde(default)]
     pub public_logs: bool,
     #[serde(default)]
@@ -492,6 +484,17 @@ pub struct Requirements {
     /// allowing applications to enforce an expected GPU count.
     #[serde(default, skip_serializing_if = "GpuPolicy::is_default")]
     pub gpu_policy: GpuPolicy,
+    /// Application health reporting, read by the gateway to decide whether this
+    /// instance belongs in its app's load-balancing rotation.
+    ///
+    /// Opt-in, and deliberately placed under `requirements` rather than at the
+    /// top level of `app-compose.json`: `Requirements` is `deny_unknown_fields`
+    /// and is itself gated behind `manifest_version >= 3`, so a deployment that
+    /// asks for health gating cannot land on a guest image that would silently
+    /// ignore it. An app that never sets this registers as "do not poll me" and
+    /// is routed to exactly as it was before this feature existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_check: Option<HealthCheck>,
 }
 
 impl Requirements {
@@ -501,8 +504,63 @@ impl Requirements {
             && self.tdx_measure_acpi_tables.is_none()
             && self.launch_token_hash.is_none()
             && self.gpu_policy.is_default()
+            && self.health_check.is_none()
+    }
+
+    /// Whether the app asked the gateway to gate traffic on its health.
+    pub fn health_check_enabled(&self) -> bool {
+        self.health_check
+            .as_ref()
+            .is_some_and(|check| check.enabled)
     }
 }
+
+/// How the guest agent decides whether this instance is serving.
+///
+/// The verdict is produced on the agent's own timer and cached in memory;
+/// `Worker.Health` only reads that cache. A fleet of gateway nodes polling the
+/// same instance therefore costs one map lookup each, not one container-runtime
+/// query each.
+#[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct HealthCheck {
+    /// Whether the gateway should gate traffic on this app's health at all.
+    ///
+    /// Explicit rather than implied by the presence of the object, so that
+    /// turning gating off during an incident is a one-word edit that keeps the
+    /// rest of the configuration intact -- and so the compose hash records the
+    /// operator's intent either way.
+    pub enabled: bool,
+    /// Path to a file the app writes its own verdict into.
+    ///
+    /// Two lines, in order:
+    ///
+    /// ```text
+    /// healthy
+    /// 1771234567
+    /// ```
+    ///
+    /// Line 1 is `healthy` or `unhealthy` (case-insensitive). Line 2 is the
+    /// unix timestamp, in seconds, at which the app wrote the file. The
+    /// timestamp is not decoration: a file older than
+    /// [`HEALTH_FILE_MAX_AGE_SECS`] counts as unhealthy, which is what turns a
+    /// wedged app -- still running, no longer updating anything -- into a
+    /// verdict instead of a stale `healthy` that never expires. Refresh it at
+    /// least twice per that window.
+    ///
+    /// When this is absent the agent falls back to the container runtime:
+    /// every container that declares a Compose `healthcheck` must be running
+    /// and healthy. That default needs nothing from the app, but it can only
+    /// see what the runtime sees; a file gives the app the last word.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_file: Option<String>,
+}
+
+/// How old a `health_file` may be before it is read as unhealthy.
+///
+/// Fixed rather than configurable: this is a liveness bound, and an app that
+/// wants a longer one is asking for its own failures to take longer to notice.
+pub const HEALTH_FILE_MAX_AGE_SECS: u64 = 60;
 
 /// Domain-separation prefix for [`launch_token_hash`]. It keeps the digest
 /// distinct from a plain `sha256(token)` (as used by the legacy app-layer
@@ -610,41 +668,6 @@ pub struct PortAttrs {
     /// connections to this port.
     #[serde(default)]
     pub pp: bool,
-}
-
-/// A health probe the app declares in `app-compose.json`.
-///
-/// The guest agent runs it on its own schedule and caches the verdict; the
-/// gateway reads the cache through `Worker.Health`. Running it locally on a
-/// timer rather than on each gateway poll keeps the two cadences independent:
-/// several gateway nodes polling the same instance must not turn into several
-/// executions of the app's probe.
-#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
-pub struct HealthCheck {
-    /// Path of the program to run.
-    ///
-    /// Executed directly, not through a shell, so nothing here is word-split,
-    /// glob-expanded or variable-substituted. Put arguments in `args`; if you
-    /// need shell semantics, point this at a script.
-    pub path: String,
-    /// Arguments passed to `path`, verbatim.
-    #[serde(default)]
-    pub args: Vec<String>,
-    /// Seconds between runs.
-    #[serde(default = "default_health_interval_secs")]
-    pub interval_secs: u64,
-    /// Seconds a single run may take before it is killed and counted as a
-    /// failure. A probe that hangs is not a probe that passes.
-    #[serde(default = "default_health_timeout_secs")]
-    pub timeout_secs: u64,
-}
-
-fn default_health_interval_secs() -> u64 {
-    10
-}
-
-fn default_health_timeout_secs() -> u64 {
-    5
 }
 
 fn default_true() -> bool {

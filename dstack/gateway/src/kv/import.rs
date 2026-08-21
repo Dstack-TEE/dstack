@@ -283,7 +283,7 @@ mod tests {
             port_policy_hash: String::new(),
             admin_port_policy: None,
             admin_ready: None,
-            has_health_endpoint: false,
+            health_check: None,
         }
     }
 

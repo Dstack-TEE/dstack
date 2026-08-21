@@ -12,18 +12,19 @@ package gateway;
 message RegisterCvmRequest {
   // The public key of the WireGuard interface of the CVM.
   string client_public_key = 1;
-  // Whether this CVM's guest agent implements `Worker.Health`, so the gateway
-  // knows to poll it and to hold the instance out of rotation until the first
-  // poll answers.
+  // Whether this CVM asked for its traffic to be gated on application health,
+  // i.e. `requirements.health_check.enabled` in its app-compose. When true the
+  // gateway polls `Worker.Health` and holds the instance out of rotation until
+  // the first poll answers.
   //
   // Declared here rather than discovered by probing because prpc answers both
   // "no such method" and "the handler failed" with HTTP 400 and drops the
   // message: a failed poll cannot tell an old image apart from a broken app,
   // and guessing wrong either blackholes healthy legacy instances or lets
-  // broken ones serve. False (including "absent", from a CVM that predates
-  // this field) means the gateway never polls and always treats the instance
-  // as healthy, exactly as before.
-  bool has_health_endpoint = 3;
+  // broken ones serve. False -- including "absent", from a CVM that predates
+  // this field or an app that never opted in -- means the gateway never polls
+  // and always treats the instance as healthy, exactly as before.
+  bool health_check = 3;
   // Per-port policy the gateway should apply when proxying to this CVM.
   // Wrapped in a message so we can distinguish "not reported" (old CVM →
   // gateway falls back to fetching app-compose via Info()) from "reported
@@ -142,9 +143,10 @@ message ProxyAccelStatus {
 
 // HostInfo is the information of a host.
 message HostInfo {
-  // Field 5 was used and dropped before this repo's visible history, without a
-  // marker. Reserved now so the next person to extend this message cannot
-  // silently reuse it and break every older client that still sends it.
+  // Field 5 was `uint32 port`, removed by b325c0f8bf when multi-port listening
+  // replaced the single-port field, with no reserved marker left behind.
+  // Reserved now so the next person to extend this message cannot silently
+  // reuse it and break every older client that still sends it.
   reserved 5;
   // The Instance id
   string instance_id = 1;
@@ -163,9 +165,10 @@ message HostInfo {
   // that predates the traffic gate; absent must not be read as "gated off".
   optional bool admin_ready = 8;
   // This node's last application-health observation: "healthy", "unhealthy",
-  // "unknown" (no poll has answered yet) or "unsupported" (the guest agent
-  // has no Worker.Health). A string rather than an enum so it stays readable
-  // as JSON. Empty when talking to a gateway that predates health polling.
+  // "unknown" (opted in, but no poll has answered yet) or "ungated" (never
+  // opted in, so never polled). A string rather than an enum so it stays
+  // readable as JSON. Empty when talking to a gateway that predates health
+  // polling.
   string health = 9;
 }
 

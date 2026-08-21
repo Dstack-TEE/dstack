@@ -36,11 +36,13 @@ impl DebugRpc for DebugRpcHandler {
             &request.instance_id,
             &request.client_public_key,
             "",
-            // Reports nothing about itself: no port policy, and no health
-            // endpoint, so a debug-registered instance is never polled and
-            // always counts as healthy. That keeps this path usable for
-            // testing routing without standing up a guest agent, but it also
-            // means health gating cannot be exercised through it.
+            // Reports nothing about itself: no port policy, and no statement
+            // either way about health gating. A brand-new debug-registered
+            // instance is therefore never polled and always counts as healthy,
+            // which keeps this path usable for testing routing without
+            // standing up a guest agent -- and re-registering an id that a real
+            // CVM already claimed leaves that CVM's declaration alone rather
+            // than silently downgrading it out of polling for good.
             Default::default(),
         )
     }

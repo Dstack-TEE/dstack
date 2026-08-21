@@ -1989,6 +1989,7 @@ dependencies = [
  "tpm-attest",
  "tracing",
  "tracing-subscriber",
+ "yaml-rust2",
 ]
 
 [[package]]

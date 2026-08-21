@@ -474,6 +474,16 @@ impl<'a> GatewayContext<'a> {
                 .collect(),
             restrict_mode: self.shared.app_compose.port_policy.restrict_mode,
         };
+        // Opt-in, not a build-time fact: the guest agent only refreshes a
+        // verdict when the app asked for one, so telling the gateway to poll an
+        // app that did not would cost every gateway node a round trip per
+        // interval to be told what it already assumes.
+        let health_check = self
+            .shared
+            .app_compose
+            .requirements
+            .as_ref()
+            .is_some_and(|requirements| requirements.health_check_enabled());
         let client = self.create_gateway_client(
             gateway_url,
             &key_store.client_key,
@@ -484,9 +494,7 @@ impl<'a> GatewayContext<'a> {
             .register_cvm(RegisterCvmRequest {
                 client_public_key: key_store.wg_pk.clone(),
                 port_policy: Some(port_policy.clone()),
-                // This binary ships alongside the guest agent that serves
-                // `Worker.Health`, so the capability is a build-time fact.
-                has_health_endpoint: true,
+                health_check,
             })
             .await
             .context("Failed to register CVM");
@@ -509,7 +517,7 @@ impl<'a> GatewayContext<'a> {
             .register_cvm(RegisterCvmRequest {
                 client_public_key: key_store.wg_pk.clone(),
                 port_policy: Some(port_policy),
-                has_health_endpoint: true,
+                health_check,
             })
             .await
             .context("Failed to register CVM")
@@ -998,6 +1006,44 @@ fn verify_manifest_feature_requirements(app_compose: &AppCompose) -> Result<()> 
     }
     if app_compose.runner != "nerdctl-compose" && app_compose.snapshotter.is_some() {
         bail!("snapshotter is only supported by the nerdctl-compose runner");
+    }
+    verify_health_check_requirement(app_compose)?;
+    Ok(())
+}
+
+/// Reject a health-gating request the guest could not act on.
+///
+/// Both of these would otherwise deploy and report healthy forever, and the
+/// only signal would be the absence of an effect -- the failure mode this is
+/// meant to remove, not add.
+fn verify_health_check_requirement(app_compose: &AppCompose) -> Result<()> {
+    let Some(health_check) = app_compose
+        .requirements
+        .as_ref()
+        .and_then(|requirements| requirements.health_check.as_ref())
+    else {
+        return Ok(());
+    };
+    if !health_check.enabled {
+        return Ok(());
+    }
+    match health_check.health_file.as_deref() {
+        Some(path) => {
+            if !path.starts_with('/') {
+                bail!("requirements.health_check.health_file must be an absolute path: {path}");
+            }
+        }
+        None => {
+            // The container fallback has nothing to look at for a runner that
+            // starts no containers, so it would answer "healthy" unconditionally.
+            if app_compose.runner != "docker-compose" && app_compose.runner != "nerdctl-compose" {
+                bail!(
+                    "requirements.health_check needs health_file for the {} runner; \
+                     without containers to inspect there is nothing to judge",
+                    app_compose.runner
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -3473,6 +3519,85 @@ fn test_app_compose(
         value["requirements"]["platforms"] = serde_json::json!(platforms);
     }
     serde_json::from_value(value).unwrap()
+}
+
+#[cfg(test)]
+fn compose_with_health_check(runner: &str, health_check: serde_json::Value) -> AppCompose {
+    serde_json::from_value(serde_json::json!({
+        "manifest_version": "3",
+        "name": "health-app",
+        "runner": runner,
+        "docker_compose_file": "services: {}\n",
+        "requirements": { "health_check": health_check },
+    }))
+    .unwrap()
+}
+
+#[test]
+fn health_check_on_a_container_runner_needs_no_health_file() {
+    let compose = compose_with_health_check("docker-compose", serde_json::json!({"enabled": true}));
+    verify_manifest_feature_requirements(&compose).unwrap();
+}
+
+/// The `bash` runner starts no containers, so the container fallback has
+/// nothing to look at and would answer healthy forever. That is exactly the
+/// silent no-op the opt-in exists to avoid.
+#[test]
+fn health_check_without_containers_to_judge_is_rejected() {
+    let compose = compose_with_health_check("bash", serde_json::json!({"enabled": true}));
+    let err = verify_manifest_feature_requirements(&compose).unwrap_err();
+    assert!(
+        err.to_string().contains("needs health_file"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn a_bash_runner_with_a_health_file_is_accepted() {
+    let compose = compose_with_health_check(
+        "bash",
+        serde_json::json!({"enabled": true, "health_file": "/dstack/health"}),
+    );
+    verify_manifest_feature_requirements(&compose).unwrap();
+}
+
+/// The agent runs in the guest rootfs, so a relative path resolves against
+/// whatever its working directory happens to be.
+#[test]
+fn a_relative_health_file_is_rejected() {
+    let compose = compose_with_health_check(
+        "docker-compose",
+        serde_json::json!({"enabled": true, "health_file": "health"}),
+    );
+    let err = verify_manifest_feature_requirements(&compose).unwrap_err();
+    assert!(
+        err.to_string().contains("absolute path"),
+        "unexpected error: {err}"
+    );
+}
+
+/// Declared but switched off must not be validated as if it were on: turning
+/// gating off during an incident should not also have to be a config rewrite.
+#[test]
+fn a_disabled_health_check_is_not_validated() {
+    let compose = compose_with_health_check("bash", serde_json::json!({"enabled": false}));
+    verify_manifest_feature_requirements(&compose).unwrap();
+}
+
+/// `requirements` is `deny_unknown_fields`, so a guest image that predates the
+/// field refuses the deployment instead of ignoring the request.
+#[test]
+fn an_unknown_requirements_field_is_refused() {
+    let parsed = serde_json::from_value::<AppCompose>(serde_json::json!({
+        "manifest_version": "3",
+        "name": "health-app",
+        "runner": "docker-compose",
+        "requirements": { "health_check_v2": { "enabled": true } },
+    }));
+    assert!(
+        parsed.is_err(),
+        "unknown requirements fields must fail closed"
+    );
 }
 
 #[test]
