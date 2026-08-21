@@ -121,7 +121,7 @@ serde-duration = { path = "serde-duration" }
 dstack-mr = { path = "dstack-mr" }
 dstack-verifier = { path = "verifier", default-features = false }
 size-parser = { path = "size-parser" }
-wavekv = "2.0"
+wavekv = "2.1"
 
 # Core dependencies
 anyhow = { version = "1.0.97", default-features = false }
