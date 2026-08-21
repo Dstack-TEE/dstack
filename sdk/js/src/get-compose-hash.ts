@@ -48,11 +48,37 @@ export interface DockerConfig extends SortableObject {
   token_key?: string;
 }
 
+export interface GpuPolicy extends SortableObject {
+  attest_gpu?: boolean;
+  rego?: string;
+  allow_devtools?: boolean;
+  allow_debug?: boolean;
+  allow_insecure_boot?: boolean;
+}
+
 export interface Requirements extends SortableObject {
   os_version?: string;
   platforms?: RequirementPlatform[];
   tdx_measure_acpi_tables?: boolean;
   launch_token_hash?: string;
+  gpu_policy?: GpuPolicy;
+}
+
+export interface PortAttrs extends SortableObject {
+  port: number;
+  pp?: boolean;
+}
+
+export interface PortPolicy extends SortableObject {
+  ports?: PortAttrs[];
+  restrict_mode?: boolean;
+}
+
+export interface VerityVolume extends SortableObject {
+  source: string;
+  /** dm-verity root hash, hex encoded. */
+  verity_root: string;
+  target: string;
 }
 
 export interface AppCompose extends SortableObject {
@@ -78,6 +104,13 @@ export interface AppCompose extends SortableObject {
   no_instance_id?: boolean;
   secure_time?: boolean;
   requirements?: Requirements;
+  init_script?: string[];
+  storage_fs?: string;
+  /** Human size string, e.g. "2G", matching what the guest reads. */
+  swap_size?: string;
+  event_log_version?: number;
+  port_policy?: PortPolicy;
+  verity_volumes?: VerityVolume[];
   // Legacy fields for backward compatibility
   bash_script?: string;
   pre_launch_script?: string;
