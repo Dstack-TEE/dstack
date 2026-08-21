@@ -642,7 +642,7 @@ SPDX-License-Identifier: Apache-2.0
             {% else %}
             <td>{{ host.health }}</td>
             {% endif %}
-            {% if host.admin_ready.unwrap_or(true) %}
+            {% if host.ready.unwrap_or(true) %}
             <td>in rotation</td>
             {% else %}
             <td class="traffic-gated" title="Removed from app-id load balancing by an operator. Still reachable by instance id.">gated off</td>

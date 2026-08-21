@@ -15,7 +15,7 @@ InstanceInfo {
     port_policy: None,
     port_policy_hash: "",
     admin_port_policy: None,
-    admin_ready: None,
+    ready: None,
     health_check: false,
     health: Ungated,
     connections: 0,

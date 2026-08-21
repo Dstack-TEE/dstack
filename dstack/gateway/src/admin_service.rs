@@ -69,7 +69,7 @@ impl AdminRpcHandler {
                     base_domain: base_domain.clone(),
                     latest_handshake,
                     num_connections: instance.num_connections(),
-                    admin_ready: Some(instance.is_admin_ready()),
+                    ready: Some(instance.is_ready()),
                     health: instance.health.as_str().to_string(),
                 }
             })
@@ -143,7 +143,7 @@ impl AdminRpc for AdminRpcHandler {
                     ts
                 },
                 num_connections: instance.num_connections(),
-                admin_ready: Some(instance.is_admin_ready()),
+                ready: Some(instance.is_ready()),
                 health: instance.health.as_str().to_string(),
             };
             Ok(GetInfoResponse {
@@ -749,7 +749,7 @@ impl AdminRpc for AdminRpcHandler {
     async fn set_instance_ready(self, request: SetInstanceReadyRequest) -> Result<()> {
         self.state
             .lock()
-            .set_admin_ready(&request.instance_id, request.ready)
+            .set_ready(&request.instance_id, request.ready)
     }
 }
 

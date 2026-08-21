@@ -792,7 +792,7 @@ fn build_state_from_kv_store(
             port_policy: data.port_policy,
             port_policy_hash: data.port_policy_hash,
             admin_port_policy: data.admin_port_policy,
-            admin_ready: data.admin_ready,
+            ready: data.ready,
             health_check,
             health,
             connections: Default::default(),
@@ -1157,7 +1157,7 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
             port_policy: data.port_policy.clone(),
             port_policy_hash: data.port_policy_hash.clone(),
             admin_port_policy: data.admin_port_policy.clone(),
-            admin_ready: data.admin_ready,
+            ready: data.ready,
             // A record written by a node that predates the field says nothing
             // about the app's intent, so it inherits whatever this node already
             // knows rather than reading as "opted out". Without that, one older
@@ -1272,7 +1272,7 @@ struct Candidate {
 /// fleet can report badly at once for a reason that has nothing to do with
 /// whether the app works. Blackholing an app on the strength of that is worse
 /// than sending traffic to instances that might be fine. The operator gate in
-/// `is_admin_ready` deliberately does *not* get this treatment: that one is an
+/// `is_ready` deliberately does *not* get this treatment: that one is an
 /// instruction, not a guess.
 fn retain_healthy(
     state: &mut ProxyStateMut,
@@ -1371,7 +1371,7 @@ impl ProxyState {
         // they have to be carried across by hand. Otherwise the traffic gate
         // falls open and the port-policy override silently reverts to whatever
         // the instance reports about itself.
-        let mut carried_admin_ready = None;
+        let mut carried_ready = None;
         let mut carried_admin_port_policy = None;
         // Same rule as above for the rebuild path below: a caller that did not
         // report the capability inherits whatever the instance declared, and a
@@ -1381,7 +1381,7 @@ impl ProxyState {
             if existing.app_id != app_id {
                 bail!("instance_id is already registered to a different app");
             }
-            carried_admin_ready = existing.admin_ready;
+            carried_ready = existing.ready;
             carried_admin_port_policy = existing.admin_port_policy.clone();
             // A restarted CVM's health verdict describes a process that no
             // longer exists, so it has to be dropped -- but "registered again"
@@ -1447,7 +1447,7 @@ impl ProxyState {
                     port_policy: existing.port_policy.clone(),
                     port_policy_hash: existing.port_policy_hash.clone(),
                     admin_port_policy: existing.admin_port_policy.clone(),
-                    admin_ready: existing.admin_ready,
+                    ready: existing.ready,
                     health_check: Some(existing.health_check),
                 };
                 if let Err(err) = self.kv_store.sync_instance(&existing.id, &data) {
@@ -1470,7 +1470,7 @@ impl ProxyState {
             port_policy,
             port_policy_hash: compose_hash.to_string(),
             admin_port_policy: carried_admin_port_policy,
-            admin_ready: carried_admin_ready,
+            ready: carried_ready,
             health_check: carried_health_check,
             health: HealthState::initial(carried_health_check),
             connections: Default::default(),
@@ -1571,12 +1571,12 @@ impl ProxyState {
     /// into a second, louder outage.
     ///
     /// Errors if the instance is not registered.
-    pub(crate) fn set_admin_ready(&mut self, instance_id: &str, ready: bool) -> Result<()> {
+    pub(crate) fn set_ready(&mut self, instance_id: &str, ready: bool) -> Result<()> {
         let Some(info) = self.state.instances.get_mut(instance_id) else {
             bail!("instance {instance_id} not found");
         };
-        let prev = info.is_admin_ready();
-        info.admin_ready = Some(ready);
+        let prev = info.is_ready();
+        info.ready = Some(ready);
         let app_id = info.app_id.clone();
         info!("admin set ready={ready} for instance {instance_id} (prev: {prev})");
         if !ready && self.count_ready_instances(&app_id) == 0 {
@@ -1673,7 +1673,7 @@ impl ProxyState {
         instances
             .iter()
             .filter_map(|id| self.state.instances.get(id))
-            .filter(|info| info.is_admin_ready())
+            .filter(|info| info.is_ready())
             .count()
     }
 
@@ -1693,7 +1693,7 @@ impl ProxyState {
             port_policy: info.port_policy.clone(),
             port_policy_hash: info.port_policy_hash.clone(),
             admin_port_policy: info.admin_port_policy.clone(),
-            admin_ready: info.admin_ready,
+            ready: info.ready,
             health_check: Some(info.health_check),
         };
         self.kv_store
@@ -1712,7 +1712,7 @@ impl ProxyState {
             port_policy: info.port_policy.clone(),
             port_policy_hash: info.port_policy_hash.clone(),
             admin_port_policy: info.admin_port_policy.clone(),
-            admin_ready: info.admin_ready,
+            ready: info.ready,
             health_check: Some(info.health_check),
         };
         if let Err(err) = self.kv_store.sync_instance(&info.id, &data) {
@@ -1869,7 +1869,7 @@ impl ProxyState {
                     // Operator gate. Only applied here, on the app-id path --
                     // the instance-id lookup above returns before this point so
                     // a gated instance stays directly reachable.
-                    if !instance.is_admin_ready() {
+                    if !instance.is_ready() {
                         return None;
                     }
                     let (_, elapsed) = handshakes.get(&instance.public_key)?;
@@ -1922,7 +1922,7 @@ impl ProxyState {
                 if let Some(instance) = self.state.instances.get(*instance_id) {
                     // A recent handshake means the tunnel is up, and the
                     // operator must not have gated the instance out.
-                    instance.is_admin_ready()
+                    instance.is_ready()
                         && handshakes
                             .get(&instance.public_key)
                             .map(|(_, elapsed)| {

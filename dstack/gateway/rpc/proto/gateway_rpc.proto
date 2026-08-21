@@ -163,7 +163,7 @@ message HostInfo {
   // Whether the operator has left this instance in its app's load-balancing
   // rotation (see Admin.SetInstanceReady). Absent when talking to a gateway
   // that predates the traffic gate; absent must not be read as "gated off".
-  optional bool admin_ready = 8;
+  optional bool ready = 8;
   // This node's last application-health observation: "healthy", "unhealthy",
   // "unknown" (opted in, but no poll has answered yet) or "ungated" (never
   // opted in, so never polled). A string rather than an enum so it stays
