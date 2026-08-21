@@ -143,12 +143,14 @@ pub struct InstanceData {
     /// learning this instance through sync) does not poll an app that never
     /// opted in and read the failures as an unhealthy one.
     ///
-    /// `Option` for the same reason as `ready` above: a build that predates
-    /// this field reads the record fine and does not write the field back, so
-    /// `None` has to mean "this writer did not know" rather than "the app opted
-    /// out". As with `ready`, this needs no cluster -- a single node rolled back
-    /// is enough. Reading `false` there would reset health to `Ungated` and drop
-    /// the app's cached selection on a record that never said so.
+    /// `Option` for the same reason as `ready` above: `None` has to mean "this
+    /// writer did not know" rather than "the app opted out", because reading
+    /// `false` where the writer simply never set the field would reset health to
+    /// `Ungated` and drop the app's cached selection on a record that never said
+    /// so. A build that predates this field is covered by the same
+    /// [`compat::carry_unknown_fields`] merge that covers `ready`; what is left
+    /// is a current-build node that declares the field and holds `None`, which
+    /// takes more than one node to reach.
     #[serde(default)]
     pub health_check: Option<bool>,
 }
@@ -2095,6 +2097,7 @@ mod value_encoding_tests {
                 port_policy_hash: String::new(),
                 admin_port_policy: None,
                 ready: None,
+                health_check: None,
             },
         )
         .expect("sync should succeed");
