@@ -42,13 +42,13 @@ pub struct InstanceInfo {
     #[serde(default)]
     pub admin_port_policy: Option<PortPolicy>,
     /// Operator-set traffic gate (Admin RPC). `None` means no operator ever
-    /// touched it. See [`InstanceInfo::is_admin_ready`].
+    /// touched it. See [`InstanceInfo::is_ready`].
     ///
     /// Persisted as a field of the instance record; see
-    /// [`crate::kv::InstanceData::admin_ready`] for why it does not get a key
+    /// [`crate::kv::InstanceData::ready`] for why it does not get a key
     /// of its own.
     #[serde(default)]
-    pub admin_ready: Option<bool>,
+    pub ready: Option<bool>,
     #[serde(skip)]
     pub connections: Arc<AtomicU64>,
 }
@@ -68,8 +68,8 @@ impl InstanceInfo {
     /// the app id. Routing to the instance id directly ignores it on purpose:
     /// the point of taking an instance out of rotation is to investigate it
     /// while it is still running, which needs the instance to stay reachable.
-    pub fn is_admin_ready(&self) -> bool {
-        self.admin_ready.unwrap_or(true)
+    pub fn is_ready(&self) -> bool {
+        self.ready.unwrap_or(true)
     }
 
     /// Whether replacing `self` with `other` could invalidate a cached
@@ -77,14 +77,14 @@ impl InstanceInfo {
     ///
     /// `ip` is copied straight into the cached `AddressInfo`; `app_id` decides
     /// which cache entry the instance belongs to; `public_key` is the key the
-    /// handshake freshness filter looks up; `admin_ready` gates eligibility.
+    /// handshake freshness filter looks up; `ready` gates eligibility.
     /// A change to any of them means a cached `top_n` was computed against a
     /// record that no longer exists.
     pub fn routing_inputs_differ(&self, other: &Self) -> bool {
         self.ip != other.ip
             || self.app_id != other.app_id
             || self.public_key != other.public_key
-            || self.admin_ready != other.admin_ready
+            || self.ready != other.ready
     }
 }
 

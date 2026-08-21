@@ -145,7 +145,7 @@ message HostInfo {
   // Whether the operator has left this instance in its app's load-balancing
   // rotation (see Admin.SetInstanceReady). Absent when talking to a gateway
   // that predates the traffic gate; absent must not be read as "gated off".
-  optional bool admin_ready = 8;
+  optional bool ready = 8;
 }
 
 message QuotedPublicKey {

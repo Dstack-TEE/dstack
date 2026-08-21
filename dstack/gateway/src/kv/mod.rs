@@ -129,7 +129,7 @@ pub struct InstanceData {
     /// lost gate silently returns an instance to rotation. Re-issuing the gate
     /// rewrites the record and fixes it.
     #[serde(default)]
-    pub admin_ready: Option<bool>,
+    pub ready: Option<bool>,
 }
 
 /// The `inst/` records currently in the KV store, split by readability.
@@ -2019,7 +2019,7 @@ mod corruption_tests {
             port_policy: Option<PortPolicy>,
             port_policy_hash: &'a str,
             admin_port_policy: Option<PortPolicy>,
-            admin_ready: Option<bool>,
+            ready: Option<bool>,
             reason: &'a str,
         }
         let widened = encode(&FutureRecord {
@@ -2030,7 +2030,7 @@ mod corruption_tests {
             port_policy: None,
             port_policy_hash: "",
             admin_port_policy: None,
-            admin_ready: Some(false),
+            ready: Some(false),
             reason: "under investigation",
         })
         .expect("encode should succeed");
@@ -2038,7 +2038,7 @@ mod corruption_tests {
 
         let loaded = kv.load_all_instances();
         assert!(loaded.undecodable.is_empty(), "{:?}", loaded.undecodable);
-        assert_eq!(loaded.decoded["future"].admin_ready, Some(false));
+        assert_eq!(loaded.decoded["future"].ready, Some(false));
     }
 
     #[test]
@@ -2172,7 +2172,7 @@ mod corruption_tests {
                     port_policy: None,
                     port_policy_hash: String::new(),
                     admin_port_policy: None,
-                    admin_ready: None,
+                    ready: None,
                 },
             )
             .expect("sync should succeed");

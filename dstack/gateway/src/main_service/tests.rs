@@ -491,7 +491,7 @@ async fn gating_an_instance_removes_it_from_rotation_but_keeps_it_directly_reach
         3
     );
 
-    proxy.set_admin_ready("gated-app-1", false).unwrap();
+    proxy.set_ready("gated-app-1", false).unwrap();
 
     let after = selected_ids(&proxy.select_top_n_hosts("gated-app").unwrap());
     assert_eq!(after, vec!["gated-app-0", "gated-app-2"]);
@@ -513,7 +513,7 @@ async fn gating_an_instance_invalidates_the_selection_cache() {
     proxy.select_top_n_hosts("cache-app").unwrap();
     assert_eq!(proxy.state.top_n.len(), 1, "selection should be cached");
 
-    proxy.set_admin_ready("cache-app-0", false).unwrap();
+    proxy.set_ready("cache-app-0", false).unwrap();
     assert!(
         proxy.state.top_n.is_empty(),
         "closing the gate must drop the cached selection"
@@ -533,15 +533,15 @@ async fn gating_every_instance_refuses_traffic_instead_of_failing_open() {
     let mut proxy = state.lock();
     register_ready_instances(&mut proxy, "drained-app", 2);
 
-    proxy.set_admin_ready("drained-app-0", false).unwrap();
-    proxy.set_admin_ready("drained-app-1", false).unwrap();
+    proxy.set_ready("drained-app-0", false).unwrap();
+    proxy.set_ready("drained-app-1", false).unwrap();
 
     assert!(
         proxy.select_top_n_hosts("drained-app").unwrap().is_empty(),
         "an operator draining every instance must be obeyed, not overridden"
     );
 
-    proxy.set_admin_ready("drained-app-1", true).unwrap();
+    proxy.set_ready("drained-app-1", true).unwrap();
     assert_eq!(
         selected_ids(&proxy.select_top_n_hosts("drained-app").unwrap()),
         vec!["drained-app-1"]
@@ -556,7 +556,7 @@ async fn the_gate_survives_re_registration() {
     let state = create_test_state().await;
     let mut proxy = state.lock();
     register_ready_instances(&mut proxy, "reboot-app", 2);
-    proxy.set_admin_ready("reboot-app-0", false).unwrap();
+    proxy.set_ready("reboot-app-0", false).unwrap();
 
     // Same instance id, same key: a reboot re-running registration.
     proxy
@@ -583,7 +583,7 @@ async fn the_random_selection_path_honours_the_gate() {
     let state = create_test_state_with(|config| config.proxy.connect_top_n = 0).await;
     let mut proxy = state.lock();
     register_ready_instances(&mut proxy, "random-app", 2);
-    proxy.set_admin_ready("random-app-0", false).unwrap();
+    proxy.set_ready("random-app-0", false).unwrap();
 
     for _ in 0..16 {
         assert_eq!(
@@ -622,7 +622,7 @@ async fn a_gate_arriving_through_kv_invalidates_the_cached_selection() {
             port_policy: existing.port_policy.clone(),
             port_policy_hash: existing.port_policy_hash.clone(),
             admin_port_policy: None,
-            admin_ready: Some(false),
+            ready: Some(false),
         }
     };
     state.kv_store.sync_instance("peer-app-0", &gated).unwrap();
@@ -675,9 +675,9 @@ async fn removing_an_instance_removes_its_gate() {
     {
         let mut proxy = state.lock();
         register_ready_instances(&mut proxy, "gone-app", 2);
-        proxy.set_admin_ready("gone-app-0", false).unwrap();
+        proxy.set_ready("gone-app-0", false).unwrap();
         assert_eq!(
-            state.kv_store.load_all_instances().decoded["gone-app-0"].admin_ready,
+            state.kv_store.load_all_instances().decoded["gone-app-0"].ready,
             Some(false)
         );
         // Seed the two ephemeral records as well, or the assertions below pass
@@ -727,7 +727,7 @@ async fn an_empty_candidate_group_is_not_blamed_on_the_port_policy() {
     {
         let mut proxy = state.lock();
         register_ready_instances(&mut proxy, "drain-all", 1);
-        proxy.set_admin_ready("drain-all-0", false).unwrap();
+        proxy.set_ready("drain-all-0", false).unwrap();
     }
     let mut proxy = state.lock();
     let empty = proxy.select_top_n_hosts("drain-all").unwrap();
@@ -748,7 +748,7 @@ async fn an_empty_candidate_group_is_not_blamed_on_the_port_policy() {
 async fn gating_an_unregistered_instance_is_an_error() {
     let state = create_test_state().await;
     let mut proxy = state.lock();
-    assert!(proxy.set_admin_ready("never-registered", false).is_err());
+    assert!(proxy.set_ready("never-registered", false).is_err());
 }
 
 /// Write a record straight into the KV store, bypassing registration, the way
@@ -776,7 +776,7 @@ fn sync_from_peer_at(
                 port_policy: None,
                 port_policy_hash: String::new(),
                 admin_port_policy: None,
-                admin_ready: None,
+                ready: None,
             },
         )
         .unwrap();
