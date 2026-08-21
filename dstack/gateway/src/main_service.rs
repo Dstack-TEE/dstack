@@ -1413,20 +1413,20 @@ impl ProxyState {
         // The selection cache holds a pre-gate snapshot. Drop it so the change
         // applies to the next connection rather than up to `cache_top_n` later.
         self.state.top_n.remove(&app_id);
-        // Not rolled back, but do not read that as "it still took effect
-        // locally". `reload_instances_from_kv_store` rebuilds every instance
-        // from the store, and any peer writing an unrelated `inst/` record
-        // triggers it -- so the next reload reads back the very record this
-        // write failed to update, and the gate reverts. A failed write survives
-        // in memory only until then: seconds, not until restart. Rolling back
-        // here would just reach the same end state sooner while losing the brief
+        // Not rolled back, but do not read that as "it took effect". The gate
+        // is in memory and nowhere else: it is gone on restart, and any reload
+        // that rebuilds instances from the store reads back the very record
+        // this write failed to update. How long it survives depends on when
+        // that next happens, which is not something to predict in an error
+        // message -- so the message says what is known instead. Rolling back
+        // here would reach the same end state sooner while throwing away the
         // window in which the operator's intent is at least locally in force.
         self.persist_instance_record(instance_id).with_context(|| {
             format!(
-                "instance {instance_id} is set to ready={ready} on this node \
-                 only and not durably: the write to the store failed, so it \
-                 will not reach the other gateways and will be undone here by \
-                 the next reload. Retry before relying on it"
+                "instance {instance_id} is set to ready={ready} in memory on \
+                 this node only: the write to the store failed, so the setting \
+                 is not durable and has not been shared. Retry before relying \
+                 on it"
             )
         })?;
         Ok(())
