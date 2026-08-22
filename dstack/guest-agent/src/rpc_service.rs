@@ -17,8 +17,8 @@ use dstack_guest_agent_rpc::{
     worker_server::{WorkerRpc, WorkerServer},
     AppInfo, AttestResponse, DeriveK256KeyResponse, DeriveKeyArgs, GetAttestationForAppKeyRequest,
     GetKeyArgs, GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse,
-    GpuInfoResponse, RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse,
-    VerifyRequest, VerifyResponse, WorkerVersion,
+    GpuInfoResponse, HealthResponse, RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs,
+    TdxQuoteResponse, VerifyRequest, VerifyResponse, WorkerVersion,
 };
 use dstack_types::{AppKeys, SysConfig, GPU_ATTESTATION_OUTPUT};
 use ed25519_dalek::ed25519::signature::hazmat::{PrehashSigner, PrehashVerifier};
@@ -79,6 +79,8 @@ struct AppStateInner {
     cert_client: CertRequestClient,
     demo_cert: RwLock<String>,
     platform: Arc<dyn PlatformBackend>,
+    /// Present only when the app opted into health gating; see `health`.
+    health: Option<Arc<crate::health::HealthMonitor>>,
 }
 
 impl AppStateInner {
@@ -169,6 +171,20 @@ impl AppState {
         let cert_client = CertRequestClient::create(&keys, verifier, vm_config.clone())
             .await
             .context("Failed to create cert signer")?;
+        // Only run the refresh loop when the app asked the gateway to gate on
+        // its health. Nothing polls an app that did not, so recomputing a
+        // verdict nobody reads would be pure cost inside the CVM.
+        let health = config
+            .app_compose
+            .requirements
+            .as_ref()
+            .filter(|requirements| requirements.health_check)
+            .map(|requirements| {
+                crate::health::HealthMonitor::spawn(
+                    requirements.health_status_file.clone(),
+                    config.app_compose.runner.clone(),
+                )
+            });
         let me = Self {
             inner: Arc::new(AppStateInner {
                 config,
@@ -177,6 +193,7 @@ impl AppState {
                 demo_cert: RwLock::new(String::new()),
                 vm_config,
                 platform,
+                health,
             }),
         };
         me.maybe_request_demo_cert();
@@ -189,6 +206,10 @@ impl AppState {
 
     pub fn config(&self) -> &Config {
         &self.inner.config
+    }
+
+    fn health(&self) -> Option<&crate::health::HealthMonitor> {
+        self.inner.health.as_deref()
     }
 
     fn quote_response(&self, report_data: [u8; 64]) -> Result<GetQuoteResponse> {
@@ -602,6 +623,14 @@ impl RpcCall<AppState> for InternalRpcHandlerV0 {
     }
 }
 
+fn health_response(verdict: crate::health::Verdict) -> HealthResponse {
+    HealthResponse {
+        healthy: verdict.healthy,
+        unhealthy: verdict.unhealthy,
+        error: verdict.error,
+    }
+}
+
 pub struct ExternalRpcHandler {
     state: AppState,
 }
@@ -622,6 +651,28 @@ impl WorkerRpc for ExternalRpcHandler {
             version: crate::CARGO_PKG_VERSION.to_string(),
             rev: crate::GIT_REV.to_string(),
         })
+    }
+
+    async fn health(self) -> Result<HealthResponse> {
+        // One lock and one clone. Everything that costs anything happens on the
+        // agent's own timer in `health`, because this method is served on the
+        // publicly reachable listener and is polled by every gateway node in
+        // the cluster: any work done here is work an anonymous caller can ask
+        // for at an arbitrary rate, multiplied by the operator's fleet size.
+        let Some(monitor) = self.state.health() else {
+            // The app did not opt in, so it registered as "do not poll me" and
+            // no gateway asks. Anything that does ask gets the same answer the
+            // gateway would have assumed.
+            return Ok(HealthResponse {
+                healthy: true,
+                unhealthy: vec![],
+                error: String::new(),
+            });
+        };
+        // Deliberately infallible: see `HealthResponse.error`. A failure to see
+        // the app has to come back as a verdict, because an RPC error is
+        // indistinguishable from an agent that predates this method.
+        Ok(health_response(monitor.report()))
     }
 
     async fn get_attestation_for_app_key(
@@ -922,6 +973,7 @@ pNs85uhOZE8z2jr8Pg==
                 )
                 .unwrap(),
             }),
+            health: None,
         };
 
         (

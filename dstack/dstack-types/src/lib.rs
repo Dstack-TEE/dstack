@@ -484,6 +484,55 @@ pub struct Requirements {
     /// allowing applications to enforce an expected GPU count.
     #[serde(default, skip_serializing_if = "GpuPolicy::is_default")]
     pub gpu_policy: GpuPolicy,
+    /// Whether the gateway should gate this app's traffic on its health, i.e.
+    /// hold an instance out of its app's load-balancing rotation until the
+    /// guest agent reports that the app is serving.
+    ///
+    /// Opt-in, and deliberately placed under `requirements` rather than at the
+    /// top level of `app-compose.json`: `Requirements` is `deny_unknown_fields`
+    /// and is itself gated behind `manifest_version >= 3`, so a deployment that
+    /// asks for health gating cannot land on a guest image that would silently
+    /// ignore it. An app that never sets this registers as "do not poll me" and
+    /// is routed to exactly as it was before this feature existed.
+    ///
+    /// Two flat fields rather than one nested object, and not because flat is
+    /// prettier. Every SDK has to reproduce this structure byte for byte to
+    /// compute the compose hash that gets whitelisted on chain, and a nested
+    /// object is where they drift: Go's `HealthCheck` had no passthrough for
+    /// fields it did not know and would have hashed them away silently, while
+    /// Python's `Requirements.from_dict` did not reconstruct the object at all
+    /// and raised on any round trip. Scalars under a `deny_unknown_fields`
+    /// parent have neither failure mode.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub health_check: bool,
+    /// Absolute path to a file the app writes its own verdict into.
+    ///
+    /// Two lines, in order:
+    ///
+    /// ```text
+    /// healthy
+    /// 1771234567
+    /// ```
+    ///
+    /// Line 1 is `healthy` or `unhealthy` (case-insensitive). Line 2 is the
+    /// unix timestamp, in seconds, at which the app wrote the file. The
+    /// timestamp is not decoration: a file older than
+    /// [`HEALTH_FILE_MAX_AGE_SECS`] counts as unhealthy, which is what turns a
+    /// wedged app -- still running, no longer updating anything -- into a
+    /// verdict instead of a stale `healthy` that never expires. Refresh it at
+    /// least twice per that window.
+    ///
+    /// When this is absent the agent falls back to the container runtime:
+    /// every container that declares a Compose `healthcheck` must be running
+    /// and healthy. That default needs nothing from the app, but it can only
+    /// see what the runtime sees; a file gives the app the last word.
+    ///
+    /// `Option`, not `String`. An empty path and an absent one have to stay
+    /// distinguishable, because Go's `omitempty` cannot tell them apart and
+    /// would hash `""` differently from the other SDKs -- on a digest that goes
+    /// on chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_status_file: Option<String>,
 }
 
 impl Requirements {
@@ -493,8 +542,73 @@ impl Requirements {
             && self.tdx_measure_acpi_tables.is_none()
             && self.launch_token_hash.is_none()
             && self.gpu_policy.is_default()
+            && !self.health_check
+            && self.health_status_file.is_none()
     }
 }
+
+/// Make a string that came from an untrusted party safe to put in a log line,
+/// and bound its length.
+///
+/// Both ends of the health path need this and neither can rely on the other:
+/// the guest agent sanitizes what an app wrote before reporting it, and the
+/// gateway sanitizes what a guest agent reported before logging it, because a
+/// guest agent is exactly the party the gateway does not trust.
+///
+/// "Unsafe" is wider than [`char::is_control`], which is only Unicode category
+/// Cc. It misses two families that do the same damage:
+///
+/// - `U+2028` LINE SEPARATOR and `U+2029` PARAGRAPH SEPARATOR, which many log
+///   viewers -- and every JavaScript or JSON consumer downstream of one --
+///   treat as a line break. That is the log-forging that stripping `\n` was
+///   meant to prevent.
+/// - The bidirectional formatting characters (`U+202A`..`U+202E`,
+///   `U+2066`..`U+2069`, `U+200E`, `U+200F`) and `U+FEFF`. `U+202E` reverses
+///   the rendering of everything after it, so an attacker controls how the
+///   rest of the line reads in a terminal without controlling its bytes.
+///
+/// Truncation is by bytes, and it says so when it happens: a bound that
+/// silently cuts a reason is worse than a short one, because the reader cannot
+/// tell a complete message from a clipped one.
+pub fn sanitize_for_log(text: &str, max_bytes: usize) -> String {
+    const MARKER: &str = "... (truncated)";
+    let mut cleaned = String::with_capacity(text.len().min(max_bytes));
+    let mut truncated = false;
+    for ch in text.chars() {
+        let ch = if is_unsafe_to_log(ch) { ' ' } else { ch };
+        if cleaned.len() + ch.len_utf8() > max_bytes {
+            truncated = true;
+            break;
+        }
+        cleaned.push(ch);
+    }
+    if truncated {
+        cleaned.push_str(MARKER);
+    }
+    cleaned
+}
+
+/// Whether a character must not survive into a log line. See
+/// [`sanitize_for_log`].
+fn is_unsafe_to_log(ch: char) -> bool {
+    ch.is_control()
+        || matches!(
+            ch,
+            '\u{2028}'
+                | '\u{2029}'
+                | '\u{200E}'
+                | '\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{FEFF}'
+        )
+}
+
+/// How old a `health_status_file` may be before it is read as unhealthy.
+///
+/// Fixed rather than configurable: this is a liveness bound, and an app that
+/// wants a longer one is asking for its own failures to take longer to notice.
+pub const HEALTH_FILE_MAX_AGE_SECS: u64 = 60;
 
 /// Domain-separation prefix for [`launch_token_hash`]. It keeps the digest
 /// distinct from a plain `sha256(token)` (as used by the legacy app-layer
@@ -2416,6 +2530,74 @@ mod vm_config_device_count_tests {
             serialized.get("swtpm").and_then(|v| v.as_bool()),
             Some(true)
         );
+    }
+}
+
+#[cfg(test)]
+mod log_sanitize_tests {
+    use super::sanitize_for_log;
+
+    #[test]
+    fn strips_the_characters_that_forge_a_log_line() {
+        let forged = sanitize_for_log("web\nJan 01 INFO all good", 512);
+        assert!(!forged.contains('\n'), "{forged:?}");
+        let escaped = sanitize_for_log("\u{1b}[2Jcleared", 512);
+        assert!(!escaped.contains('\u{1b}'), "{escaped:?}");
+    }
+
+    /// `char::is_control` is category Cc only, so these get through it -- and a
+    /// log viewer, or anything JSON downstream of one, treats them as breaks.
+    #[test]
+    fn strips_the_unicode_line_separators() {
+        for separator in ['\u{2028}', '\u{2029}', '\u{85}'] {
+            let out = sanitize_for_log(&format!("web{separator}forged"), 512);
+            assert!(!out.contains(separator), "{separator:?} survived: {out:?}");
+        }
+    }
+
+    /// U+202E reverses how everything after it renders, so an attacker decides
+    /// what a reader sees without controlling the bytes.
+    #[test]
+    fn strips_bidi_overrides() {
+        for bidi in ['\u{202E}', '\u{202A}', '\u{2066}', '\u{200F}', '\u{FEFF}'] {
+            let out = sanitize_for_log(&format!("web{bidi}txet"), 512);
+            assert!(!out.contains(bidi), "{bidi:?} survived: {out:?}");
+        }
+    }
+
+    /// Bounded in bytes, not characters. Counting characters lets a multi-byte
+    /// string reach four times the intended size.
+    #[test]
+    fn bounds_bytes_not_characters() {
+        let wide = "\u{1d54f}".repeat(400);
+        assert_eq!(wide.chars().count(), 400);
+        assert_eq!(wide.len(), 1600);
+        let out = sanitize_for_log(&wide, 512);
+        assert!(out.len() <= 512 + "... (truncated)".len(), "{}", out.len());
+    }
+
+    /// A bound that silently clips is worse than a short one: the reader cannot
+    /// tell a complete reason from a cut one.
+    #[test]
+    fn says_when_it_truncated() {
+        let wide = "\u{1d54f}".repeat(400);
+        assert!(sanitize_for_log(&wide, 512).ends_with("(truncated)"));
+        assert!(!sanitize_for_log("web is starting", 512).ends_with("(truncated)"));
+    }
+
+    #[test]
+    fn never_splits_a_character() {
+        // 512 is not a multiple of 4, so a naive byte cut would split one.
+        let wide = "\u{1d54f}".repeat(400);
+        let out = sanitize_for_log(&wide, 512);
+        let body = out.trim_end_matches("... (truncated)");
+        assert!(body.is_char_boundary(body.len()));
+        assert_eq!(body.len() % 4, 0);
+    }
+
+    #[test]
+    fn ordinary_text_is_left_alone() {
+        assert_eq!(sanitize_for_log("web is starting", 512), "web is starting");
     }
 }
 

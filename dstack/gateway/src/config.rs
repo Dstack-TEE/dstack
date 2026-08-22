@@ -293,6 +293,7 @@ pub struct ProxyConfig {
     pub ktls: Option<EngageAfter>,
     /// Background lazy-fetch behaviour for `port_policy` (legacy CVMs).
     pub port_policy_fetch: PortPolicyFetchConfig,
+    pub health_check: HealthCheckConfig,
 }
 
 impl ProxyConfig {
@@ -475,6 +476,43 @@ pub struct PortPolicyFetchConfig {
     pub backoff_initial: Duration,
     #[serde(with = "serde_duration")]
     pub backoff_max: Duration,
+}
+
+/// Application-level health polling of registered CVMs.
+///
+/// The gateway asks each guest agent whether the app is serving, rather than
+/// having the CVM push the answer. A wedged agent then shows up as a failed
+/// poll instead of as silence that has to be told apart from "nothing changed",
+/// and only CVMs that asked to be gated (`RegisterCvmRequest.health_check`) are
+/// polled at all.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HealthCheckConfig {
+    /// Poll instances at all. Turning this off leaves every instance eligible,
+    /// which is how the gateway behaved before health polling existed.
+    pub enabled: bool,
+    /// Delay between polling rounds.
+    ///
+    /// There is little point going much below this: end-to-end detection is
+    /// dominated by the app's own `healthcheck` settings, where Docker's
+    /// defaults (30s interval, 3 retries) take up to 90s to mark a container
+    /// unhealthy in the first place.
+    #[serde(with = "serde_duration")]
+    pub interval: Duration,
+    /// Timeout for a single `Worker.Health` RPC. A poll that times out counts
+    /// as unhealthy -- an agent that cannot answer cannot vouch for the app.
+    #[serde(with = "serde_duration")]
+    pub timeout: Duration,
+    /// How many instances to poll at once, so a large fleet does not arrive as
+    /// one burst of connections.
+    pub concurrency: usize,
+    /// Consecutive failures to *reach* an agent before a healthy instance is
+    /// demoted.
+    ///
+    /// Only unreachability is counted. An agent that answers "unhealthy" is
+    /// believed on the spot -- it can see the app and this gateway cannot.
+    /// Without this, one dropped packet ejects an instance and recomputes the
+    /// whole app's selection, and it costs a second invalidation coming back.
+    pub failure_threshold: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]

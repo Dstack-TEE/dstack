@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
 from dstack_sdk.get_compose_hash import AppCompose
 from dstack_sdk.get_compose_hash import DockerConfig
 from dstack_sdk.get_compose_hash import get_compose_hash
@@ -246,6 +248,121 @@ def test_sort_object_function():
     assert nested_keys == ["a", "z"]
 
 
+def test_health_check_requirement_changes_the_hash():
+    """A dropped field would silently produce the wrong on-chain hash."""
+    from dstack_sdk.get_compose_hash import Requirements
+
+    plain = AppCompose(
+        runner="docker-compose",
+        docker_compose_file="docker-compose.yml",
+        requirements=Requirements(os_version=">=0.6.1"),
+    )
+    gated = AppCompose(
+        runner="docker-compose",
+        docker_compose_file="docker-compose.yml",
+        requirements=Requirements(
+            os_version=">=0.6.1",
+            health_check=True,
+            health_status_file="/dstack/health",
+        ),
+    )
+
+    assert get_compose_hash(plain) != get_compose_hash(gated)
+
+
+def test_health_check_off_hashes_as_if_it_were_absent():
+    """The guest's Rust types skip a false `health_check`, so this SDK must too.
+
+    An app that opts out registers as "do not poll me", which is exactly what it
+    registered as before the feature existed -- one digest, not two.
+    """
+    from dstack_sdk.get_compose_hash import Requirements
+
+    absent = AppCompose(
+        runner="docker-compose", requirements=Requirements(os_version=">=0.6.1")
+    )
+    disabled = AppCompose(
+        runner="docker-compose",
+        requirements=Requirements(os_version=">=0.6.1", health_check=False),
+    )
+
+    assert get_compose_hash(absent) == get_compose_hash(disabled)
+
+
+def test_health_status_file_is_part_of_the_hash():
+    """`health_status_file` selects the verdict source, so it is not cosmetic."""
+    from dstack_sdk.get_compose_hash import Requirements
+
+    def compose(health_status_file):
+        return AppCompose(
+            runner="docker-compose",
+            requirements=Requirements(
+                health_check=True, health_status_file=health_status_file
+            ),
+        )
+
+    assert get_compose_hash(compose(None)) != get_compose_hash(
+        compose("/dstack/health")
+    )
+
+
+def test_empty_health_status_file_is_distinct_from_absent():
+    """Rust keeps these apart with `Option<String>` and Go with `*string`.
+
+    Collapsing them here would hand a Python user a digest the chain was never
+    going to be asked to whitelist.
+    """
+    from dstack_sdk.get_compose_hash import Requirements
+
+    def compose(health_status_file):
+        return AppCompose(
+            runner="docker-compose",
+            requirements=Requirements(
+                health_check=True, health_status_file=health_status_file
+            ),
+        )
+
+    assert get_compose_hash(compose(None)) != get_compose_hash(compose(""))
+
+
+def test_a_plain_dict_round_trips_through_every_entry_point():
+    """A raw manifest is the common input, and it used to raise here.
+
+    `from_dict` hands `Requirements.__init__` whatever JSON held, so a nested
+    `health_check` arrived as a `dict` and `to_dict` called `.to_dict()` on it.
+    Scalars have no such branch, and the three entry points must agree because
+    they all feed the same on-chain digest.
+    """
+    from dstack_sdk.get_compose_hash import Requirements
+
+    manifest = {
+        "runner": "docker-compose",
+        "docker_compose_file": "services: {}\n",
+        "requirements": {
+            "os_version": ">=0.6.1",
+            "health_check": True,
+            "health_status_file": "/dstack/health",
+        },
+    }
+
+    from_raw = get_compose_hash(dict(manifest))
+    normalized = get_compose_hash(dict(manifest), normalize=True)
+    typed = get_compose_hash(
+        AppCompose(
+            runner="docker-compose",
+            docker_compose_file="services: {}\n",
+            requirements=Requirements(
+                os_version=">=0.6.1",
+                health_check=True,
+                health_status_file="/dstack/health",
+            ),
+        ),
+        normalize=True,
+    )
+
+    assert from_raw == normalized == typed
+
+
 def test_port_policy_reaches_the_hash():
     """A field the SDK does not name must still reach the digest."""
     from dstack_sdk.get_compose_hash import AppCompose
@@ -292,3 +409,26 @@ def test_an_unknown_requirement_still_reaches_the_hash():
     )
 
     assert get_compose_hash(plain) != get_compose_hash(future)
+
+
+def test_hashing_a_dict_does_not_consume_it():
+    """Hashing is a question, not a transaction.
+
+    ``from_dict`` popped the nested blocks out of the argument, so a caller that
+    hashed the same manifest twice -- to compare against a whitelist and then to
+    deploy, say -- got two different digests, the second one for a manifest with
+    no ``docker_config`` and no ``requirements``. Nothing raised.
+    """
+    manifest = {
+        "runner": "docker-compose",
+        "docker_compose_file": "services:\n  web:\n    image: nginx\n",
+        "docker_config": {"registry": "ghcr.io"},
+        "requirements": {"os_version": ">=0.6.1", "health_check": True},
+    }
+    before = json.dumps(manifest, sort_keys=True)
+
+    first = get_compose_hash(manifest)
+    second = get_compose_hash(manifest)
+
+    assert first == second
+    assert json.dumps(manifest, sort_keys=True) == before

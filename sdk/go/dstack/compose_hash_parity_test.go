@@ -100,6 +100,49 @@ func TestAnUnknownFieldStillReachesTheHash(t *testing.T) {
 	}
 }
 
+// `gpu_policy` is nested, so it needs its own passthrough: without one, a
+// sub-field this SDK has not caught up with is dropped a level down where the
+// AppCompose-level Extra never sees it, and the resulting digest is wrong with
+// nothing to signal it.
+func TestAnUnknownGpuPolicyFieldStillReachesTheHash(t *testing.T) {
+	withUnknown := `{"runner":"docker-compose","requirements":{"gpu_policy":{"attest_gpu":true,"min_gpu_count":2}}}`
+	var compose AppCompose
+	if err := json.Unmarshal([]byte(withUnknown), &compose); err != nil {
+		t.Fatal(err)
+	}
+	got, err := GetComposeHash(compose)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := hashOfRawJSON(t, withUnknown); got != want {
+		reencoded, _ := json.Marshal(compose)
+		t.Fatalf("an unknown gpu_policy field was dropped.\n got=%s\nwant=%s\nre-encoded: %s", got, want, reencoded)
+	}
+}
+
+// The canonical form is the bytes the other SDKs produce, and `json.Marshal`
+// HTML-escapes `<`, `>` and `&` into `\u003c`, `\u003e` and `\u0026`. Rust,
+// Python and JS all leave them alone, so an os_version bound -- or a `&&` in a
+// compose file -- used to be enough to make this SDK the only one computing a
+// digest the chain would not be asked to whitelist.
+func TestHTMLCharactersAreNotEscaped(t *testing.T) {
+	compose := AppCompose{
+		Runner:       "docker-compose",
+		Requirements: &Requirements{OsVersion: ">=0.6.1"},
+	}
+	got, err := GetComposeHash(compose)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Written out rather than derived, so this pins the bytes and not the code
+	// that produced them.
+	canonical := `{"requirements":{"os_version":">=0.6.1"},"runner":"docker-compose"}`
+	sum := sha256.Sum256([]byte(canonical))
+	if want := hex.EncodeToString(sum[:]); got != want {
+		t.Fatalf("the canonical form diverged from the other SDKs.\n got=%s\nwant=%s", got, want)
+	}
+}
+
 // A typed field and an Extra key of the same name must not both be emitted.
 func TestADeclaredFieldWinsOverExtra(t *testing.T) {
 	compose := AppCompose{

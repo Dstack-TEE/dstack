@@ -530,6 +530,7 @@ impl<'a> GatewayContext<'a> {
                 .collect(),
             restrict_mode: self.shared.app_compose.port_policy.restrict_mode,
         };
+        let health_check = health_check_requested(&self.shared.app_compose);
         let client = self.create_gateway_client(
             gateway_url,
             &key_store.client_key,
@@ -540,6 +541,7 @@ impl<'a> GatewayContext<'a> {
             .register_cvm(RegisterCvmRequest {
                 client_public_key: key_store.wg_pk.clone(),
                 port_policy: Some(port_policy.clone()),
+                health_check,
             })
             .await
             .context("Failed to register CVM");
@@ -562,6 +564,7 @@ impl<'a> GatewayContext<'a> {
             .register_cvm(RegisterCvmRequest {
                 client_public_key: key_store.wg_pk.clone(),
                 port_policy: Some(port_policy),
+                health_check,
             })
             .await
             .context("Failed to register CVM")
@@ -1100,6 +1103,24 @@ fn record_accepting_url(
     }
 }
 
+/// Whether this app asked the gateway to gate its traffic on health.
+///
+/// Opt-in, not a build-time fact: the guest agent only refreshes a verdict when
+/// the app asked for one, so telling the gateway to poll an app that did not
+/// would cost every gateway node a round trip per interval to be told what it
+/// already assumes.
+///
+/// This is the only hop between the app's manifest and the gateway's behaviour,
+/// which is why it is a named function rather than an expression inside the
+/// registration call: getting it wrong makes the whole feature inert fleet-wide
+/// with nothing to show for it.
+fn health_check_requested(app_compose: &AppCompose) -> bool {
+    app_compose
+        .requirements
+        .as_ref()
+        .is_some_and(|requirements| requirements.health_check)
+}
+
 fn verify_manifest_feature_requirements(app_compose: &AppCompose) -> Result<()> {
     let manifest_version = verify_manifest_version(app_compose)?;
     if app_compose.requirements.is_some() && manifest_version < MANIFEST_VERSION_3 {
@@ -1119,6 +1140,59 @@ fn verify_manifest_feature_requirements(app_compose: &AppCompose) -> Result<()> 
     }
     if app_compose.runner != "nerdctl-compose" && app_compose.snapshotter.is_some() {
         bail!("snapshotter is only supported by the nerdctl-compose runner");
+    }
+    verify_health_check_requirement(app_compose)?;
+    Ok(())
+}
+
+/// Reject a health-gating request this guest could not act on.
+///
+/// Only checks that need nothing but the manifest. The obvious third
+/// check -- "does any service actually declare a `healthcheck:`?" -- is
+/// deliberately *not* here, even though an app whose containers declare none
+/// reports healthy forever, which is the failure this is meant to remove.
+///
+/// It is not here because at this point the only thing available is the raw
+/// compose text, and reading it is not the same question as the one the runtime
+/// answers. Scanning YAML for the key misses a `HEALTHCHECK` in the Dockerfile,
+/// misses a `<<:` merge from a shared anchor (the loader does not expand merge
+/// keys, so the service reads as having no `healthcheck` at all), misses
+/// `extends:` and multi-file overrides -- and *passes* `healthcheck: {disable:
+/// true}` and `test: ["NONE"]`, which are exactly the configurations that
+/// produce no verdict at runtime. It rejects working deployments and admits
+/// broken ones.
+///
+/// The guest agent asks the runtime instead, which is the authority, and
+/// reports "nothing here can be judged" as unhealthy-with-a-reason. That
+/// surfaces in the gateway log and on the dashboard rather than as a boot
+/// failure, and it is right in all of the cases above.
+fn verify_health_check_requirement(app_compose: &AppCompose) -> Result<()> {
+    let Some(requirements) = app_compose.requirements.as_ref() else {
+        return Ok(());
+    };
+    if !requirements.health_check {
+        // A path without gating enabled is inert, not an error: an operator
+        // turning gating off during an incident should not have to also delete
+        // the path they will want back.
+        return Ok(());
+    }
+    match requirements.health_status_file.as_deref() {
+        Some(path) => {
+            if !path.starts_with('/') {
+                bail!("requirements.health_status_file must be an absolute path: {path}");
+            }
+        }
+        None => {
+            // The container fallback has nothing to look at for a runner that
+            // starts no containers, so it would answer "healthy" unconditionally.
+            if app_compose.runner != "docker-compose" && app_compose.runner != "nerdctl-compose" {
+                bail!(
+                    "requirements.health_check needs health_status_file for the {} runner; \
+                     without containers to inspect there is nothing to judge",
+                    app_compose.runner
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -3594,6 +3668,126 @@ fn test_app_compose(
         value["requirements"]["platforms"] = serde_json::json!(platforms);
     }
     serde_json::from_value(value).unwrap()
+}
+
+/// The single hop between `requirements.health_check` and
+/// `RegisterCvmRequest.health_check`. Nothing else connects the app's manifest
+/// to the gateway's behaviour, so if this is wrong the feature is inert
+/// fleet-wide and nothing else fails.
+#[test]
+fn health_check_opt_in_reaches_registration() {
+    let opted_in =
+        compose_with_health_check("docker-compose", serde_json::json!({"health_check": true}));
+    assert!(health_check_requested(&opted_in));
+
+    let opted_out =
+        compose_with_health_check("docker-compose", serde_json::json!({"health_check": false}));
+    assert!(!health_check_requested(&opted_out));
+}
+
+/// An app that says nothing must register as "do not poll me", not as an
+/// opt-in by omission.
+#[test]
+fn an_app_that_says_nothing_does_not_ask_to_be_polled() {
+    let no_requirements = test_app_compose(serde_json::json!("3"), None, None);
+    assert!(!health_check_requested(&no_requirements));
+
+    let empty_requirements = test_app_compose(serde_json::json!("3"), Some(">=0.6.1"), None);
+    assert!(!health_check_requested(&empty_requirements));
+}
+
+/// An app that opts into health gating, with `overrides` merged over the
+/// `requirements` object so a case can vary one field without restating it.
+///
+/// The compose file deliberately declares no `healthcheck:`. Whether the
+/// containers can be judged is the runtime's answer, given by the guest agent,
+/// not something read out of the YAML here -- so a fixture without one has to
+/// pass validation.
+#[cfg(test)]
+fn compose_with_health_check(runner: &str, overrides: serde_json::Value) -> AppCompose {
+    let mut requirements = serde_json::json!({"health_check": true});
+    for (key, value) in overrides.as_object().expect("an object of overrides") {
+        requirements[key] = value.clone();
+    }
+    serde_json::from_value(serde_json::json!({
+        "manifest_version": "3",
+        "name": "health-app",
+        "runner": runner,
+        "docker_compose_file": "services:\n  web:\n    image: app:1\n",
+        "requirements": requirements,
+    }))
+    .unwrap()
+}
+
+#[test]
+fn health_check_on_a_container_runner_needs_no_health_status_file() {
+    let compose = compose_with_health_check("docker-compose", serde_json::json!({}));
+    verify_manifest_feature_requirements(&compose).unwrap();
+}
+
+/// The `bash` runner starts no containers, so the container fallback has
+/// nothing to look at and would answer healthy forever. That is exactly the
+/// silent no-op the opt-in exists to avoid.
+#[test]
+fn health_check_without_containers_to_judge_is_rejected() {
+    let compose = compose_with_health_check("bash", serde_json::json!({}));
+    let err = verify_manifest_feature_requirements(&compose).unwrap_err();
+    assert!(
+        err.to_string().contains("needs health_status_file"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn a_bash_runner_with_a_health_status_file_is_accepted() {
+    let compose = compose_with_health_check(
+        "bash",
+        serde_json::json!({"health_status_file": "/dstack/health"}),
+    );
+    verify_manifest_feature_requirements(&compose).unwrap();
+}
+
+/// The agent runs in the guest rootfs, so a relative path resolves against
+/// whatever its working directory happens to be.
+#[test]
+fn a_relative_health_status_file_is_rejected() {
+    let compose = compose_with_health_check(
+        "docker-compose",
+        serde_json::json!({"health_status_file": "health"}),
+    );
+    let err = verify_manifest_feature_requirements(&compose).unwrap_err();
+    assert!(
+        err.to_string().contains("absolute path"),
+        "unexpected error: {err}"
+    );
+}
+
+/// Declared but switched off must not be validated as if it were on: turning
+/// gating off during an incident should not also have to be a config rewrite.
+/// Both of the surviving checks would reject this fixture with the flag on.
+#[test]
+fn a_disabled_health_check_is_not_validated() {
+    let compose = compose_with_health_check(
+        "bash",
+        serde_json::json!({"health_check": false, "health_status_file": "relative"}),
+    );
+    verify_manifest_feature_requirements(&compose).unwrap();
+}
+
+/// `requirements` is `deny_unknown_fields`, so a guest image that predates the
+/// field refuses the deployment instead of ignoring the request.
+#[test]
+fn an_unknown_requirements_field_is_refused() {
+    let parsed = serde_json::from_value::<AppCompose>(serde_json::json!({
+        "manifest_version": "3",
+        "name": "health-app",
+        "runner": "docker-compose",
+        "requirements": { "health_check_v2": { "enabled": true } },
+    }));
+    assert!(
+        parsed.is_err(),
+        "unknown requirements fields must fail closed"
+    );
 }
 
 #[test]

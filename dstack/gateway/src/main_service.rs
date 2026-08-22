@@ -43,7 +43,7 @@ use crate::{
         InstanceRecord, KvStore, LegacyOverrides, LoadedInstances, NodeData, NodeStatus,
         PortPolicy, PortPolicyOverride, WaveKvSyncService,
     },
-    models::{InstanceInfo, PortPolicyView, WgConf, WgPeer},
+    models::{InstanceInfo, PortPolicyView, ReportedCapabilities, WgConf, WgPeer},
     proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo, AppAddressResolver},
     time::{decode_ts, now_secs},
 };
@@ -111,6 +111,12 @@ pub(crate) struct ProxyStateMut {
     pub(crate) instances: BTreeMap<String, InstanceInfo>,
     pub(crate) allocated_addresses: BTreeSet<Ipv4Addr>,
     pub(crate) top_n: BTreeMap<String, (AddressGroup, Instant)>,
+    /// When each app was last warned that its whole fleet reads unhealthy.
+    ///
+    /// Dropped wherever an app is, so the bound is the number of apps that
+    /// exist rather than the number this process has ever seen. See
+    /// [`warn_all_unhealthy`].
+    pub(crate) all_unhealthy_warned: BTreeMap<String, Instant>,
 }
 
 pub(crate) struct ProxyState {
@@ -254,6 +260,19 @@ impl Proxy {
 impl ProxyInner {
     pub(crate) fn lock(&self) -> MutexGuard<'_, ProxyState> {
         self.state.lock().or_panic("Failed to lock AppState")
+    }
+
+    /// WireGuard handshake ages, without taking the routing lock.
+    ///
+    /// The cache is its own synchronization, so a caller that only needs
+    /// handshakes has no reason to hold `ProxyState` while this builds its map
+    /// -- which clones every peer's public key, and on a cold cache shells out
+    /// to `wg show` synchronously.
+    pub(crate) fn latest_handshakes(
+        &self,
+        stale_timeout: Option<Duration>,
+    ) -> Result<BTreeMap<String, (u64, Duration)>> {
+        self.handshake_cache.latest(stale_timeout)
     }
 
     pub async fn new(
@@ -517,6 +536,7 @@ impl Proxy {
         start_cert_store_watch_task(self.clone());
         start_zt_domain_watch_task(self.clone());
         start_bootnode_discovery_task(self.clone());
+        crate::proxy::health_check::spawn_poller(self.clone());
         Ok(())
     }
 
@@ -631,7 +651,7 @@ impl Proxy {
         instance_id: &str,
         client_public_key: &str,
         compose_hash: &str,
-        port_policy: Option<PortPolicy>,
+        reported: ReportedCapabilities,
     ) -> Result<RegisterCvmResponse> {
         let mut state = self.lock();
 
@@ -655,7 +675,7 @@ impl Proxy {
                 app_id,
                 client_public_key,
                 compose_hash,
-                port_policy,
+                reported,
             )
             .context("failed to allocate IP address for client")?;
         if let Err(err) = state.reconfigure() {
@@ -773,6 +793,7 @@ fn instance_info_from_record(
     instance_id: String,
     data: InstanceRecord,
     legacy: Option<&LegacyOverrides>,
+    known_gated: bool,
 ) -> (InstanceInfo, Option<String>) {
     let mut unreadable = None;
     let (admin_port_policy, ready) = match read_overrides(store, &instance_id, legacy) {
@@ -792,6 +813,12 @@ fn instance_info_from_record(
         port_policy_hash: data.port_policy_hash,
         admin_port_policy,
         ready,
+        // A record written before this field existed says nothing about the
+        // app's intent, so it falls back to `known_gated` -- what this node
+        // already believes -- rather than reading as "opted out". Reading
+        // `false` there would reset health to `Ungated` and drop the app's
+        // cached selection on a record that never claimed the app opted out.
+        health: data.health_check.unwrap_or(known_gated).into(),
         connections: Default::default(),
     };
     (info, unreadable)
@@ -855,8 +882,18 @@ fn build_state_from_kv_store(
         let ip = data.ip;
         let app_id = data.app_id.clone();
         let legacy = legacy_overrides.get(&instance_id);
+        // Health is this node's own observation and is deliberately not
+        // persisted, so a restart starts every instance at `Unknown`. That does
+        // not blackhole anything: `Unknown` is not healthy, so an app whose
+        // instances are *all* unknown trips the fail-open in `retain_healthy`
+        // and is routed to exactly as before, until the first round of polls
+        // answers a few seconds later.
+        //
+        // Nothing is in memory yet to fall back on, unlike the reload path, so
+        // a record predating the declaration reads as not gated: routable and
+        // unpolled, and the CVM's next re-registration states it again.
         let (info, unreadable) =
-            instance_info_from_record(store, instance_id.clone(), data, legacy);
+            instance_info_from_record(store, instance_id.clone(), data, legacy, false);
         if let Some(reason) = unreadable {
             error!(
                 "cannot read the operator overrides for instance {instance_id}, holding it \
@@ -1294,8 +1331,15 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
     let mut unreadable_overrides = BTreeMap::new();
     for (instance_id, data) in instances {
         let legacy = legacy_overrides.get(&instance_id);
+        // What this node already believes the app declared, for a record that
+        // predates the field. See `instance_info_from_record`.
+        let known_gated = state
+            .state
+            .instances
+            .get(&instance_id)
+            .is_some_and(|existing| existing.health_check());
         let (mut new_info, unreadable) =
-            instance_info_from_record(store, instance_id.clone(), data, legacy);
+            instance_info_from_record(store, instance_id.clone(), data, legacy, known_gated);
         if let Some(reason) = unreadable {
             unreadable_overrides.insert(instance_id.clone(), reason);
         }
@@ -1309,6 +1353,13 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
             // WaveKV has already selected the winning value. Materialize it
             // unconditionally instead of applying another LWW rule here.
             new_info.connections = existing.connections.clone();
+            // Health is this node's own observation and WaveKV does not carry
+            // it, so it has to survive a reload the same way the connection
+            // counter does. Re-deriving it from the record would reset every
+            // instance to `Unknown` on every sync round -- dropping the whole
+            // fleet out of rotation until the next poll, over and over. The
+            // conditions under which it must *not* survive live with the field.
+            new_info.inherit_health_from(existing);
         } else {
             wg_changed = true;
         }
@@ -1324,6 +1375,7 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
                     if app_instances.is_empty() {
                         state.state.apps.remove(&existing.app_id);
                         state.state.top_n.remove(&existing.app_id);
+                        state.state.all_unhealthy_warned.remove(&existing.app_id);
                     }
                 }
             }
@@ -1365,6 +1417,72 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
 /// WireGuard peers keyed by public key, valued by (last handshake, elapsed).
 pub(crate) type Handshakes = BTreeMap<String, (u64, Duration)>;
 
+/// One instance still in the running for a connection.
+struct Candidate {
+    ip: Ipv4Addr,
+    handshake_age: Duration,
+    counter: Arc<std::sync::atomic::AtomicU64>,
+    instance_id: String,
+    healthy: bool,
+}
+
+/// Drop unhealthy candidates -- unless that would drop all of them.
+///
+/// Health is inference: a probe can be misconfigured, an agent can die, a whole
+/// fleet can report badly at once for a reason that has nothing to do with
+/// whether the app works. Blackholing an app on the strength of that is worse
+/// than sending traffic to instances that might be fine. The operator gate in
+/// `is_ready` deliberately does *not* get this treatment: that one is an
+/// instruction, not a guess.
+/// Generic over the candidate type because the two selection paths carry
+/// different ones -- `select_top_n_hosts` has already resolved each instance to
+/// a `Candidate`, while `random_select_a_host` is still holding instance ids.
+/// They had a copy of this rule each, which is one more than the number of
+/// places a change to the fail-open policy would get applied.
+fn retain_healthy<T, A: smallvec::Array<Item = T>>(
+    state: &mut ProxyStateMut,
+    app_id: &str,
+    candidates: &mut SmallVec<A>,
+    is_healthy: impl Fn(&T) -> bool,
+) {
+    if candidates.iter().any(&is_healthy) {
+        candidates.retain(|candidate| is_healthy(candidate));
+    } else if !candidates.is_empty() {
+        warn_all_unhealthy(state, app_id, candidates.len());
+    }
+}
+
+/// How often one app may report that its whole fleet looks unhealthy.
+const ALL_UNHEALTHY_WARN_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Warn that an app is being routed to on fail-open, at most once a minute.
+///
+/// Rate-limited here rather than relying on a caller's cache. The top-n path
+/// recomputes at most every `cache_top_n`, but `random_select_a_host` has no
+/// cache and runs per connection -- and a fleet that is entirely unhealthy is
+/// exactly the sustained state, so an unlimited warning would be one log line
+/// per inbound connection for as long as it lasts.
+///
+/// The state rides in `ProxyStateMut`, which the caller is already holding,
+/// rather than in a `static`. A process-global mutex here would be a new
+/// serialization point on the per-connection routing path, shared across every
+/// tenant -- one app's fail-open would contend with an unrelated app's
+/// connections.
+fn warn_all_unhealthy(state: &mut ProxyStateMut, app_id: &str, candidates: usize) {
+    if let Some(at) = state.all_unhealthy_warned.get(app_id) {
+        if at.elapsed() < ALL_UNHEALTHY_WARN_INTERVAL {
+            return;
+        }
+    }
+    state
+        .all_unhealthy_warned
+        .insert(app_id.to_string(), Instant::now());
+    warn!(
+        "app {app_id}: no instance reports healthy; routing to all {candidates} \
+         reachable instance(s) anyway rather than refusing the app"
+    );
+}
+
 impl ProxyState {
     fn valid_ip(&self, ip: Ipv4Addr) -> bool {
         self.config.wg.is_valid_client_ip(ip)
@@ -1383,14 +1501,53 @@ impl ProxyState {
         None
     }
 
+    /// Mutate an instance record in place, dropping any cached selection the
+    /// change invalidates.
+    ///
+    /// The one way to write to `instances`, because "and remember to clear
+    /// `top_n`" is not a rule a reviewer can enforce. Six call sites got it
+    /// right and the seventh -- a CVM re-registering with a new WireGuard key,
+    /// i.e. after a reboot -- did not, so the node that took the registration
+    /// kept routing to a CVM whose containers were not up for as long as
+    /// `cache_top_n`. That is precisely the window health gating exists to
+    /// close, on the node most likely to be selected, and every other node in
+    /// the cluster got it right via the sync path.
+    ///
+    /// `InstanceInfo::routing_inputs` is the definition of "invalidates", so
+    /// adding a field to the selection means editing one struct rather than
+    /// auditing every writer.
+    fn edit_instance<T>(
+        &mut self,
+        id: &str,
+        edit: impl FnOnce(&mut InstanceInfo) -> T,
+    ) -> Option<T> {
+        let info = self.state.instances.get_mut(id)?;
+        let before = info.routing_inputs().to_owned();
+        let out = edit(info);
+        if before == info.routing_inputs() {
+            return Some(out);
+        }
+        let before_app_id = before.app_id;
+        let app_id = info.app_id.clone();
+        self.state.top_n.remove(&app_id);
+        if before_app_id != app_id {
+            self.state.top_n.remove(&before_app_id);
+        }
+        Some(out)
+    }
+
     fn new_client_by_id(
         &mut self,
         id: &str,
         app_id: &str,
         public_key: &str,
         compose_hash: &str,
-        port_policy: Option<PortPolicy>,
+        reported: ReportedCapabilities,
     ) -> Result<InstanceInfo> {
+        let ReportedCapabilities {
+            port_policy,
+            health_check,
+        } = reported;
         if id.is_empty() {
             bail!("instance_id is empty (no_instance_id is set?)");
         }
@@ -1416,11 +1573,53 @@ impl ProxyState {
         // lose them and the traffic gate falls open while the port-policy
         // override silently reverts to whatever the instance says about itself.
         let mut previous: Option<InstanceInfo> = None;
-        if let Some(existing) = self.state.instances.get_mut(id) {
-            if existing.app_id != app_id {
-                bail!("instance_id is already registered to a different app");
-            }
+        if self
+            .state
+            .instances
+            .get(id)
+            .is_some_and(|existing| existing.app_id != app_id)
+        {
+            bail!("instance_id is already registered to a different app");
+        }
+        // Through `edit_instance`, so the app's cached selection is dropped when
+        // this changes something the selection was computed from. It can: a
+        // reboot resets health here. Doing that without invalidating leaves
+        // this node -- the one the CVM registered with, and therefore the one
+        // most likely to route to it -- serving a pre-reboot selection for up
+        // to `cache_top_n`, while every other node invalidates correctly off
+        // the changed key arriving through sync.
+        let edited = self.edit_instance(id, |existing| {
+            // A restarted CVM's health verdict describes a process that no
+            // longer exists, so it has to be dropped -- but "registered again"
+            // does not mean "restarted". `dstack-util`'s gateway-checker
+            // re-registers every `REFRESH_INTERVAL` (180s) and again whenever
+            // the WireGuard handshake goes stale, so resetting on every
+            // registration would drop a healthy instance to `Unknown` -- out of
+            // the rotation until the next poll -- every three minutes, for a
+            // CVM that never went anywhere.
+            //
+            // A new WireGuard key is what distinguishes the two. The guest
+            // caches its key store in `/run/dstack/gateway-cache.json`, which
+            // is tmpfs: a boot finds no cache and generates a fresh key, while
+            // every refresh within that boot reuses it. A changed capability
+            // means a different image, which also means a boot.
+            //
+            // This leans on where that cache lives. If it ever moves onto
+            // persistent storage -- to keep a CVM's WireGuard IP across
+            // reboots, say -- a reboot stops being visible here and the reset
+            // has to move to an explicit boot id in `RegisterCvmRequest`.
             let pubkey_changed = existing.public_key != public_key;
+            // A caller with nothing to say about the capability -- the debug
+            // path -- must not be able to downgrade a real CVM's declaration.
+            // Doing so would reset its health, then exclude it from polling for
+            // good, on the strength of a request that never asked about it.
+            let health_check = health_check.unwrap_or(existing.health_check());
+            // `set_health_check` re-derives `health` when the declaration
+            // changes; a reboot has to reset it even when it did not.
+            if pubkey_changed {
+                existing.reset_health();
+            }
+            existing.set_health_check(health_check);
             if pubkey_changed {
                 info!("public key changed for instance {id}, new key: {public_key}");
                 existing.public_key = public_key.to_string();
@@ -1444,7 +1643,9 @@ impl ProxyState {
             if port_policy.is_some() {
                 existing.port_policy = port_policy.clone();
             }
-            let existing = existing.clone();
+            existing.clone()
+        });
+        if let Some(existing) = edited {
             if self.valid_ip(existing.ip) {
                 // Sync existing instance to KvStore (might be from legacy state)
                 let record = InstanceRecord::from(&existing);
@@ -1464,7 +1665,10 @@ impl ProxyState {
             // Rebuilding a record that already existed. Start from it and
             // overwrite only what this registration actually re-states, so a
             // field added later is carried by default rather than by someone
-            // remembering to add a line here.
+            // remembering to add a line here. `health` in particular: the
+            // closure above has already applied this registration's
+            // declaration to it, and re-deriving it here would throw away the
+            // reboot reset it just made.
             Some(existing) => InstanceInfo {
                 ip,
                 public_key: public_key.to_string(),
@@ -1476,6 +1680,8 @@ impl ProxyState {
             },
             // First registration: no operator has had the chance to set
             // anything, so every field is stated here and the compiler says so.
+            // A caller with nothing to say about the capability -- the debug
+            // path -- has no earlier declaration to inherit, so it is not gated.
             None => InstanceInfo {
                 id: id.to_string(),
                 app_id: app_id.to_string(),
@@ -1486,6 +1692,7 @@ impl ProxyState {
                 port_policy_hash: compose_hash.to_string(),
                 admin_port_policy: None,
                 ready: None,
+                health: health_check.unwrap_or(false).into(),
                 connections: Default::default(),
             },
         };
@@ -1590,12 +1797,15 @@ impl ProxyState {
     ///
     /// Errors if the instance is not registered.
     pub(crate) fn set_ready(&mut self, instance_id: &str, ready: bool) -> Result<()> {
-        let Some(info) = self.state.instances.get_mut(instance_id) else {
+        // `edit_instance` drops the pre-gate selection cache, so the change
+        // applies to the next connection rather than up to `cache_top_n` later.
+        let Some((prev, app_id)) = self.edit_instance(instance_id, |info| {
+            let prev = info.is_ready();
+            info.ready = Some(ready);
+            (prev, info.app_id.clone())
+        }) else {
             bail!("instance {instance_id} not found");
         };
-        let prev = info.is_ready();
-        info.ready = Some(ready);
-        let app_id = info.app_id.clone();
         info!("admin set ready={ready} for instance {instance_id} (prev: {prev})");
         match self.drain_warning(instance_id, &app_id, prev, ready) {
             Ok(Some(message)) => warn!("{message}"),
@@ -1608,9 +1818,6 @@ impl ProxyState {
                  after gating {instance_id}: {err:?}"
             ),
         }
-        // The selection cache holds a pre-gate snapshot. Drop it so the change
-        // applies to the next connection rather than up to `cache_top_n` later.
-        self.state.top_n.remove(&app_id);
         // Not rolled back, but do not read that as "it took effect". The gate
         // is in memory and nowhere else: it is gone on restart, and any reload
         // that rebuilds instances from the store reads back the very record
@@ -1628,6 +1835,64 @@ impl ProxyState {
             )
         })?;
         Ok(())
+    }
+
+    /// Record this node's latest health observation for an instance.
+    ///
+    /// Logs only when the verdict changes. Every instance is polled every few
+    /// seconds, so an app that stays unhealthy for an hour should cost one
+    /// line, not several hundred.
+    pub(crate) fn record_instance_health(
+        &mut self,
+        target: &crate::proxy::health_check::Target,
+        observation: crate::proxy::health_check::Observation,
+    ) {
+        let instance_id = target.id.as_str();
+        // `edit_instance` drops the cached selection if this write changed
+        // anything the selection was computed from.
+        let applied = self.edit_instance(instance_id, |info| {
+            // The record still exists, but is it the same one that was polled?
+            // A round takes as long as its slowest instance, and a CVM can
+            // reboot and re-register inside that window -- new WireGuard key,
+            // health reset to `Unknown`, containers not up yet. Writing a
+            // verdict from before that would put the previous boot's answer on
+            // the new one and let it serve immediately, which is exactly what
+            // `Unknown` exists to prevent. The IP is checked for the same
+            // reason: it can be reallocated to another instance entirely.
+            if info.public_key != target.public_key || info.ip != target.ip {
+                return Err(());
+            }
+            let previous = info.health();
+            if previous != observation.state {
+                info.set_health(observation.state);
+            }
+            Ok(previous)
+        });
+        let previous = match applied {
+            // Recycled or deregistered while the round was in flight.
+            None => return,
+            Some(Err(())) => {
+                debug!("dropping stale health observation for instance {instance_id}");
+                return;
+            }
+            Some(Ok(previous)) => previous,
+        };
+        if previous == observation.state {
+            return;
+        }
+        let next = observation.state.as_str();
+        if observation.reason.is_empty() {
+            info!(
+                "instance {instance_id} is now {next} (was {})",
+                previous.as_str()
+            );
+        } else {
+            info!(
+                "instance {instance_id} is now {next} (was {}): {}",
+                previous.as_str(),
+                observation.reason
+            );
+        }
     }
 
     /// Whether the WireGuard tunnel to `instance` is fresh enough to route over.
@@ -1880,6 +2145,18 @@ impl ProxyState {
         Ok(())
     }
 
+    /// Whether health observations are allowed to affect routing at all.
+    ///
+    /// With polling switched off nothing ever leaves `Unknown`, and `Unknown`
+    /// is not healthy -- so the filter has to be skipped outright rather than
+    /// merely left unfed. Otherwise disabling the feature would drop exactly
+    /// the instances that opted into it, and in a fleet that also has apps
+    /// which did not (`Ungated`, which counts as healthy) it would drop the
+    /// opted-in ones permanently.
+    fn health_gating_enabled(&self) -> bool {
+        self.config.proxy.health_check.enabled
+    }
+
     pub(crate) fn select_top_n_hosts(&mut self, id: &str) -> Result<AddressGroup> {
         if self.config.debug.insecure_localhost_backend && id == "localhost" {
             return Ok(smallvec![AddressInfo {
@@ -1907,6 +2184,7 @@ impl ProxyState {
             }
         }
 
+        let health_gating = self.health_gating_enabled();
         let handshakes = self.latest_handshakes(None);
         let mut instances = match handshakes {
             Err(err) => {
@@ -1927,23 +2205,27 @@ impl ProxyState {
                     // Re-read for the sort key. `is_eligible` already proved
                     // it is present and fresh.
                     let (_, elapsed) = handshakes.get(&instance.public_key)?;
-                    Some((
-                        instance.ip,
-                        *elapsed,
-                        instance.connections.clone(),
-                        instance.id.clone(),
-                    ))
+                    Some(Candidate {
+                        ip: instance.ip,
+                        handshake_age: *elapsed,
+                        counter: instance.connections.clone(),
+                        instance_id: instance.id.clone(),
+                        healthy: !health_gating || instance.is_healthy(),
+                    })
                 })
                 .collect::<SmallVec<[_; 4]>>(),
         };
-        instances.sort_by(|a, b| a.1.cmp(&b.1));
+        retain_healthy(&mut self.state, id, &mut instances, |candidate| {
+            candidate.healthy
+        });
+        instances.sort_by(|a, b| a.handshake_age.cmp(&b.handshake_age));
         instances.truncate(n);
         let selected: AddressGroup = instances
             .into_iter()
-            .map(|(ip, _, counter, instance_id)| AddressInfo {
-                ip,
-                counter,
-                instance_id,
+            .map(|candidate| AddressInfo {
+                ip: candidate.ip,
+                counter: candidate.counter,
+                instance_id: candidate.instance_id,
             })
             .collect();
         self.state
@@ -1952,7 +2234,7 @@ impl ProxyState {
         Ok(selected)
     }
 
-    fn random_select_a_host(&self, id: &str) -> Option<AddressGroup> {
+    fn random_select_a_host(&mut self, id: &str) -> Option<AddressGroup> {
         // Direct instance lookup first
         if let Some(info) = self.state.instances.get(id).cloned() {
             return Some(smallvec![AddressInfo {
@@ -1967,16 +2249,25 @@ impl ProxyState {
         // Get latest handshakes to check instance health
         let handshakes = self.latest_handshakes(None).ok()?;
 
-        // Filter eligible instances and choose randomly among them
-        let healthy_instances = app_instances.iter().filter(|instance_id| {
-            self.state
-                .instances
-                .get(*instance_id)
-                .is_some_and(|instance| self.is_eligible(instance, &handshakes))
-        });
+        // Health is resolved here, alongside eligibility, rather than inside
+        // the retain: `retain_healthy` takes `&mut self.state` to rate-limit
+        // its warning, so its predicate cannot also be reading instances out of
+        // it.
+        let health_gating = self.health_gating_enabled();
+        // Instances the operator has left open and whose tunnel is fresh, each
+        // paired with whether health lets it serve.
+        let mut eligible = app_instances
+            .iter()
+            .filter_map(|instance_id| {
+                let instance = self.state.instances.get(instance_id)?;
+                self.is_eligible(instance, &handshakes)
+                    .then(|| (instance_id.clone(), !health_gating || instance.is_healthy()))
+            })
+            .collect::<SmallVec<[(String, bool); 4]>>();
+        retain_healthy(&mut self.state, id, &mut eligible, |(_, healthy)| *healthy);
 
-        let selected = healthy_instances.choose(&mut rand::thread_rng())?;
-        self.state.instances.get(selected).map(|info| {
+        let (selected, _) = eligible.into_iter().choose(&mut rand::thread_rng())?;
+        self.state.instances.get(&selected).map(|info| {
             smallvec![AddressInfo {
                 ip: info.ip,
                 counter: info.connections.clone(),
@@ -2004,6 +2295,11 @@ impl ProxyState {
             app_instances.remove(id);
             if app_instances.is_empty() {
                 self.state.apps.remove(&info.app_id);
+                // The rate limiter is keyed by app, so it has to be dropped
+                // with the app rather than with the instance: keyed on "apps
+                // seen since this process started" instead of "apps that
+                // exist", it only ever grows, and the key is tenant-chosen.
+                self.state.all_unhealthy_warned.remove(&info.app_id);
             }
         }
         Some(info)
@@ -2235,7 +2531,11 @@ impl GatewayRpc for RpcHandler {
             &instance_id,
             &request.client_public_key,
             &compose_hash,
-            port_policy,
+            ReportedCapabilities {
+                port_policy,
+                // A real CVM always states its intent, either way.
+                health_check: Some(request.health_check),
+            },
         )
     }
 

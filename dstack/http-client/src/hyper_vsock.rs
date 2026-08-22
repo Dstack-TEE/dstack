@@ -2,13 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use hyper::{body::Body, rt::ReadBufCursor, Uri};
+use hyper::{rt::ReadBufCursor, Uri};
 use hyper_util::{
-    client::legacy::{
-        connect::{Connected, Connection},
-        Client,
-    },
-    rt::{TokioExecutor, TokioIo},
+    client::legacy::connect::{Connected, Connection},
+    rt::TokioIo,
 };
 use pin_project_lite::pin_project;
 use std::{
@@ -169,16 +166,4 @@ fn parse_vsock_host(uri: &Uri) -> Result<(u32, u32), io::Error> {
     Ok((cid, port))
 }
 
-/// Extension trait for constructing a hyper HTTP client over a Vsock
-pub trait VsockClientExt<B: Body + Send> {
-    /// Construct a client which speaks HTTP over a Vsock domain socket
-    #[must_use]
-    fn vsock() -> Client<VsockConnector, B>
-    where
-        B::Data: Send,
-    {
-        Client::builder(TokioExecutor::new()).build(VsockConnector)
-    }
-}
-
-impl<B: Body + Send> VsockClientExt<B> for Client<VsockConnector, B> {}
+// The client itself is built in `lib.rs`, once per connection-reuse policy.

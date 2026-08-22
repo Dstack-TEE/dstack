@@ -61,6 +61,17 @@ export interface Requirements extends SortableObject {
   platforms?: RequirementPlatform[];
   tdx_measure_acpi_tables?: boolean;
   launch_token_hash?: string;
+  /**
+   * Opt-in gateway health gating. Leave it out rather than passing `false`: the
+   * guest's Rust types skip a false `health_check`, and this hash has to be the
+   * one that gets whitelisted on chain.
+   */
+  health_check?: boolean;
+  /**
+   * Path to a file the app writes its own verdict into. `""` and absent are
+   * different app composes and hash differently, in every SDK.
+   */
+  health_status_file?: string;
   gpu_policy?: GpuPolicy;
 }
 

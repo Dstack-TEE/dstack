@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 use dstack_guest_agent_rpc::dstack_guest_client::DstackGuestClient;
 use dstack_types::AppCompose;
-use http_client::prpc::PrpcClient;
+use http_client::ConnectionReuse;
 use or_panic::ResultOrPanic;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{debug, warn};
@@ -234,7 +234,11 @@ async fn fetch_and_store(state: &Proxy, instance_id: &str) -> Result<(), FetchEr
 
 async fn fetch_port_policy(ip: Ipv4Addr, agent_port: u16) -> Result<PortPolicy, FetchError> {
     let url = format!("http://{ip}:{agent_port}/prpc");
-    let client = DstackGuestClient::new(PrpcClient::new(url));
+    // Same untrusted peer as the health poller; see `guest_agent_client`.
+    // Pooled, unlike the poller: this fills a cache rather than deciding
+    // anything, it fires once per instance instead of on a timer, and a
+    // connection that died while idle costs one retry of a lazy fetch.
+    let client = DstackGuestClient::new(super::guest_agent_client(url, ConnectionReuse::Pooled));
     // Network/RPC errors here are transient: agent might still be coming up.
     let info = client
         .info()

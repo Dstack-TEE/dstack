@@ -70,6 +70,7 @@ impl AdminRpcHandler {
                     latest_handshake,
                     num_connections: instance.num_connections(),
                     ready: Some(instance.is_ready()),
+                    health: instance.health().as_str().to_string(),
                 }
             })
             .collect::<Vec<_>>();
@@ -84,6 +85,7 @@ impl AdminRpcHandler {
             // Reads the post-probe config, so this is what the data path is
             // running rather than what the file asked for.
             accel: Some(accel_status(&state.config.proxy)),
+            health_gating: state.config.proxy.health_check.enabled,
         })
     }
 }
@@ -143,6 +145,7 @@ impl AdminRpc for AdminRpcHandler {
                 },
                 num_connections: instance.num_connections(),
                 ready: Some(instance.is_ready()),
+                health: instance.health().as_str().to_string(),
             };
             Ok(GetInfoResponse {
                 found: true,

@@ -14,7 +14,9 @@ pub struct PrpcClient {
     base_url: String,
     path_append: String,
     auth_token: Option<String>,
+    max_response_bytes: Option<usize>,
     request_timeout: Option<Duration>,
+    connection_reuse: super::ConnectionReuse,
 }
 
 impl PrpcClient {
@@ -23,7 +25,9 @@ impl PrpcClient {
             base_url,
             path_append: String::new(),
             auth_token: None,
+            max_response_bytes: None,
             request_timeout: None,
+            connection_reuse: Default::default(),
         }
     }
 
@@ -35,8 +39,37 @@ impl PrpcClient {
             base_url: format!("unix:{socket_path}"),
             path_append: path,
             auth_token: None,
+            max_response_bytes: None,
             request_timeout: None,
+            connection_reuse: Default::default(),
         }
+    }
+
+    /// Refuse a response larger than `max_bytes`.
+    ///
+    /// For callers whose peer is not trusted -- anything talking to a CVM's
+    /// guest agent. Unbounded otherwise, because most peers here are local or
+    /// operator-run and return as much as the caller asked for.
+    pub fn with_max_response_bytes(mut self, max_bytes: usize) -> Self {
+        self.max_response_bytes = Some(max_bytes);
+        self
+    }
+
+    /// The bound in force, if any. Lets a caller assert it set one.
+    pub fn max_response_bytes(&self) -> Option<usize> {
+        self.max_response_bytes
+    }
+
+    /// Choose whether requests may reuse a connection. See
+    /// [`super::ConnectionReuse`] for when the default is the wrong answer.
+    pub fn with_connection_reuse(mut self, reuse: super::ConnectionReuse) -> Self {
+        self.connection_reuse = reuse;
+        self
+    }
+
+    /// The policy in force. Lets a caller assert it set the one it meant.
+    pub fn connection_reuse(&self) -> super::ConnectionReuse {
+        self.connection_reuse
     }
 
     /// Send `Authorization: Bearer <token>` with every request.
@@ -76,8 +109,17 @@ impl RequestClient for PrpcClient {
             auth_header = format!("Bearer {token}");
             headers.push(("Authorization", auth_header.as_str()));
         }
-        let request =
-            super::http_request_with_headers("POST", &self.base_url, &path, &body, &headers);
+        let request = super::http_request_with_options(
+            "POST",
+            &self.base_url,
+            &path,
+            &body,
+            &headers,
+            super::RequestOptions {
+                max_response_bytes: self.max_response_bytes,
+                connection_reuse: self.connection_reuse,
+            },
+        );
         let (status, body) = match self.request_timeout {
             Some(timeout) => tokio::time::timeout(timeout, request)
                 .await
