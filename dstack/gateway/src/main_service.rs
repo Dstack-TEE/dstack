@@ -7,7 +7,7 @@ use std::{
     net::Ipv4Addr,
     ops::Deref,
     sync::{Arc, Mutex, MutexGuard},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::{bail, ensure, Context, Result};
@@ -26,7 +26,6 @@ use ra_tls::attestation::AppInfo;
 use rand::seq::IteratorRandom;
 use rinja::Template as _;
 use safe_write::safe_write_with_mode;
-use serde::{Deserialize, Serialize};
 use smallvec::{smallvec, SmallVec};
 use tokio::sync::{
     mpsc::{unbounded_channel, UnboundedSender},
@@ -41,12 +40,12 @@ use crate::{
     config::{Config, TlsConfig},
     kv::{
         fetch_peers_from_bootnode, import, AppIdValidator, CertData, HttpsClientConfig,
-        InstanceData, KvStore, LoadedInstances, NodeData, NodeStatus, PortPolicy,
-        WaveKvSyncService,
+        InstanceRecord, KvStore, LegacyOverrides, LoadedInstances, NodeData, NodeStatus,
+        PortPolicy, PortPolicyOverride, WaveKvSyncService,
     },
     models::{InstanceInfo, PortPolicyView, WgConf, WgPeer},
     proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo, AppAddressResolver},
-    time::{decode_ts, encode_ts, now_secs},
+    time::{decode_ts, now_secs},
 };
 
 mod auth_client;
@@ -100,12 +99,17 @@ pub struct ProxyInner {
 const HANDSHAKE_CACHE_TTL: Duration = Duration::from_secs(30);
 const HANDSHAKE_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+/// The routing tables, rebuilt from WaveKV on every reload.
+///
+/// Held only in memory. It carried `Serialize`/`Deserialize` from the days
+/// before WaveKV, when it was written to a state file; nothing has serialized
+/// it since, and the derives kept every `#[serde]` attribute on the types it
+/// reaches looking load-bearing when none of them were.
+#[derive(Debug, Default)]
 pub(crate) struct ProxyStateMut {
     pub(crate) apps: BTreeMap<String, BTreeSet<String>>,
     pub(crate) instances: BTreeMap<String, InstanceInfo>,
     pub(crate) allocated_addresses: BTreeSet<Ipv4Addr>,
-    #[serde(skip)]
     pub(crate) top_n: BTreeMap<String, (AddressGroup, Instant)>,
 }
 
@@ -119,6 +123,8 @@ pub(crate) struct ProxyState {
     /// Reason last logged for each KV instance record this node refuses, so a
     /// record that stays bad is reported once rather than on every reload.
     reported_rejections: BTreeMap<String, String>,
+    /// The same, for `admin/` records this node cannot decode.
+    reported_bad_overrides: BTreeMap<String, String>,
 }
 
 /// Options for creating a Proxy instance
@@ -267,7 +273,7 @@ impl ProxyInner {
                 config.sync.node_id,
                 vec![],
                 &config.sync.data_dir,
-                (!config.sync.wal_sync_interval.is_zero()).then_some(config.sync.wal_sync_interval),
+                (!config.sync.wal_sync_window.is_zero()).then_some(config.sync.wal_sync_window),
             )
             .context("failed to initialize WaveKV store")?,
         );
@@ -285,7 +291,10 @@ impl ProxyInner {
             instances.undecodable.len(),
             nodes.len()
         );
-        let state = build_state_from_kv_store(&config, instances);
+        // Read-only: nothing may be written before the bootstrap below, so the
+        // move of any legacy overrides waits for the first reload.
+        let legacy_overrides = kv_store.legacy_instance_overrides();
+        let state = build_state_from_kv_store(&config, &kv_store, instances, &legacy_overrides);
 
         // This node's own records are written *after* the bootstrap below, not
         // here. A local write allocates a sequence number, and after a
@@ -363,6 +372,7 @@ impl ProxyInner {
             handshake_cache: handshake_cache.clone(),
             admin_shutdown: None,
             reported_rejections: BTreeMap::new(),
+            reported_bad_overrides: BTreeMap::new(),
         });
         let auth_client = AuthClient::new(config.auth.clone());
         // Bootstrap WaveKV first if sync is enabled, so certbot can load certs from peers
@@ -738,7 +748,103 @@ fn report_new_rejections(
     *reported = current;
 }
 
-fn build_state_from_kv_store(config: &Config, instances: LoadedInstances) -> ProxyStateMut {
+/// The data plane's view of an instance: what the CVM reported in `data`, plus
+/// what an operator decided about it under `admin/`.
+///
+/// One conversion for both the startup build and the reload. They had a
+/// hand-written copy each, which is how `admin_port_policy` came to be dropped
+/// once already -- the compiler says nothing when a field is missing from one
+/// of two literals that are supposed to agree.
+///
+/// The overrides are read per key, because they are separate keys: one of them
+/// existing says nothing about the other. Asking per instance is what would
+/// drop the port-policy override of an instance whose gate had already been
+/// moved across. A key that exists answers, including when it says "cleared";
+/// only a key that does not exist falls back to the copy an older build left
+/// in the instance record, or clearing an override would be undone by it.
+///
+/// Returns why the overrides could not be read, if they could not. That is not
+/// "nothing is overridden": the gate is an operator saying an instance must not
+/// be given work, so an unreadable answer keeps it out of app-id rotation until
+/// the record is readable again. Instance-id routing is never gated, so the
+/// instance stays reachable for investigation either way.
+fn instance_info_from_record(
+    store: &KvStore,
+    instance_id: String,
+    data: InstanceRecord,
+    legacy: Option<&LegacyOverrides>,
+) -> (InstanceInfo, Option<String>) {
+    let mut unreadable = None;
+    let (admin_port_policy, ready) = match read_overrides(store, &instance_id, legacy) {
+        Ok(overrides) => overrides,
+        Err(err) => {
+            unreadable = Some(format!("{err:#}"));
+            (None, Some(false))
+        }
+    };
+    let info = InstanceInfo {
+        id: instance_id,
+        app_id: data.app_id,
+        ip: data.ip,
+        public_key: data.public_key,
+        reg_time: decode_ts(data.reg_time),
+        port_policy: data.port_policy,
+        port_policy_hash: data.port_policy_hash,
+        admin_port_policy,
+        ready,
+        connections: Default::default(),
+    };
+    (info, unreadable)
+}
+
+fn read_overrides(
+    store: &KvStore,
+    instance_id: &str,
+    legacy: Option<&LegacyOverrides>,
+) -> Result<(Option<PortPolicy>, Option<bool>)> {
+    let ready = match store.instance_gate(instance_id)? {
+        Some(ready) => Some(ready),
+        None => legacy.and_then(|legacy| legacy.ready),
+    };
+    let port_policy = match store.instance_port_policy_override(instance_id)? {
+        Some(PortPolicyOverride::Set(policy)) => Some(policy),
+        Some(PortPolicyOverride::Cleared) => None,
+        None => legacy.and_then(|legacy| legacy.admin_port_policy.clone()),
+    };
+    Ok((port_policy, ready))
+}
+
+/// Report override records this node cannot read, once per transition.
+///
+/// Unreadable means the instance is held out of app-id rotation, so it is not a
+/// quiet condition -- but a record that stays bad would otherwise be reported on
+/// every reload, and reloads are driven by cluster activity.
+fn report_unreadable_overrides(
+    reported: &mut BTreeMap<String, String>,
+    unreadable: BTreeMap<String, String>,
+) {
+    for (instance_id, reason) in &unreadable {
+        if reported.get(instance_id) != Some(reason) {
+            error!(
+                "cannot read the operator overrides for instance {instance_id}, holding it \
+                 out of load balancing until they are readable again: {reason}"
+            );
+        }
+    }
+    for instance_id in reported.keys() {
+        if !unreadable.contains_key(instance_id) {
+            info!("operator overrides for instance {instance_id} are readable again");
+        }
+    }
+    *reported = unreadable;
+}
+
+fn build_state_from_kv_store(
+    config: &Config,
+    store: &KvStore,
+    instances: LoadedInstances,
+    legacy_overrides: &BTreeMap<String, LegacyOverrides>,
+) -> ProxyStateMut {
     let mut state = ProxyStateMut::default();
 
     let accepted = import::accept_instances(&config.wg, instances);
@@ -746,23 +852,21 @@ fn build_state_from_kv_store(config: &Config, instances: LoadedInstances) -> Pro
 
     // Build instances
     for (instance_id, data) in accepted.instances {
-        let info = InstanceInfo {
-            id: instance_id.clone(),
-            app_id: data.app_id.clone(),
-            ip: data.ip,
-            public_key: data.public_key,
-            reg_time: UNIX_EPOCH
-                .checked_add(Duration::from_secs(data.reg_time))
-                .unwrap_or(UNIX_EPOCH),
-            port_policy: data.port_policy,
-            port_policy_hash: data.port_policy_hash,
-            admin_port_policy: data.admin_port_policy,
-            connections: Default::default(),
-        };
-        state.allocated_addresses.insert(data.ip);
+        let ip = data.ip;
+        let app_id = data.app_id.clone();
+        let legacy = legacy_overrides.get(&instance_id);
+        let (info, unreadable) =
+            instance_info_from_record(store, instance_id.clone(), data, legacy);
+        if let Some(reason) = unreadable {
+            error!(
+                "cannot read the operator overrides for instance {instance_id}, holding it \
+                 out of load balancing until they are readable again: {reason}"
+            );
+        }
+        state.allocated_addresses.insert(ip);
         state
             .apps
-            .entry(data.app_id)
+            .entry(app_id)
             .or_default()
             .insert(instance_id.clone());
         state.instances.insert(instance_id, info);
@@ -972,14 +1076,29 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
     let store_clone = kv_store.clone();
     // Register watcher first, then do initial load to avoid race condition
     let mut rx = store_clone.watch_instances();
+    // The operator overrides live under their own prefix, so a peer opening or
+    // closing a traffic gate does not touch `inst/` and would never wake the
+    // watcher above.
+    let mut overrides_rx = store_clone.watch_instance_overrides();
     reload_instances_from_kv_store(&proxy_clone, &store_clone)
         .context("Failed to initial load instances from KvStore")?;
     tokio::spawn(async move {
         loop {
-            if rx.changed().await.is_err() {
-                break;
-            }
-            info!("WaveKV: detected remote instance changes, reloading...");
+            let reason = tokio::select! {
+                changed = rx.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    "instance"
+                }
+                changed = overrides_rx.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    "operator override"
+                }
+            };
+            info!("WaveKV: detected remote {reason} changes, reloading...");
             if let Err(err) = reload_instances_from_kv_store(&proxy_clone, &store_clone) {
                 error!("Failed to reload instances from KvStore: {err:?}");
             }
@@ -1060,11 +1179,16 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
     // at the window itself is enough to make it one: the store measures from
     // its last fsync, so a write is forced at the first tick that finds the
     // window elapsed, never more than one window after it landed.
-    let wal_sync_interval = proxy.config.sync.wal_sync_interval;
-    if !wal_sync_interval.is_zero() {
+    let wal_sync_window = proxy.config.sync.wal_sync_window;
+    if wal_sync_window.is_zero() {
+        // Not silence: no window is the strictest setting, and an operator who
+        // set zero expecting to turn the work off should find out here rather
+        // than from a latency graph.
+        info!("WaveKV: no WAL sync window, every write is forced before it returns");
+    } else {
         let kv_store_for_wal = kv_store.clone();
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(wal_sync_interval);
+            let mut ticker = tokio::time::interval(wal_sync_window);
             loop {
                 ticker.tick().await;
                 let kv = kv_store_for_wal.clone();
@@ -1081,7 +1205,7 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
                 }
             }
         });
-        info!("WaveKV: deferred WAL sync enabled (window: {wal_sync_interval:?})");
+        info!("WaveKV: deferred WAL sync enabled (window: {wal_sync_window:?})");
     }
 
     // Start periodic connection sync task
@@ -1117,6 +1241,17 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
 const LOCAL_REGISTRATION_GRACE: Duration = Duration::from_secs(60);
 
 fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> {
+    // Before the read, so an override an older node left in an instance record
+    // reaches its own key while that record is still the one carrying it.
+    let moved = store.migrate_legacy_instance_overrides();
+    if !moved.is_empty() {
+        info!(
+            "WaveKV: moved operator overrides for {} instance(s) out of the instance record: {}",
+            moved.len(),
+            moved.join(", ")
+        );
+    }
+    let legacy_overrides = store.legacy_instance_overrides();
     let accepted = import::accept_instances(&proxy.config.wg, store.load_all_instances());
     // An unreadable record is not a deletion. Its instance keeps whatever the
     // data plane already holds, so it must be exempt from the removal pass
@@ -1148,28 +1283,27 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
     for instance_id in removed {
         info!("WaveKV: instance {instance_id} was deleted remotely, dropping it");
         state.forget_instance(&instance_id);
+        // The node that deleted it could only withdraw its own `conn/` and
+        // `handshake/` keys. Ours are ours to withdraw.
+        if let Err(err) = store.sync_forget_local_observations(&instance_id) {
+            warn!("failed to withdraw this node's observations of {instance_id}: {err:?}");
+        }
         wg_changed = true;
     }
 
+    let mut unreadable_overrides = BTreeMap::new();
     for (instance_id, data) in instances {
-        let mut new_info = InstanceInfo {
-            id: instance_id.clone(),
-            app_id: data.app_id.clone(),
-            ip: data.ip,
-            public_key: data.public_key.clone(),
-            reg_time: UNIX_EPOCH
-                .checked_add(Duration::from_secs(data.reg_time))
-                .unwrap_or(UNIX_EPOCH),
-            port_policy: data.port_policy.clone(),
-            port_policy_hash: data.port_policy_hash.clone(),
-            admin_port_policy: data.admin_port_policy.clone(),
-            connections: Default::default(),
-        };
+        let legacy = legacy_overrides.get(&instance_id);
+        let (mut new_info, unreadable) =
+            instance_info_from_record(store, instance_id.clone(), data, legacy);
+        if let Some(reason) = unreadable {
+            unreadable_overrides.insert(instance_id.clone(), reason);
+        }
 
         let existing = state.state.instances.get(&instance_id).cloned();
         if let Some(existing) = &existing {
             // Check if wg config needs update
-            if existing.public_key != data.public_key || existing.ip != data.ip {
+            if existing.public_key != new_info.public_key || existing.ip != new_info.ip {
                 wg_changed = true;
             }
             // WaveKV has already selected the winning value. Materialize it
@@ -1181,10 +1315,10 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
 
         // Release old IP if it changed (prevent IP leak)
         if let Some(existing) = &existing {
-            if existing.ip != data.ip {
+            if existing.ip != new_info.ip {
                 state.state.allocated_addresses.remove(&existing.ip);
             }
-            if existing.app_id != data.app_id {
+            if existing.app_id != new_info.app_id {
                 if let Some(app_instances) = state.state.apps.get_mut(&existing.app_id) {
                     app_instances.remove(&instance_id);
                     if app_instances.is_empty() {
@@ -1194,21 +1328,42 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
                 }
             }
         }
-        state.state.allocated_addresses.insert(data.ip);
+        // Drop any cached selection this record could invalidate. WaveKV is how
+        // an operator's traffic gate reaches the other nodes, and a cached
+        // `top_n` computed before it arrived would keep feeding the gated
+        // instance for up to `cache_top_n` -- on every node except the one that
+        // took the RPC.
+        let selection_is_stale = match &existing {
+            Some(existing) => existing.routing_inputs_differ(&new_info),
+            // A record this node has not seen before is a new candidate.
+            None => true,
+        };
+        if selection_is_stale {
+            state.state.top_n.remove(&new_info.app_id);
+            if let Some(existing) = &existing {
+                state.state.top_n.remove(&existing.app_id);
+            }
+        }
+        state.state.allocated_addresses.insert(new_info.ip);
         state
             .state
             .apps
-            .entry(data.app_id)
+            .entry(new_info.app_id.clone())
             .or_default()
             .insert(instance_id.clone());
         state.state.instances.insert(instance_id, new_info);
     }
+
+    report_unreadable_overrides(&mut state.reported_bad_overrides, unreadable_overrides);
 
     if wg_changed {
         state.reconfigure()?;
     }
     Ok(())
 }
+
+/// WireGuard peers keyed by public key, valued by (last handshake, elapsed).
+pub(crate) type Handshakes = BTreeMap<String, (u64, Duration)>;
 
 impl ProxyState {
     fn valid_ip(&self, ip: Ipv4Addr) -> bool {
@@ -1254,6 +1409,13 @@ impl ProxyState {
         {
             bail!("WireGuard public key is already registered to another instance");
         }
+        // The rebuild path below reconstructs the instance from scratch -- it
+        // does that when the recorded IP is no longer inside the configured
+        // range -- and everything the registration does not re-state has to
+        // survive that. The operator overrides in particular live nowhere else:
+        // lose them and the traffic gate falls open while the port-policy
+        // override silently reverts to whatever the instance says about itself.
+        let mut previous: Option<InstanceInfo> = None;
         if let Some(existing) = self.state.instances.get_mut(id) {
             if existing.app_id != app_id {
                 bail!("instance_id is already registered to a different app");
@@ -1285,36 +1447,47 @@ impl ProxyState {
             let existing = existing.clone();
             if self.valid_ip(existing.ip) {
                 // Sync existing instance to KvStore (might be from legacy state)
-                let data = InstanceData {
-                    app_id: existing.app_id.clone(),
-                    ip: existing.ip,
-                    public_key: existing.public_key.clone(),
-                    reg_time: encode_ts(existing.reg_time),
-                    port_policy: existing.port_policy.clone(),
-                    port_policy_hash: existing.port_policy_hash.clone(),
-                    admin_port_policy: existing.admin_port_policy.clone(),
-                };
-                if let Err(err) = self.kv_store.sync_instance(&existing.id, &data) {
+                let record = InstanceRecord::from(&existing);
+                if let Err(err) = self.kv_store.sync_instance(&existing.id, &record) {
                     error!("failed to sync existing instance to KvStore: {err:?}");
                 }
                 return Ok(existing);
             }
             info!("ip {} is invalid, removing", existing.ip);
             self.state.allocated_addresses.remove(&existing.ip);
+            previous = Some(existing);
         }
         let ip = self
             .alloc_ip()
             .context("IP pool exhausted, no available addresses in client_ip_range")?;
-        let host_info = InstanceInfo {
-            id: id.to_string(),
-            app_id: app_id.to_string(),
-            ip,
-            public_key: public_key.to_string(),
-            reg_time: SystemTime::now(),
-            port_policy,
-            port_policy_hash: compose_hash.to_string(),
-            admin_port_policy: None,
-            connections: Default::default(),
+        let host_info = match previous {
+            // Rebuilding a record that already existed. Start from it and
+            // overwrite only what this registration actually re-states, so a
+            // field added later is carried by default rather than by someone
+            // remembering to add a line here.
+            Some(existing) => InstanceInfo {
+                ip,
+                public_key: public_key.to_string(),
+                reg_time: SystemTime::now(),
+                port_policy,
+                port_policy_hash: compose_hash.to_string(),
+                connections: Default::default(),
+                ..existing
+            },
+            // First registration: no operator has had the chance to set
+            // anything, so every field is stated here and the compiler says so.
+            None => InstanceInfo {
+                id: id.to_string(),
+                app_id: app_id.to_string(),
+                ip,
+                public_key: public_key.to_string(),
+                reg_time: SystemTime::now(),
+                port_policy,
+                port_policy_hash: compose_hash.to_string(),
+                admin_port_policy: None,
+                ready: None,
+                connections: Default::default(),
+            },
         };
         self.add_instance(host_info.clone());
         Ok(host_info)
@@ -1342,7 +1515,11 @@ impl ProxyState {
             return;
         };
         info.port_policy = Some(policy);
-        self.persist_instance_record(instance_id);
+        // Pre-existing behaviour: the lazy fetch retries on its own schedule,
+        // so a failed write here is logged rather than surfaced.
+        if let Err(err) = self.persist_instance_record(instance_id) {
+            error!("{err:?}");
+        }
     }
 
     /// Snapshot view of an instance's port-policy state for inspection.
@@ -1372,7 +1549,11 @@ impl ProxyState {
             policy.ports.len(),
             prev.is_some(),
         );
-        self.persist_instance_record(instance_id);
+        // Pre-existing behaviour: a failed write is logged, not returned.
+        // Left alone here so this change stays about where the record lives.
+        if let Err(err) = self.persist_instance_port_policy_override(instance_id) {
+            error!("{err:?}");
+        }
         Ok(())
     }
 
@@ -1385,43 +1566,232 @@ impl ProxyState {
         let had_override = info.admin_port_policy.take().is_some();
         info!("admin cleared port_policy for instance {instance_id} (was set: {had_override})");
         if had_override {
-            self.persist_instance_record(instance_id);
+            // Written, not deleted. An absent key means "no operator has
+            // decided anything here", which lets the legacy fallback apply --
+            // so deleting it would let a copy an older node left in the
+            // instance record put the override straight back.
+            if let Err(err) = self.persist_instance_port_policy_override(instance_id) {
+                error!("{err:?}");
+            }
         }
         Ok(())
     }
 
-    /// Persist the current in-memory `InstanceInfo` snapshot to WaveKV.
-    fn persist_instance_record(&self, instance_id: &str) {
-        let Some(info) = self.state.instances.get(instance_id) else {
-            return;
+    /// Open or close the operator traffic gate for an instance.
+    ///
+    /// Closing it removes the instance from app-id load balancing but leaves it
+    /// running and still reachable by instance id, which is the point: an
+    /// operator investigating a misbehaving instance needs it out of rotation
+    /// and reachable at the same time.
+    ///
+    /// Existing connections are deliberately left alone. They are already
+    /// bridged, and tearing them down would turn "stop sending it new work"
+    /// into a second, louder outage.
+    ///
+    /// Errors if the instance is not registered.
+    pub(crate) fn set_ready(&mut self, instance_id: &str, ready: bool) -> Result<()> {
+        let Some(info) = self.state.instances.get_mut(instance_id) else {
+            bail!("instance {instance_id} not found");
         };
-        let data = InstanceData {
-            app_id: info.app_id.clone(),
-            ip: info.ip,
-            public_key: info.public_key.clone(),
-            reg_time: encode_ts(info.reg_time),
-            port_policy: info.port_policy.clone(),
-            port_policy_hash: info.port_policy_hash.clone(),
-            admin_port_policy: info.admin_port_policy.clone(),
-        };
-        if let Err(err) = self.kv_store.sync_instance(instance_id, &data) {
-            error!("failed to sync instance {instance_id} to KvStore: {err:?}");
+        let prev = info.is_ready();
+        info.ready = Some(ready);
+        let app_id = info.app_id.clone();
+        info!("admin set ready={ready} for instance {instance_id} (prev: {prev})");
+        match self.drain_warning(instance_id, &app_id, prev, ready) {
+            Ok(Some(message)) => warn!("{message}"),
+            Ok(None) => {}
+            // The check needs a handshake read, which can fail on its own. That
+            // is not a reason to fail the gate -- it is already applied -- but
+            // it is a reason not to imply the app is still serving.
+            Err(err) => debug!(
+                "could not tell whether app {app_id} still has an eligible instance \
+                 after gating {instance_id}: {err:?}"
+            ),
         }
+        // The selection cache holds a pre-gate snapshot. Drop it so the change
+        // applies to the next connection rather than up to `cache_top_n` later.
+        self.state.top_n.remove(&app_id);
+        // Not rolled back, but do not read that as "it took effect". The gate
+        // is in memory and nowhere else: it is gone on restart, and any reload
+        // that rebuilds instances from the store reads back the very record
+        // this write failed to update. How long it survives depends on when
+        // that next happens, which is not something to predict in an error
+        // message -- so the message says what is known instead. Rolling back
+        // here would reach the same end state sooner while throwing away the
+        // window in which the operator's intent is at least locally in force.
+        self.persist_instance_gate(instance_id).with_context(|| {
+            format!(
+                "instance {instance_id} is set to ready={ready} in memory on \
+                 this node only: the write to the store failed, so the setting \
+                 is not durable and has not been shared. Retry before relying \
+                 on it"
+            )
+        })?;
+        Ok(())
+    }
+
+    /// Whether the WireGuard tunnel to `instance` is fresh enough to route over.
+    fn handshake_is_fresh(&self, instance: &InstanceInfo, handshakes: &Handshakes) -> bool {
+        handshakes
+            .get(&instance.public_key)
+            .is_some_and(|(_, elapsed)| *elapsed < self.config.proxy.timeouts.handshake_stale)
+    }
+
+    /// Whether `instance` may receive a connection addressed to its app id.
+    ///
+    /// The one definition both selection paths and the drain warning ask.
+    /// They had already drifted apart: the warning looked only at the gate,
+    /// so an instance nobody gated but whose tunnel was dead counted as cover.
+    fn is_eligible(&self, instance: &InstanceInfo, handshakes: &Handshakes) -> bool {
+        instance.is_ready() && self.handshake_is_fresh(instance, handshakes)
+    }
+
+    /// The warning an operator should see after a gate change, if any.
+    ///
+    /// Returned rather than logged so both conditions are testable, because
+    /// both were wrong. It counted only the gate, so draining the last live
+    /// instance of an app whose others were dead-but-ungated said nothing --
+    /// the case the warning exists for. And it keyed on the resulting count
+    /// alone, so a second gate-off against an already-drained app warned
+    /// again, naming an instance that was never the last ready one; the retry
+    /// the failed-write message asks for is exactly that call.
+    fn drain_warning(
+        &self,
+        instance_id: &str,
+        app_id: &str,
+        prev: bool,
+        ready: bool,
+    ) -> Result<Option<String>> {
+        // Nothing was closed, so nothing can have been closed last.
+        if !prev || ready {
+            return Ok(None);
+        }
+        if self.count_eligible_instances(app_id)? > 0 {
+            return Ok(None);
+        }
+        // Not an error -- an operator may well mean to drain an app entirely --
+        // but silently refusing every connection to an app is the kind of thing
+        // someone should be told about once.
+        Ok(Some(format!(
+            "gating instance {instance_id} leaves app {app_id} with no instance eligible \
+             for load balancing; connections addressed to the app id will be refused \
+             until one becomes eligible again"
+        )))
+    }
+
+    /// Why an app-id selection came back empty.
+    ///
+    /// The proxy learns "no candidates" as an absence, and the layer that sees
+    /// the absence first is the port-policy filter -- which has not looked at a
+    /// port yet and cannot say why. Selection is where the reason exists, so
+    /// the reason is reconstructed here rather than guessed at downstream.
+    pub(crate) fn describe_empty_selection(&self, app_id: &str) -> String {
+        let Some(instance_ids) = self.state.apps.get(app_id) else {
+            return format!("app {app_id} has no registered instances");
+        };
+        let total = instance_ids.len();
+        // The random-selection fallback swallows this error, so it is a real
+        // way to arrive here with instances that are perfectly healthy.
+        let handshakes = match self.latest_handshakes(None) {
+            Ok(handshakes) => handshakes,
+            Err(err) => {
+                return format!(
+                    "could not read WireGuard handshakes, so none of app {app_id}'s \
+                     {total} instance(s) could be checked for liveness: {err:#}"
+                )
+            }
+        };
+        let mut gated = 0;
+        let mut stale = 0;
+        for instance in instance_ids
+            .iter()
+            .filter_map(|id| self.state.instances.get(id))
+        {
+            if !instance.is_ready() {
+                gated += 1;
+            } else if !self.handshake_is_fresh(instance, &handshakes) {
+                stale += 1;
+            }
+        }
+        format!(
+            "no instance of app {app_id} is currently routable: {total} registered, \
+             {gated} gated out by an operator, {stale} with no recent WireGuard handshake"
+        )
+    }
+
+    /// How many of an app's instances can currently be given new traffic.
+    fn count_eligible_instances(&self, app_id: &str) -> Result<usize> {
+        let Some(instances) = self.state.apps.get(app_id) else {
+            return Ok(0);
+        };
+        let handshakes = self
+            .latest_handshakes(None)
+            .context("failed to read WireGuard handshakes")?;
+        Ok(instances
+            .iter()
+            .filter_map(|id| self.state.instances.get(id))
+            .filter(|info| self.is_eligible(info, &handshakes))
+            .count())
+    }
+
+    /// Persist the operator's traffic gate for `instance_id` to WaveKV.
+    ///
+    /// Separate from [`Self::persist_instance_record`], and from the port-policy
+    /// override beside it, because each is a separate key -- which is the point.
+    /// This one is written only from `Admin.SetInstanceReady`, so neither a
+    /// re-registration nor a peer's unsynced change to the other override can
+    /// overwrite it.
+    ///
+    /// Returns the store error rather than only logging it, so callers whose
+    /// API promises the change is durable can say otherwise when it is not.
+    fn persist_instance_gate(&self, instance_id: &str) -> Result<()> {
+        let Some(info) = self.state.instances.get(instance_id) else {
+            return Ok(());
+        };
+        let Some(ready) = info.ready else {
+            return Ok(());
+        };
+        self.kv_store
+            .set_instance_gate(instance_id, ready)
+            .with_context(|| {
+                format!("failed to sync the gate for instance {instance_id} to KvStore")
+            })
+    }
+
+    /// Persist the operator's port-policy override for `instance_id` to WaveKV.
+    fn persist_instance_port_policy_override(&self, instance_id: &str) -> Result<()> {
+        let Some(info) = self.state.instances.get(instance_id) else {
+            return Ok(());
+        };
+        let policy = info.admin_port_policy.clone();
+        self.kv_store
+            .set_instance_port_policy_override(instance_id, policy)
+            .with_context(|| {
+                format!(
+                    "failed to sync the port-policy override for instance {instance_id} to KvStore"
+                )
+            })
+    }
+
+    /// Persist the current in-memory `InstanceInfo` snapshot to WaveKV.
+    ///
+    /// Returns the store error rather than only logging it, so callers whose
+    /// API promises the change is durable can say otherwise when it is not.
+    fn persist_instance_record(&self, instance_id: &str) -> Result<()> {
+        let Some(info) = self.state.instances.get(instance_id) else {
+            return Ok(());
+        };
+        let record = InstanceRecord::from(info);
+        self.kv_store
+            .sync_instance(instance_id, &record)
+            .with_context(|| format!("failed to sync instance {instance_id} to KvStore"))
     }
 
     fn add_instance(&mut self, info: InstanceInfo) {
         self.state.top_n.remove(&info.app_id);
         // Sync to KvStore
-        let data = InstanceData {
-            app_id: info.app_id.clone(),
-            ip: info.ip,
-            public_key: info.public_key.clone(),
-            reg_time: encode_ts(info.reg_time),
-            port_policy: info.port_policy.clone(),
-            port_policy_hash: info.port_policy_hash.clone(),
-            admin_port_policy: info.admin_port_policy.clone(),
-        };
-        if let Err(err) = self.kv_store.sync_instance(&info.id, &data) {
+        let record = InstanceRecord::from(&info);
+        if let Err(err) = self.kv_store.sync_instance(&info.id, &record) {
             error!("failed to sync instance to KvStore: {err:?}");
         }
 
@@ -1547,15 +1917,22 @@ impl ProxyState {
                 .iter()
                 .filter_map(|instance_id| {
                     let instance = self.state.instances.get(instance_id)?;
+                    // Eligibility -- including the operator gate -- is only
+                    // applied here, on the app-id path: the instance-id lookup
+                    // above returns before this point, so a gated instance
+                    // stays directly reachable.
+                    if !self.is_eligible(instance, &handshakes) {
+                        return None;
+                    }
+                    // Re-read for the sort key. `is_eligible` already proved
+                    // it is present and fresh.
                     let (_, elapsed) = handshakes.get(&instance.public_key)?;
-                    (*elapsed < self.config.proxy.timeouts.handshake_stale).then(|| {
-                        (
-                            instance.ip,
-                            *elapsed,
-                            instance.connections.clone(),
-                            instance.id.clone(),
-                        )
-                    })
+                    Some((
+                        instance.ip,
+                        *elapsed,
+                        instance.connections.clone(),
+                        instance.id.clone(),
+                    ))
                 })
                 .collect::<SmallVec<[_; 4]>>(),
         };
@@ -1590,17 +1967,12 @@ impl ProxyState {
         // Get latest handshakes to check instance health
         let handshakes = self.latest_handshakes(None).ok()?;
 
-        // Filter healthy instances and choose randomly among them
+        // Filter eligible instances and choose randomly among them
         let healthy_instances = app_instances.iter().filter(|instance_id| {
-            if let Some(instance) = self.state.instances.get(*instance_id) {
-                // Consider instance healthy if it had a recent handshake
-                handshakes
-                    .get(&instance.public_key)
-                    .map(|(_, elapsed)| *elapsed < self.config.proxy.timeouts.handshake_stale)
-                    .unwrap_or(false)
-            } else {
-                false
-            }
+            self.state
+                .instances
+                .get(*instance_id)
+                .is_some_and(|instance| self.is_eligible(instance, &handshakes))
         });
 
         let selected = healthy_instances.choose(&mut rand::thread_rng())?;
@@ -1616,10 +1988,7 @@ impl ProxyState {
     /// Get latest handshakes
     ///
     /// Return a map of public key to (timestamp, elapsed)
-    pub(crate) fn latest_handshakes(
-        &self,
-        stale_timeout: Option<Duration>,
-    ) -> Result<BTreeMap<String, (u64, Duration)>> {
+    pub(crate) fn latest_handshakes(&self, stale_timeout: Option<Duration>) -> Result<Handshakes> {
         self.handshake_cache.latest(stale_timeout)
     }
 

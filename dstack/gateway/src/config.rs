@@ -544,9 +544,14 @@ pub struct SyncConfig {
     #[serde(with = "serde_duration")]
     pub persist_interval: Duration,
     /// How long a KV write may sit in the page cache before the write-ahead log
-    /// is forced to disk. Zero forces every write before it returns.
+    /// is forced to disk.
+    ///
+    /// Zero means *no window*, which is the strictest setting and not the
+    /// cheapest one: every write is forced before it returns. It reads the
+    /// opposite way round from the `*_interval` fields either side of it, where
+    /// zero turns the work off -- which is why this one is a window.
     #[serde(with = "serde_duration")]
-    pub wal_sync_interval: Duration,
+    pub wal_sync_window: Duration,
     /// Enable periodic sync of instance connections to KV store
     pub sync_connections_enabled: bool,
     /// Interval for syncing instance connections to KV store

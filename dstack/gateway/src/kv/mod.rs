@@ -10,7 +10,7 @@
 //! Key schema:
 //!
 //! # Persistent WaveKV (needs persistence + sync)
-//! - `inst/{instance_id}` → InstanceData
+//! - `inst/{instance_id}` → InstanceRecord
 //! - `node/{node_id}` → NodeData
 //! - `dns_cred/{cred_id}` → DnsCredential
 //! - `dns_cred_default` → cred_id (default credential ID)
@@ -53,7 +53,8 @@ use std::{collections::BTreeMap, net::Ipv4Addr, path::Path, time::Duration};
 
 use anyhow::{Context, Result};
 
-use crate::time::now_secs;
+use crate::models::InstanceInfo;
+use crate::time::{encode_ts, now_secs};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use wavekv::{node::NodeState, types::NodeId, Node};
@@ -80,9 +81,17 @@ pub struct PortPolicy {
     pub restrict_mode: bool,
 }
 
-/// Instance core data (persistent)
+/// What a CVM registered, stored at `inst/<instance_id>`.
+///
+/// Every field here came from the CVM, which is what makes it safe for any node
+/// to rewrite the whole record on any registration -- and what decides that an
+/// operator's decisions do not live here. Those are separate keys; see
+/// [`PortPolicyOverride`].
+///
+/// The assembled view the proxy routes on is [`crate::models::InstanceInfo`],
+/// which is this plus those keys plus a live connection count.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct InstanceData {
+pub struct InstanceRecord {
     pub app_id: String,
     pub ip: Ipv4Addr,
     pub public_key: String,
@@ -97,12 +106,67 @@ pub struct InstanceData {
     /// the cache is invalidated and re-fetched lazily.
     #[serde(default)]
     pub port_policy_hash: String,
-    /// Operator-set override applied via the Admin RPC. Takes precedence over
-    /// the instance-reported `port_policy` when set, and survives app upgrades
-    /// (compose_hash changes do not clear it). Cleared explicitly via
-    /// ClearInstancePortPolicy.
+}
+
+/// What an operator has said about an instance's ports, under
+/// `admin/<id>/port_policy`.
+///
+/// Three answers, not two, which is why this is not an `Option<PortPolicy>`:
+/// the key not existing is not the same as a key that says "cleared". Never set
+/// falls back to the copy an older build left in the instance record; cleared
+/// does not, or clearing an override would be undone by that copy. The wire
+/// form is `Option<PortPolicy>` -- the key's existence carries the third state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PortPolicyOverride {
+    /// An operator cleared it.
+    Cleared,
+    /// An operator set it.
+    Set(PortPolicy),
+}
+
+/// The overrides an instance record still carries from before they had keys of
+/// their own.
+///
+/// `InstanceRecord` no longer declares these fields, which is deliberate on both
+/// sides of an upgrade. Reading, this type recovers them for the move across.
+/// Writing, an undeclared field is one [`compat::carry_unknown_fields`]
+/// preserves verbatim, so a node still on the previous build keeps finding its
+/// copy where it left it for as long as the upgrade takes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct LegacyOverrides {
     #[serde(default)]
     pub admin_port_policy: Option<PortPolicy>,
+    #[serde(default)]
+    pub ready: Option<bool>,
+}
+
+impl LegacyOverrides {
+    fn is_empty(&self) -> bool {
+        self.admin_port_policy.is_none() && self.ready.is_none()
+    }
+}
+
+/// The record this node would publish for `info`.
+///
+/// Every writer rewrites the whole record, so every writer has to name every
+/// field -- and each hand-written copy is one more place a field added later
+/// can be forgotten. `admin_port_policy` was dropped that way once already.
+/// Going through one conversion makes the compiler the thing that remembers.
+///
+/// What an operator set is deliberately absent: it lives under `admin/`,
+/// written only from the Admin RPCs, so this rewrite -- which any node performs
+/// on any registration -- cannot reach it.
+impl From<&InstanceInfo> for InstanceRecord {
+    fn from(info: &InstanceInfo) -> Self {
+        Self {
+            app_id: info.app_id.clone(),
+            ip: info.ip,
+            public_key: info.public_key.clone(),
+            reg_time: encode_ts(info.reg_time),
+            port_policy: info.port_policy.clone(),
+            port_policy_hash: info.port_policy_hash.clone(),
+        }
+    }
 }
 
 /// The `inst/` records currently in the KV store, split by readability.
@@ -116,7 +180,7 @@ pub struct InstanceData {
 #[derive(Debug, Default)]
 pub struct LoadedInstances {
     /// Records that decoded successfully, keyed by instance ID.
-    pub decoded: BTreeMap<String, InstanceData>,
+    pub decoded: BTreeMap<String, InstanceRecord>,
     /// Instance IDs whose stored bytes are present but no longer decode,
     /// mapped to the decode error. Loading does not log these: the reload
     /// path reports them on transitions, and read-only listings must stay
@@ -290,6 +354,11 @@ pub mod keys {
     use super::NodeId;
 
     pub const INST_PREFIX: &str = "inst/";
+    pub const ADMIN_PREFIX: &str = "admin/";
+    /// Suffix of the traffic-gate key. See [`admin_ready`].
+    pub const ADMIN_READY: &str = "ready";
+    /// Suffix of the port-policy override key. See [`admin_port_policy`].
+    pub const ADMIN_PORT_POLICY: &str = "port_policy";
     pub const NODE_PREFIX: &str = "node/";
     pub const NODE_INFO_PREFIX: &str = "node/info/";
     pub const NODE_STATUS_PREFIX: &str = "node/status/";
@@ -309,6 +378,23 @@ pub mod keys {
 
     pub fn inst(instance_id: &str) -> String {
         format!("{INST_PREFIX}{instance_id}")
+    }
+
+    /// Key for an instance's operator-set traffic gate.
+    ///
+    /// One key per override rather than one record holding both: WaveKV
+    /// resolves a conflict by taking a whole value, so two overrides sharing a
+    /// key means setting one on this node discards a peer's unsynced change to
+    /// the other. They are independent decisions and are set by independent
+    /// calls, so they get independent keys.
+    pub fn admin_ready(instance_id: &str) -> String {
+        format!("{ADMIN_PREFIX}{instance_id}/{ADMIN_READY}")
+    }
+
+    /// Key for an instance's operator-set port-policy override.
+    /// See [`admin_ready`] for why this is not a field of the same record.
+    pub fn admin_port_policy(instance_id: &str) -> String {
+        format!("{ADMIN_PREFIX}{instance_id}/{ADMIN_PORT_POLICY}")
     }
 
     pub fn node_info(node_id: NodeId) -> String {
@@ -633,6 +719,54 @@ impl GetPutCodec for NodeState {
     }
 }
 
+/// Which of an instance's five keys a write is touching.
+///
+/// Named at every call site because the delete path issues all of them and
+/// reports them individually: an operator can do something about an `inst/`
+/// tombstone that did not land and nothing about an ephemeral observation that
+/// did not, so "a delete failed" is not a useful thing to be told.
+///
+/// It is also what `KvStore::fail_writes_for_test` aims at, which is why the
+/// write paths take one instead of a `u8` that means nothing outside a test
+/// build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InstanceKey {
+    /// The persistent `inst/` record, and its tombstone.
+    Instance,
+    /// The persistent `admin/<id>/ready` record, and its tombstone.
+    Gate,
+    /// The persistent `admin/<id>/port_policy` record, and its tombstone.
+    PortPolicyOverride,
+    /// The ephemeral `conn/` key this node owns.
+    Connections,
+    /// The ephemeral `handshake/` key this node owns.
+    Handshake,
+}
+
+impl InstanceKey {
+    /// What an error message calls it.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Instance => "instance",
+            Self::Gate => "traffic gate",
+            Self::PortPolicyOverride => "port-policy override",
+            Self::Connections => "connection count",
+            Self::Handshake => "handshake observation",
+        }
+    }
+
+    #[cfg(test)]
+    fn bit(self) -> u8 {
+        match self {
+            Self::Instance => 0b00001,
+            Self::Gate => 0b00010,
+            Self::PortPolicyOverride => 0b00100,
+            Self::Connections => 0b01000,
+            Self::Handshake => 0b10000,
+        }
+    }
+}
+
 /// Sync store wrapping two WaveKV Nodes (persistent and ephemeral).
 ///
 /// This is the sync layer - not the primary data store.
@@ -645,6 +779,19 @@ pub struct KvStore {
     ephemeral: Node,
     /// This gateway's node ID
     my_node_id: NodeId,
+    /// Which instance writes to fail, so the paths that report a failure can
+    /// be tested at all.
+    ///
+    /// The real failures here are WAL I/O -- no space, permission denied, the
+    /// data volume unmounted -- and none of them can be provoked from a test
+    /// without a filesystem to sabotage. Faking the outcome is the only way to
+    /// cover the code that reports them, which is the whole reason
+    /// `persist_instance_record` returns a `Result` and the whole reason
+    /// `sync_delete_instance` does not short-circuit.
+    ///
+    /// A bitmask of [`FailWrite`].
+    #[cfg(test)]
+    injected_failures: std::sync::Arc<std::sync::atomic::AtomicU8>,
 }
 
 /// Whether opening the persistent store failed because the storage is
@@ -689,7 +836,7 @@ impl KvStore {
     /// the ACME account and DNS credentials is the difference between a restart
     /// and a rebuild.
     ///
-    /// `wal_sync_interval` is how long a write may sit in the page cache before
+    /// `wal_sync_window` is how long a write may sit in the page cache before
     /// the log is forced to disk; `None` forces every write before it returns.
     /// It applies only to the persistent store — the ephemeral one keeps no log
     /// and never touches the disk.
@@ -697,11 +844,13 @@ impl KvStore {
         my_node_id: NodeId,
         peer_ids: Vec<NodeId>,
         data_dir: impl AsRef<Path>,
-        wal_sync_interval: Option<Duration>,
+        wal_sync_window: Option<Duration>,
     ) -> Result<Self> {
         let data_dir = data_dir.as_ref();
         let node_config = wavekv::NodeConfig {
-            wal_sync_interval,
+            // wavekv still calls it an interval; the gateway calls it a window
+            // because zero here means "no window", not "off".
+            wal_sync_interval: wal_sync_window,
             ..Default::default()
         };
         let persistent = match Node::with_persistence_and_config(
@@ -762,6 +911,8 @@ impl KvStore {
             persistent,
             ephemeral,
             my_node_id,
+            #[cfg(test)]
+            injected_failures: Default::default(),
         })
     }
 
@@ -780,10 +931,181 @@ impl KvStore {
     // ==================== Instance Sync ====================
 
     /// Sync instance data to other nodes
-    pub fn sync_instance(&self, instance_id: &str, data: &InstanceData) -> Result<()> {
+    pub fn sync_instance(&self, instance_id: &str, data: &InstanceRecord) -> Result<()> {
+        self.injected_failure(InstanceKey::Instance)?;
         self.persistent
             .write()
             .put_encoded(keys::inst(instance_id), data, true)
+    }
+
+    // ==================== Operator Override Sync ====================
+
+    /// The operator's traffic gate for one instance. `None` means no key.
+    ///
+    /// An unreadable record is an error, not a `None`. Reading it as "nobody
+    /// gated this" is the one answer that must not be guessed: it returns a
+    /// quarantined instance to rotation.
+    pub fn instance_gate(&self, instance_id: &str) -> Result<Option<bool>> {
+        self.persistent
+            .read()
+            .decode_strict::<bool>(&keys::admin_ready(instance_id))
+    }
+
+    /// The operator's port-policy override for one instance. `None` means no
+    /// key -- which is not [`PortPolicyOverride::Cleared`].
+    pub fn instance_port_policy_override(
+        &self,
+        instance_id: &str,
+    ) -> Result<Option<PortPolicyOverride>> {
+        let stored = self
+            .persistent
+            .read()
+            .decode_strict::<Option<PortPolicy>>(&keys::admin_port_policy(instance_id))?;
+        Ok(stored.map(|policy| match policy {
+            Some(policy) => PortPolicyOverride::Set(policy),
+            None => PortPolicyOverride::Cleared,
+        }))
+    }
+
+    /// Publish an instance's operator-set traffic gate.
+    pub fn set_instance_gate(&self, instance_id: &str, ready: bool) -> Result<()> {
+        self.put_admin_override(InstanceKey::Gate, keys::admin_ready(instance_id), &ready)
+    }
+
+    /// Publish an instance's operator-set port-policy override. `None` clears it.
+    ///
+    /// A cleared override is written, not deleted: an absent key is what lets
+    /// the copy an older build left in the instance record apply, so deleting
+    /// would put the override straight back.
+    pub fn set_instance_port_policy_override(
+        &self,
+        instance_id: &str,
+        policy: Option<PortPolicy>,
+    ) -> Result<()> {
+        self.put_admin_override(
+            InstanceKey::PortPolicyOverride,
+            keys::admin_port_policy(instance_id),
+            &policy,
+        )
+    }
+
+    /// The overrides an instance record still carries from before they had keys
+    /// of their own.
+    ///
+    /// Read from the same `inst/` bytes as [`InstanceRecord`], through a type
+    /// that declares only the retired fields. Bulk rather than per instance
+    /// because the only caller wants to know whether *any* remain.
+    pub fn legacy_instance_overrides(&self) -> BTreeMap<String, LegacyOverrides> {
+        self.persistent
+            .read()
+            .iter_decoded::<LegacyOverrides>(keys::INST_PREFIX)
+            .filter_map(|(key, legacy)| {
+                if legacy.is_empty() {
+                    return None;
+                }
+                Some((keys::parse_inst_key(&key)?.to_string(), legacy))
+            })
+            .collect()
+    }
+
+    /// Move any overrides still living in an instance record to their own keys.
+    ///
+    /// Runs on every reload rather than once at startup, because the source is
+    /// not only this node's own data directory: a node still on the previous
+    /// build writes overrides into `inst/`, and this is how they reach the new
+    /// keys during a rolling upgrade instead of being lost at that instance's
+    /// next re-registration.
+    ///
+    /// Per override, not per instance -- which is the point of them having a
+    /// key each. Only where the key does not exist at all: once it does it is
+    /// the answer, including when it says "no override", which is what clearing
+    /// one leaves behind. Without that rule, clearing an override here would be
+    /// undone by the stale copy an old node left in the instance record. An
+    /// unreadable key counts as existing for the same reason.
+    ///
+    /// Returns the keys written. Failures are logged and skipped: the next
+    /// reload tries again, and the read-side fallback keeps the override in
+    /// force in the meantime.
+    pub fn migrate_legacy_instance_overrides(&self) -> Vec<String> {
+        let mut moved = Vec::new();
+        for (instance_id, legacy) in self.legacy_instance_overrides() {
+            if let Some(ready) = legacy.ready {
+                if matches!(self.instance_gate(&instance_id), Ok(None)) {
+                    self.record_migration(
+                        &mut moved,
+                        InstanceKey::Gate,
+                        keys::admin_ready(&instance_id),
+                        &ready,
+                    );
+                }
+            }
+            if legacy.admin_port_policy.is_some()
+                && matches!(self.instance_port_policy_override(&instance_id), Ok(None))
+            {
+                self.record_migration(
+                    &mut moved,
+                    InstanceKey::PortPolicyOverride,
+                    keys::admin_port_policy(&instance_id),
+                    &legacy.admin_port_policy,
+                );
+            }
+        }
+        moved
+    }
+
+    fn record_migration<T: Serialize + serde::de::DeserializeOwned>(
+        &self,
+        moved: &mut Vec<String>,
+        record: InstanceKey,
+        key: String,
+        value: &T,
+    ) {
+        match self.put_admin_override(record, key.clone(), value) {
+            Ok(()) => moved.push(key),
+            Err(err) => warn!("failed to move operator override to {key}: {err:?}"),
+        }
+    }
+
+    /// Written as a replacement rather than an update: each record states one
+    /// complete fact, so carrying a field a peer wrote would leave half of one
+    /// operator's decision beside half of another's.
+    fn put_admin_override<T: Serialize + serde::de::DeserializeOwned>(
+        &self,
+        record: InstanceKey,
+        key: String,
+        value: &T,
+    ) -> Result<()> {
+        self.injected_failure(record)
+            .and_then(|()| self.persistent.write().put_encoded(key, value, false))
+            .with_context(|| format!("failed to write the {} record", record.name()))
+    }
+
+    /// Fail every write touching one of `records` until called again. See
+    /// [`KvStore::injected_failures`].
+    #[cfg(test)]
+    pub(crate) fn fail_writes_for_test(&self, records: &[InstanceKey]) {
+        let mask = records.iter().fold(0u8, |mask, record| mask | record.bit());
+        self.injected_failures
+            .store(mask, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Deliberately terse: what an operator reads is the context the write path
+    /// adds, so a test that asserts on the message is asserting on the real one.
+    #[cfg(test)]
+    fn injected_failure(&self, record: InstanceKey) -> Result<()> {
+        let mask = self
+            .injected_failures
+            .load(std::sync::atomic::Ordering::Relaxed);
+        anyhow::ensure!(mask & record.bit() == 0, "injected store failure");
+        Ok(())
+    }
+
+    /// Nothing to inject outside a test build, so the write paths read the same
+    /// in both instead of carrying a `cfg` in their bodies.
+    #[cfg(not(test))]
+    #[inline(always)]
+    fn injected_failure(&self, _record: InstanceKey) -> Result<()> {
+        Ok(())
     }
 
     /// Sync instance deletion to other nodes
@@ -791,15 +1113,73 @@ impl KvStore {
     /// Returns whether a live record (including an undecodable one) existed
     /// before the tombstone was written.
     pub fn sync_delete_instance(&self, instance_id: &str) -> Result<bool> {
-        let previous = self.persistent.write().delete(keys::inst(instance_id))?;
-        self.ephemeral
-            .write()
-            .delete(keys::conn(instance_id, self.my_node_id))?;
-        // Delete this node's handshake record
-        self.ephemeral
-            .write()
-            .delete(keys::handshake(instance_id, self.my_node_id))?;
+        // Every delete is attempted even if an earlier one fails. Short-circuiting
+        // on `?` would leave the later keys behind while the `inst/` tombstone is
+        // already published, and nothing garbage-collects orphans. They are then
+        // reported in the order they were issued, so a failure to tombstone
+        // `inst/` -- the only one of the three that is persistent, and the one an
+        // operator needs to know about -- is not masked by an ephemeral key that
+        // also happened to fail.
+        let previous = self.delete_persistent(keys::inst(instance_id), InstanceKey::Instance);
+        // The overrides outlive the instance record unless they are tombstoned
+        // too, and instance ids are recycled -- an id reused after a delete
+        // would inherit the gate and port policy an operator set for whatever
+        // ran under it before.
+        let gate = self.delete_persistent(keys::admin_ready(instance_id), InstanceKey::Gate);
+        let override_policy = self.delete_persistent(
+            keys::admin_port_policy(instance_id),
+            InstanceKey::PortPolicyOverride,
+        );
+        let observations = self.sync_forget_local_observations(instance_id);
+
+        let previous = previous?;
+        gate?;
+        override_policy?;
+        observations?;
         Ok(previous.is_some_and(|entry| !entry.is_deleted()))
+    }
+
+    /// Withdraw this node's observations of an instance.
+    ///
+    /// `conn/` and `handshake/` are keyed by observer, so a delete can only
+    /// withdraw the deleting node's own -- they are the only ones it owns.
+    /// Every other node has to withdraw its own when it learns of the deletion,
+    /// or its observation outlives the CVM it describes: nothing sweeps those
+    /// prefixes, and a node's recycle loop cannot see an instance it has
+    /// already dropped from memory. They are ephemeral, so a restart collects
+    /// them, but a gateway's uptime is measured in months.
+    pub fn sync_forget_local_observations(&self, instance_id: &str) -> Result<()> {
+        let conn = self.delete_ephemeral(
+            keys::conn(instance_id, self.my_node_id),
+            InstanceKey::Connections,
+        );
+        let handshake = self.delete_ephemeral(
+            keys::handshake(instance_id, self.my_node_id),
+            InstanceKey::Handshake,
+        );
+        conn?;
+        handshake?;
+        Ok(())
+    }
+
+    fn delete_persistent(
+        &self,
+        key: String,
+        record: InstanceKey,
+    ) -> Result<Option<wavekv::types::Entry>> {
+        self.injected_failure(record)
+            .and_then(|()| self.persistent.write().delete(key))
+            .with_context(|| format!("failed to delete the {} record", record.name()))
+    }
+
+    fn delete_ephemeral(
+        &self,
+        key: String,
+        record: InstanceKey,
+    ) -> Result<Option<wavekv::types::Entry>> {
+        self.injected_failure(record)
+            .and_then(|()| self.ephemeral.write().delete(key))
+            .with_context(|| format!("failed to delete the {} record", record.name()))
     }
 
     /// Load all instances from the sync store.
@@ -808,7 +1188,7 @@ impl KvStore {
         for (key, result) in self
             .persistent
             .read()
-            .iter_decoded_strict::<InstanceData>(keys::INST_PREFIX)
+            .iter_decoded_strict::<InstanceRecord>(keys::INST_PREFIX)
         {
             let Some(instance_id) = keys::parse_inst_key(&key) else {
                 continue;
@@ -1035,6 +1415,16 @@ impl KvStore {
     /// Watch for remote instance changes (for updating local ProxyState)
     pub fn watch_instances(&self) -> watch::Receiver<()> {
         self.persistent.watch_prefix(keys::INST_PREFIX)
+    }
+
+    /// Watch for changes to any instance's operator-set overrides.
+    ///
+    /// A separate watcher because they are a separate key: a peer opening or
+    /// closing a traffic gate touches `admin/` and nothing else, so the
+    /// instance watcher never fires and the gate would sit in the store
+    /// unapplied on every node but the one that took the RPC.
+    pub fn watch_instance_overrides(&self) -> watch::Receiver<()> {
+        self.persistent.watch_prefix(keys::ADMIN_PREFIX)
     }
 
     /// Watch for remote node changes
@@ -1932,7 +2322,7 @@ mod value_encoding_tests {
 
     /// An instance record as some later release will declare it.
     #[derive(Debug, Serialize, Deserialize)]
-    struct FutureInstanceData {
+    struct FutureInstanceRecord {
         app_id: String,
         ip: Ipv4Addr,
         public_key: String,
@@ -1950,7 +2340,7 @@ mod value_encoding_tests {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let kv = KvStore::new(1, vec![], dir.path(), None).expect("failed to create kv store");
 
-        let written_by_a_newer_node = encode(&FutureInstanceData {
+        let written_by_a_newer_node = encode(&FutureInstanceRecord {
             app_id: "app".to_string(),
             ip: Ipv4Addr::new(10, 0, 0, 1),
             public_key: "pubkey".to_string(),
@@ -1966,14 +2356,13 @@ mod value_encoding_tests {
         // This build re-registers the instance, knowing nothing of the new field.
         kv.sync_instance(
             "app",
-            &InstanceData {
+            &InstanceRecord {
                 app_id: "app".to_string(),
                 ip: Ipv4Addr::new(10, 0, 0, 2),
                 public_key: "pubkey".to_string(),
                 reg_time: 1_700_000_100,
                 port_policy: None,
                 port_policy_hash: String::new(),
-                admin_port_policy: None,
             },
         )
         .expect("sync should succeed");
@@ -1984,7 +2373,7 @@ mod value_encoding_tests {
             .get(&keys::inst("app"))
             .and_then(|entry| entry.value)
             .expect("record should exist");
-        let seen_by_a_newer_node: FutureInstanceData =
+        let seen_by_a_newer_node: FutureInstanceRecord =
             decode(&stored).expect("the newer node must still read its own field");
         assert_eq!(
             seen_by_a_newer_node.health_probe_path, "/healthz",
@@ -1995,7 +2384,7 @@ mod value_encoding_tests {
             Ipv4Addr::new(10, 0, 0, 2),
             "the writer's own fields must still take effect"
         );
-        let seen_by_this_build: InstanceData =
+        let seen_by_this_build: InstanceRecord =
             decode(&stored).expect("this build must still read the record");
         assert_eq!(seen_by_this_build.reg_time, 1_700_000_100);
     }
@@ -2237,6 +2626,307 @@ mod corruption_tests {
             .expect("raw put should succeed");
     }
 
+    fn seed_instance(kv: &KvStore, id: &str) {
+        kv.sync_instance(
+            id,
+            &InstanceRecord {
+                app_id: "app".to_string(),
+                ip: "10.0.0.20".parse().unwrap(),
+                public_key: "key".to_string(),
+                reg_time: 1,
+                port_policy: None,
+                port_policy_hash: String::new(),
+            },
+        )
+        .expect("seed");
+        kv.sync_connections(id, 0).expect("seed conn");
+        kv.sync_instance_handshake(id, 1).expect("seed handshake");
+    }
+
+    /// Short-circuiting on `?` would publish the `inst/` tombstone and then
+    /// leave the ephemeral keys behind, and nothing garbage-collects orphans.
+    #[test]
+    fn a_failed_delete_does_not_abandon_the_remaining_keys() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let kv = test_kv(dir.path());
+        seed_instance(&kv, "cvm");
+
+        kv.fail_writes_for_test(&[InstanceKey::Connections]);
+        kv.sync_delete_instance("cvm")
+            .expect_err("the conn delete was made to fail");
+        kv.fail_writes_for_test(&[]);
+
+        assert!(
+            kv.persistent
+                .read()
+                .get(&keys::inst("cvm"))
+                .is_none_or(|entry| entry.is_deleted()),
+            "the inst/ tombstone should still have been written"
+        );
+        assert!(
+            kv.ephemeral
+                .read()
+                .get(&keys::handshake("cvm", kv.my_node_id))
+                .is_none_or(|entry| entry.is_deleted()),
+            "the handshake delete must be attempted even after conn/ failed"
+        );
+    }
+
+    /// `inst/` is the only persistent one of the pair an operator can do
+    /// anything about, so its failure must not be masked by an ephemeral key
+    /// that also happened to fail -- and the message has to say which record it
+    /// was, or the ordering buys nothing.
+    #[test]
+    fn the_persistent_failure_is_the_one_reported() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let kv = test_kv(dir.path());
+        seed_instance(&kv, "cvm");
+
+        kv.fail_writes_for_test(&[
+            InstanceKey::Instance,
+            InstanceKey::Connections,
+            InstanceKey::Handshake,
+        ]);
+        let err = kv
+            .sync_delete_instance("cvm")
+            .expect_err("all three were made to fail");
+        kv.fail_writes_for_test(&[]);
+
+        let message = format!("{err:#}");
+        assert!(
+            message.contains(InstanceKey::Instance.name()),
+            "expected the instance record to be named, got: {message}"
+        );
+        assert!(
+            !message.contains(InstanceKey::Handshake.name()),
+            "the ephemeral failure must not mask it, got: {message}"
+        );
+    }
+
+    #[test]
+    fn a_clean_delete_still_reports_that_the_record_existed() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let kv = test_kv(dir.path());
+        seed_instance(&kv, "cvm");
+        assert!(kv.sync_delete_instance("cvm").expect("delete"));
+        assert!(
+            !kv.sync_delete_instance("cvm").expect("second delete"),
+            "a tombstone is not a live record"
+        );
+    }
+
+    /// Write an instance record the way the build before the overrides moved
+    /// out of it did: with both operator fields inside.
+    fn seed_legacy_record(
+        kv: &KvStore,
+        id: &str,
+        port_policy: Option<PortPolicy>,
+        ready: Option<bool>,
+    ) {
+        #[derive(serde::Serialize)]
+        struct LegacyRecord {
+            app_id: String,
+            ip: std::net::Ipv4Addr,
+            public_key: String,
+            reg_time: u64,
+            port_policy: Option<PortPolicy>,
+            port_policy_hash: String,
+            admin_port_policy: Option<PortPolicy>,
+            ready: Option<bool>,
+        }
+        let encoded = encode(&LegacyRecord {
+            app_id: "app".to_string(),
+            ip: "10.0.0.20".parse().unwrap(),
+            public_key: format!("key-{id}"),
+            reg_time: 1,
+            port_policy: None,
+            port_policy_hash: String::new(),
+            admin_port_policy: port_policy,
+            ready,
+        })
+        .expect("encode");
+        put_raw(kv, &keys::inst(id), &encoded);
+    }
+
+    fn restrictive() -> PortPolicy {
+        PortPolicy {
+            ports: BTreeMap::from([(8443, PortFlags { pp: false })]),
+            restrict_mode: true,
+        }
+    }
+
+    /// A gateway upgrading from a build that kept the overrides inside the
+    /// instance record has them only there, and nothing rewrites that record on
+    /// the operator's behalf. Losing the port-policy override silently widens
+    /// the ports the app serves, so the move has to happen on load.
+    #[test]
+    fn overrides_left_in_an_instance_record_are_moved_to_their_own_keys() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let kv = test_kv(dir.path());
+        seed_legacy_record(&kv, "legacy", Some(restrictive()), Some(false));
+
+        // Until the move, the read-side fallback is what keeps them in force.
+        assert_eq!(
+            kv.legacy_instance_overrides()["legacy"],
+            LegacyOverrides {
+                admin_port_policy: Some(restrictive()),
+                ready: Some(false),
+            }
+        );
+        assert_eq!(
+            kv.migrate_legacy_instance_overrides(),
+            vec![
+                keys::admin_ready("legacy"),
+                keys::admin_port_policy("legacy")
+            ]
+        );
+        assert_eq!(kv.instance_gate("legacy").unwrap(), Some(false));
+        assert_eq!(
+            kv.instance_port_policy_override("legacy").unwrap(),
+            Some(PortPolicyOverride::Set(restrictive()))
+        );
+        assert!(
+            kv.migrate_legacy_instance_overrides().is_empty(),
+            "the move is not repeated once the keys exist"
+        );
+    }
+
+    /// One key per override, so a legacy record holding only one of them moves
+    /// only that one -- and the other stays open to being set later.
+    #[test]
+    fn each_override_is_moved_on_its_own() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let kv = test_kv(dir.path());
+        seed_legacy_record(&kv, "legacy", None, Some(false));
+        assert_eq!(
+            kv.migrate_legacy_instance_overrides(),
+            vec![keys::admin_ready("legacy")]
+        );
+        assert_eq!(kv.instance_gate("legacy").unwrap(), Some(false));
+        assert_eq!(
+            kv.instance_port_policy_override("legacy").unwrap(),
+            None,
+            "the port-policy key was never written"
+        );
+    }
+
+    /// Two overrides in one record meant setting one on this node discarded a
+    /// peer's unsynced change to the other, because WaveKV resolves a conflict
+    /// by taking a whole value. Separate keys are what make them independent.
+    #[test]
+    fn setting_one_override_leaves_the_other_alone() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let kv = test_kv(dir.path());
+        // What a peer set, arriving through sync.
+        kv.set_instance_port_policy_override("cvm", Some(restrictive()))
+            .expect("peer override");
+        // What this node sets, from a snapshot that never saw it.
+        kv.set_instance_gate("cvm", false).expect("gate");
+
+        assert_eq!(kv.instance_gate("cvm").unwrap(), Some(false));
+        assert_eq!(
+            kv.instance_port_policy_override("cvm").unwrap(),
+            Some(PortPolicyOverride::Set(restrictive()))
+        );
+    }
+
+    /// The instance record keeps its copy through the upgrade -- this build no
+    /// longer declares those fields, so `carry_unknown_fields` preserves them
+    /// and a node still on the previous build finds them where it left them.
+    /// That is also why an empty override record has to stop the move: without
+    /// it, clearing an override here would be undone by the stale copy.
+    #[test]
+    fn a_cleared_override_is_not_resurrected_from_the_instance_record() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let kv = test_kv(dir.path());
+        seed_legacy_record(&kv, "legacy", Some(restrictive()), None);
+        assert_eq!(
+            kv.migrate_legacy_instance_overrides(),
+            vec![keys::admin_port_policy("legacy")]
+        );
+
+        // The operator clears it. Cleared is written, not deleted.
+        kv.set_instance_port_policy_override("legacy", None)
+            .expect("clear");
+        assert_eq!(
+            kv.instance_port_policy_override("legacy").unwrap(),
+            Some(PortPolicyOverride::Cleared)
+        );
+
+        assert!(
+            kv.migrate_legacy_instance_overrides().is_empty(),
+            "a key that says \"cleared\" is still an answer"
+        );
+        assert_eq!(
+            kv.instance_port_policy_override("legacy").unwrap(),
+            Some(PortPolicyOverride::Cleared),
+            "the copy in the instance record must not come back"
+        );
+    }
+
+    /// Instance ids are recycled. An id reused after a delete would inherit the
+    /// gate and port policy an operator set for whatever ran under it before.
+    #[test]
+    fn deleting_an_instance_tombstones_its_overrides() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let kv = test_kv(dir.path());
+        seed_instance(&kv, "cvm");
+        kv.set_instance_gate("cvm", false).expect("seed gate");
+        kv.set_instance_port_policy_override("cvm", Some(restrictive()))
+            .expect("seed override");
+
+        kv.sync_delete_instance("cvm").expect("delete");
+        assert!(
+            kv.instance_gate("cvm").unwrap().is_none()
+                && kv.instance_port_policy_override("cvm").unwrap().is_none(),
+            "the override record must not outlive the instance"
+        );
+    }
+
+    /// A build that adds a field must not make the record unreadable to one
+    /// that does not know it: msgpack named maps let the older reader skip what
+    /// it does not recognise. If this ever fails, widening `InstanceRecord` has
+    /// stopped being a no-op for older nodes.
+    ///
+    /// `admin_port_policy` and `ready` stand in for the retired case as well as
+    /// the future one: this build no longer declares them, so they arrive here
+    /// the same way a field from a newer peer would.
+    #[test]
+    fn an_instance_record_with_an_unknown_field_still_decodes() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+
+        #[derive(serde::Serialize)]
+        struct FutureRecord<'a> {
+            app_id: &'a str,
+            ip: std::net::Ipv4Addr,
+            public_key: &'a str,
+            reg_time: u64,
+            port_policy: Option<PortPolicy>,
+            port_policy_hash: &'a str,
+            admin_port_policy: Option<PortPolicy>,
+            ready: Option<bool>,
+            reason: &'a str,
+        }
+        let widened = encode(&FutureRecord {
+            app_id: "app",
+            ip: "10.0.0.5".parse().unwrap(),
+            public_key: "k",
+            reg_time: 1,
+            port_policy: None,
+            port_policy_hash: "",
+            admin_port_policy: None,
+            ready: Some(false),
+            reason: "under investigation",
+        })
+        .expect("encode should succeed");
+        put_raw(&kv, &keys::inst("future"), &widened);
+
+        let loaded = kv.load_all_instances();
+        assert!(loaded.undecodable.is_empty(), "{:?}", loaded.undecodable);
+        assert_eq!(loaded.decoded["future"].public_key, "k");
+    }
+
     #[test]
     fn a_corrupt_certbot_config_does_not_read_as_the_default() {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
@@ -2364,14 +3054,13 @@ mod corruption_tests {
             let kv = test_kv(&data_dir);
             kv.sync_instance(
                 "cvm",
-                &InstanceData {
+                &InstanceRecord {
                     app_id: "app".to_string(),
                     ip: "10.0.0.20".parse().unwrap(),
                     public_key: "key".to_string(),
                     reg_time: 1,
                     port_policy: None,
                     port_policy_hash: String::new(),
-                    admin_port_policy: None,
                 },
             )
             .expect("sync should succeed");
@@ -2515,6 +3204,20 @@ mod key_schema_tests {
     fn a_parser_refuses_a_key_from_another_namespace() {
         assert_eq!(keys::parse_inst_key(&keys::node_info(1)), None);
         assert_eq!(keys::parse_cert_domain(&keys::inst("inst-a")), None);
+        // The overrides and the instance record are keyed by the same id, and
+        // the instance record is iterated by prefix. Either namespace claiming
+        // the other would make an operator's decision arrive as an instance
+        // record, or the reverse.
+        assert_eq!(keys::parse_inst_key(&keys::admin_ready("inst-a")), None);
+        assert!(!keys::admin_ready("inst-a").starts_with(keys::INST_PREFIX));
+        assert!(!keys::inst("inst-a").starts_with(keys::ADMIN_PREFIX));
+        // Two overrides of one instance, and the same override of two
+        // instances, must all be distinct keys.
+        assert_ne!(
+            keys::admin_ready("inst-a"),
+            keys::admin_port_policy("inst-a")
+        );
+        assert_ne!(keys::admin_ready("inst-a"), keys::admin_ready("inst-ab"));
         assert_eq!(keys::parse_node_info_key(&keys::node_status(1)), None);
         assert_eq!(keys::parse_node_info_key(&keys::inst("inst-a")), None);
         // `node/info/` and `node/status/` share a stem; neither may claim the other.

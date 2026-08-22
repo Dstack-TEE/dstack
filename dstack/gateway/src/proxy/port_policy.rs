@@ -100,6 +100,13 @@ pub(crate) fn filter_allowed_addresses(
     port: u16,
 ) -> Result<AddressGroup> {
     let total = addresses.len();
+    // Nothing was offered, so nothing was denied here -- and `port` has not
+    // been looked at yet, so naming it would send whoever reads this log at
+    // the wrong subsystem entirely. Selection knows why it came back empty;
+    // ask it instead of guessing.
+    if total == 0 {
+        bail!("{}", state.lock().describe_empty_selection(app_id));
+    }
     let allowed: AddressGroup = addresses
         .into_iter()
         .filter(|a| match is_port_allowed(state, &a.instance_id, port) {
