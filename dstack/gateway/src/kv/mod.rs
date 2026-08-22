@@ -907,7 +907,7 @@ impl KvStore {
     /// the ACME account and DNS credentials is the difference between a restart
     /// and a rebuild.
     ///
-    /// `wal_sync_interval` is how long a write may sit in the page cache before
+    /// `wal_sync_window` is how long a write may sit in the page cache before
     /// the log is forced to disk; `None` forces every write before it returns.
     /// It applies only to the persistent store — the ephemeral one keeps no log
     /// and never touches the disk.
@@ -915,11 +915,13 @@ impl KvStore {
         my_node_id: NodeId,
         peer_ids: Vec<NodeId>,
         data_dir: impl AsRef<Path>,
-        wal_sync_interval: Option<Duration>,
+        wal_sync_window: Option<Duration>,
     ) -> Result<Self> {
         let data_dir = data_dir.as_ref();
         let node_config = wavekv::NodeConfig {
-            wal_sync_interval,
+            // wavekv still calls it an interval; the gateway calls it a window
+            // because zero here means "no window", not "off".
+            wal_sync_interval: wal_sync_window,
             ..Default::default()
         };
         let persistent = match Node::with_persistence_and_config(

@@ -269,7 +269,7 @@ impl ProxyInner {
                 config.sync.node_id,
                 vec![],
                 &config.sync.data_dir,
-                (!config.sync.wal_sync_interval.is_zero()).then_some(config.sync.wal_sync_interval),
+                (!config.sync.wal_sync_window.is_zero()).then_some(config.sync.wal_sync_window),
             )
             .context("failed to initialize WaveKV store")?,
         );
@@ -1143,11 +1143,16 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
     // at the window itself is enough to make it one: the store measures from
     // its last fsync, so a write is forced at the first tick that finds the
     // window elapsed, never more than one window after it landed.
-    let wal_sync_interval = proxy.config.sync.wal_sync_interval;
-    if !wal_sync_interval.is_zero() {
+    let wal_sync_window = proxy.config.sync.wal_sync_window;
+    if wal_sync_window.is_zero() {
+        // Not silence: no window is the strictest setting, and an operator who
+        // set zero expecting to turn the work off should find out here rather
+        // than from a latency graph.
+        info!("WaveKV: no WAL sync window, every write is forced before it returns");
+    } else {
         let kv_store_for_wal = kv_store.clone();
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(wal_sync_interval);
+            let mut ticker = tokio::time::interval(wal_sync_window);
             loop {
                 ticker.tick().await;
                 let kv = kv_store_for_wal.clone();
@@ -1164,7 +1169,7 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
                 }
             }
         });
-        info!("WaveKV: deferred WAL sync enabled (window: {wal_sync_interval:?})");
+        info!("WaveKV: deferred WAL sync enabled (window: {wal_sync_window:?})");
     }
 
     // Start periodic connection sync task

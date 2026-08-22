@@ -187,9 +187,13 @@ persist_interval = "5m"
 # the kernel.
 #
 # A cluster recovers the window from its peers on restart. A single-node gateway
-# does not, which is the case for setting this to "0s" — force every write
-# before it returns, as releases before WaveKV 2.1 always did.
-wal_sync_interval = "5s"
+# does not, which is the case for setting this to "0s".
+#
+# Note that "0s" is the strictest setting here, not the cheapest: no window
+# means every write is forced before it returns, as releases before WaveKV 2.1
+# always did. That is the opposite of the "*_interval" settings either side of
+# it, where zero turns the work off — which is why this one is a window.
+wal_sync_window = "5s"
 # Enable periodic sync of instance connections to KV store
 sync_connections_enabled = true
 # Interval for syncing instance connections to KV store
