@@ -13,7 +13,7 @@ message RegisterCvmRequest {
   // The public key of the WireGuard interface of the CVM.
   string client_public_key = 1;
   // Whether this CVM asked for its traffic to be gated on application health,
-  // i.e. `requirements.health_check.enabled` in its app-compose. When true the
+  // i.e. `requirements.health_check` in its app-compose. When true the
   // gateway polls `Worker.Health` and holds the instance out of rotation until
   // the first poll answers.
   //
@@ -119,6 +119,17 @@ message StatusResponse {
   bytes uuid = 7;
   // What the data path is actually doing with kTLS and splice.
   ProxyAccelStatus accel = 8;
+  // Whether this node polls application health at all
+  // (`core.proxy.health_check.enabled`).
+  //
+  // Reported for the same reason as ProxyAccelStatus: the configured value is
+  // not otherwise observable at runtime, and here it changes what a host's
+  // `health` means. With polling off, an instance that opted in sits at
+  // "unknown" forever *and is fully eligible for traffic* -- indistinguishable,
+  // from the host list alone, from one that is being held out of rotation
+  // pending its first answer. That is the reading an operator is most likely to
+  // need during the incident that made them switch polling off.
+  bool health_gating = 9;
 }
 
 // Effective state of the data-path acceleration options.

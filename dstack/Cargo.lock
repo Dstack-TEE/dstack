@@ -1962,6 +1962,7 @@ dependencies = [
  "ed25519-dalek",
  "figment",
  "fs-err",
+ "futures",
  "guest-api",
  "hex",
  "host-api",

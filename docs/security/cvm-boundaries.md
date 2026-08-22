@@ -199,9 +199,11 @@ what it costs and in what it says:
 - `Health` answers from a cache the agent refreshes on its own timer, so a call
   costs a lock and a clone however many callers there are. It reveals whether
   the app opted into health gating, its current verdict, and — when the app
-  declared a `health_file` — the path it named and which parsing rule failed.
-  The file's *contents* are never quoted back. Container names and statuses were
-  already public through the dashboard below.
+  declared a `health_status_file` — the path it named and which parsing rule
+  failed. That last part is a narrow oracle for whether a path exists and what
+  shape its first two lines have; the path itself is already public, since it is
+  measured into the compose hash. The file's *contents* are never quoted back.
+  Container names and statuses were already public through the dashboard below.
 - `GetAttestationForAppKey` generates a TDX quote per call and is by far the
   most expensive method here.
 

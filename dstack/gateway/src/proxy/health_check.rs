@@ -18,7 +18,7 @@
 //! next to, rather than shared state that outlives whatever wrote it.
 //!
 //! Only instances that asked to be gated are polled -- an app opts in with
-//! `requirements.health_check.enabled`, which reaches the gateway as
+//! `requirements.health_check`, which reaches the gateway as
 //! `RegisterCvmRequest.health_check`. That flag, not a probe, is what keeps an
 //! older or uninterested CVM out of this: every failed poll counts as
 //! unhealthy, so discovering support by trying would blackhole exactly the
@@ -27,7 +27,7 @@
 //! Reachability is plain HTTP over the WireGuard tunnel, the same way
 //! [`super::port_policy`] already fetches port policy from the agent.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
@@ -40,20 +40,8 @@ use crate::config::HealthCheckConfig;
 use crate::main_service::Proxy;
 use crate::models::HealthState;
 
-use super::health_store;
-
 /// How long to wait before restarting the poll loop after it dies.
 const RESTART_DELAY: Duration = Duration::from_secs(5);
-
-/// Shortest gap between two writes of the health snapshot.
-///
-/// The snapshot holds the whole fleet, so any one verdict changing rewrites
-/// every entry. One instance flapping each round would otherwise rewrite the
-/// file every interval: measured at 2000 instances that is ~39 KB/s sustained,
-/// paid by the operator, triggered by whichever tenant flips. Losing up to this
-/// much is free -- what it protects is a process restart, and anything missing
-/// is re-derived by the next poll.
-const SNAPSHOT_MIN_INTERVAL: Duration = Duration::from_secs(30);
 
 /// One poll's verdict, plus why, for the line logged when the verdict changes.
 pub(crate) struct Observation {
@@ -69,10 +57,33 @@ pub(crate) struct Observation {
 #[derive(Debug, PartialEq, Eq)]
 enum PollResult {
     Healthy,
-    /// The agent answered, and the answer was no.
+    /// The agent answered, and the answer was no. Build with
+    /// [`PollResult::unhealthy`]; the reason is app-authored.
     Unhealthy(String),
-    /// No answer: timed out, refused, unparseable.
+    /// No answer: timed out, refused, unparseable. Build with
+    /// [`PollResult::unreachable`]; the reason quotes a transport error, which
+    /// is not the same as being free of guest-controlled bytes.
     Unreachable(String),
+}
+
+impl PollResult {
+    /// The agent answered "no", for `reason`.
+    fn unhealthy(reason: impl AsRef<str>) -> Self {
+        Self::Unhealthy(sanitize(reason.as_ref()))
+    }
+
+    /// No usable answer arrived, because of `reason`.
+    ///
+    /// Sanitizing in the constructor rather than at each call site, because the
+    /// obvious-looking call sites are the dangerous ones. A decode failure
+    /// stringifies a `serde_json` error, and serde renders a type mismatch by
+    /// quoting the offending value in full: a CVM answering `{"healthy":"<16
+    /// MiB>"}` turns into a 16 MiB log line, newlines and terminal escapes
+    /// intact. That is the same attack the answered-unhealthy path is bounded
+    /// against, arriving through the branch that reads like plumbing.
+    fn unreachable(reason: impl AsRef<str>) -> Self {
+        Self::Unreachable(sanitize(reason.as_ref()))
+    }
 }
 
 /// One instance as the round snapshotted it.
@@ -127,10 +138,9 @@ async fn poll_forever(state: Proxy, config: HealthCheckConfig) {
     let mut failures = BTreeMap::<String, u32>::new();
     // Where the next round starts in the target list. See `poll_round`.
     let mut cursor = 0usize;
-    let mut last_snapshot: Option<tokio::time::Instant> = None;
     loop {
         ticker.tick().await;
-        cursor = poll_round(&state, &config, &mut failures, cursor, &mut last_snapshot).await;
+        cursor = poll_round(&state, &config, &mut failures, cursor).await;
     }
 }
 
@@ -139,13 +149,19 @@ async fn poll_round(
     config: &HealthCheckConfig,
     failures: &mut BTreeMap<String, u32>,
     cursor: usize,
-    last_snapshot: &mut Option<tokio::time::Instant>,
 ) -> usize {
     // Snapshot under the lock and poll outside it. These are network round
     // trips, and holding `ProxyState` across them would stall every connection
     // being routed.
     let mut targets = select_targets(state);
-    failures.retain(|id, _| targets.iter().any(|target| &target.id == id));
+    // Set membership rather than a scan per entry: both sides are the fleet, so
+    // the nested form is quadratic in it, re-run every interval.
+    let live = targets
+        .iter()
+        .map(|target| target.id.as_str())
+        .collect::<BTreeSet<_>>();
+    failures.retain(|id, _| live.contains(id.as_str()));
+    drop(live);
     if targets.is_empty() {
         return 0;
     }
@@ -172,7 +188,6 @@ async fn poll_round(
     // tenant's detection latency. Measured on this transport: 256 such
     // instances take a 33s round at the shipped defaults.
     let deadline = tokio::time::Instant::now() + config.interval;
-    let mut changed = false;
     let mut polled = 0usize;
     loop {
         let landed = tokio::select! {
@@ -194,7 +209,7 @@ async fn poll_round(
             // Not enough evidence yet; the instance keeps the verdict it has.
             continue;
         };
-        changed |= state.lock().record_instance_health(&target, observation);
+        state.lock().record_instance_health(&target, observation);
     }
     if polled < total {
         // Never silently. An operator whose fleet is not being fully polled has
@@ -205,11 +220,6 @@ async fn poll_round(
              the rest are first in line next round",
             config.interval
         );
-    }
-    let due = last_snapshot.is_none_or(|at| at.elapsed() >= SNAPSHOT_MIN_INTERVAL);
-    if changed && due {
-        save_snapshot(state);
-        *last_snapshot = Some(tokio::time::Instant::now());
     }
     cursor.wrapping_add(polled)
 }
@@ -235,7 +245,7 @@ pub(crate) fn select_targets(state: &Proxy) -> Vec<Target> {
         .values()
         // Instances that never asked to be polled cannot be gated on the
         // answer, so polling them would only produce failures to misread.
-        .filter(|instance| instance.health_check)
+        .filter(|instance| instance.health_check())
         .filter(|instance| {
             // No handshake recorded yet is not evidence of anything: a CVM that
             // just registered has not completed one. Only a handshake that
@@ -300,38 +310,6 @@ fn apply_hysteresis(
     })
 }
 
-/// Persist this node's verdicts so a process restart does not re-derive them.
-pub(crate) fn save_snapshot(state: &Proxy) {
-    let path = state.config.proxy.health_check.state_file.clone();
-    if path.is_empty() {
-        return;
-    }
-    let entries = {
-        let guard = state.lock();
-        guard
-            .state
-            .instances
-            .values()
-            .filter(|instance| instance.health_check)
-            .map(|instance| {
-                (
-                    instance.id.clone(),
-                    instance.public_key.clone(),
-                    instance.health,
-                )
-            })
-            .collect::<Vec<_>>()
-    };
-    // Written outside the lock: this touches the filesystem, and the routing
-    // path is waiting on the same mutex.
-    health_store::save(
-        &path,
-        entries
-            .iter()
-            .map(|(id, key, state)| (id.as_str(), key.as_str(), *state)),
-    );
-}
-
 /// Ask one agent whether its app is serving.
 ///
 /// A failure to get an answer comes back as [`PollResult::Unreachable`] rather
@@ -345,15 +323,15 @@ async fn poll_instance(ip: Ipv4Addr, agent_port: u16, timeout: Duration) -> Poll
     let client = WorkerClient::new(super::guest_agent_client(url));
     let response = match tokio::time::timeout(timeout, client.health()).await {
         Err(_) => {
-            return PollResult::Unreachable(format!("health poll timed out after {timeout:?}"))
+            return PollResult::unreachable(format!("health poll timed out after {timeout:?}"))
         }
-        Ok(Err(err)) => return PollResult::Unreachable(format!("health poll failed: {err:#}")),
+        Ok(Err(err)) => return PollResult::unreachable(format!("health poll failed: {err:#}")),
         Ok(Ok(response)) => response,
     };
     if response.healthy {
         return PollResult::Healthy;
     }
-    PollResult::Unhealthy(describe_unhealthy(&response))
+    PollResult::unhealthy(describe_unhealthy(&response))
 }
 
 /// Longest reason kept from an agent's answer.
@@ -365,12 +343,10 @@ const MAX_REASON_BYTES: usize = 512;
 /// How many unhealthy entries are named before the rest are counted.
 const MAX_NAMED_CONTAINERS: usize = 8;
 
+/// Summarize an agent's "no" for the log line. The caller sanitizes.
 fn describe_unhealthy(response: &dstack_guest_agent_rpc::HealthResponse) -> String {
     if !response.error.is_empty() {
-        return sanitize(&format!(
-            "agent could not determine app health: {}",
-            response.error
-        ));
+        return format!("agent could not determine app health: {}", response.error);
     }
     if response.unhealthy.is_empty() {
         return "agent reported unhealthy without naming anything".to_string();
@@ -387,7 +363,7 @@ fn describe_unhealthy(response: &dstack_guest_agent_rpc::HealthResponse) -> Stri
             described.push_str(&format!(" (and {rest} more)"));
         }
     }
-    sanitize(&described)
+    described
 }
 
 /// Make an agent's answer safe to log.
@@ -398,6 +374,10 @@ fn describe_unhealthy(response: &dstack_guest_agent_rpc::HealthResponse) -> Stri
 /// stripped here, where the log line is actually emitted. Otherwise a hostile
 /// CVM alternating healthy and unhealthy gets one attacker-chosen log line per
 /// interval, newlines and escapes included.
+///
+/// Called from [`PollResult::unhealthy`] and [`PollResult::unreachable`] rather
+/// than from each site that formats a reason, because the site that was missed
+/// was the one that looked like plumbing rather than like an answer.
 fn sanitize(reason: &str) -> String {
     dstack_types::sanitize_for_log(reason, MAX_REASON_BYTES)
 }
@@ -427,7 +407,6 @@ mod tests {
             timeout: Duration::from_secs(2),
             concurrency: 16,
             failure_threshold,
-            state_file: String::new(),
         }
     }
 
@@ -440,7 +419,19 @@ mod tests {
     }
 
     fn unreachable() -> PollResult {
-        PollResult::Unreachable("health poll timed out after 2s".to_string())
+        PollResult::unreachable("health poll timed out after 2s")
+    }
+
+    /// The reason exactly as it reaches a log line.
+    ///
+    /// `describe_unhealthy` composes it and the constructor bounds it, and only
+    /// the pair is ever what an operator sees -- asserting on `describe_unhealthy`
+    /// alone would pass with the sanitizing dropped.
+    fn unhealthy_reason(response: &dstack_guest_agent_rpc::HealthResponse) -> String {
+        match PollResult::unhealthy(describe_unhealthy(response)) {
+            PollResult::Unhealthy(reason) => reason,
+            other => panic!("expected an unhealthy verdict, got {other:?}"),
+        }
     }
 
     /// One dropped packet must not eject an instance and recompute the app's
@@ -569,7 +560,7 @@ mod tests {
             }],
             error: String::new(),
         };
-        let described = describe_unhealthy(&response);
+        let described = unhealthy_reason(&response);
         assert!(!described.contains('\n'), "newline survived: {described:?}");
         assert!(!described.contains('\r'), "CR survived: {described:?}");
         assert!(
@@ -588,7 +579,7 @@ mod tests {
             unhealthy: vec![],
             error: "web\u{2028}Jan 01 INFO ok\u{202E}desrever".to_string(),
         };
-        let described = describe_unhealthy(&response);
+        let described = unhealthy_reason(&response);
         assert!(!described.contains('\u{2028}'), "{described:?}");
         assert!(!described.contains('\u{202E}'), "{described:?}");
     }
@@ -602,13 +593,47 @@ mod tests {
             unhealthy: vec![],
             error: "x".repeat(64 * 1024),
         };
-        let described = describe_unhealthy(&response);
+        let described = unhealthy_reason(&response);
         assert!(
             described.len() < MAX_REASON_BYTES * 2,
             "reason was {} bytes",
             described.len()
         );
         assert!(described.ends_with("(truncated)"));
+    }
+
+    /// The other half of the same rule, on the branch that reads like plumbing.
+    ///
+    /// An unreachable reason stringifies whatever failed, and a decode failure
+    /// stringifies a `serde_json` error -- which renders a type mismatch by
+    /// quoting the offending value *in full*. A CVM answering
+    /// `{"healthy":"<16 MiB of text>"}` therefore emitted a 16 MiB log line
+    /// with its newlines and terminal escapes intact, and could schedule one
+    /// every interval by alternating healthy and garbage. The answered-unhealthy
+    /// path was bounded from the start; this one was not, because nothing about
+    /// a transport error looks guest-controlled.
+    #[test]
+    fn an_unreachable_reason_is_bounded_and_stripped_too() {
+        // The marker the truncation appends, which is allowed past the bound.
+        const MARKER: &str = "... (truncated)";
+        let quoted = "\nlevel=fatal msg=owned\u{1b}[31m".repeat(4096);
+        let hostile = format!("health poll failed: invalid type: string \"{quoted}\"");
+        assert!(
+            hostile.len() > MAX_REASON_BYTES * 4,
+            "the fixture must exceed the bound, or this test proves nothing"
+        );
+
+        let PollResult::Unreachable(reason) = PollResult::unreachable(&hostile) else {
+            panic!("unreachable() must build an Unreachable");
+        };
+        assert!(
+            reason.len() <= MAX_REASON_BYTES + MARKER.len(),
+            "reason was {} bytes",
+            reason.len()
+        );
+        assert!(reason.ends_with(MARKER), "not truncated: {reason:?}");
+        assert!(!reason.contains('\n'), "newline survived: {reason:?}");
+        assert!(!reason.contains('\u{1b}'), "escape survived: {reason:?}");
     }
 
     /// A thousand containers must not become a thousand-entry log line.

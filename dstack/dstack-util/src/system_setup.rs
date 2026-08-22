@@ -993,7 +993,7 @@ fn health_check_requested(app_compose: &AppCompose) -> bool {
     app_compose
         .requirements
         .as_ref()
-        .is_some_and(|requirements| requirements.health_check_enabled())
+        .is_some_and(|requirements| requirements.health_check)
 }
 
 fn verify_manifest_feature_requirements(app_compose: &AppCompose) -> Result<()> {
@@ -1020,26 +1020,41 @@ fn verify_manifest_feature_requirements(app_compose: &AppCompose) -> Result<()> 
     Ok(())
 }
 
-/// Reject a health-gating request the guest could not act on.
+/// Reject a health-gating request this guest could not act on.
 ///
-/// Both of these would otherwise deploy and report healthy forever, and the
-/// only signal would be the absence of an effect -- the failure mode this is
-/// meant to remove, not add.
+/// Only checks that need nothing but the manifest. The obvious third
+/// check -- "does any service actually declare a `healthcheck:`?" -- is
+/// deliberately *not* here, even though an app whose containers declare none
+/// reports healthy forever, which is the failure this is meant to remove.
+///
+/// It is not here because at this point the only thing available is the raw
+/// compose text, and reading it is not the same question as the one the runtime
+/// answers. Scanning YAML for the key misses a `HEALTHCHECK` in the Dockerfile,
+/// misses a `<<:` merge from a shared anchor (the loader does not expand merge
+/// keys, so the service reads as having no `healthcheck` at all), misses
+/// `extends:` and multi-file overrides -- and *passes* `healthcheck: {disable:
+/// true}` and `test: ["NONE"]`, which are exactly the configurations that
+/// produce no verdict at runtime. It rejects working deployments and admits
+/// broken ones.
+///
+/// The guest agent asks the runtime instead, which is the authority, and
+/// reports "nothing here can be judged" as unhealthy-with-a-reason. That
+/// surfaces in the gateway log and on the dashboard rather than as a boot
+/// failure, and it is right in all of the cases above.
 fn verify_health_check_requirement(app_compose: &AppCompose) -> Result<()> {
-    let Some(health_check) = app_compose
-        .requirements
-        .as_ref()
-        .and_then(|requirements| requirements.health_check.as_ref())
-    else {
+    let Some(requirements) = app_compose.requirements.as_ref() else {
         return Ok(());
     };
-    if !health_check.enabled {
+    if !requirements.health_check {
+        // A path without gating enabled is inert, not an error: an operator
+        // turning gating off during an incident should not have to also delete
+        // the path they will want back.
         return Ok(());
     }
-    match health_check.health_file.as_deref() {
+    match requirements.health_status_file.as_deref() {
         Some(path) => {
             if !path.starts_with('/') {
-                bail!("requirements.health_check.health_file must be an absolute path: {path}");
+                bail!("requirements.health_status_file must be an absolute path: {path}");
             }
         }
         None => {
@@ -1047,25 +1062,9 @@ fn verify_health_check_requirement(app_compose: &AppCompose) -> Result<()> {
             // starts no containers, so it would answer "healthy" unconditionally.
             if app_compose.runner != "docker-compose" && app_compose.runner != "nerdctl-compose" {
                 bail!(
-                    "requirements.health_check needs health_file for the {} runner; \
+                    "requirements.health_check needs health_status_file for the {} runner; \
                      without containers to inspect there is nothing to judge",
                     app_compose.runner
-                );
-            }
-            // Same failure, one level down and rather more likely: only
-            // containers that declare a `healthcheck:` are judged, so a compose
-            // file with none reports healthy the moment any container is
-            // created and keeps doing so after every one of them has exited.
-            // An unparseable file is not evidence either way and is left to
-            // whatever fails on it next.
-            let declares = app_compose
-                .docker_compose_file
-                .as_deref()
-                .and_then(crate::docker_compose::compose_declares_a_healthcheck);
-            if declares == Some(false) {
-                bail!(
-                    "requirements.health_check is enabled but no service in docker_compose_file \
-                     declares a healthcheck; add one, or set health_file to report health directly"
                 );
             }
         }
@@ -3546,18 +3545,18 @@ fn test_app_compose(
     serde_json::from_value(value).unwrap()
 }
 
-/// The single hop between `requirements.health_check.enabled` and
+/// The single hop between `requirements.health_check` and
 /// `RegisterCvmRequest.health_check`. Nothing else connects the app's manifest
 /// to the gateway's behaviour, so if this is wrong the feature is inert
 /// fleet-wide and nothing else fails.
 #[test]
 fn health_check_opt_in_reaches_registration() {
     let opted_in =
-        compose_with_health_check("docker-compose", serde_json::json!({"enabled": true}));
+        compose_with_health_check("docker-compose", serde_json::json!({"health_check": true}));
     assert!(health_check_requested(&opted_in));
 
     let opted_out =
-        compose_with_health_check("docker-compose", serde_json::json!({"enabled": false}));
+        compose_with_health_check("docker-compose", serde_json::json!({"health_check": false}));
     assert!(!health_check_requested(&opted_out));
 }
 
@@ -3572,58 +3571,32 @@ fn an_app_that_says_nothing_does_not_ask_to_be_polled() {
     assert!(!health_check_requested(&empty_requirements));
 }
 
+/// An app that opts into health gating, with `overrides` merged over the
+/// `requirements` object so a case can vary one field without restating it.
+///
+/// The compose file deliberately declares no `healthcheck:`. Whether the
+/// containers can be judged is the runtime's answer, given by the guest agent,
+/// not something read out of the YAML here -- so a fixture without one has to
+/// pass validation.
 #[cfg(test)]
-fn compose_with_health_check(runner: &str, health_check: serde_json::Value) -> AppCompose {
+fn compose_with_health_check(runner: &str, overrides: serde_json::Value) -> AppCompose {
+    let mut requirements = serde_json::json!({"health_check": true});
+    for (key, value) in overrides.as_object().expect("an object of overrides") {
+        requirements[key] = value.clone();
+    }
     serde_json::from_value(serde_json::json!({
         "manifest_version": "3",
         "name": "health-app",
         "runner": runner,
-        "docker_compose_file": "services:\n  web:\n    image: app:1\n    healthcheck:\n      test: [\"CMD\", \"true\"]\n",
-        "requirements": { "health_check": health_check },
+        "docker_compose_file": "services:\n  web:\n    image: app:1\n",
+        "requirements": requirements,
     }))
     .unwrap()
 }
 
 #[test]
-fn health_check_on_a_container_runner_needs_no_health_file() {
-    let compose = compose_with_health_check("docker-compose", serde_json::json!({"enabled": true}));
-    verify_manifest_feature_requirements(&compose).unwrap();
-}
-
-/// Only containers that declare a `healthcheck:` are judged, so a compose file
-/// with none reports healthy forever -- the same silent no-op the runner check
-/// above exists to remove, and the likelier mistake.
-#[test]
-fn health_check_without_any_declared_healthcheck_is_rejected() {
-    let mut compose =
-        compose_with_health_check("docker-compose", serde_json::json!({"enabled": true}));
-    compose.docker_compose_file = Some("services:\n  web:\n    image: app:1\n".to_string());
-    let err = verify_manifest_feature_requirements(&compose).unwrap_err();
-    assert!(
-        err.to_string().contains("declares a healthcheck"),
-        "unexpected error: {err}"
-    );
-}
-
-#[test]
-fn a_declared_healthcheck_on_any_service_is_enough() {
-    let mut compose =
-        compose_with_health_check("docker-compose", serde_json::json!({"enabled": true}));
-    compose.docker_compose_file = Some(
-        "services:\n  init:\n    image: app:1\n  web:\n    image: app:1\n    \
-         healthcheck:\n      test: [\"CMD\", \"true\"]\n"
-            .to_string(),
-    );
-    verify_manifest_feature_requirements(&compose).unwrap();
-}
-
-/// An unparseable compose file is not evidence that it declares nothing, and
-/// turning it into one here would reject a deployment for the wrong reason.
-#[test]
-fn an_unparseable_compose_file_is_left_to_whatever_fails_on_it_next() {
-    let mut compose =
-        compose_with_health_check("docker-compose", serde_json::json!({"enabled": true}));
-    compose.docker_compose_file = Some("\tservices: [unbalanced".to_string());
+fn health_check_on_a_container_runner_needs_no_health_status_file() {
+    let compose = compose_with_health_check("docker-compose", serde_json::json!({}));
     verify_manifest_feature_requirements(&compose).unwrap();
 }
 
@@ -3632,19 +3605,19 @@ fn an_unparseable_compose_file_is_left_to_whatever_fails_on_it_next() {
 /// silent no-op the opt-in exists to avoid.
 #[test]
 fn health_check_without_containers_to_judge_is_rejected() {
-    let compose = compose_with_health_check("bash", serde_json::json!({"enabled": true}));
+    let compose = compose_with_health_check("bash", serde_json::json!({}));
     let err = verify_manifest_feature_requirements(&compose).unwrap_err();
     assert!(
-        err.to_string().contains("needs health_file"),
+        err.to_string().contains("needs health_status_file"),
         "unexpected error: {err}"
     );
 }
 
 #[test]
-fn a_bash_runner_with_a_health_file_is_accepted() {
+fn a_bash_runner_with_a_health_status_file_is_accepted() {
     let compose = compose_with_health_check(
         "bash",
-        serde_json::json!({"enabled": true, "health_file": "/dstack/health"}),
+        serde_json::json!({"health_status_file": "/dstack/health"}),
     );
     verify_manifest_feature_requirements(&compose).unwrap();
 }
@@ -3652,10 +3625,10 @@ fn a_bash_runner_with_a_health_file_is_accepted() {
 /// The agent runs in the guest rootfs, so a relative path resolves against
 /// whatever its working directory happens to be.
 #[test]
-fn a_relative_health_file_is_rejected() {
+fn a_relative_health_status_file_is_rejected() {
     let compose = compose_with_health_check(
         "docker-compose",
-        serde_json::json!({"enabled": true, "health_file": "health"}),
+        serde_json::json!({"health_status_file": "health"}),
     );
     let err = verify_manifest_feature_requirements(&compose).unwrap_err();
     assert!(
@@ -3666,9 +3639,13 @@ fn a_relative_health_file_is_rejected() {
 
 /// Declared but switched off must not be validated as if it were on: turning
 /// gating off during an incident should not also have to be a config rewrite.
+/// Both of the surviving checks would reject this fixture with the flag on.
 #[test]
 fn a_disabled_health_check_is_not_validated() {
-    let compose = compose_with_health_check("bash", serde_json::json!({"enabled": false}));
+    let compose = compose_with_health_check(
+        "bash",
+        serde_json::json!({"health_check": false, "health_status_file": "relative"}),
+    );
     verify_manifest_feature_requirements(&compose).unwrap();
 }
 

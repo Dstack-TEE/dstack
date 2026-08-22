@@ -23,7 +23,7 @@ Health gating is off unless the app asks for it, in `requirements`:
   "name": "my-app",
   "runner": "docker-compose",
   "requirements": {
-    "health_check": { "enabled": true }
+    "health_check": true
   }
 }
 ```
@@ -55,7 +55,7 @@ There are two sources, and the app picks one.
 
 ### Default: container healthchecks
 
-With no `health_file`, the agent judges the app's own Compose project:
+With no `health_status_file`, the agent judges the app's own Compose project:
 
 ```yaml
 services:
@@ -72,6 +72,15 @@ Only containers that declare a `healthcheck` are judged. A container without one
 is not evidence either way — the app has not said how to test it — so it is
 skipped rather than counted as passing. `starting` counts as *not* healthy: that
 state is precisely the boot window this exists to keep traffic out of.
+
+If containers are running but **not one of them declares a healthcheck**, the
+instance reports unhealthy rather than healthy. You asked for traffic to be
+gated on an answer that nothing can produce, and reporting a pass would leave
+you with a feature that is switched on and doing nothing, visible only as the
+absence of an effect. Note that this is judged from what the runtime did, not
+from your compose file — a `HEALTHCHECK` in a Dockerfile counts, a `healthcheck`
+merged in from a YAML anchor counts, and `healthcheck: {disable: true}` does
+not, whatever the file appears to say.
 
 A container that declares a healthcheck and is **not running** is not healthy
 either, whatever verdict the runtime last recorded for it. Docker re-marks a
@@ -94,7 +103,7 @@ The `nerdctl-compose` runner needs **nerdctl >= 2.3.1** for Compose
 Container presence is still detected on older versions, so the boot-window gate
 works regardless.
 
-### `health_file`: the app answers for itself
+### `health_status_file`: the app answers for itself
 
 For the `bash` runner there are no containers to inspect, and an app may anyway
 want to give one whole-application answer rather than have every container
@@ -103,10 +112,8 @@ judged separately. Name a file and the agent reads it:
 ```json
 {
   "requirements": {
-    "health_check": {
-      "enabled": true,
-      "health_file": "/dstack/health"
-    }
+    "health_check": true,
+    "health_status_file": "/dstack/health"
   }
 }
 ```
@@ -134,16 +141,20 @@ timestamp, or a state word the agent does not recognise. Writing it atomically
 (write a temporary file in the same directory, then rename) avoids being judged
 on a half-written one.
 
-It must be a **regular file**, and the agent will not follow a symlink to it.
-The path is measured into the compose hash; what sits at that path at runtime is
-not, so a symlink would let a container redirect a root-owned read after the
-fact, and a FIFO would park one of the agent's threads on every refresh. Neither
-is reported as unhealthy-with-a-reason so much as refused outright.
+It must be a **regular file**. A FIFO is refused outright rather than reported
+as unhealthy-with-a-reason: opening one with no writer would park a thread of
+the agent's blocking pool on every refresh, and those threads are not
+reclaimable.
 
-For the same reason the agent never quotes the file's contents back. A verdict
-names the rule that failed — "line 1 is neither healthy nor unhealthy" — because
-the report is served to anonymous callers and the bytes at that path may not be
-the bytes the app wrote.
+Symlinks *are* followed, including a symlinked parent directory. The path is
+measured into the compose hash but what sits at that path at runtime is not, so
+this is a read the app can redirect — which buys it nothing, because it already
+writes the file and can therefore already lie about its own health. The read is
+bounded and the contents are never quoted back.
+
+That last point is deliberate: a verdict names the rule that failed — "line 1 is
+neither healthy nor unhealthy" — because the report is served to anonymous
+callers and the bytes at that path may not be the bytes the app wrote.
 
 The agent reads the file from the guest rootfs, not from inside any container,
 so a container that writes it needs the path bind-mounted in. **Mount the
@@ -177,8 +188,10 @@ must not read as a pass.
   the spot.
 - Health is a *per-node observation*. Each gateway node polls for itself and
   does not share the result, the same way each node reads its own WireGuard
-  handshakes. A node remembers its verdicts across a restart of the process, and
-  discards them across a reboot of the machine.
+  handshakes. Nothing is persisted: a gateway restart puts every instance back
+  at `unknown`, and since that is the whole app at once, the fail-open above
+  routes to all of them until the first round of polls answers a few seconds
+  later.
 - Instances whose WireGuard handshake has gone stale are not polled. They are
   already excluded from routing, and polling them would spend the round's budget
   on CVMs that are gone.
@@ -197,8 +210,12 @@ interval = "5s"
 timeout = "2s"
 concurrency = 16
 failure_threshold = 2
-state_file = "/dstack-gateway/data/instance-health.json"
 ```
 
 `enabled = false` restores the behaviour from before health polling existed:
-every instance stays eligible regardless of what it reports.
+every instance stays eligible regardless of what it reports. Note what that
+looks like from the outside: instances that opted in sit at `unknown` forever,
+because nothing will ever poll them, and they are *all in rotation*. The gateway
+dashboard labels that case `unknown (gating off)` and reports the switch itself
+under **This Node → Health Gating**, so the state is not left to be inferred
+from a column that means something different when polling is on.

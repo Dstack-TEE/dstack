@@ -132,7 +132,6 @@ interval = "5s"
 timeout = "2s"
 concurrency = 16
 failure_threshold = 2
-state_file = "/dstack-gateway/data/instance-health.json"
 
 [core.proxy.port_policy_fetch]
 # Background lazy-fetch of port_policy from legacy CVM agents.

@@ -5,6 +5,7 @@
 use super::*;
 use crate::config::{load_config_figment, Config, MutualConfig};
 use crate::kv::PortFlags;
+use crate::models::HealthState;
 use crate::proxy::port_policy::is_port_allowed;
 use base64::Engine as _;
 use std::sync::atomic::Ordering;
@@ -36,13 +37,6 @@ async fn create_test_state_with(tweak: impl FnOnce(&mut Config)) -> TestState {
     config.wg.config_path = temp_dir
         .path()
         .join("wg.conf")
-        .to_string_lossy()
-        .into_owned();
-    // Same reason: the default points at a real deployment path, and a stray
-    // snapshot there would seed tests with verdicts they never observed.
-    config.proxy.health_check.state_file = temp_dir
-        .path()
-        .join("instance-health.json")
         .to_string_lossy()
         .into_owned();
     tweak(&mut config);
@@ -530,14 +524,14 @@ fn observe_from(
     proxy: &mut ProxyState,
     target: &crate::proxy::health_check::Target,
     state: HealthState,
-) -> bool {
+) {
     proxy.record_instance_health(
         target,
         crate::proxy::health_check::Observation {
             state,
             reason: String::new(),
         },
-    )
+    );
 }
 
 fn selected_ids(group: &AddressGroup) -> Vec<String> {
@@ -782,7 +776,7 @@ async fn a_gate_arriving_through_kv_invalidates_the_cached_selection() {
             port_policy_hash: existing.port_policy_hash.clone(),
             admin_port_policy: None,
             ready: Some(false),
-            health_check: Some(existing.health_check),
+            health_check: Some(existing.health_check()),
         }
     };
     state.kv_store.sync_instance("peer-app-0", &gated).unwrap();
@@ -849,7 +843,7 @@ async fn a_capability_change_arriving_through_kv_invalidates_the_cached_selectio
 
     let mut proxy = state.lock();
     assert_eq!(
-        proxy.state.instances["swap-app-0"].health,
+        proxy.state.instances["swap-app-0"].health(),
         HealthState::Unknown
     );
     assert!(
@@ -1008,7 +1002,7 @@ async fn an_agent_that_cannot_report_health_stays_eligible() {
     for index in 0..2 {
         let id = format!("legacy-app-{index}");
         assert_eq!(
-            proxy.state.instances[&id].health,
+            proxy.state.instances[&id].health(),
             HealthState::Ungated,
             "an agent that never declared the capability must not sit in Unknown"
         );
@@ -1055,6 +1049,45 @@ async fn an_app_with_no_healthy_instance_fails_open() {
         selected_ids(&proxy.select_top_n_hosts("open-app").unwrap()).len(),
         2,
         "every instance unhealthy should route to all of them, not to none"
+    );
+}
+
+/// The rate limiter behind the fail-open warning is keyed by app id, and an app
+/// id is chosen by the tenant. Keyed on "apps this process has ever seen"
+/// rather than "apps that exist", the map only ever grew: deploy, fail every
+/// health check once, undeploy, repeat -- an unbounded map in a long-lived
+/// process, filled by whoever can register a CVM.
+#[tokio::test]
+async fn the_all_unhealthy_warning_is_forgotten_with_the_app_it_is_keyed_on() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_instances(&mut proxy, "churn-app", 2, true);
+    observe(&mut proxy, "churn-app-0", HealthState::Unhealthy);
+    observe(&mut proxy, "churn-app-1", HealthState::Unhealthy);
+
+    // Nothing healthy left, so selecting fails open and records the warning.
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("churn-app").unwrap()).len(),
+        2
+    );
+    assert!(
+        proxy.state.all_unhealthy_warned.contains_key("churn-app"),
+        "the fixture must have recorded a warning, or this test proves nothing"
+    );
+
+    for index in 0..2 {
+        proxy
+            .remove_instance(&format!("churn-app-{index}"))
+            .unwrap();
+    }
+
+    assert!(
+        !proxy.state.apps.contains_key("churn-app"),
+        "the app should be gone once its last instance is"
+    );
+    assert!(
+        !proxy.state.all_unhealthy_warned.contains_key("churn-app"),
+        "the warning entry outlived the app it is keyed on"
     );
 }
 
@@ -1159,12 +1192,67 @@ async fn a_reboot_resets_health_to_unknown() {
     ]));
 
     assert_eq!(
-        proxy.state.instances["restart-app-0"].health,
+        proxy.state.instances["restart-app-0"].health(),
         HealthState::Unknown
     );
     assert_eq!(
         selected_ids(&proxy.select_top_n_hosts("restart-app").unwrap()),
         vec!["restart-app-1"]
+    );
+}
+
+/// The reboot reset has to reach the *cached* selection too, not just the
+/// record.
+///
+/// Every other writer to `instances` dropped the app's `top_n` and this one did
+/// not, so the node that took the re-registration went on serving a selection
+/// computed before the reboot for up to `cache_top_n` -- routing to a CVM whose
+/// containers were not up, on the node most likely to be selected, while every
+/// other node in the cluster invalidated correctly through the sync path. That
+/// window is exactly what health gating exists to close, so the bug hid inside
+/// the feature meant to prevent it.
+#[tokio::test]
+async fn a_reboot_invalidates_the_selection_cached_on_the_node_that_took_it() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_instances(&mut proxy, "reboot-cache-app", 2, true);
+    observe(&mut proxy, "reboot-cache-app-0", HealthState::Healthy);
+    observe(&mut proxy, "reboot-cache-app-1", HealthState::Healthy);
+
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("reboot-cache-app").unwrap()).len(),
+        2
+    );
+    assert_eq!(proxy.state.top_n.len(), 1, "selection should be cached");
+
+    // A fresh WireGuard key is how a reboot is told apart from the periodic
+    // re-registration: the guest caches its key store in `/run`, which is
+    // tmpfs.
+    let rebooted_key = test_pubkey("reboot-cache-app-key-0-second-boot");
+    re_register(
+        &mut proxy,
+        "reboot-cache-app-0",
+        "reboot-cache-app",
+        &rebooted_key,
+        true,
+    );
+    proxy.handshake_cache.set_for_test(BTreeMap::from([
+        (rebooted_key, now_secs()),
+        (test_pubkey("reboot-cache-app-key-1"), now_secs()),
+    ]));
+
+    assert_eq!(
+        proxy.state.instances["reboot-cache-app-0"].health(),
+        HealthState::Unknown
+    );
+    assert!(
+        proxy.state.top_n.is_empty(),
+        "a reboot must drop the selection computed before it"
+    );
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("reboot-cache-app").unwrap()),
+        vec!["reboot-cache-app-1"],
+        "the rebooted instance was still being served from cache"
     );
 }
 
@@ -1189,7 +1277,7 @@ async fn a_periodic_re_registration_keeps_the_last_health_verdict() {
     );
 
     assert_eq!(
-        proxy.state.instances["refresh-app-0"].health,
+        proxy.state.instances["refresh-app-0"].health(),
         HealthState::Healthy
     );
     assert_eq!(
@@ -1198,65 +1286,32 @@ async fn a_periodic_re_registration_keeps_the_last_health_verdict() {
     );
 }
 
-/// `record_instance_health`'s return value is the only thing that makes the
-/// poller write the snapshot, so a mutation to it silently disables restart
-/// survival with every other test still green.
+/// The property that makes it safe not to persist health across a restart.
+///
+/// A restarted process rebuilds every instance at `Unknown`, which is not
+/// healthy. If the fail-open in `retain_healthy` ever stopped covering "no
+/// candidate is healthy *yet*", a gateway restart would blackhole every gated
+/// app in the fleet until its first round of polls answered -- and the poll
+/// interval is the whole outage. Nothing else stands between the restart and
+/// that, so it is pinned here rather than left to the general fail-open test,
+/// which reaches the same branch from verdicts that were actually observed.
 #[tokio::test]
-async fn recording_reports_whether_anything_changed() {
+async fn a_fleet_that_has_not_been_polled_yet_is_still_routed_to() {
     let state = create_test_state().await;
     let mut proxy = state.lock();
-    register_instances(&mut proxy, "changed-app", 1, true);
-    let info = proxy.state.instances["changed-app-0"].clone();
-    let target = crate::proxy::health_check::Target {
-        id: info.id.clone(),
-        ip: info.ip,
-        public_key: info.public_key.clone(),
-    };
+    register_instances(&mut proxy, "restarted-app", 3, true);
 
-    assert!(
-        observe_from(&mut proxy, &target, HealthState::Healthy),
-        "a new verdict is a change"
-    );
-    assert!(
-        !observe_from(&mut proxy, &target, HealthState::Healthy),
-        "the same verdict again is not"
-    );
-    assert!(
-        observe_from(&mut proxy, &target, HealthState::Unhealthy),
-        "a different verdict is"
-    );
-}
-
-/// The snapshot module is unit-tested on its own, but nothing verified that the
-/// gateway actually writes to it and reads from it. Deleting either side left
-/// the whole suite green, so a feature that is inert in production would have
-/// looked fine here.
-#[tokio::test]
-async fn a_verdict_survives_rebuilding_state_from_the_store() {
-    let state = create_test_state().await;
-    let path = state.config.proxy.health_check.state_file.clone();
-    {
-        let mut proxy = state.lock();
-        register_instances(&mut proxy, "persist-app", 2, true);
-        observe(&mut proxy, "persist-app-0", HealthState::Healthy);
-        observe(&mut proxy, "persist-app-1", HealthState::Unhealthy);
+    for index in 0..3 {
+        assert_eq!(
+            proxy.state.instances[&format!("restarted-app-{index}")].health(),
+            HealthState::Unknown,
+            "the fixture must be un-polled, or this test proves nothing"
+        );
     }
-    crate::proxy::health_check::save_snapshot(&state.proxy);
-
-    // What a restarted process does: read the snapshot, then rebuild every
-    // instance from the store.
-    let store = crate::proxy::health_store::HealthStore::load(&path);
-    let rebuilt =
-        build_state_from_kv_store(&state.config, state.kv_store.load_all_instances(), &store);
-
     assert_eq!(
-        rebuilt.instances["persist-app-0"].health,
-        HealthState::Healthy,
-        "a restart re-derived a verdict it had already observed"
-    );
-    assert_eq!(
-        rebuilt.instances["persist-app-1"].health,
-        HealthState::Unhealthy
+        selected_ids(&proxy.select_top_n_hosts("restarted-app").unwrap()).len(),
+        3,
+        "a fleet that has not been polled yet must be routed to, not held out"
     );
 }
 
@@ -1303,7 +1358,7 @@ async fn a_reboot_arriving_through_kv_resets_health_on_this_node_too() {
 
     let proxy = state.lock();
     assert_eq!(
-        proxy.state.instances["peer-reboot-app-0"].health,
+        proxy.state.instances["peer-reboot-app-0"].health(),
         HealthState::Unknown,
         "the pre-reboot verdict was carried onto the new boot"
     );
@@ -1351,11 +1406,11 @@ async fn a_record_written_without_the_capability_field_does_not_clear_it() {
 
     let proxy = state.lock();
     assert!(
-        proxy.state.instances["mixed-app-0"].health_check,
+        proxy.state.instances["mixed-app-0"].health_check(),
         "an absent field must not read as an opt-out"
     );
     assert_eq!(
-        proxy.state.instances["mixed-app-0"].health,
+        proxy.state.instances["mixed-app-0"].health(),
         HealthState::Healthy,
         "and must not reset the verdict this node observed"
     );
@@ -1438,16 +1493,15 @@ async fn a_verdict_polled_before_a_reboot_is_not_applied_after_it() {
     let rebooted_key = test_pubkey("race-app-key-0-second-boot");
     re_register(&mut proxy, "race-app-0", "race-app", &rebooted_key, true);
     assert_eq!(
-        proxy.state.instances["race-app-0"].health,
+        proxy.state.instances["race-app-0"].health(),
         HealthState::Unknown
     );
 
     // The in-flight poll finally lands.
-    let applied = observe_from(&mut proxy, &polled, HealthState::Healthy);
+    observe_from(&mut proxy, &polled, HealthState::Healthy);
 
-    assert!(!applied, "a stale observation must not count as a change");
     assert_eq!(
-        proxy.state.instances["race-app-0"].health,
+        proxy.state.instances["race-app-0"].health(),
         HealthState::Unknown,
         "the previous boot's verdict was applied to the new one"
     );
@@ -1467,10 +1521,11 @@ async fn a_verdict_polled_from_a_stale_address_is_not_applied() {
         public_key: proxy.state.instances["addr-app-0"].public_key.clone(),
     };
 
-    assert!(!observe_from(&mut proxy, &polled, HealthState::Healthy));
+    observe_from(&mut proxy, &polled, HealthState::Healthy);
     assert_eq!(
-        proxy.state.instances["addr-app-0"].health,
-        HealthState::Unknown
+        proxy.state.instances["addr-app-0"].health(),
+        HealthState::Unknown,
+        "a verdict polled from an address this instance no longer has was applied"
     );
 }
 
@@ -1498,11 +1553,11 @@ async fn a_registration_that_reports_no_capability_leaves_it_alone() {
         .unwrap();
 
     assert!(
-        proxy.state.instances["debug-app-0"].health_check,
+        proxy.state.instances["debug-app-0"].health_check(),
         "a caller with nothing to say must not clear the declaration"
     );
     assert_eq!(
-        proxy.state.instances["debug-app-0"].health,
+        proxy.state.instances["debug-app-0"].health(),
         HealthState::Healthy,
         "and must not reset the verdict either"
     );
@@ -1526,7 +1581,7 @@ async fn a_changed_health_capability_resets_health() {
     );
 
     assert_eq!(
-        proxy.state.instances["swap-app-0"].health,
+        proxy.state.instances["swap-app-0"].health(),
         HealthState::Ungated
     );
 }
@@ -1567,7 +1622,7 @@ async fn disabling_polling_keeps_both_old_and_new_instances_eligible() {
     proxy.handshake_cache.set_for_test(handshakes);
 
     assert_eq!(
-        proxy.state.instances["off-app-1"].health,
+        proxy.state.instances["off-app-1"].health(),
         HealthState::Unknown,
         "the state is still tracked; it just must not be allowed to gate"
     );
@@ -1599,11 +1654,11 @@ async fn a_kv_reload_does_not_reset_this_node_s_health_observations() {
 
     let mut proxy = state.lock();
     assert_eq!(
-        proxy.state.instances["sync-app-0"].health,
+        proxy.state.instances["sync-app-0"].health(),
         HealthState::Healthy
     );
     assert_eq!(
-        proxy.state.instances["sync-app-1"].health,
+        proxy.state.instances["sync-app-1"].health(),
         HealthState::Unhealthy
     );
     proxy.handshake_cache.set_for_test(BTreeMap::from([
@@ -1616,18 +1671,17 @@ async fn a_kv_reload_does_not_reset_this_node_s_health_observations() {
     );
 }
 
-/// The two selection paths express the "polling off means no gating" rule
-/// through different mechanisms -- the top-n path folds it into the candidate
-/// flag, the random path checks it inside `instance_is_healthy` -- so a
-/// refactor could easily fix one and miss the other. This pins the combination
-/// the other disabled-polling test does not reach.
+/// The two selection paths share `retain_healthy` but each decides for itself
+/// whether health is allowed to gate, so a refactor could easily fix one and
+/// miss the other. This pins the combination the other disabled-polling test
+/// does not reach.
 ///
 /// The fleet is deliberately mixed. With two `Unknown` instances the fail-open
 /// branch keeps both regardless, so the switch is never reached and the test
 /// passes whether or not the code under test still exists -- which is exactly
-/// what it did before, verified by deleting the check in `instance_is_healthy`
-/// and watching every test still pass. One healthy peer makes `any_healthy`
-/// true and forces the filter to actually run.
+/// what it did before, verified by deleting the check and watching every test
+/// still pass. One healthy peer makes the retain find something to keep and
+/// forces the filter to actually run.
 #[tokio::test]
 async fn disabling_polling_also_keeps_the_random_path_open() {
     let state = create_test_state_with(|config| {
@@ -1643,11 +1697,11 @@ async fn disabling_polling_also_keeps_the_random_path_open() {
     // would be filtered out rather than saved by fail-open. With polling off
     // both must stay selectable.
     assert_eq!(
-        proxy.state.instances["off-rand-app-0"].health,
+        proxy.state.instances["off-rand-app-0"].health(),
         HealthState::Healthy
     );
     assert_eq!(
-        proxy.state.instances["off-rand-app-1"].health,
+        proxy.state.instances["off-rand-app-1"].health(),
         HealthState::Unknown
     );
 

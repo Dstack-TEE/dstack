@@ -513,18 +513,6 @@ pub struct HealthCheckConfig {
     /// Without this, one dropped packet ejects an instance and recomputes the
     /// whole app's selection, and it costs a second invalidation coming back.
     pub failure_threshold: u32,
-    /// Where this node remembers its verdicts across a restart of the process.
-    ///
-    /// Health is a local observation, so a restart would otherwise reset the
-    /// fleet to `Unknown` and hold every instance out of rotation until the
-    /// next round -- for an app whose instances have staggered poll times, long
-    /// enough to matter. The snapshot is stamped with the machine's boot id and
-    /// discarded when that changes, so a *reboot* still re-derives everything:
-    /// nothing the gateway believed before the reboot is evidence about what is
-    /// running after it.
-    ///
-    /// Empty disables the snapshot.
-    pub state_file: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

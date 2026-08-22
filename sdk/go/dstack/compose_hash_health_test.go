@@ -19,8 +19,9 @@ func TestHealthCheckRequirementChangesTheHash(t *testing.T) {
 		Runner:            "docker-compose",
 		DockerComposeFile: "docker-compose.yml",
 		Requirements: &Requirements{
-			OsVersion:   ">=0.6.1",
-			HealthCheck: &HealthCheck{Enabled: true, HealthFile: strPtr("/dstack/health")},
+			OsVersion:        ">=0.6.1",
+			HealthCheck:      true,
+			HealthStatusFile: strPtr("/dstack/health"),
 		},
 	}
 	a, err := GetComposeHash(plain)
@@ -36,13 +37,31 @@ func TestHealthCheckRequirementChangesTheHash(t *testing.T) {
 	}
 }
 
-// health_file selects which source the verdict comes from, so it is not
+// Opting out is what every app did before this feature existed, so it has to
+// keep hashing that way; the guest's Rust types skip a false `health_check`,
+// and a Go `false` that serialized would fork the digest.
+func TestDisabledHealthCheckHashesAsAbsent(t *testing.T) {
+	disabled := AppCompose{
+		Runner:       "docker-compose",
+		Requirements: &Requirements{OsVersion: ">=0.6.1", HealthCheck: false},
+	}
+	got, err := GetComposeHash(disabled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := hashOfRawJSON(t, `{"runner":"docker-compose","requirements":{"os_version":">=0.6.1"}}`)
+	if got != want {
+		t.Fatalf("a false health_check must not appear in the manifest.\n got=%s\nwant=%s", got, want)
+	}
+}
+
+// health_status_file selects which source the verdict comes from, so it is not
 // cosmetic.
-func TestHealthFileIsPartOfTheHash(t *testing.T) {
+func TestHealthStatusFileIsPartOfTheHash(t *testing.T) {
 	mk := func(file *string) AppCompose {
 		return AppCompose{
 			Runner:       "docker-compose",
-			Requirements: &Requirements{HealthCheck: &HealthCheck{Enabled: true, HealthFile: file}},
+			Requirements: &Requirements{HealthCheck: true, HealthStatusFile: file},
 		}
 	}
 	a, err := GetComposeHash(mk(nil))
@@ -54,18 +73,18 @@ func TestHealthFileIsPartOfTheHash(t *testing.T) {
 		t.Fatal(err)
 	}
 	if a == b {
-		t.Fatal("health_file does not reach the compose hash")
+		t.Fatal("health_status_file does not reach the compose hash")
 	}
 }
 
 // `omitempty` on a plain string collapses these two, which Rust, Python and JS
 // keep distinct -- so a Go user re-hashing an app-compose that carries an empty
-// health_file would get a digest the other SDKs disagree with.
-func TestEmptyHealthFileIsDistinctFromAbsent(t *testing.T) {
+// health_status_file would get a digest the other SDKs disagree with.
+func TestEmptyHealthStatusFileIsDistinctFromAbsent(t *testing.T) {
 	mk := func(file *string) AppCompose {
 		return AppCompose{
 			Runner:       "docker-compose",
-			Requirements: &Requirements{HealthCheck: &HealthCheck{Enabled: true, HealthFile: file}},
+			Requirements: &Requirements{HealthCheck: true, HealthStatusFile: file},
 		}
 	}
 	absent, err := GetComposeHash(mk(nil))
@@ -77,7 +96,7 @@ func TestEmptyHealthFileIsDistinctFromAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if absent == empty {
-		t.Fatal("an empty health_file must not hash the same as an absent one")
+		t.Fatal("an empty health_status_file must not hash the same as an absent one")
 	}
 }
 

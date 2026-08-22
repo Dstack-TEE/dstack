@@ -32,9 +32,22 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use bollard::container::ListContainersOptions;
 use bollard::Docker;
+use futures::{StreamExt, TryStreamExt};
 use serde::Deserialize;
 use tokio::process::Command;
 use tracing::debug;
+
+use dstack_guest_agent_rpc::ContainerHealth;
+
+use crate::health::Verdict;
+
+/// How many containers to inspect at once on the docker path.
+///
+/// Bounded rather than unbounded: the daemon is shared with whatever the app is
+/// doing, and a burst of one request per container is a poor way to ask a
+/// process that may already be the reason health is being checked. nerdctl needs
+/// no equivalent -- it inspects the whole project in one call.
+const INSPECT_CONCURRENCY: usize = 8;
 
 /// The label Compose stamps on every container it starts.
 ///
@@ -70,13 +83,6 @@ const COMPOSE_RUNTIME_FILE: &str = "/run/dstack/app-compose-runtime.json";
 /// it, plus `kill_on_drop`, an abandoned call also reclaims its child process.
 const RUNTIME_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// One container that is not reporting healthy.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct UnhealthyContainer {
-    pub name: String,
-    pub status: String,
-}
-
 /// One container as the runtime described it.
 #[derive(Debug, PartialEq)]
 struct Observed {
@@ -90,22 +96,6 @@ struct Observed {
     state: Option<String>,
 }
 
-/// Health of the app's containers.
-pub(crate) struct HealthReport {
-    pub healthy: bool,
-    pub unhealthy: Vec<UnhealthyContainer>,
-}
-
-impl HealthReport {
-    /// Nothing to judge, so nothing to hold traffic back for.
-    fn not_judged() -> Self {
-        Self {
-            healthy: true,
-            unhealthy: vec![],
-        }
-    }
-}
-
 /// Judge the app's containers, dispatching on the runner it was started with.
 ///
 /// Only containers that declare a Compose `healthcheck` are judged. Both
@@ -113,12 +103,13 @@ impl HealthReport {
 /// the app saying "I have not told you how to test this one" rather than a
 /// pass. That keeps this from failing an app for a one-shot init container
 /// that exited cleanly.
-pub(crate) async fn collect(runner: &str) -> Result<HealthReport> {
+pub(crate) async fn collect(runner: &str) -> Result<Verdict> {
     match runner {
         "docker-compose" | "nerdctl-compose" => {}
         // The `bash` runner runs a script, not containers. There is nothing to
         // inspect and never will be, so it must not sit at "not started yet".
-        _ => return Ok(HealthReport::not_judged()),
+        // Nothing to judge, so nothing to hold traffic back for.
+        _ => return Ok(Verdict::healthy()),
     }
     let Some(runtime) = ComposeRuntime::read().await? else {
         // `app-compose.sh` writes this before it starts anything, so its
@@ -175,7 +166,7 @@ fn compose_filter(project: &str) -> String {
     format!("{COMPOSE_PROJECT_LABEL}={project}")
 }
 
-async fn collect_docker(project: &str) -> Result<HealthReport> {
+async fn collect_docker(project: &str) -> Result<Verdict> {
     let docker = Docker::connect_with_defaults().context("failed to connect to docker")?;
     let filter = compose_filter(project);
     let mut filters = HashMap::new();
@@ -189,48 +180,61 @@ async fn collect_docker(project: &str) -> Result<HealthReport> {
         .await
         .context("failed to list containers")?;
 
-    let mut observed = Vec::with_capacity(containers.len());
-    for summary in containers {
-        let Some(id) = summary.id.as_deref() else {
-            continue;
-        };
-        let details = match docker.inspect_container(id, None).await {
-            Ok(details) => details,
-            // The container went away between the list and the inspect.
-            // `docker compose up` recreates containers on every redeploy and
-            // `app-compose.sh` prunes right after, so this window is raced
-            // routinely. Judging the rest is strictly better than failing the
-            // whole report and dropping the instance out of rotation.
-            Err(bollard::errors::Error::DockerResponseServerError {
-                status_code: 404, ..
-            }) => {
-                debug!("container {id} disappeared between list and inspect");
-                continue;
+    // Concurrently, because the whole refresh has ten seconds and this is one
+    // round trip per container. Serially, a compose project with a few dozen
+    // services can spend that budget on the daemon alone, and a refresh that
+    // times out is reported as "could not tell" -- three of those in a row and
+    // the app is called unhealthy on the strength of the agent being slow.
+    let observed = futures::stream::iter(containers)
+        .map(|summary| {
+            let docker = &docker;
+            async move {
+                let id = summary.id.as_deref()?;
+                let details = match docker.inspect_container(id, None).await {
+                    Ok(details) => details,
+                    // The container went away between the list and the inspect.
+                    // `docker compose up` recreates containers on every
+                    // redeploy and `app-compose.sh` prunes right after, so this
+                    // window is raced routinely. Judging the rest is strictly
+                    // better than failing the whole report and dropping the
+                    // instance out of rotation.
+                    Err(bollard::errors::Error::DockerResponseServerError {
+                        status_code: 404,
+                        ..
+                    }) => {
+                        debug!("container {id} disappeared between list and inspect");
+                        return None;
+                    }
+                    Err(err) => {
+                        return Some(Err(anyhow::Error::new(err)
+                            .context(format!("failed to inspect container {id}"))))
+                    }
+                };
+                let state = details.state;
+                let health = state
+                    .as_ref()
+                    .and_then(|state| state.health.as_ref())
+                    .and_then(|health| health.status)
+                    .map(|status| status.to_string());
+                let run_state = state
+                    .as_ref()
+                    .and_then(|state| state.status)
+                    .map(|status| status.to_string());
+                Some(Ok(Observed {
+                    name: container_name(summary.names.as_deref(), id),
+                    health,
+                    state: run_state,
+                }))
             }
-            Err(err) => {
-                return Err(err).with_context(|| format!("failed to inspect container {id}"))
-            }
-        };
-        let state = details.state;
-        let health = state
-            .as_ref()
-            .and_then(|state| state.health.as_ref())
-            .and_then(|health| health.status)
-            .map(|status| status.to_string());
-        let run_state = state
-            .as_ref()
-            .and_then(|state| state.status)
-            .map(|status| status.to_string());
-        observed.push(Observed {
-            name: container_name(summary.names.as_deref(), id),
-            health,
-            state: run_state,
-        });
-    }
+        })
+        .buffer_unordered(INSPECT_CONCURRENCY)
+        .filter_map(|result| async move { result })
+        .try_collect::<Vec<_>>()
+        .await?;
     Ok(judge(observed))
 }
 
-async fn collect_nerdctl(runtime: &ComposeRuntime) -> Result<HealthReport> {
+async fn collect_nerdctl(runtime: &ComposeRuntime) -> Result<Verdict> {
     let filter = format!("label={}", compose_filter(&runtime.project));
     let ids = nerdctl(runtime, &["ps", "-a", "-q", "--filter", &filter])
         .await
@@ -391,24 +395,27 @@ struct NerdctlHealth {
 ///
 /// Containers that declare no healthcheck stay unjudged even when they have
 /// exited. A one-shot init container that ran and stopped is normal, and the
-/// app has not said how to tell the difference.
-fn judge(containers: Vec<Observed>) -> HealthReport {
+/// app has not said how to tell the difference. But if *no* container is
+/// judged, the app asked to be gated on an answer nothing can produce, and
+/// saying "healthy" to that is the silent no-op this feature exists to remove.
+/// That is checked here rather than by scanning the compose file at deploy
+/// time, because this is the only place that sees what the runtime actually
+/// did: a `HEALTHCHECK` in a Dockerfile never appears in the compose file, a
+/// `healthcheck:` merged in from a YAML anchor is invisible to a key scan, and
+/// `healthcheck: {disable: true}` is present in the file and produces nothing
+/// here.
+fn judge(containers: Vec<Observed>) -> Verdict {
     // No container exists yet. Registration happens in
     // `dstack-prepare.service` and `app-compose.service` is ordered after it,
     // so this is the window where the image may still be pulling -- exactly
     // what the gateway must keep traffic out of. A runtime answering while
     // having nothing to show is not the same as the app being fine.
     if containers.is_empty() {
-        return HealthReport {
-            healthy: false,
-            unhealthy: vec![UnhealthyContainer {
-                name: "<compose>".to_string(),
-                status: "no container has been created yet".to_string(),
-            }],
-        };
+        return Verdict::unhealthy("<compose>", "no container has been created yet".to_string());
     }
 
     let mut unhealthy = Vec::new();
+    let mut judged = 0usize;
     for container in containers {
         let Observed {
             name,
@@ -417,8 +424,8 @@ fn judge(containers: Vec<Observed>) -> HealthReport {
         } = container;
         match health.as_deref() {
             // No healthcheck declared, or none reported yet.
-            None | Some("") | Some("none") => {}
-            Some(health) if !is_running(state.as_deref()) => unhealthy.push(UnhealthyContainer {
+            None | Some("") | Some("none") => continue,
+            Some(health) if !is_running(state.as_deref()) => unhealthy.push(ContainerHealth {
                 name,
                 status: format!(
                     "{} (last health check: {health})",
@@ -428,17 +435,35 @@ fn judge(containers: Vec<Observed>) -> HealthReport {
             Some("healthy") => {}
             // "starting", "unhealthy", and anything a future runtime version
             // invents. Unknown states hold traffic back rather than pass.
-            Some(other) => unhealthy.push(UnhealthyContainer {
+            Some(other) => unhealthy.push(ContainerHealth {
                 name,
                 status: other.to_string(),
             }),
         }
+        judged += 1;
     }
 
-    HealthReport {
-        healthy: unhealthy.is_empty(),
-        unhealthy,
+    if judged == 0 {
+        // Containers exist, and not one of them can be judged. Reported rather
+        // than passed: this app asked for its traffic to be gated on an answer,
+        // and answering "healthy" unconditionally is worse than saying so --
+        // the operator would see a feature that is switched on and doing
+        // nothing, with no signal but the absence of an effect.
+        return Verdict::unhealthy(
+            "<compose>",
+            "no container declares a healthcheck, so nothing can be judged; add one, or set \
+             requirements.health_status_file to report health directly"
+                .to_string(),
+        );
     }
+
+    // By name, because the docker collector inspects concurrently and hands
+    // them back in completion order. The gateway names the first eight and
+    // counts the rest, so an unstable order would rewrite that log line on
+    // every poll for a project with more than eight failing containers --
+    // making a steady failure read as a changing one.
+    unhealthy.sort_by(|a, b| a.name.cmp(&b.name));
+    Verdict::from_containers(unhealthy)
 }
 
 /// Whether the runtime says this container is running.
@@ -592,17 +617,49 @@ mod tests {
         assert_eq!(report.unhealthy[0].name, "<compose>");
     }
 
-    /// Most existing compose files declare no healthcheck. The app has not said
-    /// how to test it, so it is not judged.
+    /// An app that asked to be gated on an answer nothing here can produce.
+    ///
+    /// Passing it would be the silent no-op this feature exists to remove: the
+    /// gate is switched on, does nothing, and the only signal is the absence of
+    /// an effect. Naming `<compose>` puts a reason in the gateway log and on
+    /// the dashboard instead. This is judged here rather than by scanning the
+    /// compose file at deploy time because only the runtime knows -- a
+    /// `HEALTHCHECK` in a Dockerfile is nowhere in the compose file, and
+    /// `healthcheck: {disable: true}` is in it while producing nothing.
+    ///
+    /// The three shapes are the ones both runtimes actually emit for "no
+    /// healthcheck": docker says `none`, nerdctl omits `State.Health`
+    /// altogether, and an empty string is the defensive third.
     #[test]
-    fn containers_without_a_healthcheck_are_not_judged() {
+    fn an_app_where_no_container_declares_a_healthcheck_is_reported_not_passed() {
         let report = judge(vec![
             named("web", None),
             named("db", Some("none")),
             named("init", Some("")),
         ]);
+        assert!(!report.healthy);
+        assert_eq!(report.unhealthy.len(), 1);
+        assert_eq!(report.unhealthy[0].name, "<compose>");
+        assert!(
+            report.unhealthy[0].status.contains("nothing can be judged"),
+            "unexpected status: {}",
+            report.unhealthy[0].status
+        );
+    }
+
+    /// The carve-out the rule above must not swallow. A container declaring no
+    /// healthcheck is still skipped *individually* as long as something else in
+    /// the project is judged -- otherwise every project with a sidecar or an
+    /// init container would fail on the sidecar.
+    #[test]
+    fn a_container_without_a_healthcheck_is_skipped_when_another_is_judged() {
+        let report = judge(vec![
+            named("web", Some("healthy")),
+            named("sidecar", None),
+            named("db", Some("none")),
+        ]);
         assert!(report.healthy);
-        assert!(report.unhealthy.is_empty());
+        assert!(report.unhealthy.is_empty(), "{:?}", report.unhealthy);
     }
 
     #[test]

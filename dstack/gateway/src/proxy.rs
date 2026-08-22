@@ -68,7 +68,6 @@ pub(crate) fn guest_agent_client(url: String) -> http_client::prpc::PrpcClient {
 }
 
 pub(crate) mod health_check;
-pub(crate) mod health_store;
 mod idle;
 mod io_bridge;
 pub(crate) mod port_policy;

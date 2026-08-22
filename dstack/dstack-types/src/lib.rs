@@ -484,8 +484,9 @@ pub struct Requirements {
     /// allowing applications to enforce an expected GPU count.
     #[serde(default, skip_serializing_if = "GpuPolicy::is_default")]
     pub gpu_policy: GpuPolicy,
-    /// Application health reporting, read by the gateway to decide whether this
-    /// instance belongs in its app's load-balancing rotation.
+    /// Whether the gateway should gate this app's traffic on its health, i.e.
+    /// hold an instance out of its app's load-balancing rotation until the
+    /// guest agent reports that the app is serving.
     ///
     /// Opt-in, and deliberately placed under `requirements` rather than at the
     /// top level of `app-compose.json`: `Requirements` is `deny_unknown_fields`
@@ -493,45 +494,18 @@ pub struct Requirements {
     /// asks for health gating cannot land on a guest image that would silently
     /// ignore it. An app that never sets this registers as "do not poll me" and
     /// is routed to exactly as it was before this feature existed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub health_check: Option<HealthCheck>,
-}
-
-impl Requirements {
-    pub fn is_empty(&self) -> bool {
-        self.os_version.is_none()
-            && self.platforms.is_none()
-            && self.tdx_measure_acpi_tables.is_none()
-            && self.launch_token_hash.is_none()
-            && self.gpu_policy.is_default()
-            && self.health_check.is_none()
-    }
-
-    /// Whether the app asked the gateway to gate traffic on its health.
-    pub fn health_check_enabled(&self) -> bool {
-        self.health_check
-            .as_ref()
-            .is_some_and(|check| check.enabled)
-    }
-}
-
-/// How the guest agent decides whether this instance is serving.
-///
-/// The verdict is produced on the agent's own timer and cached in memory;
-/// `Worker.Health` only reads that cache. A fleet of gateway nodes polling the
-/// same instance therefore costs one map lookup each, not one container-runtime
-/// query each.
-#[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
-pub struct HealthCheck {
-    /// Whether the gateway should gate traffic on this app's health at all.
     ///
-    /// Explicit rather than implied by the presence of the object, so that
-    /// turning gating off during an incident is a one-word edit that keeps the
-    /// rest of the configuration intact -- and so the compose hash records the
-    /// operator's intent either way.
-    pub enabled: bool,
-    /// Path to a file the app writes its own verdict into.
+    /// Two flat fields rather than one nested object, and not because flat is
+    /// prettier. Every SDK has to reproduce this structure byte for byte to
+    /// compute the compose hash that gets whitelisted on chain, and a nested
+    /// object is where they drift: Go's `HealthCheck` had no passthrough for
+    /// fields it did not know and would have hashed them away silently, while
+    /// Python's `Requirements.from_dict` did not reconstruct the object at all
+    /// and raised on any round trip. Scalars under a `deny_unknown_fields`
+    /// parent have neither failure mode.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub health_check: bool,
+    /// Absolute path to a file the app writes its own verdict into.
     ///
     /// Two lines, in order:
     ///
@@ -552,8 +526,25 @@ pub struct HealthCheck {
     /// every container that declares a Compose `healthcheck` must be running
     /// and healthy. That default needs nothing from the app, but it can only
     /// see what the runtime sees; a file gives the app the last word.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub health_file: Option<String>,
+    ///
+    /// `Option`, not `String`. An empty path and an absent one have to stay
+    /// distinguishable, because Go's `omitempty` cannot tell them apart and
+    /// would hash `""` differently from the other SDKs -- on a digest that goes
+    /// on chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_status_file: Option<String>,
+}
+
+impl Requirements {
+    pub fn is_empty(&self) -> bool {
+        self.os_version.is_none()
+            && self.platforms.is_none()
+            && self.tdx_measure_acpi_tables.is_none()
+            && self.launch_token_hash.is_none()
+            && self.gpu_policy.is_default()
+            && !self.health_check
+            && self.health_status_file.is_none()
+    }
 }
 
 /// Make a string that came from an untrusted party safe to put in a log line,
@@ -613,7 +604,7 @@ fn is_unsafe_to_log(ch: char) -> bool {
         )
 }
 
-/// How old a `health_file` may be before it is read as unhealthy.
+/// How old a `health_status_file` may be before it is read as unhealthy.
 ///
 /// Fixed rather than configurable: this is a liveness bound, and an app that
 /// wants a longer one is asking for its own failures to take longer to notice.

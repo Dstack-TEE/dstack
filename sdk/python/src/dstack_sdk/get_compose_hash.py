@@ -49,26 +49,6 @@ class DockerConfig:
         return result
 
 
-class HealthCheck:
-    """Application health reporting, read by the gateway."""
-
-    def __init__(
-        self,
-        enabled: bool = False,
-        health_file: Optional[str] = None,
-    ) -> None:
-        """Initialize a new ``HealthCheck`` instance."""
-        self.enabled = enabled
-        self.health_file = health_file
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Return a dictionary representation excluding ``None`` fields."""
-        result: Dict[str, Any] = {"enabled": self.enabled}
-        if self.health_file is not None:
-            result["health_file"] = self.health_file
-        return result
-
-
 class Requirements:
     """Guest-side requirements for app compose."""
 
@@ -78,7 +58,8 @@ class Requirements:
         platforms: Optional[List[str]] = None,
         tdx_measure_acpi_tables: Optional[bool] = None,
         launch_token_hash: Optional[str] = None,
-        health_check: Optional[HealthCheck] = None,
+        health_check: bool = False,
+        health_status_file: Optional[str] = None,
         gpu_policy: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
@@ -88,6 +69,7 @@ class Requirements:
         self.tdx_measure_acpi_tables = tdx_measure_acpi_tables
         self.launch_token_hash = launch_token_hash
         self.health_check = health_check
+        self.health_status_file = health_status_file
         self.gpu_policy = gpu_policy
         self._extra = dict(kwargs)
 
@@ -102,8 +84,15 @@ class Requirements:
             result["tdx_measure_acpi_tables"] = self.tdx_measure_acpi_tables
         if self.launch_token_hash is not None:
             result["launch_token_hash"] = self.launch_token_hash
-        if self.health_check is not None:
-            result["health_check"] = self.health_check.to_dict()
+        # An explicit ``False`` and an absent field are the same request, and
+        # the guest's Rust types skip serializing it in both cases; emitting it
+        # here would give this SDK a digest no other one produces.
+        if self.health_check:
+            result["health_check"] = True
+        # ``""`` and absent stay distinguishable: they are different app
+        # composes, so they must be different hashes in every SDK.
+        if self.health_status_file is not None:
+            result["health_status_file"] = self.health_status_file
         if self.gpu_policy is not None:
             result["gpu_policy"] = self.gpu_policy
         result.update(self._extra)
@@ -194,7 +183,17 @@ class AppCompose:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AppCompose":
-        """Create AppCompose from dictionary."""
+        """Create AppCompose from dictionary.
+
+        The caller's dictionary is left alone. The nested fields below are
+        popped rather than read, and popping the argument made this destructive:
+        hashing the same dictionary twice returned two different digests,
+        because the second call no longer saw ``docker_config`` or
+        ``requirements``. Silent, and the digest is what gets whitelisted on
+        chain.
+        """
+        data = dict(data)
+
         # Handle docker_config
         docker_config: Optional[DockerConfig] = None
         if "docker_config" in data and data["docker_config"] is not None:

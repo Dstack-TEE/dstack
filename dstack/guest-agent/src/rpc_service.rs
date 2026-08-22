@@ -15,10 +15,10 @@ use dstack_guest_agent_rpc::{
     dstack_guest_server::{DstackGuestRpc, DstackGuestServer},
     tappd_server::{TappdRpc, TappdServer},
     worker_server::{WorkerRpc, WorkerServer},
-    AppInfo, AttestResponse, ContainerHealth, DeriveK256KeyResponse, DeriveKeyArgs,
-    GetAttestationForAppKeyRequest, GetKeyArgs, GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs,
-    GetTlsKeyResponse, GpuInfoResponse, HealthResponse, RawQuoteArgs, SignRequest, SignResponse,
-    TdxQuoteArgs, TdxQuoteResponse, VerifyRequest, VerifyResponse, WorkerVersion,
+    AppInfo, AttestResponse, DeriveK256KeyResponse, DeriveKeyArgs, GetAttestationForAppKeyRequest,
+    GetKeyArgs, GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse,
+    GpuInfoResponse, HealthResponse, RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs,
+    TdxQuoteResponse, VerifyRequest, VerifyResponse, WorkerVersion,
 };
 use dstack_types::{AppKeys, SysConfig, GPU_ATTESTATION_OUTPUT};
 use ed25519_dalek::ed25519::signature::hazmat::{PrehashSigner, PrehashVerifier};
@@ -178,10 +178,12 @@ impl AppState {
             .app_compose
             .requirements
             .as_ref()
-            .and_then(|requirements| requirements.health_check.clone())
-            .filter(|check| check.enabled)
-            .map(|check| {
-                crate::health::HealthMonitor::spawn(check, config.app_compose.runner.clone())
+            .filter(|requirements| requirements.health_check)
+            .map(|requirements| {
+                crate::health::HealthMonitor::spawn(
+                    requirements.health_status_file.clone(),
+                    config.app_compose.runner.clone(),
+                )
             });
         let me = Self {
             inner: Arc::new(AppStateInner {
@@ -624,14 +626,7 @@ impl RpcCall<AppState> for InternalRpcHandlerV0 {
 fn health_response(verdict: crate::health::Verdict) -> HealthResponse {
     HealthResponse {
         healthy: verdict.healthy,
-        unhealthy: verdict
-            .unhealthy
-            .into_iter()
-            .map(|container| ContainerHealth {
-                name: container.name,
-                status: container.status,
-            })
-            .collect(),
+        unhealthy: verdict.unhealthy,
         error: verdict.error,
     }
 }

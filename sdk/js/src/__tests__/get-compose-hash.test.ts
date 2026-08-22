@@ -527,6 +527,42 @@ describe('Deterministic JSON Serialization', () => {
     })
   })
 
+  describe('Health Gating', () => {
+    it('should let health_check reach the hash', () => {
+      const plain: AppCompose = {
+        runner: "docker-compose",
+        docker_compose_file: "docker-compose.yml",
+        requirements: { os_version: ">=0.6.1" }
+      }
+      const gated: AppCompose = {
+        runner: "docker-compose",
+        docker_compose_file: "docker-compose.yml",
+        requirements: {
+          os_version: ">=0.6.1",
+          health_check: true,
+          health_status_file: "/dstack/health"
+        }
+      }
+
+      expect(getComposeHash(plain)).not.toBe(getComposeHash(gated))
+    })
+
+    // Rust keeps these apart with `Option<String>` and Go with `*string`, and
+    // the digest they agree on is the one whitelisted on chain.
+    it('should keep an empty health_status_file distinct from an absent one', () => {
+      const absent: AppCompose = {
+        runner: "docker-compose",
+        requirements: { health_check: true }
+      }
+      const empty: AppCompose = {
+        runner: "docker-compose",
+        requirements: { health_check: true, health_status_file: "" }
+      }
+
+      expect(getComposeHash(absent)).not.toBe(getComposeHash(empty))
+    })
+  })
+
   describe('Backward Compatibility', () => {
     it('should still work with legacy bash_script and pre_launch_script', () => {
       const compose: AppCompose = {

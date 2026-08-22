@@ -497,6 +497,18 @@ SPDX-License-Identifier: Apache-2.0
             <td>{{ accel.splice_engaged }}</td>
             <td>Connections that entered a zero-copy relay, on either path.</td>
         </tr>
+        <tr>
+            <td>Health Gating</td>
+            {% if status.health_gating %}
+            <td>on</td>
+            <td>Instances that opted in are held out of app-id load balancing
+                until a poll says the app is serving.</td>
+            {% else %}
+            <td class="health-unhealthy">off</td>
+            <td>Nothing is polled and every instance is eligible, whatever the
+                Health column says.</td>
+            {% endif %}
+        </tr>
     </table>
 
     <h2>Global Connections</h2>
@@ -636,7 +648,11 @@ SPDX-License-Identifier: Apache-2.0
             {% if host.health == "unhealthy" %}
             <td class="health-unhealthy" title="The guest agent reports the app is not serving.">unhealthy</td>
             {% else if host.health == "unknown" %}
+            {% if status.health_gating %}
             <td class="health-unknown" title="Registered, but no health poll has answered yet. Held out of rotation until one does.">unknown</td>
+            {% else %}
+            <td class="health-unknown" title="This app asked to be gated on its health, but polling is off on this node (core.proxy.health_check.enabled). Nothing will ever answer, and the instance is in rotation.">unknown (gating off)</td>
+            {% endif %}
             {% else if host.health == "ungated" %}
             <td class="health-unknown" title="This app did not set requirements.health_check.enabled, so it is never polled and always eligible.">not polled</td>
             {% else %}
