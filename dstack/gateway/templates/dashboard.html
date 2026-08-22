@@ -654,7 +654,7 @@ SPDX-License-Identifier: Apache-2.0
             <td class="health-unknown" title="This app asked to be gated on its health, but polling is off on this node (core.proxy.health_check.enabled). Nothing will ever answer, and the instance is in rotation.">unknown (gating off)</td>
             {% endif %}
             {% else if host.health == "ungated" %}
-            <td class="health-unknown" title="This app did not set requirements.health_check.enabled, so it is never polled and always eligible.">not polled</td>
+            <td class="health-unknown" title="This app did not set requirements.health_check, so it is never polled and always eligible.">not polled</td>
             {% else %}
             <td>{{ host.health }}</td>
             {% endif %}
