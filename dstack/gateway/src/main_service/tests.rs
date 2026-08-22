@@ -855,7 +855,7 @@ async fn a_gate_that_could_not_be_stored_is_reported_as_such() {
     let state = create_test_state().await;
     state
         .kv_store
-        .fail_writes_for_test(crate::kv::FailWrite::ADMIN);
+        .fail_writes_for_test(&[crate::kv::InstanceRecord::Gate]);
     let mut proxy = state.lock();
     register_ready_instances(&mut proxy, "durable-app", 1);
 

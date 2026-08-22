@@ -458,12 +458,6 @@ pub mod keys {
         format!("{ADMIN_PREFIX}{instance_id}/{ADMIN_PORT_POLICY}")
     }
 
-    /// Prefix covering every override key for one instance.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn admin_prefix(instance_id: &str) -> String {
-        format!("{ADMIN_PREFIX}{instance_id}/")
-    }
-
     pub fn node_info(node_id: NodeId) -> String {
         format!("{NODE_INFO_PREFIX}{node_id}")
     }
@@ -796,22 +790,52 @@ impl GetPutCodec for NodeState {
     }
 }
 
-/// Which write [`KvStore::fail_writes_for_test`] should fail.
+/// Which of an instance's records a write is touching.
 ///
-/// Named at every call site rather than only under `cfg(test)`, so the deletes
-/// below read the same in both builds.
-pub(crate) struct FailWrite;
-
-#[cfg_attr(not(test), allow(dead_code))]
-impl FailWrite {
+/// Named at every call site because the delete path issues all of them and
+/// reports them individually: an operator can do something about an `inst/`
+/// tombstone that did not land and nothing about an ephemeral observation that
+/// did not, so "a delete failed" is not a useful thing to be told.
+///
+/// It is also what [`KvStore::fail_writes_for_test`] aims at, which is why the
+/// write paths take one instead of a `u8` that means nothing outside a test
+/// build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InstanceRecord {
     /// The persistent `inst/` record, and its tombstone.
-    pub(crate) const INST: u8 = 0b0001;
-    /// The ephemeral `conn/` key.
-    pub(crate) const CONN: u8 = 0b0010;
-    /// The ephemeral `handshake/` key.
-    pub(crate) const HANDSHAKE: u8 = 0b0100;
-    /// The persistent `admin/` record, and its tombstone.
-    pub(crate) const ADMIN: u8 = 0b1000;
+    Instance,
+    /// The persistent `admin/<id>/ready` record, and its tombstone.
+    Gate,
+    /// The persistent `admin/<id>/port_policy` record, and its tombstone.
+    PortPolicyOverride,
+    /// The ephemeral `conn/` key this node owns.
+    Connections,
+    /// The ephemeral `handshake/` key this node owns.
+    Handshake,
+}
+
+impl InstanceRecord {
+    /// What an error message calls it.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Instance => "instance",
+            Self::Gate => "traffic gate",
+            Self::PortPolicyOverride => "port-policy override",
+            Self::Connections => "connection count",
+            Self::Handshake => "handshake observation",
+        }
+    }
+
+    #[cfg(test)]
+    fn bit(self) -> u8 {
+        match self {
+            Self::Instance => 0b00001,
+            Self::Gate => 0b00010,
+            Self::PortPolicyOverride => 0b00100,
+            Self::Connections => 0b01000,
+            Self::Handshake => 0b10000,
+        }
+    }
 }
 
 /// Sync store wrapping two WaveKV Nodes (persistent and ephemeral).
@@ -977,8 +1001,7 @@ impl KvStore {
 
     /// Sync instance data to other nodes
     pub fn sync_instance(&self, instance_id: &str, data: &InstanceData) -> Result<()> {
-        #[cfg(test)]
-        self.injected_failure(FailWrite::INST)?;
+        self.injected_failure(InstanceRecord::Instance)?;
         self.persistent
             .write()
             .put_encoded(keys::inst(instance_id), data, true)
@@ -1080,6 +1103,7 @@ impl KvStore {
                 if !has(keys::ADMIN_READY) {
                     self.record_migration(
                         &mut moved,
+                        InstanceRecord::Gate,
                         keys::admin_ready(&instance_id),
                         &InstanceGate { ready },
                     );
@@ -1088,6 +1112,7 @@ impl KvStore {
             if overrides.port_policy.is_some() && !has(keys::ADMIN_PORT_POLICY) {
                 self.record_migration(
                     &mut moved,
+                    InstanceRecord::PortPolicyOverride,
                     keys::admin_port_policy(&instance_id),
                     &AdminPortPolicy {
                         policy: overrides.port_policy,
@@ -1101,10 +1126,11 @@ impl KvStore {
     fn record_migration<T: Serialize + serde::de::DeserializeOwned>(
         &self,
         moved: &mut Vec<String>,
+        record: InstanceRecord,
         key: String,
         value: &T,
     ) {
-        match self.put_admin_override(key.clone(), value) {
+        match self.put_admin_override(record, key.clone(), value) {
             Ok(()) => moved.push(key),
             Err(err) => warn!("failed to move operator override to {key}: {err:?}"),
         }
@@ -1112,7 +1138,7 @@ impl KvStore {
 
     /// Publish an instance's operator-set traffic gate.
     pub fn sync_instance_gate(&self, instance_id: &str, gate: &InstanceGate) -> Result<()> {
-        self.put_admin_override(keys::admin_ready(instance_id), gate)
+        self.put_admin_override(InstanceRecord::Gate, keys::admin_ready(instance_id), gate)
     }
 
     /// Publish an instance's operator-set port-policy override.
@@ -1125,7 +1151,11 @@ impl KvStore {
         instance_id: &str,
         data: &AdminPortPolicy,
     ) -> Result<()> {
-        self.put_admin_override(keys::admin_port_policy(instance_id), data)
+        self.put_admin_override(
+            InstanceRecord::PortPolicyOverride,
+            keys::admin_port_policy(instance_id),
+            data,
+        )
     }
 
     /// Written as a replacement rather than an update: each record states one
@@ -1133,29 +1163,40 @@ impl KvStore {
     /// operator's decision beside half of another's.
     fn put_admin_override<T: Serialize + serde::de::DeserializeOwned>(
         &self,
+        record: InstanceRecord,
         key: String,
         value: &T,
     ) -> Result<()> {
-        #[cfg(test)]
-        self.injected_failure(FailWrite::ADMIN)?;
-        self.persistent.write().put_encoded(key, value, false)
+        self.injected_failure(record)
+            .and_then(|()| self.persistent.write().put_encoded(key, value, false))
+            .with_context(|| format!("failed to write the {} record", record.name()))
     }
 
-    /// See [`KvStore::injected_failures`].
+    /// Fail every write touching one of `records` until called again. See
+    /// [`KvStore::injected_failures`].
     #[cfg(test)]
-    pub(crate) fn fail_writes_for_test(&self, mask: u8) {
+    pub(crate) fn fail_writes_for_test(&self, records: &[InstanceRecord]) {
+        let mask = records.iter().fold(0u8, |mask, record| mask | record.bit());
         self.injected_failures
             .store(mask, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Deliberately terse: what an operator reads is the context the write path
+    /// adds, so a test that asserts on the message is asserting on the real one.
     #[cfg(test)]
-    fn injected_failure(&self, which: u8) -> Result<()> {
+    fn injected_failure(&self, record: InstanceRecord) -> Result<()> {
         let mask = self
             .injected_failures
             .load(std::sync::atomic::Ordering::Relaxed);
-        if mask & which != 0 {
-            anyhow::bail!("injected store failure for {which:#04b}");
-        }
+        anyhow::ensure!(mask & record.bit() == 0, "injected store failure");
+        Ok(())
+    }
+
+    /// Nothing to inject outside a test build, so the write paths read the same
+    /// in both instead of carrying a `cfg` in their bodies.
+    #[cfg(not(test))]
+    #[inline(always)]
+    fn injected_failure(&self, _record: InstanceRecord) -> Result<()> {
         Ok(())
     }
 
@@ -1171,14 +1212,16 @@ impl KvStore {
         // `inst/` -- the only one of the three that is persistent, and the one an
         // operator needs to know about -- is not masked by an ephemeral key that
         // also happened to fail.
-        let previous = self.delete_persistent(keys::inst(instance_id), FailWrite::INST);
+        let previous = self.delete_persistent(keys::inst(instance_id), InstanceRecord::Instance);
         // The overrides outlive the instance record unless they are tombstoned
         // too, and instance ids are recycled -- an id reused after a delete
         // would inherit the gate and port policy an operator set for whatever
         // ran under it before.
-        let gate = self.delete_persistent(keys::admin_ready(instance_id), FailWrite::ADMIN);
-        let override_policy =
-            self.delete_persistent(keys::admin_port_policy(instance_id), FailWrite::ADMIN);
+        let gate = self.delete_persistent(keys::admin_ready(instance_id), InstanceRecord::Gate);
+        let override_policy = self.delete_persistent(
+            keys::admin_port_policy(instance_id),
+            InstanceRecord::PortPolicyOverride,
+        );
         let observations = self.sync_forget_local_observations(instance_id);
 
         let previous = previous?;
@@ -1198,26 +1241,37 @@ impl KvStore {
     /// already dropped from memory. They are ephemeral, so a restart collects
     /// them, but a gateway's uptime is measured in months.
     pub fn sync_forget_local_observations(&self, instance_id: &str) -> Result<()> {
-        let conn = self.delete_ephemeral(keys::conn(instance_id, self.my_node_id), FailWrite::CONN);
+        let conn = self.delete_ephemeral(
+            keys::conn(instance_id, self.my_node_id),
+            InstanceRecord::Connections,
+        );
         let handshake = self.delete_ephemeral(
             keys::handshake(instance_id, self.my_node_id),
-            FailWrite::HANDSHAKE,
+            InstanceRecord::Handshake,
         );
         conn?;
         handshake?;
         Ok(())
     }
 
-    fn delete_persistent(&self, key: String, _which: u8) -> Result<Option<wavekv::types::Entry>> {
-        #[cfg(test)]
-        self.injected_failure(_which)?;
-        self.persistent.write().delete(key)
+    fn delete_persistent(
+        &self,
+        key: String,
+        record: InstanceRecord,
+    ) -> Result<Option<wavekv::types::Entry>> {
+        self.injected_failure(record)
+            .and_then(|()| self.persistent.write().delete(key))
+            .with_context(|| format!("failed to delete the {} record", record.name()))
     }
 
-    fn delete_ephemeral(&self, key: String, _which: u8) -> Result<Option<wavekv::types::Entry>> {
-        #[cfg(test)]
-        self.injected_failure(_which)?;
-        self.ephemeral.write().delete(key)
+    fn delete_ephemeral(
+        &self,
+        key: String,
+        record: InstanceRecord,
+    ) -> Result<Option<wavekv::types::Entry>> {
+        self.injected_failure(record)
+            .and_then(|()| self.ephemeral.write().delete(key))
+            .with_context(|| format!("failed to delete the {} record", record.name()))
     }
 
     /// Load all instances from the sync store.
@@ -2689,10 +2743,10 @@ mod corruption_tests {
         let kv = test_kv(dir.path());
         seed_instance(&kv, "cvm");
 
-        kv.fail_writes_for_test(FailWrite::CONN);
+        kv.fail_writes_for_test(&[InstanceRecord::Connections]);
         kv.sync_delete_instance("cvm")
             .expect_err("the conn delete was made to fail");
-        kv.fail_writes_for_test(0);
+        kv.fail_writes_for_test(&[]);
 
         assert!(
             kv.persistent
@@ -2710,24 +2764,34 @@ mod corruption_tests {
         );
     }
 
-    /// `inst/` is the only one of the three that is persistent, and the only
-    /// one an operator can do anything about, so its failure must not be
-    /// masked by an ephemeral key that also happened to fail.
+    /// `inst/` is the only persistent one of the pair an operator can do
+    /// anything about, so its failure must not be masked by an ephemeral key
+    /// that also happened to fail -- and the message has to say which record it
+    /// was, or the ordering buys nothing.
     #[test]
     fn the_persistent_failure_is_the_one_reported() {
         let dir = tempfile::tempdir().expect("temp dir");
         let kv = test_kv(dir.path());
         seed_instance(&kv, "cvm");
 
-        kv.fail_writes_for_test(FailWrite::INST | FailWrite::CONN | FailWrite::HANDSHAKE);
+        kv.fail_writes_for_test(&[
+            InstanceRecord::Instance,
+            InstanceRecord::Connections,
+            InstanceRecord::Handshake,
+        ]);
         let err = kv
             .sync_delete_instance("cvm")
             .expect_err("all three were made to fail");
-        kv.fail_writes_for_test(0);
+        kv.fail_writes_for_test(&[]);
 
+        let message = format!("{err:#}");
         assert!(
-            format!("{err:#}").contains(&format!("{:#04b}", FailWrite::INST)),
-            "expected the inst/ failure, got: {err:#}"
+            message.contains(InstanceRecord::Instance.name()),
+            "expected the instance record to be named, got: {message}"
+        );
+        assert!(
+            !message.contains(InstanceRecord::Handshake.name()),
+            "the ephemeral failure must not mask it, got: {message}"
         );
     }
 
@@ -3255,8 +3319,12 @@ mod key_schema_tests {
         assert_eq!(keys::parse_inst_key(&keys::admin_ready("inst-a")), None);
         assert!(!keys::admin_ready("inst-a").starts_with(keys::INST_PREFIX));
         assert!(!keys::inst("inst-a").starts_with(keys::ADMIN_PREFIX));
-        // `inst-a` must not swallow `inst-ab`.
-        assert!(!keys::admin_ready("inst-ab").starts_with(&keys::admin_prefix("inst-a")));
+        // `inst-a` must not swallow `inst-ab`: the id is not the last segment,
+        // so the parse has to split from the right to stay unambiguous.
+        assert_eq!(
+            keys::parse_admin_key(&keys::admin_ready("inst-ab")),
+            Some(("inst-ab", keys::ADMIN_READY))
+        );
         assert_eq!(keys::parse_node_info_key(&keys::node_status(1)), None);
         assert_eq!(keys::parse_node_info_key(&keys::inst("inst-a")), None);
         // `node/info/` and `node/status/` share a stem; neither may claim the other.
