@@ -403,6 +403,8 @@ fn sanitize(reason: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     /// The bound is a per-call-site opt-in now, not a property of the
     /// transport, so nothing but a test stops a refactor from dropping it --
@@ -419,6 +421,176 @@ mod tests {
             client.max_response_bytes().is_some(),
             "a guest agent is untrusted; its response must be bounded"
         );
+    }
+
+    /// A stand-in for a CVM's guest agent, on loopback.
+    ///
+    /// `poll_instance` is handed an address and does everything else itself:
+    /// forms the pRPC request, reads the answer under a bound, and turns a
+    /// transport failure into `Unreachable` rather than into a verdict. None of
+    /// that is reachable from a unit test that injects a `PollResult`, and it
+    /// is the one hop between the gateway and an untrusted peer -- so it gets a
+    /// real socket.
+    ///
+    /// `answer` of `None` accepts the connection and then says nothing, which
+    /// is what a wedged agent looks like from here: not a refusal, which fails
+    /// fast, but silence that has to be timed out.
+    async fn fake_agent(answer: Option<Vec<u8>>) -> u16 {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            // Drain the request first. Answering into a socket the peer is
+            // still writing to is a reset on some platforms, which would show
+            // up as a flake rather than as the case under test.
+            let mut pending = Vec::new();
+            let mut buf = [0u8; 1024];
+            let headers_end = loop {
+                if let Some(at) = pending.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break at + 4;
+                }
+                match socket.read(&mut buf).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => pending.extend_from_slice(&buf[..n]),
+                }
+            };
+            let content_length = String::from_utf8_lossy(&pending[..headers_end])
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())?
+                })
+                .unwrap_or(0);
+            while pending.len() < headers_end + content_length {
+                match socket.read(&mut buf).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => pending.extend_from_slice(&buf[..n]),
+                }
+            }
+            let Some(answer) = answer else {
+                std::future::pending::<()>().await;
+                return;
+            };
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                answer.len()
+            );
+            // Ignored: an oversized answer is refused mid-body, so the client
+            // is gone long before the last chunk goes out. That is the case
+            // under test, not a failure of the fixture.
+            let _ = socket.write_all(head.as_bytes()).await;
+            let _ = socket.write_all(&answer).await;
+        });
+        port
+    }
+
+    async fn poll_fake(answer: Option<Vec<u8>>) -> PollResult {
+        let port = fake_agent(answer).await;
+        poll_instance(Ipv4Addr::LOCALHOST, port, Duration::from_secs(5)).await
+    }
+
+    #[tokio::test]
+    async fn an_agent_that_says_yes_is_healthy() {
+        assert_eq!(
+            poll_fake(Some(br#"{"healthy":true}"#.to_vec())).await,
+            PollResult::Healthy
+        );
+    }
+
+    /// The answer has to survive being decoded, not just being received: the
+    /// container list is what an operator reads to find out which container is
+    /// holding the instance out of rotation.
+    #[tokio::test]
+    async fn an_agent_that_says_no_is_believed_and_names_what_failed() {
+        let answer = br#"{"healthy":false,"unhealthy":[{"name":"web","status":"unhealthy"}]}"#;
+        let PollResult::Unhealthy(reason) = poll_fake(Some(answer.to_vec())).await else {
+            panic!("an agent answering `no` must be believed on the spot");
+        };
+        assert!(reason.contains("web is unhealthy"), "unexpected: {reason}");
+    }
+
+    /// Silence is not a verdict. It has to arrive as `Unreachable`, because
+    /// that is the only thing `apply_hysteresis` will make an app wait
+    /// `failure_threshold` rounds for -- an `Unhealthy` here would demote on
+    /// the first dropped packet.
+    #[tokio::test]
+    async fn an_agent_that_accepts_and_then_says_nothing_times_out() {
+        let port = fake_agent(None).await;
+        let result = poll_instance(Ipv4Addr::LOCALHOST, port, Duration::from_millis(100)).await;
+        let PollResult::Unreachable(reason) = result else {
+            panic!("a silent agent must not produce a verdict, got {result:?}");
+        };
+        assert!(reason.contains("timed out"), "unexpected: {reason}");
+    }
+
+    #[tokio::test]
+    async fn nothing_listening_is_unreachable_rather_than_unhealthy() {
+        // Bound and dropped, so the port is one nothing answers on.
+        let port = {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+                .await
+                .expect("bind");
+            listener.local_addr().expect("addr").port()
+        };
+        let result = poll_instance(Ipv4Addr::LOCALHOST, port, Duration::from_secs(5)).await;
+        assert!(
+            matches!(result, PollResult::Unreachable(_)),
+            "a refused connection must not read as an agent saying no, got {result:?}"
+        );
+    }
+
+    /// The bound the whole "a guest agent is untrusted" argument rests on,
+    /// asserted where it is actually applied rather than where it is set.
+    /// `every_guest_agent_client_bounds_the_response` proves the call site asks
+    /// for one and the transport has its own test that it enforces one; this is
+    /// the test that they are wired to each other.
+    #[tokio::test]
+    async fn an_oversized_answer_is_refused_instead_of_buffered() {
+        let mut answer = br#"{"healthy":true,"padding":""#.to_vec();
+        answer.resize(crate::proxy::MAX_GUEST_RESPONSE_BYTES + 4096, b'A');
+        answer.extend_from_slice(br#""}"#);
+        let result = poll_fake(Some(answer)).await;
+        assert!(
+            matches!(result, PollResult::Unreachable(_)),
+            "an unbounded answer is an out-of-memory the guest gets to schedule, got {result:?}"
+        );
+    }
+
+    /// A decode failure is the sanitizer's worst case and the one that was
+    /// missed once: serde renders a type mismatch by quoting the offending
+    /// value, so the guest picks the bytes. Covered in isolation already --
+    /// this is the same thing arriving over a socket, which is how it would
+    /// actually happen.
+    #[tokio::test]
+    async fn a_hostile_answer_cannot_write_its_own_log_line() {
+        let answer = format!(
+            r#"{{"healthy":"{}"}}"#,
+            "\\u000a[ERROR] fabricated\\u0000".repeat(64)
+        );
+        let result = poll_fake(Some(answer.into_bytes())).await;
+        let PollResult::Unreachable(reason) = result else {
+            panic!("an undecodable answer is not a verdict, got {result:?}");
+        };
+        assert!(
+            !reason.contains('\n') && !reason.contains('\u{0}'),
+            "control characters reached a log line: {reason:?}"
+        );
+        // The marker truncation appends is allowed past the bound, the same
+        // way `an_unreachable_reason_is_bounded_and_stripped_too` has it.
+        const MARKER: &str = "... (truncated)";
+        assert!(
+            reason.len() <= MAX_REASON_BYTES + MARKER.len(),
+            "reason was not bounded: {} bytes",
+            reason.len()
+        );
+        // Asserted, not assumed: without it this test would also pass on a
+        // reason that was simply short, which proves nothing about the bound.
+        assert!(reason.ends_with(MARKER), "not truncated: {reason:?}");
     }
 
     /// The probe must open its own connection. Reuse is the cheaper default
