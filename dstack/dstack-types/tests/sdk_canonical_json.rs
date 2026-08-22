@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #[test]
 fn canonical_sdk_json_round_trips() {
     // Byte-for-byte what the Python/Go/JS SDKs emit for this manifest; all
