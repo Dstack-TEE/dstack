@@ -875,14 +875,15 @@ async fn removing_an_instance_removes_its_gate() {
 /// Selection handing over an empty group means every instance was ruled out
 /// before the port policy ever looked -- an operator drained the app, or none
 /// passed the handshake filter. Blaming the port policy sends whoever reads the
-/// log at the wrong subsystem.
+/// log at the wrong subsystem, and the port it names was never examined.
 #[tokio::test]
-async fn an_empty_candidate_group_is_not_blamed_on_the_port_policy() {
+async fn an_empty_candidate_group_names_the_reason_selection_had() {
     let state = create_test_state().await;
     {
         let mut proxy = state.lock();
-        register_ready_instances(&mut proxy, "drain-all", 1);
+        register_ready_instances(&mut proxy, "drain-all", 2);
         proxy.set_ready("drain-all-0", false).unwrap();
+        expire_handshake(&mut proxy, "drain-all-1");
     }
     let mut proxy = state.lock();
     let empty = proxy.select_top_n_hosts("drain-all").unwrap();
@@ -893,9 +894,14 @@ async fn an_empty_candidate_group_is_not_blamed_on_the_port_policy() {
         crate::proxy::port_policy::filter_allowed_addresses(&state.proxy, empty, "drain-all", 443)
             .unwrap_err()
             .to_string();
+    assert!(!err.contains("port"), "the port was never checked: {err}");
     assert!(
-        err.contains("no instance") && !err.contains("port policy"),
-        "unexpected error: {err}"
+        err.contains("1 gated out by an operator"),
+        "the gated instance should be accounted for: {err}"
+    );
+    assert!(
+        err.contains("1 with no recent WireGuard handshake"),
+        "the dead instance should be accounted for: {err}"
     );
 }
 

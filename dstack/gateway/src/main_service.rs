@@ -1541,6 +1541,46 @@ impl ProxyState {
         )))
     }
 
+    /// Why an app-id selection came back empty.
+    ///
+    /// The proxy learns "no candidates" as an absence, and the layer that sees
+    /// the absence first is the port-policy filter -- which has not looked at a
+    /// port yet and cannot say why. Selection is where the reason exists, so
+    /// the reason is reconstructed here rather than guessed at downstream.
+    pub(crate) fn describe_empty_selection(&self, app_id: &str) -> String {
+        let Some(instance_ids) = self.state.apps.get(app_id) else {
+            return format!("app {app_id} has no registered instances");
+        };
+        let total = instance_ids.len();
+        // The random-selection fallback swallows this error, so it is a real
+        // way to arrive here with instances that are perfectly healthy.
+        let handshakes = match self.latest_handshakes(None) {
+            Ok(handshakes) => handshakes,
+            Err(err) => {
+                return format!(
+                    "could not read WireGuard handshakes, so none of app {app_id}'s \
+                     {total} instance(s) could be checked for liveness: {err:#}"
+                )
+            }
+        };
+        let mut gated = 0;
+        let mut stale = 0;
+        for instance in instance_ids
+            .iter()
+            .filter_map(|id| self.state.instances.get(id))
+        {
+            if !instance.is_ready() {
+                gated += 1;
+            } else if !self.handshake_is_fresh(instance, &handshakes) {
+                stale += 1;
+            }
+        }
+        format!(
+            "no instance of app {app_id} is currently routable: {total} registered, \
+             {gated} gated out by an operator, {stale} with no recent WireGuard handshake"
+        )
+    }
+
     /// How many of an app's instances can currently be given new traffic.
     fn count_eligible_instances(&self, app_id: &str) -> Result<usize> {
         let Some(instances) = self.state.apps.get(app_id) else {
@@ -1707,8 +1747,8 @@ impl ProxyState {
                     if !self.is_eligible(instance, &handshakes) {
                         return None;
                     }
-                    // Re-read for the sort key; eligibility already proved it
-                    // is present and fresh.
+                    // Re-read for the sort key. `is_eligible` already proved
+                    // it is present and fresh.
                     let (_, elapsed) = handshakes.get(&instance.public_key)?;
                     Some((
                         instance.ip,
