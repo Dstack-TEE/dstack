@@ -214,9 +214,13 @@ pub struct LoadedOverrides {
     pub decoded: BTreeMap<String, AdminOverrides>,
     /// Which of an instance's override keys exist, readable or not.
     ///
-    /// Separate from `decoded` because absent and cleared are different
-    /// answers: a cleared port-policy override is a present record holding
-    /// `None`, and only this tells it from a key that was never written.
+    /// Carried beside `decoded` because absent and cleared are different
+    /// answers and `decoded` can only show one of them: a cleared port-policy
+    /// override is a present record holding `None`, which is the same `None` a
+    /// key that was never written produces. The two together are three states
+    /// -- no key, a key saying "cleared", a key carrying a value -- and every
+    /// reader needs all three, because only the first may fall back to the copy
+    /// an older build left in the instance record.
     pub present: BTreeMap<String, BTreeSet<String>>,
     /// Instance IDs whose override record is present but no longer decodes,
     /// mapped to the decode error.
@@ -228,6 +232,25 @@ pub struct LoadedOverrides {
     /// never gated, so the instance stays reachable for investigation either
     /// way, which is the property the gate itself is built on.
     pub unreadable: BTreeMap<String, String>,
+}
+
+impl LoadedOverrides {
+    /// Which override keys an instance actually has, readable or not.
+    ///
+    /// Answered per key because they are per key. A caller that asks per
+    /// instance gets the two confused, and confusing them drops an override.
+    pub fn written_keys(&self, instance_id: &str) -> WrittenKeys<'_> {
+        WrittenKeys(self.present.get(instance_id))
+    }
+}
+
+/// The override keys one instance has. See [`LoadedOverrides::written_keys`].
+pub struct WrittenKeys<'a>(Option<&'a BTreeSet<String>>);
+
+impl WrittenKeys<'_> {
+    pub fn contains(&self, name: &str) -> bool {
+        self.0.is_some_and(|names| names.contains(name))
+    }
 }
 
 /// The `inst/` records currently in the KV store, split by readability.
@@ -1099,8 +1122,8 @@ impl KvStore {
         let existing = self.load_all_instance_overrides();
         let mut moved = Vec::new();
         for (instance_id, overrides) in legacy {
-            let present = existing.present.get(&instance_id);
-            let has = |name: &str| present.is_some_and(|names| names.contains(name));
+            let written = existing.written_keys(&instance_id);
+            let has = |name: &str| written.contains(name);
             if let Some(ready) = overrides.ready {
                 if !has(keys::ADMIN_READY) {
                     self.record_migration(

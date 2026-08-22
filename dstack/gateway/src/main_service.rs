@@ -40,7 +40,7 @@ use crate::{
     cert_store::{CertResolver, CertStoreBuilder},
     config::{Config, TlsConfig},
     kv::{
-        fetch_peers_from_bootnode, import, AdminOverrides, AdminPortPolicy, AppIdValidator,
+        fetch_peers_from_bootnode, import, keys, AdminOverrides, AdminPortPolicy, AppIdValidator,
         CertData, HttpsClientConfig, InstanceData, InstanceGate, KvStore, LoadedInstances,
         LoadedOverrides, NodeData, NodeStatus, PortPolicy, WaveKvSyncService,
     },
@@ -768,12 +768,26 @@ fn effective_overrides(
             ready: Some(false),
         };
     }
-    current
-        .decoded
-        .get(instance_id)
-        .or_else(|| legacy.get(instance_id))
-        .cloned()
-        .unwrap_or_default()
+    // Per key, not per instance. They are separate keys, so one of them
+    // existing says nothing about the other: an operator who sets the gate
+    // through the new path on an instance whose port-policy override is still
+    // in the instance record would otherwise have the override dropped, which
+    // is the failure this whole split exists to remove.
+    let written = current.written_keys(instance_id);
+    let stored = current.decoded.get(instance_id);
+    let legacy = legacy.get(instance_id);
+    AdminOverrides {
+        ready: if written.contains(keys::ADMIN_READY) {
+            stored.and_then(|stored| stored.ready)
+        } else {
+            legacy.and_then(|legacy| legacy.ready)
+        },
+        port_policy: if written.contains(keys::ADMIN_PORT_POLICY) {
+            stored.and_then(|stored| stored.port_policy.clone())
+        } else {
+            legacy.and_then(|legacy| legacy.port_policy.clone())
+        },
+    }
 }
 
 /// Report override records this node cannot read, once per transition.

@@ -775,6 +775,81 @@ async fn setting_the_gate_does_not_discard_a_peers_port_policy_override() {
     );
 }
 
+/// The two overrides have a key each, so one of them existing says nothing
+/// about the other. Falling back to the instance record per instance rather
+/// than per key means an operator who gates an instance mid-upgrade drops the
+/// port-policy override that has not been moved across yet -- silently
+/// widening the ports the app serves, which is the failure the split exists to
+/// remove.
+///
+/// The reload path hides this: it migrates before it reads, so the key it would
+/// have fallen back for already exists by then. Startup does not -- nothing may
+/// be written before the WaveKV bootstrap -- so the merge itself has to be
+/// right, which is what this asserts.
+#[test]
+fn one_override_key_existing_does_not_answer_for_the_other() {
+    let mut current = LoadedOverrides::default();
+    // A peer gated the instance through the new key. Only that key exists.
+    current.decoded.insert(
+        "half-moved".to_string(),
+        AdminOverrides {
+            ready: Some(false),
+            port_policy: None,
+        },
+    );
+    current.present.insert(
+        "half-moved".to_string(),
+        BTreeSet::from([crate::kv::keys::ADMIN_READY.to_string()]),
+    );
+    // The port-policy override is still where the previous build left it.
+    let legacy = BTreeMap::from([(
+        "half-moved".to_string(),
+        AdminOverrides {
+            ready: Some(true),
+            port_policy: Some(policy(true, &[8443])),
+        },
+    )]);
+
+    let effective = effective_overrides("half-moved", &current, &legacy);
+    assert_eq!(
+        effective.ready,
+        Some(false),
+        "the gate key exists, so it answers -- not the stale copy"
+    );
+    assert_eq!(
+        effective.port_policy,
+        Some(policy(true, &[8443])),
+        "the port-policy key does not exist, so the instance record still answers"
+    );
+}
+
+/// The other half of the same rule: a key that exists and says "cleared" is an
+/// answer. Reading the stale copy there would undo the clear.
+#[test]
+fn a_cleared_override_is_an_answer_not_an_absence() {
+    let mut current = LoadedOverrides::default();
+    current
+        .decoded
+        .insert("cleared".to_string(), AdminOverrides::default());
+    current.present.insert(
+        "cleared".to_string(),
+        BTreeSet::from([crate::kv::keys::ADMIN_PORT_POLICY.to_string()]),
+    );
+    let legacy = BTreeMap::from([(
+        "cleared".to_string(),
+        AdminOverrides {
+            ready: None,
+            port_policy: Some(policy(true, &[8443])),
+        },
+    )]);
+
+    assert_eq!(
+        effective_overrides("cleared", &current, &legacy).port_policy,
+        None,
+        "the operator cleared it; the instance record must not put it back"
+    );
+}
+
 /// The instance record as the build before the override key wrote it.
 #[derive(serde::Serialize)]
 struct LegacyRecord {
