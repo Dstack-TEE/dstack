@@ -820,7 +820,13 @@ message SetInstanceReadyRequest {
   // true puts the instance back into rotation, false removes it. Existing
   // connections are left running either way; this only affects which
   // instances new connections may be routed to.
-  bool ready = 2;
+  //
+  // Required. It is `optional` so that absent and false stay distinguishable:
+  // a proto3 scalar decodes an omitted field as its zero value, and over the
+  // JSON transport -- where unknown keys are ignored -- a request that omits
+  // the field or misspells it would otherwise be a successful call that pulls
+  // the instance out of rotation. The server rejects absent instead.
+  optional bool ready = 2;
 }
 
 // Inspect an instance's port-policy state.

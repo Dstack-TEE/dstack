@@ -745,9 +745,14 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn set_instance_ready(self, request: SetInstanceReadyRequest) -> Result<()> {
-        self.state
-            .lock()
-            .set_ready(&request.instance_id, request.ready)
+        // Absent is not false. Over the JSON transport an omitted -- or
+        // misspelled, since unknown keys are ignored -- `ready` would decode to
+        // the field's default and quietly pull the instance out of rotation,
+        // answering 200 while doing the opposite of nothing.
+        let ready = request
+            .ready
+            .context("`ready` is required: say true to put the instance back into rotation, false to take it out")?;
+        self.state.lock().set_ready(&request.instance_id, ready)
     }
 }
 
@@ -1167,5 +1172,37 @@ mod wavekv_status_tests {
         assert_eq!(peer.last_seen.len(), 1);
         assert_eq!(peer.last_seen[0].node_id, 2);
         assert_eq!(peer.last_seen[0].timestamp, 1234);
+    }
+}
+
+#[cfg(test)]
+mod set_instance_ready_tests {
+    use dstack_gateway_rpc::SetInstanceReadyRequest;
+
+    /// prpc gives every generated field `#[serde(default)]`, and serde ignores
+    /// keys it does not know. A plain proto3 `bool ready` therefore turns both
+    /// "I forgot the field" and "I misspelled the field" into a 200 that pulls
+    /// the instance out of rotation. `optional` keeps absent distinguishable so
+    /// the handler can refuse it.
+    #[test]
+    fn an_omitted_ready_stays_distinguishable_from_a_gate_off() {
+        let omitted: SetInstanceReadyRequest =
+            serde_json::from_str(r#"{"instance_id": "abc"}"#).expect("decodes");
+        assert_eq!(omitted.ready, None, "absent must not decode as false");
+
+        let misspelled: SetInstanceReadyRequest =
+            serde_json::from_str(r#"{"instance_id": "abc", "redy": true}"#).expect("decodes");
+        assert_eq!(
+            misspelled.ready, None,
+            "an unknown key is dropped, so this is the omitted case too"
+        );
+
+        let explicit: SetInstanceReadyRequest =
+            serde_json::from_str(r#"{"instance_id": "abc", "ready": false}"#).expect("decodes");
+        assert_eq!(
+            explicit.ready,
+            Some(false),
+            "a stated false still gates off"
+        );
     }
 }
