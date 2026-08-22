@@ -334,9 +334,65 @@ struct GatewayKeyStore {
     wg_sk: String,
     /// WireGuard public key
     wg_pk: String,
+    /// The gateway URL that last accepted a registration for this cluster.
+    ///
+    /// Tried first on the next refresh. Without it the list is walked in
+    /// configured order every time, which is sticky in the wrong way: every CVM
+    /// piles onto the first URL, and when that one has an outage the whole
+    /// fleet moves to the second and then moves *back* the moment the first
+    /// recovers. Each of those moves rewrites the instance record from a
+    /// different node's memory, which is exactly what loses per-instance state
+    /// that only lives there.
+    ///
+    /// Scoped to a boot, because the cache is on tmpfs. That is the right
+    /// scope: a boot regenerates the WireGuard key and re-registers from
+    /// scratch anyway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_url: Option<String>,
+}
+
+/// Freshly issued client certificate material for [`GatewayKeyStore::renewed`].
+struct IssuedClientCerts {
+    client_cert: String,
+    client_cert_with_quote: String,
+    client_key: String,
+    cert_not_after: u64,
 }
 
 impl GatewayKeyStore {
+    /// The store a certificate renewal produces: fresh certificates plus
+    /// everything the renewal must carry over from the previous cache — the
+    /// WireGuard identity, because the gateway maps this peer by its public
+    /// key, and the registration preference, because the renewed store is
+    /// saved over the cache before the per-cluster loop reads the preference
+    /// back, so dropping it here would drop it on disk too and drift the
+    /// fleet back onto the first configured URL at every renewal.
+    fn renewed(
+        cache: Option<Self>,
+        generate_wg: impl FnOnce() -> Result<(String, String)>,
+        certs: IssuedClientCerts,
+    ) -> Result<Self> {
+        let (wg_sk, wg_pk, last_url) = match cache {
+            Some(cache) => {
+                info!("reusing cached WireGuard keys");
+                (cache.wg_sk, cache.wg_pk, cache.last_url)
+            }
+            None => {
+                let (wg_sk, wg_pk) = generate_wg()?;
+                (wg_sk, wg_pk, None)
+            }
+        };
+        Ok(Self {
+            client_cert: certs.client_cert,
+            client_cert_with_quote: certs.client_cert_with_quote,
+            client_key: certs.client_key,
+            cert_not_after: certs.cert_not_after,
+            wg_sk,
+            wg_pk,
+            last_url,
+        })
+    }
+
     fn load_from(path: &Path) -> Option<Self> {
         let content = fs::read_to_string(path).ok()?;
         serde_json::from_str(&content).ok()
@@ -526,18 +582,6 @@ impl<'a> GatewayContext<'a> {
             }
         }
 
-        // Reuse WireGuard keys from cache if available, otherwise generate new ones
-        let (wg_sk, wg_pk) = if let Some(ref cache) = cache {
-            info!("Reusing cached WireGuard keys");
-            (cache.wg_sk.clone(), cache.wg_pk.clone())
-        } else {
-            info!("Generating new WireGuard keys");
-            let sk = cmd!(wg genkey)?;
-            let pk =
-                cmd!(echo $sk | wg pubkey).or(Err(anyhow!("Failed to generate public key")))?;
-            (sk, pk)
-        };
-
         // Request new client certificates
         info!("Requesting new client certificates");
         let now = std::time::SystemTime::now()
@@ -592,14 +636,22 @@ impl<'a> GatewayContext<'a> {
             .context("Failed to request cert with quote")?;
         let client_cert_with_quote = certs_with_quote.join("\n");
 
-        Ok(GatewayKeyStore {
-            client_cert,
-            client_cert_with_quote,
-            client_key,
-            cert_not_after,
-            wg_sk,
-            wg_pk,
-        })
+        GatewayKeyStore::renewed(
+            cache,
+            || {
+                info!("generating new WireGuard keys");
+                let sk = cmd!(wg genkey)?;
+                let pk =
+                    cmd!(echo $sk | wg pubkey).or(Err(anyhow!("Failed to generate public key")))?;
+                Ok((sk, pk))
+            },
+            IssuedClientCerts {
+                client_cert,
+                client_cert_with_quote,
+                client_key,
+                cert_not_after,
+            },
+        )
     }
 
     fn key_store_for_additional_cluster(
@@ -656,26 +708,29 @@ impl<'a> GatewayContext<'a> {
             } else {
                 self.key_store_for_additional_cluster(&target.name, &primary_key_store)
             };
-            let (key_store, cache_path) = match key_store_result {
+            let (mut key_store, cache_path) = match key_store_result {
                 Ok(value) => value,
                 Err(err) => {
                     errors.push(format!("{}: {err:#}", target.name));
                     continue;
                 }
             };
+            carry_cluster_preference(&mut key_store, &cache_path, &target.urls);
             if let Err(err) = key_store.save_to(&cache_path) {
                 warn!(cluster = %target.name, "failed to save gateway cluster cache: {err:?}");
             }
 
             let mut first_error = None;
             let mut response = None;
-            for url in &target.urls {
+            let mut accepted_by = None;
+            for url in order_by_stickiness(&target.urls, key_store.last_url.as_deref()) {
                 match self
                     .register_cvm(url, &key_store, &self.keys.gateway_app_id)
                     .await
                 {
                     Ok(value) => {
                         response = Some(value);
+                        accepted_by = Some(url.clone());
                         break;
                     }
                     Err(err) => {
@@ -686,6 +741,7 @@ impl<'a> GatewayContext<'a> {
                     }
                 }
             }
+            record_accepting_url(&target.name, &mut key_store, &cache_path, accepted_by);
             let Some(response) = response else {
                 errors.push(format!(
                     "{}: {:#}",
@@ -976,6 +1032,75 @@ fn verify_app_compose_policy(shared: &HostShared) -> Result<()> {
         verify_launch_token_requirement(launch_token_hash, &token)?;
     }
     Ok(())
+}
+
+/// The order to try a cluster's gateway URLs in, last accepting one first.
+///
+/// Walking the configured list every time is sticky in the wrong way. Every CVM
+/// piles onto the first URL, so one node takes all registration traffic; and
+/// when that node has an outage the whole fleet moves to the second URL and
+/// then moves *back* the instant the first recovers. Every one of those moves
+/// rewrites the instance record from a different node's memory, which is how
+/// per-instance state that lives only there gets lost.
+///
+/// Preferring the last node that accepted turns both into one-time events: a
+/// CVM that moved stays moved, and the fleet spreads over the outage rather
+/// than snapping back together.
+///
+/// `last` is only a preference. Everything else still follows in configured
+/// order, so a URL that is down costs one failed attempt and nothing more.
+fn order_by_stickiness<'a>(urls: &'a [String], last: Option<&str>) -> Vec<&'a String> {
+    let mut ordered = Vec::with_capacity(urls.len());
+    if let Some(last) = last {
+        ordered.extend(urls.iter().filter(|url| url.as_str() == last));
+    }
+    ordered.extend(urls.iter().filter(|url| Some(url.as_str()) != last));
+    ordered
+}
+
+/// Carry the cluster's own remembered URL into a freshly resolved key store.
+///
+/// The preference is per cluster. The store handed in may have just been
+/// rebuilt by a certificate renewal, or cloned from the primary's for an
+/// additional cluster — either way the preference that counts is the one this
+/// cluster's cache holds, and only while the operator still lists the URL: a
+/// URL removed from the config is dropped rather than resurrected.
+fn carry_cluster_preference(
+    key_store: &mut GatewayKeyStore,
+    cache_path: &Path,
+    configured: &[String],
+) {
+    key_store.last_url = GatewayKeyStore::load_from(cache_path)
+        .and_then(|cached| cached.last_url)
+        .filter(|url| configured.iter().any(|configured| configured == url));
+}
+
+/// Persist the URL that accepted this round's registration, if it changed.
+///
+/// Only an acceptance updates the preference. A round where every URL failed
+/// says nothing about where the instance record lives, and clearing on it
+/// would have one bad tick — a full-cluster outage, or a blip in this CVM's
+/// own networking — erase the fleet's spread and pile everyone back onto the
+/// first configured URL at recovery.
+fn record_accepting_url(
+    cluster: &str,
+    key_store: &mut GatewayKeyStore,
+    cache_path: &Path,
+    accepted_by: Option<String>,
+) {
+    let Some(url) = accepted_by else {
+        return;
+    };
+    if key_store.last_url.as_deref() == Some(url.as_str()) {
+        return;
+    }
+    if key_store.last_url.is_some() {
+        info!(cluster, %url, "gateway registration moved");
+    }
+    key_store.last_url = Some(url);
+    if let Err(err) = key_store.save_to(cache_path) {
+        warn!(cluster, "failed to record the accepting gateway: {err:?}");
+    }
 }
 
 /// Whether this app asked the gateway to gate its traffic on health.
@@ -3996,7 +4121,10 @@ mod kms_provider_inventory_tests {
 
 #[cfg(test)]
 mod gateway_registration_refresh_tests {
-    use super::{gateway_rpc_url, wireguard_endpoint_hosts, GatewayKeyStore};
+    use super::{
+        carry_cluster_preference, gateway_rpc_url, order_by_stickiness, record_accepting_url,
+        wireguard_endpoint_hosts, GatewayKeyStore, IssuedClientCerts,
+    };
     use std::os::unix::fs::PermissionsExt as _;
 
     fn key_store(cert_not_after: u64) -> GatewayKeyStore {
@@ -4007,7 +4135,276 @@ mod gateway_registration_refresh_tests {
             cert_not_after,
             wg_sk: "sentinel-wg-private".into(),
             wg_pk: "sentinel-wg-public".into(),
+            last_url: None,
         }
+    }
+
+    fn urls(list: &[&str]) -> Vec<String> {
+        list.iter().map(|url| url.to_string()).collect()
+    }
+
+    fn ordered(list: &[String], last: Option<&str>) -> Vec<String> {
+        order_by_stickiness(list, last)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// With nothing remembered the configured order stands, which is the
+    /// behaviour every existing deployment already has.
+    #[test]
+    fn without_a_remembered_url_the_configured_order_stands() {
+        let list = urls(&["https://a", "https://b", "https://c"]);
+        assert_eq!(ordered(&list, None), list);
+    }
+
+    /// The point: a CVM that moved to the second gateway during an outage stays
+    /// there instead of snapping back the moment the first recovers. Each move
+    /// rewrites the instance record from a different node's memory.
+    #[test]
+    fn the_last_accepting_url_is_tried_first() {
+        let list = urls(&["https://a", "https://b", "https://c"]);
+        assert_eq!(
+            ordered(&list, Some("https://b")),
+            urls(&["https://b", "https://a", "https://c"])
+        );
+    }
+
+    /// A preference, not a pin: if the remembered one is down it costs one
+    /// failed attempt and the rest follow in configured order.
+    #[test]
+    fn the_remaining_urls_keep_their_configured_order() {
+        let list = urls(&["https://a", "https://b", "https://c", "https://d"]);
+        assert_eq!(
+            ordered(&list, Some("https://c")),
+            urls(&["https://c", "https://a", "https://b", "https://d"])
+        );
+    }
+
+    /// An operator removing a URL from the config must not resurrect it.
+    #[test]
+    fn a_remembered_url_no_longer_configured_is_ignored() {
+        let list = urls(&["https://a", "https://b"]);
+        assert_eq!(ordered(&list, Some("https://gone")), list);
+    }
+
+    #[test]
+    fn every_url_is_tried_exactly_once() {
+        let list = urls(&["https://a", "https://b", "https://c"]);
+        for last in [
+            None,
+            Some("https://a"),
+            Some("https://b"),
+            Some("https://c"),
+        ] {
+            let mut seen = ordered(&list, last);
+            assert_eq!(seen.len(), list.len(), "last={last:?}");
+            seen.sort();
+            let mut expected = list.clone();
+            expected.sort();
+            assert_eq!(seen, expected, "last={last:?}");
+        }
+    }
+
+    /// The cache is what carries the preference across a refresh, so it has to
+    /// survive the round trip -- and an older cache without the field must
+    /// still load.
+    #[test]
+    fn the_remembered_url_round_trips_through_the_cache() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("gateway-cache.json");
+        let mut store = key_store(u64::MAX);
+        store.last_url = Some("https://b".into());
+        store.save_to(&path).expect("save");
+        let loaded = GatewayKeyStore::load_from(&path).expect("load");
+        assert_eq!(loaded.last_url.as_deref(), Some("https://b"));
+
+        let legacy = serde_json::to_value(key_store(u64::MAX))
+            .map(|mut value| {
+                value.as_object_mut().unwrap().remove("last_url");
+                value
+            })
+            .expect("serialize");
+        std::fs::write(&path, legacy.to_string()).expect("write");
+        let loaded =
+            GatewayKeyStore::load_from(&path).expect("a cache without the field must load");
+        assert_eq!(loaded.last_url, None);
+    }
+
+    fn issued_certs(cert_not_after: u64) -> IssuedClientCerts {
+        IssuedClientCerts {
+            client_cert: "renewed-cert".into(),
+            client_cert_with_quote: "renewed-cert-with-quote".into(),
+            client_key: "renewed-key".into(),
+            cert_not_after,
+        }
+    }
+
+    /// A certificate renewal rebuilds the store from scratch. It must carry
+    /// the WireGuard identity — the gateway maps this peer by its public
+    /// key — and the registration preference, or every renewal would drift
+    /// the CVM back onto the first configured URL.
+    #[test]
+    fn a_certificate_renewal_carries_the_wireguard_identity_and_the_preference() {
+        let mut cached = key_store(0);
+        cached.last_url = Some("https://b".into());
+        let renewed = GatewayKeyStore::renewed(
+            Some(cached),
+            || panic!("a cached WireGuard identity must be reused, not regenerated"),
+            issued_certs(u64::MAX),
+        )
+        .expect("renew");
+        assert_eq!(renewed.wg_sk, "sentinel-wg-private");
+        assert_eq!(renewed.wg_pk, "sentinel-wg-public");
+        assert_eq!(renewed.last_url.as_deref(), Some("https://b"));
+        assert_eq!(renewed.client_cert, "renewed-cert");
+        assert_eq!(renewed.cert_not_after, u64::MAX);
+    }
+
+    /// A cold start has nothing to carry: fresh WireGuard identity, no
+    /// preference.
+    #[test]
+    fn a_cold_start_generates_a_fresh_wireguard_identity_and_no_preference() {
+        let renewed = GatewayKeyStore::renewed(
+            None,
+            || Ok(("fresh-wg-private".into(), "fresh-wg-public".into())),
+            issued_certs(u64::MAX),
+        )
+        .expect("renew");
+        assert_eq!(renewed.wg_sk, "fresh-wg-private");
+        assert_eq!(renewed.wg_pk, "fresh-wg-public");
+        assert_eq!(renewed.last_url, None);
+    }
+
+    /// The sequence a refresh tick runs for the default cluster when the
+    /// certificate expires: rebuild the store, save it over the cache, then
+    /// read the preference back for the registration round. The rebuilt store
+    /// is what gets written, so it must already carry the preference — this
+    /// is exactly the sequence that used to lose it.
+    #[test]
+    fn the_preference_survives_the_renewal_that_rewrites_the_cache() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("gateway-cache.json");
+        let mut cached = key_store(0); // expired certificate forces the rebuild
+        cached.last_url = Some("https://b".into());
+        cached.save_to(&path).expect("save");
+
+        let renewed = GatewayKeyStore::renewed(
+            GatewayKeyStore::load_from(&path),
+            || panic!("a cached WireGuard identity must be reused, not regenerated"),
+            issued_certs(u64::MAX),
+        )
+        .expect("renew");
+        renewed.save_to(&path).expect("save renewed");
+
+        let mut store = renewed;
+        carry_cluster_preference(&mut store, &path, &urls(&["https://a", "https://b"]));
+        assert_eq!(store.last_url.as_deref(), Some("https://b"));
+    }
+
+    /// An additional cluster's store is cloned from the primary's; the
+    /// preference that counts is the one in the cluster's own cache.
+    #[test]
+    fn an_additional_cluster_does_not_inherit_the_primary_preference() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("gateway-cache-second.json");
+        let mut cluster_cache = key_store(u64::MAX);
+        cluster_cache.last_url = Some("https://b".into());
+        cluster_cache.save_to(&path).expect("save");
+
+        let mut store = key_store(u64::MAX);
+        store.last_url = Some("https://primary".into());
+        carry_cluster_preference(&mut store, &path, &urls(&["https://a", "https://b"]));
+        assert_eq!(store.last_url.as_deref(), Some("https://b"));
+    }
+
+    /// No cache on disk means no preference, whatever the resolved store
+    /// happened to carry.
+    #[test]
+    fn a_missing_cluster_cache_clears_the_carried_preference() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("absent.json");
+        let mut store = key_store(u64::MAX);
+        store.last_url = Some("https://primary".into());
+        carry_cluster_preference(&mut store, &path, &urls(&["https://primary"]));
+        assert_eq!(store.last_url, None);
+    }
+
+    /// An operator removing a URL from the config must not see the cache
+    /// resurrect it.
+    #[test]
+    fn the_carry_drops_a_url_removed_from_the_config() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("gateway-cache.json");
+        let mut cached = key_store(u64::MAX);
+        cached.last_url = Some("https://gone".into());
+        cached.save_to(&path).expect("save");
+
+        let mut store = key_store(u64::MAX);
+        carry_cluster_preference(&mut store, &path, &urls(&["https://a"]));
+        assert_eq!(store.last_url, None);
+    }
+
+    /// Only an acceptance updates the preference: a round where every URL
+    /// failed says nothing about where the instance record lives, and
+    /// clearing on it would erase the fleet's spread in one bad tick.
+    #[test]
+    fn a_round_where_every_url_failed_keeps_the_preference() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("gateway-cache.json");
+        let mut store = key_store(u64::MAX);
+        store.last_url = Some("https://b".into());
+        store.save_to(&path).expect("save");
+
+        record_accepting_url("default", &mut store, &path, None);
+        assert_eq!(store.last_url.as_deref(), Some("https://b"));
+        let on_disk = GatewayKeyStore::load_from(&path).expect("load");
+        assert_eq!(on_disk.last_url.as_deref(), Some("https://b"));
+    }
+
+    /// An acceptance by a different node is recorded in memory and on disk.
+    #[test]
+    fn an_acceptance_moves_and_persists_the_preference() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("gateway-cache.json");
+        let mut store = key_store(u64::MAX);
+        store.last_url = Some("https://a".into());
+
+        record_accepting_url("default", &mut store, &path, Some("https://c".into()));
+        assert_eq!(store.last_url.as_deref(), Some("https://c"));
+        let on_disk = GatewayKeyStore::load_from(&path).expect("load");
+        assert_eq!(on_disk.last_url.as_deref(), Some("https://c"));
+    }
+
+    /// The first acceptance of a boot is recorded too — that is what the
+    /// next refresh's ordering is built from.
+    #[test]
+    fn the_first_acceptance_is_recorded() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("gateway-cache.json");
+        let mut store = key_store(u64::MAX);
+
+        record_accepting_url("default", &mut store, &path, Some("https://a".into()));
+        assert_eq!(store.last_url.as_deref(), Some("https://a"));
+        let on_disk = GatewayKeyStore::load_from(&path).expect("load");
+        assert_eq!(on_disk.last_url.as_deref(), Some("https://a"));
+    }
+
+    /// Re-acceptance by the remembered node changes nothing, so nothing is
+    /// written.
+    #[test]
+    fn re_acceptance_by_the_same_url_does_not_rewrite_the_cache() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("gateway-cache.json");
+        let mut store = key_store(u64::MAX);
+        store.last_url = Some("https://c".into());
+
+        record_accepting_url("default", &mut store, &path, Some("https://c".into()));
+        assert_eq!(store.last_url.as_deref(), Some("https://c"));
+        assert!(
+            !path.exists(),
+            "an unchanged preference must not be written"
+        );
     }
 
     #[test]
