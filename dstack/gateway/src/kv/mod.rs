@@ -1118,17 +1118,14 @@ impl KvStore {
     /// clean up records orphaned by an earlier partial failure.
     ///
     /// Only failure to tombstone `inst/` is returned. Failures deleting the
-    /// associated overrides or this node's ephemeral observations are logged:
-    /// they do not change whether the CVM was removed, and must not prevent the
-    /// local routing and WireGuard cleanup that follows this call.
+    /// associated overrides or this node's ephemeral observations are logged --
+    /// even when the tombstone also failed: they do not change whether the CVM
+    /// was removed, and must not prevent the local routing and WireGuard
+    /// cleanup that follows this call.
     pub fn sync_delete_instance(&self, instance_id: &str) -> Result<bool> {
         // Every delete is attempted even if an earlier one fails. Short-circuiting
         // on `?` would leave the later keys behind while the `inst/` tombstone is
-        // already published, and nothing garbage-collects orphans. They are then
-        // reported in the order they were issued, so a failure to tombstone
-        // `inst/` -- the only one of the three that is persistent, and the one an
-        // operator needs to know about -- is not masked by an ephemeral key that
-        // also happened to fail.
+        // already published, and nothing garbage-collects orphans.
         let previous = self.delete_persistent(keys::inst(instance_id), InstanceKey::Instance);
         // The overrides outlive the instance record unless they are tombstoned
         // too, and instance ids are recycled -- an id reused after a delete
@@ -1141,7 +1138,12 @@ impl KvStore {
         );
         let observations = self.sync_forget_local_observations(instance_id);
 
-        let previous = previous?;
+        // Logged before `previous` can return: a store-wide fault fails these
+        // together with the `inst/` tombstone, and that compound failure is
+        // exactly when the operator needs the inventory of what was left
+        // behind. An orphaned override is a persistent record a recycled id
+        // would inherit, so it is an error; a leaked observation is inert
+        // telemetry, so it is a warning -- matching the reload path.
         for result in [gate, override_policy] {
             if let Err(err) = result {
                 error!(
@@ -1151,12 +1153,12 @@ impl KvStore {
             }
         }
         if let Err(err) = observations {
-            error!(
+            warn!(
                 "failed to delete local observations while removing instance \
                  {instance_id}, leaving orphan telemetry records: {err:?}"
             );
         }
-        Ok(previous.is_some_and(|entry| !entry.is_deleted()))
+        Ok(previous?.is_some_and(|entry| !entry.is_deleted()))
     }
 
     /// Withdraw this node's observations of an instance.
@@ -2695,10 +2697,51 @@ mod corruption_tests {
         );
     }
 
-    /// `inst/` is the only persistent one of the pair an operator can do
-    /// anything about, so its failure must not be masked by an ephemeral key
-    /// that also happened to fail -- and the message has to say which record it
-    /// was, or the ordering buys nothing.
+    /// An orphaned `admin/` record is persistent -- a recycled instance id
+    /// would inherit it -- but it does not change whether the CVM was removed,
+    /// so the failure is logged, the remaining keys are still deleted, and the
+    /// removal reports the fate of the `inst/` tombstone alone.
+    #[test]
+    fn a_failed_override_delete_does_not_fail_the_removal() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let kv = test_kv(dir.path());
+        seed_instance(&kv, "cvm");
+        kv.set_instance_gate("cvm", false).expect("seed gate");
+
+        kv.fail_writes_for_test(&[InstanceKey::Gate]);
+        assert!(
+            kv.sync_delete_instance("cvm")
+                .expect("an override failure must not fail removal"),
+            "the live instance record was removed"
+        );
+        kv.fail_writes_for_test(&[]);
+
+        assert!(
+            kv.persistent
+                .read()
+                .get(&keys::inst("cvm"))
+                .is_none_or(|entry| entry.is_deleted()),
+            "the inst/ tombstone should still have been written"
+        );
+        assert!(
+            kv.persistent
+                .read()
+                .get(&keys::admin_ready("cvm"))
+                .is_some_and(|entry| !entry.is_deleted()),
+            "the failed gate delete leaves the orphan this test is about"
+        );
+        assert!(
+            kv.ephemeral
+                .read()
+                .get(&keys::conn("cvm", kv.my_node_id))
+                .is_none_or(|entry| entry.is_deleted()),
+            "the conn/ delete must be attempted even after the gate failed"
+        );
+    }
+
+    /// Only the `inst/` failure reaches the caller -- the other deletes are
+    /// logged, never returned -- and its message has to name the record, so
+    /// the operator learns the removal itself is what did not take.
     #[test]
     fn the_persistent_failure_is_the_one_reported() {
         let dir = tempfile::tempdir().expect("temp dir");

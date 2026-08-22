@@ -1420,35 +1420,21 @@ async fn an_operator_can_remove_a_cvm_whose_kv_record_is_unreadable() {
 #[tokio::test]
 async fn removing_a_cvm_clears_its_telemetry_even_with_no_record_left() {
     let state = create_test_state().await;
-    let node = state.kv_store.my_node_id();
     state.kv_store.sync_connections("orphan", 3).unwrap();
     state.kv_store.sync_instance_handshake("orphan", 1).unwrap();
-
-    let conn_key = crate::kv::keys::conn("orphan", node);
-    let conn_is_live = || {
-        state
-            .kv_store
-            .ephemeral()
-            .read()
-            .get(&conn_key)
-            .is_some_and(|entry| !entry.is_deleted())
-    };
-    assert!(conn_is_live(), "seeded conn/ record should be live");
-    assert!(state
-        .kv_store
-        .get_instance_handshakes("orphan")
-        .contains_key(&node));
+    assert_eq!(
+        observations_are_live(&state, "orphan"),
+        (true, true),
+        "seeded telemetry records should be live"
+    );
 
     // No `inst/` record exists, so the removal reports nothing was there --
     // and still deletes both telemetry records.
     let removal = state.proxy.remove_cvm("orphan").unwrap();
     assert!(!removal.record_existed);
     assert!(!removal.removed_locally);
-    assert!(!conn_is_live(), "{conn_key} should be gone");
-    assert!(!state
-        .kv_store
-        .get_instance_handshakes("orphan")
-        .contains_key(&node));
+    let leaked = live_keys_naming(&state, "orphan");
+    assert!(leaked.is_empty(), "left behind: {leaked:?}");
 }
 
 #[tokio::test]
