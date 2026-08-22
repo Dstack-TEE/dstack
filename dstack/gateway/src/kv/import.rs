@@ -281,8 +281,6 @@ mod tests {
             reg_time,
             port_policy: None,
             port_policy_hash: String::new(),
-            admin_port_policy: None,
-            ready: None,
         }
     }
 

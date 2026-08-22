@@ -39,14 +39,16 @@ pub struct InstanceInfo {
     pub port_policy_hash: String,
     /// Operator-set override (Admin RPC). Takes precedence over `port_policy`
     /// when set; survives app upgrades.
+    ///
+    /// Persisted under `admin/<instance_id>/port_policy`, not in the instance
+    /// record -- see [`crate::kv::AdminOverrides`].
     #[serde(default)]
     pub admin_port_policy: Option<PortPolicy>,
     /// Operator-set traffic gate (Admin RPC). `None` means no operator ever
     /// touched it. See [`InstanceInfo::is_ready`].
     ///
-    /// Persisted as a field of the instance record; see
-    /// [`crate::kv::InstanceData::ready`] for why it does not get a key
-    /// of its own.
+    /// Persisted under `admin/<instance_id>/ready`, not in the instance record
+    /// -- see [`crate::kv::AdminOverrides`].
     #[serde(default)]
     pub ready: Option<bool>,
     #[serde(skip)]

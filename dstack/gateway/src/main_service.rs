@@ -40,9 +40,9 @@ use crate::{
     cert_store::{CertResolver, CertStoreBuilder},
     config::{Config, TlsConfig},
     kv::{
-        fetch_peers_from_bootnode, import, AppIdValidator, CertData, HttpsClientConfig,
-        InstanceData, KvStore, LoadedInstances, NodeData, NodeStatus, PortPolicy,
-        WaveKvSyncService,
+        fetch_peers_from_bootnode, import, AdminOverrides, AdminPortPolicy, AppIdValidator,
+        CertData, HttpsClientConfig, InstanceData, InstanceGate, KvStore, LoadedInstances,
+        LoadedOverrides, NodeData, NodeStatus, PortPolicy, WaveKvSyncService,
     },
     models::{InstanceInfo, PortPolicyView, WgConf, WgPeer},
     proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo, AppAddressResolver},
@@ -119,6 +119,8 @@ pub(crate) struct ProxyState {
     /// Reason last logged for each KV instance record this node refuses, so a
     /// record that stays bad is reported once rather than on every reload.
     reported_rejections: BTreeMap<String, String>,
+    /// The same, for `admin/` records this node cannot decode.
+    reported_bad_overrides: BTreeMap<String, String>,
 }
 
 /// Options for creating a Proxy instance
@@ -285,7 +287,11 @@ impl ProxyInner {
             instances.undecodable.len(),
             nodes.len()
         );
-        let state = build_state_from_kv_store(&config, instances);
+        // Read-only: nothing may be written before the bootstrap below, so the
+        // move of any legacy overrides waits for the first reload.
+        let overrides = kv_store.load_all_instance_overrides();
+        let legacy_overrides = kv_store.legacy_instance_overrides();
+        let state = build_state_from_kv_store(&config, instances, &overrides, &legacy_overrides);
 
         // This node's own records are written *after* the bootstrap below, not
         // here. A local write allocates a sequence number, and after a
@@ -363,6 +369,7 @@ impl ProxyInner {
             handshake_cache: handshake_cache.clone(),
             admin_shutdown: None,
             reported_rejections: BTreeMap::new(),
+            reported_bad_overrides: BTreeMap::new(),
         });
         let auth_client = AuthClient::new(config.auth.clone());
         // Bootstrap WaveKV first if sync is enabled, so certbot can load certs from peers
@@ -738,7 +745,66 @@ fn report_new_rejections(
     *reported = current;
 }
 
-fn build_state_from_kv_store(config: &Config, instances: LoadedInstances) -> ProxyStateMut {
+/// The operator overrides in force for `instance_id`.
+///
+/// The `admin/` record wins whenever there is one, including when it says
+/// nothing is overridden. Only when there is none does the copy an older build
+/// left inside the instance record apply -- that is the same rule
+/// [`KvStore::migrate_legacy_instance_overrides`] writes by, so a reload before
+/// the move and one after it answer the same thing.
+///
+/// A record that will not decode is neither. Guessing "nothing is overridden"
+/// is what would return a quarantined instance to rotation, so the instance is
+/// held out of app-id selection until the record is readable again; it stays
+/// reachable by instance id throughout, as a gated instance always is.
+fn effective_overrides(
+    instance_id: &str,
+    current: &LoadedOverrides,
+    legacy: &BTreeMap<String, AdminOverrides>,
+) -> AdminOverrides {
+    if current.unreadable.contains_key(instance_id) {
+        return AdminOverrides {
+            port_policy: None,
+            ready: Some(false),
+        };
+    }
+    current
+        .decoded
+        .get(instance_id)
+        .or_else(|| legacy.get(instance_id))
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Report override records this node cannot read, once per transition.
+///
+/// Unreadable means the instance is held out of app-id rotation, so it is not a
+/// quiet condition -- but a record that stays bad would otherwise be reported on
+/// every reload, and reloads are driven by cluster activity.
+fn report_unreadable_overrides(proxy: &Proxy, loaded: &LoadedOverrides) {
+    let mut state = proxy.lock();
+    for (instance_id, reason) in &loaded.unreadable {
+        if state.reported_bad_overrides.get(instance_id) != Some(reason) {
+            error!(
+                "cannot read the operator overrides for instance {instance_id}, holding it \
+                 out of load balancing until they are readable again: {reason}"
+            );
+        }
+    }
+    for instance_id in state.reported_bad_overrides.keys() {
+        if !loaded.unreadable.contains_key(instance_id) {
+            info!("operator overrides for instance {instance_id} are readable again");
+        }
+    }
+    state.reported_bad_overrides = loaded.unreadable.clone();
+}
+
+fn build_state_from_kv_store(
+    config: &Config,
+    instances: LoadedInstances,
+    overrides: &LoadedOverrides,
+    legacy_overrides: &BTreeMap<String, AdminOverrides>,
+) -> ProxyStateMut {
     let mut state = ProxyStateMut::default();
 
     let accepted = import::accept_instances(&config.wg, instances);
@@ -746,6 +812,7 @@ fn build_state_from_kv_store(config: &Config, instances: LoadedInstances) -> Pro
 
     // Build instances
     for (instance_id, data) in accepted.instances {
+        let admin = effective_overrides(&instance_id, overrides, legacy_overrides);
         let info = InstanceInfo {
             id: instance_id.clone(),
             app_id: data.app_id.clone(),
@@ -756,8 +823,8 @@ fn build_state_from_kv_store(config: &Config, instances: LoadedInstances) -> Pro
                 .unwrap_or(UNIX_EPOCH),
             port_policy: data.port_policy,
             port_policy_hash: data.port_policy_hash,
-            admin_port_policy: data.admin_port_policy,
-            ready: data.ready,
+            admin_port_policy: admin.port_policy,
+            ready: admin.ready,
             connections: Default::default(),
         };
         state.allocated_addresses.insert(data.ip);
@@ -973,14 +1040,29 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
     let store_clone = kv_store.clone();
     // Register watcher first, then do initial load to avoid race condition
     let mut rx = store_clone.watch_instances();
+    // The operator overrides live under their own prefix, so a peer opening or
+    // closing a traffic gate does not touch `inst/` and would never wake the
+    // watcher above.
+    let mut overrides_rx = store_clone.watch_instance_overrides();
     reload_instances_from_kv_store(&proxy_clone, &store_clone)
         .context("Failed to initial load instances from KvStore")?;
     tokio::spawn(async move {
         loop {
-            if rx.changed().await.is_err() {
-                break;
-            }
-            info!("WaveKV: detected remote instance changes, reloading...");
+            let reason = tokio::select! {
+                changed = rx.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    "instance"
+                }
+                changed = overrides_rx.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    "operator override"
+                }
+            };
+            info!("WaveKV: detected remote {reason} changes, reloading...");
             if let Err(err) = reload_instances_from_kv_store(&proxy_clone, &store_clone) {
                 error!("Failed to reload instances from KvStore: {err:?}");
             }
@@ -1118,6 +1200,19 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
 const LOCAL_REGISTRATION_GRACE: Duration = Duration::from_secs(60);
 
 fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> {
+    // Before the read, so an override an older node left in an instance record
+    // reaches its own key while that record is still the one carrying it.
+    let moved = store.migrate_legacy_instance_overrides();
+    if !moved.is_empty() {
+        info!(
+            "WaveKV: moved operator overrides for {} instance(s) out of the instance record: {}",
+            moved.len(),
+            moved.join(", ")
+        );
+    }
+    let overrides = store.load_all_instance_overrides();
+    report_unreadable_overrides(proxy, &overrides);
+    let legacy_overrides = store.legacy_instance_overrides();
     let accepted = import::accept_instances(&proxy.config.wg, store.load_all_instances());
     // An unreadable record is not a deletion. Its instance keeps whatever the
     // data plane already holds, so it must be exempt from the removal pass
@@ -1153,6 +1248,7 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
     }
 
     for (instance_id, data) in instances {
+        let admin = effective_overrides(&instance_id, &overrides, &legacy_overrides);
         let mut new_info = InstanceInfo {
             id: instance_id.clone(),
             app_id: data.app_id.clone(),
@@ -1163,8 +1259,8 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
                 .unwrap_or(UNIX_EPOCH),
             port_policy: data.port_policy.clone(),
             port_policy_hash: data.port_policy_hash.clone(),
-            admin_port_policy: data.admin_port_policy.clone(),
-            ready: data.ready,
+            admin_port_policy: admin.port_policy,
+            ready: admin.ready,
             connections: Default::default(),
         };
 
@@ -1416,8 +1512,8 @@ impl ProxyState {
             prev.is_some(),
         );
         // Pre-existing behaviour: a failed write is logged, not returned.
-        // Left alone here so this change stays about the traffic gate.
-        if let Err(err) = self.persist_instance_record(instance_id) {
+        // Left alone here so this change stays about where the record lives.
+        if let Err(err) = self.persist_instance_port_policy_override(instance_id) {
             error!("{err:?}");
         }
         Ok(())
@@ -1432,7 +1528,11 @@ impl ProxyState {
         let had_override = info.admin_port_policy.take().is_some();
         info!("admin cleared port_policy for instance {instance_id} (was set: {had_override})");
         if had_override {
-            if let Err(err) = self.persist_instance_record(instance_id) {
+            // Written, not deleted. An absent key means "no operator has
+            // decided anything here", which lets the legacy fallback apply --
+            // so deleting it would let a copy an older node left in the
+            // instance record put the override straight back.
+            if let Err(err) = self.persist_instance_port_policy_override(instance_id) {
                 error!("{err:?}");
             }
         }
@@ -1481,7 +1581,7 @@ impl ProxyState {
         // message -- so the message says what is known instead. Rolling back
         // here would reach the same end state sooner while throwing away the
         // window in which the operator's intent is at least locally in force.
-        self.persist_instance_record(instance_id).with_context(|| {
+        self.persist_instance_gate(instance_id).with_context(|| {
             format!(
                 "instance {instance_id} is set to ready={ready} in memory on \
                  this node only: the write to the store failed, so the setting \
@@ -1594,6 +1694,47 @@ impl ProxyState {
             .filter_map(|id| self.state.instances.get(id))
             .filter(|info| self.is_eligible(info, &handshakes))
             .count())
+    }
+
+    /// Persist the operator's traffic gate for `instance_id` to WaveKV.
+    ///
+    /// Separate from [`Self::persist_instance_record`], and from the port-policy
+    /// override beside it, because each is a separate key -- which is the point.
+    /// This one is written only from `Admin.SetInstanceReady`, so neither a
+    /// re-registration nor a peer's unsynced change to the other override can
+    /// overwrite it.
+    ///
+    /// Returns the store error rather than only logging it, so callers whose
+    /// API promises the change is durable can say otherwise when it is not.
+    fn persist_instance_gate(&self, instance_id: &str) -> Result<()> {
+        let Some(info) = self.state.instances.get(instance_id) else {
+            return Ok(());
+        };
+        let Some(ready) = info.ready else {
+            return Ok(());
+        };
+        self.kv_store
+            .sync_instance_gate(instance_id, &InstanceGate { ready })
+            .with_context(|| {
+                format!("failed to sync the gate for instance {instance_id} to KvStore")
+            })
+    }
+
+    /// Persist the operator's port-policy override for `instance_id` to WaveKV.
+    fn persist_instance_port_policy_override(&self, instance_id: &str) -> Result<()> {
+        let Some(info) = self.state.instances.get(instance_id) else {
+            return Ok(());
+        };
+        let data = AdminPortPolicy {
+            policy: info.admin_port_policy.clone(),
+        };
+        self.kv_store
+            .sync_instance_port_policy_override(instance_id, &data)
+            .with_context(|| {
+                format!(
+                    "failed to sync the port-policy override for instance {instance_id} to KvStore"
+                )
+            })
     }
 
     /// Persist the current in-memory `InstanceInfo` snapshot to WaveKV.

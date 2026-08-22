@@ -646,6 +646,148 @@ async fn the_gate_survives_re_registration() {
     );
 }
 
+/// The re-registration above is local, so the node applying it already holds
+/// the gate. The case that used to lose it is a peer: the gate rode in the
+/// instance record, every node rewrites that record in full from its own
+/// memory on every registration, and `gateway_checker` re-registers every 180s
+/// -- so a node the gate had not reached yet published a record without it and
+/// won on last-write. The record it publishes now cannot carry the gate at all.
+#[tokio::test]
+async fn a_re_registration_by_a_node_that_never_saw_the_gate_cannot_drop_it() {
+    let state = create_test_state().await;
+    {
+        let mut proxy = state.lock();
+        register_ready_instances(&mut proxy, "race-app", 2);
+        proxy.set_ready("race-app-0", false).unwrap();
+    }
+
+    // What that peer would publish: the whole instance record, rebuilt from a
+    // memory copy holding no gate, with a newer reg_time so it wins.
+    {
+        let mut proxy = state.lock();
+        let unaware = InstanceInfo {
+            ready: None,
+            admin_port_policy: None,
+            reg_time: SystemTime::now(),
+            ..proxy.state.instances["race-app-0"].clone()
+        };
+        state
+            .kv_store
+            .sync_instance("race-app-0", &InstanceData::from(&unaware))
+            .unwrap();
+        // ... and this node forgets it too, so only the store can answer.
+        proxy.state.instances.get_mut("race-app-0").unwrap().ready = None;
+    }
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+
+    let mut proxy = state.lock();
+    assert_eq!(
+        proxy.state.instances["race-app-0"].ready,
+        Some(false),
+        "the gate has its own key; a re-registration must not be able to reach it"
+    );
+    assert_eq!(
+        selected_ids(&proxy.select_top_n_hosts("race-app").unwrap()),
+        vec!["race-app-1"]
+    );
+}
+
+/// The data plane, not just the store: an override an older build left inside
+/// the instance record has to be in force from the first load, before anything
+/// has had a chance to move it.
+#[tokio::test]
+async fn an_override_left_in_the_instance_record_still_reaches_the_data_plane() {
+    let state = create_test_state().await;
+    {
+        let mut proxy = state.lock();
+        register_ready_instances(&mut proxy, "legacy-app", 2);
+    }
+    // Rewrite the record the way the previous build wrote it: the operator
+    // fields inside, and no `admin/` record anywhere.
+    {
+        let proxy = state.lock();
+        let existing = proxy.state.instances["legacy-app-0"].clone();
+        let legacy = LegacyRecord {
+            app_id: existing.app_id,
+            ip: existing.ip,
+            public_key: existing.public_key,
+            reg_time: encode_ts(existing.reg_time),
+            port_policy: existing.port_policy,
+            port_policy_hash: existing.port_policy_hash,
+            admin_port_policy: Some(policy(true, &[8443])),
+            ready: Some(false),
+        };
+        state
+            .kv_store
+            .persistent()
+            .write()
+            .put(
+                crate::kv::keys::inst("legacy-app-0"),
+                crate::kv::encode(&legacy).unwrap(),
+            )
+            .unwrap();
+    }
+
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+
+    let proxy = state.lock();
+    let migrated = &proxy.state.instances["legacy-app-0"];
+    assert_eq!(migrated.ready, Some(false));
+    assert_eq!(migrated.admin_port_policy, Some(policy(true, &[8443])));
+    assert_eq!(
+        state.kv_store.load_all_instance_overrides().decoded["legacy-app-0"].ready,
+        Some(false),
+        "and the reload should have moved them to their own key"
+    );
+}
+
+/// The service-level counterpart of the KV test: an operator setting the gate
+/// here must not discard a port-policy override a peer set and this node has
+/// not applied yet. Two overrides in one record made that a whole-value
+/// conflict; two keys make them independent.
+#[tokio::test]
+async fn setting_the_gate_does_not_discard_a_peers_port_policy_override() {
+    let state = create_test_state().await;
+    {
+        let mut proxy = state.lock();
+        register_ready_instances(&mut proxy, "split-app", 2);
+    }
+    // A peer's override, in the store but not yet in this node's memory.
+    state
+        .kv_store
+        .sync_instance_port_policy_override(
+            "split-app-0",
+            &AdminPortPolicy {
+                policy: Some(policy(true, &[8443])),
+            },
+        )
+        .unwrap();
+    state.lock().set_ready("split-app-0", false).unwrap();
+
+    let loaded = state.kv_store.load_all_instance_overrides();
+    assert_eq!(
+        loaded.decoded["split-app-0"],
+        AdminOverrides {
+            port_policy: Some(policy(true, &[8443])),
+            ready: Some(false),
+        },
+        "the gate write must not have taken the port-policy override with it"
+    );
+}
+
+/// The instance record as the build before the override key wrote it.
+#[derive(serde::Serialize)]
+struct LegacyRecord {
+    app_id: String,
+    ip: std::net::Ipv4Addr,
+    public_key: String,
+    reg_time: u64,
+    port_policy: Option<crate::kv::PortPolicy>,
+    port_policy_hash: String,
+    admin_port_policy: Option<crate::kv::PortPolicy>,
+    ready: Option<bool>,
+}
+
 /// The test above takes the early-return branch of `new_client_by_id`, where
 /// the in-memory record is reused untouched -- so it says nothing about the
 /// rebuild branch, which reconstructs the record. Dropping the operator
@@ -704,16 +846,16 @@ async fn both_operator_overrides_survive_the_ip_rebuild_path() {
     );
 }
 
-/// `persist_instance_record` was changed to return a `Result` for exactly one
-/// caller: `set_ready`, whose API tells an operator the gate is in force.
-/// Swallowing that error left the whole suite green, so nothing pinned the one
-/// behaviour the signature change existed for.
+/// `persist_instance_overrides` returns a `Result` for exactly one caller:
+/// `set_ready`, whose API tells an operator the gate is in force. Swallowing
+/// that error left the whole suite green, so nothing pinned the one behaviour
+/// the signature exists for.
 #[tokio::test]
 async fn a_gate_that_could_not_be_stored_is_reported_as_such() {
     let state = create_test_state().await;
     state
         .kv_store
-        .fail_writes_for_test(crate::kv::FailWrite::INST);
+        .fail_writes_for_test(crate::kv::FailWrite::ADMIN);
     let mut proxy = state.lock();
     register_ready_instances(&mut proxy, "durable-app", 1);
 
@@ -765,22 +907,11 @@ async fn a_gate_arriving_through_kv_invalidates_the_cached_selection() {
         assert_eq!(proxy.state.top_n.len(), 1, "selection should be cached");
     }
 
-    // A peer gated peer-app-0 and the record reached us through sync.
-    let gated = {
-        let proxy = state.lock();
-        let existing = proxy.state.instances["peer-app-0"].clone();
-        InstanceData {
-            app_id: existing.app_id.clone(),
-            ip: existing.ip,
-            public_key: existing.public_key.clone(),
-            reg_time: now,
-            port_policy: existing.port_policy.clone(),
-            port_policy_hash: existing.port_policy_hash.clone(),
-            admin_port_policy: None,
-            ready: Some(false),
-        }
-    };
-    state.kv_store.sync_instance("peer-app-0", &gated).unwrap();
+    // A peer gated peer-app-0 and the override record reached us through sync.
+    state
+        .kv_store
+        .sync_instance_gate("peer-app-0", &InstanceGate { ready: false })
+        .unwrap();
     reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
 
     let mut proxy = state.lock();
@@ -832,7 +963,7 @@ async fn removing_an_instance_removes_its_gate() {
         register_ready_instances(&mut proxy, "gone-app", 2);
         proxy.set_ready("gone-app-0", false).unwrap();
         assert_eq!(
-            state.kv_store.load_all_instances().decoded["gone-app-0"].ready,
+            state.kv_store.load_all_instance_overrides().decoded["gone-app-0"].ready,
             Some(false)
         );
         // Seed the two ephemeral records as well, or the assertions below pass
@@ -853,18 +984,23 @@ async fn removing_an_instance_removes_its_gate() {
         );
         proxy.remove_instance("gone-app-0").unwrap();
     }
-    // The gate lives in the instance record, so removing the instance takes it
-    // with it. The deletes are issued unconditionally so a failure in one
-    // cannot strand the others, which is only worth anything if they are all
-    // actually issued.
-    let key = crate::kv::keys::inst("gone-app-0");
-    let live = state
-        .kv_store
-        .persistent()
-        .read()
-        .get(&key)
-        .is_some_and(|entry| !entry.is_deleted());
-    assert!(!live, "{key} should be gone");
+    // The gate has its own key now, so it needs its own tombstone -- an id
+    // recycled after the delete would otherwise inherit it. The deletes are
+    // issued unconditionally so a failure in one cannot strand the others,
+    // which is only worth anything if they are all actually issued.
+    for key in [
+        crate::kv::keys::inst("gone-app-0"),
+        crate::kv::keys::admin_ready("gone-app-0"),
+        crate::kv::keys::admin_port_policy("gone-app-0"),
+    ] {
+        let live = state
+            .kv_store
+            .persistent()
+            .read()
+            .get(&key)
+            .is_some_and(|entry| !entry.is_deleted());
+        assert!(!live, "{key} should be gone");
+    }
     assert!(
         !handshake_is_live(&state),
         "handshake/ record should be gone"
@@ -936,8 +1072,6 @@ fn sync_from_peer_at(
                 reg_time,
                 port_policy: None,
                 port_policy_hash: String::new(),
-                admin_port_policy: None,
-                ready: None,
             },
         )
         .unwrap();

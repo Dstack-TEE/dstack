@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - sdk: `AppCompose` in the Go SDK gained `init_script`, `storage_fs`, `swap_size`, `event_log_version`, `port_policy` and `verity_volumes`, and `Requirements` gained `gpu_policy` in the Go and Python SDKs
 - shared API authentication (`dstack-api-auth`) protecting the full VMM HTTP/pRPC/UI surface and unifying Gateway/KMS admin auth: bearer/`X-Admin-Token`/HTTP Basic/bcrypt htpasswd, constant-time verification (#796)
 - gateway: `Admin.SetInstanceReady` takes a CVM instance out of its app's load-balancing rotation without stopping it; instance-id routing stays open so the instance can still be investigated, and the setting survives re-registration
+- gateway: operator-set per-instance overrides now live under their own KV keys — `admin/<instance_id>/ready` and `admin/<instance_id>/port_policy` — instead of inside the instance record, so a CVM re-registration can no longer drop them and setting one cannot discard a peer's unsynced change to the other. An override left in an instance record by an earlier build is moved across on load
 
 ### Fixed
 - sdk: the Go and Python compose-hash helpers silently dropped every app-compose field they did not declare, so `getComposeHash` returned a digest for an app-compose that was not the one being deployed — and that digest is what gets whitelisted on chain. The missing fields are named above; both now keep unrecognised keys as well, so a guest that gains a field before the SDK does still hashes correctly
