@@ -1179,18 +1179,33 @@ impl KvStore {
         let gate = self.delete_persistent(keys::admin_ready(instance_id), FailWrite::ADMIN);
         let override_policy =
             self.delete_persistent(keys::admin_port_policy(instance_id), FailWrite::ADMIN);
+        let observations = self.sync_forget_local_observations(instance_id);
+
+        let previous = previous?;
+        gate?;
+        override_policy?;
+        observations?;
+        Ok(previous.is_some_and(|entry| !entry.is_deleted()))
+    }
+
+    /// Withdraw this node's observations of an instance.
+    ///
+    /// `conn/` and `handshake/` are keyed by observer, so a delete can only
+    /// withdraw the deleting node's own -- they are the only ones it owns.
+    /// Every other node has to withdraw its own when it learns of the deletion,
+    /// or its observation outlives the CVM it describes: nothing sweeps those
+    /// prefixes, and a node's recycle loop cannot see an instance it has
+    /// already dropped from memory. They are ephemeral, so a restart collects
+    /// them, but a gateway's uptime is measured in months.
+    pub fn sync_forget_local_observations(&self, instance_id: &str) -> Result<()> {
         let conn = self.delete_ephemeral(keys::conn(instance_id, self.my_node_id), FailWrite::CONN);
         let handshake = self.delete_ephemeral(
             keys::handshake(instance_id, self.my_node_id),
             FailWrite::HANDSHAKE,
         );
-
-        let previous = previous?;
-        gate?;
-        override_policy?;
         conn?;
         handshake?;
-        Ok(previous.is_some_and(|entry| !entry.is_deleted()))
+        Ok(())
     }
 
     fn delete_persistent(&self, key: String, _which: u8) -> Result<Option<wavekv::types::Entry>> {

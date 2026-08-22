@@ -1244,6 +1244,11 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
     for instance_id in removed {
         info!("WaveKV: instance {instance_id} was deleted remotely, dropping it");
         state.forget_instance(&instance_id);
+        // The node that deleted it could only withdraw its own `conn/` and
+        // `handshake/` keys. Ours are ours to withdraw.
+        if let Err(err) = store.sync_forget_local_observations(&instance_id) {
+            warn!("failed to withdraw this node's observations of {instance_id}: {err:?}");
+        }
         wg_changed = true;
     }
 

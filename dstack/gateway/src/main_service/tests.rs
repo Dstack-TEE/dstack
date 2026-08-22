@@ -929,83 +929,85 @@ async fn a_gate_arriving_through_kv_invalidates_the_cached_selection() {
     );
 }
 
-/// Whether this node's `conn/` record for the fixture instance is live.
+/// Every live key in either store whose name contains `instance_id`.
 ///
-/// Reads the raw entry because `KvStore` exposes no conn accessor, and uses the
-/// store's own node id rather than the config's so the key matches whatever
-/// `sync_connections` wrote -- the two agree today, and this keeps the
-/// assertions honest if they ever stop agreeing.
-fn conn_is_live(state: &TestState) -> bool {
-    let key = crate::kv::keys::conn("gone-app-0", state.kv_store.my_node_id());
-    state
+/// Scanned rather than listed, so a per-instance key added later without a
+/// matching delete shows up here instead of leaking quietly.
+fn live_keys_naming(state: &TestState, instance_id: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for (key, entry) in state
+        .kv_store
+        .persistent()
+        .read()
+        .iter_all_including_tombstones()
+    {
+        if key.contains(instance_id) && !entry.is_deleted() {
+            found.push(key.clone());
+        }
+    }
+    for (key, entry) in state
         .kv_store
         .ephemeral()
         .read()
-        .get(&key)
-        .is_some_and(|entry| !entry.is_deleted())
+        .iter_all_including_tombstones()
+    {
+        if key.contains(instance_id) && !entry.is_deleted() {
+            found.push(key.clone());
+        }
+    }
+    found.sort();
+    found
 }
 
-/// Whether this node's `handshake/` observation for the fixture instance is live.
-fn handshake_is_live(state: &TestState) -> bool {
-    state
-        .kv_store
-        .get_instance_handshakes("gone-app-0")
-        .contains_key(&state.kv_store.my_node_id())
-}
-
-/// Removing an instance must take its gate with it, or a later instance
-/// reusing the id would inherit a quarantine nobody asked for.
+/// Nothing that names a CVM may outlive it. The gate especially: instance ids
+/// are recycled, so one left behind would quarantine whatever registers under
+/// the id next.
+///
+/// The deletes are issued unconditionally so a failure in one cannot strand the
+/// others, which is only worth anything if they are all actually issued.
 #[tokio::test]
-async fn removing_an_instance_removes_its_gate() {
+async fn removing_an_instance_leaves_nothing_behind_that_names_it() {
     let state = create_test_state().await;
     {
         let mut proxy = state.lock();
         register_ready_instances(&mut proxy, "gone-app", 2);
         proxy.set_ready("gone-app-0", false).unwrap();
-        assert_eq!(
-            state.kv_store.load_all_instance_overrides().decoded["gone-app-0"].ready,
-            Some(false)
-        );
-        // Seed the two ephemeral records as well, or the assertions below pass
+        proxy
+            .set_admin_port_policy("gone-app-0", policy(true, &[8443]))
+            .unwrap();
+        // Seed the two ephemeral records as well, or the assertion below passes
         // whether or not the deletes are issued.
         state.kv_store.sync_connections("gone-app-0", 3).unwrap();
         state
             .kv_store
             .sync_instance_handshake("gone-app-0", 1)
             .unwrap();
-        // Assert they are live first. Without this the post-delete assertions
-        // go quietly vacuous again the moment the seeds stop landing on the
-        // keys they are checked against -- which is the failure this test
-        // exists to rule out.
-        assert!(conn_is_live(&state), "seeded conn/ record should be live");
-        assert!(
-            handshake_is_live(&state),
-            "seeded handshake/ record should be live"
-        );
-        proxy.remove_instance("gone-app-0").unwrap();
     }
-    // The gate has its own key now, so it needs its own tombstone -- an id
-    // recycled after the delete would otherwise inherit it. The deletes are
-    // issued unconditionally so a failure in one cannot strand the others,
-    // which is only worth anything if they are all actually issued.
-    for key in [
-        crate::kv::keys::inst("gone-app-0"),
-        crate::kv::keys::admin_ready("gone-app-0"),
-        crate::kv::keys::admin_port_policy("gone-app-0"),
-    ] {
-        let live = state
-            .kv_store
-            .persistent()
-            .read()
-            .get(&key)
-            .is_some_and(|entry| !entry.is_deleted());
-        assert!(!live, "{key} should be gone");
-    }
-    assert!(
-        !handshake_is_live(&state),
-        "handshake/ record should be gone"
+
+    let node = state.kv_store.my_node_id();
+    let before = live_keys_naming(&state, "gone-app-0");
+    assert_eq!(
+        before,
+        vec![
+            "admin/gone-app-0/port_policy".to_string(),
+            "admin/gone-app-0/ready".to_string(),
+            format!("conn/gone-app-0/{node}"),
+            format!("handshake/gone-app-0/{node}"),
+            "inst/gone-app-0".to_string(),
+        ],
+        "the fixture must seed every per-instance key, or the assertion below \
+         is vacuous"
     );
-    assert!(!conn_is_live(&state), "conn/ record should be gone");
+
+    state.lock().remove_instance("gone-app-0").unwrap();
+
+    assert!(
+        live_keys_naming(&state, "gone-app-0").is_empty(),
+        "left behind: {:?}",
+        live_keys_naming(&state, "gone-app-0")
+    );
+    // The sibling is untouched: a delete is per instance, not per app.
+    assert!(!live_keys_naming(&state, "gone-app-1").is_empty());
 }
 
 /// Selection handing over an empty group means every instance was ruled out
@@ -1157,6 +1159,59 @@ async fn an_instance_deleted_on_another_node_stops_being_routable_here() {
         .state
         .allocated_addresses
         .contains(&"10.0.0.40".parse().unwrap()));
+}
+
+/// Whether this node's ephemeral observations of `instance_id` are live.
+fn observations_are_live(state: &TestState, instance_id: &str) -> (bool, bool) {
+    let node = state.kv_store.my_node_id();
+    let store = state.kv_store.ephemeral().read();
+    let live = |key: String| store.get(&key).is_some_and(|entry| !entry.is_deleted());
+    (
+        live(crate::kv::keys::conn(instance_id, node)),
+        live(crate::kv::keys::handshake(instance_id, node)),
+    )
+}
+
+/// A delete can only withdraw the deleting node's own `conn/` and `handshake/`
+/// keys -- those are the only ones it owns. Every other node has to withdraw
+/// its own when it learns of the deletion, or its observation of a CVM that no
+/// longer exists is never collected: nothing else iterates those prefixes, and
+/// the recycle loop cannot see an instance it has already dropped from memory.
+#[tokio::test]
+async fn learning_of_a_remote_deletion_withdraws_this_nodes_observations() {
+    let state = create_test_state().await;
+    sync_from_peer(
+        &state,
+        "peer-instance",
+        "10.0.0.40",
+        &test_pubkey("peer-key"),
+    );
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+    // This node has been watching it, as every node in the cluster does.
+    state.kv_store.sync_connections("peer-instance", 4).unwrap();
+    state
+        .kv_store
+        .sync_instance_handshake("peer-instance", 1)
+        .unwrap();
+    assert_eq!(observations_are_live(&state, "peer-instance"), (true, true));
+
+    // The tombstone arrives through sync: the peer withdrew its own keys, not
+    // ours. Written directly rather than through `sync_delete_instance`, which
+    // is what the *deleting* node calls.
+    state
+        .kv_store
+        .persistent()
+        .write()
+        .delete(crate::kv::keys::inst("peer-instance"))
+        .unwrap();
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+
+    assert!(!state.lock().state.instances.contains_key("peer-instance"));
+    assert_eq!(
+        observations_are_live(&state, "peer-instance"),
+        (false, false),
+        "this node's observations must not outlive the instance they describe"
+    );
 }
 
 #[tokio::test]
