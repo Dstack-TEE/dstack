@@ -40,8 +40,8 @@ use crate::{
     config::{Config, TlsConfig},
     kv::{
         fetch_peers_from_bootnode, import, AppIdValidator, CertData, HttpsClientConfig,
-        InstanceData, KvStore, LegacyOverrides, LoadedInstances, NodeData, NodeStatus, PortPolicy,
-        PortPolicyOverride, WaveKvSyncService,
+        InstanceRecord, KvStore, LegacyOverrides, LoadedInstances, NodeData, NodeStatus,
+        PortPolicy, PortPolicyOverride, WaveKvSyncService,
     },
     models::{InstanceInfo, PortPolicyView, WgConf, WgPeer},
     proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo, AppAddressResolver},
@@ -771,7 +771,7 @@ fn report_new_rejections(
 fn instance_info_from_record(
     store: &KvStore,
     instance_id: String,
-    data: InstanceData,
+    data: InstanceRecord,
     legacy: Option<&LegacyOverrides>,
 ) -> (InstanceInfo, Option<String>) {
     let mut unreadable = None;
@@ -1447,8 +1447,8 @@ impl ProxyState {
             let existing = existing.clone();
             if self.valid_ip(existing.ip) {
                 // Sync existing instance to KvStore (might be from legacy state)
-                let data = InstanceData::from(&existing);
-                if let Err(err) = self.kv_store.sync_instance(&existing.id, &data) {
+                let record = InstanceRecord::from(&existing);
+                if let Err(err) = self.kv_store.sync_instance(&existing.id, &record) {
                     error!("failed to sync existing instance to KvStore: {err:?}");
                 }
                 return Ok(existing);
@@ -1781,17 +1781,17 @@ impl ProxyState {
         let Some(info) = self.state.instances.get(instance_id) else {
             return Ok(());
         };
-        let data = InstanceData::from(info);
+        let record = InstanceRecord::from(info);
         self.kv_store
-            .sync_instance(instance_id, &data)
+            .sync_instance(instance_id, &record)
             .with_context(|| format!("failed to sync instance {instance_id} to KvStore"))
     }
 
     fn add_instance(&mut self, info: InstanceInfo) {
         self.state.top_n.remove(&info.app_id);
         // Sync to KvStore
-        let data = InstanceData::from(&info);
-        if let Err(err) = self.kv_store.sync_instance(&info.id, &data) {
+        let record = InstanceRecord::from(&info);
+        if let Err(err) = self.kv_store.sync_instance(&info.id, &record) {
             error!("failed to sync instance to KvStore: {err:?}");
         }
 

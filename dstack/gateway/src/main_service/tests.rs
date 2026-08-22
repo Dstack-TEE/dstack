@@ -673,7 +673,7 @@ async fn a_re_registration_by_a_node_that_never_saw_the_gate_cannot_drop_it() {
         };
         state
             .kv_store
-            .sync_instance("race-app-0", &InstanceData::from(&unaware))
+            .sync_instance("race-app-0", &InstanceRecord::from(&unaware))
             .unwrap();
         // ... and this node forgets it too, so only the store can answer.
         proxy.state.instances.get_mut("race-app-0").unwrap().ready = None;
@@ -913,7 +913,7 @@ async fn a_gate_that_could_not_be_stored_is_reported_as_such() {
     let state = create_test_state().await;
     state
         .kv_store
-        .fail_writes_for_test(&[crate::kv::InstanceRecord::Gate]);
+        .fail_writes_for_test(&[crate::kv::InstanceKey::Gate]);
     let mut proxy = state.lock();
     register_ready_instances(&mut proxy, "durable-app", 1);
 
@@ -1125,7 +1125,7 @@ fn sync_from_peer_at(
         .kv_store
         .sync_instance(
             instance_id,
-            &InstanceData {
+            &InstanceRecord {
                 app_id: "peer-app".to_string(),
                 ip: ip.parse().unwrap(),
                 public_key: public_key.to_string(),

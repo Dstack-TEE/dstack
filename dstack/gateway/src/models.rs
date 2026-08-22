@@ -25,13 +25,14 @@ mod filters {
 /// record, what an operator decided under `admin/`, and this node's live
 /// connection count.
 ///
-/// Not a stored shape, which is the difference from [`crate::kv::InstanceData`]
-/// -- that one is the `inst/` record and nothing else. Assembling three sources
-/// into one type here is what lets the proxy answer a routing question without
-/// touching the store; keeping them apart is what stops a registration, which
-/// writes the `inst/` record in full, from carrying an operator's decision back
-/// out with it. `From<&InstanceInfo> for InstanceData` is that narrowing, and
-/// the compiler is what checks it drops exactly the right fields.
+/// Not a stored shape, which is the difference from
+/// [`crate::kv::InstanceRecord`] -- that one is the `inst/` record and nothing
+/// else. Assembling three sources into one type here is what lets the proxy
+/// answer a routing question without touching the store; keeping them apart is
+/// what stops a registration, which writes the `inst/` record in full, from
+/// carrying an operator's decision back out with it.
+/// `From<&InstanceInfo> for InstanceRecord` is that narrowing, and the compiler
+/// is what checks it drops exactly the right fields.
 #[derive(Clone, Debug)]
 pub struct InstanceInfo {
     pub id: String,
