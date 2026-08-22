@@ -26,7 +26,6 @@ use ra_tls::attestation::AppInfo;
 use rand::seq::IteratorRandom;
 use rinja::Template as _;
 use safe_write::safe_write_with_mode;
-use serde::{Deserialize, Serialize};
 use smallvec::{smallvec, SmallVec};
 use tokio::sync::{
     mpsc::{unbounded_channel, UnboundedSender},
@@ -100,12 +99,17 @@ pub struct ProxyInner {
 const HANDSHAKE_CACHE_TTL: Duration = Duration::from_secs(30);
 const HANDSHAKE_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+/// The routing tables, rebuilt from WaveKV on every reload.
+///
+/// Held only in memory. It carried `Serialize`/`Deserialize` from the days
+/// before WaveKV, when it was written to a state file; nothing has serialized
+/// it since, and the derives kept every `#[serde]` attribute on the types it
+/// reaches looking load-bearing when none of them were.
+#[derive(Debug, Default)]
 pub(crate) struct ProxyStateMut {
     pub(crate) apps: BTreeMap<String, BTreeSet<String>>,
     pub(crate) instances: BTreeMap<String, InstanceInfo>,
     pub(crate) allocated_addresses: BTreeSet<Ipv4Addr>,
-    #[serde(skip)]
     pub(crate) top_n: BTreeMap<String, (AddressGroup, Instant)>,
 }
 
