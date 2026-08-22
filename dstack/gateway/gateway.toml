@@ -122,10 +122,12 @@ inbound_pp_enabled = false
 # whether the app is serving, and keeps instances that say no out of app-id
 # load balancing. Instances stay reachable by instance id regardless.
 #
-# Safe to leave on: only CVMs whose app-compose sets
-# `requirements.health_check.enabled` are polled at all, and if every instance
-# of an app reports unhealthy the gateway routes to all of them anyway rather
-# than blackholing the app.
+# Safe to leave on: only CVMs whose app-compose sets `requirements.health_check`
+# are polled at all, and if every instance of an app reports unhealthy the
+# gateway routes to all of them anyway rather than blackholing the app.
+# Note the two are different keys with similar names: `enabled` below switches
+# polling on for this gateway, `requirements.health_check` is how an app asks
+# to be polled.
 [core.proxy.health_check]
 enabled = true
 interval = "5s"
