@@ -1228,6 +1228,9 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
     Ok(())
 }
 
+/// WireGuard peers keyed by public key, valued by (last handshake, elapsed).
+pub(crate) type Handshakes = BTreeMap<String, (u64, Duration)>;
+
 impl ProxyState {
     fn valid_ip(&self, ip: Ipv4Addr) -> bool {
         self.config.wg.is_valid_client_ip(ip)
@@ -1456,14 +1459,16 @@ impl ProxyState {
         info.ready = Some(ready);
         let app_id = info.app_id.clone();
         info!("admin set ready={ready} for instance {instance_id} (prev: {prev})");
-        if !ready && self.count_ready_instances(&app_id) == 0 {
-            // Not an error -- an operator may well mean to drain an app
-            // entirely -- but silently refusing every connection to an app is
-            // the kind of thing someone should be told about once.
-            warn!(
-                "instance {instance_id} was the last ready instance of app {app_id}; \
-                 the app will refuse new connections until one is set ready again"
-            );
+        match self.drain_warning(instance_id, &app_id, prev, ready) {
+            Ok(Some(message)) => warn!("{message}"),
+            Ok(None) => {}
+            // The check needs a handshake read, which can fail on its own. That
+            // is not a reason to fail the gate -- it is already applied -- but
+            // it is a reason not to imply the app is still serving.
+            Err(err) => debug!(
+                "could not tell whether app {app_id} still has an eligible instance \
+                 after gating {instance_id}: {err:?}"
+            ),
         }
         // The selection cache holds a pre-gate snapshot. Drop it so the change
         // applies to the next connection rather than up to `cache_top_n` later.
@@ -1487,16 +1492,68 @@ impl ProxyState {
         Ok(())
     }
 
-    /// How many of an app's instances the operator has left open to traffic.
-    fn count_ready_instances(&self, app_id: &str) -> usize {
+    /// Whether the WireGuard tunnel to `instance` is fresh enough to route over.
+    fn handshake_is_fresh(&self, instance: &InstanceInfo, handshakes: &Handshakes) -> bool {
+        handshakes
+            .get(&instance.public_key)
+            .is_some_and(|(_, elapsed)| *elapsed < self.config.proxy.timeouts.handshake_stale)
+    }
+
+    /// Whether `instance` may receive a connection addressed to its app id.
+    ///
+    /// The one definition both selection paths and the drain warning ask.
+    /// They had already drifted apart: the warning looked only at the gate,
+    /// so an instance nobody gated but whose tunnel was dead counted as cover.
+    fn is_eligible(&self, instance: &InstanceInfo, handshakes: &Handshakes) -> bool {
+        instance.is_ready() && self.handshake_is_fresh(instance, handshakes)
+    }
+
+    /// The warning an operator should see after a gate change, if any.
+    ///
+    /// Returned rather than logged so both conditions are testable, because
+    /// both were wrong. It counted only the gate, so draining the last live
+    /// instance of an app whose others were dead-but-ungated said nothing --
+    /// the case the warning exists for. And it keyed on the resulting count
+    /// alone, so a second gate-off against an already-drained app warned
+    /// again, naming an instance that was never the last ready one; the retry
+    /// the failed-write message asks for is exactly that call.
+    fn drain_warning(
+        &self,
+        instance_id: &str,
+        app_id: &str,
+        prev: bool,
+        ready: bool,
+    ) -> Result<Option<String>> {
+        // Nothing was closed, so nothing can have been closed last.
+        if !prev || ready {
+            return Ok(None);
+        }
+        if self.count_eligible_instances(app_id)? > 0 {
+            return Ok(None);
+        }
+        // Not an error -- an operator may well mean to drain an app entirely --
+        // but silently refusing every connection to an app is the kind of thing
+        // someone should be told about once.
+        Ok(Some(format!(
+            "gating instance {instance_id} leaves app {app_id} with no instance eligible \
+             for load balancing; connections addressed to the app id will be refused \
+             until one becomes eligible again"
+        )))
+    }
+
+    /// How many of an app's instances can currently be given new traffic.
+    fn count_eligible_instances(&self, app_id: &str) -> Result<usize> {
         let Some(instances) = self.state.apps.get(app_id) else {
-            return 0;
+            return Ok(0);
         };
-        instances
+        let handshakes = self
+            .latest_handshakes(None)
+            .context("failed to read WireGuard handshakes")?;
+        Ok(instances
             .iter()
             .filter_map(|id| self.state.instances.get(id))
-            .filter(|info| info.is_ready())
-            .count()
+            .filter(|info| self.is_eligible(info, &handshakes))
+            .count())
     }
 
     /// Persist the current in-memory `InstanceInfo` snapshot to WaveKV.
@@ -1643,21 +1700,22 @@ impl ProxyState {
                 .iter()
                 .filter_map(|instance_id| {
                     let instance = self.state.instances.get(instance_id)?;
-                    // Operator gate. Only applied here, on the app-id path --
-                    // the instance-id lookup above returns before this point so
-                    // a gated instance stays directly reachable.
-                    if !instance.is_ready() {
+                    // Eligibility -- including the operator gate -- is only
+                    // applied here, on the app-id path: the instance-id lookup
+                    // above returns before this point, so a gated instance
+                    // stays directly reachable.
+                    if !self.is_eligible(instance, &handshakes) {
                         return None;
                     }
+                    // Re-read for the sort key; eligibility already proved it
+                    // is present and fresh.
                     let (_, elapsed) = handshakes.get(&instance.public_key)?;
-                    (*elapsed < self.config.proxy.timeouts.handshake_stale).then(|| {
-                        (
-                            instance.ip,
-                            *elapsed,
-                            instance.connections.clone(),
-                            instance.id.clone(),
-                        )
-                    })
+                    Some((
+                        instance.ip,
+                        *elapsed,
+                        instance.connections.clone(),
+                        instance.id.clone(),
+                    ))
                 })
                 .collect::<SmallVec<[_; 4]>>(),
         };
@@ -1692,19 +1750,12 @@ impl ProxyState {
         // Get latest handshakes to check instance health
         let handshakes = self.latest_handshakes(None).ok()?;
 
-        // Filter healthy instances and choose randomly among them
+        // Filter eligible instances and choose randomly among them
         let healthy_instances = app_instances.iter().filter(|instance_id| {
-            if let Some(instance) = self.state.instances.get(*instance_id) {
-                // Consider instance healthy if it had a recent handshake, and
-                // only if the operator has not gated it out of rotation.
-                instance.is_ready()
-                    && handshakes
-                        .get(&instance.public_key)
-                        .map(|(_, elapsed)| *elapsed < self.config.proxy.timeouts.handshake_stale)
-                        .unwrap_or(false)
-            } else {
-                false
-            }
+            self.state
+                .instances
+                .get(*instance_id)
+                .is_some_and(|instance| self.is_eligible(instance, &handshakes))
         });
 
         let selected = healthy_instances.choose(&mut rand::thread_rng())?;
@@ -1720,10 +1771,7 @@ impl ProxyState {
     /// Get latest handshakes
     ///
     /// Return a map of public key to (timestamp, elapsed)
-    pub(crate) fn latest_handshakes(
-        &self,
-        stale_timeout: Option<Duration>,
-    ) -> Result<BTreeMap<String, (u64, Duration)>> {
+    pub(crate) fn latest_handshakes(&self, stale_timeout: Option<Duration>) -> Result<Handshakes> {
         self.handshake_cache.latest(stale_timeout)
     }
 

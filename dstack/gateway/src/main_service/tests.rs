@@ -525,6 +525,75 @@ async fn gating_an_instance_invalidates_the_selection_cache() {
     );
 }
 
+/// Mark `instance_id`'s tunnel as long dead while leaving the others alone.
+fn expire_handshake(proxy: &mut ProxyState, instance_id: &str) {
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let key = proxy.state.instances[instance_id].public_key.clone();
+    let mut handshakes = proxy
+        .latest_handshakes(None)
+        .unwrap()
+        .into_iter()
+        .map(|(pk, (ts, _))| (pk, ts))
+        .collect::<BTreeMap<_, _>>();
+    handshakes.insert(key, now.saturating_sub(3600));
+    proxy.handshake_cache.set_for_test(handshakes);
+}
+
+/// The warning exists to tell an operator they just took the app offline. An
+/// instance nobody gated but whose tunnel is dead is not cover: selection will
+/// not route to it either. Counting it as cover silences the warning in the one
+/// case it is for.
+#[tokio::test]
+async fn draining_the_last_live_instance_warns_even_with_ungated_dead_ones() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_ready_instances(&mut proxy, "half-dead", 2);
+    expire_handshake(&mut proxy, "half-dead-1");
+
+    // Nobody gated -1, so a gate-only count sees cover in it.
+    assert!(proxy.state.instances["half-dead-1"].is_ready());
+    assert_eq!(proxy.count_eligible_instances("half-dead").unwrap(), 1);
+
+    proxy.set_ready("half-dead-0", false).unwrap();
+    let warning = proxy
+        .drain_warning("half-dead-0", "half-dead", true, false)
+        .unwrap();
+    assert!(
+        warning.is_some_and(|message| message.contains("no instance eligible")),
+        "draining onto a dead instance must still warn"
+    );
+}
+
+/// The message on a failed gate write asks the operator to retry. Warning on
+/// the resulting count alone makes that retry claim the instance was the last
+/// ready one -- a second time, about an instance that was already gated.
+#[tokio::test]
+async fn re_gating_an_already_gated_instance_does_not_warn_again() {
+    let state = create_test_state().await;
+    let mut proxy = state.lock();
+    register_ready_instances(&mut proxy, "twice", 1);
+
+    proxy.set_ready("twice-0", false).unwrap();
+    assert!(
+        proxy
+            .drain_warning("twice-0", "twice", true, false)
+            .unwrap()
+            .is_some(),
+        "closing the last gate is worth saying once"
+    );
+
+    assert!(
+        proxy
+            .drain_warning("twice-0", "twice", false, false)
+            .unwrap()
+            .is_none(),
+        "an instance that was already gated was not the last ready one"
+    );
+}
+
 /// Health checks are inference and may be wrong, so they fail open. The
 /// operator gate is an instruction, so it does not: gating every instance
 /// means the app refuses new connections rather than quietly serving them.
