@@ -5,6 +5,7 @@
 package dstack
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -46,6 +47,9 @@ type GpuPolicy struct {
 	AllowDevtools     *bool   `json:"allow_devtools,omitempty"`
 	AllowDebug        *bool   `json:"allow_debug,omitempty"`
 	AllowInsecureBoot *bool   `json:"allow_insecure_boot,omitempty"`
+
+	// Extra carries fields this SDK does not know; see AppCompose.Extra.
+	Extra map[string]interface{} `json:"-"`
 }
 
 // Requirements represents guest-side requirements.
@@ -54,7 +58,20 @@ type Requirements struct {
 	Platforms            *[]RequirementPlatform `json:"platforms,omitempty"`
 	TdxMeasureAcpiTables *bool                  `json:"tdx_measure_acpi_tables,omitempty"`
 	LaunchTokenHash      string                 `json:"launch_token_hash,omitempty"`
-	GpuPolicy            *GpuPolicy             `json:"gpu_policy,omitempty"`
+
+	// HealthCheck opts into gateway health gating. `omitempty` is the point:
+	// the guest's Rust types skip a false `health_check`, so an app that opts
+	// out has to hash exactly as it did before this field existed.
+	HealthCheck bool `json:"health_check,omitempty"`
+	// HealthStatusFile is a pointer because `omitempty` on a string cannot tell
+	// an absent field from an empty one, and Rust, Python and JS all can.
+	// Re-hashing an app-compose that carries `"health_status_file": ""` would
+	// otherwise yield a different digest here than in the other SDKs -- and
+	// that digest is what gets whitelisted on chain. TdxMeasureAcpiTables is a
+	// pointer for the same reason.
+	HealthStatusFile *string `json:"health_status_file,omitempty"`
+
+	GpuPolicy *GpuPolicy `json:"gpu_policy,omitempty"`
 
 	// Extra carries fields this SDK does not know; see AppCompose.Extra.
 	Extra map[string]interface{} `json:"-"`
@@ -167,13 +184,21 @@ func sortKeys(v interface{}) interface{} {
 }
 
 // toDeterministicJSON converts the structure to deterministic JSON
+//
+// HTML escaping is off. `json.Marshal` would write `>=0.6.1` as `\u003e=0.6.1`,
+// which is valid JSON and a different byte string -- so an os_version bound, or
+// a `&&` in a compose file, silently gave Go a digest that Rust, Python and JS
+// never produce, on the value that gets whitelisted on chain.
 func toDeterministicJSON(v interface{}) (string, error) {
 	sorted := sortKeys(v)
-	jsonBytes, err := json.Marshal(sorted)
-	if err != nil {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(sorted); err != nil {
 		return "", err
 	}
-	return string(jsonBytes), nil
+	// Encode appends a newline that Marshal does not.
+	return strings.TrimSuffix(buf.String(), "\n"), nil
 }
 
 // GetComposeHash computes the SHA256 hash of the application composition
@@ -304,5 +329,24 @@ func (r *Requirements) UnmarshalJSON(data []byte) error {
 	}
 	*r = Requirements(decoded)
 	r.Extra = extra
+	return nil
+}
+
+// MarshalJSON writes the declared fields plus anything in Extra.
+func (g GpuPolicy) MarshalJSON() ([]byte, error) {
+	type inner GpuPolicy
+	return marshalWithExtra(inner(g), g.Extra)
+}
+
+// UnmarshalJSON fills the declared fields and keeps the rest in Extra.
+func (g *GpuPolicy) UnmarshalJSON(data []byte) error {
+	type inner GpuPolicy
+	var decoded inner
+	extra, err := unmarshalWithExtra(data, &decoded, jsonFieldNames(GpuPolicy{}))
+	if err != nil {
+		return err
+	}
+	*g = GpuPolicy(decoded)
+	g.Extra = extra
 	return nil
 }

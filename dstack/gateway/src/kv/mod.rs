@@ -106,6 +106,24 @@ pub struct InstanceRecord {
     /// the cache is invalidated and re-fetched lazily.
     #[serde(default)]
     pub port_policy_hash: String,
+    /// Whether the CVM declared, at registration, that its traffic should be
+    /// gated on app health. Persisted so a restarted gateway (or a peer
+    /// learning this instance through sync) does not poll an app that never
+    /// opted in and read the failures as an unhealthy one.
+    ///
+    /// A declaration, so it belongs here with everything else the CVM said
+    /// about itself -- unlike the operator's gate, which any registration would
+    /// then be able to overwrite and which therefore has a key of its own.
+    ///
+    /// `Option` because `None` has to mean "the writer did not know about this
+    /// field" rather than "the app opted out": reading `false` off a record
+    /// written before the field existed would reset health to `Ungated` and
+    /// drop the app's cached selection on a record that never said so. A build
+    /// that predates the field round-trips it through
+    /// [`compat::carry_unknown_fields`], so `None` only reaches a reader after
+    /// a rollback and forward again.
+    #[serde(default)]
+    pub health_check: Option<bool>,
 }
 
 /// What an operator has said about an instance's ports, under
@@ -165,6 +183,10 @@ impl From<&InstanceInfo> for InstanceRecord {
             reg_time: encode_ts(info.reg_time),
             port_policy: info.port_policy.clone(),
             port_policy_hash: info.port_policy_hash.clone(),
+            // Only the declaration crosses the store. The verdict beside it in
+            // `Health` is this node's own observation, and a shared one would
+            // outlive the instance that earned it.
+            health_check: Some(info.health_check()),
         }
     }
 }
@@ -2385,6 +2407,7 @@ mod value_encoding_tests {
                 reg_time: 1_700_000_100,
                 port_policy: None,
                 port_policy_hash: String::new(),
+                health_check: None,
             },
         )
         .expect("sync should succeed");
@@ -2658,6 +2681,7 @@ mod corruption_tests {
                 reg_time: 1,
                 port_policy: None,
                 port_policy_hash: String::new(),
+                health_check: None,
             },
         )
         .expect("seed");
@@ -3127,6 +3151,7 @@ mod corruption_tests {
                     reg_time: 1,
                     port_policy: None,
                     port_policy_hash: String::new(),
+                    health_check: None,
                 },
             )
             .expect("sync should succeed");

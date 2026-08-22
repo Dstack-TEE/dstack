@@ -58,7 +58,178 @@ pub struct InstanceInfo {
     /// Persisted under `admin/<instance_id>/ready`, not in the instance record
     /// -- see [`crate::kv::KvStore::instance_gate`].
     pub ready: Option<bool>,
+    /// What this CVM asked for, and what this node has observed since.
+    ///
+    /// Only the declaration crosses the store, as the bare `health_check`
+    /// boolean of the `inst/` record: it came from the CVM, so it belongs
+    /// there with everything else the CVM said about itself. The observation
+    /// does not, deliberately -- every node polls for itself, the same way
+    /// each node reads its own WireGuard handshakes. A shared "healthy" flag
+    /// would outlive the instance that set it, and "I could not reach it" is a
+    /// per-node fact anyway.
+    ///
+    /// The field is crate-visible so a record can be built in one expression;
+    /// [`Health`]'s own state is not, so there is no way to build one whose
+    /// declaration and verdict disagree.
+    pub(crate) health: Health,
     pub connections: Arc<AtomicU64>,
+}
+
+/// What a CVM reported about itself when it registered.
+///
+/// Bundled rather than passed as positional arguments: every one of these is a
+/// self-declared capability, and the list has already grown once. A struct
+/// keeps the next addition from rippling through every call site.
+#[derive(Debug, Clone, Default)]
+pub struct ReportedCapabilities {
+    /// Per-port behaviour declared by the app. `None` means "not reported"
+    /// (legacy CVM), and the gateway fetches it lazily instead.
+    pub port_policy: Option<PortPolicy>,
+    /// Whether the app asked for its traffic to be gated on its health
+    /// (`requirements.health_check`).
+    ///
+    /// `None` means the caller has nothing to say about it -- the debug
+    /// registration path, which has no CVM to ask -- and leaves whatever the
+    /// instance already declared in place. `Some(false)` is an app that did not
+    /// opt in, or an image that predates the field; the gateway polls neither.
+    pub health_check: Option<bool>,
+}
+
+impl From<Option<PortPolicy>> for ReportedCapabilities {
+    /// Convenience for callers that only have a port policy to report and
+    /// nothing to say about health gating.
+    fn from(port_policy: Option<PortPolicy>) -> Self {
+        Self {
+            port_policy,
+            health_check: None,
+        }
+    }
+}
+
+/// What this gateway node knows about an instance's application-level health.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HealthState {
+    /// No poll has completed yet. Reads as *not* healthy: a CVM registers
+    /// during boot, before its containers exist, so "not asked yet" is far
+    /// more often "not up yet" than "fine".
+    #[default]
+    Unknown,
+    /// The guest agent reported that every container declaring a healthcheck
+    /// is healthy.
+    Healthy,
+    /// The guest agent reported at least one container not healthy, or could
+    /// not be reached at all.
+    Unhealthy,
+    /// This instance never asked to be gated -- an app that did not set
+    /// `requirements.health_check`, or an image that predates the
+    /// field. Reads as healthy: it has to keep serving exactly as before.
+    Ungated,
+}
+
+/// An instance's health gating: what the CVM asked for, and what this node has
+/// observed since.
+///
+/// One value rather than two fields, because the second is a function of the
+/// first whenever there is no observation to report -- `Ungated` is not a
+/// verdict, it is a restatement of "never asked". Kept apart, that derivation
+/// has to be repeated at every site that builds or resets a record, and a site
+/// that forgets produces an instance which is simultaneously routable and
+/// unpollable, with nothing on this node able to lift it.
+///
+/// Neither half is serialized. The declaration reaches the store as the bare
+/// boolean of [`crate::kv::InstanceRecord::health_check`], through
+/// `From<&InstanceInfo>`; the observation reaches it not at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Health {
+    gated: bool,
+    state: HealthState,
+}
+
+impl Default for Health {
+    /// Not derived. `HealthState::default()` is `Unknown`, but the default
+    /// *declaration* is "not gated", whose state is `Ungated` -- and a derive
+    /// would pair the two independently and produce an instance that is held
+    /// out of rotation while also being filtered out of the poll set, with
+    /// nothing able to lift it. Deferring to `From<bool>` keeps one derivation.
+    fn default() -> Self {
+        Self::from(false)
+    }
+}
+
+impl From<bool> for Health {
+    fn from(gated: bool) -> Self {
+        Self {
+            gated,
+            state: HealthState::initial(gated),
+        }
+    }
+}
+
+impl Health {
+    /// Whether this instance asked to be gated, and therefore polled.
+    pub fn is_gated(self) -> bool {
+        self.gated
+    }
+
+    /// The last observation, or the state that stands in for never having one.
+    pub fn state(self) -> HealthState {
+        self.state
+    }
+
+    /// Record what a poll found.
+    fn observe(&mut self, state: HealthState) {
+        self.state = state;
+    }
+
+    /// Apply what the CVM declared at registration.
+    ///
+    /// A declaration that changed means the image did, so any verdict about the
+    /// previous one is void. An unchanged one must not disturb a live verdict:
+    /// a CVM re-registers every three minutes without going anywhere, and
+    /// resetting on each would drop a healthy instance out of rotation until
+    /// its next poll, forever, on a timer.
+    fn declare(&mut self, gated: bool) {
+        if self.gated != gated {
+            self.gated = gated;
+            self.forget();
+        }
+    }
+
+    /// Drop any verdict, as if the instance had just registered.
+    fn forget(&mut self) {
+        self.state = HealthState::initial(self.gated);
+    }
+}
+
+impl HealthState {
+    /// The state an instance starts in, given whether it asked to be gated.
+    ///
+    /// An instance that opted in starts `Unknown` -- held out of rotation until
+    /// a poll answers -- because registration happens during boot, before the
+    /// app exists. One that did not starts `Ungated` and stays eligible, so
+    /// apps that never asked for this keep working.
+    fn initial(health_check: bool) -> Self {
+        if health_check {
+            HealthState::Unknown
+        } else {
+            HealthState::Ungated
+        }
+    }
+
+    /// Whether this state permits traffic.
+    pub fn is_healthy(self) -> bool {
+        matches!(self, HealthState::Healthy | HealthState::Ungated)
+    }
+
+    /// Stable lowercase name, as reported over the admin API.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HealthState::Unknown => "unknown",
+            HealthState::Healthy => "healthy",
+            HealthState::Unhealthy => "unhealthy",
+            HealthState::Ungated => "ungated",
+        }
+    }
 }
 
 impl InstanceInfo {
@@ -80,19 +251,138 @@ impl InstanceInfo {
         self.ready.unwrap_or(true)
     }
 
+    /// Whether this node's last health observation permits traffic.
+    ///
+    /// Unlike [`InstanceInfo::is_ready`], this is an inference and can be
+    /// wrong, so callers fail open when it would empty an app's candidate set.
+    pub fn is_healthy(&self) -> bool {
+        self.health.state().is_healthy()
+    }
+
+    /// This node's last health observation, for reporting.
+    pub fn health(&self) -> HealthState {
+        self.health.state()
+    }
+
+    /// Whether this instance asked to be gated, and polled, at all.
+    pub fn health_check(&self) -> bool {
+        self.health.is_gated()
+    }
+
+    /// Record a fresh observation.
+    pub fn set_health(&mut self, state: HealthState) {
+        self.health.observe(state);
+    }
+
+    /// Apply what the CVM declared, re-deriving the verdict if it changed.
+    pub fn set_health_check(&mut self, health_check: bool) {
+        self.health.declare(health_check);
+    }
+
+    /// Forget any verdict, as if the instance had just registered.
+    ///
+    /// For the caller that can see a *reboot* -- a new WireGuard key -- which
+    /// the declaration alone cannot show.
+    pub fn reset_health(&mut self) {
+        self.health.forget();
+    }
+
+    /// Adopt another record's verdict, when it is about the same running app.
+    ///
+    /// Used by the reload path: health is this node's own observation and the
+    /// store does not carry it, so re-deriving it from the record would reset
+    /// the whole fleet to `Unknown` on every sync round. Two things must not
+    /// survive. A changed declaration means the image was replaced. And a
+    /// changed WireGuard key means the CVM rebooted: the guest caches its key
+    /// store in `/run`, which is tmpfs, so a fresh key is a fresh boot. Without
+    /// the second check the reboot reset is only applied on whichever node took
+    /// the registration -- every *other* node learns about the new boot through
+    /// sync and quietly copies its own pre-reboot verdict onto it.
+    pub fn inherit_health_from(&mut self, previous: &Self) {
+        if self.health_check() == previous.health_check() && self.public_key == previous.public_key
+        {
+            self.health.observe(previous.health.state());
+        }
+    }
+
     /// Whether replacing `self` with `other` could invalidate a cached
     /// selection.
     ///
     /// `ip` is copied straight into the cached `AddressInfo`; `app_id` decides
     /// which cache entry the instance belongs to; `public_key` is the key the
-    /// handshake freshness filter looks up; `ready` gates eligibility.
-    /// A change to any of them means a cached `top_n` was computed against a
-    /// record that no longer exists.
+    /// handshake freshness filter looks up; `ready` and `health` both
+    /// gate eligibility. A change to any of them means a cached `top_n` was
+    /// computed against a record that no longer exists.
+    ///
+    /// `health` is this node's own observation rather than something the record
+    /// carries, and a reload copies it across, so it only differs here when the
+    /// reload had to reset it -- the declared capability changed, meaning the
+    /// image did.
     pub fn routing_inputs_differ(&self, other: &Self) -> bool {
-        self.ip != other.ip
-            || self.app_id != other.app_id
-            || self.public_key != other.public_key
-            || self.ready != other.ready
+        self.routing_inputs() != other.routing_inputs()
+    }
+
+    /// The parts of this record a cached selection was computed from.
+    ///
+    /// Borrows rather than clones, so an in-place edit can be checked for
+    /// staleness without copying a record it may not have changed -- this runs
+    /// once per poll result, which is the whole fleet every interval.
+    pub(crate) fn routing_inputs(&self) -> RoutingInputs<'_> {
+        RoutingInputs {
+            ip: self.ip,
+            app_id: &self.app_id,
+            public_key: &self.public_key,
+            ready: self.ready,
+            health: self.health,
+        }
+    }
+}
+
+/// A borrowed view of the fields [`InstanceInfo::routing_inputs_differ`]
+/// compares, so that definition lives in exactly one place. Adding a field to
+/// the selection means adding it here; nothing else has to be audited.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RoutingInputs<'a> {
+    ip: Ipv4Addr,
+    app_id: &'a str,
+    public_key: &'a str,
+    ready: Option<bool>,
+    health: Health,
+}
+
+impl RoutingInputs<'_> {
+    /// Detach from the record, so a caller can compare across a mutation.
+    pub(crate) fn to_owned(self) -> OwnedRoutingInputs {
+        OwnedRoutingInputs {
+            ip: self.ip,
+            app_id: self.app_id.to_string(),
+            public_key: self.public_key.to_string(),
+            ready: self.ready,
+            health: self.health,
+        }
+    }
+}
+
+/// [`RoutingInputs`] with the borrows taken, for comparing a record against
+/// itself either side of an edit.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct OwnedRoutingInputs {
+    ip: Ipv4Addr,
+    /// Which cache entry the record belonged to *before* the edit. A record
+    /// that changed apps invalidates both.
+    pub(crate) app_id: String,
+    public_key: String,
+    ready: Option<bool>,
+    health: Health,
+}
+
+impl PartialEq<RoutingInputs<'_>> for OwnedRoutingInputs {
+    fn eq(&self, other: &RoutingInputs<'_>) -> bool {
+        self.ip == other.ip
+            && self.app_id == other.app_id
+            && self.public_key == other.public_key
+            && self.ready == other.ready
+            && self.health == other.health
     }
 }
 
@@ -193,4 +483,51 @@ pub struct Dashboard {
     /// Lifted out of `status` so the template does not have to unwrap the
     /// proto's optional message on every field.
     pub accel: ProxyAccelStatus,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Only the declaration survives a trip through the store, which is what
+    /// `InstanceRecord::health_check` carries and what a reload rebuilds from.
+    #[test]
+    fn only_the_declaration_survives_a_round_trip() {
+        let restored = Health::from(true);
+        assert!(restored.is_gated());
+        // Not `Healthy`. The observation is deliberately not carried, so a
+        // record that arrives from the store has to start held out of rotation
+        // rather than inherit a verdict nobody made.
+        assert_eq!(restored.state(), HealthState::Unknown);
+    }
+
+    /// The pair cannot be built inconsistently, which is the point of it being
+    /// one value. `HealthState::default()` is `Unknown` while the default
+    /// declaration is "not gated", whose state is `Ungated` -- a derived
+    /// `Default` would pair those and produce an instance that is both held out
+    /// of rotation and filtered out of the poll set, with nothing able to lift
+    /// it.
+    #[test]
+    fn the_default_declaration_is_not_the_default_state() {
+        assert_eq!(Health::default(), Health::from(false));
+        assert_eq!(Health::default().state(), HealthState::Ungated);
+        assert!(Health::default().state().is_healthy());
+    }
+
+    /// A CVM re-registers every three minutes without having gone anywhere.
+    /// Re-deriving the verdict on each would drop a healthy instance out of
+    /// rotation until its next poll, forever, on a timer.
+    #[test]
+    fn redeclaring_the_same_intent_leaves_a_verdict_alone() {
+        let mut health = Health::from(true);
+        health.observe(HealthState::Healthy);
+
+        health.declare(true);
+        assert_eq!(health.state(), HealthState::Healthy);
+
+        // A changed declaration means a different image, so the verdict is
+        // about something that is no longer running.
+        health.declare(false);
+        assert_eq!(health.state(), HealthState::Ungated);
+    }
 }

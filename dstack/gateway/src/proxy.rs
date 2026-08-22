@@ -12,6 +12,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use http_client::ConnectionReuse;
 use or_panic::ResultOrPanic;
 use sni::extract_sni;
 pub(crate) use tls_passthough::AppAddressResolver;
@@ -44,6 +45,39 @@ pub(crate) type AddressGroup = smallvec::SmallVec<[AddressInfo; 4]>;
 
 mod adaptive_ktls;
 mod balance;
+/// Largest response the gateway will read from a guest agent.
+///
+/// `Worker.Health` returns a bool and a short list, so this is generous for the
+/// poller. It is sized for the other guest-facing call: `DstackGuest.Info`
+/// carries `tcb_info`, which embeds the app's entire `app_compose` -- including
+/// `docker_compose_file` verbatim. Nothing caps how large an app-compose may
+/// be, and a legacy CVM whose `Info` exceeds this never gets a port policy and
+/// is denied permanently, so the bound has to sit well above any plausible
+/// compose file rather than merely above a health response.
+const MAX_GUEST_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+/// A prpc client for a CVM's guest agent.
+///
+/// The one place that decides how the gateway talks to a guest agent, because
+/// that peer is the one dstack's threat model does not trust -- the reason
+/// health is polled rather than pushed. Bounding the response is a per-caller
+/// opt-in in `http-client` (a transport-wide cap would break `dstack vmm
+/// logs`), so it has to be applied somewhere; applying it here means a new
+/// guest-facing client cannot forget.
+///
+/// `reuse` is an argument rather than a default for the opposite reason: the
+/// two guest-facing callers want different answers and neither is obviously
+/// right, so the compiler asks. See [`ConnectionReuse`].
+pub(crate) fn guest_agent_client(
+    url: String,
+    reuse: ConnectionReuse,
+) -> http_client::prpc::PrpcClient {
+    http_client::prpc::PrpcClient::new(url)
+        .with_max_response_bytes(MAX_GUEST_RESPONSE_BYTES)
+        .with_connection_reuse(reuse)
+}
+
+pub(crate) mod health_check;
 mod idle;
 mod io_bridge;
 pub(crate) mod port_policy;
