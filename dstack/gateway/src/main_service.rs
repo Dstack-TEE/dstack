@@ -46,7 +46,7 @@ use crate::{
     },
     models::{InstanceInfo, PortPolicyView, WgConf, WgPeer},
     proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo, AppAddressResolver},
-    time::{decode_ts, encode_ts, now_secs},
+    time::{decode_ts, now_secs},
 };
 
 mod auth_client;
@@ -1272,20 +1272,17 @@ impl ProxyState {
         {
             bail!("WireGuard public key is already registered to another instance");
         }
-        // Both operator overrides live only in the instance record, so when the
-        // rebuild path below reconstructs the instance from scratch -- it does
-        // that when the recorded IP is no longer inside the configured range --
-        // they have to be carried across by hand. Otherwise the traffic gate
-        // falls open and the port-policy override silently reverts to whatever
-        // the instance reports about itself.
-        let mut carried_ready = None;
-        let mut carried_admin_port_policy = None;
+        // The rebuild path below reconstructs the instance from scratch -- it
+        // does that when the recorded IP is no longer inside the configured
+        // range -- and everything the registration does not re-state has to
+        // survive that. The operator overrides in particular live nowhere else:
+        // lose them and the traffic gate falls open while the port-policy
+        // override silently reverts to whatever the instance says about itself.
+        let mut previous: Option<InstanceInfo> = None;
         if let Some(existing) = self.state.instances.get_mut(id) {
             if existing.app_id != app_id {
                 bail!("instance_id is already registered to a different app");
             }
-            carried_ready = existing.ready;
-            carried_admin_port_policy = existing.admin_port_policy.clone();
             let pubkey_changed = existing.public_key != public_key;
             if pubkey_changed {
                 info!("public key changed for instance {id}, new key: {public_key}");
@@ -1313,16 +1310,7 @@ impl ProxyState {
             let existing = existing.clone();
             if self.valid_ip(existing.ip) {
                 // Sync existing instance to KvStore (might be from legacy state)
-                let data = InstanceData {
-                    app_id: existing.app_id.clone(),
-                    ip: existing.ip,
-                    public_key: existing.public_key.clone(),
-                    reg_time: encode_ts(existing.reg_time),
-                    port_policy: existing.port_policy.clone(),
-                    port_policy_hash: existing.port_policy_hash.clone(),
-                    admin_port_policy: existing.admin_port_policy.clone(),
-                    ready: existing.ready,
-                };
+                let data = InstanceData::from(&existing);
                 if let Err(err) = self.kv_store.sync_instance(&existing.id, &data) {
                     error!("failed to sync existing instance to KvStore: {err:?}");
                 }
@@ -1330,21 +1318,39 @@ impl ProxyState {
             }
             info!("ip {} is invalid, removing", existing.ip);
             self.state.allocated_addresses.remove(&existing.ip);
+            previous = Some(existing);
         }
         let ip = self
             .alloc_ip()
             .context("IP pool exhausted, no available addresses in client_ip_range")?;
-        let host_info = InstanceInfo {
-            id: id.to_string(),
-            app_id: app_id.to_string(),
-            ip,
-            public_key: public_key.to_string(),
-            reg_time: SystemTime::now(),
-            port_policy,
-            port_policy_hash: compose_hash.to_string(),
-            admin_port_policy: carried_admin_port_policy,
-            ready: carried_ready,
-            connections: Default::default(),
+        let host_info = match previous {
+            // Rebuilding a record that already existed. Start from it and
+            // overwrite only what this registration actually re-states, so a
+            // field added later is carried by default rather than by someone
+            // remembering to add a line here.
+            Some(existing) => InstanceInfo {
+                ip,
+                public_key: public_key.to_string(),
+                reg_time: SystemTime::now(),
+                port_policy,
+                port_policy_hash: compose_hash.to_string(),
+                connections: Default::default(),
+                ..existing
+            },
+            // First registration: no operator has had the chance to set
+            // anything, so every field is stated here and the compiler says so.
+            None => InstanceInfo {
+                id: id.to_string(),
+                app_id: app_id.to_string(),
+                ip,
+                public_key: public_key.to_string(),
+                reg_time: SystemTime::now(),
+                port_policy,
+                port_policy_hash: compose_hash.to_string(),
+                admin_port_policy: None,
+                ready: None,
+                connections: Default::default(),
+            },
         };
         self.add_instance(host_info.clone());
         Ok(host_info)
@@ -1501,16 +1507,7 @@ impl ProxyState {
         let Some(info) = self.state.instances.get(instance_id) else {
             return Ok(());
         };
-        let data = InstanceData {
-            app_id: info.app_id.clone(),
-            ip: info.ip,
-            public_key: info.public_key.clone(),
-            reg_time: encode_ts(info.reg_time),
-            port_policy: info.port_policy.clone(),
-            port_policy_hash: info.port_policy_hash.clone(),
-            admin_port_policy: info.admin_port_policy.clone(),
-            ready: info.ready,
-        };
+        let data = InstanceData::from(info);
         self.kv_store
             .sync_instance(instance_id, &data)
             .with_context(|| format!("failed to sync instance {instance_id} to KvStore"))
@@ -1519,16 +1516,7 @@ impl ProxyState {
     fn add_instance(&mut self, info: InstanceInfo) {
         self.state.top_n.remove(&info.app_id);
         // Sync to KvStore
-        let data = InstanceData {
-            app_id: info.app_id.clone(),
-            ip: info.ip,
-            public_key: info.public_key.clone(),
-            reg_time: encode_ts(info.reg_time),
-            port_policy: info.port_policy.clone(),
-            port_policy_hash: info.port_policy_hash.clone(),
-            admin_port_policy: info.admin_port_policy.clone(),
-            ready: info.ready,
-        };
+        let data = InstanceData::from(&info);
         if let Err(err) = self.kv_store.sync_instance(&info.id, &data) {
             error!("failed to sync instance to KvStore: {err:?}");
         }

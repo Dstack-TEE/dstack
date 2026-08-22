@@ -53,7 +53,8 @@ use std::{collections::BTreeMap, net::Ipv4Addr, path::Path, time::Duration};
 
 use anyhow::{Context, Result};
 
-use crate::time::now_secs;
+use crate::models::InstanceInfo;
+use crate::time::{encode_ts, now_secs};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use wavekv::{node::NodeState, types::NodeId, Node};
@@ -138,6 +139,27 @@ pub struct InstanceData {
     /// rewrites the record and fixes it.
     #[serde(default)]
     pub ready: Option<bool>,
+}
+
+/// The record this node would publish for `info`.
+///
+/// Every writer rewrites the whole record, so every writer has to name every
+/// field -- and each hand-written copy is one more place a field added later
+/// can be forgotten. `admin_port_policy` was dropped that way once already.
+/// Going through one conversion makes the compiler the thing that remembers.
+impl From<&InstanceInfo> for InstanceData {
+    fn from(info: &InstanceInfo) -> Self {
+        Self {
+            app_id: info.app_id.clone(),
+            ip: info.ip,
+            public_key: info.public_key.clone(),
+            reg_time: encode_ts(info.reg_time),
+            port_policy: info.port_policy.clone(),
+            port_policy_hash: info.port_policy_hash.clone(),
+            admin_port_policy: info.admin_port_policy.clone(),
+            ready: info.ready,
+        }
+    }
 }
 
 /// The `inst/` records currently in the KV store, split by readability.

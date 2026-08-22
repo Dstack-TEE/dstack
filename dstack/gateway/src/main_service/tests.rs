@@ -6,6 +6,7 @@ use super::*;
 use crate::config::{load_config_figment, Config, MutualConfig};
 use crate::kv::PortFlags;
 use crate::proxy::port_policy::is_port_allowed;
+use crate::time::encode_ts;
 use base64::Engine as _;
 use std::sync::atomic::Ordering;
 use tempfile::TempDir;
@@ -578,14 +579,13 @@ async fn the_gate_survives_re_registration() {
 
 /// The test above takes the early-return branch of `new_client_by_id`, where
 /// the in-memory record is reused untouched -- so it says nothing about the
-/// `carried_ready` / `carried_admin_port_policy` locals, which only exist
-/// for the *other* branch. Replacing both with `None` left the whole suite
-/// green, which is why this test exists.
+/// rebuild branch, which reconstructs the record. Dropping the operator
+/// overrides there left the whole suite green, which is why this test exists.
 ///
 /// That branch runs when the recorded IP is no longer inside
 /// `wg.client_ip_range` -- an operator renumbering the range, or a record
 /// restored from a differently-configured gateway. The instance is rebuilt from
-/// scratch, and anything held only in the record has to be carried by hand.
+/// the previous one, and anything held only in the record has to survive that.
 #[tokio::test]
 async fn both_operator_overrides_survive_the_ip_rebuild_path() {
     let state = create_test_state().await;
