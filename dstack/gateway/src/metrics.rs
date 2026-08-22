@@ -358,7 +358,7 @@ pub(crate) fn render(snapshot: &Snapshot) -> String {
     counter(
         &mut out,
         "dstack_gateway_kv_wal_sync_failures_total",
-        "Attempts to force the WaveKV write-ahead log to disk that failed. While this is rising, writes accepted in the last wal_sync_interval are not durable.",
+        "Attempts to force the WaveKV write-ahead log to disk that failed. While this is rising, writes accepted in the last wal_sync_window are not durable.",
         "",
         KV_WAL_SYNC_FAILURES.load(Ordering::Relaxed),
     );

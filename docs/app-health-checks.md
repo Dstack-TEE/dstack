@@ -188,10 +188,12 @@ must not read as a pass.
   the spot.
 - Health is a *per-node observation*. Each gateway node polls for itself and
   does not share the result, the same way each node reads its own WireGuard
-  handshakes. Nothing is persisted: a gateway restart puts every instance back
-  at `unknown`, and since that is the whole app at once, the fail-open above
-  routes to all of them until the first round of polls answers a few seconds
-  later.
+  handshakes. The verdict is not persisted: a gateway restart puts every
+  instance back at `unknown`, and since that is the whole app at once, the
+  fail-open above routes to all of them until the first round of polls answers
+  a few seconds later. What *is* stored is the CVM's declaration -- the
+  `health_check` field of its `inst/` record -- so a restarted node knows which
+  instances to poll before any of them re-register.
 - Instances whose WireGuard handshake has gone stale are not polled. They are
   already excluded from routing, and polling them would spend the round's budget
   on CVMs that are gone.

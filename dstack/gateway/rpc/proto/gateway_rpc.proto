@@ -567,8 +567,10 @@ service Admin {
   // to the instance id are never gated, so an instance pulled from rotation
   // stays directly reachable for investigation.
   //
-  // The setting is persisted and survives re-registration, so an instance
-  // does not quietly rejoin the rotation by rebooting.
+  // The setting is persisted under a key only the Admin API writes, so a
+  // re-registration -- by this instance or from another gateway node -- cannot
+  // reopen the gate. An instance does not quietly rejoin the rotation by
+  // rebooting, and does not need the operator to re-issue the gate after one.
   rpc SetInstanceReady(SetInstanceReadyRequest) returns (google.protobuf.Empty) {}
 }
 
@@ -855,7 +857,13 @@ message SetInstanceReadyRequest {
   // true puts the instance back into rotation, false removes it. Existing
   // connections are left running either way; this only affects which
   // instances new connections may be routed to.
-  bool ready = 2;
+  //
+  // Required. It is `optional` so that absent and false stay distinguishable:
+  // a proto3 scalar decodes an omitted field as its zero value, and over the
+  // JSON transport -- where unknown keys are ignored -- a request that omits
+  // the field or misspells it would otherwise be a successful call that pulls
+  // the instance out of rotation. The server rejects absent instead.
+  optional bool ready = 2;
 }
 
 // Inspect an instance's port-policy state.

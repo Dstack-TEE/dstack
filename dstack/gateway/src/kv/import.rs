@@ -30,7 +30,7 @@ use std::net::Ipv4Addr;
 use anyhow::{ensure, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 
-use super::{InstanceData, LoadedInstances, MAX_CLOCK_DRIFT_SECS};
+use super::{InstanceRecord, LoadedInstances, MAX_CLOCK_DRIFT_SECS};
 use crate::config::WgConfig;
 use crate::time::now_secs;
 
@@ -71,7 +71,7 @@ pub struct RejectedInstance {
 
 /// Records accepted for import, plus the ones that were skipped.
 pub struct AcceptedInstances {
-    pub instances: BTreeMap<String, InstanceData>,
+    pub instances: BTreeMap<String, InstanceRecord>,
     pub rejected: Vec<RejectedInstance>,
 }
 
@@ -139,7 +139,7 @@ fn validate_instance(
     wg: &WgConfig,
     now: u64,
     instance_id: &str,
-    data: &InstanceData,
+    data: &InstanceRecord,
 ) -> Result<()> {
     validate_id("instance_id", instance_id)?;
     validate_id("app_id", &data.app_id)?;
@@ -190,7 +190,7 @@ fn accept_instances_at(wg: &WgConfig, loaded: LoadedInstances, now: u64) -> Acce
         undecodable,
     } = loaded;
 
-    let mut ordered: Vec<(String, InstanceData)> = decoded.into_iter().collect();
+    let mut ordered: Vec<(String, InstanceRecord)> = decoded.into_iter().collect();
     ordered.sort_by(|(left_id, left), (right_id, right)| {
         left.reg_time
             .cmp(&right.reg_time)
@@ -273,21 +273,19 @@ mod tests {
         STANDARD.encode([seed; WG_PUBLIC_KEY_BYTES])
     }
 
-    fn instance(ip: &str, public_key: &str, reg_time: u64) -> InstanceData {
-        InstanceData {
+    fn instance(ip: &str, public_key: &str, reg_time: u64) -> InstanceRecord {
+        InstanceRecord {
             app_id: "0123456789abcdef".to_string(),
             ip: ip.parse().unwrap(),
             public_key: public_key.to_string(),
             reg_time,
             port_policy: None,
             port_policy_hash: String::new(),
-            admin_port_policy: None,
-            ready: None,
             health_check: None,
         }
     }
 
-    fn loaded(records: Vec<(&str, InstanceData)>) -> LoadedInstances {
+    fn loaded(records: Vec<(&str, InstanceRecord)>) -> LoadedInstances {
         LoadedInstances {
             decoded: records
                 .into_iter()
@@ -297,7 +295,7 @@ mod tests {
         }
     }
 
-    fn accept(records: Vec<(&str, InstanceData)>) -> AcceptedInstances {
+    fn accept(records: Vec<(&str, InstanceRecord)>) -> AcceptedInstances {
         accept_instances_at(&wg_config(), loaded(records), NOW)
     }
 

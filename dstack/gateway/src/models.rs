@@ -4,7 +4,6 @@
 
 use dstack_gateway_rpc::{AcmeInfoResponse, ProxyAccelStatus, StatusResponse};
 use rinja::Template;
-use serde::{Deserialize, Serialize};
 use std::{
     net::Ipv4Addr,
     sync::{
@@ -22,7 +21,19 @@ mod filters {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// One instance as the data plane sees it: what the CVM reported in its `inst/`
+/// record, what an operator decided under `admin/`, and this node's live
+/// connection count.
+///
+/// Not a stored shape, which is the difference from
+/// [`crate::kv::InstanceRecord`] -- that one is the `inst/` record and nothing
+/// else. Assembling three sources into one type here is what lets the proxy
+/// answer a routing question without touching the store; keeping them apart is
+/// what stops a registration, which writes the `inst/` record in full, from
+/// carrying an operator's decision back out with it.
+/// `From<&InstanceInfo> for InstanceRecord` is that narrowing, and the compiler
+/// is what checks it drops exactly the right fields.
+#[derive(Clone, Debug)]
 pub struct InstanceInfo {
     pub id: String,
     pub app_id: String,
@@ -31,38 +42,36 @@ pub struct InstanceInfo {
     pub reg_time: SystemTime,
     /// Port policy. `None` means the CVM didn't report any (legacy);
     /// gateway will lazily populate via Info() on first proxied connection.
-    #[serde(default)]
     pub port_policy: Option<PortPolicy>,
     /// Hex-encoded compose_hash that `port_policy` was learned against. The
     /// cache is invalidated when a new registration presents a different hash.
-    #[serde(default)]
     pub port_policy_hash: String,
     /// Operator-set override (Admin RPC). Takes precedence over `port_policy`
     /// when set; survives app upgrades.
-    #[serde(default)]
+    ///
+    /// Persisted under `admin/<instance_id>/port_policy`, not in the instance
+    /// record -- see [`crate::kv::PortPolicyOverride`].
     pub admin_port_policy: Option<PortPolicy>,
     /// Operator-set traffic gate (Admin RPC). `None` means no operator ever
     /// touched it. See [`InstanceInfo::is_ready`].
     ///
-    /// Persisted as a field of the instance record; see
-    /// [`crate::kv::InstanceData::ready`] for why it does not get a key
-    /// of its own.
-    #[serde(default)]
+    /// Persisted under `admin/<instance_id>/ready`, not in the instance record
+    /// -- see [`crate::kv::KvStore::instance_gate`].
     pub ready: Option<bool>,
     /// What this CVM asked for, and what this node has observed since.
     ///
-    /// Serialized as the bare `health_check` boolean it was before, because the
-    /// observation is deliberately not persisted and not shared through WaveKV:
-    /// every node polls for itself, the same way each node reads its own
-    /// WireGuard handshakes. A shared "healthy" flag would outlive the instance
-    /// that set it, and "I could not reach it" is a per-node fact anyway.
+    /// Only the declaration crosses the store, as the bare `health_check`
+    /// boolean of the `inst/` record: it came from the CVM, so it belongs
+    /// there with everything else the CVM said about itself. The observation
+    /// does not, deliberately -- every node polls for itself, the same way
+    /// each node reads its own WireGuard handshakes. A shared "healthy" flag
+    /// would outlive the instance that set it, and "I could not reach it" is a
+    /// per-node fact anyway.
     ///
     /// The field is crate-visible so a record can be built in one expression;
     /// [`Health`]'s own state is not, so there is no way to build one whose
     /// declaration and verdict disagree.
-    #[serde(default, rename = "health_check")]
     pub(crate) health: Health,
-    #[serde(skip)]
     pub connections: Arc<AtomicU64>,
 }
 
@@ -98,7 +107,7 @@ impl From<Option<PortPolicy>> for ReportedCapabilities {
 }
 
 /// What this gateway node knows about an instance's application-level health.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum HealthState {
     /// No poll has completed yet. Reads as *not* healthy: a CVM registers
     /// during boot, before its containers exist, so "not asked yet" is far
@@ -127,10 +136,10 @@ pub enum HealthState {
 /// that forgets produces an instance which is simultaneously routable and
 /// unpollable, with nothing on this node able to lift it.
 ///
-/// Serialized as the bare boolean, so the stored record keeps the shape it had:
-/// only the declaration is persisted, and the observation is re-derived.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(from = "bool", into = "bool")]
+/// Neither half is serialized. The declaration reaches the store as the bare
+/// boolean of [`crate::kv::InstanceRecord::health_check`], through
+/// `From<&InstanceInfo>`; the observation reaches it not at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Health {
     gated: bool,
     state: HealthState,
@@ -153,12 +162,6 @@ impl From<bool> for Health {
             gated,
             state: HealthState::initial(gated),
         }
-    }
-}
-
-impl From<Health> for bool {
-    fn from(health: Health) -> Self {
-        health.gated
     }
 }
 
@@ -486,19 +489,14 @@ pub struct Dashboard {
 mod tests {
     use super::*;
 
-    /// The stored record's shape is unchanged by folding the two health fields
-    /// into one value. A record written by an older build has to keep loading,
-    /// and a record this build writes has to keep loading on an older one --
-    /// which is a downgrade, i.e. exactly when nobody is watching.
+    /// Only the declaration survives a trip through the store, which is what
+    /// `InstanceRecord::health_check` carries and what a reload rebuilds from.
     #[test]
-    fn health_is_stored_as_the_bare_declaration() {
-        let gated = serde_json::to_value(Health::from(true)).expect("serialize");
-        assert_eq!(gated, serde_json::json!(true));
-
-        let restored: Health = serde_json::from_value(serde_json::json!(true)).expect("parse");
+    fn only_the_declaration_survives_a_round_trip() {
+        let restored = Health::from(true);
         assert!(restored.is_gated());
         // Not `Healthy`. The observation is deliberately not carried, so a
-        // record that arrives from disk has to start held out of rotation
+        // record that arrives from the store has to start held out of rotation
         // rather than inherit a verdict nobody made.
         assert_eq!(restored.state(), HealthState::Unknown);
     }
