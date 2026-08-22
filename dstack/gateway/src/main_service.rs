@@ -7,7 +7,7 @@ use std::{
     net::Ipv4Addr,
     ops::Deref,
     sync::{Arc, Mutex, MutexGuard},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::{bail, ensure, Context, Result};
@@ -744,21 +744,56 @@ fn report_new_rejections(
     *reported = current;
 }
 
-/// The operator overrides in force for `instance_id`.
+/// The data plane's view of an instance: what the CVM reported in `data`, plus
+/// what an operator decided about it under `admin/`.
 ///
-/// Per key, because they are separate keys: one of them existing says nothing
-/// about the other. Asking per instance is what would drop the port-policy
-/// override of an instance whose gate had already been moved across.
+/// One conversion for both the startup build and the reload. They had a
+/// hand-written copy each, which is how `admin_port_policy` came to be dropped
+/// once already -- the compiler says nothing when a field is missing from one
+/// of two literals that are supposed to agree.
 ///
-/// A key that exists answers, including when it says "cleared". Only a key that
-/// does not exist falls back to the copy an older build left in the instance
-/// record -- otherwise clearing an override would be undone by that copy.
+/// The overrides are read per key, because they are separate keys: one of them
+/// existing says nothing about the other. Asking per instance is what would
+/// drop the port-policy override of an instance whose gate had already been
+/// moved across. A key that exists answers, including when it says "cleared";
+/// only a key that does not exist falls back to the copy an older build left
+/// in the instance record, or clearing an override would be undone by it.
 ///
-/// `Err` is not "nothing is overridden". The gate is an operator saying an
-/// instance must not be given work, so an unreadable answer keeps it out of
-/// app-id rotation until the record is readable again; instance-id routing is
-/// never gated, so it stays reachable for investigation either way.
-fn effective_overrides(
+/// Returns why the overrides could not be read, if they could not. That is not
+/// "nothing is overridden": the gate is an operator saying an instance must not
+/// be given work, so an unreadable answer keeps it out of app-id rotation until
+/// the record is readable again. Instance-id routing is never gated, so the
+/// instance stays reachable for investigation either way.
+fn instance_info_from_record(
+    store: &KvStore,
+    instance_id: String,
+    data: InstanceData,
+    legacy: Option<&LegacyOverrides>,
+) -> (InstanceInfo, Option<String>) {
+    let mut unreadable = None;
+    let (admin_port_policy, ready) = match read_overrides(store, &instance_id, legacy) {
+        Ok(overrides) => overrides,
+        Err(err) => {
+            unreadable = Some(format!("{err:#}"));
+            (None, Some(false))
+        }
+    };
+    let info = InstanceInfo {
+        id: instance_id,
+        app_id: data.app_id,
+        ip: data.ip,
+        public_key: data.public_key,
+        reg_time: decode_ts(data.reg_time),
+        port_policy: data.port_policy,
+        port_policy_hash: data.port_policy_hash,
+        admin_port_policy,
+        ready,
+        connections: Default::default(),
+    };
+    (info, unreadable)
+}
+
+fn read_overrides(
     store: &KvStore,
     instance_id: &str,
     legacy: Option<&LegacyOverrides>,
@@ -774,10 +809,6 @@ fn effective_overrides(
     };
     Ok((port_policy, ready))
 }
-
-/// What [`effective_overrides`] answers when it cannot read a record: the
-/// instance takes no app-id traffic until an operator rewrites one.
-const OVERRIDES_UNREADABLE: (Option<PortPolicy>, Option<bool>) = (None, Some(false));
 
 /// Report override records this node cannot read, once per transition.
 ///
@@ -817,33 +848,21 @@ fn build_state_from_kv_store(
 
     // Build instances
     for (instance_id, data) in accepted.instances {
-        let (admin_port_policy, ready) =
-            effective_overrides(store, &instance_id, legacy_overrides.get(&instance_id))
-                .unwrap_or_else(|err| {
-                    error!(
-                        "cannot read the operator overrides for instance {instance_id}, \
-                         holding it out of load balancing until they are readable again: {err:#}"
-                    );
-                    OVERRIDES_UNREADABLE
-                });
-        let info = InstanceInfo {
-            id: instance_id.clone(),
-            app_id: data.app_id.clone(),
-            ip: data.ip,
-            public_key: data.public_key,
-            reg_time: UNIX_EPOCH
-                .checked_add(Duration::from_secs(data.reg_time))
-                .unwrap_or(UNIX_EPOCH),
-            port_policy: data.port_policy,
-            port_policy_hash: data.port_policy_hash,
-            admin_port_policy,
-            ready,
-            connections: Default::default(),
-        };
-        state.allocated_addresses.insert(data.ip);
+        let ip = data.ip;
+        let app_id = data.app_id.clone();
+        let legacy = legacy_overrides.get(&instance_id);
+        let (info, unreadable) =
+            instance_info_from_record(store, instance_id.clone(), data, legacy);
+        if let Some(reason) = unreadable {
+            error!(
+                "cannot read the operator overrides for instance {instance_id}, holding it \
+                 out of load balancing until they are readable again: {reason}"
+            );
+        }
+        state.allocated_addresses.insert(ip);
         state
             .apps
-            .entry(data.app_id)
+            .entry(app_id)
             .or_default()
             .insert(instance_id.clone());
         state.instances.insert(instance_id, info);
@@ -1270,31 +1289,17 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
 
     let mut unreadable_overrides = BTreeMap::new();
     for (instance_id, data) in instances {
-        let (admin_port_policy, ready) =
-            effective_overrides(store, &instance_id, legacy_overrides.get(&instance_id))
-                .unwrap_or_else(|err| {
-                    unreadable_overrides.insert(instance_id.clone(), format!("{err:#}"));
-                    OVERRIDES_UNREADABLE
-                });
-        let mut new_info = InstanceInfo {
-            id: instance_id.clone(),
-            app_id: data.app_id.clone(),
-            ip: data.ip,
-            public_key: data.public_key.clone(),
-            reg_time: UNIX_EPOCH
-                .checked_add(Duration::from_secs(data.reg_time))
-                .unwrap_or(UNIX_EPOCH),
-            port_policy: data.port_policy.clone(),
-            port_policy_hash: data.port_policy_hash.clone(),
-            admin_port_policy,
-            ready,
-            connections: Default::default(),
-        };
+        let legacy = legacy_overrides.get(&instance_id);
+        let (mut new_info, unreadable) =
+            instance_info_from_record(store, instance_id.clone(), data, legacy);
+        if let Some(reason) = unreadable {
+            unreadable_overrides.insert(instance_id.clone(), reason);
+        }
 
         let existing = state.state.instances.get(&instance_id).cloned();
         if let Some(existing) = &existing {
             // Check if wg config needs update
-            if existing.public_key != data.public_key || existing.ip != data.ip {
+            if existing.public_key != new_info.public_key || existing.ip != new_info.ip {
                 wg_changed = true;
             }
             // WaveKV has already selected the winning value. Materialize it
@@ -1306,10 +1311,10 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
 
         // Release old IP if it changed (prevent IP leak)
         if let Some(existing) = &existing {
-            if existing.ip != data.ip {
+            if existing.ip != new_info.ip {
                 state.state.allocated_addresses.remove(&existing.ip);
             }
-            if existing.app_id != data.app_id {
+            if existing.app_id != new_info.app_id {
                 if let Some(app_instances) = state.state.apps.get_mut(&existing.app_id) {
                     app_instances.remove(&instance_id);
                     if app_instances.is_empty() {
@@ -1330,16 +1335,16 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
             None => true,
         };
         if selection_is_stale {
-            state.state.top_n.remove(&data.app_id);
+            state.state.top_n.remove(&new_info.app_id);
             if let Some(existing) = &existing {
                 state.state.top_n.remove(&existing.app_id);
             }
         }
-        state.state.allocated_addresses.insert(data.ip);
+        state.state.allocated_addresses.insert(new_info.ip);
         state
             .state
             .apps
-            .entry(data.app_id)
+            .entry(new_info.app_id.clone())
             .or_default()
             .insert(instance_id.clone());
         state.state.instances.insert(instance_id, new_info);

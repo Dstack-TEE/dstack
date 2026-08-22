@@ -799,7 +799,7 @@ async fn one_override_key_existing_does_not_answer_for_the_other() {
     };
 
     let (port_policy, ready) =
-        effective_overrides(&state.kv_store, "half-moved", Some(&legacy)).unwrap();
+        read_overrides(&state.kv_store, "half-moved", Some(&legacy)).unwrap();
     assert_eq!(
         ready,
         Some(false),
@@ -826,7 +826,7 @@ async fn a_cleared_override_is_an_answer_not_an_absence() {
         admin_port_policy: Some(policy(true, &[8443])),
     };
 
-    let (port_policy, _) = effective_overrides(&state.kv_store, "cleared", Some(&legacy)).unwrap();
+    let (port_policy, _) = read_overrides(&state.kv_store, "cleared", Some(&legacy)).unwrap();
     assert_eq!(
         port_policy, None,
         "the operator cleared it; the instance record must not put it back"
