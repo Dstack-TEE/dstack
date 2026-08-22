@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - sdk: the Go and Python compose-hash helpers silently dropped every app-compose field they did not declare, so `getComposeHash` returned a digest for an app-compose that was not the one being deployed — and that digest is what gets whitelisted on chain. The missing fields are named above; both now keep unrecognised keys as well, so a guest that gains a field before the SDK does still hashes correctly
 
 ### Changed
+- http-client: HTTP clients are built once and shared instead of per request, which is what every `http_request*` call did until now -- each one paid for a connection pool, a DNS resolver and a TLS configuration it then threw away. Callers choose whether requests may reuse a connection (`RequestOptions::connection_reuse`, `PrpcClient::with_connection_reuse`); the default is to reuse. The gateway's health poller opts out: opening the connection is half of what a probe asks, since an agent that has run out of file descriptors keeps serving connections it already has while refusing every new one -- and every connection the gateway proxies to an app is a new one
 - os/yocto: nerdctl 2.2.1 → 2.3.5, so `nerdctl compose` honours the Compose `healthcheck:` field (only translated into `--health-*` flags from 2.3.1 on). Requires openembedded-core to move to `wrynose` head for go 1.26.5, which also brings gcc 15.2 → 15.3 — every guest image measurement changes, so the new image hashes need whitelisting in KMS
 
 

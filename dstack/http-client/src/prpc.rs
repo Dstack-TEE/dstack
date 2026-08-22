@@ -16,6 +16,7 @@ pub struct PrpcClient {
     auth_token: Option<String>,
     max_response_bytes: Option<usize>,
     request_timeout: Option<Duration>,
+    connection_reuse: super::ConnectionReuse,
 }
 
 impl PrpcClient {
@@ -26,6 +27,7 @@ impl PrpcClient {
             auth_token: None,
             max_response_bytes: None,
             request_timeout: None,
+            connection_reuse: Default::default(),
         }
     }
 
@@ -39,6 +41,7 @@ impl PrpcClient {
             auth_token: None,
             max_response_bytes: None,
             request_timeout: None,
+            connection_reuse: Default::default(),
         }
     }
 
@@ -55,6 +58,18 @@ impl PrpcClient {
     /// The bound in force, if any. Lets a caller assert it set one.
     pub fn max_response_bytes(&self) -> Option<usize> {
         self.max_response_bytes
+    }
+
+    /// Choose whether requests may reuse a connection. See
+    /// [`super::ConnectionReuse`] for when the default is the wrong answer.
+    pub fn with_connection_reuse(mut self, reuse: super::ConnectionReuse) -> Self {
+        self.connection_reuse = reuse;
+        self
+    }
+
+    /// The policy in force. Lets a caller assert it set the one it meant.
+    pub fn connection_reuse(&self) -> super::ConnectionReuse {
+        self.connection_reuse
     }
 
     /// Send `Authorization: Bearer <token>` with every request.
@@ -94,13 +109,16 @@ impl RequestClient for PrpcClient {
             auth_header = format!("Bearer {token}");
             headers.push(("Authorization", auth_header.as_str()));
         }
-        let request = super::http_request_bounded(
+        let request = super::http_request_with_options(
             "POST",
             &self.base_url,
             &path,
             &body,
             &headers,
-            self.max_response_bytes,
+            super::RequestOptions {
+                max_response_bytes: self.max_response_bytes,
+                connection_reuse: self.connection_reuse,
+            },
         );
         let (status, body) = match self.request_timeout {
             Some(timeout) => tokio::time::timeout(timeout, request)

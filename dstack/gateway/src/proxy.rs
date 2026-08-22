@@ -12,6 +12,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use http_client::ConnectionReuse;
 use or_panic::ResultOrPanic;
 use sni::extract_sni;
 pub(crate) use tls_passthough::AppAddressResolver;
@@ -63,8 +64,17 @@ const MAX_GUEST_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 /// opt-in in `http-client` (a transport-wide cap would break `dstack vmm
 /// logs`), so it has to be applied somewhere; applying it here means a new
 /// guest-facing client cannot forget.
-pub(crate) fn guest_agent_client(url: String) -> http_client::prpc::PrpcClient {
-    http_client::prpc::PrpcClient::new(url).with_max_response_bytes(MAX_GUEST_RESPONSE_BYTES)
+///
+/// `reuse` is an argument rather than a default for the opposite reason: the
+/// two guest-facing callers want different answers and neither is obviously
+/// right, so the compiler asks. See [`ConnectionReuse`].
+pub(crate) fn guest_agent_client(
+    url: String,
+    reuse: ConnectionReuse,
+) -> http_client::prpc::PrpcClient {
+    http_client::prpc::PrpcClient::new(url)
+        .with_max_response_bytes(MAX_GUEST_RESPONSE_BYTES)
+        .with_connection_reuse(reuse)
 }
 
 pub(crate) mod health_check;

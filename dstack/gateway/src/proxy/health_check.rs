@@ -33,6 +33,7 @@ use std::time::Duration;
 
 use dstack_guest_agent_rpc::worker_client::WorkerClient;
 use futures::StreamExt;
+use http_client::ConnectionReuse;
 use tokio::time::MissedTickBehavior;
 use tracing::{error, info, warn};
 
@@ -316,11 +317,7 @@ fn apply_hysteresis(
 /// than as a verdict; [`apply_hysteresis`] decides when enough of them in a row
 /// amount to one.
 async fn poll_instance(ip: Ipv4Addr, agent_port: u16, timeout: Duration) -> PollResult {
-    let url = format!("http://{ip}:{agent_port}/prpc");
-    // `guest_agent_client` bounds the response: `health_check` is self-declared
-    // by the CVM and this runs on a timer against the whole fleet, so an
-    // unbounded body here is an out-of-memory the guest gets to schedule.
-    let client = WorkerClient::new(super::guest_agent_client(url));
+    let client = WorkerClient::new(prober_transport(ip, agent_port));
     let response = match tokio::time::timeout(timeout, client.health()).await {
         Err(_) => {
             return PollResult::unreachable(format!("health poll timed out after {timeout:?}"))
@@ -332,6 +329,27 @@ async fn poll_instance(ip: Ipv4Addr, agent_port: u16, timeout: Duration) -> Poll
         return PollResult::Healthy;
     }
     PollResult::unhealthy(describe_unhealthy(&response))
+}
+
+/// How the poller talks to one agent.
+///
+/// Named, rather than built inline, so the two decisions it makes can be
+/// asserted. Both are the kind a refactor drops without anything failing.
+///
+/// `guest_agent_client` bounds the response: `health_check` is self-declared by
+/// the CVM and this runs on a timer against the whole fleet, so an unbounded
+/// body here is an out-of-memory the guest gets to schedule.
+///
+/// The connection is fresh rather than pooled, because opening it is half of
+/// what this call asks. An agent out of file descriptors, or with a full accept
+/// backlog, keeps answering whoever is already connected while refusing
+/// everyone new -- and every connection the gateway proxies to the app is a new
+/// one. A probe riding a pooled connection would report healthy for an instance
+/// no real request can reach. Only the connection is unshared; the client
+/// itself is process-wide. See `http_client::ConnectionReuse`.
+fn prober_transport(ip: Ipv4Addr, agent_port: u16) -> http_client::prpc::PrpcClient {
+    let url = format!("http://{ip}:{agent_port}/prpc");
+    super::guest_agent_client(url, ConnectionReuse::Fresh)
 }
 
 /// Longest reason kept from an agent's answer.
@@ -393,10 +411,29 @@ mod tests {
     /// against the whole fleet.
     #[test]
     fn every_guest_agent_client_bounds_the_response() {
-        let client = crate::proxy::guest_agent_client("http://10.0.0.2:8090/prpc".to_string());
+        let client = crate::proxy::guest_agent_client(
+            "http://10.0.0.2:8090/prpc".to_string(),
+            ConnectionReuse::Pooled,
+        );
         assert!(
             client.max_response_bytes().is_some(),
             "a guest agent is untrusted; its response must be bounded"
+        );
+    }
+
+    /// The probe must open its own connection. Reuse is the cheaper default
+    /// and would be adopted by anyone tidying this up, so the reason it is
+    /// wrong here is written down in `prober_transport` and asserted here: a
+    /// pooled connection reports on an agent's ability to serve a conversation
+    /// it is already in, while the traffic this gates is every time a *new*
+    /// one. An agent that has run out of descriptors passes the first and
+    /// fails the second.
+    #[test]
+    fn the_probe_does_not_ride_a_connection_someone_else_opened() {
+        assert_eq!(
+            prober_transport(Ipv4Addr::new(10, 0, 0, 2), 8090).connection_reuse(),
+            ConnectionReuse::Fresh,
+            "a probe over a pooled connection cannot see an agent that refuses new ones"
         );
     }
 
