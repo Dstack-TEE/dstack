@@ -41,14 +41,14 @@ pub struct InstanceInfo {
     /// when set; survives app upgrades.
     ///
     /// Persisted under `admin/<instance_id>/port_policy`, not in the instance
-    /// record -- see [`crate::kv::AdminOverrides`].
+    /// record -- see [`crate::kv::PortPolicyOverride`].
     #[serde(default)]
     pub admin_port_policy: Option<PortPolicy>,
     /// Operator-set traffic gate (Admin RPC). `None` means no operator ever
     /// touched it. See [`InstanceInfo::is_ready`].
     ///
     /// Persisted under `admin/<instance_id>/ready`, not in the instance record
-    /// -- see [`crate::kv::AdminOverrides`].
+    /// -- see [`crate::kv::KvStore::instance_gate`].
     #[serde(default)]
     pub ready: Option<bool>,
     #[serde(skip)]

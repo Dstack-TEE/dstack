@@ -735,9 +735,9 @@ async fn an_override_left_in_the_instance_record_still_reaches_the_data_plane() 
     assert_eq!(migrated.ready, Some(false));
     assert_eq!(migrated.admin_port_policy, Some(policy(true, &[8443])));
     assert_eq!(
-        state.kv_store.load_all_instance_overrides().decoded["legacy-app-0"].ready,
+        state.kv_store.instance_gate("legacy-app-0").unwrap(),
         Some(false),
-        "and the reload should have moved them to their own key"
+        "and the reload should have moved them to their own keys"
     );
 }
 
@@ -755,22 +755,20 @@ async fn setting_the_gate_does_not_discard_a_peers_port_policy_override() {
     // A peer's override, in the store but not yet in this node's memory.
     state
         .kv_store
-        .sync_instance_port_policy_override(
-            "split-app-0",
-            &AdminPortPolicy {
-                policy: Some(policy(true, &[8443])),
-            },
-        )
+        .set_instance_port_policy_override("split-app-0", Some(policy(true, &[8443])))
         .unwrap();
     state.lock().set_ready("split-app-0", false).unwrap();
 
-    let loaded = state.kv_store.load_all_instance_overrides();
     assert_eq!(
-        loaded.decoded["split-app-0"],
-        AdminOverrides {
-            port_policy: Some(policy(true, &[8443])),
-            ready: Some(false),
-        },
+        state.kv_store.instance_gate("split-app-0").unwrap(),
+        Some(false)
+    );
+    assert_eq!(
+        state
+            .kv_store
+            .instance_port_policy_override("split-app-0")
+            .unwrap(),
+        Some(crate::kv::PortPolicyOverride::Set(policy(true, &[8443]))),
         "the gate write must not have taken the port-policy override with it"
     );
 }
@@ -786,38 +784,29 @@ async fn setting_the_gate_does_not_discard_a_peers_port_policy_override() {
 /// have fallen back for already exists by then. Startup does not -- nothing may
 /// be written before the WaveKV bootstrap -- so the merge itself has to be
 /// right, which is what this asserts.
-#[test]
-fn one_override_key_existing_does_not_answer_for_the_other() {
-    let mut current = LoadedOverrides::default();
+#[tokio::test]
+async fn one_override_key_existing_does_not_answer_for_the_other() {
+    let state = create_test_state().await;
     // A peer gated the instance through the new key. Only that key exists.
-    current.decoded.insert(
-        "half-moved".to_string(),
-        AdminOverrides {
-            ready: Some(false),
-            port_policy: None,
-        },
-    );
-    current.present.insert(
-        "half-moved".to_string(),
-        BTreeSet::from([crate::kv::keys::ADMIN_READY.to_string()]),
-    );
+    state
+        .kv_store
+        .set_instance_gate("half-moved", false)
+        .unwrap();
     // The port-policy override is still where the previous build left it.
-    let legacy = BTreeMap::from([(
-        "half-moved".to_string(),
-        AdminOverrides {
-            ready: Some(true),
-            port_policy: Some(policy(true, &[8443])),
-        },
-    )]);
+    let legacy = LegacyOverrides {
+        ready: Some(true),
+        admin_port_policy: Some(policy(true, &[8443])),
+    };
 
-    let effective = effective_overrides("half-moved", &current, &legacy);
+    let (port_policy, ready) =
+        effective_overrides(&state.kv_store, "half-moved", Some(&legacy)).unwrap();
     assert_eq!(
-        effective.ready,
+        ready,
         Some(false),
         "the gate key exists, so it answers -- not the stale copy"
     );
     assert_eq!(
-        effective.port_policy,
+        port_policy,
         Some(policy(true, &[8443])),
         "the port-policy key does not exist, so the instance record still answers"
     );
@@ -825,27 +814,21 @@ fn one_override_key_existing_does_not_answer_for_the_other() {
 
 /// The other half of the same rule: a key that exists and says "cleared" is an
 /// answer. Reading the stale copy there would undo the clear.
-#[test]
-fn a_cleared_override_is_an_answer_not_an_absence() {
-    let mut current = LoadedOverrides::default();
-    current
-        .decoded
-        .insert("cleared".to_string(), AdminOverrides::default());
-    current.present.insert(
-        "cleared".to_string(),
-        BTreeSet::from([crate::kv::keys::ADMIN_PORT_POLICY.to_string()]),
-    );
-    let legacy = BTreeMap::from([(
-        "cleared".to_string(),
-        AdminOverrides {
-            ready: None,
-            port_policy: Some(policy(true, &[8443])),
-        },
-    )]);
+#[tokio::test]
+async fn a_cleared_override_is_an_answer_not_an_absence() {
+    let state = create_test_state().await;
+    state
+        .kv_store
+        .set_instance_port_policy_override("cleared", None)
+        .unwrap();
+    let legacy = LegacyOverrides {
+        ready: None,
+        admin_port_policy: Some(policy(true, &[8443])),
+    };
 
+    let (port_policy, _) = effective_overrides(&state.kv_store, "cleared", Some(&legacy)).unwrap();
     assert_eq!(
-        effective_overrides("cleared", &current, &legacy).port_policy,
-        None,
+        port_policy, None,
         "the operator cleared it; the instance record must not put it back"
     );
 }
@@ -985,7 +968,7 @@ async fn a_gate_arriving_through_kv_invalidates_the_cached_selection() {
     // A peer gated peer-app-0 and the override record reached us through sync.
     state
         .kv_store
-        .sync_instance_gate("peer-app-0", &InstanceGate { ready: false })
+        .set_instance_gate("peer-app-0", false)
         .unwrap();
     reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
 

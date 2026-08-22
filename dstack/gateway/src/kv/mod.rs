@@ -49,12 +49,7 @@ pub use https_client::{AppIdValidator, HttpsClientConfig};
 pub use sync_service::{fetch_peers_from_bootnode, PersistentWriteNotifier, WaveKvSyncService};
 use tracing::{error, warn};
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    net::Ipv4Addr,
-    path::Path,
-    time::Duration,
-};
+use std::{collections::BTreeMap, net::Ipv4Addr, path::Path, time::Duration};
 
 use anyhow::{Context, Result};
 
@@ -105,79 +100,41 @@ pub struct InstanceData {
     pub port_policy_hash: String,
 }
 
-/// The operator's traffic gate for one instance, under `admin/<id>/ready`.
-///
-/// A struct rather than a bare `bool` so the record can gain a field the way
-/// every other value here can -- who set it, when, why.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub struct InstanceGate {
-    /// false takes the instance out of its app's load-balancing rotation.
-    pub ready: bool,
-}
-
-/// The operator's port-policy override for one instance, under
+/// What an operator has said about an instance's ports, under
 /// `admin/<id>/port_policy`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AdminPortPolicy {
-    /// `None` is an operator having cleared the override, which is not the same
-    /// as never having set one. Absent lets the copy an older build left in the
-    /// instance record apply; cleared does not, or clearing an override would
-    /// be undone by that copy.
-    #[serde(default)]
-    pub policy: Option<PortPolicy>,
+///
+/// Three answers, not two, which is why this is not an `Option<PortPolicy>`:
+/// the key not existing is not the same as a key that says "cleared". Never set
+/// falls back to the copy an older build left in the instance record; cleared
+/// does not, or clearing an override would be undone by that copy. The wire
+/// form is `Option<PortPolicy>` -- the key's existence carries the third state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PortPolicyOverride {
+    /// An operator cleared it.
+    Cleared,
+    /// An operator set it.
+    Set(PortPolicy),
 }
 
-/// What an operator has decided about one instance.
+/// The overrides an instance record still carries from before they had keys of
+/// their own.
 ///
-/// A read-side view assembled from the two keys above, not a stored record.
-/// Both live outside [`InstanceData`] because the writer is different, and that
-/// is what decides which key a fact lives in. `inst/` states what the CVM
-/// reports about itself, and is rewritten in full by whichever node the CVM
-/// registers against, from that node's own memory -- so anything in it the CVM
-/// does not report is dropped the moment a node that has not yet synced
-/// re-registers the instance. `gateway_checker` re-registers every 180s, so
-/// that window is hit routinely.
-///
-/// For a CVM-reported fact that is harmless: the CVM restates it. For the
-/// cached `port_policy` it is harmless too: it is re-fetched. For an operator's
-/// decision it is not, and the two fail in the direction that matters --
-/// a lost gate silently returns a quarantined instance to rotation, and a lost
-/// port-policy override silently widens the ports the app will serve. Only the
-/// operator writes those keys, so a re-registration cannot touch them.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AdminOverrides {
-    pub port_policy: Option<PortPolicy>,
-    pub ready: Option<bool>,
-}
-
-impl AdminOverrides {
-    /// Whether an operator has actually set anything.
-    pub fn is_empty(&self) -> bool {
-        self.port_policy.is_none() && self.ready.is_none()
-    }
-}
-
-/// The same two overrides as they were once stored: inside the instance record.
-///
-/// `InstanceData` no longer declares them, which is deliberate on both sides of
-/// an upgrade. Reading, this type recovers them for the move to their own keys.
+/// `InstanceData` no longer declares these fields, which is deliberate on both
+/// sides of an upgrade. Reading, this type recovers them for the move across.
 /// Writing, an undeclared field is one [`compat::carry_unknown_fields`]
 /// preserves verbatim, so a node still on the previous build keeps finding its
 /// copy where it left it for as long as the upgrade takes.
-#[derive(Debug, Clone, Deserialize)]
-struct LegacyInstanceOverrides {
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct LegacyOverrides {
     #[serde(default)]
-    admin_port_policy: Option<PortPolicy>,
+    pub admin_port_policy: Option<PortPolicy>,
     #[serde(default)]
-    ready: Option<bool>,
+    pub ready: Option<bool>,
 }
 
-impl From<LegacyInstanceOverrides> for AdminOverrides {
-    fn from(legacy: LegacyInstanceOverrides) -> Self {
-        Self {
-            port_policy: legacy.admin_port_policy,
-            ready: legacy.ready,
-        }
+impl LegacyOverrides {
+    fn is_empty(&self) -> bool {
+        self.admin_port_policy.is_none() && self.ready.is_none()
     }
 }
 
@@ -201,55 +158,6 @@ impl From<&InstanceInfo> for InstanceData {
             port_policy: info.port_policy.clone(),
             port_policy_hash: info.port_policy_hash.clone(),
         }
-    }
-}
-
-/// The `admin/` records currently in the KV store, split by readability.
-#[derive(Debug, Default)]
-pub struct LoadedOverrides {
-    /// What each instance's readable override records say, keyed by instance
-    /// ID. An instance appears once both keys are accounted for; a field is
-    /// `None` when its key is absent, which is what lets the legacy copy in the
-    /// instance record still apply.
-    pub decoded: BTreeMap<String, AdminOverrides>,
-    /// Which of an instance's override keys exist, readable or not.
-    ///
-    /// Carried beside `decoded` because absent and cleared are different
-    /// answers and `decoded` can only show one of them: a cleared port-policy
-    /// override is a present record holding `None`, which is the same `None` a
-    /// key that was never written produces. The two together are three states
-    /// -- no key, a key saying "cleared", a key carrying a value -- and every
-    /// reader needs all three, because only the first may fall back to the copy
-    /// an older build left in the instance record.
-    pub present: BTreeMap<String, BTreeSet<String>>,
-    /// Instance IDs whose override record is present but no longer decodes,
-    /// mapped to the decode error.
-    ///
-    /// Read as "unknown", not as "nothing is overridden". The gate is an
-    /// operator saying an instance must not be given work, so an unreadable
-    /// answer keeps it out of app-id rotation until the record is readable
-    /// again -- re-issuing either override rewrites it. Instance-id routing is
-    /// never gated, so the instance stays reachable for investigation either
-    /// way, which is the property the gate itself is built on.
-    pub unreadable: BTreeMap<String, String>,
-}
-
-impl LoadedOverrides {
-    /// Which override keys an instance actually has, readable or not.
-    ///
-    /// Answered per key because they are per key. A caller that asks per
-    /// instance gets the two confused, and confusing them drops an override.
-    pub fn written_keys(&self, instance_id: &str) -> WrittenKeys<'_> {
-        WrittenKeys(self.present.get(instance_id))
-    }
-}
-
-/// The override keys one instance has. See [`LoadedOverrides::written_keys`].
-pub struct WrittenKeys<'a>(Option<&'a BTreeSet<String>>);
-
-impl WrittenKeys<'_> {
-    pub fn contains(&self, name: &str) -> bool {
-        self.0.is_some_and(|names| names.contains(name))
     }
 }
 
@@ -568,16 +476,6 @@ pub mod keys {
         key.strip_prefix(INST_PREFIX)
     }
 
-    /// Parse (instance_id, override name) from an admin/{instance_id}/{name} key.
-    ///
-    /// Split from the right, so an instance id is not required to be free of
-    /// `/` for the override name to come out right.
-    pub fn parse_admin_key(key: &str) -> Option<(&str, &str)> {
-        let rest = key.strip_prefix(ADMIN_PREFIX)?;
-        let (instance_id, name) = rest.rsplit_once('/')?;
-        (!instance_id.is_empty() && !name.is_empty()).then_some((instance_id, name))
-    }
-
     /// Parse node_id from node/info/{node_id} key
     pub fn parse_node_info_key(key: &str) -> Option<NodeId> {
         key.strip_prefix(NODE_INFO_PREFIX)?.parse().ok()
@@ -820,7 +718,7 @@ impl GetPutCodec for NodeState {
 /// tombstone that did not land and nothing about an ephemeral observation that
 /// did not, so "a delete failed" is not a useful thing to be told.
 ///
-/// It is also what [`KvStore::fail_writes_for_test`] aims at, which is why the
+/// It is also what `KvStore::fail_writes_for_test` aims at, which is why the
 /// write paths take one instead of a `u8` that means nothing outside a test
 /// build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1034,65 +932,70 @@ impl KvStore {
 
     // ==================== Operator Override Sync ====================
 
-    /// Load every instance's operator-set overrides.
+    /// The operator's traffic gate for one instance. `None` means no key.
     ///
-    /// A record that no longer decodes is reported rather than skipped. Skipping
-    /// it would read as "no operator has decided anything", which is the one
-    /// answer that must not be guessed: it returns a quarantined instance to
-    /// rotation and drops a port-policy override back to whatever the instance
-    /// says about itself. See [`LoadedOverrides::unreadable`].
-    pub fn load_all_instance_overrides(&self) -> LoadedOverrides {
-        let mut loaded = LoadedOverrides::default();
-        let store = self.persistent.read();
-        for (key, entry) in store.iter_by_prefix(keys::ADMIN_PREFIX) {
-            // A tombstone is a key that was deleted, which is the same as one
-            // that was never written.
-            let Some(bytes) = entry.value.as_ref() else {
-                continue;
-            };
-            let Some((instance_id, name)) = keys::parse_admin_key(key) else {
-                continue;
-            };
-            loaded
-                .present
-                .entry(instance_id.to_string())
-                .or_default()
-                .insert(name.to_string());
-            let overrides = loaded.decoded.entry(instance_id.to_string()).or_default();
-            let decoded = match name {
-                keys::ADMIN_READY => {
-                    decode::<InstanceGate>(bytes).map(|gate| overrides.ready = Some(gate.ready))
-                }
-                keys::ADMIN_PORT_POLICY => decode::<AdminPortPolicy>(bytes)
-                    .map(|stored| overrides.port_policy = stored.policy),
-                // A key this build does not know. A newer peer may have added
-                // one; leaving it alone is what lets it.
-                _ => continue,
-            };
-            if let Err(err) = decoded {
-                loaded
-                    .unreadable
-                    .insert(instance_id.to_string(), format!("{key}: {err:#}"));
-            }
-        }
-        loaded
+    /// An unreadable record is an error, not a `None`. Reading it as "nobody
+    /// gated this" is the one answer that must not be guessed: it returns a
+    /// quarantined instance to rotation.
+    pub fn instance_gate(&self, instance_id: &str) -> Result<Option<bool>> {
+        self.persistent
+            .read()
+            .decode_strict::<bool>(&keys::admin_ready(instance_id))
+    }
+
+    /// The operator's port-policy override for one instance. `None` means no
+    /// key -- which is not [`PortPolicyOverride::Cleared`].
+    pub fn instance_port_policy_override(
+        &self,
+        instance_id: &str,
+    ) -> Result<Option<PortPolicyOverride>> {
+        let stored = self
+            .persistent
+            .read()
+            .decode_strict::<Option<PortPolicy>>(&keys::admin_port_policy(instance_id))?;
+        Ok(stored.map(|policy| match policy {
+            Some(policy) => PortPolicyOverride::Set(policy),
+            None => PortPolicyOverride::Cleared,
+        }))
+    }
+
+    /// Publish an instance's operator-set traffic gate.
+    pub fn set_instance_gate(&self, instance_id: &str, ready: bool) -> Result<()> {
+        self.put_admin_override(InstanceRecord::Gate, keys::admin_ready(instance_id), &ready)
+    }
+
+    /// Publish an instance's operator-set port-policy override. `None` clears it.
+    ///
+    /// A cleared override is written, not deleted: an absent key is what lets
+    /// the copy an older build left in the instance record apply, so deleting
+    /// would put the override straight back.
+    pub fn set_instance_port_policy_override(
+        &self,
+        instance_id: &str,
+        policy: Option<PortPolicy>,
+    ) -> Result<()> {
+        self.put_admin_override(
+            InstanceRecord::PortPolicyOverride,
+            keys::admin_port_policy(instance_id),
+            &policy,
+        )
     }
 
     /// The overrides an instance record still carries from before they had keys
-    /// of their own, for instances that have not been moved across yet.
+    /// of their own.
     ///
     /// Read from the same `inst/` bytes as [`InstanceData`], through a type
-    /// that declares only the retired fields.
-    pub fn legacy_instance_overrides(&self) -> BTreeMap<String, AdminOverrides> {
+    /// that declares only the retired fields. Bulk rather than per instance
+    /// because the only caller wants to know whether *any* remain.
+    pub fn legacy_instance_overrides(&self) -> BTreeMap<String, LegacyOverrides> {
         self.persistent
             .read()
-            .iter_decoded::<LegacyInstanceOverrides>(keys::INST_PREFIX)
+            .iter_decoded::<LegacyOverrides>(keys::INST_PREFIX)
             .filter_map(|(key, legacy)| {
-                let overrides = AdminOverrides::from(legacy);
-                if overrides.is_empty() {
+                if legacy.is_empty() {
                     return None;
                 }
-                Some((keys::parse_inst_key(&key)?.to_string(), overrides))
+                Some((keys::parse_inst_key(&key)?.to_string(), legacy))
             })
             .collect()
     }
@@ -1109,39 +1012,33 @@ impl KvStore {
     /// key each. Only where the key does not exist at all: once it does it is
     /// the answer, including when it says "no override", which is what clearing
     /// one leaves behind. Without that rule, clearing an override here would be
-    /// undone by the stale copy an old node left in the instance record.
+    /// undone by the stale copy an old node left in the instance record. An
+    /// unreadable key counts as existing for the same reason.
     ///
     /// Returns the keys written. Failures are logged and skipped: the next
     /// reload tries again, and the read-side fallback keeps the override in
     /// force in the meantime.
     pub fn migrate_legacy_instance_overrides(&self) -> Vec<String> {
-        let legacy = self.legacy_instance_overrides();
-        if legacy.is_empty() {
-            return Vec::new();
-        }
-        let existing = self.load_all_instance_overrides();
         let mut moved = Vec::new();
-        for (instance_id, overrides) in legacy {
-            let written = existing.written_keys(&instance_id);
-            let has = |name: &str| written.contains(name);
-            if let Some(ready) = overrides.ready {
-                if !has(keys::ADMIN_READY) {
+        for (instance_id, legacy) in self.legacy_instance_overrides() {
+            if let Some(ready) = legacy.ready {
+                if matches!(self.instance_gate(&instance_id), Ok(None)) {
                     self.record_migration(
                         &mut moved,
                         InstanceRecord::Gate,
                         keys::admin_ready(&instance_id),
-                        &InstanceGate { ready },
+                        &ready,
                     );
                 }
             }
-            if overrides.port_policy.is_some() && !has(keys::ADMIN_PORT_POLICY) {
+            if legacy.admin_port_policy.is_some()
+                && matches!(self.instance_port_policy_override(&instance_id), Ok(None))
+            {
                 self.record_migration(
                     &mut moved,
                     InstanceRecord::PortPolicyOverride,
                     keys::admin_port_policy(&instance_id),
-                    &AdminPortPolicy {
-                        policy: overrides.port_policy,
-                    },
+                    &legacy.admin_port_policy,
                 );
             }
         }
@@ -1159,28 +1056,6 @@ impl KvStore {
             Ok(()) => moved.push(key),
             Err(err) => warn!("failed to move operator override to {key}: {err:?}"),
         }
-    }
-
-    /// Publish an instance's operator-set traffic gate.
-    pub fn sync_instance_gate(&self, instance_id: &str, gate: &InstanceGate) -> Result<()> {
-        self.put_admin_override(InstanceRecord::Gate, keys::admin_ready(instance_id), gate)
-    }
-
-    /// Publish an instance's operator-set port-policy override.
-    ///
-    /// A cleared override is written, not deleted: an absent key is what lets
-    /// the copy an older build left in the instance record apply, so deleting
-    /// would put the override straight back.
-    pub fn sync_instance_port_policy_override(
-        &self,
-        instance_id: &str,
-        data: &AdminPortPolicy,
-    ) -> Result<()> {
-        self.put_admin_override(
-            InstanceRecord::PortPolicyOverride,
-            keys::admin_port_policy(instance_id),
-            data,
-        )
     }
 
     /// Written as a replacement rather than an update: each record states one
@@ -2885,8 +2760,8 @@ mod corruption_tests {
         // Until the move, the read-side fallback is what keeps them in force.
         assert_eq!(
             kv.legacy_instance_overrides()["legacy"],
-            AdminOverrides {
-                port_policy: Some(restrictive()),
+            LegacyOverrides {
+                admin_port_policy: Some(restrictive()),
                 ready: Some(false),
             }
         );
@@ -2897,12 +2772,10 @@ mod corruption_tests {
                 keys::admin_port_policy("legacy")
             ]
         );
+        assert_eq!(kv.instance_gate("legacy").unwrap(), Some(false));
         assert_eq!(
-            kv.load_all_instance_overrides().decoded["legacy"],
-            AdminOverrides {
-                port_policy: Some(restrictive()),
-                ready: Some(false),
-            }
+            kv.instance_port_policy_override("legacy").unwrap(),
+            Some(PortPolicyOverride::Set(restrictive()))
         );
         assert!(
             kv.migrate_legacy_instance_overrides().is_empty(),
@@ -2921,9 +2794,12 @@ mod corruption_tests {
             kv.migrate_legacy_instance_overrides(),
             vec![keys::admin_ready("legacy")]
         );
-        let loaded = kv.load_all_instance_overrides();
-        assert_eq!(loaded.decoded["legacy"].ready, Some(false));
-        assert!(!loaded.present["legacy"].contains(keys::ADMIN_PORT_POLICY));
+        assert_eq!(kv.instance_gate("legacy").unwrap(), Some(false));
+        assert_eq!(
+            kv.instance_port_policy_override("legacy").unwrap(),
+            None,
+            "the port-policy key was never written"
+        );
     }
 
     /// Two overrides in one record meant setting one on this node discarded a
@@ -2934,23 +2810,15 @@ mod corruption_tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let kv = test_kv(dir.path());
         // What a peer set, arriving through sync.
-        kv.sync_instance_port_policy_override(
-            "cvm",
-            &AdminPortPolicy {
-                policy: Some(restrictive()),
-            },
-        )
-        .expect("peer override");
+        kv.set_instance_port_policy_override("cvm", Some(restrictive()))
+            .expect("peer override");
         // What this node sets, from a snapshot that never saw it.
-        kv.sync_instance_gate("cvm", &InstanceGate { ready: false })
-            .expect("gate");
+        kv.set_instance_gate("cvm", false).expect("gate");
 
+        assert_eq!(kv.instance_gate("cvm").unwrap(), Some(false));
         assert_eq!(
-            kv.load_all_instance_overrides().decoded["cvm"],
-            AdminOverrides {
-                port_policy: Some(restrictive()),
-                ready: Some(false),
-            }
+            kv.instance_port_policy_override("cvm").unwrap(),
+            Some(PortPolicyOverride::Set(restrictive()))
         );
     }
 
@@ -2970,16 +2838,20 @@ mod corruption_tests {
         );
 
         // The operator clears it. Cleared is written, not deleted.
-        kv.sync_instance_port_policy_override("legacy", &AdminPortPolicy::default())
+        kv.set_instance_port_policy_override("legacy", None)
             .expect("clear");
-        assert!(kv.load_all_instance_overrides().decoded["legacy"].is_empty());
+        assert_eq!(
+            kv.instance_port_policy_override("legacy").unwrap(),
+            Some(PortPolicyOverride::Cleared)
+        );
 
         assert!(
             kv.migrate_legacy_instance_overrides().is_empty(),
-            "an override record that says nothing is still an answer"
+            "a key that says \"cleared\" is still an answer"
         );
-        assert!(
-            kv.load_all_instance_overrides().decoded["legacy"].is_empty(),
+        assert_eq!(
+            kv.instance_port_policy_override("legacy").unwrap(),
+            Some(PortPolicyOverride::Cleared),
             "the copy in the instance record must not come back"
         );
     }
@@ -2991,19 +2863,14 @@ mod corruption_tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let kv = test_kv(dir.path());
         seed_instance(&kv, "cvm");
-        kv.sync_instance_gate("cvm", &InstanceGate { ready: false })
-            .expect("seed gate");
-        kv.sync_instance_port_policy_override(
-            "cvm",
-            &AdminPortPolicy {
-                policy: Some(restrictive()),
-            },
-        )
-        .expect("seed override");
+        kv.set_instance_gate("cvm", false).expect("seed gate");
+        kv.set_instance_port_policy_override("cvm", Some(restrictive()))
+            .expect("seed override");
 
         kv.sync_delete_instance("cvm").expect("delete");
         assert!(
-            !kv.load_all_instance_overrides().decoded.contains_key("cvm"),
+            kv.instance_gate("cvm").unwrap().is_none()
+                && kv.instance_port_policy_override("cvm").unwrap().is_none(),
             "the override record must not outlive the instance"
         );
     }
@@ -3312,14 +3179,6 @@ mod key_schema_tests {
     #[test]
     fn every_key_parses_back_to_what_built_it() {
         assert_eq!(keys::parse_inst_key(&keys::inst("inst-a")), Some("inst-a"));
-        assert_eq!(
-            keys::parse_admin_key(&keys::admin_ready("inst-a")),
-            Some(("inst-a", keys::ADMIN_READY))
-        );
-        assert_eq!(
-            keys::parse_admin_key(&keys::admin_port_policy("inst-a")),
-            Some(("inst-a", keys::ADMIN_PORT_POLICY))
-        );
         assert_eq!(keys::parse_node_info_key(&keys::node_info(42)), Some(42));
         assert_eq!(
             keys::parse_cert_domain(&keys::cert_attestation_latest("a.example")),
@@ -3337,19 +3196,20 @@ mod key_schema_tests {
     fn a_parser_refuses_a_key_from_another_namespace() {
         assert_eq!(keys::parse_inst_key(&keys::node_info(1)), None);
         assert_eq!(keys::parse_cert_domain(&keys::inst("inst-a")), None);
-        // The overrides and the instance record are keyed by the same id and
-        // iterated by prefix. Either namespace claiming the other would make an
-        // operator's decision arrive as an instance record, or the reverse.
-        assert_eq!(keys::parse_admin_key(&keys::inst("inst-a")), None);
+        // The overrides and the instance record are keyed by the same id, and
+        // the instance record is iterated by prefix. Either namespace claiming
+        // the other would make an operator's decision arrive as an instance
+        // record, or the reverse.
         assert_eq!(keys::parse_inst_key(&keys::admin_ready("inst-a")), None);
         assert!(!keys::admin_ready("inst-a").starts_with(keys::INST_PREFIX));
         assert!(!keys::inst("inst-a").starts_with(keys::ADMIN_PREFIX));
-        // `inst-a` must not swallow `inst-ab`: the id is not the last segment,
-        // so the parse has to split from the right to stay unambiguous.
-        assert_eq!(
-            keys::parse_admin_key(&keys::admin_ready("inst-ab")),
-            Some(("inst-ab", keys::ADMIN_READY))
+        // Two overrides of one instance, and the same override of two
+        // instances, must all be distinct keys.
+        assert_ne!(
+            keys::admin_ready("inst-a"),
+            keys::admin_port_policy("inst-a")
         );
+        assert_ne!(keys::admin_ready("inst-a"), keys::admin_ready("inst-ab"));
         assert_eq!(keys::parse_node_info_key(&keys::node_status(1)), None);
         assert_eq!(keys::parse_node_info_key(&keys::inst("inst-a")), None);
         // `node/info/` and `node/status/` share a stem; neither may claim the other.
