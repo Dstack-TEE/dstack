@@ -333,7 +333,7 @@ pub async fn fetch_peers_from_bootnode(
 }
 
 #[cfg(test)]
-mod removal_refusal_tests {
+mod sync_rejection_tests {
     use super::*;
 
     fn wrapped(status: u16) -> anyhow::Error {
@@ -360,7 +360,7 @@ mod removal_refusal_tests {
 
     /// The rejection must reach the node's own monitoring.
     #[test]
-    fn a_refusal_is_counted_for_the_victims_own_monitoring() {
+    fn a_rejection_is_counted_for_the_senders_own_monitoring() {
         // Process-wide static: assert on the delta, never the absolute value.
         let before = crate::metrics::sync_rejected_count();
         HttpSyncNetwork::note_if_rejected(&wrapped(500), 2);

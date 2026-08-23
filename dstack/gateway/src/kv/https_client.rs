@@ -157,10 +157,9 @@ pub struct HttpsClient {
 }
 
 /// A non-success HTTP status, kept as a typed error in the chain so a caller
-/// can react to a specific code. The sync path needs to tell "a peer refuses
-/// this node as removed" (403) apart from a peer that is down or broken --
-/// and a removed node cannot learn that from local state, because the very
-/// refusals are what keep its copy of the removal marker from ever arriving.
+/// can react to a specific code. The sync path needs to tell an HTTP 403
+/// rejection apart from a peer that is down or broken without string-matching
+/// a formatted error message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HttpStatusError(pub u16);
 
@@ -531,9 +530,8 @@ mod transport_tests {
     }
 
     /// The status code survives into the error chain as a typed value: the
-    /// sync path tells "a peer refuses this node as removed" (403) apart from
-    /// a peer that is down or broken, and string-matching a Display line is
-    /// not a contract.
+    /// sync path tells an HTTP 403 rejection apart from a peer that is down or
+    /// broken, and string-matching a Display line is not a contract.
     #[tokio::test]
     async fn a_refusal_status_is_readable_from_the_error_chain() {
         let err = request(StatusCode::FORBIDDEN, Vec::new())
