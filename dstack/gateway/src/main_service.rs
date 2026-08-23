@@ -181,7 +181,18 @@ impl Proxy {
     /// The tombstone is written even when this node cannot decode the stored
     /// record or no longer has the CVM in memory. This makes the operation an
     /// idempotent recovery path for bad replicated instance records without
-    /// exposing arbitrary raw-KV deletion.
+    /// exposing arbitrary raw-KV deletion. Re-issuing it after a partial
+    /// failure also sweeps up any override or telemetry record left behind.
+    ///
+    /// An error from the delete means the tombstone itself was not written, so
+    /// the CVM is still registered cluster-wide. The local cleanup below is
+    /// then deliberately skipped: the record is still live in the store, and
+    /// the next reload would re-import the instance anyway. Anything the store
+    /// dropped short of that -- an `admin/` override left for a future holder
+    /// of the id to inherit, or a leaked telemetry key -- is logged and does
+    /// not fail the removal, because the CVM is gone either way and failing
+    /// would abort the routing cleanup an operator reached for this call to
+    /// get.
     pub fn remove_cvm(&self, instance_id: &str) -> Result<CvmRemoval> {
         let mut state = self.lock();
         let record_existed = state

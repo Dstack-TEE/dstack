@@ -2381,6 +2381,30 @@ async fn an_operator_can_remove_a_cvm_whose_kv_record_is_unreadable() {
     assert!(!retry.removed_locally);
 }
 
+/// A removal that raced a peer's, or one whose earlier attempt died between
+/// the tombstone and the telemetry keys, leaves `conn/`/`handshake/` records
+/// with no instance behind them. Nothing garbage-collects those, so re-issuing
+/// the removal has to sweep them up rather than stop at "no record to delete".
+#[tokio::test]
+async fn removing_a_cvm_clears_its_telemetry_even_with_no_record_left() {
+    let state = create_test_state().await;
+    state.kv_store.sync_connections("orphan", 3).unwrap();
+    state.kv_store.sync_instance_handshake("orphan", 1).unwrap();
+    assert_eq!(
+        observations_are_live(&state, "orphan"),
+        (true, true),
+        "seeded telemetry records should be live"
+    );
+
+    // No `inst/` record exists, so the removal reports nothing was there --
+    // and still deletes both telemetry records.
+    let removal = state.proxy.remove_cvm("orphan").unwrap();
+    assert!(!removal.record_existed);
+    assert!(!removal.removed_locally);
+    let leaked = live_keys_naming(&state, "orphan");
+    assert!(leaked.is_empty(), "left behind: {leaked:?}");
+}
+
 #[tokio::test]
 async fn removing_an_unknown_cvm_reports_that_nothing_existed() {
     let state = create_test_state().await;
