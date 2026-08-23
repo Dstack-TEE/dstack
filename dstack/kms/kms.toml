@@ -18,9 +18,9 @@ port = 8000
 key = "/etc/kms/certs/rpc.key"
 certs = "/etc/kms/certs/rpc.crt"
 
-[rpc.tls.mutual]
-ca_certs = "/etc/kms/certs/tmp-ca.crt"
-mandatory = false
+# No `[rpc.tls.mutual]`: client certificates are verified by the attestation they
+# carry, not by an issuer CA (see ra-rpc's ratls_client_verifier). Leaving a
+# `mutual` section here is harmless — it is no longer the trust anchor.
 
 [core]
 cert_dir = "/etc/kms/certs"
