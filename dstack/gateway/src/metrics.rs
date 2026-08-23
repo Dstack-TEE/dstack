@@ -56,7 +56,7 @@ static WG_RECONFIGURE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static WG_RECONFIGURE_FAILURES: AtomicU64 = AtomicU64::new(0);
 static KV_PERSIST_FAILURES: AtomicU64 = AtomicU64::new(0);
 static KV_WAL_SYNC_FAILURES: AtomicU64 = AtomicU64::new(0);
-static SYNC_REJECTED_AS_REMOVED: AtomicU64 = AtomicU64::new(0);
+static SYNC_REJECTED: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
     /// Set while a scrape is sampling live state.
@@ -129,19 +129,15 @@ pub(crate) fn record_kv_wal_sync_failure() {
     KV_WAL_SYNC_FAILURES.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Record a sync envelope of ours that a peer refused with HTTP 403 as
-/// removed. The victim-side signal, and the primary one: a mistakenly
-/// removed node is exactly the machine whose monitoring is still attached,
-/// and it cannot learn of its removal from local state -- the refusals are
-/// what keep the marker from ever replicating to it.
-pub(crate) fn record_sync_rejected_as_removed() {
-    SYNC_REJECTED_AS_REMOVED.fetch_add(1, Ordering::Relaxed);
+/// Record a sync envelope of ours that a peer rejected with HTTP 403.
+pub(crate) fn record_sync_rejected() {
+    SYNC_REJECTED.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Test-only read: the counter is process-wide, so tests assert on deltas.
 #[cfg(test)]
-pub(crate) fn sync_rejected_as_removed_count() -> u64 {
-    SYNC_REJECTED_AS_REMOVED.load(Ordering::Relaxed)
+pub(crate) fn sync_rejected_count() -> u64 {
+    SYNC_REJECTED.load(Ordering::Relaxed)
 }
 
 /// Index of the longest prefix in `prefixes` that `key` starts with.
@@ -383,16 +379,16 @@ pub(crate) fn render(snapshot: &Snapshot) -> String {
     );
     counter(
         &mut out,
-        "dstack_gateway_sync_rejected_as_removed_total",
-        "Sync envelopes this node sent that a peer refused with HTTP 403 as removed. Nonzero means THIS node has been removed from the cluster and is still trying to sync: re-admit it via SetNodeUrl on a surviving gateway, or decommission it.",
+        "dstack_gateway_sync_rejected_total",
+        "Sync envelopes this node sent that a peer rejected with HTTP 403. This can indicate a removal lockout or an app-identity mismatch.",
         "",
-        SYNC_REJECTED_AS_REMOVED.load(Ordering::Relaxed),
+        SYNC_REJECTED.load(Ordering::Relaxed),
     );
 
     header(
         &mut out,
         "dstack_gateway_node_last_seen_timestamp_seconds",
-        "Latest time any gateway observed the node, unix seconds. Replicated (max across observers): every node reports roughly the same value, so aggregate with max(), and alert on time() minus this. A node an operator removed leaves the series entirely -- absence here plus dstack_gateway_sync_rejected_as_removed_total on the machine itself is the removed-by-mistake picture.",
+        "Latest time any gateway observed the node, unix seconds. Replicated (max across observers): every node reports roughly the same value, so aggregate with max(), and alert on time() minus this. A node an operator removed leaves the series entirely -- absence here plus dstack_gateway_sync_rejected_total on the machine itself can indicate the removed-by-mistake picture.",
         "gauge",
     );
     for (node_id, last_seen) in &snapshot.node_last_seen {

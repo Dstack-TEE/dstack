@@ -40,29 +40,24 @@ pub struct HttpSyncNetwork {
 }
 
 impl HttpSyncNetwork {
-    /// Whether a send failed because the peer refuses this node as removed.
-    fn refused_as_removed(err: &anyhow::Error) -> bool {
+    /// Whether a peer rejected a send with HTTP 403.
+    fn was_rejected(err: &anyhow::Error) -> bool {
         err.chain()
             .filter_map(|cause| cause.downcast_ref::<HttpStatusError>())
             .any(|status| status.0 == 403)
     }
 
-    /// Surface a 403 as what it is: this node's only line of sight on its own
-    /// removal. The marker replicates among the surviving members, and the
-    /// refusals it drives are exactly what keeps this node from ever pulling
-    /// a copy -- so the signal cannot come from local state, and has to be
-    /// read off the door slamming. Counted for the node's own monitoring
-    /// (`dstack_gateway_sync_rejected_as_removed_total`) and logged with the
-    /// two ways out.
-    fn note_if_refused_as_removed(err: &anyhow::Error, peer: NodeId) {
-        if !Self::refused_as_removed(err) {
+    /// Count a 403 for this node's own monitoring. Sync endpoints use 403 for
+    /// both removal lockouts and app-identity mismatches, so the metric and log
+    /// deliberately report a rejection without claiming which condition caused it.
+    fn note_if_rejected(err: &anyhow::Error, peer: NodeId) {
+        if !Self::was_rejected(err) {
             return;
         }
-        crate::metrics::record_sync_rejected_as_removed();
+        crate::metrics::record_sync_rejected();
         error!(
-            "peer {peer} refuses this node's sync envelopes as removed (HTTP 403); \
-             this node has been removed from the cluster -- re-admit it via SetNodeUrl \
-             on a surviving gateway, or decommission it"
+            "peer {peer} rejected this node's sync envelope (HTTP 403); \
+             this can indicate a removal lockout or an app-identity mismatch"
         );
     }
     /// `my_uuid` is passed in rather than read back out of the store.
@@ -131,7 +126,7 @@ impl ExchangeInterface for HttpSyncNetwork {
             .post_bytes_response(&sync_url, env.encode()?)
             .await
             .with_context(|| format!("failed to sync to peer {peer} at {sync_url}"))
-            .inspect_err(|err| Self::note_if_refused_as_removed(err, peer))?;
+            .inspect_err(|err| Self::note_if_rejected(err, peer))?;
 
         self.kv_store.update_peer_last_seen(peer);
         Ok(Some(SyncEnvelope::decode(&body)?))
@@ -145,7 +140,7 @@ impl ExchangeInterface for HttpSyncNetwork {
             .post_bytes_no_response(&push_url, env.encode()?)
             .await
             .with_context(|| format!("failed to push to peer {peer} at {push_url}"))
-            .inspect_err(|err| Self::note_if_refused_as_removed(err, peer))?;
+            .inspect_err(|err| Self::note_if_rejected(err, peer))?;
         Ok(())
     }
 }
@@ -347,37 +342,34 @@ mod removal_refusal_tests {
         )
     }
 
-    /// 403 is the lockout answer and nothing else on this path returns it; a
-    /// peer that is down, overloaded or broken must not read as "this node
-    /// was removed".
+    /// Only HTTP 403 is a rejection; transport errors and other HTTP failures
+    /// must not increment the rejection counter.
     #[test]
-    fn only_a_403_reads_as_refused_as_removed() {
-        assert!(HttpSyncNetwork::refused_as_removed(&wrapped(403)));
+    fn only_a_403_reads_as_rejected() {
+        assert!(HttpSyncNetwork::was_rejected(&wrapped(403)));
         for status in [400u16, 401, 404, 500, 503] {
             assert!(
-                !HttpSyncNetwork::refused_as_removed(&wrapped(status)),
-                "status {status} must not read as a removal refusal"
+                !HttpSyncNetwork::was_rejected(&wrapped(status)),
+                "status {status} must not read as a rejection"
             );
         }
-        assert!(!HttpSyncNetwork::refused_as_removed(&anyhow::anyhow!(
+        assert!(!HttpSyncNetwork::was_rejected(&anyhow::anyhow!(
             "connection refused"
         )));
     }
 
-    /// The refusal must reach the node's own monitoring: a mistakenly removed
-    /// node is exactly the machine whose metrics are still being scraped, and
-    /// it cannot learn of its removal any other way.
+    /// The rejection must reach the node's own monitoring.
     #[test]
     fn a_refusal_is_counted_for_the_victims_own_monitoring() {
         // Process-wide static: assert on the delta, never the absolute value.
-        let before = crate::metrics::sync_rejected_as_removed_count();
-        HttpSyncNetwork::note_if_refused_as_removed(&wrapped(500), 2);
+        let before = crate::metrics::sync_rejected_count();
+        HttpSyncNetwork::note_if_rejected(&wrapped(500), 2);
         assert_eq!(
-            crate::metrics::sync_rejected_as_removed_count(),
+            crate::metrics::sync_rejected_count(),
             before,
-            "an ordinary failure must not claim this node was removed"
+            "an ordinary failure must not count as a rejection"
         );
-        HttpSyncNetwork::note_if_refused_as_removed(&wrapped(403), 2);
-        assert!(crate::metrics::sync_rejected_as_removed_count() > before);
+        HttpSyncNetwork::note_if_rejected(&wrapped(403), 2);
+        assert!(crate::metrics::sync_rejected_count() > before);
     }
 }
