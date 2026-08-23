@@ -494,6 +494,20 @@ impl KmsRpc for RpcHandler {
         })
     }
 
+    /// Serve the temp CA certificate and key.
+    ///
+    /// Both current callers - guests at boot, and KMS-to-KMS onboarding
+    /// ([`crate::onboard_service`]) - fetch this CA and mint their client certificate
+    /// from it, because the KMS used to pin the CA for mutual TLS and a self-issued
+    /// certificate had nothing to chain to.
+    ///
+    /// That pin is gone: client certificates are now verified by the attestation they
+    /// carry (`ra_rpc::ratls_client_verifier`), so a self-issued certificate would be
+    /// accepted on the same terms. Neither caller has been migrated yet, so this RPC
+    /// still has to work.
+    ///
+    /// The key it returns authenticates nobody: it is handed to any caller. Removing
+    /// this RPC needs both callers migrated first.
     async fn get_temp_ca_cert(self) -> Result<GetTempCaCertResponse> {
         let self_boot_info = self
             .ensure_self_allowed()
