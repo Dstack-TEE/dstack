@@ -49,6 +49,20 @@ fn sample(state: &State<Proxy>) -> Snapshot {
         .map(|(domain, data)| (domain, data.not_after))
         .collect();
 
+    // One pass over the node table plus one ephemeral read per node -- the
+    // cost the counting fast-path above avoids, paid here deliberately,
+    // because a per-node timestamp is the point: a node whose value stops
+    // advancing is offline, however the operator's alerting words it.
+    let node_last_seen = kv_store
+        .load_all_nodes()
+        .into_keys()
+        .filter_map(|id| {
+            kv_store
+                .get_node_latest_last_seen(id)
+                .map(|last_seen| (id, last_seen))
+        })
+        .collect();
+
     Snapshot {
         version: crate::app_version(),
         node_id: kv_store.my_node_id(),
@@ -59,6 +73,7 @@ fn sample(state: &State<Proxy>) -> Snapshot {
         accel,
         stores,
         cert_not_after,
+        node_last_seen,
     }
 }
 
