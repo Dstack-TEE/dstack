@@ -44,6 +44,7 @@ service DstackGuest {
   rpc GetKey(GetKeyArgs) returns (GetKeyResponse) {}
 
   // Generates a TDX quote with given report data.
+  // Intel TDX only. On any other platform this fails; use Attest instead.
   rpc GetQuote(RawQuoteArgs) returns (GetQuoteResponse) {}
 
   // Generates a versioned attestation with the given report data.
@@ -197,19 +198,18 @@ message GpuInfoResponse {
 }
 
 message GetQuoteResponse {
-  // TDX quote (empty on non-TDX platforms such as AMD SEV-SNP)
+  reserved 5;
+  reserved "attestation";
+
+  // TDX quote
   bytes quote = 1;
-  // Event log (empty on non-TDX platforms). V2 runtime events always include
-  // their hex-encoded digest preimage. Clients should verify
-  // sha384(hex_decode(preimage)) == digest.
+  // Event log. V2 runtime events always include their hex-encoded digest
+  // preimage. Clients should verify sha384(hex_decode(preimage)) == digest.
   string event_log = 2;
   // Report data
   bytes report_data = 3;
   // Hw config
   string vm_config = 4;
-  // Platform-adaptive versioned attestation (SCALE/msgpack encoded). Populated
-  // on non-TDX platforms; TDX uses quote + event_log above.
-  bytes attestation = 5;
 }
 
 // The request to derive a key
@@ -287,6 +287,7 @@ service Worker {
   // Get the guest agent version
   rpc Version(google.protobuf.Empty) returns (WorkerVersion) {}
   // Get attestation
+  // Intel TDX only, since it returns a GetQuoteResponse.
   rpc GetAttestationForAppKey(GetAttestationForAppKeyRequest) returns (GetQuoteResponse) {}
   // Report whether the app is serving. Polled by the gateway to decide whether
   // this instance should be in its app's load-balancing rotation.

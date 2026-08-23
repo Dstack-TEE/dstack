@@ -939,7 +939,9 @@ pNs85uhOZE8z2jr8Pg==
             ) -> Result<GetQuoteResponse> {
                 let attestation = patch_report_data(&self.attestation, report_data);
                 let Some(quote) = attestation.platform.tdx_quote().map(ToOwned::to_owned) else {
-                    return Err(anyhow::anyhow!("Quote not found"));
+                    return Err(anyhow::anyhow!(
+                        "GetQuote is Intel TDX only, use Attest on this platform"
+                    ));
                 };
                 Ok(GetQuoteResponse {
                     quote,
@@ -949,7 +951,6 @@ pNs85uhOZE8z2jr8Pg==
                     .unwrap_or_default(),
                     report_data: report_data.to_vec(),
                     vm_config: vm_config.to_string(),
-                    attestation: Vec::new(),
                 })
             }
 
@@ -1187,7 +1188,7 @@ pNs85uhOZE8z2jr8Pg==
         const EXPECTED_REPORT_DATA: &str =
             "dip1::ed25519-pk:5Pbre1Amf1hrp2V2bbfKlIfxpQb2pJAmrgmhxgVoG9s\0\0\0\0";
         assert_eq!(EXPECTED_REPORT_DATA.as_bytes(), response.report_data);
-        assert!(response.attestation.is_empty());
+        assert!(!response.quote.is_empty());
     }
 
     #[tokio::test]
@@ -1203,7 +1204,7 @@ pNs85uhOZE8z2jr8Pg==
         const EXPECTED_REPORT_DATA: &str =
             "dip1::secp256k1c-pk:A6t_JdVkVdMAocH3f1f20WGT6JzdntxcXimUtEax8zc9";
         assert_eq!(EXPECTED_REPORT_DATA.as_bytes(), response.report_data);
-        assert!(response.attestation.is_empty());
+        assert!(!response.quote.is_empty());
     }
 
     #[tokio::test]

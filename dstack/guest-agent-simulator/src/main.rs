@@ -220,6 +220,37 @@ mod tests {
     }
 
     #[test]
+    fn simulator_rejects_get_quote_on_non_tdx() {
+        use ra_tls::attestation::PlatformEvidence;
+
+        let fixture = simulator::load_versioned_attestation(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../guest-agent/fixtures/attestation.bin"),
+        )
+        .expect("fixture attestation should load");
+        let mut attestation = fixture.into_v1();
+        attestation.platform = PlatformEvidence::SevSnp {
+            report: vec![0u8; 1184],
+            cert_chain: Vec::new(),
+            mr_config: String::new(),
+        };
+        let non_tdx = VersionedAttestation::V1 { attestation };
+        let report_data = [0x5a; 64];
+
+        // GetQuote is Intel TDX only.
+        let err = simulator::simulated_quote_response(&non_tdx, report_data, "", true, None)
+            .expect_err("GetQuote must fail on a non-TDX platform");
+        assert!(
+            err.to_string().contains("Intel TDX only"),
+            "unexpected error: {err}"
+        );
+
+        // Attest remains the supported path on the same platform.
+        simulator::simulated_attest_response(&non_tdx, report_data, true, None)
+            .expect("Attest must still work on a non-TDX platform");
+    }
+
+    #[test]
     fn simulator_can_preserve_fixture_report_data() {
         let fixture = simulator::load_versioned_attestation(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

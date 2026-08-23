@@ -33,22 +33,14 @@ impl PlatformBackend for RealPlatform {
 
     fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse> {
         let attestation = Attestation::quote(&report_data).context("Failed to get quote")?;
-        let tdx_quote = attestation.get_tdx_quote_bytes();
-        let tdx_event_log = attestation.get_tdx_event_log_string();
-        let versioned = if tdx_quote.is_some() {
-            Vec::new()
-        } else {
-            attestation
-                .into_versioned()
-                .to_bytes()
-                .context("Failed to encode versioned attestation")?
-        };
+        let quote = attestation
+            .get_tdx_quote_bytes()
+            .context("GetQuote is Intel TDX only, use Attest on this platform")?;
         Ok(GetQuoteResponse {
-            quote: tdx_quote.unwrap_or_default(),
-            event_log: tdx_event_log.unwrap_or_default(),
+            quote,
+            event_log: attestation.get_tdx_event_log_string().unwrap_or_default(),
             report_data: report_data.to_vec(),
             vm_config: vm_config.to_string(),
-            attestation: versioned,
         })
     }
 
