@@ -402,17 +402,25 @@ fn build_operation(
             }
         }),
     );
-    responses.insert(
-        "400".into(),
-        json!({
-            "description": "RPC error",
-            "content": {
-                "application/json": {
-                    "schema": { "$ref": "#/components/schemas/RpcError" }
+    // A service may report a more specific status than a generic bad request;
+    // these are the ones the framework itself produces.
+    for (code, description) in [
+        ("400", "RPC error"),
+        ("404", "No such method"),
+        ("413", "Request body exceeds the configured limit"),
+    ] {
+        responses.insert(
+            code.into(),
+            json!({
+                "description": description,
+                "content": {
+                    "application/json": {
+                        "schema": { "$ref": "#/components/schemas/RpcError" }
+                    }
                 }
-            }
-        }),
-    );
+            }),
+        );
+    }
     operation.insert("responses".into(), Value::Object(responses));
 
     Ok(Value::Object(operation))
