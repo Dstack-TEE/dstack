@@ -130,8 +130,18 @@ pub fn code_of(err: &anyhow::Error) -> Option<u16> {
         .next()
 }
 
+/// Whether `method` is one the service actually implements.
+///
+/// `prpc-build` generates the method table and the dispatcher's match arms from
+/// the same list, so this answers exactly what the dispatcher would accept.
+fn is_known_method<S: PrpcService>(method: &str) -> bool {
+    S::methods().as_ref().contains(&method)
+}
+
 /// Status code reported for an error that carries no code of its own.
 pub const CODE_BAD_REQUEST: u16 = 400;
+/// Status code reported when a requested method does not exist.
+pub const CODE_NOT_FOUND: u16 = 404;
 /// Status code reported when the request body exceeds the configured limit.
 pub const CODE_PAYLOAD_TOO_LARGE: u16 = 413;
 
@@ -147,26 +157,35 @@ pub trait RpcCall<State>: Sized {
         is_json: bool,
         is_query: bool,
     ) -> (u16, Vec<u8>) {
-        dispatch_prpc(
-            method,
+        let (code, body) = dispatch_prpc(
+            &method,
             payload,
             is_json,
             is_query,
             <Self::PrpcService as From<Self>>::from(self),
         )
-        .await
+        .await;
+        // The dispatcher reports an unknown method as an ordinary error, so it
+        // arrives here as a generic bad request. Only that case needs refining,
+        // so the method table is consulted lazily: a successful call, or a
+        // failure the service chose a code for, never pays for the lookup. The
+        // dispatcher's own message is reused verbatim rather than rebuilt here.
+        if code == CODE_BAD_REQUEST && !is_known_method::<Self::PrpcService>(&method) {
+            return (CODE_NOT_FOUND, body);
+        }
+        (code, body)
     }
 }
 
 async fn dispatch_prpc(
-    path: String,
+    path: &str,
     data: Vec<u8>,
     json: bool,
     query: bool,
     server: impl PrpcService + Send + 'static,
 ) -> (u16, Vec<u8>) {
     info!("dispatching request: {path}");
-    let result = server.dispatch_request(&path, data, json, query).await;
+    let result = server.dispatch_request(path, data, json, query).await;
     let (code, data) = match result {
         Ok(data) => (200, data),
         Err(err) => {
