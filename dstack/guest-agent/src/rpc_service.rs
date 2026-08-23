@@ -15,10 +15,10 @@ use dstack_guest_agent_rpc::{
     dstack_guest_server::{DstackGuestRpc, DstackGuestServer},
     tappd_server::{TappdRpc, TappdServer},
     worker_server::{WorkerRpc, WorkerServer},
-    AppInfo, AttestResponse, DeriveK256KeyResponse, DeriveKeyArgs, GetAttestationForAppKeyRequest,
-    GetKeyArgs, GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse,
-    GpuInfoResponse, HealthResponse, RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs,
-    TdxQuoteResponse, VerifyRequest, VerifyResponse, WorkerVersion,
+    AppInfo, AttestAppKeyRequest, AttestResponse, DeriveK256KeyResponse, DeriveKeyArgs, GetKeyArgs,
+    GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse, GpuInfoResponse,
+    HealthResponse, RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse,
+    VerifyRequest, VerifyResponse, WorkerVersion,
 };
 use dstack_types::{AppKeys, SysConfig, GPU_ATTESTATION_OUTPUT};
 use ed25519_dalek::ed25519::signature::hazmat::{PrehashSigner, PrehashVerifier};
@@ -675,54 +675,62 @@ impl WorkerRpc for ExternalRpcHandler {
         Ok(health_response(monitor.report()))
     }
 
-    async fn get_attestation_for_app_key(
-        self,
-        request: GetAttestationForAppKeyRequest,
-    ) -> Result<GetQuoteResponse> {
+    async fn attest_app_key(self, request: AttestAppKeyRequest) -> Result<AttestResponse> {
+        let report_data = self.app_key_report_data(&request.algorithm).await?;
+        self.state.attest_response(report_data)
+    }
+}
+
+impl ExternalRpcHandler {
+    /// Derive the app key for `algorithm` and build the DIP-1 report data that
+    /// commits to its public key.
+    ///
+    /// The caller cannot compute this itself -- it does not know the public key
+    /// until the key is derived here -- which is why attesting an app key needs
+    /// its own method instead of the caller-supplied report data `GetQuote`
+    /// and `Attest` take.
+    async fn app_key_report_data(&self, algorithm: &str) -> Result<[u8; 64]> {
         let key_response = InternalRpcHandler {
             state: self.state.clone(),
         }
         .get_key(GetKeyArgs {
             path: "vms".to_string(),
             purpose: "signing".to_string(),
-            algorithm: request.algorithm.clone(),
+            algorithm: algorithm.to_string(),
         })
         .await?;
 
-        let algorithm = normalize_algorithm(&request.algorithm);
-        match algorithm {
+        let (prefix, pubkey) = match normalize_algorithm(algorithm) {
             "ed25519" => {
                 let key_bytes: [u8; 32] = key_response
                     .key
                     .try_into()
                     .ok()
                     .context("Key is incorrect")?;
-                let ed25519_key = Ed25519SigningKey::from_bytes(&key_bytes);
-                let ed25519_pubkey = ed25519_key.verifying_key().to_bytes();
-
-                let mut ed25519_report_data = [0u8; 64];
-                let ed25519_b64 = URL_SAFE_NO_PAD.encode(ed25519_pubkey);
-                let ed25519_report_string = format!("dip1::ed25519-pk:{}", ed25519_b64);
-                let ed_bytes = ed25519_report_string.as_bytes();
-                ed25519_report_data[..ed_bytes.len()].copy_from_slice(ed_bytes);
-
-                self.state.quote_response(ed25519_report_data)
+                let key = Ed25519SigningKey::from_bytes(&key_bytes);
+                ("dip1::ed25519-pk:", key.verifying_key().to_bytes().to_vec())
             }
             "secp256k1" | "secp256k1_prehashed" => {
-                let secp256k1_key = SigningKey::from_slice(&key_response.key)
+                let key = SigningKey::from_slice(&key_response.key)
                     .context("Failed to parse secp256k1 key")?;
-                let secp256k1_pubkey = secp256k1_key.verifying_key().to_sec1_bytes();
-
-                let mut secp256k1_report_data = [0u8; 64];
-                let secp256k1_b64 = URL_SAFE_NO_PAD.encode(secp256k1_pubkey);
-                let secp256k1_report_string = format!("dip1::secp256k1c-pk:{}", secp256k1_b64);
-                let secp_bytes = secp256k1_report_string.as_bytes();
-                secp256k1_report_data[..secp_bytes.len()].copy_from_slice(secp_bytes);
-
-                self.state.quote_response(secp256k1_report_data)
+                (
+                    "dip1::secp256k1c-pk:",
+                    key.verifying_key().to_sec1_bytes().to_vec(),
+                )
             }
-            _ => Err(anyhow::anyhow!("Unsupported algorithm")),
+            _ => return Err(anyhow::anyhow!("Unsupported algorithm")),
+        };
+
+        let report_string = format!("{prefix}{}", URL_SAFE_NO_PAD.encode(pubkey));
+        let bytes = report_string.as_bytes();
+        let mut report_data = [0u8; 64];
+        // A longer public key encoding than the 64 bytes of report data would
+        // otherwise truncate into a valid-looking commitment to a different key.
+        if bytes.len() > report_data.len() {
+            anyhow::bail!("report data for {algorithm} does not fit in 64 bytes");
         }
+        report_data[..bytes.len()].copy_from_slice(bytes);
+        Ok(report_data)
     }
 }
 
@@ -744,14 +752,14 @@ mod tests {
         config::{AppComposeWrapper, Config},
     };
     use dstack_attest::attestation::AttestationVerifier;
-    use dstack_guest_agent_rpc::{GetAttestationForAppKeyRequest, SignRequest};
+    use dstack_guest_agent_rpc::{AttestAppKeyRequest, SignRequest};
     use dstack_types::{AppCompose, AppKeys, EventLogVersion, KeyProvider};
     use ed25519_dalek::ed25519::signature::hazmat::PrehashVerifier;
     use ed25519_dalek::{
         Signature as Ed25519Signature, Verifier, VerifyingKey as Ed25519VerifyingKey,
     };
     use k256::ecdsa::{Signature as K256Signature, VerifyingKey};
-    use ra_tls::attestation::{AttestationV1, VersionedAttestation};
+    use ra_tls::attestation::{AttestationV1, PlatformEvidence, VersionedAttestation};
     use sha2::Sha256;
     use std::collections::HashSet;
     use std::convert::TryFrom;
@@ -773,6 +781,14 @@ mod tests {
         assert_eq!(read_gpu_attestation(&dir.path().join("missing")), "");
     }
 
+    fn app_key_report_data(response: &AttestResponse) -> [u8; 64] {
+        VersionedAttestation::from_bytes(&response.attestation)
+            .expect("failed to decode attestation")
+            .into_v1()
+            .report_data()
+            .expect("attestation carries no report data")
+    }
+
     fn extract_pubkey_from_report_data(report_data: &[u8], prefix: &str) -> Result<Vec<u8>> {
         let end = report_data
             .iter()
@@ -790,6 +806,14 @@ mod tests {
     }
 
     async fn setup_test_state() -> (AppState, tempfile::NamedTempFile) {
+        setup_test_state_with_platform(None).await
+    }
+
+    /// The same state, with the fixture's platform evidence swapped out.
+    /// `None` keeps the fixture's Intel TDX evidence.
+    async fn setup_test_state_with_platform(
+        platform: Option<PlatformEvidence>,
+    ) -> (AppState, tempfile::NamedTempFile) {
         let mut temp_attestation_file = tempfile::NamedTempFile::new().unwrap();
 
         let attestation = include_bytes!("../fixtures/attestation.bin");
@@ -969,10 +993,20 @@ pNs85uhOZE8z2jr8Pg==
             cert_client: dummy_cert_client,
             demo_cert: RwLock::new(String::new()),
             platform: Arc::new(TestSimulatorPlatform {
-                attestation: VersionedAttestation::from_bytes(
-                    &std::fs::read(temp_attestation_file.path()).unwrap(),
-                )
-                .unwrap(),
+                attestation: {
+                    let fixture = VersionedAttestation::from_bytes(
+                        &std::fs::read(temp_attestation_file.path()).unwrap(),
+                    )
+                    .unwrap();
+                    match platform {
+                        None => fixture,
+                        Some(evidence) => {
+                            let mut attestation = fixture.into_v1();
+                            attestation.platform = evidence;
+                            VersionedAttestation::V1 { attestation }
+                        }
+                    }
+                },
             }),
             health: None,
         };
@@ -1054,15 +1088,14 @@ pNs85uhOZE8z2jr8Pg==
         let response = handler.sign(request).await.unwrap();
 
         let attestation_response = ExternalRpcHandler::new(state)
-            .get_attestation_for_app_key(GetAttestationForAppKeyRequest {
+            .attest_app_key(AttestAppKeyRequest {
                 algorithm: "ed25519".to_string(),
             })
             .await
             .unwrap();
 
-        let pk_bytes =
-            extract_pubkey_from_report_data(&attestation_response.report_data, "dip1::ed25519-pk:")
-                .unwrap();
+        let report_data = app_key_report_data(&attestation_response);
+        let pk_bytes = extract_pubkey_from_report_data(&report_data, "dip1::ed25519-pk:").unwrap();
 
         let public_key = Ed25519VerifyingKey::try_from(pk_bytes.as_slice()).unwrap();
         let signature = Ed25519Signature::try_from(response.signature.as_slice()).unwrap();
@@ -1084,17 +1117,15 @@ pNs85uhOZE8z2jr8Pg==
         let response = handler.sign(request).await.unwrap();
 
         let attestation_response = ExternalRpcHandler::new(state)
-            .get_attestation_for_app_key(GetAttestationForAppKeyRequest {
+            .attest_app_key(AttestAppKeyRequest {
                 algorithm: "secp256k1".to_string(),
             })
             .await
             .unwrap();
 
-        let pk_bytes = extract_pubkey_from_report_data(
-            &attestation_response.report_data,
-            "dip1::secp256k1c-pk:",
-        )
-        .unwrap();
+        let report_data = app_key_report_data(&attestation_response);
+        let pk_bytes =
+            extract_pubkey_from_report_data(&report_data, "dip1::secp256k1c-pk:").unwrap();
 
         let public_key = VerifyingKey::from_sec1_bytes(&pk_bytes).unwrap();
         let signature = K256Signature::try_from(response.signature.as_slice()).unwrap();
@@ -1119,17 +1150,15 @@ pNs85uhOZE8z2jr8Pg==
         let response = handler.sign(request).await.unwrap();
 
         let attestation_response = ExternalRpcHandler::new(state)
-            .get_attestation_for_app_key(GetAttestationForAppKeyRequest {
+            .attest_app_key(AttestAppKeyRequest {
                 algorithm: "secp256k1".to_string(),
             })
             .await
             .unwrap();
 
-        let pk_bytes = extract_pubkey_from_report_data(
-            &attestation_response.report_data,
-            "dip1::secp256k1c-pk:",
-        )
-        .unwrap();
+        let report_data = app_key_report_data(&attestation_response);
+        let pk_bytes =
+            extract_pubkey_from_report_data(&report_data, "dip1::secp256k1c-pk:").unwrap();
 
         let public_key = VerifyingKey::from_sec1_bytes(&pk_bytes).unwrap();
         let signature = K256Signature::try_from(response.signature.as_slice()).unwrap();
@@ -1176,46 +1205,89 @@ pNs85uhOZE8z2jr8Pg==
     }
 
     #[tokio::test]
-    async fn test_get_attestation_for_app_key_ed25519_success() {
+    async fn test_attest_app_key_ed25519_success() {
         let (state, _guard) = setup_test_state().await;
         let handler = ExternalRpcHandler::new(state.clone());
-        let request = GetAttestationForAppKeyRequest {
+        let request = AttestAppKeyRequest {
             algorithm: "ed25519".to_string(),
         };
 
-        let response = handler.get_attestation_for_app_key(request).await.unwrap();
+        let response = handler.attest_app_key(request).await.unwrap();
 
         const EXPECTED_REPORT_DATA: &str =
             "dip1::ed25519-pk:5Pbre1Amf1hrp2V2bbfKlIfxpQb2pJAmrgmhxgVoG9s\0\0\0\0";
-        assert_eq!(EXPECTED_REPORT_DATA.as_bytes(), response.report_data);
-        assert!(!response.quote.is_empty());
+        assert_eq!(
+            EXPECTED_REPORT_DATA.as_bytes(),
+            app_key_report_data(&response).as_slice()
+        );
     }
 
     #[tokio::test]
-    async fn test_get_attestation_for_app_key_secp256k1_success() {
+    async fn test_attest_app_key_secp256k1_success() {
         let (state, _guard) = setup_test_state().await;
         let handler = ExternalRpcHandler::new(state.clone());
-        let request = GetAttestationForAppKeyRequest {
+        let request = AttestAppKeyRequest {
             algorithm: "secp256k1".to_string(),
         };
 
-        let response = handler.get_attestation_for_app_key(request).await.unwrap();
+        let response = handler.attest_app_key(request).await.unwrap();
 
         const EXPECTED_REPORT_DATA: &str =
             "dip1::secp256k1c-pk:A6t_JdVkVdMAocH3f1f20WGT6JzdntxcXimUtEax8zc9";
-        assert_eq!(EXPECTED_REPORT_DATA.as_bytes(), response.report_data);
-        assert!(!response.quote.is_empty());
+        assert_eq!(
+            EXPECTED_REPORT_DATA.as_bytes(),
+            app_key_report_data(&response).as_slice()
+        );
     }
 
     #[tokio::test]
-    async fn test_get_attestation_for_app_key_unsupported_algorithm_fails() {
+    async fn test_attest_app_key_works_on_non_tdx() {
+        // The reason this method exists in place of the GetQuoteResponse-shaped
+        // one it replaces: the external listener has no other way to attest an
+        // app key, and `Attest` is no substitute -- it is on the internal
+        // socket, and its caller would have to know the app key's public key in
+        // advance to build the report data.
+        let (state, _guard) = setup_test_state_with_platform(Some(PlatformEvidence::SevSnp {
+            report: vec![0u8; 1184],
+            cert_chain: Vec::new(),
+            mr_config: String::new(),
+        }))
+        .await;
+
+        // GetQuote is closed on this platform...
+        let err = state
+            .quote_response([0x5a; 64])
+            .expect_err("GetQuote must fail on a non-TDX platform");
+        assert!(
+            err.to_string().contains("Intel TDX only"),
+            "unexpected error: {err}"
+        );
+
+        // ...and attesting an app key still works.
+        let response = ExternalRpcHandler::new(state)
+            .attest_app_key(AttestAppKeyRequest {
+                algorithm: "ed25519".to_string(),
+            })
+            .await
+            .unwrap();
+
+        const EXPECTED_REPORT_DATA: &str =
+            "dip1::ed25519-pk:5Pbre1Amf1hrp2V2bbfKlIfxpQb2pJAmrgmhxgVoG9s\0\0\0\0";
+        assert_eq!(
+            EXPECTED_REPORT_DATA.as_bytes(),
+            app_key_report_data(&response).as_slice()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_attest_app_key_unsupported_algorithm_fails() {
         let (state, _guard) = setup_test_state().await;
         let handler = ExternalRpcHandler::new(state);
-        let request = GetAttestationForAppKeyRequest {
+        let request = AttestAppKeyRequest {
             algorithm: "ecdsa".to_string(), // Unsupported algorithm
         };
 
-        let result = handler.get_attestation_for_app_key(request).await;
+        let result = handler.attest_app_key(request).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "Unsupported algorithm");
     }

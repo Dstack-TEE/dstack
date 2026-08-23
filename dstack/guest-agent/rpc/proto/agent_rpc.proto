@@ -44,7 +44,11 @@ service DstackGuest {
   rpc GetKey(GetKeyArgs) returns (GetKeyResponse) {}
 
   // Generates a TDX quote with given report data.
-  // Intel TDX only. On any other platform this fails; use Attest instead.
+  //
+  // Answers wherever the platform has Intel TDX; anywhere else it fails, and
+  // Attest is the replacement. On GCP Confidential VMs it answers with the TDX
+  // quote alone, leaving out the vTPM quote GCP's verification also binds --
+  // use Attest there to get evidence a verifier can check in full.
   rpc GetQuote(RawQuoteArgs) returns (GetQuoteResponse) {}
 
   // Generates a versioned attestation with the given report data.
@@ -286,9 +290,14 @@ service Worker {
   rpc Info(google.protobuf.Empty) returns (AppInfo) {}
   // Get the guest agent version
   rpc Version(google.protobuf.Empty) returns (WorkerVersion) {}
-  // Get attestation
-  // Intel TDX only, since it returns a GetQuoteResponse.
-  rpc GetAttestationForAppKey(GetAttestationForAppKeyRequest) returns (GetQuoteResponse) {}
+  // Attest a key the app derived.
+  //
+  // Replaces GetAttestationForAppKey, which returned a GetQuoteResponse and so
+  // could not answer on a platform without Intel TDX. Returns what
+  // DstackGuest.Attest returns; that method cannot serve this case, because it
+  // takes the report data from the caller and an external verifier does not
+  // know the app key's public key until the agent derives it.
+  rpc AttestAppKey(AttestAppKeyRequest) returns (AttestResponse) {}
   // Report whether the app is serving. Polled by the gateway to decide whether
   // this instance should be in its app's load-balancing rotation.
   //
@@ -330,6 +339,6 @@ message VerifyResponse {
   bool valid = 1;
 }
 
-message GetAttestationForAppKeyRequest {
+message AttestAppKeyRequest {
   string algorithm = 1;
 }
