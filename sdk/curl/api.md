@@ -109,9 +109,11 @@ curl --unix-socket /var/run/dstack.sock http://dstack/GetKey?path=my/key/path&pu
 
 ### 3. Get Quote
 
-Generates a TDX quote with given plain report data. Intel TDX only: on any other
-platform this returns an error. For platform-agnostic verification, use
-[Attest](#8-attest) instead.
+Generates a TDX quote with given plain report data. Needs Intel TDX: on a
+platform without it this returns an error. On GCP Confidential VMs it answers
+with the TDX quote alone, leaving out the vTPM quote GCP's verification also
+binds. For evidence a verifier can check in full on any platform, use
+[Attest](#7-attest) instead.
 
 **Endpoint:** `/GetQuote`
 

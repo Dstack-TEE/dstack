@@ -82,9 +82,13 @@ services:
 curl --unix-socket /var/run/dstack.sock http://localhost/GetQuote?report_data=0x1234deadbeef | jq .
 ```
 
-`GetQuote` is Intel TDX only. On other platforms (AMD SEV-SNP, AWS Nitro, GCP
-Confidential VMs) it returns an error; use `Attest` instead, which returns a
-platform-adaptive attestation:
+`GetQuote` needs Intel TDX. On platforms without it (AMD SEV-SNP, AWS Nitro) it
+returns an error. On GCP Confidential VMs it answers, but with the TDX quote
+alone -- GCP's verification also binds a vTPM quote, which this response has no
+field for, so a verifier that takes it at face value checks less than it should.
+
+`Attest` is the replacement in both cases. It returns a platform-adaptive
+attestation carrying whatever evidence the platform actually produces:
 
 ```bash
 curl --unix-socket /var/run/dstack.sock http://localhost/Attest?report_data=0x1234deadbeef | jq .

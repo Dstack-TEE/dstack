@@ -144,8 +144,10 @@ impl DstackClient {
 
     /// Request a TDX quote for the provided report data.
     ///
-    /// Intel TDX only. On any other platform the guest agent returns an error;
-    /// use [`Self::attest`] there.
+    /// Needs Intel TDX. Without it the guest agent returns an error, and on GCP
+    /// Confidential VMs it answers with the TDX quote alone, leaving out the
+    /// vTPM quote GCP's verification also binds. Use [`Self::attest`] in both
+    /// cases.
     pub async fn get_quote(&self, report_data: Vec<u8>) -> Result<GetQuoteResponse> {
         if report_data.is_empty() || report_data.len() > 64 {
             anyhow::bail!("Invalid report data length")

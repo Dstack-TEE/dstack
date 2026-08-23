@@ -81,7 +81,7 @@ Returns `{ key: string, certificate_chain: string[], asUint8Array(maxLength?) }`
 ### `getQuote(reportData)`
 
 Generate a raw TDX quote. `reportData` is up to 64 bytes (string, Buffer, or Uint8Array).
-Intel TDX only; on any other platform it throws and you should call `attest()` instead.
+Needs Intel TDX: without it the call throws, and on GCP Confidential VMs it returns the TDX quote alone, leaving out the vTPM quote GCP's verification also binds. Call `attest()` in both cases.
 
 ```typescript
 const quote = await client.getQuote('user:alice:nonce123')

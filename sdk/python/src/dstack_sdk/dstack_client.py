@@ -412,8 +412,10 @@ class AsyncDstackClient(BaseClient):
     ) -> GetQuoteResponse:
         """Request a TDX quote for the provided report data.
 
-        Intel TDX only. On any other platform the guest agent returns an error;
-        use ``attest()`` there.
+        Needs Intel TDX. Without it the guest agent returns an error, and on
+        GCP Confidential VMs it answers with the TDX quote alone, leaving out
+        the vTPM quote GCP's verification also binds. Use ``attest()`` in both
+        cases.
         """
         if not report_data or not isinstance(report_data, (bytes, str)):
             raise ValueError("report_data can not be empty")
@@ -581,8 +583,10 @@ class DstackClient(BaseClient):
     ) -> GetQuoteResponse:
         """Request a TDX quote for the provided report data.
 
-        Intel TDX only. On any other platform the guest agent returns an error;
-        use ``attest()`` there.
+        Needs Intel TDX. Without it the guest agent returns an error, and on
+        GCP Confidential VMs it answers with the TDX quote alone, leaving out
+        the vTPM quote GCP's verification also binds. Use ``attest()`` in both
+        cases.
         """
         raise NotImplementedError
 

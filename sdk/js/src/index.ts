@@ -270,8 +270,10 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
   /**
    * Request a TDX quote for the given report data.
    *
-   * Intel TDX only. On any other platform the guest agent returns an error and
-   * this throws; use `attest()` there.
+   * Needs Intel TDX. Without it the guest agent returns an error and this
+   * throws, and on GCP Confidential VMs it answers with the TDX quote alone,
+   * leaving out the vTPM quote GCP's verification also binds. Use `attest()`
+   * in both cases.
    */
   async getQuote(report_data: string | Buffer | Uint8Array): Promise<GetQuoteResponse> {
     let hex = to_hex(report_data)

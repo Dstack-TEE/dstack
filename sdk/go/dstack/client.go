@@ -475,8 +475,10 @@ func (c *DstackClient) GetKey(ctx context.Context, path string, purpose string, 
 	return &response, nil
 }
 
-// Gets a TDX quote from the dstack service. Intel TDX only: on any other
-// platform the guest agent returns an error and Attest should be used instead.
+// Gets a TDX quote from the dstack service. Needs Intel TDX: on a platform
+// without it the guest agent returns an error, and on GCP Confidential VMs it
+// answers with the TDX quote alone, leaving out the vTPM quote GCP's
+// verification also binds. Attest should be used in both cases.
 func (c *DstackClient) GetQuote(ctx context.Context, reportData []byte) (*GetQuoteResponse, error) {
 	if len(reportData) > 64 {
 		return nil, fmt.Errorf("report data is too large, it should be at most 64 bytes")
