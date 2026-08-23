@@ -99,7 +99,6 @@ export interface GetQuoteResponse {
   event_log: string
   report_data?: Hex
   vm_config?: string
-  attestation?: Hex
 }
 
 export interface AttestResponse {
@@ -268,6 +267,12 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
     })
   }
 
+  /**
+   * Request a TDX quote for the given report data.
+   *
+   * Intel TDX only. On any other platform the guest agent returns an error and
+   * this throws; use `attest()` there.
+   */
   async getQuote(report_data: string | Buffer | Uint8Array): Promise<GetQuoteResponse> {
     let hex = to_hex(report_data)
     if (hex.length > 128) {

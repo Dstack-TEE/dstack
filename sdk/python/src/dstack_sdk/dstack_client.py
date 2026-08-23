@@ -142,7 +142,6 @@ class GetQuoteResponse(BaseModel):
     event_log: str
     report_data: str = ""
     vm_config: str = ""
-    attestation: str = ""
 
     def decode_quote(self) -> bytes:
         return bytes.fromhex(self.quote)
@@ -411,7 +410,11 @@ class AsyncDstackClient(BaseClient):
         self,
         report_data: str | bytes,
     ) -> GetQuoteResponse:
-        """Request an attestation quote for the provided report data."""
+        """Request a TDX quote for the provided report data.
+
+        Intel TDX only. On any other platform the guest agent returns an error;
+        use ``attest()`` there.
+        """
         if not report_data or not isinstance(report_data, (bytes, str)):
             raise ValueError("report_data can not be empty")
         report_bytes: bytes = (
@@ -576,7 +579,11 @@ class DstackClient(BaseClient):
         self,
         report_data: str | bytes,
     ) -> GetQuoteResponse:
-        """Request an attestation quote for the provided report data."""
+        """Request a TDX quote for the provided report data.
+
+        Intel TDX only. On any other platform the guest agent returns an error;
+        use ``attest()`` there.
+        """
         raise NotImplementedError
 
     @call_async

@@ -67,6 +67,8 @@ The Rust SDK currently requests the default `secp256k1` key material. Use distin
 ### Generate Attestation Quotes
 
 `get_quote()` creates a TDX quote proving your code runs in a genuine TEE.
+It is Intel TDX only; on any other platform it fails and you should call
+`attest()` instead.
 
 ```rust
 let quote = client.get_quote(b"user:alice:nonce123".to_vec()).await?;

@@ -559,7 +559,9 @@ userB, _ := client.GetKey(ctx, "user/bob/wallet", "", "secp256k1")
 
 ##### `GetQuote(ctx context.Context, reportData []byte) (*GetQuoteResponse, error)`
 
-Generates a TDX attestation quote containing the provided report data.
+Generates a TDX attestation quote containing the provided report data. Intel TDX
+only; on any other platform it returns an error and you should call `Attest()`
+instead.
 
 **Parameters:**
 - `reportData`: Data to include in quote (max 64 bytes)

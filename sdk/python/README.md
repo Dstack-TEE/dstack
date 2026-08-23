@@ -73,6 +73,8 @@ ed_key = client.get_key('signing/key', algorithm='ed25519')
 ### Generate Attestation Quotes
 
 `get_quote()` creates a TDX quote proving your code runs in a genuine TEE.
+It is Intel TDX only; on any other platform it fails and you should call
+`attest()` instead.
 
 ```python
 quote = client.get_quote(b'user:alice:nonce123')
