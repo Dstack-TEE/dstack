@@ -5694,9 +5694,11 @@ dependencies = [
  "reqwest",
  "rocket",
  "rocket-vsock-listener",
+ "rustls",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "x509-parser",
 ]

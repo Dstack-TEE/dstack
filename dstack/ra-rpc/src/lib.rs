@@ -14,6 +14,9 @@ use tracing::{error, info};
 pub use ra_tls::attestation::{Attestation, VerifiedAttestation};
 
 #[cfg(feature = "rocket")]
+pub mod ratls_client_verifier;
+
+#[cfg(feature = "rocket")]
 pub mod rocket_helper;
 
 #[cfg(feature = "client")]
