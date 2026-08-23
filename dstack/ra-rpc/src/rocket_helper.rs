@@ -325,7 +325,10 @@ async fn read_data(data: Data<'_>, limit: ByteUnit) -> Result<Vec<u8>> {
     let stream = data.open(limit);
     let data = stream.into_bytes().await.context("failed to read data")?;
     if !data.is_complete() {
-        anyhow::bail!("payload too large");
+        return Err(crate::ErrorExt::with_code(
+            anyhow::anyhow!("payload too large"),
+            crate::CODE_PAYLOAD_TOO_LARGE,
+        ));
     }
     Ok(data.into_inner())
 }
@@ -384,9 +387,12 @@ impl<S> PrpcHandler<'_, '_, S> {
             Err(err) => {
                 warn!("error handling prpc: {err:?}");
                 let body = encode_error(json, &err);
+                let status = crate::code_of(&err)
+                    .and_then(Status::from_code)
+                    .unwrap_or(Status::BadRequest);
                 RpcResponse {
                     is_json: json,
-                    status: Status::BadRequest,
+                    status,
                     body,
                 }
             }

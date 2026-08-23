@@ -25,6 +25,9 @@ x509-parser.workspace = true
 prost-types = { workspace = true, optional = true }
 or-panic.workspace = true
 
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
 [features]
 default = ["rocket", "client"]
 rocket = ["dep:rocket", "dep:rocket-vsock-listener"]
