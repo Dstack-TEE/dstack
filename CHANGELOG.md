@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- dstack-util, cert-client: guests mint self-issued RA-TLS client
+  certificates for KMS calls instead of fetching the temp CA and minting from
+  it; the KMS authenticates the quote inside the certificate, not its issuer.
+  The KMS root CA now comes from `GetMeta`, over the same unauthenticated
+  connection `GetTempCaCert` used, so the trust posture is unchanged: relying
+  parties bind the KMS through the `key-provider` launch event (RTMR3/PCR14)
+  against the on-chain `kmsInfo` or a pinned key, and `verify_key_provider_id`
+  also enforces it in-guest when the app pins `key_provider_id`. A guest built
+  from this change needs KMS 0.6.0 or later; older KMS releases pin the temp CA
+  and refuse the certificate at the TLS handshake
+- dstack-types: `KeyProvider::Kms` drops `tmp_ca_key` and `tmp_ca_cert`, so
+  `.appkeys.json` no longer carries them. Files written by older images still
+  parse, but out-of-tree readers that require those fields fail on new files
+
 ## [0.6.0] - 2026-09-28
 
 > [!IMPORTANT]
