@@ -2263,8 +2263,6 @@ pub enum KeyProvider {
         url: String,
         #[serde(with = "hex_bytes")]
         pubkey: Vec<u8>,
-        tmp_ca_key: String,
-        tmp_ca_cert: String,
     },
 }
 
@@ -2326,8 +2324,6 @@ mod key_provider_tests {
         let kms = KeyProvider::Kms {
             url: "https://kms.example".into(),
             pubkey: vec![0xab; 32],
-            tmp_ca_key: String::new(),
-            tmp_ca_cert: String::new(),
         };
         assert_eq!(kms.id(), &[0xab; 32]);
     }

@@ -36,7 +36,7 @@ use ra_rpc::{
 };
 use ra_tls::{
     attestation::{detect_tee_variant, AttestationVerifier, QuoteContentType, TeeVariant},
-    cert::{generate_ra_cert, CertConfigV2, CertSigningRequestV2, Csr},
+    cert::{generate_self_signed_ra_cert, CertConfigV2, CertSigningRequestV2, Csr},
 };
 use rand::Rng as _;
 use safe_write::{safe_write, safe_write_with_mode};
@@ -2505,16 +2505,24 @@ impl<'a> Stage0<'a> {
 
     async fn request_app_keys_from_kms_url(&self, kms_url: String) -> Result<AppKeys> {
         info!("Requesting app keys from KMS: {kms_url}");
-        let tmp_ca = {
-            info!("Getting temp ca cert");
+        // Learn the KMS root CA over an unauthenticated connection. It is pinned
+        // immediately afterwards by `verify_key_provider_id`, which compares it
+        // against the measured `app_compose.key_provider_id`, so a CA substituted
+        // here does not survive to the point where the keys get used.
+        let root_ca = {
+            info!("Getting KMS root CA");
             let client = RaClient::new(kms_url.clone(), true)?;
             let kms_client = dstack_kms_rpc::kms_client::KmsClient::new(client);
             kms_client
-                .get_temp_ca_cert()
+                .get_meta()
                 .await
-                .context("Failed to get temp ca cert")?
+                .context("Failed to get KMS meta")?
+                .ca_cert
         };
-        let cert_pair = generate_ra_cert(tmp_ca.temp_ca_cert.clone(), tmp_ca.temp_ca_key.clone())?;
+        // Self-issued: the quote inside the certificate is the identity, so there is
+        // no CA to fetch and no shared private key to hold.
+        let cert_pair =
+            generate_self_signed_ra_cert(None).context("Failed to generate RA-TLS cert")?;
         let attestation_verifier = attestation_verifier(&self.shared.sys_config)?;
         let ra_client = RaClientConfig::builder()
             .tls_no_check(false)
@@ -2522,7 +2530,7 @@ impl<'a> Stage0<'a> {
             .remote_uri(kms_url.clone())
             .tls_client_cert(cert_pair.cert_pem)
             .tls_client_key(cert_pair.key_pem)
-            .tls_ca_cert(tmp_ca.ca_cert.clone())
+            .tls_ca_cert(root_ca.clone())
             .attestation_verifier(attestation_verifier)
             .cert_validator(Box::new(validate_kms_rpc_cert))
             .build()
@@ -2540,13 +2548,13 @@ impl<'a> Stage0<'a> {
         emit_runtime_event("os-image-hash", &response.os_image_hash)
             .context("failed to extend os-image-hash to the launch measurement")?;
 
-        let (_, ca_pem) = x509_parser::pem::parse_x509_pem(tmp_ca.ca_cert.as_bytes())
+        let (_, ca_pem) = x509_parser::pem::parse_x509_pem(root_ca.as_bytes())
             .context("Failed to parse ca cert")?;
         let x509 = ca_pem.parse_x509().context("Failed to parse ca cert")?;
         let root_pubkey = x509.public_key().raw.to_vec();
 
         let keys = AppKeys {
-            ca_cert: tmp_ca.ca_cert,
+            ca_cert: root_ca,
             disk_crypt_key: response.disk_crypt_key,
             env_crypt_key: response.env_crypt_key,
             k256_key: response.k256_key,
@@ -2555,8 +2563,6 @@ impl<'a> Stage0<'a> {
             key_provider: KeyProvider::Kms {
                 url: kms_url,
                 pubkey: root_pubkey,
-                tmp_ca_key: tmp_ca.temp_ca_key,
-                tmp_ca_cert: tmp_ca.temp_ca_cert,
             },
         };
         Ok(keys)

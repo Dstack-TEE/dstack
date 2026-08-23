@@ -14,7 +14,7 @@ use k256::schnorr::SigningKey;
 use ra_rpc::Attestation;
 use ra_tls::{
     attestation::{AttestationQuote, QuoteContentType, VersionedAttestation},
-    cert::{generate_ra_cert, generate_ra_cert_with_app_id},
+    cert::{generate_ra_cert, generate_self_signed_ra_cert},
     kdf::{derive_key, derive_p256_key_pair_from_bytes},
     rcgen::KeyPair,
 };
@@ -633,13 +633,13 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
         None
     };
 
-    // Step 1: Get temporary CA certificate
+    // Step 1: Fetch the KMS root CA
     eprintln!("Connecting to KMS: {kms_url}");
     let tls_no_check = root_ca_pem.is_none();
     if tls_no_check {
         eprintln!("Warning: no --root-ca provided, TLS certificate verification is disabled for initial connection");
     }
-    let tmp_ca = {
+    let root_ca = {
         let client = RaClientConfig::builder()
             .remote_uri(kms_url.clone())
             .tls_no_check(tls_no_check)
@@ -648,21 +648,17 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
             .build()
             .into_client()
             .context("failed to create client")?;
-        let kms_client = KmsClient::new(client);
-        kms_client
-            .get_temp_ca_cert()
+        KmsClient::new(client)
+            .get_meta()
             .await
-            .context("Failed to get temp CA cert")?
+            .context("Failed to get KMS meta")?
+            .ca_cert
     };
 
-    // Step 2: Generate RA-TLS client certificate
+    // Step 2: Generate a self-issued RA-TLS client certificate. The quote inside it
+    // is the identity the KMS authenticates, so no CA material is needed.
     let app_id = decode_app_id(args.app_id.as_deref())?;
-    let cert_pair = generate_ra_cert_with_app_id(
-        tmp_ca.temp_ca_cert.clone(),
-        tmp_ca.temp_ca_key.clone(),
-        app_id,
-    )
-    .context("Failed to generate RA cert")?;
+    let cert_pair = generate_self_signed_ra_cert(app_id).context("Failed to generate RA cert")?;
 
     // Step 3: Create authenticated client and request app keys
     let ra_client = RaClientConfig::builder()
@@ -671,7 +667,7 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
         .remote_uri(kms_url.clone())
         .tls_client_cert(cert_pair.cert_pem)
         .tls_client_key(cert_pair.key_pem)
-        .tls_ca_cert(tmp_ca.ca_cert.clone())
+        .tls_ca_cert(root_ca.clone())
         .build()
         .into_client()
         .context("Failed to create RA client")?;
@@ -686,13 +682,13 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
         .context("Failed to get app key")?;
 
     // Step 4: Build AppKeys structure
-    let (_, ca_pem) = x509_parser::pem::parse_x509_pem(tmp_ca.ca_cert.as_bytes())
-        .context("Failed to parse CA cert")?;
+    let (_, ca_pem) =
+        x509_parser::pem::parse_x509_pem(root_ca.as_bytes()).context("Failed to parse CA cert")?;
     let x509 = ca_pem.parse_x509().context("Failed to parse CA cert")?;
     let root_pubkey = x509.public_key().raw.to_vec();
 
     let keys = utils::AppKeys {
-        ca_cert: tmp_ca.ca_cert,
+        ca_cert: root_ca,
         disk_crypt_key: response.disk_crypt_key,
         env_crypt_key: response.env_crypt_key,
         k256_key: response.k256_key,
@@ -701,8 +697,6 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
         key_provider: KeyProvider::Kms {
             url: kms_url,
             pubkey: root_pubkey,
-            tmp_ca_key: tmp_ca.temp_ca_key,
-            tmp_ca_cert: tmp_ca.temp_ca_cert,
         },
     };
 
