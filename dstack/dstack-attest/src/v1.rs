@@ -171,7 +171,11 @@ impl PlatformEvidence {
                 event_log: strip_tdx_runtime_event_log(event_log),
                 tpm_quote,
             },
-            other => other,
+            // No TDX event log to strip. Listed rather than caught by a
+            // wildcard so that a new platform has to state its answer here.
+            evidence @ (Self::NitroEnclave { .. }
+            | Self::AwsNitroTpm { .. }
+            | Self::SevSnp { .. }) => evidence,
         }
     }
 }
@@ -338,6 +342,22 @@ impl Attestation {
                 }
                 PlatformEvidence::Tdx { quote, event_log }
             }
+            // Same TDX quote layout, so the same patch applies. The vTPM quote
+            // is left alone: it commits to PCRs, not to this report data.
+            PlatformEvidence::GcpTdx {
+                mut quote,
+                event_log,
+                tpm_quote,
+            } => {
+                if quote.len() >= TDX_QUOTE_REPORT_DATA_RANGE.end {
+                    quote[TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
+                }
+                PlatformEvidence::GcpTdx {
+                    quote,
+                    event_log,
+                    tpm_quote,
+                }
+            }
             PlatformEvidence::SevSnp {
                 mut report,
                 cert_chain,
@@ -352,7 +372,13 @@ impl Attestation {
                     mr_config,
                 }
             }
-            other => other,
+            // Nothing to patch: both carry their report data inside a signed
+            // document, and rewriting it would only invalidate the signature.
+            // Listed rather than caught by a wildcard so that a new platform
+            // has to state its answer here instead of silently getting this
+            // one -- GcpTdx was skipped for exactly that reason.
+            evidence @ (PlatformEvidence::NitroEnclave { .. }
+            | PlatformEvidence::AwsNitroTpm { .. }) => evidence,
         };
         let stack = match self.stack {
             StackEvidence::Dstack {
