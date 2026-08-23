@@ -5696,6 +5696,7 @@ dependencies = [
  "rocket-vsock-listener",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
  "x509-parser",
 ]
