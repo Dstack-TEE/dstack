@@ -215,3 +215,12 @@ wal_sync_window = "5s"
 sync_connections_enabled = true
 # Interval for syncing instance connections to KV store
 sync_connections_interval = "30s"
+# Collect tombstones every peer has already acknowledged once every this many
+# replicated writes, per store. Zero keeps every delete on disk for the life of
+# the deployment. The trigger counts replicated writes rather than reading a
+# clock so that every node in a cluster collects in the same window -- the
+# state digest covers tombstones, so nodes collecting on their own phase
+# report a mismatch and pay a full re-exchange. An operator override stored in
+# the KV itself (SetTombstoneGcConfig) replicates everywhere and takes
+# precedence over this per-node default.
+tombstone_gc_writes = 10000

@@ -49,7 +49,12 @@ pub use https_client::{AppIdValidator, HttpsClientConfig};
 pub use sync_service::{fetch_peers_from_bootnode, PersistentWriteNotifier, WaveKvSyncService};
 use tracing::{error, warn};
 
-use std::{collections::BTreeMap, net::Ipv4Addr, path::Path, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::Ipv4Addr,
+    path::Path,
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
 
@@ -189,6 +194,37 @@ impl From<&InstanceInfo> for InstanceRecord {
             health_check: Some(info.health_check()),
         }
     }
+}
+
+/// What one round of tombstone collection freed, per store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CollectedTombstones {
+    pub persistent: usize,
+    pub ephemeral: usize,
+}
+
+impl CollectedTombstones {
+    pub fn total(&self) -> usize {
+        self.persistent + self.ephemeral
+    }
+}
+
+/// How many replicated writes this node covers, per store: the sum over every
+/// origin of that origin's ack watermark.
+///
+/// This is a function of replicated state, so every node's reading converges
+/// within a sync round -- which is what lets the tombstone GC trigger on it
+/// and land in the same window cluster-wide without any node reading a clock.
+/// It is monotone in steady state, and steps back in two ways with different
+/// lifetimes. Digest repair lowers an ack until retransmission restores it --
+/// a dip the GC trigger simply waits out. Removing a peer drops that origin's
+/// watermark for good; the GC task answers by resetting its baseline (see
+/// `start_tombstone_gc_task`) instead of waiting for the cluster to re-earn
+/// writes it no longer remembers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplicatedWrites {
+    pub persistent: u64,
+    pub ephemeral: u64,
 }
 
 /// The `inst/` records currently in the KV store, split by readability.
@@ -371,6 +407,20 @@ impl Default for GlobalCertbotConfig {
     }
 }
 
+/// Tombstone GC pacing (stored in KV, synced across nodes).
+///
+/// The pace must be one number cluster-wide: nodes collecting on different
+/// boundaries are back to collecting on their own phase, which the state
+/// digest reads as divergence. Storing the override in the replicated KV is
+/// what makes it one number; the per-node config file only supplies the
+/// default for when this record is absent.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GlobalTombstoneGcConfig {
+    /// Collect once every this many replicated writes, per store. Zero
+    /// disables collection cluster-wide.
+    pub writes_per_collection: u64,
+}
+
 // Key prefixes and builders
 pub mod keys {
     use super::NodeId;
@@ -394,6 +444,7 @@ pub mod keys {
     /// Shared by the `GLOBAL_*` keys below; not itself a key.
     pub const GLOBAL_PREFIX: &str = "global/";
     pub const GLOBAL_CERTBOT_CONFIG: &str = "global/certbot_config";
+    pub const GLOBAL_TOMBSTONE_GC_CONFIG: &str = "global/tombstone_gc_config";
     pub const GLOBAL_ACME_CREDENTIALS: &str = "global/acme_credentials";
     pub const GLOBAL_ACME_ATTESTATION: &str = "global/acme_attestation";
     pub const GLOBAL_ACME_ROTATION_LOCK: &str = "global/acme_rotation_lock";
@@ -1482,6 +1533,95 @@ impl KvStore {
     }
 
     // ==================== Persistence ====================
+
+    /// Drop tombstones every known peer has already covered.
+    ///
+    /// wavekv gates this on an ack watermark rather than a clock: a tombstone
+    /// may go only once every peer reports having seen the delete that wrote
+    /// it. v1 took a TTL instead and 2.0 removed that API, because under any
+    /// state-shipping scheme an uncoordinated clock-based collection lets a
+    /// lagging replica resurrect the key -- here, a deregistered CVM
+    /// reappearing in every node's WireGuard config.
+    ///
+    /// Both stores, because both accumulate. A `conn/` or `handshake/`
+    /// tombstone is only in memory and goes on restart; an `inst/` or `admin/`
+    /// one is on disk and does not, so without this it is kept for the life of
+    /// the deployment.
+    ///
+    /// Both are attempted even if the first fails, for the same reason the
+    /// deletes are: stopping halfway leaves the stores disagreeing about what
+    /// has been collected, which is the state the digest reports as divergence.
+    /// And when both fail, the error names both -- the second failure is a
+    /// separate fact, not a detail of the first.
+    pub fn collect_tombstone_garbage(&self) -> Result<CollectedTombstones> {
+        let persistent = self
+            .persistent
+            .write()
+            .collect_tombstone_garbage()
+            .context("failed to collect tombstones from the persistent store");
+        let ephemeral = self
+            .ephemeral
+            .write()
+            .collect_tombstone_garbage()
+            .context("failed to collect tombstones from the ephemeral store");
+        match (persistent, ephemeral) {
+            (Ok(persistent), Ok(ephemeral)) => Ok(CollectedTombstones {
+                persistent,
+                ephemeral,
+            }),
+            (Err(err), Ok(_)) | (Ok(_), Err(err)) => Err(err),
+            (Err(persistent), Err(ephemeral)) => {
+                Err(persistent.context(format!("the ephemeral store failed too: {ephemeral:#}")))
+            }
+        }
+    }
+
+    /// How many replicated writes this node covers, per store.
+    ///
+    /// The tombstone GC trigger compares this against a boundary; see
+    /// `ReplicatedWrites` for why it is a count and not a clock.
+    pub fn replicated_writes(&self) -> ReplicatedWrites {
+        let sum = |node: &Node| {
+            node.read()
+                .acks_snapshot()
+                .values()
+                .fold(0u64, |acc, seq| acc.saturating_add(*seq))
+        };
+        ReplicatedWrites {
+            persistent: sum(&self.persistent),
+            ephemeral: sum(&self.ephemeral),
+        }
+    }
+
+    /// The sync peer set (both stores share membership).
+    ///
+    /// The tombstone GC task watches this for shrinkage: a removed peer takes
+    /// its ack watermark out of `replicated_writes` permanently, which must
+    /// not be read as "the cluster has stopped writing".
+    pub fn peer_ids(&self) -> BTreeSet<NodeId> {
+        self.persistent.read().get_peers().into_iter().collect()
+    }
+
+    /// Get the tombstone GC pacing override, if an operator has stored one.
+    ///
+    /// `None` means "use the config-file default". Fails closed on a corrupt
+    /// record: falling back to either the default or `None` would silently put
+    /// this node on a different collection boundary from its peers.
+    pub fn get_tombstone_gc_config(&self) -> Result<Option<GlobalTombstoneGcConfig>> {
+        self.persistent
+            .read()
+            .decode_strict(keys::GLOBAL_TOMBSTONE_GC_CONFIG)
+    }
+
+    /// Store the tombstone GC pacing override, replicating it to every node.
+    pub fn set_tombstone_gc_config(&self, config: &GlobalTombstoneGcConfig) -> Result<()> {
+        self.persistent.write().put_encoded(
+            keys::GLOBAL_TOMBSTONE_GC_CONFIG.to_string(),
+            config,
+            true,
+        )?;
+        Ok(())
+    }
 
     pub fn persist_if_dirty(&self) -> Result<bool> {
         self.persistent.persist_if_dirty()
@@ -2660,11 +2800,11 @@ mod decompression_tests {
 mod corruption_tests {
     use super::*;
 
-    fn test_kv(data_dir: &std::path::Path) -> KvStore {
+    pub(super) fn test_kv(data_dir: &std::path::Path) -> KvStore {
         KvStore::new(1, vec![], data_dir, None).expect("failed to create kv store")
     }
 
-    fn put_raw(kv: &KvStore, key: &str, value: &[u8]) {
+    pub(super) fn put_raw(kv: &KvStore, key: &str, value: &[u8]) {
         kv.persistent
             .write()
             .put(key.to_string(), value.to_vec())
@@ -3313,5 +3453,348 @@ mod key_schema_tests {
         assert_eq!(keys::parse_node_info_key(&keys::inst("inst-a")), None);
         // `node/info/` and `node/status/` share a stem; neither may claim the other.
         assert_eq!(keys::parse_node_info_key("node/info/not-a-number"), None);
+    }
+}
+
+/// Tombstone GC: what may be collected (the ack watermark), when collection
+/// triggers (the replicated write count), and how the pace is shared (the KV
+/// override). Split from `corruption_tests` because these are a feature's
+/// tests, not corruption drills -- they only borrow its raw-write helpers.
+#[cfg(test)]
+mod tombstone_gc_tests {
+    use super::corruption_tests::{put_raw, test_kv};
+    use super::*;
+
+    fn seed_instance(kv: &KvStore, id: &str) {
+        kv.sync_instance(
+            id,
+            &InstanceRecord {
+                app_id: "app".to_string(),
+                ip: "10.0.0.20".parse().unwrap(),
+                public_key: format!("key-{id}"),
+                reg_time: 1,
+                port_policy: None,
+                port_policy_hash: String::new(),
+                health_check: None,
+            },
+        )
+        .expect("seed");
+    }
+
+    /// Whether the key is still held at all, tombstone included.
+    fn key_is_held(kv: &KvStore, key: &str) -> bool {
+        kv.persistent.read().get_including_tombstones(key).is_some()
+    }
+
+    /// A delete leaves a tombstone, and nothing collected them: they are
+    /// replicated state, on disk, kept for the life of the deployment. A
+    /// single-node gateway has no peer to resurrect from, which is exactly the
+    /// case wavekv collects unconditionally.
+    #[test]
+    fn a_single_node_collects_the_tombstones_it_has_finished_with() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let kv = test_kv(dir.path());
+        seed_instance(&kv, "cvm");
+        kv.sync_delete_instance("cvm").expect("delete");
+        assert!(
+            key_is_held(&kv, &keys::inst("cvm")),
+            "a delete leaves a tombstone behind"
+        );
+        assert!(
+            kv.load_all_instances().decoded.is_empty(),
+            "which is not the same as the record still being live"
+        );
+
+        let collected = kv.collect_tombstone_garbage().expect("collect");
+        // The delete tombstones the admin override keys alongside `inst/`
+        // (recycled ids must not inherit an operator's gate), so the count is
+        // "at least the instance record", not exactly one.
+        assert!(collected.persistent >= 1);
+        assert!(!key_is_held(&kv, &keys::inst("cvm")));
+    }
+
+    /// The watermark, not a clock, is what makes this safe. A peer that has not
+    /// acknowledged the delete may still be holding the live record, so
+    /// dropping the tombstone would let it push that record back -- a
+    /// deregistered CVM reappearing in every node's WireGuard config. v1 took a
+    /// TTL here and 2.0 removed the API for this reason.
+    #[test]
+    fn a_tombstone_a_peer_has_not_acknowledged_is_kept() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let kv = test_kv(dir.path());
+        seed_instance(&kv, "cvm");
+        kv.sync_delete_instance("cvm").expect("delete");
+        kv.add_peer(2).expect("add peer");
+
+        let collected = kv.collect_tombstone_garbage().expect("collect");
+        assert_eq!(collected.persistent, 0);
+        assert!(
+            key_is_held(&kv, &keys::inst("cvm")),
+            "a peer that has not seen the delete can still resurrect the record"
+        );
+    }
+
+    /// Exchange sync envelopes until a full round moves no entries in either
+    /// direction, then stop.
+    ///
+    /// The real path, not a hand-set ack: what makes a tombstone collectable is
+    /// the peer reporting that it covers the delete, and only a round trip
+    /// produces that report. The quiet round's envelopes are still applied --
+    /// an empty delta still carries the sender's ack map, which is exactly the
+    /// report the collector is waiting on.
+    fn sync_until_quiet(left: &KvStore, right: &KvStore) {
+        for _ in 0..8 {
+            let mut moved = 0;
+            for (from, to) in [(left, right), (right, left)] {
+                let request = from
+                    .persistent
+                    .read()
+                    .prepare_sync(to.my_node_id(), vec![0u8; 16]);
+                moved += request.entries.len();
+                to.persistent
+                    .write()
+                    .apply_envelope(request)
+                    .expect("peer applies our envelope");
+                let reply = to
+                    .persistent
+                    .read()
+                    .prepare_sync(from.my_node_id(), vec![0u8; 16]);
+                moved += reply.entries.len();
+                from.persistent
+                    .write()
+                    .apply_envelope(reply)
+                    .expect("we apply the peer's envelope");
+            }
+            if moved == 0 {
+                return;
+            }
+        }
+        panic!("the stores were still exchanging entries after 8 rounds");
+    }
+
+    /// The property the ack watermark buys, and the one a TTL cannot: age plays
+    /// no part. A tombstone written a moment ago is collectable the instant
+    /// every peer covers the delete -- and until then it is kept no matter how
+    /// long that takes, where a TTL would drop it and let the peer push the
+    /// record it still holds back as a live value.
+    #[test]
+    fn a_tombstone_is_collected_on_coverage_not_on_age() {
+        let left_dir = tempfile::tempdir().expect("temp dir");
+        let right_dir = tempfile::tempdir().expect("temp dir");
+        let left = KvStore::new(1, vec![2], left_dir.path(), None).expect("left");
+        let right = KvStore::new(2, vec![1], right_dir.path(), None).expect("right");
+
+        seed_instance(&left, "cvm");
+        sync_until_quiet(&left, &right);
+        assert!(
+            right.load_all_instances().decoded.contains_key("cvm"),
+            "the peer must hold the live record, or there is nothing to resurrect"
+        );
+
+        left.sync_delete_instance("cvm").expect("delete");
+        // Freshly written, and the peer has not been told. Age is irrelevant
+        // here; coverage is not.
+        assert_eq!(
+            left.collect_tombstone_garbage()
+                .expect("collect")
+                .persistent,
+            0
+        );
+        assert!(key_is_held(&left, &keys::inst("cvm")));
+
+        sync_until_quiet(&left, &right);
+        assert!(
+            right.load_all_instances().decoded.is_empty(),
+            "the peer must have applied the delete"
+        );
+        assert!(
+            left.collect_tombstone_garbage()
+                .expect("collect")
+                .persistent
+                >= 1,
+            "once every peer covers the delete, nothing can push the record back"
+        );
+        assert!(!key_is_held(&left, &keys::inst("cvm")));
+
+        // And the peer cannot reintroduce it afterwards.
+        sync_until_quiet(&left, &right);
+        assert!(left.load_all_instances().decoded.is_empty());
+        assert!(right.load_all_instances().decoded.is_empty());
+    }
+
+    /// The GC trigger counts replicated writes instead of reading a clock, so
+    /// what it counts must behave like replicated state: advance with writes,
+    /// and read the same on every converged node.
+    #[test]
+    fn the_replicated_write_count_advances_with_writes_and_converges_between_peers() {
+        let left_dir = tempfile::tempdir().expect("temp dir");
+        let right_dir = tempfile::tempdir().expect("temp dir");
+        let left = KvStore::new(1, vec![2], left_dir.path(), None).expect("left");
+        let right = KvStore::new(2, vec![1], right_dir.path(), None).expect("right");
+
+        let before = left.replicated_writes();
+        seed_instance(&left, "cvm");
+        left.sync_delete_instance("cvm").expect("delete");
+        let after = left.replicated_writes();
+        assert!(
+            after.persistent > before.persistent,
+            "a write and a delete both advance the count"
+        );
+
+        assert!(
+            right.replicated_writes().persistent < after.persistent,
+            "the peer has not covered the writes yet"
+        );
+        sync_until_quiet(&left, &right);
+        assert_eq!(
+            left.replicated_writes().persistent,
+            right.replicated_writes().persistent,
+            "converged nodes read the same count, which is what lets them share GC boundaries"
+        );
+    }
+
+    /// `RemovePeer` drops the removed origin's ack watermark, so the write
+    /// count steps back for good -- the regression the GC task's baseline
+    /// reset exists for: without it, a boundary earned before the removal
+    /// gates collection until the cluster re-earns writes it no longer
+    /// remembers.
+    #[test]
+    fn removing_a_peer_permanently_lowers_the_replicated_write_count() {
+        let left_dir = tempfile::tempdir().expect("temp dir");
+        let right_dir = tempfile::tempdir().expect("temp dir");
+        let left = KvStore::new(1, vec![2], left_dir.path(), None).expect("left");
+        let right = KvStore::new(2, vec![1], right_dir.path(), None).expect("right");
+
+        // Writes authored by the peer, so the count left holds for origin 2
+        // is exactly what the removal deletes.
+        seed_instance(&right, "cvm");
+        sync_until_quiet(&left, &right);
+        let before = left.replicated_writes().persistent;
+
+        assert!(left.peer_ids().contains(&2));
+        left.remove_peer(2).expect("remove peer");
+        assert!(
+            !left.peer_ids().contains(&2),
+            "the shrinkage the GC task watches for"
+        );
+        assert!(
+            left.replicated_writes().persistent < before,
+            "the removed origin's watermark is gone from the count, permanently"
+        );
+    }
+
+    /// The resurrection the watermark cannot prevent, pinned as a known
+    /// limitation.
+    ///
+    /// Removing a peer vacates the watermark, collection then drops the
+    /// tombstone, and the removed node returning with its old data directory
+    /// still holds the record live. Ordinary rounds do not leak it back: the
+    /// returning node's request re-teaches the responder coverage of its
+    /// origin, so nothing it authored is re-sent. What breaks it is wavekv's
+    /// own divergence repair -- the digests disagree for as long as the
+    /// returning node holds the zombie, and after `digest_check_rounds` the
+    /// repair (`reset_peer_coverage`) makes it re-send everything, tombstoned
+    /// keys included, with nothing left to beat them under LWW.
+    ///
+    /// Until a removed node is locked out at the sync boundary, removal must
+    /// mean decommission: the removed node's data directory must never come
+    /// back.
+    #[test]
+    fn a_removed_node_returning_with_old_state_resurrects_collected_deletes() {
+        let left_dir = tempfile::tempdir().expect("temp dir");
+        let right_dir = tempfile::tempdir().expect("temp dir");
+        let left = KvStore::new(1, vec![2], left_dir.path(), None).expect("left");
+        let right = KvStore::new(2, vec![1], right_dir.path(), None).expect("right");
+
+        // The record is authored by the node that will be removed.
+        seed_instance(&right, "cvm");
+        sync_until_quiet(&left, &right);
+
+        // right goes dark; left deletes the record, retires right, and -- now
+        // peerless -- collects the tombstone.
+        left.sync_delete_instance("cvm").expect("delete");
+        left.remove_peer(2).expect("retire");
+        assert!(
+            left.collect_tombstone_garbage()
+                .expect("collect")
+                .persistent
+                >= 1
+        );
+        assert!(left.load_all_instances().decoded.is_empty());
+        assert!(
+            right.load_all_instances().decoded.contains_key("cvm"),
+            "the removed node still holds the record live -- the zombie"
+        );
+
+        // right comes back and initiates rounds -- the real topology: left
+        // pruned it, so left never initiates. Ordinary rounds do not
+        // resurrect: right's request carries its ack map, left re-adopts
+        // coverage of origin 2, and right's zombie stays filtered out.
+        let ordinary_round = || {
+            let request = right.persistent.read().prepare_sync(1, vec![0u8; 16]);
+            let reply = left
+                .persistent
+                .write()
+                .handle_envelope(request, vec![0u8; 16])
+                .expect("left answers the returning node");
+            right
+                .persistent
+                .write()
+                .apply_envelope(reply)
+                .expect("right applies the reply");
+        };
+        ordinary_round();
+        ordinary_round();
+        assert!(
+            left.load_all_instances().decoded.is_empty(),
+            "the plain delta path does not leak the zombie back"
+        );
+
+        // But the digests now disagree for good -- left lacks a key right
+        // holds, with no tombstone and no ack filter to reconcile them -- so
+        // after `digest_check_rounds` quiescent mismatches the divergence
+        // repair fires on the returning node, and its next request is a full
+        // dump.
+        right.persistent.write().reset_peer_coverage(1);
+        ordinary_round();
+        assert!(
+            left.load_all_instances().decoded.contains_key("cvm"),
+            "the deregistered CVM is back, live, in every node's WireGuard config"
+        );
+    }
+
+    /// The pace override lives in the KV so that it is one number cluster-wide;
+    /// absent means "use the config-file default", and the record replicates
+    /// like any other write.
+    #[test]
+    fn a_tombstone_gc_override_is_absent_by_default_and_replicates() {
+        let left_dir = tempfile::tempdir().expect("temp dir");
+        let right_dir = tempfile::tempdir().expect("temp dir");
+        let left = KvStore::new(1, vec![2], left_dir.path(), None).expect("left");
+        let right = KvStore::new(2, vec![1], right_dir.path(), None).expect("right");
+
+        assert_eq!(left.get_tombstone_gc_config().expect("read"), None);
+
+        let config = GlobalTombstoneGcConfig {
+            writes_per_collection: 5000,
+        };
+        left.set_tombstone_gc_config(&config).expect("store");
+        sync_until_quiet(&left, &right);
+        assert_eq!(
+            right.get_tombstone_gc_config().expect("read"),
+            Some(config),
+            "every node reads the operator's pace, not its own default"
+        );
+    }
+
+    /// Fails closed like the certbot config: reading a corrupt override as the
+    /// per-node default would silently put this node on a different collection
+    /// boundary from its peers.
+    #[test]
+    fn a_corrupt_tombstone_gc_override_does_not_read_as_the_default() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let kv = test_kv(dir.path());
+        put_raw(&kv, keys::GLOBAL_TOMBSTONE_GC_CONFIG, b"not-messagepack");
+        assert!(kv.get_tombstone_gc_config().is_err());
     }
 }
