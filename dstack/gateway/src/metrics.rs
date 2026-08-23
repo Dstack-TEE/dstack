@@ -56,6 +56,7 @@ static WG_RECONFIGURE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static WG_RECONFIGURE_FAILURES: AtomicU64 = AtomicU64::new(0);
 static KV_PERSIST_FAILURES: AtomicU64 = AtomicU64::new(0);
 static KV_WAL_SYNC_FAILURES: AtomicU64 = AtomicU64::new(0);
+static SYNC_REJECTED: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
     /// Set while a scrape is sampling live state.
@@ -128,6 +129,17 @@ pub(crate) fn record_kv_wal_sync_failure() {
     KV_WAL_SYNC_FAILURES.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Record a sync envelope of ours that a peer rejected with HTTP 403.
+pub(crate) fn record_sync_rejected() {
+    SYNC_REJECTED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Test-only read: the counter is process-wide, so tests assert on deltas.
+#[cfg(test)]
+pub(crate) fn sync_rejected_count() -> u64 {
+    SYNC_REJECTED.load(Ordering::Relaxed)
+}
+
 /// Index of the longest prefix in `prefixes` that `key` starts with.
 ///
 /// Longest rather than first so that adding a narrower prefix later (say
@@ -163,6 +175,9 @@ pub(crate) struct Snapshot {
     pub stores: Vec<StoreSnapshot>,
     /// domain -> certificate `notAfter`, in seconds since the epoch.
     pub cert_not_after: Vec<(String, u64)>,
+    /// node id -> the latest time any gateway observed the node, in seconds
+    /// since the epoch (max across observers, future-dated reports dropped).
+    pub node_last_seen: Vec<(u32, u64)>,
 }
 
 /// One WaveKV store (`persistent` or `ephemeral`).
@@ -362,6 +377,28 @@ pub(crate) fn render(snapshot: &Snapshot) -> String {
         "",
         KV_WAL_SYNC_FAILURES.load(Ordering::Relaxed),
     );
+    counter(
+        &mut out,
+        "dstack_gateway_sync_rejected_total",
+        "Sync envelopes this node sent that a peer rejected with HTTP 403. This can indicate a removal lockout or an app-identity mismatch.",
+        "",
+        SYNC_REJECTED.load(Ordering::Relaxed),
+    );
+
+    header(
+        &mut out,
+        "dstack_gateway_node_last_seen_timestamp_seconds",
+        "Latest time any gateway observed the node, unix seconds. Replicated (max across observers): every node reports roughly the same value, so aggregate with max(), and alert on time() minus this. A node an operator removed leaves the series entirely -- absence here plus dstack_gateway_sync_rejected_total on the machine itself can indicate the removed-by-mistake picture.",
+        "gauge",
+    );
+    for (node_id, last_seen) in &snapshot.node_last_seen {
+        line(
+            &mut out,
+            "dstack_gateway_node_last_seen_timestamp_seconds",
+            &format!("{{node=\"{node_id}\"}}"),
+            *last_seen,
+        );
+    }
 
     gauge(
         &mut out,
@@ -490,6 +527,7 @@ mod tests {
                 }],
             }],
             cert_not_after: vec![("app.example.com".to_string(), 1_800_000_000)],
+            node_last_seen: vec![(2, 1_777_000_000)],
         }
     }
 
@@ -529,6 +567,7 @@ mod tests {
             "dstack_gateway_cluster_kv_keys{store=\"persistent\"} 42",
             "dstack_gateway_kv_dirty{store=\"persistent\"} 1",
             "dstack_gateway_cluster_cert_not_after_seconds{domain=\"app.example.com\"} 1800000000",
+            "dstack_gateway_node_last_seen_timestamp_seconds{node=\"2\"} 1777000000",
         ] {
             assert!(rendered.contains(expected), "missing sample: {expected}");
         }

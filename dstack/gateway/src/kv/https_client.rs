@@ -156,6 +156,21 @@ pub struct HttpsClient {
     client: HyperClient,
 }
 
+/// A non-success HTTP status, kept as a typed error in the chain so a caller
+/// can react to a specific code. The sync path needs to tell an HTTP 403
+/// rejection apart from a peer that is down or broken without string-matching
+/// a formatted error message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HttpStatusError(pub u16);
+
+impl std::fmt::Display for HttpStatusError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "request failed with HTTP status {}", self.0)
+    }
+}
+
+impl std::error::Error for HttpStatusError {}
+
 impl HttpsClient {
     async fn post_gzipped(
         &self,
@@ -255,7 +270,7 @@ impl HttpsClient {
             .with_context(|| format!("failed to send request to {url}"))?;
 
         if !response.status().is_success() {
-            anyhow::bail!("request failed: {}", response.status());
+            return Err(HttpStatusError(response.status().as_u16()).into());
         }
 
         // Bounded like every other response: this is the bootnode GetPeers path, and
@@ -271,7 +286,7 @@ impl HttpsClient {
 
         let status = response.status();
         if !status.is_success() {
-            anyhow::bail!("request failed: {status}");
+            return Err(HttpStatusError(status.as_u16()).into());
         }
 
         let body = read_body_bounded(response.into_body()).await?;
@@ -282,7 +297,7 @@ impl HttpsClient {
     pub async fn post_bytes_no_response(&self, url: &str, body: Vec<u8>) -> Result<()> {
         let response = self.post_gzipped(url, body).await?;
         if !response.status().is_success() {
-            anyhow::bail!("request failed: {}", response.status());
+            return Err(HttpStatusError(response.status().as_u16()).into());
         }
         Ok(())
     }
@@ -512,6 +527,22 @@ mod transport_tests {
             .expect("client")
             .post_bytes_response(&url, b"request".to_vec())
             .await
+    }
+
+    /// The status code survives into the error chain as a typed value: the
+    /// sync path tells an HTTP 403 rejection apart from a peer that is down or
+    /// broken, and string-matching a Display line is not a contract.
+    #[tokio::test]
+    async fn a_refusal_status_is_readable_from_the_error_chain() {
+        let err = request(StatusCode::FORBIDDEN, Vec::new())
+            .await
+            .expect_err("403 must not read as success");
+        let status = err
+            .chain()
+            .filter_map(|cause| cause.downcast_ref::<HttpStatusError>())
+            .next()
+            .expect("the status must be present as a typed error");
+        assert_eq!(*status, HttpStatusError(403));
     }
 
     /// A non-success status must never be decoded as a successful sync response.

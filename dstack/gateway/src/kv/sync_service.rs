@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use dstack_gateway_rpc::GetPeersResponse;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use wavekv::{
     sync::{
         ExchangeInterface, PeerLinkStatus, SyncConfig as KvSyncConfig, SyncEnvelope, SyncManager,
@@ -23,7 +23,7 @@ use wavekv::{
 
 use crate::config::SyncConfig as GwSyncConfig;
 
-use super::https_client::{HttpsClient, HttpsClientConfig};
+use super::https_client::{HttpStatusError, HttpsClient, HttpsClientConfig};
 use super::KvStore;
 
 /// HTTP-based network transport for WaveKV sync.
@@ -40,6 +40,26 @@ pub struct HttpSyncNetwork {
 }
 
 impl HttpSyncNetwork {
+    /// Whether a peer rejected a send with HTTP 403.
+    fn was_rejected(err: &anyhow::Error) -> bool {
+        err.chain()
+            .filter_map(|cause| cause.downcast_ref::<HttpStatusError>())
+            .any(|status| status.0 == 403)
+    }
+
+    /// Count a 403 for this node's own monitoring. Sync endpoints use 403 for
+    /// both removal lockouts and app-identity mismatches, so the metric and log
+    /// deliberately report a rejection without claiming which condition caused it.
+    fn note_if_rejected(err: &anyhow::Error, peer: NodeId) {
+        if !Self::was_rejected(err) {
+            return;
+        }
+        crate::metrics::record_sync_rejected();
+        error!(
+            "peer {peer} rejected this node's sync envelope (HTTP 403); \
+             this can indicate a removal lockout or an app-identity mismatch"
+        );
+    }
     /// `my_uuid` is passed in rather than read back out of the store.
     ///
     /// Our own uuid is local configuration, not replicated state, and sourcing
@@ -105,7 +125,8 @@ impl ExchangeInterface for HttpSyncNetwork {
             .client
             .post_bytes_response(&sync_url, env.encode()?)
             .await
-            .with_context(|| format!("failed to sync to peer {peer} at {sync_url}"))?;
+            .with_context(|| format!("failed to sync to peer {peer} at {sync_url}"))
+            .inspect_err(|err| Self::note_if_rejected(err, peer))?;
 
         self.kv_store.update_peer_last_seen(peer);
         Ok(Some(SyncEnvelope::decode(&body)?))
@@ -118,7 +139,8 @@ impl ExchangeInterface for HttpSyncNetwork {
         self.client
             .post_bytes_no_response(&push_url, env.encode()?)
             .await
-            .with_context(|| format!("failed to push to peer {peer} at {push_url}"))?;
+            .with_context(|| format!("failed to push to peer {peer} at {push_url}"))
+            .inspect_err(|err| Self::note_if_rejected(err, peer))?;
         Ok(())
     }
 }
@@ -308,4 +330,46 @@ pub async fn fetch_peers_from_bootnode(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod sync_rejection_tests {
+    use super::*;
+
+    fn wrapped(status: u16) -> anyhow::Error {
+        anyhow::Error::new(HttpStatusError(status)).context(
+            "failed to sync to peer 2 at https://gw2.example.com:9202/wavekv/sync/persistent",
+        )
+    }
+
+    /// Only HTTP 403 is a rejection; transport errors and other HTTP failures
+    /// must not increment the rejection counter.
+    #[test]
+    fn only_a_403_reads_as_rejected() {
+        assert!(HttpSyncNetwork::was_rejected(&wrapped(403)));
+        for status in [400u16, 401, 404, 500, 503] {
+            assert!(
+                !HttpSyncNetwork::was_rejected(&wrapped(status)),
+                "status {status} must not read as a rejection"
+            );
+        }
+        assert!(!HttpSyncNetwork::was_rejected(&anyhow::anyhow!(
+            "connection refused"
+        )));
+    }
+
+    /// The rejection must reach the node's own monitoring.
+    #[test]
+    fn a_rejection_is_counted_for_the_senders_own_monitoring() {
+        // Process-wide static: assert on the delta, never the absolute value.
+        let before = crate::metrics::sync_rejected_count();
+        HttpSyncNetwork::note_if_rejected(&wrapped(500), 2);
+        assert_eq!(
+            crate::metrics::sync_rejected_count(),
+            before,
+            "an ordinary failure must not count as a rejection"
+        );
+        HttpSyncNetwork::note_if_rejected(&wrapped(403), 2);
+        assert!(crate::metrics::sync_rejected_count() > before);
+    }
 }
