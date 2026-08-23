@@ -642,7 +642,8 @@ impl DistributedCertBot {
             .to_report_data(account_uri.as_bytes())
             .to_vec();
 
-        // Get quote
+        // Get quote. GetQuote is Intel TDX only, so this is best-effort: on other
+        // platforms the versioned attestation below is the only evidence available.
         let quote = match agent
             .get_quote(RawQuoteArgs {
                 report_data: report_data.clone(),
@@ -652,7 +653,7 @@ impl DistributedCertBot {
             Ok(resp) => serde_json::to_string(&resp).unwrap_or_default(),
             Err(err) => {
                 warn!("failed to get TDX quote for ACME account: {err:?}");
-                return Ok(());
+                String::new()
             }
         };
 
@@ -664,6 +665,11 @@ impl DistributedCertBot {
                 String::new()
             }
         };
+
+        if quote.is_empty() && attestation_str.is_empty() {
+            warn!("no attestation evidence for ACME account, skipping save");
+            return Ok(());
+        }
 
         let attestation = AcmeAttestation {
             account_uri: account_uri.to_string(),
@@ -712,7 +718,8 @@ impl DistributedCertBot {
             .to_report_data(public_key_der)
             .to_vec();
 
-        // Get quote
+        // Get quote. GetQuote is Intel TDX only, so this is best-effort: on other
+        // platforms the versioned attestation below is the only evidence available.
         let quote = match agent
             .get_quote(RawQuoteArgs {
                 report_data: report_data.clone(),
@@ -722,7 +729,7 @@ impl DistributedCertBot {
             Ok(resp) => serde_json::to_string(&resp).unwrap_or_default(),
             Err(err) => {
                 warn!(domain, "failed to generate TDX quote: {err:?}");
-                return Ok(());
+                String::new()
             }
         };
 
@@ -734,6 +741,11 @@ impl DistributedCertBot {
                 String::new()
             }
         };
+
+        if quote.is_empty() && attestation.is_empty() {
+            warn!(domain, "no attestation evidence for cert, skipping save");
+            return Ok(());
+        }
 
         let attestation = CertAttestation {
             public_key: public_key_der.to_vec(),
