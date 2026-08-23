@@ -560,13 +560,7 @@ pub fn generate_ra_cert_with_app_id(
     let ca = CaCert::new(ca_cert_pem, ca_key_pem)?;
 
     let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
-    let pubkey = key.public_key_der();
-
-    let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
-
-    let attestation = Attestation::quote_with_app_id(&report_data, app_id)
-        .context("Failed to get quote for cert pubkey")?
-        .into_versioned();
+    let attestation = quote_cert_pubkey(&key, app_id)?;
 
     // Build certificate request with all extensions
     let req = CertRequest::builder()
@@ -579,6 +573,47 @@ pub fn generate_ra_cert_with_app_id(
         cert_pem: cert.pem(),
         key_pem: key.serialize_pem(),
     })
+}
+
+/// Generate a self-signed certificate with RA-TLS quote and event log.
+///
+/// The quote's report data binds this certificate's public key, so a peer that
+/// verifies RA-TLS certificates by attestation learns the sender's identity from
+/// the quote rather than from the issuer. No CA — shared or otherwise — is needed
+/// to mint it.
+///
+/// Use this against servers that verify client certificates by attestation. The
+/// certificate is rejected by servers that pin an issuer CA, which is why callers
+/// that must interoperate with older peers keep using [`generate_ra_cert`].
+#[cfg(feature = "quote")]
+pub fn generate_self_signed_ra_cert(app_id: Option<[u8; 20]>) -> Result<CertPair> {
+    use rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
+
+    let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
+    let attestation = quote_cert_pubkey(&key, app_id)?;
+
+    let cert = CertRequest::builder()
+        .subject("RA-TLS Self-Signed Cert")
+        .key(&key)
+        .attestation(&attestation)
+        .usage_client_auth(true)
+        .build()
+        .self_signed()
+        .context("failed to self-sign certificate")?;
+    Ok(CertPair {
+        cert_pem: cert.pem(),
+        key_pem: key.serialize_pem(),
+    })
+}
+
+/// Take a quote over `key`'s public key, so the attestation binds the certificate
+/// that will carry it.
+#[cfg(feature = "quote")]
+fn quote_cert_pubkey(key: &KeyPair, app_id: Option<[u8; 20]>) -> Result<VersionedAttestation> {
+    let report_data = QuoteContentType::RaTlsCert.to_report_data(&key.public_key_der());
+    Ok(Attestation::quote_with_app_id(&report_data, app_id)
+        .context("Failed to get quote for cert pubkey")?
+        .into_versioned())
 }
 
 #[cfg(test)]
