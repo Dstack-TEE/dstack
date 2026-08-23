@@ -242,11 +242,24 @@ impl Proxy {
             node_id != self.config.sync.node_id,
             "a node cannot remove itself"
         );
-        // Drop the peer before publishing the tombstone: the __peer_addr
-        // deletion wakes the peer-address watcher, whose prune would
-        // otherwise race this call and make the reported membership depend
-        // on scheduling.
-        let removed_from_peer_set = self.kv_store.remove_peer(node_id)?;
+        // Capture membership before the first write. Every replicated write
+        // this function makes wakes a watcher whose prune races it -- the
+        // removal marker wakes the marker watcher just as surely as the
+        // __peer_addr tombstone wakes the address watcher -- so the answer
+        // must come from a read taken while no such signal exists yet, or the
+        // reported membership depends on scheduling. A guard test drives both
+        // watchers at full speed against this.
+        let removed_from_peer_set = self.kv_store.peer_ids().contains(&node_id);
+        // The durable half first: the live marker is what keeps the removed
+        // node out after the __peer_addr tombstone below has been collected.
+        self.kv_store
+            .mark_peer_removed(node_id)
+            .with_context(|| format!("failed to write the removal marker for node {node_id}"))?;
+        // Drop the peer here rather than leaving it to the watchers, so the
+        // removal is complete when this call returns. Idempotent when a
+        // watcher's prune wins the race, which is why the return value above
+        // does not come from this call.
+        self.kv_store.remove_peer(node_id)?;
         let record_existed = self
             .kv_store
             .sync_remove_node(node_id)
@@ -313,6 +326,21 @@ impl ProxyInner {
         );
 
         // Load state from WaveKV
+        if kv_store.is_peer_removed(config.sync.node_id) {
+            // Best-effort: a removed node usually never receives its own
+            // marker -- the refusals the marker drives are what keep it from
+            // replicating here -- so this only fires when the marker slipped
+            // in before the lockout took effect. The reliable signal is the
+            // sender side reading 403 off its own sync attempts. Only a
+            // warning, because this copy may also be stale: re-admission
+            // clears the marker on the peers, which is where the lockout is
+            // enforced, and a node whose marker really is current gets every
+            // envelope refused and can do no harm either way.
+            warn!(
+                "this node's own data directory says an operator removed it from the cluster; \
+                 peers will refuse to sync until it is re-admitted via SetNodeUrl"
+            );
+        }
         let instances = kv_store.load_all_instances();
         let nodes = kv_store.load_all_nodes();
         info!(
@@ -1320,6 +1348,22 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
                 break;
             }
             kv_for_peers.prune_removed_peers();
+        }
+    });
+
+    // The removal marker prunes too. It usually replicates in the same round
+    // as the address tombstone, but a node that was offline for the removal
+    // can receive the marker alone -- the tombstone may already have been
+    // collected everywhere else, and a live record is the one signal that
+    // cannot be.
+    let mut rx = kv_store.watch_peer_removed();
+    let kv_for_removed = kv_store.clone();
+    tokio::spawn(async move {
+        loop {
+            if rx.changed().await.is_err() {
+                break;
+            }
+            kv_for_removed.prune_removed_peers();
         }
     });
 

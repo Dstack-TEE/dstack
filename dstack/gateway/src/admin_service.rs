@@ -189,6 +189,11 @@ impl AdminRpc for AdminRpcHandler {
 
     async fn set_node_url(self, request: SetNodeUrlRequest) -> Result<()> {
         let kv_store = self.state.kv_store();
+        // Writing a node's address back is the explicit re-admission
+        // decision, so it clears the removal marker the sync lockout reads.
+        if kv_store.clear_peer_removed(request.id)? {
+            info!("cleared the removal marker for node {}", request.id);
+        }
         kv_store.register_peer_url(request.id, &request.url)?;
         info!("Updated peer URL: node {} -> {}", request.id, request.url);
         Ok(())

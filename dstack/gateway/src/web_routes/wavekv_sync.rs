@@ -149,6 +149,7 @@ pub async fn sync_store(
         warn!("rejected sync from invalid node_id 0");
         return Err(Status::BadRequest);
     }
+    refuse_removed_sender(state, env.sender_id)?;
 
     let Some(result) = wavekv_sync.handle_envelope(store, env) else {
         return Err(Status::NotFound);
@@ -166,6 +167,23 @@ pub async fn sync_store(
         ContentType::new("application", "x-msgpack-gz"),
         gzip(&encoded)?,
     ))
+}
+
+/// Refuse an envelope from a node an operator has removed.
+///
+/// The app-identity check above proves the sender is *a* gateway of this app;
+/// it cannot prove the sender is still a *member*. A removed node returning
+/// with its old data directory diverges from every digest, and wavekv's
+/// repair would answer with a full re-exchange that resurrects every record
+/// whose delete the cluster has already collected -- so the door, not the
+/// merge, is where a removed sender has to stop. Re-admission is an explicit
+/// operator decision: SetNodeUrl clears the marker.
+fn refuse_removed_sender(state: &Proxy, sender_id: u32) -> Result<(), Status> {
+    if state.kv_store().is_peer_removed(sender_id) {
+        warn!("refused an envelope from removed node {sender_id}");
+        return Err(Status::Forbidden);
+    }
+    Ok(())
 }
 
 /// Opportunistic push endpoint (wavekv RFC 0001 section 3.9).
@@ -191,6 +209,7 @@ pub async fn push_store(
         warn!("rejected push from invalid node_id 0");
         return Err(Status::BadRequest);
     }
+    refuse_removed_sender(state, env.sender_id)?;
 
     let Some(result) = wavekv_sync.handle_push(store, env) else {
         return Err(Status::NotFound);
@@ -658,6 +677,43 @@ mod tests {
             .await;
 
         assert_eq!(response.status(), Status::NotFound);
+    }
+
+    /// The lockout at the door. The app-identity check proves the sender is
+    /// *a* gateway of this app; only the removal marker says whether it is
+    /// still a *member*. A removed node's envelopes are refused on both
+    /// routes before anything merges, and clearing the marker -- the
+    /// SetNodeUrl re-admission path -- opens the door again.
+    #[tokio::test]
+    async fn a_removed_nodes_envelopes_are_refused_at_the_door() {
+        let (client, proxy, _tmp) = serving_gateway(true).await;
+        register_peer(&proxy);
+        proxy.kv_store().mark_peer_removed(PEER).expect("mark");
+
+        for path in ["/wavekv/sync/persistent", "/wavekv/push/persistent"] {
+            let response = client
+                .post(path)
+                .body(body(&SyncEnvelope::new(PEER, peer_uuid())))
+                .dispatch()
+                .await;
+            assert_eq!(
+                response.status(),
+                Status::Forbidden,
+                "{path} must refuse a removed sender"
+            );
+        }
+
+        proxy.kv_store().clear_peer_removed(PEER).expect("clear");
+        let response = client
+            .post("/wavekv/sync/persistent")
+            .body(body(&SyncEnvelope::new(PEER, peer_uuid())))
+            .dispatch()
+            .await;
+        assert_eq!(
+            response.status(),
+            Status::Ok,
+            "re-admission opens the door again"
+        );
     }
 
     /// A node with synchronization disabled reports that the service is unavailable.

@@ -2467,6 +2467,10 @@ async fn an_operator_can_remove_a_decommissioned_node() {
     assert!(removal.record_existed);
     assert!(removal.removed_from_peer_set);
     assert!(kv.get_peer_url(7).is_none());
+    assert!(
+        kv.is_peer_removed(7),
+        "removal leaves the durable marker the sync lockout reads"
+    );
     assert!(!kv.load_all_nodes().contains_key(&7));
     let peers = kv.persistent().read().status().peers;
     assert!(!peers.iter().any(|peer| peer.id == 7));
@@ -2522,15 +2526,26 @@ async fn remove_node_reports_peer_membership_despite_a_racing_watcher() {
     let state = create_test_state().await;
     let kv = state.kv_store.clone();
 
-    // The production watch task prunes the peer set as soon as the
-    // __peer_addr tombstone lands. remove_node must capture membership
-    // before publishing the tombstone, or the answer it returns would
-    // depend on which of the two gets there first.
-    let mut rx = kv.watch_peer_addrs();
-    let kv_for_watch = kv.clone();
-    let watcher = tokio::spawn(async move {
-        while rx.changed().await.is_ok() {
-            kv_for_watch.prune_removed_peers();
+    // The production watch tasks prune the peer set as soon as either signal
+    // lands: the __peer_addr tombstone wakes the address watcher, and the
+    // removal marker -- written first -- wakes the marker watcher.
+    // remove_node must capture membership before writing anything, or the
+    // answer it returns would depend on which of the racers gets there
+    // first. Both watchers are driven here at full speed; the marker one is
+    // the sharper race, because the marker is remove_node's very first
+    // write.
+    let mut addr_rx = kv.watch_peer_addrs();
+    let kv_for_addrs = kv.clone();
+    let addr_watcher = tokio::spawn(async move {
+        while addr_rx.changed().await.is_ok() {
+            kv_for_addrs.prune_removed_peers();
+        }
+    });
+    let mut marker_rx = kv.watch_peer_removed();
+    let kv_for_markers = kv.clone();
+    let marker_watcher = tokio::spawn(async move {
+        while marker_rx.changed().await.is_ok() {
+            kv_for_markers.prune_removed_peers();
         }
     });
 
@@ -2541,13 +2556,14 @@ async fn remove_node_reports_peer_membership_despite_a_racing_watcher() {
         assert!(removal.record_existed);
         assert!(
             removal.removed_from_peer_set,
-            "node {node_id}: membership must be captured before the tombstone publishes"
+            "node {node_id}: membership must be captured before the first write lands"
         );
         let peers = kv.persistent().read().status().peers;
         assert!(!peers.iter().any(|peer| peer.id == node_id));
     }
 
-    watcher.abort();
+    addr_watcher.abort();
+    marker_watcher.abort();
 }
 
 #[tokio::test]
