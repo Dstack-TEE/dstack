@@ -407,6 +407,23 @@ impl Default for GlobalCertbotConfig {
     }
 }
 
+/// Durable record that an operator removed a node from the cluster (stored in
+/// KV, synced across nodes).
+///
+/// A **live** record, deliberately. The `__peer_addr` tombstone the removal
+/// also writes is food for the tombstone GC, and a removal marker the
+/// collector eventually eats reads as "never registered" at precisely the
+/// moment the lockout matters -- after collection, when a returning node's
+/// stale records have nothing left to beat them under LWW. A fact that must
+/// outlive every tombstone cannot be expressed as a deletion.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PeerRemovalRecord {
+    /// Unix seconds when the operator removed the node.
+    pub removed_at: u64,
+    /// The node that executed the removal.
+    pub removed_by: NodeId,
+}
+
 /// Tombstone GC pacing (stored in KV, synced across nodes).
 ///
 /// The pace must be one number cluster-wide: nodes collecting on different
@@ -438,6 +455,7 @@ pub mod keys {
     pub const HANDSHAKE_PREFIX: &str = "handshake/";
     pub const LAST_SEEN_NODE_PREFIX: &str = "last_seen/node/";
     pub const PEER_ADDR_PREFIX: &str = "__peer_addr/";
+    pub const PEER_REMOVED_PREFIX: &str = "__peer_removed/";
     pub const CERT_PREFIX: &str = "cert/";
     pub const DNS_CRED_PREFIX: &str = "dns_cred/";
     pub const DNS_CRED_DEFAULT: &str = "dns_cred_default";
@@ -503,6 +521,10 @@ pub mod keys {
 
     pub fn peer_addr(node_id: NodeId) -> String {
         format!("{PEER_ADDR_PREFIX}{node_id}")
+    }
+
+    pub fn peer_removed(node_id: NodeId) -> String {
+        format!("{PEER_REMOVED_PREFIX}{node_id}")
     }
 
     // ==================== DNS Credential keys ====================
@@ -1653,10 +1675,68 @@ impl KvStore {
         Ok(removed)
     }
 
-    /// Drop peers whose sync address has been explicitly deleted.
+    /// Mark a node as removed by an operator.
     ///
-    /// A tombstoned `__peer_addr/{id}` record is the replicated signal that
-    /// an operator removed the node (see [`Self::sync_remove_node`]). An
+    /// A live record rather than a tombstone -- see [`PeerRemovalRecord`] for
+    /// why the durable fact cannot be the `__peer_addr` deletion itself.
+    pub fn mark_peer_removed(&self, node_id: NodeId) -> Result<()> {
+        let record = PeerRemovalRecord {
+            removed_at: now_secs(),
+            removed_by: self.my_node_id,
+        };
+        self.persistent
+            .write()
+            .put_encoded(keys::peer_removed(node_id), &record, true)?;
+        Ok(())
+    }
+
+    /// Clear a node's removal marker: the explicit re-admission decision.
+    ///
+    /// Returns whether a marker was there to clear. The deletion this writes
+    /// is an ordinary tombstone -- once a node is re-admitted there is
+    /// nothing left that must be remembered forever.
+    pub fn clear_peer_removed(&self, node_id: NodeId) -> Result<bool> {
+        let previous = self
+            .persistent
+            .write()
+            .delete(keys::peer_removed(node_id))?;
+        Ok(previous.is_some_and(|entry| !entry.is_deleted()))
+    }
+
+    /// Whether an operator has removed this node and nobody has re-admitted it.
+    ///
+    /// Fails closed on a corrupt marker: refusing sync from a node whose
+    /// marker cannot be read is recoverable -- the operator overwrites or
+    /// clears it -- while admitting a removed node's full dump can resurrect
+    /// every record whose delete the cluster has already collected.
+    pub fn is_peer_removed(&self, node_id: NodeId) -> bool {
+        match self
+            .persistent
+            .read()
+            .decode_strict::<PeerRemovalRecord>(&keys::peer_removed(node_id))
+        {
+            Ok(record) => record.is_some(),
+            Err(err) => {
+                warn!(
+                    "the removal marker for node {node_id} is unreadable, \
+                     treating the node as removed: {err:#}"
+                );
+                true
+            }
+        }
+    }
+
+    /// Watch for changes to replicated removal markers
+    pub fn watch_peer_removed(&self) -> watch::Receiver<()> {
+        self.persistent.watch_prefix(keys::PEER_REMOVED_PREFIX)
+    }
+
+    /// Drop peers an operator has removed.
+    ///
+    /// The durable signal is the live `__peer_removed/{id}` marker (see
+    /// [`Self::mark_peer_removed`]). A tombstoned `__peer_addr/{id}` record
+    /// counts too: it is the only signal a removal performed by an older
+    /// binary leaves, and it works until the tombstone GC collects it. An
     /// address that was never written does not count: bootstrap can add a
     /// peer before its address record has synced in, and such a peer must
     /// not be dropped for being early.
@@ -1677,7 +1757,7 @@ impl KvStore {
                 .read()
                 .get_including_tombstones(&keys::peer_addr(peer_id))
                 .is_some_and(|entry| entry.is_deleted());
-            if !tombstoned {
+            if !tombstoned && !self.is_peer_removed(peer_id) {
                 continue;
             }
             warn!("dropping removed node {peer_id} from the sync peer set");
@@ -3796,5 +3876,96 @@ mod tombstone_gc_tests {
         let kv = test_kv(dir.path());
         put_raw(&kv, keys::GLOBAL_TOMBSTONE_GC_CONFIG, b"not-messagepack");
         assert!(kv.get_tombstone_gc_config().is_err());
+    }
+}
+
+/// Node removal markers: the durable "this identity was retired" fact that
+/// the sync lockout and peer pruning read. Live records, so the tombstone GC
+/// can never collect the signal out from under either.
+#[cfg(test)]
+mod peer_removal_tests {
+    use super::corruption_tests::{put_raw, test_kv};
+    use super::*;
+
+    /// The property the marker exists for: the `__peer_addr` tombstone a
+    /// removal writes is collected like any other, but a fact that must
+    /// outlive every tombstone is stored as a live record, and collection
+    /// cannot touch it.
+    #[test]
+    fn a_removal_marker_survives_the_collector() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let kv = test_kv(dir.path());
+        kv.mark_peer_removed(2).expect("mark");
+        // Simulate the rest of the removal: the address delete leaves a
+        // tombstone, and a peerless store collects everything collectable.
+        kv.register_peer_url(2, "https://gw2.example.com:9202")
+            .expect("register");
+        kv.remove_peer(2).expect("drop peer");
+        kv.sync_remove_node(2).expect("delete records");
+        kv.collect_tombstone_garbage().expect("collect");
+
+        assert!(
+            kv.persistent
+                .read()
+                .get_including_tombstones(&keys::peer_addr(2))
+                .is_none(),
+            "the address tombstone is gone -- the state a returning node meets"
+        );
+        assert!(
+            kv.is_peer_removed(2),
+            "the marker is what remains to say the node was removed"
+        );
+    }
+
+    /// The pruning judge accepts either signal: the live marker (durable),
+    /// or the address tombstone (what a removal by an older binary leaves,
+    /// until the collector eats it). A peer with neither -- early bootstrap
+    /// -- is left alone.
+    #[test]
+    fn a_marked_peer_is_pruned_even_when_the_address_tombstone_is_long_gone() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let kv = KvStore::new(1, vec![2], dir.path(), None).expect("kv");
+
+        // No address record, no marker: an early-bootstrap peer, kept.
+        kv.prune_removed_peers();
+        assert!(kv.peer_ids().contains(&2));
+
+        // The marker alone -- the post-collection state -- prunes.
+        kv.mark_peer_removed(2).expect("mark");
+        kv.prune_removed_peers();
+        assert!(
+            !kv.peer_ids().contains(&2),
+            "the marker prunes without any tombstone to read"
+        );
+    }
+
+    /// Re-admission is one explicit call: clearing the marker, whose own
+    /// deletion is an ordinary tombstone -- once a node is welcome again
+    /// there is nothing that must be remembered forever.
+    #[test]
+    fn clearing_the_marker_re_admits_the_node() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let kv = test_kv(dir.path());
+
+        kv.mark_peer_removed(2).expect("mark");
+        assert!(kv.is_peer_removed(2));
+
+        assert!(kv.clear_peer_removed(2).expect("clear"));
+        assert!(!kv.is_peer_removed(2));
+        assert!(
+            !kv.clear_peer_removed(2).expect("clear again"),
+            "idempotent, and the retry reports there was nothing to clear"
+        );
+    }
+
+    /// Fails closed: refusing sync from a node whose marker is unreadable is
+    /// recoverable by overwriting the record; admitting a removed node's full
+    /// dump can resurrect every collected delete.
+    #[test]
+    fn a_corrupt_removal_marker_reads_as_removed() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let kv = test_kv(dir.path());
+        put_raw(&kv, &keys::peer_removed(2), b"not-messagepack");
+        assert!(kv.is_peer_removed(2));
     }
 }

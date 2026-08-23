@@ -474,7 +474,12 @@ service Admin {
   rpc SetCaa(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   // Summary API for inspect.
   rpc GetMeta(google.protobuf.Empty) returns (GetMetaResponse) {}
-  // Set a node's sync URL - used for dynamic peer management
+  // Set a node's sync URL - used for dynamic peer management. Writing a
+  // node's address is also the explicit re-admission decision: it clears the
+  // durable removal marker RemoveNode leaves, so a node removed by mistake is
+  // brought back with this call. Re-admit a node with its old data directory
+  // only if it was never absent across a collected deletion; when in doubt,
+  // wipe the data directory first.
   rpc SetNodeUrl(SetNodeUrlRequest) returns (google.protobuf.Empty) {}
   // Set a node's status (up/down)
   rpc SetNodeStatus(SetNodeStatusRequest) returns (google.protobuf.Empty) {}
@@ -495,7 +500,13 @@ service Admin {
   rpc ListRejectedInstances(google.protobuf.Empty) returns (ListRejectedInstancesResponse) {}
   // Remove a decommissioned gateway node from WaveKV and this node's sync peer
   // set. Idempotent operator recovery action; other gateways prune the node
-  // from their own peer sets when the removal replicates to them.
+  // from their own peer sets when the removal replicates to them. Also writes
+  // a durable removal marker that every gateway's sync endpoints enforce: the
+  // removed node's envelopes are refused, so it cannot re-register itself by
+  // restarting, and a stale copy of its data directory cannot resurrect
+  // records whose deletes the cluster has already collected. Removal is meant
+  // to be permanent; the escape hatch for a mistake is SetNodeUrl, which
+  // clears the marker.
   rpc RemoveNode(RemoveNodeRequest) returns (RemoveNodeResponse) {}
 
   // ==================== DNS Credential Management ====================
