@@ -13,9 +13,8 @@
 //!
 //! [`RaTlsClientVerifier`] replaces the chain check with the check that actually
 //! carries meaning: the certificate must carry an attestation. Certificates minted
-//! from that temp CA — which is what guests and KMS-to-KMS onboarding still send —
-//! are accepted for that attestation rather than for their issuer, so nothing has to
-//! change on the client side for them to keep working. Verifying that
+//! from that temp CA are still accepted, on the same terms as self-issued ones, which
+//! is what keeps guest images built before the switch working. Verifying that
 //! attestation — and deciding whether the app behind it is authorized — needs
 //! network I/O (collateral fetch, auth API) and stays where it already is, in
 //! [`crate::rocket_helper`] and the service handlers. Keeping the expensive half
@@ -299,9 +298,9 @@ mod tests {
 
     #[test]
     fn accepts_ca_signed_cert() {
-        // What guests and KMS-to-KMS onboarding send today: a certificate minted from
-        // the KMS temp CA. That chain is no longer pinned, so it is accepted for the
-        // attestation it carries instead.
+        // Guest images built before the switch still mint their client certificate from
+        // the KMS temp CA. That chain is no longer pinned, so the certificate is
+        // accepted for the attestation it carries instead.
         let ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
         let ca_cert = CertRequest::builder()
             .subject("Dstack Client Temp CA")

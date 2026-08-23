@@ -108,16 +108,14 @@ service KMS {
   rpc GetMeta(google.protobuf.Empty) returns (GetMetaResponse);
   // Request the temporary CA certificate and key.
   //
-  // Both current callers - guests at boot, and KMS-to-KMS onboarding - fetch this CA
-  // and mint their client certificate from it, because the KMS used to pin the CA for
-  // mutual TLS and a self-issued certificate had nothing to chain to.
+  // Deprecated, and no longer called from this tree: guests and KMS-to-KMS onboarding
+  // both mint self-issued RA-TLS certificates now. It exists because the KMS used to
+  // pin this CA for mutual TLS, which left a self-issued certificate with nothing to
+  // chain to; the KMS verifies client certificates by the attestation they carry and
+  // ignores the issuer, so that CA no longer establishes anything.
   //
-  // That pin is gone: the KMS now verifies client certificates by the attestation
-  // they carry and ignores the issuer, so a self-issued certificate would be accepted
-  // on the same terms. Neither caller has been migrated yet, so this RPC still has to
-  // work; it is scheduled for removal once both are.
-  //
-  // Do not build new callers on it. A caller that only needs the KMS root CA can read
+  // Retained so guest images built before the switch keep booting. Remove once no
+  // supported guest image calls it. A caller that only needs the KMS root CA can read
   // `ca_cert` from `GetMeta` instead.
   rpc GetTempCaCert(google.protobuf.Empty) returns (GetTempCaCertResponse);
   // Sign a certificate
