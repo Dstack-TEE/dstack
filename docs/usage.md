@@ -82,6 +82,14 @@ services:
 curl --unix-socket /var/run/dstack.sock http://localhost/GetQuote?report_data=0x1234deadbeef | jq .
 ```
 
+`GetQuote` is Intel TDX only. On other platforms (AMD SEV-SNP, AWS Nitro, GCP
+Confidential VMs) it returns an error; use `Attest` instead, which returns a
+platform-adaptive attestation:
+
+```bash
+curl --unix-socket /var/run/dstack.sock http://localhost/Attest?report_data=0x1234deadbeef | jq .
+```
+
 For advanced compatibility with unmodified binaries that expect native Linux TEE interfaces such as `/dev/tdx_guest`, `/dev/sev-guest`, or configfs-tsm, see [Advanced Native TEE Interfaces in Containers](./native-tee-interfaces.md).
 
 ## Container Logs

@@ -13,8 +13,8 @@ Files:
   `vm_config` carries `tdx_measurement`.
 - `tdx-lite-getquote.json`: raw guest-agent `GetQuoteResponse` captured
   via `GetAttestationForAppKey`, including quote, event log, and vm_config.
-  TDX `GetQuoteResponse` intentionally omits the `attestation` field to keep
-  the response compact.
+  `GetQuoteResponse` is Intel TDX only and carries no versioned attestation;
+  use `Attest` for the platform-adaptive form.
 
 Captured with:
 
