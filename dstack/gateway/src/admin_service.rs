@@ -21,9 +21,9 @@ use dstack_gateway_rpc::{
     RemoveCvmResponse, RemoveNodeRequest, RemoveNodeResponse, RenewCertResponse,
     RenewZtDomainCertRequest, RenewZtDomainCertResponse, RotateAcmeCredentialsResponse,
     SetCertbotConfigRequest, SetDefaultDnsCredentialRequest, SetInstancePortPolicyRequest,
-    SetInstanceReadyRequest, SetNodeStatusRequest, SetNodeUrlRequest, StatusResponse,
-    StoreSyncStatus, UpdateDnsCredentialRequest, WaveKvStatusResponse, ZtDomainCertStatus,
-    ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
+    SetInstanceReadyRequest, SetNodeStatusRequest, SetNodeUrlRequest, SetTombstoneGcConfigRequest,
+    StatusResponse, StoreSyncStatus, TombstoneGcConfigResponse, UpdateDnsCredentialRequest,
+    WaveKvStatusResponse, ZtDomainCertStatus, ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
 };
 use ra_rpc::{CallContext, RpcCall};
 use tracing::{info, warn};
@@ -31,8 +31,8 @@ use wavekv::node::NodeStatus as WaveKvNodeStatus;
 
 use crate::{
     kv::{
-        import::Rejection, DnsCredential, DnsProvider, GlobalCertbotConfig, NodeStatus, PortFlags,
-        PortPolicy, ZtDomainConfig,
+        import::Rejection, DnsCredential, DnsProvider, GlobalCertbotConfig,
+        GlobalTombstoneGcConfig, NodeStatus, PortFlags, PortPolicy, ZtDomainConfig,
     },
     main_service::Proxy,
     models::PortPolicyView,
@@ -714,6 +714,33 @@ impl AdminRpc for AdminRpcHandler {
             config.renew_before_expiration,
             config.renew_timeout,
             config.acme_url
+        );
+        Ok(())
+    }
+
+    // ==================== Tombstone GC Configuration ====================
+
+    async fn get_tombstone_gc_config(self) -> Result<TombstoneGcConfigResponse> {
+        Ok(match self.state.kv_store().get_tombstone_gc_config()? {
+            Some(stored) => TombstoneGcConfigResponse {
+                writes_per_collection: stored.writes_per_collection,
+                stored_in_kv: true,
+            },
+            None => TombstoneGcConfigResponse {
+                writes_per_collection: self.state.config.sync.tombstone_gc_writes,
+                stored_in_kv: false,
+            },
+        })
+    }
+
+    async fn set_tombstone_gc_config(self, request: SetTombstoneGcConfigRequest) -> Result<()> {
+        let config = GlobalTombstoneGcConfig {
+            writes_per_collection: request.writes_per_collection,
+        };
+        self.state.kv_store().set_tombstone_gc_config(&config)?;
+        info!(
+            "updated tombstone GC config: writes_per_collection={}",
+            config.writes_per_collection
         );
         Ok(())
     }

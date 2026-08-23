@@ -547,6 +547,14 @@ service Admin {
   // to the new account; it does not deactivate the old ACME account at the CA.
   rpc RotateAcmeCredentials(google.protobuf.Empty) returns (RotateAcmeCredentialsResponse) {}
 
+  // ==================== Tombstone GC Configuration ====================
+  // Get the effective tombstone GC pacing on this node
+  rpc GetTombstoneGcConfig(google.protobuf.Empty) returns (TombstoneGcConfigResponse) {}
+  // Store the tombstone GC pacing in the replicated KV, overriding every
+  // node's config-file default so the whole cluster collects on the same
+  // write-count boundaries. Zero disables collection cluster-wide.
+  rpc SetTombstoneGcConfig(SetTombstoneGcConfigRequest) returns (google.protobuf.Empty) {}
+
   // ==================== Per-Instance Port Policy Override ====================
   // Set an admin override for an instance's port policy. Takes precedence
   // over the policy reported by the instance itself, and survives app
@@ -832,6 +840,23 @@ message SetCertbotConfigRequest {
   optional uint64 renew_timeout_secs = 3;
   // ACME server URL (empty means use default Let's Encrypt production)
   optional string acme_url = 4;
+}
+
+// ==================== Tombstone GC Configuration Messages ====================
+
+// Tombstone GC configuration response
+message TombstoneGcConfigResponse {
+  // Collect tombstones once every this many replicated writes (0 = disabled)
+  uint64 writes_per_collection = 1;
+  // True when the value is the replicated KV override; false when it is this
+  // node's config-file default (which other nodes may not share)
+  bool stored_in_kv = 2;
+}
+
+// Set tombstone GC configuration request
+message SetTombstoneGcConfigRequest {
+  // Collect tombstones once every this many replicated writes (0 = disabled)
+  uint64 writes_per_collection = 1;
 }
 
 // ==================== Per-Instance Port Policy Override Messages ====================

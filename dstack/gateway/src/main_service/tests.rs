@@ -2627,3 +2627,39 @@ async fn a_stuck_bad_record_is_reported_once_and_again_when_it_recovers() {
     reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
     assert!(state.lock().reported_rejections.is_empty());
 }
+
+/// The GC trigger is a pure function of the replicated write count and the
+/// shared pace, so every node in a cluster crosses each collection boundary
+/// together without reading a clock. The digest covers tombstones, so a node
+/// that has collected and one that has not look diverged to wavekv's detector,
+/// which forces a full re-exchange; nodes collecting on their own phase would
+/// pay that every cycle.
+#[test]
+fn tombstone_collection_triggers_on_write_count_boundaries_not_on_time() {
+    let w = |persistent, ephemeral| ReplicatedWrites {
+        persistent,
+        ephemeral,
+    };
+
+    // Never collected: due regardless of the count — the backlog case, where a
+    // store that never writes again would otherwise never shed the tombstones
+    // it already holds.
+    assert!(tombstone_collection_due(None, w(0, 0), 100));
+
+    // Inside the boundary nothing is due, no matter how much time has passed.
+    assert!(!tombstone_collection_due(Some(w(50, 0)), w(99, 0), 100));
+    // Crossing it is what makes collection due, on either store.
+    assert!(tombstone_collection_due(Some(w(50, 0)), w(100, 0), 100));
+    assert!(tombstone_collection_due(Some(w(50, 0)), w(50, 100), 100));
+
+    // Two nodes whose views of the same state are a beat apart agree on every
+    // boundary: whichever sees the crossing later still sees it.
+    let earlier = w(99, 0);
+    let later = w(101, 0);
+    assert!(!tombstone_collection_due(Some(w(50, 0)), earlier, 100));
+    assert!(tombstone_collection_due(Some(w(50, 0)), later, 100));
+
+    // Digest repair can lower an ack; a count that stepped back is not due
+    // until it crosses the next boundary again.
+    assert!(!tombstone_collection_due(Some(w(100, 0)), w(90, 0), 100));
+}

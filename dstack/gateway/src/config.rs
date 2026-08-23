@@ -149,6 +149,15 @@ fn default_true() -> bool {
     true
 }
 
+/// Roughly hourly on a busy ephemeral store and rarer on the quiet persistent
+/// one -- the cadence follows write volume, which is also what produces
+/// tombstones. Any value works for correctness: the ack watermark decides what
+/// may go, not this, so it trades disk against how often every node stops to
+/// scan its data map.
+fn default_tombstone_gc_writes() -> u64 {
+    10_000
+}
+
 fn default_handshake_stale() -> Duration {
     Duration::from_secs(30 * 60)
 }
@@ -590,6 +599,18 @@ pub struct SyncConfig {
     /// zero turns the work off -- which is why this one is a window.
     #[serde(with = "serde_duration")]
     pub wal_sync_window: Duration,
+    /// Collect tombstones once every this many replicated writes, per store.
+    /// Zero disables collection, which keeps every delete on disk for the life
+    /// of the deployment.
+    ///
+    /// The trigger is a count of replicated writes rather than a clock so that
+    /// every node in a cluster collects in the same window without agreeing on
+    /// the time: see `start_tombstone_gc_task`. This value is only the default
+    /// -- an operator override stored in the KV itself (`SetTombstoneGcConfig`)
+    /// replicates to every node and takes precedence, which is also the only
+    /// way to keep the boundaries identical when config files drift.
+    #[serde(default = "default_tombstone_gc_writes")]
+    pub tombstone_gc_writes: u64,
     /// Enable periodic sync of instance connections to KV store
     pub sync_connections_enabled: bool,
     /// Interval for syncing instance connections to KV store

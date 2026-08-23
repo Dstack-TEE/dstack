@@ -41,7 +41,7 @@ use crate::{
     kv::{
         fetch_peers_from_bootnode, import, AppIdValidator, CertData, HttpsClientConfig,
         InstanceRecord, KvStore, LegacyOverrides, LoadedInstances, NodeData, NodeStatus,
-        PortPolicy, PortPolicyOverride, WaveKvSyncService,
+        PortPolicy, PortPolicyOverride, ReplicatedWrites, WaveKvSyncService,
     },
     models::{InstanceInfo, PortPolicyView, ReportedCapabilities, WgConf, WgPeer},
     proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo, AppAddressResolver},
@@ -1116,6 +1116,143 @@ async fn start_wavekv_sync_task(proxy: Proxy, wavekv_sync: Arc<WaveKvSyncService
     info!("WaveKV sync tasks started");
 }
 
+/// How often the tombstone GC task re-reads its trigger. An implementation
+/// detail, not a policy knob: one read of two tiny records and two ack-map
+/// sums. The pace of collection itself comes from `tombstone_gc_writes`.
+///
+/// Short enough that two nodes crossing the same write-count boundary do so
+/// within one check period plus one sync round of each other -- well inside
+/// the `digest_check_rounds` window the divergence detector needs before it
+/// calls the gap a repair case. That window is `sync.interval` times
+/// `digest_check_rounds` -- three minutes on the defaults -- so the margin is
+/// an assumption about configuration, not a constant: an operator who
+/// tightens the sync interval toward this period erodes it.
+const TOMBSTONE_GC_CHECK_PERIOD: Duration = Duration::from_secs(15);
+
+/// Whether a store has crossed a collection boundary since the last one.
+///
+/// The trigger is a pure function of the replicated write count and the shared
+/// pace `N`: collect when `writes / N` has grown. Every node evaluates the
+/// same function over state that converges within a sync round, so the cluster
+/// crosses each boundary together **without any node reading a clock** -- the
+/// wall-clock-aligned design this replaces was correct only while every host's
+/// clock stayed stepped-together, an assumption this has no use for.
+///
+/// `last` is the count at this node's previous collection, `None` when it has
+/// not collected since the task started (or since collection was re-enabled),
+/// which is read as due: the backlog case, where a store that never writes
+/// again would otherwise never cross a boundary and never shed the tombstones
+/// it already holds.
+///
+/// In a cluster the backlog case has a cost: a restarted node collects alone,
+/// and if anything was collectable the digest repair puts it back a few
+/// rounds later, to be shed for good at the next shared boundary. That is one
+/// bounded repair per restart, paid to keep the guarantee that a store nobody
+/// ever writes to again still ends up empty.
+fn tombstone_collection_due(last: Option<ReplicatedWrites>, now: ReplicatedWrites, n: u64) -> bool {
+    let Some(last) = last else {
+        return true;
+    };
+    now.persistent / n > last.persistent / n || now.ephemeral / n > last.ephemeral / n
+}
+
+/// Drop tombstones the cluster has finished with.
+///
+/// Beside the persist and WAL tasks because it belongs to the same set: work
+/// the store needs on a schedule whether or not this node has peers. A
+/// single-node gateway has nobody to resurrect from, so wavekv collects every
+/// tombstone it holds -- and it is the deployment where nothing else ever
+/// would.
+///
+/// The pace is read every period rather than once at startup because the
+/// operator override lives in the KV itself and can change under a running
+/// node. A corrupt override skips the round instead of falling back to the
+/// config-file default: the default is per-node, and collecting on it while
+/// peers honour the override is exactly the phase drift the shared pace
+/// exists to prevent.
+///
+/// Collection runs on the blocking pool for the same reason persist and WAL
+/// sync do: it takes the store's write lock and walks the whole data map, and
+/// a proxy's event loop cannot afford a worker parked on that.
+fn start_tombstone_gc_task(proxy: &Proxy) {
+    let default_pace = proxy.config.sync.tombstone_gc_writes;
+    let kv_store = proxy.kv_store.clone();
+    tokio::spawn(async move {
+        let mut last: Option<ReplicatedWrites> = None;
+        let mut peers = kv_store.peer_ids();
+        let mut override_unreadable = false;
+        loop {
+            tokio::time::sleep(TOMBSTONE_GC_CHECK_PERIOD).await;
+            let pace = match kv_store.get_tombstone_gc_config() {
+                Ok(stored) => {
+                    if override_unreadable {
+                        info!("WaveKV: the tombstone GC override is readable again");
+                        override_unreadable = false;
+                    }
+                    stored.map_or(default_pace, |c| c.writes_per_collection)
+                }
+                Err(err) => {
+                    // Corruption is deterministic until an operator overwrites
+                    // the record, so report the pause once, not every period.
+                    if !override_unreadable {
+                        error!(
+                            "WaveKV: the tombstone GC override is unreadable, \
+                             collection is paused until it is overwritten: {err:?}"
+                        );
+                        override_unreadable = true;
+                    }
+                    continue;
+                }
+            };
+            if pace == 0 {
+                // Re-enabling starts from the backlog case, deliberately.
+                last = None;
+                continue;
+            }
+            // A removed peer takes its lifetime of writes out of the count for
+            // good (`RemovePeer` drops `acks[removed]`). A baseline above the
+            // shrunken count would gate collection on the cluster re-earning
+            // writes it no longer remembers -- on a quiet store, indefinitely.
+            // Removal replicates, so every node observes it within a sync
+            // round of the others and their resets land clustered.
+            let now_peers = kv_store.peer_ids();
+            if !peers.is_subset(&now_peers) {
+                last = None;
+            }
+            peers = now_peers;
+            let now = kv_store.replicated_writes();
+            if !tombstone_collection_due(last, now, pace) {
+                continue;
+            }
+            let kv = kv_store.clone();
+            match tokio::task::spawn_blocking(move || kv.collect_tombstone_garbage()).await {
+                Ok(Ok(collected)) => {
+                    // On failure `last` keeps its value and the next period
+                    // retries; only success moves the boundary.
+                    last = Some(now);
+                    if collected.total() > 0 {
+                        info!(
+                            "WaveKV: collected {} tombstones ({} persistent, {} ephemeral)",
+                            collected.total(),
+                            collected.persistent,
+                            collected.ephemeral
+                        );
+                    }
+                }
+                Ok(Err(err)) => error!("WaveKV: tombstone collection failed: {err:?}"),
+                Err(err) => error!("WaveKV: the tombstone collection task did not finish: {err}"),
+            }
+        }
+    });
+    if default_pace == 0 {
+        info!("WaveKV: tombstone collection disabled by default; a stored override can enable it");
+    } else {
+        info!(
+            "WaveKV: tombstone collection enabled (default pace: every {default_pace} replicated writes)"
+        );
+    }
+}
+
 fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
     let kv_store = proxy.kv_store.clone();
 
@@ -1255,6 +1392,8 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
         });
         info!("WaveKV: deferred WAL sync enabled (window: {wal_sync_window:?})");
     }
+
+    start_tombstone_gc_task(&proxy);
 
     // Start periodic connection sync task
     if proxy.config.sync.sync_connections_enabled {
