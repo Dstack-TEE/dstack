@@ -4,8 +4,10 @@
 
 """Ethereum helpers for deriving accounts from dstack keys.
 
-Use with ``dstack_sdk.DstackClient`` responses to create ``eth_account``
-objects for signing and transacting.
+Use with ``dstack_sdk.DstackClientV0`` responses to create ``eth_account``
+objects for signing and transacting. These helpers take the v0 response models;
+for a v1 key, hand ``GetKeyResponseV1.decode_key()`` to ``Account.from_key``
+yourself.
 """
 
 import hashlib
@@ -19,7 +21,7 @@ from .dstack_client import GetTlsKeyResponse
 
 
 def to_account(get_key_response: GetKeyResponse | GetTlsKeyResponse) -> LocalAccount:
-    """Create an Ethereum account from DstackClient key response.
+    """Create an Ethereum account from a DstackClientV0 key response.
 
     DEPRECATED: Use to_account_secure instead. This method has security concerns.
     Current implementation uses raw key material without proper hashing.

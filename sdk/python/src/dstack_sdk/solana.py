@@ -4,8 +4,10 @@
 
 """Solana helpers for deriving keypairs from dstack keys.
 
-Use with ``dstack_sdk.DstackClient`` responses to create ``solders.Keypair``
-objects for signing transactions on Solana.
+Use with ``dstack_sdk.DstackClientV0`` responses to create ``solders.Keypair``
+objects for signing transactions on Solana. These helpers take the v0 response
+models; for a v1 key, hand ``GetKeyResponseV1.decode_key()`` to
+``Keypair.from_seed`` yourself.
 """
 
 import hashlib
@@ -18,7 +20,7 @@ from .dstack_client import GetTlsKeyResponse
 
 
 def to_keypair(get_key_response: GetKeyResponse | GetTlsKeyResponse) -> Keypair:
-    """Create a Solana Keypair from DstackClient key response.
+    """Create a Solana Keypair from a DstackClientV0 key response.
 
     DEPRECATED: Use to_keypair_secure instead. This method has security concerns.
     Current implementation uses raw key material without proper hashing.

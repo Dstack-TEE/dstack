@@ -445,6 +445,29 @@ func TestV1MethodsPostUnderTheV1Prefix(t *testing.T) {
 	}
 }
 
+// The unsuffixed names are v1. The assignments below are half the assertion --
+// they do not compile if DstackClient is anything else -- and the round trip is
+// the other half: the default constructor must actually post under /v1.
+func TestUnsuffixedClientIsV1(t *testing.T) {
+	var _ *dstack.DstackClientV1 = (*dstack.DstackClient)(nil)
+
+	path := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path <- r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"version":"0.6.0","rev":"test"}`))
+	}))
+	defer server.Close()
+
+	client := dstack.NewDstackClient(dstack.WithEndpoint(server.URL))
+	if _, err := client.Version(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-path; got != "/v1/Version" {
+		t.Errorf("expected the default client to speak v1, got %s", got)
+	}
+}
+
 // An agent that predates v1 has no /v1 mount, so it answers with a plain 404
 // rather than a prpc error. The client surfaces that rather than masking it.
 func TestV1AgainstAnAgentWithoutV1(t *testing.T) {

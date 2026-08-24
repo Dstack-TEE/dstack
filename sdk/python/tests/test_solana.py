@@ -7,8 +7,8 @@ import warnings
 import pytest
 from solders.keypair import Keypair
 
-from dstack_sdk import AsyncDstackClient
-from dstack_sdk import DstackClient
+from dstack_sdk import AsyncDstackClientV0
+from dstack_sdk import DstackClientV0
 from dstack_sdk import GetKeyResponse
 from dstack_sdk.solana import to_keypair
 from dstack_sdk.solana import to_keypair_secure
@@ -16,7 +16,7 @@ from dstack_sdk.solana import to_keypair_secure
 
 @pytest.mark.asyncio
 async def test_async_to_keypair():
-    client = AsyncDstackClient()
+    client = AsyncDstackClientV0()
     result = await client.get_key("test")
     assert isinstance(result, GetKeyResponse)
     keypair = to_keypair(result)
@@ -24,7 +24,7 @@ async def test_async_to_keypair():
 
 
 def test_sync_to_keypair():
-    client = DstackClient()
+    client = DstackClientV0()
     result = client.get_key("test")
     assert isinstance(result, GetKeyResponse)
     keypair = to_keypair(result)
@@ -33,7 +33,7 @@ def test_sync_to_keypair():
 
 @pytest.mark.asyncio
 async def test_async_to_keypair_secure():
-    client = AsyncDstackClient()
+    client = AsyncDstackClientV0()
     result = await client.get_key("test")
     assert isinstance(result, GetKeyResponse)
     keypair = to_keypair_secure(result)
@@ -41,7 +41,7 @@ async def test_async_to_keypair_secure():
 
 
 def test_sync_to_keypair_secure():
-    client = DstackClient()
+    client = DstackClientV0()
     result = client.get_key("test")
     assert isinstance(result, GetKeyResponse)
     keypair = to_keypair_secure(result)
@@ -50,7 +50,7 @@ def test_sync_to_keypair_secure():
 
 def test_to_keypair_with_tls_key():
     """Test to_keypair with TLS key response (should show warning)."""
-    client = DstackClient()
+    client = DstackClientV0()
     result = client.get_tls_key()
 
     with warnings.catch_warnings(record=True) as w:
@@ -65,7 +65,7 @@ def test_to_keypair_with_tls_key():
 
 def test_to_keypair_secure_with_tls_key():
     """Test to_keypair_secure with TLS key response (should show warning)."""
-    client = DstackClient()
+    client = DstackClientV0()
     result = client.get_tls_key()
 
     with warnings.catch_warnings(record=True) as w:

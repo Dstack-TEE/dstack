@@ -30,8 +30,9 @@ const sdkVersion = "0.6.0"
 
 // clientOptions holds what a caller may set at construction.
 //
-// Both NewDstackClientV0 and NewDstackClientV1 take the same options: a caller
-// moving to v1 changes the constructor and nothing else.
+// Every constructor -- NewDstackClient, NewDstackClientV1 and NewDstackClientV0
+// -- takes the same options, so a caller moving between surfaces changes the
+// constructor and nothing else.
 type clientOptions struct {
 	endpoint string
 	logger   *slog.Logger

@@ -327,3 +327,15 @@ class DstackClientV1(BaseClient):
     @call_async
     def __exit__(self, exc_type, exc_val, exc_tb):
         raise NotImplementedError
+
+
+#: The recommended client: unsuffixed means v1, the surface that gains
+#: capabilities. Code written against the pre-0.6 unsuffixed name -- which then
+#: meant v0 -- breaks loudly here rather than quietly deriving other keys,
+#: because the v1 methods have different signatures and ``get_key`` refuses to
+#: guess an algorithm. Pin such code to ``DstackClientV0`` to keep the frozen
+#: surface.
+DstackClient = DstackClientV1
+
+#: The recommended async client; see ``DstackClient``.
+AsyncDstackClient = AsyncDstackClientV1

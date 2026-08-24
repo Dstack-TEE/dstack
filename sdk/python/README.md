@@ -1,8 +1,8 @@
 # dstack SDK for Python
 
-Access TEE features from your Python application running inside dstack. Derive deterministic keys, generate attestation quotes, create TLS certificates, and sign data—all backed by hardware security.
+Access TEE features from your Python application running inside dstack. Derive deterministic keys, request attestations, and issue TLS certificates—all backed by hardware security.
 
-## Two clients, two APIs
+## The default client speaks v1
 
 dstack 0.6.0 split the guest agent API into two surfaces on one socket, and the
 agent picks between them by URL path alone. This SDK mirrors both, and nothing
@@ -10,15 +10,14 @@ more — neither client translates calls to the other.
 
 | Client | Surface | Paths | What it is |
 |---|---|---|---|
-| `DstackClientV0` / `AsyncDstackClientV0` | the frozen v0.5.11 API | `/GetKey`, equivalently `/v0/GetKey` | Frozen: no new method, no new field, ever |
-| `DstackClientV1` / `AsyncDstackClientV1` | `dstack.guest.v1` | `/v1/GetKey` | Where every new capability lands |
+| `DstackClient` / `AsyncDstackClient` — same classes as `DstackClientV1` / `AsyncDstackClientV1` | `dstack.guest.v1` | `/v1/GetKey` | **The default.** Where every new capability lands |
+| `DstackClientV0` / `AsyncDstackClientV0` | the frozen v0.5.11 API | `/GetKey`, equivalently `/v0/GetKey` | Legacy. Frozen: no new method, no new field, ever |
 
-`DstackClient` and `AsyncDstackClient` remain as deprecated aliases for the v0
-clients, so pre-0.6 code keeps working unchanged. They are the same classes; use
-the `V0` names in new code so a reader can tell which surface it is looking at.
+Use the unsuffixed name in new code. The `V1` names are the same classes, spelled
+out for code that wants the surface visible at a glance.
 
 > [!WARNING]
-> **v1 derives different key material than v0.** `DstackClientV1.get_key('x', 'secp256k1')`
+> **v1 derives different key material than v0.** `DstackClient.get_key('x', 'secp256k1')`
 > and `DstackClientV0.get_key('x')` return different private keys. The v1 KDF binds
 > the algorithm and its own context tag alongside the domain, which is the point of
 > the new derivation, not a defect: v0 ignored the algorithm, so one secret served
@@ -26,11 +25,16 @@ the `V0` names in new code so a reader can tell which surface it is looking at.
 > back. An application holding assets under a v0 key must migrate them deliberately —
 > derive the v1 key, move the asset with a transaction signed by the v0 key, and only
 > then cut over.
+>
+> Code that used the unsuffixed client for v0 calls fails **loudly** on upgrade
+> rather than silently deriving different keys, because the v1 method signatures
+> differ and `get_key` requires `algorithm` explicitly. To stay on the frozen
+> surface, switch to `DstackClientV0`.
 
 The v1 surface serves only what genuinely needs the TEE, so it has no `sign`, no
 `verify`, no `emit_event`, no `get_quote` and no `gpu_info`. See
 [`docs/guest-api-v1.md`](../../docs/guest-api-v1.md) for the normative spec, and
-[V1 Client](#v1-client) below for the six methods it does have.
+[Legacy (v0, frozen)](#legacy-v0-frozen) for the surface those methods live on.
 
 ## Installation
 
@@ -42,8 +46,8 @@ Blockchain helpers are optional extras:
 
 | Extra | Pulls in | Use when |
 |---|---|---|
-| `dstack-sdk[ethereum]` | `eth-account` | You want `to_account` / `to_account_secure` for Ethereum signing |
-| `dstack-sdk[solana]` | `solders` | You want `to_keypair` / `to_keypair_secure` for Solana signing |
+| `dstack-sdk[ethereum]` | `eth-account` | You sign Ethereum transactions |
+| `dstack-sdk[solana]` | `solders` | You sign Solana transactions |
 | `dstack-sdk[all]` | both | You need both |
 
 Aliases `[eth]` and `[sol]` are accepted for convenience.
@@ -51,253 +55,37 @@ Aliases `[eth]` and `[sol]` are accepted for convenience.
 ## Quick Start
 
 ```python
-from dstack_sdk import DstackClientV0, DstackClientV1
+from dstack_sdk import DstackClient
 
-# The frozen v0.5.11 surface
-v0 = DstackClientV0()
-key = v0.get_key('wallet/eth')       # Same path always returns the same key
-quote = v0.get_quote(b'my-app-state')
+client = DstackClient()
 
-# dstack.guest.v1 — a different surface, and different keys
-v1 = DstackClientV1()
-key = v1.get_key('wallet/eth', 'secp256k1')   # algorithm is required
-attestation = v1.attest(b'my-app-state')
+key = client.get_key('wallet/eth', 'secp256k1')   # algorithm is required
+attestation = client.attest(b'my-app-state')
+info = client.info()
 ```
 
-Both clients automatically connect to `/var/run/dstack.sock`, take the same
-constructor, and resolve endpoints the same way. For local development with the
-simulator:
+The client automatically connects to `/var/run/dstack.sock`. For local
+development with the simulator:
 
 ```python
-client = DstackClientV0('http://localhost:8090')
+client = DstackClient('http://localhost:8090')
 # or export DSTACK_SIMULATOR_ENDPOINT=http://localhost:8090
 ```
 
-## V0 Client
+Every v1 method requires a 0.6.0+ guest agent: older agents have no `/v1` mount
+and answer HTTP 404.
 
-`DstackClientV0` speaks the frozen v0.5.11 API. In the examples below,
-`client = DstackClientV0()`.
+## Client
 
-### Derive Keys
-
-`get_key()` derives deterministic keys bound to your application's identity (`app_id`). The same path always produces the same key for your app, but different apps get different keys even with the same path.
-
-```python
-# Derive keys by path
-eth_key = client.get_key('wallet/ethereum')
-btc_key = client.get_key('wallet/bitcoin')
-
-# Use path to separate keys
-mainnet_key = client.get_key('wallet/eth/mainnet')
-testnet_key = client.get_key('wallet/eth/testnet')
-
-# Use a different signature algorithm (requires dstack OS >= 0.5.7)
-ed_key = client.get_key('signing/key', algorithm='ed25519')
-```
-
-**Parameters:**
-- `path` (optional): Key derivation path. Defaults to `""` (root).
-- `purpose` (optional): Included in the signature chain message; does not affect the derived key.
-- `algorithm` (optional): `'secp256k1'` (default) or `'ed25519'`. For compatibility, this selects how the same derived 32-byte material is interpreted; it does not domain-separate the derivation. Use algorithm-specific paths when independent keys are required.
-
-**Returns:** `GetKeyResponse`
-- `key`: Hex-encoded private key
-- `signature_chain`: Signatures proving the key was derived in a genuine TEE
-- `decode_key()` / `decode_signature_chain()`: Helpers that return `bytes`
-
-### Generate Attestation Quotes
-
-`get_quote()` creates a TDX quote proving your code runs in a genuine TEE.
-It needs Intel TDX: without it the call fails, and on GCP Confidential VMs it
-returns the TDX quote alone, leaving out the vTPM quote GCP's verification also
-binds. Call `attest()` in both cases.
-
-```python
-quote = client.get_quote(b'user:alice:nonce123')
-print(quote.event_log)
-```
-
-**Parameters:**
-- `report_data`: Up to 64 bytes (`bytes` or `str`). Shorter inputs are padded with zeros; longer inputs should be hashed first (e.g., SHA-256).
-
-**Returns:** `GetQuoteResponse`
-- `quote`: Hex-encoded TDX quote
-- `event_log`: JSON string of measured events
-- `decode_quote()` / `decode_event_log()`: Helpers
-
-### Versioned Attestation
-
-`attest()` returns a versioned attestation payload that newer verifier APIs can dispatch on without sniffing the quote format.
-
-```python
-result = client.attest(b'user:alice:nonce123')
-print(result.attestation)        # hex string
-print(result.decode_attestation())  # bytes
-```
-
-`report_data` is the only argument. GPU evidence — boot-time and on-demand alike —
-is a v1 capability; see [V1 Client](#v1-client).
-
-### Get Instance Info
-
-```python
-info = client.info()
-print(info.app_id)
-print(info.instance_id)
-print(info.tcb_info)
-print(info.cloud_vendor, info.cloud_product)  # 0.5.7+
-```
-
-**Returns:** `InfoResponse`
-- `app_id`, `instance_id`, `app_name`, `device_id`
-- `tcb_info`: TCB measurements (MRTD, RTMRs, event log, compose hash, ...)
-- `compose_hash`: Hash of the app configuration
-- `app_cert`: Application certificate (PEM)
-- `key_provider_info`: Key management configuration
-- `cloud_vendor` / `cloud_product`: Cloud provider strings (empty on older OS)
-
-### Generate TLS Certificates
-
-`get_tls_key()` creates fresh TLS certificates. Unlike `get_key()`, each call generates a new random key.
-
-```python
-tls = client.get_tls_key(
-    subject='api.example.com',
-    alt_names=['localhost'],
-    usage_ra_tls=True,    # Embed attestation in certificate
-    # 0.5.7+ options below:
-    not_before=1700000000,   # seconds since UNIX epoch
-    not_after=1800000000,
-    with_app_info=True,
-)
-print(tls.key)                  # PEM private key
-print(tls.certificate_chain)    # Certificate chain
-```
-
-**Parameters:**
-- `subject` (optional): Certificate Common Name (e.g., domain name)
-- `alt_names` (optional): Subject Alternative Names
-- `usage_ra_tls` (optional): Embed TDX quote in a certificate extension (default `False`)
-- `usage_server_auth` (optional): Enable for server authentication (default `True`)
-- `usage_client_auth` (optional): Enable for client authentication (default `False`)
-- `not_before` / `not_after` (optional, kw-only): Validity window in seconds since UNIX epoch. Requires dstack OS >= 0.5.7.
-- `with_app_info` (optional, kw-only): Embed app identity into the certificate. Requires dstack OS >= 0.5.7.
-
-When any of the 0.5.7-only options is set, the SDK probes `Version` first and raises `RuntimeError` on older guest agents that lack it.
-
-**Returns:** `GetTlsKeyResponse`
-- `key`: PEM-encoded private key
-- `certificate_chain`: List of PEM certificates
-- `as_uint8array(max_length=None)`: Returns the DER-encoded private key bytes (handy when feeding key material into low-level crypto libraries)
-
-### Sign and Verify
-
-Both are frozen v0 RPCs and neither has a v1 counterpart. Signing happens in the
-TEE because it needs a key only the TEE holds; verifying does not, and the
-agent's answer arrives over the socket unattested, so a relying party gains
-nothing over checking the signature itself with a standard library.
-
-```python
-result = client.sign('ed25519', b'message to sign')
-
-verdict = client.verify(
-    'ed25519',
-    b'message to sign',
-    result.decode_signature(),
-    result.decode_public_key(),
-)
-assert verdict.valid is True
-```
-
-**`sign()` Parameters:**
-- `algorithm`: `'ed25519'`, `'secp256k1'` (alias `'k256'`), or `'secp256k1_prehashed'`
-- `data`: Data to sign (`bytes` or `str`). For `secp256k1_prehashed`, must be a 32-byte digest.
-
-**`sign()` Returns:** `SignResponse`
-- `signature`: Hex-encoded signature
-- `public_key`: Hex-encoded public key
-- `signature_chain`: Three signatures linking the signing key back to the KMS root
-
-**`verify()` Returns:** `VerifyResponse` with a single `valid: bool`. It reports
-only whether that one signature matches that one public key — it says nothing
-about *whose* key it is, and it does not walk the signature chain.
-
-Earlier drafts of this SDK shipped local `verify_signature` and
-`verify_signature_chain` helpers. They are gone. To verify a v1 signature chain,
-follow [`docs/guest-api-v1.md`](../../docs/guest-api-v1.md), which is the
-normative spec: it gives the claim encoding, the link order, and — the part that
-actually establishes anything — the requirement that the KMS root public key
-come from somewhere you already trust (the `DstackKms` contract's
-`kmsInfo().k256Pubkey`, or a value you pinned), never from the CVM being
-checked.
-
-### Diagnostics
-
-```python
-client.version()        # VersionResponse(version, rev) — raises on OS < 0.5.7
-client.is_reachable()   # Quick connectivity probe; never raises
-```
-
-### Async
-
-`AsyncDstackClientV0` has the identical surface, with every method a coroutine:
-
-```python
-import asyncio
-from dstack_sdk import AsyncDstackClientV0
-
-async def main():
-    client = AsyncDstackClientV0()
-
-    info = await client.info()
-    key = await client.get_key('wallet/eth')
-
-    # Run requests concurrently
-    keys = await asyncio.gather(
-        client.get_key('user/alice'),
-        client.get_key('user/bob'),
-    )
-
-asyncio.run(main())
-```
-
-`AsyncDstackClientV0` accepts the same constructor as `DstackClientV0` plus `use_sync_http: bool = False` for callers that need to issue sync HTTP from within an async context. The same holds for `AsyncDstackClientV1`.
-
-### Removed in 0.6.0
-
-`emit_event()` is still on the client, but the agent now fails every call:
-runtime RTMR3 events are system-owned and an app can no longer extend them. The
-method remains so that a caller written against 0.5.x gets the agent's own
-explanation rather than a 404. `attest_gpu()` and `gpu_info()` never shipped on
-this surface and are not here; they live on the v1 client.
-
-## V1 Client
-
-`DstackClientV1` speaks `dstack.guest.v1` at `/v1/<Method>`. Six methods, and
-deliberately no more — v1 serves only what genuinely needs the TEE.
-
-### `issue_cert()`
-
-v0 called this `get_tls_key()`, which named the by-product rather than the
-request. The private key is freshly generated per call and is *not* derived from
-the app identity: two calls with the same arguments return two unrelated keys.
-
-```python
-cert = client.issue_cert(
-    subject='api.example.com',
-    alt_names=['localhost'],
-    usage_ra_tls=True,       # Embed the attestation in the certificate
-    usage_server_auth=True,
-    usage_client_auth=False,
-    with_app_info=True,
-    not_before=1700000000,   # seconds since UNIX epoch
-    not_after=1800000000,
-)
-print(cert.key)                 # PEM private key
-print(cert.certificate_chain)   # PEM chain, leaf first
-```
+`DstackClient` speaks `dstack.guest.v1` at `/v1/<Method>`. Six methods, and
+deliberately no more — v1 serves only what genuinely needs the TEE. In the
+examples below, `client = DstackClient()`.
 
 ### `get_key()`
+
+Derives deterministic keys bound to your application's identity (`app_id`). The
+same domain always produces the same key for your app, and different apps get
+different keys for the same domain.
 
 ```python
 key = client.get_key('wallet/eth', 'secp256k1')
@@ -360,6 +148,30 @@ evidence. `evidence` is opaque vendor-native bytes, hex-encoded on the wire — 
 not assume UTF-8 or JSON. It does not by itself bind the GPU to this CVM; only
 TDISP/TEE-IO device binding closes that gap.
 
+### `issue_cert()`
+
+v0 called this `get_tls_key()`, which named the by-product rather than the
+request. The private key is freshly generated per call and is *not* derived from
+the app identity: two calls with the same arguments return two unrelated keys.
+
+```python
+cert = client.issue_cert(
+    subject='api.example.com',
+    alt_names=['localhost'],
+    usage_ra_tls=True,       # Embed the attestation in the certificate
+    usage_server_auth=True,
+    usage_client_auth=False,
+    with_app_info=True,
+    not_before=1700000000,   # seconds since UNIX epoch
+    not_after=1800000000,
+)
+print(cert.key)                 # PEM private key
+print(cert.certificate_chain)   # PEM chain, leaf first
+```
+
+**Returns:** `IssueCertResponseV1` with a PEM `key` and a leaf-first
+`certificate_chain`.
+
 ### `info()`
 
 ```python
@@ -389,47 +201,88 @@ client.version()   # VersionResponseV1(version, rev)
 
 ### Async
 
-```python
-from dstack_sdk import AsyncDstackClientV1
+`AsyncDstackClient` has the identical surface, with every method a coroutine:
 
-client = AsyncDstackClientV1()
-key = await client.get_key('wallet/eth', 'ed25519')
+```python
+import asyncio
+from dstack_sdk import AsyncDstackClient
+
+async def main():
+    client = AsyncDstackClient()
+
+    info = await client.info()
+    key = await client.get_key('wallet/eth', 'ed25519')
+
+    # Run requests concurrently
+    keys = await asyncio.gather(
+        client.get_key('user/alice', 'secp256k1'),
+        client.get_key('user/bob', 'secp256k1'),
+    )
+
+asyncio.run(main())
 ```
+
+`AsyncDstackClient` accepts the same constructor as `DstackClient` plus
+`use_sync_http: bool = False` for callers that need to issue sync HTTP from
+within an async context. The same holds for the v0 clients.
+
+### Signing and verifying
+
+Neither is a v1 method. Signing happens wherever the key is, and `get_key()`
+already hands you the key, so a round trip to the agent adds nothing; verifying
+needs no key at all, and an agent's answer arrives over the socket unattested,
+so a relying party gains nothing over checking the signature itself with a
+standard library.
+
+```python
+from eth_account import Account
+
+key = client.get_key('wallet/eth', 'secp256k1')
+account = Account.from_key(key.decode_key())
+signed = account.sign_message(...)
+```
+
+To verify a v1 signature chain, follow
+[`docs/guest-api-v1.md`](../../docs/guest-api-v1.md), which is the normative
+spec: it gives the claim encoding, the link order, and — the part that actually
+establishes anything — the requirement that the KMS root public key come from
+somewhere you already trust (the `DstackKms` contract's `kmsInfo().k256Pubkey`,
+or a value you pinned), never from the CVM being checked.
 
 ## Blockchain Integration
 
-These helpers take a v0 `GetKeyResponse` or `GetTlsKeyResponse`. To use a v1 key,
-pass `key.decode_key()` to your chain library directly.
+A v1 key is 32 raw bytes from `decode_key()`; hand them to your chain library
+directly.
 
 ### Ethereum
 
 ```python
-from dstack_sdk.ethereum import to_account_secure
+from eth_account import Account
 
-key = client.get_key('wallet/ethereum')
-account = to_account_secure(key)
+key = client.get_key('wallet/ethereum', 'secp256k1')
+account = Account.from_key(key.decode_key())
 print(account.address)
 ```
-
-`to_account_secure(key)` hashes the full key material with SHA-256 before deriving the Ethereum private key. The legacy `to_account()` is kept for backward compatibility but uses raw key bytes—prefer the secure variant for new code.
 
 ### Solana
 
 ```python
-from dstack_sdk.solana import to_keypair_secure
+from solders.keypair import Keypair
 
-key = client.get_key('wallet/solana', purpose='mainnet', algorithm='ed25519')
-keypair = to_keypair_secure(key)
+key = client.get_key('wallet/solana', 'ed25519')
+keypair = Keypair.from_seed(key.decode_key())
 print(keypair.pubkey())
 ```
 
-Same pattern: `to_keypair_secure(key)` SHA-256-hashes the key material; `to_keypair()` is the legacy raw-bytes variant.
+The `dstack_sdk.ethereum` and `dstack_sdk.solana` helpers take v0 response
+models; see [Blockchain helpers (v0 responses)](#blockchain-helpers-v0-responses).
 
 ---
 
 ## Deployment Utilities
 
-These utilities are for deployment scripts, not runtime SDK operations.
+These utilities are for deployment scripts, not runtime SDK operations, and are
+the same for either client.
 
 ### Encrypted Environment Variables
 
@@ -489,10 +342,10 @@ hash_value = get_compose_hash(app_compose_dict)
 
 | Feature | Required dstack OS |
 |---|---|
+| Every `DstackClient` (v1) method | 0.6.0+ — older agents have no `/v1` mount and answer HTTP 404 |
 | V0 `get_key`, `get_quote`, `get_tls_key` (legacy fields), `info` (legacy fields) | 0.3+ |
 | V0 `attest`, `sign`, `verify`, `is_reachable` | 0.5.0+ (`sign` requires a server build with the feature) |
 | V0 `version`, `algorithm='ed25519'` on `get_key`, `info.cloud_vendor` / `cloud_product`, `not_before` / `not_after` / `with_app_info` on `get_tls_key` | 0.5.7+ |
-| Every `DstackClientV1` method | 0.6.0+ — older agents have no `/v1` mount and answer HTTP 404 |
 | V0 `emit_event` | Removed in 0.6.0: the agent always fails it |
 | `verify_env_encrypt_public_key` (signature_v1 with timestamp) | Requires KMS build that emits `signature_v1`; legacy variant remains available |
 
@@ -527,9 +380,240 @@ pdm run check
 `make install` / `make test` wrap the same commands and additionally assert that
 `DSTACK_SIMULATOR_ENDPOINT` and `TAPPD_SIMULATOR_ENDPOINT` are set.
 
+---
+
+# Legacy (v0, frozen)
+
+Everything below is the frozen v0.5.11 surface. It still works and is still
+served, but it gains no method and no field. Reach for it when you must keep the
+v0 key derivation, or when you need `sign` / `verify`, which v1 does not serve.
+
+Import it by its explicit name — the unsuffixed `DstackClient` now means v1:
+
+```python
+from dstack_sdk import DstackClientV0, AsyncDstackClientV0
+
+v0 = DstackClientV0()
+```
+
+## V0 Client
+
+In the examples below, `v0 = DstackClientV0()`.
+
+### Derive Keys
+
+`get_key()` derives deterministic keys bound to your application's identity (`app_id`). The same path always produces the same key for your app, but different apps get different keys even with the same path.
+
+```python
+# Derive keys by path
+eth_key = v0.get_key('wallet/ethereum')
+btc_key = v0.get_key('wallet/bitcoin')
+
+# Use path to separate keys
+mainnet_key = v0.get_key('wallet/eth/mainnet')
+testnet_key = v0.get_key('wallet/eth/testnet')
+
+# Use a different signature algorithm (requires dstack OS >= 0.5.7)
+ed_key = v0.get_key('signing/key', algorithm='ed25519')
+```
+
+**Parameters:**
+- `path` (optional): Key derivation path. Defaults to `""` (root).
+- `purpose` (optional): Included in the signature chain message; does not affect the derived key.
+- `algorithm` (optional): `'secp256k1'` (default) or `'ed25519'`. For compatibility, this selects how the same derived 32-byte material is interpreted; it does not domain-separate the derivation. Use algorithm-specific paths when independent keys are required.
+
+**Returns:** `GetKeyResponse`
+- `key`: Hex-encoded private key
+- `signature_chain`: Signatures proving the key was derived in a genuine TEE
+- `decode_key()` / `decode_signature_chain()`: Helpers that return `bytes`
+
+### Generate Attestation Quotes
+
+`get_quote()` creates a TDX quote proving your code runs in a genuine TEE.
+It needs Intel TDX: without it the call fails, and on GCP Confidential VMs it
+returns the TDX quote alone, leaving out the vTPM quote GCP's verification also
+binds. Call `attest()` in both cases.
+
+```python
+quote = v0.get_quote(b'user:alice:nonce123')
+print(quote.event_log)
+```
+
+**Parameters:**
+- `report_data`: Up to 64 bytes (`bytes` or `str`). Shorter inputs are padded with zeros; longer inputs should be hashed first (e.g., SHA-256).
+
+**Returns:** `GetQuoteResponse`
+- `quote`: Hex-encoded TDX quote
+- `event_log`: JSON string of measured events
+- `decode_quote()` / `decode_event_log()`: Helpers
+
+### Versioned Attestation
+
+`attest()` returns a versioned attestation payload that newer verifier APIs can dispatch on without sniffing the quote format.
+
+```python
+result = v0.attest(b'user:alice:nonce123')
+print(result.attestation)        # hex string
+print(result.decode_attestation())  # bytes
+```
+
+`report_data` is the only argument. GPU evidence — boot-time and on-demand alike —
+is a v1 capability; see [`attest()`](#attest) and [`attest_gpu()`](#attest_gpu).
+
+### Get Instance Info
+
+```python
+info = v0.info()
+print(info.app_id)
+print(info.instance_id)
+print(info.tcb_info)
+print(info.cloud_vendor, info.cloud_product)  # 0.5.7+
+```
+
+**Returns:** `InfoResponse`
+- `app_id`, `instance_id`, `app_name`, `device_id`
+- `tcb_info`: TCB measurements (MRTD, RTMRs, event log, compose hash, ...)
+- `compose_hash`: Hash of the app configuration
+- `app_cert`: Application certificate (PEM)
+- `key_provider_info`: Key management configuration
+- `cloud_vendor` / `cloud_product`: Cloud provider strings (empty on older OS)
+
+### Generate TLS Certificates
+
+`get_tls_key()` creates fresh TLS certificates. Unlike `get_key()`, each call generates a new random key.
+
+```python
+tls = v0.get_tls_key(
+    subject='api.example.com',
+    alt_names=['localhost'],
+    usage_ra_tls=True,    # Embed attestation in certificate
+    # 0.5.7+ options below:
+    not_before=1700000000,   # seconds since UNIX epoch
+    not_after=1800000000,
+    with_app_info=True,
+)
+print(tls.key)                  # PEM private key
+print(tls.certificate_chain)    # Certificate chain
+```
+
+**Parameters:**
+- `subject` (optional): Certificate Common Name (e.g., domain name)
+- `alt_names` (optional): Subject Alternative Names
+- `usage_ra_tls` (optional): Embed TDX quote in a certificate extension (default `False`)
+- `usage_server_auth` (optional): Enable for server authentication (default `True`)
+- `usage_client_auth` (optional): Enable for client authentication (default `False`)
+- `not_before` / `not_after` (optional, kw-only): Validity window in seconds since UNIX epoch. Requires dstack OS >= 0.5.7.
+- `with_app_info` (optional, kw-only): Embed app identity into the certificate. Requires dstack OS >= 0.5.7.
+
+When any of the 0.5.7-only options is set, the SDK probes `Version` first and raises `RuntimeError` on older guest agents that lack it.
+
+**Returns:** `GetTlsKeyResponse`
+- `key`: PEM-encoded private key
+- `certificate_chain`: List of PEM certificates
+- `as_uint8array(max_length=None)`: Returns the DER-encoded private key bytes (handy when feeding key material into low-level crypto libraries)
+
+### Sign and Verify
+
+Both are frozen v0 RPCs and neither has a v1 counterpart.
+
+```python
+result = v0.sign('ed25519', b'message to sign')
+
+verdict = v0.verify(
+    'ed25519',
+    b'message to sign',
+    result.decode_signature(),
+    result.decode_public_key(),
+)
+assert verdict.valid is True
+```
+
+**`sign()` Parameters:**
+- `algorithm`: `'ed25519'`, `'secp256k1'` (alias `'k256'`), or `'secp256k1_prehashed'`
+- `data`: Data to sign (`bytes` or `str`). For `secp256k1_prehashed`, must be a 32-byte digest.
+
+**`sign()` Returns:** `SignResponse`
+- `signature`: Hex-encoded signature
+- `public_key`: Hex-encoded public key
+- `signature_chain`: Three signatures linking the signing key back to the KMS root
+
+**`verify()` Returns:** `VerifyResponse` with a single `valid: bool`. It reports
+only whether that one signature matches that one public key — it says nothing
+about *whose* key it is, and it does not walk the signature chain.
+
+Earlier drafts of this SDK shipped local `verify_signature` and
+`verify_signature_chain` helpers. They are gone; verify locally per
+[`docs/guest-api-v1.md`](../../docs/guest-api-v1.md).
+
+### Diagnostics
+
+```python
+v0.version()        # VersionResponse(version, rev) — raises on OS < 0.5.7
+v0.is_reachable()   # Quick connectivity probe; never raises
+```
+
+### Async
+
+`AsyncDstackClientV0` has the identical surface, with every method a coroutine:
+
+```python
+import asyncio
+from dstack_sdk import AsyncDstackClientV0
+
+async def main():
+    v0 = AsyncDstackClientV0()
+
+    info = await v0.info()
+    key = await v0.get_key('wallet/eth')
+
+    # Run requests concurrently
+    keys = await asyncio.gather(
+        v0.get_key('user/alice'),
+        v0.get_key('user/bob'),
+    )
+
+asyncio.run(main())
+```
+
+### Removed in 0.6.0
+
+`emit_event()` is still on the client, but the agent now fails every call:
+runtime RTMR3 events are system-owned and an app can no longer extend them. The
+method remains so that a caller written against 0.5.x gets the agent's own
+explanation rather than a 404. `attest_gpu()` and `gpu_info()` never shipped on
+this surface and are not here; they live on the v1 client.
+
+## Blockchain helpers (v0 responses)
+
+`dstack_sdk.ethereum` and `dstack_sdk.solana` take a v0 `GetKeyResponse` or
+`GetTlsKeyResponse`. For a v1 key, skip them and pass `key.decode_key()` to your
+chain library directly, as shown in
+[Blockchain Integration](#blockchain-integration).
+
+```python
+from dstack_sdk import DstackClientV0
+from dstack_sdk.ethereum import to_account_secure
+from dstack_sdk.solana import to_keypair_secure
+
+v0 = DstackClientV0()
+
+account = to_account_secure(v0.get_key('wallet/ethereum'))
+print(account.address)
+
+keypair = to_keypair_secure(
+    v0.get_key('wallet/solana', purpose='mainnet', algorithm='ed25519')
+)
+print(keypair.pubkey())
+```
+
+`to_account_secure` / `to_keypair_secure` hash the full key material with
+SHA-256 before deriving. The legacy `to_account()` / `to_keypair()` use raw key
+bytes and are kept only for backward compatibility.
+
 ## Migration from TappdClient
 
-Replace `TappdClient` with `DstackClientV0`:
+`TappdClient` only ever spoke v0, so replace it with `DstackClientV0` —
+not with the unsuffixed name, which is now v1 and derives different keys:
 
 ```python
 # Before
@@ -538,7 +622,7 @@ client = TappdClient()
 
 # After
 from dstack_sdk import DstackClientV0
-client = DstackClientV0()
+v0 = DstackClientV0()
 ```
 
 Method changes:
@@ -548,8 +632,8 @@ Method changes:
 
 ## Migration from v0 to v1
 
-`DstackClientV1` is a separate surface, not an upgrade path — read the key
-warning at the top before switching anything that holds state.
+v1 is a separate surface, not an upgrade path — read the key warning at the top
+before switching anything that holds state.
 
 | v0 | v1 | Note |
 |---|---|---|

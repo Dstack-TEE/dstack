@@ -21,7 +21,7 @@ import (
 )
 
 func TestGetKey(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	resp, err := client.GetKey(context.Background(), "/", "test", "ed25519")
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestGetKey(t *testing.T) {
 }
 
 func TestGetQuote(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	resp, err := client.GetQuote(context.Background(), []byte("test"))
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ func TestGetQuote(t *testing.T) {
 }
 
 func TestAttest(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	resp, err := client.Attest(context.Background(), []byte("test"))
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +111,7 @@ func TestAttestRequestIsFrozenAtV0(t *testing.T) {
 }
 
 func TestGetTlsKey(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	altNames := []string{"localhost"}
 	resp, err := client.GetTlsKey(
 		context.Background(),
@@ -177,7 +177,7 @@ func TestGetTlsKey(t *testing.T) {
 }
 
 func TestGetTlsKeyMinimalOptions(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	// Test with minimal options (just subject)
 	resp, err := client.GetTlsKey(
 		context.Background(),
@@ -217,7 +217,7 @@ func TestGetTlsKeyMinimalOptions(t *testing.T) {
 }
 
 func TestGetTlsKeyServerOnly(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	// Test with server auth only
 	resp, err := client.GetTlsKey(
 		context.Background(),
@@ -269,7 +269,7 @@ func TestGetTlsKeyServerOnly(t *testing.T) {
 }
 
 func TestGetTlsKeyClientOnly(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	// Test with client auth only
 	resp, err := client.GetTlsKey(
 		context.Background(),
@@ -321,7 +321,7 @@ func TestGetTlsKeyClientOnly(t *testing.T) {
 }
 
 func TestGetTlsKeyWithMultipleAltNames(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	// Test with multiple alternative names
 	altNames := []string{"example.com", "test.example.com"}
 	resp, err := client.GetTlsKey(
@@ -385,7 +385,7 @@ func parseCertificate(pemCert string) (*x509.Certificate, error) {
 }
 
 func TestInfo(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	resp, err := client.Info(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -443,7 +443,7 @@ func TestInfo(t *testing.T) {
 }
 
 func TestSignAndVerifyEd25519(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	dataToSign := []byte("test message for ed25519")
 	algorithm := "ed25519"
 
@@ -486,7 +486,7 @@ func TestSignAndVerifyEd25519(t *testing.T) {
 }
 
 func TestSignAndVerifySecp256k1(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	dataToSign := []byte("test message for secp256k1")
 	algorithm := "secp256k1"
 
@@ -522,7 +522,7 @@ func TestSignAndVerifySecp256k1(t *testing.T) {
 }
 
 func TestSignAndVerifySecp256k1Prehashed(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	dataToSign := []byte("test message for secp256k1 prehashed")
 	digest := sha256.Sum256(dataToSign)
 	algorithm := "secp256k1_prehashed"
@@ -567,7 +567,7 @@ func TestSignAndVerifySecp256k1Prehashed(t *testing.T) {
 }
 
 func TestGetVersion(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	resp, err := client.GetVersion(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -579,7 +579,7 @@ func TestGetVersion(t *testing.T) {
 }
 
 func TestGetKeyK256Alias(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 
 	respK256, err := client.GetKey(context.Background(), "/test", "purpose", "k256")
 	if err != nil {
@@ -598,7 +598,7 @@ func TestGetKeyK256Alias(t *testing.T) {
 }
 
 func TestGetKeyUnsupportedAlgorithm(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	_, err := client.GetKey(context.Background(), "/test", "purpose", "rsa")
 	if err == nil {
 		t.Fatal("expected error for unsupported algorithm")
@@ -606,7 +606,7 @@ func TestGetKeyUnsupportedAlgorithm(t *testing.T) {
 }
 
 func TestGetKeySecp256k1PrehashedRejected(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	_, err := client.GetKey(context.Background(), "/test", "purpose", "secp256k1_prehashed")
 	if err == nil {
 		t.Fatal("expected error for secp256k1_prehashed in GetKey")
@@ -614,7 +614,7 @@ func TestGetKeySecp256k1PrehashedRejected(t *testing.T) {
 }
 
 func TestGetKeyAlgorithmValidation(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 
 	// ed25519 should succeed (Version RPC is available on the simulator)
 	resp, err := client.GetKey(context.Background(), "/test", "purpose", "ed25519")
@@ -646,12 +646,11 @@ func TestEmitEventSurfacesTheRemovalMessage(t *testing.T) {
 	}
 }
 
-// NewDstackClient is kept as a deprecated alias for NewDstackClientV0, so code
-// written against the pre-0.6 SDK keeps compiling and keeps talking to the same
-// frozen surface.
-func TestDeprecatedAliasIsTheV0Client(t *testing.T) {
-	var client *dstack.DstackClientV0 = dstack.NewDstackClient()
+// The frozen surface stays reachable, but only under its explicit name now that
+// the unsuffixed client means v1.
+func TestV0RemainsAvailableUnderItsExplicitName(t *testing.T) {
+	var client *dstack.DstackClientV0 = dstack.NewDstackClientV0()
 	if !client.IsReachable(context.Background()) {
-		t.Error("expected the aliased client to reach the simulator")
+		t.Error("expected the v0 client to reach the simulator")
 	}
 }

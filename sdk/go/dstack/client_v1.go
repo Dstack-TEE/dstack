@@ -132,11 +132,25 @@ type DstackClientV1 struct {
 	transport
 }
 
+// DstackClient is the recommended client, and it is v1: the unsuffixed name
+// tracks the current API rather than pinning the surface a caller happened to
+// start on. Code that used it for v0 fails to compile after the upgrade,
+// because the v1 signatures differ -- which is the point. A silent switch would
+// hand back different key material under the same call.
+type DstackClient = DstackClientV1
+
 // Creates a new DstackClientV1 instance based on the provided endpoint.
 // Endpoint resolution is identical to NewDstackClientV0 -- the two surfaces
 // share one socket and differ only in the URL path.
 func NewDstackClientV1(opts ...DstackClientOption) *DstackClientV1 {
 	return &DstackClientV1{transport: newTransport(opts)}
+}
+
+// NewDstackClient creates a client for the current API, which is v1. Use it
+// unless you specifically need the frozen v0.5.11 surface, in which case name
+// NewDstackClientV0 explicitly.
+func NewDstackClient(opts ...DstackClientOption) *DstackClient {
+	return NewDstackClientV1(opts...)
 }
 
 // decodeHexField decodes one hex-encoded protobuf `bytes` field, naming the

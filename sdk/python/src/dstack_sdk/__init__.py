@@ -2,11 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from .dstack_client import AsyncDstackClient
 from .dstack_client import AsyncDstackClientV0
 from .dstack_client import AsyncTappdClient
 from .dstack_client import AttestResponse
-from .dstack_client import DstackClient
 from .dstack_client import DstackClientV0
 from .dstack_client import EventLog
 from .dstack_client import GetKeyResponse
@@ -18,9 +16,11 @@ from .dstack_client import TappdClient
 from .dstack_client import TcbInfo
 from .dstack_client import VerifyResponse
 from .dstack_client import VersionResponse
+from .dstack_client_v1 import AsyncDstackClient
 from .dstack_client_v1 import AsyncDstackClientV1
 from .dstack_client_v1 import AttestGpuResponseV1
 from .dstack_client_v1 import AttestResponseV1
+from .dstack_client_v1 import DstackClient
 from .dstack_client_v1 import DstackClientV1
 from .dstack_client_v1 import GetKeyResponseV1
 from .dstack_client_v1 import GpuEvidenceBundleV1
@@ -38,17 +38,17 @@ from .verify_env_encrypt_public_key import verify_env_encrypt_public_key
 from .verify_env_encrypt_public_key import verify_env_encrypt_public_key_legacy
 
 __all__ = [
-    # v0 clients (the frozen v0.5.11 surface)
-    "DstackClientV0",
-    "AsyncDstackClientV0",
-    # Deprecated aliases for the v0 clients, kept for pre-0.6 code
+    # The default clients: unsuffixed means dstack.guest.v1
     "DstackClient",
     "AsyncDstackClient",
-    "AsyncTappdClient",
-    "TappdClient",
-    # v1 clients (dstack.guest.v1)
+    # The same classes under their explicit names
     "DstackClientV1",
     "AsyncDstackClientV1",
+    # Legacy clients for the frozen v0.5.11 surface
+    "DstackClientV0",
+    "AsyncDstackClientV0",
+    "AsyncTappdClient",
+    "TappdClient",
     # v0 response types
     "GetKeyResponse",
     "GetTlsKeyResponse",

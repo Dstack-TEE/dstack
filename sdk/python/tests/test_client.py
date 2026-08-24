@@ -9,11 +9,9 @@ import warnings
 from evidence_api.tdx.quote import TdxQuote
 import pytest
 
-from dstack_sdk import AsyncDstackClient
 from dstack_sdk import AsyncDstackClientV0
 from dstack_sdk import AsyncTappdClient
 from dstack_sdk import AttestResponse
-from dstack_sdk import DstackClient
 from dstack_sdk import DstackClientV0
 from dstack_sdk import GetKeyResponse
 from dstack_sdk import GetQuoteResponse
@@ -127,11 +125,6 @@ def test_v0_surface_has_no_gpu_or_v1_methods():
     for name in ["attest_gpu", "gpu_info", "issue_cert"]:
         assert not hasattr(DstackClientV0, name)
         assert not hasattr(AsyncDstackClientV0, name)
-
-
-def test_v0_aliases_are_the_same_class():
-    assert DstackClient is DstackClientV0
-    assert AsyncDstackClient is AsyncDstackClientV0
 
 
 def test_sync_client_attest_takes_report_data_only():

@@ -6,10 +6,12 @@ from typing import List
 
 import pytest
 
+from dstack_sdk import AsyncDstackClient
 from dstack_sdk import AsyncDstackClientV0
 from dstack_sdk import AsyncDstackClientV1
 from dstack_sdk import AttestGpuResponseV1
 from dstack_sdk import AttestResponseV1
+from dstack_sdk import DstackClient
 from dstack_sdk import DstackClientV0
 from dstack_sdk import DstackClientV1
 from dstack_sdk import GetKeyResponseV1
@@ -25,6 +27,27 @@ def test_v1_posts_to_the_v1_path():
     """The agent picks the version from the URL path alone."""
     assert AsyncDstackClientV1.PATH_PREFIX == "/v1/"
     assert AsyncDstackClientV0.PATH_PREFIX == "/"
+
+
+def test_unsuffixed_names_are_the_v1_clients():
+    """Unsuffixed means v1: it is the default, and the V1 names are the same class."""
+    assert DstackClient is DstackClientV1
+    assert AsyncDstackClient is AsyncDstackClientV1
+
+
+def test_v0_call_shapes_fail_loudly_on_the_default_client():
+    """Pre-0.6 code aimed at the unsuffixed name breaks, rather than deriving other keys.
+
+    Both v0 spellings of get_key are rejected before a request goes out, so an
+    upgraded caller sees a TypeError instead of a key it did not ask for.
+    """
+    client = DstackClient()
+    with pytest.raises(TypeError):
+        client.get_key(path="wallet/eth", purpose="mainnet")
+    with pytest.raises(TypeError):
+        client.get_key("wallet/eth")
+    for name in ["sign", "verify", "emit_event", "get_quote", "get_tls_key"]:
+        assert not hasattr(client, name)
 
 
 def test_v1_surface_is_exactly_six_methods():

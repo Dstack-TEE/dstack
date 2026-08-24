@@ -189,28 +189,23 @@ const (
 // The methods here mirror the unversioned paths (`/GetKey`, equivalently
 // `/v0/GetKey`), which the agent serves unchanged for pre-0.6 clients and will
 // never extend. New capability lives on DstackClientV1.
+//
+// Deprecated: legacy surface, frozen at v0.5.11 and never extended. New code
+// should use DstackClient, which is DstackClientV1. Reaching for the explicit
+// V0 name is the deliberate way to stay on the frozen surface.
 type DstackClientV0 struct {
 	transport
 }
-
-// DstackClient is the pre-0.6 name for DstackClientV0.
-//
-// Deprecated: use DstackClientV0, or DstackClientV1 for the current API.
-type DstackClient = DstackClientV0
 
 // Creates a new DstackClientV0 instance based on the provided endpoint.
 // If the endpoint is empty, it will use the simulator endpoint if it is
 // set in the environment through DSTACK_SIMULATOR_ENDPOINT. Otherwise, it
 // will use the default endpoint at /var/run/dstack.sock.
+//
+// Deprecated: constructs a client for the frozen v0.5.11 surface. New code
+// should use NewDstackClient, which returns a v1 client.
 func NewDstackClientV0(opts ...DstackClientOption) *DstackClientV0 {
 	return &DstackClientV0{transport: newTransport(opts)}
-}
-
-// NewDstackClient is the pre-0.6 name for NewDstackClientV0.
-//
-// Deprecated: use NewDstackClientV0, or NewDstackClientV1 for the current API.
-func NewDstackClient(opts ...DstackClientOption) *DstackClient {
-	return NewDstackClientV0(opts...)
 }
 
 // TlsKeyOption defines a function type for TLS key options
@@ -591,10 +586,14 @@ func (c *DstackClientV0) TdxQuote(ctx context.Context, reportData []byte, hashAl
 	return c.GetQuote(ctx, reportData)
 }
 
-// TappdClient is a deprecated wrapper around DstackClient for backward compatibility.
+// TappdClient is a deprecated wrapper around DstackClientV0 for backward
+// compatibility. It wraps v0 and not v1 because tappd predates both: its
+// callers expect the v0.5.11 method set, and v1 has no equivalent for the
+// tappd-era methods overridden below.
+//
 // Deprecated: Use DstackClient instead.
 type TappdClient struct {
-	*DstackClient
+	*DstackClientV0
 }
 
 // NewTappdClient creates a new deprecated TappdClient.
@@ -618,11 +617,11 @@ func NewTappdClient(opts ...DstackClientOption) *TappdClient {
 	// Add user-provided options
 	tappdOpts = append(tappdOpts, opts...)
 
-	client := NewDstackClient(tappdOpts...)
+	client := NewDstackClientV0(tappdOpts...)
 	client.logger.Warn("TappdClient is deprecated, please use DstackClient instead")
 
 	return &TappdClient{
-		DstackClient: client,
+		DstackClientV0: client,
 	}
 }
 

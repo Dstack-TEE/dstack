@@ -399,7 +399,12 @@ class AsyncBaseClient(BaseClient):
 
 
 class AsyncDstackClientV0(AsyncBaseClient):
-    """Async client for the frozen v0.5.11 guest agent API.
+    """Legacy async client for the frozen v0.5.11 guest agent API.
+
+    .. deprecated:: 0.6.0
+       Prefer ``AsyncDstackClient`` (which is ``AsyncDstackClientV1``). This
+       class stays for code that must keep the v0 key derivation or needs
+       ``sign`` / ``verify``, which v1 does not serve.
 
     Served at the historical unversioned paths (``/GetKey``) and, since 0.6.0,
     equivalently at ``/v0/GetKey``. The surface is frozen: it gains no method
@@ -611,9 +616,13 @@ class AsyncDstackClientV0(AsyncBaseClient):
 
 
 class DstackClientV0(BaseClient):
-    """Sync client for the frozen v0.5.11 guest agent API.
+    """Legacy sync client for the frozen v0.5.11 guest agent API.
 
-    See ``AsyncDstackClientV0``; every method here is its blocking twin.
+    .. deprecated:: 0.6.0
+       Prefer ``DstackClient`` (which is ``DstackClientV1``); see
+       ``AsyncDstackClientV0`` for when staying on v0 is the right call.
+
+    Every method here is the blocking twin of ``AsyncDstackClientV0``'s.
     """
 
     PATH_PREFIX = "/"
@@ -728,20 +737,12 @@ class DstackClientV0(BaseClient):
         raise NotImplementedError
 
 
-#: Deprecated alias for :class:`AsyncDstackClientV0`. dstack 0.6.0 split the
-#: guest agent API into two surfaces, so a client's name now says which one it
-#: speaks. This alias keeps pre-0.6 code importing, and is the same class -- it
-#: is not a v1 client and will never become one.
-AsyncDstackClient = AsyncDstackClientV0
-
-#: Deprecated alias for :class:`DstackClientV0`; see ``AsyncDstackClient``.
-DstackClient = DstackClientV0
-
-
 class AsyncTappdClient(AsyncDstackClientV0):
     """Deprecated async client kept for backward compatibility.
 
-    DEPRECATED: Use ``AsyncDstackClient`` instead.
+    DEPRECATED: Use ``AsyncDstackClientV0`` instead. It is named explicitly
+    here because tappd only ever spoke v0, and the unsuffixed
+    ``AsyncDstackClient`` now means v1, which derives different keys.
     """
 
     def __init__(
@@ -755,7 +756,7 @@ class AsyncTappdClient(AsyncDstackClientV0):
         if not use_sync_http:
             # Already warned in TappdClient.__init__
             emit_deprecation_warning(
-                "AsyncTappdClient is deprecated, please use AsyncDstackClient instead"
+                "AsyncTappdClient is deprecated, please use AsyncDstackClientV0 instead"
             )
 
         endpoint = get_tappd_endpoint(endpoint)
@@ -826,13 +827,13 @@ class AsyncTappdClient(AsyncDstackClientV0):
 class TappdClient(DstackClientV0):
     """Deprecated client kept for backward compatibility.
 
-    DEPRECATED: Use ``DstackClient`` instead.
+    DEPRECATED: Use ``DstackClientV0`` instead; see ``AsyncTappdClient``.
     """
 
     def __init__(self, endpoint: str | None = None, timeout: float = 3):
         """Initialize deprecated tappd client wrapper."""
         emit_deprecation_warning(
-            "TappdClient is deprecated, please use DstackClient instead"
+            "TappdClient is deprecated, please use DstackClientV0 instead"
         )
         endpoint = get_tappd_endpoint(endpoint)
         self.async_client = AsyncTappdClient(

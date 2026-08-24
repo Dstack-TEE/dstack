@@ -24,7 +24,7 @@ func TestGetKeySignatureVerification(t *testing.T) {
 	expectedAppPubkey, _ := hex.DecodeString("02818494263695e8839122dbd88e281d7380622999df4e60a14befa0f2d096fc7c")
 	expectedKmsPubkey, _ := hex.DecodeString("0321529e458424ab1f710a3a57ec4dad2fb195ddca572f7469242ba6c7563085b6")
 
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	path := "/test/path"
 	purpose := "test-purpose"
 	resp, err := client.GetKey(context.Background(), path, purpose, "secp256k1")
