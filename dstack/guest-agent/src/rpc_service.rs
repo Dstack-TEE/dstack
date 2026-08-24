@@ -2,10 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{
-    path::Path,
-    sync::{Arc, RwLock},
-};
+use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -15,13 +12,12 @@ use dstack_guest_agent_rpc::{
     dstack_guest_server::{DstackGuestRpc, DstackGuestServer},
     tappd_server::{TappdRpc, TappdServer},
     worker_server::{WorkerRpc, WorkerServer},
-    AppInfo, AttestAppKeyRequest, AttestArgs, AttestGpuArgs, AttestGpuResponse, AttestResponse,
-    DeriveK256KeyResponse, DeriveKeyArgs, EmitEventArgs, GetKeyArgs, GetKeyResponse,
-    GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse, GpuEvidenceBundle, GpuInfoResponse,
-    HealthResponse, RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse,
+    AppInfo, AttestResponse, DeriveK256KeyResponse, DeriveKeyArgs, EmitEventArgs,
+    GetAttestationForAppKeyRequest, GetKeyArgs, GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs,
+    GetTlsKeyResponse, RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse,
     VerifyRequest, VerifyResponse, WorkerVersion,
 };
-use dstack_types::{AppKeys, SysConfig, GPU_ATTESTATION_OUTPUT};
+use dstack_types::{AppKeys, SysConfig};
 use ed25519_dalek::ed25519::signature::hazmat::{PrehashSigner, PrehashVerifier};
 use ed25519_dalek::{Signer as Ed25519Signer, SigningKey as Ed25519SigningKey, Verifier};
 use fs_err as fs;
@@ -39,41 +35,17 @@ use rcgen::KeyPair;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::json;
 use sha3::{Digest, Keccak256};
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::{
     backend::{PlatformBackend, RealPlatform},
     config::Config,
 };
 
-fn read_dmi_file(name: &str) -> String {
+pub(crate) fn read_dmi_file(name: &str) -> String {
     fs::read_to_string(format!("/sys/class/dmi/id/{name}"))
         .map(|s| s.trim().to_string())
         .unwrap_or_default()
-}
-
-/// Read the GPU attestation output saved during boot. Returns an empty string
-/// when no output is available (e.g. no GPU attached or attestation disabled).
-fn read_gpu_attestation(path: &Path) -> String {
-    match fs::read_to_string(path) {
-        Ok(attestation) => attestation,
-        Err(err) => {
-            if err.kind() != std::io::ErrorKind::NotFound {
-                warn!("failed to read GPU attestation output: {err:?}");
-            }
-            String::new()
-        }
-    }
-}
-
-/// GPU evidence to return alongside an attestation. Opt-in, so a caller that
-/// does not care about GPUs neither pays the disk read nor carries the payload.
-fn boottime_gpu_evidence(include: bool, path: &Path) -> String {
-    if include {
-        read_gpu_attestation(path)
-    } else {
-        String::new()
-    }
 }
 
 #[derive(Clone)]
@@ -221,23 +193,81 @@ impl AppState {
         &self.inner.config
     }
 
-    fn health(&self) -> Option<&crate::health::HealthMonitor> {
+    pub(crate) fn health(&self) -> Option<&crate::health::HealthMonitor> {
         self.inner.health.as_deref()
     }
 
-    fn quote_response(&self, report_data: [u8; 64]) -> Result<GetQuoteResponse> {
+    pub(crate) fn quote_response(&self, report_data: [u8; 64]) -> Result<GetQuoteResponse> {
         self.inner
             .platform
             .quote_response(report_data, &self.inner.vm_config)
     }
 
-    fn attest_cvm(&self, report_data: [u8; 64]) -> Result<Vec<u8>> {
+    pub(crate) fn attest_cvm(&self, report_data: [u8; 64]) -> Result<Vec<u8>> {
         self.inner.platform.attest_cvm(report_data)?.to_bytes()
     }
+
+    /// The application's root secp256k1 key, the root of every derived key and
+    /// the signer of the first link of every signature chain.
+    pub(crate) fn app_root_k256_key(&self) -> &[u8] {
+        &self.inner.keys.k256_key
+    }
+
+    /// The KMS root key's signature over the app root public key: the second
+    /// link of every signature chain, produced outside this agent and passed
+    /// through byte-for-byte on both API surfaces.
+    pub(crate) fn kms_k256_signature(&self) -> Vec<u8> {
+        self.inner.keys.k256_signature.clone()
+    }
+
+    /// The VM's hardware configuration, as the VMM produced it.
+    pub(crate) fn vm_config(&self) -> &str {
+        &self.inner.vm_config
+    }
+
+    /// The attestation the agent reports identity from.
+    pub(crate) fn info_attestation(&self) -> Result<VersionedAttestation> {
+        self.inner.info_attestation()
+    }
+
+    pub(crate) fn gpu_attestor(&self) -> &crate::gpu_attest::GpuAttestor {
+        &self.inner.gpu_attestor
+    }
+
+    pub(crate) async fn issue_cert(
+        &self,
+        key: &KeyPair,
+        config: CertConfigV2,
+    ) -> Result<Vec<String>> {
+        self.inner.issue_cert(key, config).await
+    }
+}
+
+/// Generate the fresh P-256 key that backs a certificate the agent issues.
+///
+/// Random, not derived: the certificate is minted per call, so there is
+/// nothing for a stable key to buy, and a key nobody can re-derive is a
+/// smaller thing to hold. Shared by the unversioned `GetTlsKey` and v1's
+/// `IssueCert` so the two cannot drift.
+pub(crate) fn generate_cert_key() -> Result<KeyPair> {
+    let mut seed = [0u8; 32];
+    SystemRandom::new()
+        .fill(&mut seed)
+        .context("Failed to generate secure seed")?;
+    derive_p256_key_pair_from_bytes(&seed, &[]).context("Failed to derive key")
 }
 
 pub struct InternalRpcHandler {
     state: AppState,
+}
+
+impl InternalRpcHandler {
+    /// Only the router constructs this in a running agent; the v1 tests build
+    /// one directly to assert the unversioned surface still answers as it did.
+    #[cfg(test)]
+    pub(crate) fn new(state: AppState) -> Self {
+        Self { state }
+    }
 }
 
 pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
@@ -305,7 +335,10 @@ pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
     })
 }
 
-fn validate_cert_validity(not_before: Option<u64>, not_after: Option<u64>) -> Result<()> {
+pub(crate) fn validate_cert_validity(
+    not_before: Option<u64>,
+    not_after: Option<u64>,
+) -> Result<()> {
     if let (Some(not_before), Some(not_after)) = (not_before, not_after) {
         if not_before >= not_after {
             anyhow::bail!("not_before must be earlier than not_after");
@@ -317,12 +350,7 @@ fn validate_cert_validity(not_before: Option<u64>, not_after: Option<u64>) -> Re
 impl DstackGuestRpc for InternalRpcHandler {
     async fn get_tls_key(self, request: GetTlsKeyArgs) -> anyhow::Result<GetTlsKeyResponse> {
         validate_cert_validity(request.not_before, request.not_after)?;
-        let mut seed = [0u8; 32];
-        SystemRandom::new()
-            .fill(&mut seed)
-            .context("Failed to generate secure seed")?;
-        let derived_key =
-            derive_p256_key_pair_from_bytes(&seed, &[]).context("Failed to derive key")?;
+        let derived_key = generate_cert_key()?;
         let config = CertConfigV2 {
             org_name: None,
             subject: request.subject,
@@ -401,29 +429,6 @@ impl DstackGuestRpc for InternalRpcHandler {
 
     async fn info(self) -> Result<AppInfo> {
         get_info(&self.state, false).await
-    }
-
-    async fn attest_gpu(self, request: AttestGpuArgs) -> Result<AttestGpuResponse> {
-        let evidence = self
-            .state
-            .inner
-            .gpu_attestor
-            .attest(&request.nonce)
-            .await
-            .context("GPU attestation failed")?;
-        Ok(AttestGpuResponse {
-            bundles: vec![GpuEvidenceBundle {
-                vendor: "nvidia".to_string(),
-                format: "nvidia-nvattest-collect-evidence-json-v1".to_string(),
-                evidence,
-            }],
-        })
-    }
-
-    async fn gpu_info(self) -> Result<GpuInfoResponse> {
-        Ok(GpuInfoResponse {
-            attestation: read_gpu_attestation(Path::new(GPU_ATTESTATION_OUTPUT)),
-        })
     }
 
     async fn sign(self, request: SignRequest) -> Result<SignResponse> {
@@ -526,14 +531,10 @@ impl DstackGuestRpc for InternalRpcHandler {
         Ok(VerifyResponse { valid })
     }
 
-    async fn attest(self, request: AttestArgs) -> Result<AttestResponse> {
+    async fn attest(self, request: RawQuoteArgs) -> Result<AttestResponse> {
         let report_data = pad64(&request.report_data).context("Report data is too long")?;
         Ok(AttestResponse {
             attestation: self.state.attest_cvm(report_data)?,
-            boottime_gpu_evidence: boottime_gpu_evidence(
-                request.include_boottime_gpu_evidence,
-                Path::new(GPU_ATTESTATION_OUTPUT),
-            ),
         })
     }
 
@@ -554,7 +555,7 @@ fn normalize_algorithm(algorithm: &str) -> &str {
     }
 }
 
-fn pad64(data: &[u8]) -> Option<[u8; 64]> {
+pub(crate) fn pad64(data: &[u8]) -> Option<[u8; 64]> {
     if data.len() > 64 {
         return None;
     }
@@ -676,14 +677,6 @@ impl RpcCall<AppState> for InternalRpcHandlerV0 {
     }
 }
 
-fn health_response(verdict: crate::health::Verdict) -> HealthResponse {
-    HealthResponse {
-        healthy: verdict.healthy,
-        unhealthy: verdict.unhealthy,
-        error: verdict.error,
-    }
-}
-
 pub struct ExternalRpcHandler {
     state: AppState,
 }
@@ -706,36 +699,22 @@ impl WorkerRpc for ExternalRpcHandler {
         })
     }
 
-    async fn health(self) -> Result<HealthResponse> {
-        // One lock and one clone. Everything that costs anything happens on the
-        // agent's own timer in `health`, because this method is served on the
-        // publicly reachable listener and is polled by every gateway node in
-        // the cluster: any work done here is work an anonymous caller can ask
-        // for at an arbitrary rate, multiplied by the operator's fleet size.
-        let Some(monitor) = self.state.health() else {
-            // The app did not opt in, so it registered as "do not poll me" and
-            // no gateway asks. Anything that does ask gets the same answer the
-            // gateway would have assumed.
-            return Ok(HealthResponse {
-                healthy: true,
-                unhealthy: vec![],
-                error: String::new(),
-            });
-        };
-        // Deliberately infallible: see `HealthResponse.error`. A failure to see
-        // the app has to come back as a verdict, because an RPC error is
-        // indistinguishable from an agent that predates this method.
-        Ok(health_response(monitor.report()))
-    }
-
-    async fn attest_app_key(self, request: AttestAppKeyRequest) -> Result<AttestResponse> {
+    /// Legacy and frozen at the v0.5.11 shape. See the RPC's doc comment in
+    /// agent_rpc.proto.
+    ///
+    /// Returns a `GetQuoteResponse`, which only Intel TDX can fill, so this
+    /// fails on every other platform exactly as `GetQuote` does. That is the
+    /// limitation `WorkerV1.AttestAppKey` exists to lift, and it is why this
+    /// method is not the one new callers should use.
+    ///
+    /// The report data comes from the same `app_key_report_data` the v1 method
+    /// uses, so both attest the same public key for a given algorithm.
+    async fn get_attestation_for_app_key(
+        self,
+        request: GetAttestationForAppKeyRequest,
+    ) -> Result<GetQuoteResponse> {
         let report_data = self.app_key_report_data(&request.algorithm).await?;
-        Ok(AttestResponse {
-            attestation: self.state.attest_cvm(report_data)?,
-            // This method attests a key, not the machine. A caller that wants
-            // the boot-time GPU evidence asks `Attest` or `GpuInfo` for it.
-            boottime_gpu_evidence: String::new(),
-        })
+        self.state.quote_response(report_data)
     }
 }
 
@@ -747,7 +726,7 @@ impl ExternalRpcHandler {
     /// until the key is derived here -- which is why attesting an app key needs
     /// its own method instead of the caller-supplied report data `GetQuote`
     /// and `Attest` take.
-    async fn app_key_report_data(&self, algorithm: &str) -> Result<[u8; 64]> {
+    pub(crate) async fn app_key_report_data(&self, algorithm: &str) -> Result<[u8; 64]> {
         let algorithm = normalize_algorithm(algorithm);
         // Prehashing is a signing mode, not a key type: the same secp256k1 key
         // signs both ways, so derive it under the base name. `Sign` does the
@@ -812,14 +791,17 @@ impl RpcCall<AppState> for ExternalRpcHandler {
 }
 
 #[cfg(test)]
-mod tests {
+// `pub(crate)` so the v1 handler's tests can build a state from the same
+// fixture. Two fixtures would let the two surfaces be tested against different
+// app root keys, which is exactly what the cross-version key assertions check.
+pub(crate) mod tests {
     use super::*;
     use crate::{
         backend::PlatformBackend,
         config::{AppComposeWrapper, Config},
     };
     use dstack_attest::attestation::AttestationVerifier;
-    use dstack_guest_agent_rpc::{AttestAppKeyRequest, SignRequest};
+    use dstack_guest_agent_rpc::{GetAttestationForAppKeyRequest, SignRequest};
     use dstack_types::{AppCompose, AppKeys, EventLogVersion, KeyProvider};
     use ed25519_dalek::ed25519::signature::hazmat::PrehashVerifier;
     use ed25519_dalek::{
@@ -831,41 +813,6 @@ mod tests {
     use std::collections::HashSet;
     use std::convert::TryFrom;
     use std::io::Write;
-
-    #[test]
-    fn reads_gpu_attestation_output_verbatim() {
-        let mut output = tempfile::NamedTempFile::new().unwrap();
-        let attestation = r#"{"result_code":0,"claims":[]}"#;
-        output.write_all(attestation.as_bytes()).unwrap();
-        output.flush().unwrap();
-
-        assert_eq!(read_gpu_attestation(output.path()), attestation);
-    }
-
-    #[test]
-    fn attest_returns_boottime_gpu_evidence_only_when_requested() {
-        let mut output = tempfile::NamedTempFile::new().unwrap();
-        let evidence = r#"{"result_code":0,"claims":[]}"#;
-        output.write_all(evidence.as_bytes()).unwrap();
-        output.flush().unwrap();
-
-        assert_eq!(boottime_gpu_evidence(true, output.path()), evidence);
-        assert_eq!(boottime_gpu_evidence(false, output.path()), "");
-    }
-
-    #[test]
-    fn missing_gpu_attestation_output_reads_as_empty() {
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(read_gpu_attestation(&dir.path().join("missing")), "");
-    }
-
-    fn app_key_report_data(response: &AttestResponse) -> [u8; 64] {
-        VersionedAttestation::from_bytes(&response.attestation)
-            .expect("failed to decode attestation")
-            .into_v1()
-            .report_data()
-            .expect("attestation carries no report data")
-    }
 
     fn extract_pubkey_from_report_data(report_data: &[u8], prefix: &str) -> Result<Vec<u8>> {
         let end = report_data
@@ -883,13 +830,31 @@ mod tests {
         }
     }
 
-    async fn setup_test_state() -> (AppState, tempfile::NamedTempFile) {
+    pub(crate) async fn setup_test_state() -> (AppState, tempfile::NamedTempFile) {
         setup_test_state_with_platform(None).await
     }
 
     /// The same state, with the fixture's platform evidence swapped out.
     /// `None` keeps the fixture's Intel TDX evidence.
-    async fn setup_test_state_with_platform(
+    /// The same state with the app having opted into publishing its TCB info,
+    /// which is what unlocks the document fields on the external surface.
+    pub(crate) async fn setup_test_state_with_public_tcbinfo() -> (AppState, tempfile::NamedTempFile)
+    {
+        let (state, guard) = setup_test_state().await;
+        let mut config = state.config().clone();
+        config.app_compose.app_compose.public_tcbinfo = true;
+        config.app_compose.raw = r#"{"name":"test"}"#.to_string();
+        let mut inner = Arc::try_unwrap(state.inner).ok().expect("sole owner");
+        inner.config = config;
+        (
+            AppState {
+                inner: Arc::new(inner),
+            },
+            guard,
+        )
+    }
+
+    pub(crate) async fn setup_test_state_with_platform(
         platform: Option<PlatformEvidence>,
     ) -> (AppState, tempfile::NamedTempFile) {
         let mut temp_attestation_file = tempfile::NamedTempFile::new().unwrap();
@@ -1110,14 +1075,10 @@ pNs85uhOZE8z2jr8Pg==
 
         let response = handler.sign(request).await.unwrap();
 
-        let attestation_response = ExternalRpcHandler::new(state)
-            .attest_app_key(AttestAppKeyRequest {
-                algorithm: "ed25519".to_string(),
-            })
+        let report_data = ExternalRpcHandler::new(state)
+            .app_key_report_data("ed25519")
             .await
             .unwrap();
-
-        let report_data = app_key_report_data(&attestation_response);
         let pk_bytes = extract_pubkey_from_report_data(&report_data, "dip1::ed25519-pk:").unwrap();
 
         let public_key = Ed25519VerifyingKey::try_from(pk_bytes.as_slice()).unwrap();
@@ -1139,14 +1100,10 @@ pNs85uhOZE8z2jr8Pg==
 
         let response = handler.sign(request).await.unwrap();
 
-        let attestation_response = ExternalRpcHandler::new(state)
-            .attest_app_key(AttestAppKeyRequest {
-                algorithm: "secp256k1".to_string(),
-            })
+        let report_data = ExternalRpcHandler::new(state)
+            .app_key_report_data("secp256k1")
             .await
             .unwrap();
-
-        let report_data = app_key_report_data(&attestation_response);
         let pk_bytes =
             extract_pubkey_from_report_data(&report_data, "dip1::secp256k1c-pk:").unwrap();
 
@@ -1172,14 +1129,10 @@ pNs85uhOZE8z2jr8Pg==
 
         let response = handler.sign(request).await.unwrap();
 
-        let attestation_response = ExternalRpcHandler::new(state)
-            .attest_app_key(AttestAppKeyRequest {
-                algorithm: "secp256k1".to_string(),
-            })
+        let report_data = ExternalRpcHandler::new(state)
+            .app_key_report_data("secp256k1")
             .await
             .unwrap();
-
-        let report_data = app_key_report_data(&attestation_response);
         let pk_bytes =
             extract_pubkey_from_report_data(&report_data, "dip1::secp256k1c-pk:").unwrap();
 
@@ -1227,49 +1180,60 @@ pNs85uhOZE8z2jr8Pg==
         assert_eq!(result.unwrap_err().to_string(), "Unsupported algorithm");
     }
 
+    const ED25519_REPORT_DATA: &str =
+        "dip1::ed25519-pk:5Pbre1Amf1hrp2V2bbfKlIfxpQb2pJAmrgmhxgVoG9s\0\0\0\0";
+    const SECP256K1_REPORT_DATA: &str =
+        "dip1::secp256k1c-pk:A6t_JdVkVdMAocH3f1f20WGT6JzdntxcXimUtEax8zc9";
+
+    /// The DIP-1 report data both external surfaces commit to. `WorkerV1`
+    /// wraps these exact bytes in an attestation and the frozen
+    /// `GetAttestationForAppKey` wraps them in a TDX quote, so pinning them
+    /// here pins both.
     #[tokio::test]
-    async fn test_attest_app_key_ed25519_success() {
+    async fn app_key_report_data_matches_its_vectors() {
         let (state, _guard) = setup_test_state().await;
-        let handler = ExternalRpcHandler::new(state.clone());
-        let request = AttestAppKeyRequest {
-            algorithm: "ed25519".to_string(),
-        };
+        for (algorithm, expected) in [
+            ("ed25519", ED25519_REPORT_DATA),
+            ("secp256k1", SECP256K1_REPORT_DATA),
+        ] {
+            let report_data = ExternalRpcHandler::new(state.clone())
+                .app_key_report_data(algorithm)
+                .await
+                .unwrap();
+            assert_eq!(expected.as_bytes(), report_data.as_slice(), "{algorithm}");
+        }
+    }
 
-        let response = handler.attest_app_key(request).await.unwrap();
-
-        const EXPECTED_REPORT_DATA: &str =
-            "dip1::ed25519-pk:5Pbre1Amf1hrp2V2bbfKlIfxpQb2pJAmrgmhxgVoG9s\0\0\0\0";
-        assert_eq!(
-            EXPECTED_REPORT_DATA.as_bytes(),
-            app_key_report_data(&response).as_slice()
-        );
+    /// Prehashing changes how a key signs, not which key it is, so it must
+    /// commit to the same public key as the plain name.
+    #[tokio::test]
+    async fn app_key_report_data_accepts_secp256k1_prehashed() {
+        let (state, _guard) = setup_test_state().await;
+        let prehashed = ExternalRpcHandler::new(state.clone())
+            .app_key_report_data("secp256k1_prehashed")
+            .await
+            .expect("secp256k1_prehashed must be accepted");
+        let plain = ExternalRpcHandler::new(state)
+            .app_key_report_data("secp256k1")
+            .await
+            .unwrap();
+        assert_eq!(prehashed, plain);
     }
 
     #[tokio::test]
-    async fn test_attest_app_key_secp256k1_success() {
+    async fn app_key_report_data_rejects_an_unsupported_algorithm() {
         let (state, _guard) = setup_test_state().await;
-        let handler = ExternalRpcHandler::new(state.clone());
-        let request = AttestAppKeyRequest {
-            algorithm: "secp256k1".to_string(),
-        };
-
-        let response = handler.attest_app_key(request).await.unwrap();
-
-        const EXPECTED_REPORT_DATA: &str =
-            "dip1::secp256k1c-pk:A6t_JdVkVdMAocH3f1f20WGT6JzdntxcXimUtEax8zc9";
-        assert_eq!(
-            EXPECTED_REPORT_DATA.as_bytes(),
-            app_key_report_data(&response).as_slice()
-        );
+        let result = ExternalRpcHandler::new(state)
+            .app_key_report_data("ecdsa")
+            .await;
+        assert_eq!(result.unwrap_err().to_string(), "Unsupported algorithm");
     }
 
+    /// The frozen method returns a `GetQuoteResponse`, which only Intel TDX can
+    /// fill. That limitation is the whole reason `WorkerV1.AttestAppKey`
+    /// exists, so it has to stay observable here.
     #[tokio::test]
-    async fn test_attest_app_key_works_on_non_tdx() {
-        // The reason this method exists in place of the GetQuoteResponse-shaped
-        // one it replaces: the external listener has no other way to attest an
-        // app key, and `Attest` is no substitute -- it is on the internal
-        // socket, and its caller would have to know the app key's public key in
-        // advance to build the report data.
+    async fn get_attestation_for_app_key_is_tdx_only() {
         let (state, _guard) = setup_test_state_with_platform(Some(PlatformEvidence::SevSnp {
             report: vec![0u8; 1184],
             cert_chain: Vec::new(),
@@ -1277,64 +1241,29 @@ pNs85uhOZE8z2jr8Pg==
         }))
         .await;
 
-        // GetQuote is closed on this platform...
-        let err = state
-            .quote_response([0x5a; 64])
-            .expect_err("GetQuote must fail on a non-TDX platform");
+        let err = ExternalRpcHandler::new(state)
+            .get_attestation_for_app_key(GetAttestationForAppKeyRequest {
+                algorithm: "ed25519".to_string(),
+            })
+            .await
+            .expect_err("the frozen method cannot answer without a TDX quote");
         assert!(
             err.to_string().contains("Intel TDX only"),
             "unexpected error: {err}"
         );
+    }
 
-        // ...and attesting an app key still works.
+    #[tokio::test]
+    async fn get_attestation_for_app_key_answers_on_tdx() {
+        let (state, _guard) = setup_test_state().await;
         let response = ExternalRpcHandler::new(state)
-            .attest_app_key(AttestAppKeyRequest {
+            .get_attestation_for_app_key(GetAttestationForAppKeyRequest {
                 algorithm: "ed25519".to_string(),
             })
             .await
             .unwrap();
-
-        const EXPECTED_REPORT_DATA: &str =
-            "dip1::ed25519-pk:5Pbre1Amf1hrp2V2bbfKlIfxpQb2pJAmrgmhxgVoG9s\0\0\0\0";
-        assert_eq!(
-            EXPECTED_REPORT_DATA.as_bytes(),
-            app_key_report_data(&response).as_slice()
-        );
-    }
-
-    #[tokio::test]
-    async fn test_attest_app_key_accepts_secp256k1_prehashed() {
-        // Prehashing changes how the key signs, not which key it is, so this
-        // must attest the same public key `Sign` uses under that name.
-        let (state, _guard) = setup_test_state().await;
-
-        let prehashed = ExternalRpcHandler::new(state.clone())
-            .attest_app_key(AttestAppKeyRequest {
-                algorithm: "secp256k1_prehashed".to_string(),
-            })
-            .await
-            .expect("secp256k1_prehashed must be accepted");
-        let plain = ExternalRpcHandler::new(state)
-            .attest_app_key(AttestAppKeyRequest {
-                algorithm: "secp256k1".to_string(),
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(app_key_report_data(&prehashed), app_key_report_data(&plain));
-    }
-
-    #[tokio::test]
-    async fn test_attest_app_key_unsupported_algorithm_fails() {
-        let (state, _guard) = setup_test_state().await;
-        let handler = ExternalRpcHandler::new(state);
-        let request = AttestAppKeyRequest {
-            algorithm: "ecdsa".to_string(), // Unsupported algorithm
-        };
-
-        let result = handler.attest_app_key(request).await;
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "Unsupported algorithm");
+        assert_eq!(ED25519_REPORT_DATA.as_bytes(), response.report_data);
+        assert!(!response.quote.is_empty());
     }
 
     #[test]

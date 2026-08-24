@@ -33,7 +33,7 @@ use dstack_types::HEALTH_FILE_MAX_AGE_SECS;
 use or_panic::ResultOrPanic;
 use tracing::{debug, info, warn};
 
-use dstack_guest_agent_rpc::ContainerHealth;
+use dstack_guest_agent_rpc::v1::ContainerHealth;
 
 use crate::container_health;
 

@@ -8,6 +8,7 @@ use crate::config::BindAddr;
 use crate::guest_api_service::GuestApiHandler;
 use crate::http_routes;
 use crate::rpc_service::{AppState, ExternalRpcHandler, InternalRpcHandler, InternalRpcHandlerV0};
+use crate::rpc_service_v1::{ExternalV1RpcHandler, V1RpcHandler};
 use crate::socket_activation::{ActivatedSockets, ActivatedUnixListener};
 use anyhow::{anyhow, Context, Result};
 use ra_rpc::rocket_helper::UnixPeerCredListener;
@@ -86,8 +87,13 @@ async fn run_internal(
     activated_socket: Option<StdUnixListener>,
     sock_ready_tx: oneshot::Sender<()>,
 ) -> Result<()> {
+    // Two surfaces, one socket, selected by URL path alone. `/` is the frozen
+    // unversioned API v0.5.x clients speak; `/v1` is `dstack.guest.v1`. There
+    // is no header negotiation and no default-version redirect, so a caller's
+    // URL is the whole record of which contract it asked for.
     let rocket = rocket::custom(figment)
         .mount("/", ra_rpc::prpc_routes!(AppState, InternalRpcHandler))
+        .mount("/v1", ra_rpc::prpc_routes!(AppState, V1RpcHandler))
         .manage(state);
     let ignite = rocket
         .ignite()
@@ -135,9 +141,15 @@ async fn run_internal(
 async fn run_external(state: AppState, figment: Figment) -> Result<()> {
     let rocket = rocket::custom(figment)
         .mount("/", http_routes::external_routes(state.config()))
+        // Same two-surface split as the internal socket: `/prpc` is the
+        // unversioned Worker, closed at v0.5.11, and `/prpc/v1` is `WorkerV1`.
         .mount(
             "/prpc",
             ra_rpc::prpc_routes!(AppState, ExternalRpcHandler, trim: "Worker."),
+        )
+        .mount(
+            "/prpc/v1",
+            ra_rpc::prpc_routes!(AppState, ExternalV1RpcHandler),
         )
         .attach(AdHoc::on_response("Add app version header", |_req, res| {
             Box::pin(async move {

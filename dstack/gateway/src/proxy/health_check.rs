@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use dstack_guest_agent_rpc::worker_client::WorkerClient;
+use dstack_guest_agent_rpc::v1::worker_v1_client::WorkerV1Client;
 use futures::StreamExt;
 use http_client::ConnectionReuse;
 use tokio::time::MissedTickBehavior;
@@ -317,8 +317,8 @@ fn apply_hysteresis(
 /// than as a verdict; [`apply_hysteresis`] decides when enough of them in a row
 /// amount to one.
 async fn poll_instance(ip: Ipv4Addr, agent_port: u16, timeout: Duration) -> PollResult {
-    let client = WorkerClient::new(prober_transport(ip, agent_port));
-    let response = match tokio::time::timeout(timeout, client.health()).await {
+    let client = WorkerV1Client::new(prober_transport(ip, agent_port));
+    let response = match tokio::time::timeout(timeout, client.health(Default::default())).await {
         Err(_) => {
             return PollResult::unreachable(format!("health poll timed out after {timeout:?}"))
         }
@@ -348,7 +348,11 @@ async fn poll_instance(ip: Ipv4Addr, agent_port: u16, timeout: Duration) -> Poll
 /// no real request can reach. Only the connection is unshared; the client
 /// itself is process-wide. See `http_client::ConnectionReuse`.
 fn prober_transport(ip: Ipv4Addr, agent_port: u16) -> http_client::prpc::PrpcClient {
-    let url = format!("http://{ip}:{agent_port}/prpc");
+    // `/prpc/v1`, not `/prpc`: `Health` is a `WorkerV1` method. Version skew is
+    // safe in both directions. A pre-0.6 gateway never polls at all, and only a
+    // 0.6+ agent can opt in via `RegisterCvmRequest.health_check`, so no agent
+    // that lacks this path is ever asked for it.
+    let url = format!("http://{ip}:{agent_port}/prpc/v1");
     super::guest_agent_client(url, ConnectionReuse::Fresh)
 }
 
@@ -362,7 +366,7 @@ const MAX_REASON_BYTES: usize = 512;
 const MAX_NAMED_CONTAINERS: usize = 8;
 
 /// Summarize an agent's "no" for the log line. The caller sanitizes.
-fn describe_unhealthy(response: &dstack_guest_agent_rpc::HealthResponse) -> String {
+fn describe_unhealthy(response: &dstack_guest_agent_rpc::v1::HealthResponse) -> String {
     if !response.error.is_empty() {
         return format!("agent could not determine app health: {}", response.error);
     }
@@ -487,6 +491,37 @@ mod tests {
             let _ = socket.write_all(&answer).await;
         });
         port
+    }
+
+    /// The poller must ask the versioned surface. `Health` lives on `WorkerV1`
+    /// at `/prpc/v1`; the unversioned `Worker` at `/prpc` is closed at v0.5.11
+    /// and has no such method, so a poller pointed there gets a 400 that
+    /// `apply_hysteresis` eventually turns into "unhealthy" for every instance
+    /// in the fleet at once.
+    #[tokio::test]
+    async fn the_poller_asks_the_v1_surface() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let mut buf = [0u8; 1024];
+            let n = socket.read(&mut buf).await.unwrap_or(0);
+            let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let _ = tx.send(request.lines().next().unwrap_or_default().to_string());
+        });
+
+        let _ = poll_instance(Ipv4Addr::LOCALHOST, port, Duration::from_secs(5)).await;
+
+        let request_line = rx.await.expect("the poller sent no request");
+        assert!(
+            request_line.contains("/prpc/v1/Health"),
+            "expected the v1 Health path, got: {request_line}"
+        );
     }
 
     async fn poll_fake(answer: Option<Vec<u8>>) -> PollResult {
@@ -636,7 +671,7 @@ mod tests {
     /// `describe_unhealthy` composes it and the constructor bounds it, and only
     /// the pair is ever what an operator sees -- asserting on `describe_unhealthy`
     /// alone would pass with the sanitizing dropped.
-    fn unhealthy_reason(response: &dstack_guest_agent_rpc::HealthResponse) -> String {
+    fn unhealthy_reason(response: &dstack_guest_agent_rpc::v1::HealthResponse) -> String {
         match PollResult::unhealthy(describe_unhealthy(response)) {
             PollResult::Unhealthy(reason) => reason,
             other => panic!("expected an unhealthy verdict, got {other:?}"),
@@ -726,7 +761,7 @@ mod tests {
 
     #[test]
     fn an_agent_error_is_described_rather_than_dropped() {
-        let response = dstack_guest_agent_rpc::HealthResponse {
+        let response = dstack_guest_agent_rpc::v1::HealthResponse {
             healthy: false,
             unhealthy: vec![],
             error: "failed to connect to docker".to_string(),
@@ -736,14 +771,14 @@ mod tests {
 
     #[test]
     fn unhealthy_containers_are_named() {
-        let response = dstack_guest_agent_rpc::HealthResponse {
+        let response = dstack_guest_agent_rpc::v1::HealthResponse {
             healthy: false,
             unhealthy: vec![
-                dstack_guest_agent_rpc::ContainerHealth {
+                dstack_guest_agent_rpc::v1::ContainerHealth {
                     name: "web".to_string(),
                     status: "starting".to_string(),
                 },
-                dstack_guest_agent_rpc::ContainerHealth {
+                dstack_guest_agent_rpc::v1::ContainerHealth {
                     name: "db".to_string(),
                     status: "unhealthy".to_string(),
                 },
@@ -761,9 +796,9 @@ mod tests {
     /// forge a log line or repaint a terminal.
     #[test]
     fn control_characters_from_an_agent_never_reach_a_log_line() {
-        let response = dstack_guest_agent_rpc::HealthResponse {
+        let response = dstack_guest_agent_rpc::v1::HealthResponse {
             healthy: false,
-            unhealthy: vec![dstack_guest_agent_rpc::ContainerHealth {
+            unhealthy: vec![dstack_guest_agent_rpc::v1::ContainerHealth {
                 name: "web\n2026-01-01 INFO forged".to_string(),
                 status: "\x1b[31mstarting\r".to_string(),
             }],
@@ -783,7 +818,7 @@ mod tests {
     /// the rendering of everything after it.
     #[test]
     fn line_separators_and_bidi_overrides_are_stripped_too() {
-        let response = dstack_guest_agent_rpc::HealthResponse {
+        let response = dstack_guest_agent_rpc::v1::HealthResponse {
             healthy: false,
             unhealthy: vec![],
             error: "web\u{2028}Jan 01 INFO ok\u{202E}desrever".to_string(),
@@ -797,7 +832,7 @@ mod tests {
     /// emitted every time the verdict flips.
     #[test]
     fn an_oversized_reason_is_truncated() {
-        let response = dstack_guest_agent_rpc::HealthResponse {
+        let response = dstack_guest_agent_rpc::v1::HealthResponse {
             healthy: false,
             unhealthy: vec![],
             error: "x".repeat(64 * 1024),
@@ -848,10 +883,10 @@ mod tests {
     /// A thousand containers must not become a thousand-entry log line.
     #[test]
     fn only_the_first_few_containers_are_named() {
-        let response = dstack_guest_agent_rpc::HealthResponse {
+        let response = dstack_guest_agent_rpc::v1::HealthResponse {
             healthy: false,
             unhealthy: (0..50)
-                .map(|index| dstack_guest_agent_rpc::ContainerHealth {
+                .map(|index| dstack_guest_agent_rpc::v1::ContainerHealth {
                     name: format!("svc-{index}"),
                     status: "starting".to_string(),
                 })
@@ -868,7 +903,7 @@ mod tests {
     /// reason an operator can act on.
     #[test]
     fn an_unhealthy_response_naming_nothing_still_has_a_reason() {
-        let response = dstack_guest_agent_rpc::HealthResponse {
+        let response = dstack_guest_agent_rpc::v1::HealthResponse {
             healthy: false,
             unhealthy: vec![],
             error: String::new(),
