@@ -46,7 +46,7 @@ older guest chokes on.
 ## Where the verdict comes from
 
 The guest agent recomputes a verdict every 5 seconds and caches it; the gateway
-polls `Worker.Health`, which only reads that cache. The two cadences are
+polls `WorkerV1.Health` (at `/prpc/v1`), which only reads that cache. The two cadences are
 independent on purpose — a fleet of gateway nodes polling the same instance must
 not multiply into that many container-runtime queries inside the CVM, and the
 RPC is served on the CVM's publicly reachable listener.
