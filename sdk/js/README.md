@@ -95,6 +95,17 @@ Versioned dstack attestation that works across TDX / GCP / Nitro providers. Pref
 const { attestation } = await client.attest('app-state-snapshot')
 ```
 
+Pass `true` as the second argument to also return the boot-time GPU attestation
+evidence, so a verifier gets the quote and the GPU evidence in one round trip.
+
+```typescript
+const { attestation, boottime_gpu_evidence } = await client.attest('app-state-snapshot', true)
+```
+
+The evidence is the same bytes ``gpuInfo()`` serves and is empty unless the flag was set
+and boot-time GPU attestation output exists. It is not bound to `report_data`; verify
+it with the measured `gpu-attestation` event digest as described under ``gpuInfo()``.
+
 ### `attestGpu(nonce)`
 
 Collects vendor-native GPU evidence for a caller-chosen 32-byte nonce.

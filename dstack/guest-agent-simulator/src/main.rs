@@ -13,7 +13,7 @@ use dstack_guest_agent::{
     config::{self, Config},
     run_server, AppState,
 };
-use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
+use dstack_guest_agent_rpc::GetQuoteResponse;
 use mock_attestation::tdx::TdxGenerator;
 use ra_tls::attestation::VersionedAttestation;
 use serde::Deserialize;
@@ -102,7 +102,7 @@ impl PlatformBackend for SimulatorPlatform {
         )
     }
 
-    fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
+    fn attest_cvm(&self, report_data: [u8; 64]) -> Result<VersionedAttestation> {
         simulator::simulated_attest_response(
             &self.attestation,
             report_data,
@@ -183,9 +183,13 @@ mod tests {
     fn simulator_attest_response_preserves_legacy_wire_format() {
         let platform = load_fixture_platform();
         let report_data = [0x5a; 64];
-        let response = platform.attest_response(report_data).unwrap();
-        assert_eq!(response.attestation.first(), Some(&0x00));
-        let patched = VersionedAttestation::from_bytes(&response.attestation)
+        let encoded = platform
+            .attest_cvm(report_data)
+            .unwrap()
+            .to_bytes()
+            .unwrap();
+        assert_eq!(encoded.first(), Some(&0x00));
+        let patched = VersionedAttestation::from_bytes(&encoded)
             .unwrap()
             .into_v1();
         assert_eq!(patched.report_data().unwrap(), report_data);
@@ -296,7 +300,7 @@ mod tests {
         // relying parties on GCP at Attest.
         let attested = simulator::simulated_attest_response(&gcp_tdx, report_data, true, None)
             .expect("Attest must work on GCP TDX too");
-        let round_tripped = VersionedAttestation::from_bytes(&attested.attestation)
+        let round_tripped = VersionedAttestation::from_bytes(&attested.to_bytes().unwrap())
             .unwrap()
             .into_v1();
         assert!(round_tripped.platform.tpm_quote().is_some());
@@ -312,8 +316,12 @@ mod tests {
         let original = fixture.clone().into_v1().report_data().unwrap();
         let platform = SimulatorPlatform::new(fixture, false, None).unwrap();
         let report_data = [0x5a; 64];
-        let response = platform.attest_response(report_data).unwrap();
-        let patched = VersionedAttestation::from_bytes(&response.attestation)
+        let encoded = platform
+            .attest_cvm(report_data)
+            .unwrap()
+            .to_bytes()
+            .unwrap();
+        let patched = VersionedAttestation::from_bytes(&encoded)
             .unwrap()
             .into_v1();
         assert_eq!(patched.report_data().unwrap(), original);

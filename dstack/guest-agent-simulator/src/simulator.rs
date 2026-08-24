@@ -6,7 +6,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
 use dcap_qvl::quote::Quote;
-use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
+use dstack_guest_agent_rpc::GetQuoteResponse;
 use mock_attestation::tdx::TdxGenerator;
 use ra_tls::attestation::{
     AttestationV1, PlatformEvidence, QuoteContentType, TdxAttestationExt, VersionedAttestation,
@@ -59,20 +59,17 @@ pub fn simulated_attest_response(
     report_data: [u8; 64],
     patch_report_data: bool,
     generator: Option<&TdxGenerator>,
-) -> Result<AttestResponse> {
+) -> Result<VersionedAttestation> {
     let preserve_legacy = matches!(source, VersionedAttestation::V0 { .. });
     let mut attestation =
         prepare_attestation(source, report_data, patch_report_data, generator, "attest")?;
     if let Some(event_log) = attestation.platform.tdx_event_log_mut() {
         cc_eventlog::tdx::fill_v2_preimages(event_log);
     }
-    let attestation = if preserve_legacy {
+    Ok(if preserve_legacy {
         attestation.try_into_legacy()?.into_versioned()
     } else {
         VersionedAttestation::V1 { attestation }
-    };
-    Ok(AttestResponse {
-        attestation: attestation.to_bytes()?,
     })
 }
 

@@ -260,6 +260,12 @@ curl --unix-socket /var/run/dstack.sock http://dstack/Attest?report_data=0000000
 }
 ```
 
+`boottime_gpu_evidence` carries the same bytes [`GpuInfo`](#8-gpu-info) serves, so one call
+returns both the quote and the GPU evidence a verifier needs. It is empty unless
+`include_boottime_gpu_evidence` was set and boot-time GPU attestation output exists. It is
+**not** bound to `report_data` — authenticate it with the `evidence_sha256`
+procedure documented under `GpuInfo` below.
+
 ### 7. Attest GPU
 
 Collects vendor-native GPU evidence for a caller-chosen 32-byte nonce.

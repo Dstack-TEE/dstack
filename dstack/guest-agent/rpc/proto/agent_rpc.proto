@@ -53,7 +53,7 @@ service DstackGuest {
 
   // Generates a versioned attestation with the given report data.
   // Returns a dstack-defined attestation format that supports different attestation modes across platforms.
-  rpc Attest(RawQuoteArgs) returns (AttestResponse) {}
+  rpc Attest(AttestArgs) returns (AttestResponse) {}
 
   // Get app info
   rpc Info(google.protobuf.Empty) returns (AppInfo) {}
@@ -193,6 +193,22 @@ message RawQuoteArgs {
   bytes report_data = 1;
 }
 
+// The request to get a versioned attestation
+message AttestArgs {
+  // 64 bytes of report data
+  bytes report_data = 1;
+  // Field 2 and 3 carried `include_ccel` and `include_preimages` while this RPC
+  // took a `RawQuoteArgs`. Both were bools, so reusing either number here would
+  // make a pre-0.6.0 client's `include_ccel = true` arrive as a request for
+  // something else entirely.
+  reserved 2, 3;
+  reserved "include_ccel", "include_preimages";
+  // Also return the boot-time GPU attestation evidence in
+  // `boottime_gpu_evidence`. This does not sample the GPU now and does not
+  // answer `report_data`; see that field.
+  bool include_boottime_gpu_evidence = 4;
+}
+
 message TdxQuoteResponse {
   // TDX quote
   bytes quote = 1;
@@ -209,6 +225,21 @@ message TdxQuoteResponse {
 message AttestResponse {
   // The attestation
   bytes attestation = 1;
+  // Complete JSON output produced by nvattest at boot, the same bytes `GpuInfo`
+  // serves. Only `DstackGuest.Attest` populates it, and only when the request set
+  // `include_boottime_gpu_evidence` and boot-time GPU attestation output exists.
+  //
+  // Not bound to `report_data`: nvattest ran at boot against its own nonce, so a
+  // fresh `report_data` says nothing about it. Bind it by replaying the runtime
+  // event log and comparing sha256 of these exact UTF-8 bytes against the
+  // `evidence_sha256` field of the measured `gpu-attestation` event.
+  //
+  // This is a historical statement about the boot, not a live one: it does not
+  // prove the GPU is still attached. Sampling the GPU at attestation time would
+  // not fix that -- an NVIDIA report binds the device and a nonce but not the TD
+  // the device is attached to, so a fresh report can be relayed from a genuine
+  // remote GPU. Only TDISP/TEE-IO device binding closes that.
+  string boottime_gpu_evidence = 2;
 }
 
 message AttestGpuArgs {
