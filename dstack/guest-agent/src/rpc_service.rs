@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -42,6 +43,19 @@ use crate::{
     backend::{PlatformBackend, RealPlatform},
     config::Config,
 };
+
+/// How long a failed identity decode is left alone before another call is
+/// allowed to touch the platform again.
+///
+/// The cache makes the happy path free, but nothing caches a failure, and the
+/// retry path is reachable from `/prpc/v1/Info` -- anonymous, publicly
+/// reachable, and one hardware quote plus an event-log replay per attempt,
+/// under the global quote lock. Retrying per call would hand any caller that
+/// can route to the CVM exactly the lever the cache exists to remove, for as
+/// long as the platform stays broken. A floor of half a minute bounds that to
+/// one attempt per interval while still letting a platform that was only
+/// momentarily unable to attest recover on its own.
+const IDENTITY_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Decode the immutable identity fields out of a boot attestation.
 ///
@@ -94,6 +108,11 @@ struct AppStateInner {
     app_root_signing_key: Option<SigningKey>,
     /// Identity as decoded from the boot attestation. See [`AppIdentity`].
     identity: RwLock<Option<Arc<AppIdentity>>>,
+    /// When the last identity decode failed, so the retry can be throttled.
+    /// See [`IDENTITY_RETRY_INTERVAL`]. Separate from the cache above because
+    /// it is written only on the degraded path, and read only when the cache
+    /// is empty.
+    identity_last_failure: Mutex<Option<Instant>>,
     /// `sys_vendor` and `product_name`, read once. Neither changes while the
     /// VM is running.
     cloud_vendor: String,
@@ -108,6 +127,7 @@ struct AppStateInner {
 /// on every `Info` -- including anonymous calls to the public `/prpc/v1/Info`,
 /// which let any caller that can route to the CVM monopolise that lock and
 /// starve the attestation path the agent actually needs.
+#[derive(Debug)]
 pub(crate) struct AppIdentity {
     pub(crate) app_id: Vec<u8>,
     pub(crate) instance_id: Vec<u8>,
@@ -242,13 +262,16 @@ impl AppState {
                 gpu_attestor,
                 app_root_signing_key,
                 identity: RwLock::new(None),
+                identity_last_failure: Mutex::new(None),
                 cloud_vendor: read_dmi_file("sys_vendor"),
                 cloud_product: read_dmi_file("product_name"),
             }),
         };
         // Decode identity now so no request has to. Non-fatal: a platform that
         // cannot attest at this instant would otherwise take the whole agent
-        // down, and `identity()` retries on demand.
+        // down, and `identity()` retries on demand. A failure here counts as
+        // the first attempt and arms the retry throttle, so the boot attempt
+        // and a request-driven one are on the same budget.
         if let Err(err) = me.identity() {
             error!("failed to decode app identity at startup: {err:?}");
         }
@@ -307,11 +330,15 @@ impl AppState {
         &self.inner.cloud_product
     }
 
-    /// The decoded identity, computed at most once.
+    /// The decoded identity, computed at most once on success.
     ///
-    /// Populated at construction; this path only runs when that attempt failed,
-    /// so a platform that could not attest at boot still answers later rather
-    /// than staying broken for the life of the process.
+    /// Populated at construction; the decode below only runs when that attempt
+    /// failed, so a platform that could not attest at boot still answers later
+    /// rather than staying broken for the life of the process. It runs at most
+    /// once per [`IDENTITY_RETRY_INTERVAL`], because the callers reaching it
+    /// include anonymous ones. Within the window the caller is told the
+    /// identity is unavailable and when the next attempt is, and the platform
+    /// is not touched at all.
     pub(crate) fn identity(&self) -> Result<Arc<AppIdentity>> {
         if let Some(identity) = self
             .inner
@@ -322,7 +349,38 @@ impl AppState {
         {
             return Ok(identity.clone());
         }
-        let identity = Arc::new(decode_identity(&self.inner)?);
+        // Two callers arriving together on a cold cache may both attempt once.
+        // That is the same race the cache has always had, and one extra quote
+        // is not worth holding a lock across the decode for.
+        if let Some(failed_at) = *self
+            .inner
+            .identity_last_failure
+            .lock()
+            .or_panic("lock should never fail")
+        {
+            let elapsed = failed_at.elapsed();
+            if elapsed < IDENTITY_RETRY_INTERVAL {
+                let retry_in = (IDENTITY_RETRY_INTERVAL - elapsed).as_secs() + 1;
+                anyhow::bail!(
+                    "the app identity is unavailable: decoding it failed and the next attempt is at most {retry_in}s away"
+                );
+            }
+        }
+        // Blocking, and deliberately left on the executor: the throttle above
+        // caps this at one quote per interval for the whole process, which is
+        // far short of what would justify a `spawn_blocking` hop and making
+        // every caller of `identity()` async to reach it.
+        let identity = match decode_identity(&self.inner) {
+            Ok(identity) => Arc::new(identity),
+            Err(err) => {
+                *self
+                    .inner
+                    .identity_last_failure
+                    .lock()
+                    .or_panic("lock should never fail") = Some(Instant::now());
+                return Err(err);
+            }
+        };
         *self
             .inner
             .identity
@@ -974,6 +1032,7 @@ pub(crate) mod tests {
     use std::collections::HashSet;
     use std::convert::TryFrom;
     use std::io::Write;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     fn extract_pubkey_from_report_data(report_data: &[u8], prefix: &str) -> Result<Vec<u8>> {
         let end = report_data
@@ -995,14 +1054,52 @@ pub(crate) mod tests {
         setup_test_state_with_platform(None).await
     }
 
+    /// How many times the fixture platform was asked to attest for `Info`, and
+    /// whether it should refuse. Counting the calls is the only way to see the
+    /// identity throttle work: what it changes is how often the platform is
+    /// touched, not what any single call returns.
+    #[derive(Default)]
+    struct InfoAttestationProbe {
+        calls: AtomicUsize,
+        failing: AtomicBool,
+    }
+
+    impl InfoAttestationProbe {
+        fn failing() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                failing: AtomicBool::new(true),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::Relaxed)
+        }
+
+        fn set_failing(&self, failing: bool) {
+            self.failing.store(failing, Ordering::Relaxed);
+        }
+    }
+
+    /// The fixture state, built against a platform the probe watches.
+    async fn setup_test_state_with_probe(
+        probe: Arc<InfoAttestationProbe>,
+    ) -> (AppState, tempfile::NamedTempFile) {
+        build_test_state(None, |_| {}, probe).await
+    }
+
     /// The same state with the app having opted into publishing its TCB info,
     /// which is what unlocks the document fields on the external surface.
     pub(crate) async fn setup_test_state_with_public_tcbinfo() -> (AppState, tempfile::NamedTempFile)
     {
-        build_test_state(None, |config| {
-            config.app_compose.app_compose.public_tcbinfo = true;
-            config.app_compose.raw = r#"{"name":"test"}"#.to_string();
-        })
+        build_test_state(
+            None,
+            |config| {
+                config.app_compose.app_compose.public_tcbinfo = true;
+                config.app_compose.raw = r#"{"name":"test"}"#.to_string();
+            },
+            Arc::default(),
+        )
         .await
     }
 
@@ -1011,7 +1108,7 @@ pub(crate) mod tests {
     pub(crate) async fn setup_test_state_with_platform(
         platform: Option<PlatformEvidence>,
     ) -> (AppState, tempfile::NamedTempFile) {
-        build_test_state(platform, |_| {}).await
+        build_test_state(platform, |_| {}, Arc::default()).await
     }
 
     /// The one fixture body. `configure` adjusts the app config before the
@@ -1020,6 +1117,7 @@ pub(crate) mod tests {
     async fn build_test_state(
         platform: Option<PlatformEvidence>,
         configure: impl FnOnce(&mut Config),
+        probe: Arc<InfoAttestationProbe>,
     ) -> (AppState, tempfile::NamedTempFile) {
         let mut temp_attestation_file = tempfile::NamedTempFile::new().unwrap();
 
@@ -1143,6 +1241,7 @@ pNs85uhOZE8z2jr8Pg==
 
         struct TestSimulatorPlatform {
             attestation: VersionedAttestation,
+            probe: Arc<InfoAttestationProbe>,
         }
 
         fn patch_report_data(
@@ -1154,6 +1253,10 @@ pNs85uhOZE8z2jr8Pg==
 
         impl PlatformBackend for TestSimulatorPlatform {
             fn attestation_for_info(&self) -> Result<VersionedAttestation> {
+                self.probe.calls.fetch_add(1, Ordering::Relaxed);
+                if self.probe.failing.load(Ordering::Relaxed) {
+                    anyhow::bail!("the platform cannot attest right now");
+                }
                 Ok(self.attestation.clone())
             }
 
@@ -1213,11 +1316,13 @@ pNs85uhOZE8z2jr8Pg==
                         }
                     }
                 },
+                probe,
             }),
             health: None,
             gpu_attestor: crate::gpu_attest::GpuAttestor::new(),
             app_root_signing_key: SigningKey::from_slice(&DUMMY_K256_KEY).ok(),
             identity: RwLock::new(None),
+            identity_last_failure: Mutex::new(None),
             // Read the same way production does, so a test comparing v1 `Info`
             // against v0 `get_info` compares like with like.
             cloud_vendor: read_dmi_file("sys_vendor"),
@@ -1745,5 +1850,70 @@ pNs85uhOZE8z2jr8Pg==
 
         let err = result.unwrap_err().to_string();
         assert!(err.contains("removed in dstack 0.6.0"), "{err}");
+    }
+
+    /// A failed decode must be as cheap to repeat as a cached success is.
+    /// `identity()` is reached from the anonymous `/prpc/v1/Info`, and each
+    /// attempt is a hardware quote plus an RTMR replay under the global quote
+    /// lock -- retrying per call would give a caller on a broken platform the
+    /// very lever the cache exists to take away.
+    #[tokio::test]
+    async fn a_failed_identity_decode_is_not_retried_within_the_throttle_window() {
+        let probe = Arc::new(InfoAttestationProbe::failing());
+        let (state, _guard) = setup_test_state_with_probe(probe.clone()).await;
+
+        let err = state
+            .identity()
+            .expect_err("the platform refuses to attest");
+        assert!(err.to_string().contains("cannot attest"), "{err}");
+        assert_eq!(probe.calls(), 1);
+
+        for _ in 0..8 {
+            let err = state.identity().expect_err("still throttled");
+            assert!(
+                err.to_string().contains("the app identity is unavailable"),
+                "{err}"
+            );
+        }
+        assert_eq!(
+            probe.calls(),
+            1,
+            "the platform was asked again inside the throttle window"
+        );
+    }
+
+    /// The throttle bounds the retry rate; it must not turn a transient failure
+    /// into a permanent one. Once the window has passed the next call attests
+    /// again, and a success from then on is cached like any other.
+    #[tokio::test]
+    async fn the_identity_decode_is_retried_once_the_throttle_window_has_passed() {
+        let probe = Arc::new(InfoAttestationProbe::failing());
+        let (state, _guard) = setup_test_state_with_probe(probe.clone()).await;
+        state
+            .identity()
+            .expect_err("the platform refuses to attest");
+
+        // Age the recorded failure rather than sleeping out the interval.
+        *state
+            .inner
+            .identity_last_failure
+            .lock()
+            .expect("lock should never fail") = Some(
+            Instant::now()
+                .checked_sub(IDENTITY_RETRY_INTERVAL)
+                .expect("the monotonic clock is older than the throttle window"),
+        );
+        probe.set_failing(false);
+
+        let identity = state.identity().expect("the platform recovered");
+        assert_eq!(probe.calls(), 2);
+
+        let again = state.identity().expect("a decoded identity is cached");
+        assert!(Arc::ptr_eq(&identity, &again));
+        assert_eq!(
+            probe.calls(),
+            2,
+            "a success must be cached, not re-decoded per call"
+        );
     }
 }
