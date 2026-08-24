@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -75,6 +76,50 @@ func TestAttest(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "report data is too large") {
 		t.Fatalf("expected error to mention report data size, got: %v", err)
+	}
+}
+
+func TestAttestGpu(t *testing.T) {
+	const evidence = `{"result_code":0,"claims":[]}`
+	nonce := bytes.Repeat([]byte{0xab}, 32)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/AttestGpu" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		var payload map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("failed to decode request: %v", err)
+		}
+		if payload["nonce"] != hex.EncodeToString(nonce) {
+			t.Fatalf("nonce was not forwarded verbatim, got: %v", payload["nonce"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"evidence": evidence,
+			"nonce":    hex.EncodeToString(nonce),
+		})
+	}))
+	defer server.Close()
+
+	client := dstack.NewDstackClient(dstack.WithEndpoint(server.URL))
+	resp, err := client.AttestGpu(context.Background(), nonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Evidence != evidence {
+		t.Fatalf("unexpected evidence: %s", resp.Evidence)
+	}
+	if resp.Nonce != hex.EncodeToString(nonce) {
+		t.Fatalf("unexpected nonce: %s", resp.Nonce)
+	}
+}
+
+func TestAttestGpuRejectsWrongNonceLength(t *testing.T) {
+	client := dstack.NewDstackClient()
+	for _, n := range [][]byte{nil, bytes.Repeat([]byte{1}, 31), bytes.Repeat([]byte{1}, 33)} {
+		if _, err := client.AttestGpu(context.Background(), n); err == nil {
+			t.Fatalf("expected a %d-byte nonce to be rejected", len(n))
+		}
 	}
 }
 

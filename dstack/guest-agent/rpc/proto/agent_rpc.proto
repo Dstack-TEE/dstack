@@ -61,6 +61,18 @@ service DstackGuest {
   // Get GPU information collected during boot.
   rpc GpuInfo(google.protobuf.Empty) returns (GpuInfoResponse) {}
 
+  // Run NVIDIA GPU attestation now, against a nonce the caller chooses.
+  //
+  // This answers "is the device I can talk to right now a genuine, CC-enabled
+  // NVIDIA GPU that signs my challenge", which `GpuInfo` cannot: that returns a
+  // record written at boot. Use it after anything that may have reinitialised
+  // the GPU -- a driver reload leaves a device that responds to NVML but can no
+  // longer attest -- and before submitting work you care about.
+  //
+  // It is NOT a remote attestation claim, and a relying party outside this CVM
+  // must not treat it as one. See `AttestGpuResponse.evidence`.
+  rpc AttestGpu(AttestGpuArgs) returns (AttestGpuResponse) {}
+
   // Sign a payload
   rpc Sign(SignRequest) returns (SignResponse) {}
 
@@ -196,6 +208,40 @@ message TdxQuoteResponse {
 message AttestResponse {
   // The attestation
   bytes attestation = 1;
+}
+
+message AttestGpuArgs {
+  // Exactly 32 bytes of caller-chosen challenge, passed to the GPU verbatim.
+  //
+  // SPDM fixes the evidence nonce at 32 bytes, and dstack applies no transform
+  // so a caller can compare these bytes directly against the `eat_nonce` claim
+  // rather than reversing a hash. To bind a longer challenge, hash it yourself.
+  bytes nonce = 1;
+}
+
+message AttestGpuResponse {
+  // Complete JSON output produced by nvattest, in the same shape `GpuInfo`
+  // returns, for the nonce in the request.
+  //
+  // dstack has already checked that nvattest succeeded and that every claim
+  // answers this nonce. Appraising the claims -- device count, CC state, VBIOS
+  // and driver versions, your own policy -- is the caller's job.
+  //
+  // What this proves is local and live: at the moment of the call, a genuine
+  // NVIDIA GPU reachable from this CVM signed this nonce. What it does NOT
+  // prove is that the GPU is attached to *this* TD. An NVIDIA report binds the
+  // device and the nonce, nothing more, so a hostile host can relay the
+  // challenge to a real GPU elsewhere and a colluding workload can do the same.
+  // Deriving the nonce from a TDX quote does not help -- the relay can derive
+  // it too. Only TDISP/TEE-IO device binding would close this, and no current
+  // Hopper/Blackwell deployment offers it. So: sound as a local health check,
+  // unsound as evidence to a remote party. For the latter, use the boot-time
+  // `gpu-attestation` runtime event, which measured code emits before any
+  // workload exists and which the event log binds to the quote.
+  string evidence = 1;
+  // The nonce the GPU actually answered, hex-encoded, as it appears in
+  // `eat_nonce`. Echoed so a caller can assert on it without re-encoding.
+  string nonce = 2;
 }
 
 message GpuInfoResponse {

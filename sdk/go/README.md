@@ -575,6 +575,28 @@ instead.
 - Cryptographic proof of execution environment
 - Audit trail generation
 
+##### `AttestGpu(ctx context.Context, nonce []byte) (*AttestGpuResponse, error)`
+
+Runs NVIDIA GPU attestation now, against a 32-byte nonce you choose. Use it after
+anything that may have reinitialised the GPU — a driver reload leaves a device that
+answers NVML but can no longer attest.
+
+```go
+resp, err := client.AttestGpu(ctx, nonce)
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Println(resp.Evidence)
+```
+
+> [!WARNING]
+> Not a remote attestation claim. It proves a genuine NVIDIA GPU reachable from this
+> CVM signed your nonce right now; it does not prove the GPU is attached to *this*
+> CVM, because an NVIDIA report binds the device and the nonce and nothing more, so a
+> hostile host can relay the challenge to a real GPU elsewhere. Sound as a local
+> health check, unsound as evidence to a remote party — for that use the boot-time
+> `gpu-attestation` event bound to the quote. Calls are rate-limited to one per 10s.
+
 ##### `GpuInfo(ctx context.Context) (*GpuInfoResponse, error)`
 
 Returns GPU information collected during boot. Currently, this includes the

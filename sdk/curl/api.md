@@ -260,7 +260,62 @@ curl --unix-socket /var/run/dstack.sock http://dstack/Attest?report_data=0000000
 }
 ```
 
-### 7. GPU Info
+### 7. Attest GPU
+
+Runs NVIDIA GPU attestation **now**, against a nonce you choose. Unlike
+[`GpuInfo`](#8-gpu-info), which replays a record written at boot, this samples the
+device at the moment of the call.
+
+Use it after anything that may have reinitialised the GPU. A driver reload leaves a
+device that still answers NVML but can no longer attest, and this is how an
+application detects that before submitting work.
+
+> [!WARNING]
+> This is **not** a remote attestation claim. It proves that a genuine NVIDIA GPU
+> reachable from this CVM signed your nonce, right now. It does not prove the GPU is
+> attached to *this* CVM: an NVIDIA report binds the device and the nonce, nothing
+> more, so a hostile host can relay the challenge to a real GPU elsewhere, and
+> deriving the nonce from a TDX quote does not help because the relay can derive it
+> too. Only TDISP/TEE-IO device binding would close this, and no current
+> Hopper/Blackwell deployment offers it.
+>
+> Sound as a local health check. Unsound as evidence to a remote party — for that,
+> use the boot-time `gpu-attestation` runtime event, which measured code emits
+> before any workload exists and which the event log binds to the quote.
+
+**Endpoint:** `/AttestGpu`
+
+**Request Parameters:**
+
+| Field | Type | Description | Example |
+|-------|------|-------------|----------|
+| `nonce` | string | Exactly 32 bytes, hex-encoded, passed to the GPU verbatim. To bind a longer challenge, hash it yourself. | `"ab...ab"` (64 hex chars) |
+
+**Example:**
+```bash
+curl --unix-socket /var/run/dstack.sock -X POST \
+  http://dstack/AttestGpu \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "nonce": "abababababababababababababababababababababababababababababababab"
+  }'
+```
+
+**Response:**
+```json
+{
+  "evidence": "{\"result_code\": 0, \"claims\": [...]}",
+  "nonce": "abababababababababababababababababababababababababababababababab"
+}
+```
+
+dstack has already checked that nvattest succeeded and that every claim answers your
+nonce; appraising the claims is yours. Calls are serialised and rate-limited (one
+attestation per 10s), because each one spawns `nvattest` and fetches OCSP and RIM
+collateral from NVIDIA. A call arriving inside the cooldown is rejected with a wait
+hint rather than queued.
+
+### 8. GPU Info
 
 Returns GPU information collected during boot. Currently, this includes the
 complete JSON output produced by NVIDIA `nvattest`.

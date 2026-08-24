@@ -104,6 +104,25 @@ println!("{}", info.tcb_info);
 Generates a versioned attestation with a custom 64-byte payload.
 - `attestation`: Hex-encoded attestation
 
+#### `attest_gpu(nonce: Vec<u8>) -> AttestGpuResponse`
+
+Runs NVIDIA GPU attestation now, against a 32-byte nonce you choose. Use it after
+anything that may have reinitialised the GPU — a driver reload leaves a device that
+answers NVML but can no longer attest.
+
+```rust
+let result = client.attest_gpu(nonce.to_vec()).await?;
+println!("{}", result.evidence);
+```
+
+> [!WARNING]
+> Not a remote attestation claim. It proves a genuine NVIDIA GPU reachable from this
+> CVM signed your nonce right now; it does not prove the GPU is attached to *this*
+> CVM, because an NVIDIA report binds the device and the nonce and nothing more, so a
+> hostile host can relay the challenge to a real GPU elsewhere. Sound as a local
+> health check, unsound as evidence to a remote party — for that use the boot-time
+> `gpu-attestation` event bound to the quote. Calls are rate-limited to one per 10s.
+
 #### `gpu_info() -> GpuInfoResponse`
 
 Returns GPU information collected during boot. Currently, this includes the

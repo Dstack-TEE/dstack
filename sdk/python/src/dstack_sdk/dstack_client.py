@@ -157,6 +157,20 @@ class AttestResponse(BaseModel):
         return bytes.fromhex(self.attestation)
 
 
+class AttestGpuResponse(BaseModel):
+    """Result of a fresh, on-demand NVIDIA GPU attestation.
+
+    Proves that a genuine NVIDIA GPU reachable from this CVM signed the nonce, right now.
+    It does NOT prove the GPU is attached to this CVM: an NVIDIA report binds the device
+    and the nonce, nothing more, so a hostile host can relay the challenge to a real GPU
+    elsewhere. Sound as a local health check, unsound as evidence to a remote party --
+    for that, use the boot-time `gpu-attestation` event bound to the quote.
+    """
+
+    evidence: str
+    nonce: str
+
+
 class GpuInfoResponse(BaseModel):
     attestation: str
 
@@ -440,6 +454,22 @@ class AsyncDstackClient(BaseClient):
         result = await self._send_rpc_request("Attest", {"report_data": hex})
         return AttestResponse(**result)
 
+    async def attest_gpu(self, nonce: bytes) -> AttestGpuResponse:
+        """Run NVIDIA GPU attestation now, against a 32-byte nonce you choose.
+
+        Proves that a genuine NVIDIA GPU reachable from this CVM signed the nonce, right now.
+        It does NOT prove the GPU is attached to this CVM: an NVIDIA report binds the device
+        and the nonce, nothing more, so a hostile host can relay the challenge to a real GPU
+        elsewhere. Sound as a local health check, unsound as evidence to a remote party --
+        for that, use the boot-time `gpu-attestation` event bound to the quote.
+        """
+        if not isinstance(nonce, (bytes, bytearray)) or len(nonce) != 32:
+            raise ValueError("nonce must be exactly 32 bytes")
+        result = await self._send_rpc_request(
+            "AttestGpu", {"nonce": binascii.hexlify(bytes(nonce)).decode()}
+        )
+        return AttestGpuResponse(**result)
+
     async def gpu_info(self) -> GpuInfoResponse:
         """Return GPU information collected during boot."""
         result = await self._send_rpc_request("GpuInfo", {})
@@ -571,6 +601,18 @@ class DstackClient(BaseClient):
         report_data: str | bytes,
     ) -> AttestResponse:
         """Request a versioned attestation for the provided report data."""
+        raise NotImplementedError
+
+    @call_async
+    def attest_gpu(self, nonce: bytes) -> AttestGpuResponse:
+        """Run NVIDIA GPU attestation now, against a 32-byte nonce you choose.
+
+        Proves that a genuine NVIDIA GPU reachable from this CVM signed the nonce, right now.
+        It does NOT prove the GPU is attached to this CVM: an NVIDIA report binds the device
+        and the nonce, nothing more, so a hostile host can relay the challenge to a real GPU
+        elsewhere. Sound as a local health check, unsound as evidence to a remote party --
+        for that, use the boot-time `gpu-attestation` event bound to the quote.
+        """
         raise NotImplementedError
 
     @call_async

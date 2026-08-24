@@ -11,6 +11,7 @@ import pytest
 
 from dstack_sdk import AsyncDstackClient
 from dstack_sdk import AsyncTappdClient
+from dstack_sdk import AttestGpuResponse
 from dstack_sdk import AttestResponse
 from dstack_sdk import DstackClient
 from dstack_sdk import GetKeyResponse
@@ -119,6 +120,32 @@ async def test_async_client_attest():
     result = await client.attest("test")
     assert isinstance(result, AttestResponse)
     assert len(result.attestation) > 0
+
+
+@pytest.mark.asyncio
+async def test_async_client_attest_gpu(monkeypatch):
+    evidence = '{"result_code":0,"claims":[]}'
+    nonce = bytes([0xAB]) * 32
+
+    async def fake_send(self, method, payload):
+        assert method == "AttestGpu"
+        assert payload == {"nonce": nonce.hex()}
+        return {"evidence": evidence, "nonce": nonce.hex()}
+
+    monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
+    monkeypatch.setattr(AsyncDstackClient, "_send_rpc_request", fake_send)
+    result = await AsyncDstackClient().attest_gpu(nonce)
+    assert isinstance(result, AttestGpuResponse)
+    assert result.evidence == evidence
+    assert result.nonce == nonce.hex()
+
+
+@pytest.mark.asyncio
+async def test_async_client_attest_gpu_rejects_wrong_nonce_length():
+    client = AsyncDstackClient()
+    for bad in [b"", bytes(31), bytes(33), "not-bytes"]:
+        with pytest.raises(ValueError):
+            await client.attest_gpu(bad)
 
 
 @pytest.mark.asyncio

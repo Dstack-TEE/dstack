@@ -26,6 +26,20 @@ async fn test_async_client_get_quote() {
 }
 
 #[tokio::test]
+async fn test_async_client_attest_gpu_validates_nonce_length() {
+    let client = AsyncDstackClient::new(None);
+    for len in [0, 31, 33] {
+        assert!(
+            client.attest_gpu(vec![0u8; len]).await.is_err(),
+            "a {len}-byte nonce must be rejected"
+        );
+    }
+    // The simulator ships no nvattest, so a well-formed request must still fail
+    // fast with an error rather than hang for the attestation timeout.
+    assert!(client.attest_gpu(vec![0xab; 32]).await.is_err());
+}
+
+#[tokio::test]
 async fn test_async_client_attest() {
     let client = AsyncDstackClient::new(None);
     let result = client.attest(b"test".to_vec()).await.unwrap();

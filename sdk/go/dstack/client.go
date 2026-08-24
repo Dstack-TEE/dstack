@@ -118,6 +118,21 @@ type GpuInfoResponse struct {
 	Attestation string `json:"attestation"`
 }
 
+// AttestGpuResponse is the result of a fresh, on-demand NVIDIA GPU attestation.
+//
+// It proves that a genuine NVIDIA GPU reachable from this CVM signed the nonce,
+// right now. It does NOT prove the GPU is attached to this CVM: an NVIDIA report
+// binds the device and the nonce, nothing more, so a hostile host can relay the
+// challenge to a real GPU elsewhere. Sound as a local health check, unsound as
+// evidence to a remote party -- for that, use the boot-time `gpu-attestation`
+// event bound to the quote.
+type AttestGpuResponse struct {
+	// Evidence is the complete nvattest JSON for the requested nonce.
+	Evidence string `json:"evidence"`
+	// Nonce is the nonce the GPU answered, hex-encoded, as it appears in eat_nonce.
+	Nonce string `json:"nonce"`
+}
+
 // Represents an event log entry in the TCB info
 type EventLog struct {
 	IMR          int    `json:"imr"`
@@ -529,6 +544,27 @@ func (c *DstackClient) Attest(ctx context.Context, reportData []byte) (*AttestRe
 	}
 
 	return &AttestResponse{Attestation: attestation}, nil
+}
+
+// AttestGpu runs NVIDIA GPU attestation now, against a 32-byte nonce you choose.
+//
+// See AttestGpuResponse for what this does and does not prove.
+func (c *DstackClient) AttestGpu(ctx context.Context, nonce []byte) (*AttestGpuResponse, error) {
+	if len(nonce) != 32 {
+		return nil, fmt.Errorf("nonce must be exactly 32 bytes, got %d", len(nonce))
+	}
+
+	payload := map[string]interface{}{"nonce": hex.EncodeToString(nonce)}
+	data, err := c.sendRPCRequest(ctx, "/AttestGpu", payload)
+	if err != nil {
+		return nil, err
+	}
+
+	var response AttestGpuResponse
+	if err := json.Unmarshal(data, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
 }
 
 // GpuInfo returns GPU information collected during boot.

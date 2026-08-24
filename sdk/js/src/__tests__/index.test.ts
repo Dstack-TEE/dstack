@@ -48,6 +48,19 @@ describe('DstackClient', () => {
     expect(() => JSON.parse(result.event_log)).not.toThrowError()
   })
 
+  it('should reject an attestGpu nonce that is not 32 bytes', async () => {
+    const client = new DstackClient()
+    await expect(() => client.attestGpu(new Uint8Array(31))).rejects.toThrow()
+    await expect(() => client.attestGpu(new Uint8Array(33))).rejects.toThrow()
+  })
+
+  it('should surface an attestGpu failure when the simulator has no GPU', async () => {
+    const client = new DstackClient()
+    // The simulator ships no nvattest, so this must fail fast and clearly
+    // rather than hang for the attestation timeout.
+    await expect(() => client.attestGpu(new Uint8Array(32).fill(0xab))).rejects.toThrow()
+  })
+
   it('should be able to attest', async () => {
     const client = new DstackClient()
     const result = await client.attest('test')

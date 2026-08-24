@@ -164,6 +164,22 @@ impl DstackClient {
         Ok(response)
     }
 
+    /// Runs NVIDIA GPU attestation now, against a 32-byte nonce you choose.
+    ///
+    /// Proves that a genuine NVIDIA GPU reachable from this CVM signed the nonce, right now.
+    /// It does NOT prove the GPU is attached to this CVM: an NVIDIA report binds the device
+    /// and the nonce, nothing more, so a hostile host can relay the challenge to a real GPU
+    /// elsewhere. Sound as a local health check, unsound as evidence to a remote party --
+    /// for that, use the boot-time `gpu-attestation` event bound to the quote.
+    pub async fn attest_gpu(&self, nonce: Vec<u8>) -> Result<AttestGpuResponse> {
+        if nonce.len() != 32 {
+            anyhow::bail!("Nonce must be exactly 32 bytes")
+        }
+        let data = json!({ "nonce": hex_encode(nonce) });
+        let response = self.send_rpc_request("/AttestGpu", &data).await?;
+        Ok(serde_json::from_value::<AttestGpuResponse>(response)?)
+    }
+
     /// Returns GPU information collected during boot.
     pub async fn gpu_info(&self) -> Result<GpuInfoResponse> {
         let response = self.send_rpc_request("/GpuInfo", &json!({})).await?;

@@ -103,6 +103,25 @@ export interface AttestResponse {
   attestation: Hex
 }
 
+/**
+ * Result of a fresh, on-demand NVIDIA GPU attestation.
+ *
+ * Proves that a genuine NVIDIA GPU reachable from this CVM signed the nonce, right
+ * now. It does NOT prove the GPU is attached to this CVM: an NVIDIA report binds the
+ * device and the nonce, nothing more, so a hostile host can relay the challenge to a
+ * real GPU elsewhere. Sound as a local health check, unsound as evidence to a remote
+ * party -- for that, use the boot-time `gpu-attestation` event bound to the quote.
+ */
+export interface AttestGpuResponse {
+  __name__: Readonly<'AttestGpuResponse'>
+
+  /** Complete nvattest JSON for the requested nonce. */
+  evidence: string
+
+  /** The nonce the GPU answered, hex-encoded, as it appears in `eat_nonce`. */
+  nonce: string
+}
+
 export interface GpuInfoResponse {
   __name__: Readonly<'GpuInfoResponse'>
 
@@ -299,6 +318,26 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
     return Object.freeze({
       __name__: 'AttestResponse',
       attestation: result.attestation as Hex,
+    })
+  }
+
+  /**
+   * Runs NVIDIA GPU attestation now, against a 32-byte nonce you choose.
+   *
+   * See {@link AttestGpuResponse} for what this does and does not prove.
+   */
+  async attestGpu(nonce: Buffer | Uint8Array): Promise<AttestGpuResponse> {
+    if (nonce.length !== 32) {
+      throw new Error(`Nonce must be exactly 32 bytes, got ${nonce.length}.`)
+    }
+    const payload = JSON.stringify({ nonce: to_hex(nonce) })
+    const result = await send_rpc_request<{ evidence: string, nonce: string }>(this.endpoint, '/AttestGpu', payload)
+    if ('error' in (result as any)) {
+      throw new Error((result as any)['error'] as string)
+    }
+    return Object.freeze({
+      ...result,
+      __name__: 'AttestGpuResponse' as const,
     })
   }
 

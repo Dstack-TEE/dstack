@@ -98,6 +98,23 @@ pub struct AttestResponse {
     pub attestation: String,
 }
 
+/// Response from a fresh, on-demand NVIDIA GPU attestation.
+///
+/// Proves that a genuine NVIDIA GPU reachable from this CVM signed the nonce, right now.
+/// It does NOT prove the GPU is attached to this CVM: an NVIDIA report binds the device
+/// and the nonce, nothing more, so a hostile host can relay the challenge to a real GPU
+/// elsewhere. Sound as a local health check, unsound as evidence to a remote party --
+/// for that, use the boot-time `gpu-attestation` event bound to the quote.
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+pub struct AttestGpuResponse {
+    /// Complete JSON output produced by nvattest for the requested nonce.
+    pub evidence: String,
+    /// The nonce the GPU answered, hex-encoded, as it appears in `eat_nonce`.
+    pub nonce: String,
+}
+
 /// Response containing the complete NVIDIA GPU attestation output.
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
