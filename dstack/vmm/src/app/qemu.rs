@@ -23,6 +23,7 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use bon::Builder;
 use dstack_types::shared_filenames::HOST_SHARED_DISK_LABEL;
+use dstack_types::version::Version;
 use fs_err as fs;
 use nix::unistd::{Gid, Uid};
 use serde::Serialize;
@@ -255,7 +256,7 @@ impl PreparedQemuLaunch {
         let tdx_mr_config_id = if tee_enabled
             && platform == CvmPlatform::Tdx
             && cfg.use_mrconfigid
-            && vm.image.info.version_tuple().unwrap_or_default() >= (0, 5, 2)
+            && vm.image.info.version().unwrap_or_default() >= Version::new(0, 5, 2)
         {
             Some(tdx_mr_config_id(&workdir, &app_compose)?)
         } else {
@@ -527,7 +528,7 @@ impl QemuCommandBuilder<'_> {
         let Some(rootfs) = &self.vm.image.rootfs else {
             return Ok(());
         };
-        let image_version = self.vm.image.info.version_tuple().unwrap_or_default();
+        let image_version = self.vm.image.info.version().unwrap_or_default();
         let extension = rootfs
             .extension()
             .unwrap_or_default()
@@ -535,7 +536,7 @@ impl QemuCommandBuilder<'_> {
             .unwrap_or_default();
         match extension {
             "iso" => {
-                if image_version >= (0, 5, 0) {
+                if image_version >= Version::new(0, 5, 0) {
                     bail!(
                         "Unsupported rootfs type: {extension}. Image versions >= 0.5.0 must use verity rootfs"
                     );

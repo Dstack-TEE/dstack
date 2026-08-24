@@ -726,9 +726,15 @@ async fn fetch_tagged_release(
 /// use the current unified image (which already contains conditional NVIDIA
 /// support).
 fn pick_asset(assets: &[Asset], gpu: bool) -> Option<&Asset> {
+    // `-dev` marks the dev *flavour*, which only ever appears as a name prefix
+    // (`dstack-dev-*`, `dstack-nvidia-dev-*`). Matching it as a bare substring
+    // would also reject release names whose version carries a `-dev` prerelease
+    // tag, e.g. `dstack-0.6.1-dev1.tar.gz`.
+    let is_dev_flavour =
+        |n: &str| n.starts_with("dstack-dev-") || n.starts_with("dstack-nvidia-dev-");
     let matches = |a: &&Asset, want_legacy_gpu: bool| {
         let n = a.name.as_str();
-        if !n.ends_with(".tar.gz") || n.ends_with("-uki.tar.gz") || n.contains("-dev") {
+        if !n.ends_with(".tar.gz") || n.ends_with("-uki.tar.gz") || is_dev_flavour(n) {
             return false;
         }
         let is_gpu = n.starts_with("dstack-nvidia-");
@@ -843,6 +849,41 @@ mod tests {
             pick_asset(&assets, true).unwrap().name,
             "dstack-0.6.0.tar.gz"
         );
+    }
+
+    #[test]
+    fn dev_flavour_is_matched_by_prefix_not_substring() {
+        // `-dev` as a *prerelease tag* is part of the version, not the flavour,
+        // so these releases must still be selectable.
+        let assets = vec![
+            asset("dstack-dev-0.6.1-dev1.tar.gz"),
+            asset("dstack-0.6.1-dev1.tar.gz"),
+            asset("dstack-nvidia-dev-0.6.1-dev1.tar.gz"),
+            asset("dstack-nvidia-0.6.1-dev1.tar.gz"),
+        ];
+        assert_eq!(
+            pick_asset(&assets, false).unwrap().name,
+            "dstack-0.6.1-dev1.tar.gz"
+        );
+        assert_eq!(
+            pick_asset(&assets, true).unwrap().name,
+            "dstack-nvidia-0.6.1-dev1.tar.gz"
+        );
+    }
+
+    #[test]
+    fn prerelease_versions_are_selectable() {
+        for version in ["0.6.1-rc1", "0.6.1.rc1", "0.6.1-beta.2", "0.6.1.a1"] {
+            let assets = vec![
+                asset(&format!("dstack-{version}-uki.tar.gz")),
+                asset(&format!("dstack-{version}.tar.gz")),
+            ];
+            assert_eq!(
+                pick_asset(&assets, false).unwrap().name,
+                format!("dstack-{version}.tar.gz"),
+                "{version}"
+            );
+        }
     }
 
     #[test]
