@@ -171,6 +171,7 @@ class GpuEvidenceBundle(BaseModel):
 
 class AttestGpuResponse(BaseModel):
     """Result of fresh, on-demand GPU evidence collection."""
+
     bundles: list[GpuEvidenceBundle]
 
 
