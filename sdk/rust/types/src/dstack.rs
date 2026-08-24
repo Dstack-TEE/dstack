@@ -235,15 +235,6 @@ impl SignResponse {
     }
 }
 
-/// Response from a Verify request
-#[derive(Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
-#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
-pub struct VerifyResponse {
-    /// Whether the signature is valid
-    pub valid: bool,
-}
-
 /// Response from a Version request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]

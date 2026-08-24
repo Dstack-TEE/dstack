@@ -151,40 +151,64 @@ println!("{:?}", tls.certificate_chain);  // Certificate chain
 
 ### Sign and Verify
 
-Sign data using TEE-derived keys (not yet released):
+Signing happens in the TEE, because it needs a key only the TEE holds. Verifying
+does not, so it runs locally in this SDK -- the guest agent's `Verify` RPC was
+removed in v0.6.0. Its answer arrived over the socket unattested, so trusting it
+was never better than checking the signature yourself.
 
 ```rust
-let result = client.sign("ed25519", b"message to sign".to_vec()).await?;
-println!("{:?}", result.signature);
-println!("{:?}", result.public_key);
+use dstack_sdk::verify::{verify_signature, verify_signature_chain, SignatureChain};
 
-// Verify the signature
-let valid = client.verify(
+let result = client.sign("ed25519", b"message to sign".to_vec()).await?;
+
+// Does this signature check out under this public key?
+let valid = verify_signature(
     "ed25519",
-    b"message to sign".to_vec(),
-    result.signature.clone(),
-    result.public_key.clone()
-).await?;
-println!("{}", valid.valid);  // true
+    b"message to sign",
+    &result.decode_signature()?,
+    &result.decode_public_key()?,
+)?;
+assert!(valid);
 ```
 
 **`sign()` Parameters:**
-- `algorithm`: `"ed25519"`, `"secp256k1"`, or `"secp256k1_prehashed"`
-- `data`: Data to sign
+- `algorithm`: `"ed25519"`, `"secp256k1"` (alias `"k256"`), or `"secp256k1_prehashed"`
+- `data`: Data to sign (a 32-byte digest for `secp256k1_prehashed`)
 
 **`sign()` Returns:** `SignResponse`
 - `signature`: Signature bytes
 - `public_key`: Public key bytes
-- `signature_chain`: Signatures proving TEE origin
+- `signature_chain`: Three signatures linking the signing key back to the KMS root
 
-**`verify()` Parameters:**
-- `algorithm`: Algorithm used for signing
-- `data`: Original data
-- `signature`: Signature to verify
-- `public_key`: Public key to verify against
+**`verify_signature()` Returns** `Result<bool>` -- `Ok(false)` when a well-formed
+signature does not match, and `Err` when an input is malformed (bad key length,
+unknown algorithm, non-canonical high-S signature). A malformed input is a caller
+bug, not a verdict.
 
-**`verify()` Returns:** `VerifyResponse`
-- `valid`: Boolean indicating if signature is valid
+#### Verifying the whole chain
+
+`verify_signature` alone proves only that whoever holds that public key signed the
+data. It says nothing about *whose* key it is. `verify_signature_chain` walks all
+three links back to a KMS root key you supply:
+
+```rust
+let info = client.info().await?;
+let verified = verify_signature_chain(&SignatureChain::from_sign_response(
+    "ed25519",
+    b"message to sign",
+    &result.decode_public_key()?,
+    &result.decode_signature_chain()?,
+    &hex::decode(&info.app_id)?,
+    &kms_root_pubkey,   // you supply this -- see below
+)?;
+println!("app root key: {}", hex::encode(verified.app_root_pubkey));
+```
+
+`kms_root_pubkey` must come from somewhere you already trust: the `DstackKms`
+contract's `kmsInfo().k256Pubkey`, or a value you pinned. Reading it from the same
+KMS you are checking against proves nothing -- an attacker who can answer that
+query can also mint a self-consistent chain. This comparison is the entire point
+of the chain; skip it and the other two links establish nothing.
 
 ## Blockchain Integration
 
