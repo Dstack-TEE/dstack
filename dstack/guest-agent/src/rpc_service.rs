@@ -18,13 +18,11 @@ use dstack_guest_agent_rpc::{
     AppInfo, AttestAppKeyRequest, AttestResponse, DeriveK256KeyResponse, DeriveKeyArgs, GetKeyArgs,
     GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse, GpuInfoResponse,
     HealthResponse, RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse,
-    VerifyRequest, VerifyResponse, WorkerVersion,
+    WorkerVersion,
 };
 use dstack_types::{AppKeys, SysConfig, GPU_ATTESTATION_OUTPUT};
-use ed25519_dalek::ed25519::signature::hazmat::{PrehashSigner, PrehashVerifier};
-use ed25519_dalek::{
-    Signer as Ed25519Signer, SigningKey as Ed25519SigningKey, Verifier as Ed25519Verifier,
-};
+use ed25519_dalek::ed25519::signature::hazmat::PrehashSigner;
+use ed25519_dalek::{Signer as Ed25519Signer, SigningKey as Ed25519SigningKey};
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
 use or_panic::ResultOrPanic;
@@ -443,40 +441,6 @@ impl DstackGuestRpc for InternalRpcHandler {
             ],
             public_key,
         })
-    }
-
-    async fn verify(self, request: VerifyRequest) -> Result<VerifyResponse> {
-        let algorithm = normalize_algorithm(&request.algorithm);
-        let valid = match algorithm {
-            "ed25519" => {
-                let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(
-                    &request
-                        .public_key
-                        .as_slice()
-                        .try_into()
-                        .ok()
-                        .context("invalid public key")?,
-                )?;
-                let signature = ed25519_dalek::Signature::from_slice(&request.signature)?;
-                verifying_key.verify(&request.data, &signature).is_ok()
-            }
-            "secp256k1" => {
-                let verifying_key =
-                    k256::ecdsa::VerifyingKey::from_sec1_bytes(&request.public_key)?;
-                let signature = k256::ecdsa::Signature::from_slice(&request.signature)?;
-                verifying_key.verify(&request.data, &signature).is_ok()
-            }
-            "secp256k1_prehashed" => {
-                let verifying_key =
-                    k256::ecdsa::VerifyingKey::from_sec1_bytes(&request.public_key)?;
-                let signature = k256::ecdsa::Signature::from_slice(&request.signature)?;
-                verifying_key
-                    .verify_prehash(&request.data, &signature)
-                    .is_ok()
-            }
-            _ => return Err(anyhow::anyhow!("Unsupported algorithm")),
-        };
-        Ok(VerifyResponse { valid })
     }
 
     async fn attest(self, request: RawQuoteArgs) -> Result<AttestResponse> {
@@ -1026,60 +990,6 @@ pNs85uhOZE8z2jr8Pg==
             },
             temp_attestation_file,
         )
-    }
-
-    #[tokio::test]
-    async fn test_verify_ed25519_success() {
-        let (state, _guard) = setup_test_state().await;
-        let handler = InternalRpcHandler {
-            state: state.clone(),
-        };
-        let data_to_sign = b"test message for ed25519";
-        let sign_request = SignRequest {
-            algorithm: "ed25519".to_string(),
-            data: data_to_sign.to_vec(),
-        };
-
-        let sign_response = handler.sign(sign_request).await.unwrap();
-
-        let verify_request = VerifyRequest {
-            algorithm: "ed25519".to_string(),
-            data: data_to_sign.to_vec(),
-            signature: sign_response.signature,
-            public_key: sign_response.public_key,
-        };
-        let handler = InternalRpcHandler {
-            state: state.clone(),
-        };
-        let verify_response = handler.verify(verify_request).await.unwrap();
-        assert!(verify_response.valid);
-    }
-
-    #[tokio::test]
-    async fn test_verify_secp256k1_success() {
-        let (state, _guard) = setup_test_state().await;
-        let handler = InternalRpcHandler {
-            state: state.clone(),
-        };
-        let data_to_sign = b"test message for secp256k1";
-        let sign_request = SignRequest {
-            algorithm: "secp256k1".to_string(),
-            data: data_to_sign.to_vec(),
-        };
-
-        let sign_response = handler.sign(sign_request).await.unwrap();
-
-        let verify_request = VerifyRequest {
-            algorithm: "secp256k1".to_string(),
-            data: data_to_sign.to_vec(),
-            signature: sign_response.signature,
-            public_key: sign_response.public_key,
-        };
-        let handler = InternalRpcHandler {
-            state: state.clone(),
-        };
-        let verify_response = handler.verify(verify_request).await.unwrap();
-        assert!(verify_response.valid);
     }
 
     #[tokio::test]

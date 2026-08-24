@@ -64,8 +64,11 @@ service DstackGuest {
   // Sign a payload
   rpc Sign(SignRequest) returns (SignResponse) {}
 
-  // Verify a signature
-  rpc Verify(VerifyRequest) returns (VerifyResponse) {}
+  // Removed in v0.6.0: `rpc Verify(VerifyRequest) returns (VerifyResponse)`.
+  // Signature verification needs no key material and no attestation, and the
+  // agent's answer arrives over the socket unattested, so a caller gained
+  // nothing over checking the signature itself. The SDKs now do it locally --
+  // see `verify_signature` / `verify_signature_chain`. Do not reuse the name.
 
   // Get the guest agent version
   rpc Version(google.protobuf.Empty) returns (WorkerVersion) {}
@@ -326,17 +329,6 @@ message SignResponse {
   repeated bytes signature_chain = 2;
   // The public key signing the data
   bytes public_key = 3;
-}
-
-message VerifyRequest {
-  string algorithm = 1;
-  bytes data = 2;
-  bytes signature = 3;
-  bytes public_key = 4;
-}
-
-message VerifyResponse {
-  bool valid = 1;
 }
 
 message AttestAppKeyRequest {
