@@ -35,7 +35,20 @@ simulator_stop() {
     rm -f "$DSTACK_SOCKET" "$TAPPD_SOCKET" "$GUEST_SOCKET" "$EXTERNAL_SOCKET"
 }
 
+# Printed at most once per run. The callers set `-E`, so an ERR trap propagates
+# into every function and subshell: without a guard, a failure inside a suite
+# dumps the same 100 lines on the way out of each frame, and the test failure an
+# operator came to read ends up scrolled off the top.
+#
+# The marker is a file, not a variable, precisely because the duplicate print
+# comes from a subshell -- an assignment there would not be visible to the
+# parent that prints second.
+SIMULATOR_LOGS_PRINTED_MARKER="$SIMULATOR_DIR/.simulator-logs-printed"
+
 simulator_print_logs() {
+    if ! (set -o noclobber; : >"$SIMULATOR_LOGS_PRINTED_MARKER") 2>/dev/null; then
+        return 0
+    fi
     if [[ -f "$SIMULATOR_LOG" ]]; then
         echo "Last simulator logs:"
         tail -100 "$SIMULATOR_LOG" || true
@@ -70,7 +83,7 @@ simulator_build() {
         # have set, and building in the wrong directory is not a failure worth
         # discovering three steps later.
         cd "$SIMULATOR_DIR" || exit 1
-        ./build.sh
+        ./build.sh || exit 1
     )
 }
 
@@ -82,6 +95,7 @@ simulator_start() {
         "$TAPPD_SOCKET" \
         "$GUEST_SOCKET" \
         "$EXTERNAL_SOCKET" \
+        "$SIMULATOR_LOGS_PRINTED_MARKER" \
         "$SIMULATOR_LOG"
 
     export DSTACK_SIMULATOR_ENDPOINT="$DSTACK_SOCKET"
@@ -89,12 +103,25 @@ simulator_start() {
 
     simulator_build
 
-    # `exec` matters: without it bash keeps the subshell around as a parent of
-    # the simulator -- it only elides the fork for a subshell's last command
-    # when no traps are installed, and the callers install several. `$!` would
-    # then be the subshell, `simulator_stop` would kill that and leave the
-    # simulator orphaned, holding the binary open so the next run's build.sh
-    # fails to overwrite it with "Text file busy".
+    # `exec` matters: without it `$!` is the subshell rather than the simulator,
+    # so `simulator_stop` kills the wrapper and leaves the simulator orphaned,
+    # holding its binary open until the next run's build.sh fails to overwrite
+    # it with "Text file busy".
+    #
+    # It takes both of the conditions below to lose the pid, which is why this
+    # is easy to get wrong by testing only one of them (measured, bash 5.2):
+    #
+    #   traps   body            `$!` is
+    #   none    single command  the command   (bash collapses `( cmd ) &`)
+    #   none    cd; command     the command   (last-command exec applies)
+    #   set     single command  the command   (collapsed before traps matter)
+    #   set     cd; command     THE SUBSHELL  <- this script
+    #
+    # A trap that must still run after the last command is what disables the
+    # exec-in-place, and a body that does something first is what stops the
+    # whole subshell being collapsed instead. This function has a `cd` and its
+    # callers install four traps, so `exec` is the only thing making `$!` the
+    # simulator.
     (
         cd "$SIMULATOR_DIR" || exit 1
         exec ./dstack-simulator >"$SIMULATOR_LOG" 2>&1

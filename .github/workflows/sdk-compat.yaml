@@ -31,7 +31,12 @@ jobs:
       # Each tag is an independent claim; one failing should not hide the other.
       fail-fast: false
       matrix:
-        tag: [v0.5.10, v0.5.11]
+        # v0.5.11 is the tag the freeze is defined against, and v0.5.9 is the
+        # newest tag whose SDKs actually differ from it. Not v0.5.10, the
+        # obvious other choice: `git rev-parse v0.5.10:sdk v0.5.11:sdk` returns
+        # one hash, so that pair would run the same suites twice and report the
+        # agreement as two independent results.
+        tag: [v0.5.9, v0.5.11]
     steps:
       - uses: actions/checkout@v5
         with:

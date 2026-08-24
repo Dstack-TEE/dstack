@@ -21,7 +21,11 @@
 #
 # Usage: sdk/compat/run-compat-tests.sh <tag> [<tag>...]
 #   e.g. sdk/compat/run-compat-tests.sh v0.5.11
-#        sdk/compat/run-compat-tests.sh v0.5.10 v0.5.11   # one simulator, both tags
+#        sdk/compat/run-compat-tests.sh v0.5.9 v0.5.11   # one simulator, both tags
+#
+# Any tag works, but check that the pair you pick differs: several release tags
+# share an SDK tree byte for byte (v0.5.10 and v0.5.11 do), and running both
+# reports one result twice.
 #
 # CI runs one tag per matrix job. Passing several tags locally builds and starts
 # the simulator once and shares one Cargo target directory across them.
@@ -80,21 +84,40 @@ usage() {
 # ---------------------------------------------------------------------------
 
 # All four lists are empty, and that is the result, not an oversight: the
-# v0.5.10 and v0.5.11 suites pass in full against the 0.6.0 agent, so the freeze
-# currently holds with no exceptions. Two 0.6.0 changes were expected to land
-# here and did not:
+# released suites pass in full against the 0.6.0 agent, so the freeze currently
+# holds with no exceptions. Two 0.6.0 changes were expected to land here and
+# did not -- but for different reasons, and only one of them is reassuring:
 #
-#   - `EmitEvent` always fails now (CHANGELOG 0.6.0, Removed: "runtime RTMR3
-#     events are system-owned"). Rust, Go and JS never tested it. Python's
-#     `test_emit_event` asserts HTTP 400 whenever DSTACK_SIMULATOR_ENDPOINT is
-#     set -- the simulator had no RTMR to extend at v0.5.11 either -- and the
-#     0.6.0 stub fails with exactly HTTP 400, so the released assertion still
-#     holds.
-#   - `GetQuote` is Intel TDX only now (CHANGELOG 0.6.0, Changed). The simulator
+#   - `GetQuote` is Intel TDX only now (CHANGELOG, Changed). The simulator
 #     serves a TDX quote, so it answers, which is what the released suites
-#     assert.
+#     assert. Genuinely covered: the suites exercise the path and agree.
+#   - `EmitEvent` always fails now (CHANGELOG, Removed: "runtime RTMR3 events
+#     are system-owned"). Rust, Go and JS never tested it. Python's
+#     `assert_emit_event_behavior` asserts HTTP 400 whenever
+#     DSTACK_SIMULATOR_ENDPOINT is set, because the simulator had no RTMR to
+#     extend at v0.5.11 either -- so it asserts 400 whether the method works or
+#     is a stub, and it would pass either way. Not covered. The absence of a
+#     skip entry here says nothing about `EmitEvent`; do not read it as
+#     evidence.
+#
+# Both point at CHANGELOG.md's `[Unreleased]` section -- 0.6.0 is not cut yet,
+# so there is no `## [0.6.0]` heading to cite.
 #
 # Entries with spaces must be quoted; a bare word list splits on them.
+#
+# The four lists do NOT share matching semantics, so an entry cannot be moved
+# between them unchanged:
+#
+#   RUST_SKIP    literal substring of the full test path (`cargo test --skip`).
+#                Reaches `cargo test` only -- the two `cargo run --example`
+#                invocations below cannot be skipped.
+#   GO_SKIP      REGEXP over the test name (`go test -skip`), joined with `|`.
+#   PYTHON_SKIP  literal nodeid prefix (`pytest --deselect`); pytest matches
+#                with `startswith`, so `::test_foo` also takes `::test_foo_bar`.
+#   JS_SKIP      REGEXP, woven into one negative-lookahead `--testNamePattern`.
+#
+# The two regexp lists interpolate entries unescaped: a `(`, `+` or `.` in an
+# entry changes its meaning. Escape it, or the skip silently widens.
 
 # Rust: `cargo test -- --skip <substring>`, matched against the full test path.
 RUST_SKIP=(

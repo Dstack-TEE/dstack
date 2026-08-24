@@ -17,7 +17,7 @@ their own test suites against that simulator.
 
 ```
 sdk/compat/run-compat-tests.sh v0.5.11
-sdk/compat/run-compat-tests.sh v0.5.10 v0.5.11   # one simulator, both tags
+sdk/compat/run-compat-tests.sh v0.5.9 v0.5.11   # one simulator, both tags
 ```
 
 The released SDKs come from `git worktree add <tag>`, so they are the published
@@ -32,14 +32,52 @@ behaviour, and the break is invisible. A released client cannot be edited to
 accommodate a change, so it fails when the surface moves — which is what a real
 deployed 0.5.x application would do.
 
+## What this does not catch
+
+A released client only exercises what it already knew about, so this job sees
+**breaking** drift and is blind to **additive** drift. Add a field to a frozen
+message and every old client ignores it, exactly as JSON and protobuf intend:
+the suites stay green. That is not a hypothetical — the comment at the top of
+`agent_rpc.proto` records that the surface acquired `GpuInfo`, `AttestGpu` and
+an `AttestArgs` field between v0.5.11 and 0.6.0, which is the drift this job
+would have slept through.
+
+Additions are caught one layer down, by the descriptor-digest test in
+`dstack/guest-agent/rpc/tests/frozen_surface.rs`: it hashes every frozen
+service's method list and the full field list of every message they reach, so a
+*wire-compatible* addition fails CI even though no client would notice.
+
+Neither check subsumes the other. The digest pins the shape and cannot see
+behaviour changing underneath a stable shape; this job exercises behaviour and
+cannot see the shape growing. Both are required, and a change that trips
+neither is what "frozen" is allowed to mean.
+
 The suites run the same four languages `sdk/run-tests.sh` runs — Rust, Go,
 Python, JS — including their purely local tests (compose hashing, env
 encryption, signature verification vectors). Those need no agent and should pass
 unchanged; they are not skipped just because they are not client calls.
 
-CI runs one tag per matrix job (`.github/workflows/sdk-compat.yaml`). Passing
-several tags in one local invocation builds and starts the simulator once and
-shares a Cargo target directory across them.
+CI runs one tag per matrix job (`.github/workflows/sdk-compat.yaml`), over
+`v0.5.11` — the tag the freeze is defined against — and `v0.5.9`, the newest
+tag whose SDKs actually differ from it. Check before adding a tag: several
+release tags share an SDK tree byte for byte (`git rev-parse v0.5.10:sdk
+v0.5.11:sdk` prints one hash twice), and a pair like that runs the same suites
+twice and reports the agreement as two independent results.
+
+Passing several tags in one local invocation builds and starts the simulator
+once and shares a Cargo target directory across them.
+
+The JS leg is the one that is not hermetic: the released `sdk/js` ships a
+`bun.lockb` but no `package-lock.json`, and pins `typescript` and `@types/node`
+at `latest`, so `npm install` resolves fresh every run. A red JS suite here can
+mean an npm publish rather than agent drift — check the diff before believing
+it. The Rust, Go and Python legs are pinned by `Cargo.lock`, `go.sum` and
+`pdm.lock`.
+
+Both scripts use the sockets and the binary under `sdk/simulator/`, so running
+this and `sdk/run-tests.sh` at the same time in one checkout will have them
+delete each other's sockets and fail to overwrite a running binary. Use
+separate checkouts, or run them one after the other.
 
 Two things `sdk/run-tests.sh` does are deliberately left out: `pdm run check`
 (it lints the released SDK's source with today's ruff and mypy, which says
