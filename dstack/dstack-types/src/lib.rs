@@ -448,10 +448,6 @@ impl GpuPolicy {
 #[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Requirements {
-    /// OS-version requirement parsed with Rust semver requirement semantics,
-    /// e.g. `">=0.6.0"` or `">=0.6.0, <0.7.0"`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub os_version: Option<String>,
     /// Allowed attestation platforms. Omitted means any supported platform;
     /// an explicit empty list means no platform is allowed.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -537,8 +533,7 @@ pub struct Requirements {
 
 impl Requirements {
     pub fn is_empty(&self) -> bool {
-        self.os_version.is_none()
-            && self.platforms.is_none()
+        self.platforms.is_none()
             && self.tdx_measure_acpi_tables.is_none()
             && self.launch_token_hash.is_none()
             && self.gpu_policy.is_default()
@@ -988,13 +983,12 @@ mod app_compose_tests {
     }
 
     #[test]
-    fn requirements_support_os_version_and_platforms() {
+    fn requirements_support_platforms_and_policies() {
         let compose: AppCompose = serde_json::from_value(serde_json::json!({
             "manifest_version": "3",
             "name": "test",
             "runner": "docker-compose",
             "requirements": {
-                "os_version": ">=0.6.1",
                 "platforms": ["dstack-gcp-tdx", "dstack-tdx"],
                 "tdx_measure_acpi_tables": true,
                 "launch_token_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
@@ -1008,7 +1002,6 @@ mod app_compose_tests {
         }))
         .unwrap();
         let requirements = compose.requirements.as_ref().unwrap();
-        assert_eq!(requirements.os_version.as_deref(), Some(">=0.6.1"));
         assert_eq!(
             requirements.platforms,
             Some(vec!["dstack-gcp-tdx".to_string(), "dstack-tdx".to_string()])
@@ -1033,7 +1026,7 @@ mod app_compose_tests {
             "name": "test",
             "runner": "docker-compose",
             "requirements": {
-                "os_version_policy": ">=0.6.1"
+                "os_version": ">=0.6.1"
             }
         }))
         .unwrap_err();
@@ -2666,7 +2659,7 @@ mod appcompose_sdk_parity {
                 "verity_root": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
                 "target": "/mnt/v",
             }],
-            "requirements": {"os_version": ">=0.6.1"},
+            "requirements": {"platforms": ["dstack-tdx"]},
             "snapshotter": "overlayfs",
         }))
         .expect("the fixture must stay parseable");

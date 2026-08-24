@@ -318,11 +318,9 @@ impl CvmVerifier {
         let kernel = kernel_path.display().to_string();
         let initrd = initrd_path.display().to_string();
 
-        // Prefer the explicit variant the image declared; fall back to parsing
-        // the version out of the image name for pre-`ovmf_variant` deployments.
-        let ovmf_variant = vm_config
-            .ovmf_variant
-            .unwrap_or_else(|| dstack_mr::ovmf_variant_for_image(vm_config.image.as_deref()));
+        // Prefer the explicit variant the image declared; pre-`ovmf_variant`
+        // deployments fall back to the only layout that existed back then.
+        let ovmf_variant = vm_config.ovmf_variant.unwrap_or_default();
 
         let details = dstack_mr::Machine::builder()
             .cpu_count(vm_config.cpu_count)

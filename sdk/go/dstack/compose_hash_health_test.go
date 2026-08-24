@@ -13,13 +13,13 @@ func TestHealthCheckRequirementChangesTheHash(t *testing.T) {
 	plain := AppCompose{
 		Runner:            "docker-compose",
 		DockerComposeFile: "docker-compose.yml",
-		Requirements:      &Requirements{OsVersion: ">=0.6.1"},
+		Requirements:      &Requirements{LaunchTokenHash: "ff00"},
 	}
 	gated := AppCompose{
 		Runner:            "docker-compose",
 		DockerComposeFile: "docker-compose.yml",
 		Requirements: &Requirements{
-			OsVersion:        ">=0.6.1",
+			LaunchTokenHash:  "ff00",
 			HealthCheck:      true,
 			HealthStatusFile: strPtr("/dstack/health"),
 		},
@@ -43,13 +43,13 @@ func TestHealthCheckRequirementChangesTheHash(t *testing.T) {
 func TestDisabledHealthCheckHashesAsAbsent(t *testing.T) {
 	disabled := AppCompose{
 		Runner:       "docker-compose",
-		Requirements: &Requirements{OsVersion: ">=0.6.1", HealthCheck: false},
+		Requirements: &Requirements{LaunchTokenHash: "ff00", HealthCheck: false},
 	}
 	got, err := GetComposeHash(disabled)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := hashOfRawJSON(t, `{"runner":"docker-compose","requirements":{"os_version":">=0.6.1"}}`)
+	want := hashOfRawJSON(t, `{"runner":"docker-compose","requirements":{"launch_token_hash":"ff00"}}`)
 	if got != want {
 		t.Fatalf("a false health_check must not appear in the manifest.\n got=%s\nwant=%s", got, want)
 	}

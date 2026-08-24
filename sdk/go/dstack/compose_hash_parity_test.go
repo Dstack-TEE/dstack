@@ -44,7 +44,6 @@ const fullAppCompose = `{
   "port_policy": {"ports": [{"port": 8080, "pp": true}], "restrict_mode": true},
   "verity_volumes": [{"source": "v.img", "verity_root": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff", "target": "/mnt/v"}],
   "requirements": {
-    "os_version": ">=0.6.1",
     "platforms": ["dstack-tdx"],
     "tdx_measure_acpi_tables": true,
     "launch_token_hash": "ff00",
@@ -122,13 +121,16 @@ func TestAnUnknownGpuPolicyFieldStillReachesTheHash(t *testing.T) {
 
 // The canonical form is the bytes the other SDKs produce, and `json.Marshal`
 // HTML-escapes `<`, `>` and `&` into `\u003c`, `\u003e` and `\u0026`. Rust,
-// Python and JS all leave them alone, so an os_version bound -- or a `&&` in a
-// compose file -- used to be enough to make this SDK the only one computing a
-// digest the chain would not be asked to whitelist.
+// Python and JS all leave them alone, so a `&&` in a compose file used to be
+// enough to make this SDK the only one computing a digest the chain would not
+// be asked to whitelist.
+//
+// The fixture has to keep carrying one of those three characters or this stops
+// testing anything.
 func TestHTMLCharactersAreNotEscaped(t *testing.T) {
 	compose := AppCompose{
-		Runner:       "docker-compose",
-		Requirements: &Requirements{OsVersion: ">=0.6.1"},
+		Runner:            "docker-compose",
+		DockerComposeFile: "services:\n  w:\n    image: x && y\n",
 	}
 	got, err := GetComposeHash(compose)
 	if err != nil {
@@ -136,7 +138,7 @@ func TestHTMLCharactersAreNotEscaped(t *testing.T) {
 	}
 	// Written out rather than derived, so this pins the bytes and not the code
 	// that produced them.
-	canonical := `{"requirements":{"os_version":">=0.6.1"},"runner":"docker-compose"}`
+	canonical := `{"docker_compose_file":"services:\n  w:\n    image: x && y\n","runner":"docker-compose"}`
 	sum := sha256.Sum256([]byte(canonical))
 	if want := hex.EncodeToString(sum[:]); got != want {
 		t.Fatalf("the canonical form diverged from the other SDKs.\n got=%s\nwant=%s", got, want)

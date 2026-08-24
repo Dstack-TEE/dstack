@@ -8,9 +8,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use dstack_types::{
-    AwsOsImageMeasurementDocument, AwsPcrReplay, GcpOsImageMeasurementDocument, GcpTpmReplay,
-    SevOsImageMeasurementDocument, TdxOsImageMeasurementDocument, GCP_MEASUREMENT_FILENAME,
-    SNP_MEASUREMENT_FILENAME, TDX_MEASUREMENT_FILENAME,
+    version::Version, AwsOsImageMeasurementDocument, AwsPcrReplay, GcpOsImageMeasurementDocument,
+    GcpTpmReplay, SevOsImageMeasurementDocument, TdxOsImageMeasurementDocument,
+    GCP_MEASUREMENT_FILENAME, SNP_MEASUREMENT_FILENAME, TDX_MEASUREMENT_FILENAME,
 };
 use serde::{Deserialize, Serialize};
 
@@ -46,18 +46,17 @@ pub struct ImageInfo {
 }
 
 impl ImageInfo {
-    pub fn version_tuple(&self) -> Option<(u16, u16, u16)> {
-        let version = self
-            .version
-            .split('.')
-            .take(3)
-            .map(|v| v.parse::<u16>())
-            .collect::<Result<Vec<_>, _>>()
-            .ok()?;
-        if version.len() < 3 {
-            return None;
-        }
-        Some((version[0], version[1], version[2]))
+    /// Parse `version` with the shared dstack version grammar.
+    ///
+    /// Prerelease and build-metadata suffixes are stripped, so `0.6.1-rc1`,
+    /// `0.6.1.rc1` and `0.6.1` all compare equal. That is deliberate: image
+    /// version comparisons here gate guest features, and a release candidate
+    /// is built from the code of the version it is a candidate for.
+    ///
+    /// Returns `None` when `version` is absent or unparseable; callers must
+    /// decide explicitly whether that is fatal.
+    pub fn version(&self) -> Option<Version> {
+        Version::parse(&self.version)
     }
 }
 
@@ -308,7 +307,7 @@ fn guess_version(base_path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Image, ImageInfo};
+    use super::{Image, ImageInfo, Version};
     use std::{fs, sync::Arc, thread};
     use tempfile::TempDir;
 
@@ -330,24 +329,36 @@ mod tests {
         fs::write(image.join("vmlinuz"), b"kernel").unwrap();
         let loaded = Image::load(&image).unwrap();
         assert_eq!(loaded.info.version, "1.2.3");
-        assert_eq!(loaded.info.version_tuple(), Some((1, 2, 3)));
+        assert_eq!(loaded.info.version(), Some(Version::new(1, 2, 3)));
         assert!(!loaded.info.shared_ro);
     }
 
     #[test]
     fn parses_version_boundaries_and_rejects_missing_artifact() {
         for (version, expected) in [
-            ("0.0.0", Some((0, 0, 0))),
-            ("65535.1.2", Some((u16::MAX, 1, 2))),
-            ("1.2", None),
+            ("0.0.0", Some(Version::new(0, 0, 0))),
+            ("65535.1.2", Some(Version::new(65535, 1, 2))),
+            // A missing patch component defaults to 0.
+            ("1.2", Some(Version::new(1, 2, 0))),
+            // A non-numeric patch is not silently coerced to 0.
             ("1.2.invalid", None),
-            ("65536.1.2", None),
+            // u16 no longer bounds the components.
+            ("65536.1.2", Some(Version::new(65536, 1, 2))),
+            // Prerelease and build metadata compare equal to the release.
+            ("0.6.1-rc1", Some(Version::new(0, 6, 1))),
+            ("0.6.1.rc1", Some(Version::new(0, 6, 1))),
+            ("0.6.1+build.5", Some(Version::new(0, 6, 1))),
+            ("0.6.1-rc.1+build.5", Some(Version::new(0, 6, 1))),
+            // Still garbage in, None out.
+            ("", None),
+            ("nvidia-0.6.0", None),
+            ("v0.6.1", None),
         ] {
             let json = format!(
                 r#"{{"cmdline":null,"kernel":"k","initrd":"i","hda":null,"rootfs":null,"bios":null,"version":"{version}"}}"#
             );
             let info: ImageInfo = serde_json::from_str(&json).unwrap();
-            assert_eq!(info.version_tuple(), expected);
+            assert_eq!(info.version(), expected, "{version}");
         }
         let (_root, image) = fixture("missing", "missing");
         assert!(Image::load(image).is_err());

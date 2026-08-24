@@ -255,13 +255,13 @@ def test_health_check_requirement_changes_the_hash():
     plain = AppCompose(
         runner="docker-compose",
         docker_compose_file="docker-compose.yml",
-        requirements=Requirements(os_version=">=0.6.1"),
+        requirements=Requirements(launch_token_hash="ff00"),
     )
     gated = AppCompose(
         runner="docker-compose",
         docker_compose_file="docker-compose.yml",
         requirements=Requirements(
-            os_version=">=0.6.1",
+            launch_token_hash="ff00",
             health_check=True,
             health_status_file="/dstack/health",
         ),
@@ -279,11 +279,11 @@ def test_health_check_off_hashes_as_if_it_were_absent():
     from dstack_sdk.get_compose_hash import Requirements
 
     absent = AppCompose(
-        runner="docker-compose", requirements=Requirements(os_version=">=0.6.1")
+        runner="docker-compose", requirements=Requirements(launch_token_hash="ff00")
     )
     disabled = AppCompose(
         runner="docker-compose",
-        requirements=Requirements(os_version=">=0.6.1", health_check=False),
+        requirements=Requirements(launch_token_hash="ff00", health_check=False),
     )
 
     assert get_compose_hash(absent) == get_compose_hash(disabled)
@@ -339,7 +339,6 @@ def test_a_plain_dict_round_trips_through_every_entry_point():
         "runner": "docker-compose",
         "docker_compose_file": "services: {}\n",
         "requirements": {
-            "os_version": ">=0.6.1",
             "health_check": True,
             "health_status_file": "/dstack/health",
         },
@@ -352,7 +351,6 @@ def test_a_plain_dict_round_trips_through_every_entry_point():
             runner="docker-compose",
             docker_compose_file="services: {}\n",
             requirements=Requirements(
-                os_version=">=0.6.1",
                 health_check=True,
                 health_status_file="/dstack/health",
             ),
@@ -383,12 +381,12 @@ def test_gpu_policy_reaches_the_hash():
     from dstack_sdk.get_compose_hash import Requirements
 
     plain = AppCompose(
-        runner="docker-compose", requirements=Requirements(os_version=">=0.6.1")
+        runner="docker-compose", requirements=Requirements(launch_token_hash="ff00")
     )
     gated = AppCompose(
         runner="docker-compose",
         requirements=Requirements(
-            os_version=">=0.6.1", gpu_policy={"attest_gpu": False}
+            launch_token_hash="ff00", gpu_policy={"attest_gpu": False}
         ),
     )
 
@@ -401,11 +399,11 @@ def test_an_unknown_requirement_still_reaches_the_hash():
     from dstack_sdk.get_compose_hash import Requirements
 
     plain = AppCompose(
-        runner="docker-compose", requirements=Requirements(os_version=">=0.6.1")
+        runner="docker-compose", requirements=Requirements(launch_token_hash="ff00")
     )
     future = AppCompose(
         runner="docker-compose",
-        requirements=Requirements(os_version=">=0.6.1", some_future_field=True),
+        requirements=Requirements(launch_token_hash="ff00", some_future_field=True),
     )
 
     assert get_compose_hash(plain) != get_compose_hash(future)
@@ -423,7 +421,7 @@ def test_hashing_a_dict_does_not_consume_it():
         "runner": "docker-compose",
         "docker_compose_file": "services:\n  web:\n    image: nginx\n",
         "docker_config": {"registry": "ghcr.io"},
-        "requirements": {"os_version": ">=0.6.1", "health_check": True},
+        "requirements": {"launch_token_hash": "ff00", "health_check": True},
     }
     before = json.dumps(manifest, sort_keys=True)
 

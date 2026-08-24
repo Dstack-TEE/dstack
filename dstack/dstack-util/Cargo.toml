@@ -24,7 +24,6 @@ scale = { workspace = true, features = ["derive"] }
 schnorrkel.workspace = true
 serde.workspace = true
 serde-human-bytes.workspace = true
-semver.workspace = true
 serde_json.workspace = true
 sd-notify.workspace = true
 sha2.workspace = true

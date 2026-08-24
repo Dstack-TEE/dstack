@@ -532,13 +532,13 @@ describe('Deterministic JSON Serialization', () => {
       const plain: AppCompose = {
         runner: "docker-compose",
         docker_compose_file: "docker-compose.yml",
-        requirements: { os_version: ">=0.6.1" }
+        requirements: { launch_token_hash: "ff00" }
       }
       const gated: AppCompose = {
         runner: "docker-compose",
         docker_compose_file: "docker-compose.yml",
         requirements: {
-          os_version: ">=0.6.1",
+          launch_token_hash: "ff00",
           health_check: true,
           health_status_file: "/dstack/health"
         }

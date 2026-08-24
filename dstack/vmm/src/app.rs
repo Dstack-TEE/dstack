@@ -18,6 +18,7 @@ use dstack_types::mr_config::MrConfigV3;
 use dstack_types::shared_filenames::{
     APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, SYS_CONFIG, TEE_SIMULATOR_CONFIG, USER_CONFIG,
 };
+use dstack_types::version::Version;
 use dstack_vmm_rpc::{
     self as pb, GpuInfo, ReloadVmsResponse, StatusRequest, StatusResponse, VmConfiguration,
 };
@@ -1605,7 +1606,10 @@ pub(crate) fn make_sys_config(
 ) -> Result<String> {
     let image_path = cfg.image.path.join(&manifest.image);
     let image = Image::load(image_path).context("Failed to load image info")?;
-    let img_ver = image.info.version_tuple().unwrap_or((0, 0, 0));
+    let img_ver = image
+        .info
+        .version()
+        .with_context(|| format!("Unparseable image version: {:?}", image.info.version))?;
     let mut kms_urls = if manifest.kms_urls.is_empty() {
         cfg.cvm.kms_urls.clone()
     } else {
@@ -1629,8 +1633,8 @@ pub(crate) fn make_sys_config(
             cluster.urls.shuffle(&mut rng);
         }
     }
-    if img_ver < (0, 5, 0) {
-        bail!("Unsupported image version: {img_ver:?}");
+    if img_ver < Version::new(0, 5, 0) {
+        bail!("Unsupported image version: {img_ver}");
     }
 
     let vm_config = make_vm_config(

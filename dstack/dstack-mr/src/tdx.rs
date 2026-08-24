@@ -33,8 +33,6 @@ struct ImageMetadata {
     initrd: String,
     bios: String,
     #[serde(default)]
-    version: String,
-    #[serde(default)]
     ovmf_variant: Option<OvmfVariant>,
 }
 
@@ -309,16 +307,7 @@ pub fn tdx_os_image_measurement_for_image_dir(image_dir: &Path) -> Result<TdxOsI
     crate::sev::rootfs_hash_from_cmdline(Some(&base_cmdline))
         .context("failed to parse dstack.rootfs_hash from TDX cmdline")?;
 
-    let ovmf_variant = meta
-        .ovmf_variant
-        .or_else(|| {
-            if meta.version.is_empty() {
-                None
-            } else {
-                crate::ovmf_variant_for_version(&meta.version).ok()
-            }
-        })
-        .unwrap_or_default();
+    let ovmf_variant = meta.ovmf_variant.unwrap_or_default();
 
     let fw_data = fs::read(image_dir.join(&meta.bios))
         .with_context(|| format!("cannot read {}", image_dir.join(&meta.bios).display()))?;
@@ -476,14 +465,7 @@ pub fn tdx_measurements_for_image_dir_without_rtmr0(
     let ovmf_variant = vm_config
         .ovmf_variant
         .or(meta.ovmf_variant)
-        .or_else(|| {
-            if meta.version.is_empty() {
-                None
-            } else {
-                crate::ovmf_variant_for_version(&meta.version).ok()
-            }
-        })
-        .unwrap_or_else(|| crate::ovmf_variant_for_image(vm_config.image.as_deref()));
+        .unwrap_or_default();
 
     let firmware = firmware_path.display().to_string();
     let kernel = kernel_path.display().to_string();
@@ -574,14 +556,7 @@ pub fn tdx_measurements_for_image_dir_with_acpi_hashes(
     let ovmf_variant = vm_config
         .ovmf_variant
         .or(meta.ovmf_variant)
-        .or_else(|| {
-            if meta.version.is_empty() {
-                None
-            } else {
-                crate::ovmf_variant_for_version(&meta.version).ok()
-            }
-        })
-        .unwrap_or_else(|| crate::ovmf_variant_for_image(vm_config.image.as_deref()));
+        .unwrap_or_default();
 
     let firmware = firmware_path.display().to_string();
     let kernel = kernel_path.display().to_string();

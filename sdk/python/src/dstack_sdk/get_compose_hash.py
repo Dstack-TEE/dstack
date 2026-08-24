@@ -54,7 +54,6 @@ class Requirements:
 
     def __init__(
         self,
-        os_version: Optional[str] = None,
         platforms: Optional[List[str]] = None,
         tdx_measure_acpi_tables: Optional[bool] = None,
         launch_token_hash: Optional[str] = None,
@@ -64,7 +63,6 @@ class Requirements:
         **kwargs: Any,
     ) -> None:
         """Initialize a new ``Requirements`` instance."""
-        self.os_version = os_version
         self.platforms = platforms
         self.tdx_measure_acpi_tables = tdx_measure_acpi_tables
         self.launch_token_hash = launch_token_hash
@@ -76,8 +74,6 @@ class Requirements:
     def to_dict(self) -> Dict[str, Any]:
         """Return a dictionary representation excluding ``None`` fields."""
         result: Dict[str, Any] = {}
-        if self.os_version is not None:
-            result["os_version"] = self.os_version
         if self.platforms is not None:
             result["platforms"] = self.platforms
         if self.tdx_measure_acpi_tables is not None:

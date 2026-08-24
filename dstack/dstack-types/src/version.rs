@@ -52,8 +52,13 @@ impl Version {
         let mut parts = version.split('.');
         let major = parts.next()?.parse().ok()?;
         let minor = parts.next()?.parse().ok()?;
-        // Patch is optional, defaults to 0
-        let patch = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        // Patch is optional and defaults to 0, but a patch that is *present*
+        // must be numeric: silently reading "0.6.garbage" as 0.6.0 would
+        // downgrade a malformed version into a valid-looking one.
+        let patch = match parts.next() {
+            Some(patch) => patch.parse().ok()?,
+            None => 0,
+        };
         // Ignore extra parts like "0.5.6.1"
 
         Some(Self {
@@ -160,6 +165,33 @@ mod tests {
         assert!(Version::parse("1").is_none());
         assert!(Version::parse("v").is_none());
         assert!(Version::parse("abc.def.ghi").is_none());
+        // A leading `v` is not stripped: callers that accept tags must do it.
+        assert!(Version::parse("v0.5.6").is_none());
+        // An image-name fragment must not parse as a version.
+        assert!(Version::parse("nvidia-0.6.0").is_none());
+    }
+
+    #[test]
+    fn test_parse_rejects_present_but_non_numeric_patch() {
+        // An absent patch defaults to 0 ...
+        assert_eq!(Version::parse("1.2").unwrap(), Version::new(1, 2, 0));
+        // ... but a present one must be numeric rather than coerced to 0.
+        assert!(Version::parse("1.2.invalid").is_none());
+        assert!(Version::parse("0.6.garbage.1").is_none());
+    }
+
+    #[test]
+    fn test_prerelease_compares_equal_to_release() {
+        // A release candidate is built from the code of the version it is a
+        // candidate for, so feature gates must treat the two as equal.
+        assert_eq!(Version::parse("0.6.1-rc1"), Version::parse("0.6.1"));
+        assert_eq!(Version::parse("0.6.1.rc1"), Version::parse("0.6.1"));
+        assert_eq!(Version::parse("0.6.1+build.5"), Version::parse("0.6.1"));
+        assert_eq!(
+            Version::parse("0.6.1-rc.1+build.5"),
+            Version::parse("0.6.1")
+        );
+        assert!(Version::parse("0.6.0-rc1").unwrap() >= Version::new(0, 6, 0));
     }
 
     #[test]

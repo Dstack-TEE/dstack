@@ -60,7 +60,6 @@ type RequirementPlatform =
   | 'dstack-amd-sev-snp'
   | 'dstack-nitro-enclave';
 type Requirements = {
-  os_version?: string;
   platforms?: RequirementPlatform[];
   tdx_measure_acpi_tables?: boolean;
   launch_token_hash?: string;
@@ -745,18 +744,49 @@ type CreateVmPayloadSource = {
     return image?.version;
   };
 
-  const verGE = (versionStr: string, otherVersionStr: string) => {
-    const versionParts = versionStr.split('.').map(Number);
-    const otherParts = otherVersionStr.split('.').map(Number);
-    return (
-      versionParts[0] > otherParts[0] ||
-      (versionParts[0] === otherParts[0] && versionParts[1] > otherParts[1]) ||
-      (versionParts[0] === otherParts[0] && versionParts[1] === otherParts[1] && versionParts[2] >= otherParts[2])
-    );
+  // Mirror of dstack-types::version::Version::parse. The prerelease/build
+  // suffix is stripped at the first '-' or '+', then major.minor[.patch] are
+  // read as decimal integers with patch defaulting to 0. So 0.6.1, 0.6.1-rc1,
+  // 0.6.1.rc1 and 0.6.1+build.5 all parse to the same version: a release
+  // candidate is built from the code of the version it is a candidate for and
+  // must not be feature-gated down to the previous release.
+  //
+  // Returns null when the string is absent or not parseable; verGE then
+  // reports false rather than silently comparing against NaN.
+  const parseVer = (v: string | undefined): [number, number, number] | null => {
+    if (!v) {
+      return null;
+    }
+    // Deliberately not `Number()`: it accepts ' 6', '0x10' and '' where the
+    // Rust parser rejects them, which would let the two sides disagree.
+    const num = (s: string | undefined): number | null =>
+      s !== undefined && /^\d+$/.test(s) ? Number(s) : null;
+    const parts = v.trim().split(/[-+]/)[0].split('.');
+    const major = num(parts[0]);
+    const minor = num(parts[1]);
+    const patch = parts.length > 2 ? num(parts[2]) : 0;
+    if (major === null || minor === null || patch === null) {
+      return null;
+    }
+    return [major, minor, patch];
+  };
+
+  const verGE = (versionStr: string | undefined, otherVersionStr: string) => {
+    const version = parseVer(versionStr);
+    const other = parseVer(otherVersionStr);
+    if (!version || !other) {
+      return false;
+    }
+    for (let i = 0; i < 3; i++) {
+      if (version[i] !== other[i]) {
+        return version[i] > other[i];
+      }
+    }
+    return true;
   };
 
   const appComposeManifestVersion = (versionStr: string | undefined): number | string => {
-    if (versionStr && verGE(versionStr, '0.6.0')) {
+    if (verGE(versionStr, '0.6.0')) {
       return '3';
     }
     return 2;
@@ -769,9 +799,6 @@ type CreateVmPayloadSource = {
       network_info: false,
       compose_version: 1,
     };
-    if (!versionStr) {
-      return features;
-    }
     if (verGE(versionStr, '0.3.3')) {
       features.progress = true;
       features.graceful_shutdown = true;
@@ -831,7 +858,7 @@ type CreateVmPayloadSource = {
 
   async function makeAppComposeFile() {
     const osVersion = imageVersion(vmForm.value.image);
-    if (nonEmptyInitScripts(vmForm.value.initScripts).length > 1 && (!osVersion || !verGE(osVersion, '0.6.0'))) {
+    if (nonEmptyInitScripts(vmForm.value.initScripts).length > 1 && !verGE(osVersion, '0.6.0')) {
       throw new Error('Multiple init scripts require a dstack image version 0.6.0 or newer');
     }
     const appCompose: Record<string, unknown> = {

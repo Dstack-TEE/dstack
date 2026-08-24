@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use dstack_mr::{Machine, OvmfVariant, ovmf_variant_for_image, ovmf_variant_for_version};
+use dstack_mr::{Machine, OvmfVariant};
 use dstack_types::{ImageInfo, VmConfig};
 use fs_err as fs;
 use size_parser::parse_memory_size;
@@ -93,11 +93,6 @@ struct MachineConfig {
     #[arg(long)]
     qemu_version: Option<String>,
 
-    /// dstack OS version (MAJOR.MINOR.PATCH), validated before using the supported OVMF
-    /// measurement layout. If omitted, falls back to `image_info.version`.
-    #[arg(long)]
-    dstack_os_version: Option<String>,
-
     /// Output JSON
     #[arg(long)]
     json: bool,
@@ -119,20 +114,9 @@ fn main() -> Result<()> {
             let initrd_path = parent_dir.join(&image_info.initrd).display().to_string();
             let cmdline = image_info.cmdline + " initrd=initrd";
 
-            // CLI flag wins, then the explicit `ovmf_variant` in metadata.json,
-            // and finally the OS version field. Older metadata.json files may
-            // carry neither, in which case fall back to the default.
-            let ovmf_variant = if let Some(v) = config.dstack_os_version.as_deref() {
-                ovmf_variant_for_version(v)
-                    .with_context(|| format!("invalid dstack OS version: {v}"))?
-            } else if let Some(variant) = image_info.ovmf_variant {
-                variant
-            } else if !image_info.version.is_empty() {
-                ovmf_variant_for_version(&image_info.version)
-                    .with_context(|| format!("invalid dstack OS version: {}", image_info.version))?
-            } else {
-                OvmfVariant::default()
-            };
+            // The image declares its OVMF layout. Older metadata.json files
+            // predate the field, so fall back to the only layout that existed.
+            let ovmf_variant = image_info.ovmf_variant.unwrap_or_default();
 
             let machine = Machine::builder()
                 .cpu_count(config.cpu)
@@ -341,19 +325,11 @@ fn run_diagnose(config: &DiagnoseConfig) -> Result<()> {
     let cmdline = format!("{} initrd=initrd", image_info.cmdline);
 
     // Same resolution order as the verifier (see verifier::compute_measurement_details):
-    // explicit vm_config.ovmf_variant > image_info.ovmf_variant > parse vm_config.image
-    // > parse image_info.version > legacy default.
+    // explicit vm_config.ovmf_variant > image_info.ovmf_variant > legacy default.
     let ovmf_variant = vm
         .ovmf_variant
         .or(image_info.ovmf_variant)
-        .unwrap_or_else(|| {
-            let from_image = ovmf_variant_for_image(vm.image.as_deref());
-            if !image_info.version.is_empty() {
-                ovmf_variant_for_version(&image_info.version).unwrap_or(from_image)
-            } else {
-                from_image
-            }
-        });
+        .unwrap_or_default();
 
     let details = Machine::builder()
         .cpu_count(vm.cpu_count)
