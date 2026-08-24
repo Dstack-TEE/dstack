@@ -36,10 +36,13 @@ service Tappd {
 
 // The service for the dstack guest agent.
 //
-// This unversioned surface is CLOSED. It is exactly the v0.5.11 surface and
-// stays that way: no additions, no renumbering, no removals, and no semantic
-// changes to existing methods. It exists so a v0.5.x client keeps working
-// against a 0.6 agent unchanged.
+// This surface is CLOSED. It is exactly the v0.5.11 surface and stays that way:
+// no additions, no renumbering, no removals, and no semantic changes to
+// existing methods. It exists so a v0.5.x client keeps working against a 0.6
+// agent unchanged.
+//
+// It is the `v0` surface, served at `/v0`. Its historical unversioned path `/`
+// stays mounted as an alias onto this same handler for pre-0.6 clients.
 //
 // Every new capability goes to `dstack.guest.v1` (agent_rpc_v1.proto), served
 // at `/v1` on the same socket. Do not add a method here, and do not add a
@@ -304,9 +307,10 @@ message WorkerVersion {
 
 // The external guest agent service.
 //
-// CLOSED, like `DstackGuest`: exactly the v0.5.11 surface, served at `/prpc`
-// on the external listener. New capability goes to `dstack.guest.v1`'s
-// `WorkerV1`, served at `/prpc/v1` on the same listener.
+// CLOSED, like `DstackGuest`: exactly the v0.5.11 surface, served at
+// `/prpc/v0` on the external listener, with `/prpc` kept as an alias onto the
+// same handler for pre-0.6 clients. New capability goes to `dstack.guest.v1`'s
+// `WorkerV1`, served at `/prpc/v1`.
 service Worker {
   // Get app info
   rpc Info(google.protobuf.Empty) returns (AppInfo) {}
