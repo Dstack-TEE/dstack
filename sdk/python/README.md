@@ -42,7 +42,8 @@ The v1 surface serves only what genuinely needs the TEE, so it has no `sign`, no
 pip install dstack-sdk
 ```
 
-Blockchain helpers are optional extras:
+Blockchain helpers are optional extras, needed only for the v0-era chain
+adapters ([Blockchain helpers](#blockchain-helpers)):
 
 | Extra | Pulls in | Use when |
 |---|---|---|
