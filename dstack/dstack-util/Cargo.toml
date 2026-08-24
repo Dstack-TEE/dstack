@@ -69,4 +69,5 @@ safe-write.workspace = true
 errify.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
 rand.workspace = true

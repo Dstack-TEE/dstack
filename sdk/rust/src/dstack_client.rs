@@ -166,11 +166,19 @@ impl DstackClient {
 
     /// Runs NVIDIA GPU attestation now, against a 32-byte nonce you choose.
     ///
-    /// Proves that a genuine NVIDIA GPU reachable from this CVM signed the nonce, right now.
-    /// It does NOT prove the GPU is attached to this CVM: an NVIDIA report binds the device
-    /// and the nonce, nothing more, so a hostile host can relay the challenge to a real GPU
-    /// elsewhere. Sound as a local health check, unsound as evidence to a remote party --
-    /// for that, use the boot-time `gpu-attestation` event bound to the quote.
+    /// Meaningful to a caller inside this CVM: the agent ran NVIDIA's verifier, which checked
+    /// the GPU's report signature, its certificate chain and OCSP status, and the driver and
+    /// VBIOS RIM signatures, all against this nonce.
+    ///
+    /// NOT independently verifiable by a third party, for two separate reasons. First, it is
+    /// unsigned: `--verifier local` returns the verifier's conclusion, not the GPU's signed
+    /// report. Its detached EAT is `alg:none` issued by `NVAT-LOCAL-VERIFIER`, and a claim
+    /// like `x-nvidia-gpu-attestation-report-signature-verified` is an assertion, not proof;
+    /// the signed artifacts are consumed during verification and not carried here. Second,
+    /// even signed it would bind the device and the nonce but not the TD, so it is relayable
+    /// from a genuine remote GPU. Use it as a local health check. For remote evidence use the
+    /// boot-time `gpu-attestation` event, which measured code emits before any workload
+    /// exists and which the event log binds to the quote.
     pub async fn attest_gpu(&self, nonce: Vec<u8>) -> Result<AttestGpuResponse> {
         if nonce.len() != 32 {
             anyhow::bail!("Nonce must be exactly 32 bytes")

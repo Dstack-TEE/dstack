@@ -1837,6 +1837,48 @@ mod gpu {
         const H100_ATTESTATION_OUTPUT: &[u8] =
             include_bytes!("../tests/fixtures/gpu_attestation_h100.json");
 
+        /// The `AttestGpu` API documents that its output cannot be verified by a
+        /// third party, because the local verifier reports a conclusion rather
+        /// than the GPU's signed report. That is a claim about NVIDIA's output
+        /// format, so pin it: if a future SDK starts signing the detached EAT,
+        /// this fails and the API docs need revisiting rather than quietly
+        /// becoming wrong.
+        #[test]
+        fn local_verifier_output_is_unsigned_self_report() {
+            let output: Value = serde_json::from_slice(H100_ATTESTATION_OUTPUT).unwrap();
+            let eat = &output["detached_eat"];
+            let jwt = eat[0][1].as_str().expect("detached EAT carries a JWT");
+            let (header_b64, rest) = jwt.split_once('.').unwrap();
+            let (_, signature) = rest.split_once('.').unwrap();
+            assert!(
+                signature.is_empty(),
+                "detached EAT is signed; AttestGpu docs claim it is not"
+            );
+
+            use base64::Engine as _;
+            let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(header_b64)
+                .unwrap();
+            let header: Value = serde_json::from_slice(&header).unwrap();
+            assert_eq!(header["alg"], "none");
+
+            // And the signed artifacts really are absent: the claims carry
+            // verdicts about the certificate chain, not the chain itself.
+            let claim = &output["claims"][0];
+            assert_eq!(
+                claim["x-nvidia-gpu-attestation-report-signature-verified"],
+                true
+            );
+            assert!(
+                claim["x-nvidia-gpu-attestation-report-cert-chain"]
+                    .as_object()
+                    .expect("cert-chain claim is a verdict object")
+                    .keys()
+                    .all(|key| key.starts_with("x-nvidia-cert-")),
+                "cert-chain claim carries certificates, not just verdicts"
+            );
+        }
+
         #[test]
         fn inventory_counts_nvidia_and_non_nvidia_gpus() {
             let root = tempfile::tempdir().unwrap();

@@ -227,17 +227,33 @@ message AttestGpuResponse {
   // answers this nonce. Appraising the claims -- device count, CC state, VBIOS
   // and driver versions, your own policy -- is the caller's job.
   //
-  // What this proves is local and live: at the moment of the call, a genuine
-  // NVIDIA GPU reachable from this CVM signed this nonce. What it does NOT
-  // prove is that the GPU is attached to *this* TD. An NVIDIA report binds the
-  // device and the nonce, nothing more, so a hostile host can relay the
-  // challenge to a real GPU elsewhere and a colluding workload can do the same.
-  // Deriving the nonce from a TDX quote does not help -- the relay can derive
-  // it too. Only TDISP/TEE-IO device binding would close this, and no current
-  // Hopper/Blackwell deployment offers it. So: sound as a local health check,
-  // unsound as evidence to a remote party. For the latter, use the boot-time
-  // `gpu-attestation` runtime event, which measured code emits before any
-  // workload exists and which the event log binds to the quote.
+  // To a caller inside this CVM this is a live, meaningful result: the agent ran
+  // NVIDIA's verifier, which checked the GPU's report signature, its certificate
+  // chain and OCSP status, and the driver and VBIOS RIM signatures, all against
+  // this nonce.
+  //
+  // It is NOT independently verifiable by a third party, for two separate
+  // reasons, and the first is the one that surprises people:
+  //
+  // 1. It is unsigned. `nvattest --verifier local` returns the verifier's
+  //    conclusion, not the GPU's signed report. The detached EAT it embeds is
+  //    `alg:none` with an empty signature, issued by `NVAT-LOCAL-VERIFIER`, and
+  //    claims such as `x-nvidia-gpu-attestation-report-signature-verified` are
+  //    assertions about a check already performed, not proof anyone can redo.
+  //    The GPU's signed SPDM report and certificate chain are consumed during
+  //    verification and do not appear here. So a relying party handed this JSON
+  //    has nothing to check -- it is a self-report from inside the CVM.
+  // 2. Even signed, it would bind the device and the nonce but not the TD the
+  //    device is attached to, so it can be relayed from a genuine remote GPU.
+  //    Deriving the nonce from a TDX quote does not help; the relay can derive
+  //    it too. Only TDISP/TEE-IO device binding closes that, and no current
+  //    Hopper/Blackwell deployment offers it.
+  //
+  // Remote evidence therefore stays with the boot-time `gpu-attestation` runtime
+  // event. Its trust does not come from the JSON being self-authenticating
+  // either -- it comes from measured dstack code (pinned by `os_image_hash`)
+  // having done the appraisal before any workload existed, with sha256 of the
+  // exact bytes measured into RTMR3 and covered by the quote.
   string evidence = 1;
   // The nonce the GPU actually answered, hex-encoded, as it appears in
   // `eat_nonce`. Echoed so a caller can assert on it without re-encoding.

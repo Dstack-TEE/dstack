@@ -106,11 +106,12 @@ const { evidence } = await client.attestGpu(crypto.randomBytes(32))
 ```
 
 > [!WARNING]
-> Not a remote attestation claim. It proves a genuine NVIDIA GPU reachable from this
-> CVM signed your nonce right now; it does not prove the GPU is attached to *this*
-> CVM, because an NVIDIA report binds the device and the nonce and nothing more, so a
-> hostile host can relay the challenge to a real GPU elsewhere. Sound as a local
-> health check, unsound as evidence to a remote party — for that use the boot-time
+> **Not independently verifiable by a third party.** Inside the CVM it is meaningful —
+> the agent ran NVIDIA's verifier against your nonce. Outside it, two things are true:
+> the output is *unsigned* (`--verifier local` returns the verifier's conclusion, with
+> an `alg:none` detached EAT; the GPU's signed report is consumed and not carried), and
+> even signed it would bind the device and nonce but not the TD, so it is relayable.
+> Use it as a local health check; for remote evidence use the boot-time
 > `gpu-attestation` event bound to the quote. Calls are rate-limited to one per 10s.
 
 ### `gpuInfo()`

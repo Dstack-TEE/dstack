@@ -271,17 +271,27 @@ device that still answers NVML but can no longer attest, and this is how an
 application detects that before submitting work.
 
 > [!WARNING]
-> This is **not** a remote attestation claim. It proves that a genuine NVIDIA GPU
-> reachable from this CVM signed your nonce, right now. It does not prove the GPU is
-> attached to *this* CVM: an NVIDIA report binds the device and the nonce, nothing
-> more, so a hostile host can relay the challenge to a real GPU elsewhere, and
-> deriving the nonce from a TDX quote does not help because the relay can derive it
-> too. Only TDISP/TEE-IO device binding would close this, and no current
-> Hopper/Blackwell deployment offers it.
+> **This response cannot be independently verified by a third party.** Inside the CVM
+> it is meaningful: the agent ran NVIDIA's verifier, which checked the GPU's report
+> signature, certificate chain and OCSP status, and the driver and VBIOS RIM
+> signatures, against your nonce. Outside it, two separate problems apply.
 >
-> Sound as a local health check. Unsound as evidence to a remote party — for that,
-> use the boot-time `gpu-attestation` runtime event, which measured code emits
-> before any workload exists and which the event log binds to the quote.
+> 1. **It is unsigned.** `--verifier local` returns the verifier's *conclusion*, not
+>    the GPU's signed report. The embedded detached EAT is `alg:none` with an empty
+>    signature, issued by `NVAT-LOCAL-VERIFIER`, and claims like
+>    `x-nvidia-gpu-attestation-report-signature-verified: true` are assertions about a
+>    check already performed — the signed SPDM report and certificate chain are
+>    consumed during verification and are not carried in the output. A relying party
+>    handed this JSON has nothing to check.
+> 2. **No TD binding.** Even signed, an NVIDIA report binds the device and the nonce,
+>    not the TD it is attached to, so it can be relayed from a genuine remote GPU.
+>    Deriving the nonce from a TDX quote does not help — the relay can derive it too.
+>    Only TDISP/TEE-IO closes this, and no current Hopper/Blackwell deployment has it.
+>
+> Use it as a local health check. For remote evidence use the boot-time
+> `gpu-attestation` runtime event: its trust comes not from the JSON being
+> self-authenticating but from measured dstack code (pinned by `os_image_hash`) having
+> appraised the GPU before any workload existed, with the digest in RTMR3.
 
 **Endpoint:** `/AttestGpu`
 
