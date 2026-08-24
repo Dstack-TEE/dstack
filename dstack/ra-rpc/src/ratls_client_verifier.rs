@@ -78,15 +78,17 @@ impl ClientCertVerifier for RaTlsClientVerifier {
             })?;
 
         // webpki used to enforce the validity window; keep doing so now that it does not.
-        let now_secs = now.as_secs();
+        // Compare as i64: x509 timestamps are signed, and a certificate whose window
+        // predates the epoch must read as expired rather than as unbounded.
+        let now_secs = now.as_secs() as i64;
         let not_before = cert.validity().not_before.timestamp();
         let not_after = cert.validity().not_after.timestamp();
-        if not_before > 0 && now_secs < not_before as u64 {
+        if now_secs < not_before {
             return Err(rustls::Error::General(
                 "client certificate is not yet valid".into(),
             ));
         }
-        if not_after > 0 && now_secs > not_after as u64 {
+        if now_secs > not_after {
             return Err(rustls::Error::General(
                 "client certificate has expired".into(),
             ));
@@ -298,6 +300,19 @@ mod tests {
     fn rejects_expired_cert() {
         let att = attestation();
         let expired = SystemTime::now() - Duration::from_secs(3600);
+        let err = verify(leaf(Some(&att), Some(expired), None)).unwrap_err();
+        assert!(
+            err.to_string().contains("expired"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_cert_that_expired_before_the_epoch() {
+        // x509 timestamps are signed. A notAfter before 1970 must read as expired,
+        // not as "no upper bound".
+        let att = attestation();
+        let expired = SystemTime::UNIX_EPOCH - Duration::from_secs(365 * 86400);
         let err = verify(leaf(Some(&att), Some(expired), None)).unwrap_err();
         assert!(
             err.to_string().contains("expired"),
