@@ -175,10 +175,6 @@ port = $KMS_RPC_LISTEN_PORT
 key = "$CERTS_DIR/rpc.key"
 certs = "$CERTS_DIR/rpc.crt"
 
-[rpc.tls.mutual]
-ca_certs = "$CERTS_DIR/tmp-ca.crt"
-mandatory = false
-
 [core]
 cert_dir = "$CERTS_DIR"
 attest_rpc_cert = false

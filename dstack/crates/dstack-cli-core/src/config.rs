@@ -130,10 +130,6 @@ port = 8000
 key = "/kms/certs/rpc.key"
 certs = "/kms/certs/rpc.crt"
 
-[rpc.tls.mutual]
-ca_certs = "/kms/certs/tmp-ca.crt"
-mandatory = false
-
 [core]
 cert_dir = "/kms/certs"
 # single-node: the KMS does not self-attest to its own auth API before

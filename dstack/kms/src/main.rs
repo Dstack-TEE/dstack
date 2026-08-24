@@ -6,12 +6,14 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use config::KmsConfig;
 use main_service::{KmsState, RpcHandler};
+use ra_rpc::ratls_client_verifier::RaTlsClientAuth;
 use ra_rpc::rocket_helper::QuoteVerifier;
 use ra_tls::attestation::AttestationVerifier;
 use rocket::{
     fairing::AdHoc,
     figment::{providers::Serialized, Figment},
     response::content::{RawHtml, RawText},
+    tls::Resolver as _,
     Shutdown, State,
 };
 use tracing::{info, warn};
@@ -180,6 +182,11 @@ async fn main() -> Result<()> {
         .clone()
         .merge(Serialized::defaults(figment.find_value("rpc")?));
     let mut rocket = rocket::custom(figment)
+        // Verify client certificates by their attestation rather than by issuer. The
+        // certificates guests and onboarding mint from the temp CA today keep working
+        // unchanged - they are now accepted for the attestation they carry rather than
+        // for who signed them - and a self-issued certificate would be accepted too.
+        .attach(RaTlsClientAuth::fairing())
         .attach(AdHoc::on_response("Add app version header", |_req, res| {
             Box::pin(async move {
                 res.set_raw_header("X-App-Version", app_version());
