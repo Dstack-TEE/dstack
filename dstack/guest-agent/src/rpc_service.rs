@@ -226,11 +226,8 @@ impl AppState {
             .quote_response(report_data, &self.inner.vm_config)
     }
 
-    fn attestation_for_report_data(&self, report_data: [u8; 64]) -> Result<Vec<u8>> {
-        self.inner
-            .platform
-            .attestation_for_report_data(report_data)?
-            .to_bytes()
+    fn attest_cvm(&self, report_data: [u8; 64]) -> Result<Vec<u8>> {
+        self.inner.platform.attest_cvm(report_data)?.to_bytes()
     }
 }
 
@@ -459,7 +456,7 @@ impl DstackGuestRpc for InternalRpcHandler {
     async fn attest(self, request: AttestArgs) -> Result<AttestResponse> {
         let report_data = pad64(&request.report_data).context("Report data is too long")?;
         Ok(AttestResponse {
-            attestation: self.state.attestation_for_report_data(report_data)?,
+            attestation: self.state.attest_cvm(report_data)?,
             boottime_gpu_evidence: boottime_gpu_evidence(
                 request.include_boottime_gpu_evidence,
                 Path::new(GPU_ATTESTATION_OUTPUT),
@@ -661,7 +658,7 @@ impl WorkerRpc for ExternalRpcHandler {
     async fn attest_app_key(self, request: AttestAppKeyRequest) -> Result<AttestResponse> {
         let report_data = self.app_key_report_data(&request.algorithm).await?;
         Ok(AttestResponse {
-            attestation: self.state.attestation_for_report_data(report_data)?,
+            attestation: self.state.attest_cvm(report_data)?,
             // This method attests a key, not the machine. A caller that wants
             // the boot-time GPU evidence asks `Attest` or `GpuInfo` for it.
             boottime_gpu_evidence: String::new(),
@@ -986,10 +983,7 @@ pNs85uhOZE8z2jr8Pg==
                 })
             }
 
-            fn attestation_for_report_data(
-                &self,
-                report_data: [u8; 64],
-            ) -> Result<VersionedAttestation> {
+            fn attest_cvm(&self, report_data: [u8; 64]) -> Result<VersionedAttestation> {
                 let attestation = patch_report_data(&self.attestation, report_data);
                 Ok(VersionedAttestation::V1 { attestation })
             }

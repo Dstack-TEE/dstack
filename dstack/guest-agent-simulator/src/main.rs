@@ -102,7 +102,7 @@ impl PlatformBackend for SimulatorPlatform {
         )
     }
 
-    fn attestation_for_report_data(&self, report_data: [u8; 64]) -> Result<VersionedAttestation> {
+    fn attest_cvm(&self, report_data: [u8; 64]) -> Result<VersionedAttestation> {
         simulator::simulated_attest_response(
             &self.attestation,
             report_data,
@@ -184,7 +184,7 @@ mod tests {
         let platform = load_fixture_platform();
         let report_data = [0x5a; 64];
         let encoded = platform
-            .attestation_for_report_data(report_data)
+            .attest_cvm(report_data)
             .unwrap()
             .to_bytes()
             .unwrap();
@@ -317,7 +317,7 @@ mod tests {
         let platform = SimulatorPlatform::new(fixture, false, None).unwrap();
         let report_data = [0x5a; 64];
         let encoded = platform
-            .attestation_for_report_data(report_data)
+            .attest_cvm(report_data)
             .unwrap()
             .to_bytes()
             .unwrap();

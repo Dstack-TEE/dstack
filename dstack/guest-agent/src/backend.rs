@@ -11,9 +11,10 @@ pub trait PlatformBackend: Send + Sync {
     fn attestation_for_info(&self) -> Result<VersionedAttestation>;
     fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation>;
     fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse>;
-    /// The attestation `Attest` and `AttestAppKey` return, with digest
-    /// preimages filled in. Encoding it is the RPC layer's job.
-    fn attestation_for_report_data(&self, report_data: [u8; 64]) -> Result<VersionedAttestation>;
+    /// Attest the CVM itself: the attestation `Attest` and `AttestAppKey`
+    /// return, with digest preimages filled in. Encoding it is the RPC
+    /// layer's job.
+    fn attest_cvm(&self, report_data: [u8; 64]) -> Result<VersionedAttestation>;
 }
 
 #[derive(Debug, Default)]
@@ -46,7 +47,7 @@ impl PlatformBackend for RealPlatform {
         })
     }
 
-    fn attestation_for_report_data(&self, report_data: [u8; 64]) -> Result<VersionedAttestation> {
+    fn attest_cvm(&self, report_data: [u8; 64]) -> Result<VersionedAttestation> {
         let mut attestation =
             Attestation::quote(&report_data).context("Failed to get attestation")?;
         attestation.fill_event_preimages();
