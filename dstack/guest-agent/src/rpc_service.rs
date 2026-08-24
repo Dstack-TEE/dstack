@@ -79,7 +79,7 @@ struct AppStateInner {
     platform: Arc<dyn PlatformBackend>,
     /// Present only when the app opted into health gating; see `health`.
     health: Option<Arc<crate::health::HealthMonitor>>,
-    /// Serialises and rate-limits on-demand GPU attestation.
+    /// Serialises on-demand GPU attestation.
     gpu_attestor: crate::gpu_attest::GpuAttestor,
 }
 
