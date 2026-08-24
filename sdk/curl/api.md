@@ -16,6 +16,22 @@ services:
       - /var/run/dstack.sock:/var/run/dstack.sock
 ```
 
+## API versions
+
+The agent serves two surfaces on this socket, chosen by URL path:
+
+| Path | Surface |
+|---|---|
+| `/v1/<Method>` | `dstack.guest.v1`, the current API |
+| `/v0/<Method>` | the frozen v0.5.11 API |
+| `/<Method>` | the same frozen API, under its historical path |
+
+The endpoints below are the frozen v0 ones unless a section says otherwise.
+They keep working unchanged. New integrations should target `/v1`, which is
+specified byte-for-byte in
+[`docs/guest-api-v1.md`](../../docs/guest-api-v1.md) -- note that v1 derives
+different key material for the same name, on purpose.
+
 ## Endpoints
 
 ### 1. Get TLS Key
@@ -260,17 +276,19 @@ curl --unix-socket /var/run/dstack.sock http://dstack/Attest?report_data=0000000
 }
 ```
 
-`boottime_gpu_evidence` carries the same bytes [`GpuInfo`](#8-gpu-info) serves, so one call
-returns both the quote and the GPU evidence a verifier needs. It is empty unless
-`include_boottime_gpu_evidence` was set and boot-time GPU attestation output exists. It is
-**not** bound to `report_data` — authenticate it with the `evidence_sha256`
-procedure documented under `GpuInfo` below.
+> **v1 only.** `include_boottime_gpu_evidence` and the `boottime_gpu_evidence`
+> response field are not on this frozen endpoint. Use
+> [`/v1/Attest`](#8-boot-time-gpu-evidence-v1) for them; a request sending
+> `include_boottime_gpu_evidence` here is ignored, not honoured.
 
 ### 7. Attest GPU
 
 Collects vendor-native GPU evidence for a caller-chosen 32-byte nonce.
 
-**Endpoint:** `/AttestGpu`
+**Endpoint:** `/v1/AttestGpu`
+
+> **v1 only.** This method is not on the frozen surface. It never appeared in a
+> v0.5.x release, so no existing client is affected.
 
 **Request Parameters:**
 
@@ -295,38 +313,53 @@ the evidence signature, certificate chain, measurements, and embedded nonce. The
 agent does not appraise the evidence. Evidence does not by itself bind the GPU to this
 CVM.
 
-### 8. GPU Info
+### 8. Boot-time GPU evidence (v1)
 
-Returns GPU information collected during boot. Currently, this includes the
-complete JSON output produced by NVIDIA `nvattest`.
-The `attestation` field is empty when no GPU attestation output is available,
-for example on a VM without an NVIDIA GPU or when GPU attestation was disabled.
+Returns the complete JSON output NVIDIA `nvattest` produced during boot, as part
+of an attestation.
 
-**Endpoint:** `/GpuInfo`
+> **`/GpuInfo` is gone.** It was added after v0.5.11 and never shipped in a
+> release, so nothing that ran against a released agent used it. Ask
+> `/v1/Attest` with `include_boottime_gpu_evidence` instead: it returns the same
+> bytes plus the attestation you need to authenticate them, in one round trip.
+
+**Endpoint:** `/v1/Attest`
 
 **Example:**
 ```bash
-curl --unix-socket /var/run/dstack.sock http://dstack/GpuInfo
+curl --unix-socket /var/run/dstack.sock -X POST \
+  http://dstack/v1/Attest \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "report_data": "1234deadbeaf",
+    "include_boottime_gpu_evidence": true
+  }'
 ```
 
 **Response:**
 ```json
 {
-  "attestation": "{\"result_code\": 0, \"claims\": [...]}"
+  "attestation": "<hex-encoded-attestation>",
+  "boottime_gpu_evidence": "{\"result_code\": 0, \"claims\": [...]}"
 }
 ```
 
-`GpuInfo.attestation` is the exact UTF-8 `nvattest` output saved during boot;
-calling this endpoint does not perform a new attestation. To authenticate it on
-TDX, first verify the quote and replay the supplied event log to the quote's
-RTMR3. Then decode the `gpu-attestation` event payload and compare its
-`evidence_sha256` with the SHA-256 digest of the exact returned string:
+`boottime_gpu_evidence` is the exact UTF-8 `nvattest` output saved during boot;
+requesting it does not perform a new attestation, and it is empty when no
+boot-time GPU attestation output is available (for example on a VM without an
+NVIDIA GPU, or when GPU attestation was disabled). It is **not** bound to
+`report_data`.
+
+To authenticate it on TDX, first verify the quote and replay the supplied event
+log to the quote's RTMR3. Then decode the `gpu-attestation` event payload and
+compare its `evidence_sha256` with the SHA-256 digest of the exact returned
+string:
 
 ```python
 import hashlib
 import json
 
-gpu_info = json.load(open("gpu-info.json"))
+attest_response = json.load(open("attest.json"))
 quote_response = json.load(open("quote.json"))
 events = quote_response["event_log"]
 if isinstance(events, str):
@@ -334,7 +367,7 @@ if isinstance(events, str):
 
 entry = next(event for event in events if event["event"] == "gpu-attestation")
 measured = json.loads(bytes.fromhex(entry["event_payload"]))
-actual = hashlib.sha256(gpu_info["attestation"].encode()).hexdigest()
+actual = hashlib.sha256(attest_response["boottime_gpu_evidence"].encode()).hexdigest()
 assert actual == measured["evidence_sha256"]
 ```
 

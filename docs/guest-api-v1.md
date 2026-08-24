@@ -79,8 +79,8 @@ mounted twice: `DstackGuestV1` hands out key material, and `WorkerV1` never does
 Version selection is by URL path and nothing else. There is no header
 negotiation, no `Accept-Version`, and no default-version redirect, so a request
 URL is the complete record of which contract the caller asked for. An agent that
-predates v1 answers `/v1/...` with HTTP 400, the same way it answers any unknown
-method.
+predates v1 has no `/v1` mount at all, so it answers `/v1/...` with a plain
+HTTP 404 -- see [Detecting an agent without v1](#detecting-an-agent-without-v1).
 
 Both surfaces run over the same prpc transport. A `POST` carrying
 `Content-Type: application/json` takes a JSON body and returns JSON; any other
@@ -88,9 +88,30 @@ content type takes a protobuf-encoded request message and returns a
 protobuf-encoded response. A `GET` takes its fields as query parameters and
 returns JSON.
 
-Every handler failure returns HTTP 400 with the error text in the body. prpc uses
-the same status for an unknown method, so the message text is the only thing that
-distinguishes "this agent does not have that method" from "that call failed".
+### Status codes
+
+| Status | Body | Meaning |
+|---|---|---|
+| 200 | the response message | Success |
+| 404 | the server's own 404 page | No such mount: this agent has no surface at that path |
+| 404 | `{"error": "Service not found: <Method>"}` | The surface is mounted; it has no such method |
+| 400 | `{"error": "<message>"}` | The method ran and failed |
+| other | `{"error": "<message>"}` | A handler chose the status; the message says why |
+
+A handler failure is a 400 with the error text in the body. v1 does not default,
+coerce, or truncate a malformed request into a well-formed one.
+
+### Detecting an agent without v1
+
+Both "this agent is too old for v1" and "v1 exists but has no such method"
+answer 404, so the status alone does not separate them. The body does.
+
+- 404 whose body is **not** JSON carrying `Service not found` -- there is no
+  surface mounted at that path. The agent predates v1.
+- 404 whose body **is** `{"error": "Service not found: <Method>"}` -- v1 is
+  mounted and does not have that method.
+
+`/v1/Version` is the cheapest probe: it takes no arguments and touches nothing.
 
 ## The internal surface
 
@@ -403,31 +424,45 @@ public key may verify `(r, s)` against it directly and compare instead.
 
 ## The external surface
 
-`WorkerV1` has four methods, served at `/prpc/v1`.
+`WorkerV1` has three methods, served at `/prpc/v1`.
 
 | Method | Purpose |
 |---|---|
 | `Info` | Application identity and configuration, subject to `public_tcbinfo` |
 | `Version` | The agent version |
-| `AttestAppKey` | Attest a key the application derived, named by algorithm |
 | `Health` | Report whether the application is serving |
 
-Nothing here returns key material, and no caller chooses what gets signed.
-`AttestAppKey` names a key by algorithm alone; the agent derives it and attests
-the public key. A caller cannot build that report data itself, because it does
-not know the public key until the agent derives it, which is why attesting an app
-key needs its own method rather than the caller-supplied `report_data` that
-`Attest` takes.
+Nothing here returns key material, and no caller chooses what gets signed or
+attested.
 
-`AttestAppKey` replaces the frozen `Worker.GetAttestationForAppKey`. That method
-returns a `GetQuoteResponse`, which only Intel TDX can fill, so it fails on every
-other platform and leaves an external caller there with no way to attest an app
-key at all. `AttestAppKey` takes the same request and returns the v1
-`AttestResponse`, on every platform. Its `boottime_gpu_evidence` is always empty:
-this method attests a key, not the machine.
+### There is no v1 AttestAppKey
 
-Both methods commit to the same public key for a given algorithm, because both
-build their report data the same way. Only the envelope differs.
+The frozen surface has `Worker.GetAttestationForAppKey`, which attests a key the
+agent derives from an algorithm name alone. v1 has no counterpart, on purpose.
+
+That method attests the key v0's KDF derives at path `vms` with purpose
+`signing`. No v1 `GetKey(domain, algorithm)` call can return that key: the v1
+KDF has a different salt, a different `info`, and no `purpose` input at all. A
+v1 application calling it would receive an attestation of a public key whose
+private half it has no way to obtain, which is worse than having no method --
+it looks like it works.
+
+A v1 application attests its own key instead:
+
+1. Derive the key: `GetKey(domain, algorithm)` on the internal socket.
+2. Commit to it: build `report_data` over `public_key` yourself. Prefix it so a
+   verifier can tell what it is looking at -- see the `dip1::` convention the
+   frozen method uses.
+3. Attest it: `Attest(report_data)` on the internal socket.
+4. Publish it: hand the resulting attestation to relying parties. The
+   application serves it; the agent's external listener does not.
+
+This is strictly more capable than the method it replaces. The application picks
+which of its keys to attest, and picks the commitment format, instead of being
+limited to the single key the agent would derive for it.
+
+Legacy flows keep using `Worker.GetAttestationForAppKey`, unchanged and frozen.
+It is Intel TDX only, because it returns a `GetQuoteResponse`.
 
 `Health` is polled by the gateway to decide whether an instance belongs in its
 application's load-balancing rotation. It answers from a cache the agent
@@ -446,9 +481,22 @@ minus what the application asked to keep private. Unless the app-compose sets
 - `vm_config`
 - `key_provider_info`
 
-Identity and the measurement hashes are always present. That is the same line the
-unversioned `Worker.Info` drew, which blanked `tcb_info` and `vm_config` under
-the same flag.
+Identity and the measurement hashes are always present.
+
+This is close to, but deliberately not the same as, what the frozen
+`Worker.Info` does. That one blanks `tcb_info` and `vm_config`, and serves
+`key_provider_info` externally in every case. v1 blanks `key_provider_info` too:
+it names the component holding the application's keys, and an external caller
+has no use for it. The frozen behaviour is unchanged on its own surface, so a
+v0.5.x client sees exactly what it always did.
+
+| Field | `Worker.Info` (frozen) | `WorkerV1.Info` |
+|---|---|---|
+| identity, measurement hashes | always served | always served |
+| `tcb_info` / measurement registers | blanked | not in the message at all |
+| `vm_config` | blanked | blanked |
+| `app_compose` | (nested in `tcb_info`, blanked) | blanked |
+| `key_provider_info` | **always served** | **blanked** |
 
 The internal `DstackGuestV1.Info` applies no gating at all. The flag decides what
 an outside party may learn, and the caller on the internal socket is the
@@ -536,10 +584,11 @@ over exactly those bytes, so do not parse and re-serialize before hashing: key
 order, whitespace and unknown fields all change the digest, and that digest is
 what gets whitelisted on chain.
 
-v1 applies no `public_tcbinfo` hiding. That flag decides what the *external*
-listener may reveal, and v1 is on the internal socket only, so there is nobody to
-hide from; the caller is the application itself. External exposure stays on the
-unversioned `Worker.Info`.
+`DstackGuestV1.Info` on the internal socket applies no hiding: the caller is the
+application itself, which cannot need protecting from its own configuration.
+`WorkerV1.Info` on the external listener honours `public_tcbinfo`; see
+[public_tcbinfo on the external surface](#public_tcbinfo-on-the-external-surface),
+which is the authoritative description.
 
 ## Errors
 
@@ -549,10 +598,12 @@ unversioned `Worker.Info`.
 | Derived secp256k1 scalar out of range | Error; the caller picks another domain |
 | `report_data` longer than 64 bytes | Error |
 | `not_before` not earlier than `not_after` | Error |
-| Unknown method, including `/v1` on an older agent | HTTP 400 |
+| Unknown method on a mounted surface | HTTP 404, `Service not found: <Method>` |
+| `/v1/...` on an agent that predates v1 | HTTP 404, no such mount |
 
-Every one of these is an HTTP 400 with the message in the body. v1 does not
-default, coerce, or truncate a malformed request into a well-formed one.
+Everything above the last two rows is an HTTP 400 with the message in the body.
+See [Status codes](#status-codes) for the full mapping. v1 does not default,
+coerce, or truncate a malformed request into a well-formed one.
 
 ## Migration from the unversioned API
 
@@ -573,12 +624,19 @@ remain on the internal one (`EmitEvent` fails with a message naming its removal)
 and `GetAttestationForAppKey` remains on the external one. Nothing forces a
 migration.
 
-**SDK shape.** The SDKs ship two clients that mirror the two surfaces: a
-`ClientV0` for the closed unversioned API, including its `Sign` and `Verify` RPCs,
-and a `ClientV1` for this one. They are transport mirrors, not a compatibility
-layer, and neither translates calls to the other. `ClientV1` has no `Sign` and no
-`Verify` because v1 has neither; an application signs locally and a relying party
-verifies locally, following the rules above.
+**SDK shape.** The SDKs do not implement v1 yet; that lands in a later release.
+This is the contract they will implement, stated here so integrators can plan
+against it and so the SDK work has something to be checked against.
+
+They will ship two clients mirroring the two surfaces: a `ClientV0` for the
+closed unversioned API, including its `Sign` and `Verify` RPCs, and a `ClientV1`
+for this one. They will be transport mirrors, not a compatibility layer, and
+neither will translate calls to the other. `ClientV1` will have no `Sign` and no
+`Verify`, because v1 has neither; an application signs locally and a relying
+party verifies locally, following the rules above.
+
+Until that release, the current SDKs speak the frozen surface only. Against a
+0.6 agent they keep working, because that surface is still mounted.
 
 ## Field mapping
 
@@ -599,8 +657,8 @@ For readers porting from the unversioned API.
 | `Sign` | — | Removed; sign locally with the key from `GetKey` |
 | `Verify` | — | Removed; verify locally per this document |
 | `EmitEvent` | — | Removed; RTMR3 is system-owned |
-| `Worker.GetAttestationForAppKey` | `WorkerV1.AttestAppKey` | Same request; answers on every platform |
-| `Worker.Info` | `WorkerV1.Info` | Same `public_tcbinfo` gating |
+| `Worker.GetAttestationForAppKey` | — | No v1 counterpart; a v1 app attests its own key, see above |
+| `Worker.Info` | `WorkerV1.Info` | Also gates `key_provider_info`; see above |
 
 ## Related documents
 
