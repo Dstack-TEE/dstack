@@ -528,21 +528,17 @@ impl QemuCommandBuilder<'_> {
         let Some(rootfs) = &self.vm.image.rootfs else {
             return Ok(());
         };
-        let image_version = self.vm.image.info.version().unwrap_or_default();
         let extension = rootfs
             .extension()
             .unwrap_or_default()
             .to_str()
             .unwrap_or_default();
         match extension {
-            "iso" => {
-                if image_version >= Version::new(0, 5, 0) {
-                    bail!(
-                        "Unsupported rootfs type: {extension}. Image versions >= 0.5.0 must use verity rootfs"
-                    );
-                }
-                command.arg("-cdrom").arg(rootfs);
-            }
+            // Images before 0.5.0 shipped an `.iso` rootfs booted via `-cdrom`,
+            // with no dm-verity behind it. `make_sys_config` has rejected those
+            // images since it started requiring >= 0.5.0, so that branch was
+            // already unreachable; dropping it keeps the rejection explicit
+            // instead of leaving a non-verity boot path one edit away.
             "verity" => {
                 command.arg("-drive").arg(format!(
                     "file={},if=none,id=hd0,format=raw,readonly=on",
