@@ -10,6 +10,7 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 # shellcheck source=simulator/lifecycle.sh
+# shellcheck disable=SC1091  # the hook runs without -x, so it cannot follow this
 source "$ROOT_DIR/simulator/lifecycle.sh"
 
 trap 'simulator_print_logs' ERR

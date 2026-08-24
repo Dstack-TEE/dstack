@@ -45,6 +45,7 @@ SDK_DIR="$(cd "$COMPAT_DIR/.." && pwd -P)"
 REPO_ROOT="$(cd "$SDK_DIR/.." && pwd -P)"
 
 # shellcheck source=../simulator/lifecycle.sh
+# shellcheck disable=SC1091  # the hook runs without -x, so it cannot follow this
 source "$SDK_DIR/simulator/lifecycle.sh"
 
 # Old SDK builds go to a target directory of their own: shared across tags so a

@@ -65,7 +65,11 @@ simulator_wait_for_socket() {
 
 simulator_build() {
     (
-        cd "$SIMULATOR_DIR"
+        # `|| exit` rather than relying on the caller's `set -e`: this file is
+        # sourced, so it inherits whatever shell options the caller happens to
+        # have set, and building in the wrong directory is not a failure worth
+        # discovering three steps later.
+        cd "$SIMULATOR_DIR" || exit 1
         ./build.sh
     )
 }
@@ -92,7 +96,7 @@ simulator_start() {
     # simulator orphaned, holding the binary open so the next run's build.sh
     # fails to overwrite it with "Text file busy".
     (
-        cd "$SIMULATOR_DIR"
+        cd "$SIMULATOR_DIR" || exit 1
         exec ./dstack-simulator >"$SIMULATOR_LOG" 2>&1
     ) &
     SIMULATOR_PID=$!
