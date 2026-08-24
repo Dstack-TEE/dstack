@@ -170,23 +170,6 @@ JSON string as v0 did, and `compose_hash` is sha256 over its verbatim bytes.
 
 Also the cheapest probe for whether an agent serves v1 at all.
 
-## Blockchain Integration
-
-### Ethereum with Alloy
-
-```rust
-use dstack_sdk::DstackClient;
-use dstack_sdk::ethereum::to_account_v1;
-
-let client = DstackClient::new(None);
-let key = client.get_key("wallet/ethereum", "secp256k1").await?;
-let signer = to_account_v1(&key)?;
-println!("Ethereum address: {}", signer.address());
-```
-
-On the frozen surface the equivalent is `ethereum::to_account` with a
-`DstackClientV0` response.
-
 ## Development
 
 For local development without TDX hardware, use the simulator:
@@ -369,6 +352,23 @@ To verify a **v1 signature chain**, do it yourself.
 normatively: the claim encoding, the recovery step, and the trust anchor the
 chain has to terminate at. This SDK deliberately ships no verification helper --
 it mirrors an API surface, and verifying is the relying party's job.
+
+### Blockchain adapters (v0-era)
+
+`ethereum::to_account` is typed against the v0 `GetKeyResponse` and stays that
+way. The v1 surface has no chain-related functionality: it returns key
+material, and what an application builds from those bytes is its own business.
+
+```rust
+use dstack_sdk::dstack_client::DstackClientV0;
+use dstack_sdk::ethereum::to_account;
+
+let client = DstackClientV0::new(None);
+let key = client.get_key(Some("wallet/ethereum".to_string()), None).await?;
+let signer = to_account(&key)?;
+println!("Ethereum address: {}", signer.address());
+```
+
 
 ## License
 

@@ -165,31 +165,6 @@ Do not parse and re-serialize `app_compose` before hashing it — key order, whi
 
 Returns `{ version, rev }` of the guest agent.
 
-## Blockchain keys
-
-A v1 derived key is 32 raw bytes, which is what both ecosystems' key constructors want:
-
-```typescript
-import { privateKeyToAccount } from 'viem/accounts'
-import { createWalletClient, http } from 'viem'
-import { mainnet } from 'viem/chains'
-
-const key = await client.getKey('wallet/ethereum', 'secp256k1')
-const account = privateKeyToAccount(`0x${Buffer.from(key.key).toString('hex')}`)
-
-const wallet = createWalletClient({ account, chain: mainnet, transport: http() })
-```
-
-```typescript
-import { Keypair } from '@solana/web3.js'
-
-const key = await client.getKey('wallet/solana', 'ed25519')
-const keypair = Keypair.fromSeed(key.key)
-console.log(keypair.publicKey.toBase58())
-```
-
-The `@phala/dstack-sdk/viem` and `@phala/dstack-sdk/solana` submodules are typed against the v0 response shapes and are documented under [Legacy](#legacy-v0-frozen).
-
 ## Compose hash
 
 ```typescript
@@ -400,7 +375,7 @@ Sub-500ms probe against `/Info`. Returns a boolean and never throws — useful f
 
 ### Blockchain helpers
 
-`toViemAccountSecure` and `toKeypairSecure` take a v0 `GetKeyResponse` or `GetTlsKeyResponse`, so they belong to this surface. For v1 keys, construct the account directly — see [Blockchain keys](#blockchain-keys).
+The chain adapters are v0-era and stay that way: `toViemAccountSecure` and `toKeypairSecure` take a v0 `GetKeyResponse` or `GetTlsKeyResponse`. The v1 surface has no chain-related functionality — it returns key material, and what an application builds from those bytes is its own business.
 
 ```typescript
 import { toViemAccountSecure } from '@phala/dstack-sdk/viem'

@@ -34,8 +34,8 @@ a call to the other, and each one's method set is exactly its surface's. v1 has
 no `sign` and no `verify`, because any caller that can reach the socket can ask
 `get_key` for the private key and do both locally.
 
-> **v1 keys are not v0 keys.** Deriving under the same name through a `ClientV1`
-> returns *different key material* than a `ClientV0` does. This is deliberate --
+> **v1 keys are not v0 keys.** Deriving under the same name through `DstackClient`
+> returns *different key material* than `DstackClientV0` does. This is deliberate --
 > the v0 KDF ignored the algorithm, so one secret served both curves -- and
 > there is no compatibility mode. An application holding assets under a v0 key
 > must migrate them with a transaction signed by the old key before cutting
@@ -47,7 +47,7 @@ The SDKs ship no verification helper. Verifying needs no client and no
 connection, and it is the relying party's job.
 [`docs/guest-api-v1.md`](../docs/guest-api-v1.md) specifies the rules
 normatively -- the claim encoding, the recovery step, and the trust anchor the
-chain has to terminate at. `ClientV0.verify()` remains for single signatures on
+chain has to terminate at. `DstackClientV0.verify()` remains for single signatures on
 the frozen surface, since that is what the v0 surface offers.
 
 ## SDKs

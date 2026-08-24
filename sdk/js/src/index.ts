@@ -510,7 +510,7 @@ export class TappdClient extends DstackClientV0<TcbInfoV03x> {
         endpoint = socketPaths.find(p => fs.existsSync(p)) ?? socketPaths[0]
       }
     }
-    console.warn('TappdClient is deprecated, please use DstackClient instead')
+    console.warn('TappdClient is deprecated, please use DstackClientV0 instead')
     super(endpoint)
   }
 
