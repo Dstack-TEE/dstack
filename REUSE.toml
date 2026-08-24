@@ -45,7 +45,6 @@ path = [
     "tools/sca/examples/hello-c/config.json",
     "tools/sca/examples/heartbeat/rootfs/etc/heartbeat/interval",
     "sdk/simulator/*.json",
-    "sdk/tests/vectors/*.json",
     "sdk/go/go.sum",
     "sdk/go/ratls/go.sum",
     "dstack/kms/dstack-app/builder/shared/builder-pinned-packages.txt",
