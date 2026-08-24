@@ -2,6 +2,36 @@
 
 Access TEE features from your Python application running inside dstack. Derive deterministic keys, generate attestation quotes, create TLS certificates, and sign data—all backed by hardware security.
 
+## Two clients, two APIs
+
+dstack 0.6.0 split the guest agent API into two surfaces on one socket, and the
+agent picks between them by URL path alone. This SDK mirrors both, and nothing
+more — neither client translates calls to the other.
+
+| Client | Surface | Paths | What it is |
+|---|---|---|---|
+| `DstackClientV0` / `AsyncDstackClientV0` | the frozen v0.5.11 API | `/GetKey`, equivalently `/v0/GetKey` | Frozen: no new method, no new field, ever |
+| `DstackClientV1` / `AsyncDstackClientV1` | `dstack.guest.v1` | `/v1/GetKey` | Where every new capability lands |
+
+`DstackClient` and `AsyncDstackClient` remain as deprecated aliases for the v0
+clients, so pre-0.6 code keeps working unchanged. They are the same classes; use
+the `V0` names in new code so a reader can tell which surface it is looking at.
+
+> [!WARNING]
+> **v1 derives different key material than v0.** `DstackClientV1.get_key('x', 'secp256k1')`
+> and `DstackClientV0.get_key('x')` return different private keys. The v1 KDF binds
+> the algorithm and its own context tag alongside the domain, which is the point of
+> the new derivation, not a defect: v0 ignored the algorithm, so one secret served
+> two curves. There is no compatibility mode and no flag that brings the old bytes
+> back. An application holding assets under a v0 key must migrate them deliberately —
+> derive the v1 key, move the asset with a transaction signed by the v0 key, and only
+> then cut over.
+
+The v1 surface serves only what genuinely needs the TEE, so it has no `sign`, no
+`verify`, no `emit_event`, no `get_quote` and no `gpu_info`. See
+[`docs/guest-api-v1.md`](../../docs/guest-api-v1.md) for the normative spec, and
+[V1 Client](#v1-client) below for the six methods it does have.
+
 ## Installation
 
 ```bash
@@ -21,27 +51,32 @@ Aliases `[eth]` and `[sol]` are accepted for convenience.
 ## Quick Start
 
 ```python
-from dstack_sdk import DstackClient
+from dstack_sdk import DstackClientV0, DstackClientV1
 
-client = DstackClient()
+# The frozen v0.5.11 surface
+v0 = DstackClientV0()
+key = v0.get_key('wallet/eth')       # Same path always returns the same key
+quote = v0.get_quote(b'my-app-state')
 
-# Derive a deterministic key for your wallet
-key = client.get_key('wallet/eth')
-print(key.key)  # Same path always returns the same key
-
-# Generate an attestation quote
-quote = client.get_quote(b'my-app-state')
-print(quote.quote)
+# dstack.guest.v1 — a different surface, and different keys
+v1 = DstackClientV1()
+key = v1.get_key('wallet/eth', 'secp256k1')   # algorithm is required
+attestation = v1.attest(b'my-app-state')
 ```
 
-The client automatically connects to `/var/run/dstack.sock`. For local development with the simulator:
+Both clients automatically connect to `/var/run/dstack.sock`, take the same
+constructor, and resolve endpoints the same way. For local development with the
+simulator:
 
 ```python
-client = DstackClient('http://localhost:8090')
+client = DstackClientV0('http://localhost:8090')
 # or export DSTACK_SIMULATOR_ENDPOINT=http://localhost:8090
 ```
 
-## Core API
+## V0 Client
+
+`DstackClientV0` speaks the frozen v0.5.11 API. In the examples below,
+`client = DstackClientV0()`.
 
 ### Derive Keys
 
@@ -100,47 +135,8 @@ print(result.attestation)        # hex string
 print(result.decode_attestation())  # bytes
 ```
 
-Pass `include_boottime_gpu_evidence=True` to also return the boot-time GPU attestation
-evidence, so a verifier gets the quote and the GPU evidence in one round trip.
-
-```python
-result = client.attest(b'user:alice:nonce123', include_boottime_gpu_evidence=True)
-print(result.boottime_gpu_evidence)
-```
-
-The evidence is the same bytes ``gpu_info()`` serves and is empty unless the flag was set
-and boot-time GPU attestation output exists. It is not bound to `report_data`; verify
-it with the measured `gpu-attestation` event digest as described under ``gpu_info()``.
-
-### On-demand GPU Attestation
-
-`attest_gpu(nonce)` collects vendor-native GPU evidence for a caller-chosen 32-byte
-nonce.
-
-```python
-result = client.attest_gpu(os.urandom(32))
-for bundle in result.bundles:
-    print(bundle.vendor, bundle.format, bundle.evidence)
-```
-
-Select a verifier using each bundle's `vendor` and `format`. The verifier must check
-the evidence signature, certificate chain, measurements, and embedded nonce. Evidence
-is opaque and hex-encoded by the JSON RPC. It does not by itself bind the GPU to this
-CVM.
-
-### GPU Info
-
-`gpu_info()` returns GPU information collected during boot. Currently, this
-includes the complete NVIDIA `nvattest` JSON output.
-
-```python
-gpu = client.gpu_info()
-print(gpu.attestation)
-```
-
-The `attestation` field is empty when no GPU attestation output is available.
-The raw output is not trusted by itself; remote verifiers should compare its
-digest with the measured `gpu-attestation` runtime event.
+`report_data` is the only argument. GPU evidence — boot-time and on-demand alike —
+is a v1 capability; see [V1 Client](#v1-client).
 
 ### Get Instance Info
 
@@ -196,24 +192,21 @@ When any of the 0.5.7-only options is set, the SDK probes `Version` first and ra
 
 ### Sign and Verify
 
-Signing happens in the TEE, because it needs a key only the TEE holds. Verifying
-does not, so it runs locally in this SDK — the guest agent's `Verify` RPC was
-removed in v0.6.0. Its answer arrived over the socket unattested, so trusting it
-was never better than checking the signature yourself.
+Both are frozen v0 RPCs and neither has a v1 counterpart. Signing happens in the
+TEE because it needs a key only the TEE holds; verifying does not, and the
+agent's answer arrives over the socket unattested, so a relying party gains
+nothing over checking the signature itself with a standard library.
 
 ```python
-from dstack_sdk import verify_signature, verify_signature_chain
-
 result = client.sign('ed25519', b'message to sign')
 
-# Does this signature check out under this public key?
-valid = verify_signature(
+verdict = client.verify(
     'ed25519',
     b'message to sign',
     result.decode_signature(),
     result.decode_public_key(),
 )
-assert valid is True
+assert verdict.valid is True
 ```
 
 **`sign()` Parameters:**
@@ -225,46 +218,18 @@ assert valid is True
 - `public_key`: Hex-encoded public key
 - `signature_chain`: Three signatures linking the signing key back to the KMS root
 
-**`verify_signature()` Returns:** `bool` — `False` when a well-formed signature
-does not match, and it *raises* `ValueError` when an input is malformed (bad key
-length, wrong signature length, unknown algorithm, non-canonical high-S
-signature). A malformed input is a caller bug, not a verdict.
+**`verify()` Returns:** `VerifyResponse` with a single `valid: bool`. It reports
+only whether that one signature matches that one public key — it says nothing
+about *whose* key it is, and it does not walk the signature chain.
 
-#### Verifying the whole chain
-
-`verify_signature` alone proves only that whoever holds that public key signed
-the data. It says nothing about *whose* key it is. `verify_signature_chain`
-walks all three links back to a KMS root key you supply:
-
-```python
-# Both anchors come from you, not from the CVM being checked.
-expected_app_id = bytes.fromhex('a9019d1b2c3d4e5f60718293a4b5c6d7e8f90a1b')
-kms_root_pubkey = bytes.fromhex('03...')  # pinned, or read from DstackKms
-
-app_root_pubkey = verify_signature_chain(
-    'ed25519',
-    b'message to sign',
-    result.decode_public_key(),
-    result.decode_signature_chain(),
-    expected_app_id,
-    kms_root_pubkey,
-)
-print(app_root_pubkey.hex())  # compressed SEC1, 33 bytes
-```
-
-Note what the example does *not* do: it never passes `client.info().app_id`
-straight through. That value is reported by the very CVM being verified, so a
-chain checked against it proves only that the CVM is self-consistent with
-itself. Use the app id you registered on chain, and if you want `AppInfo` in the
-picture, compare it against that value rather than trusting it.
-
-It returns the app root public key and raises `ValueError` on any failure.
-
-`kms_root_pubkey` must come from somewhere you already trust: the `DstackKms`
-contract's `kmsInfo().k256Pubkey`, or a value you pinned. Reading it from the
-same KMS you are checking against proves nothing — an attacker who can answer
-that query can also mint a self-consistent chain. This comparison is the entire
-point of the chain; skip it and the other two links establish nothing.
+Earlier drafts of this SDK shipped local `verify_signature` and
+`verify_signature_chain` helpers. They are gone. To verify a v1 signature chain,
+follow [`docs/guest-api-v1.md`](../../docs/guest-api-v1.md), which is the
+normative spec: it gives the claim encoding, the link order, and — the part that
+actually establishes anything — the requirement that the KMS root public key
+come from somewhere you already trust (the `DstackKms` contract's
+`kmsInfo().k256Pubkey`, or a value you pinned), never from the CVM being
+checked.
 
 ### Diagnostics
 
@@ -273,16 +238,16 @@ client.version()        # VersionResponse(version, rev) — raises on OS < 0.5.7
 client.is_reachable()   # Quick connectivity probe; never raises
 ```
 
-## Async Client
+### Async
 
-For async applications, use `AsyncDstackClient`. The API surface is identical, but every method is a coroutine:
+`AsyncDstackClientV0` has the identical surface, with every method a coroutine:
 
 ```python
 import asyncio
-from dstack_sdk import AsyncDstackClient
+from dstack_sdk import AsyncDstackClientV0
 
 async def main():
-    client = AsyncDstackClient()
+    client = AsyncDstackClientV0()
 
     info = await client.info()
     key = await client.get_key('wallet/eth')
@@ -296,9 +261,137 @@ async def main():
 asyncio.run(main())
 ```
 
-`AsyncDstackClient` accepts the same constructor as `DstackClient` plus `use_sync_http: bool = False` for callers that need to issue sync HTTP from within an async context.
+`AsyncDstackClientV0` accepts the same constructor as `DstackClientV0` plus `use_sync_http: bool = False` for callers that need to issue sync HTTP from within an async context. The same holds for `AsyncDstackClientV1`.
+
+### Removed in 0.6.0
+
+`emit_event()` is still on the client, but the agent now fails every call:
+runtime RTMR3 events are system-owned and an app can no longer extend them. The
+method remains so that a caller written against 0.5.x gets the agent's own
+explanation rather than a 404. `attest_gpu()` and `gpu_info()` never shipped on
+this surface and are not here; they live on the v1 client.
+
+## V1 Client
+
+`DstackClientV1` speaks `dstack.guest.v1` at `/v1/<Method>`. Six methods, and
+deliberately no more — v1 serves only what genuinely needs the TEE.
+
+### `issue_cert()`
+
+v0 called this `get_tls_key()`, which named the by-product rather than the
+request. The private key is freshly generated per call and is *not* derived from
+the app identity: two calls with the same arguments return two unrelated keys.
+
+```python
+cert = client.issue_cert(
+    subject='api.example.com',
+    alt_names=['localhost'],
+    usage_ra_tls=True,       # Embed the attestation in the certificate
+    usage_server_auth=True,
+    usage_client_auth=False,
+    with_app_info=True,
+    not_before=1700000000,   # seconds since UNIX epoch
+    not_after=1800000000,
+)
+print(cert.key)                 # PEM private key
+print(cert.certificate_chain)   # PEM chain, leaf first
+```
+
+### `get_key()`
+
+```python
+key = client.get_key('wallet/eth', 'secp256k1')
+print(key.decode_key())             # 32 raw bytes
+print(key.decode_public_key())      # SEC1 compressed (33 B), or 32 B for ed25519
+print(key.decode_signature_chain()) # two links: app root, then KMS root
+```
+
+**Parameters:**
+- `domain`: Any string. This replaces v0's `path` plus `purpose`; in v0 only `path` reached the KDF and `purpose` was merely echoed into the chain claim. Derivation is flat — two domains give unrelated keys, and `a/b` is not a child of `a`.
+- `algorithm`: Exactly `'secp256k1'` or `'ed25519'`. **Required.** There is no default and no `k256` alias, because in v0 a typo silently produced a key of the wrong type under a name the caller thought meant something else. An empty value is rejected client-side.
+
+**Returns:** `GetKeyResponseV1` with hex `key`, `public_key` and
+`signature_chain`, plus the usual `decode_*` helpers.
+
+### `attest()`
+
+The sole CVM attestation entry point in v1. The dstack attestation format
+already carries the quote and the event log, so v0's TDX-only `get_quote` has
+nothing left to add.
+
+```python
+result = client.attest(b'user:alice:nonce123')
+print(result.decode_attestation())
+
+with_gpu = client.attest(b'user:alice:nonce123', include_boottime_gpu_evidence=True)
+print(with_gpu.boottime_gpu_evidence)
+```
+
+`report_data` is 1–64 bytes and is zero-padded on the right to 64.
+`boottime_gpu_evidence` is nvattest's complete boot-time JSON output, empty
+unless the flag was set and such output exists. It is *not* bound to
+`report_data` — nvattest ran at boot against its own nonce. Bind it by replaying
+the runtime event log and comparing sha256 of those exact UTF-8 bytes against
+`evidence_sha256` in the measured `gpu-attestation` event.
+
+### `attest_gpu()`
+
+Samples the GPU *now*, against a nonce you choose — which is what
+`boottime_gpu_evidence` cannot tell you, since that is a record written at boot.
+Use it after anything that may have reinitialised the GPU.
+
+```python
+result = client.attest_gpu(os.urandom(32))  # exactly 32 bytes
+for bundle in result.bundles:
+    print(bundle.vendor, bundle.format, bundle.decode_evidence())
+```
+
+Select a verifier using each bundle's `vendor` and `format`, then check the
+signature, certificate chain, measurements, and the nonce embedded in the
+evidence. `evidence` is opaque vendor-native bytes, hex-encoded on the wire — do
+not assume UTF-8 or JSON. It does not by itself bind the GPU to this CVM; only
+TDISP/TEE-IO device binding closes that gap.
+
+### `info()`
+
+```python
+info = client.info()
+print(info.app_id, info.app_name, info.compose_hash)
+print(info.instance_id, info.device_id)
+print(info.os_image_hash, info.mr_aggregated)
+print(info.app_compose, info.vm_config, info.key_provider_info)
+print(info.cloud_vendor, info.cloud_product)
+```
+
+Identity and configuration — not attestation. Nothing here is evidence: it
+arrives over a local socket with no quote behind it. That is why there is no
+`tcb_info` and no `app_cert`. The measurement registers and the event log belong
+to `attest()`, which returns them quote-backed. `compose_hash`, `os_image_hash`
+and `mr_aggregated` are here because they identify *which* application and image
+this is, and a relying party still confirms them against an attestation.
+
+`app_compose` is the verbatim deployed document and `compose_hash` is sha256
+over exactly those bytes — do not parse and re-serialize before hashing.
+
+### `version()`
+
+```python
+client.version()   # VersionResponseV1(version, rev)
+```
+
+### Async
+
+```python
+from dstack_sdk import AsyncDstackClientV1
+
+client = AsyncDstackClientV1()
+key = await client.get_key('wallet/eth', 'ed25519')
+```
 
 ## Blockchain Integration
+
+These helpers take a v0 `GetKeyResponse` or `GetTlsKeyResponse`. To use a v1 key,
+pass `key.decode_key()` to your chain library directly.
 
 ### Ethereum
 
@@ -388,13 +481,14 @@ hash_value = get_compose_hash(app_compose_dict)
 
 | Feature | Required dstack OS |
 |---|---|
-| `get_key`, `get_quote`, `get_tls_key` (legacy fields), `info` (legacy fields) | 0.3+ |
-| `attest`, `sign`, `is_reachable` | 0.5.0+ (`sign` requires a server build with the feature) |
-| `version`, `algorithm='ed25519'` on `get_key`, `info.cloud_vendor` / `cloud_product`, `not_before` / `not_after` / `with_app_info` on `get_tls_key` | 0.5.7+ |
+| V0 `get_key`, `get_quote`, `get_tls_key` (legacy fields), `info` (legacy fields) | 0.3+ |
+| V0 `attest`, `sign`, `verify`, `is_reachable` | 0.5.0+ (`sign` requires a server build with the feature) |
+| V0 `version`, `algorithm='ed25519'` on `get_key`, `info.cloud_vendor` / `cloud_product`, `not_before` / `not_after` / `with_app_info` on `get_tls_key` | 0.5.7+ |
+| Every `DstackClientV1` method | 0.6.0+ — older agents have no `/v1` mount and answer HTTP 404 |
+| V0 `emit_event` | Removed in 0.6.0: the agent always fails it |
 | `verify_env_encrypt_public_key` (signature_v1 with timestamp) | Requires KMS build that emits `signature_v1`; legacy variant remains available |
-| `verify_signature`, `verify_signature_chain` | Any — verification is local and needs no guest agent |
 
-Calls that require 0.5.7-only fields probe the `Version` RPC first and raise a clear `RuntimeError` on older guest agents.
+V0 calls that require 0.5.7-only fields probe the `Version` RPC first and raise a clear `RuntimeError` on older guest agents. The v1 client never probes: it requires a 0.6 agent outright.
 
 ## Development
 
@@ -413,17 +507,21 @@ Then set the endpoint:
 export DSTACK_SIMULATOR_ENDPOINT=http://localhost:8090
 ```
 
-Install dev dependencies and run tests with PDM:
+Install dev dependencies, then run the tests and the format/lint checks with PDM:
 
 ```bash
 cd sdk/python
-make install
-make test
+pdm install --dev
+pdm run test
+pdm run check
 ```
+
+`make install` / `make test` wrap the same commands and additionally assert that
+`DSTACK_SIMULATOR_ENDPOINT` and `TAPPD_SIMULATOR_ENDPOINT` are set.
 
 ## Migration from TappdClient
 
-Replace `TappdClient` with `DstackClient`:
+Replace `TappdClient` with `DstackClientV0`:
 
 ```python
 # Before
@@ -431,14 +529,31 @@ from dstack_sdk import TappdClient
 client = TappdClient()
 
 # After
-from dstack_sdk import DstackClient
-client = DstackClient()
+from dstack_sdk import DstackClientV0
+client = DstackClientV0()
 ```
 
 Method changes:
 - `derive_key()` → `get_tls_key()` for TLS certificates
 - `tdx_quote()` → `get_quote()` (raw data only, no hash algorithms)
 - Socket path: `/var/run/tappd.sock` → `/var/run/dstack.sock`
+
+## Migration from v0 to v1
+
+`DstackClientV1` is a separate surface, not an upgrade path — read the key
+warning at the top before switching anything that holds state.
+
+| v0 | v1 | Note |
+|---|---|---|
+| `get_tls_key()` | `issue_cert()` | Renamed; same behaviour |
+| `get_key(path, purpose)` | `get_key(domain, algorithm)` | Merged into one KDF input; `algorithm` is now required |
+| `get_quote()` | `attest()` | The TDX-only channel is subsumed |
+| `info().tcb_info` | — | Measurements are typed fields; the rest belongs to `attest()` |
+| `info().app_cert` | — | A dashboard artifact; it proved nothing |
+| `sign()` | — | Sign locally with the key `get_key()` returns |
+| `verify()` | — | Verify locally, per `docs/guest-api-v1.md` |
+| `emit_event()` | — | RTMR3 is system-owned as of 0.6.0 |
+| `gpu_info()` | `attest()` with `include_boottime_gpu_evidence=True` | Same bytes, now on the attestation call |
 
 ## License
 

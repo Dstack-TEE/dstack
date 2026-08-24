@@ -152,31 +152,9 @@ class GetQuoteResponse(BaseModel):
 
 class AttestResponse(BaseModel):
     attestation: str
-    # Complete JSON output produced by nvattest during guest boot. Empty unless
-    # the request set include_boottime_gpu_evidence and the guest has boot-time GPU
-    # attestation output. Not bound to report_data: verify it by replaying the
-    # runtime event log and comparing sha256 of these exact UTF-8 bytes against
-    # evidence_sha256 in the `gpu-attestation` event.
-    boottime_gpu_evidence: str = ""
 
     def decode_attestation(self) -> bytes:
         return bytes.fromhex(self.attestation)
-
-
-class GpuEvidenceBundle(BaseModel):
-    vendor: str
-    format: str
-    evidence: str
-
-
-class AttestGpuResponse(BaseModel):
-    """Result of fresh, on-demand GPU evidence collection."""
-
-    bundles: list[GpuEvidenceBundle]
-
-
-class GpuInfoResponse(BaseModel):
-    attestation: str
 
 
 class SignResponse(BaseModel):
@@ -192,6 +170,10 @@ class SignResponse(BaseModel):
 
     def decode_public_key(self) -> bytes:
         return bytes.fromhex(self.public_key)
+
+
+class VerifyResponse(BaseModel):
+    valid: bool
 
 
 class VersionResponse(BaseModel):
@@ -280,7 +262,43 @@ class BaseClient:
     pass
 
 
-class AsyncDstackClient(BaseClient):
+def raise_for_status(response: httpx.Response) -> None:
+    """Raise on an error status, carrying the guest agent's message.
+
+    prpc reports "no such method" and "the handler failed" alike as an HTTP
+    400 with the reason in the JSON body, so the status line on its own cannot
+    tell a removed method from a rejected argument. httpx's own
+    ``raise_for_status`` shows only the status line, which would hide exactly
+    the text a caller needs -- for instance the one ``EmitEvent`` returns
+    naming its removal.
+    """
+    try:
+        response.raise_for_status()
+        return
+    except httpx.HTTPStatusError as exc:
+        message = ""
+        try:
+            body = response.json()
+            if isinstance(body, dict):
+                message = str(body.get("error", ""))
+        except Exception:
+            message = response.text.strip()
+        if not message:
+            raise
+        raise httpx.HTTPStatusError(
+            f"{exc.args[0]}\nguest agent said: {message}",
+            request=exc.request,
+            response=response,
+        ) from None
+
+
+class AsyncBaseClient(BaseClient):
+    """Transport shared by every async client, whatever surface it speaks.
+
+    Subclasses differ only in ``PATH_PREFIX``: the guest agent selects the API
+    version from the URL path alone, never from a header.
+    """
+
     PATH_PREFIX = "/"
 
     def __init__(
@@ -353,14 +371,12 @@ class AsyncDstackClient(BaseClient):
             # Use sync HTTP client - works from any context
             sync_client: httpx.Client = self._get_sync_client()
             response = sync_client.post(path, json=payload, headers=headers)
-            response.raise_for_status()
-            return cast(Dict[str, Any], response.json())
         else:
             # Use async HTTP client - traditional async behavior
             async_client: httpx.AsyncClient = self._get_client()
             response = await async_client.post(path, json=payload, headers=headers)
-            response.raise_for_status()
-            return cast(Dict[str, Any], response.json())
+        raise_for_status(response)
+        return cast(Dict[str, Any], response.json())
 
     async def __aenter__(self):
         self._client_ref_count += 1
@@ -380,6 +396,17 @@ class AsyncDstackClient(BaseClient):
             if self._sync_client:
                 self._sync_client.close()
                 self._sync_client = None
+
+
+class AsyncDstackClientV0(AsyncBaseClient):
+    """Async client for the frozen v0.5.11 guest agent API.
+
+    Served at the historical unversioned paths (``/GetKey``) and, since 0.6.0,
+    equivalently at ``/v0/GetKey``. The surface is frozen: it gains no method
+    and no field. New capabilities live on ``AsyncDstackClientV1``.
+    """
+
+    PATH_PREFIX = "/"
 
     async def _ensure_algorithm_supported(self, algorithm: str) -> None:
         """Check OS version when a non-secp256k1 algorithm is requested."""
@@ -445,13 +472,8 @@ class AsyncDstackClient(BaseClient):
     async def attest(
         self,
         report_data: str | bytes,
-        include_boottime_gpu_evidence: bool = False,
     ) -> AttestResponse:
-        """Request a versioned attestation for the provided report data.
-
-        Set include_boottime_gpu_evidence to also return the boot-time GPU attestation
-        evidence in AttestResponse.boottime_gpu_evidence.
-        """
+        """Request a versioned attestation for the provided report data."""
         if not report_data or not isinstance(report_data, (bytes, str)):
             raise ValueError("report_data can not be empty")
         report_bytes: bytes = (
@@ -460,37 +482,34 @@ class AsyncDstackClient(BaseClient):
         if len(report_bytes) > 64:
             raise ValueError("report_data must be less than 64 bytes")
         hex = binascii.hexlify(report_bytes).decode()
-        result = await self._send_rpc_request(
-            "Attest",
-            {
-                "report_data": hex,
-                "include_boottime_gpu_evidence": include_boottime_gpu_evidence,
-            },
-        )
+        result = await self._send_rpc_request("Attest", {"report_data": hex})
         return AttestResponse(**result)
-
-    async def attest_gpu(self, nonce: bytes) -> AttestGpuResponse:
-        """Collect vendor-native GPU evidence for a 32-byte nonce.
-
-        Select a verifier using each bundle's vendor and format, and verify the
-        signature, certificate chain, measurements, and embedded nonce.
-        """
-        if not isinstance(nonce, (bytes, bytearray)) or len(nonce) != 32:
-            raise ValueError("nonce must be exactly 32 bytes")
-        result = await self._send_rpc_request(
-            "AttestGpu", {"nonce": binascii.hexlify(bytes(nonce)).decode()}
-        )
-        return AttestGpuResponse(**result)
-
-    async def gpu_info(self) -> GpuInfoResponse:
-        """Return GPU information collected during boot."""
-        result = await self._send_rpc_request("GpuInfo", {})
-        return GpuInfoResponse(**result)
 
     async def info(self) -> InfoResponse[TcbInfo]:
         """Fetch service information including parsed TCB info."""
         result = await self._send_rpc_request("Info", {})
         return InfoResponse.parse_response(result, TcbInfoV05x)
+
+    async def emit_event(
+        self,
+        event: str,
+        payload: str | bytes,
+    ) -> None:
+        """Emit an event that extends RTMR3 on TDX platforms.
+
+        Removed in dstack 0.6.0: runtime RTMR3 events are system-owned, and the
+        agent now fails every call. The method stays so that a caller written
+        against 0.5.x gets the agent's own explanation rather than a 404.
+        """
+        if not event:
+            raise ValueError("event name cannot be empty")
+
+        payload_bytes: bytes = payload.encode() if isinstance(payload, str) else payload
+        hex_payload = binascii.hexlify(payload_bytes).decode()
+        await self._send_rpc_request(
+            "EmitEvent", {"event": event, "payload": hex_payload}
+        )
+        return None
 
     async def get_tls_key(
         self,
@@ -552,6 +571,27 @@ class AsyncDstackClient(BaseClient):
         result = await self._send_rpc_request("Sign", payload)
         return SignResponse(**result)
 
+    async def verify(
+        self,
+        algorithm: str,
+        data: str | bytes,
+        signature: str | bytes,
+        public_key: str | bytes,
+    ) -> VerifyResponse:
+        """Verify a signature."""
+        data_bytes = data.encode() if isinstance(data, str) else data
+        sig_bytes = signature.encode() if isinstance(signature, str) else signature
+        pk_bytes = public_key.encode() if isinstance(public_key, str) else public_key
+
+        payload = {
+            "algorithm": algorithm,
+            "data": binascii.hexlify(data_bytes).decode(),
+            "signature": binascii.hexlify(sig_bytes).decode(),
+            "public_key": binascii.hexlify(pk_bytes).decode(),
+        }
+        result = await self._send_rpc_request("Verify", payload)
+        return VerifyResponse(**result)
+
     async def version(self) -> VersionResponse:
         """Query the guest-agent version.
 
@@ -570,7 +610,12 @@ class AsyncDstackClient(BaseClient):
             return False
 
 
-class DstackClient(BaseClient):
+class DstackClientV0(BaseClient):
+    """Sync client for the frozen v0.5.11 guest agent API.
+
+    See ``AsyncDstackClientV0``; every method here is its blocking twin.
+    """
+
     PATH_PREFIX = "/"
 
     def __init__(self, endpoint: str | None = None, *, timeout: float = 3):
@@ -579,7 +624,7 @@ class DstackClient(BaseClient):
         If a non-HTTP(S) endpoint is provided, it is treated as a Unix socket
         path and validated for existence.
         """
-        self.async_client = AsyncDstackClient(
+        self.async_client = AsyncDstackClientV0(
             endpoint, use_sync_http=True, timeout=timeout
         )
 
@@ -611,32 +656,25 @@ class DstackClient(BaseClient):
     def attest(
         self,
         report_data: str | bytes,
-        include_boottime_gpu_evidence: bool = False,
     ) -> AttestResponse:
-        """Request a versioned attestation for the provided report data.
-
-        Set include_boottime_gpu_evidence to also return the boot-time GPU attestation
-        evidence in AttestResponse.boottime_gpu_evidence.
-        """
-        raise NotImplementedError
-
-    @call_async
-    def attest_gpu(self, nonce: bytes) -> AttestGpuResponse:
-        """Collect vendor-native GPU evidence for a 32-byte nonce.
-
-        Select a verifier using each bundle's vendor and format, and verify the
-        signature, certificate chain, measurements, and embedded nonce.
-        """
-        raise NotImplementedError
-
-    @call_async
-    def gpu_info(self) -> GpuInfoResponse:
-        """Return GPU information collected during boot."""
+        """Request a versioned attestation for the provided report data."""
         raise NotImplementedError
 
     @call_async
     def info(self) -> InfoResponse[TcbInfo]:
         """Fetch service information including parsed TCB info."""
+        raise NotImplementedError
+
+    @call_async
+    def emit_event(
+        self,
+        event: str,
+        payload: str | bytes,
+    ) -> None:
+        """Emit an event that extends RTMR3 on TDX platforms.
+
+        Removed in dstack 0.6.0; see ``AsyncDstackClientV0.emit_event``.
+        """
         raise NotImplementedError
 
     @call_async
@@ -661,6 +699,17 @@ class DstackClient(BaseClient):
         raise NotImplementedError
 
     @call_async
+    def verify(
+        self,
+        algorithm: str,
+        data: str | bytes,
+        signature: str | bytes,
+        public_key: str | bytes,
+    ) -> VerifyResponse:
+        """Verify a signature."""
+        raise NotImplementedError
+
+    @call_async
     def version(self) -> VersionResponse:
         """Query the guest-agent version."""
         raise NotImplementedError
@@ -679,7 +728,17 @@ class DstackClient(BaseClient):
         raise NotImplementedError
 
 
-class AsyncTappdClient(AsyncDstackClient):
+#: Deprecated alias for :class:`AsyncDstackClientV0`. dstack 0.6.0 split the
+#: guest agent API into two surfaces, so a client's name now says which one it
+#: speaks. This alias keeps pre-0.6 code importing, and is the same class -- it
+#: is not a v1 client and will never become one.
+AsyncDstackClient = AsyncDstackClientV0
+
+#: Deprecated alias for :class:`DstackClientV0`; see ``AsyncDstackClient``.
+DstackClient = DstackClientV0
+
+
+class AsyncTappdClient(AsyncDstackClientV0):
     """Deprecated async client kept for backward compatibility.
 
     DEPRECATED: Use ``AsyncDstackClient`` instead.
@@ -764,7 +823,7 @@ class AsyncTappdClient(AsyncDstackClient):
         return InfoResponse.parse_response(result, TcbInfoV03x)
 
 
-class TappdClient(DstackClient):
+class TappdClient(DstackClientV0):
     """Deprecated client kept for backward compatibility.
 
     DEPRECATED: Use ``DstackClient`` instead.

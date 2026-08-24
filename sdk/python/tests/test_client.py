@@ -10,24 +10,24 @@ from evidence_api.tdx.quote import TdxQuote
 import pytest
 
 from dstack_sdk import AsyncDstackClient
+from dstack_sdk import AsyncDstackClientV0
 from dstack_sdk import AsyncTappdClient
-from dstack_sdk import AttestGpuResponse
 from dstack_sdk import AttestResponse
 from dstack_sdk import DstackClient
+from dstack_sdk import DstackClientV0
 from dstack_sdk import GetKeyResponse
 from dstack_sdk import GetQuoteResponse
 from dstack_sdk import GetTlsKeyResponse
-from dstack_sdk import GpuInfoResponse
 from dstack_sdk import SignResponse
 from dstack_sdk import TappdClient
+from dstack_sdk import VerifyResponse
 from dstack_sdk import VersionResponse
-from dstack_sdk import verify_signature
 from dstack_sdk.dstack_client import InfoResponse
 from dstack_sdk.dstack_client import TcbInfo
 
 
 def test_sync_client_get_key():
-    client = DstackClient()
+    client = DstackClientV0()
     result = client.get_key()  # Test default algorithm (secp256k1)
     assert isinstance(result, GetKeyResponse)
     assert isinstance(result.decode_key(), bytes)
@@ -43,20 +43,20 @@ def test_sync_client_get_key():
 
 
 def test_sync_client_get_quote():
-    client = DstackClient()
+    client = DstackClientV0()
     result = client.get_quote("test")
     assert isinstance(result, GetQuoteResponse)
 
 
 def test_sync_client_attest():
-    client = DstackClient()
+    client = DstackClientV0()
     result = client.attest("test")
     assert isinstance(result, AttestResponse)
     assert len(result.attestation) > 0
 
 
 def test_sync_client_get_tls_key():
-    client = DstackClient()
+    client = DstackClientV0()
     result = client.get_tls_key()
     assert isinstance(result, GetTlsKeyResponse)
     assert isinstance(result.key, str)
@@ -65,7 +65,7 @@ def test_sync_client_get_tls_key():
 
 
 def test_sync_client_get_info():
-    client = DstackClient()
+    client = DstackClientV0()
     result = client.info()
     check_info_response(result)
 
@@ -92,7 +92,7 @@ def check_info_response(result: InfoResponse):
 
 @pytest.mark.asyncio
 async def test_async_client_get_key():
-    client = AsyncDstackClient()
+    client = AsyncDstackClientV0()
     result = await client.get_key()  # Test default algorithm (secp256k1)
     assert isinstance(result, GetKeyResponse)
     assert isinstance(result.decode_key(), bytes)
@@ -109,87 +109,64 @@ async def test_async_client_get_key():
 
 @pytest.mark.asyncio
 async def test_async_client_get_quote():
-    client = AsyncDstackClient()
+    client = AsyncDstackClientV0()
     result = await client.get_quote("test")
     assert isinstance(result, GetQuoteResponse)
 
 
 @pytest.mark.asyncio
 async def test_async_client_attest():
-    client = AsyncDstackClient()
+    client = AsyncDstackClientV0()
     result = await client.attest("test")
     assert isinstance(result, AttestResponse)
     assert len(result.attestation) > 0
 
 
-@pytest.mark.asyncio
-async def test_async_client_attest_boottime_gpu_evidence(monkeypatch):
-    evidence = '{"result_code":0,"claims":[]}'
-
-    async def fake_send(self, method, payload):
-        assert method == "Attest"
-        assert payload["include_boottime_gpu_evidence"] is True
-        return {"attestation": "deadbeef", "boottime_gpu_evidence": evidence}
-
-    monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
-    monkeypatch.setattr(AsyncDstackClient, "_send_rpc_request", fake_send)
-    result = await AsyncDstackClient().attest(
-        "test", include_boottime_gpu_evidence=True
-    )
-    assert isinstance(result, AttestResponse)
-    assert result.boottime_gpu_evidence == evidence
+def test_v0_surface_has_no_gpu_or_v1_methods():
+    """The frozen surface never gained the GPU methods; the agent 404s them."""
+    for name in ["attest_gpu", "gpu_info", "issue_cert"]:
+        assert not hasattr(DstackClientV0, name)
+        assert not hasattr(AsyncDstackClientV0, name)
 
 
-@pytest.mark.asyncio
-async def test_async_client_attest_gpu(monkeypatch):
-    evidence = '[{"arch":"HOPPER","evidence":"BASE64","certificate":"BASE64"}]'
-    nonce = bytes([0xAB]) * 32
+def test_v0_aliases_are_the_same_class():
+    assert DstackClient is DstackClientV0
+    assert AsyncDstackClient is AsyncDstackClientV0
 
-    async def fake_send(self, method, payload):
-        assert method == "AttestGpu"
-        assert payload == {"nonce": nonce.hex()}
-        return {
-            "bundles": [
-                {"vendor": "nvidia", "format": "nvidia-test-v1", "evidence": evidence}
-            ]
-        }
 
-    monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
-    monkeypatch.setattr(AsyncDstackClient, "_send_rpc_request", fake_send)
-    result = await AsyncDstackClient().attest_gpu(nonce)
-    assert isinstance(result, AttestGpuResponse)
-    assert len(result.bundles) == 1
-    assert result.bundles[0].vendor == "nvidia"
-    assert result.bundles[0].evidence == evidence
+def test_sync_client_attest_takes_report_data_only():
+    """The frozen Attest has one field; a GPU flag belongs to v1."""
+    client = DstackClientV0()
+    with pytest.raises(TypeError):
+        client.attest("test", include_boottime_gpu_evidence=True)
+
+
+def test_sync_client_emit_event_reports_its_removal():
+    """The agent always fails EmitEvent now; surface its message, do not swallow it."""
+    client = DstackClientV0()
+    with pytest.raises(Exception) as excinfo:
+        client.emit_event("test-event", b"payload")
+    assert "EmitEvent was removed" in str(excinfo.value)
 
 
 @pytest.mark.asyncio
-async def test_async_client_attest_gpu_rejects_wrong_nonce_length():
-    client = AsyncDstackClient()
-    for bad in [b"", bytes(31), bytes(33), "not-bytes"]:
-        with pytest.raises(ValueError):
-            await client.attest_gpu(bad)
+async def test_async_client_emit_event_reports_its_removal():
+    client = AsyncDstackClientV0()
+    with pytest.raises(Exception) as excinfo:
+        await client.emit_event("test-event", b"payload")
+    assert "EmitEvent was removed" in str(excinfo.value)
 
 
 @pytest.mark.asyncio
-async def test_async_client_gpu_info(monkeypatch):
-    attestation = '{"result_code":0,"claims":[]}'
-
-    async def fake_send(self, method, payload):
-        assert method == "GpuInfo"
-        assert payload == {}
-        return {"attestation": attestation}
-
-    monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
-    monkeypatch.setattr(AsyncDstackClient, "_send_rpc_request", fake_send)
-    result = await AsyncDstackClient().gpu_info()
-    assert isinstance(result, GpuInfoResponse)
-    assert result.attestation == attestation
+async def test_async_client_emit_event_rejects_empty_name():
+    client = AsyncDstackClientV0()
+    with pytest.raises(ValueError):
+        await client.emit_event("", b"payload")
 
 
 @pytest.mark.asyncio
 async def test_async_client_get_tls_key():
-    client = AsyncDstackClient()
+    client = AsyncDstackClientV0()
     result = await client.get_tls_key()
     assert isinstance(result, GetTlsKeyResponse)
     assert isinstance(result.key, str)
@@ -199,7 +176,7 @@ async def test_async_client_get_tls_key():
 
 @pytest.mark.asyncio
 async def test_async_client_get_info():
-    client = AsyncDstackClient()
+    client = AsyncDstackClientV0()
     result = await client.info()
     check_info_response(result)
 
@@ -207,7 +184,7 @@ async def test_async_client_get_info():
 @pytest.mark.asyncio
 async def test_tls_key_uniqueness():
     """Test that TLS keys are unique across multiple calls."""
-    client = AsyncDstackClient()
+    client = AsyncDstackClientV0()
     result1 = await client.get_tls_key()
     result2 = await client.get_tls_key()
     # TLS keys should be unique for each call
@@ -217,11 +194,11 @@ async def test_tls_key_uniqueness():
 @pytest.mark.asyncio
 async def test_get_quote_raw_hash_error():
     with pytest.raises(ValueError) as excinfo:
-        client = AsyncDstackClient()
+        client = AsyncDstackClientV0()
         await client.get_quote("0" * 65)
     assert "64 bytes" in str(excinfo.value)
     with pytest.raises(ValueError) as excinfo:
-        client = AsyncDstackClient()
+        client = AsyncDstackClientV0()
         await client.get_quote(b"0" * 129)
     assert "64 bytes" in str(excinfo.value)
 
@@ -229,7 +206,7 @@ async def test_get_quote_raw_hash_error():
 @pytest.mark.asyncio
 async def test_report_data():
     reportdata = "test"
-    client = AsyncDstackClient()
+    client = AsyncDstackClientV0()
     result = await client.get_quote(reportdata)
     tdxQuote = TdxQuote(bytearray(result.decode_quote()))
     reportdata = reportdata.encode("utf-8") + b"\x00" * (64 - len(reportdata))
@@ -238,7 +215,7 @@ async def test_report_data():
 
 def test_sync_client_is_reachable():
     """Test that sync client can check if service is reachable."""
-    client = DstackClient()
+    client = DstackClientV0()
     is_reachable = client.is_reachable()
     assert isinstance(is_reachable, bool)
     assert is_reachable
@@ -247,7 +224,7 @@ def test_sync_client_is_reachable():
 @pytest.mark.asyncio
 async def test_async_client_is_reachable():
     """Test that async client can check if service is reachable."""
-    client = AsyncDstackClient()
+    client = AsyncDstackClientV0()
     is_reachable = await client.is_reachable()
     assert isinstance(is_reachable, bool)
     assert is_reachable
@@ -255,7 +232,7 @@ async def test_async_client_is_reachable():
 
 def test_tls_key_as_uint8array():
     """Test that TLS key can be converted to bytes with as_uint8array method."""
-    client = DstackClient()
+    client = DstackClientV0()
     result = client.get_tls_key()
 
     # Test full length
@@ -272,7 +249,7 @@ def test_tls_key_as_uint8array():
 
 def test_tls_key_with_alt_names():
     """Test TLS key generation with alt names."""
-    client = DstackClient()
+    client = DstackClientV0()
     alt_names = ["localhost", "127.0.0.1"]
     result = client.get_tls_key(
         subject="test-subject",
@@ -295,7 +272,7 @@ def test_unix_socket_file_not_exist():
 
     try:
         with pytest.raises(FileNotFoundError) as exc_info:
-            DstackClient("/non/existent/socket")
+            DstackClientV0("/non/existent/socket")
         assert "Unix socket file /non/existent/socket does not exist" in str(
             exc_info.value
         )
@@ -313,8 +290,8 @@ def test_non_unix_socket_endpoints():
 
     try:
         # These should not raise errors
-        client1 = DstackClient("http://localhost:8080")
-        client2 = DstackClient("https://example.com")
+        client1 = DstackClientV0("http://localhost:8080")
+        client2 = DstackClientV0("https://example.com")
         assert client1 is not None
         assert client2 is not None
     finally:
@@ -327,8 +304,8 @@ SIGN_TEST_DATA = b"Test message for signing"
 SIGN_BAD_DATA = b"This is not the original message"
 
 
-def test_sync_sign_then_verify_locally_ed25519():
-    client = DstackClient()
+def test_sync_sign_then_verify_ed25519():
+    client = DstackClientV0()
     algo = "ed25519"
     sign_resp = client.sign(algo, SIGN_TEST_DATA)
     assert isinstance(sign_resp, SignResponse)
@@ -338,12 +315,14 @@ def test_sync_sign_then_verify_locally_ed25519():
 
     signature = sign_resp.decode_signature()
     public_key = sign_resp.decode_public_key()
-    assert verify_signature(algo, SIGN_TEST_DATA, signature, public_key) is True
-    assert verify_signature(algo, SIGN_BAD_DATA, signature, public_key) is False
+    good = client.verify(algo, SIGN_TEST_DATA, signature, public_key)
+    assert isinstance(good, VerifyResponse)
+    assert good.valid is True
+    assert client.verify(algo, SIGN_BAD_DATA, signature, public_key).valid is False
 
 
-def test_sync_sign_then_verify_locally_secp256k1():
-    client = DstackClient()
+def test_sync_sign_then_verify_secp256k1():
+    client = DstackClientV0()
     algo = "secp256k1"
     sign_resp = client.sign(algo, SIGN_TEST_DATA)
     assert isinstance(sign_resp, SignResponse)
@@ -351,12 +330,12 @@ def test_sync_sign_then_verify_locally_secp256k1():
 
     signature = sign_resp.decode_signature()
     public_key = sign_resp.decode_public_key()
-    assert verify_signature(algo, SIGN_TEST_DATA, signature, public_key) is True
-    assert verify_signature(algo, SIGN_BAD_DATA, signature, public_key) is False
+    assert client.verify(algo, SIGN_TEST_DATA, signature, public_key).valid is True
+    assert client.verify(algo, SIGN_BAD_DATA, signature, public_key).valid is False
 
 
-def test_sync_sign_then_verify_locally_secp256k1_prehashed():
-    client = DstackClient()
+def test_sync_sign_then_verify_secp256k1_prehashed():
+    client = DstackClientV0()
     algo = "secp256k1_prehashed"
     digest = hashlib.sha256(SIGN_TEST_DATA).digest()
     assert len(digest) == 32
@@ -367,14 +346,14 @@ def test_sync_sign_then_verify_locally_secp256k1_prehashed():
 
     signature = sign_resp.decode_signature()
     public_key = sign_resp.decode_public_key()
-    assert verify_signature(algo, digest, signature, public_key) is True
+    assert client.verify(algo, digest, signature, public_key).valid is True
 
     bad_digest = hashlib.sha256(SIGN_BAD_DATA).digest()
-    assert verify_signature(algo, bad_digest, signature, public_key) is False
+    assert client.verify(algo, bad_digest, signature, public_key).valid is False
 
 
 def test_sync_sign_prehashed_length_error():
-    client = DstackClient()
+    client = DstackClientV0()
     algo = "secp256k1_prehashed"
     with pytest.raises(ValueError) as excinfo:
         client.sign(algo, b"too short")
@@ -382,8 +361,8 @@ def test_sync_sign_prehashed_length_error():
 
 
 @pytest.mark.asyncio
-async def test_async_sign_then_verify_locally_ed25519():
-    client = AsyncDstackClient()
+async def test_async_sign_then_verify_ed25519():
+    client = AsyncDstackClientV0()
     algo = "ed25519"
     sign_resp = await client.sign(algo, SIGN_TEST_DATA)
     assert isinstance(sign_resp, SignResponse)
@@ -392,26 +371,30 @@ async def test_async_sign_then_verify_locally_ed25519():
 
     signature = sign_resp.decode_signature()
     public_key = sign_resp.decode_public_key()
-    assert verify_signature(algo, SIGN_TEST_DATA, signature, public_key) is True
-    assert verify_signature(algo, SIGN_BAD_DATA, signature, public_key) is False
+    good = await client.verify(algo, SIGN_TEST_DATA, signature, public_key)
+    assert good.valid is True
+    bad = await client.verify(algo, SIGN_BAD_DATA, signature, public_key)
+    assert bad.valid is False
 
 
 @pytest.mark.asyncio
-async def test_async_sign_then_verify_locally_secp256k1():
-    client = AsyncDstackClient()
+async def test_async_sign_then_verify_secp256k1():
+    client = AsyncDstackClientV0()
     algo = "secp256k1"
     sign_resp = await client.sign(algo, SIGN_TEST_DATA)
     assert isinstance(sign_resp, SignResponse)
 
     signature = sign_resp.decode_signature()
     public_key = sign_resp.decode_public_key()
-    assert verify_signature(algo, SIGN_TEST_DATA, signature, public_key) is True
-    assert verify_signature(algo, SIGN_BAD_DATA, signature, public_key) is False
+    good = await client.verify(algo, SIGN_TEST_DATA, signature, public_key)
+    assert good.valid is True
+    bad = await client.verify(algo, SIGN_BAD_DATA, signature, public_key)
+    assert bad.valid is False
 
 
 @pytest.mark.asyncio
-async def test_async_sign_then_verify_locally_secp256k1_prehashed():
-    client = AsyncDstackClient()
+async def test_async_sign_then_verify_secp256k1_prehashed():
+    client = AsyncDstackClientV0()
     algo = "secp256k1_prehashed"
     digest = hashlib.sha256(SIGN_TEST_DATA).digest()
 
@@ -420,15 +403,17 @@ async def test_async_sign_then_verify_locally_secp256k1_prehashed():
 
     signature = sign_resp.decode_signature()
     public_key = sign_resp.decode_public_key()
-    assert verify_signature(algo, digest, signature, public_key) is True
+    good = await client.verify(algo, digest, signature, public_key)
+    assert good.valid is True
 
     bad_digest = hashlib.sha256(SIGN_BAD_DATA).digest()
-    assert verify_signature(algo, bad_digest, signature, public_key) is False
+    bad = await client.verify(algo, bad_digest, signature, public_key)
+    assert bad.valid is False
 
 
 @pytest.mark.asyncio
 async def test_async_sign_prehashed_length_error():
-    client = AsyncDstackClient()
+    client = AsyncDstackClientV0()
     algo = "secp256k1_prehashed"
     with pytest.raises(ValueError) as excinfo:
         await client.sign(algo, b"too short")
@@ -528,7 +513,7 @@ async def test_async_tappd_client_tdx_quote_deprecated():
 
 
 def test_sync_client_version():
-    client = DstackClient()
+    client = DstackClientV0()
     result = client.version()
     assert isinstance(result, VersionResponse)
     assert result.version != ""
@@ -536,14 +521,14 @@ def test_sync_client_version():
 
 @pytest.mark.asyncio
 async def test_async_client_version():
-    client = AsyncDstackClient()
+    client = AsyncDstackClientV0()
     result = await client.version()
     assert isinstance(result, VersionResponse)
     assert result.version != ""
 
 
 def test_sync_client_get_key_k256_alias():
-    client = DstackClient()
+    client = DstackClientV0()
     result_k256 = client.get_key(path="/test", purpose="p", algorithm="k256")
     result_secp = client.get_key(path="/test", purpose="p", algorithm="secp256k1")
     # k256 is an alias for secp256k1, should produce the same key
@@ -552,21 +537,21 @@ def test_sync_client_get_key_k256_alias():
 
 @pytest.mark.asyncio
 async def test_async_client_get_key_k256_alias():
-    client = AsyncDstackClient()
+    client = AsyncDstackClientV0()
     result_k256 = await client.get_key(path="/test", purpose="p", algorithm="k256")
     result_secp = await client.get_key(path="/test", purpose="p", algorithm="secp256k1")
     assert result_k256.decode_key() == result_secp.decode_key()
 
 
 def test_sync_client_get_key_secp256k1_prehashed_rejected():
-    client = DstackClient()
+    client = DstackClientV0()
     with pytest.raises(Exception):
         client.get_key(algorithm="secp256k1_prehashed")
 
 
 @pytest.mark.asyncio
 async def test_async_client_get_key_secp256k1_prehashed_rejected():
-    client = AsyncDstackClient()
+    client = AsyncDstackClientV0()
     with pytest.raises(Exception):
         await client.get_key(algorithm="secp256k1_prehashed")
 
@@ -584,7 +569,7 @@ async def test_async_tappd_client_is_reachable():
 @pytest.mark.asyncio
 async def test_sync_client_in_async_context_get_key():
     """Test that sync client works when called from async context."""
-    client = DstackClient()
+    client = DstackClientV0()
     result = client.get_key()
     assert isinstance(result, GetKeyResponse)
     assert isinstance(result.decode_key(), bytes)
@@ -594,7 +579,7 @@ async def test_sync_client_in_async_context_get_key():
 @pytest.mark.asyncio
 async def test_sync_client_in_async_context_get_info():
     """Test that sync client info works when called from async context."""
-    client = DstackClient()
+    client = DstackClientV0()
     result = client.info()
     check_info_response(result)
 
@@ -602,8 +587,8 @@ async def test_sync_client_in_async_context_get_info():
 @pytest.mark.asyncio
 async def test_mixed_sync_async_calls():
     """Test mixing sync and async client calls in the same async context."""
-    sync_client = DstackClient()
-    async_client = AsyncDstackClient()
+    sync_client = DstackClientV0()
+    async_client = AsyncDstackClientV0()
 
     # Call sync client from async context
     sync_result = sync_client.get_key()
@@ -630,8 +615,8 @@ async def test_get_tls_key_new_options_payload(monkeypatch):
         return {"key": "k", "certificate_chain": []}
 
     monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
-    monkeypatch.setattr(AsyncDstackClient, "_send_rpc_request", fake_send)
-    client = AsyncDstackClient()
+    monkeypatch.setattr(AsyncDstackClientV0, "_send_rpc_request", fake_send)
+    client = AsyncDstackClientV0()
     result = await client.get_tls_key(
         subject="api.example.com",
         not_before=1_700_000_000,
@@ -656,8 +641,8 @@ async def test_get_tls_key_legacy_options_skip_version_probe(monkeypatch):
         return {"key": "k", "certificate_chain": []}
 
     monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
-    monkeypatch.setattr(AsyncDstackClient, "_send_rpc_request", fake_send)
-    client = AsyncDstackClient()
+    monkeypatch.setattr(AsyncDstackClientV0, "_send_rpc_request", fake_send)
+    client = AsyncDstackClientV0()
     await client.get_tls_key(subject="api.example.com")
     assert [c[0] for c in calls] == ["GetTlsKey"]
     payload = calls[0][1]
@@ -676,7 +661,7 @@ async def test_get_tls_key_new_options_require_version(monkeypatch):
         return {"key": "k", "certificate_chain": []}
 
     monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
-    monkeypatch.setattr(AsyncDstackClient, "_send_rpc_request", fake_send)
-    client = AsyncDstackClient()
+    monkeypatch.setattr(AsyncDstackClientV0, "_send_rpc_request", fake_send)
+    client = AsyncDstackClientV0()
     with pytest.raises(RuntimeError, match="TLS key options"):
         await client.get_tls_key(with_app_info=False)

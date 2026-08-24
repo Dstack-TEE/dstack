@@ -3,21 +3,30 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .dstack_client import AsyncDstackClient
+from .dstack_client import AsyncDstackClientV0
 from .dstack_client import AsyncTappdClient
-from .dstack_client import AttestGpuResponse
 from .dstack_client import AttestResponse
 from .dstack_client import DstackClient
+from .dstack_client import DstackClientV0
 from .dstack_client import EventLog
 from .dstack_client import GetKeyResponse
 from .dstack_client import GetQuoteResponse
 from .dstack_client import GetTlsKeyResponse
-from .dstack_client import GpuEvidenceBundle
-from .dstack_client import GpuInfoResponse
 from .dstack_client import InfoResponse
 from .dstack_client import SignResponse
 from .dstack_client import TappdClient
 from .dstack_client import TcbInfo
+from .dstack_client import VerifyResponse
 from .dstack_client import VersionResponse
+from .dstack_client_v1 import AsyncDstackClientV1
+from .dstack_client_v1 import AttestGpuResponseV1
+from .dstack_client_v1 import AttestResponseV1
+from .dstack_client_v1 import DstackClientV1
+from .dstack_client_v1 import GetKeyResponseV1
+from .dstack_client_v1 import GpuEvidenceBundleV1
+from .dstack_client_v1 import InfoResponseV1
+from .dstack_client_v1 import IssueCertResponseV1
+from .dstack_client_v1 import VersionResponseV1
 from .encrypt_env_vars import EnvVar
 from .encrypt_env_vars import encrypt_env_vars
 from .encrypt_env_vars import encrypt_env_vars_sync
@@ -25,29 +34,40 @@ from .get_compose_hash import AppCompose
 from .get_compose_hash import DockerConfig
 from .get_compose_hash import Requirements
 from .get_compose_hash import get_compose_hash
-from .verify import verify_signature
-from .verify import verify_signature_chain
 from .verify_env_encrypt_public_key import verify_env_encrypt_public_key
 from .verify_env_encrypt_public_key import verify_env_encrypt_public_key_legacy
 
 __all__ = [
-    # Core clients
+    # v0 clients (the frozen v0.5.11 surface)
+    "DstackClientV0",
+    "AsyncDstackClientV0",
+    # Deprecated aliases for the v0 clients, kept for pre-0.6 code
     "DstackClient",
     "AsyncDstackClient",
     "AsyncTappdClient",
     "TappdClient",
-    # Response types
+    # v1 clients (dstack.guest.v1)
+    "DstackClientV1",
+    "AsyncDstackClientV1",
+    # v0 response types
     "GetKeyResponse",
     "GetTlsKeyResponse",
     "AttestResponse",
-    "AttestGpuResponse",
-    "GpuEvidenceBundle",
-    "GpuInfoResponse",
     "GetQuoteResponse",
     "InfoResponse",
     "TcbInfo",
     "EventLog",
+    "SignResponse",
+    "VerifyResponse",
     "VersionResponse",
+    # v1 response types
+    "IssueCertResponseV1",
+    "GetKeyResponseV1",
+    "AttestResponseV1",
+    "AttestGpuResponseV1",
+    "GpuEvidenceBundleV1",
+    "InfoResponseV1",
+    "VersionResponseV1",
     # Utility functions
     "encrypt_env_vars_sync",
     "encrypt_env_vars",
@@ -56,8 +76,6 @@ __all__ = [
     "AppCompose",
     "DockerConfig",
     "Requirements",
-    "verify_signature",
-    "verify_signature_chain",
     "verify_env_encrypt_public_key",
     "verify_env_encrypt_public_key_legacy",
 ]
