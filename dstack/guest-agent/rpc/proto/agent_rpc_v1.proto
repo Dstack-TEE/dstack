@@ -441,9 +441,11 @@ message HealthResponse {
   // false in that case: an agent that cannot see the app is in no position to
   // vouch for it.
   //
-  // Reported in the response rather than as an RPC error on purpose. prpc
-  // answers both "no such method" and "the handler failed" with HTTP 400 and
-  // drops the message, so an error here would be indistinguishable from an
-  // agent too old to know this method at all.
+  // Reported in the response rather than as an RPC error on purpose. The
+  // gateway's health poller counts any failed poll as a failed poll; it does
+  // not read the status code or the body. A verdict of "the agent cannot see
+  // the app" raised as an RPC error would therefore be filed alongside an
+  // agent that is unreachable or has no such method, and the reason would
+  // never reach the operator. Carried here alongside `healthy` false, it does.
   string error = 3;
 }

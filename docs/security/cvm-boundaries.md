@@ -190,8 +190,8 @@ The dstack-guest-agent runs an HTTP server on port 8090 inside the CVM. This por
 |--------|-------------|------------|
 | Info | Get application information | AppInfo |
 | Version | Get guest agent version | WorkerVersion |
-| AttestAppKey | Attest a key the app derived | AttestResponse |
-| Health | Report whether the application is serving | HealthResponse |
+| GetAttestationForAppKey | Attest the key the agent derives for the app | GetQuoteResponse |
+| Health | Report whether the application is serving (`/prpc/v1` only) | HealthResponse |
 
 Everything on this listener is unauthenticated, so each method is bounded in
 what it costs and in what it says:
@@ -204,8 +204,8 @@ what it costs and in what it says:
   shape its first two lines have; the path itself is already public, since it is
   measured into the compose hash. The file's *contents* are never quoted back.
   Container names and statuses were already public through the dashboard below.
-- `AttestAppKey` generates a fresh platform attestation per call and is by far
-  the most expensive method here.
+- `GetAttestationForAppKey` generates a fresh platform attestation per call and
+  is by far the most expensive method here.
 
 The service also provides a web dashboard at the root URL (`/`) showing basic CVM information. View the dashboard template [here](../../dstack/guest-agent/templates/dashboard.html).
 

@@ -577,9 +577,9 @@ impl DstackGuestRpc for InternalRpcHandler {
     }
 
     /// Always fails. See the RPC's doc comment in agent_rpc.proto: the method
-    /// exists so a pre-0.6 client learns why its events stopped being recorded
-    /// instead of getting an unknown-method 400 it cannot tell apart from
-    /// talking to the wrong socket.
+    /// exists so a pre-0.6 client learns why its events stopped being recorded,
+    /// instead of the bare `Service not found` a deleted method would answer
+    /// with, which says nothing about the removal.
     async fn emit_event(self, _request: EmitEventArgs) -> Result<()> {
         anyhow::bail!(
             "EmitEvent was removed in dstack 0.6.0; runtime RTMR3 events are system-owned and cannot be extended by apps"
@@ -862,9 +862,11 @@ impl WorkerRpc for ExternalRpcHandler {
     /// agent_rpc.proto.
     ///
     /// Returns a `GetQuoteResponse`, which only Intel TDX can fill, so this
-    /// fails on every other platform exactly as `GetQuote` does. That is the
-    /// limitation `WorkerV1.AttestAppKey` exists to lift, and it is why this
-    /// method is not the one new callers should use.
+    /// fails on every other platform exactly as `GetQuote` does. v1 ships no
+    /// counterpart that lifts the limitation: a v1 application attests its own
+    /// key instead -- derive it at `/v1/GetKey`, commit the public key into
+    /// `report_data`, call `/v1/Attest`, and serve the result to relying
+    /// parties. See the `Worker` service comment in agent_rpc_v1.proto.
     ///
     /// The report data comes from the same `app_key_report_data` the v1 method
     /// uses, so both attest the same public key for a given algorithm.
@@ -1399,8 +1401,9 @@ pNs85uhOZE8z2jr8Pg==
     }
 
     /// The frozen method returns a `GetQuoteResponse`, which only Intel TDX can
-    /// fill. That limitation is the whole reason `WorkerV1.AttestAppKey`
-    /// exists, so it has to stay observable here.
+    /// fill. That limitation is why v1 replaced the method with the
+    /// attest-your-own-key flow rather than porting it, so it has to stay
+    /// observable here.
     #[tokio::test]
     async fn get_attestation_for_app_key_is_tdx_only() {
         let (state, _guard) = setup_test_state_with_platform(Some(PlatformEvidence::SevSnp {

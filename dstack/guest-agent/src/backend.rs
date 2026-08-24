@@ -11,9 +11,8 @@ pub trait PlatformBackend: Send + Sync {
     fn attestation_for_info(&self) -> Result<VersionedAttestation>;
     fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation>;
     fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse>;
-    /// Attest the CVM itself: the attestation `Attest` and `AttestAppKey`
-    /// return, with digest preimages filled in. Encoding it is the RPC
-    /// layer's job.
+    /// Attest the CVM itself: the attestation `Attest` returns, with digest
+    /// preimages filled in. Encoding it is the RPC layer's job.
     fn attest_cvm(&self, report_data: [u8; 64]) -> Result<VersionedAttestation>;
 }
 

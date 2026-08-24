@@ -56,7 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ### Removed
-- guest-agent: the `EmitEvent` RPC no longer records anything -- runtime RTMR3 events are system-owned in 0.6.0, so an app can no longer extend the measurement chain. The method itself stays on the unversioned path and always fails with an error naming the removal, rather than being deleted outright: prpc answers both "no such method" and "the handler failed" with HTTP 400 and drops the message, so a deleted method would leave a 0.5.x caller with a generic error indistinguishable from a wrong socket or a version skew. **Breaking:** any app extending RTMR3 at runtime must stop; bind app data through `report_data` instead, which is what most callers wanted anyway
+- guest-agent: the `EmitEvent` RPC no longer records anything -- runtime RTMR3 events are system-owned in 0.6.0, so an app can no longer extend the measurement chain. The method itself stays on the unversioned path and always fails with an error naming the removal, rather than being deleted outright: a deleted method answers HTTP 404 `Service not found: EmitEvent`, which tells a 0.5.x caller nothing about why its events stopped being recorded, while the kept stub fails with a message naming the removal and pointing at `report_data`. **Breaking:** any app extending RTMR3 at runtime must stop; bind app data through `report_data` instead, which is what most callers wanted anyway
 
 
 ## [0.5.5] - 2025-10-20

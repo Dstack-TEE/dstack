@@ -520,7 +520,7 @@ mod tests {
 
     /// The poller must ask the versioned surface. `Health` lives on `WorkerV1`
     /// at `/prpc/v1`; the unversioned `Worker` at `/prpc` is closed at v0.5.11
-    /// and has no such method, so a poller pointed there gets a 400 that
+    /// and has no such method, so a poller pointed there gets a 404 that
     /// `apply_hysteresis` eventually turns into "unhealthy" for every instance
     /// in the fleet at once.
     #[tokio::test]

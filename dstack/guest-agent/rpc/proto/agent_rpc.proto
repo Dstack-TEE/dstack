@@ -79,8 +79,10 @@ service DstackGuest {
   // so an app can no longer extend them.
   //
   // The method is kept only so a pre-0.6 client gets a self-explanatory error.
-  // prpc answers both "no such method" and "the handler failed" with HTTP 400,
-  // so the message text is the only thing that tells the two apart.
+  // Deleting it would answer HTTP 404 `Service not found: EmitEvent`, which
+  // says nothing about why the events stopped being recorded; the kept stub
+  // fails with HTTP 400 and a message naming the removal and what to do
+  // instead. The self-explanatory error is the whole point of keeping it.
   rpc EmitEvent(EmitEventArgs) returns (google.protobuf.Empty) {}
 
   // Get app info

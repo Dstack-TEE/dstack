@@ -302,9 +302,11 @@ impl WorkerRpc for ExternalV1RpcHandler {
                 error: String::new(),
             });
         };
-        // Deliberately infallible: see `HealthResponse.error`. A failure to see
-        // the app has to come back as a verdict, because an RPC error is
-        // indistinguishable from an agent that predates this method.
+        // Deliberately infallible: see `HealthResponse.error`. The gateway
+        // counts every failed poll alike, so a failure to see the app has to
+        // come back as a verdict -- raised as an RPC error it would be lumped
+        // in with an unreachable agent and the reason would never reach the
+        // operator.
         let verdict = monitor.report();
         Ok(HealthResponse {
             healthy: verdict.healthy,
