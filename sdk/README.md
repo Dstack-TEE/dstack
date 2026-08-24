@@ -13,13 +13,21 @@ every SDK mirrors both:
 
 | Client | Surface | Paths |
 |---|---|---|
-| `ClientV0` | the frozen v0.5.11 API | `/GetKey`, also served at `/v0/GetKey` |
-| `ClientV1` | `dstack.guest.v1` | `/v1/GetKey` |
+| `DstackClient` (= `DstackClientV1`) | `dstack.guest.v1` | `/v1/GetKey` |
+| `DstackClientV0` | the frozen v0.5.11 API | `/GetKey`, also served at `/v0/GetKey` |
 
-The v0 surface is closed: it gains no methods and changes no behaviour, so a
-v0.5.x program keeps working against a 0.6 agent unchanged. New work goes to v1,
-which is specified byte-for-byte in
+**The unsuffixed client is v1** in every SDK -- that is the recommended default.
+v1 is specified byte-for-byte in
 [`docs/guest-api-v1.md`](../docs/guest-api-v1.md).
+
+`DstackClientV0` is legacy and explicitly named. That surface is closed: it
+gains no methods and changes no behaviour, so a v0.5.x program keeps working
+against a 0.6 agent unchanged.
+
+> **The unsuffixed name flipped to v1 in 0.6.0.** Code that used it for v0 calls
+> fails loudly on upgrade -- the v1 method signatures differ and `get_key`
+> requires `algorithm` explicitly -- rather than silently deriving different
+> keys. To stay on the frozen surface, switch to `DstackClientV0`.
 
 The clients are transport mirrors, not a compatibility layer: neither translates
 a call to the other, and each one's method set is exactly its surface's. v1 has

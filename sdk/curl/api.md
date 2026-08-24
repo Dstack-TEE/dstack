@@ -26,13 +26,31 @@ The agent serves two surfaces on this socket, chosen by URL path:
 | `/v0/<Method>` | the frozen v0.5.11 API |
 | `/<Method>` | the same frozen API, under its historical path |
 
-The endpoints below are the frozen v0 ones unless a section says otherwise.
-They keep working unchanged. New integrations should target `/v1`, which is
+**`/v1` is the current API** and what new integrations should target. It is
 specified byte-for-byte in
-[`docs/guest-api-v1.md`](../../docs/guest-api-v1.md) -- note that v1 derives
-different key material for the same name, on purpose.
+[`docs/guest-api-v1.md`](../../docs/guest-api-v1.md), which is the normative
+reference -- this page is a curl-oriented tour, not the contract.
 
-## Endpoints
+`/v1` serves exactly six methods:
+
+| Endpoint | Purpose |
+|---|---|
+| `/v1/IssueCert` | Issue a certificate, with a freshly generated key |
+| `/v1/GetKey` | Derive an application key with its signature chain |
+| `/v1/Attest` | Versioned attestation, optionally with boot-time GPU evidence |
+| `/v1/AttestGpu` | Collect GPU evidence now, against a nonce you choose |
+| `/v1/Info` | Application identity and configuration |
+| `/v1/Version` | Agent version |
+
+> **v1 derives different key material than v0 for the same name**, on purpose,
+> with no compatibility mode. See the migration note in the spec.
+
+The remaining sections document the **legacy v0 surface**. It is frozen at
+v0.5.11 and keeps working unchanged, reachable at `/v0/<Method>` and at the
+unversioned `/<Method>` paths it has always had. Sections marked *(v1)* describe
+the current API instead.
+
+## Endpoints (legacy v0)
 
 ### 1. Get TLS Key
 
@@ -281,7 +299,7 @@ curl --unix-socket /var/run/dstack.sock http://dstack/Attest?report_data=0000000
 > [`/v1/Attest`](#8-boot-time-gpu-evidence-v1) for them; a request sending
 > `include_boottime_gpu_evidence` here is ignored, not honoured.
 
-### 7. Attest GPU
+### 7. Attest GPU *(v1)*
 
 Collects vendor-native GPU evidence for a caller-chosen 32-byte nonce.
 
@@ -313,15 +331,11 @@ the evidence signature, certificate chain, measurements, and embedded nonce. The
 agent does not appraise the evidence. Evidence does not by itself bind the GPU to this
 CVM.
 
-### 8. Boot-time GPU evidence (v1)
+### 8. Boot-time GPU evidence *(v1)*
 
-Returns the complete JSON output NVIDIA `nvattest` produced during boot, as part
-of an attestation.
-
-> **`/GpuInfo` is gone.** It was added after v0.5.11 and never shipped in a
-> release, so nothing that ran against a released agent used it. Ask
-> `/v1/Attest` with `include_boottime_gpu_evidence` instead: it returns the same
-> bytes plus the attestation you need to authenticate them, in one round trip.
+Returns the complete output NVIDIA `nvattest` produced during boot, as part of
+an attestation -- so one round trip fetches the evidence together with the
+attestation needed to authenticate it.
 
 **Endpoint:** `/v1/Attest`
 

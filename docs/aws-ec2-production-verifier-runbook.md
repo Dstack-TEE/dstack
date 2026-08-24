@@ -214,8 +214,12 @@ For GPU workloads, PCR14 also contains `gpu-policy-hash` immediately after
 `SHA-256(JCS(requirements.gpu_policy))`, using `{}` when the policy is omitted.
 Because the verifier replays the event chain against the signed NitroTPM
 Attestation Document, this validates `gpu_policy_hash` on AWS. A successful GPU
-launch also adds `gpu-attestation`; its `evidence_sha256` can be compared with
-the exact UTF-8 bytes returned by `GpuInfo.attestation` after PCR14 replay.
+launch also adds `gpu-attestation`; after PCR14 replay, its `evidence_sha256`
+can be compared with `SHA-256(hex_decode(bundle.evidence))`, where `bundle` is
+the `AttestResponse.boottime_gpu_evidence` entry whose `format` is
+`nvidia-nvattest-boottime-json-v1`, returned by `/v1/Attest` when the request
+sets `include_boottime_gpu_evidence`. Hash the decoded bytes exactly as
+returned, not a re-serialized form.
 
 The guest also extends a `MrConfig` V2 **config commitment** into **PCR8**
 (`PCR8 = sha384(0^48 || config_id)`). This is **optional** and exists only to

@@ -56,10 +56,10 @@ one, on both listeners.
 
 | Listener | Version | Service | Mount | Example path |
 |---|---|---|---|---|
-| Internal socket | v1 | `DstackGuestV1` | `/v1` | `/v1/GetKey` |
+| Internal socket | v1 | `DstackGuest` | `/v1` | `/v1/GetKey` |
 | Internal socket | v0 | `DstackGuest`, frozen | `/v0` | `/v0/GetKey` |
 | Internal socket | v0 alias | `DstackGuest`, frozen | `/` | `/GetKey` |
-| External | v1 | `WorkerV1` | `/prpc/v1` | `/prpc/v1/Health` |
+| External | v1 | `Worker` | `/prpc/v1` | `/prpc/v1/Health` |
 | External | v0 | `Worker`, frozen | `/prpc/v0` | `/prpc/v0/Info` |
 | External | v0 alias | `Worker`, frozen | `/prpc` | `/prpc/Worker.Info` |
 
@@ -68,13 +68,20 @@ working unchanged. They are additional mounts of the *same* handler, not a
 parallel implementation, so they cannot drift from `/v0`. New code should say
 which version it means.
 
+Both packages name their services `DstackGuest` and `Worker`. The version lives
+in the package (`dstack.guest.v1`) and in the mount path, not in the service
+name -- `dstack.guest.v1.DstackGuestV1` would say it twice. Where this document
+needs to distinguish them it writes "the v1 `DstackGuest`" or "the frozen
+`Worker`".
+
 `Tappd` is unchanged and outside this scheme: it predates v0 and stays on its own
 socket at `/prpc/`.
 
 The internal socket is `/var/run/dstack.sock`, reachable only by the application
 itself. The external listener is reachable by anyone who can route to the CVM.
 That difference is the whole reason there are two services rather than one
-mounted twice: `DstackGuestV1` hands out key material, and `WorkerV1` never does.
+mounted twice: the v1 `DstackGuest` hands out key material, and the v1 `Worker`
+never does.
 
 Version selection is by URL path and nothing else. There is no header
 negotiation, no `Accept-Version`, and no default-version redirect, so a request
@@ -115,7 +122,7 @@ answer 404, so the status alone does not separate them. The body does.
 
 ## The internal surface
 
-`DstackGuestV1` has six methods.
+The v1 `DstackGuest` has six methods.
 
 | Method | Purpose |
 |---|---|
@@ -139,10 +146,10 @@ and nowhere else, and the `VersionedAttestation` that `Attest` returns already
 carries the TDX quote and the event log. See
 [Extracting a quote from an attestation](#extracting-a-quote-from-an-attestation).
 
-`GpuInfo` is absent from v1, and has also been removed from the unversioned
-surface. It never appeared in a release, and `Attest` with
-`include_boottime_gpu_evidence` returns the same bytes -- in the same
-`GpuEvidenceBundle` shape `AttestGpu` uses, so there is one parser for both.
+Boot-time GPU evidence has no method of its own. `Attest` with
+`include_boottime_gpu_evidence` returns it, in the same `GpuEvidenceBundle`
+shape `AttestGpu` uses, so one parser handles both and one round trip fetches
+the evidence together with the attestation needed to authenticate it.
 
 `EmitEvent` is absent because runtime RTMR3 events became system-owned in 0.6.0.
 An application binds its data through `report_data` instead.
@@ -425,7 +432,7 @@ public key may verify `(r, s)` against it directly and compare instead.
 
 ## The external surface
 
-`WorkerV1` has three methods, served at `/prpc/v1`.
+The v1 `Worker` has three methods, served at `/prpc/v1`.
 
 | Method | Purpose |
 |---|---|
@@ -474,7 +481,7 @@ gateway nodes are polling. Only instances that opted in via
 
 ### public_tcbinfo on the external surface
 
-`WorkerV1.Info` returns the same `InfoResponse` the internal surface returns,
+The v1 `Worker.Info` returns the same `InfoResponse` the internal surface returns,
 minus what the application asked to keep private. Unless the app-compose sets
 `public_tcbinfo`, the three document fields come back as empty strings:
 
@@ -491,7 +498,7 @@ it names the component holding the application's keys, and an external caller
 has no use for it. The frozen behaviour is unchanged on its own surface, so a
 v0.5.x client sees exactly what it always did.
 
-| Field | `Worker.Info` (frozen) | `WorkerV1.Info` |
+| Field | frozen `Worker.Info` | v1 `Worker.Info` |
 |---|---|---|
 | identity, measurement hashes | always served | always served |
 | `tcb_info` / measurement registers | blanked | not in the message at all |
@@ -499,7 +506,7 @@ v0.5.x client sees exactly what it always did.
 | `app_compose` | (nested in `tcb_info`, blanked) | blanked |
 | `key_provider_info` | **always served** | **blanked** |
 
-The internal `DstackGuestV1.Info` applies no gating at all. The flag decides what
+The internal v1 `DstackGuest.Info` applies no gating at all. The flag decides what
 an outside party may learn, and the caller on the internal socket is the
 application itself; an application cannot need protecting from its own
 configuration.
@@ -611,9 +618,9 @@ over exactly those bytes, so do not parse and re-serialize before hashing: key
 order, whitespace and unknown fields all change the digest, and that digest is
 what gets whitelisted on chain.
 
-`DstackGuestV1.Info` on the internal socket applies no hiding: the caller is the
+The v1 `DstackGuest.Info` on the internal socket applies no hiding: the caller is the
 application itself, which cannot need protecting from its own configuration.
-`WorkerV1.Info` on the external listener honours `public_tcbinfo`; see
+The v1 `Worker.Info` on the external listener honours `public_tcbinfo`; see
 [public_tcbinfo on the external surface](#public_tcbinfo-on-the-external-surface),
 which is the authoritative description.
 
@@ -651,11 +658,17 @@ remain on the internal one (`EmitEvent` fails with a message naming its removal)
 and `GetAttestationForAppKey` remains on the external one. Nothing forces a
 migration.
 
-**SDK shape.** All four SDKs ship two clients mirroring the two surfaces: a
-`ClientV0` for the closed unversioned API, including its `Sign` and `Verify`
-RPCs, and a `ClientV1` for this one. They are transport mirrors, not a
-compatibility layer: neither translates a call to the other, and each one's
-method set is exactly its surface's.
+**SDK shape.** All four SDKs ship two clients mirroring the two surfaces, and
+**the unsuffixed client is this one**: `DstackClient` names the v1 client and is
+the recommended default. `DstackClientV0` is the closed unversioned API,
+explicitly named and marked legacy, and still carries its `Sign` and `Verify`
+RPCs. They are transport mirrors, not a compatibility layer: neither translates
+a call to the other, and each one's method set is exactly its surface's.
+
+That alias flipped in 0.6.0. Code that used the unsuffixed client for v0 calls
+fails loudly on upgrade -- the v1 signatures differ and `GetKey` requires
+`algorithm` explicitly -- rather than silently deriving different keys under the
+new KDF. To stay on the frozen surface, name `DstackClientV0`.
 
 `ClientV1` has no `Sign` and no `Verify`, because v1 has neither. An application
 signs locally with the key `GetKey` returns, and a relying party verifies
@@ -674,7 +687,6 @@ For readers porting from the unversioned API.
 | `GetKeyArgs.algorithm` (defaulted) | `GetKeyRequest.algorithm` | Required; no `k256` alias |
 | — | `GetKeyResponse.public_key` | Added |
 | `GetQuote` | `Attest` | TDX-only channel subsumed |
-| `GpuInfo` (never released) | `AttestResponse.boottime_gpu_evidence` | Same bytes, now a `GpuEvidenceBundle` list |
 | `AppInfo.tcb_info` | — | Measurements are typed fields; the rest belongs to `Attest` |
 | `AppInfo.app_cert` | — | Dashboard artifact |
 | `AppInfo.vm_config` | `InfoResponse.vm_config` | Unchanged content |
@@ -684,12 +696,12 @@ For readers porting from the unversioned API.
 | `Verify` | — | Removed; verify locally per this document |
 | `EmitEvent` | — | Removed; RTMR3 is system-owned |
 | `Worker.GetAttestationForAppKey` | — | No v1 counterpart; a v1 app attests its own key, see above |
-| `Worker.Info` | `WorkerV1.Info` | Also gates `key_provider_info`; see above |
+| frozen `Worker.Info` | v1 `Worker.Info` | Also gates `key_provider_info`; see above |
 
 ## Related documents
 
 - [Attestation on Intel TDX](./attestation-tdx.md)
-- [Application health checks](./app-health-checks.md), for `WorkerV1.Health`
+- [Application health checks](./app-health-checks.md), for `/prpc/v1/Health`
 - [App Compose format](./normalized-app-compose.md), for the schema behind
   `InfoResponse.app_compose`
 - [On-chain governance](./onchain-governance.md), for the `DstackKms` contract that
