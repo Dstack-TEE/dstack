@@ -93,8 +93,11 @@ service DstackGuest {
   //
   // Verification needs no key material and no attestation, and the agent's
   // answer arrives over the socket unattested, so a caller gains nothing over
-  // checking the signature itself. SDKs >= 0.6 do it locally -- see
-  // `verify_signature` / `verify_signature_chain`.
+  // checking the signature itself. It is retained because it is part of this
+  // frozen surface, and the SDKs' v0 clients still expose it.
+  //
+  // v1 has no counterpart. A relying party verifies locally, against the rules
+  // in `docs/guest-api-v1.md`.
   //
   // Retained here only so 0.5.x clients keep working. It will not appear in the
   // v1 API; do not call it from new code.

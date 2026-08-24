@@ -624,19 +624,17 @@ remain on the internal one (`EmitEvent` fails with a message naming its removal)
 and `GetAttestationForAppKey` remains on the external one. Nothing forces a
 migration.
 
-**SDK shape.** The SDKs do not implement v1 yet; that lands in a later release.
-This is the contract they will implement, stated here so integrators can plan
-against it and so the SDK work has something to be checked against.
+**SDK shape.** All four SDKs ship two clients mirroring the two surfaces: a
+`ClientV0` for the closed unversioned API, including its `Sign` and `Verify`
+RPCs, and a `ClientV1` for this one. They are transport mirrors, not a
+compatibility layer: neither translates a call to the other, and each one's
+method set is exactly its surface's.
 
-They will ship two clients mirroring the two surfaces: a `ClientV0` for the
-closed unversioned API, including its `Sign` and `Verify` RPCs, and a `ClientV1`
-for this one. They will be transport mirrors, not a compatibility layer, and
-neither will translate calls to the other. `ClientV1` will have no `Sign` and no
-`Verify`, because v1 has neither; an application signs locally and a relying
-party verifies locally, following the rules above.
-
-Until that release, the current SDKs speak the frozen surface only. Against a
-0.6 agent they keep working, because that surface is still mounted.
+`ClientV1` has no `Sign` and no `Verify`, because v1 has neither. An application
+signs locally with the key `GetKey` returns, and a relying party verifies
+locally, following the rules above. The SDKs deliberately ship no verification
+helper: verifying needs no client and no connection, and this document is what a
+verifier implements against.
 
 ## Field mapping
 
