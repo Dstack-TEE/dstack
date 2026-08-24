@@ -96,6 +96,28 @@ pub struct GetQuoteResponse {
 pub struct AttestResponse {
     /// The attestation in hexadecimal format
     pub attestation: String,
+    /// Complete JSON output produced by nvattest during guest boot. Empty
+    /// unless the request set `include_gpu_evidence` and the guest has
+    /// boot-time GPU attestation output.
+    ///
+    /// Not bound to `report_data`: verify it by replaying the runtime event log
+    /// and comparing sha256 of these exact UTF-8 bytes against
+    /// `evidence_sha256` in the `gpu-attestation` event.
+    #[serde(default)]
+    pub gpu_evidence: String,
+}
+
+/// Configuration for a versioned attestation request
+#[derive(Debug, bon::Builder, Serialize, Deserialize)]
+#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+pub struct AttestConfig {
+    /// The report data in hexadecimal format, at most 64 bytes once decoded
+    #[builder(into)]
+    pub report_data: String,
+    /// Also return the boot-time GPU attestation evidence in `gpu_evidence`
+    #[builder(default = false)]
+    pub include_gpu_evidence: bool,
 }
 
 /// Response containing the complete NVIDIA GPU attestation output.

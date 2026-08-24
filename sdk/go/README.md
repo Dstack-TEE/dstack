@@ -575,6 +575,23 @@ instead.
 - Cryptographic proof of execution environment
 - Audit trail generation
 
+##### `AttestWithOptions(ctx context.Context, reportData []byte, opts AttestOptions) (*AttestResponse, error)`
+
+Same as `Attest`, with options. Set `IncludeGpuEvidence` to also return the boot-time
+GPU attestation evidence, so a verifier gets the quote and the GPU evidence in one round trip.
+
+```go
+resp, err := client.AttestWithOptions(ctx, reportData, dstack.AttestOptions{IncludeGpuEvidence: true})
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Println(resp.GpuEvidence)
+```
+
+The evidence is the same bytes ``GpuInfo`` serves and is empty unless the flag was set
+and boot-time GPU attestation output exists. It is not bound to `report_data`; verify
+it with the measured `gpu-attestation` event digest as described under ``GpuInfo``.
+
 ##### `GpuInfo(ctx context.Context) (*GpuInfoResponse, error)`
 
 Returns GPU information collected during boot. Currently, this includes the

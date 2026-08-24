@@ -122,6 +122,22 @@ async def test_async_client_attest():
 
 
 @pytest.mark.asyncio
+async def test_async_client_attest_gpu_evidence(monkeypatch):
+    evidence = '{"result_code":0,"claims":[]}'
+
+    async def fake_send(self, method, payload):
+        assert method == "Attest"
+        assert payload["include_gpu_evidence"] is True
+        return {"attestation": "deadbeef", "gpu_evidence": evidence}
+
+    monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
+    monkeypatch.setattr(AsyncDstackClient, "_send_rpc_request", fake_send)
+    result = await AsyncDstackClient().attest("test", include_gpu_evidence=True)
+    assert isinstance(result, AttestResponse)
+    assert result.gpu_evidence == evidence
+
+
+@pytest.mark.asyncio
 async def test_async_client_gpu_info(monkeypatch):
     attestation = '{"result_code":0,"claims":[]}'
 

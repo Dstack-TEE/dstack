@@ -4,7 +4,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use hex::encode as hex_encode;
 use http_client_unix_domain_socket::{ClientUnix, Method};
 use reqwest::Client;
@@ -152,13 +152,25 @@ impl DstackClient {
         Ok(response)
     }
 
+    /// Requests a versioned attestation for the given report data.
     pub async fn attest(&self, report_data: Vec<u8>) -> Result<AttestResponse> {
+        self.attest_with(
+            AttestConfig::builder()
+                .report_data(hex_encode(&report_data))
+                .build(),
+        )
+        .await
+    }
+
+    /// Requests a versioned attestation, optionally bundling the boot-time GPU
+    /// attestation evidence so a verifier can check both in one round trip.
+    pub async fn attest_with(&self, config: AttestConfig) -> Result<AttestResponse> {
+        let report_data =
+            hex::decode(&config.report_data).context("Invalid report data encoding")?;
         if report_data.is_empty() || report_data.len() > 64 {
             anyhow::bail!("Invalid report data length")
         }
-        let hex_data = hex_encode(report_data);
-        let data = json!({ "report_data": hex_data });
-        let response = self.send_rpc_request("/Attest", &data).await?;
+        let response = self.send_rpc_request("/Attest", &config).await?;
         let response = serde_json::from_value::<AttestResponse>(response)?;
 
         Ok(response)
