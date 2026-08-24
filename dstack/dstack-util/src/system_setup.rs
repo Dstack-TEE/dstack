@@ -41,7 +41,6 @@ use ra_tls::{
 use rand::Rng as _;
 use safe_write::{safe_write, safe_write_with_mode};
 use scopeguard::defer;
-use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -1001,11 +1000,6 @@ fn verify_app_compose_policy(shared: &HostShared) -> Result<()> {
     let Some(requirements) = app_compose.requirements.as_ref() else {
         return Ok(());
     };
-    if requirements.os_version.is_some() {
-        let current_os_version =
-            read_current_os_version().context("Failed to read current dstack OS version")?;
-        verify_os_version_requirement(app_compose, &current_os_version)?;
-    }
     if let Some(platforms) = requirements.platforms.as_deref() {
         if platforms.is_empty() {
             bail!("Unsupported attestation platform: requirements.platforms is empty");
@@ -1197,29 +1191,6 @@ fn verify_health_check_requirement(app_compose: &AppCompose) -> Result<()> {
     Ok(())
 }
 
-fn verify_os_version_requirement(app_compose: &AppCompose, current_os_version: &str) -> Result<()> {
-    let Some(requirements) = app_compose.requirements.as_ref() else {
-        return Ok(());
-    };
-    let Some(os_version) = requirements.os_version.as_deref() else {
-        return Ok(());
-    };
-    let os_version_req = VersionReq::parse(os_version)
-        .with_context(|| format!("Invalid requirements.os_version: {os_version}"))?;
-    let current_os_version = Version::parse(current_os_version)
-        .with_context(|| format!("Invalid current dstack OS version: {current_os_version}"))?;
-    if !os_version_req.matches(&current_os_version) {
-        bail!(
-            "Unsupported dstack OS version: current {current_os_version}, required {os_version_req}"
-        );
-    }
-    info!(
-        "dstack OS version requirement satisfied: current={}, requirement={}",
-        current_os_version, os_version_req
-    );
-    Ok(())
-}
-
 fn verify_platform_requirements(
     app_compose: &AppCompose,
     current_platform: TeeVariant,
@@ -1341,58 +1312,6 @@ fn launch_token_from_user_config(user_config: &str) -> Result<String> {
         .as_str()
         .context("user_config dstack.launch_token is not a string")?;
     Ok(token.to_string())
-}
-
-fn read_current_os_version() -> Result<String> {
-    const OS_RELEASE_PATHS: &[&str] = &["/etc/os-release", "/usr/lib/os-release"];
-    for path in OS_RELEASE_PATHS {
-        let content = match fs::read_to_string(path) {
-            Ok(content) => content,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(err) => return Err(err).with_context(|| format!("Failed to read {path}")),
-        };
-        if let Some(version) = os_release_value(&content, "VERSION_ID") {
-            return Ok(version);
-        }
-    }
-    bail!("VERSION_ID not found in /etc/os-release or /usr/lib/os-release")
-}
-
-fn os_release_value(content: &str, key: &str) -> Option<String> {
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((k, v)) = line.split_once('=') else {
-            continue;
-        };
-        if k == key {
-            return Some(unquote_os_release_value(v));
-        }
-    }
-    None
-}
-
-fn unquote_os_release_value(value: &str) -> String {
-    let value = value.trim();
-    if let Some(inner) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
-        // Double-quoted: a backslash escapes the next character.
-        let mut unescaped = String::with_capacity(inner.len());
-        let mut chars = inner.chars();
-        while let Some(c) = chars.next() {
-            match c {
-                '\\' => unescaped.push(chars.next().unwrap_or('\\')),
-                _ => unescaped.push(c),
-            }
-        }
-        return unescaped;
-    }
-    if let Some(inner) = value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')) {
-        // Single-quoted: shell single quotes have no escape sequences.
-        return inner.to_string();
-    }
-    value.to_string()
 }
 
 pub async fn cmd_sys_setup(args: SetupArgs) -> Result<()> {
@@ -3572,21 +3491,14 @@ fn test_validate_luks2_header_rejects_out_of_range_keyslot_area() {
 }
 
 #[cfg(test)]
-fn test_app_compose(
-    manifest_version: serde_json::Value,
-    os_version: Option<&str>,
-    platforms: Option<&[&str]>,
-) -> AppCompose {
+fn test_app_compose(manifest_version: serde_json::Value, platforms: Option<&[&str]>) -> AppCompose {
     let mut value = serde_json::json!({
         "manifest_version": manifest_version,
         "name": "test",
         "runner": "docker-compose"
     });
-    if os_version.is_some() || platforms.is_some() {
+    if platforms.is_some() {
         value["requirements"] = serde_json::json!({});
-    }
-    if let Some(os_version) = os_version {
-        value["requirements"]["os_version"] = serde_json::json!(os_version);
     }
     if let Some(platforms) = platforms {
         value["requirements"]["platforms"] = serde_json::json!(platforms);
@@ -3613,11 +3525,12 @@ fn health_check_opt_in_reaches_registration() {
 /// opt-in by omission.
 #[test]
 fn an_app_that_says_nothing_does_not_ask_to_be_polled() {
-    let no_requirements = test_app_compose(serde_json::json!("3"), None, None);
+    let no_requirements = test_app_compose(serde_json::json!("3"), None);
     assert!(!health_check_requested(&no_requirements));
 
-    let empty_requirements = test_app_compose(serde_json::json!("3"), Some(">=0.6.1"), None);
-    assert!(!health_check_requested(&empty_requirements));
+    // Requirements present, but carrying something other than health_check.
+    let other_requirements = test_app_compose(serde_json::json!("3"), Some(&["dstack-tdx"]));
+    assert!(!health_check_requested(&other_requirements));
 }
 
 /// An app that opts into health gating, with `overrides` merged over the
@@ -3716,21 +3629,21 @@ fn an_unknown_requirements_field_is_refused() {
 
 #[test]
 fn test_manifest_version_policy_rejects_above_guest_max() {
-    let app_compose = test_app_compose(serde_json::json!("4"), None, None);
+    let app_compose = test_app_compose(serde_json::json!("4"), None);
     let err = verify_manifest_version(&app_compose).unwrap_err();
     assert!(err.to_string().contains("Unsupported manifest_version"));
 }
 
 #[test]
-fn test_os_version_requirement_requires_v3_manifest() {
-    let app_compose = test_app_compose(serde_json::json!("2"), Some(">=0.6.1"), None);
+fn test_requirements_require_v3_manifest() {
+    let app_compose = test_app_compose(serde_json::json!("2"), Some(&["dstack-tdx"]));
     let err = verify_manifest_feature_requirements(&app_compose).unwrap_err();
     assert!(err.to_string().contains("requires manifest_version"));
 }
 
 #[test]
 fn test_nerdctl_compose_requires_v3_manifest() {
-    let mut app_compose = test_app_compose(serde_json::json!(2), None, None);
+    let mut app_compose = test_app_compose(serde_json::json!(2), None);
     app_compose.runner = "nerdctl-compose".to_string();
     let err = verify_manifest_feature_requirements(&app_compose).unwrap_err();
     assert!(err.to_string().contains("nerdctl-compose requires"));
@@ -3741,7 +3654,7 @@ fn test_nerdctl_compose_requires_v3_manifest() {
 
 #[test]
 fn test_multiple_init_scripts_require_v3_manifest() {
-    let mut app_compose = test_app_compose(serde_json::json!(2), None, None);
+    let mut app_compose = test_app_compose(serde_json::json!(2), None);
     app_compose.init_script = vec!["echo one".into(), "echo two".into()];
     let err = verify_manifest_feature_requirements(&app_compose).unwrap_err();
     assert!(err
@@ -3754,7 +3667,7 @@ fn test_multiple_init_scripts_require_v3_manifest() {
 
 #[test]
 fn test_snapshotter_is_rejected_for_other_runners() {
-    let mut app_compose = test_app_compose(serde_json::json!("3"), None, None);
+    let mut app_compose = test_app_compose(serde_json::json!("3"), None);
     app_compose.snapshotter = Some(dstack_types::ContainerSnapshotter::Stargz);
     let err = verify_manifest_feature_requirements(&app_compose).unwrap_err();
     assert!(err
@@ -3763,41 +3676,9 @@ fn test_snapshotter_is_rejected_for_other_runners() {
 }
 
 #[test]
-fn test_os_version_requirement_rejects_too_old_os() {
-    let app_compose = test_app_compose(serde_json::json!("3"), Some(">=0.6.1"), None);
-    let err = verify_os_version_requirement(&app_compose, "0.6.0").unwrap_err();
-    assert!(err.to_string().contains("Unsupported dstack OS version"));
-    verify_os_version_requirement(&app_compose, "0.6.1").unwrap();
-    verify_os_version_requirement(&app_compose, "0.6.2").unwrap();
-}
-
-#[test]
-fn test_os_version_requirement_accepts_semver_requirement_ranges() {
-    let app_compose = test_app_compose(serde_json::json!("3"), Some(">=0.6.0, <0.7.0"), None);
-    verify_os_version_requirement(&app_compose, "0.6.0").unwrap();
-    verify_os_version_requirement(&app_compose, "0.6.9").unwrap();
-    let err = verify_os_version_requirement(&app_compose, "0.7.0").unwrap_err();
-    assert!(err.to_string().contains("Unsupported dstack OS version"));
-}
-
-#[test]
-fn test_os_version_requirement_rejects_invalid_semver_strings() {
-    let app_compose = test_app_compose(serde_json::json!("3"), Some(">=0.6.0.a0"), None);
-    let err = verify_os_version_requirement(&app_compose, "0.6.0").unwrap_err();
-    assert!(err.to_string().contains("Invalid requirements.os_version"));
-
-    let app_compose = test_app_compose(serde_json::json!("3"), Some(">=0.6.0-a0"), None);
-    let err = verify_os_version_requirement(&app_compose, "0.6.0.a0").unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("Invalid current dstack OS version"));
-}
-
-#[test]
 fn test_platform_requirements_accept_matching_platform() {
     let app_compose = test_app_compose(
         serde_json::json!("3"),
-        None,
         Some(&["dstack-gcp-tdx", "dstack-tdx"]),
     );
     verify_platform_requirements(&app_compose, TeeVariant::DstackGcpTdx).unwrap();
@@ -3806,14 +3687,14 @@ fn test_platform_requirements_accept_matching_platform() {
 
 #[test]
 fn test_platform_requirements_reject_non_matching_platform() {
-    let app_compose = test_app_compose(serde_json::json!("3"), None, Some(&["dstack-gcp-tdx"]));
+    let app_compose = test_app_compose(serde_json::json!("3"), Some(&["dstack-gcp-tdx"]));
     let err = verify_platform_requirements(&app_compose, TeeVariant::DstackAmdSevSnp).unwrap_err();
     assert!(err.to_string().contains("Unsupported attestation platform"));
 }
 
 #[test]
 fn test_platform_requirements_require_v3_manifest() {
-    let app_compose = test_app_compose(serde_json::json!("2"), None, Some(&["dstack-gcp-tdx"]));
+    let app_compose = test_app_compose(serde_json::json!("2"), Some(&["dstack-gcp-tdx"]));
     let err = verify_manifest_feature_requirements(&app_compose).unwrap_err();
     assert!(err.to_string().contains("requires manifest_version"));
 }
@@ -3833,24 +3714,24 @@ fn test_empty_requirements_require_v3_manifest() {
 
 #[test]
 fn test_platform_requirements_omitted_accepts_any_platform() {
-    let app_compose = test_app_compose(serde_json::json!("3"), None, None);
+    let app_compose = test_app_compose(serde_json::json!("3"), None);
     verify_platform_requirements(&app_compose, TeeVariant::DstackAmdSevSnp).unwrap();
 }
 
 #[test]
 fn test_platform_requirements_explicit_empty_rejects_all_platforms() {
-    let app_compose = test_app_compose(serde_json::json!("3"), None, Some(&[]));
+    let app_compose = test_app_compose(serde_json::json!("3"), Some(&[]));
     let err = verify_platform_requirements(&app_compose, TeeVariant::DstackTdx).unwrap_err();
     assert!(err.to_string().contains("Unsupported attestation platform"));
 
-    let app_compose = test_app_compose(serde_json::json!("2"), None, Some(&[]));
+    let app_compose = test_app_compose(serde_json::json!("2"), Some(&[]));
     let err = verify_manifest_feature_requirements(&app_compose).unwrap_err();
     assert!(err.to_string().contains("requires manifest_version"));
 }
 
 #[test]
 fn test_platform_requirements_reject_invalid_platform_value() {
-    let app_compose = test_app_compose(serde_json::json!("3"), None, Some(&["gcptdx"]));
+    let app_compose = test_app_compose(serde_json::json!("3"), Some(&["gcptdx"]));
     let err = verify_platform_requirements(&app_compose, TeeVariant::DstackTdx).unwrap_err();
     assert!(err
         .to_string()
@@ -3983,34 +3864,6 @@ fn test_launch_token_from_user_config_rejects_missing_or_invalid_token() {
     assert!(err
         .to_string()
         .contains("failed to parse user_config as JSON"));
-}
-
-#[test]
-fn test_os_release_value_parses_quoted_version_id() {
-    let content = r#"
-NAME="DStack"
-VERSION_ID="0.6.1"
-"#;
-    assert_eq!(
-        os_release_value(content, "VERSION_ID").as_deref(),
-        Some("0.6.1")
-    );
-}
-
-#[test]
-fn test_unquote_os_release_value_handles_quoting_styles() {
-    assert_eq!(unquote_os_release_value("0.6.1"), "0.6.1");
-    assert_eq!(unquote_os_release_value("\"0.6.1\""), "0.6.1");
-    assert_eq!(unquote_os_release_value("'0.6.1'"), "0.6.1");
-    // Double-quoted: backslash escapes the next character.
-    assert_eq!(unquote_os_release_value(r#""a\"b""#), "a\"b");
-    assert_eq!(unquote_os_release_value(r#""a\\b""#), r"a\b");
-    assert_eq!(unquote_os_release_value(r#""a\\\"b""#), r#"a\"b"#);
-    // Single-quoted: no escape sequences.
-    assert_eq!(unquote_os_release_value(r"'a\\b'"), r"a\\b");
-    // Unbalanced/degenerate quotes are returned verbatim.
-    assert_eq!(unquote_os_release_value("\""), "\"");
-    assert_eq!(unquote_os_release_value("\"a"), "\"a");
 }
 
 #[cfg(test)]

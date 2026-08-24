@@ -2253,7 +2253,6 @@ dependencies = [
  "schnorrkel",
  "scopeguard",
  "sd-notify",
- "semver",
  "serde",
  "serde-human-bytes",
  "serde_json",

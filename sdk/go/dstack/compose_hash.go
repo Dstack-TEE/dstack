@@ -54,7 +54,6 @@ type GpuPolicy struct {
 
 // Requirements represents guest-side requirements.
 type Requirements struct {
-	OsVersion            string                 `json:"os_version,omitempty"`
 	Platforms            *[]RequirementPlatform `json:"platforms,omitempty"`
 	TdxMeasureAcpiTables *bool                  `json:"tdx_measure_acpi_tables,omitempty"`
 	LaunchTokenHash      string                 `json:"launch_token_hash,omitempty"`
@@ -185,9 +184,9 @@ func sortKeys(v interface{}) interface{} {
 
 // toDeterministicJSON converts the structure to deterministic JSON
 //
-// HTML escaping is off. `json.Marshal` would write `>=0.6.1` as `\u003e=0.6.1`,
-// which is valid JSON and a different byte string -- so an os_version bound, or
-// a `&&` in a compose file, silently gave Go a digest that Rust, Python and JS
+// HTML escaping is off. `json.Marshal` would write `x && y` as
+// `x \u0026\u0026 y`, which is valid JSON and a different byte string -- so a
+// `&&` in a compose file silently gave Go a digest that Rust, Python and JS
 // never produce, on the value that gets whitelisted on chain.
 func toDeterministicJSON(v interface{}) (string, error) {
 	sorted := sortKeys(v)
