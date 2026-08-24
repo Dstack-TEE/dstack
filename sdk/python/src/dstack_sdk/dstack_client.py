@@ -152,6 +152,12 @@ class GetQuoteResponse(BaseModel):
 
 class AttestResponse(BaseModel):
     attestation: str
+    # Complete JSON output produced by nvattest during guest boot. Empty unless
+    # the request set include_boottime_gpu_evidence and the guest has boot-time GPU
+    # attestation output. Not bound to report_data: verify it by replaying the
+    # runtime event log and comparing sha256 of these exact UTF-8 bytes against
+    # evidence_sha256 in the `gpu-attestation` event.
+    boottime_gpu_evidence: str = ""
 
     def decode_attestation(self) -> bytes:
         return bytes.fromhex(self.attestation)
@@ -427,8 +433,13 @@ class AsyncDstackClient(BaseClient):
     async def attest(
         self,
         report_data: str | bytes,
+        include_boottime_gpu_evidence: bool = False,
     ) -> AttestResponse:
-        """Request a versioned attestation for the provided report data."""
+        """Request a versioned attestation for the provided report data.
+
+        Set include_boottime_gpu_evidence to also return the boot-time GPU attestation
+        evidence in AttestResponse.boottime_gpu_evidence.
+        """
         if not report_data or not isinstance(report_data, (bytes, str)):
             raise ValueError("report_data can not be empty")
         report_bytes: bytes = (
@@ -437,7 +448,13 @@ class AsyncDstackClient(BaseClient):
         if len(report_bytes) > 64:
             raise ValueError("report_data must be less than 64 bytes")
         hex = binascii.hexlify(report_bytes).decode()
-        result = await self._send_rpc_request("Attest", {"report_data": hex})
+        result = await self._send_rpc_request(
+            "Attest",
+            {
+                "report_data": hex,
+                "include_boottime_gpu_evidence": include_boottime_gpu_evidence,
+            },
+        )
         return AttestResponse(**result)
 
     async def gpu_info(self) -> GpuInfoResponse:
@@ -569,8 +586,13 @@ class DstackClient(BaseClient):
     def attest(
         self,
         report_data: str | bytes,
+        include_boottime_gpu_evidence: bool = False,
     ) -> AttestResponse:
-        """Request a versioned attestation for the provided report data."""
+        """Request a versioned attestation for the provided report data.
+
+        Set include_boottime_gpu_evidence to also return the boot-time GPU attestation
+        evidence in AttestResponse.boottime_gpu_evidence.
+        """
         raise NotImplementedError
 
     @call_async

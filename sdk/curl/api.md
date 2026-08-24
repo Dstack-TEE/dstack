@@ -238,6 +238,7 @@ You can submit the returned `attestation` directly to the verifier `/verify` end
 | Field | Type | Description | Example |
 |-------|------|-------------|----------|
 | `report_data` | string | Report data of max length 64 bytes. Padding with 0s if less than 64 bytes. | `"1234deadbeaf"` |
+| `include_boottime_gpu_evidence` | boolean | Optional, defaults to `false`. Also returns the boot-time GPU attestation evidence in `boottime_gpu_evidence`. | `true` |
 
 **Example:**
 ```bash
@@ -245,20 +246,28 @@ curl --unix-socket /var/run/dstack.sock -X POST \
   http://dstack/Attest \
   -H 'Content-Type: application/json' \
   -d '{
-    "report_data": "1234deadbeaf"
+    "report_data": "1234deadbeaf",
+    "include_boottime_gpu_evidence": true
   }'
 ```
 Or
 ```bash
-curl --unix-socket /var/run/dstack.sock http://dstack/Attest?report_data=00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+curl --unix-socket /var/run/dstack.sock 'http://dstack/Attest?report_data=1234deadbeaf&include_boottime_gpu_evidence=true'
 ```
 
 **Response:**
 ```json
 {
-  "attestation": "<hex-encoded-attestation>"
+  "attestation": "<hex-encoded-attestation>",
+  "boottime_gpu_evidence": "{\"result_code\": 0, \"claims\": [...]}"
 }
 ```
+
+`boottime_gpu_evidence` carries the same bytes [`GpuInfo`](#7-gpu-info) serves, so one call
+returns both the quote and the GPU evidence a verifier needs. It is empty unless
+`include_boottime_gpu_evidence` was set and boot-time GPU attestation output exists. It is
+**not** bound to `report_data` — authenticate it with the `evidence_sha256`
+procedure documented under `GpuInfo` below.
 
 ### 7. GPU Info
 

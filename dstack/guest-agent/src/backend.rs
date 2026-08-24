@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result};
-use dstack_guest_agent_rpc::{AttestResponse, GetQuoteResponse};
+use dstack_guest_agent_rpc::GetQuoteResponse;
 use ra_tls::attestation::Attestation;
 use ra_tls::attestation::{QuoteContentType, VersionedAttestation};
 
@@ -11,7 +11,10 @@ pub trait PlatformBackend: Send + Sync {
     fn attestation_for_info(&self) -> Result<VersionedAttestation>;
     fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation>;
     fn quote_response(&self, report_data: [u8; 64], vm_config: &str) -> Result<GetQuoteResponse>;
-    fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse>;
+    /// Attest the CVM itself: the attestation `Attest` and `AttestAppKey`
+    /// return, with digest preimages filled in. Encoding it is the RPC
+    /// layer's job.
+    fn attest_cvm(&self, report_data: [u8; 64]) -> Result<VersionedAttestation>;
 }
 
 #[derive(Debug, Default)]
@@ -44,12 +47,10 @@ impl PlatformBackend for RealPlatform {
         })
     }
 
-    fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
+    fn attest_cvm(&self, report_data: [u8; 64]) -> Result<VersionedAttestation> {
         let mut attestation =
             Attestation::quote(&report_data).context("Failed to get attestation")?;
         attestation.fill_event_preimages();
-        Ok(AttestResponse {
-            attestation: attestation.into_versioned().to_bytes()?,
-        })
+        Ok(attestation.into_versioned())
     }
 }

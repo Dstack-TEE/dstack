@@ -100,6 +100,18 @@ print(result.attestation)        # hex string
 print(result.decode_attestation())  # bytes
 ```
 
+Pass `include_boottime_gpu_evidence=True` to also return the boot-time GPU attestation
+evidence, so a verifier gets the quote and the GPU evidence in one round trip.
+
+```python
+result = client.attest(b'user:alice:nonce123', include_boottime_gpu_evidence=True)
+print(result.boottime_gpu_evidence)
+```
+
+The evidence is the same bytes ``gpu_info()`` serves and is empty unless the flag was set
+and boot-time GPU attestation output exists. It is not bound to `report_data`; verify
+it with the measured `gpu-attestation` event digest as described under ``gpu_info()``.
+
 ### GPU Info
 
 `gpu_info()` returns GPU information collected during boot. Currently, this

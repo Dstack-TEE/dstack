@@ -111,6 +111,20 @@ func (r *GetQuoteResponse) DecodeEventLog() ([]EventLog, error) {
 // Represents the response from an attestation request.
 type AttestResponse struct {
 	Attestation []byte
+	// BoottimeGpuEvidence is the complete JSON output produced by nvattest during guest
+	// boot. Empty unless the request set IncludeBoottimeGpuEvidence and the guest has
+	// boot-time GPU attestation output.
+	//
+	// It is not bound to reportData: verify it by replaying the runtime event log
+	// and comparing sha256 of these exact UTF-8 bytes against evidence_sha256 in
+	// the `gpu-attestation` event.
+	BoottimeGpuEvidence string
+}
+
+// AttestOptions tunes what an Attest call returns.
+type AttestOptions struct {
+	// IncludeBoottimeGpuEvidence also returns the boot-time GPU attestation evidence.
+	IncludeBoottimeGpuEvidence bool
 }
 
 // GpuInfoResponse contains GPU information collected during boot.
@@ -503,12 +517,19 @@ func (c *DstackClient) GetQuote(ctx context.Context, reportData []byte) (*GetQuo
 
 // Gets a versioned attestation from the dstack service.
 func (c *DstackClient) Attest(ctx context.Context, reportData []byte) (*AttestResponse, error) {
+	return c.AttestWithOptions(ctx, reportData, AttestOptions{})
+}
+
+// Gets a versioned attestation from the dstack service, optionally bundling the
+// boot-time GPU attestation evidence so a verifier can check both in one round trip.
+func (c *DstackClient) AttestWithOptions(ctx context.Context, reportData []byte, opts AttestOptions) (*AttestResponse, error) {
 	if len(reportData) > 64 {
 		return nil, fmt.Errorf("report data is too large, it should be at most 64 bytes")
 	}
 
 	payload := map[string]interface{}{
-		"report_data": hex.EncodeToString(reportData),
+		"report_data":          hex.EncodeToString(reportData),
+		"include_boottime_gpu_evidence": opts.IncludeBoottimeGpuEvidence,
 	}
 
 	data, err := c.sendRPCRequest(ctx, "/Attest", payload)
@@ -518,6 +539,7 @@ func (c *DstackClient) Attest(ctx context.Context, reportData []byte) (*AttestRe
 
 	var response struct {
 		Attestation string `json:"attestation"`
+		BoottimeGpuEvidence string `json:"boottime_gpu_evidence"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, err
@@ -528,7 +550,7 @@ func (c *DstackClient) Attest(ctx context.Context, reportData []byte) (*AttestRe
 		return nil, err
 	}
 
-	return &AttestResponse{Attestation: attestation}, nil
+	return &AttestResponse{Attestation: attestation, BoottimeGpuEvidence: response.BoottimeGpuEvidence}, nil
 }
 
 // GpuInfo returns GPU information collected during boot.
