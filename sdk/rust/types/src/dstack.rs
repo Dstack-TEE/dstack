@@ -96,58 +96,6 @@ pub struct GetQuoteResponse {
 pub struct AttestResponse {
     /// The attestation in hexadecimal format
     pub attestation: String,
-    /// Complete JSON output produced by nvattest during guest boot. Empty
-    /// unless the request set `include_boottime_gpu_evidence` and the guest has
-    /// boot-time GPU attestation output.
-    ///
-    /// Not bound to `report_data`: verify it by replaying the runtime event log
-    /// and comparing sha256 of these exact UTF-8 bytes against
-    /// `evidence_sha256` in the `gpu-attestation` event.
-    #[serde(default)]
-    pub boottime_gpu_evidence: String,
-}
-
-/// Configuration for a versioned attestation request
-#[derive(Debug, bon::Builder, Serialize, Deserialize)]
-#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
-#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
-pub struct AttestConfig {
-    /// The report data in hexadecimal format, at most 64 bytes once decoded
-    #[builder(into)]
-    pub report_data: String,
-    /// Also return the boot-time GPU attestation evidence in `boottime_gpu_evidence`
-    #[builder(default = false)]
-    pub include_boottime_gpu_evidence: bool,
-}
-
-/// Response from fresh, on-demand GPU evidence collection.
-///
-#[derive(Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
-#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
-pub struct AttestGpuResponse {
-    pub bundles: Vec<GpuEvidenceBundle>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
-#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
-pub struct GpuEvidenceBundle {
-    /// Stable GPU vendor identifier.
-    pub vendor: String,
-    /// Vendor-specific evidence format and version.
-    pub format: String,
-    /// Hex-encoded opaque evidence bytes, as represented by the JSON RPC.
-    pub evidence: String,
-}
-
-/// Response containing the complete NVIDIA GPU attestation output.
-#[derive(Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
-#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
-pub struct GpuInfoResponse {
-    /// Complete JSON output produced by nvattest during guest boot.
-    pub attestation: String,
 }
 
 impl AttestResponse {
@@ -276,6 +224,15 @@ impl SignResponse {
     pub fn decode_signature_chain(&self) -> Result<Vec<Vec<u8>>, FromHexError> {
         self.signature_chain.iter().map(hex::decode).collect()
     }
+}
+
+/// Response from a Verify request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+pub struct VerifyResponse {
+    /// Whether the signature is valid
+    pub valid: bool,
 }
 
 /// Response from a Version request

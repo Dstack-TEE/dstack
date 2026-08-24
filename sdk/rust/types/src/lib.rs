@@ -7,4 +7,5 @@
 extern crate alloc;
 
 pub mod dstack;
+pub mod dstack_v1;
 pub mod tappd;

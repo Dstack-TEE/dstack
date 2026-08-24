@@ -3,22 +3,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use dstack_sdk::dstack_client::DstackClient;
-use dstack_sdk::verify::verify_signature;
+use dstack_sdk::dstack_client::DstackClientV0;
 use dstack_sdk_types::dstack::TlsKeyConfig;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Create a DstackClient with default endpoint (/var/run/dstack.sock)
-    let client = DstackClient::new(None);
+    // Create a DstackClientV0 with default endpoint (/var/run/dstack.sock)
+    let client = DstackClientV0::new(None);
 
     // Or create with a custom endpoint
-    // let client = DstackClient::new(Some("/custom/path/dstack.sock"));
+    // let client = DstackClientV0::new(Some("/custom/path/dstack.sock"));
 
     // Or create with HTTP endpoint for simulator
-    // let client = DstackClient::new(Some("http://localhost:8000"));
+    // let client = DstackClientV0::new(Some("http://localhost:8000"));
 
-    println!("DstackClient created successfully!");
+    println!("DstackClientV0 created successfully!");
 
     // Example usage (these will fail without a running dstack service):
 
@@ -112,8 +111,11 @@ async fn main() -> anyhow::Result<()> {
     let sig_bytes = sign_resp.decode_signature()?;
     let pub_key_bytes = sign_resp.decode_public_key()?;
 
-    // Verification is local -- it needs no key material and no round trip.
-    let valid = verify_signature(algorithm, &data_to_sign, &sig_bytes, &pub_key_bytes)?;
-    println!("  Verification successful: {valid}");
+    // Sign and Verify are both v0 RPCs, so this round trip stays on the frozen
+    // surface. v1 has neither; see `docs/guest-api-v1.md`.
+    let verified = client
+        .verify(algorithm, data_to_sign, sig_bytes, pub_key_bytes)
+        .await?;
+    println!("  Verification successful: {}", verified.valid);
     Ok(())
 }

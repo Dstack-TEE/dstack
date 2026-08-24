@@ -4,7 +4,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use hex::encode as hex_encode;
 use http_client_unix_domain_socket::{ClientUnix, Method};
 use reqwest::Client;
@@ -21,7 +21,15 @@ struct SignRequest<'a> {
     data: String,
 }
 
-fn get_endpoint(endpoint: Option<&str>) -> String {
+#[derive(Debug, Serialize)]
+struct VerifyRequest<'a> {
+    algorithm: &'a str,
+    data: String,
+    signature: String,
+    public_key: String,
+}
+
+pub(crate) fn get_endpoint(endpoint: Option<&str>) -> String {
     if let Some(e) = endpoint {
         return e.to_string();
     }
@@ -52,8 +60,17 @@ pub enum ClientKind {
 
 pub trait BaseClient {}
 
-/// The main client for interacting with the dstack service
-pub struct DstackClient {
+/// Client for the frozen v0 guest-agent surface.
+///
+/// Speaks the unversioned paths (`/GetKey`), which the agent also serves at
+/// `/v0`. That surface is closed at exactly what dstack v0.5.11 shipped: it
+/// gains no methods and changes no behaviour, so this client keeps working
+/// against a 0.6 agent unchanged.
+///
+/// For anything new, use [`crate::dstack_client_v1::DstackClientV1`]. Note that
+/// **v1 derives different key material than v0 for the same inputs** -- see
+/// `docs/guest-api-v1.md` for the migration.
+pub struct DstackClientV0 {
     /// The base URL for HTTP requests
     base_url: String,
     /// The endpoint for Unix domain socket communication
@@ -62,9 +79,9 @@ pub struct DstackClient {
     client: ClientKind,
 }
 
-impl BaseClient for DstackClient {}
+impl BaseClient for DstackClientV0 {}
 
-impl DstackClient {
+impl DstackClientV0 {
     pub fn new(endpoint: Option<&str>) -> Self {
         let endpoint = get_endpoint(endpoint);
         let (base_url, client) = match endpoint {
@@ -74,7 +91,7 @@ impl DstackClient {
             _ => ("http://localhost".to_string(), ClientKind::Unix),
         };
 
-        DstackClient {
+        DstackClientV0 {
             base_url,
             endpoint,
             client,
@@ -153,47 +170,16 @@ impl DstackClient {
     }
 
     /// Requests a versioned attestation for the given report data.
+    ///
+    /// No GPU-evidence flag: that field is reserved on this surface and only
+    /// `/v1/Attest` honours it.
     pub async fn attest(&self, report_data: Vec<u8>) -> Result<AttestResponse> {
-        self.attest_with(
-            AttestConfig::builder()
-                .report_data(hex_encode(&report_data))
-                .build(),
-        )
-        .await
-    }
-
-    /// Requests a versioned attestation, optionally bundling the boot-time GPU
-    /// attestation evidence so a verifier can check both in one round trip.
-    pub async fn attest_with(&self, config: AttestConfig) -> Result<AttestResponse> {
-        let report_data =
-            hex::decode(&config.report_data).context("Invalid report data encoding")?;
         if report_data.is_empty() || report_data.len() > 64 {
             anyhow::bail!("Invalid report data length")
         }
-        let response = self.send_rpc_request("/Attest", &config).await?;
-        let response = serde_json::from_value::<AttestResponse>(response)?;
-
-        Ok(response)
-    }
-
-    /// Collects vendor-native GPU evidence for a caller-chosen 32-byte nonce.
-    ///
-    /// Select a verifier using each bundle's vendor and format. The verifier must
-    /// check the signature, certificate chain, measurements, and embedded nonce.
-    pub async fn attest_gpu(&self, nonce: Vec<u8>) -> Result<AttestGpuResponse> {
-        if nonce.len() != 32 {
-            anyhow::bail!("Nonce must be exactly 32 bytes")
-        }
-        let data = json!({ "nonce": hex_encode(nonce) });
-        let response = self.send_rpc_request("/AttestGpu", &data).await?;
-        Ok(serde_json::from_value::<AttestGpuResponse>(response)?)
-    }
-
-    /// Returns GPU information collected during boot.
-    pub async fn gpu_info(&self) -> Result<GpuInfoResponse> {
-        let response = self.send_rpc_request("/GpuInfo", &json!({})).await?;
-        let response = serde_json::from_value::<GpuInfoResponse>(response)?;
-        Ok(response)
+        let data = json!({ "report_data": hex_encode(report_data) });
+        let response = self.send_rpc_request("/Attest", &data).await?;
+        Ok(serde_json::from_value::<AttestResponse>(response)?)
     }
 
     pub async fn info(&self) -> Result<InfoResponse> {
@@ -209,6 +195,22 @@ impl DstackClient {
         let response = self.send_rpc_request("/Version", &json!({})).await?;
         let response = serde_json::from_value::<VersionResponse>(response)?;
         Ok(response)
+    }
+
+    /// Emit a runtime event.
+    ///
+    /// Always fails against a 0.6 agent: runtime RTMR3 events became
+    /// system-owned, and the method is kept only so a caller learns that from
+    /// the error rather than from an unexplained failure. The agent's message
+    /// is surfaced verbatim.
+    pub async fn emit_event(&self, event: String, payload: Vec<u8>) -> Result<()> {
+        if event.is_empty() {
+            anyhow::bail!("Event name cannot be empty")
+        }
+        let hex_payload = hex_encode(payload);
+        let data = json!({ "event": event, "payload": hex_payload });
+        self.send_rpc_request::<_, ()>("/EmitEvent", &data).await?;
+        Ok(())
     }
 
     pub async fn get_tls_key(&self, tls_key_config: TlsKeyConfig) -> Result<GetTlsKeyResponse> {
@@ -228,4 +230,36 @@ impl DstackClient {
         let response = serde_json::from_value::<SignResponse>(response)?;
         Ok(response)
     }
+
+    /// Verifies a payload signature through the agent.
+    ///
+    /// Part of the v0 surface and kept for callers that already depend on it.
+    /// It needs no key material and no attestation, and the answer arrives over
+    /// the socket unattested, so a caller gains nothing over checking the
+    /// signature itself. v1 has no counterpart; `docs/guest-api-v1.md`
+    /// specifies verification for relying parties.
+    pub async fn verify(
+        &self,
+        algorithm: &str,
+        data: Vec<u8>,
+        signature: Vec<u8>,
+        public_key: Vec<u8>,
+    ) -> Result<VerifyResponse> {
+        let payload = VerifyRequest {
+            algorithm,
+            data: hex_encode(data),
+            signature: hex_encode(signature),
+            public_key: hex_encode(public_key),
+        };
+        let response = self.send_rpc_request("/Verify", &payload).await?;
+        let response = serde_json::from_value::<VerifyResponse>(response)?;
+        Ok(response)
+    }
 }
+
+/// The v0 client under its historical name.
+#[deprecated(
+    since = "0.6.0",
+    note = "renamed to DstackClientV0; the new v1 surface is DstackClientV1"
+)]
+pub type DstackClient = DstackClientV0;

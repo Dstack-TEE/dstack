@@ -6,8 +6,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use dcap_qvl::quote::Quote;
-use dstack_sdk::dstack_client::{AttestConfig, DstackClient as AsyncDstackClient};
-use dstack_sdk::verify::verify_signature;
+use dstack_sdk::dstack_client::DstackClientV0 as AsyncDstackClient;
 use sha2::{Digest, Sha256};
 
 #[tokio::test]
@@ -23,54 +22,6 @@ async fn test_async_client_get_quote() {
     let client = AsyncDstackClient::new(None);
     let result = client.get_quote("test".into()).await.unwrap();
     assert!(!result.quote.is_empty());
-}
-
-#[tokio::test]
-async fn test_async_client_attest_gpu_validates_nonce_length() {
-    let client = AsyncDstackClient::new(None);
-    for len in [0, 31, 33] {
-        assert!(
-            client.attest_gpu(vec![0u8; len]).await.is_err(),
-            "a {len}-byte nonce must be rejected"
-        );
-    }
-    // The simulator ships no nvattest, so a well-formed request must still fail
-    // fast with an error rather than hang for the attestation timeout.
-    assert!(client.attest_gpu(vec![0xab; 32]).await.is_err());
-}
-
-#[tokio::test]
-async fn test_async_client_attest() {
-    let client = AsyncDstackClient::new(None);
-    let result = client.attest(b"test".to_vec()).await.unwrap();
-    let attestation = result.decode_attestation().unwrap();
-    assert!(!attestation.is_empty());
-    assert!(result.boottime_gpu_evidence.is_empty());
-
-    let too_large = client.attest(vec![0_u8; 65]).await;
-    assert!(too_large.is_err());
-}
-
-#[tokio::test]
-async fn test_async_client_attest_with_boottime_gpu_evidence() {
-    let client = AsyncDstackClient::new(None);
-    let config = AttestConfig::builder()
-        .report_data(hex::encode(b"test"))
-        .include_boottime_gpu_evidence(true)
-        .build();
-    let result = client.attest_with(config).await.unwrap();
-    assert!(!result.decode_attestation().unwrap().is_empty());
-    // Whether evidence exists depends on the host, so assert the request
-    // round-trips and the field is populated from the same source as GpuInfo.
-    assert_eq!(
-        result.boottime_gpu_evidence,
-        client.gpu_info().await.unwrap().attestation
-    );
-
-    let too_large = AttestConfig::builder()
-        .report_data(hex::encode([0_u8; 65]))
-        .build();
-    assert!(client.attest_with(too_large).await.is_err());
 }
 
 #[tokio::test]
@@ -165,11 +116,12 @@ async fn test_async_client_sign_k256_alias() {
     assert_eq!(resp_k256.public_key, resp_secp.public_key);
 }
 
-// The Sign RPC is still server-side; only the checking of its result moved into
-// the SDK. These replace the round trips that used to call the removed Verify RPC.
+// Sign and Verify are both v0 RPCs, so the round trip stays entirely on the
+// frozen surface. v1 has neither: an app there signs locally with the key
+// `get_key` returns, and a relying party verifies per `docs/guest-api-v1.md`.
 
 #[tokio::test]
-async fn test_sign_then_verify_locally_ed25519() {
+async fn test_sign_then_verify_ed25519() {
     let client = AsyncDstackClient::new(None);
     let data = b"test message for ed25519".to_vec();
     let resp = client.sign("ed25519", data.clone()).await.unwrap();
@@ -177,12 +129,24 @@ async fn test_sign_then_verify_locally_ed25519() {
     let public_key = resp.decode_public_key().unwrap();
 
     assert_eq!(resp.signature_chain.len(), 3);
-    assert!(verify_signature("ed25519", &data, &signature, &public_key).unwrap());
-    assert!(!verify_signature("ed25519", b"wrong message", &signature, &public_key).unwrap());
+    assert!(
+        client
+            .verify("ed25519", data, signature.clone(), public_key.clone())
+            .await
+            .unwrap()
+            .valid
+    );
+    assert!(
+        !client
+            .verify("ed25519", b"wrong message".to_vec(), signature, public_key)
+            .await
+            .unwrap()
+            .valid
+    );
 }
 
 #[tokio::test]
-async fn test_sign_then_verify_locally_secp256k1() {
+async fn test_sign_then_verify_secp256k1() {
     let client = AsyncDstackClient::new(None);
     let data = b"test message for secp256k1".to_vec();
     let resp = client.sign("secp256k1", data.clone()).await.unwrap();
@@ -190,12 +154,29 @@ async fn test_sign_then_verify_locally_secp256k1() {
     let public_key = resp.decode_public_key().unwrap();
 
     assert_eq!(resp.signature_chain.len(), 3);
-    assert!(verify_signature("secp256k1", &data, &signature, &public_key).unwrap());
-    assert!(!verify_signature("secp256k1", b"wrong message", &signature, &public_key).unwrap());
+    assert!(
+        client
+            .verify("secp256k1", data, signature.clone(), public_key.clone())
+            .await
+            .unwrap()
+            .valid
+    );
+    assert!(
+        !client
+            .verify(
+                "secp256k1",
+                b"wrong message".to_vec(),
+                signature,
+                public_key
+            )
+            .await
+            .unwrap()
+            .valid
+    );
 }
 
 #[tokio::test]
-async fn test_sign_then_verify_locally_secp256k1_prehashed() {
+async fn test_sign_then_verify_secp256k1_prehashed() {
     let client = AsyncDstackClient::new(None);
     let digest = Sha256::digest(b"test message for prehashed").to_vec();
     let resp = client
@@ -206,5 +187,11 @@ async fn test_sign_then_verify_locally_secp256k1_prehashed() {
     let public_key = resp.decode_public_key().unwrap();
 
     assert_eq!(resp.signature_chain.len(), 3);
-    assert!(verify_signature("secp256k1_prehashed", &digest, &signature, &public_key).unwrap());
+    assert!(
+        client
+            .verify("secp256k1_prehashed", digest, signature, public_key)
+            .await
+            .unwrap()
+            .valid
+    );
 }
