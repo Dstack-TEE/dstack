@@ -4,7 +4,6 @@
 
 import http from 'http'
 import https from 'https'
-import net from 'net'
 
 export const __version__ = "0.6.0"
 
@@ -54,18 +53,6 @@ function parseError(body: string): Error {
 
 function isSuccess(statusCode: number): boolean {
   return statusCode >= 200 && statusCode < 300
-}
-
-/**
- * Read the status code out of an HTTP status line (`HTTP/1.1 404 Not Found`).
- *
- * Exported for the unix-socket branch's tests: that branch speaks HTTP by hand,
- * so nothing else parses this for it. An unreadable line yields 0, which is not
- * a success code and so gets reported rather than passed off as one.
- */
-export function parse_status_code(statusLine: string): number {
-  const code = Number.parseInt(statusLine.split(' ')[1], 10)
-  return Number.isNaN(code) ? 0 : code
 }
 
 export function send_rpc_request<T = any>(endpoint: string, path: string, payload: string, timeoutMs?: number): Promise<T> {
@@ -133,13 +120,17 @@ export function send_rpc_request<T = any>(endpoint: string, path: string, payloa
       }
 
       const req = (url.protocol === 'https:' ? https : http).request(url, options, (res) => {
-        let data = ''
+        // Buffers, concatenated once at the end, rather than `data += chunk`.
+        // Appending a Buffer to a string decodes that chunk on its own, so a
+        // UTF-8 sequence split across two TCP reads becomes two replacement
+        // characters -- and the call still resolves, with corrupted data.
+        const chunks: Buffer[] = []
         res.on('data', (chunk) => {
-          data += chunk
+          chunks.push(chunk)
         })
         res.on('end', () => {
           cleanup()
-          settle(res.statusCode ?? 0, data)
+          settle(res.statusCode ?? 0, Buffer.concat(chunks).toString('utf8'))
         })
       })
 
@@ -155,67 +146,55 @@ export function send_rpc_request<T = any>(endpoint: string, path: string, payloa
       req.write(payload)
       req.end()
     } else {
-      const client = net.createConnection({ path: endpoint }, () => {
-        client.write(`POST ${path} HTTP/1.1\r\n`)
-        client.write(`Host: localhost\r\n`)
-        client.write(`Content-Type: application/json\r\n`)
-        // Byte length, not `payload.length`: JS strings count UTF-16 code units
-        // and the socket emits UTF-8, so any non-ASCII field -- a `getKey`
-        // domain, a certificate subject -- declared a body shorter than the one
-        // sent. The agent then parsed truncated JSON and the surplus bytes were
-        // left in the stream to corrupt whatever read next.
-        client.write(`Content-Length: ${Buffer.byteLength(payload)}\r\n`)
-        client.write('\r\n')
-        client.write(payload)
-      })
+      // `socketPath` rather than a hand-written request over `net`: node's HTTP
+      // client already frames the request, de-chunks the response, and knows
+      // that `Content-Length` counts bytes. The version this replaces did none
+      // of those on the read path -- it compared a byte count from the header
+      // against a JS string's UTF-16 length, so a response carrying one
+      // non-ASCII character never satisfied its own end condition and the call
+      // hung until the agent's keep-alive expired, ten seconds later. An
+      // app-compose with an accented character in a comment was enough.
+      const req = http.request(
+        {
+          socketPath: endpoint,
+          path,
+          method: 'POST',
+          // One connection per call, closed when the response ends. The code
+          // this replaces called `client.end()` explicitly; node's default
+          // agent instead pools the socket, and an open socket keeps the
+          // process alive -- a script that awaits one `info()` and returns
+          // would hang until the agent's keep-alive expired.
+          agent: false,
+          headers: {
+            Host: 'localhost',
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload),
+            'User-Agent': `dstack-sdk-js/${__version__}`,
+          },
+        },
+        (res) => {
+          const chunks: Buffer[] = []
+          res.on('data', (chunk) => {
+            chunks.push(chunk)
+          })
+          res.on('end', () => {
+            cleanup()
+            settle(res.statusCode ?? 0, Buffer.concat(chunks).toString('utf8'))
+          })
+        },
+      )
 
-      let data = ''
-      let headers: Record<string, string> = {}
-      let headersParsed = false
-      let statusCode = 0
-      let contentLength = 0
-      let bodyData = ''
-
-      client.on('data', (chunk) => {
-        data += chunk
-        if (!headersParsed) {
-          const headerEndIndex = data.indexOf('\r\n\r\n')
-          if (headerEndIndex !== -1) {
-            const headerLines = data.slice(0, headerEndIndex).split('\r\n')
-            // The first line is the status line, not a header.
-            statusCode = parse_status_code(headerLines[0])
-            headerLines.slice(1).forEach(line => {
-              const [key, value] = line.split(': ')
-              if (key && value) {
-                headers[key.toLowerCase()] = value
-              }
-            })
-            headersParsed = true
-            contentLength = parseInt(headers['content-length'] || '0', 10)
-            bodyData = data.slice(headerEndIndex + 4)
-          }
-        } else {
-          bodyData += chunk
-        }
-
-        if (headersParsed && bodyData.length >= contentLength) {
-          client.end()
-        }
-      })
-
-      client.on('end', () => {
-        cleanup()
-        settle(statusCode, bodyData.slice(0, contentLength))
-      })
-
-      client.on('error', (error) => {
+      req.on('error', (error) => {
         cleanup()
         safeReject(error)
       })
 
       abortController.signal.addEventListener('abort', () => {
-        client.destroy()
+        req.destroy()
       })
+
+      req.write(payload)
+      req.end()
     }
   })
 }

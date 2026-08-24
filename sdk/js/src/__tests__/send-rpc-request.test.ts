@@ -3,38 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { expect, describe, it, vi, beforeEach, afterEach } from 'vitest'
-import { send_rpc_request, parse_status_code, __version__ } from '../send-rpc-request'
+import { send_rpc_request, __version__ } from '../send-rpc-request'
 import http from 'http'
 import https from 'https'
-import net from 'net'
 
 // Mock the modules
 vi.mock('http')
 vi.mock('https')
-vi.mock('net')
-
-describe('parse_status_code', () => {
-  it('should read the code out of a status line', () => {
-    expect(parse_status_code('HTTP/1.1 200 OK')).toBe(200)
-    expect(parse_status_code('HTTP/1.1 404 Not Found')).toBe(404)
-    expect(parse_status_code('HTTP/1.0 500 Internal Server Error')).toBe(500)
-  })
-
-  it('should treat an unreadable status line as unsuccessful', () => {
-    // Not 2xx, so an answer nobody can classify is reported rather than
-    // silently passed off as a success.
-    expect(parse_status_code('')).toBe(0)
-    expect(parse_status_code('garbage')).toBe(0)
-  })
-})
 
 describe('send_rpc_request', () => {
   let mockHttpRequest: any
   let mockHttpsRequest: any
-  let mockNetConnect: any
   let mockReq: any
   let mockRes: any
-  let mockClient: any
 
   beforeEach(() => {
     // Reset all mocks
@@ -58,17 +39,6 @@ describe('send_rpc_request', () => {
 
     vi.mocked(http).request = mockHttpRequest
     vi.mocked(https).request = mockHttpsRequest
-
-    // Mock net connection
-    mockClient = {
-      write: vi.fn(),
-      end: vi.fn(),
-      on: vi.fn(),
-      destroy: vi.fn(),
-    }
-
-    mockNetConnect = vi.fn(() => mockClient)
-    vi.mocked(net).createConnection = mockNetConnect
   })
 
   afterEach(() => {
@@ -90,7 +60,7 @@ describe('send_rpc_request', () => {
         const dataCallback = mockRes.on.mock.calls.find(call => call[0] === 'data')?.[1]
         const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
 
-        if (dataCallback) dataCallback('{"result": "success"}')
+        if (dataCallback) dataCallback(Buffer.from('{"result": "success"}', 'utf8'))
         if (endCallback) endCallback()
 
         return mockReq
@@ -128,7 +98,7 @@ describe('send_rpc_request', () => {
         const dataCallback = mockRes.on.mock.calls.find(call => call[0] === 'data')?.[1]
         const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
 
-        if (dataCallback) dataCallback('{"result": "success"}')
+        if (dataCallback) dataCallback(Buffer.from('{"result": "success"}', 'utf8'))
         if (endCallback) endCallback()
 
         return mockReq
@@ -166,7 +136,7 @@ describe('send_rpc_request', () => {
         const dataCallback = mockRes.on.mock.calls.find(call => call[0] === 'data')?.[1]
         const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
 
-        if (dataCallback) dataCallback('{"error": "Service not found: GetKeyX"}')
+        if (dataCallback) dataCallback(Buffer.from('{"error": "Service not found: GetKeyX"}', 'utf8'))
         if (endCallback) endCallback()
 
         return mockReq
@@ -187,7 +157,7 @@ describe('send_rpc_request', () => {
         const dataCallback = mockRes.on.mock.calls.find(call => call[0] === 'data')?.[1]
         const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
 
-        if (dataCallback) dataCallback(page)
+        if (dataCallback) dataCallback(Buffer.from(page, 'utf8'))
         if (endCallback) endCallback()
 
         return mockReq
@@ -212,115 +182,13 @@ describe('send_rpc_request', () => {
         const dataCallback = mockRes.on.mock.calls.find(call => call[0] === 'data')?.[1]
         const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
 
-        if (dataCallback) dataCallback('invalid json')
+        if (dataCallback) dataCallback(Buffer.from('invalid json', 'utf8'))
         if (endCallback) endCallback()
 
         return mockReq
       })
 
       await expect(send_rpc_request(endpoint, path, payload)).rejects.toThrow('failed to parse response')
-    })
-  })
-
-    describe('Unix socket requests', () => {
-    it('should call createConnection with correct parameters', () => {
-      const endpoint = '/tmp/socket'
-      const path = '/api/test'
-      const payload = '{"test": "data"}'
-
-      // Mock the socket connection to never complete
-      mockNetConnect.mockImplementation((options, callback) => {
-        return mockClient
-      })
-
-      // Start the request but don't wait for completion
-      send_rpc_request(endpoint, path, payload)
-
-      expect(mockNetConnect).toHaveBeenCalledWith({ path: endpoint }, expect.any(Function))
-    })
-
-    // The unix branch speaks HTTP by hand, so it is the only one that has to
-    // read the status off the wire itself -- and until it did, a 404 reached the
-    // caller as "failed to parse response".
-    it('should report a non-2xx read off the status line', async () => {
-      const body = '{"error": "Service not found: GetKeyX"}'
-      mockNetConnect.mockImplementation(() => {
-        setTimeout(() => {
-          const dataCallback = mockClient.on.mock.calls.find(call => call[0] === 'data')?.[1]
-          const endCallback = mockClient.on.mock.calls.find(call => call[0] === 'end')?.[1]
-          dataCallback(
-            `HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n${body}`
-          )
-          endCallback()
-        }, 0)
-        return mockClient
-      })
-
-      await expect(send_rpc_request('/tmp/socket', '/GetKeyX', '{}'))
-        .rejects.toThrow('HTTP 404: Service not found: GetKeyX')
-    })
-
-    it('should still resolve a 200 read off the status line', async () => {
-      const body = '{"version":"0.6.0"}'
-      mockNetConnect.mockImplementation(() => {
-        setTimeout(() => {
-          const dataCallback = mockClient.on.mock.calls.find(call => call[0] === 'data')?.[1]
-          const endCallback = mockClient.on.mock.calls.find(call => call[0] === 'end')?.[1]
-          dataCallback(`HTTP/1.1 200 OK\r\nContent-Length: ${body.length}\r\n\r\n${body}`)
-          endCallback()
-        }, 0)
-        return mockClient
-      })
-
-      await expect(send_rpc_request('/tmp/socket', '/Version', '{}')).resolves.toEqual({
-        version: '0.6.0',
-      })
-    })
-
-    // `payload.length` counts UTF-16 code units and the socket emits UTF-8, so a
-    // request with any non-ASCII field declared a body shorter than the one it
-    // sent: the agent parsed truncated JSON and the surplus bytes stayed in the
-    // stream. Both halves of the framing have to count bytes.
-    it('should declare the payload length in bytes, not code units', async () => {
-      const payload = JSON.stringify({ domain: 'café', algorithm: 'secp256k1' })
-      expect(Buffer.byteLength(payload)).toBeGreaterThan(payload.length)
-
-      const body = '{"ok":true}'
-      mockNetConnect.mockImplementation((options, callback) => {
-        // Deferred, as a real socket defers it: the connect handler writes
-        // through the `client` binding that createConnection is still returning.
-        setTimeout(() => {
-          callback()
-          const dataCallback = mockClient.on.mock.calls.find(call => call[0] === 'data')?.[1]
-          const endCallback = mockClient.on.mock.calls.find(call => call[0] === 'end')?.[1]
-          dataCallback(`HTTP/1.1 200 OK\r\nContent-Length: ${body.length}\r\n\r\n${body}`)
-          endCallback()
-        }, 0)
-        return mockClient
-      })
-
-      await send_rpc_request('/tmp/socket', '/v1/GetKey', payload)
-
-      const written = mockClient.write.mock.calls.map((call: any[]) => call[0])
-      expect(written).toContain(`Content-Length: ${Buffer.byteLength(payload)}\r\n`)
-      expect(written).not.toContain(`Content-Length: ${payload.length}\r\n`)
-    })
-
-    it('should handle Unix socket connection errors', async () => {
-      const endpoint = '/tmp/socket'
-      const path = '/api/test'
-      const payload = '{"test": "data"}'
-
-      mockNetConnect.mockImplementation(() => {
-        mockClient.on.mockImplementation((event, callback) => {
-          if (event === 'error') {
-            setTimeout(() => callback(new Error('socket connection failed')), 0)
-          }
-        })
-        return mockClient
-      })
-
-      await expect(send_rpc_request(endpoint, path, payload)).rejects.toThrow('socket connection failed')
     })
   })
 
@@ -406,7 +274,7 @@ describe('send_rpc_request', () => {
         const dataCallback = mockRes.on.mock.calls.find(call => call[0] === 'data')?.[1]
         const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
 
-        if (dataCallback) dataCallback('{"result": "success"}')
+        if (dataCallback) dataCallback(Buffer.from('{"result": "success"}', 'utf8'))
         if (endCallback) endCallback()
 
         return mockReq
@@ -431,7 +299,7 @@ describe('send_rpc_request', () => {
         const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
 
         setTimeout(() => {
-          if (dataCallback) dataCallback('{"result": "success"}')
+          if (dataCallback) dataCallback(Buffer.from('{"result": "success"}', 'utf8'))
           if (endCallback) {
             endCallback() // First end
             endCallback() // Second end - should be ignored
@@ -446,3 +314,4 @@ describe('send_rpc_request', () => {
     })
   })
 })
+

@@ -60,14 +60,18 @@ pub enum ClientKind {
 
 pub trait BaseClient {}
 
-/// How much of a server response an error may quote.
+/// How much of a server response an error may quote, in characters.
 ///
 /// An agent with no route for the path answers with an HTML page, and pasting a
 /// whole page into an error helps nobody.
-const MAX_ERROR_BODY: usize = 512;
+///
+/// Characters rather than bytes so the bound cannot land inside a multi-byte
+/// sequence; the byte length that follows from it is larger, which is fine for
+/// something whose only job is to stop an error message running away.
+const MAX_ERROR_BODY_CHARS: usize = 512;
 
 fn truncate(text: &str) -> String {
-    match text.char_indices().nth(MAX_ERROR_BODY) {
+    match text.char_indices().nth(MAX_ERROR_BODY_CHARS) {
         Some((end, _)) => format!("{}...", &text[..end]),
         None => text.to_string(),
     }
@@ -355,11 +359,11 @@ mod tests {
 
     #[test]
     fn bounds_the_quoted_body() {
-        let err = http_error(500, "x".repeat(MAX_ERROR_BODY * 2).as_bytes());
+        let err = http_error(500, "x".repeat(MAX_ERROR_BODY_CHARS * 2).as_bytes());
         // An HTML error page must not become the whole error message.
         assert_eq!(
             err.to_string().len(),
-            "HTTP 500: ".len() + MAX_ERROR_BODY + 3
+            "HTTP 500: ".len() + MAX_ERROR_BODY_CHARS + 3
         );
         assert!(err.to_string().ends_with("..."));
     }

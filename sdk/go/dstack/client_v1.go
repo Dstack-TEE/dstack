@@ -222,6 +222,11 @@ func WithCertUsageRaTls(usage bool) IssueCertV1Option {
 }
 
 // WithCertUsageServerAuth sets the server auth key usage.
+//
+// Defaults to true, matching the v1 default in the Rust, Python and JS SDKs;
+// pass false to issue a certificate that cannot be used for server auth. The
+// frozen v0 GetTlsKey defaults it to false instead, because that is what the
+// released 0.5.x SDK sent.
 func WithCertUsageServerAuth(usage bool) IssueCertV1Option {
 	return func(o *issueCertV1Options) {
 		o.usageServerAuth = usage
