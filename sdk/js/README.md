@@ -162,16 +162,26 @@ On its own, `verifySignature` only proves that whoever holds that public key sig
 ```typescript
 import { verifySignatureChain } from '@phala/dstack-sdk'
 
-const info = await client.info()
+// Both anchors come from you, not from the CVM being checked.
+const expectedAppId = Buffer.from('a9019d1b2c3d4e5f60718293a4b5c6d7e8f90a1b', 'hex')
+const kmsRootPubKey = Buffer.from('03...', 'hex')  // pinned, or read from DstackKms
+
 const appRootPubKey = verifySignatureChain({
   algorithm: 'ed25519',
   data,
   publicKey: res.public_key,
   signatureChain: res.signature_chain,
-  appId: Buffer.from(info.app_id.replace(/^0x/, ''), 'hex'),
-  kmsRootPubKey,  // compressed or uncompressed SEC1, from a source you trust
+  appId: expectedAppId,
+  kmsRootPubKey,
 })
 ```
+
+Note what the example does *not* do: it never passes `info.app_id` from
+`client.info()` straight through. That value is reported by the very CVM being
+verified, so a chain checked against it proves only that the CVM is
+self-consistent with itself. Use the app id you registered on chain, and if you
+want `info` in the picture, compare it against that value rather than trusting
+it.
 
 Returns the app root public key (compressed SEC1, 33 bytes) or throws. Get `kmsRootPubKey` from the `DstackKms` contract (`kmsInfo().k256Pubkey`) or pin it in your build — reading it from the KMS you are verifying against proves nothing.
 

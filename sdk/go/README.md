@@ -715,11 +715,8 @@ produced with their own keys. Get the root from the `DstackKms` contract
 against proves nothing.
 
 ```go
-info, err := client.Info(ctx)
-if err != nil {
-	log.Fatal(err)
-}
-appID, _ := hex.DecodeString(strings.TrimPrefix(info.AppID, "0x"))
+// Both anchors come from you, not from the CVM being checked.
+appID, _ := hex.DecodeString("a9019d1b2c3d4e5f60718293a4b5c6d7e8f90a1b")
 kmsRoot, _ := hex.DecodeString("03...") // pinned, or read from the DstackKms contract
 
 appRootPubKey, err := dstack.VerifySignatureChain(dstack.SignatureChainInput{
@@ -736,6 +733,13 @@ if err != nil {
 }
 fmt.Printf("app root key: %x\n", appRootPubKey)
 ```
+
+Note what the example does *not* do: it never passes `info.AppID` from
+`client.Info()` straight through. That value is reported by the very CVM being
+verified, so a chain checked against it proves only that the CVM is
+self-consistent with itself. Use the app id you registered on chain, and if you
+want `Info` in the picture, compare it against that value rather than trusting
+it.
 
 ### KMS Public Key Verification
 

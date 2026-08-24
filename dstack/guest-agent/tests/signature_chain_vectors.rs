@@ -18,6 +18,15 @@
 //!
 //! Run `UPDATE_VECTORS=1 cargo test -p dstack-guest-agent --test signature_chain_vectors`
 //! to regenerate after an intentional format change.
+//!
+//! What these vectors deliberately do NOT pin: the handling of recovery ids 2
+//! and 3 in the two recoverable chain links. Rust, Go and JavaScript accept the
+//! full 0..3 range; Python rejects 2 and 3, because `eth_keys` only models v in
+//! {0, 1}. Reaching either case requires an ECDSA nonce whose `r` wrapped the
+//! curve order, which happens with probability around 2^-128 and which no
+//! dstack signer has ever produced -- so there is no way to generate a fixture
+//! for it here, and the divergence is unreachable rather than latent. Recorded
+//! so the next person does not have to rediscover it.
 
 use ed25519_dalek::{Signer as _, SigningKey as Ed25519SigningKey};
 use k256::ecdsa::SigningKey;

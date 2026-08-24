@@ -209,17 +209,26 @@ the data. It says nothing about *whose* key it is. `verify_signature_chain`
 walks all three links back to a KMS root key you supply:
 
 ```python
-info = client.info()
+# Both anchors come from you, not from the CVM being checked.
+expected_app_id = bytes.fromhex('a9019d1b2c3d4e5f60718293a4b5c6d7e8f90a1b')
+kms_root_pubkey = bytes.fromhex('03...')  # pinned, or read from DstackKms
+
 app_root_pubkey = verify_signature_chain(
     'ed25519',
     b'message to sign',
     result.decode_public_key(),
     result.decode_signature_chain(),
-    bytes.fromhex(info.app_id),
-    kms_root_pubkey,   # you supply this — see below
+    expected_app_id,
+    kms_root_pubkey,
 )
 print(app_root_pubkey.hex())  # compressed SEC1, 33 bytes
 ```
+
+Note what the example does *not* do: it never passes `client.info().app_id`
+straight through. That value is reported by the very CVM being verified, so a
+chain checked against it proves only that the CVM is self-consistent with
+itself. Use the app id you registered on chain, and if you want `AppInfo` in the
+picture, compare it against that value rather than trusting it.
 
 It returns the app root public key and raises `ValueError` on any failure.
 

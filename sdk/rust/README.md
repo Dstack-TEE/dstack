@@ -192,17 +192,26 @@ data. It says nothing about *whose* key it is. `verify_signature_chain` walks al
 three links back to a KMS root key you supply:
 
 ```rust
-let info = client.info().await?;
+// Both anchors come from you, not from the CVM being checked.
+let expected_app_id = hex::decode("a9019d1b2c3d4e5f60718293a4b5c6d7e8f90a1b")?;
+let kms_root_pubkey = hex::decode("03...")?;  // pinned, or read from DstackKms
+
 let verified = verify_signature_chain(&SignatureChain::from_sign_response(
     "ed25519",
     b"message to sign",
     &result.decode_public_key()?,
     &result.decode_signature_chain()?,
-    &hex::decode(&info.app_id)?,
-    &kms_root_pubkey,   // you supply this -- see below
+    &expected_app_id,
+    &kms_root_pubkey,
 )?;
 println!("app root key: {}", hex::encode(verified.app_root_pubkey));
 ```
+
+Note what the example does *not* do: it never passes `client.info().app_id`
+straight through. That value is reported by the very CVM being verified, so a
+chain checked against it proves only that the CVM is self-consistent with
+itself. Use the app id you registered on chain, and if you want `AppInfo` in the
+picture, compare it against that value rather than trusting it.
 
 `kms_root_pubkey` must come from somewhere you already trust: the `DstackKms`
 contract's `kmsInfo().k256Pubkey`, or a value you pinned. Reading it from the same
