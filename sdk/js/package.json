@@ -1,6 +1,6 @@
 {
   "name": "@phala/dstack-sdk",
-  "version": "0.5.8",
+  "version": "0.6.0",
   "description": "dstack SDK",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -53,14 +53,6 @@
       },
       "import": "./dist/verify-env-encrypt-public-key.mjs",
       "require": "./dist/verify-env-encrypt-public-key.js"
-    },
-    "./verify": {
-      "types": {
-        "import": "./dist/verify.d.mts",
-        "require": "./dist/verify.d.ts"
-      },
-      "import": "./dist/verify.mjs",
-      "require": "./dist/verify.js"
     }
   },
   "engines": {

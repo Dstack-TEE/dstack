@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use certbot::{AcmeClient, Dns01Client};
-use dstack_guest_agent_rpc::{AttestArgs, RawQuoteArgs};
+use dstack_guest_agent_rpc::v0::RawQuoteArgs;
 use ra_tls::attestation::QuoteContentType;
 use ra_tls::rcgen::KeyPair;
 use tokio::sync::Mutex;
@@ -658,13 +658,7 @@ impl DistributedCertBot {
         };
 
         // Get attestation
-        let attestation_str = match agent
-            .attest(AttestArgs {
-                report_data,
-                include_boottime_gpu_evidence: false,
-            })
-            .await
-        {
+        let attestation_str = match agent.attest(RawQuoteArgs { report_data }).await {
             Ok(resp) => serde_json::to_string(&resp).unwrap_or_default(),
             Err(err) => {
                 warn!("failed to get attestation for ACME account: {err:?}");
@@ -740,13 +734,7 @@ impl DistributedCertBot {
         };
 
         // Get attestation
-        let attestation = match agent
-            .attest(AttestArgs {
-                report_data,
-                include_boottime_gpu_evidence: false,
-            })
-            .await
-        {
+        let attestation = match agent.attest(RawQuoteArgs { report_data }).await {
             Ok(resp) => serde_json::to_string(&resp).unwrap_or_default(),
             Err(err) => {
                 warn!(domain, "failed to get attestation: {err:?}");

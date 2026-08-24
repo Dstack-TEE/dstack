@@ -3,7 +3,7 @@
 //! Generate a v2 KMS CSR whose key is bound to fresh guest attestation.
 
 use anyhow::{Context, Result};
-use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, AttestArgs};
+use dstack_guest_agent_rpc::v0::{dstack_guest_client::DstackGuestClient, RawQuoteArgs};
 use http_client::prpc::PrpcClient;
 use ra_tls::{
     attestation::{PlatformEvidence, QuoteContentType, VersionedAttestation},
@@ -31,9 +31,8 @@ async fn main() -> Result<()> {
     let address = dstack_types::dstack_agent_address();
     let client = DstackGuestClient::new(PrpcClient::new(address));
     let response = client
-        .attest(AttestArgs {
+        .attest(RawQuoteArgs {
             report_data: report_data.to_vec(),
-            include_boottime_gpu_evidence: false,
         })
         .await
         .context("failed to obtain key-bound guest attestation")?;

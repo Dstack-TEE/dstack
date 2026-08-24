@@ -14,16 +14,17 @@ message RegisterCvmRequest {
   string client_public_key = 1;
   // Whether this CVM asked for its traffic to be gated on application health,
   // i.e. `requirements.health_check` in its app-compose. When true the
-  // gateway polls `Worker.Health` and holds the instance out of rotation until
-  // the first poll answers.
+  // gateway polls `Health` on the v1 external surface (`/prpc/v1/Health`) and
+  // holds the instance out of rotation until the first poll answers.
   //
-  // Declared here rather than discovered by probing because prpc answers both
-  // "no such method" and "the handler failed" with HTTP 400 and drops the
-  // message: a failed poll cannot tell an old image apart from a broken app,
-  // and guessing wrong either blackholes healthy legacy instances or lets
-  // broken ones serve. False -- including "absent", from a CVM that predates
-  // this field or an app that never opted in -- means the gateway never polls
-  // and always treats the instance as healthy, exactly as before.
+  // Declared here rather than discovered by probing because the poller treats
+  // every failed poll alike: a timeout, a refused connection, and the 404 an
+  // image without `/prpc/v1` answers all count as one failure, and telling an
+  // old image apart from a broken app would mean classifying error shapes on
+  // every poll -- guessing wrong either blackholes healthy legacy instances
+  // or lets broken ones serve. False -- including "absent", from a CVM that
+  // predates this field or an app that never opted in -- means the gateway
+  // never polls and always treats the instance as healthy, exactly as before.
   bool health_check = 3;
   // Per-port policy the gateway should apply when proxying to this CVM.
   // Wrapped in a message so we can distinguish "not reported" (old CVM →

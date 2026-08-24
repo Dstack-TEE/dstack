@@ -6,6 +6,12 @@
 use alloy::signers::local::PrivateKeySigner;
 use dstack_sdk_types::dstack::GetKeyResponse;
 
+/// Build a signer from a `get_key` response.
+///
+/// A v0-era adapter, and deliberately still typed against the v0 response: the
+/// v1 surface has no chain-related functionality. v1's story ends at "`GetKey`
+/// returns key material"; what an application builds from those bytes is its
+/// own business, not something this SDK models.
 pub fn to_account(
     get_key_response: &GetKeyResponse,
 ) -> Result<PrivateKeySigner, Box<dyn std::error::Error>> {

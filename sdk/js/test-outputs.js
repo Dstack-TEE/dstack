@@ -3,7 +3,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-const { DstackClient, TappdClient, getComposeHash, verifyEnvEncryptPublicKey } = require('./dist/node/index.js');
+const { DstackClientV0, TappdClient, getComposeHash, verifyEnvEncryptPublicKey } = require('./dist/node/index.js');
 const { toViemAccount, toViemAccountSecure } = require('./dist/node/viem.js');
 const { toKeypair, toKeypairSecure } = require('./dist/node/solana.js');
 
@@ -12,8 +12,8 @@ async function main() {
 
     try {
         // Test client get_key
-        const client = new DstackClient();
-        console.log("\n1. Testing DstackClient.getKey()");
+        const client = new DstackClientV0();
+        console.log("\n1. Testing DstackClientV0.getKey()");
 
         const testPaths = [
             { path: "test/wallet", purpose: "ethereum" },
@@ -95,7 +95,7 @@ async function main() {
 
         // Test quotes
         console.log("\n5. Testing Quote Methods");
-        console.log("\n5.1 DstackClient.getQuote():");
+        console.log("\n5.1 DstackClientV0.getQuote():");
         const dstackQuote = await client.getQuote("test-data-for-quote");
         console.log(`  quote length: ${dstackQuote.quote.length}`);
         console.log(`  event_log length: ${dstackQuote.event_log.length}`);

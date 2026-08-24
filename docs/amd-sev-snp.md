@@ -88,8 +88,8 @@ MrConfigV3 document through `HOST_DATA`, so a verifier can validate the report
 and document binding and then compare this field with the expected GPU policy
 digest. If the field is absent, this optional check is not asserted. This binds
 the GPU policy, but not the later `gpu-attestation` runtime event or the
-`GpuInfo` output: the current SEV-SNP path has no quote-bound runtime
-measurement register.
+boot-time GPU evidence returned by `/v1/Attest`: the current SEV-SNP path has
+no quote-bound runtime measurement register.
 
 The verifier supports the AMD Milan, Genoa, and Turin KDS product families.
 Bergamo and Siena are handled through AMD's canonical Genoa KDS product path.

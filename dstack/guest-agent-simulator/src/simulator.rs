@@ -6,7 +6,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
 use dcap_qvl::quote::Quote;
-use dstack_guest_agent_rpc::GetQuoteResponse;
+use dstack_guest_agent_rpc::v0::GetQuoteResponse;
 use mock_attestation::tdx::TdxGenerator;
 use ra_tls::attestation::{
     AttestationV1, PlatformEvidence, QuoteContentType, TdxAttestationExt, VersionedAttestation,

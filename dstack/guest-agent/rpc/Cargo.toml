@@ -17,5 +17,10 @@ serde_json.workspace = true
 anyhow.workspace = true
 scale.workspace = true
 
+[dev-dependencies]
+prost-types.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
 [build-dependencies]
 prpc-build.workspace = true

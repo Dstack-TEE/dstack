@@ -37,7 +37,7 @@ use serde::Deserialize;
 use tokio::process::Command;
 use tracing::debug;
 
-use dstack_guest_agent_rpc::ContainerHealth;
+use dstack_guest_agent_rpc::v1::ContainerHealth;
 
 use crate::health::Verdict;
 

@@ -9,7 +9,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
-	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -22,7 +21,7 @@ import (
 )
 
 func TestGetKey(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	resp, err := client.GetKey(context.Background(), "/", "test", "ed25519")
 	if err != nil {
 		t.Fatal(err)
@@ -38,7 +37,7 @@ func TestGetKey(t *testing.T) {
 }
 
 func TestGetQuote(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	resp, err := client.GetQuote(context.Background(), []byte("test"))
 	if err != nil {
 		t.Fatal(err)
@@ -60,7 +59,7 @@ func TestGetQuote(t *testing.T) {
 }
 
 func TestAttest(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	resp, err := client.Attest(context.Background(), []byte("test"))
 	if err != nil {
 		t.Fatal(err)
@@ -79,102 +78,40 @@ func TestAttest(t *testing.T) {
 	}
 }
 
-func TestAttestWithBoottimeGpuEvidence(t *testing.T) {
-	const evidence = `{"result_code":0,"claims":[]}`
+// The frozen surface is exactly v0.5.11, so v0's Attest must keep sending the
+// v0.5.11 request body. The GPU flag belongs to v1 and must not leak back here.
+func TestAttestRequestIsFrozenAtV0(t *testing.T) {
+	var payload map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/Attest" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
+			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
-		var payload map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatalf("failed to decode request: %v", err)
-		}
-		if payload["include_boottime_gpu_evidence"] != true {
-			t.Fatalf("expected include_boottime_gpu_evidence to be forwarded, got: %v", payload["include_boottime_gpu_evidence"])
+			t.Errorf("failed to decode request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"attestation":           "deadbeef",
-			"boottime_gpu_evidence": evidence,
-		})
+		_ = json.NewEncoder(w).Encode(map[string]string{"attestation": "deadbeef"})
 	}))
 	defer server.Close()
 
-	client := dstack.NewDstackClient(dstack.WithEndpoint(server.URL))
-	resp, err := client.AttestWithOptions(context.Background(), []byte("test"), dstack.AttestOptions{IncludeBoottimeGpuEvidence: true})
+	client := dstack.NewDstackClientV0(dstack.WithEndpoint(server.URL))
+	resp, err := client.Attest(context.Background(), []byte("test"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.BoottimeGpuEvidence != evidence {
-		t.Fatalf("unexpected gpu evidence: %s", resp.BoottimeGpuEvidence)
+	if !bytes.Equal(resp.Attestation, []byte{0xde, 0xad, 0xbe, 0xef}) {
+		t.Errorf("unexpected attestation: %x", resp.Attestation)
 	}
-}
-
-func TestAttestGpu(t *testing.T) {
-	const evidence = `[{"arch":"HOPPER","nonce":"ab","evidence":"BASE64","certificate":"BASE64"}]`
-	nonce := bytes.Repeat([]byte{0xab}, 32)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/AttestGpu" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-		var payload map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatalf("failed to decode request: %v", err)
-		}
-		if payload["nonce"] != hex.EncodeToString(nonce) {
-			t.Fatalf("nonce was not forwarded verbatim, got: %v", payload["nonce"])
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"bundles": []map[string]string{{
-				"vendor": "nvidia", "format": "nvidia-test-v1", "evidence": evidence,
-			}},
-		})
-	}))
-	defer server.Close()
-
-	client := dstack.NewDstackClient(dstack.WithEndpoint(server.URL))
-	resp, err := client.AttestGpu(context.Background(), nonce)
-	if err != nil {
-		t.Fatal(err)
+	if len(payload) != 1 {
+		t.Errorf("expected report_data to be the only request field, got %v", payload)
 	}
-	if len(resp.Bundles) != 1 || resp.Bundles[0].Vendor != "nvidia" || resp.Bundles[0].Evidence != evidence {
-		t.Fatalf("unexpected evidence bundles: %+v", resp.Bundles)
-	}
-}
-
-func TestAttestGpuRejectsWrongNonceLength(t *testing.T) {
-	client := dstack.NewDstackClient()
-	for _, n := range [][]byte{nil, bytes.Repeat([]byte{1}, 31), bytes.Repeat([]byte{1}, 33)} {
-		if _, err := client.AttestGpu(context.Background(), n); err == nil {
-			t.Fatalf("expected a %d-byte nonce to be rejected", len(n))
-		}
-	}
-}
-
-func TestGpuInfo(t *testing.T) {
-	const attestation = `{"result_code":0,"claims":[]}`
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/GpuInfo" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"attestation": attestation})
-	}))
-	defer server.Close()
-
-	client := dstack.NewDstackClient(dstack.WithEndpoint(server.URL))
-	response, err := client.GpuInfo(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.Attestation != attestation {
-		t.Fatalf("unexpected attestation: %s", response.Attestation)
+	if _, present := payload["include_boottime_gpu_evidence"]; present {
+		t.Error("include_boottime_gpu_evidence is a v1 field and must not appear on the frozen surface")
 	}
 }
 
 func TestGetTlsKey(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	altNames := []string{"localhost"}
 	resp, err := client.GetTlsKey(
 		context.Background(),
@@ -240,7 +177,7 @@ func TestGetTlsKey(t *testing.T) {
 }
 
 func TestGetTlsKeyMinimalOptions(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	// Test with minimal options (just subject)
 	resp, err := client.GetTlsKey(
 		context.Background(),
@@ -280,7 +217,7 @@ func TestGetTlsKeyMinimalOptions(t *testing.T) {
 }
 
 func TestGetTlsKeyServerOnly(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	// Test with server auth only
 	resp, err := client.GetTlsKey(
 		context.Background(),
@@ -332,7 +269,7 @@ func TestGetTlsKeyServerOnly(t *testing.T) {
 }
 
 func TestGetTlsKeyClientOnly(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	// Test with client auth only
 	resp, err := client.GetTlsKey(
 		context.Background(),
@@ -384,7 +321,7 @@ func TestGetTlsKeyClientOnly(t *testing.T) {
 }
 
 func TestGetTlsKeyWithMultipleAltNames(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	// Test with multiple alternative names
 	altNames := []string{"example.com", "test.example.com"}
 	resp, err := client.GetTlsKey(
@@ -448,7 +385,7 @@ func parseCertificate(pemCert string) (*x509.Certificate, error) {
 }
 
 func TestInfo(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	resp, err := client.Info(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -506,7 +443,7 @@ func TestInfo(t *testing.T) {
 }
 
 func TestSignAndVerifyEd25519(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	dataToSign := []byte("test message for ed25519")
 	algorithm := "ed25519"
 
@@ -528,30 +465,28 @@ func TestSignAndVerifyEd25519(t *testing.T) {
 		t.Error("expected Signature to be the same as SignatureChain[0]")
 	}
 
-	// Verification is local: it needs no key material, so the SDK checks the
-	// signature itself rather than asking the agent for an unattested verdict.
-	valid, err := dstack.VerifySignature(algorithm, dataToSign, signResp.Signature, signResp.PublicKey)
+	verifyResp, err := client.Verify(context.Background(), algorithm, dataToSign, signResp.Signature, signResp.PublicKey)
 	if err != nil {
-		t.Fatalf("VerifySignature() error = %v", err)
+		t.Fatalf("Verify() error = %v", err)
 	}
 
-	if !valid {
+	if !verifyResp.Valid {
 		t.Error("expected verification to be valid")
 	}
 
 	badData := []byte("wrong message")
-	valid, err = dstack.VerifySignature(algorithm, badData, signResp.Signature, signResp.PublicKey)
+	verifyResp, err = client.Verify(context.Background(), algorithm, badData, signResp.Signature, signResp.PublicKey)
 	if err != nil {
-		t.Fatalf("VerifySignature() with bad data error = %v", err)
+		t.Fatalf("Verify() with bad data error = %v", err)
 	}
 
-	if valid {
+	if verifyResp.Valid {
 		t.Error("expected verification with bad data to be invalid")
 	}
 }
 
 func TestSignAndVerifySecp256k1(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	dataToSign := []byte("test message for secp256k1")
 	algorithm := "secp256k1"
 
@@ -570,12 +505,12 @@ func TestSignAndVerifySecp256k1(t *testing.T) {
 		t.Errorf("expected signature chain to have 3 elements, got %d", len(signResp.SignatureChain))
 	}
 
-	valid, err := dstack.VerifySignature(algorithm, dataToSign, signResp.Signature, signResp.PublicKey)
+	verifyResp, err := client.Verify(context.Background(), algorithm, dataToSign, signResp.Signature, signResp.PublicKey)
 	if err != nil {
-		t.Fatalf("VerifySignature() error = %v", err)
+		t.Fatalf("Verify() error = %v", err)
 	}
 
-	if !valid {
+	if !verifyResp.Valid {
 		t.Error("expected verification to be valid")
 	}
 
@@ -587,7 +522,7 @@ func TestSignAndVerifySecp256k1(t *testing.T) {
 }
 
 func TestSignAndVerifySecp256k1Prehashed(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	dataToSign := []byte("test message for secp256k1 prehashed")
 	digest := sha256.Sum256(dataToSign)
 	algorithm := "secp256k1_prehashed"
@@ -601,18 +536,23 @@ func TestSignAndVerifySecp256k1Prehashed(t *testing.T) {
 		t.Error("expected signature to not be empty")
 	}
 
-	valid, err := dstack.VerifySignature(algorithm, digest[:], signResp.Signature, signResp.PublicKey)
+	verifyResp, err := client.Verify(context.Background(), algorithm, digest[:], signResp.Signature, signResp.PublicKey)
 	if err != nil {
-		t.Fatalf("VerifySignature() error = %v", err)
+		t.Fatalf("Verify() error = %v", err)
 	}
 
-	if !valid {
+	if !verifyResp.Valid {
 		t.Error("expected verification to be valid")
 	}
 
-	// A pre-hashed digest must be exactly 32 bytes on the verifying side too.
-	if _, err := dstack.VerifySignature(algorithm, dataToSign, signResp.Signature, signResp.PublicKey); err == nil {
-		t.Error("expected VerifySignature to reject a non-digest payload for secp256k1_prehashed")
+	// The signature covers the digest, so the raw payload it was taken over does
+	// not verify: secp256k1_prehashed treats data as the digest itself.
+	verifyResp, err = client.Verify(context.Background(), algorithm, dataToSign, signResp.Signature, signResp.PublicKey)
+	if err != nil {
+		t.Fatalf("Verify() with a non-digest payload error = %v", err)
+	}
+	if verifyResp.Valid {
+		t.Error("expected a non-digest payload not to verify under secp256k1_prehashed")
 	}
 
 	// Test invalid digest length for signing
@@ -627,7 +567,7 @@ func TestSignAndVerifySecp256k1Prehashed(t *testing.T) {
 }
 
 func TestGetVersion(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	resp, err := client.GetVersion(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -639,7 +579,7 @@ func TestGetVersion(t *testing.T) {
 }
 
 func TestGetKeyK256Alias(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 
 	respK256, err := client.GetKey(context.Background(), "/test", "purpose", "k256")
 	if err != nil {
@@ -658,7 +598,7 @@ func TestGetKeyK256Alias(t *testing.T) {
 }
 
 func TestGetKeyUnsupportedAlgorithm(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	_, err := client.GetKey(context.Background(), "/test", "purpose", "rsa")
 	if err == nil {
 		t.Fatal("expected error for unsupported algorithm")
@@ -666,7 +606,7 @@ func TestGetKeyUnsupportedAlgorithm(t *testing.T) {
 }
 
 func TestGetKeySecp256k1PrehashedRejected(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 	_, err := client.GetKey(context.Background(), "/test", "purpose", "secp256k1_prehashed")
 	if err == nil {
 		t.Fatal("expected error for secp256k1_prehashed in GetKey")
@@ -674,7 +614,7 @@ func TestGetKeySecp256k1PrehashedRejected(t *testing.T) {
 }
 
 func TestGetKeyAlgorithmValidation(t *testing.T) {
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV0()
 
 	// ed25519 should succeed (Version RPC is available on the simulator)
 	resp, err := client.GetKey(context.Background(), "/test", "purpose", "ed25519")
@@ -683,5 +623,34 @@ func TestGetKeyAlgorithmValidation(t *testing.T) {
 	}
 	if resp.Key == "" {
 		t.Error("expected key to not be empty")
+	}
+}
+
+// EmitEvent is gone from the agent as of 0.6.0, but it stays on the client so a
+// pre-0.6 application still compiles. The agent's removal message must reach the
+// caller verbatim: an application that thinks it measured something it did not
+// is worse off than one that fails loudly.
+func TestEmitEventSurfacesTheRemovalMessage(t *testing.T) {
+	client := dstack.NewDstackClientV0()
+	err := client.EmitEvent(context.Background(), "test-event", []byte("payload"))
+	if err == nil {
+		t.Fatal("expected EmitEvent to fail against a 0.6.0 agent")
+	}
+	if !strings.Contains(err.Error(), "EmitEvent was removed in dstack 0.6.0") {
+		t.Errorf("expected the agent's removal message to be surfaced, got: %v", err)
+	}
+
+	// The client-side guard still runs first, so an empty name never reaches the wire.
+	if err := client.EmitEvent(context.Background(), "", nil); err == nil {
+		t.Error("expected an empty event name to be rejected")
+	}
+}
+
+// The frozen surface stays reachable, but only under its explicit name now that
+// the unsuffixed client means v1.
+func TestV0RemainsAvailableUnderItsExplicitName(t *testing.T) {
+	var client *dstack.DstackClientV0 = dstack.NewDstackClientV0()
+	if !client.IsReachable(context.Background()) {
+		t.Error("expected the v0 client to reach the simulator")
 	}
 }

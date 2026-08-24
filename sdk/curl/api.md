@@ -16,7 +16,41 @@ services:
       - /var/run/dstack.sock:/var/run/dstack.sock
 ```
 
-## Endpoints
+## API versions
+
+The agent serves two surfaces on this socket, chosen by URL path:
+
+| Path | Surface |
+|---|---|
+| `/v1/<Method>` | `dstack.guest.v1`, the current API |
+| `/v0/<Method>` | the frozen v0.5.11 API |
+| `/<Method>` | the same frozen API, under its historical path |
+
+**`/v1` is the current API** and what new integrations should target. It is
+specified byte-for-byte in
+[`docs/guest-api-v1.md`](../../docs/guest-api-v1.md), which is the normative
+reference -- this page is a curl-oriented tour, not the contract.
+
+`/v1` serves exactly six methods:
+
+| Endpoint | Purpose |
+|---|---|
+| `/v1/IssueCert` | Issue a certificate, with a freshly generated key |
+| `/v1/GetKey` | Derive an application key with its signature chain |
+| `/v1/Attest` | Versioned attestation, optionally with boot-time GPU evidence |
+| `/v1/AttestGpu` | Collect GPU evidence now, against a nonce you choose |
+| `/v1/Info` | Application identity and configuration |
+| `/v1/Version` | Agent version |
+
+> **v1 derives different key material than v0 for the same name**, on purpose,
+> with no compatibility mode. See the migration note in the spec.
+
+The remaining sections document the **legacy v0 surface**. It is frozen at
+v0.5.11 and keeps working unchanged, reachable at `/v0/<Method>` and at the
+unversioned `/<Method>` paths it has always had. Sections marked *(v1)* describe
+the current API instead.
+
+## Endpoints (legacy v0)
 
 ### 1. Get TLS Key
 
@@ -76,7 +110,7 @@ Generates a deterministic private key from the application key and returns both 
 | `purpose` | string | Purpose for the key. Can be any string. This is used in the signature chain and does not affect the private key bytes. | `"signing"` |
 | `algorithm` | string | `secp256k1` (default), `k256` (alias), or `ed25519`. For compatibility, this selects how the same derived 32-byte material is interpreted; it does not domain-separate the derivation. | `ed25519` |
 
-Use algorithm-specific paths, such as `wallet/ethereum` and `wallet/solana`, when independent keys are required across algorithms.
+Use algorithm-specific paths, such as `backup-signing/secp256k1` and `backup-signing/ed25519`, when independent keys are required across algorithms.
 
 **Example:**
 ```bash
@@ -260,17 +294,19 @@ curl --unix-socket /var/run/dstack.sock http://dstack/Attest?report_data=0000000
 }
 ```
 
-`boottime_gpu_evidence` carries the same bytes [`GpuInfo`](#8-gpu-info) serves, so one call
-returns both the quote and the GPU evidence a verifier needs. It is empty unless
-`include_boottime_gpu_evidence` was set and boot-time GPU attestation output exists. It is
-**not** bound to `report_data` — authenticate it with the `evidence_sha256`
-procedure documented under `GpuInfo` below.
+> **v1 only.** `include_boottime_gpu_evidence` and the `boottime_gpu_evidence`
+> response field are not on this frozen endpoint. Use
+> [`/v1/Attest`](#8-boot-time-gpu-evidence-v1) for them; a request sending
+> `include_boottime_gpu_evidence` here is ignored, not honoured.
 
-### 7. Attest GPU
+### 7. Attest GPU *(v1)*
 
 Collects vendor-native GPU evidence for a caller-chosen 32-byte nonce.
 
-**Endpoint:** `/AttestGpu`
+**Endpoint:** `/v1/AttestGpu`
+
+> **v1 only.** This method is not on the frozen surface. It never appeared in a
+> v0.5.x release, so no existing client is affected.
 
 **Request Parameters:**
 
@@ -295,38 +331,62 @@ the evidence signature, certificate chain, measurements, and embedded nonce. The
 agent does not appraise the evidence. Evidence does not by itself bind the GPU to this
 CVM.
 
-### 8. GPU Info
+### 8. Boot-time GPU evidence *(v1)*
 
-Returns GPU information collected during boot. Currently, this includes the
-complete JSON output produced by NVIDIA `nvattest`.
-The `attestation` field is empty when no GPU attestation output is available,
-for example on a VM without an NVIDIA GPU or when GPU attestation was disabled.
+Returns the complete output NVIDIA `nvattest` produced during boot, as part of
+an attestation -- so one round trip fetches the evidence together with the
+attestation needed to authenticate it.
 
-**Endpoint:** `/GpuInfo`
+**Endpoint:** `/v1/Attest`
 
 **Example:**
 ```bash
-curl --unix-socket /var/run/dstack.sock http://dstack/GpuInfo
+curl --unix-socket /var/run/dstack.sock -X POST \
+  http://dstack/v1/Attest \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "report_data": "1234deadbeaf",
+    "include_boottime_gpu_evidence": true
+  }'
 ```
 
 **Response:**
 ```json
 {
-  "attestation": "{\"result_code\": 0, \"claims\": [...]}"
+  "attestation": "<hex-encoded-attestation>",
+  "boottime_gpu_evidence": [
+    {
+      "vendor": "nvidia",
+      "format": "nvidia-nvattest-boottime-json-v1",
+      "evidence": "<hex-encoded UTF-8 nvattest output>"
+    }
+  ]
 }
 ```
 
-`GpuInfo.attestation` is the exact UTF-8 `nvattest` output saved during boot;
-calling this endpoint does not perform a new attestation. To authenticate it on
-TDX, first verify the quote and replay the supplied event log to the quote's
-RTMR3. Then decode the `gpu-attestation` event payload and compare its
-`evidence_sha256` with the SHA-256 digest of the exact returned string:
+`boottime_gpu_evidence` uses the same `GpuEvidenceBundle` shape
+[`/v1/AttestGpu`](#7-attest-gpu) returns, so one parser handles both. Dispatch
+on `format`: `nvidia-nvattest-boottime-json-v1` is the record written at boot,
+`nvidia-nvattest-collect-evidence-json-v1` is collected on demand against a
+nonce you choose. A verifier for one does not appraise the other.
+
+It is an empty list when the flag was not set or the guest has no boot-time GPU
+output — there is no sentinel value.
+
+Each bundle's `evidence` decodes to the exact UTF-8 `nvattest` output saved
+during boot, byte for byte. Requesting it does not perform a new attestation,
+and it is **not** bound to `report_data`.
+
+To authenticate it on TDX, first verify the quote and replay the supplied event
+log to the quote's RTMR3. Then decode the `gpu-attestation` event payload and
+compare its `evidence_sha256` with the SHA-256 digest of the exact returned
+string:
 
 ```python
 import hashlib
 import json
 
-gpu_info = json.load(open("gpu-info.json"))
+attest_response = json.load(open("attest.json"))
 quote_response = json.load(open("quote.json"))
 events = quote_response["event_log"]
 if isinstance(events, str):
@@ -334,7 +394,13 @@ if isinstance(events, str):
 
 entry = next(event for event in events if event["event"] == "gpu-attestation")
 measured = json.loads(bytes.fromhex(entry["event_payload"]))
-actual = hashlib.sha256(gpu_info["attestation"].encode()).hexdigest()
+# sha256 over the exact bytes the agent read from disk. Do not parse and
+# re-serialize the JSON first: that changes the digest.
+bundle = next(
+    b for b in attest_response["boottime_gpu_evidence"]
+    if b["format"] == "nvidia-nvattest-boottime-json-v1"
+)
+actual = hashlib.sha256(bytes.fromhex(bundle["evidence"])).hexdigest()
 assert actual == measured["evidence_sha256"]
 ```
 

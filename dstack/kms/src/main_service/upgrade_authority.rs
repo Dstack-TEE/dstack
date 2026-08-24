@@ -5,7 +5,9 @@
 use super::build_boot_info_for_attestation;
 use crate::config::{AuthApi, KmsConfig};
 use anyhow::{bail, Context, Result};
-use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, AttestArgs, AttestResponse};
+use dstack_guest_agent_rpc::v0::{
+    dstack_guest_client::DstackGuestClient, AttestResponse, RawQuoteArgs,
+};
 use http_client::prpc::PrpcClient;
 use ra_tls::attestation::{AttestationVerifier, VerifiedAttestation, VersionedAttestation};
 use serde::de::DeserializeOwned;
@@ -180,12 +182,7 @@ pub(crate) fn dstack_client() -> DstackGuestClient<PrpcClient> {
 }
 
 pub(crate) async fn app_attest(report_data: Vec<u8>) -> Result<AttestResponse> {
-    dstack_client()
-        .attest(AttestArgs {
-            report_data,
-            include_boottime_gpu_evidence: false,
-        })
-        .await
+    dstack_client().attest(RawQuoteArgs { report_data }).await
 }
 
 pub(crate) fn pad64(hash: [u8; 32]) -> Vec<u8> {

@@ -4,13 +4,13 @@
 
 
 import { expect, describe, it, vi } from 'vitest'
-import { DstackClient, TappdClient } from '../index'
+import { DstackClientV0, TappdClient } from '../index'
 import { toViemAccount, toViemAccountSecure } from '../viem'
 
 describe('viem support', () => {
   describe('toViemAccount (legacy)', () => {
-    it('should able to get account from getKey with DstackClient', async () => {
-      const client = new DstackClient()
+    it('should able to get account from getKey with DstackClientV0', async () => {
+      const client = new DstackClientV0()
       const result = await client.getKey('/', 'test')
       const account = toViemAccount(result)
 
@@ -34,8 +34,8 @@ describe('viem support', () => {
       consoleSpy.mockRestore()
     })
 
-    it('should able to get account from getTlsKey with DstackClient', async () => {
-      const client = new DstackClient()
+    it('should able to get account from getTlsKey with DstackClientV0', async () => {
+      const client = new DstackClientV0()
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
       const result = await client.getTlsKey()
@@ -51,8 +51,8 @@ describe('viem support', () => {
   })
 
   describe('toViemAccountSecure', () => {
-    it('should able to get account from getKey with DstackClient', async () => {
-      const client = new DstackClient()
+    it('should able to get account from getKey with DstackClientV0', async () => {
+      const client = new DstackClientV0()
       const result = await client.getKey('/', 'test')
       const account = toViemAccountSecure(result)
 
@@ -76,8 +76,8 @@ describe('viem support', () => {
       consoleSpy.mockRestore()
     })
 
-    it('should able to get account from getTlsKey with DstackClient', async () => {
-      const client = new DstackClient()
+    it('should able to get account from getTlsKey with DstackClientV0', async () => {
+      const client = new DstackClientV0()
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
       const result = await client.getTlsKey()

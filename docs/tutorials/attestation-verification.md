@@ -499,8 +499,18 @@ For a successful GPU launch, the relevant order is `compose-hash`, any
 and `boot-mr-done`.
 After replaying the log to the quote's RTMR3, decode the JSON payload of
 `gpu-attestation` and compare its `evidence_sha256` with the SHA-256 digest of
-the exact UTF-8 `GpuInfo.attestation` string. `GpuInfo` reads the result saved
-during boot and does not perform a new attestation.
+the boot-time GPU evidence bytes. Fetch those bytes by calling `/v1/Attest`
+with `include_boottime_gpu_evidence: true`: `AttestResponse.boottime_gpu_evidence`
+is a list of `GpuEvidenceBundle` (`{vendor, format, evidence}`); pick the one
+whose `format` is `nvidia-nvattest-boottime-json-v1`, hex-decode its `evidence`
+field, and hash exactly those bytes — `SHA-256(hex_decode(bundle.evidence))`.
+Hash the decoded bytes as returned, not the JSON string and not a re-serialized
+form: the comparison is byte-exact, including any whitespace or trailing
+newline. That bundle is the record saved during boot; returning it does not
+perform a new attestation. `/v1/AttestGpu` does perform a fresh one, but its
+bundles carry the distinct `format` `nvidia-nvattest-collect-evidence-json-v1`,
+are appraised against a caller nonce rather than the boot record, and are not
+bound to the TD, so they must not be used as remote evidence.
 
 ### Verify specific event values
 

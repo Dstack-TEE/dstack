@@ -14,6 +14,7 @@ mod health;
 mod http_routes;
 mod models;
 pub mod rpc_service;
+pub mod rpc_service_v1;
 mod server;
 mod socket_activation;
 

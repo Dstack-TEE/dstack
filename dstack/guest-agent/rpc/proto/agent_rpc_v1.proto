@@ -1,0 +1,451 @@
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package dstack.guest.v1;
+
+// The versioned dstack guest agent API.
+//
+// Two services, one per trust surface, mirroring the two unversioned ones:
+//
+//   `DstackGuest`  internal socket (`/var/run/dstack.sock`), at `/v1`
+//   `Worker`       external listener, at `/prpc/v1`
+//
+// The names carry no version suffix: the package `dstack.guest.v1` already
+// says which surface this is, and `dstack.guest.v1.DstackGuestV1` would say it
+// twice.
+//
+// The frozen v0.5.11 services are named `v0` and served at `/v0` and
+// `/prpc/v0`; their historical unversioned paths (`/` and `/prpc`) stay mounted
+// as aliases onto the same handlers, so a pre-0.6 client keeps working. The
+// version a caller gets is decided by the URL path alone, never by a header.
+//
+// The two are not the same surface with different mounts. The internal socket
+// is reachable only by the application itself, so `DstackGuest` hands out key
+// material; the external listener is reachable by anyone who can route to the
+// CVM, so `Worker` never does.
+//
+// Conventions, applied without exception:
+//   - every request message is `<Method>Request`, every response
+//     `<Method>Response`, including for methods that take no arguments -- an
+//     empty message can gain a field, `google.protobuf.Empty` cannot;
+//   - a field's encoding is stated in its doc comment, not in its name. The
+//     fields that carry JSON documents say so and name who owns the schema;
+//   - a key is named by `(domain, algorithm)` and nothing else. There is no
+//     `purpose` field anywhere in v1. Encode roles in the domain string.
+//
+// v1 keys are NOT the v0 keys. The v1 KDF derives under its own HKDF salt and
+// binds the algorithm and a versioned context tag alongside the domain, so the
+// same name yields different key material here than on the frozen surface, and
+// secp256k1 and ed25519 no longer share one 32-byte secret. See `docs/guest-api-v1.md` for the
+// byte-level construction.
+//
+// v1 serves only what genuinely needs the TEE: deriving keys from the app root
+// key, and attesting. It is not an HSM and does not pretend to be one.
+//
+// So there is no `Sign` and no `Verify`. Any caller that can reach this socket
+// can ask `GetKey` for the private key itself, so a server-side `Sign` grants
+// no capability the caller does not already have -- it is pure computation
+// behind an IPC round trip, and one more entry point to audit. Verifying is
+// the same argument without even the key: the agent's answer arrives
+// unattested, so a relying party gains nothing over checking it itself.
+// Applications sign locally with a standard library, using the key `GetKey`
+// returns; `docs/guest-api-v1.md` specifies chain verification normatively.
+//
+// There is no `EmitEvent` either: runtime RTMR3 events are system-owned as of
+// 0.6.0 and cannot be extended by an app.
+//
+// The unversioned surface keeps `Sign` and `Verify` for v0.5.x clients. They
+// are frozen there and are not carried forward.
+service DstackGuest {
+  // Issue a certificate for this application.
+  //
+  // The agent builds a CSR, signs it with the certificate's own key, and
+  // relays it to the KMS `SignCert` RPC (or to the local CA when the app runs
+  // without a KMS), then returns the chain the signer produced. Certificate
+  // issuance is the operation; v0 called this `GetTlsKey`, which named the
+  // by-product instead of the request.
+  //
+  // The private key is freshly generated for every call and is NOT derived
+  // from the app identity: none of the request fields feed it, and calling
+  // twice with the same arguments yields two unrelated keys. `GetKey` is the
+  // method that derives a stable, attestable key.
+  //
+  // This first cut serves only the integrated one-step mode, where the agent
+  // holds the key. A mode that signs a caller-supplied CSR or public key --
+  // so the private key never leaves the caller -- is a plausible extension and
+  // would arrive as added fields or a sibling method, not as a change to what
+  // these fields mean.
+  rpc IssueCert(IssueCertRequest) returns (IssueCertResponse) {}
+
+  // Derive an application key from `(domain, algorithm)` and return the private
+  // key with its signature chain.
+  rpc GetKey(GetKeyRequest) returns (GetKeyResponse) {}
+
+  // Produce a versioned attestation over the given report data.
+  //
+  // The sole CVM attestation entry point in v1. The dstack-defined attestation
+  // format covers every supported platform and already carries the TDX quote
+  // and the event log, so v0's TDX-only `GetQuote` has nothing left to add:
+  // it answers on Intel TDX and nowhere else, and on GCP Confidential VMs it
+  // returns the TDX quote without the vTPM quote GCP's verification also
+  // binds. `docs/guest-api-v1.md` says how to extract a raw quote and event
+  // log from the attestation. `GetQuote` stays on the unversioned surface for
+  // v0.5.x clients.
+  rpc Attest(AttestRequest) returns (AttestResponse) {}
+
+  // Collect GPU attestation evidence now, against a nonce the caller chooses.
+  //
+  // This answers "is the device I can talk to right now a genuine, CC-enabled
+  // NVIDIA GPU that signs my challenge", which `GpuInfo` cannot: that returns
+  // a record written at boot. Use it after anything that may have
+  // reinitialised the GPU -- a driver reload leaves a device that responds to
+  // NVML but can no longer attest -- and before submitting work you care
+  // about.
+  //
+  // Returns vendor-native evidence, not a local verdict, so a relying party
+  // can appraise it with its own verifier. Evidence still does not bind the
+  // GPU to this TD; see `AttestGpuResponse.bundles`.
+  rpc AttestGpu(AttestGpuRequest) returns (AttestGpuResponse) {}
+
+  // Return this application's identity and measurements.
+  rpc Info(InfoRequest) returns (InfoResponse) {}
+
+  // Return the guest agent version.
+  rpc Version(VersionRequest) returns (VersionResponse) {}
+}
+
+// ---------------------------------------------------------------------------
+// Certificate issuance
+// ---------------------------------------------------------------------------
+
+message IssueCertRequest {
+  // Subject of the certificate to request.
+  string subject = 1;
+  // DNS alternative names for the certificate.
+  repeated string alt_names = 2;
+  // Include the attestation quote in the certificate (RA-TLS).
+  bool usage_ra_tls = 3;
+  // Key usage server auth.
+  bool usage_server_auth = 4;
+  // Key usage client auth.
+  bool usage_client_auth = 5;
+  // Certificate validity start, seconds since the UNIX epoch. Rejected when
+  // it is not earlier than `not_after`.
+  optional uint64 not_before = 6;
+  // Certificate validity end, seconds since the UNIX epoch.
+  optional uint64 not_after = 7;
+  // Include app info in the certificate.
+  bool with_app_info = 8;
+}
+
+message IssueCertResponse {
+  // The private key the agent generated for this certificate, PEM-encoded.
+  // Fresh per call; see `IssueCert`.
+  string key = 1;
+  // The certificate chain, leaf first, each entry PEM-encoded, exactly as the
+  // signer returned it.
+  repeated string certificate_chain = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Application keys
+// ---------------------------------------------------------------------------
+
+message GetKeyRequest {
+  // Caller-chosen domain-separation string identifying the key. Not a DNS
+  // name -- the certificate fields on `IssueCertRequest` are the ones that
+  // take those.
+  //
+  // Any byte string a proto3 `string` can carry, including one with `:`, `/`
+  // or NUL in it: the KDF length-prefixes it, so no domain can be confused
+  // with another.
+  //
+  // Derivation is flat. Two domains yield unrelated keys, and `a/b` is not a
+  // child of `a` in any sense -- there is no BIP-32-style hierarchy and no
+  // parent key from which a sub-domain's key can be computed.
+  //
+  // This replaces v0's `path` plus `purpose`. In v0 only `path` reached the
+  // KDF and `purpose` was merely echoed into the chain claim; here the one
+  // field feeds both, alongside `algorithm`.
+  string domain = 1;
+  // Key type. Exactly `secp256k1` or `ed25519`.
+  //
+  // There is no default and no alias: an empty or unrecognised value is an
+  // error. v0 defaulted an empty string to secp256k1 and accepted `k256`,
+  // which meant a typo silently produced a key of the wrong type under a name
+  // the caller thought meant something else.
+  //
+  // Names the key type only. v1 has no signing modes, because it has no
+  // signing method: v0's `secp256k1_prehashed` was a mode wearing an
+  // algorithm's name, and it does not appear here.
+  string algorithm = 2;
+}
+
+message GetKeyResponse {
+  // The derived private key: 32 raw bytes for both supported algorithms.
+  bytes key = 1;
+  // The corresponding public key. SEC1 compressed, 33 bytes, for secp256k1;
+  // 32 raw bytes for ed25519. This is the exact byte string the signature
+  // chain's first link commits to, so a relying party never has to re-derive
+  // it from `key` to check the chain.
+  bytes public_key = 2;
+  // Two links, in order:
+  //   [0] the app root key's secp256k1 signature over the v1 key claim, which
+  //       binds algorithm, domain and `public_key` -- see `docs/guest-api-v1.md`
+  //       for the encoding and the verification steps;
+  //   [1] the KMS root key's secp256k1 signature over the app root public key.
+  //
+  // Link [1] is produced by the KMS and is byte-identical to the one the
+  // unversioned surface returns. Link [0] is not: its claim encoding is new,
+  // and it is deliberately not one the v0 claim format can produce.
+  repeated bytes signature_chain = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Attestation
+// ---------------------------------------------------------------------------
+
+message AttestRequest {
+  // Up to 64 bytes of report data, zero-padded on the right to 64.
+  bytes report_data = 1;
+  // Also return the boot-time GPU attestation evidence in
+  // `AttestResponse.boottime_gpu_evidence`. This does not sample the GPU
+  // now and does not answer `report_data`; see that field.
+  bool include_boottime_gpu_evidence = 2;
+}
+
+message AttestResponse {
+  // The versioned dstack attestation.
+  bytes attestation = 1;
+
+  // Boot-time GPU attestation evidence. Empty unless the request set
+  // `include_boottime_gpu_evidence` and boot-time output exists, so absence is
+  // just the empty list rather than a sentinel value.
+  //
+  // Same bundle shape `AttestGpu` returns, so a consumer writes one parser for
+  // both. `format` is what separates them: this carries
+  // `nvidia-nvattest-boottime-json-v1`, the record written at boot, while
+  // `AttestGpu` carries `nvidia-nvattest-collect-evidence-json-v1`, collected
+  // on demand against a caller's nonce. Do not appraise one with the other's
+  // verifier.
+  //
+  // `evidence` is the exact UTF-8 bytes of the nvattest output as read from
+  // disk, byte for byte. That exactness is load-bearing: the only thing tying
+  // this evidence to the boot is sha256 over precisely these bytes, compared
+  // against the `evidence_sha256` field of the measured `gpu-attestation`
+  // event after replaying the runtime event log. Re-encoding or reformatting
+  // the JSON breaks the comparison.
+  //
+  // Not bound to `report_data`: nvattest ran at boot against its own nonce, so
+  // a fresh `report_data` says nothing about it.
+  //
+  // This is a historical statement about the boot, not a live one: it does not
+  // prove the GPU is still attached. Sampling the GPU at attestation time
+  // would not fix that -- an NVIDIA report binds the device and a nonce but
+  // not the TD the device is attached to, so a fresh report can be relayed
+  // from a genuine remote GPU. Only TDISP/TEE-IO device binding closes that.
+  repeated GpuEvidenceBundle boottime_gpu_evidence = 2;
+}
+
+message AttestGpuRequest {
+  // Exactly 32 bytes of caller-chosen challenge, passed to the GPU verbatim.
+  //
+  // SPDM fixes the evidence nonce at 32 bytes, and dstack applies no transform
+  // so a caller can compare these bytes directly against the `eat_nonce` claim
+  // rather than reversing a hash. To bind a longer challenge, hash it
+  // yourself.
+  bytes nonce = 1;
+}
+
+message AttestGpuResponse {
+  // Vendor-native evidence bundles. The caller must select a verifier using
+  // `vendor` and `format`, then verify the signature, certificate chain,
+  // measurements, and the nonce embedded in the evidence.
+  repeated GpuEvidenceBundle bundles = 1;
+}
+
+// One vendor's GPU evidence.
+//
+// Shared by `AttestGpu` and `AttestResponse.boottime_gpu_evidence` so a
+// consumer writes one parser for both. Dispatch on `(vendor, format)`; the two
+// sources carry different `format` values because they answer different
+// questions, and a verifier for one does not appraise the other.
+message GpuEvidenceBundle {
+  // Stable GPU vendor identifier, for example `nvidia`, `amd`, or `intel`.
+  string vendor = 1;
+  // Vendor-specific evidence format and version. Known values:
+  //   `nvidia-nvattest-collect-evidence-json-v1`  fresh, from `AttestGpu`
+  //   `nvidia-nvattest-boottime-json-v1`          the record written at boot
+  string format = 2;
+  // Opaque vendor-native evidence bytes. Do not assume UTF-8 or JSON.
+  bytes evidence = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+message InfoRequest {}
+
+// Identity and configuration. Not attestation.
+//
+// Everything here is what this application *is*: who it is, what it was
+// configured with, and where it runs. Nothing here is evidence, and nothing
+// here should be trusted on its own -- it arrives over a local socket with no
+// quote behind it.
+//
+// That is why the measurement registers and the event log are absent. v0's
+// `AppInfo.tcb_info` carried MRTD, RTMR0-3 and the event log as a JSON blob,
+// which invited relying parties to read measurements out of an unattested
+// response. Those values belong to `Attest`, whose `VersionedAttestation`
+// carries them quote-backed. Ask `Attest` and verify, or do not use them.
+//
+// `mr_aggregated`, `os_image_hash` and `compose_hash` are the exception, and a
+// deliberate one: they identify *which* application and image this is, which is
+// the question `Info` answers. They are typed bytes here rather than hex
+// strings inside a JSON blob, and each appears exactly once -- v0 returned all
+// three both as top-level `AppInfo` fields and again, hex-encoded, inside
+// `tcb_info`, two encodings of one fact and free to disagree. They are still
+// unattested, and a relying party still confirms them against an attestation.
+//
+// `app_cert` is gone as well. It was a self-issued demo certificate the agent
+// minted for a dashboard, proved nothing, and had no business on a key API.
+message InfoResponse {
+  // Application -- what is deployed.
+
+  // App ID.
+  bytes app_id = 1;
+  // App name, from app-compose.
+  string app_name = 2;
+  // Compose hash. Adjacent to the document it commits to, so a caller can see
+  // at a glance which field the hash covers.
+  bytes compose_hash = 3;
+  // The app-compose document, as a JSON document owned by the app-compose
+  // schema (`docs/normalized-app-compose.md`).
+  //
+  // These are the verbatim bytes that were deployed, and `compose_hash` is
+  // sha256 over exactly these bytes. Do not parse and re-serialize before
+  // hashing: key order, whitespace and unknown fields all change the digest,
+  // and that digest is what gets whitelisted on chain.
+  //
+  // Served directly rather than nested inside another JSON string, which is
+  // what v0 did via `tcb_info`.
+  string app_compose = 4;
+
+  // Instance -- which running copy.
+
+  // App instance ID.
+  bytes instance_id = 5;
+
+  // Platform -- what it runs on.
+
+  // Device ID. Identifies the host machine, not this instance.
+  bytes device_id = 6;
+  // OS image hash.
+  bytes os_image_hash = 7;
+  // Aggregated measurement register value.
+  bytes mr_aggregated = 8;
+  // The VM's hardware configuration, as a JSON document produced and owned by
+  // the VMM. The guest agent passes it through unparsed.
+  string vm_config = 9;
+  // The key provider that supplied this app's keys, as a JSON document owned
+  // by dstack-util (`{"name": ..., "id": ...}`), passed through unparsed.
+  string key_provider_info = 10;
+  // Cloud provider sys_vendor, for example "Google".
+  string cloud_vendor = 11;
+  // Cloud provider product_name, for example "Google Compute Engine".
+  string cloud_product = 12;
+}
+
+message VersionRequest {}
+
+message VersionResponse {
+  // dstack version.
+  string version = 1;
+  // Git revision.
+  string rev = 2;
+}
+
+// ---------------------------------------------------------------------------
+// The external surface
+// ---------------------------------------------------------------------------
+
+// The versioned external guest agent service.
+//
+// Served on the external listener at `/prpc/v1`, alongside the closed
+// unversioned `Worker` at `/prpc`.
+//
+// Anyone who can route to the CVM can call this, so nothing here returns key
+// material, and nothing here lets a caller choose what gets signed or attested.
+//
+// There is deliberately no `AttestAppKey`. v0's version attests the key its own
+// KDF derives at path `vms` with purpose `signing`, and no v1 `GetKey(domain,
+// algorithm)` can return that key -- so a pure-v1 application could be handed
+// an attestation of a public key whose private half it has no way to obtain.
+// A v1 application attests its own key instead: derive it at `/v1/GetKey`,
+// commit the public key into `report_data`, and call `/v1/Attest`. The
+// application then hands that attestation to its relying parties. Legacy flows
+// keep using the frozen `Worker.GetAttestationForAppKey`.
+service Worker {
+  // Return this application's identity and configuration.
+  //
+  // The same `InfoResponse` the internal surface returns, minus what the app
+  // asked to keep private: unless the app-compose sets `public_tcbinfo`, the
+  // three document fields (`app_compose`, `vm_config`, `key_provider_info`)
+  // come back empty. Identity and the measurement hashes are always present,
+  // which is what the unversioned `Worker.Info` also did.
+  rpc Info(InfoRequest) returns (InfoResponse) {}
+
+  // Return the guest agent version.
+  rpc Version(VersionRequest) returns (VersionResponse) {}
+
+  // Report whether the app is serving. Polled by the gateway to decide whether
+  // this instance should be in its app's load-balancing rotation.
+  //
+  // Answers from a cache the agent refreshes on its own timer, so the cost of
+  // one call is a lock and a clone however many gateway nodes are polling.
+  //
+  // Only instances that asked for gating (`RegisterCvmRequest.health_check`)
+  // are ever polled. That flag, not this method's absence, is what protects an
+  // older image: the gateway counts *any* failed poll as unhealthy, so probing
+  // to discover support would blackhole every guest agent that predates this.
+  rpc Health(HealthRequest) returns (HealthResponse) {}
+}
+
+message HealthRequest {}
+
+// One container that is not reporting healthy.
+message ContainerHealth {
+  // Container name, without the leading slash Docker prepends.
+  string name = 1;
+  // Docker health state: "starting" or "unhealthy". A healthy container is
+  // never listed. A string rather than an enum so it stays readable as JSON.
+  string status = 2;
+}
+
+// Aggregate application health, as the agent last determined it.
+message HealthResponse {
+  // False when the app's own health file says so or has gone stale, or -- when
+  // no health file was declared -- when any container that declares a Compose
+  // `healthcheck` is not running and healthy.
+  bool healthy = 1;
+  // The containers that made `healthy` false, so an operator reading gateway
+  // logs can tell which one is holding the instance out of rotation. Purely
+  // diagnostic -- the gateway routes on `healthy` alone.
+  repeated ContainerHealth unhealthy = 2;
+  // Set when the agent could not see the app at all for several refreshes in
+  // a row (container runtime unreachable, permission denied). `healthy` is
+  // false in that case: an agent that cannot see the app is in no position to
+  // vouch for it.
+  //
+  // Reported in the response rather than as an RPC error on purpose. The
+  // gateway's health poller counts any failed poll as a failed poll; it does
+  // not read the status code or the body. A verdict of "the agent cannot see
+  // the app" raised as an RPC error would therefore be filed alongside an
+  // agent that is unreachable or has no such method, and the reason would
+  // never reach the operator. Carried here alongside `healthy` false, it does.
+  string error = 3;
+}

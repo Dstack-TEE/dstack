@@ -7,9 +7,9 @@
 import asyncio
 import sys
 
-from dstack_sdk import AsyncDstackClient
+from dstack_sdk import AsyncDstackClientV0
 from dstack_sdk import AsyncTappdClient
-from dstack_sdk import DstackClient
+from dstack_sdk import DstackClientV0
 from dstack_sdk import TappdClient
 from dstack_sdk import get_compose_hash
 from dstack_sdk import verify_env_encrypt_public_key
@@ -20,8 +20,8 @@ async def main():  # noqa: D103
 
     try:
         # Test client get_key
-        client = DstackClient()
-        print("\n1. Testing DstackClient.get_key()")
+        client = DstackClientV0()
+        print("\n1. Testing DstackClientV0.get_key()")
 
         test_paths = [
             {"path": "test/wallet", "purpose": "ethereum"},
@@ -141,13 +141,13 @@ async def main():  # noqa: D103
 
         # Test quotes
         print("\n5. Testing Quote Methods")
-        print("\n5.1 DstackClient.get_quote():")
+        print("\n5.1 DstackClientV0.get_quote():")
         dstack_quote = client.get_quote("test-data-for-quote")
         print(f"  quote length: {len(dstack_quote.quote)}")
         print(f"  event_log length: {len(dstack_quote.event_log)}")
 
-        print("\n5.2 AsyncDstackClient.get_quote():")
-        async_client = AsyncDstackClient()
+        print("\n5.2 AsyncDstackClientV0.get_quote():")
+        async_client = AsyncDstackClientV0()
         async_dstack_quote = await async_client.get_quote("test-data-for-quote")
         print(f"  quote length: {len(async_dstack_quote.quote)}")
         print(f"  event_log length: {len(async_dstack_quote.event_log)}")

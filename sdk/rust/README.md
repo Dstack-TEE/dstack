@@ -3,6 +3,36 @@
 Access TEE features from your Rust application running inside dstack. Derive deterministic keys, generate attestation quotes, create TLS certificates, and sign data—all backed by hardware security.
 
 This directory is a **standalone Cargo workspace** (`dstack-sdk`, `dstack-sdk-types`, and a `no_std` check crate). It does not join the `dstack/` core workspace.
+## Two API surfaces
+
+The guest agent serves two surfaces on the same socket, selected by URL path,
+and this SDK mirrors both:
+
+| Client | Surface | Paths |
+|---|---|---|
+| `DstackClient` (= `DstackClientV1`) | `dstack.guest.v1` | `/v1/GetKey` |
+| `DstackClientV0` | the frozen v0.5.11 API | `/GetKey`, also served at `/v0/GetKey` |
+
+`DstackClient` is the recommended default and names the v1 surface.
+`DstackClientV0` is legacy: that surface is closed, gains no methods, and exists
+so a v0.5.x program keeps working unchanged.
+
+> **The `DstackClient` alias flipped in 0.6.0.** It used to mean the v0 client.
+> Code that called v0 methods through it now **fails to compile** rather than
+> silently deriving different key material -- the v1 signatures differ, and
+> `get_key` requires an explicit `algorithm`. To stay on the frozen surface,
+> name `DstackClientV0`.
+
+> **v1 keys are not v0 keys.** Deriving under the same name through
+> `DstackClient` returns *different key material* than `DstackClientV0` does.
+> This is deliberate -- the v0 KDF ignored the algorithm, so one secret served
+> both curves -- and there is no compatibility mode. An application holding
+> assets under a v0 key must migrate them with a transaction signed by the old
+> key before cutting over. See [`docs/guest-api-v1.md`](../../docs/guest-api-v1.md).
+
+The clients are transport mirrors, not a compatibility layer: neither
+translates a call to the other, and each one's method set is exactly its
+surface's.
 
 ## Installation
 
@@ -14,33 +44,191 @@ dstack-sdk = { git = "https://github.com/Dstack-TEE/dstack.git" }
 ## Quick Start
 
 ```rust
-use dstack_sdk::dstack_client::DstackClient;
+use dstack_sdk::DstackClient;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     let client = DstackClient::new(None);
 
-    // Derive a deterministic key for your wallet
-    let key = client.get_key(Some("wallet/eth".to_string()), None).await?;
-    println!("{}", key.key);  // Same path always returns the same key
+    // Derive an application key. `domain` is a caller-chosen
+    // domain-separation string; `algorithm` is required.
+    let key = client.get_key("storage-encryption", "secp256k1").await?;
+    println!("public key: {}", key.public_key);
 
-    // Generate an attestation quote
-    let resp = client.attest(b"my-app-state".to_vec()).await?;
-    println!("{}", resp.attestation);
-
+    let info = client.info().await?;
+    println!("app: {} ({})", info.app_name, info.app_id);
     Ok(())
 }
 ```
 
-The client automatically connects to `/var/run/dstack.sock`. For local development with the simulator:
+Point it somewhere else with `DstackClient::new(Some("/custom/dstack.sock"))`
+or an `http://` URL.
+
+## API
+
 
 ```rust
-let client = DstackClient::new(Some("http://localhost:8090".to_string()));
+use dstack_sdk::DstackClient;
+use dstack_sdk::dstack_client_v1::IssueCertConfig;
+
+let client = DstackClient::new(None);
 ```
 
-## Core API
+#### `get_key(domain: &str, algorithm: &str) -> GetKeyResponse`
 
-### Derive Keys
+```rust
+let key = client.get_key("storage-encryption", "secp256k1").await?;
+let private_key = key.decode_key()?;      // 32 bytes
+let public_key = key.decode_public_key()?; // SEC1 compressed, or 32 raw for ed25519
+```
+
+`domain` is a caller-chosen domain-separation string -- not a DNS name and not a
+path. Derivation is **flat**: `a/b` is unrelated to `a`, and no key derives
+another. `algorithm` is required and must be `secp256k1` or `ed25519`; there is
+no default and no `k256` alias, so a typo is an error rather than a key of the
+wrong type.
+
+`signature_chain` has two links: the app root key's signature over the v1 key
+claim, then the KMS root key's signature over the app root public key.
+
+#### `attest(report_data: Vec<u8>, include_boottime_gpu_evidence: bool) -> AttestResponse`
+
+v1's only CVM attestation entry point. The attestation already carries the TDX
+quote and the event log, and unlike v0's `get_quote` it answers on every
+supported platform.
+
+```rust
+let result = client.attest(b"custom data".to_vec(), true).await?;
+let attestation = result.decode_attestation()?;
+
+// Boot-time GPU evidence uses the same bundle shape `attest_gpu` returns, so
+// one parser handles both. Empty when the flag was not set or the guest has no
+// GPU output -- absence is the empty list, not a sentinel.
+for bundle in &result.boottime_gpu_evidence {
+    assert_eq!(bundle.format, dstack_sdk::dstack_client_v1::FORMAT_BOOTTIME);
+    let nvattest_output = bundle.decode_evidence()?; // exact bytes from disk
+}
+```
+
+Dispatch on `format`: `nvidia-nvattest-boottime-json-v1` is the record written
+at boot, `nvidia-nvattest-collect-evidence-json-v1` is collected on demand
+against a nonce you choose. A verifier for one does not appraise the other.
+
+That evidence is **not** bound to `report_data` -- nvattest ran at boot against
+its own nonce. Bind it by replaying the runtime event log and comparing sha256
+of the bundle's **exact** decoded bytes against `evidence_sha256` in the
+`gpu-attestation` event. Parsing and re-serializing the JSON first changes the
+digest and breaks the comparison.
+
+#### `attest_gpu(nonce: Vec<u8>) -> AttestGpuResponse`
+
+Collects GPU evidence *now*, against a caller-chosen 32-byte nonce -- which the
+boot-time evidence cannot answer, since it is a record written at boot.
+
+```rust
+let result = client.attest_gpu(vec![0xab; 32]).await?;
+for bundle in &result.bundles {
+    println!("{} / {}", bundle.vendor, bundle.format);
+}
+```
+
+Returns vendor-native evidence, not a verdict: select a verifier by `vendor` and
+`format`, then check the signature, certificate chain, measurements, and the
+nonce embedded in the evidence.
+
+#### `issue_cert(config: IssueCertConfig) -> IssueCertResponse`
+
+Certificate issuance -- what v0 called `get_tls_key`, which named the by-product
+rather than the request.
+
+```rust
+let cert = client
+    .issue_cert(
+        IssueCertConfig::builder()
+            .subject("example.com")
+            .usage_server_auth(true)
+            .build(),
+    )
+    .await?;
+```
+
+The returned private key is freshly generated per call and is **not** derived
+from the app identity: two identical requests produce two unrelated keys.
+`get_key` is the method that derives a stable, attestable key.
+
+#### `info() -> InfoResponse`
+
+Identity and configuration, never attestation. The measurement registers and the
+event log are deliberately absent -- they are attestation data, and this
+response arrives over a local socket with nothing vouching for it. Ask `attest`
+and verify.
+
+`app_compose` is served directly here, rather than nested inside a `tcb_info`
+JSON string as v0 did, and `compose_hash` is sha256 over its verbatim bytes.
+
+#### `version() -> VersionResponse`
+
+Also the cheapest probe for whether an agent serves v1 at all.
+
+## Development
+
+For local development without TDX hardware, use the simulator:
+
+```bash
+git clone https://github.com/Dstack-TEE/dstack.git
+cd dstack/sdk/simulator
+./build.sh
+./dstack-simulator
+```
+
+Then set the endpoint:
+
+```bash
+export DSTACK_SIMULATOR_ENDPOINT=http://localhost:8090
+```
+
+Run examples:
+
+```bash
+cargo run --example dstack_client_usage
+```
+
+---
+
+## Migration from TappdClient
+
+`TappdClient` is superseded. For new code use `DstackClient` (v1); for a
+like-for-like swap that keeps the old semantics, use `DstackClientV0`:
+
+```rust
+// Before
+use dstack_sdk::tappd_client::TappdClient;
+let client = TappdClient::new(None);
+
+// After
+use dstack_sdk::dstack_client::DstackClientV0;
+let client = DstackClientV0::new(None);
+```
+
+Method changes:
+- `derive_key()` → `get_tls_key()` for TLS certificates
+- Socket path: `/var/run/tappd.sock` → `/var/run/dstack.sock`
+
+## Legacy (v0, frozen)
+
+Everything below is the **frozen v0.5.11 surface**, reached through
+`DstackClientV0`. It is closed: no new methods, no behaviour changes. Use it
+only if you need something v1 does not carry -- `sign`, `verify`, `emit_event`,
+`get_quote` -- or to keep existing code working while you migrate.
+
+```rust
+use dstack_sdk::dstack_client::DstackClientV0;
+
+let client = DstackClientV0::new(None);
+```
+
+
+### Derive Keys (v0)
 
 `get_key()` derives deterministic keys bound to your application's identity (`app_id`). The same path always produces the same key for your app, but different apps get different keys even with the same path.
 
@@ -103,54 +291,9 @@ println!("{}", info.tcb_info);
 #### `attest(report_data: Vec<u8>) -> AttestResponse`
 Generates a versioned attestation with a custom 64-byte payload.
 - `attestation`: Hex-encoded attestation
-- `boottime_gpu_evidence`: Boot-time GPU attestation evidence, empty unless requested
 
-#### `attest_with(config: AttestConfig) -> AttestResponse`
-Same, with options. Set `include_boottime_gpu_evidence` to also return the boot-time GPU
-attestation evidence, so a verifier gets the quote and the GPU evidence in one round trip.
-
-```rust
-let config = AttestConfig::builder()
-    .report_data(hex::encode(b"user:alice:nonce123"))
-    .include_boottime_gpu_evidence(true)
-    .build();
-let result = client.attest_with(config).await?;
-println!("{}", result.boottime_gpu_evidence);
-```
-
-The evidence is the same bytes ``gpu_info()`` serves and is empty unless the flag was set
-and boot-time GPU attestation output exists. It is not bound to `report_data`; verify
-it with the measured `gpu-attestation` event digest as described under ``gpu_info()``.
-
-#### `attest_gpu(nonce: Vec<u8>) -> AttestGpuResponse`
-
-Collects vendor-native GPU evidence for a caller-chosen 32-byte nonce.
-
-```rust
-let result = client.attest_gpu(nonce.to_vec()).await?;
-for bundle in result.bundles {
-    println!("{} {} {}", bundle.vendor, bundle.format, bundle.evidence);
-}
-```
-
-Select a verifier using each bundle's `vendor` and `format`. The verifier must check
-the evidence signature, certificate chain, measurements, and embedded nonce. Evidence
-is opaque and hex-encoded by the JSON RPC. It does not by itself bind the GPU to this
-CVM.
-
-#### `gpu_info() -> GpuInfoResponse`
-
-Returns GPU information collected during boot. Currently, this includes the
-complete NVIDIA `nvattest` JSON output.
-
-```rust
-let gpu = client.gpu_info().await?;
-println!("{}", gpu.attestation);
-```
-
-The `attestation` field is empty when no GPU attestation output is available.
-The raw output is not trusted by itself; remote verifiers should compare its
-digest with the measured `gpu-attestation` runtime event.
+No GPU-evidence flag on v0: that field is reserved on this surface, and only
+`DstackClientV1::attest` honours it.
 
 ### Generate TLS Certificates
 
@@ -183,131 +326,49 @@ println!("{:?}", tls.certificate_chain);  // Certificate chain
 - `key`: PEM-encoded private key
 - `certificate_chain`: List of PEM certificates
 
-### Sign and Verify
+### Sign and Verify (v0 only)
 
-Signing happens in the TEE, because it needs a key only the TEE holds. Verifying
-does not, so it runs locally in this SDK -- the guest agent's `Verify` RPC was
-removed in v0.6.0. Its answer arrived over the socket unattested, so trusting it
-was never better than checking the signature yourself.
+`Sign` and `Verify` are v0 RPCs. v1 has neither: any caller that can reach the
+socket can ask `get_key` for the private key and do both locally, so an RPC for
+them would add a round trip without adding a capability.
 
 ```rust
-use dstack_sdk::verify::{verify_signature, verify_signature_chain, SignatureChain};
+let sign_resp = client.sign("secp256k1", b"my message".to_vec()).await?;
+let signature = sign_resp.decode_signature()?;
+let public_key = sign_resp.decode_public_key()?;
 
-let result = client.sign("ed25519", b"message to sign".to_vec()).await?;
-
-// Does this signature check out under this public key?
-let valid = verify_signature(
-    "ed25519",
-    b"message to sign",
-    &result.decode_signature()?,
-    &result.decode_public_key()?,
-)?;
-assert!(valid);
+let verified = client
+    .verify("secp256k1", b"my message".to_vec(), signature, public_key)
+    .await?;
+assert!(verified.valid);
 ```
 
-**`sign()` Parameters:**
-- `algorithm`: `"ed25519"`, `"secp256k1"` (alias `"k256"`), or `"secp256k1_prehashed"`
-- `data`: Data to sign (a 32-byte digest for `secp256k1_prehashed`)
+`verify()` needs no key material and no attestation, and the agent's answer
+arrives over the socket unattested -- a caller gains nothing over checking the
+signature itself. It is kept because it is part of the frozen v0 surface.
 
-**`sign()` Returns:** `SignResponse`
-- `signature`: Signature bytes
-- `public_key`: Public key bytes
-- `signature_chain`: Three signatures linking the signing key back to the KMS root
+To verify a **v1 signature chain**, do it yourself.
+[`docs/guest-api-v1.md`](../../docs/guest-api-v1.md) specifies the rules
+normatively: the claim encoding, the recovery step, and the trust anchor the
+chain has to terminate at. This SDK deliberately ships no verification helper --
+it mirrors an API surface, and verifying is the relying party's job.
 
-**`verify_signature()` Returns** `Result<bool>` -- `Ok(false)` when a well-formed
-signature does not match, and `Err` when an input is malformed (bad key length,
-unknown algorithm, non-canonical high-S signature). A malformed input is a caller
-bug, not a verdict.
+### Blockchain adapters (v0-era)
 
-#### Verifying the whole chain
-
-`verify_signature` alone proves only that whoever holds that public key signed the
-data. It says nothing about *whose* key it is. `verify_signature_chain` walks all
-three links back to a KMS root key you supply:
+`ethereum::to_account` is typed against the v0 `GetKeyResponse` and stays that
+way. The v1 surface has no chain-related functionality: it returns key
+material, and what an application builds from those bytes is its own business.
 
 ```rust
-// Both anchors come from you, not from the CVM being checked.
-let expected_app_id = hex::decode("a9019d1b2c3d4e5f60718293a4b5c6d7e8f90a1b")?;
-let kms_root_pubkey = hex::decode("03...")?;  // pinned, or read from DstackKms
-
-let verified = verify_signature_chain(&SignatureChain::from_sign_response(
-    "ed25519",
-    b"message to sign",
-    &result.decode_public_key()?,
-    &result.decode_signature_chain()?,
-    &expected_app_id,
-    &kms_root_pubkey,
-)?;
-println!("app root key: {}", hex::encode(verified.app_root_pubkey));
-```
-
-Note what the example does *not* do: it never passes `client.info().app_id`
-straight through. That value is reported by the very CVM being verified, so a
-chain checked against it proves only that the CVM is self-consistent with
-itself. Use the app id you registered on chain, and if you want `AppInfo` in the
-picture, compare it against that value rather than trusting it.
-
-`kms_root_pubkey` must come from somewhere you already trust: the `DstackKms`
-contract's `kmsInfo().k256Pubkey`, or a value you pinned. Reading it from the same
-KMS you are checking against proves nothing -- an attacker who can answer that
-query can also mint a self-consistent chain. This comparison is the entire point
-of the chain; skip it and the other two links establish nothing.
-
-## Blockchain Integration
-
-### Ethereum with Alloy
-
-```rust
-use dstack_sdk::dstack_client::DstackClient;
+use dstack_sdk::dstack_client::DstackClientV0;
 use dstack_sdk::ethereum::to_account;
 
+let client = DstackClientV0::new(None);
 let key = client.get_key(Some("wallet/ethereum".to_string()), None).await?;
 let signer = to_account(&key)?;
 println!("Ethereum address: {}", signer.address());
 ```
 
-## Development
-
-For local development without TDX hardware, use the simulator:
-
-```bash
-git clone https://github.com/Dstack-TEE/dstack.git
-cd dstack/sdk/simulator
-./build.sh
-./dstack-simulator
-```
-
-Then set the endpoint:
-
-```bash
-export DSTACK_SIMULATOR_ENDPOINT=http://localhost:8090
-```
-
-Run examples:
-
-```bash
-cargo run --example dstack_client_usage
-```
-
----
-
-## Migration from TappdClient
-
-Replace `TappdClient` with `DstackClient`:
-
-```rust
-// Before
-use dstack_sdk::tappd_client::TappdClient;
-let client = TappdClient::new(None);
-
-// After
-use dstack_sdk::dstack_client::DstackClient;
-let client = DstackClient::new(None);
-```
-
-Method changes:
-- `derive_key()` → `get_tls_key()` for TLS certificates
-- Socket path: `/var/run/tappd.sock` → `/var/run/dstack.sock`
 
 ## License
 

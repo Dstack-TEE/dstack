@@ -34,7 +34,27 @@ service Tappd {
   rpc Version(google.protobuf.Empty) returns (WorkerVersion) {}
 }
 
-// The service for the dstack guest agent
+// The service for the dstack guest agent.
+//
+// This surface is CLOSED. It is exactly the v0.5.11 surface and stays that way:
+// no additions, no renumbering, no removals, and no semantic changes to
+// existing methods. It exists so a v0.5.x client keeps working against a 0.6
+// agent unchanged.
+//
+// It is the `v0` surface, served at `/v0`. Its historical unversioned path `/`
+// stays mounted as an alias onto this same handler for pre-0.6 clients.
+//
+// Every new capability goes to `dstack.guest.v1` (agent_rpc_v1.proto), served
+// at `/v1` on the same socket. Do not add a method here, and do not add a
+// field to a message here, even a wire-compatible one -- "frozen except for
+// additions" is how this surface acquired `GpuInfo`, `AttestGpu` and
+// `AttestArgs` between v0.5.11 and 0.6.0, none of which ever shipped and all
+// of which have been moved to v1.
+//
+// Two behaviour-only changes are sanctioned and do not alter the wire shape:
+// `GetQuote` now fails on a platform without Intel TDX instead of returning an
+// empty quote, and `GetTlsKey` rejects a not_before that is not earlier than
+// not_after. `EmitEvent` always fails; see its doc comment.
 service DstackGuest {
   // Derives a cryptographic key from the specified key path.
   // Returns the derived key along with its TLS certificate chain.
@@ -53,35 +73,37 @@ service DstackGuest {
 
   // Generates a versioned attestation with the given report data.
   // Returns a dstack-defined attestation format that supports different attestation modes across platforms.
-  rpc Attest(AttestArgs) returns (AttestResponse) {}
+  rpc Attest(RawQuoteArgs) returns (AttestResponse) {}
+
+  // Removed in v0.6.0: always fails. Runtime RTMR3 events are system-owned now,
+  // so an app can no longer extend them.
+  //
+  // The method is kept only so a pre-0.6 client gets a self-explanatory error.
+  // Deleting it would answer HTTP 404 `Service not found: EmitEvent`, which
+  // says nothing about why the events stopped being recorded; the kept stub
+  // fails with HTTP 400 and a message naming the removal and what to do
+  // instead. The self-explanatory error is the whole point of keeping it.
+  rpc EmitEvent(EmitEventArgs) returns (google.protobuf.Empty) {}
 
   // Get app info
   rpc Info(google.protobuf.Empty) returns (AppInfo) {}
 
-  // Get GPU information collected during boot.
-  rpc GpuInfo(google.protobuf.Empty) returns (GpuInfoResponse) {}
-
-  // Collect GPU attestation evidence now, against a nonce the caller chooses.
-  //
-  // This answers "is the device I can talk to right now a genuine, CC-enabled
-  // NVIDIA GPU that signs my challenge", which `GpuInfo` cannot: that returns a
-  // record written at boot. Use it after anything that may have reinitialised
-  // the GPU -- a driver reload leaves a device that responds to NVML but can no
-  // longer attest -- and before submitting work you care about.
-  //
-  // Returns vendor-native evidence, not a local verdict, so a relying party can
-  // appraise it with its own verifier. Evidence still does not bind the GPU to
-  // this TD; see `AttestGpuResponse.bundles`.
-  rpc AttestGpu(AttestGpuArgs) returns (AttestGpuResponse) {}
-
   // Sign a payload
   rpc Sign(SignRequest) returns (SignResponse) {}
 
-  // Removed in v0.6.0: `rpc Verify(VerifyRequest) returns (VerifyResponse)`.
-  // Signature verification needs no key material and no attestation, and the
-  // agent's answer arrives over the socket unattested, so a caller gained
-  // nothing over checking the signature itself. The SDKs now do it locally --
-  // see `verify_signature` / `verify_signature_chain`. Do not reuse the name.
+  // Verify a signature. Deprecated, legacy-only.
+  //
+  // Verification needs no key material and no attestation, and the agent's
+  // answer arrives over the socket unattested, so a caller gains nothing over
+  // checking the signature itself. It is retained because it is part of this
+  // frozen surface, and the SDKs' v0 clients still expose it.
+  //
+  // v1 has no counterpart. A relying party verifies locally, against the rules
+  // in `docs/guest-api-v1.md`.
+  //
+  // Retained here only so 0.5.x clients keep working. It will not appear in the
+  // v1 API; do not call it from new code.
+  rpc Verify(VerifyRequest) returns (VerifyResponse) {}
 
   // Get the guest agent version
   rpc Version(google.protobuf.Empty) returns (WorkerVersion) {}
@@ -191,22 +213,15 @@ message TdxQuoteArgs {
 message RawQuoteArgs {
   // 64 bytes of report data
   bytes report_data = 1;
-}
 
-// The request to get a versioned attestation
-message AttestArgs {
-  // 64 bytes of report data
-  bytes report_data = 1;
-  // Field 2 and 3 carried `include_ccel` and `include_preimages` while this RPC
-  // took a `RawQuoteArgs`. Both were bools, so reusing either number here would
-  // make a pre-0.6.0 client's `include_ccel = true` arrive as a request for
-  // something else entirely.
-  reserved 2, 3;
-  reserved "include_ccel", "include_preimages";
-  // Also return the boot-time GPU attestation evidence in
-  // `boottime_gpu_evidence`. This does not sample the GPU now and does not
-  // answer `report_data`; see that field.
-  bool include_boottime_gpu_evidence = 4;
+  // Between v0.5.11 and 0.6.0, `Attest` briefly took its own `AttestArgs`
+  // carrying `include_ccel` (2), `include_preimages` (3) and
+  // `include_boottime_gpu_evidence` (4). None of that shipped in a release,
+  // and `Attest` takes this message again, but an interim `next` build in
+  // somebody's dev environment may still send those numbers. Reserved so a
+  // future field cannot silently absorb one.
+  reserved 2, 3, 4;
+  reserved "include_ccel", "include_preimages", "include_boottime_gpu_evidence";
 }
 
 message TdxQuoteResponse {
@@ -225,54 +240,12 @@ message TdxQuoteResponse {
 message AttestResponse {
   // The attestation
   bytes attestation = 1;
-  // Complete JSON output produced by nvattest at boot, the same bytes `GpuInfo`
-  // serves. Only `DstackGuest.Attest` populates it, and only when the request set
-  // `include_boottime_gpu_evidence` and boot-time GPU attestation output exists.
-  //
-  // Not bound to `report_data`: nvattest ran at boot against its own nonce, so a
-  // fresh `report_data` says nothing about it. Bind it by replaying the runtime
-  // event log and comparing sha256 of these exact UTF-8 bytes against the
-  // `evidence_sha256` field of the measured `gpu-attestation` event.
-  //
-  // This is a historical statement about the boot, not a live one: it does not
-  // prove the GPU is still attached. Sampling the GPU at attestation time would
-  // not fix that -- an NVIDIA report binds the device and a nonce but not the TD
-  // the device is attached to, so a fresh report can be relayed from a genuine
-  // remote GPU. Only TDISP/TEE-IO device binding closes that.
-  string boottime_gpu_evidence = 2;
-}
 
-message AttestGpuArgs {
-  // Exactly 32 bytes of caller-chosen challenge, passed to the GPU verbatim.
-  //
-  // SPDM fixes the evidence nonce at 32 bytes, and dstack applies no transform
-  // so a caller can compare these bytes directly against the `eat_nonce` claim
-  // rather than reversing a hash. To bind a longer challenge, hash it yourself.
-  bytes nonce = 1;
-}
-
-message AttestGpuResponse {
-  // Vendor-native evidence bundles. The caller must select a verifier using
-  // `vendor` and `format`, then verify the signature, certificate chain,
-  // measurements, and the nonce embedded in the evidence.
-  repeated GpuEvidenceBundle bundles = 1;
-}
-
-message GpuEvidenceBundle {
-  // Stable GPU vendor identifier, for example `nvidia`, `amd`, or `intel`.
-  string vendor = 1;
-
-  // Vendor-specific evidence format and version.
-  string format = 2;
-
-  // Opaque vendor-native evidence bytes. Do not assume UTF-8 or JSON.
-  bytes evidence = 3;
-}
-
-message GpuInfoResponse {
-  // Complete JSON output produced by nvattest. Empty when no boot-time GPU
-  // attestation output is available.
-  string attestation = 1;
+  // Field 2 briefly carried `boottime_gpu_evidence` on `next` and never
+  // shipped. `dstack.guest.v1`'s own AttestResponse serves those bytes, under
+  // the same name, on `/v1/Attest`.
+  reserved 2;
+  reserved "boottime_gpu_evidence";
 }
 
 message GetQuoteResponse {
@@ -288,6 +261,15 @@ message GetQuoteResponse {
   bytes report_data = 3;
   // Hw config
   string vm_config = 4;
+}
+
+// The request of the removed EmitEvent RPC. Kept so a pre-0.6 client's request
+// still decodes and reaches the handler that explains the removal.
+message EmitEventArgs {
+  // The event name
+  string event = 1;
+  // The event data
+  bytes payload = 2;
 }
 
 // The request to derive a key
@@ -328,61 +310,27 @@ message WorkerVersion {
   string rev = 2;
 }
 
-// One container that is not reporting healthy.
-message ContainerHealth {
-  // Container name, without the leading slash Docker prepends.
-  string name = 1;
-  // Docker health state: "starting" or "unhealthy". A healthy container is
-  // never listed. A string rather than an enum so it stays readable as JSON.
-  string status = 2;
-}
-
-// Aggregate application health, as the agent last determined it.
-message HealthResponse {
-  // False when the app's own health file says so or has gone stale, or -- when
-  // no health file was declared -- when any container that declares a Compose
-  // `healthcheck` is not running and healthy.
-  bool healthy = 1;
-  // The containers that made `healthy` false, so an operator reading gateway
-  // logs can tell which one is holding the instance out of rotation. Purely
-  // diagnostic -- the gateway routes on `healthy` alone.
-  repeated ContainerHealth unhealthy = 2;
-  // Set when the agent could not see the app at all for several refreshes in
-  // a row (container runtime unreachable, permission denied). `healthy` is
-  // false in that case: an agent that cannot see the app is in no position to
-  // vouch for it.
-  //
-  // Reported in the response rather than as an RPC error on purpose. prpc
-  // answers both "no such method" and "the handler failed" with HTTP 400 and
-  // drops the message, so an error here would be indistinguishable from an
-  // agent too old to know this method at all.
-  string error = 3;
-}
-
+// The external guest agent service.
+//
+// CLOSED, like `DstackGuest`: exactly the v0.5.11 surface, served at
+// `/prpc/v0` on the external listener, with `/prpc` kept as an alias onto the
+// same handler for pre-0.6 clients. New capability goes to `dstack.guest.v1`'s
+// `dstack.guest.v1`'s `Worker`, served at `/prpc/v1`.
 service Worker {
   // Get app info
   rpc Info(google.protobuf.Empty) returns (AppInfo) {}
   // Get the guest agent version
   rpc Version(google.protobuf.Empty) returns (WorkerVersion) {}
-  // Attest a key the app derived.
+  // Get attestation.
   //
-  // Replaces GetAttestationForAppKey, which returned a GetQuoteResponse and so
-  // could not answer on a platform without Intel TDX. Returns what
-  // DstackGuest.Attest returns; that method cannot serve this case, because it
-  // takes the report data from the caller and an external verifier does not
-  // know the app key's public key until the agent derives it.
-  rpc AttestAppKey(AttestAppKeyRequest) returns (AttestResponse) {}
-  // Report whether the app is serving. Polled by the gateway to decide whether
-  // this instance should be in its app's load-balancing rotation.
+  // Legacy and frozen. Returns a `GetQuoteResponse`, so it answers on Intel TDX
+  // and fails everywhere else.
   //
-  // Answers from a cache the agent refreshes on its own timer, so the cost of
-  // one call is a lock and a clone however many gateway nodes are polling.
-  //
-  // Only instances that asked for gating (`RegisterCvmRequest.health_check`)
-  // are ever polled. That flag, not this method's absence, is what protects an
-  // older image: the gateway counts *any* failed poll as unhealthy, so probing
-  // to discover support would blackhole every guest agent that predates this.
-  rpc Health(google.protobuf.Empty) returns (HealthResponse) {}
+  // The v1 surface has no counterpart, deliberately: this attests the key v0's
+  // KDF derives at path `vms`, which no v1 `GetKey(domain, algorithm)` can
+  // return. A v1 application attests its own key instead -- derive it at
+  // `/v1/GetKey`, commit the public key into `report_data`, call `/v1/Attest`.
+  rpc GetAttestationForAppKey(GetAttestationForAppKeyRequest) returns (GetQuoteResponse) {}
 }
 
 message SignRequest {
@@ -402,6 +350,17 @@ message SignResponse {
   bytes public_key = 3;
 }
 
-message AttestAppKeyRequest {
+message VerifyRequest {
+  string algorithm = 1;
+  bytes data = 2;
+  bytes signature = 3;
+  bytes public_key = 4;
+}
+
+message VerifyResponse {
+  bool valid = 1;
+}
+
+message GetAttestationForAppKeyRequest {
   string algorithm = 1;
 }

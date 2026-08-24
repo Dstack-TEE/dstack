@@ -13,7 +13,7 @@ use dstack_guest_agent::{
     config::{self, Config},
     run_server, AppState,
 };
-use dstack_guest_agent_rpc::GetQuoteResponse;
+use dstack_guest_agent_rpc::v0::GetQuoteResponse;
 use mock_attestation::tdx::TdxGenerator;
 use ra_tls::attestation::VersionedAttestation;
 use serde::Deserialize;

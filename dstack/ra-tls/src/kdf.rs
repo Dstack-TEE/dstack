@@ -19,13 +19,34 @@ impl KeyType for AnySizeKey {
     }
 }
 
-/// Derives a key using HKDF-SHA256.
+/// The salt every pre-0.6 derivation uses.
+///
+/// Load-bearing: it is baked into every key deployed before the versioned guest
+/// API. Never change it.
+pub const LEGACY_SALT: &[u8] = b"RATLS";
+
+/// Derives a key using HKDF-SHA256 under the legacy [`LEGACY_SALT`].
 pub fn derive_key(
     input_key_material: &[u8],
     context_data: &[&[u8]],
     key_size: usize,
 ) -> Result<Vec<u8>, Unspecified> {
-    let salt = Salt::new(HKDF_SHA256, b"RATLS");
+    derive_key_with_salt(LEGACY_SALT, input_key_material, context_data, key_size)
+}
+
+/// Derives a key using HKDF-SHA256 under an explicit salt.
+///
+/// A distinct salt gives a genuinely separate derivation tree: two callers using
+/// different salts cannot land on the same key however their `context_data`
+/// happens to be built, which a shared salt cannot promise when one caller's
+/// context is attacker-chosen.
+pub fn derive_key_with_salt(
+    salt: &[u8],
+    input_key_material: &[u8],
+    context_data: &[&[u8]],
+    key_size: usize,
+) -> Result<Vec<u8>, Unspecified> {
+    let salt = Salt::new(HKDF_SHA256, salt);
     let pseudo_rand_key: Prk = salt.extract(input_key_material);
     let output_key_material: Okm<AnySizeKey> =
         pseudo_rand_key.expand(context_data, AnySizeKey(key_size))?;
@@ -100,6 +121,28 @@ mod tests {
         let key = derive_key(b"input key material", &[b"context one"], 32).unwrap();
         assert_eq!(key.len(), 32);
         assert!(key.iter().any(|&x| x != 0));
+    }
+
+    /// The refactor that introduced an explicit salt must not have moved the
+    /// legacy derivation, which every pre-0.6 key depends on.
+    #[test]
+    fn derive_key_still_uses_the_legacy_salt() {
+        let context = [b"context one".as_ref(), b"context two".as_ref()];
+        assert_eq!(
+            derive_key(b"input key material", &context, 32).unwrap(),
+            derive_key_with_salt(b"RATLS", b"input key material", &context, 32).unwrap()
+        );
+    }
+
+    /// Two salts, one everything else: the outputs must be unrelated. This is
+    /// what makes a salt change a real domain separation rather than a rename.
+    #[test]
+    fn a_different_salt_gives_a_different_key() {
+        let context = [b"context one".as_ref()];
+        assert_ne!(
+            derive_key_with_salt(b"RATLS", b"ikm", &context, 32).unwrap(),
+            derive_key_with_salt(b"dstack-guest-v1", b"ikm", &context, 32).unwrap()
+        );
     }
 
     #[test]

@@ -24,8 +24,8 @@ import (
 
 // Phala RA-TLS OIDs for certificate extensions.
 var (
-	oidTdxQuote  = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 62397, 1, 1}
-	oidEventLog  = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 62397, 1, 2}
+	oidTdxQuote = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 62397, 1, 1}
+	oidEventLog = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 62397, 1, 2}
 )
 
 // DefaultPCCSURL is the default PCCS server for collateral fetching.
