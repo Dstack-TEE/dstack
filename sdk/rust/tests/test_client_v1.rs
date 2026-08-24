@@ -180,7 +180,7 @@ async fn issue_cert_returns_a_key_and_a_chain() {
 /// pins is the pair of things it can actually get wrong or notice: that the
 /// client decodes the v1 wire format correctly, and that the agent's KDF has
 /// not moved under it. The construction these bytes come from is specified in
-/// `docs/guest-api-v1.md` and implemented once in `ra_tls::guest_api_v1`, which
+/// `docs/guest-api-v1.md` and implemented once in `ra_tls::api_v1`, which
 /// is the source of truth; the vectors there pin the primitive directly.
 ///
 /// A diff here is a change to deployed key material. Fix the derivation, do not

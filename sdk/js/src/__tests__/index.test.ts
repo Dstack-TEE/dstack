@@ -4,12 +4,17 @@
 
 import { expect, describe, it, vi } from 'vitest'
 import crypto from 'crypto' // Added for prehashed test
-import { DstackClient, DstackClientV0, TappdClient } from '../index'
+import { DstackClient, DstackClientV0, DstackClientV1, TappdClient } from '../index'
 
 describe('DstackClientV0', () => {
-  it('should keep DstackClient as an alias of DstackClientV0', () => {
-    expect(DstackClient).toBe(DstackClientV0)
-    expect(new DstackClient()).toBeInstanceOf(DstackClientV0)
+  it('should only be reachable under its explicit name now', () => {
+    expect(DstackClient).not.toBe(DstackClientV0)
+    expect(new DstackClient()).not.toBeInstanceOf(DstackClientV0)
+  })
+
+  it('should stay the base of TappdClient even though the alias moved to v1', () => {
+    expect(new TappdClient()).toBeInstanceOf(DstackClientV0)
+    expect(new TappdClient()).not.toBeInstanceOf(DstackClientV1)
   })
 
   it('should able to derive key in TappdClient', async () => {
@@ -19,20 +24,20 @@ describe('DstackClientV0', () => {
     expect(result).toHaveProperty('certificate_chain')
   })
 
-  it('should throws error in DstackClient', async () => {
-    const client = new DstackClient()
+  it('should throws error in DstackClientV0', async () => {
+    const client = new DstackClientV0()
     await expect(() => client.deriveKey('/', 'test')).rejects.toThrow('deriveKey is deprecated, please use getKey instead.')
   })
 
   it('should able to get key', async () => {
-    const client = new DstackClient()
+    const client = new DstackClientV0()
     const result = await client.getKey('/', 'test')
     expect(result).toHaveProperty('key')
     expect(result).toHaveProperty('signature_chain')
   })
 
   it('should able to get key with different algorithms', async () => {
-    const client = new DstackClient()
+    const client = new DstackClientV0()
     const resultSecp = await client.getKey('/secp', 'test', 'secp256k1')
     expect(resultSecp.key).toBeInstanceOf(Uint8Array)
     expect(resultSecp.key.length).toBe(32) // secp256k1 private key size
@@ -44,7 +49,7 @@ describe('DstackClientV0', () => {
 
 
   it('should able to request tdx quote', async () => {
-    const client = new DstackClient()
+    const client = new DstackClientV0()
     // You can put computation result as report data to tdxQuote. NOTE: it should serializable by JSON.stringify
     const result = await client.getQuote('some data or anything can be call by toJSON')
     expect(result).toHaveProperty('quote')
@@ -54,26 +59,26 @@ describe('DstackClientV0', () => {
   })
 
   it('should be able to attest', async () => {
-    const client = new DstackClient()
+    const client = new DstackClientV0()
     const result = await client.attest('test')
     expect(result).toHaveProperty('attestation')
     expect(result.attestation).not.toBe('')
   })
 
   it('should not carry the GPU methods, which this surface never served', () => {
-    const client = new DstackClient() as any
+    const client = new DstackClientV0() as any
     expect(client.attestGpu).toBeUndefined()
     expect(client.gpuInfo).toBeUndefined()
   })
 
   it('should able to get derive key result as uint8array', async () => {
-    const client = new DstackClient()
+    const client = new DstackClientV0()
     const result = await client.getKey('/', 'test')
     expect(result.key).toBeInstanceOf(Uint8Array)
   })
 
   it('should able to get derive key result as uint8array with specified length', async () => {
-    const client = new DstackClient()
+    const client = new DstackClientV0()
     const result = await client.getTlsKey()
     const full = result.asUint8Array()
     const key = result.asUint8Array(32)
@@ -84,33 +89,33 @@ describe('DstackClientV0', () => {
   })
 
   it('should be able to get quote', async () => {
-    const client = new DstackClient()
+    const client = new DstackClientV0()
     const result = await client.getQuote('pure string')
   })
 
   it('should throw error on report_data large then 64 characters', async () => {
-    const client = new DstackClient()
+    const client = new DstackClientV0()
     await expect(() => client.getQuote('0'.padEnd(65, 'x'))).rejects.toThrow()
   })
 
   it('should throw error on report_data large then 64 bytes', async () => {
-    const client = new DstackClient()
+    const client = new DstackClientV0()
     await expect(() => client.getQuote(Buffer.alloc(65))).rejects.toThrow()
   })
 
   it('should throw error on report_data large then 128 bytes', async () => {
-    const client = new DstackClient()
+    const client = new DstackClientV0()
     const input = new Uint8Array(65).fill(0)
     await expect(() => client.getQuote(input)).rejects.toThrow()
   })
 
   it('should throw error on attest report_data larger than 64 bytes', async () => {
-    const client = new DstackClient()
+    const client = new DstackClientV0()
     await expect(() => client.attest(Buffer.alloc(65))).rejects.toThrow()
   })
 
   it('should be able to get info', async () => {
-    const client = new DstackClient()
+    const client = new DstackClientV0()
     const result = await client.info()
     expect(result).toHaveProperty('app_id')
     expect(result).toHaveProperty('instance_id')
@@ -126,7 +131,7 @@ describe('DstackClientV0', () => {
   })
 
   it('should be able to decode tcb info', async () => {
-    const client = new DstackClient()
+    const client = new DstackClientV0()
     const result = await client.info()
     const tcbInfo = result.tcb_info
     expect(tcbInfo).toHaveProperty('rtmr0')
@@ -142,7 +147,7 @@ describe('DstackClientV0', () => {
   })
 
   it('should be able to get TLS key with alt names', async () => {
-    const client = new DstackClient()
+    const client = new DstackClientV0()
     const altNames = ['localhost', '127.0.0.1']
     const result = await client.getTlsKey({
       subject: 'test-subject',
@@ -162,7 +167,7 @@ describe('DstackClientV0', () => {
     const savedEnv = process.env.DSTACK_SIMULATOR_ENDPOINT
     delete process.env.DSTACK_SIMULATOR_ENDPOINT
 
-    expect(() => new DstackClient('/non/existent/socket')).toThrow('Unix socket file /non/existent/socket does not exist')
+    expect(() => new DstackClientV0('/non/existent/socket')).toThrow('Unix socket file /non/existent/socket does not exist')
 
     // Restore environment variable
     if (savedEnv) {
@@ -175,8 +180,8 @@ describe('DstackClientV0', () => {
     const savedEnv = process.env.DSTACK_SIMULATOR_ENDPOINT
     delete process.env.DSTACK_SIMULATOR_ENDPOINT
 
-    expect(() => new DstackClient('http://localhost:8080')).not.toThrow()
-    expect(() => new DstackClient('https://example.com')).not.toThrow()
+    expect(() => new DstackClientV0('http://localhost:8080')).not.toThrow()
+    expect(() => new DstackClientV0('https://example.com')).not.toThrow()
 
     // Restore environment variable
     if (savedEnv) {
@@ -185,13 +190,13 @@ describe('DstackClientV0', () => {
   })
 
   it('should be able to check if service is reachable', async () => {
-    const client = new DstackClient()
+    const client = new DstackClientV0()
     const isReachable = await client.isReachable()
     expect(typeof isReachable).toBe('boolean')
   })
 
   describe('Sign and Verify Methods', () => {
-    const client = new DstackClient()
+    const client = new DstackClientV0()
     const testData = 'Test message for signing'
     const badData = 'This is not the original message'
 
@@ -261,12 +266,12 @@ describe('DstackClientV0', () => {
 
   describe('emitEvent', () => {
     it('should reject an empty event name before reaching the agent', async () => {
-      const client = new DstackClient()
+      const client = new DstackClientV0()
       await expect(() => client.emitEvent('', 'payload')).rejects.toThrow('Event name cannot be empty')
     })
 
     it('should surface the agent removal message instead of resolving silently', async () => {
-      const client = new DstackClient()
+      const client = new DstackClientV0()
       // The 0.6.0 agent always fails this. A caller that gets a resolved promise
       // would believe the event was measured, which is the one wrong answer here.
       await expect(() => client.emitEvent('test-event', 'payload')).rejects.toThrow(
@@ -276,21 +281,21 @@ describe('DstackClientV0', () => {
   })
 
   it('should be able to get version', async () => {
-    const client = new DstackClient()
+    const client = new DstackClientV0()
     const result = await client.version()
     expect(result).toHaveProperty('version')
     expect(result.version).not.toBe('')
   })
 
   it('should get key with k256 alias producing same result as secp256k1', async () => {
-    const client = new DstackClient()
+    const client = new DstackClientV0()
     const resultK256 = await client.getKey('/test', 'purpose', 'k256')
     const resultSecp = await client.getKey('/test', 'purpose', 'secp256k1')
     expect(resultK256.key).toEqual(resultSecp.key)
   })
 
   it('should reject secp256k1_prehashed in getKey', async () => {
-    const client = new DstackClient()
+    const client = new DstackClientV0()
     await expect(() => client.getKey('/test', 'purpose', 'secp256k1_prehashed')).rejects.toThrow()
   })
 
@@ -332,9 +337,9 @@ describe('DstackClientV0', () => {
     })
   })
 
-  describe('deprecated methods with DstackClient', () => {
+  describe('deprecated methods with DstackClientV0', () => {
     it('should throws error in deriveKey method', async () => {
-      const client = new DstackClient()
+      const client = new DstackClientV0()
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
       await expect(() => client.deriveKey('/', 'test')).rejects.toThrow('deriveKey is deprecated, please use getKey instead.')
@@ -343,7 +348,7 @@ describe('DstackClientV0', () => {
     })
 
     it('should throws error in tdxQuote method without hash algorithm parameter', async () => {
-      const client = new DstackClient()
+      const client = new DstackClientV0()
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
       await expect(() => client.tdxQuote('test data')).rejects.toThrow('tdxQuote only supports raw hash algorithm.')
@@ -352,7 +357,7 @@ describe('DstackClientV0', () => {
     })
 
     it("should throws error in tdxQuote method with hash algorithm parameter other than raw", async () => {
-      const client = new DstackClient()
+      const client = new DstackClientV0()
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
       await expect(() => client.tdxQuote('test data', 'sha256')).rejects.toThrow('tdxQuote only supports raw hash algorithm.')
@@ -361,7 +366,7 @@ describe('DstackClientV0', () => {
     })
 
     it('should able to get quote with plain report_data in tdxQuote method with warning', async () => {
-      const client = new DstackClient()
+      const client = new DstackClientV0()
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
       const result = await client.tdxQuote('test data', "raw")
@@ -373,7 +378,7 @@ describe('DstackClientV0', () => {
     })
 
     it('should throws error in tdxQuote with hash algorithm parameter', async () => {
-      const client = new DstackClient()
+      const client = new DstackClientV0()
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
       await expect(() => client.tdxQuote('test data', 'sha256')).rejects.toThrow('tdxQuote only supports raw hash algorithm.')

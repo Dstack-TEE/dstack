@@ -1,6 +1,6 @@
 # @phala/dstack-sdk
 
-JavaScript / TypeScript client for the dstack guest agent. Derive deterministic keys, generate TDX attestation quotes, issue TLS certificates, and encrypt environment variables for KMS-managed deployments — all against the guest agent socket inside a confidential VM (CVM).
+JavaScript / TypeScript client for the dstack guest agent. Derive deterministic keys, produce TDX attestations, issue TLS certificates, and encrypt environment variables for KMS-managed deployments — all against the guest agent socket inside a confidential VM (CVM).
 
 ## Installation
 
@@ -19,27 +19,12 @@ npm install @phala/dstack-sdk
 
 Node 18+ supported. Tested through Node 24.
 
-## Two API surfaces
-
-dstack 0.6.0 splits the guest agent API into two surfaces on the same socket, selected by URL path. This SDK mirrors both.
-
-| Client | Paths | Status |
-| --- | --- | --- |
-| `DstackClientV1` | `/v1/<Method>` | Current. Six methods. Needs guest agent ≥ 0.6.0. |
-| `DstackClientV0` | `/<Method>`, and equivalently `/v0/<Method>` | Frozen at the 0.5.11 shape. Will not change again. |
-
-`DstackClient` remains exported as a deprecated alias of `DstackClientV0`, so existing code keeps working unchanged. New code should name the surface it means.
-
-> **v1 keys are not v0 keys.** `DstackClientV1.getKey` derives under its own HKDF salt and binds the algorithm and a versioned context tag into the derivation. The same name yields **different key material** on the two surfaces, and under v1 secp256k1 and ed25519 no longer share one 32-byte secret. There is no compatibility mode and no migration path back — an app that has published a v0-derived address must keep deriving it with `DstackClientV0`. `docs/guest-api-v1.md` pins the byte-level construction.
-
-v1 also drops `sign`, `verify`, `getQuote`, `gpuInfo` and `emitEvent`. Those are not oversights: the agent holds two things a caller cannot get elsewhere — the app root key, and the platform's ability to attest — and v1 serves those two things only. Signing and verifying are pure computation over material `getKey` already hands you.
-
 ## Quick start
 
 ```typescript
-import { DstackClientV1 } from '@phala/dstack-sdk'
+import { DstackClient } from '@phala/dstack-sdk'
 
-const client = new DstackClientV1()
+const client = new DstackClient()
 
 const key = await client.getKey('wallet/eth', 'secp256k1')
 console.log(Buffer.from(key.key).toString('hex'))
@@ -48,18 +33,35 @@ const { attestation } = await client.attest('app-state-snapshot')
 console.log(attestation)
 ```
 
-Both clients share the same construction. The constructor probes `/var/run/dstack.sock`, then `/run/dstack.sock`, then the `/var/run/dstack/` and `/run/dstack/` variants. Pass an explicit endpoint for HTTP or for a non-default socket:
+The constructor probes `/var/run/dstack.sock`, then `/run/dstack.sock`, then the `/var/run/dstack/` and `/run/dstack/` variants. Pass an explicit endpoint for HTTP or for a non-default socket:
 
 ```typescript
-const client = new DstackClientV1('http://localhost:8090')      // simulator
-const client = new DstackClientV1('/run/dstack/dstack.sock')    // custom path
+const client = new DstackClient('http://localhost:8090')      // simulator
+const client = new DstackClient('/run/dstack/dstack.sock')    // custom path
 ```
 
 `DSTACK_SIMULATOR_ENDPOINT` overrides the default when set.
 
-An agent that predates v1 has no `/v1` mount at all, so it answers with a plain HTTP 404 page. `version()` is the cheapest probe for support.
+An agent that predates v1 has no `/v1` mount at all, so it answers with a plain HTTP 404 page rather than a JSON error. `version()` is the cheapest probe for support.
 
-## v1 client
+## Two API surfaces
+
+dstack 0.6.0 splits the guest agent API into two surfaces on the same socket, selected by URL path. This SDK mirrors both.
+
+| Client | Paths | Status |
+| --- | --- | --- |
+| `DstackClient`, `DstackClientV1` | `/v1/<Method>` | **Current, and the default.** Six methods. Needs guest agent ≥ 0.6.0. |
+| `DstackClientV0` | `/<Method>`, and equivalently `/v0/<Method>` | Deprecated. Frozen at the 0.5.11 shape; will not change again. |
+
+The unsuffixed `DstackClient` names v1. `DstackClientV1` is the same class under an explicit name — use whichever reads better; new code should not need `DstackClientV0` at all.
+
+> **v1 keys are not v0 keys.** `getKey` on v1 derives under its own HKDF salt and binds the algorithm and a versioned context tag into the derivation. The same name yields **different key material** on the two surfaces, and under v1 secp256k1 and ed25519 no longer share one 32-byte secret. There is no compatibility mode and no migration path back — an app that has published a v0-derived address must keep deriving it with `DstackClientV0`. `docs/guest-api-v1.md` pins the byte-level construction.
+
+Code that used the unsuffixed client for v0 calls fails **loudly** on upgrade rather than silently deriving different keys, because the v1 method signatures differ and `getKey` requires `algorithm` explicitly. To stay on the frozen surface, switch to `DstackClientV0`.
+
+v1 also drops `sign`, `verify`, `getQuote`, `gpuInfo` and `emitEvent`. Those are not oversights: the agent holds two things a caller cannot get elsewhere — the app root key, and the platform's ability to attest — and v1 serves those two things only. Signing and verifying are pure computation over material `getKey` already hands you.
+
+## Client methods
 
 ### `issueCert(options?)`
 
@@ -101,7 +103,7 @@ Both arguments are required. `algorithm` is exactly `'secp256k1'` or `'ed25519'`
 
 ### `attest(reportData, includeBoottimeGpuEvidence?)`
 
-The only CVM attestation entry point in v1. The versioned attestation already carries the TDX quote and the event log, so there is no separate `getQuote`.
+The only CVM attestation entry point. The versioned attestation already carries the TDX quote and the event log, so there is no separate `getQuote`.
 
 ```typescript
 const { attestation } = await client.attest('app-state-snapshot')
@@ -163,149 +165,30 @@ Do not parse and re-serialize `app_compose` before hashing it — key order, whi
 
 Returns `{ version, rev }` of the guest agent.
 
-## v0 client
+## Blockchain keys
 
-The frozen surface, at the dstack 0.5.11 shape. Everything below is `DstackClientV0` (or its deprecated `DstackClient` alias).
-
-### Keys
-
-#### `getKey(path?, purpose?, algorithm?)`
-
-Derive a deterministic key. The same `(app_id, path)` returns the same raw key material; different apps deriving on the same path get different keys.
+A v1 derived key is 32 raw bytes, which is what both ecosystems' key constructors want:
 
 ```typescript
-const eth = await client.getKey('wallet/ethereum')                       // secp256k1 (default)
-const sol = await client.getKey('wallet/solana', 'mainnet', 'ed25519')   // ed25519
-```
-
-Returns `{ key: Uint8Array, signature_chain: Uint8Array[] }`. The signature chain proves the key was derived inside a genuine TEE.
-
-`purpose` is included in the signature-chain message and does not affect the private key bytes. `algorithm` selects how the derived 32-byte material is interpreted: `'secp256k1'` (default), `'k256'` (alias), or `'ed25519'`. It does not domain-separate the derivation, so use algorithm-specific paths such as `wallet/ethereum` and `wallet/solana` when those keys must be independent. ed25519 requires guest agent ≥ 0.5.7.
-
-#### `getTlsKey(options?)`
-
-Generate a fresh random TLS keypair plus certificate chain. Every call returns a new key — use `getKey` for deterministic material.
-
-```typescript
-const tls = await client.getTlsKey({
-  subject: 'api.example.com',
-  altNames: ['localhost', '127.0.0.1'],
-  usageRaTls: true,           // embed TDX quote in cert extension
-})
-```
-
-Options: `subject`, `altNames`, `usageRaTls`, `usageServerAuth` (default `true`), `usageClientAuth` (default `false`), and — on guest agent ≥ 0.5.7 — `notBefore`, `notAfter` (Unix seconds), `withAppInfo`. The client probes `version()` before sending the new options and throws a clear error on older agents instead of silently dropping them.
-
-Returns `{ key: string, certificate_chain: string[], asUint8Array(maxLength?) }`. `key` is PEM-encoded.
-
-### Attestation
-
-#### `getQuote(reportData)`
-
-Generate a raw TDX quote. `reportData` is up to 64 bytes (string, Buffer, or Uint8Array).
-Needs Intel TDX: without it the call throws, and on GCP Confidential VMs it returns the TDX quote alone, leaving out the vTPM quote GCP's verification also binds. Call `attest()` in both cases.
-
-```typescript
-const quote = await client.getQuote('user:alice:nonce123')
-quote.quote        // hex-encoded TDX quote
-quote.event_log    // JSON string of measured events
-```
-
-#### `attest(reportData)`
-
-Versioned dstack attestation that works across TDX / GCP / Nitro providers. Preferred for cross-platform verifiers.
-
-```typescript
-const { attestation } = await client.attest('app-state-snapshot')
-```
-
-`reportData` only — GPU evidence is not available on this surface. Use `DstackClientV1.attest` or `DstackClientV1.attestGpu`.
-
-#### `info()`
-
-App identity and TCB metadata.
-
-```typescript
-const info = await client.info()
-info.app_id              // application identifier
-info.instance_id         // CVM instance identifier
-info.tcb_info            // parsed { mrtd, rtmr0..3, event_log, ... }
-info.compose_hash
-info.cloud_vendor        // e.g. "Google" (guest agent ≥ 0.5.7)
-info.cloud_product       // e.g. "Google Compute Engine" (guest agent ≥ 0.5.7)
-```
-
-#### `version()`
-
-Returns `{ version, rev }` of the guest agent. Throws on agents older than 0.5.7 (the RPC didn't exist).
-
-### Sign and verify
-
-#### `sign(algorithm, data)`
-
-Sign data with a derived key. The SDK rejects mismatched input early — `secp256k1_prehashed` requires a 32-byte digest.
-
-```typescript
-const res = await client.sign('ed25519', 'hello dstack')
-res.signature        // Uint8Array
-res.public_key       // Uint8Array
-res.signature_chain  // Uint8Array[] — proves the signing key came from this TEE
-```
-
-Algorithms: `ed25519`, `secp256k1`, `secp256k1_prehashed`. Requires guest agent ≥ 0.5.7.
-
-#### `verify(algorithm, data, signature, publicKey)`
-
-Check a single signature through the agent. Returns `{ valid: boolean }`; throws when the agent rejects the input as malformed.
-
-```typescript
-const { valid } = await client.verify('ed25519', 'hello dstack', res.signature, res.public_key)
-```
-
-This only proves that whoever holds `publicKey` signed the data. Establishing that the signer was a dstack app under a KMS you trust means walking the whole signature chain, and that is not something the agent can tell you — its answer arrives over the socket unattested, so it is worth no more than checking it yourself.
-
-The SDK no longer ships `verifySignature` and `verifySignatureChain`. For a v1 chain, `docs/guest-api-v1.md` is the normative spec: it gives the claim encoding, the recovery steps, and why the KMS root key must come from the `DstackKms` contract (`kmsInfo().k256Pubkey`) or a pinned value rather than from the agent under test.
-
-One thing that spec insists on and that is easy to get wrong: never anchor a chain against `info.app_id` read from the same CVM. That value is reported by the very thing being verified, so a chain checked against it proves only that the CVM is self-consistent with itself. Use the app id you registered on chain.
-
-#### `emitEvent(event, payload)`
-
-Removed in dstack 0.6.0 — runtime RTMR3 events became system-owned, so a 0.6.0 agent fails every call and this surfaces the agent's own message. Bind application data through `report_data` on `attest()` instead.
-
-### Diagnostics
-
-#### `isReachable()`
-
-Sub-500ms probe against `/Info`. Returns a boolean and never throws — useful for liveness checks.
-
-## Blockchain helpers
-
-### Ethereum
-
-```typescript
-import { toViemAccountSecure } from '@phala/dstack-sdk/viem'
+import { privateKeyToAccount } from 'viem/accounts'
 import { createWalletClient, http } from 'viem'
 import { mainnet } from 'viem/chains'
 
-const key = await client.getKey('wallet/ethereum')
-const account = toViemAccountSecure(key)
+const key = await client.getKey('wallet/ethereum', 'secp256k1')
+const account = privateKeyToAccount(`0x${Buffer.from(key.key).toString('hex')}`)
 
 const wallet = createWalletClient({ account, chain: mainnet, transport: http() })
 ```
 
-`toViemAccountSecure` hashes the derived key with SHA-256 before passing it to viem's `privateKeyToAccount`. The unhashed alternative `toViemAccount` is kept for migration only and emits a warning.
-
-### Solana
-
 ```typescript
-import { toKeypairSecure } from '@phala/dstack-sdk/solana'
+import { Keypair } from '@solana/web3.js'
 
-const key = await client.getKey('wallet/solana', 'mainnet', 'ed25519')
-const keypair = toKeypairSecure(key)
+const key = await client.getKey('wallet/solana', 'ed25519')
+const keypair = Keypair.fromSeed(key.key)
 console.log(keypair.publicKey.toBase58())
 ```
 
-Same pattern as the Ethereum helper. `toKeypair` is the unhashed legacy variant.
+The `@phala/dstack-sdk/viem` and `@phala/dstack-sdk/solana` submodules are typed against the v0 response shapes and are documented under [Legacy](#legacy-v0-frozen).
 
 ## Compose hash
 
@@ -373,9 +256,9 @@ Verify functions return the signer's compressed public key (hex) on success, or 
 
 | Feature | Minimum guest agent |
 | --- | --- |
-| `getKey`, `getTlsKey`, `getQuote`, `info` | 0.3.x |
-| `attest`, `sign`, `verify`, `version`, ed25519 keys, `info.cloud_vendor` / `cloud_product`, `getTlsKey` `notBefore` / `notAfter` / `withAppInfo` | 0.5.7 |
-| `DstackClientV1`, all six of its methods | 0.6.0 |
+| `DstackClient` (v1), all six of its methods | 0.6.0 |
+| `DstackClientV0`: `getKey`, `getTlsKey`, `getQuote`, `info` | 0.3.x |
+| `DstackClientV0`: `attest`, `sign`, `verify`, `version`, ed25519 keys, `info.cloud_vendor` / `cloud_product`, `getTlsKey` `notBefore` / `notAfter` / `withAppInfo` | 0.5.7 |
 
 `emitEvent` needed 0.5.0 and was removed in 0.6.0; a 0.6.0 agent fails every call.
 
@@ -392,15 +275,154 @@ cd dstack/sdk/simulator
 export DSTACK_SIMULATOR_ENDPOINT=http://localhost:8090
 ```
 
-Then point `new DstackClientV1()` at the simulator (it picks up `DSTACK_SIMULATOR_ENDPOINT` automatically). Both clients read the same variable and serve both surfaces from the one socket.
+Then point `new DstackClient()` at the simulator (it picks up `DSTACK_SIMULATOR_ENDPOINT` automatically). Both clients read the same variable, and the one simulator socket serves both surfaces.
 
-## Migration
+## Legacy (v0, frozen)
 
-### v0 to v1
+Everything below is the deprecated `DstackClientV0` surface, frozen at the dstack 0.5.11 shape. It is kept for apps that already published v0-derived material and therefore cannot move. New code should use `DstackClient`.
+
+```typescript
+import { DstackClientV0 } from '@phala/dstack-sdk'
+
+const client = new DstackClientV0()
+```
+
+### Keys
+
+#### `getKey(path?, purpose?, algorithm?)`
+
+Derive a deterministic key. The same `(app_id, path)` returns the same raw key material; different apps deriving on the same path get different keys.
+
+```typescript
+const eth = await client.getKey('wallet/ethereum')                       // secp256k1 (default)
+const sol = await client.getKey('wallet/solana', 'mainnet', 'ed25519')   // ed25519
+```
+
+Returns `{ key: Uint8Array, signature_chain: Uint8Array[] }`. The signature chain proves the key was derived inside a genuine TEE.
+
+`purpose` is included in the signature-chain message and does not affect the private key bytes. `algorithm` selects how the derived 32-byte material is interpreted: `'secp256k1'` (default), `'k256'` (alias), or `'ed25519'`. It does not domain-separate the derivation, so use algorithm-specific paths such as `wallet/ethereum` and `wallet/solana` when those keys must be independent. ed25519 requires guest agent ≥ 0.5.7.
+
+#### `getTlsKey(options?)`
+
+Generate a fresh random TLS keypair plus certificate chain. Every call returns a new key — use `getKey` for deterministic material.
+
+```typescript
+const tls = await client.getTlsKey({
+  subject: 'api.example.com',
+  altNames: ['localhost', '127.0.0.1'],
+  usageRaTls: true,           // embed TDX quote in cert extension
+})
+```
+
+Options: `subject`, `altNames`, `usageRaTls`, `usageServerAuth` (default `true`), `usageClientAuth` (default `false`), and — on guest agent ≥ 0.5.7 — `notBefore`, `notAfter` (Unix seconds), `withAppInfo`. The client probes `version()` before sending the new options and throws a clear error on older agents instead of silently dropping them.
+
+Returns `{ key: string, certificate_chain: string[], asUint8Array(maxLength?) }`. `key` is PEM-encoded.
+
+### Attestation
+
+#### `getQuote(reportData)`
+
+Generate a raw TDX quote. `reportData` is up to 64 bytes (string, Buffer, or Uint8Array).
+Needs Intel TDX: without it the call throws, and on GCP Confidential VMs it returns the TDX quote alone, leaving out the vTPM quote GCP's verification also binds. Call `attest()` in both cases.
+
+```typescript
+const quote = await client.getQuote('user:alice:nonce123')
+quote.quote        // hex-encoded TDX quote
+quote.event_log    // JSON string of measured events
+```
+
+#### `attest(reportData)`
+
+Versioned dstack attestation that works across TDX / GCP / Nitro providers. Preferred over `getQuote` for cross-platform verifiers.
+
+```typescript
+const { attestation } = await client.attest('app-state-snapshot')
+```
+
+`reportData` only — GPU evidence is not available on this surface. Use `DstackClient.attest` or `DstackClient.attestGpu`.
+
+#### `info()`
+
+App identity and TCB metadata.
+
+```typescript
+const info = await client.info()
+info.app_id              // application identifier
+info.instance_id         // CVM instance identifier
+info.tcb_info            // parsed { mrtd, rtmr0..3, event_log, ... }
+info.compose_hash
+info.cloud_vendor        // e.g. "Google" (guest agent ≥ 0.5.7)
+info.cloud_product       // e.g. "Google Compute Engine" (guest agent ≥ 0.5.7)
+```
+
+#### `version()`
+
+Returns `{ version, rev }` of the guest agent. Throws on agents older than 0.5.7 (the RPC didn't exist).
+
+### Sign and verify
+
+#### `sign(algorithm, data)`
+
+Sign data with a derived key. The SDK rejects mismatched input early — `secp256k1_prehashed` requires a 32-byte digest.
+
+```typescript
+const res = await client.sign('ed25519', 'hello dstack')
+res.signature        // Uint8Array
+res.public_key       // Uint8Array
+res.signature_chain  // Uint8Array[] — proves the signing key came from this TEE
+```
+
+Algorithms: `ed25519`, `secp256k1`, `secp256k1_prehashed`. Requires guest agent ≥ 0.5.7.
+
+#### `verify(algorithm, data, signature, publicKey)`
+
+Check a single signature through the agent. Returns `{ valid: boolean }`; throws when the agent rejects the input as malformed.
+
+```typescript
+const { valid } = await client.verify('ed25519', 'hello dstack', res.signature, res.public_key)
+```
+
+This only proves that whoever holds `publicKey` signed the data. Establishing that the signer was a dstack app under a KMS you trust means walking the whole signature chain, and that is not something the agent can tell you — its answer arrives over the socket unattested, so it is worth no more than checking it yourself.
+
+The SDK no longer ships `verifySignature` and `verifySignatureChain`. For a v1 chain, `docs/guest-api-v1.md` is the normative spec: it gives the claim encoding, the recovery steps, and why the KMS root key must come from the `DstackKms` contract (`kmsInfo().k256Pubkey`) or a pinned value rather than from the agent under test.
+
+One thing that spec insists on and that is easy to get wrong: never anchor a chain against `info.app_id` read from the same CVM. That value is reported by the very thing being verified, so a chain checked against it proves only that the CVM is self-consistent with itself. Use the app id you registered on chain.
+
+#### `emitEvent(event, payload)`
+
+Removed in dstack 0.6.0 — runtime RTMR3 events became system-owned, so a 0.6.0 agent fails every call and this surfaces the agent's own message. Bind application data through `report_data` on `attest()` instead.
+
+### Diagnostics
+
+#### `isReachable()`
+
+Sub-500ms probe against `/Info`. Returns a boolean and never throws — useful for liveness checks.
+
+### Blockchain helpers
+
+`toViemAccountSecure` and `toKeypairSecure` take a v0 `GetKeyResponse` or `GetTlsKeyResponse`, so they belong to this surface. For v1 keys, construct the account directly — see [Blockchain keys](#blockchain-keys).
+
+```typescript
+import { toViemAccountSecure } from '@phala/dstack-sdk/viem'
+
+const key = await client.getKey('wallet/ethereum')
+const account = toViemAccountSecure(key)
+```
+
+```typescript
+import { toKeypairSecure } from '@phala/dstack-sdk/solana'
+
+const key = await client.getKey('wallet/solana', 'mainnet', 'ed25519')
+const keypair = toKeypairSecure(key)
+```
+
+Given a `GetTlsKeyResponse` both helpers hash the PEM key with SHA-256 first, which is what makes them "secure" relative to `toViemAccount` and `toKeypair`; those unhashed variants are kept for migration only and emit a warning.
+
+### Migrating v0 to v1
 
 | v0 | v1 |
 | --- | --- |
-| `new DstackClient()` / `new DstackClientV0()` | `new DstackClientV1()` |
+| `new DstackClientV0()` | `new DstackClient()` |
 | `client.getTlsKey({ subject })` | `client.issueCert({ subject })` |
 | `client.getKey(path, purpose)` | `client.getKey(domain, algorithm)` — **different key material** |
 | `client.getQuote(data)` | `client.attest(data)` |
@@ -411,18 +433,16 @@ Then point `new DstackClientV1()` at the simulator (it picks up `DSTACK_SIMULATO
 
 Migrate a surface at a time: both clients can talk to the same agent at once, so a v1 `attest()` is safe to adopt while `getKey` still runs on v0. What cannot be mixed is key derivation — see the warning under [Two API surfaces](#two-api-surfaces).
 
-### From TappdClient
+### Migrating from TappdClient
 
-`TappdClient` and its `deriveKey` / `tdxQuote` methods are deprecated but still exported. Replace them with `DstackClientV0` and the new methods:
+`TappdClient` and its `deriveKey` / `tdxQuote` methods are deprecated but still exported, and still extend `DstackClientV0` — the unsuffixed alias moving to v1 did not change what they inherit or what they send.
 
 | Old | New |
 | --- | --- |
-| `new TappdClient()` | `new DstackClientV0()` |
-| `client.deriveKey(path, subject)` | `client.getTlsKey({ subject })` |
-| `client.tdxQuote(data)` | `client.getQuote(data)` |
+| `new TappdClient()` | `new DstackClient()` — or `new DstackClientV0()` to keep the same key material |
+| `client.deriveKey(path, subject)` | `client.issueCert({ subject })` |
+| `client.tdxQuote(data)` | `client.attest(data)` |
 | `/var/run/tappd.sock` | `/var/run/dstack.sock` |
-
-`toViemAccount` and `toKeypair` are kept for the same reason; prefer their `Secure` variants in new code.
 
 ## License
 

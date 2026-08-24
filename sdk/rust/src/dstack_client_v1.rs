@@ -25,7 +25,8 @@ pub use dstack_sdk_types::dstack_v1::*;
 
 use crate::dstack_client::{get_endpoint, BaseClient, ClientKind};
 
-/// Client for the v1 guest-agent surface.
+/// Client for the v1 guest-agent surface. **This is the default client**, and
+/// what the unsuffixed [`crate::DstackClient`] names.
 ///
 /// **v1 keys are not v0 keys.** Deriving under the same name here as on
 /// [`crate::dstack_client::DstackClientV0`] returns different key material, by
@@ -182,3 +183,12 @@ impl DstackClientV1 {
         serde_json::from_value::<VersionResponse>(response).context("failed to decode the response")
     }
 }
+
+/// The recommended client.
+///
+/// Names the v1 surface. This alias flipped in 0.6.0: it used to mean the v0
+/// client, and code that was calling v0 methods through it stops compiling
+/// rather than silently deriving different key material -- the v1 signatures
+/// differ, and `get_key` requires an explicit `algorithm`. To stay on the
+/// frozen surface, name [`crate::dstack_client::DstackClientV0`] explicitly.
+pub type DstackClient = DstackClientV1;

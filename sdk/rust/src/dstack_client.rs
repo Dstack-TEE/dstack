@@ -62,6 +62,11 @@ pub trait BaseClient {}
 
 /// Client for the frozen v0 guest-agent surface.
 ///
+/// **Legacy.** New code should use [`crate::dstack_client_v1::DstackClientV1`],
+/// which is what the unsuffixed `DstackClient` now names. This client stays for
+/// applications that need the v0.5.11 surface -- `sign`, `verify`,
+/// `emit_event`, `get_quote` -- which v1 does not carry.
+///
 /// Speaks the unversioned paths (`/GetKey`), which the agent also serves at
 /// `/v0`. That surface is closed at exactly what dstack v0.5.11 shipped: it
 /// gains no methods and changes no behaviour, so this client keeps working
@@ -256,10 +261,3 @@ impl DstackClientV0 {
         Ok(response)
     }
 }
-
-/// The v0 client under its historical name.
-#[deprecated(
-    since = "0.6.0",
-    note = "renamed to DstackClientV0; the new v1 surface is DstackClientV1"
-)]
-pub type DstackClient = DstackClientV0;

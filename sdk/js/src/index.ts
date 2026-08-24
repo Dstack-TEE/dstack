@@ -198,6 +198,10 @@ function to_gpu_evidence_bundles(
  * New capability lands in {@link DstackClientV1}, which derives *different* key
  * material for the same inputs -- the two are separate derivation trees, not
  * two spellings of one.
+ *
+ * @deprecated Legacy surface, kept for apps that already published v0-derived
+ * material and therefore cannot move. Use {@link DstackClientV1}, which the
+ * unsuffixed `DstackClient` now names, for anything new.
  */
 export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
   protected endpoint: string
@@ -487,13 +491,8 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
   }
 }
 
-/**
- * @deprecated Say which surface you mean: {@link DstackClientV0} for the frozen
- * one this alias points at, or {@link DstackClientV1} for the current API.
- */
-export const DstackClient = DstackClientV0
-export type DstackClient<T extends TcbInfo = TcbInfoV05x> = DstackClientV0<T>
-
+// `TappdClient` names `DstackClientV0` rather than the `DstackClient` alias on
+// purpose: the alias points at v1 now, and Tappd speaks the v0 wire surface.
 export class TappdClient extends DstackClientV0<TcbInfoV03x> {
   constructor(endpoint: string | undefined = undefined) {
     if (endpoint === undefined) {
@@ -904,3 +903,18 @@ export class DstackClientV1 {
     })
   }
 }
+
+/**
+ * The recommended client: `dstack.guest.v1`.
+ *
+ * Declared here rather than beside {@link DstackClientV0} because a `const`
+ * cannot name a class that has not been evaluated yet.
+ *
+ * This alias used to mean {@link DstackClientV0}. Code that upgrades without
+ * changing the name fails loudly rather than quietly deriving different keys:
+ * the v1 signatures differ, and `getKey` requires `algorithm` explicitly, so a
+ * v0 call site stops compiling (or throws) instead of returning wrong material.
+ * To stay on the frozen surface, name {@link DstackClientV0}.
+ */
+export const DstackClient = DstackClientV1
+export type DstackClient = DstackClientV1

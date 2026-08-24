@@ -5,10 +5,19 @@
 import { expect, describe, it } from 'vitest'
 import http from 'http'
 import type { AddressInfo } from 'net'
-import { DstackClientV0, DstackClientV1 } from '../index'
+import { DstackClient, DstackClientV0, DstackClientV1 } from '../index'
 import type { GpuEvidenceBundleV1 } from '../index'
 
 describe('DstackClientV1', () => {
+  it('should be what the unsuffixed DstackClient names, as value and as type', () => {
+    expect(DstackClient).toBe(DstackClientV1)
+    // Typed as the alias, constructed through the alias: this line fails to
+    // compile if either half of the export stops pointing at v1.
+    const client: DstackClient = new DstackClient()
+    expect(client).toBeInstanceOf(DstackClientV1)
+    expect(client).not.toBeInstanceOf(DstackClientV0)
+  })
+
   it('should be able to get version', async () => {
     const client = new DstackClientV1()
     const result = await client.version()
