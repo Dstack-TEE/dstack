@@ -13,8 +13,18 @@
 use anyhow::{anyhow, bail, Context, Result};
 use ed25519_dalek::SigningKey as Ed25519SigningKey;
 use k256::ecdsa::SigningKey;
-use ra_tls::kdf::derive_key;
+use ra_tls::kdf::derive_key_with_salt;
 use sha3::{Digest, Keccak256};
+
+/// The HKDF salt for every v1 derivation.
+///
+/// Distinct from the legacy `RATLS` salt, which gives v1 its own derivation
+/// tree rather than a differently-labelled branch of the old one. Under a shared
+/// salt the two surfaces are separated only by their HKDF `info`, and the
+/// legacy `info` is the caller's `path` verbatim -- so a caller that passed the
+/// v1 `info` byte string as a v0 path would reproduce a v1 key. Different salts
+/// close that by construction, whatever either side puts in `info`.
+pub(crate) const KDF_SALT: &[u8] = b"dstack-guest-v1";
 
 /// Context tag bound into every v1 key derivation.
 pub(crate) const KEY_CONTEXT_TAG: &[u8] = b"dstack-guest-v1-key";
@@ -118,16 +128,17 @@ pub(crate) struct AppKey {
 impl AppKey {
     /// Derive the key for `(domain, algorithm)` from the app root key.
     ///
-    /// HKDF-SHA256 over the app root secp256k1 key, with the `info` from
-    /// [`key_derivation_info`]. Same primitive and same salt as v0; what
-    /// changed is that the algorithm and a version tag are now inputs, so the
-    /// two curves no longer share one secret and a v1 domain is not a v0 path.
+    /// HKDF-SHA256 over the app root secp256k1 key, under [`KDF_SALT`], with
+    /// the `info` from [`key_derivation_info`]. Same primitive as v0; what
+    /// changed is the salt, and that the algorithm and a version tag are now
+    /// inputs -- so the two curves no longer share one secret and a v1 domain
+    /// is not a v0 path.
     ///
     /// Flat, not hierarchical: `a/b` is an opaque domain string like any
     /// other, unrelated to `a`, and no key here derives another.
     pub(crate) fn derive(app_root_key: &[u8], domain: &str, algorithm: Algorithm) -> Result<Self> {
         let info = key_derivation_info(domain, algorithm)?;
-        let derived = derive_key(app_root_key, &[&info], 32)
+        let derived = derive_key_with_salt(KDF_SALT, app_root_key, &[&info], 32)
             .map_err(|_| anyhow!("failed to derive the application key"))?;
         let secret: [u8; 32] = derived
             .as_slice()
@@ -189,6 +200,7 @@ impl AppKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ra_tls::kdf::derive_key;
 
     /// The app root key the committed vectors were generated from. Same value
     /// the handler tests use, so a vector can be reproduced end to end.
@@ -256,40 +268,40 @@ mod tests {
             (
                 "",
                 Algorithm::Secp256k1,
-                "463e877bc7322c1c09e567844b3101e88f353bfb33177c41cb13832cb67eef1c",
-                "03c45e036d19662802e628d9a712c07a9d9d64bee28e1754a72d75010860a789c2",
+                "59f60584ce6fd2a3a31997256db9d77322463fc8a6b1520110401bcb1ee92387",
+                "0377c7fb050db181d392266a3cee9adb2901c6d665f11bac68be5457f577ba4908",
             ),
             (
                 "",
                 Algorithm::Ed25519,
-                "a41f6458de9d11a43f79640b6ab2c62d02aceda7b16c5f159dc7ad69621c7eb0",
-                "7a5740fa9ab4791a232cc1fc7e73d5ff47ad41be2589a71b05f128dee4223f08",
+                "b023493030669cf22e9cafa6a464d4cf3ae4edfe5474ec796710f21ea011946d",
+                "a3dc149fd5b765eab2eb7d3174fa939e39386898f10b15b7b146f6f1358ecf2a",
             ),
             (
                 "wallet",
                 Algorithm::Secp256k1,
-                "c2b47271c2956c020eb471f3d6ec9a08bac4ce72d158078592c3bfd9db67808c",
-                "0375b11b6fabbe6e18b9bac26b082070dea76487ce512323870bc784a28ec5404b",
+                "2580611f0f936abe59399a8ac4ed9964d0259bd34c88ea012ca42b32acbf9386",
+                "0369cecd3c8da88730f7d45875824c3e75f63a2d3da4be42f45671954daa2abb28",
             ),
             (
                 "wallet",
                 Algorithm::Ed25519,
-                "fce7a47f848fc9f7a799a34e061f4d07d7e8ef3adda98d8fc36a5de3f5146cdf",
-                "5e8076b492634770e9b12dc8b136c9f5e3e8a86adc657040ba7a320296dcf6b0",
+                "d76a703b08ebb074b809b9d6acf3d7c6663131273807717ce9d23bbadc2c644e",
+                "dade622d0fa1641e79b16e0b04e296be671f85f0aa6387b7d37e9d89f87494f5",
             ),
             (
                 "a/b/c",
                 Algorithm::Secp256k1,
-                "448f92c86abd72c1c35b7ff75b5c9971114694e7825518e5ed0d2101711527cd",
-                "03011845be1d30004c148ae49ef3a82585094f856a7c9bc3ed06edf959537a4eac",
+                "7f0973449298085d2d36a3b4c4d3243c100ba1981ffa885fe9e9dee883e69538",
+                "02e9b1a61b6d70aa9b241753828c316bf90e33e77b2e113f9ba75a8b6dc3cde5c1",
             ),
             // A domain carrying NUL and `:`, the two characters a
             // delimiter-joined encoding would choke on.
             (
                 "k\u{0}:ey",
                 Algorithm::Ed25519,
-                "3cfcf09543e94d23c87aec1e5774ca3803feb3dd8ee298507650409b20ebfdde",
-                "9ba2d94591b97db4f089fc187cfcb09a9cd55bdd553e066d80cc8cb2977bd841",
+                "42da8bf0b479ed125c370e3b91f982735bf08ff592abbd586985affa43ee96a1",
+                "c833107822b003ff5675b33b90b151d4315c3ab9162b17d876e8dffde41abf9b",
             ),
         ];
         for (domain, algorithm, expected_secret, expected_public) in vectors {
@@ -316,8 +328,8 @@ mod tests {
         let key = derive("wallet", Algorithm::Secp256k1);
         assert_eq!(
             hex::encode(key.claim_signature(&TEST_APP_ROOT_KEY).unwrap()),
-            "96726db35263cb2a7067fc5ebb0d06621f7cab2d0f0aa15a83858dbf9ff7f12c\
-             6e1c5640223fcca1a03ba5ccf09d353609db6481f9563add16e16a8ad8544c29\
+            "af26d2f258d34580e7288bd83fc97bddc83769476d77823c4f76a3ad77a75149\
+             1a39ffc4ef3aa66cb0d008b8f6f199e6d57c1da9a92ba4cf10f23bf752b8cad0\
              00"
         );
     }
@@ -343,6 +355,37 @@ mod tests {
             assert_ne!(derive(name, Algorithm::Secp256k1).secret(), v0);
             assert_ne!(derive(name, Algorithm::Ed25519).secret(), v0);
         }
+    }
+
+    /// The one v0 path that could reach a v1 key under a shared salt: the
+    /// legacy `info` is the caller's `path` verbatim, so passing the v1 `info`
+    /// byte string as a v0 path made the two derivations identical.
+    ///
+    /// The v1 salt closes it by construction. This is the test that would have
+    /// failed before the salt changed, so it is the one that keeps it changed.
+    #[test]
+    fn a_v0_path_cannot_reproduce_a_v1_key() {
+        for (domain, algorithm) in [
+            ("", Algorithm::Secp256k1),
+            ("wallet", Algorithm::Secp256k1),
+            ("wallet", Algorithm::Ed25519),
+        ] {
+            let info = key_derivation_info(domain, algorithm).unwrap();
+            // The best a v0 caller can do: hand the whole v1 info to `path`.
+            let v0 = derive_key(&TEST_APP_ROOT_KEY, &[&info], 32).unwrap();
+            assert_ne!(
+                derive(domain, algorithm).secret(),
+                v0,
+                "a v0 path reproduced the v1 key for ({domain:?}, {})",
+                algorithm.name()
+            );
+        }
+    }
+
+    #[test]
+    fn the_v1_salt_is_not_the_legacy_salt() {
+        assert_eq!(KDF_SALT, b"dstack-guest-v1");
+        assert_ne!(KDF_SALT, ra_tls::kdf::LEGACY_SALT);
     }
 
     #[test]

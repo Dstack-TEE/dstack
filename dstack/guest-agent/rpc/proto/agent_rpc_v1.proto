@@ -13,9 +13,10 @@ package dstack.guest.v1;
 //   `DstackGuestV1`  internal socket (`/var/run/dstack.sock`), at `/v1`
 //   `WorkerV1`       external listener, at `/prpc/v1`
 //
-// Each unversioned surface stays mounted where it was and is closed at exactly
-// v0.5.11. The version a caller gets is decided by the URL path alone, never by
-// a header.
+// The frozen v0.5.11 services are named `v0` and served at `/v0` and
+// `/prpc/v0`; their historical unversioned paths (`/` and `/prpc`) stay mounted
+// as aliases onto the same handlers, so a pre-0.6 client keeps working. The
+// version a caller gets is decided by the URL path alone, never by a header.
 //
 // The two are not the same surface with different mounts. The internal socket
 // is reachable only by the application itself, so `DstackGuestV1` hands out key
@@ -31,10 +32,10 @@ package dstack.guest.v1;
 //   - a key is named by `(domain, algorithm)` and nothing else. There is no
 //     `purpose` field anywhere in v1. Encode roles in the domain string.
 //
-// v1 keys are NOT the v0 keys. The v1 KDF binds the algorithm and a versioned
-// context tag alongside the domain, so the same name yields different key
-// material here than on the unversioned surface, and secp256k1 and ed25519 no
-// longer share one 32-byte secret. See `docs/guest-api-v1.md` for the
+// v1 keys are NOT the v0 keys. The v1 KDF derives under its own HKDF salt and
+// binds the algorithm and a versioned context tag alongside the domain, so the
+// same name yields different key material here than on the frozen surface, and
+// secp256k1 and ed25519 no longer share one 32-byte secret. See `docs/guest-api-v1.md` for the
 // byte-level construction.
 //
 // v1 serves only what genuinely needs the TEE: deriving keys from the app root
