@@ -43,7 +43,7 @@ func TestV1GetKey(t *testing.T) {
 		{"secp256k1", 33},
 		{"ed25519", 32},
 	} {
-		resp, err := client.GetKey(context.Background(), "wallet", tc.algorithm)
+		resp, err := client.GetKey(context.Background(), "storage-encryption", tc.algorithm)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.algorithm, err)
 		}
@@ -74,11 +74,11 @@ func TestV1GetKeyIsDomainSeparated(t *testing.T) {
 	client := dstack.NewDstackClientV1()
 	ctx := context.Background()
 
-	k256, err := client.GetKey(ctx, "wallet", "secp256k1")
+	k256, err := client.GetKey(ctx, "storage-encryption", "secp256k1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ed, err := client.GetKey(ctx, "wallet", "ed25519")
+	ed, err := client.GetKey(ctx, "storage-encryption", "ed25519")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestV1GetKeyIsDomainSeparated(t *testing.T) {
 	}
 
 	// Derivation is stable for a given (domain, algorithm).
-	again, err := client.GetKey(ctx, "wallet", "secp256k1")
+	again, err := client.GetKey(ctx, "storage-encryption", "secp256k1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,11 +109,11 @@ func TestV1GetKeyIsDomainSeparated(t *testing.T) {
 func TestV1GetKeyDiffersFromV0(t *testing.T) {
 	ctx := context.Background()
 
-	v1Resp, err := dstack.NewDstackClientV1().GetKey(ctx, "wallet", "secp256k1")
+	v1Resp, err := dstack.NewDstackClientV1().GetKey(ctx, "storage-encryption", "secp256k1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	v0Resp, err := dstack.NewDstackClientV0().GetKey(ctx, "wallet", "", "secp256k1")
+	v0Resp, err := dstack.NewDstackClientV0().GetKey(ctx, "storage-encryption", "", "secp256k1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestV1GetKeyRejectsMissingOrUnknownAlgorithms(t *testing.T) {
 	client := dstack.NewDstackClientV1()
 	ctx := context.Background()
 
-	_, err := client.GetKey(ctx, "wallet", "")
+	_, err := client.GetKey(ctx, "storage-encryption", "")
 	if err == nil {
 		t.Fatal("expected an empty algorithm to be rejected")
 	}
@@ -147,7 +147,7 @@ func TestV1GetKeyRejectsMissingOrUnknownAlgorithms(t *testing.T) {
 	}
 
 	for _, algorithm := range []string{"k256", "secp256k1_prehashed", "rsa"} {
-		if _, err := client.GetKey(ctx, "wallet", algorithm); err == nil {
+		if _, err := client.GetKey(ctx, "storage-encryption", algorithm); err == nil {
 			t.Errorf("expected algorithm %q to be rejected", algorithm)
 		}
 	}

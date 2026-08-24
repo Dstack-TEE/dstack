@@ -43,9 +43,9 @@ def test_v0_call_shapes_fail_loudly_on_the_default_client():
     """
     client = DstackClient()
     with pytest.raises(TypeError):
-        client.get_key(path="wallet/eth", purpose="mainnet")
+        client.get_key(path="storage-encryption", purpose="mainnet")
     with pytest.raises(TypeError):
-        client.get_key("wallet/eth")
+        client.get_key("storage-encryption")
     for name in ["sign", "verify", "emit_event", "get_quote", "get_tls_key"]:
         assert not hasattr(client, name)
 
@@ -115,7 +115,7 @@ def check_info_response(result: InfoResponseV1):
 
 def test_sync_v1_get_key():
     client = DstackClientV1()
-    result = client.get_key("wallet/eth", "secp256k1")
+    result = client.get_key("storage-encryption", "secp256k1")
     assert isinstance(result, GetKeyResponseV1)
     assert len(result.decode_key()) == 32
     # secp256k1 public keys are SEC1 compressed, and the chain's first link
@@ -123,7 +123,7 @@ def test_sync_v1_get_key():
     assert len(result.decode_public_key()) == 33
     assert len(result.decode_signature_chain()) == 2
 
-    ed = client.get_key("wallet/eth", "ed25519")
+    ed = client.get_key("storage-encryption", "ed25519")
     assert len(ed.decode_key()) == 32
     assert len(ed.decode_public_key()) == 32
     # The v1 KDF binds the algorithm, so one name no longer serves two curves.
@@ -144,7 +144,7 @@ async def test_async_v1_get_key_is_deterministic_per_domain():
 def test_v1_get_key_requires_an_algorithm():
     client = DstackClientV1()
     with pytest.raises(ValueError, match="algorithm is required"):
-        client.get_key("wallet/eth", "")
+        client.get_key("storage-encryption", "")
 
 
 @pytest.mark.asyncio
@@ -152,14 +152,14 @@ async def test_async_v1_get_key_rejects_the_v0_k256_alias():
     """v0 accepted `k256`; v1 refuses rather than guess what the caller meant."""
     client = AsyncDstackClientV1()
     with pytest.raises(Exception) as excinfo:
-        await client.get_key("wallet/eth", "k256")
+        await client.get_key("storage-encryption", "k256")
     assert "k256" in str(excinfo.value)
 
 
 def test_v1_keys_differ_from_v0_keys():
     """No compatibility mode: the same name yields different key material."""
-    v0 = DstackClientV0().get_key("wallet/eth", "")
-    v1 = DstackClientV1().get_key("wallet/eth", "secp256k1")
+    v0 = DstackClientV0().get_key("storage-encryption", "")
+    v1 = DstackClientV1().get_key("storage-encryption", "secp256k1")
     assert v1.decode_key() != v0.decode_key()
 
 

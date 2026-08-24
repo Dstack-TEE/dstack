@@ -68,7 +68,7 @@ describe('DstackClientV1', () => {
   describe('getKey', () => {
     it('should derive a secp256k1 key with a public key and a two-link chain', async () => {
       const client = new DstackClientV1()
-      const result = await client.getKey('wallet', 'secp256k1')
+      const result = await client.getKey('storage-encryption', 'secp256k1')
       expect(result.key).toBeInstanceOf(Uint8Array)
       expect(result.key.length).toBe(32)
       // SEC1 compressed, so the chain's first link commits to these exact bytes.
@@ -83,7 +83,7 @@ describe('DstackClientV1', () => {
 
     it('should derive an ed25519 key with a 32-byte public key', async () => {
       const client = new DstackClientV1()
-      const result = await client.getKey('wallet', 'ed25519')
+      const result = await client.getKey('storage-encryption', 'ed25519')
       expect(result.key.length).toBe(32)
       expect(result.public_key.length).toBe(32)
       expect(result.signature_chain.length).toBe(2)
@@ -91,21 +91,21 @@ describe('DstackClientV1', () => {
 
     it('should be deterministic for the same domain and algorithm', async () => {
       const client = new DstackClientV1()
-      const first = await client.getKey('wallet', 'secp256k1')
-      const second = await client.getKey('wallet', 'secp256k1')
+      const first = await client.getKey('storage-encryption', 'secp256k1')
+      const second = await client.getKey('storage-encryption', 'secp256k1')
       expect(first.key).toEqual(second.key)
     })
 
     it('should separate the two curves, which v0 did not', async () => {
       const client = new DstackClientV1()
-      const secp = await client.getKey('wallet', 'secp256k1')
-      const ed = await client.getKey('wallet', 'ed25519')
+      const secp = await client.getKey('storage-encryption', 'secp256k1')
+      const ed = await client.getKey('storage-encryption', 'ed25519')
       expect(secp.key).not.toEqual(ed.key)
     })
 
     it('should derive different material than v0 for the same name', async () => {
-      const v0 = await new DstackClientV0().getKey('wallet', '', 'secp256k1')
-      const v1 = await new DstackClientV1().getKey('wallet', 'secp256k1')
+      const v0 = await new DstackClientV0().getKey('storage-encryption', '', 'secp256k1')
+      const v1 = await new DstackClientV1().getKey('storage-encryption', 'secp256k1')
       expect(v1.key).not.toEqual(v0.key)
     })
 
@@ -124,17 +124,17 @@ describe('DstackClientV1', () => {
 
     it('should reject an empty algorithm without a round trip', async () => {
       const client = new DstackClientV1()
-      await expect(() => client.getKey('wallet', '')).rejects.toThrow('algorithm is required')
+      await expect(() => client.getKey('storage-encryption', '')).rejects.toThrow('algorithm is required')
     })
 
     it('should reject the v0 k256 alias', async () => {
       const client = new DstackClientV1()
-      await expect(() => client.getKey('wallet', 'k256')).rejects.toThrow()
+      await expect(() => client.getKey('storage-encryption', 'k256')).rejects.toThrow()
     })
 
     it('should reject secp256k1_prehashed, which named a signing mode', async () => {
       const client = new DstackClientV1()
-      await expect(() => client.getKey('wallet', 'secp256k1_prehashed')).rejects.toThrow()
+      await expect(() => client.getKey('storage-encryption', 'secp256k1_prehashed')).rejects.toThrow()
     })
   })
 
