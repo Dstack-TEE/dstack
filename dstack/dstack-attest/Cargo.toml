@@ -49,6 +49,9 @@ rsa = { workspace = true, optional = true }
 tpm2 = { workspace = true, optional = true }
 
 [features]
+# Synthetic-attestation helpers used to build fixtures. Simulator only -- see
+# the gated `impl Attestation` in src/v1.rs for why production must not have it.
+simulator = []
 quote = [
     "aws-nitro-enclaves-nsm-api",
     "ciborium",

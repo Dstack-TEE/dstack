@@ -11,10 +11,10 @@ Files:
 - `tdx-lite-attestation.json`: verifier input that mimics the KMS
   `GetAppKey` flow. It contains a stripped `attestation` whose embedded
   `vm_config` carries `tdx_measurement`.
-- `tdx-lite-getquote.json`: raw guest-agent `GetQuoteResponse` captured
-  via `GetAttestationForAppKey`, including quote, event log, and vm_config.
-  TDX `GetQuoteResponse` intentionally omits the `attestation` field to keep
-  the response compact.
+- `tdx-lite-getquote.json`: raw guest-agent `GetQuoteResponse`, including
+  quote, event log, and vm_config -- the shape `DstackGuest.GetQuote` returns.
+  `GetQuoteResponse` is Intel TDX only and carries no versioned attestation;
+  use `Attest` for the platform-adaptive form.
 
 Captured with:
 

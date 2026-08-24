@@ -220,6 +220,89 @@ mod tests {
     }
 
     #[test]
+    fn simulator_rejects_get_quote_on_non_tdx() {
+        use ra_tls::attestation::PlatformEvidence;
+
+        let fixture = simulator::load_versioned_attestation(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../guest-agent/fixtures/attestation.bin"),
+        )
+        .expect("fixture attestation should load");
+        let mut attestation = fixture.into_v1();
+        attestation.platform = PlatformEvidence::SevSnp {
+            report: vec![0u8; 1184],
+            cert_chain: Vec::new(),
+            mr_config: String::new(),
+        };
+        let non_tdx = VersionedAttestation::V1 { attestation };
+        let report_data = [0x5a; 64];
+
+        // GetQuote is Intel TDX only.
+        let err = simulator::simulated_quote_response(&non_tdx, report_data, "", true, None)
+            .expect_err("GetQuote must fail on a non-TDX platform");
+        assert!(
+            err.to_string().contains("Intel TDX only"),
+            "unexpected error: {err}"
+        );
+
+        // Attest remains the supported path on the same platform.
+        simulator::simulated_attest_response(&non_tdx, report_data, true, None)
+            .expect("Attest must still work on a non-TDX platform");
+    }
+
+    #[test]
+    fn simulator_serves_get_quote_on_gcp_tdx() {
+        use dstack_types::Platform;
+        use ra_tls::attestation::{PlatformEvidence, TpmQuote};
+
+        let fixture = simulator::load_versioned_attestation(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../guest-agent/fixtures/attestation.bin"),
+        )
+        .expect("fixture attestation should load");
+        let mut attestation = fixture.into_v1();
+        let (quote, event_log) = match attestation.platform {
+            PlatformEvidence::Tdx { quote, event_log } => (quote, event_log),
+            other => panic!("fixture should carry bare TDX evidence, got {other:?}"),
+        };
+        attestation.platform = PlatformEvidence::GcpTdx {
+            quote,
+            event_log,
+            tpm_quote: TpmQuote {
+                message: Vec::new(),
+                signature: Vec::new(),
+                pcr_values: Vec::new(),
+                ak_cert: Vec::new(),
+                platform: Platform::Gcp,
+                event_log: Vec::new(),
+            },
+        };
+        let gcp_tdx = VersionedAttestation::V1 { attestation };
+        let report_data = [0x5a; 64];
+
+        // The gate is "does this platform have a TDX quote", not "is this bare
+        // TDX", so GCP Confidential VMs are served, with the report data
+        // patched into the quote the same way bare TDX gets it.
+        let response = simulator::simulated_quote_response(&gcp_tdx, report_data, "", true, None)
+            .expect("GetQuote must answer on GCP TDX");
+        assert_eq!(
+            &response.quote[ra_tls::attestation::TDX_QUOTE_REPORT_DATA_RANGE],
+            &report_data
+        );
+        assert_eq!(response.report_data, report_data);
+
+        // What the response cannot carry is the vTPM quote GCP's verification
+        // also binds -- it has no field for one. That is why the docs point
+        // relying parties on GCP at Attest.
+        let attested = simulator::simulated_attest_response(&gcp_tdx, report_data, true, None)
+            .expect("Attest must work on GCP TDX too");
+        let round_tripped = VersionedAttestation::from_bytes(&attested.attestation)
+            .unwrap()
+            .into_v1();
+        assert!(round_tripped.platform.tpm_quote().is_some());
+    }
+
+    #[test]
     fn simulator_can_preserve_fixture_report_data() {
         let fixture = simulator::load_versioned_attestation(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

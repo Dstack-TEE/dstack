@@ -85,11 +85,10 @@ func (r *GetKeyResponse) DecodeSignatureChain() ([][]byte, error) {
 
 // Represents the response from a quote request.
 type GetQuoteResponse struct {
-	Quote       string `json:"quote"`
-	EventLog    string `json:"event_log"`
-	ReportData  string `json:"report_data"`
-	VmConfig    string `json:"vm_config"`
-	Attestation string `json:"attestation"`
+	Quote      string `json:"quote"`
+	EventLog   string `json:"event_log"`
+	ReportData string `json:"report_data"`
+	VmConfig   string `json:"vm_config"`
 }
 
 // DecodeQuote returns the quote bytes
@@ -100,10 +99,6 @@ func (r *GetQuoteResponse) DecodeQuote() ([]byte, error) {
 // DecodeReportData returns the report data bytes
 func (r *GetQuoteResponse) DecodeReportData() ([]byte, error) {
 	return hex.DecodeString(r.ReportData)
-}
-
-func (r *GetQuoteResponse) DecodeAttestation() ([]byte, error) {
-	return hex.DecodeString(r.Attestation)
 }
 
 // DecodeEventLog returns the event log as structured data
@@ -480,7 +475,10 @@ func (c *DstackClient) GetKey(ctx context.Context, path string, purpose string, 
 	return &response, nil
 }
 
-// Gets a quote from the dstack service.
+// Gets a TDX quote from the dstack service. Needs Intel TDX: on a platform
+// without it the guest agent returns an error, and on GCP Confidential VMs it
+// answers with the TDX quote alone, leaving out the vTPM quote GCP's
+// verification also binds. Attest should be used in both cases.
 func (c *DstackClient) GetQuote(ctx context.Context, reportData []byte) (*GetQuoteResponse, error) {
 	if len(reportData) > 64 {
 		return nil, fmt.Errorf("report data is too large, it should be at most 64 bytes")

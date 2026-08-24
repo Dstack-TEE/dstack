@@ -674,6 +674,7 @@ impl AdminRpc for AdminRpcHandler {
             .map(|att| CertAttestationInfo {
                 public_key: att.public_key,
                 quote: att.quote,
+                attestation: att.attestation,
                 generated_by: att.generated_by,
                 generated_at: att.generated_at,
             });
@@ -684,6 +685,7 @@ impl AdminRpc for AdminRpcHandler {
             .map(|att| CertAttestationInfo {
                 public_key: att.public_key,
                 quote: att.quote,
+                attestation: att.attestation,
                 generated_by: att.generated_by,
                 generated_at: att.generated_at,
             })

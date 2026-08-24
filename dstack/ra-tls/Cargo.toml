@@ -46,6 +46,7 @@ errify.workspace = true
 rmp-serde.workspace = true
 
 [features]
+simulator = ["dstack-attest/simulator"]
 quote = ["dstack-attest/quote"]
 
 [dev-dependencies]

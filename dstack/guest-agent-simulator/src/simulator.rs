@@ -41,19 +41,16 @@ pub fn simulated_quote_response(
         "quote",
     )?;
     let Some(quote) = attestation.tdx_quote_bytes() else {
-        return Err(anyhow!("Quote not found"));
+        return Err(anyhow!(
+            "GetQuote is Intel TDX only, use Attest on this platform"
+        ));
     };
-    let versioned = VersionedAttestation::V1 {
-        attestation: attestation.clone(),
-    }
-    .to_bytes()?;
 
     Ok(GetQuoteResponse {
         quote,
         event_log: attestation.tdx_event_log_string().unwrap_or_default(),
         report_data: report_data.to_vec(),
         vm_config: vm_config.to_string(),
-        attestation: versioned,
     })
 }
 
@@ -119,7 +116,12 @@ fn prepare_attestation(
             context,
         ));
     };
-    let mut attestation = attestation.clone().into_v1().with_report_data(report_data);
+    // Stack half only: the fixture quote read below is replaced outright by
+    // the generated one, so patching its report data would be undone.
+    let mut attestation = attestation
+        .clone()
+        .into_v1()
+        .with_stack_report_data(report_data);
     let quote = attestation
         .platform
         .tdx_quote()

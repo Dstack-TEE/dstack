@@ -25,7 +25,7 @@ quantified and bounded.
   parallel paths (a separate `GetAppKeyAmd` was rejected on these grounds, #630). When an
   existing API is the wrong shape, add a purpose-built one rather than overloading a return
   value (`is_app_allowed` returning policy → add `auth_api.get_app_policy` instead, #538).
-- **Names must say what the thing does.** `GetQuote` for an app key → `GetAttestationForAppKey`
+- **Names must say what the thing does.** `GetQuote` for an app key → `AttestAppKey`
   (#360). An RPC named `ComposeHash` that returns an `app_id` is wrong (#181).
 - **Avoid enums in protobuf APIs** that surface as JSON — proto has no way to express
   snake_case serde renaming, so use strings (#241).

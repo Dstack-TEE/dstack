@@ -804,12 +804,16 @@ message ForceReleaseCertLockRequest {
 message CertAttestationInfo {
   // Certificate public key (DER encoded)
   bytes public_key = 1;
-  // TDX Quote (JSON serialized)
+  // TDX Quote (JSON serialized). Empty when the node has no Intel TDX, or when
+  // the quote request failed; `attestation` is the evidence then.
   string quote = 2;
   // Node that generated this attestation
   uint32 generated_by = 3;
   // Timestamp when this attestation was generated
   uint64 generated_at = 4;
+  // Versioned attestation (JSON serialized `AttestResponse`). Present on every
+  // platform, and the only evidence on nodes without Intel TDX.
+  string attestation = 5;
 }
 
 // List certificate attestations request

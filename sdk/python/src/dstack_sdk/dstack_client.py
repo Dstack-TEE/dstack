@@ -142,7 +142,6 @@ class GetQuoteResponse(BaseModel):
     event_log: str
     report_data: str = ""
     vm_config: str = ""
-    attestation: str = ""
 
     def decode_quote(self) -> bytes:
         return bytes.fromhex(self.quote)
@@ -411,7 +410,13 @@ class AsyncDstackClient(BaseClient):
         self,
         report_data: str | bytes,
     ) -> GetQuoteResponse:
-        """Request an attestation quote for the provided report data."""
+        """Request a TDX quote for the provided report data.
+
+        Needs Intel TDX. Without it the guest agent returns an error, and on
+        GCP Confidential VMs it answers with the TDX quote alone, leaving out
+        the vTPM quote GCP's verification also binds. Use ``attest()`` in both
+        cases.
+        """
         if not report_data or not isinstance(report_data, (bytes, str)):
             raise ValueError("report_data can not be empty")
         report_bytes: bytes = (
@@ -576,7 +581,13 @@ class DstackClient(BaseClient):
         self,
         report_data: str | bytes,
     ) -> GetQuoteResponse:
-        """Request an attestation quote for the provided report data."""
+        """Request a TDX quote for the provided report data.
+
+        Needs Intel TDX. Without it the guest agent returns an error, and on
+        GCP Confidential VMs it answers with the TDX quote alone, leaving out
+        the vTPM quote GCP's verification also binds. Use ``attest()`` in both
+        cases.
+        """
         raise NotImplementedError
 
     @call_async

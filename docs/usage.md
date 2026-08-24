@@ -82,6 +82,18 @@ services:
 curl --unix-socket /var/run/dstack.sock http://localhost/GetQuote?report_data=0x1234deadbeef | jq .
 ```
 
+`GetQuote` needs Intel TDX. On platforms without it (AMD SEV-SNP, AWS Nitro) it
+returns an error. On GCP Confidential VMs it answers, but with the TDX quote
+alone -- GCP's verification also binds a vTPM quote, which this response has no
+field for, so a verifier that takes it at face value checks less than it should.
+
+`Attest` is the replacement in both cases. It returns a platform-adaptive
+attestation carrying whatever evidence the platform actually produces:
+
+```bash
+curl --unix-socket /var/run/dstack.sock http://localhost/Attest?report_data=0x1234deadbeef | jq .
+```
+
 For advanced compatibility with unmodified binaries that expect native Linux TEE interfaces such as `/dev/tdx_guest`, `/dev/sev-guest`, or configfs-tsm, see [Advanced Native TEE Interfaces in Containers](./native-tee-interfaces.md).
 
 ## Container Logs

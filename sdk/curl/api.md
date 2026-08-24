@@ -109,7 +109,11 @@ curl --unix-socket /var/run/dstack.sock http://dstack/GetKey?path=my/key/path&pu
 
 ### 3. Get Quote
 
-Generates a quote with given plain report data. For platform-agnostic verification, use the `attestation` field in the response.
+Generates a TDX quote with given plain report data. Needs Intel TDX: on a
+platform without it this returns an error. On GCP Confidential VMs it answers
+with the TDX quote alone, leaving out the vTPM quote GCP's verification also
+binds. For evidence a verifier can check in full on any platform, use
+[Attest](#7-attest) instead.
 
 **Endpoint:** `/GetQuote`
 
@@ -139,8 +143,7 @@ curl --unix-socket /var/run/dstack.sock http://dstack/GetQuote?report_data=00000
   "quote": "<hex-encoded-quote>",
   "event_log": "<json-event-log>",
   "report_data": "<hex-encoded-report-data>",
-  "vm_config": "<json-vm-config-string>",
-  "attestation": "<hex-encoded-versioned-attestation>"
+  "vm_config": "<json-vm-config-string>"
 }
 ```
 
