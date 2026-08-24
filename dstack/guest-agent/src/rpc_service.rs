@@ -926,8 +926,9 @@ impl WorkerRpc for ExternalRpcHandler {
     /// `report_data`, call `/v1/Attest`, and serve the result to relying
     /// parties. See the `Worker` service comment in agent_rpc_v1.proto.
     ///
-    /// The report data comes from the same `app_key_report_data` the v1 method
-    /// uses, so both attest the same public key for a given algorithm.
+    /// The report data comes from `app_key_report_data`, the same commitment
+    /// the frozen `Sign` path's key uses, so what gets attested is the public
+    /// key of the key that actually signs.
     async fn get_attestation_for_app_key(
         self,
         request: GetAttestationForAppKeyRequest,
@@ -1461,10 +1462,10 @@ pNs85uhOZE8z2jr8Pg==
     const SECP256K1_REPORT_DATA: &str =
         "dip1::secp256k1c-pk:A6t_JdVkVdMAocH3f1f20WGT6JzdntxcXimUtEax8zc9";
 
-    /// The DIP-1 report data both external surfaces commit to. `WorkerV1`
-    /// wraps these exact bytes in an attestation and the frozen
-    /// `GetAttestationForAppKey` wraps them in a TDX quote, so pinning them
-    /// here pins both.
+    /// The DIP-1 report data the frozen `Worker.GetAttestationForAppKey`
+    /// commits to, wrapped in a TDX quote. Pinned so the commitment format a
+    /// relying party parses cannot drift; v1 has no counterpart method, so
+    /// this is the only surface these bytes appear on.
     #[tokio::test]
     async fn app_key_report_data_matches_its_vectors() {
         let (state, _guard) = setup_test_state().await;

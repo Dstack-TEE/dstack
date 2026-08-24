@@ -291,8 +291,10 @@ Generated with an app root key of
 The last row's domain is the five bytes `6b 00 3a 65 79`. It is there because a
 delimiter-joined encoding would mishandle it.
 
-The same vectors are asserted in
-`dstack/guest-agent/src/rpc_service_v1/keys.rs`. They describe deployed key
+The same vectors are asserted in `dstack/ra-tls/src/api_v1.rs`, which pins the
+private-key column next to the primitives that produce it;
+`dstack/guest-agent/src/rpc_service_v1/keys.rs` pins the public-key column
+through the type the handler actually serves. They describe deployed key
 material, so a diff against them is a bug in the derivation, not a stale fixture.
 
 ## The signature chain
@@ -364,7 +366,7 @@ string, and since the two byte strings can never be equal, matching their keccak
 digests would require a preimage attack on keccak256.
 
 The regression test is `a_v0_claim_cannot_be_crafted_into_a_v1_claim` in
-`dstack/guest-agent/src/rpc_service_v1/keys.rs`. It builds the strongest available
+`dstack/ra-tls/src/api_v1.rs`. It builds the strongest available
 forgery, a `purpose` set to the v1 claim minus exactly the suffix v0 appends on
 its own, then asserts both that the byte strings differ and that the structural
 property holds.
@@ -478,6 +480,12 @@ refreshes on its own timer, so one call costs a lock and a clone however many
 gateway nodes are polling. Only instances that opted in via
 `RegisterCvmRequest.health_check` are ever polled; see
 [Application health checks](./app-health-checks.md).
+
+An app that never opted in answers `healthy: true` with an empty `unhealthy`
+and no `error`, whatever its containers are doing: it declared itself
+un-polled, so the agent computes no verdict and returns what the gateway would
+have assumed. A caller other than the gateway must read that `true` as "nobody
+asked me to know", not as a health check that passed.
 
 ### public_tcbinfo on the external surface
 
@@ -631,6 +639,8 @@ which is the authoritative description.
 | Empty or unrecognised `algorithm` | Error naming the accepted values |
 | Derived secp256k1 scalar out of range | Error; the caller picks another domain |
 | `report_data` longer than 64 bytes | Error |
+| `nonce` not exactly 32 bytes | Error naming the required length |
+| GPU attestation unavailable in this image | Error; `AttestGpu` has nothing to collect |
 | `not_before` not earlier than `not_after` | Error |
 | Unknown method on a mounted surface | HTTP 404, `Service not found: <Method>` |
 | `/v1/...` on an agent that predates v1 | HTTP 404, no such mount |
