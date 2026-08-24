@@ -168,29 +168,66 @@ When any of the 0.5.7-only options is set, the SDK probes `Version` first and ra
 
 ### Sign and Verify
 
-Sign data using TEE-derived keys:
+Signing happens in the TEE, because it needs a key only the TEE holds. Verifying
+does not, so it runs locally in this SDK — the guest agent's `Verify` RPC was
+removed in v0.6.0. Its answer arrived over the socket unattested, so trusting it
+was never better than checking the signature yourself.
 
 ```python
-result = client.sign('ed25519', b'message to sign')
-print(result.signature)
-print(result.public_key)
+from dstack_sdk import verify_signature, verify_signature_chain
 
-# Verify the signature
-valid = client.verify('ed25519', b'message to sign', result.signature, result.public_key)
-print(valid.valid)  # True
+result = client.sign('ed25519', b'message to sign')
+
+# Does this signature check out under this public key?
+valid = verify_signature(
+    'ed25519',
+    b'message to sign',
+    result.decode_signature(),
+    result.decode_public_key(),
+)
+assert valid is True
 ```
 
 **`sign()` Parameters:**
-- `algorithm`: `'ed25519'`, `'secp256k1'`, or `'secp256k1_prehashed'`
+- `algorithm`: `'ed25519'`, `'secp256k1'` (alias `'k256'`), or `'secp256k1_prehashed'`
 - `data`: Data to sign (`bytes` or `str`). For `secp256k1_prehashed`, must be a 32-byte digest.
 
 **`sign()` Returns:** `SignResponse`
 - `signature`: Hex-encoded signature
 - `public_key`: Hex-encoded public key
-- `signature_chain`: Signatures proving TEE origin
+- `signature_chain`: Three signatures linking the signing key back to the KMS root
 
-**`verify()` Returns:** `VerifyResponse`
-- `valid`: Boolean indicating if the signature is valid
+**`verify_signature()` Returns:** `bool` — `False` when a well-formed signature
+does not match, and it *raises* `ValueError` when an input is malformed (bad key
+length, wrong signature length, unknown algorithm, non-canonical high-S
+signature). A malformed input is a caller bug, not a verdict.
+
+#### Verifying the whole chain
+
+`verify_signature` alone proves only that whoever holds that public key signed
+the data. It says nothing about *whose* key it is. `verify_signature_chain`
+walks all three links back to a KMS root key you supply:
+
+```python
+info = client.info()
+app_root_pubkey = verify_signature_chain(
+    'ed25519',
+    b'message to sign',
+    result.decode_public_key(),
+    result.decode_signature_chain(),
+    bytes.fromhex(info.app_id),
+    kms_root_pubkey,   # you supply this — see below
+)
+print(app_root_pubkey.hex())  # compressed SEC1, 33 bytes
+```
+
+It returns the app root public key and raises `ValueError` on any failure.
+
+`kms_root_pubkey` must come from somewhere you already trust: the `DstackKms`
+contract's `kmsInfo().k256Pubkey`, or a value you pinned. Reading it from the
+same KMS you are checking against proves nothing — an attacker who can answer
+that query can also mint a self-consistent chain. This comparison is the entire
+point of the chain; skip it and the other two links establish nothing.
 
 ### Diagnostics
 
@@ -315,9 +352,10 @@ hash_value = get_compose_hash(app_compose_dict)
 | Feature | Required dstack OS |
 |---|---|
 | `get_key`, `get_quote`, `get_tls_key` (legacy fields), `info` (legacy fields) | 0.3+ |
-| `attest`, `sign` / `verify`, `is_reachable` | 0.5.0+ (sign/verify require server build with the feature) |
+| `attest`, `sign`, `is_reachable` | 0.5.0+ (`sign` requires a server build with the feature) |
 | `version`, `algorithm='ed25519'` on `get_key`, `info.cloud_vendor` / `cloud_product`, `not_before` / `not_after` / `with_app_info` on `get_tls_key` | 0.5.7+ |
 | `verify_env_encrypt_public_key` (signature_v1 with timestamp) | Requires KMS build that emits `signature_v1`; legacy variant remains available |
+| `verify_signature`, `verify_signature_chain` | Any — verification is local and needs no guest agent |
 
 Calls that require 0.5.7-only fields probe the `Version` RPC first and raise a clear `RuntimeError` on older guest agents.
 

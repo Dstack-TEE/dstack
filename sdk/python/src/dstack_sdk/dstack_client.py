@@ -176,10 +176,6 @@ class SignResponse(BaseModel):
         return bytes.fromhex(self.public_key)
 
 
-class VerifyResponse(BaseModel):
-    valid: bool
-
-
 class VersionResponse(BaseModel):
     version: str
     rev: str
@@ -514,27 +510,6 @@ class AsyncDstackClient(BaseClient):
         result = await self._send_rpc_request("Sign", payload)
         return SignResponse(**result)
 
-    async def verify(
-        self,
-        algorithm: str,
-        data: str | bytes,
-        signature: str | bytes,
-        public_key: str | bytes,
-    ) -> VerifyResponse:
-        """Verify a signature."""
-        data_bytes = data.encode() if isinstance(data, str) else data
-        sig_bytes = signature.encode() if isinstance(signature, str) else signature
-        pk_bytes = public_key.encode() if isinstance(public_key, str) else public_key
-
-        payload = {
-            "algorithm": algorithm,
-            "data": binascii.hexlify(data_bytes).decode(),
-            "signature": binascii.hexlify(sig_bytes).decode(),
-            "public_key": binascii.hexlify(pk_bytes).decode(),
-        }
-        result = await self._send_rpc_request("Verify", payload)
-        return VerifyResponse(**result)
-
     async def version(self) -> VersionResponse:
         """Query the guest-agent version.
 
@@ -627,17 +602,6 @@ class DstackClient(BaseClient):
     @call_async
     def sign(self, algorithm: str, data: str | bytes) -> SignResponse:
         """Signs data using a derived key."""
-        raise NotImplementedError
-
-    @call_async
-    def verify(
-        self,
-        algorithm: str,
-        data: str | bytes,
-        signature: str | bytes,
-        public_key: str | bytes,
-    ) -> VerifyResponse:
-        """Verify a signature."""
         raise NotImplementedError
 
     @call_async
