@@ -17,7 +17,7 @@
 //! This handler shares every backend with the unversioned one -- the same
 //! `AppState`, the same certificate client, the same platform attestation and
 //! GPU attestor. What it does not share is key derivation and the
-//! signature-chain claim, which are new in v1 and live in [`keys`].
+//! signature-chain claim, which are new in v1 and live in the `keys` submodule.
 //!
 //! v1 serves only what needs the TEE: deriving from the app root key, and
 //! attesting. It has no `Sign` and no `Verify`, because a caller that can
@@ -362,7 +362,7 @@ mod tests {
         for algorithm in ["secp256k1", "ed25519"] {
             let (state, _guard) = state().await;
             let key = V1RpcHandler::new(state)
-                .get_key(get_key_request("wallet", algorithm))
+                .get_key(get_key_request("storage-encryption", algorithm))
                 .await
                 .unwrap();
 
@@ -382,13 +382,16 @@ mod tests {
 
         let (state, _guard) = state().await;
         let key = V1RpcHandler::new(state.clone())
-            .get_key(get_key_request("wallet", "secp256k1"))
+            .get_key(get_key_request("storage-encryption", "secp256k1"))
             .await
             .unwrap();
 
-        let claim =
-            ra_tls::api_v1::key_claim(keys::Algorithm::Secp256k1, "wallet", &key.public_key)
-                .unwrap();
+        let claim = ra_tls::api_v1::key_claim(
+            keys::Algorithm::Secp256k1,
+            "storage-encryption",
+            &key.public_key,
+        )
+        .unwrap();
         let link = &key.signature_chain[0];
         let recovered = VerifyingKey::recover_from_digest(
             Keccak256::new_with_prefix(&claim),
@@ -411,7 +414,7 @@ mod tests {
         let (state, _guard) = state().await;
 
         let secp = V1RpcHandler::new(state.clone())
-            .get_key(get_key_request("wallet", "secp256k1"))
+            .get_key(get_key_request("storage-encryption", "secp256k1"))
             .await
             .unwrap();
         let derived = k256::ecdsa::SigningKey::from_slice(&secp.key).unwrap();
@@ -421,7 +424,7 @@ mod tests {
         );
 
         let ed = V1RpcHandler::new(state)
-            .get_key(get_key_request("wallet", "ed25519"))
+            .get_key(get_key_request("storage-encryption", "ed25519"))
             .await
             .unwrap();
         let seed: [u8; 32] = ed.key.as_slice().try_into().unwrap();
@@ -434,7 +437,7 @@ mod tests {
         let (state, _guard) = state().await;
         for algorithm in ["", "k256", "rsa", "secp256k1_prehashed"] {
             let result = V1RpcHandler::new(state.clone())
-                .get_key(get_key_request("wallet", algorithm))
+                .get_key(get_key_request("storage-encryption", algorithm))
                 .await;
             assert!(result.is_err(), "v1 accepted algorithm {algorithm:?}");
         }
@@ -447,12 +450,12 @@ mod tests {
     async fn v1_keys_differ_from_the_unversioned_keys_for_the_same_name() {
         let (state, _guard) = state().await;
         let v1 = V1RpcHandler::new(state.clone())
-            .get_key(get_key_request("wallet", "secp256k1"))
+            .get_key(get_key_request("storage-encryption", "secp256k1"))
             .await
             .unwrap();
         let v0 = crate::rpc_service::InternalRpcHandler::new(state)
             .get_key(GetKeyArgs {
-                path: "wallet".to_string(),
+                path: "storage-encryption".to_string(),
                 purpose: "signing".to_string(),
                 algorithm: "secp256k1".to_string(),
             })

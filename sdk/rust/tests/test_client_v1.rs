@@ -20,7 +20,7 @@ async fn version_answers_on_the_v1_surface() {
 #[tokio::test]
 async fn get_key_returns_a_key_public_key_and_two_link_chain() {
     for algorithm in ["secp256k1", "ed25519"] {
-        let response = client().get_key("wallet", algorithm).await.unwrap();
+        let response = client().get_key("storage-encryption", algorithm).await.unwrap();
 
         // 32 raw bytes for both algorithms, hex-encoded on the wire.
         assert_eq!(response.decode_key().unwrap().len(), 32);
@@ -34,14 +34,14 @@ async fn get_key_returns_a_key_public_key_and_two_link_chain() {
 
 #[tokio::test]
 async fn get_key_public_key_lengths_are_the_specified_ones() {
-    let secp = client().get_key("wallet", "secp256k1").await.unwrap();
+    let secp = client().get_key("storage-encryption", "secp256k1").await.unwrap();
     assert_eq!(
         secp.decode_public_key().unwrap().len(),
         33,
         "SEC1 compressed"
     );
 
-    let ed = client().get_key("wallet", "ed25519").await.unwrap();
+    let ed = client().get_key("storage-encryption", "ed25519").await.unwrap();
     assert_eq!(ed.decode_public_key().unwrap().len(), 32);
 }
 
@@ -49,10 +49,10 @@ async fn get_key_public_key_lengths_are_the_specified_ones() {
 /// nothing in particular and get a key.
 #[tokio::test]
 async fn get_key_rejects_an_empty_or_unknown_algorithm() {
-    assert!(client().get_key("wallet", "").await.is_err());
+    assert!(client().get_key("storage-encryption", "").await.is_err());
     for algorithm in ["k256", "rsa", "secp256k1_prehashed"] {
         assert!(
-            client().get_key("wallet", algorithm).await.is_err(),
+            client().get_key("storage-encryption", algorithm).await.is_err(),
             "v1 accepted algorithm {algorithm:?}"
         );
     }
@@ -70,8 +70,8 @@ async fn different_domains_yield_different_keys() {
 /// KDF exists.
 #[tokio::test]
 async fn the_two_algorithms_never_share_key_material() {
-    let secp = client().get_key("wallet", "secp256k1").await.unwrap();
-    let ed = client().get_key("wallet", "ed25519").await.unwrap();
+    let secp = client().get_key("storage-encryption", "secp256k1").await.unwrap();
+    let ed = client().get_key("storage-encryption", "ed25519").await.unwrap();
     assert_ne!(secp.key, ed.key);
 }
 
@@ -189,16 +189,16 @@ async fn issue_cert_returns_a_key_and_a_chain() {
 async fn derives_the_committed_key_vectors() {
     let vectors = [
         (
-            "wallet",
+            "storage-encryption",
             "secp256k1",
-            "3eef50886741de9728c9aca86faa1f972b9769cd405e9f11f32a0504b15b74c9",
-            "033770227604619366f5de330e39aed186f7957e7f4c8e8970c564787548191f0b",
+            "b9fa657a9b12a35468341fe9204cad53d393b35f05184546fbc5c329a526cf79",
+            "0380a54b49c2ad61341d7ade1f41df5061783f8be45911bed81a8048bed2a60b36",
         ),
         (
-            "wallet",
+            "storage-encryption",
             "ed25519",
-            "8ef9a05184df708b9f7d1c721303e4fa61c3da964f3d36aee73708323e980be3",
-            "44678855229fa746d1bb46e27125ae3b9fbb168daa4c59ddb952655772026d39",
+            "4330ca9a8816f4e2be49b6b1c54a619940d70263429e9efe1fa5c3e269ef2786",
+            "ec766df0797ac4be0e85af6cd48cf26c834527ec0156550cbd4e68c9934748b7",
         ),
         (
             "",

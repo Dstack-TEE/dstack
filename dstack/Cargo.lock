@@ -5730,6 +5730,7 @@ dependencies = [
  "dcap-qvl",
  "dstack-attest",
  "dstack-types",
+ "ed25519-dalek",
  "elliptic-curve",
  "errify",
  "ez-hash",

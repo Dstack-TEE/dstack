@@ -191,14 +191,14 @@ mod tests {
 
     #[test]
     fn encodes_derivation_info_with_length_prefixes() {
-        let info = key_derivation_info("wallet", KeyAlgorithm::Secp256k1).unwrap();
+        let info = key_derivation_info("storage-encryption", KeyAlgorithm::Secp256k1).unwrap();
         let expected = [
             &19u32.to_be_bytes()[..],
             b"dstack-guest-v1-key",
             &9u32.to_be_bytes()[..],
             b"secp256k1",
-            &6u32.to_be_bytes()[..],
-            b"wallet",
+            &18u32.to_be_bytes()[..],
+            b"storage-encryption",
         ]
         .concat();
         assert_eq!(info, expected);
@@ -237,14 +237,14 @@ mod tests {
                 "b023493030669cf22e9cafa6a464d4cf3ae4edfe5474ec796710f21ea011946d",
             ),
             (
-                "wallet",
+                "storage-encryption",
                 KeyAlgorithm::Secp256k1,
-                "2580611f0f936abe59399a8ac4ed9964d0259bd34c88ea012ca42b32acbf9386",
+                "5510330f86902ddae38c6d89c93a8408019332c17a429e1abd01c4a28d1544a6",
             ),
             (
-                "wallet",
+                "storage-encryption",
                 KeyAlgorithm::Ed25519,
-                "d76a703b08ebb074b809b9d6acf3d7c6663131273807717ce9d23bbadc2c644e",
+                "3c4c3ece12fa99ccb93fc0090877f80e70545fdd971e2ac93d3398c4684538d3",
             ),
             (
                 "a/b/c",
@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn the_two_algorithms_never_share_key_material() {
-        for domain in ["", "wallet", "a/b/c", "\u{0}"] {
+        for domain in ["", "storage-encryption", "a/b/c", "\u{0}"] {
             assert_ne!(
                 derive_app_key(&TEST_APP_ROOT_KEY, domain, KeyAlgorithm::Secp256k1).unwrap(),
                 derive_app_key(&TEST_APP_ROOT_KEY, domain, KeyAlgorithm::Ed25519).unwrap(),
@@ -286,7 +286,7 @@ mod tests {
     /// string equals the old path.
     #[test]
     fn v1_keys_differ_from_v0_keys_for_the_same_name() {
-        for name in ["", "wallet", "vms"] {
+        for name in ["", "storage-encryption", "vms"] {
             let v0 = crate::kdf::derive_key(&TEST_APP_ROOT_KEY, &[name.as_bytes()], 32).unwrap();
             for algorithm in [KeyAlgorithm::Secp256k1, KeyAlgorithm::Ed25519] {
                 assert_ne!(
@@ -309,8 +309,8 @@ mod tests {
     fn a_v0_path_cannot_reproduce_a_v1_key() {
         for (domain, algorithm) in [
             ("", KeyAlgorithm::Secp256k1),
-            ("wallet", KeyAlgorithm::Secp256k1),
-            ("wallet", KeyAlgorithm::Ed25519),
+            ("storage-encryption", KeyAlgorithm::Secp256k1),
+            ("storage-encryption", KeyAlgorithm::Ed25519),
         ] {
             let info = key_derivation_info(domain, algorithm).unwrap();
             // The best a v0 caller can do: hand the whole v1 info to `path`.
@@ -335,16 +335,16 @@ mod tests {
     #[test]
     fn encodes_the_claim_with_the_raw_public_key() {
         let public_key =
-            hex::decode("0369cecd3c8da88730f7d45875824c3e75f63a2d3da4be42f45671954daa2abb28")
+            hex::decode("03d962450a41748021c8b02787ac36ce642ff0ae25f4c55019eb527e1112cfd764")
                 .unwrap();
-        let claim = key_claim(KeyAlgorithm::Secp256k1, "wallet", &public_key).unwrap();
+        let claim = key_claim(KeyAlgorithm::Secp256k1, "storage-encryption", &public_key).unwrap();
         let expected = [
             &25u32.to_be_bytes()[..],
             b"dstack-guest-v1-key-claim",
             &9u32.to_be_bytes()[..],
             b"secp256k1",
-            &6u32.to_be_bytes()[..],
-            b"wallet",
+            &18u32.to_be_bytes()[..],
+            b"storage-encryption",
             &33u32.to_be_bytes()[..],
             &public_key,
         ]
@@ -358,9 +358,10 @@ mod tests {
     #[test]
     fn a_v0_claim_cannot_be_crafted_into_a_v1_claim() {
         let public_key =
-            hex::decode("0369cecd3c8da88730f7d45875824c3e75f63a2d3da4be42f45671954daa2abb28")
+            hex::decode("03d962450a41748021c8b02787ac36ce642ff0ae25f4c55019eb527e1112cfd764")
                 .unwrap();
-        let v1_claim = key_claim(KeyAlgorithm::Secp256k1, "wallet", &public_key).unwrap();
+        let v1_claim =
+            key_claim(KeyAlgorithm::Secp256k1, "storage-encryption", &public_key).unwrap();
 
         // Best case for the attacker: the v1 claim minus exactly the suffix v0
         // appends on its own, used verbatim as `purpose`.
@@ -406,15 +407,15 @@ mod tests {
     #[test]
     fn produces_the_committed_claim_signature_vector() {
         let public_key =
-            hex::decode("0369cecd3c8da88730f7d45875824c3e75f63a2d3da4be42f45671954daa2abb28")
+            hex::decode("03d962450a41748021c8b02787ac36ce642ff0ae25f4c55019eb527e1112cfd764")
                 .unwrap();
-        let claim = key_claim(KeyAlgorithm::Secp256k1, "wallet", &public_key).unwrap();
+        let claim = key_claim(KeyAlgorithm::Secp256k1, "storage-encryption", &public_key).unwrap();
         let key = SigningKey::from_slice(&TEST_APP_ROOT_KEY).unwrap();
         assert_eq!(
             hex::encode(sign_recoverable_keccak256(&key, &claim).unwrap()),
-            "af26d2f258d34580e7288bd83fc97bddc83769476d77823c4f76a3ad77a75149\
-             1a39ffc4ef3aa66cb0d008b8f6f199e6d57c1da9a92ba4cf10f23bf752b8cad0\
-             00"
+            "5b6193729ce7976ec67863f21692d4b98c69832698aae8e001a7d33a6f818b6e\
+             46ca950725b6e90e8ca9bcf394abd03ce264bf9b7eec1e91693247f9dd53c269\
+             01"
         );
     }
 

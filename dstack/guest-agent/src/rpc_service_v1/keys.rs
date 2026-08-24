@@ -109,14 +109,14 @@ mod tests {
                 "a3dc149fd5b765eab2eb7d3174fa939e39386898f10b15b7b146f6f1358ecf2a",
             ),
             (
-                "wallet",
+                "storage-encryption",
                 Algorithm::Secp256k1,
-                "0369cecd3c8da88730f7d45875824c3e75f63a2d3da4be42f45671954daa2abb28",
+                "03d962450a41748021c8b02787ac36ce642ff0ae25f4c55019eb527e1112cfd764",
             ),
             (
-                "wallet",
+                "storage-encryption",
                 Algorithm::Ed25519,
-                "dade622d0fa1641e79b16e0b04e296be671f85f0aa6387b7d37e9d89f87494f5",
+                "2380c4a33a60b60613fa43866421e5b96eb8dcde211317200fd0d41e7e491288",
             ),
             (
                 "a/b/c",
@@ -142,15 +142,22 @@ mod tests {
     #[test]
     fn the_public_key_lengths_are_the_specified_ones() {
         assert_eq!(
-            derive("wallet", Algorithm::Secp256k1).public_key().len(),
+            derive("storage-encryption", Algorithm::Secp256k1)
+                .public_key()
+                .len(),
             33
         );
-        assert_eq!(derive("wallet", Algorithm::Ed25519).public_key().len(), 32);
+        assert_eq!(
+            derive("storage-encryption", Algorithm::Ed25519)
+                .public_key()
+                .len(),
+            32
+        );
     }
 
     #[test]
     fn the_two_algorithms_never_share_key_material() {
-        for domain in ["", "wallet", "a/b/c"] {
+        for domain in ["", "storage-encryption", "a/b/c"] {
             assert_ne!(
                 derive(domain, Algorithm::Secp256k1).secret(),
                 derive(domain, Algorithm::Ed25519).secret(),
@@ -164,12 +171,17 @@ mod tests {
         use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
         use sha3::{Digest as _, Keccak256};
 
-        let key = derive("wallet", Algorithm::Secp256k1);
+        let key = derive("storage-encryption", Algorithm::Secp256k1);
         let app_root = SigningKey::from_slice(&TEST_APP_ROOT_KEY).unwrap();
         let link = key.claim_signature(&app_root).unwrap();
         assert_eq!(link.len(), 65);
 
-        let claim = key_claim(Algorithm::Secp256k1, "wallet", &key.public_key()).unwrap();
+        let claim = key_claim(
+            Algorithm::Secp256k1,
+            "storage-encryption",
+            &key.public_key(),
+        )
+        .unwrap();
         let recovered = VerifyingKey::recover_from_digest(
             Keccak256::new_with_prefix(&claim),
             &Signature::from_slice(&link[..64]).unwrap(),

@@ -110,7 +110,7 @@ Generates a deterministic private key from the application key and returns both 
 | `purpose` | string | Purpose for the key. Can be any string. This is used in the signature chain and does not affect the private key bytes. | `"signing"` |
 | `algorithm` | string | `secp256k1` (default), `k256` (alias), or `ed25519`. For compatibility, this selects how the same derived 32-byte material is interpreted; it does not domain-separate the derivation. | `ed25519` |
 
-Use algorithm-specific paths, such as `wallet/ethereum` and `wallet/solana`, when independent keys are required across algorithms.
+Use algorithm-specific paths, such as `backup-signing/secp256k1` and `backup-signing/ed25519`, when independent keys are required across algorithms.
 
 **Example:**
 ```bash

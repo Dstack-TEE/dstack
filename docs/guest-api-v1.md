@@ -283,8 +283,8 @@ Generated with an app root key of
 |---|---|---|---|
 | `""` | secp256k1 | `59f60584ce6fd2a3a31997256db9d77322463fc8a6b1520110401bcb1ee92387` | `0377c7fb050db181d392266a3cee9adb2901c6d665f11bac68be5457f577ba4908` |
 | `""` | ed25519 | `b023493030669cf22e9cafa6a464d4cf3ae4edfe5474ec796710f21ea011946d` | `a3dc149fd5b765eab2eb7d3174fa939e39386898f10b15b7b146f6f1358ecf2a` |
-| `wallet` | secp256k1 | `2580611f0f936abe59399a8ac4ed9964d0259bd34c88ea012ca42b32acbf9386` | `0369cecd3c8da88730f7d45875824c3e75f63a2d3da4be42f45671954daa2abb28` |
-| `wallet` | ed25519 | `d76a703b08ebb074b809b9d6acf3d7c6663131273807717ce9d23bbadc2c644e` | `dade622d0fa1641e79b16e0b04e296be671f85f0aa6387b7d37e9d89f87494f5` |
+| `storage-encryption` | secp256k1 | `5510330f86902ddae38c6d89c93a8408019332c17a429e1abd01c4a28d1544a6` | `03d962450a41748021c8b02787ac36ce642ff0ae25f4c55019eb527e1112cfd764` |
+| `storage-encryption` | ed25519 | `3c4c3ece12fa99ccb93fc0090877f80e70545fdd971e2ac93d3398c4684538d3` | `2380c4a33a60b60613fa43866421e5b96eb8dcde211317200fd0d41e7e491288` |
 | `a/b/c` | secp256k1 | `7f0973449298085d2d36a3b4c4d3243c100ba1981ffa885fe9e9dee883e69538` | `02e9b1a61b6d70aa9b241753828c316bf90e33e77b2e113f9ba75a8b6dc3cde5c1` |
 | `k\0:ey` | ed25519 | `42da8bf0b479ed125c370e3b91f982735bf08ff592abbd586985affa43ee96a1` | `c833107822b003ff5675b33b90b151d4315c3ab9162b17d876e8dffde41abf9b` |
 
@@ -324,21 +324,21 @@ key. `r` and `s` are 32-byte big-endian integers, low-S normalised, and `v` is t
 one-byte recovery id in `0..=3`. `public_key` is the raw derived public key from
 the table above, not a hex string.
 
-A worked claim, for `domain = "wallet"` and `algorithm = "secp256k1"`:
+A worked claim, for `domain = "storage-encryption"` and `algorithm = "secp256k1"`:
 
 ```text
 00 00 00 19  "dstack-guest-v1-key-claim"     25 bytes
 00 00 00 09  "secp256k1"                      9 bytes
-00 00 00 06  "wallet"                         6 bytes
-00 00 00 21  03 69 ce cd ... bb 28           33 bytes
+00 00 00 12  "storage-encryption"            18 bytes
+00 00 00 21  03 d9 62 45 ... d7 64           33 bytes
 ```
 
 With the app root key from the test vector table, `link0` is
 
 ```text
-af26d2f258d34580e7288bd83fc97bddc83769476d77823c4f76a3ad77a75149
-1a39ffc4ef3aa66cb0d008b8f6f199e6d57c1da9a92ba4cf10f23bf752b8cad0
-00
+5b6193729ce7976ec67863f21692d4b98c69832698aae8e001a7d33a6f818b6e
+46ca950725b6e90e8ca9bcf394abd03ce264bf9b7eec1e91693247f9dd53c269
+01
 ```
 
 The signature is deterministic (RFC 6979), so this vector pins the whole encoding

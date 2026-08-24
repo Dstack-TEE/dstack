@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Derive an application key. `domain` is a caller-chosen
     // domain-separation string; `algorithm` is required.
-    let key = client.get_key("wallet", "secp256k1").await?;
+    let key = client.get_key("storage-encryption", "secp256k1").await?;
     println!("public key: {}", key.public_key);
 
     let info = client.info().await?;
@@ -77,7 +77,7 @@ let client = DstackClient::new(None);
 #### `get_key(domain: &str, algorithm: &str) -> GetKeyResponse`
 
 ```rust
-let key = client.get_key("wallet", "secp256k1").await?;
+let key = client.get_key("storage-encryption", "secp256k1").await?;
 let private_key = key.decode_key()?;      // 32 bytes
 let public_key = key.decode_public_key()?; // SEC1 compressed, or 32 raw for ed25519
 ```

@@ -51,4 +51,5 @@ simulator = ["dstack-attest/simulator"]
 quote = ["dstack-attest/quote"]
 
 [dev-dependencies]
+ed25519-dalek.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
