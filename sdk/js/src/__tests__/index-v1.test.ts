@@ -181,6 +181,63 @@ describe('DstackClientV1', () => {
     })
   })
 
+  describe('GPU evidence bundles', () => {
+    // The simulator ships no nvattest, so a stub agent is the only way to see a
+    // non-empty bundle -- and the decoding is what a verifier depends on.
+    const nvattest_output = '{"nonce": "00", "measurements": []}\n'
+    const evidence = Buffer.from(nvattest_output, 'utf8').toString('hex')
+
+    async function withStubAgent(fn: (client: DstackClientV1) => Promise<void>) {
+      const server = http.createServer((req, res) => {
+        const body = req.url === '/v1/Attest'
+          ? {
+            attestation: 'aabb',
+            boottime_gpu_evidence: [
+              { vendor: 'nvidia', format: 'nvidia-nvattest-boottime-json-v1', evidence },
+            ],
+          }
+          : {
+            bundles: [
+              { vendor: 'nvidia', format: 'nvidia-nvattest-collect-evidence-json-v1', evidence },
+            ],
+          }
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(body))
+      })
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()))
+      try {
+        const { port } = server.address() as AddressInfo
+        await fn(new DstackClientV1(`http://127.0.0.1:${port}`))
+      } finally {
+        await new Promise<void>(resolve => server.close(() => resolve()))
+      }
+    }
+
+    it('should decode boot-time evidence to the nvattest bytes verbatim', async () => {
+      await withStubAgent(async client => {
+        const result = await client.attest('test', true)
+        const [bundle] = result.boottime_gpu_evidence
+        expect(bundle.vendor).toBe('nvidia')
+        expect(bundle.format).toBe('nvidia-nvattest-boottime-json-v1')
+        // Byte-exact: sha256 over these bytes is what `evidence_sha256` in the
+        // measured `gpu-attestation` event commits to.
+        expect(Buffer.from(bundle.asUint8Array()).toString('utf8')).toBe(nvattest_output)
+      })
+    })
+
+    it('should hand both methods the same bundle shape', async () => {
+      await withStubAgent(async client => {
+        const attested = await client.attest('test', true)
+        const collected = await client.attestGpu(new Uint8Array(32))
+        const boottime: GpuEvidenceBundleV1 = attested.boottime_gpu_evidence[0]
+        const on_demand: GpuEvidenceBundleV1 = collected.bundles[0]
+        // Only `format` separates them, so one parser handles both.
+        expect(on_demand.format).toBe('nvidia-nvattest-collect-evidence-json-v1')
+        expect(on_demand.asUint8Array()).toEqual(boottime.asUint8Array())
+      })
+    })
+  })
+
   describe('info', () => {
     it('should return the flat identity shape', async () => {
       const client = new DstackClientV1()

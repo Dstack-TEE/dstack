@@ -111,9 +111,14 @@ const { attestation } = await client.attest('app-state-snapshot')
 
 ```typescript
 const { attestation, boottime_gpu_evidence } = await client.attest('snapshot', true)
+for (const bundle of boottime_gpu_evidence) {
+  console.log(bundle.vendor, bundle.format, bundle.asUint8Array())
+}
 ```
 
-That evidence is not bound to `reportData` — nvattest ran at boot against its own nonce. Bind it by replaying the runtime event log and comparing sha256 of those exact UTF-8 bytes against `evidence_sha256` in the measured `gpu-attestation` event.
+`boottime_gpu_evidence` is a list of the same `GpuEvidenceBundleV1` objects `attestGpu` returns, so one parser serves both; `format` is what tells them apart (`nvidia-nvattest-boottime-json-v1` here, `nvidia-nvattest-collect-evidence-json-v1` there). Absence is the empty list, not a sentinel: it is empty unless the flag was set and the guest has boot-time output.
+
+That evidence is not bound to `reportData` — nvattest ran at boot against its own nonce. Bind it by replaying the runtime event log and comparing sha256 of the bytes `asUint8Array()` returns — exactly the bytes nvattest emitted, so do not parse and re-serialize the JSON — against `evidence_sha256` in the measured `gpu-attestation` event.
 
 ### `attestGpu(nonce)`
 
@@ -122,13 +127,13 @@ Collect GPU evidence now, against a 32-byte nonce you choose. This answers "is t
 ```typescript
 const { bundles } = await client.attestGpu(crypto.randomBytes(32))
 for (const bundle of bundles) {
-  console.log(bundle.vendor, bundle.format, bundle.evidence)
+  console.log(bundle.vendor, bundle.format, bundle.asUint8Array())
 }
 ```
 
 The nonce must be exactly 32 bytes — SPDM fixes the length, and dstack applies no transform, so you can compare these bytes directly against the `eat_nonce` claim. Hash a longer challenge yourself.
 
-Select a verifier from each bundle's `vendor` and `format`, then check the signature, certificate chain, measurements and embedded nonce. `evidence` is opaque and hex-encoded. It does not by itself bind the GPU to this CVM.
+Select a verifier from each bundle's `vendor` and `format`, then check the signature, certificate chain, measurements and embedded nonce. `evidence` is opaque and hex-encoded on the wire; `asUint8Array()` gives the vendor's bytes verbatim. It does not by itself bind the GPU to this CVM.
 
 ### `info()`
 
