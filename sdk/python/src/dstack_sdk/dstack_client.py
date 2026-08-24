@@ -450,7 +450,10 @@ class AsyncDstackClient(BaseClient):
         hex = binascii.hexlify(report_bytes).decode()
         result = await self._send_rpc_request(
             "Attest",
-            {"report_data": hex, "include_boottime_gpu_evidence": include_boottime_gpu_evidence},
+            {
+                "report_data": hex,
+                "include_boottime_gpu_evidence": include_boottime_gpu_evidence,
+            },
         )
         return AttestResponse(**result)
 

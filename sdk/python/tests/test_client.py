@@ -132,7 +132,9 @@ async def test_async_client_attest_boottime_gpu_evidence(monkeypatch):
 
     monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
     monkeypatch.setattr(AsyncDstackClient, "_send_rpc_request", fake_send)
-    result = await AsyncDstackClient().attest("test", include_boottime_gpu_evidence=True)
+    result = await AsyncDstackClient().attest(
+        "test", include_boottime_gpu_evidence=True
+    )
     assert isinstance(result, AttestResponse)
     assert result.boottime_gpu_evidence == evidence
 
