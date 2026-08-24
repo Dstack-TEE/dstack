@@ -25,7 +25,7 @@ dstack applications consist of:
 - **Remote Attestation**: Versioned attestations providing cryptographic proof of execution environment, including GPU evidence
 - **TLS Certificate Management**: Fresh certificate issuance with optional RA-TLS support for secure connections
 - **Deployment Security**: Client-side encryption of sensitive environment variables ensuring secrets are only accessible to target TEE applications
-- **Blockchain Integration**: Ready-to-use adapters for Ethereum and Solana ecosystems
+- **Blockchain Integration**: v0-era adapters for Ethereum and Solana, see [Blockchain adapters](#blockchain-adapters)
 
 ### Two API versions
 
@@ -203,51 +203,7 @@ cert2, _ := client.IssueCert(ctx)
 // cert1.Key != cert2.Key (always different!)
 ```
 
-## Optional blockchain helpers (build tags)
-
-By default, the Go SDK builds a **core profile** (attestation, key derivation, info, env encryption).
-
-Optional helpers are split by tags:
-
-- `ethereum` tag:
-  - `ToEthereumAccount()`
-  - `ToEthereumAccountSecure()`
-- `solana` tag:
-  - `ToSolanaKeypair()`
-  - `ToSolanaKeypairSecure()`
-
-These adapters take the v0 `*GetKeyResponse`; see [Legacy (v0, frozen)](#legacy-v0-frozen). With the v1 client the conversion is a one-liner against the standard library, because `GetKey` already returns raw 32-byte key material — see the examples below.
-
-### Enable Ethereum helpers
-
-```bash
-# add optional dependency
-go get github.com/ethereum/go-ethereum@v1.16.8
-
-# build/test with ethereum helpers enabled
-go build -tags ethereum ./...
-go test -tags ethereum ./...
-```
-
-### Enable Solana helpers
-
-```bash
-# no extra dependency is required for solana helper APIs
-go build -tags solana ./...
-go test -tags solana ./...
-```
-
-### Enable both
-
-```bash
-go get github.com/ethereum/go-ethereum@v1.16.8
-go build -tags "ethereum solana" ./...
-go test -tags "ethereum solana" ./...
-```
-
-If you don't need blockchain helper APIs, do not use these tags and you won't pull optional helper imports.
-
-### Testing against a local starter app
+## Testing against a local starter app
 
 You can validate SDK changes immediately from another Go project by using `replace`:
 
@@ -263,7 +219,8 @@ go mod tidy
 go run .
 ```
 
-If your starter enables optional blockchain routes, run with matching tags:
+If your starter enables the v0-era blockchain routes, run with matching tags
+(see [Blockchain adapters](#blockchain-adapters)):
 
 ```bash
 # ethereum only
@@ -275,78 +232,6 @@ go run -tags solana .
 
 # both
 go run -tags "ethereum solana" .
-```
-
-## Blockchain Integration
-
-### Ethereum
-
-> requires build tag: `ethereum`
-
-```go
-import (
-	"github.com/Dstack-TEE/dstack/sdk/go/dstack"
-	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/ethclient"
-)
-
-keyResult, err := client.GetKey(ctx, "ethereum/main", "secp256k1")
-if err != nil {
-	log.Fatal(err)
-}
-
-// GetKey returns the 32 raw private key bytes, which is exactly what
-// go-ethereum wants — no hashing or re-derivation in between.
-privateKey, err := crypto.ToECDSA(keyResult.Key)
-if err != nil {
-	log.Fatal(err)
-}
-address := crypto.PubkeyToAddress(privateKey.PublicKey)
-
-fmt.Println("Ethereum Address:", address.Hex())
-
-// Connect to Ethereum network
-ethClient, err := ethclient.Dial("https://mainnet.infura.io/v3/YOUR-PROJECT-ID")
-if err != nil {
-	log.Fatal(err)
-}
-
-// Use account for transactions...
-```
-
-### Solana
-
-> requires build tag: `solana`
-
-```go
-import (
-	"crypto/ed25519"
-	"encoding/hex"
-
-	"github.com/Dstack-TEE/dstack/sdk/go/dstack"
-)
-
-keyResult, err := client.GetKey(ctx, "solana/main", "ed25519")
-if err != nil {
-	log.Fatal(err)
-}
-
-// The 32 bytes are the ed25519 seed. Ask for `ed25519` rather than reusing a
-// secp256k1 key: v1 binds the algorithm into the derivation, so the two are
-// independent keys and neither is a reinterpretation of the other.
-privateKey := ed25519.NewKeyFromSeed(keyResult.Key)
-publicKey := privateKey.Public().(ed25519.PublicKey)
-
-fmt.Println("Solana Public Key:", hex.EncodeToString(publicKey))
-
-// Sign messages
-message := []byte("Hello Solana")
-signature := ed25519.Sign(privateKey, message)
-fmt.Println("Signature:", hex.EncodeToString(signature))
-
-// Verify signature
-isValid := ed25519.Verify(publicKey, message, signature)
-fmt.Println("Valid signature:", isValid)
 ```
 
 ## Environment Variables Encryption
@@ -972,10 +857,11 @@ Tests connectivity to the dstack service.
 
 ## Blockchain adapters
 
-`ToEthereumAccount`, `ToEthereumAccountSecure`, `ToSolanaKeypair` and
-`ToSolanaKeypairSecure` accept the v0 `*GetKeyResponse` (and, with a warning,
-`*GetTlsKeyResponse`). They do not accept the v1 `*GetKeyV1Response` — with v1
-there is nothing to adapt, because `GetKey` already returns the raw 32 bytes.
+The chain adapters are v0-era. `ToEthereumAccount`, `ToEthereumAccountSecure`,
+`ToSolanaKeypair` and `ToSolanaKeypairSecure` accept the v0 `*GetKeyResponse`
+(and, with a warning, `*GetTlsKeyResponse`), and that is the only shape they
+take: v1 has no chain-related surface. `GetKey` returns key material, and what
+an application builds out of those bytes is its own business.
 
 ```go
 keyResult, _ := v0.GetKey(ctx, "ethereum/main", "wallet", "secp256k1")
@@ -987,6 +873,48 @@ if err != nil {
 }
 fmt.Println("Ethereum Address:", secureAccount.Address.Hex())
 ```
+
+### Build tags
+
+By default, the Go SDK builds a **core profile** (attestation, key derivation, info, env encryption).
+
+The adapters are split by tags:
+
+- `ethereum` tag:
+  - `ToEthereumAccount()`
+  - `ToEthereumAccountSecure()`
+- `solana` tag:
+  - `ToSolanaKeypair()`
+  - `ToSolanaKeypairSecure()`
+
+#### Enable Ethereum helpers
+
+```bash
+# add optional dependency
+go get github.com/ethereum/go-ethereum@v1.16.8
+
+# build/test with ethereum helpers enabled
+go build -tags ethereum ./...
+go test -tags ethereum ./...
+```
+
+#### Enable Solana helpers
+
+```bash
+# no extra dependency is required for solana helper APIs
+go build -tags solana ./...
+go test -tags solana ./...
+```
+
+#### Enable both
+
+```bash
+go get github.com/ethereum/go-ethereum@v1.16.8
+go build -tags "ethereum solana" ./...
+go test -tags "ethereum solana" ./...
+```
+
+If you don't need blockchain helper APIs, do not use these tags and you won't pull optional helper imports.
 
 ## Migration from TappdClient
 

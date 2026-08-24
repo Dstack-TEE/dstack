@@ -235,11 +235,11 @@ so a relying party gains nothing over checking the signature itself with a
 standard library.
 
 ```python
-from eth_account import Account
+from cryptography.hazmat.primitives.asymmetric import ed25519
 
-key = client.get_key('wallet/eth', 'secp256k1')
-account = Account.from_key(key.decode_key())
-signed = account.sign_message(...)
+key = client.get_key('signing/messages', 'ed25519')
+signing_key = ed25519.Ed25519PrivateKey.from_private_bytes(key.decode_key())
+signature = signing_key.sign(b'message to sign')
 ```
 
 To verify a v1 signature chain, follow
@@ -248,34 +248,6 @@ spec: it gives the claim encoding, the link order, and — the part that actuall
 establishes anything — the requirement that the KMS root public key come from
 somewhere you already trust (the `DstackKms` contract's `kmsInfo().k256Pubkey`,
 or a value you pinned), never from the CVM being checked.
-
-## Blockchain Integration
-
-A v1 key is 32 raw bytes from `decode_key()`; hand them to your chain library
-directly.
-
-### Ethereum
-
-```python
-from eth_account import Account
-
-key = client.get_key('wallet/ethereum', 'secp256k1')
-account = Account.from_key(key.decode_key())
-print(account.address)
-```
-
-### Solana
-
-```python
-from solders.keypair import Keypair
-
-key = client.get_key('wallet/solana', 'ed25519')
-keypair = Keypair.from_seed(key.decode_key())
-print(keypair.pubkey())
-```
-
-The `dstack_sdk.ethereum` and `dstack_sdk.solana` helpers take v0 response
-models; see [Blockchain helpers (v0 responses)](#blockchain-helpers-v0-responses).
 
 ---
 
@@ -583,12 +555,12 @@ method remains so that a caller written against 0.5.x gets the agent's own
 explanation rather than a 404. `attest_gpu()` and `gpu_info()` never shipped on
 this surface and are not here; they live on the v1 client.
 
-## Blockchain helpers (v0 responses)
+## Blockchain helpers
 
-`dstack_sdk.ethereum` and `dstack_sdk.solana` take a v0 `GetKeyResponse` or
-`GetTlsKeyResponse`. For a v1 key, skip them and pass `key.decode_key()` to your
-chain library directly, as shown in
-[Blockchain Integration](#blockchain-integration).
+The chain adapters are v0-era. `dstack_sdk.ethereum` and `dstack_sdk.solana`
+take a v0 `GetKeyResponse` or `GetTlsKeyResponse`, and that is the only shape
+they take: v1 has no chain-related surface. `get_key()` returns key material,
+and what an application builds out of those bytes is its own business.
 
 ```python
 from dstack_sdk import DstackClientV0
