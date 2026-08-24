@@ -92,7 +92,7 @@ impl PlatformEvidence {
     pub fn tdx_quote(&self) -> Option<&[u8]> {
         match self {
             Self::Tdx { quote, .. } | Self::GcpTdx { quote, .. } => Some(quote.as_slice()),
-            _ => None,
+            Self::NitroEnclave { .. } | Self::AwsNitroTpm { .. } | Self::SevSnp { .. } => None,
         }
     }
 
@@ -101,42 +101,57 @@ impl PlatformEvidence {
             Self::Tdx { event_log, .. } | Self::GcpTdx { event_log, .. } => {
                 Some(event_log.as_slice())
             }
-            _ => None,
+            Self::NitroEnclave { .. } | Self::AwsNitroTpm { .. } | Self::SevSnp { .. } => None,
         }
     }
 
     pub fn tpm_quote(&self) -> Option<&TpmQuote> {
         match self {
             Self::GcpTdx { tpm_quote, .. } => Some(tpm_quote),
-            _ => None,
+            Self::Tdx { .. }
+            | Self::NitroEnclave { .. }
+            | Self::AwsNitroTpm { .. }
+            | Self::SevSnp { .. } => None,
         }
     }
 
     pub fn nsm_quote(&self) -> Option<&[u8]> {
         match self {
             Self::NitroEnclave { nsm_quote } => Some(nsm_quote.as_slice()),
-            _ => None,
+            Self::Tdx { .. }
+            | Self::GcpTdx { .. }
+            | Self::AwsNitroTpm { .. }
+            | Self::SevSnp { .. } => None,
         }
     }
 
     pub fn sev_snp_report(&self) -> Option<&[u8]> {
         match self {
             Self::SevSnp { report, .. } => Some(report.as_slice()),
-            _ => None,
+            Self::Tdx { .. }
+            | Self::GcpTdx { .. }
+            | Self::NitroEnclave { .. }
+            | Self::AwsNitroTpm { .. } => None,
         }
     }
 
     pub fn sev_snp_cert_chain(&self) -> Option<&[Vec<u8>]> {
         match self {
             Self::SevSnp { cert_chain, .. } => Some(cert_chain.as_slice()),
-            _ => None,
+            Self::Tdx { .. }
+            | Self::GcpTdx { .. }
+            | Self::NitroEnclave { .. }
+            | Self::AwsNitroTpm { .. } => None,
         }
     }
 
     pub fn sev_snp_mr_config_document(&self) -> Option<&str> {
         match self {
             Self::SevSnp { mr_config, .. } => Some(mr_config.as_str()),
-            _ => None,
+            Self::Tdx { .. }
+            | Self::GcpTdx { .. }
+            | Self::NitroEnclave { .. }
+            | Self::AwsNitroTpm { .. } => None,
         }
     }
 
@@ -147,8 +162,8 @@ impl PlatformEvidence {
 
     pub fn tdx_event_log_mut(&mut self) -> Option<&mut Vec<TdxEvent>> {
         match self {
-            Self::Tdx { event_log, .. } => Some(event_log),
-            _ => None,
+            Self::Tdx { event_log, .. } | Self::GcpTdx { event_log, .. } => Some(event_log),
+            Self::NitroEnclave { .. } | Self::AwsNitroTpm { .. } | Self::SevSnp { .. } => None,
         }
     }
 
@@ -358,7 +373,11 @@ impl Attestation {
                 PlatformEvidence::Tdx { quote, event_log }
             }
             // Same TDX quote layout, so the same patch applies. The vTPM quote
-            // is left alone: it commits to PCRs, not to this report data.
+            // beside it cannot follow: its `qualified_data` is
+            // `sha256(tdx_quote)`, and re-deriving that would need the AK to
+            // re-sign. So this severs the TPM binding on top of the quote
+            // signature the patch already invalidates -- acceptable only
+            // because nothing verifies a simulator attestation.
             PlatformEvidence::GcpTdx {
                 mut quote,
                 event_log,
@@ -600,6 +619,41 @@ mod tests {
         assert_eq!(stripped[3].imr, 3);
         assert_eq!(stripped[3].event, "app-id");
         assert_eq!(stripped[3].event_payload, vec![0x42]);
+    }
+
+    #[test]
+    fn tdx_event_log_accessors_agree_on_gcp_tdx() {
+        // The mut accessor used to match bare TDX only, so `fill_v2_preimages`
+        // silently skipped GCP attestations and returned V2 events without the
+        // preimage the guest-agent proto promises clients can verify. Whatever
+        // the read accessor reaches, the mut one has to reach too.
+        let mut evidence = PlatformEvidence::GcpTdx {
+            quote: vec![0u8; 64],
+            event_log: vec![TdxEvent {
+                imr: 3,
+                event_type: cc_eventlog::DSTACK_RUNTIME_EVENT_TYPE,
+                digest: vec![0u8; 48],
+                event: "test-event".into(),
+                event_payload: b"payload".to_vec(),
+                version: EventLogVersion::V2,
+                preimage: None,
+            }],
+            tpm_quote: TpmQuote {
+                message: Vec::new(),
+                signature: Vec::new(),
+                pcr_values: Vec::new(),
+                ak_cert: Vec::new(),
+                platform: dstack_types::Platform::Gcp,
+                event_log: Vec::new(),
+            },
+        };
+
+        assert!(evidence.tdx_event_log().is_some());
+        let log = evidence
+            .tdx_event_log_mut()
+            .expect("mut accessor must reach GCP TDX too");
+        cc_eventlog::tdx::fill_v2_preimages(log);
+        assert!(evidence.tdx_event_log().unwrap()[0].preimage.is_some());
     }
 
     #[test]
