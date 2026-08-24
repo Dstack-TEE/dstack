@@ -21,11 +21,11 @@ dstack applications consist of:
 
 ### SDK Capabilities
 
-- **Key Derivation**: Deterministic key derivation for wallets, signing, encryption, and other application-specific secrets
+- **Key Derivation**: Deterministic key derivation for signing, encryption, and other application-specific secrets
 - **Remote Attestation**: Versioned attestations providing cryptographic proof of execution environment, including GPU evidence
 - **TLS Certificate Management**: Fresh certificate issuance with optional RA-TLS support for secure connections
 - **Deployment Security**: Client-side encryption of sensitive environment variables ensuring secrets are only accessible to target TEE applications
-- **Blockchain Integration**: v0-era adapters for Ethereum and Solana, see [Blockchain adapters](#blockchain-adapters)
+- **Blockchain Integration (legacy)**: v0-era adapters for Ethereum and Solana, not part of v1 — see [Blockchain adapters](#blockchain-adapters)
 
 ### Two API versions
 
@@ -54,13 +54,13 @@ What v1 changes:
 - `Attest` subsumes `GetQuote`; `Info` is flat, with no `tcb_info` blob and no `app_cert`.
 - `Sign`, `Verify` and `EmitEvent` are gone. Sign and verify locally with a standard library, using the key `GetKey` returns; `EmitEvent` is gone because runtime RTMR3 events became system-owned.
 
-> **⚠️ v1 derives different key material than v0.** `client.GetKey(ctx, "wallet", "secp256k1")`
-> and `v0.GetKey(ctx, "wallet", "", "secp256k1")` return **unrelated** keys. v1 derives
+> **⚠️ v1 derives different key material than v0.** `client.GetKey(ctx, "storage-encryption", "secp256k1")`
+> and `v0.GetKey(ctx, "storage-encryption", "", "secp256k1")` return **unrelated** keys. v1 derives
 > under its own HKDF salt and binds the algorithm and a versioned context tag alongside
 > the domain, so secp256k1 and ed25519 no longer share one 32-byte secret either. There is
 > no compatibility mode and no way to reach a v0 key through v1. An application holding
-> funds or data under a v0 key must migrate them deliberately: derive the v1 key, then
-> move the assets. See `docs/guest-api-v1.md` for the byte-level construction.
+> anything under a v0 key must migrate it deliberately: derive the v1 key, then re-key
+> whatever the old one protected. See `docs/guest-api-v1.md` for the byte-level construction.
 >
 > Code that used the unsuffixed client for v0 calls fails **loudly** on upgrade rather
 > than silently deriving different keys, because the v1 method signatures differ and
@@ -140,14 +140,14 @@ func main() {
 	fmt.Println("App Compose:", info.AppCompose)
 
 	// Derive deterministic keys for application-specific secrets
-	walletKey, err := client.GetKey(ctx, "wallet/ethereum", "secp256k1")
+	storageKey, err := client.GetKey(ctx, "storage-encryption", "secp256k1")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	fmt.Println("Derived key (32 bytes):", hex.EncodeToString(walletKey.Key)) // secp256k1 private key
-	fmt.Println("Public key:", hex.EncodeToString(walletKey.PublicKey))
-	fmt.Println("Signature chain links:", len(walletKey.SignatureChain)) // Authenticity proof
+	fmt.Println("Derived key (32 bytes):", hex.EncodeToString(storageKey.Key)) // secp256k1 private key
+	fmt.Println("Public key:", hex.EncodeToString(storageKey.PublicKey))
+	fmt.Println("Signature chain links:", len(storageKey.SignatureChain)) // Authenticity proof
 
 	// Generate a remote attestation, bound to your own data
 	applicationData := map[string]interface{}{
@@ -256,7 +256,7 @@ envVars := []dstack.EnvVar{
 	{Key: "DATABASE_URL", Value: "postgresql://user:pass@host:5432/db"},
 	{Key: "API_SECRET_KEY", Value: "your-secret-key"},
 	{Key: "JWT_PRIVATE_KEY", Value: "-----BEGIN PRIVATE KEY-----\n..."},
-	{Key: "WALLET_MNEMONIC", Value: "abandon abandon abandon..."},
+	{Key: "BACKUP_SIGNING_SEED", Value: "hex-encoded seed..."},
 }
 
 // 2. Obtain encryption public key from KMS API (dstack-vmm or Phala Cloud).
@@ -320,16 +320,16 @@ The SDK implements secure key derivation using:
 
 ```go
 // Each domain generates a unique, deterministic key
-wallet1, _ := client.GetKey(ctx, "app1/wallet", "secp256k1")
-wallet2, _ := client.GetKey(ctx, "app2/wallet", "secp256k1")
-// wallet1.Key != wallet2.Key (guaranteed different)
+storageKey, _ := client.GetKey(ctx, "storage-encryption", "secp256k1")
+authKey, _ := client.GetKey(ctx, "api-auth", "secp256k1")
+// storageKey.Key != authKey.Key (guaranteed different)
 
-sameWallet, _ := client.GetKey(ctx, "app1/wallet", "secp256k1")
-// wallet1.Key == sameWallet.Key (guaranteed identical)
+sameStorageKey, _ := client.GetKey(ctx, "storage-encryption", "secp256k1")
+// storageKey.Key == sameStorageKey.Key (guaranteed identical)
 
 // The algorithm is bound into the derivation, so the two curves never share a
 // secret — this is a second, unrelated key, not a reinterpretation of the first.
-solWallet, _ := client.GetKey(ctx, "app1/wallet", "ed25519")
+storageKeyEd25519, _ := client.GetKey(ctx, "storage-encryption", "ed25519")
 ```
 
 Derivation is **flat**: `a/b` is not a child of `a`. The `/` is a naming convention, nothing more, and two domains that share a prefix yield unrelated keys.
@@ -473,14 +473,13 @@ Derives an application key from `(domain, algorithm)`.
 secp256k1, 32 raw bytes for ed25519), and a two-element `SignatureChain`.
 
 ```go
-key, err := client.GetKey(ctx, "wallet/ethereum", "secp256k1")
+key, err := client.GetKey(ctx, "backup-signing", "secp256k1")
 ```
 
 **Use Cases:**
 - Stable service identity keys
 - Application signing keys
 - Encryption key seeds
-- Cryptocurrency wallets and transaction signing
 - Any scenario requiring consistent, reproducible keys
 
 #### `Attest(ctx context.Context, reportData []byte, includeBoottimeGpuEvidence bool) (*AttestV1Response, error)`

@@ -22,9 +22,9 @@ out for code that wants the surface visible at a glance.
 > the algorithm and its own context tag alongside the domain, which is the point of
 > the new derivation, not a defect: v0 ignored the algorithm, so one secret served
 > two curves. There is no compatibility mode and no flag that brings the old bytes
-> back. An application holding assets under a v0 key must migrate them deliberately —
-> derive the v1 key, move the asset with a transaction signed by the v0 key, and only
-> then cut over.
+> back. An application that has published or committed to material derived from a v0
+> key must migrate deliberately — derive the v1 key, re-establish whatever depends on
+> the old one under it, and only then cut over.
 >
 > Code that used the unsuffixed client for v0 calls fails **loudly** on upgrade
 > rather than silently deriving different keys, because the v1 method signatures
@@ -60,7 +60,7 @@ from dstack_sdk import DstackClient
 
 client = DstackClient()
 
-key = client.get_key('wallet/eth', 'secp256k1')   # algorithm is required
+key = client.get_key('storage-encryption', 'secp256k1')   # algorithm is required
 attestation = client.attest(b'my-app-state')
 info = client.info()
 ```
@@ -89,7 +89,7 @@ same domain always produces the same key for your app, and different apps get
 different keys for the same domain.
 
 ```python
-key = client.get_key('wallet/eth', 'secp256k1')
+key = client.get_key('storage-encryption', 'secp256k1')
 print(key.decode_key())             # 32 raw bytes
 print(key.decode_public_key())      # SEC1 compressed (33 B), or 32 B for ed25519
 print(key.decode_signature_chain()) # two links: app root, then KMS root
@@ -212,7 +212,7 @@ async def main():
     client = AsyncDstackClient()
 
     info = await client.info()
-    key = await client.get_key('wallet/eth', 'ed25519')
+    key = await client.get_key('backup-signing', 'ed25519')
 
     # Run requests concurrently
     keys = await asyncio.gather(

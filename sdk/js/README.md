@@ -8,7 +8,7 @@ JavaScript / TypeScript client for the dstack guest agent. Derive deterministic 
 npm install @phala/dstack-sdk
 ```
 
-`@noble/hashes` and `@noble/curves` ship as regular dependencies — the core needs them for hashing and for verifying the KMS env-encryption key. Install the matching peer when you import a blockchain submodule:
+`@noble/hashes` and `@noble/curves` ship as regular dependencies — the core needs them for hashing and for verifying the KMS env-encryption key. Install the matching peer when you import one of the v0-era chain submodules:
 
 | Import path | Extra peer dependency |
 | --- | --- |
@@ -26,7 +26,7 @@ import { DstackClient } from '@phala/dstack-sdk'
 
 const client = new DstackClient()
 
-const key = await client.getKey('wallet/eth', 'secp256k1')
+const key = await client.getKey('storage-encryption', 'secp256k1')
 console.log(Buffer.from(key.key).toString('hex'))
 
 const { attestation } = await client.attest('app-state-snapshot')
@@ -55,7 +55,7 @@ dstack 0.6.0 splits the guest agent API into two surfaces on the same socket, se
 
 The unsuffixed `DstackClient` names v1. `DstackClientV1` is the same class under an explicit name — use whichever reads better; new code should not need `DstackClientV0` at all.
 
-> **v1 keys are not v0 keys.** `getKey` on v1 derives under its own HKDF salt and binds the algorithm and a versioned context tag into the derivation. The same name yields **different key material** on the two surfaces, and under v1 secp256k1 and ed25519 no longer share one 32-byte secret. There is no compatibility mode and no migration path back — an app that has published a v0-derived address must keep deriving it with `DstackClientV0`. `docs/guest-api-v1.md` pins the byte-level construction.
+> **v1 keys are not v0 keys.** `getKey` on v1 derives under its own HKDF salt and binds the algorithm and a versioned context tag into the derivation. The same name yields **different key material** on the two surfaces, and under v1 secp256k1 and ed25519 no longer share one 32-byte secret. There is no compatibility mode and no migration path back — an app that has published v0-derived material must keep deriving it with `DstackClientV0`. `docs/guest-api-v1.md` pins the byte-level construction.
 
 Code that used the unsuffixed client for v0 calls fails **loudly** on upgrade rather than silently deriving different keys, because the v1 method signatures differ and `getKey` requires `algorithm` explicitly. To stay on the frozen surface, switch to `DstackClientV0`.
 
@@ -87,12 +87,12 @@ The key is freshly generated on every call and is not derived from the app ident
 Derive a deterministic application key.
 
 ```typescript
-const eth = await client.getKey('wallet/ethereum', 'secp256k1')
-const sol = await client.getKey('wallet/solana', 'ed25519')
+const enc = await client.getKey('storage-encryption', 'secp256k1')
+const sig = await client.getKey('backup-signing', 'ed25519')   // unrelated key material
 
-eth.key             // Uint8Array, 32 bytes
-eth.public_key      // Uint8Array — SEC1 compressed (33) for secp256k1, raw (32) for ed25519
-eth.signature_chain // Uint8Array[], exactly 2 links
+enc.key             // Uint8Array, 32 bytes
+enc.public_key      // Uint8Array — SEC1 compressed (33) for secp256k1, raw (32) for ed25519
+enc.signature_chain // Uint8Array[], exactly 2 links
 ```
 
 Both arguments are required. `algorithm` is exactly `'secp256k1'` or `'ed25519'` — there is no default and no `k256` alias, because v0's defaulting meant a typo silently produced a key of the wrong type under a name the caller thought meant something else.

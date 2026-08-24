@@ -720,7 +720,7 @@ export interface VersionResponseV1 {
  * `emitEvent` are absent by design, not by oversight; see `docs/guest-api-v1.md`.
  *
  * A v1 key is NOT the v0 key of the same name. v1 derives under its own HKDF
- * salt and binds the algorithm into the derivation, so `getKey('wallet',
+ * salt and binds the algorithm into the derivation, so `getKey('storage-encryption',
  * 'secp256k1')` here returns different material than `DstackClientV0.getKey`
  * ever did, and secp256k1 and ed25519 no longer share one secret. There is no
  * compatibility mode.
