@@ -106,24 +106,19 @@ Generates a versioned attestation with a custom 64-byte payload.
 
 #### `attest_gpu(nonce: Vec<u8>) -> AttestGpuResponse`
 
-Runs NVIDIA GPU attestation now, against a 32-byte nonce you choose. Use it after
-anything that may have reinitialised the GPU — a driver reload leaves a device that
-answers NVML but can no longer attest.
+Collects vendor-native GPU evidence for a caller-chosen 32-byte nonce.
 
 ```rust
 let result = client.attest_gpu(nonce.to_vec()).await?;
-println!("{}", result.evidence);
+for bundle in result.bundles {
+    println!("{} {} {}", bundle.vendor, bundle.format, bundle.evidence);
+}
 ```
 
-> [!IMPORTANT]
-> `evidence` is GPU-signed and checkable by anyone — the base64 SPDM report and its
-> certificate chain, over your nonce. `appraisal` is the local verifier's verdict on
-> those same bytes and does **not** travel (`alg:none` EAT), so a remote party should
-> appraise `evidence` itself and ignore `appraisal`.
->
-> Neither binds the GPU to this CVM: an NVIDIA report binds the device and nonce and
-> nothing else, so it is relayable until TDISP/TEE-IO. For TD-bound evidence use the
-> boot-time `gpu-attestation` event. Calls are rate-limited to one per 10s.
+Select a verifier using each bundle's `vendor` and `format`. The verifier must check
+the evidence signature, certificate chain, measurements, and embedded nonce. Evidence
+is opaque and hex-encoded by the JSON RPC. It does not by itself bind the GPU to this
+CVM.
 
 #### `gpu_info() -> GpuInfoResponse`
 

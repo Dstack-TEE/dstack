@@ -61,7 +61,7 @@ service DstackGuest {
   // Get GPU information collected during boot.
   rpc GpuInfo(google.protobuf.Empty) returns (GpuInfoResponse) {}
 
-  // Run NVIDIA GPU attestation now, against a nonce the caller chooses.
+  // Collect GPU attestation evidence now, against a nonce the caller chooses.
   //
   // This answers "is the device I can talk to right now a genuine, CC-enabled
   // NVIDIA GPU that signs my challenge", which `GpuInfo` cannot: that returns a
@@ -69,9 +69,9 @@ service DstackGuest {
   // the GPU -- a driver reload leaves a device that responds to NVML but can no
   // longer attest -- and before submitting work you care about.
   //
-  // Returns the GPU-signed evidence itself, not just a verdict about it, so a
-  // relying party can appraise it with its own verifier. That still does not
-  // bind the GPU to this TD -- see `AttestGpuResponse.evidence`.
+  // Returns vendor-native evidence, not a local verdict, so a relying party can
+  // appraise it with its own verifier. Evidence still does not bind the GPU to
+  // this TD; see `AttestGpuResponse.bundles`.
   rpc AttestGpu(AttestGpuArgs) returns (AttestGpuResponse) {}
 
   // Sign a payload
@@ -221,41 +221,21 @@ message AttestGpuArgs {
 }
 
 message AttestGpuResponse {
-  // GPU-signed evidence for the requested nonce: `nvattest collect-evidence`
-  // output, a JSON array with one entry per device carrying the base64 SPDM
-  // attestation report and its certificate chain.
-  //
-  // This is the part a third party can check for itself, and the reason the RPC
-  // returns it rather than only a verdict. A relying party verifies the chain to
-  // NVIDIA's root, checks the report signature with the leaf key, confirms the
-  // nonce inside the report is the one it issued, and compares the measurements
-  // against NVIDIA's RIM documents -- with its own verifier, trusting nothing
-  // this CVM says.
-  //
-  // What it still cannot establish is which TD the device is attached to. An
-  // NVIDIA report binds the device and the nonce and nothing else, so it can be
-  // relayed from a genuine remote GPU; deriving the nonce from a TDX quote does
-  // not help, because the relay can derive it too. Only TDISP/TEE-IO closes
-  // that, and no current Hopper/Blackwell deployment offers it.
-  string evidence = 1;
+  // Vendor-native evidence bundles. The caller must select a verifier using
+  // `vendor` and `format`, then verify the signature, certificate chain,
+  // measurements, and the nonce embedded in the evidence.
+  repeated GpuEvidenceBundle bundles = 1;
+}
 
-  // The local verifier's appraisal of exactly those bytes: `nvattest attest
-  // --verifier local` output, the same shape `GpuInfo` returns.
-  //
-  // Convenience for a caller inside this CVM, which is in the agent's trust
-  // domain: the agent checked the report signature, the certificate chain and
-  // OCSP status, and the driver and VBIOS RIM signatures, so the caller does not
-  // have to. It is NOT evidence and does not travel: the detached EAT it carries
-  // is `alg:none`, issued by `NVAT-LOCAL-VERIFIER`, and a claim such as
-  // `x-nvidia-gpu-attestation-report-signature-verified` is an assertion about a
-  // check already performed, not proof anyone else can redo. A remote party
-  // should ignore this field and appraise `evidence` itself.
-  string appraisal = 2;
+message GpuEvidenceBundle {
+  // Stable GPU vendor identifier, for example `nvidia`, `amd`, or `intel`.
+  string vendor = 1;
 
-  // The nonce both halves answer, hex-encoded, as it appears in `eat_nonce` and
-  // in each evidence entry. Echoed so a caller can assert on it without
-  // re-encoding.
-  string nonce = 3;
+  // Vendor-specific evidence format and version.
+  string format = 2;
+
+  // Opaque vendor-native evidence bytes. Do not assume UTF-8 or JSON.
+  bytes evidence = 3;
 }
 
 message GpuInfoResponse {

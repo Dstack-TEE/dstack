@@ -4820,7 +4820,6 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_json",
- "tempfile",
  "tokio",
  "tracing",
  "url",

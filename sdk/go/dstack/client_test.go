@@ -94,10 +94,10 @@ func TestAttestGpu(t *testing.T) {
 			t.Fatalf("nonce was not forwarded verbatim, got: %v", payload["nonce"])
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"evidence":  evidence,
-			"appraisal": `{"result_code":0,"claims":[]}`,
-			"nonce":     hex.EncodeToString(nonce),
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"bundles": []map[string]string{{
+				"vendor": "nvidia", "format": "nvidia-test-v1", "evidence": evidence,
+			}},
 		})
 	}))
 	defer server.Close()
@@ -107,14 +107,8 @@ func TestAttestGpu(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Evidence != evidence {
-		t.Fatalf("unexpected evidence: %s", resp.Evidence)
-	}
-	if resp.Appraisal == "" {
-		t.Fatal("expected the appraisal to be carried alongside the evidence")
-	}
-	if resp.Nonce != hex.EncodeToString(nonce) {
-		t.Fatalf("unexpected nonce: %s", resp.Nonce)
+	if len(resp.Bundles) != 1 || resp.Bundles[0].Vendor != "nvidia" || resp.Bundles[0].Evidence != evidence {
+		t.Fatalf("unexpected evidence bundles: %+v", resp.Bundles)
 	}
 }
 

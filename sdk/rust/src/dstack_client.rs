@@ -164,21 +164,10 @@ impl DstackClient {
         Ok(response)
     }
 
-    /// Runs NVIDIA GPU attestation now, against a 32-byte nonce you choose.
+    /// Collects vendor-native GPU evidence for a caller-chosen 32-byte nonce.
     ///
-    /// `evidence` is GPU-signed and checkable by anyone: the base64 SPDM attestation report
-    /// and its certificate chain, per device, for the nonce you sent. A relying party
-    /// verifies the chain to NVIDIA's root, checks the report signature, confirms the nonce
-    /// inside the report, and compares measurements against NVIDIA's RIM documents, using
-    /// its own verifier and trusting nothing the CVM says.
-    ///
-    /// `appraisal` is the local verifier's verdict on those same bytes -- convenient inside
-    /// the CVM, but not evidence: its detached EAT is `alg:none` from `NVAT-LOCAL-VERIFIER`,
-    /// so a remote party should ignore it and appraise `evidence` itself.
-    ///
-    /// Neither binds the GPU to this TD. An NVIDIA report binds the device and the nonce and
-    /// nothing else, so it can be relayed from a genuine remote GPU; only TDISP/TEE-IO would
-    /// close that.
+    /// Select a verifier using each bundle's vendor and format. The verifier must
+    /// check the signature, certificate chain, measurements, and embedded nonce.
     pub async fn attest_gpu(&self, nonce: Vec<u8>) -> Result<AttestGpuResponse> {
         if nonce.len() != 32 {
             anyhow::bail!("Nonce must be exactly 32 bytes")

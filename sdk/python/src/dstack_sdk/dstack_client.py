@@ -157,27 +157,15 @@ class AttestResponse(BaseModel):
         return bytes.fromhex(self.attestation)
 
 
-class AttestGpuResponse(BaseModel):
-    """Result of a fresh, on-demand NVIDIA GPU attestation.
-
-    `evidence` is GPU-signed and checkable by anyone: the base64 SPDM attestation report
-    and its certificate chain, per device, for the nonce you sent. A relying party
-    verifies the chain to NVIDIA's root, checks the report signature, confirms the nonce
-    inside the report, and compares measurements against NVIDIA's RIM documents, using
-    its own verifier and trusting nothing the CVM says.
-
-    `appraisal` is the local verifier's verdict on those same bytes -- convenient inside
-    the CVM, but not evidence: its detached EAT is `alg:none` from `NVAT-LOCAL-VERIFIER`,
-    so a remote party should ignore it and appraise `evidence` itself.
-
-    Neither binds the GPU to this TD. An NVIDIA report binds the device and the nonce and
-    nothing else, so it can be relayed from a genuine remote GPU; only TDISP/TEE-IO would
-    close that.
-    """
-
+class GpuEvidenceBundle(BaseModel):
+    vendor: str
+    format: str
     evidence: str
-    nonce: str
-    appraisal: str = ""
+
+
+class AttestGpuResponse(BaseModel):
+    """Result of fresh, on-demand GPU evidence collection."""
+    bundles: list[GpuEvidenceBundle]
 
 
 class GpuInfoResponse(BaseModel):
@@ -464,21 +452,10 @@ class AsyncDstackClient(BaseClient):
         return AttestResponse(**result)
 
     async def attest_gpu(self, nonce: bytes) -> AttestGpuResponse:
-        """Run NVIDIA GPU attestation now, against a 32-byte nonce you choose.
+        """Collect vendor-native GPU evidence for a 32-byte nonce.
 
-        `evidence` is GPU-signed and checkable by anyone: the base64 SPDM attestation report
-        and its certificate chain, per device, for the nonce you sent. A relying party
-        verifies the chain to NVIDIA's root, checks the report signature, confirms the nonce
-        inside the report, and compares measurements against NVIDIA's RIM documents, using
-        its own verifier and trusting nothing the CVM says.
-
-        `appraisal` is the local verifier's verdict on those same bytes -- convenient inside
-        the CVM, but not evidence: its detached EAT is `alg:none` from `NVAT-LOCAL-VERIFIER`,
-        so a remote party should ignore it and appraise `evidence` itself.
-
-        Neither binds the GPU to this TD. An NVIDIA report binds the device and the nonce and
-        nothing else, so it can be relayed from a genuine remote GPU; only TDISP/TEE-IO would
-        close that.
+        Select a verifier using each bundle's vendor and format, and verify the
+        signature, certificate chain, measurements, and embedded nonce.
         """
         if not isinstance(nonce, (bytes, bytearray)) or len(nonce) != 32:
             raise ValueError("nonce must be exactly 32 bytes")
@@ -622,21 +599,10 @@ class DstackClient(BaseClient):
 
     @call_async
     def attest_gpu(self, nonce: bytes) -> AttestGpuResponse:
-        """Run NVIDIA GPU attestation now, against a 32-byte nonce you choose.
+        """Collect vendor-native GPU evidence for a 32-byte nonce.
 
-        `evidence` is GPU-signed and checkable by anyone: the base64 SPDM attestation report
-        and its certificate chain, per device, for the nonce you sent. A relying party
-        verifies the chain to NVIDIA's root, checks the report signature, confirms the nonce
-        inside the report, and compares measurements against NVIDIA's RIM documents, using
-        its own verifier and trusting nothing the CVM says.
-
-        `appraisal` is the local verifier's verdict on those same bytes -- convenient inside
-        the CVM, but not evidence: its detached EAT is `alg:none` from `NVAT-LOCAL-VERIFIER`,
-        so a remote party should ignore it and appraise `evidence` itself.
-
-        Neither binds the GPU to this TD. An NVIDIA report binds the device and the nonce and
-        nothing else, so it can be relayed from a genuine remote GPU; only TDISP/TEE-IO would
-        close that.
+        Select a verifier using each bundle's vendor and format, and verify the
+        signature, certificate chain, measurements, and embedded nonce.
         """
         raise NotImplementedError
 

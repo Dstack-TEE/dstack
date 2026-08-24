@@ -262,40 +262,7 @@ curl --unix-socket /var/run/dstack.sock http://dstack/Attest?report_data=0000000
 
 ### 7. Attest GPU
 
-Runs NVIDIA GPU attestation **now**, against a nonce you choose. Unlike
-[`GpuInfo`](#8-gpu-info), which replays a record written at boot, this samples the
-device at the moment of the call.
-
-Use it after anything that may have reinitialised the GPU. A driver reload leaves a
-device that still answers NVML but can no longer attest, and this is how an
-application detects that before submitting work.
-
-> [!IMPORTANT]
-> `evidence` is checkable by anyone; `appraisal` is not. A relying party outside this
-> CVM should verify `evidence` with its own verifier and ignore `appraisal`.
->
-> **`evidence`** is `nvattest collect-evidence` output: one entry per device with the
-> base64 SPDM attestation report and its certificate chain, signed by the GPU over the
-> nonce you sent. To check it: verify the chain to NVIDIA's device-identity root,
-> verify the report signature with the leaf key, confirm the nonce inside the report is
-> the one you issued, then compare the measurements against NVIDIA's RIM documents.
->
-> **`appraisal`** is the local verifier's verdict on exactly those bytes, provided
-> because a caller inside the CVM is in the agent's trust domain and usually just wants
-> the answer. It does not travel: its detached EAT is `alg:none` issued by
-> `NVAT-LOCAL-VERIFIER`, and a claim like
-> `x-nvidia-gpu-attestation-report-signature-verified: true` is an assertion about a
-> check already performed, not proof anyone can redo.
-
-> [!WARNING]
-> Neither field binds the GPU to *this* CVM. An NVIDIA report binds the device and the
-> nonce and nothing else, so it can be relayed from a genuine remote GPU; deriving the
-> nonce from a TDX quote does not help, because the relay can derive it too. Only
-> TDISP/TEE-IO closes this, and no current Hopper/Blackwell deployment offers it.
->
-> For evidence that the GPU is bound to this TD, use the boot-time `gpu-attestation`
-> runtime event: measured dstack code (pinned by `os_image_hash`) appraised the GPU
-> before any workload existed, with the digest in RTMR3 under the quote.
+Collects vendor-native GPU evidence for a caller-chosen 32-byte nonce.
 
 **Endpoint:** `/AttestGpu`
 
@@ -303,33 +270,24 @@ application detects that before submitting work.
 
 | Field | Type | Description | Example |
 |-------|------|-------------|----------|
-| `nonce` | string | Exactly 32 bytes, hex-encoded, passed to the GPU verbatim. To bind a longer challenge, hash it yourself. | `"ab...ab"` (64 hex chars) |
-
-**Example:**
-```bash
-curl --unix-socket /var/run/dstack.sock -X POST \
-  http://dstack/AttestGpu \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "nonce": "abababababababababababababababababababababababababababababababab"
-  }'
-```
+| `nonce` | string | Exactly 32 bytes, hex-encoded and passed to the GPU verbatim. | `"ab...ab"` (64 hex chars) |
 
 **Response:**
+
 ```json
 {
-  "evidence": "[{\"arch\": \"HOPPER\", \"nonce\": \"abab...\", \"evidence\": \"<base64 report>\", \"certificate\": \"<base64 chain>\"}]",
-  "appraisal": "{\"result_code\": 0, \"claims\": [...]}",
-  "nonce": "abababababababababababababababababababababababababababababababab"
+  "bundles": [{
+    "vendor": "nvidia",
+    "format": "nvidia-nvattest-collect-evidence-json-v1",
+    "evidence": "<hex-encoded opaque evidence>"
+  }]
 }
 ```
 
-The two halves describe the same report: dstack collects the evidence once and appraises
-those exact bytes rather than asking the GPU twice. dstack has already checked that
-nvattest succeeded and that every claim answers your nonce. Calls are serialised and rate-limited (one
-attestation per 10s), because each one spawns `nvattest` and fetches OCSP and RIM
-collateral from NVIDIA. A call arriving inside the cooldown is rejected with a wait
-hint rather than queued.
+Select a verifier using each bundle's `vendor` and `format`. The verifier must check
+the evidence signature, certificate chain, measurements, and embedded nonce. The
+agent does not appraise the evidence. Evidence does not by itself bind the GPU to this
+CVM.
 
 ### 8. GPU Info
 

@@ -12,6 +12,7 @@ from .dstack_client import GetQuoteResponse
 from .dstack_client import GetTlsKeyResponse
 from .dstack_client import AttestGpuResponse
 from .dstack_client import GpuInfoResponse
+from .dstack_client import GpuEvidenceBundle
 from .dstack_client import InfoResponse
 from .dstack_client import SignResponse
 from .dstack_client import TappdClient
@@ -40,6 +41,7 @@ __all__ = [
     "GetTlsKeyResponse",
     "AttestResponse",
     "AttestGpuResponse",
+    "GpuEvidenceBundle",
     "GpuInfoResponse",
     "GetQuoteResponse",
     "InfoResponse",

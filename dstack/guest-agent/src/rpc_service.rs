@@ -17,8 +17,8 @@ use dstack_guest_agent_rpc::{
     worker_server::{WorkerRpc, WorkerServer},
     AppInfo, AttestAppKeyRequest, AttestGpuArgs, AttestGpuResponse, AttestResponse,
     DeriveK256KeyResponse, DeriveKeyArgs, GetKeyArgs, GetKeyResponse, GetQuoteResponse,
-    GetTlsKeyArgs, GetTlsKeyResponse, GpuInfoResponse, HealthResponse, RawQuoteArgs, SignRequest,
-    SignResponse, TdxQuoteArgs, TdxQuoteResponse, WorkerVersion,
+    GetTlsKeyArgs, GetTlsKeyResponse, GpuEvidenceBundle, GpuInfoResponse, HealthResponse,
+    RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse, WorkerVersion,
 };
 use dstack_types::{AppKeys, SysConfig, GPU_ATTESTATION_OUTPUT};
 use ed25519_dalek::ed25519::signature::hazmat::PrehashSigner;
@@ -164,10 +164,7 @@ impl AppState {
             serde_json::from_str(&fs::read_to_string(&config.sys_config_file)?)
                 .context("Failed to parse VM config")?;
         let collateral_urls = sys_config.collateral_urls();
-        // Same collateral proxy the boot gate uses, so a CVM without egress to
-        // NVIDIA can still attest on demand.
-        let gpu_attestor =
-            crate::gpu_attest::GpuAttestor::new(sys_config.nvidia_attestation_proxy_url.clone());
+        let gpu_attestor = crate::gpu_attest::GpuAttestor::new();
         let vm_config = sys_config.vm_config;
         // Same trust anchor decision as dstack-util: never host-supplied, and
         // development roots only when this guest published them itself.
@@ -386,7 +383,7 @@ impl DstackGuestRpc for InternalRpcHandler {
     }
 
     async fn attest_gpu(self, request: AttestGpuArgs) -> Result<AttestGpuResponse> {
-        let attestation = self
+        let evidence = self
             .state
             .inner
             .gpu_attestor
@@ -394,10 +391,11 @@ impl DstackGuestRpc for InternalRpcHandler {
             .await
             .context("GPU attestation failed")?;
         Ok(AttestGpuResponse {
-            evidence: attestation.evidence,
-            appraisal: String::from_utf8(attestation.appraisal)
-                .context("nvattest output is not valid UTF-8")?,
-            nonce: attestation.nonce,
+            bundles: vec![GpuEvidenceBundle {
+                vendor: "nvidia".to_string(),
+                format: "nvidia-nvattest-collect-evidence-json-v1".to_string(),
+                evidence,
+            }],
         })
     }
 
@@ -1005,7 +1003,7 @@ pNs85uhOZE8z2jr8Pg==
                 },
             }),
             health: None,
-            gpu_attestor: crate::gpu_attest::GpuAttestor::new(None),
+            gpu_attestor: crate::gpu_attest::GpuAttestor::new(),
         };
 
         (

@@ -98,33 +98,25 @@ pub struct AttestResponse {
     pub attestation: String,
 }
 
-/// Response from a fresh, on-demand NVIDIA GPU attestation.
+/// Response from fresh, on-demand GPU evidence collection.
 ///
-/// `evidence` is GPU-signed and checkable by anyone: the base64 SPDM attestation report
-/// and its certificate chain, per device, for the nonce you sent. A relying party
-/// verifies the chain to NVIDIA's root, checks the report signature, confirms the nonce
-/// inside the report, and compares measurements against NVIDIA's RIM documents, using
-/// its own verifier and trusting nothing the CVM says.
-///
-/// `appraisal` is the local verifier's verdict on those same bytes -- convenient inside
-/// the CVM, but not evidence: its detached EAT is `alg:none` from `NVAT-LOCAL-VERIFIER`,
-/// so a remote party should ignore it and appraise `evidence` itself.
-///
-/// Neither binds the GPU to this TD. An NVIDIA report binds the device and the nonce and
-/// nothing else, so it can be relayed from a genuine remote GPU; only TDISP/TEE-IO would
-/// close that.
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
 pub struct AttestGpuResponse {
-    /// GPU-signed evidence: `collect-evidence` output, one entry per device
-    /// carrying the base64 SPDM attestation report and its certificate chain.
+    pub bundles: Vec<GpuEvidenceBundle>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+pub struct GpuEvidenceBundle {
+    /// Stable GPU vendor identifier.
+    pub vendor: String,
+    /// Vendor-specific evidence format and version.
+    pub format: String,
+    /// Hex-encoded opaque evidence bytes, as represented by the JSON RPC.
     pub evidence: String,
-    /// The local verifier's appraisal of exactly those bytes. Unsigned.
-    #[serde(default)]
-    pub appraisal: String,
-    /// The nonce both halves answer, hex-encoded, as it appears in `eat_nonce`.
-    pub nonce: String,
 }
 
 /// Response containing the complete NVIDIA GPU attestation output.

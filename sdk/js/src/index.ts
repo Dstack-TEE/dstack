@@ -104,36 +104,18 @@ export interface AttestResponse {
 }
 
 /**
- * Result of a fresh, on-demand NVIDIA GPU attestation.
- *
- * `evidence` is GPU-signed and checkable by anyone: the base64 SPDM attestation report
- * and its certificate chain, per device, for the nonce you sent. A relying party
- * verifies the chain to NVIDIA's root, checks the report signature, confirms the nonce
- * inside the report, and compares measurements against NVIDIA's RIM documents, using
- * its own verifier and trusting nothing the CVM says.
- *
- * `appraisal` is the local verifier's verdict on those same bytes -- convenient inside
- * the CVM, but not evidence: its detached EAT is `alg:none` from `NVAT-LOCAL-VERIFIER`,
- * so a remote party should ignore it and appraise `evidence` itself.
- *
- * Neither binds the GPU to this TD. An NVIDIA report binds the device and the nonce and
- * nothing else, so it can be relayed from a genuine remote GPU; only TDISP/TEE-IO would
- * close that.
+ * Result of fresh, on-demand GPU evidence collection.
  */
 export interface AttestGpuResponse {
   __name__: Readonly<'AttestGpuResponse'>
+  bundles: GpuEvidenceBundle[]
+}
 
-  /**
-   * GPU-signed evidence: `collect-evidence` output, one entry per device carrying
-   * the base64 SPDM attestation report and its certificate chain.
-   */
-  evidence: string
-
-  /** The local verifier's verdict on exactly those bytes. Unsigned. */
-  appraisal: string
-
-  /** The nonce both halves answer, hex-encoded, as it appears in `eat_nonce`. */
-  nonce: string
+export interface GpuEvidenceBundle {
+  vendor: string
+  format: string
+  /** Hex-encoded opaque evidence bytes, as represented by the JSON RPC. */
+  evidence: Hex
 }
 
 export interface GpuInfoResponse {
@@ -345,7 +327,7 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
       throw new Error(`Nonce must be exactly 32 bytes, got ${nonce.length}.`)
     }
     const payload = JSON.stringify({ nonce: to_hex(nonce) })
-    const result = await send_rpc_request<{ evidence: string, appraisal: string, nonce: string }>(this.endpoint, '/AttestGpu', payload)
+    const result = await send_rpc_request<{ bundles: GpuEvidenceBundle[] }>(this.endpoint, '/AttestGpu', payload)
     if ('error' in (result as any)) {
       throw new Error((result as any)['error'] as string)
     }

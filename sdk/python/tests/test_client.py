@@ -125,21 +125,24 @@ async def test_async_client_attest():
 @pytest.mark.asyncio
 async def test_async_client_attest_gpu(monkeypatch):
     evidence = '[{"arch":"HOPPER","evidence":"BASE64","certificate":"BASE64"}]'
-    appraisal = '{"result_code":0,"claims":[]}'
     nonce = bytes([0xAB]) * 32
 
     async def fake_send(self, method, payload):
         assert method == "AttestGpu"
         assert payload == {"nonce": nonce.hex()}
-        return {"evidence": evidence, "appraisal": appraisal, "nonce": nonce.hex()}
+        return {
+            "bundles": [
+                {"vendor": "nvidia", "format": "nvidia-test-v1", "evidence": evidence}
+            ]
+        }
 
     monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
     monkeypatch.setattr(AsyncDstackClient, "_send_rpc_request", fake_send)
     result = await AsyncDstackClient().attest_gpu(nonce)
     assert isinstance(result, AttestGpuResponse)
-    assert result.evidence == evidence
-    assert result.appraisal == appraisal
-    assert result.nonce == nonce.hex()
+    assert len(result.bundles) == 1
+    assert result.bundles[0].vendor == "nvidia"
+    assert result.bundles[0].evidence == evidence
 
 
 @pytest.mark.asyncio

@@ -97,23 +97,19 @@ const { attestation } = await client.attest('app-state-snapshot')
 
 ### `attestGpu(nonce)`
 
-Runs NVIDIA GPU attestation now, against a 32-byte nonce you choose. Use it after
-anything that may have reinitialised the GPU — a driver reload leaves a device that
-answers NVML but can no longer attest.
+Collects vendor-native GPU evidence for a caller-chosen 32-byte nonce.
 
 ```typescript
-const { evidence } = await client.attestGpu(crypto.randomBytes(32))
+const { bundles } = await client.attestGpu(crypto.randomBytes(32))
+for (const bundle of bundles) {
+  console.log(bundle.vendor, bundle.format, bundle.evidence)
+}
 ```
 
-> [!IMPORTANT]
-> `evidence` is GPU-signed and checkable by anyone — the base64 SPDM report and its
-> certificate chain, over your nonce. `appraisal` is the local verifier's verdict on
-> those same bytes and does **not** travel (`alg:none` EAT), so a remote party should
-> appraise `evidence` itself and ignore `appraisal`.
->
-> Neither binds the GPU to this CVM: an NVIDIA report binds the device and nonce and
-> nothing else, so it is relayable until TDISP/TEE-IO. For TD-bound evidence use the
-> boot-time `gpu-attestation` event. Calls are rate-limited to one per 10s.
+Select a verifier using each bundle's `vendor` and `format`. The verifier must check
+the evidence signature, certificate chain, measurements, and embedded nonce. Evidence
+is opaque and hex-encoded by the JSON RPC. It does not by itself bind the GPU to this
+CVM.
 
 ### `gpuInfo()`
 

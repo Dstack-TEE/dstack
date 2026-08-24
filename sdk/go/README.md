@@ -577,27 +577,22 @@ instead.
 
 ##### `AttestGpu(ctx context.Context, nonce []byte) (*AttestGpuResponse, error)`
 
-Runs NVIDIA GPU attestation now, against a 32-byte nonce you choose. Use it after
-anything that may have reinitialised the GPU — a driver reload leaves a device that
-answers NVML but can no longer attest.
+Collects vendor-native GPU evidence for a caller-chosen 32-byte nonce.
 
 ```go
 resp, err := client.AttestGpu(ctx, nonce)
 if err != nil {
-	log.Fatal(err)
+    log.Fatal(err)
 }
-fmt.Println(resp.Evidence)
+for _, bundle := range resp.Bundles {
+    fmt.Println(bundle.Vendor, bundle.Format, bundle.Evidence)
+}
 ```
 
-> [!IMPORTANT]
-> `evidence` is GPU-signed and checkable by anyone — the base64 SPDM report and its
-> certificate chain, over your nonce. `appraisal` is the local verifier's verdict on
-> those same bytes and does **not** travel (`alg:none` EAT), so a remote party should
-> appraise `evidence` itself and ignore `appraisal`.
->
-> Neither binds the GPU to this CVM: an NVIDIA report binds the device and nonce and
-> nothing else, so it is relayable until TDISP/TEE-IO. For TD-bound evidence use the
-> boot-time `gpu-attestation` event. Calls are rate-limited to one per 10s.
+Select a verifier using each bundle's `Vendor` and `Format`. The verifier must check
+the evidence signature, certificate chain, measurements, and embedded nonce. Evidence
+is opaque and hex-encoded by the JSON RPC. It does not by itself bind the GPU to this
+CVM.
 
 ##### `GpuInfo(ctx context.Context) (*GpuInfoResponse, error)`
 
