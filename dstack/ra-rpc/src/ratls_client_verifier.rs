@@ -25,11 +25,12 @@
 
 use std::sync::Arc;
 
-use rocket::tls::{ClientHello, Resolver, ServerConfig, TlsConfig};
+use rocket::tls::{CipherSuite, ClientHello, Resolver, ServerConfig, TlsConfig};
 use rocket::{Build, Rocket};
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, UnixTime};
 use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
+use rustls::server::ServerSessionMemoryCache;
 use rustls::{DigitallySignedStruct, DistinguishedName, SignatureScheme};
 use tracing::{debug, info, warn};
 use x509_parser::prelude::FromDer as _;
@@ -146,10 +147,18 @@ impl ClientCertVerifier for RaTlsClientVerifier {
 /// A Rocket TLS resolver that serves one [`ServerConfig`] wired to
 /// [`RaTlsClientVerifier`].
 ///
-/// Attach it with `rocket.attach(RaTlsClientAuth::fairing())`. It reads the same
-/// `tls.certs` / `tls.key` the stock listener uses and replaces only the client
-/// verifier, so `[tls.mutual]` becomes inert — rocket still builds a default config
-/// from it, but every connection resolves to this one instead.
+/// Attach it with `rocket.attach(RaTlsClientAuth::fairing())`. Rustls keeps
+/// `ServerConfig::verifier` private, so the verifier cannot be swapped into the config
+/// rocket already built: this resolver builds its own from the same `[tls]` section and
+/// resolves every connection to it. Rocket still builds its default config, but nothing
+/// ever uses it, which is what makes `[tls.mutual]` inert.
+///
+/// Building a second config means mirroring what the stock listener sets, and the
+/// mirror is deliberate rather than incidental: protocol versions, ALPN,
+/// `prefer_server_cipher_order`, the session cache and the ticketer are all set to
+/// rocket's values. The single exception is `tls.ciphers`, which selects a crypto
+/// provider through a mapping rocket keeps private; a non-default cipher list is
+/// warned about at startup rather than silently dropped.
 pub struct RaTlsClientAuth {
     config: Option<Arc<ServerConfig>>,
 }
@@ -200,13 +209,25 @@ fn build_server_config(tls: &TlsConfig) -> anyhow::Result<ServerConfig> {
     let mut key_reader = tls.key_reader().context("failed to read tls.key")?;
     let key = PrivateKeyDer::from_pem_reader(&mut key_reader).context("failed to parse tls.key")?;
 
+    if tls.ciphers().ne(CipherSuite::DEFAULT_SET) {
+        // Rocket derives a crypto provider from this list through a private mapping,
+        // and only when no process-default provider is installed. Rather than
+        // duplicating that table, say so instead of dropping the setting silently.
+        warn!("tls.ciphers is not applied by the RA-TLS resolver; the default provider's suites are used");
+    }
+
     let mut config = rustls::ServerConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
         .context("failed to select TLS protocol versions")?
         .with_client_cert_verifier(Arc::new(RaTlsClientVerifier::new(provider)))
         .with_single_cert(certs, key)
         .context("failed to load server certificate")?;
-    // Match rocket's own ALPN so HTTP/2 keeps working.
+    // Everything below mirrors rocket's own listener, so replacing the verifier is the
+    // only observable difference. Dropping the ticketer and the larger session cache
+    // would quietly change resumption behaviour for every existing deployment.
+    config.ignore_client_order = tls.prefer_server_cipher_order();
+    config.session_storage = ServerSessionMemoryCache::new(1024);
+    config.ticketer = rustls::crypto::ring::Ticketer::new().context("failed to build ticketer")?;
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     debug!("built RA-TLS server config");
     Ok(config)
@@ -311,6 +332,42 @@ mod tests {
             err.to_string().contains("expired"),
             "unexpected error: {err}"
         );
+    }
+
+    fn server_tls_config(prefer_server_cipher_order: bool) -> TlsConfig {
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let cert = CertRequest::builder()
+            .subject("test server")
+            .key(&key)
+            .usage_server_auth(true)
+            .build()
+            .self_signed()
+            .unwrap();
+        TlsConfig::from_bytes(cert.pem().as_bytes(), key.serialize_pem().as_bytes())
+            .with_preferred_server_cipher_order(prefer_server_cipher_order)
+    }
+
+    /// Building a second `ServerConfig` is only safe if it carries rocket's own
+    /// settings; anything left at a rustls default is a silent behaviour change for
+    /// deployments that used the stock listener.
+    #[test]
+    fn mirrors_rockets_tls_settings() {
+        let config = build_server_config(&server_tls_config(true)).unwrap();
+        assert!(
+            config.ignore_client_order,
+            "tls.prefer_server_cipher_order must reach the config"
+        );
+        assert!(
+            config.ticketer.enabled(),
+            "rocket configures a ticketer; dropping it changes resumption"
+        );
+        assert_eq!(
+            config.alpn_protocols,
+            vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+        );
+
+        let config = build_server_config(&server_tls_config(false)).unwrap();
+        assert!(!config.ignore_client_order);
     }
 
     #[test]
