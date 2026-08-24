@@ -45,28 +45,59 @@ pub(crate) mod keys;
 
 use keys::{Algorithm, AppKey};
 
-/// Read the GPU attestation output saved during boot. Returns an empty string
-/// when no output is available (e.g. no GPU attached or attestation disabled).
-fn read_gpu_attestation(path: &Path) -> String {
-    match fs::read_to_string(path) {
-        Ok(attestation) => attestation,
+/// The vendor every bundle this agent produces carries today.
+const GPU_VENDOR: &str = "nvidia";
+
+/// Format tag for evidence collected on demand, against a caller's nonce.
+const GPU_FORMAT_ON_DEMAND: &str = "nvidia-nvattest-collect-evidence-json-v1";
+
+/// Format tag for the record nvattest wrote at boot.
+///
+/// Distinct from [`GPU_FORMAT_ON_DEMAND`] because the two answer different
+/// questions -- "is this device genuine right now" versus "what did the boot
+/// look like" -- and a verifier for one does not appraise the other. Sharing a
+/// tag would leave a consumer no way to tell them apart.
+const GPU_FORMAT_BOOTTIME: &str = "nvidia-nvattest-boottime-json-v1";
+
+/// Read the GPU attestation output saved during boot.
+///
+/// Returns the bytes exactly as they sit on disk. That exactness is the whole
+/// contract: the only thing binding this evidence to the boot is sha256 over
+/// precisely these bytes against the measured `gpu-attestation` event, so this
+/// must never normalise, re-encode, or trim what it read.
+///
+/// `None` when no output is available (no GPU attached, or attestation
+/// disabled).
+fn read_gpu_attestation(path: &Path) -> Option<Vec<u8>> {
+    match fs::read(path) {
+        Ok(attestation) => Some(attestation),
         Err(err) => {
             if err.kind() != std::io::ErrorKind::NotFound {
                 warn!("failed to read GPU attestation output: {err:?}");
             }
-            String::new()
+            None
         }
     }
 }
 
-/// GPU evidence to return alongside an attestation. Opt-in, so a caller that
-/// does not care about GPUs neither pays the disk read nor carries the payload.
-fn boottime_gpu_evidence(include: bool, path: &Path) -> String {
-    if include {
-        read_gpu_attestation(path)
-    } else {
-        String::new()
+/// GPU evidence to return alongside an attestation.
+///
+/// Opt-in, so a caller that does not care about GPUs neither pays the disk read
+/// nor carries the payload. Returns the same bundle shape `AttestGpu` uses, so
+/// a consumer needs one parser rather than two; absence is the empty list.
+fn boottime_gpu_evidence(include: bool, path: &Path) -> Vec<GpuEvidenceBundle> {
+    if !include {
+        return Vec::new();
     }
+    read_gpu_attestation(path)
+        .map(|evidence| {
+            vec![GpuEvidenceBundle {
+                vendor: GPU_VENDOR.to_string(),
+                format: GPU_FORMAT_BOOTTIME.to_string(),
+                evidence,
+            }]
+        })
+        .unwrap_or_default()
 }
 
 /// Build the v1 `Info` response.
@@ -199,8 +230,8 @@ impl DstackGuestV1Rpc for V1RpcHandler {
             .context("GPU attestation failed")?;
         Ok(AttestGpuResponse {
             bundles: vec![GpuEvidenceBundle {
-                vendor: "nvidia".to_string(),
-                format: "nvidia-nvattest-collect-evidence-json-v1".to_string(),
+                vendor: GPU_VENDOR.to_string(),
+                format: GPU_FORMAT_ON_DEMAND.to_string(),
                 evidence,
             }],
         })
@@ -513,7 +544,8 @@ mod tests {
         assert_eq!(v1.app_compose, state.config().app_compose.raw);
     }
 
-    /// GPU evidence rides on `Attest`, which is the only way to get it now.
+    /// GPU evidence rides on `Attest`, which is the only way to get it now,
+    /// and it comes back in the same bundle shape `AttestGpu` uses.
     #[tokio::test]
     async fn attest_returns_boot_time_gpu_evidence_only_when_asked() {
         let mut output = tempfile::NamedTempFile::new().unwrap();
@@ -521,24 +553,45 @@ mod tests {
         output.write_all(evidence.as_bytes()).unwrap();
         output.flush().unwrap();
 
-        assert_eq!(boottime_gpu_evidence(true, output.path()), evidence);
-        assert_eq!(boottime_gpu_evidence(false, output.path()), "");
+        let bundles = boottime_gpu_evidence(true, output.path());
+        assert_eq!(bundles.len(), 1);
+        assert_eq!(bundles[0].vendor, "nvidia");
+        // The tag that separates the boot record from on-demand collection.
+        assert_eq!(bundles[0].format, "nvidia-nvattest-boottime-json-v1");
+        assert_ne!(bundles[0].format, GPU_FORMAT_ON_DEMAND);
+        // Byte-exact: the event-log binding is sha256 over precisely these
+        // bytes, so anything that reformats the JSON breaks verification.
+        assert_eq!(bundles[0].evidence, evidence.as_bytes());
+
+        assert!(boottime_gpu_evidence(false, output.path()).is_empty());
+    }
+
+    /// No GPU output is the empty list, not a bundle carrying nothing.
+    #[tokio::test]
+    async fn attest_returns_no_bundle_when_there_is_no_gpu_output() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(boottime_gpu_evidence(true, &dir.path().join("missing")).is_empty());
     }
 
     #[test]
     fn reads_gpu_attestation_output_verbatim() {
         let mut output = tempfile::NamedTempFile::new().unwrap();
-        let attestation = r#"{"result_code":0,"claims":[]}"#;
+        // Trailing newline and internal spacing included on purpose: this is
+        // read byte for byte, never normalised.
+        let attestation = "{\"result_code\": 0, \"claims\": []}\n";
         output.write_all(attestation.as_bytes()).unwrap();
         output.flush().unwrap();
 
-        assert_eq!(read_gpu_attestation(output.path()), attestation);
+        assert_eq!(
+            read_gpu_attestation(output.path()).unwrap(),
+            attestation.as_bytes()
+        );
     }
 
     #[test]
-    fn missing_gpu_attestation_output_reads_as_empty() {
+    fn missing_gpu_attestation_output_reads_as_none() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(read_gpu_attestation(&dir.path().join("missing")), "");
+        assert!(read_gpu_attestation(&dir.path().join("missing")).is_none());
     }
 
     /// `Attest` is v1's only CVM attestation entry point, and the versioned

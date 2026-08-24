@@ -95,13 +95,35 @@ async fn attest_returns_an_attestation() {
     assert!(response.boottime_gpu_evidence.is_empty());
 }
 
+/// Boot-time GPU evidence comes back in the same bundle shape `attest_gpu`
+/// uses, so a consumer needs one parser rather than two. Absence is the empty
+/// list, not a sentinel.
 #[tokio::test]
 async fn attest_can_ask_for_the_boot_time_gpu_evidence() {
-    // The simulator has no GPU output, so the field comes back empty. What is
+    // The simulator has no GPU output, so the list comes back empty. What is
     // under test is that the flag is accepted on this surface at all -- it is
-    // reserved on v0.
+    // reserved on v0 -- and that the field decodes as a bundle list.
     let response = client().attest(b"test".to_vec(), true).await.unwrap();
     assert!(!response.decode_attestation().unwrap().is_empty());
+
+    let bundles: &Vec<dstack_sdk::dstack_client_v1::GpuEvidenceBundle> =
+        &response.boottime_gpu_evidence;
+    assert!(bundles.is_empty(), "the simulator has no GPU output");
+    for bundle in bundles {
+        assert_eq!(bundle.vendor, "nvidia");
+        assert_eq!(bundle.format, dstack_sdk::dstack_client_v1::FORMAT_BOOTTIME);
+        assert!(bundle.decode_evidence().is_ok());
+    }
+}
+
+/// The two sources must stay distinguishable: a verifier for the live
+/// measurement does not appraise the boot record.
+#[test]
+fn the_two_gpu_evidence_formats_are_distinct() {
+    use dstack_sdk::dstack_client_v1::{FORMAT_BOOTTIME, FORMAT_ON_DEMAND};
+    assert_eq!(FORMAT_BOOTTIME, "nvidia-nvattest-boottime-json-v1");
+    assert_eq!(FORMAT_ON_DEMAND, "nvidia-nvattest-collect-evidence-json-v1");
+    assert_ne!(FORMAT_BOOTTIME, FORMAT_ON_DEMAND);
 }
 
 #[tokio::test]

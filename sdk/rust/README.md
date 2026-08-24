@@ -126,7 +126,9 @@ println!("{}", info.tcb_info);
 #### `attest(report_data: Vec<u8>) -> AttestResponse`
 Generates a versioned attestation with a custom 64-byte payload.
 - `attestation`: Hex-encoded attestation
-- `boottime_gpu_evidence`: Boot-time GPU attestation evidence, empty unless requested
+
+No GPU-evidence flag on v0: that field is reserved on this surface, and only
+`DstackClientV1::attest` honours it.
 
 ### Generate TLS Certificates
 
@@ -220,14 +222,25 @@ supported platform.
 ```rust
 let result = client.attest(b"custom data".to_vec(), true).await?;
 let attestation = result.decode_attestation()?;
-// `boottime_gpu_evidence` is the nvattest output captured at boot; empty when
-// the flag was not set or the guest has no GPU output.
+
+// Boot-time GPU evidence uses the same bundle shape `attest_gpu` returns, so
+// one parser handles both. Empty when the flag was not set or the guest has no
+// GPU output -- absence is the empty list, not a sentinel.
+for bundle in &result.boottime_gpu_evidence {
+    assert_eq!(bundle.format, dstack_sdk::dstack_client_v1::FORMAT_BOOTTIME);
+    let nvattest_output = bundle.decode_evidence()?; // exact bytes from disk
+}
 ```
+
+Dispatch on `format`: `nvidia-nvattest-boottime-json-v1` is the record written
+at boot, `nvidia-nvattest-collect-evidence-json-v1` is collected on demand
+against a nonce you choose. A verifier for one does not appraise the other.
 
 That evidence is **not** bound to `report_data` -- nvattest ran at boot against
 its own nonce. Bind it by replaying the runtime event log and comparing sha256
-of those exact UTF-8 bytes against `evidence_sha256` in the `gpu-attestation`
-event.
+of the bundle's **exact** decoded bytes against `evidence_sha256` in the
+`gpu-attestation` event. Parsing and re-serializing the JSON first changes the
+digest and breaks the comparison.
 
 #### `attest_gpu(nonce: Vec<u8>) -> AttestGpuResponse`
 

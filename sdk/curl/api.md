@@ -340,15 +340,28 @@ curl --unix-socket /var/run/dstack.sock -X POST \
 ```json
 {
   "attestation": "<hex-encoded-attestation>",
-  "boottime_gpu_evidence": "{\"result_code\": 0, \"claims\": [...]}"
+  "boottime_gpu_evidence": [
+    {
+      "vendor": "nvidia",
+      "format": "nvidia-nvattest-boottime-json-v1",
+      "evidence": "<hex-encoded UTF-8 nvattest output>"
+    }
+  ]
 }
 ```
 
-`boottime_gpu_evidence` is the exact UTF-8 `nvattest` output saved during boot;
-requesting it does not perform a new attestation, and it is empty when no
-boot-time GPU attestation output is available (for example on a VM without an
-NVIDIA GPU, or when GPU attestation was disabled). It is **not** bound to
-`report_data`.
+`boottime_gpu_evidence` uses the same `GpuEvidenceBundle` shape
+[`/v1/AttestGpu`](#7-attest-gpu) returns, so one parser handles both. Dispatch
+on `format`: `nvidia-nvattest-boottime-json-v1` is the record written at boot,
+`nvidia-nvattest-collect-evidence-json-v1` is collected on demand against a
+nonce you choose. A verifier for one does not appraise the other.
+
+It is an empty list when the flag was not set or the guest has no boot-time GPU
+output — there is no sentinel value.
+
+Each bundle's `evidence` decodes to the exact UTF-8 `nvattest` output saved
+during boot, byte for byte. Requesting it does not perform a new attestation,
+and it is **not** bound to `report_data`.
 
 To authenticate it on TDX, first verify the quote and replay the supplied event
 log to the quote's RTMR3. Then decode the `gpu-attestation` event payload and
@@ -367,7 +380,13 @@ if isinstance(events, str):
 
 entry = next(event for event in events if event["event"] == "gpu-attestation")
 measured = json.loads(bytes.fromhex(entry["event_payload"]))
-actual = hashlib.sha256(attest_response["boottime_gpu_evidence"].encode()).hexdigest()
+# sha256 over the exact bytes the agent read from disk. Do not parse and
+# re-serialize the JSON first: that changes the digest.
+bundle = next(
+    b for b in attest_response["boottime_gpu_evidence"]
+    if b["format"] == "nvidia-nvattest-boottime-json-v1"
+)
+actual = hashlib.sha256(bytes.fromhex(bundle["evidence"])).hexdigest()
 assert actual == measured["evidence_sha256"]
 ```
 

@@ -125,15 +125,24 @@ pub struct AttestConfig {
 pub struct AttestResponse {
     /// The attestation, hex-encoded
     pub attestation: String,
-    /// The complete output nvattest produced at boot. Empty unless the request
-    /// asked for it and boot-time output exists.
+    /// Boot-time GPU attestation evidence. Empty unless the request asked for
+    /// it and boot-time output exists, so absence is just the empty list.
+    ///
+    /// The same [`GpuEvidenceBundle`] shape `attest_gpu` returns, so one parser
+    /// handles both. Dispatch on `format`: [`FORMAT_BOOTTIME`] is the record
+    /// written at boot, [`FORMAT_ON_DEMAND`] is collected against a caller's
+    /// nonce, and a verifier for one does not appraise the other.
+    ///
+    /// Each bundle's `evidence` decodes to the nvattest output byte for byte.
+    /// That exactness is the contract: the only thing binding this evidence to
+    /// the boot is sha256 over precisely those bytes, compared against
+    /// `evidence_sha256` in the measured `gpu-attestation` event after
+    /// replaying the runtime event log. Re-serializing the JSON first changes
+    /// the digest.
     ///
     /// Not bound to `report_data`: nvattest ran at boot against its own nonce.
-    /// Bind it by replaying the runtime event log and comparing sha256 of these
-    /// exact UTF-8 bytes against `evidence_sha256` in the `gpu-attestation`
-    /// event.
     #[serde(default)]
-    pub boottime_gpu_evidence: String,
+    pub boottime_gpu_evidence: Vec<GpuEvidenceBundle>,
 }
 
 impl AttestResponse {
@@ -152,7 +161,16 @@ pub struct AttestGpuResponse {
     pub bundles: Vec<GpuEvidenceBundle>,
 }
 
+/// Evidence collected on demand, against a caller-chosen nonce.
+pub const FORMAT_ON_DEMAND: &str = "nvidia-nvattest-collect-evidence-json-v1";
+
+/// The evidence record nvattest wrote at boot.
+pub const FORMAT_BOOTTIME: &str = "nvidia-nvattest-boottime-json-v1";
+
 /// One vendor's evidence.
+///
+/// Shared by `attest_gpu` and `attest`'s boot-time evidence so a consumer
+/// writes one parser for both; `(vendor, format)` says which is which.
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]

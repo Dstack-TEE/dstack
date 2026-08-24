@@ -216,21 +216,34 @@ message AttestRequest {
 message AttestResponse {
   // The versioned dstack attestation.
   bytes attestation = 1;
-  // The complete output nvattest produced at boot: a JSON document owned by
-  // NVIDIA's nvattest, passed through unparsed. Populated only when the
-  // request asked for it and boot-time GPU attestation output exists.
+
+  // Boot-time GPU attestation evidence. Empty unless the request set
+  // `include_boottime_gpu_evidence` and boot-time output exists, so absence is
+  // just the empty list rather than a sentinel value.
+  //
+  // Same bundle shape `AttestGpu` returns, so a consumer writes one parser for
+  // both. `format` is what separates them: this carries
+  // `nvidia-nvattest-boottime-json-v1`, the record written at boot, while
+  // `AttestGpu` carries `nvidia-nvattest-collect-evidence-json-v1`, collected
+  // on demand against a caller's nonce. Do not appraise one with the other's
+  // verifier.
+  //
+  // `evidence` is the exact UTF-8 bytes of the nvattest output as read from
+  // disk, byte for byte. That exactness is load-bearing: the only thing tying
+  // this evidence to the boot is sha256 over precisely these bytes, compared
+  // against the `evidence_sha256` field of the measured `gpu-attestation`
+  // event after replaying the runtime event log. Re-encoding or reformatting
+  // the JSON breaks the comparison.
   //
   // Not bound to `report_data`: nvattest ran at boot against its own nonce, so
-  // a fresh `report_data` says nothing about it. Bind it by replaying the
-  // runtime event log and comparing sha256 of these exact UTF-8 bytes against
-  // the `evidence_sha256` field of the measured `gpu-attestation` event.
+  // a fresh `report_data` says nothing about it.
   //
   // This is a historical statement about the boot, not a live one: it does not
   // prove the GPU is still attached. Sampling the GPU at attestation time
   // would not fix that -- an NVIDIA report binds the device and a nonce but
   // not the TD the device is attached to, so a fresh report can be relayed
   // from a genuine remote GPU. Only TDISP/TEE-IO device binding closes that.
-  string boottime_gpu_evidence = 2;
+  repeated GpuEvidenceBundle boottime_gpu_evidence = 2;
 }
 
 message AttestGpuRequest {
@@ -250,10 +263,18 @@ message AttestGpuResponse {
   repeated GpuEvidenceBundle bundles = 1;
 }
 
+// One vendor's GPU evidence.
+//
+// Shared by `AttestGpu` and `AttestResponse.boottime_gpu_evidence` so a
+// consumer writes one parser for both. Dispatch on `(vendor, format)`; the two
+// sources carry different `format` values because they answer different
+// questions, and a verifier for one does not appraise the other.
 message GpuEvidenceBundle {
   // Stable GPU vendor identifier, for example `nvidia`, `amd`, or `intel`.
   string vendor = 1;
-  // Vendor-specific evidence format and version.
+  // Vendor-specific evidence format and version. Known values:
+  //   `nvidia-nvattest-collect-evidence-json-v1`  fresh, from `AttestGpu`
+  //   `nvidia-nvattest-boottime-json-v1`          the record written at boot
   string format = 2;
   // Opaque vendor-native evidence bytes. Do not assume UTF-8 or JSON.
   bytes evidence = 3;

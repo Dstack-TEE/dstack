@@ -140,8 +140,9 @@ carries the TDX quote and the event log. See
 [Extracting a quote from an attestation](#extracting-a-quote-from-an-attestation).
 
 `GpuInfo` is absent from v1, and has also been removed from the unversioned
-surface. It never appeared in a release, and
-`Attest` with `include_boottime_gpu_evidence` returns the same bytes.
+surface. It never appeared in a release, and `Attest` with
+`include_boottime_gpu_evidence` returns the same bytes -- in the same
+`GpuEvidenceBundle` shape `AttestGpu` uses, so there is one parser for both.
 
 `EmitEvent` is absent because runtime RTMR3 events became system-owned in 0.6.0.
 An application binds its data through `report_data` instead.
@@ -541,22 +542,48 @@ the digest.
 
 ### GPU evidence
 
-`AttestResponse.boottime_gpu_evidence` is populated only when the request sets
-`include_boottime_gpu_evidence` and boot-time output exists. It is not bound to
-`report_data`: nvattest ran at boot against its own nonce. To bind it, replay the
-runtime event log and compare `sha256` of those exact UTF-8 bytes against the
-`evidence_sha256` field of the measured `gpu-attestation` event.
+Both GPU methods return the same thing: a list of `GpuEvidenceBundle`, each
+carrying `vendor`, `format`, and opaque `evidence` bytes. `AttestGpu` returns
+its bundles directly; `Attest` returns them in
+`AttestResponse.boottime_gpu_evidence`. A consumer writes one bundle parser and
+dispatches on `(vendor, format)`.
 
-That evidence is a historical statement about the boot and does not prove the GPU
-is still attached. Sampling the GPU at attestation time would not fix it, because
-an NVIDIA report binds the device and a nonce but not the TD the device is
-attached to, so a fresh report can be relayed from a genuine remote GPU. Only
-TDISP/TEE-IO device binding closes that gap.
+| Source | `vendor` | `format` | Answers |
+|---|---|---|---|
+| `AttestGpu` | `nvidia` | `nvidia-nvattest-collect-evidence-json-v1` | is this device genuine right now |
+| `Attest` | `nvidia` | `nvidia-nvattest-boottime-json-v1` | what the boot looked like |
+
+The two `format` values are deliberately distinct. They answer different
+questions and a verifier for one does not appraise the other, so sharing a tag
+would leave a consumer no way to tell a live measurement from a boot record.
+
+`boottime_gpu_evidence` is populated only when the request sets
+`include_boottime_gpu_evidence` and boot-time output exists. Absence is the
+empty list; there is no sentinel value.
+
+Its `evidence` is the exact bytes of the nvattest output as the agent read them
+from disk. That exactness is the contract, not an implementation detail: the
+only thing tying this evidence to the boot is `sha256` over precisely those
+bytes, compared against the `evidence_sha256` field of the measured
+`gpu-attestation` event after replaying the runtime event log. Parsing and
+re-serializing the JSON before hashing changes the digest and breaks the
+comparison.
+
+That evidence is not bound to `report_data` -- nvattest ran at boot against its
+own nonce, so a fresh `report_data` says nothing about it.
+
+It is also a historical statement about the boot, not a live one: it does not
+prove the GPU is still attached. Sampling the GPU at attestation time would not
+fix it, because an NVIDIA report binds the device and a nonce but not the TD the
+device is attached to, so a fresh report can be relayed from a genuine remote
+GPU. Only TDISP/TEE-IO device binding closes that gap.
 
 `AttestGpu` answers the narrower question of whether the device reachable right
 now is a genuine CC-enabled GPU that signs a caller-chosen 32-byte nonce. It
-returns vendor-native evidence bundles rather than a local verdict, so a relying
-party appraises them with its own verifier.
+returns vendor-native evidence rather than a local verdict, so a relying party
+appraises it with its own verifier: select one by `vendor` and `format`, then
+check the signature, certificate chain, measurements, and the nonce embedded in
+the evidence.
 
 ## Info
 
@@ -647,6 +674,7 @@ For readers porting from the unversioned API.
 | `GetKeyArgs.algorithm` (defaulted) | `GetKeyRequest.algorithm` | Required; no `k256` alias |
 | — | `GetKeyResponse.public_key` | Added |
 | `GetQuote` | `Attest` | TDX-only channel subsumed |
+| `GpuInfo` (never released) | `AttestResponse.boottime_gpu_evidence` | Same bytes, now a `GpuEvidenceBundle` list |
 | `AppInfo.tcb_info` | — | Measurements are typed fields; the rest belongs to `Attest` |
 | `AppInfo.app_cert` | — | Dashboard artifact |
 | `AppInfo.vm_config` | `InfoResponse.vm_config` | Unchanged content |
