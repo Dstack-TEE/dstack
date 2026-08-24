@@ -45,7 +45,7 @@ evaluation, `gpu-attestation`. The `gpu-policy-hash` payload is
 The `gpu-attestation` payload is JSON containing the verified device count,
 CC/DevTools state, and `evidence_sha256`.
 
-The guest-agent `GpuInfo` API returns the complete `nvattest` JSON captured during boot; `Attest` returns the same bytes in `gpu_evidence` when called with `include_gpu_evidence`, so a verifier can fetch the quote and the GPU evidence in one round trip. It is not trustworthy by itself. After verifying the TDX quote and replaying the event log to RTMR3, hash the exact UTF-8 bytes of `GpuInfo.attestation` (or `Attest.gpu_evidence`) and require the result to equal the `gpu-attestation` event's `evidence_sha256`. See [GPU Security for AI Workloads](./security/security-model.md#gpu-security-for-ai-workloads) for the event schema, ordering, Rego example, and platform differences.
+The guest-agent `GpuInfo` API returns the complete `nvattest` JSON captured during boot; `Attest` returns the same bytes in `boottime_gpu_evidence` when called with `include_boottime_gpu_evidence`, so a verifier can fetch the quote and the GPU evidence in one round trip. It is not trustworthy by itself. After verifying the TDX quote and replaying the event log to RTMR3, hash the exact UTF-8 bytes of `GpuInfo.attestation` (or `Attest.boottime_gpu_evidence`) and require the result to equal the `gpu-attestation` event's `evidence_sha256`. See [GPU Security for AI Workloads](./security/security-model.md#gpu-security-for-ai-workloads) for the event schema, ordering, Rego example, and platform differences.
 
 ### 2.2. Determining expected MRs
 MRTD, RTMR0, RTMR1, and RTMR2 correspond to the image. dstack OS builds all related software from source.

@@ -78,7 +78,7 @@ func TestAttest(t *testing.T) {
 	}
 }
 
-func TestAttestWithGpuEvidence(t *testing.T) {
+func TestAttestWithBoottimeGpuEvidence(t *testing.T) {
 	const evidence = `{"result_code":0,"claims":[]}`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/Attest" {
@@ -88,24 +88,24 @@ func TestAttestWithGpuEvidence(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatalf("failed to decode request: %v", err)
 		}
-		if payload["include_gpu_evidence"] != true {
-			t.Fatalf("expected include_gpu_evidence to be forwarded, got: %v", payload["include_gpu_evidence"])
+		if payload["include_boottime_gpu_evidence"] != true {
+			t.Fatalf("expected include_boottime_gpu_evidence to be forwarded, got: %v", payload["include_boottime_gpu_evidence"])
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"attestation":  "deadbeef",
-			"gpu_evidence": evidence,
+			"boottime_gpu_evidence": evidence,
 		})
 	}))
 	defer server.Close()
 
 	client := dstack.NewDstackClient(dstack.WithEndpoint(server.URL))
-	resp, err := client.AttestWithOptions(context.Background(), []byte("test"), dstack.AttestOptions{IncludeGpuEvidence: true})
+	resp, err := client.AttestWithOptions(context.Background(), []byte("test"), dstack.AttestOptions{IncludeBoottimeGpuEvidence: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.GpuEvidence != evidence {
-		t.Fatalf("unexpected gpu evidence: %s", resp.GpuEvidence)
+	if resp.BoottimeGpuEvidence != evidence {
+		t.Fatalf("unexpected gpu evidence: %s", resp.BoottimeGpuEvidence)
 	}
 }
 

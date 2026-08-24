@@ -577,15 +577,15 @@ instead.
 
 ##### `AttestWithOptions(ctx context.Context, reportData []byte, opts AttestOptions) (*AttestResponse, error)`
 
-Same as `Attest`, with options. Set `IncludeGpuEvidence` to also return the boot-time
+Same as `Attest`, with options. Set `IncludeBoottimeGpuEvidence` to also return the boot-time
 GPU attestation evidence, so a verifier gets the quote and the GPU evidence in one round trip.
 
 ```go
-resp, err := client.AttestWithOptions(ctx, reportData, dstack.AttestOptions{IncludeGpuEvidence: true})
+resp, err := client.AttestWithOptions(ctx, reportData, dstack.AttestOptions{IncludeBoottimeGpuEvidence: true})
 if err != nil {
 	log.Fatal(err)
 }
-fmt.Println(resp.GpuEvidence)
+fmt.Println(resp.BoottimeGpuEvidence)
 ```
 
 The evidence is the same bytes ``GpuInfo`` serves and is empty unless the flag was set

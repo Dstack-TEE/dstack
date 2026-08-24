@@ -73,7 +73,7 @@ pub fn simulated_attest_response(
     };
     Ok(AttestResponse {
         attestation: attestation.to_bytes()?,
-        gpu_evidence: String::new(),
+        boottime_gpu_evidence: String::new(),
     })
 }
 

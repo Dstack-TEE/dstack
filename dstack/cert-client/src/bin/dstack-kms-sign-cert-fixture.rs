@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
     let response = client
         .attest(AttestArgs {
             report_data: report_data.to_vec(),
-            include_gpu_evidence: false,
+            include_boottime_gpu_evidence: false,
         })
         .await
         .context("failed to obtain key-bound guest attestation")?;

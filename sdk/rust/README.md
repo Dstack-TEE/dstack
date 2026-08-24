@@ -103,19 +103,19 @@ println!("{}", info.tcb_info);
 #### `attest(report_data: Vec<u8>) -> AttestResponse`
 Generates a versioned attestation with a custom 64-byte payload.
 - `attestation`: Hex-encoded attestation
-- `gpu_evidence`: Boot-time GPU attestation evidence, empty unless requested
+- `boottime_gpu_evidence`: Boot-time GPU attestation evidence, empty unless requested
 
 #### `attest_with(config: AttestConfig) -> AttestResponse`
-Same, with options. Set `include_gpu_evidence` to also return the boot-time GPU
+Same, with options. Set `include_boottime_gpu_evidence` to also return the boot-time GPU
 attestation evidence, so a verifier gets the quote and the GPU evidence in one round trip.
 
 ```rust
 let config = AttestConfig::builder()
     .report_data(hex::encode(b"user:alice:nonce123"))
-    .include_gpu_evidence(true)
+    .include_boottime_gpu_evidence(true)
     .build();
 let result = client.attest_with(config).await?;
-println!("{}", result.gpu_evidence);
+println!("{}", result.boottime_gpu_evidence);
 ```
 
 The evidence is the same bytes ``gpu_info()`` serves and is empty unless the flag was set

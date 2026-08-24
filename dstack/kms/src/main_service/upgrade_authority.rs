@@ -183,7 +183,7 @@ pub(crate) async fn app_attest(report_data: Vec<u8>) -> Result<AttestResponse> {
     dstack_client()
         .attest(AttestArgs {
             report_data,
-            include_gpu_evidence: false,
+            include_boottime_gpu_evidence: false,
         })
         .await
 }

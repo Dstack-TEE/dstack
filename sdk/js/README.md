@@ -87,7 +87,7 @@ quote.quote        // hex-encoded TDX quote
 quote.event_log    // JSON string of measured events
 ```
 
-### `attest(reportData, includeGpuEvidence?)`
+### `attest(reportData, includeBoottimeGpuEvidence?)`
 
 Versioned dstack attestation that works across TDX / GCP / Nitro providers. Preferred for cross-platform verifiers.
 
@@ -99,7 +99,7 @@ Pass `true` as the second argument to also return the boot-time GPU attestation
 evidence, so a verifier gets the quote and the GPU evidence in one round trip.
 
 ```typescript
-const { attestation, gpu_evidence } = await client.attest('app-state-snapshot', true)
+const { attestation, boottime_gpu_evidence } = await client.attest('app-state-snapshot', true)
 ```
 
 The evidence is the same bytes ``gpuInfo()`` serves and is empty unless the flag was set

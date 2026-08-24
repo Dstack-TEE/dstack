@@ -67,7 +67,7 @@ fn read_gpu_attestation(path: &Path) -> String {
 
 /// GPU evidence to return alongside an attestation. Opt-in, so a caller that
 /// does not care about GPUs neither pays the disk read nor carries the payload.
-fn attest_gpu_evidence(include: bool, path: &Path) -> String {
+fn boottime_gpu_evidence(include: bool, path: &Path) -> String {
     if include {
         read_gpu_attestation(path)
     } else {
@@ -456,8 +456,8 @@ impl DstackGuestRpc for InternalRpcHandler {
     async fn attest(self, request: AttestArgs) -> Result<AttestResponse> {
         let report_data = pad64(&request.report_data).context("Report data is too long")?;
         let mut response = self.state.attest_response(report_data)?;
-        response.gpu_evidence = attest_gpu_evidence(
-            request.include_gpu_evidence,
+        response.boottime_gpu_evidence = boottime_gpu_evidence(
+            request.include_boottime_gpu_evidence,
             Path::new(GPU_ATTESTATION_OUTPUT),
         );
         Ok(response)
@@ -764,14 +764,14 @@ mod tests {
     }
 
     #[test]
-    fn attest_returns_gpu_evidence_only_when_requested() {
+    fn attest_returns_boottime_gpu_evidence_only_when_requested() {
         let mut output = tempfile::NamedTempFile::new().unwrap();
         let evidence = r#"{"result_code":0,"claims":[]}"#;
         output.write_all(evidence.as_bytes()).unwrap();
         output.flush().unwrap();
 
-        assert_eq!(attest_gpu_evidence(true, output.path()), evidence);
-        assert_eq!(attest_gpu_evidence(false, output.path()), "");
+        assert_eq!(boottime_gpu_evidence(true, output.path()), evidence);
+        assert_eq!(boottime_gpu_evidence(false, output.path()), "");
     }
 
     #[test]
@@ -981,7 +981,7 @@ pNs85uhOZE8z2jr8Pg==
                 let attestation = patch_report_data(&self.attestation, report_data);
                 Ok(AttestResponse {
                     attestation: VersionedAttestation::V1 { attestation }.to_bytes()?,
-                    gpu_evidence: String::new(),
+                    boottime_gpu_evidence: String::new(),
                 })
             }
         }

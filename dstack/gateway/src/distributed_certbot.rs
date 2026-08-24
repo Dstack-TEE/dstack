@@ -661,7 +661,7 @@ impl DistributedCertBot {
         let attestation_str = match agent
             .attest(AttestArgs {
                 report_data,
-                include_gpu_evidence: false,
+                include_boottime_gpu_evidence: false,
             })
             .await
         {
@@ -743,7 +743,7 @@ impl DistributedCertBot {
         let attestation = match agent
             .attest(AttestArgs {
                 report_data,
-                include_gpu_evidence: false,
+                include_boottime_gpu_evidence: false,
             })
             .await
         {

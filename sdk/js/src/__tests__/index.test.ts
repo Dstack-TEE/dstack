@@ -53,7 +53,7 @@ describe('DstackClient', () => {
     const result = await client.attest('test')
     expect(result).toHaveProperty('attestation')
     expect(result.attestation).not.toBe('')
-    expect(result.gpu_evidence).toBe('')
+    expect(result.boottime_gpu_evidence).toBe('')
   })
 
   it('should be able to attest with gpu evidence', async () => {
@@ -62,7 +62,7 @@ describe('DstackClient', () => {
     expect(result).toHaveProperty('attestation')
     expect(result.attestation).not.toBe('')
     // Whether evidence exists depends on the host; assert the field is present.
-    expect(result).toHaveProperty('gpu_evidence')
+    expect(result).toHaveProperty('boottime_gpu_evidence')
   })
 
   it('should able to get derive key result as uint8array', async () => {

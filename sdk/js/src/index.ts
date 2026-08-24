@@ -104,14 +104,14 @@ export interface AttestResponse {
 
   /**
    * Complete JSON output produced by nvattest during guest boot. Empty unless the
-   * request set `include_gpu_evidence` and the guest has boot-time GPU attestation
+   * request set `include_boottime_gpu_evidence` and the guest has boot-time GPU attestation
    * output.
    *
    * Not bound to `report_data`: verify it by replaying the runtime event log and
    * comparing sha256 of these exact UTF-8 bytes against `evidence_sha256` in the
    * `gpu-attestation` event.
    */
-  gpu_evidence: string
+  boottime_gpu_evidence: string
 }
 
 export interface GpuInfoResponse {
@@ -299,16 +299,16 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
   /**
    * Requests a versioned attestation for the given report data.
    *
-   * Pass `include_gpu_evidence` to also return the boot-time GPU attestation
-   * evidence in `gpu_evidence`, so a verifier can check both in one round trip.
+   * Pass `include_boottime_gpu_evidence` to also return the boot-time GPU attestation
+   * evidence in `boottime_gpu_evidence`, so a verifier can check both in one round trip.
    */
-  async attest(report_data: string | Buffer | Uint8Array, include_gpu_evidence: boolean = false): Promise<AttestResponse> {
+  async attest(report_data: string | Buffer | Uint8Array, include_boottime_gpu_evidence: boolean = false): Promise<AttestResponse> {
     let hex = to_hex(report_data)
     if (hex.length > 128) {
       throw new Error(`Report data is too large, it should be less than 64 bytes.`)
     }
-    const payload = JSON.stringify({ report_data: hex, include_gpu_evidence })
-    const result = await send_rpc_request<{ attestation: string, gpu_evidence?: string }>(this.endpoint, '/Attest', payload)
+    const payload = JSON.stringify({ report_data: hex, include_boottime_gpu_evidence })
+    const result = await send_rpc_request<{ attestation: string, boottime_gpu_evidence?: string }>(this.endpoint, '/Attest', payload)
     if ('error' in (result as any)) {
       const err = (result as any)['error'] as string
       throw new Error(err)
@@ -316,7 +316,7 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
     return Object.freeze({
       __name__: 'AttestResponse',
       attestation: result.attestation as Hex,
-      gpu_evidence: result.gpu_evidence ?? '',
+      boottime_gpu_evidence: result.boottime_gpu_evidence ?? '',
     })
   }
 

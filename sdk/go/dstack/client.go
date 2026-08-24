@@ -111,20 +111,20 @@ func (r *GetQuoteResponse) DecodeEventLog() ([]EventLog, error) {
 // Represents the response from an attestation request.
 type AttestResponse struct {
 	Attestation []byte
-	// GpuEvidence is the complete JSON output produced by nvattest during guest
-	// boot. Empty unless the request set IncludeGpuEvidence and the guest has
+	// BoottimeGpuEvidence is the complete JSON output produced by nvattest during guest
+	// boot. Empty unless the request set IncludeBoottimeGpuEvidence and the guest has
 	// boot-time GPU attestation output.
 	//
 	// It is not bound to reportData: verify it by replaying the runtime event log
 	// and comparing sha256 of these exact UTF-8 bytes against evidence_sha256 in
 	// the `gpu-attestation` event.
-	GpuEvidence string
+	BoottimeGpuEvidence string
 }
 
 // AttestOptions tunes what an Attest call returns.
 type AttestOptions struct {
-	// IncludeGpuEvidence also returns the boot-time GPU attestation evidence.
-	IncludeGpuEvidence bool
+	// IncludeBoottimeGpuEvidence also returns the boot-time GPU attestation evidence.
+	IncludeBoottimeGpuEvidence bool
 }
 
 // GpuInfoResponse contains GPU information collected during boot.
@@ -529,7 +529,7 @@ func (c *DstackClient) AttestWithOptions(ctx context.Context, reportData []byte,
 
 	payload := map[string]interface{}{
 		"report_data":          hex.EncodeToString(reportData),
-		"include_gpu_evidence": opts.IncludeGpuEvidence,
+		"include_boottime_gpu_evidence": opts.IncludeBoottimeGpuEvidence,
 	}
 
 	data, err := c.sendRPCRequest(ctx, "/Attest", payload)
@@ -539,7 +539,7 @@ func (c *DstackClient) AttestWithOptions(ctx context.Context, reportData []byte,
 
 	var response struct {
 		Attestation string `json:"attestation"`
-		GpuEvidence string `json:"gpu_evidence"`
+		BoottimeGpuEvidence string `json:"boottime_gpu_evidence"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, err
@@ -550,7 +550,7 @@ func (c *DstackClient) AttestWithOptions(ctx context.Context, reportData []byte,
 		return nil, err
 	}
 
-	return &AttestResponse{Attestation: attestation, GpuEvidence: response.GpuEvidence}, nil
+	return &AttestResponse{Attestation: attestation, BoottimeGpuEvidence: response.BoottimeGpuEvidence}, nil
 }
 
 // GpuInfo returns GPU information collected during boot.

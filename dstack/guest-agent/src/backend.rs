@@ -52,7 +52,7 @@ impl PlatformBackend for RealPlatform {
             attestation: attestation.into_versioned().to_bytes()?,
             // Filled in by the RPC layer when the caller asks for it: GPU
             // evidence is a file the boot wrote, not a platform quote.
-            gpu_evidence: String::new(),
+            boottime_gpu_evidence: String::new(),
         })
     }
 }

@@ -31,25 +31,25 @@ async fn test_async_client_attest() {
     let result = client.attest(b"test".to_vec()).await.unwrap();
     let attestation = result.decode_attestation().unwrap();
     assert!(!attestation.is_empty());
-    assert!(result.gpu_evidence.is_empty());
+    assert!(result.boottime_gpu_evidence.is_empty());
 
     let too_large = client.attest(vec![0_u8; 65]).await;
     assert!(too_large.is_err());
 }
 
 #[tokio::test]
-async fn test_async_client_attest_with_gpu_evidence() {
+async fn test_async_client_attest_with_boottime_gpu_evidence() {
     let client = AsyncDstackClient::new(None);
     let config = AttestConfig::builder()
         .report_data(hex::encode(b"test"))
-        .include_gpu_evidence(true)
+        .include_boottime_gpu_evidence(true)
         .build();
     let result = client.attest_with(config).await.unwrap();
     assert!(!result.decode_attestation().unwrap().is_empty());
     // Whether evidence exists depends on the host, so assert the request
     // round-trips and the field is populated from the same source as GpuInfo.
     assert_eq!(
-        result.gpu_evidence,
+        result.boottime_gpu_evidence,
         client.gpu_info().await.unwrap().attestation
     );
 
