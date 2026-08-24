@@ -60,6 +60,14 @@ service DstackGuest {
   // Returns a dstack-defined attestation format that supports different attestation modes across platforms.
   rpc Attest(AttestArgs) returns (AttestResponse) {}
 
+  // Removed in v0.6.0: always fails. Runtime RTMR3 events are system-owned now,
+  // so an app can no longer extend them.
+  //
+  // The method is kept only so a pre-0.6 client gets a self-explanatory error.
+  // prpc answers both "no such method" and "the handler failed" with HTTP 400,
+  // so the message text is the only thing that tells the two apart.
+  rpc EmitEvent(EmitEventArgs) returns (google.protobuf.Empty) {}
+
   // Get app info
   rpc Info(google.protobuf.Empty) returns (AppInfo) {}
 
@@ -298,6 +306,15 @@ message GetQuoteResponse {
   bytes report_data = 3;
   // Hw config
   string vm_config = 4;
+}
+
+// The request of the removed EmitEvent RPC. Kept so a pre-0.6 client's request
+// still decodes and reaches the handler that explains the removal.
+message EmitEventArgs {
+  // The event name
+  string event = 1;
+  // The event data
+  bytes payload = 2;
 }
 
 // The request to derive a key

@@ -16,10 +16,10 @@ use dstack_guest_agent_rpc::{
     tappd_server::{TappdRpc, TappdServer},
     worker_server::{WorkerRpc, WorkerServer},
     AppInfo, AttestAppKeyRequest, AttestArgs, AttestGpuArgs, AttestGpuResponse, AttestResponse,
-    DeriveK256KeyResponse, DeriveKeyArgs, GetKeyArgs, GetKeyResponse, GetQuoteResponse,
-    GetTlsKeyArgs, GetTlsKeyResponse, GpuEvidenceBundle, GpuInfoResponse, HealthResponse,
-    RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse, VerifyRequest,
-    VerifyResponse, WorkerVersion,
+    DeriveK256KeyResponse, DeriveKeyArgs, EmitEventArgs, GetKeyArgs, GetKeyResponse,
+    GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse, GpuEvidenceBundle, GpuInfoResponse,
+    HealthResponse, RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse,
+    VerifyRequest, VerifyResponse, WorkerVersion,
 };
 use dstack_types::{AppKeys, SysConfig, GPU_ATTESTATION_OUTPUT};
 use ed25519_dalek::ed25519::signature::hazmat::{PrehashSigner, PrehashVerifier};
@@ -387,6 +387,16 @@ impl DstackGuestRpc for InternalRpcHandler {
     async fn get_quote(self, request: RawQuoteArgs) -> Result<GetQuoteResponse> {
         let report_data = pad64(&request.report_data).context("Report data is too long")?;
         self.state.quote_response(report_data)
+    }
+
+    /// Always fails. See the RPC's doc comment in agent_rpc.proto: the method
+    /// exists so a pre-0.6 client learns why its events stopped being recorded
+    /// instead of getting an unknown-method 400 it cannot tell apart from
+    /// talking to the wrong socket.
+    async fn emit_event(self, _request: EmitEventArgs) -> Result<()> {
+        anyhow::bail!(
+            "EmitEvent was removed in dstack 0.6.0; runtime RTMR3 events are system-owned and cannot be extended by apps"
+        )
     }
 
     async fn info(self) -> Result<AppInfo> {
@@ -1597,5 +1607,19 @@ pNs85uhOZE8z2jr8Pg==
             .await;
 
         assert_eq!(result.unwrap_err().to_string(), "Unsupported algorithm");
+    }
+
+    #[tokio::test]
+    async fn emit_event_reports_its_removal() {
+        let (state, _guard) = setup_test_state().await;
+        let result = InternalRpcHandler { state }
+            .emit_event(EmitEventArgs {
+                event: "test-event".to_string(),
+                payload: b"payload".to_vec(),
+            })
+            .await;
+
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("removed in dstack 0.6.0"), "{err}");
     }
 }
