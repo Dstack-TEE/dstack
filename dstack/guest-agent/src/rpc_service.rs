@@ -15,10 +15,10 @@ use dstack_guest_agent_rpc::{
     dstack_guest_server::{DstackGuestRpc, DstackGuestServer},
     tappd_server::{TappdRpc, TappdServer},
     worker_server::{WorkerRpc, WorkerServer},
-    AppInfo, AttestAppKeyRequest, AttestResponse, DeriveK256KeyResponse, DeriveKeyArgs, GetKeyArgs,
-    GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse, GpuInfoResponse,
-    HealthResponse, RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse,
-    WorkerVersion,
+    AppInfo, AttestAppKeyRequest, AttestArgs, AttestResponse, DeriveK256KeyResponse, DeriveKeyArgs,
+    GetKeyArgs, GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse,
+    GpuInfoResponse, HealthResponse, RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs,
+    TdxQuoteResponse, WorkerVersion,
 };
 use dstack_types::{AppKeys, SysConfig, GPU_ATTESTATION_OUTPUT};
 use ed25519_dalek::ed25519::signature::hazmat::PrehashSigner;
@@ -62,6 +62,16 @@ fn read_gpu_attestation(path: &Path) -> String {
             }
             String::new()
         }
+    }
+}
+
+/// GPU evidence to return alongside an attestation. Opt-in, so a caller that
+/// does not care about GPUs neither pays the disk read nor carries the payload.
+fn attest_gpu_evidence(include: bool, path: &Path) -> String {
+    if include {
+        read_gpu_attestation(path)
+    } else {
+        String::new()
     }
 }
 
@@ -443,9 +453,14 @@ impl DstackGuestRpc for InternalRpcHandler {
         })
     }
 
-    async fn attest(self, request: RawQuoteArgs) -> Result<AttestResponse> {
+    async fn attest(self, request: AttestArgs) -> Result<AttestResponse> {
         let report_data = pad64(&request.report_data).context("Report data is too long")?;
-        self.state.attest_response(report_data)
+        let mut response = self.state.attest_response(report_data)?;
+        response.gpu_evidence = attest_gpu_evidence(
+            request.include_gpu_evidence,
+            Path::new(GPU_ATTESTATION_OUTPUT),
+        );
+        Ok(response)
     }
 
     async fn version(self) -> Result<WorkerVersion> {
@@ -749,6 +764,17 @@ mod tests {
     }
 
     #[test]
+    fn attest_returns_gpu_evidence_only_when_requested() {
+        let mut output = tempfile::NamedTempFile::new().unwrap();
+        let evidence = r#"{"result_code":0,"claims":[]}"#;
+        output.write_all(evidence.as_bytes()).unwrap();
+        output.flush().unwrap();
+
+        assert_eq!(attest_gpu_evidence(true, output.path()), evidence);
+        assert_eq!(attest_gpu_evidence(false, output.path()), "");
+    }
+
+    #[test]
     fn missing_gpu_attestation_output_reads_as_empty() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(read_gpu_attestation(&dir.path().join("missing")), "");
@@ -955,6 +981,7 @@ pNs85uhOZE8z2jr8Pg==
                 let attestation = patch_report_data(&self.attestation, report_data);
                 Ok(AttestResponse {
                     attestation: VersionedAttestation::V1 { attestation }.to_bytes()?,
+                    gpu_evidence: String::new(),
                 })
             }
         }
