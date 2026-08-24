@@ -263,7 +263,11 @@ func WithCertAppInfo(enabled bool) IssueCertV1Option {
 // is not derived from the app identity -- GetKey is the method that derives a
 // stable, attestable key. v0 called this GetTlsKey.
 func (c *DstackClientV1) IssueCert(ctx context.Context, options ...IssueCertV1Option) (*IssueCertV1Response, error) {
-	opts := &issueCertV1Options{}
+	// usageServerAuth starts true, matching the v1 default in the Rust, Python
+	// and JS SDKs: a certificate that cannot be served with is useless to most
+	// callers, and a v1 default that differs per language is a trap. Opt out
+	// with WithCertUsageServerAuth(false).
+	opts := &issueCertV1Options{usageServerAuth: true}
 	for _, option := range options {
 		option(opts)
 	}

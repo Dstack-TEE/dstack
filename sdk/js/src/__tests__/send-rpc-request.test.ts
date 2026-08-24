@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { expect, describe, it, vi, beforeEach, afterEach } from 'vitest'
-import { send_rpc_request, __version__ } from '../send-rpc-request'
+import { send_rpc_request, parse_status_code, __version__ } from '../send-rpc-request'
 import http from 'http'
 import https from 'https'
 import net from 'net'
@@ -12,6 +12,21 @@ import net from 'net'
 vi.mock('http')
 vi.mock('https')
 vi.mock('net')
+
+describe('parse_status_code', () => {
+  it('should read the code out of a status line', () => {
+    expect(parse_status_code('HTTP/1.1 200 OK')).toBe(200)
+    expect(parse_status_code('HTTP/1.1 404 Not Found')).toBe(404)
+    expect(parse_status_code('HTTP/1.0 500 Internal Server Error')).toBe(500)
+  })
+
+  it('should treat an unreadable status line as unsuccessful', () => {
+    // Not 2xx, so an answer nobody can classify is reported rather than
+    // silently passed off as a success.
+    expect(parse_status_code('')).toBe(0)
+    expect(parse_status_code('garbage')).toBe(0)
+  })
+})
 
 describe('send_rpc_request', () => {
   let mockHttpRequest: any
@@ -143,6 +158,49 @@ describe('send_rpc_request', () => {
       await expect(send_rpc_request(endpoint, path, payload)).rejects.toThrow('connection failed')
     })
 
+    it('should report a non-2xx with its status and the prpc error text', async () => {
+      mockRes.statusCode = 404
+      mockHttpRequest.mockImplementation((url, options, callback) => {
+        callback(mockRes)
+
+        const dataCallback = mockRes.on.mock.calls.find(call => call[0] === 'data')?.[1]
+        const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
+
+        if (dataCallback) dataCallback('{"error": "Service not found: GetKeyX"}')
+        if (endCallback) endCallback()
+
+        return mockReq
+      })
+
+      await expect(send_rpc_request('http://localhost:3000', '/GetKeyX', '{}'))
+        .rejects.toThrow('HTTP 404: Service not found: GetKeyX')
+    })
+
+    it('should report a non-2xx with a bounded snippet when the body is not JSON', async () => {
+      // What a pre-0.6 agent answers a `/v1` call with: no `error` field, and a
+      // whole page of it. Without the status this reads as a parse failure.
+      const page = `<!DOCTYPE html>${'<p>not found</p>'.repeat(200)}`
+      mockRes.statusCode = 404
+      mockHttpRequest.mockImplementation((url, options, callback) => {
+        callback(mockRes)
+
+        const dataCallback = mockRes.on.mock.calls.find(call => call[0] === 'data')?.[1]
+        const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
+
+        if (dataCallback) dataCallback(page)
+        if (endCallback) endCallback()
+
+        return mockReq
+      })
+
+      const error = await send_rpc_request('http://localhost:3000', '/v1/Version', '{}')
+        .catch((err: Error) => err)
+      expect(error).toBeInstanceOf(Error)
+      expect((error as Error).message).toContain('HTTP 404: <!DOCTYPE html>')
+      expect((error as Error).message.length).toBeLessThan(page.length)
+      expect((error as Error).message.endsWith('...')).toBe(true)
+    })
+
     it('should handle invalid JSON response', async () => {
       const endpoint = 'http://localhost:3000'
       const path = '/api/test'
@@ -179,6 +237,73 @@ describe('send_rpc_request', () => {
       send_rpc_request(endpoint, path, payload)
 
       expect(mockNetConnect).toHaveBeenCalledWith({ path: endpoint }, expect.any(Function))
+    })
+
+    // The unix branch speaks HTTP by hand, so it is the only one that has to
+    // read the status off the wire itself -- and until it did, a 404 reached the
+    // caller as "failed to parse response".
+    it('should report a non-2xx read off the status line', async () => {
+      const body = '{"error": "Service not found: GetKeyX"}'
+      mockNetConnect.mockImplementation(() => {
+        setTimeout(() => {
+          const dataCallback = mockClient.on.mock.calls.find(call => call[0] === 'data')?.[1]
+          const endCallback = mockClient.on.mock.calls.find(call => call[0] === 'end')?.[1]
+          dataCallback(
+            `HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n${body}`
+          )
+          endCallback()
+        }, 0)
+        return mockClient
+      })
+
+      await expect(send_rpc_request('/tmp/socket', '/GetKeyX', '{}'))
+        .rejects.toThrow('HTTP 404: Service not found: GetKeyX')
+    })
+
+    it('should still resolve a 200 read off the status line', async () => {
+      const body = '{"version":"0.6.0"}'
+      mockNetConnect.mockImplementation(() => {
+        setTimeout(() => {
+          const dataCallback = mockClient.on.mock.calls.find(call => call[0] === 'data')?.[1]
+          const endCallback = mockClient.on.mock.calls.find(call => call[0] === 'end')?.[1]
+          dataCallback(`HTTP/1.1 200 OK\r\nContent-Length: ${body.length}\r\n\r\n${body}`)
+          endCallback()
+        }, 0)
+        return mockClient
+      })
+
+      await expect(send_rpc_request('/tmp/socket', '/Version', '{}')).resolves.toEqual({
+        version: '0.6.0',
+      })
+    })
+
+    // `payload.length` counts UTF-16 code units and the socket emits UTF-8, so a
+    // request with any non-ASCII field declared a body shorter than the one it
+    // sent: the agent parsed truncated JSON and the surplus bytes stayed in the
+    // stream. Both halves of the framing have to count bytes.
+    it('should declare the payload length in bytes, not code units', async () => {
+      const payload = JSON.stringify({ domain: 'café', algorithm: 'secp256k1' })
+      expect(Buffer.byteLength(payload)).toBeGreaterThan(payload.length)
+
+      const body = '{"ok":true}'
+      mockNetConnect.mockImplementation((options, callback) => {
+        // Deferred, as a real socket defers it: the connect handler writes
+        // through the `client` binding that createConnection is still returning.
+        setTimeout(() => {
+          callback()
+          const dataCallback = mockClient.on.mock.calls.find(call => call[0] === 'data')?.[1]
+          const endCallback = mockClient.on.mock.calls.find(call => call[0] === 'end')?.[1]
+          dataCallback(`HTTP/1.1 200 OK\r\nContent-Length: ${body.length}\r\n\r\n${body}`)
+          endCallback()
+        }, 0)
+        return mockClient
+      })
+
+      await send_rpc_request('/tmp/socket', '/v1/GetKey', payload)
+
+      const written = mockClient.write.mock.calls.map((call: any[]) => call[0])
+      expect(written).toContain(`Content-Length: ${Buffer.byteLength(payload)}\r\n`)
+      expect(written).not.toContain(`Content-Length: ${payload.length}\r\n`)
     })
 
     it('should handle Unix socket connection errors', async () => {

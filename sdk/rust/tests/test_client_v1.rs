@@ -229,3 +229,23 @@ async fn issue_cert_generates_a_fresh_key_per_call() {
     let second = client().issue_cert(config()).await.unwrap();
     assert_ne!(first.key, second.key);
 }
+
+/// An agent that predates v1 has no `/v1` mount, so it answers with a plain
+/// HTML 404 rather than a prpc error -- and that page is the only clue the
+/// caller gets. The simulator's tappd socket serves no `/v1` either, so it
+/// stands in for one here.
+#[tokio::test]
+async fn a_missing_v1_mount_is_reported_with_its_status() {
+    let endpoint = std::env::var("TAPPD_SIMULATOR_ENDPOINT")
+        .expect("TAPPD_SIMULATOR_ENDPOINT must point at the simulator");
+    let err = DstackClientV1::new(Some(&endpoint))
+        .version()
+        .await
+        .unwrap_err();
+
+    let message = format!("{err:#}");
+    assert!(
+        message.starts_with("HTTP 404: <!DOCTYPE html>"),
+        "expected the status and the server's page, got: {message}"
+    );
+}

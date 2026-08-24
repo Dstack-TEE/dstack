@@ -48,14 +48,13 @@ describe('DstackClientV1', () => {
       expect(first.key).not.toBe(second.key)
     })
 
-    it('should expose the key as a uint8array of the requested length', async () => {
+    it('should hand back the key as PEM and nothing else', async () => {
       const client = new DstackClientV1()
-      const result = await client.issueCert()
-      const full = result.asUint8Array()
-      const truncated = result.asUint8Array(32)
-      expect(full).toBeInstanceOf(Uint8Array)
-      expect(truncated.length).toBe(32)
-      expect(truncated.length).not.toBe(full.length)
+      const result = await client.issueCert() as any
+      // The raw-bytes accessor v0 carries fed the chain adapters, and v1 has no
+      // chain surface. All four SDKs return the PEM string alone here.
+      expect(result.asUint8Array).toBeUndefined()
+      expect(Object.keys(result).sort()).toEqual(['__name__', 'certificate_chain', 'key'])
     })
 
     it('should reject a validity window that ends before it starts', async () => {
@@ -116,6 +115,24 @@ describe('DstackClientV1', () => {
       expect(parent.key).not.toEqual(child.key)
     })
 
+    // Over the unix socket the SDK writes the HTTP framing itself, and it used
+    // to declare `Content-Length` as the string's UTF-16 code-unit count while
+    // sending UTF-8 -- so a domain like this one arrived truncated and the
+    // surplus bytes were left in the stream. The simulator runs on that path.
+    it('should send a domain with multi-byte characters intact', async () => {
+      const client = new DstackClientV1()
+      const first = await client.getKey('café-storage', 'secp256k1')
+      expect(first.key.length).toBe(32)
+
+      // Truncation would land on some prefix of the domain, and derivation binds
+      // the domain, so a mangled request cannot derive the same key twice the
+      // same way -- nor differ from a genuinely different domain.
+      const again = await client.getKey('café-storage', 'secp256k1')
+      expect(again.key).toEqual(first.key)
+      const truncated = await client.getKey('caf', 'secp256k1')
+      expect(truncated.key).not.toEqual(first.key)
+    })
+
     it('should accept an empty domain', async () => {
       const client = new DstackClientV1()
       const result = await client.getKey('', 'secp256k1')
@@ -162,7 +179,7 @@ describe('DstackClientV1', () => {
       // Assigning one to the other is the assertion: one parser, both methods.
       const bundles: GpuEvidenceBundleV1[] = result.boottime_gpu_evidence
       for (const bundle of bundles) {
-        expect(bundle.asUint8Array()).toBeInstanceOf(Uint8Array)
+        expect(bundle.decodeEvidence()).toBeInstanceOf(Uint8Array)
       }
     })
 
@@ -183,9 +200,10 @@ describe('DstackClientV1', () => {
     it('should surface the agent failure when there is no GPU', async () => {
       const client = new DstackClientV1()
       // The simulator ships no nvattest, so this must fail fast and clearly
-      // rather than hang for the attestation timeout.
+      // rather than hang for the attestation timeout -- with the status the
+      // agent answered and its own explanation, not a parse error.
       await expect(() => client.attestGpu(new Uint8Array(32).fill(0xab))).rejects.toThrow(
-        'GPU attestation'
+        /^HTTP 4\d\d: .*GPU attestation/
       )
     })
   })
@@ -230,7 +248,7 @@ describe('DstackClientV1', () => {
         expect(bundle.format).toBe('nvidia-nvattest-boottime-json-v1')
         // Byte-exact: sha256 over these bytes is what `evidence_sha256` in the
         // measured `gpu-attestation` event commits to.
-        expect(Buffer.from(bundle.asUint8Array()).toString('utf8')).toBe(nvattest_output)
+        expect(Buffer.from(bundle.decodeEvidence()).toString('utf8')).toBe(nvattest_output)
       })
     })
 
@@ -242,7 +260,7 @@ describe('DstackClientV1', () => {
         const on_demand: GpuEvidenceBundleV1 = collected.bundles[0]
         // Only `format` separates them, so one parser handles both.
         expect(on_demand.format).toBe('nvidia-nvattest-collect-evidence-json-v1')
-        expect(on_demand.asUint8Array()).toEqual(boottime.asUint8Array())
+        expect(on_demand.decodeEvidence()).toEqual(boottime.decodeEvidence())
       })
     })
   })

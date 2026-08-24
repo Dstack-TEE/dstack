@@ -16,14 +16,12 @@
 
 use anyhow::{Context, Result};
 use hex::encode as hex_encode;
-use http_client_unix_domain_socket::{ClientUnix, Method};
-use reqwest::Client;
 use serde::{de::DeserializeOwned, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 
 pub use dstack_sdk_types::dstack_v1::*;
 
-use crate::dstack_client::{get_endpoint, BaseClient, ClientKind};
+use crate::dstack_client::{get_endpoint, http_post, unix_post, BaseClient, ClientKind};
 
 /// Client for the v1 guest-agent surface. **This is the default client**, and
 /// what the unsuffixed [`crate::DstackClient`] names.
@@ -68,32 +66,11 @@ impl DstackClientV1 {
         payload: &S,
     ) -> Result<D> {
         let path = format!("/v1/{method}");
-        match &self.client {
-            ClientKind::Http => {
-                let client = Client::new();
-                let url = format!("{}{}", self.base_url.trim_end_matches('/'), path);
-                let res = client
-                    .post(&url)
-                    .json(payload)
-                    .header("Content-Type", "application/json")
-                    .send()
-                    .await?
-                    .error_for_status()?;
-                Ok(res.json().await?)
-            }
-            ClientKind::Unix => {
-                let mut unix_client = ClientUnix::try_new(&self.endpoint).await?;
-                let res = unix_client
-                    .send_request_json::<_, _, Value>(
-                        &path,
-                        Method::POST,
-                        &[("Content-Type", "application/json"), ("Host", "dstack")],
-                        Some(&payload),
-                    )
-                    .await?;
-                Ok(res.1)
-            }
-        }
+        let body = match &self.client {
+            ClientKind::Http => http_post(&self.base_url, &path, payload).await?,
+            ClientKind::Unix => unix_post(&self.endpoint, &path, payload).await?,
+        };
+        serde_json::from_slice(&body).context("failed to parse the response")
     }
 
     /// Issue a certificate for this application.
