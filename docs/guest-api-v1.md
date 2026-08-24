@@ -51,13 +51,25 @@ Every surface the agent serves is now a closed v0 fossil plus a v1. The
 unversioned surfaces are exactly v0.5.11 and never change again; new capability
 arrives only in `dstack.guest.v1`.
 
-| Listener | Service | Mount | Example path |
-|---|---|---|---|
-| Internal socket | `DstackGuestV1` | `/v1` | `/v1/GetKey` |
-| Internal socket | `DstackGuest`, closed | `/` | `/GetKey` |
-| Internal socket | `Tappd`, closed | `/prpc/` | `/prpc/Tappd.TdxQuote` |
-| External | `WorkerV1` | `/prpc/v1` | `/prpc/v1/Health` |
-| External | `Worker`, closed | `/prpc` | `/prpc/Worker.Info` |
+The scheme is uniform: `v0` names the frozen v0.5.11 surface, `v1` the current
+one, on both listeners.
+
+| Listener | Version | Service | Mount | Example path |
+|---|---|---|---|---|
+| Internal socket | v1 | `DstackGuestV1` | `/v1` | `/v1/GetKey` |
+| Internal socket | v0 | `DstackGuest`, frozen | `/v0` | `/v0/GetKey` |
+| Internal socket | v0 alias | `DstackGuest`, frozen | `/` | `/GetKey` |
+| External | v1 | `WorkerV1` | `/prpc/v1` | `/prpc/v1/Health` |
+| External | v0 | `Worker`, frozen | `/prpc/v0` | `/prpc/v0/Info` |
+| External | v0 alias | `Worker`, frozen | `/prpc` | `/prpc/Worker.Info` |
+
+The unversioned paths are compatibility aliases, kept so a pre-0.6 client keeps
+working unchanged. They are additional mounts of the *same* handler, not a
+parallel implementation, so they cannot drift from `/v0`. New code should say
+which version it means.
+
+`Tappd` is unchanged and outside this scheme: it predates v0 and stays on its own
+socket at `/prpc/`.
 
 The internal socket is `/var/run/dstack.sock`, reachable only by the application
 itself. The external listener is reachable by anyone who can route to the CVM.
@@ -182,7 +194,7 @@ Joining with `:` or `/` is not sufficient here and is not what v1 does.
 ### The KDF
 
 ```text
-salt = "RATLS"                          (5 bytes, ASCII, unchanged from v0)
+salt = "dstack-guest-v1"                (15 bytes, ASCII; v0 uses "RATLS")
 IKM  = app root secp256k1 private key   (32 bytes, `k256_key` from .appkeys.json)
 info = LP("dstack-guest-v1-key") || LP(algorithm) || LP(domain)
 L    = 32
@@ -193,9 +205,23 @@ key = HKDF-SHA256(salt, IKM, info, L)   (RFC 5869: extract, then expand)
 `algorithm` is bound as its canonical name, `secp256k1` or `ed25519`, never as the
 string the caller sent.
 
-The primitive family is unchanged from v0, which used the same HKDF-SHA256 and the
-same salt. What changed is the `info`: v0 passed the path alone, so the algorithm
-did not participate and one 32-byte secret served both curves.
+The primitive is unchanged from v0, which also used HKDF-SHA256 over the same
+input key material. Two things changed. The `info` now binds the algorithm and a
+version tag, where v0 passed the path alone, so the algorithm did not participate
+and one 32-byte secret served both curves. And the salt is v1's own.
+
+The salt is what makes v1 a separate derivation tree rather than a
+differently-labelled branch of the old one. Under a shared salt the two surfaces
+would be separated only by their HKDF `info` -- and the legacy `info` is the
+caller's `path` verbatim, so a caller that passed the v1 `info` byte string as a
+v0 `path` would reproduce a v1 key exactly. Different salts close that by
+construction, whatever either side puts in `info`.
+
+That collision was never a privilege boundary: both derivations serve the same
+single-tenant application from the same root key, and that application may call
+either surface. It is closed because a KDF whose separation depends on nobody
+choosing an awkward input is one refactor away from not separating anything, and
+the fix costs nothing on a surface with no deployed keys yet.
 
 The 32 output bytes are used directly:
 
@@ -204,13 +230,6 @@ The 32 output bytes are used directly:
   caller can choose another one. Folding the scalar into range would silently land
   two domains on one key.
 - **ed25519**: the RFC 8032 seed, from which the key expands as usual.
-
-Because v1 and v0 share the HKDF salt, a caller that supplies a crafted `path` to
-the unversioned `GetKey` can reproduce a v1 key. That is not a boundary. Both
-derivations serve the same single-tenant application from the same root key, and
-that application can call either surface. The domain separation here prevents
-accidental reuse across algorithms and versions; it does not isolate a caller from
-itself, and nothing in dstack's threat model asks it to.
 
 ### Public key encoding
 
@@ -233,12 +252,12 @@ Generated with an app root key of
 
 | domain | algorithm | private key | public key |
 |---|---|---|---|
-| `""` | secp256k1 | `463e877bc7322c1c09e567844b3101e88f353bfb33177c41cb13832cb67eef1c` | `03c45e036d19662802e628d9a712c07a9d9d64bee28e1754a72d75010860a789c2` |
-| `""` | ed25519 | `a41f6458de9d11a43f79640b6ab2c62d02aceda7b16c5f159dc7ad69621c7eb0` | `7a5740fa9ab4791a232cc1fc7e73d5ff47ad41be2589a71b05f128dee4223f08` |
-| `wallet` | secp256k1 | `c2b47271c2956c020eb471f3d6ec9a08bac4ce72d158078592c3bfd9db67808c` | `0375b11b6fabbe6e18b9bac26b082070dea76487ce512323870bc784a28ec5404b` |
-| `wallet` | ed25519 | `fce7a47f848fc9f7a799a34e061f4d07d7e8ef3adda98d8fc36a5de3f5146cdf` | `5e8076b492634770e9b12dc8b136c9f5e3e8a86adc657040ba7a320296dcf6b0` |
-| `a/b/c` | secp256k1 | `448f92c86abd72c1c35b7ff75b5c9971114694e7825518e5ed0d2101711527cd` | `03011845be1d30004c148ae49ef3a82585094f856a7c9bc3ed06edf959537a4eac` |
-| `k\0:ey` | ed25519 | `3cfcf09543e94d23c87aec1e5774ca3803feb3dd8ee298507650409b20ebfdde` | `9ba2d94591b97db4f089fc187cfcb09a9cd55bdd553e066d80cc8cb2977bd841` |
+| `""` | secp256k1 | `59f60584ce6fd2a3a31997256db9d77322463fc8a6b1520110401bcb1ee92387` | `0377c7fb050db181d392266a3cee9adb2901c6d665f11bac68be5457f577ba4908` |
+| `""` | ed25519 | `b023493030669cf22e9cafa6a464d4cf3ae4edfe5474ec796710f21ea011946d` | `a3dc149fd5b765eab2eb7d3174fa939e39386898f10b15b7b146f6f1358ecf2a` |
+| `wallet` | secp256k1 | `2580611f0f936abe59399a8ac4ed9964d0259bd34c88ea012ca42b32acbf9386` | `0369cecd3c8da88730f7d45875824c3e75f63a2d3da4be42f45671954daa2abb28` |
+| `wallet` | ed25519 | `d76a703b08ebb074b809b9d6acf3d7c6663131273807717ce9d23bbadc2c644e` | `dade622d0fa1641e79b16e0b04e296be671f85f0aa6387b7d37e9d89f87494f5` |
+| `a/b/c` | secp256k1 | `7f0973449298085d2d36a3b4c4d3243c100ba1981ffa885fe9e9dee883e69538` | `02e9b1a61b6d70aa9b241753828c316bf90e33e77b2e113f9ba75a8b6dc3cde5c1` |
+| `k\0:ey` | ed25519 | `42da8bf0b479ed125c370e3b91f982735bf08ff592abbd586985affa43ee96a1` | `c833107822b003ff5675b33b90b151d4315c3ab9162b17d876e8dffde41abf9b` |
 
 The last row's domain is the five bytes `6b 00 3a 65 79`. It is there because a
 delimiter-joined encoding would mishandle it.
@@ -282,14 +301,14 @@ A worked claim, for `domain = "wallet"` and `algorithm = "secp256k1"`:
 00 00 00 19  "dstack-guest-v1-key-claim"     25 bytes
 00 00 00 09  "secp256k1"                      9 bytes
 00 00 00 06  "wallet"                         6 bytes
-00 00 00 21  03 75 b1 1b ... 04 4b           33 bytes
+00 00 00 21  03 69 ce cd ... bb 28           33 bytes
 ```
 
 With the app root key from the test vector table, `link0` is
 
 ```text
-96726db35263cb2a7067fc5ebb0d06621f7cab2d0f0aa15a83858dbf9ff7f12c
-6e1c5640223fcca1a03ba5ccf09d353609db6481f9563add16e16a8ad8544c29
+af26d2f258d34580e7288bd83fc97bddc83769476d77823c4f76a3ad77a75149
+1a39ffc4ef3aa66cb0d008b8f6f199e6d57c1da9a92ba4cf10f23bf752b8cad0
 00
 ```
 
