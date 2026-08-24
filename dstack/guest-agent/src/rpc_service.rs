@@ -690,17 +690,26 @@ impl ExternalRpcHandler {
     /// its own method instead of the caller-supplied report data `GetQuote`
     /// and `Attest` take.
     async fn app_key_report_data(&self, algorithm: &str) -> Result<[u8; 64]> {
+        let algorithm = normalize_algorithm(algorithm);
+        // Prehashing is a signing mode, not a key type: the same secp256k1 key
+        // signs both ways, so derive it under the base name. `Sign` does the
+        // same, and without this the prehashed name reaches `get_key` verbatim
+        // and comes back "Unsupported algorithm".
+        let key_algorithm = match algorithm {
+            "secp256k1_prehashed" => "secp256k1",
+            other => other,
+        };
         let key_response = InternalRpcHandler {
             state: self.state.clone(),
         }
         .get_key(GetKeyArgs {
             path: "vms".to_string(),
             purpose: "signing".to_string(),
-            algorithm: algorithm.to_string(),
+            algorithm: key_algorithm.to_string(),
         })
         .await?;
 
-        let (prefix, pubkey) = match normalize_algorithm(algorithm) {
+        let (prefix, pubkey) = match algorithm {
             "ed25519" => {
                 let key_bytes: [u8; 32] = key_response
                     .key
@@ -1277,6 +1286,28 @@ pNs85uhOZE8z2jr8Pg==
             EXPECTED_REPORT_DATA.as_bytes(),
             app_key_report_data(&response).as_slice()
         );
+    }
+
+    #[tokio::test]
+    async fn test_attest_app_key_accepts_secp256k1_prehashed() {
+        // Prehashing changes how the key signs, not which key it is, so this
+        // must attest the same public key `Sign` uses under that name.
+        let (state, _guard) = setup_test_state().await;
+
+        let prehashed = ExternalRpcHandler::new(state.clone())
+            .attest_app_key(AttestAppKeyRequest {
+                algorithm: "secp256k1_prehashed".to_string(),
+            })
+            .await
+            .expect("secp256k1_prehashed must be accepted");
+        let plain = ExternalRpcHandler::new(state)
+            .attest_app_key(AttestAppKeyRequest {
+                algorithm: "secp256k1".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(app_key_report_data(&prehashed), app_key_report_data(&plain));
     }
 
     #[tokio::test]
