@@ -726,7 +726,7 @@ client := dstack.NewDstackClientV1()
 
 Protobuf `bytes` fields travel as lowercase hex on the wire and are exposed as
 `[]byte`; the fields carrying JSON documents (`AppCompose`, `VmConfig`,
-`KeyProviderInfo`, `BoottimeGpuEvidence`) stay `string`.
+`KeyProviderInfo`) stay `string`.
 
 ##### `IssueCert(ctx context.Context, options ...IssueCertV1Option) (*IssueCertV1Response, error)`
 
@@ -764,11 +764,26 @@ Produces a versioned attestation over `reportData` (1–64 bytes, zero-padded on
 the right to 64). The sole CVM attestation entry point in v1: the attestation
 already carries the TDX quote and the event log, so there is no `GetQuote`.
 
-Setting `includeBoottimeGpuEvidence` also returns `BoottimeGpuEvidence`, the
-complete `nvattest` output from boot. It is **not** bound to `reportData`: bind
-it by replaying the runtime event log and comparing sha256 of those exact UTF-8
-bytes against the `evidence_sha256` field of the measured `gpu-attestation`
-event.
+Setting `includeBoottimeGpuEvidence` also returns `BoottimeGpuEvidence`, the GPU
+evidence `nvattest` recorded at boot, as `[]GpuEvidenceBundle` — the same type
+`AttestGpu` returns, so one parser serves both methods. Absence is the empty
+slice, not a sentinel: it stays empty unless you asked for it *and* the guest has
+boot-time output.
+
+It is **not** bound to `reportData`: bind a bundle by replaying the runtime event
+log and comparing sha256 of its `Evidence` against the `evidence_sha256` field of
+the measured `gpu-attestation` event. `Evidence` holds the exact bytes `nvattest`
+wrote, byte for byte, and that exactness is what makes the comparison work —
+re-serializing the JSON changes the digest.
+
+```go
+att, err := client.Attest(ctx, reportData, true)
+for _, bundle := range att.BoottimeGpuEvidence {
+    // bundle.Format == "nvidia-nvattest-boottime-json-v1"
+    digest := sha256.Sum256(bundle.Evidence)
+    // compare digest against the `gpu-attestation` event's evidence_sha256
+}
+```
 
 ##### `AttestGpu(ctx context.Context, nonce []byte) (*AttestGpuV1Response, error)`
 
@@ -777,9 +792,15 @@ Collects GPU evidence now, against a nonce you choose. The nonce must be
 length and dstack passes it through verbatim, so you can compare it directly
 against the `eat_nonce` claim rather than reversing a hash.
 
-**Returns:** `Bundles`, each with `Vendor`, `Format` and opaque `Evidence`
-bytes. This is evidence, not a verdict — select a verifier by vendor and format,
-then check the signature, certificate chain, measurements and embedded nonce. It
+**Returns:** `Bundles`, each a `GpuEvidenceBundle` with `Vendor`, `Format` and
+opaque `Evidence` bytes — the same type `Attest` returns in
+`BoottimeGpuEvidence`. `Format` is what separates them: these carry
+`nvidia-nvattest-collect-evidence-json-v1`, the boot-time record carries
+`nvidia-nvattest-boottime-json-v1`, and a verifier for one does not appraise the
+other.
+
+This is evidence, not a verdict — select a verifier by vendor and format, then
+check the signature, certificate chain, measurements and embedded nonce. It
 still does not bind the GPU to this CVM.
 
 ##### `Info(ctx context.Context) (*InfoV1Response, error)`

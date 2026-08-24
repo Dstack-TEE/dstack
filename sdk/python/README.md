@@ -324,15 +324,23 @@ result = client.attest(b'user:alice:nonce123')
 print(result.decode_attestation())
 
 with_gpu = client.attest(b'user:alice:nonce123', include_boottime_gpu_evidence=True)
-print(with_gpu.boottime_gpu_evidence)
+for bundle in with_gpu.boottime_gpu_evidence:
+    print(bundle.vendor, bundle.format, bundle.decode_evidence())
 ```
 
 `report_data` is 1–64 bytes and is zero-padded on the right to 64.
-`boottime_gpu_evidence` is nvattest's complete boot-time JSON output, empty
-unless the flag was set and such output exists. It is *not* bound to
-`report_data` — nvattest ran at boot against its own nonce. Bind it by replaying
-the runtime event log and comparing sha256 of those exact UTF-8 bytes against
-`evidence_sha256` in the measured `gpu-attestation` event.
+`boottime_gpu_evidence` is a list of `GpuEvidenceBundleV1` — the same model
+`attest_gpu()` returns, so one bundle parser serves both methods. It is empty
+unless the flag was set and the guest has boot-time output; there is no
+sentinel. Boot-time bundles carry `format='nvidia-nvattest-boottime-json-v1'`,
+against `attest_gpu()`'s `'nvidia-nvattest-collect-evidence-json-v1'`.
+
+Boot-time evidence is *not* bound to `report_data` — nvattest ran at boot
+against its own nonce. Bind it by replaying the runtime event log and comparing
+sha256 of `decode_evidence()` against `evidence_sha256` in the measured
+`gpu-attestation` event. `decode_evidence()` returns the nvattest output byte
+for byte; do not parse and re-serialize before hashing, since key order and
+whitespace change the digest.
 
 ### `attest_gpu()`
 
@@ -553,7 +561,7 @@ warning at the top before switching anything that holds state.
 | `sign()` | — | Sign locally with the key `get_key()` returns |
 | `verify()` | — | Verify locally, per `docs/guest-api-v1.md` |
 | `emit_event()` | — | RTMR3 is system-owned as of 0.6.0 |
-| `gpu_info()` | `attest()` with `include_boottime_gpu_evidence=True` | Same bytes, now on the attestation call |
+| `gpu_info()` | `attest()` with `include_boottime_gpu_evidence=True` | Same bytes, now on the attestation call, in `attest_gpu()`'s bundle shape |
 
 ## License
 

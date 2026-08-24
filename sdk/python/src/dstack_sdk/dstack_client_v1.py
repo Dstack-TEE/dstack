@@ -53,20 +53,19 @@ class GetKeyResponseV1(BaseModel):
         return [bytes.fromhex(chain) for chain in self.signature_chain]
 
 
-class AttestResponseV1(BaseModel):
-    attestation: str
-    # Complete JSON output produced by nvattest during guest boot. Empty unless
-    # the request set include_boottime_gpu_evidence and the guest has boot-time
-    # GPU attestation output. Not bound to report_data: verify it by replaying
-    # the runtime event log and comparing sha256 of these exact UTF-8 bytes
-    # against evidence_sha256 in the `gpu-attestation` event.
-    boottime_gpu_evidence: str = ""
-
-    def decode_attestation(self) -> bytes:
-        return bytes.fromhex(self.attestation)
-
-
 class GpuEvidenceBundleV1(BaseModel):
+    """One vendor's GPU evidence, however it was obtained.
+
+    The same bundle shape carries both fresh ``attest_gpu()`` output and the
+    boot-time record in ``AttestResponseV1.boottime_gpu_evidence``, so a caller
+    writes one parser and switches on ``format``:
+
+    - ``nvidia-nvattest-collect-evidence-json-v1`` -- collected on demand,
+      against the nonce passed to ``attest_gpu()``.
+    - ``nvidia-nvattest-boottime-json-v1`` -- the record nvattest wrote at guest
+      boot, against its own nonce.
+    """
+
     vendor: str
     format: str
     # Opaque vendor-native evidence, hex-encoded on the wire. Do not assume
@@ -74,7 +73,28 @@ class GpuEvidenceBundleV1(BaseModel):
     evidence: str
 
     def decode_evidence(self) -> bytes:
+        """Return the evidence as raw bytes, exactly as the vendor emitted it.
+
+        The exactness matters for the boot-time format: the binding rule is
+        sha256 over precisely these bytes, compared against ``evidence_sha256``
+        in the measured ``gpu-attestation`` event. Parsing and re-serializing
+        the JSON changes key order and whitespace, and so changes the digest.
+        """
         return bytes.fromhex(self.evidence)
+
+
+class AttestResponseV1(BaseModel):
+    attestation: str
+    # The GPU evidence nvattest recorded during guest boot, in the same bundle
+    # shape attest_gpu returns. Empty unless the request set
+    # include_boottime_gpu_evidence and the guest has boot-time output. Not
+    # bound to report_data: verify each bundle by replaying the runtime event
+    # log and comparing sha256 of decode_evidence() against evidence_sha256 in
+    # the `gpu-attestation` event.
+    boottime_gpu_evidence: List[GpuEvidenceBundleV1] = []
+
+    def decode_attestation(self) -> bytes:
+        return bytes.fromhex(self.attestation)
 
 
 class AttestGpuResponseV1(BaseModel):
@@ -192,7 +212,9 @@ class AsyncDstackClientV1(AsyncBaseClient):
         ``get_quote`` has nothing left to add.
 
         Set include_boottime_gpu_evidence to also return the boot-time GPU
-        attestation evidence in ``AttestResponseV1.boottime_gpu_evidence``.
+        attestation evidence in ``AttestResponseV1.boottime_gpu_evidence``, as
+        the same ``GpuEvidenceBundleV1`` list ``attest_gpu`` returns. A guest
+        with no boot-time output returns an empty list.
         """
         if not report_data or not isinstance(report_data, (bytes, str)):
             raise ValueError("report_data can not be empty")

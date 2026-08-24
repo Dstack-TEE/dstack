@@ -47,23 +47,39 @@ type GetKeyV1Response struct {
 type AttestV1Response struct {
 	// The versioned dstack attestation.
 	Attestation []byte
-	// The complete output nvattest produced at boot, a JSON document passed
-	// through unparsed. Populated only when the request asked for it and the
-	// guest has boot-time GPU attestation output.
+	// The GPU evidence nvattest recorded at guest boot, in the same bundle
+	// shape AttestGpu returns. Empty unless the request asked for it and the
+	// guest has boot-time output, so absence is the empty slice rather than a
+	// sentinel value.
 	//
-	// Not bound to reportData: bind it by replaying the runtime event log and
-	// comparing sha256 of these exact UTF-8 bytes against the evidence_sha256
-	// field of the measured `gpu-attestation` event.
-	BoottimeGpuEvidence string
+	// Not bound to reportData: nvattest ran at boot against its own nonce.
+	// Bind a bundle by replaying the runtime event log and comparing sha256 of
+	// its Evidence against the evidence_sha256 field of the measured
+	// `gpu-attestation` event.
+	BoottimeGpuEvidence []GpuEvidenceBundle
 }
 
-// One vendor-native GPU evidence bundle.
+// One vendor's GPU evidence, however it was obtained.
+//
+// Shared by AttestGpu and AttestV1Response.BoottimeGpuEvidence so a consumer
+// writes one parser for both, then dispatches on (Vendor, Format): the two
+// sources answer different questions and a verifier for one does not appraise
+// the other.
 type GpuEvidenceBundle struct {
 	// Stable GPU vendor identifier, for example `nvidia`.
 	Vendor string
-	// Vendor-specific evidence format and version.
+	// Vendor-specific evidence format and version. Known values:
+	//   `nvidia-nvattest-collect-evidence-json-v1`  fresh, from AttestGpu
+	//   `nvidia-nvattest-boottime-json-v1`          the record written at boot
 	Format string
-	// Opaque vendor-native evidence bytes. Do not assume UTF-8 or JSON.
+	// Opaque vendor-native evidence bytes, hex-encoded on the wire. Do not
+	// assume UTF-8 or JSON.
+	//
+	// These are the vendor's bytes verbatim, and for the boot-time format that
+	// exactness is load-bearing: the binding rule is sha256 over precisely
+	// these bytes, compared against evidence_sha256 in the measured
+	// `gpu-attestation` event. Parsing and re-serializing the JSON changes key
+	// order and whitespace, and so changes the digest.
 	Evidence []byte
 }
 
@@ -131,6 +147,29 @@ func decodeHexField(name string, value string) ([]byte, error) {
 		return nil, fmt.Errorf("failed to decode %s: %w", name, err)
 	}
 	return decoded, nil
+}
+
+// Wire form of GpuEvidenceBundle, identical under `bundles` and under
+// `boottime_gpu_evidence`.
+type gpuEvidenceBundleJSON struct {
+	Vendor   string `json:"vendor"`
+	Format   string `json:"format"`
+	Evidence string `json:"evidence"`
+}
+
+// decodeGpuEvidenceBundles decodes one repeated GpuEvidenceBundle field, naming
+// the field so a malformed response says which one was wrong. An absent or
+// empty list decodes to an empty slice: absence is not an error.
+func decodeGpuEvidenceBundles(name string, wire []gpuEvidenceBundleJSON) ([]GpuEvidenceBundle, error) {
+	bundles := make([]GpuEvidenceBundle, len(wire))
+	for i, bundle := range wire {
+		evidence, err := decodeHexField(fmt.Sprintf("evidence of %s element %d", name, i), bundle.Evidence)
+		if err != nil {
+			return nil, err
+		}
+		bundles[i] = GpuEvidenceBundle{Vendor: bundle.Vendor, Format: bundle.Format, Evidence: evidence}
+	}
+	return bundles, nil
 }
 
 // IssueCertV1Option defines a function type for v1 certificate options.
@@ -305,8 +344,9 @@ func (c *DstackClientV1) GetKey(ctx context.Context, domain string, algorithm st
 // The sole CVM attestation entry point in v1: the attestation already carries
 // the TDX quote and the event log, so there is no separate GetQuote.
 //
-// includeBoottimeGpuEvidence also returns the boot-time nvattest output. That
-// evidence is not bound to reportData; see AttestV1Response.
+// includeBoottimeGpuEvidence also returns the boot-time nvattest output, as
+// GpuEvidenceBundle values -- the same shape AttestGpu returns, so one parser
+// serves both. That evidence is not bound to reportData; see AttestV1Response.
 func (c *DstackClientV1) Attest(ctx context.Context, reportData []byte, includeBoottimeGpuEvidence bool) (*AttestV1Response, error) {
 	if len(reportData) == 0 || len(reportData) > 64 {
 		return nil, fmt.Errorf("report data must be between 1 and 64 bytes, got %d", len(reportData))
@@ -323,8 +363,8 @@ func (c *DstackClientV1) Attest(ctx context.Context, reportData []byte, includeB
 	}
 
 	var response struct {
-		Attestation         string `json:"attestation"`
-		BoottimeGpuEvidence string `json:"boottime_gpu_evidence"`
+		Attestation         string                  `json:"attestation"`
+		BoottimeGpuEvidence []gpuEvidenceBundleJSON `json:"boottime_gpu_evidence"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, err
@@ -335,9 +375,14 @@ func (c *DstackClientV1) Attest(ctx context.Context, reportData []byte, includeB
 		return nil, err
 	}
 
+	boottimeGpuEvidence, err := decodeGpuEvidenceBundles("boottime_gpu_evidence", response.BoottimeGpuEvidence)
+	if err != nil {
+		return nil, err
+	}
+
 	return &AttestV1Response{
 		Attestation:         attestation,
-		BoottimeGpuEvidence: response.BoottimeGpuEvidence,
+		BoottimeGpuEvidence: boottimeGpuEvidence,
 	}, nil
 }
 
@@ -362,23 +407,15 @@ func (c *DstackClientV1) AttestGpu(ctx context.Context, nonce []byte) (*AttestGp
 	}
 
 	var response struct {
-		Bundles []struct {
-			Vendor   string `json:"vendor"`
-			Format   string `json:"format"`
-			Evidence string `json:"evidence"`
-		} `json:"bundles"`
+		Bundles []gpuEvidenceBundleJSON `json:"bundles"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, err
 	}
 
-	bundles := make([]GpuEvidenceBundle, len(response.Bundles))
-	for i, bundle := range response.Bundles {
-		evidence, err := decodeHexField(fmt.Sprintf("evidence of bundle %d", i), bundle.Evidence)
-		if err != nil {
-			return nil, err
-		}
-		bundles[i] = GpuEvidenceBundle{Vendor: bundle.Vendor, Format: bundle.Format, Evidence: evidence}
+	bundles, err := decodeGpuEvidenceBundles("bundles", response.Bundles)
+	if err != nil {
+		return nil, err
 	}
 
 	return &AttestGpuV1Response{Bundles: bundles}, nil

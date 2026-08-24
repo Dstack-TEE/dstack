@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -161,6 +162,75 @@ func TestV1Attest(t *testing.T) {
 
 	if len(resp.Attestation) == 0 {
 		t.Error("expected attestation to not be empty")
+	}
+}
+
+// The simulator has no boot-time GPU output, which is the case worth pinning:
+// absence is the empty slice, not a sentinel a caller has to test for.
+func TestV1AttestBoottimeGpuEvidenceIsEmptyWithoutGpuOutput(t *testing.T) {
+	client := dstack.NewDstackClientV1()
+	resp, err := client.Attest(context.Background(), []byte("test"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(resp.BoottimeGpuEvidence) != 0 {
+		t.Errorf("expected no boot-time evidence from the simulator, got %d bundles", len(resp.BoottimeGpuEvidence))
+	}
+	// Same type as AttestGpu's bundles, so one parser serves both methods.
+	// This assignment is the assertion: it does not compile otherwise.
+	var bundles []dstack.GpuEvidenceBundle = resp.BoottimeGpuEvidence
+	bundles = (&dstack.AttestGpuV1Response{}).Bundles
+	_ = bundles
+}
+
+// Boot-time evidence arrives in the same bundle shape AttestGpu returns, and
+// its evidence is hex-decoded to the exact bytes nvattest wrote.
+func TestV1AttestBoottimeGpuEvidenceBundles(t *testing.T) {
+	evidence := []byte(`{"result_code":0,"claims":[]}`)
+
+	var payload map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/Attest" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("failed to decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"attestation": "deadbeef",
+			"boottime_gpu_evidence": []map[string]string{{
+				"vendor":   "nvidia",
+				"format":   "nvidia-nvattest-boottime-json-v1",
+				"evidence": hex.EncodeToString(evidence),
+			}},
+		})
+	}))
+	defer server.Close()
+
+	client := dstack.NewDstackClientV1(dstack.WithEndpoint(server.URL))
+	resp, err := client.Attest(context.Background(), []byte("test"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if payload["include_boottime_gpu_evidence"] != true {
+		t.Errorf("expected the request to ask for boot-time evidence, got: %v", payload["include_boottime_gpu_evidence"])
+	}
+	if len(resp.BoottimeGpuEvidence) != 1 {
+		t.Fatalf("expected 1 bundle, got %d", len(resp.BoottimeGpuEvidence))
+	}
+
+	bundle := resp.BoottimeGpuEvidence[0]
+	// The format is what separates this from AttestGpu's on-demand evidence.
+	if bundle.Vendor != "nvidia" || bundle.Format != "nvidia-nvattest-boottime-json-v1" {
+		t.Errorf("unexpected bundle: %+v", bundle)
+	}
+	// sha256 of exactly these bytes is what the `gpu-attestation` event commits
+	// to, so the decode must be byte-for-byte, not a re-serialized parse.
+	if !bytes.Equal(bundle.Evidence, evidence) {
+		t.Errorf("expected the exact nvattest bytes, got %q", bundle.Evidence)
 	}
 }
 

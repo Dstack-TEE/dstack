@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import List
+
 import pytest
 
 from dstack_sdk import AsyncDstackClientV0
@@ -11,6 +13,7 @@ from dstack_sdk import AttestResponseV1
 from dstack_sdk import DstackClientV0
 from dstack_sdk import DstackClientV1
 from dstack_sdk import GetKeyResponseV1
+from dstack_sdk import GpuEvidenceBundleV1
 from dstack_sdk import InfoResponseV1
 from dstack_sdk import IssueCertResponseV1
 from dstack_sdk import VersionResponseV1
@@ -145,12 +148,22 @@ def test_sync_v1_attest():
 
 @pytest.mark.asyncio
 async def test_async_v1_attest_boottime_gpu_evidence(monkeypatch):
-    evidence = '{"result_code":0,"claims":[]}'
+    """Boot-time evidence arrives in the same bundle shape attest_gpu returns."""
+    evidence = b'{"result_code":0,"claims":[]}'
 
     async def fake_send(self, method, payload):
         assert method == "Attest"
         assert payload["include_boottime_gpu_evidence"] is True
-        return {"attestation": "deadbeef", "boottime_gpu_evidence": evidence}
+        return {
+            "attestation": "deadbeef",
+            "boottime_gpu_evidence": [
+                {
+                    "vendor": "nvidia",
+                    "format": "nvidia-nvattest-boottime-json-v1",
+                    "evidence": evidence.hex(),
+                }
+            ],
+        }
 
     monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
     monkeypatch.setattr(AsyncDstackClientV1, "_send_rpc_request", fake_send)
@@ -158,7 +171,24 @@ async def test_async_v1_attest_boottime_gpu_evidence(monkeypatch):
         "test", include_boottime_gpu_evidence=True
     )
     assert isinstance(result, AttestResponseV1)
-    assert result.boottime_gpu_evidence == evidence
+    bundle = result.boottime_gpu_evidence[0]
+    assert isinstance(bundle, GpuEvidenceBundleV1)
+    assert bundle.format == "nvidia-nvattest-boottime-json-v1"
+    # sha256 of exactly these bytes is what the `gpu-attestation` event commits
+    # to, so the decode must be byte-for-byte, not a re-serialized parse.
+    assert bundle.decode_evidence() == evidence
+
+
+def test_sync_v1_attest_boottime_gpu_evidence_defaults_to_empty():
+    """No GPU output in the simulator: absence is an empty list, not a sentinel."""
+    result = DstackClientV1().attest(
+        b"user:alice:nonce123", include_boottime_gpu_evidence=True
+    )
+    assert result.boottime_gpu_evidence == []
+    # Same model as attest_gpu's bundles, so one parser serves both methods.
+    bundles = List[GpuEvidenceBundleV1]
+    assert AttestResponseV1.model_fields["boottime_gpu_evidence"].annotation == bundles
+    assert AttestGpuResponseV1.model_fields["bundles"].annotation == bundles
 
 
 @pytest.mark.asyncio

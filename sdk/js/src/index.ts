@@ -176,6 +176,21 @@ function throwOnRpcError(result: unknown): void {
 }
 
 /**
+ * Attach the byte accessor to the bundles a v1 RPC returned.
+ *
+ * Shared by `attest` and `attestGpu` so both hand back the same object shape,
+ * which is the point of the wire message being shared.
+ */
+function to_gpu_evidence_bundles(
+  bundles: Array<Omit<GpuEvidenceBundleV1, 'asUint8Array'>> | undefined,
+): GpuEvidenceBundleV1[] {
+  return (bundles ?? []).map(bundle => Object.freeze({
+    ...bundle,
+    asUint8Array: () => new Uint8Array(Buffer.from(bundle.evidence, 'hex')),
+  }))
+}
+
+/**
  * Client for the frozen v0 guest agent surface, served at `/<Method>` and,
  * since dstack 0.6.0, equivalently at `/v0/<Method>`.
  *
@@ -605,16 +620,32 @@ export interface AttestResponseV1 {
   attestation: Hex
 
   /**
-   * Complete JSON output nvattest produced at boot. Empty unless the request
-   * asked for it and the guest has boot-time GPU attestation output.
+   * The GPU evidence nvattest recorded at boot, in the same bundle shape
+   * {@link DstackClientV1.attestGpu} returns, so one parser serves both. Empty
+   * unless the request asked for it and the guest has boot-time output --
+   * absence is the empty array, not a sentinel.
    *
-   * Not bound to `report_data`: verify it by replaying the runtime event log
-   * and comparing sha256 of these exact UTF-8 bytes against `evidence_sha256`
-   * in the measured `gpu-attestation` event.
+   * Not bound to `report_data`: nvattest ran at boot against its own nonce.
+   * Bind it by replaying the runtime event log and comparing sha256 of the
+   * bytes `asUint8Array()` returns against `evidence_sha256` in the measured
+   * `gpu-attestation` event.
    */
-  boottime_gpu_evidence: string
+  boottime_gpu_evidence: GpuEvidenceBundleV1[]
 }
 
+/**
+ * One vendor's GPU evidence, however it was obtained.
+ *
+ * Shared by {@link DstackClientV1.attestGpu} and
+ * {@link AttestResponseV1.boottime_gpu_evidence}; dispatch on `vendor` and
+ * `format`, because the two sources answer different questions and a verifier
+ * for one does not appraise the other:
+ *
+ * - `nvidia-nvattest-collect-evidence-json-v1` -- collected on demand by
+ *   `attestGpu`, against the nonce you passed.
+ * - `nvidia-nvattest-boottime-json-v1` -- the record written at boot, carried
+ *   by `attest`.
+ */
 export interface GpuEvidenceBundleV1 {
   /** Stable GPU vendor identifier, for example `nvidia`. */
   vendor: string
@@ -622,6 +653,16 @@ export interface GpuEvidenceBundleV1 {
   format: string
   /** Opaque vendor-native evidence bytes, hex-encoded by the JSON RPC. */
   evidence: Hex
+
+  /**
+   * The evidence as raw bytes, exactly as the vendor emitted it.
+   *
+   * Byte-exact by design: for a boot-time bundle the binding rule is sha256
+   * over precisely these bytes, compared against `evidence_sha256` in the
+   * measured `gpu-attestation` event, so parsing and re-serialising the JSON
+   * breaks the comparison.
+   */
+  asUint8Array: () => Uint8Array
 }
 
 export interface AttestGpuResponseV1 {
@@ -790,7 +831,8 @@ export class DstackClientV1 {
    *
    * @param report_data 1 to 64 bytes, zero-padded on the right to 64 by the agent.
    * @param include_boottime_gpu_evidence Also return the boot-time GPU evidence,
-   * so a verifier gets both in one round trip. It is not bound to `report_data`.
+   * as the same {@link GpuEvidenceBundleV1} list `attestGpu` returns, so a
+   * verifier gets both in one round trip. It is not bound to `report_data`.
    */
   async attest(
     report_data: string | Buffer | Uint8Array,
@@ -804,13 +846,15 @@ export class DstackClientV1 {
       throw new Error(`report data must be at most 64 bytes, but received ${hex.length / 2}`)
     }
     const payload = JSON.stringify({ report_data: hex, include_boottime_gpu_evidence })
-    const result = await send_rpc_request<{ attestation: string, boottime_gpu_evidence?: string }>(
-      this.endpoint, '/v1/Attest', payload)
+    const result = await send_rpc_request<{
+      attestation: string,
+      boottime_gpu_evidence?: Array<Omit<GpuEvidenceBundleV1, 'asUint8Array'>>,
+    }>(this.endpoint, '/v1/Attest', payload)
     throwOnRpcError(result)
     return Object.freeze({
       __name__: 'AttestResponseV1' as const,
       attestation: result.attestation as Hex,
-      boottime_gpu_evidence: result.boottime_gpu_evidence ?? '',
+      boottime_gpu_evidence: to_gpu_evidence_bundles(result.boottime_gpu_evidence),
     })
   }
 
@@ -830,11 +874,12 @@ export class DstackClientV1 {
       throw new Error(`nonce must be exactly 32 bytes, but received ${nonce.length}`)
     }
     const payload = JSON.stringify({ nonce: to_hex(nonce) })
-    const result = await send_rpc_request<{ bundles: GpuEvidenceBundleV1[] }>(
-      this.endpoint, '/v1/AttestGpu', payload)
+    const result = await send_rpc_request<{
+      bundles?: Array<Omit<GpuEvidenceBundleV1, 'asUint8Array'>>,
+    }>(this.endpoint, '/v1/AttestGpu', payload)
     throwOnRpcError(result)
     return Object.freeze({
-      bundles: result.bundles ?? [],
+      bundles: to_gpu_evidence_bundles(result.bundles),
       __name__: 'AttestGpuResponseV1' as const,
     })
   }

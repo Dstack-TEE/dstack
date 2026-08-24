@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { expect, describe, it } from 'vitest'
+import http from 'http'
+import type { AddressInfo } from 'net'
 import { DstackClientV0, DstackClientV1 } from '../index'
+import type { GpuEvidenceBundleV1 } from '../index'
 
 describe('DstackClientV1', () => {
   it('should be able to get version', async () => {
@@ -131,15 +134,27 @@ describe('DstackClientV1', () => {
       const client = new DstackClientV1()
       const result = await client.attest('test')
       expect(result.attestation).not.toBe('')
-      expect(result.boottime_gpu_evidence).toBe('')
+      expect(result.boottime_gpu_evidence).toEqual([])
     })
 
     it('should accept the boot-time GPU evidence flag', async () => {
       const client = new DstackClientV1()
       const result = await client.attest('test', true)
       expect(result.attestation).not.toBe('')
-      // Whether evidence exists depends on the host; assert the field is present.
-      expect(result).toHaveProperty('boottime_gpu_evidence')
+      // Absence is the empty list, not a sentinel; the simulator has no GPU
+      // output, so this is empty here but must still be an array.
+      expect(Array.isArray(result.boottime_gpu_evidence)).toBe(true)
+      expect(result.boottime_gpu_evidence).toEqual([])
+    })
+
+    it('should type boot-time evidence as the bundle list attestGpu returns', async () => {
+      const client = new DstackClientV1()
+      const result = await client.attest('test', true)
+      // Assigning one to the other is the assertion: one parser, both methods.
+      const bundles: GpuEvidenceBundleV1[] = result.boottime_gpu_evidence
+      for (const bundle of bundles) {
+        expect(bundle.asUint8Array()).toBeInstanceOf(Uint8Array)
+      }
     })
 
     it('should reject report data outside 1..64 bytes', async () => {
