@@ -10,6 +10,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+nvattest.workspace = true
 aes-gcm.workspace = true
 anyhow.workspace = true
 clap.workspace = true

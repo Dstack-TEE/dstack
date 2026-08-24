@@ -1970,6 +1970,7 @@ dependencies = [
  "libc",
  "listenfd",
  "load_config",
+ "nvattest",
  "or-panic",
  "ra-rpc",
  "ra-tls",
@@ -2239,6 +2240,7 @@ dependencies = [
  "k256",
  "libc",
  "luks2",
+ "nvattest",
  "nvml-wrapper",
  "parity-scale-codec",
  "ra-rpc",
@@ -4808,6 +4810,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "nvattest"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]

@@ -59,6 +59,7 @@ members = [
     "serde-duration",
     "dstack-mr",
     "dstack-mr/cli",
+    "nvattest",
     "nvidia-attest-proxy",
     "verifier",
     "size-parser",
@@ -121,6 +122,7 @@ serde-duration = { path = "serde-duration" }
 dstack-mr = { path = "dstack-mr" }
 dstack-verifier = { path = "verifier", default-features = false }
 size-parser = { path = "size-parser" }
+nvattest = { path = "nvattest" }
 wavekv = "2.1"
 
 # Core dependencies
