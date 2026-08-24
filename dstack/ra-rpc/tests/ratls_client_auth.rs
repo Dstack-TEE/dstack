@@ -14,19 +14,12 @@
 //!   * an anonymous connection still reaches the handler, so the unauthenticated
 //!     RPCs stay reachable.
 
-use std::sync::Arc;
-
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use ra_rpc::ratls_client_verifier::RaTlsClientAuth;
 use ra_tls::attestation::{Attestation, AttestationQuote, TdxQuote, VersionedAttestation};
 use ra_tls::cert::CertRequest;
 use ra_tls::rcgen::{Certificate, KeyPair, PKCS_ECDSA_P256_SHA256};
 use rocket::tls::Resolver as _;
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::crypto::CryptoProvider;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
-use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 struct CertPair {
     cert_pem: String,
@@ -103,87 +96,25 @@ fn whoami(cert: Option<rocket::mtls::Certificate<'_>>) -> String {
     }
 }
 
-#[derive(Debug)]
-struct AcceptAnyServer(Arc<CryptoProvider>);
-
-impl ServerCertVerifier for AcceptAnyServer {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        Ok(ServerCertVerified::assertion())
-    }
-    fn verify_tls12_signature(
-        &self,
-        m: &[u8],
-        c: &CertificateDer<'_>,
-        d: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(m, c, d, &self.0.signature_verification_algorithms)
-    }
-    fn verify_tls13_signature(
-        &self,
-        m: &[u8],
-        c: &CertificateDer<'_>,
-        d: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(m, c, d, &self.0.signature_verification_algorithms)
-    }
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.0.signature_verification_algorithms.supported_schemes()
-    }
-}
-
+/// Drive the server the way a real caller does: an HTTPS client that presents (or
+/// withholds) a client certificate. Server-cert checking is off because the test
+/// server is self-issued; the client certificate is the subject here.
 async fn probe(port: u16, client: Option<&CertPair>) -> Result<String> {
-    use rustls::pki_types::pem::PemObject as _;
-
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let builder = ClientConfig::builder_with_provider(provider.clone())
-        .with_safe_default_protocol_versions()?
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(AcceptAnyServer(provider)));
-    let mut config = match client {
-        Some(pair) => {
-            let certs: Vec<CertificateDer<'static>> =
-                CertificateDer::pem_slice_iter(pair.cert_pem.as_bytes())
-                    .collect::<Result<_, _>>()?;
-            let key = PrivateKeyDer::from_pem_slice(pair.key_pem.as_bytes())?;
-            builder.with_client_auth_cert(certs, key)?
-        }
-        None => builder.with_no_client_auth(),
-    };
-    config.alpn_protocols = vec![b"http/1.1".to_vec()];
-
-    let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
-    let tcp = tokio::net::TcpStream::connect(("127.0.0.1", port))
-        .await
-        .context("tcp connect")?;
-    let mut tls = connector
-        .connect(ServerName::try_from("localhost")?, tcp)
-        .await
-        .context("tls handshake")?;
-    tls.write_all(b"GET /whoami HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-        .await?;
-    let mut buf = Vec::new();
-    tls.read_to_end(&mut buf).await?;
-    let text = String::from_utf8_lossy(&buf).to_string();
-    let body = text
-        .rsplit("\r\n\r\n")
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if body.is_empty() {
-        bail!(
-            "empty body, status line: {}",
-            text.lines().next().unwrap_or("")
-        );
+    let mut builder = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(std::time::Duration::from_secs(10));
+    if let Some(pair) = client {
+        let identity_pem = format!("{}\n{}", pair.cert_pem, pair.key_pem);
+        builder = builder.identity(reqwest::Identity::from_pem(identity_pem.as_bytes())?);
     }
-    Ok(body)
+    let response = builder
+        .build()?
+        .get(format!("https://127.0.0.1:{port}/whoami"))
+        .send()
+        .await
+        .context("request failed")?
+        .error_for_status()?;
+    response.text().await.context("failed to read body")
 }
 
 fn free_port() -> u16 {
@@ -193,10 +124,6 @@ fn free_port() -> u16 {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn client_certs_are_authenticated_by_attestation_not_issuer() {
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .ok();
-
     let dir = tempdir();
     let server = server_cert();
     let certs_path = dir.join("server.crt");

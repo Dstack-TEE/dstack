@@ -28,7 +28,10 @@ or-panic.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-tokio-rustls.workspace = true
+reqwest = { workspace = true, default-features = false, features = [
+    "rustls",
+    "charset",
+] }
 
 [features]
 default = ["rocket", "client"]
