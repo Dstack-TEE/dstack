@@ -226,8 +226,11 @@ impl AppState {
             .quote_response(report_data, &self.inner.vm_config)
     }
 
-    fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
-        self.inner.platform.attest_response(report_data)
+    fn attestation_for_report_data(&self, report_data: [u8; 64]) -> Result<Vec<u8>> {
+        self.inner
+            .platform
+            .attestation_for_report_data(report_data)?
+            .to_bytes()
     }
 }
 
@@ -455,12 +458,13 @@ impl DstackGuestRpc for InternalRpcHandler {
 
     async fn attest(self, request: AttestArgs) -> Result<AttestResponse> {
         let report_data = pad64(&request.report_data).context("Report data is too long")?;
-        let mut response = self.state.attest_response(report_data)?;
-        response.boottime_gpu_evidence = boottime_gpu_evidence(
-            request.include_boottime_gpu_evidence,
-            Path::new(GPU_ATTESTATION_OUTPUT),
-        );
-        Ok(response)
+        Ok(AttestResponse {
+            attestation: self.state.attestation_for_report_data(report_data)?,
+            boottime_gpu_evidence: boottime_gpu_evidence(
+                request.include_boottime_gpu_evidence,
+                Path::new(GPU_ATTESTATION_OUTPUT),
+            ),
+        })
     }
 
     async fn version(self) -> Result<WorkerVersion> {
@@ -656,7 +660,12 @@ impl WorkerRpc for ExternalRpcHandler {
 
     async fn attest_app_key(self, request: AttestAppKeyRequest) -> Result<AttestResponse> {
         let report_data = self.app_key_report_data(&request.algorithm).await?;
-        self.state.attest_response(report_data)
+        Ok(AttestResponse {
+            attestation: self.state.attestation_for_report_data(report_data)?,
+            // This method attests a key, not the machine. A caller that wants
+            // the boot-time GPU evidence asks `Attest` or `GpuInfo` for it.
+            boottime_gpu_evidence: String::new(),
+        })
     }
 }
 
@@ -977,12 +986,12 @@ pNs85uhOZE8z2jr8Pg==
                 })
             }
 
-            fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
+            fn attestation_for_report_data(
+                &self,
+                report_data: [u8; 64],
+            ) -> Result<VersionedAttestation> {
                 let attestation = patch_report_data(&self.attestation, report_data);
-                Ok(AttestResponse {
-                    attestation: VersionedAttestation::V1 { attestation }.to_bytes()?,
-                    boottime_gpu_evidence: String::new(),
-                })
+                Ok(VersionedAttestation::V1 { attestation })
             }
         }
 
