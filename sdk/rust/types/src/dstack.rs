@@ -100,26 +100,30 @@ pub struct AttestResponse {
 
 /// Response from a fresh, on-demand NVIDIA GPU attestation.
 ///
-/// Meaningful to a caller inside this CVM: the agent ran NVIDIA's verifier, which checked
-/// the GPU's report signature, its certificate chain and OCSP status, and the driver and
-/// VBIOS RIM signatures, all against this nonce.
+/// `evidence` is GPU-signed and checkable by anyone: the base64 SPDM attestation report
+/// and its certificate chain, per device, for the nonce you sent. A relying party
+/// verifies the chain to NVIDIA's root, checks the report signature, confirms the nonce
+/// inside the report, and compares measurements against NVIDIA's RIM documents, using
+/// its own verifier and trusting nothing the CVM says.
 ///
-/// NOT independently verifiable by a third party, for two separate reasons. First, it is
-/// unsigned: `--verifier local` returns the verifier's conclusion, not the GPU's signed
-/// report. Its detached EAT is `alg:none` issued by `NVAT-LOCAL-VERIFIER`, and a claim
-/// like `x-nvidia-gpu-attestation-report-signature-verified` is an assertion, not proof;
-/// the signed artifacts are consumed during verification and not carried here. Second,
-/// even signed it would bind the device and the nonce but not the TD, so it is relayable
-/// from a genuine remote GPU. Use it as a local health check. For remote evidence use the
-/// boot-time `gpu-attestation` event, which measured code emits before any workload
-/// exists and which the event log binds to the quote.
+/// `appraisal` is the local verifier's verdict on those same bytes -- convenient inside
+/// the CVM, but not evidence: its detached EAT is `alg:none` from `NVAT-LOCAL-VERIFIER`,
+/// so a remote party should ignore it and appraise `evidence` itself.
+///
+/// Neither binds the GPU to this TD. An NVIDIA report binds the device and the nonce and
+/// nothing else, so it can be relayed from a genuine remote GPU; only TDISP/TEE-IO would
+/// close that.
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
 pub struct AttestGpuResponse {
-    /// Complete JSON output produced by nvattest for the requested nonce.
+    /// GPU-signed evidence: `collect-evidence` output, one entry per device
+    /// carrying the base64 SPDM attestation report and its certificate chain.
     pub evidence: String,
-    /// The nonce the GPU answered, hex-encoded, as it appears in `eat_nonce`.
+    /// The local verifier's appraisal of exactly those bytes. Unsigned.
+    #[serde(default)]
+    pub appraisal: String,
+    /// The nonce both halves answer, hex-encoded, as it appears in `eat_nonce`.
     pub nonce: String,
 }
 

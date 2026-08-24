@@ -54,6 +54,13 @@ struct NvattestOutput {
 }
 
 #[derive(Deserialize)]
+struct CollectEvidenceOutput {
+    result_code: i64,
+    #[serde(default)]
+    evidences: Vec<Value>,
+}
+
+#[derive(Deserialize)]
 struct NonceClaim {
     #[serde(rename = "eat_nonce")]
     eat_nonce: String,
@@ -170,13 +177,7 @@ pub async fn run(
     if !available() {
         bail!("nvattest is not available in this image");
     }
-    if nonce.len() != NONCE_LEN {
-        bail!(
-            "gpu attestation nonce must be {NONCE_LEN} bytes, got {}",
-            nonce.len()
-        );
-    }
-    let nonce = hex_encode(nonce);
+    let nonce = check_nonce_len(nonce)?;
     let args = args(&nonce, proxy_url)?;
     if args.iter().any(|arg| arg == "--relying-party-policy")
         && !Path::new(TRUST_OUTPOST_POLICY).is_file()
@@ -189,6 +190,118 @@ pub async fn run(
         info!("nvattest: {}", truncated_lossy(&output.stderr, 2048));
     }
     Ok((nonce, output))
+}
+
+/// GPU-signed evidence plus the local verifier's appraisal of it.
+///
+/// Kept apart because they are different things in the RATS sense: `evidence`
+/// is what the GPU signed and anyone can check, `appraisal` is a verdict about
+/// it that only the party who produced it vouches for.
+#[derive(Debug)]
+pub struct CollectedAttestation {
+    /// `collect-evidence` output: a JSON array with one entry per device, each
+    /// carrying the base64 SPDM attestation report and its certificate chain.
+    pub evidence: String,
+    /// `attest` output over exactly those bytes: the appraisal claims.
+    pub appraisal: Vec<u8>,
+    /// Hex nonce both halves answer.
+    pub nonce: String,
+    /// Parsed appraisal claims.
+    pub claims: Vec<Value>,
+}
+
+/// Collect GPU-signed evidence for `nonce` without appraising it.
+///
+/// Returns the `evidences` array alone, which is the shape `attest
+/// --gpu-evidence-source=file` expects, and the shape a third party needs: the
+/// report and certificate chain, not a verdict about them.
+pub async fn collect_evidence(nonce: &[u8], timeout: Duration) -> Result<(String, Vec<u8>)> {
+    let nonce = check_nonce_len(nonce)?;
+    let args = [
+        "collect-evidence",
+        "--device",
+        "gpu",
+        "--nonce",
+        &nonce,
+        "--format",
+        "json",
+    ];
+    let output = run_command(NVATTEST, &args, timeout).await?;
+    if !output.stderr.is_empty() {
+        info!(
+            "nvattest collect-evidence: {}",
+            truncated_lossy(&output.stderr, 2048)
+        );
+    }
+    check_status(&output)?;
+    let parsed: CollectEvidenceOutput = serde_json::from_slice(&output.stdout)
+        .context("failed to parse nvattest collect-evidence output")?;
+    if parsed.result_code != 0 {
+        bail!(
+            "nvattest collect-evidence failed (result_code={})",
+            parsed.result_code
+        );
+    }
+    if parsed.evidences.is_empty() {
+        bail!("nvattest collected no GPU evidence");
+    }
+    let evidences =
+        serde_json::to_vec(&parsed.evidences).context("failed to re-encode GPU evidence")?;
+    Ok((nonce, evidences))
+}
+
+/// Collect GPU-signed evidence and appraise those exact bytes.
+///
+/// Two steps rather than one `attest` run so the caller gets evidence a third
+/// party can check alongside the verdict, and so both provably describe the
+/// same report: the appraisal reads back the collected bytes instead of asking
+/// the GPU a second time. The SDK independently rejects an evidence file whose
+/// nonce does not match the one passed here.
+pub async fn collect_and_appraise(
+    nonce: &[u8],
+    proxy_url: Option<&str>,
+    timeout: Duration,
+) -> Result<CollectedAttestation> {
+    if !available() {
+        bail!("nvattest is not available in this image");
+    }
+    let (nonce, evidences) = collect_evidence(nonce, timeout).await?;
+
+    let dir = tempfile::tempdir().context("failed to create a directory for GPU evidence")?;
+    let path = dir.path().join("gpu-evidence.json");
+    std::fs::write(&path, &evidences).context("failed to stage GPU evidence")?;
+    let path = path.to_str().context("GPU evidence path is not UTF-8")?;
+
+    let mut args = args(&nonce, proxy_url)?;
+    args.extend([
+        "--gpu-evidence-source".to_string(),
+        "file".to_string(),
+        "--gpu-evidence-file".to_string(),
+        path.to_string(),
+    ]);
+    let borrowed = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let output = run_command(NVATTEST, &borrowed, timeout).await?;
+    if !output.stderr.is_empty() {
+        info!("nvattest: {}", truncated_lossy(&output.stderr, 2048));
+    }
+    check_status(&output)?;
+    let claims = check_nonce(&output.stdout, &nonce)?;
+    Ok(CollectedAttestation {
+        evidence: String::from_utf8(evidences).context("GPU evidence is not valid UTF-8")?,
+        appraisal: output.stdout,
+        nonce,
+        claims,
+    })
+}
+
+fn check_nonce_len(nonce: &[u8]) -> Result<String> {
+    if nonce.len() != NONCE_LEN {
+        bail!(
+            "gpu attestation nonce must be {NONCE_LEN} bytes, got {}",
+            nonce.len()
+        );
+    }
+    Ok(hex_encode(nonce))
 }
 
 /// Turn a non-zero nvattest exit into an error carrying a bounded stderr tail.
@@ -291,6 +404,38 @@ mod tests {
         let nonce = "aa".repeat(NONCE_LEN);
         assert!(check_nonce(&output(1, &[claim(&nonce, true)]), &nonce).is_err());
         assert!(check_nonce(&output(0, &[]), &nonce).is_err());
+    }
+
+    #[tokio::test]
+    async fn collect_evidence_rejects_a_nonce_of_the_wrong_length() {
+        let err = collect_evidence(&[0u8; 16], DEFAULT_TIMEOUT)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("32 bytes") || err.contains("not available"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn appraisal_args_read_back_the_collected_evidence() {
+        // The appraisal must consume the collected bytes rather than ask the
+        // GPU again, or the two halves of the response could describe different
+        // reports. Pin the flags that make that true.
+        let mut args = args("aa", None).unwrap();
+        args.extend([
+            "--gpu-evidence-source".to_string(),
+            "file".to_string(),
+            "--gpu-evidence-file".to_string(),
+            "/tmp/e.json".to_string(),
+        ]);
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--gpu-evidence-source", "file"]));
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--gpu-evidence-file", "/tmp/e.json"]));
     }
 
     #[tokio::test]

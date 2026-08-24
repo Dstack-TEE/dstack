@@ -134,9 +134,12 @@ type GpuInfoResponse struct {
 // evidence use the boot-time `gpu-attestation` event, which measured code emits
 // before any workload exists and which the event log binds to the quote.
 type AttestGpuResponse struct {
-	// Evidence is the complete nvattest JSON for the requested nonce.
+	// Evidence is GPU-signed: collect-evidence output, one entry per device
+	// carrying the base64 SPDM attestation report and its certificate chain.
 	Evidence string `json:"evidence"`
-	// Nonce is the nonce the GPU answered, hex-encoded, as it appears in eat_nonce.
+	// Appraisal is the local verifier's verdict on exactly those bytes. Unsigned.
+	Appraisal string `json:"appraisal"`
+	// Nonce is the nonce both halves answer, hex-encoded, as it appears in eat_nonce.
 	Nonce string `json:"nonce"`
 }
 

@@ -105,14 +105,15 @@ answers NVML but can no longer attest.
 const { evidence } = await client.attestGpu(crypto.randomBytes(32))
 ```
 
-> [!WARNING]
-> **Not independently verifiable by a third party.** Inside the CVM it is meaningful —
-> the agent ran NVIDIA's verifier against your nonce. Outside it, two things are true:
-> the output is *unsigned* (`--verifier local` returns the verifier's conclusion, with
-> an `alg:none` detached EAT; the GPU's signed report is consumed and not carried), and
-> even signed it would bind the device and nonce but not the TD, so it is relayable.
-> Use it as a local health check; for remote evidence use the boot-time
-> `gpu-attestation` event bound to the quote. Calls are rate-limited to one per 10s.
+> [!IMPORTANT]
+> `evidence` is GPU-signed and checkable by anyone — the base64 SPDM report and its
+> certificate chain, over your nonce. `appraisal` is the local verifier's verdict on
+> those same bytes and does **not** travel (`alg:none` EAT), so a remote party should
+> appraise `evidence` itself and ignore `appraisal`.
+>
+> Neither binds the GPU to this CVM: an NVIDIA report binds the device and nonce and
+> nothing else, so it is relayable until TDISP/TEE-IO. For TD-bound evidence use the
+> boot-time `gpu-attestation` event. Calls are rate-limited to one per 10s.
 
 ### `gpuInfo()`
 

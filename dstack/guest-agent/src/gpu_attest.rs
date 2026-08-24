@@ -59,7 +59,7 @@ impl GpuAttestor {
     }
 
     /// Attest against `nonce`, or explain why not.
-    pub async fn attest(&self, nonce: &[u8]) -> Result<nvattest::Attestation> {
+    pub async fn attest(&self, nonce: &[u8]) -> Result<nvattest::CollectedAttestation> {
         if nonce.len() != nvattest::NONCE_LEN {
             bail!(
                 "nonce must be exactly {} bytes, got {}",
@@ -74,7 +74,8 @@ impl GpuAttestor {
         // starting a competing nvattest against the same devices.
         let mut last_run = self.last_run.lock().await;
         check_cooldown(*last_run, Instant::now(), self.cooldown)?;
-        let result = nvattest::attest(nonce, self.proxy_url.as_deref(), self.timeout).await;
+        let result =
+            nvattest::collect_and_appraise(nonce, self.proxy_url.as_deref(), self.timeout).await;
         // Stamp on failure too: a failing GPU is the case most likely to be
         // retried in a tight loop, and the most expensive to retry.
         *last_run = Some(Instant::now());

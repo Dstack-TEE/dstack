@@ -394,7 +394,8 @@ impl DstackGuestRpc for InternalRpcHandler {
             .await
             .context("GPU attestation failed")?;
         Ok(AttestGpuResponse {
-            evidence: String::from_utf8(attestation.output)
+            evidence: attestation.evidence,
+            appraisal: String::from_utf8(attestation.appraisal)
                 .context("nvattest output is not valid UTF-8")?,
             nonce: attestation.nonce,
         })

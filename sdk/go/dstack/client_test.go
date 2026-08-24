@@ -80,7 +80,7 @@ func TestAttest(t *testing.T) {
 }
 
 func TestAttestGpu(t *testing.T) {
-	const evidence = `{"result_code":0,"claims":[]}`
+	const evidence = `[{"arch":"HOPPER","nonce":"ab","evidence":"BASE64","certificate":"BASE64"}]`
 	nonce := bytes.Repeat([]byte{0xab}, 32)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/AttestGpu" {
@@ -95,8 +95,9 @@ func TestAttestGpu(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"evidence": evidence,
-			"nonce":    hex.EncodeToString(nonce),
+			"evidence":  evidence,
+			"appraisal": `{"result_code":0,"claims":[]}`,
+			"nonce":     hex.EncodeToString(nonce),
 		})
 	}))
 	defer server.Close()
@@ -108,6 +109,9 @@ func TestAttestGpu(t *testing.T) {
 	}
 	if resp.Evidence != evidence {
 		t.Fatalf("unexpected evidence: %s", resp.Evidence)
+	}
+	if resp.Appraisal == "" {
+		t.Fatal("expected the appraisal to be carried alongside the evidence")
 	}
 	if resp.Nonce != hex.EncodeToString(nonce) {
 		t.Fatalf("unexpected nonce: %s", resp.Nonce)
