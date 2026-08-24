@@ -348,10 +348,19 @@ async fn poll_instance(ip: Ipv4Addr, agent_port: u16, timeout: Duration) -> Poll
 /// no real request can reach. Only the connection is unshared; the client
 /// itself is process-wide. See `http_client::ConnectionReuse`.
 fn prober_transport(ip: Ipv4Addr, agent_port: u16) -> http_client::prpc::PrpcClient {
-    // `/prpc/v1`, not `/prpc`: `Health` is a `WorkerV1` method. Version skew is
-    // safe in both directions. A pre-0.6 gateway never polls at all, and only a
-    // 0.6+ agent can opt in via `RegisterCvmRequest.health_check`, so no agent
-    // that lacks this path is ever asked for it.
+    // `/prpc/v1`, not `/prpc`: `Health` is a `WorkerV1` method.
+    //
+    // No released agent is affected. `Health` never shipped in a release, and a
+    // pre-0.6 gateway does not poll, so the only guests that can be asked are
+    // 0.6+ ones that opted in via `RegisterCvmRequest.health_check`.
+    //
+    // The one skew that does exist is unreleased: an interim `next` build that
+    // served `Health` at `/prpc` and registered with `health_check = true` will
+    // now 404 every poll, and a 404 counts as unreachable, so after
+    // `failure_threshold` polls the instance drops out of app-id rotation.
+    // Instance-id routing keeps working and a restart on a current build fixes
+    // it. Not worth a compatibility probe on every poll for a build nobody was
+    // asked to run.
     let url = format!("http://{ip}:{agent_port}/prpc/v1");
     super::guest_agent_client(url, ConnectionReuse::Fresh)
 }
@@ -440,6 +449,18 @@ mod tests {
     /// is what a wedged agent looks like from here: not a refusal, which fails
     /// fast, but silence that has to be timed out.
     async fn fake_agent(answer: Option<Vec<u8>>) -> u16 {
+        fake_agent_capturing(answer, None).await
+    }
+
+    /// The same stand-in, optionally reporting the request line it was sent.
+    ///
+    /// Kept as one implementation because the drain below is what stops this
+    /// fixture flaking: answering into a socket the peer is still writing to is
+    /// a reset on some platforms.
+    async fn fake_agent_capturing(
+        answer: Option<Vec<u8>>,
+        request_line: Option<tokio::sync::oneshot::Sender<String>>,
+    ) -> u16 {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .await
             .expect("bind");
@@ -476,6 +497,10 @@ mod tests {
                     Ok(n) => pending.extend_from_slice(&buf[..n]),
                 }
             }
+            if let Some(tx) = request_line {
+                let head = String::from_utf8_lossy(&pending[..headers_end]).into_owned();
+                let _ = tx.send(head.lines().next().unwrap_or_default().to_string());
+            }
             let Some(answer) = answer else {
                 std::future::pending::<()>().await;
                 return;
@@ -500,20 +525,8 @@ mod tests {
     /// in the fleet at once.
     #[tokio::test]
     async fn the_poller_asks_the_v1_surface() {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-            .await
-            .expect("bind");
-        let port = listener.local_addr().expect("addr").port();
         let (tx, rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(async move {
-            let Ok((mut socket, _)) = listener.accept().await else {
-                return;
-            };
-            let mut buf = [0u8; 1024];
-            let n = socket.read(&mut buf).await.unwrap_or(0);
-            let request = String::from_utf8_lossy(&buf[..n]).into_owned();
-            let _ = tx.send(request.lines().next().unwrap_or_default().to_string());
-        });
+        let port = fake_agent_capturing(Some(br#"{"healthy":true}"#.to_vec()), Some(tx)).await;
 
         let _ = poll_instance(Ipv4Addr::LOCALHOST, port, Duration::from_secs(5)).await;
 

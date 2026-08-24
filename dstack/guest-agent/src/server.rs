@@ -304,12 +304,22 @@ mod tests {
     use crate::rpc_service::tests::setup_test_state;
     use rocket::local::asynchronous::Client;
 
-    /// Fetch `path` from a rocket carrying the real mount table.
-    async fn get(mount: fn(Rocket<Build>) -> Rocket<Build>, path: &str) -> (u16, String) {
-        let (state, _guard) = setup_test_state().await;
+    /// One agent, serving a whole mount table, for the life of a test.
+    ///
+    /// A `Client` per request would compare two different rocket instances and
+    /// two different `AppState`s; the alias property under test is that `/v0`
+    /// and `/` reach the *same* handler on the *same* instance.
+    async fn client(
+        mount: fn(Rocket<Build>) -> Rocket<Build>,
+    ) -> (Client, tempfile::NamedTempFile) {
+        let (state, guard) = setup_test_state().await;
         let client = Client::tracked(mount(rocket::build()).manage(state))
             .await
             .expect("rocket failed to ignite");
+        (client, guard)
+    }
+
+    async fn get(client: &Client, path: &str) -> (u16, String) {
         let response = client.get(path).dispatch().await;
         let status = response.status().code;
         (status, response.into_string().await.unwrap_or_default())
@@ -322,8 +332,9 @@ mod tests {
     /// the same handler rather than a second one that happens to agree today.
     #[tokio::test]
     async fn the_internal_v0_mount_is_an_alias_for_the_unversioned_path() {
-        let (unversioned_status, unversioned) = get(mount_internal, "/Version").await;
-        let (v0_status, v0) = get(mount_internal, "/v0/Version").await;
+        let (client, _guard) = client(mount_internal).await;
+        let (unversioned_status, unversioned) = get(&client, "/Version").await;
+        let (v0_status, v0) = get(&client, "/v0/Version").await;
 
         assert_eq!(unversioned_status, 200, "{unversioned}");
         assert_eq!(v0_status, 200, "{v0}");
@@ -334,8 +345,9 @@ mod tests {
     /// Same on the external listener, one level down.
     #[tokio::test]
     async fn the_external_v0_mount_is_an_alias_for_the_unversioned_path() {
-        let (unversioned_status, unversioned) = get(mount_external, "/prpc/Version").await;
-        let (v0_status, v0) = get(mount_external, "/prpc/v0/Version").await;
+        let (client, _guard) = client(mount_external).await;
+        let (unversioned_status, unversioned) = get(&client, "/prpc/Version").await;
+        let (v0_status, v0) = get(&client, "/prpc/v0/Version").await;
 
         assert_eq!(unversioned_status, 200, "{unversioned}");
         assert_eq!(v0_status, 200, "{v0}");
@@ -346,30 +358,71 @@ mod tests {
     /// the alias and on `/v0`.
     #[tokio::test]
     async fn the_external_mounts_accept_the_service_name_prefix() {
+        let (client, _guard) = client(mount_external).await;
         for path in ["/prpc/Worker.Version", "/prpc/v0/Worker.Version"] {
-            let (status, body) = get(mount_external, path).await;
+            let (status, body) = get(&client, path).await;
             assert_eq!(status, 200, "{path}: {body}");
         }
     }
 
     /// The version in the path selects the surface, and nothing else does.
-    /// `/v1` must not answer a method only the frozen surface has, and `/v0`
-    /// must not answer a v1-only one.
     #[tokio::test]
-    async fn each_mount_serves_only_its_own_surface() {
+    async fn each_internal_mount_serves_only_its_own_surface() {
+        let (client, _guard) = client(mount_internal).await;
+
         // `Verify` is frozen-only; `IssueCert` is v1-only.
-        let (status, _) = get(mount_internal, "/v1/Verify").await;
+        let (status, _) = get(&client, "/v1/Verify").await;
         assert_ne!(status, 200, "/v1 must not serve the frozen Verify");
 
         for path in ["/IssueCert", "/v0/IssueCert"] {
-            let (status, _) = get(mount_internal, path).await;
+            let (status, _) = get(&client, path).await;
             assert_ne!(status, 200, "{path} must not serve the v1 IssueCert");
         }
+    }
+
+    #[tokio::test]
+    async fn each_external_mount_serves_only_its_own_surface() {
+        let (client, _guard) = client(mount_external).await;
 
         // `Health` is v1-only on the external listener.
         for path in ["/prpc/Health", "/prpc/v0/Health"] {
-            let (status, _) = get(mount_external, path).await;
+            let (status, _) = get(&client, path).await;
             assert_ne!(status, 200, "{path} must not serve the v1 Health");
         }
+    }
+
+    /// How a client tells "this agent has no v1" from "v1 said no".
+    ///
+    /// Both an absent mount and an unknown method answer 404, so the status
+    /// alone is not enough: only the body separates them. A failed handler is
+    /// the 400. `docs/guest-api-v1.md` documents this as the probe rule, and
+    /// this test is what keeps the documented rule true.
+    #[tokio::test]
+    async fn version_probing_can_tell_an_absent_mount_from_an_unknown_method() {
+        let (state, _guard) = setup_test_state().await;
+        // An agent that predates v1: the frozen surface and nothing else.
+        let pre_v1 = Client::tracked(
+            rocket::build()
+                .mount("/", ra_rpc::prpc_routes!(AppState, InternalRpcHandler))
+                .manage(state),
+        )
+        .await
+        .expect("rocket failed to ignite");
+
+        // No `/v1` mount: Rocket has no route to match, and answers its own
+        // 404 page. This is what an agent too old for v1 looks like.
+        let (status, body) = get(&pre_v1, "/v1/GetKey").await;
+        assert_eq!(status, 404);
+        assert!(!body.contains("Service not found"), "{body}");
+
+        // A mounted surface, unknown method: also 404, but prpc's, naming the
+        // method. This is what a *current* agent says to a method it lacks.
+        let (status, body) = get(&pre_v1, "/NoSuchMethod").await;
+        assert_eq!(status, 404);
+        assert!(body.contains("Service not found: NoSuchMethod"), "{body}");
+
+        // A mounted surface, known method, handler says no: 400.
+        let (status, _) = get(&pre_v1, "/EmitEvent").await;
+        assert_eq!(status, 400);
     }
 }
