@@ -237,8 +237,8 @@ message AttestResponse {
   bytes attestation = 1;
 
   // Field 2 briefly carried `boottime_gpu_evidence` on `next` and never
-  // shipped. `dstack.guest.v1`'s AttestResponse serves those bytes as
-  // `boottime_gpu_evidence_json`.
+  // shipped. `dstack.guest.v1`'s own AttestResponse serves those bytes, under
+  // the same name, on `/v1/Attest`.
   reserved 2;
   reserved "boottime_gpu_evidence";
 }
