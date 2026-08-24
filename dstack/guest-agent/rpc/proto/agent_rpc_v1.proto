@@ -354,8 +354,16 @@ message VersionResponse {
 // unversioned `Worker` at `/prpc`.
 //
 // Anyone who can route to the CVM can call this, so nothing here returns key
-// material or lets a caller choose what gets signed. `AttestAppKey` names a key
-// by algorithm alone and attests the public key the agent derives.
+// material, and nothing here lets a caller choose what gets signed or attested.
+//
+// There is deliberately no `AttestAppKey`. v0's version attests the key its own
+// KDF derives at path `vms` with purpose `signing`, and no v1 `GetKey(domain,
+// algorithm)` can return that key -- so a pure-v1 application could be handed
+// an attestation of a public key whose private half it has no way to obtain.
+// A v1 application attests its own key instead: derive it at `/v1/GetKey`,
+// commit the public key into `report_data`, and call `/v1/Attest`. The
+// application then hands that attestation to its relying parties. Legacy flows
+// keep using the frozen `Worker.GetAttestationForAppKey`.
 service WorkerV1 {
   // Return this application's identity and configuration.
   //
@@ -369,15 +377,6 @@ service WorkerV1 {
   // Return the guest agent version.
   rpc Version(VersionRequest) returns (VersionResponse) {}
 
-  // Attest a key the application derived.
-  //
-  // Replaces `Worker.GetAttestationForAppKey`, which returned a
-  // `GetQuoteResponse` and so could not answer on a platform without Intel TDX.
-  // Returns what `DstackGuestV1.Attest` returns; that method cannot serve this
-  // case, because it takes report data from the caller and an external verifier
-  // does not know the app key's public key until the agent derives it.
-  rpc AttestAppKey(AttestAppKeyRequest) returns (AttestResponse) {}
-
   // Report whether the app is serving. Polled by the gateway to decide whether
   // this instance should be in its app's load-balancing rotation.
   //
@@ -389,11 +388,6 @@ service WorkerV1 {
   // older image: the gateway counts *any* failed poll as unhealthy, so probing
   // to discover support would blackhole every guest agent that predates this.
   rpc Health(HealthRequest) returns (HealthResponse) {}
-}
-
-message AttestAppKeyRequest {
-  // Key type. Exactly `secp256k1` or `ed25519`, as in `GetKeyRequest`.
-  string algorithm = 1;
 }
 
 message HealthRequest {}

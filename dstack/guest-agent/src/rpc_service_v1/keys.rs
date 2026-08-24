@@ -2,120 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! Key derivation and signature-chain claims for the v1 API.
+//! The v1 application key, assembled from the shared normative primitives.
 //!
-//! Everything here is normative wire behaviour: the byte strings this module
-//! builds are what relying parties re-derive when they check a chain, and
-//! `docs/guest-api-v1.md` is the specification they implement from. Changing a
-//! constant or a field order here changes every key and every claim a deployed
-//! agent produces.
+//! The encodings themselves -- the salt, the context tags, the length-prefixed
+//! `info` and claim, and the chain-link envelope -- live in
+//! [`ra_tls::guest_api_v1`], so the agent, the verifier and the SDK share one
+//! definition instead of three transcriptions of the specification prose. What
+//! is left here is turning derived bytes into a usable key pair.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use ed25519_dalek::SigningKey as Ed25519SigningKey;
 use k256::ecdsa::SigningKey;
-use ra_tls::kdf::derive_key_with_salt;
-use sha3::{Digest, Keccak256};
+use ra_tls::guest_api_v1::{derive_app_key, key_claim, sign_recoverable_keccak256};
 
-/// The HKDF salt for every v1 derivation.
-///
-/// Distinct from the legacy `RATLS` salt, which gives v1 its own derivation
-/// tree rather than a differently-labelled branch of the old one. Under a shared
-/// salt the two surfaces are separated only by their HKDF `info`, and the
-/// legacy `info` is the caller's `path` verbatim -- so a caller that passed the
-/// v1 `info` byte string as a v0 path would reproduce a v1 key. Different salts
-/// close that by construction, whatever either side puts in `info`.
-pub(crate) const KDF_SALT: &[u8] = b"dstack-guest-v1";
-
-/// Context tag bound into every v1 key derivation.
-pub(crate) const KEY_CONTEXT_TAG: &[u8] = b"dstack-guest-v1-key";
-
-/// Context tag bound into every v1 signature-chain key claim.
-///
-/// Distinct from [`KEY_CONTEXT_TAG`] so that no derivation input can ever be
-/// read as a claim, or the other way round -- the two encodings are otherwise
-/// built the same way and would share a prefix.
-pub(crate) const CLAIM_CONTEXT_TAG: &[u8] = b"dstack-guest-v1-key-claim";
-
-/// The key types the v1 API serves.
-///
-/// A closed set, matched exhaustively: an algorithm name that is not one of
-/// these is an error, never a default. v0 defaulted an empty string to
-/// secp256k1 and accepted `k256` as an alias, so a caller could ask for
-/// nothing in particular and get a key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Algorithm {
-    Secp256k1,
-    Ed25519,
-}
-
-impl Algorithm {
-    pub(crate) fn parse(name: &str) -> Result<Self> {
-        match name {
-            "secp256k1" => Ok(Self::Secp256k1),
-            "ed25519" => Ok(Self::Ed25519),
-            "" => bail!("algorithm is required, use `secp256k1` or `ed25519`"),
-            other => bail!("unsupported algorithm `{other}`, use `secp256k1` or `ed25519`"),
-        }
-    }
-
-    /// The canonical name, and the exact bytes bound into derivations and
-    /// claims. Never the string the caller sent.
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Self::Secp256k1 => "secp256k1",
-            Self::Ed25519 => "ed25519",
-        }
-    }
-}
-
-/// Append one length-prefixed field: a 4-byte big-endian length, then the
-/// bytes.
-///
-/// Prefixing rather than joining with a delimiter is the whole point. A domain
-/// is an arbitrary caller-chosen string -- it may contain `:`, `/`, or NUL --
-/// so any delimiter it could also contain lets two different `(domain,
-/// algorithm)` pairs encode to the same byte string and share a key.
-fn push_field(out: &mut Vec<u8>, field: &[u8]) -> Result<()> {
-    let len = u32::try_from(field.len()).context("field is too long to encode")?;
-    out.extend_from_slice(&len.to_be_bytes());
-    out.extend_from_slice(field);
-    Ok(())
-}
-
-/// The HKDF `info` for a v1 application key.
-///
-/// `LP(tag) || LP(algorithm) || LP(domain)`, where `LP(x)` is `len(x)` as a
-/// 4-byte big-endian integer followed by `x`.
-pub(crate) fn key_derivation_info(domain: &str, algorithm: Algorithm) -> Result<Vec<u8>> {
-    let mut info = Vec::new();
-    push_field(&mut info, KEY_CONTEXT_TAG)?;
-    push_field(&mut info, algorithm.name().as_bytes())?;
-    push_field(&mut info, domain.as_bytes())?;
-    Ok(info)
-}
-
-/// The claim the app root key signs to vouch for a derived public key.
-///
-/// `LP(tag) || LP(algorithm) || LP(domain) || LP(public_key)`, with the public
-/// key as raw bytes.
-///
-/// Raw bytes, and a length prefix in front of them, are what makes this
-/// unforgeable through the v0 surface. v0's claim is
-/// `keccak256("{purpose}:{hex(pubkey)}")` over a caller-chosen `purpose`, so
-/// the app root key can be made to sign nearly any ASCII string that ends in
-/// `:` followed by lowercase hex. This encoding ends in `LP(public_key)`,
-/// whose four length bytes are `00 00 00 21` for secp256k1 and `00 00 00 20`
-/// for ed25519 and sit inside the region a v0 preimage requires to be
-/// hex-only. `0x00` is not a hex character, so no `purpose` reproduces this
-/// byte string -- the exclusion is structural, not probabilistic.
-pub(crate) fn key_claim(algorithm: Algorithm, domain: &str, public_key: &[u8]) -> Result<Vec<u8>> {
-    let mut claim = Vec::new();
-    push_field(&mut claim, CLAIM_CONTEXT_TAG)?;
-    push_field(&mut claim, algorithm.name().as_bytes())?;
-    push_field(&mut claim, domain.as_bytes())?;
-    push_field(&mut claim, public_key)?;
-    Ok(claim)
-}
+pub(crate) use ra_tls::guest_api_v1::KeyAlgorithm as Algorithm;
 
 /// An application key derived for one `(domain, algorithm)` pair.
 pub(crate) struct AppKey {
@@ -128,22 +28,10 @@ pub(crate) struct AppKey {
 impl AppKey {
     /// Derive the key for `(domain, algorithm)` from the app root key.
     ///
-    /// HKDF-SHA256 over the app root secp256k1 key, under [`KDF_SALT`], with
-    /// the `info` from [`key_derivation_info`]. Same primitive as v0; what
-    /// changed is the salt, and that the algorithm and a version tag are now
-    /// inputs -- so the two curves no longer share one secret and a v1 domain
-    /// is not a v0 path.
-    ///
-    /// Flat, not hierarchical: `a/b` is an opaque domain string like any
-    /// other, unrelated to `a`, and no key here derives another.
+    /// Flat, not hierarchical: `a/b` is an opaque domain string like any other,
+    /// unrelated to `a`, and no key here derives another.
     pub(crate) fn derive(app_root_key: &[u8], domain: &str, algorithm: Algorithm) -> Result<Self> {
-        let info = key_derivation_info(domain, algorithm)?;
-        let derived = derive_key_with_salt(KDF_SALT, app_root_key, &[&info], 32)
-            .map_err(|_| anyhow!("failed to derive the application key"))?;
-        let secret: [u8; 32] = derived
-            .as_slice()
-            .try_into()
-            .map_err(|_| anyhow!("derived key has the wrong length"))?;
+        let secret = derive_app_key(app_root_key, domain, algorithm)?;
         let public_key = match algorithm {
             // Rejects a scalar that is zero or at least the group order. That
             // is a ~2^-128 event for one domain and the caller can just pick
@@ -180,30 +68,20 @@ impl AppKey {
     /// The app root key's signature over this key's claim: the first link of
     /// the signature chain.
     ///
-    /// 65 bytes, `r || s || recovery_id`, over `keccak256` of the claim. The
-    /// recovery byte is kept so a relying party can recover the app root
-    /// public key from the link alone and compare it against what the second
-    /// link attests.
-    pub(crate) fn claim_signature(&self, app_root_key: &[u8]) -> Result<Vec<u8>> {
+    /// Takes the parsed key rather than its bytes, so the caller can share one
+    /// across requests instead of re-parsing a scalar per `GetKey`.
+    pub(crate) fn claim_signature(&self, app_root_key: &SigningKey) -> Result<Vec<u8>> {
         let claim = key_claim(self.algorithm, &self.domain, &self.public_key)?;
-        let app_signing_key = SigningKey::from_slice(app_root_key)
-            .context("failed to parse the app root k256 key")?;
-        let (signature, recovery_id) = app_signing_key
-            .sign_digest_recoverable(Keccak256::new_with_prefix(&claim))
-            .context("failed to sign the key claim")?;
-        let mut link = signature.to_vec();
-        link.push(recovery_id.to_byte());
-        Ok(link)
+        sign_recoverable_keccak256(app_root_key, &claim)
+            .map_err(|err| anyhow!("failed to sign the key claim: {err:#}"))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ra_tls::kdf::derive_key;
 
-    /// The app root key the committed vectors were generated from. Same value
-    /// the handler tests use, so a vector can be reproduced end to end.
+    /// The app root key `ra_tls::guest_api_v1` committed its vectors against.
     const TEST_APP_ROOT_KEY: [u8; 32] = [
         0x1A, 0x2B, 0x3C, 0x4D, 0x5E, 0x6F, 0x7A, 0x8B, 0x9C, 0x0D, 0x1E, 0x2F, 0x3A, 0x4B, 0x5C,
         0x6D, 0x7E, 0x8F, 0x9A, 0x0B, 0x1C, 0x2D, 0x3E, 0x4F, 0x5A, 0x6B, 0x7C, 0x8D, 0x9E, 0x0F,
@@ -214,129 +92,65 @@ mod tests {
         AppKey::derive(&TEST_APP_ROOT_KEY, domain, algorithm).unwrap()
     }
 
+    /// The public key vectors, checked through the type the handler actually
+    /// uses. The private-key and encoding vectors are pinned next to the
+    /// primitives in `ra_tls::guest_api_v1`.
     #[test]
-    fn rejects_an_empty_or_unknown_algorithm() {
-        assert_eq!(
-            Algorithm::parse("").unwrap_err().to_string(),
-            "algorithm is required, use `secp256k1` or `ed25519`"
-        );
-        assert_eq!(
-            Algorithm::parse("k256").unwrap_err().to_string(),
-            "unsupported algorithm `k256`, use `secp256k1` or `ed25519`"
-        );
-        assert!(Algorithm::parse("secp256k1_prehashed").is_err());
-        assert!(Algorithm::parse("rsa").is_err());
-    }
-
-    #[test]
-    fn encodes_derivation_info_with_length_prefixes() {
-        let info = key_derivation_info("wallet", Algorithm::Secp256k1).unwrap();
-        let expected = [
-            &19u32.to_be_bytes()[..],
-            b"dstack-guest-v1-key",
-            &9u32.to_be_bytes()[..],
-            b"secp256k1",
-            &6u32.to_be_bytes()[..],
-            b"wallet",
-        ]
-        .concat();
-        assert_eq!(info, expected);
-    }
-
-    /// A delimiter-joined encoding would collide here; a length-prefixed one
-    /// cannot. A domain carrying the delimiter is the shape that breaks
-    /// `join(":")`.
-    #[test]
-    fn no_two_domains_encode_the_same_way() {
-        let a = key_derivation_info("a\u{0}b", Algorithm::Ed25519).unwrap();
-        let b = key_derivation_info("a", Algorithm::Ed25519).unwrap();
-        let c = key_derivation_info("ab", Algorithm::Ed25519).unwrap();
-        assert_ne!(a, b);
-        assert_ne!(a, c);
-        assert_ne!(b, c);
-    }
-
-    /// Committed vectors, also published in `docs/guest-api-v1.md` so a
-    /// non-Rust implementation can check itself against them.
-    ///
-    /// These bytes are the v1 keys of every deployment whose app root key is
-    /// `TEST_APP_ROOT_KEY`. A diff here is a change to deployed key material,
-    /// not a fixture update: fix the derivation, do not update the vector.
-    #[test]
-    fn derives_the_committed_key_vectors() {
+    fn derives_the_committed_public_key_vectors() {
         let vectors = [
             (
                 "",
                 Algorithm::Secp256k1,
-                "59f60584ce6fd2a3a31997256db9d77322463fc8a6b1520110401bcb1ee92387",
                 "0377c7fb050db181d392266a3cee9adb2901c6d665f11bac68be5457f577ba4908",
             ),
             (
                 "",
                 Algorithm::Ed25519,
-                "b023493030669cf22e9cafa6a464d4cf3ae4edfe5474ec796710f21ea011946d",
                 "a3dc149fd5b765eab2eb7d3174fa939e39386898f10b15b7b146f6f1358ecf2a",
             ),
             (
                 "wallet",
                 Algorithm::Secp256k1,
-                "2580611f0f936abe59399a8ac4ed9964d0259bd34c88ea012ca42b32acbf9386",
                 "0369cecd3c8da88730f7d45875824c3e75f63a2d3da4be42f45671954daa2abb28",
             ),
             (
                 "wallet",
                 Algorithm::Ed25519,
-                "d76a703b08ebb074b809b9d6acf3d7c6663131273807717ce9d23bbadc2c644e",
                 "dade622d0fa1641e79b16e0b04e296be671f85f0aa6387b7d37e9d89f87494f5",
             ),
             (
                 "a/b/c",
                 Algorithm::Secp256k1,
-                "7f0973449298085d2d36a3b4c4d3243c100ba1981ffa885fe9e9dee883e69538",
                 "02e9b1a61b6d70aa9b241753828c316bf90e33e77b2e113f9ba75a8b6dc3cde5c1",
             ),
-            // A domain carrying NUL and `:`, the two characters a
-            // delimiter-joined encoding would choke on.
             (
                 "k\u{0}:ey",
                 Algorithm::Ed25519,
-                "42da8bf0b479ed125c370e3b91f982735bf08ff592abbd586985affa43ee96a1",
                 "c833107822b003ff5675b33b90b151d4315c3ab9162b17d876e8dffde41abf9b",
             ),
         ];
-        for (domain, algorithm, expected_secret, expected_public) in vectors {
-            let key = derive(domain, algorithm);
-            let name = algorithm.name();
+        for (domain, algorithm, expected) in vectors {
             assert_eq!(
-                hex::encode(key.secret()),
-                expected_secret,
-                "v1 key vector changed for ({domain:?}, {name})"
-            );
-            assert_eq!(
-                hex::encode(key.public_key()),
-                expected_public,
-                "v1 public key vector changed for ({domain:?}, {name})"
+                hex::encode(derive(domain, algorithm).public_key()),
+                expected,
+                "v1 public key vector changed for ({domain:?}, {})",
+                algorithm.name()
             );
         }
     }
 
-    /// The claim signature is deterministic: RFC 6979 fixes `k` from the key
-    /// and the digest, so a committed vector pins the whole chain-link
-    /// encoding, recovery byte included.
     #[test]
-    fn produces_the_committed_claim_signature_vector() {
-        let key = derive("wallet", Algorithm::Secp256k1);
+    fn the_public_key_lengths_are_the_specified_ones() {
         assert_eq!(
-            hex::encode(key.claim_signature(&TEST_APP_ROOT_KEY).unwrap()),
-            "af26d2f258d34580e7288bd83fc97bddc83769476d77823c4f76a3ad77a75149\
-             1a39ffc4ef3aa66cb0d008b8f6f199e6d57c1da9a92ba4cf10f23bf752b8cad0\
-             00"
+            derive("wallet", Algorithm::Secp256k1).public_key().len(),
+            33
         );
+        assert_eq!(derive("wallet", Algorithm::Ed25519).public_key().len(), 32);
     }
 
     #[test]
     fn the_two_algorithms_never_share_key_material() {
-        for domain in ["", "wallet", "a/b/c", "\u{0}"] {
+        for domain in ["", "wallet", "a/b/c"] {
             assert_ne!(
                 derive(domain, Algorithm::Secp256k1).secret(),
                 derive(domain, Algorithm::Ed25519).secret(),
@@ -345,133 +159,23 @@ mod tests {
         }
     }
 
-    /// v0 derived `derive_key(app_root, [path], 32)` and handed the same 32
-    /// bytes to both curves. v1 must not land on those bytes when the domain
-    /// string equals the old path.
-    #[test]
-    fn v1_keys_differ_from_v0_keys_for_the_same_name() {
-        for name in ["", "wallet", "vms"] {
-            let v0 = derive_key(&TEST_APP_ROOT_KEY, &[name.as_bytes()], 32).unwrap();
-            assert_ne!(derive(name, Algorithm::Secp256k1).secret(), v0);
-            assert_ne!(derive(name, Algorithm::Ed25519).secret(), v0);
-        }
-    }
-
-    /// The one v0 path that could reach a v1 key under a shared salt: the
-    /// legacy `info` is the caller's `path` verbatim, so passing the v1 `info`
-    /// byte string as a v0 path made the two derivations identical.
-    ///
-    /// The v1 salt closes it by construction. This is the test that would have
-    /// failed before the salt changed, so it is the one that keeps it changed.
-    #[test]
-    fn a_v0_path_cannot_reproduce_a_v1_key() {
-        for (domain, algorithm) in [
-            ("", Algorithm::Secp256k1),
-            ("wallet", Algorithm::Secp256k1),
-            ("wallet", Algorithm::Ed25519),
-        ] {
-            let info = key_derivation_info(domain, algorithm).unwrap();
-            // The best a v0 caller can do: hand the whole v1 info to `path`.
-            let v0 = derive_key(&TEST_APP_ROOT_KEY, &[&info], 32).unwrap();
-            assert_ne!(
-                derive(domain, algorithm).secret(),
-                v0,
-                "a v0 path reproduced the v1 key for ({domain:?}, {})",
-                algorithm.name()
-            );
-        }
-    }
-
-    #[test]
-    fn the_v1_salt_is_not_the_legacy_salt() {
-        assert_eq!(KDF_SALT, b"dstack-guest-v1");
-        assert_ne!(KDF_SALT, ra_tls::kdf::LEGACY_SALT);
-    }
-
-    #[test]
-    fn encodes_the_claim_with_the_raw_public_key() {
-        let key = derive("wallet", Algorithm::Secp256k1);
-        let public_key = key.public_key();
-        assert_eq!(public_key.len(), 33, "expected a compressed SEC1 point");
-        let claim = key_claim(Algorithm::Secp256k1, "wallet", &public_key).unwrap();
-        let expected = [
-            &25u32.to_be_bytes()[..],
-            b"dstack-guest-v1-key-claim",
-            &9u32.to_be_bytes()[..],
-            b"secp256k1",
-            &6u32.to_be_bytes()[..],
-            b"wallet",
-            &33u32.to_be_bytes()[..],
-            &public_key,
-        ]
-        .concat();
-        assert_eq!(claim, expected);
-    }
-
-    /// The forgery a malicious app would attempt: v0's `purpose` is
-    /// caller-chosen, so it picks one that reproduces the v1 claim's prefix
-    /// and lets v0 append `":" + hex(pubkey)` itself.
-    #[test]
-    fn a_v0_claim_cannot_be_crafted_into_a_v1_claim() {
-        let key = derive("wallet", Algorithm::Secp256k1);
-        let public_key = key.public_key();
-        let v1_claim = key_claim(Algorithm::Secp256k1, "wallet", &public_key).unwrap();
-
-        // Best case for the attacker: the v1 claim minus exactly the suffix v0
-        // appends on its own, used verbatim as `purpose`.
-        let hex_pubkey = hex::encode(&public_key);
-        let appended = format!(":{hex_pubkey}");
-        let purpose_len = v1_claim.len().saturating_sub(appended.len());
-        let purpose = String::from_utf8_lossy(&v1_claim[..purpose_len]).into_owned();
-        let v0_claim = format!("{purpose}:{hex_pubkey}").into_bytes();
-
-        assert_ne!(
-            v0_claim, v1_claim,
-            "a v0 purpose reproduced the v1 claim byte string"
-        );
-        assert_ne!(
-            Keccak256::digest(&v0_claim),
-            Keccak256::digest(&v1_claim),
-            "a v0 claim collided with a v1 claim"
-        );
-
-        // And the structural reason, so a future encoding change cannot make
-        // the assertion above pass by accident: a v0 preimage ends in `:`
-        // followed by lowercase hex only, while the v1 claim's last 37 bytes
-        // start with the public key's `00 00 00 21` length prefix.
-        let tail = &v1_claim[v1_claim.len() - 37..];
-        assert_eq!(&tail[..4], &33u32.to_be_bytes());
-        assert!(
-            tail.iter().any(|b| !b.is_ascii_hexdigit()),
-            "the v1 claim tail is entirely hex, which v0 could reproduce"
-        );
-    }
-
-    #[test]
-    fn the_two_context_tags_are_not_prefixes_of_one_another_once_encoded() {
-        let derivation = key_derivation_info("p", Algorithm::Ed25519).unwrap();
-        let claim = key_claim(Algorithm::Ed25519, "p", &[0u8; 32]).unwrap();
-        assert!(!claim.starts_with(&derivation));
-        assert!(!derivation.starts_with(&claim));
-    }
-
     #[test]
     fn the_claim_signature_verifies_under_the_app_root_key() {
-        use k256::ecdsa::{RecoveryId, Signature as K256Signature, VerifyingKey};
+        use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
+        use sha3::{Digest as _, Keccak256};
 
         let key = derive("wallet", Algorithm::Secp256k1);
-        let link = key.claim_signature(&TEST_APP_ROOT_KEY).unwrap();
+        let app_root = SigningKey::from_slice(&TEST_APP_ROOT_KEY).unwrap();
+        let link = key.claim_signature(&app_root).unwrap();
         assert_eq!(link.len(), 65);
 
         let claim = key_claim(Algorithm::Secp256k1, "wallet", &key.public_key()).unwrap();
-        let digest = Keccak256::new_with_prefix(&claim);
-        let signature = K256Signature::from_slice(&link[..64]).unwrap();
-        let recovery_id = RecoveryId::from_byte(link[64]).unwrap();
-
-        let recovered = VerifyingKey::recover_from_digest(digest, &signature, recovery_id).unwrap();
-        let app_root = *SigningKey::from_slice(&TEST_APP_ROOT_KEY)
-            .unwrap()
-            .verifying_key();
-        assert_eq!(recovered, app_root);
+        let recovered = VerifyingKey::recover_from_digest(
+            Keccak256::new_with_prefix(&claim),
+            &Signature::from_slice(&link[..64]).unwrap(),
+            RecoveryId::from_byte(link[64]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(&recovered, app_root.verifying_key());
     }
 }

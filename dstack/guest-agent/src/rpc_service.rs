@@ -29,12 +29,13 @@ use ra_tls::{
         QuoteContentType, TdxAttestationExt, VersionedAttestation, DEFAULT_HASH_ALGORITHM,
     },
     cert::{CertConfigV2, CertSigningRequestV2, Csr},
+    guest_api_v1::sign_recoverable_keccak256,
     kdf::{derive_key, derive_p256_key_pair_from_bytes},
 };
 use rcgen::KeyPair;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::json;
-use sha3::{Digest, Keccak256};
+
 use tracing::error;
 
 use crate::{
@@ -42,7 +43,27 @@ use crate::{
     config::Config,
 };
 
-pub(crate) fn read_dmi_file(name: &str) -> String {
+/// Decode the immutable identity fields out of a boot attestation.
+///
+/// Costs a quote and an event-log replay, which is why its result is cached for
+/// the life of the process.
+fn decode_identity(inner: &AppStateInner) -> Result<AppIdentity> {
+    let attestation = inner.info_attestation()?.into_v1();
+    let app_info = attestation
+        .decode_app_info(false)
+        .context("failed to decode app info")?;
+    Ok(AppIdentity {
+        app_id: app_info.app_id,
+        instance_id: app_info.instance_id,
+        device_id: app_info.device_id,
+        mr_aggregated: app_info.mr_aggregated.to_vec(),
+        os_image_hash: app_info.os_image_hash,
+        compose_hash: app_info.compose_hash,
+        key_provider_info: String::from_utf8(app_info.key_provider_info).unwrap_or_default(),
+    })
+}
+
+fn read_dmi_file(name: &str) -> String {
     fs::read_to_string(format!("/sys/class/dmi/id/{name}"))
         .map(|s| s.trim().to_string())
         .unwrap_or_default()
@@ -64,6 +85,37 @@ struct AppStateInner {
     health: Option<Arc<crate::health::HealthMonitor>>,
     /// Serialises on-demand GPU attestation.
     gpu_attestor: crate::gpu_attest::GpuAttestor,
+    /// The app root key, parsed once.
+    ///
+    /// `None` when the key provider handed us something that is not a valid
+    /// secp256k1 scalar. Kept non-fatal so this cannot turn a boot problem into
+    /// a boot failure -- the RPCs that need it report it per call, as they did
+    /// when each parsed the key itself.
+    app_root_signing_key: Option<SigningKey>,
+    /// Identity as decoded from the boot attestation. See [`AppIdentity`].
+    identity: RwLock<Option<Arc<AppIdentity>>>,
+    /// `sys_vendor` and `product_name`, read once. Neither changes while the
+    /// VM is running.
+    cloud_vendor: String,
+    cloud_product: String,
+}
+
+/// The identity fields v1 `Info` reports, decoded once.
+///
+/// Every one of these is fixed for the life of the VM: they come out of the
+/// launch measurements. Recomputing them per call meant generating a fresh
+/// hardware quote and replaying the RTMR event log under the global quote lock
+/// on every `Info` -- including anonymous calls to the public `/prpc/v1/Info`,
+/// which let any caller that can route to the CVM monopolise that lock and
+/// starve the attestation path the agent actually needs.
+pub(crate) struct AppIdentity {
+    pub(crate) app_id: Vec<u8>,
+    pub(crate) instance_id: Vec<u8>,
+    pub(crate) device_id: Vec<u8>,
+    pub(crate) mr_aggregated: Vec<u8>,
+    pub(crate) os_image_hash: Vec<u8>,
+    pub(crate) compose_hash: Vec<u8>,
+    pub(crate) key_provider_info: String,
 }
 
 impl AppStateInner {
@@ -169,6 +221,15 @@ impl AppState {
                     config.app_compose.runner.clone(),
                 )
             });
+        // Parsed once, and non-fatally: an unusable app root key is reported by
+        // the RPCs that need one, not by refusing to start.
+        let app_root_signing_key = match SigningKey::from_slice(&keys.k256_key) {
+            Ok(key) => Some(key),
+            Err(err) => {
+                error!("the app root k256 key did not parse: {err:?}");
+                None
+            }
+        };
         let me = Self {
             inner: Arc::new(AppStateInner {
                 config,
@@ -179,8 +240,18 @@ impl AppState {
                 platform,
                 health,
                 gpu_attestor,
+                app_root_signing_key,
+                identity: RwLock::new(None),
+                cloud_vendor: read_dmi_file("sys_vendor"),
+                cloud_product: read_dmi_file("product_name"),
             }),
         };
+        // Decode identity now so no request has to. Non-fatal: a platform that
+        // cannot attest at this instant would otherwise take the whole agent
+        // down, and `identity()` retries on demand.
+        if let Err(err) = me.identity() {
+            error!("failed to decode app identity at startup: {err:?}");
+        }
         me.maybe_request_demo_cert();
         Ok(me)
     }
@@ -213,21 +284,56 @@ impl AppState {
         &self.inner.keys.k256_key
     }
 
+    /// The same key, parsed. Shared rather than re-parsed per request.
+    pub(crate) fn app_root_signing_key(&self) -> Result<&SigningKey> {
+        let Some(key) = self.inner.app_root_signing_key.as_ref() else {
+            anyhow::bail!("the app root k256 key is not a valid secp256k1 scalar");
+        };
+        Ok(key)
+    }
+
     /// The KMS root key's signature over the app root public key: the second
     /// link of every signature chain, produced outside this agent and passed
     /// through byte-for-byte on both API surfaces.
-    pub(crate) fn kms_k256_signature(&self) -> Vec<u8> {
-        self.inner.keys.k256_signature.clone()
+    pub(crate) fn kms_k256_signature(&self) -> &[u8] {
+        &self.inner.keys.k256_signature
+    }
+
+    pub(crate) fn cloud_vendor(&self) -> &str {
+        &self.inner.cloud_vendor
+    }
+
+    pub(crate) fn cloud_product(&self) -> &str {
+        &self.inner.cloud_product
+    }
+
+    /// The decoded identity, computed at most once.
+    ///
+    /// Populated at construction; this path only runs when that attempt failed,
+    /// so a platform that could not attest at boot still answers later rather
+    /// than staying broken for the life of the process.
+    pub(crate) fn identity(&self) -> Result<Arc<AppIdentity>> {
+        if let Some(identity) = self
+            .inner
+            .identity
+            .read()
+            .or_panic("lock should never fail")
+            .as_ref()
+        {
+            return Ok(identity.clone());
+        }
+        let identity = Arc::new(decode_identity(&self.inner)?);
+        *self
+            .inner
+            .identity
+            .write()
+            .or_panic("lock should never fail") = Some(identity.clone());
+        Ok(identity)
     }
 
     /// The VM's hardware configuration, as the VMM produced it.
     pub(crate) fn vm_config(&self) -> &str {
         &self.inner.vm_config
-    }
-
-    /// The attestation the agent reports identity from.
-    pub(crate) fn info_attestation(&self) -> Result<VersionedAttestation> {
-        self.inner.info_attestation()
     }
 
     pub(crate) fn gpu_attestor(&self) -> &crate::gpu_attest::GpuAttestor {
@@ -247,14 +353,67 @@ impl AppState {
 ///
 /// Random, not derived: the certificate is minted per call, so there is
 /// nothing for a stable key to buy, and a key nobody can re-derive is a
-/// smaller thing to hold. Shared by the unversioned `GetTlsKey` and v1's
-/// `IssueCert` so the two cannot drift.
-pub(crate) fn generate_cert_key() -> Result<KeyPair> {
+/// smaller thing to hold.
+///
+/// The `Failed to ...` contexts are the v0.5.11 strings verbatim. They are what
+/// a frozen-surface caller sees, so they keep their original capitalisation
+/// rather than following the lowercase house rule.
+fn generate_cert_key() -> Result<KeyPair> {
     let mut seed = [0u8; 32];
     SystemRandom::new()
         .fill(&mut seed)
         .context("Failed to generate secure seed")?;
     derive_p256_key_pair_from_bytes(&seed, &[]).context("Failed to derive key")
+}
+
+/// The certificate request fields both surfaces take.
+///
+/// The two wire messages are different types with identical fields, so this is
+/// where they meet. Without it the shared body is copied per surface and the
+/// copies drift.
+pub(crate) struct CertRequestFields {
+    pub(crate) subject: String,
+    pub(crate) alt_names: Vec<String>,
+    pub(crate) usage_ra_tls: bool,
+    pub(crate) usage_server_auth: bool,
+    pub(crate) usage_client_auth: bool,
+    pub(crate) with_app_info: bool,
+    pub(crate) not_before: Option<u64>,
+    pub(crate) not_after: Option<u64>,
+}
+
+/// A freshly issued certificate and the key that backs it.
+pub(crate) struct IssuedCert {
+    pub(crate) key: String,
+    pub(crate) certificate_chain: Vec<String>,
+}
+
+/// Validate, generate a key, build the CSR, and get it signed.
+///
+/// The whole body of the frozen `GetTlsKey` and of v1's `IssueCert`: they
+/// differ only in which message type carries the fields in and the result out.
+pub(crate) async fn issue_cert_for_request(
+    state: &AppState,
+    request: CertRequestFields,
+) -> Result<IssuedCert> {
+    validate_cert_validity(request.not_before, request.not_after)?;
+    let key = generate_cert_key()?;
+    let config = CertConfigV2 {
+        org_name: None,
+        subject: request.subject,
+        subject_alt_names: request.alt_names,
+        usage_server_auth: request.usage_server_auth,
+        usage_client_auth: request.usage_client_auth,
+        ext_quote: request.usage_ra_tls,
+        ext_app_info: request.with_app_info,
+        not_after: request.not_after,
+        not_before: request.not_before,
+    };
+    let certificate_chain = state.issue_cert(&key, config).await?;
+    Ok(IssuedCert {
+        key: key.serialize_pem(),
+        certificate_chain,
+    })
 }
 
 pub struct InternalRpcHandler {
@@ -349,23 +508,23 @@ pub(crate) fn validate_cert_validity(
 
 impl DstackGuestRpc for InternalRpcHandler {
     async fn get_tls_key(self, request: GetTlsKeyArgs) -> anyhow::Result<GetTlsKeyResponse> {
-        validate_cert_validity(request.not_before, request.not_after)?;
-        let derived_key = generate_cert_key()?;
-        let config = CertConfigV2 {
-            org_name: None,
-            subject: request.subject,
-            subject_alt_names: request.alt_names,
-            usage_server_auth: request.usage_server_auth,
-            usage_client_auth: request.usage_client_auth,
-            ext_quote: request.usage_ra_tls,
-            ext_app_info: request.with_app_info,
-            not_after: request.not_after,
-            not_before: request.not_before,
-        };
-        let certificate_chain = self.state.inner.issue_cert(&derived_key, config).await?;
+        let issued = issue_cert_for_request(
+            &self.state,
+            CertRequestFields {
+                subject: request.subject,
+                alt_names: request.alt_names,
+                usage_ra_tls: request.usage_ra_tls,
+                usage_server_auth: request.usage_server_auth,
+                usage_client_auth: request.usage_client_auth,
+                with_app_info: request.with_app_info,
+                not_before: request.not_before,
+                not_after: request.not_after,
+            },
+        )
+        .await?;
         Ok(GetTlsKeyResponse {
-            key: derived_key.serialize_pem(),
-            certificate_chain,
+            key: issued.key,
+            certificate_chain: issued.certificate_chain,
         })
     }
 
@@ -401,10 +560,10 @@ impl DstackGuestRpc for InternalRpcHandler {
         let msg_to_sign = format!("{}:{}", request.purpose, pubkey_hex);
         let app_signing_key =
             SigningKey::from_slice(k256_app_key).context("Failed to parse app k256 key")?;
-        let digest = Keccak256::new_with_prefix(msg_to_sign);
-        let (signature, recid) = app_signing_key.sign_digest_recoverable(digest)?;
-        let mut signature = signature.to_vec();
-        signature.push(recid.to_byte());
+        // The shared 65-byte `r || s || v` envelope. Byte-identical to the copy
+        // this replaced -- `get_key_pins_the_frozen_chain_link` is the vector
+        // that says so, and it exists for exactly this de-duplication.
+        let signature = sign_recoverable_keccak256(&app_signing_key, msg_to_sign.as_bytes())?;
 
         Ok(GetKeyResponse {
             key,
@@ -809,7 +968,7 @@ pub(crate) mod tests {
     };
     use k256::ecdsa::{Signature as K256Signature, VerifyingKey};
     use ra_tls::attestation::{AttestationV1, PlatformEvidence, VersionedAttestation};
-    use sha2::Sha256;
+    use sha2::{Digest as _, Sha256};
     use std::collections::HashSet;
     use std::convert::TryFrom;
     use std::io::Write;
@@ -834,28 +993,31 @@ pub(crate) mod tests {
         setup_test_state_with_platform(None).await
     }
 
-    /// The same state, with the fixture's platform evidence swapped out.
-    /// `None` keeps the fixture's Intel TDX evidence.
     /// The same state with the app having opted into publishing its TCB info,
     /// which is what unlocks the document fields on the external surface.
     pub(crate) async fn setup_test_state_with_public_tcbinfo() -> (AppState, tempfile::NamedTempFile)
     {
-        let (state, guard) = setup_test_state().await;
-        let mut config = state.config().clone();
-        config.app_compose.app_compose.public_tcbinfo = true;
-        config.app_compose.raw = r#"{"name":"test"}"#.to_string();
-        let mut inner = Arc::try_unwrap(state.inner).ok().expect("sole owner");
-        inner.config = config;
-        (
-            AppState {
-                inner: Arc::new(inner),
-            },
-            guard,
-        )
+        build_test_state(None, |config| {
+            config.app_compose.app_compose.public_tcbinfo = true;
+            config.app_compose.raw = r#"{"name":"test"}"#.to_string();
+        })
+        .await
     }
 
+    /// The same state, with the fixture's platform evidence swapped out.
+    /// `None` keeps the fixture's Intel TDX evidence.
     pub(crate) async fn setup_test_state_with_platform(
         platform: Option<PlatformEvidence>,
+    ) -> (AppState, tempfile::NamedTempFile) {
+        build_test_state(platform, |_| {}).await
+    }
+
+    /// The one fixture body. `configure` adjusts the app config before the
+    /// state is built, which is cheaper and clearer than rebuilding an
+    /// already-shared `Arc` afterwards.
+    async fn build_test_state(
+        platform: Option<PlatformEvidence>,
+        configure: impl FnOnce(&mut Config),
     ) -> (AppState, tempfile::NamedTempFile) {
         let mut temp_attestation_file = tempfile::NamedTempFile::new().unwrap();
 
@@ -895,12 +1057,13 @@ pub(crate) mod tests {
             raw: String::new(),
         };
 
-        let dummy_config = Config {
+        let mut dummy_config = Config {
             keys_file: String::new(),
             app_compose: dummy_appcompose_wrapper,
             sys_config_file: String::new().into(),
             data_disks: HashSet::new(),
         };
+        configure(&mut dummy_config);
 
         const DUMMY_PEM_KEY: &str = r#"-----BEGIN PRIVATE KEY-----
 MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCSeV81CKVqILf/
@@ -1051,6 +1214,12 @@ pNs85uhOZE8z2jr8Pg==
             }),
             health: None,
             gpu_attestor: crate::gpu_attest::GpuAttestor::new(),
+            app_root_signing_key: SigningKey::from_slice(&DUMMY_K256_KEY).ok(),
+            identity: RwLock::new(None),
+            // Read the same way production does, so a test comparing v1 `Info`
+            // against v0 `get_info` compares like with like.
+            cloud_vendor: read_dmi_file("sys_vendor"),
+            cloud_product: read_dmi_file("product_name"),
         };
 
         (
@@ -1264,6 +1433,29 @@ pNs85uhOZE8z2jr8Pg==
             .unwrap();
         assert_eq!(ED25519_REPORT_DATA.as_bytes(), response.report_data);
         assert!(!response.quote.is_empty());
+    }
+
+    /// The frozen v0 signature chain, pinned byte for byte.
+    ///
+    /// Added when the keccak256 -> recoverable-sign -> `r || s || v` envelope
+    /// was de-duplicated into `ra_tls::guest_api_v1`: without a vector here,
+    /// nothing would have caught the shared helper disagreeing with the copy it
+    /// replaced. RFC 6979 makes the signature deterministic, so this is exact.
+    #[tokio::test]
+    async fn get_key_pins_the_frozen_chain_link() {
+        let (state, _guard) = setup_test_state().await;
+        let response = InternalRpcHandler::new(state)
+            .get_key(GetKeyArgs {
+                path: "test".to_string(),
+                purpose: "signing".to_string(),
+                algorithm: "secp256k1".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            hex::encode(&response.signature_chain[0]),
+            "c8a3dcf06c4e95bd78a5d7a1c8fcff171fc5848cfae804c6fc11bda4dc5d4062379995390843827444992c4c0e4bac70f0f878e01b9fc8b98cd7126fe5a3876b01"
+        );
     }
 
     #[test]

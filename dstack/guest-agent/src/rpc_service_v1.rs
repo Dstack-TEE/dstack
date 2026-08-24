@@ -30,19 +30,16 @@ use anyhow::{Context, Result};
 use dstack_guest_agent_rpc::v1::{
     dstack_guest_v1_server::{DstackGuestV1Rpc, DstackGuestV1Server},
     worker_v1_server::{WorkerV1Rpc, WorkerV1Server},
-    AttestAppKeyRequest, AttestGpuRequest, AttestGpuResponse, AttestRequest, AttestResponse,
-    GetKeyRequest, GetKeyResponse, GpuEvidenceBundle, HealthRequest, HealthResponse, InfoRequest,
-    InfoResponse, IssueCertRequest, IssueCertResponse, VersionRequest, VersionResponse,
+    AttestGpuRequest, AttestGpuResponse, AttestRequest, AttestResponse, GetKeyRequest,
+    GetKeyResponse, GpuEvidenceBundle, HealthRequest, HealthResponse, InfoRequest, InfoResponse,
+    IssueCertRequest, IssueCertResponse, VersionRequest, VersionResponse,
 };
 use dstack_types::GPU_ATTESTATION_OUTPUT;
 use fs_err as fs;
 use ra_rpc::{CallContext, RpcCall};
-use ra_tls::cert::CertConfigV2;
 use tracing::warn;
 
-use crate::rpc_service::{
-    generate_cert_key, pad64, read_dmi_file, validate_cert_validity, AppState, ExternalRpcHandler,
-};
+use crate::rpc_service::{issue_cert_for_request, pad64, AppState};
 
 pub(crate) mod keys;
 
@@ -74,37 +71,51 @@ fn boottime_gpu_evidence(include: bool, path: &Path) -> String {
 
 /// Build the v1 `Info` response.
 ///
-/// Built straight from the attestation's app info rather than from the
-/// unversioned `AppInfo`, because v1 needs the verbatim app-compose document
-/// that v0 only ever exposed nested inside the `tcb_info` JSON string.
+/// Reads identity from the cache `AppState` decoded once; see
+/// [`crate::rpc_service::AppIdentity`] for why this must not attest per call.
 ///
 /// `hide_documents` applies the app's `public_tcbinfo` choice: with it set, the
 /// three document fields come back empty and everything identifying the app
-/// stays visible. That is the same line the unversioned `Worker.Info` drew, and
-/// it is drawn only on the external listener -- an app cannot need protecting
-/// from itself.
+/// stays visible. Each hidden field is skipped rather than built and thrown
+/// away, so the public listener does not clone an app-compose document per
+/// anonymous call in order to discard it.
+///
+/// This is close to, but not the same as, the line the frozen `Worker.Info`
+/// draws. That one blanks `tcb_info` and `vm_config` and always serves
+/// `key_provider_info`; v1 blanks `key_provider_info` too, because it names the
+/// component that holds the app's keys and an external caller has no need for
+/// it. The frozen behaviour is unchanged on its own surface.
 fn info_response(state: &AppState, hide_documents: bool) -> Result<InfoResponse> {
-    let attestation = state.info_attestation()?.into_v1();
-    let app_info = attestation
-        .decode_app_info(false)
-        .context("Failed to decode app info")?;
-    let document = |value: String| if hide_documents { String::new() } else { value };
+    let identity = state.identity()?;
+    let document = |value: &dyn Fn() -> String| {
+        if hide_documents {
+            String::new()
+        } else {
+            value()
+        }
+    };
     Ok(InfoResponse {
-        app_id: app_info.app_id,
+        app_id: identity.app_id.clone(),
         app_name: state.config().app_compose.name.clone(),
-        compose_hash: app_info.compose_hash,
-        app_compose: document(state.config().app_compose.raw.clone()),
-        instance_id: app_info.instance_id,
-        device_id: app_info.device_id,
-        os_image_hash: app_info.os_image_hash,
-        mr_aggregated: app_info.mr_aggregated.to_vec(),
-        vm_config: document(state.vm_config().to_string()),
-        key_provider_info: document(
-            String::from_utf8(app_info.key_provider_info).unwrap_or_default(),
-        ),
-        cloud_vendor: read_dmi_file("sys_vendor"),
-        cloud_product: read_dmi_file("product_name"),
+        compose_hash: identity.compose_hash.clone(),
+        app_compose: document(&|| state.config().app_compose.raw.clone()),
+        instance_id: identity.instance_id.clone(),
+        device_id: identity.device_id.clone(),
+        os_image_hash: identity.os_image_hash.clone(),
+        mr_aggregated: identity.mr_aggregated.clone(),
+        vm_config: document(&|| state.vm_config().to_string()),
+        key_provider_info: document(&|| identity.key_provider_info.clone()),
+        cloud_vendor: state.cloud_vendor().to_string(),
+        cloud_product: state.cloud_product().to_string(),
     })
+}
+
+/// The version both v1 services report.
+fn version_response() -> VersionResponse {
+    VersionResponse {
+        version: crate::CARGO_PKG_VERSION.to_string(),
+        rev: crate::GIT_REV.to_string(),
+    }
 }
 
 pub struct V1RpcHandler {
@@ -121,11 +132,10 @@ impl V1RpcHandler {
     /// signature chain.
     fn derive(&self, domain: &str, algorithm: &str) -> Result<(AppKey, Vec<Vec<u8>>)> {
         let algorithm = Algorithm::parse(algorithm)?;
-        let app_root_key = self.state.app_root_k256_key();
-        let key = AppKey::derive(app_root_key, domain, algorithm)?;
+        let key = AppKey::derive(self.state.app_root_k256_key(), domain, algorithm)?;
         let chain = vec![
-            key.claim_signature(app_root_key)?,
-            self.state.kms_k256_signature(),
+            key.claim_signature(self.state.app_root_signing_key()?)?,
+            self.state.kms_k256_signature().to_vec(),
         ];
         Ok((key, chain))
     }
@@ -133,23 +143,23 @@ impl V1RpcHandler {
 
 impl DstackGuestV1Rpc for V1RpcHandler {
     async fn issue_cert(self, request: IssueCertRequest) -> Result<IssueCertResponse> {
-        validate_cert_validity(request.not_before, request.not_after)?;
-        let key = generate_cert_key()?;
-        let config = CertConfigV2 {
-            org_name: None,
-            subject: request.subject,
-            subject_alt_names: request.alt_names,
-            usage_server_auth: request.usage_server_auth,
-            usage_client_auth: request.usage_client_auth,
-            ext_quote: request.usage_ra_tls,
-            ext_app_info: request.with_app_info,
-            not_after: request.not_after,
-            not_before: request.not_before,
-        };
-        let certificate_chain = self.state.issue_cert(&key, config).await?;
+        let issued = issue_cert_for_request(
+            &self.state,
+            crate::rpc_service::CertRequestFields {
+                subject: request.subject,
+                alt_names: request.alt_names,
+                usage_ra_tls: request.usage_ra_tls,
+                usage_server_auth: request.usage_server_auth,
+                usage_client_auth: request.usage_client_auth,
+                with_app_info: request.with_app_info,
+                not_before: request.not_before,
+                not_after: request.not_after,
+            },
+        )
+        .await?;
         Ok(IssueCertResponse {
-            key: key.serialize_pem(),
-            certificate_chain,
+            key: issued.key,
+            certificate_chain: issued.certificate_chain,
         })
     }
 
@@ -163,9 +173,16 @@ impl DstackGuestV1Rpc for V1RpcHandler {
     }
 
     async fn attest(self, request: AttestRequest) -> Result<AttestResponse> {
-        let report_data = pad64(&request.report_data).context("Report data is too long")?;
+        let report_data = pad64(&request.report_data).context("report data is too long")?;
+        // Generating a quote takes a global mutex and then blocks in an ioctl.
+        // On the async executor that parks a worker thread for the duration and
+        // stalls every other connection this agent is serving.
+        let state = self.state.clone();
+        let attestation = tokio::task::spawn_blocking(move || state.attest_cvm(report_data))
+            .await
+            .context("the attestation task panicked")??;
         Ok(AttestResponse {
-            attestation: self.state.attest_cvm(report_data)?,
+            attestation,
             boottime_gpu_evidence: boottime_gpu_evidence(
                 request.include_boottime_gpu_evidence,
                 Path::new(GPU_ATTESTATION_OUTPUT),
@@ -199,10 +216,7 @@ impl DstackGuestV1Rpc for V1RpcHandler {
     }
 
     async fn version(self, _request: VersionRequest) -> Result<VersionResponse> {
-        Ok(VersionResponse {
-            version: crate::CARGO_PKG_VERSION.to_string(),
-            rev: crate::GIT_REV.to_string(),
-        })
+        Ok(version_response())
     }
 }
 
@@ -219,7 +233,7 @@ impl RpcCall<AppState> for V1RpcHandler {
 /// The v1 handler on the external listener.
 ///
 /// Reachable by anyone who can route to the CVM, so it serves no key material
-/// and lets no caller choose what gets signed.
+/// and lets no caller choose what gets signed or attested.
 pub struct ExternalV1RpcHandler {
     state: AppState,
 }
@@ -238,26 +252,7 @@ impl WorkerV1Rpc for ExternalV1RpcHandler {
     }
 
     async fn version(self, _request: VersionRequest) -> Result<VersionResponse> {
-        Ok(VersionResponse {
-            version: crate::CARGO_PKG_VERSION.to_string(),
-            rev: crate::GIT_REV.to_string(),
-        })
-    }
-
-    async fn attest_app_key(self, request: AttestAppKeyRequest) -> Result<AttestResponse> {
-        // Same report data the frozen `Worker.GetAttestationForAppKey` builds,
-        // so both surfaces attest the same public key for a given algorithm.
-        // What changes is the envelope: an attestation answers on every
-        // platform, a `GetQuoteResponse` only on Intel TDX.
-        let report_data = ExternalRpcHandler::new(self.state.clone())
-            .app_key_report_data(&request.algorithm)
-            .await?;
-        Ok(AttestResponse {
-            attestation: self.state.attest_cvm(report_data)?,
-            // This method attests a key, not the machine. A caller that wants
-            // the boot-time GPU evidence asks `Attest` for it.
-            boottime_gpu_evidence: String::new(),
-        })
+        Ok(version_response())
     }
 
     async fn health(self, _request: HealthRequest) -> Result<HealthResponse> {
@@ -308,9 +303,8 @@ mod tests {
     use k256::ecdsa::Signature as K256Signature;
     use std::io::Write as _;
 
-    async fn handler() -> (V1RpcHandler, AppState, tempfile::NamedTempFile) {
-        let (state, guard) = setup_test_state().await;
-        (V1RpcHandler::new(state.clone()), state, guard)
+    async fn state() -> (AppState, tempfile::NamedTempFile) {
+        setup_test_state().await
     }
 
     fn get_key_request(domain: &str, algorithm: &str) -> GetKeyRequest {
@@ -325,7 +319,7 @@ mod tests {
     /// handler serves and every assertion built on them goes quiet.
     #[tokio::test]
     async fn the_fixture_root_key_matches_the_committed_vectors() {
-        let (_, state, _guard) = handler().await;
+        let (state, _guard) = state().await;
         assert_eq!(
             hex::encode(state.app_root_k256_key()),
             "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b"
@@ -335,7 +329,7 @@ mod tests {
     #[tokio::test]
     async fn get_key_returns_a_two_link_chain_for_both_algorithms() {
         for algorithm in ["secp256k1", "ed25519"] {
-            let (_, state, _guard) = handler().await;
+            let (state, _guard) = state().await;
             let key = V1RpcHandler::new(state)
                 .get_key(get_key_request("wallet", algorithm))
                 .await
@@ -355,13 +349,15 @@ mod tests {
         use k256::ecdsa::{RecoveryId, SigningKey, VerifyingKey};
         use sha3::{Digest as _, Keccak256};
 
-        let (_, state, _guard) = handler().await;
+        let (state, _guard) = state().await;
         let key = V1RpcHandler::new(state.clone())
             .get_key(get_key_request("wallet", "secp256k1"))
             .await
             .unwrap();
 
-        let claim = keys::key_claim(keys::Algorithm::Secp256k1, "wallet", &key.public_key).unwrap();
+        let claim =
+            ra_tls::guest_api_v1::key_claim(keys::Algorithm::Secp256k1, "wallet", &key.public_key)
+                .unwrap();
         let link = &key.signature_chain[0];
         let recovered = VerifyingKey::recover_from_digest(
             Keccak256::new_with_prefix(&claim),
@@ -381,7 +377,7 @@ mod tests {
     /// `public_key`, which is what the chain vouches for.
     #[tokio::test]
     async fn the_public_key_belongs_to_the_returned_private_key() {
-        let (_, state, _guard) = handler().await;
+        let (state, _guard) = state().await;
 
         let secp = V1RpcHandler::new(state.clone())
             .get_key(get_key_request("wallet", "secp256k1"))
@@ -404,7 +400,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_an_empty_or_unknown_algorithm() {
-        let (_, state, _guard) = handler().await;
+        let (state, _guard) = state().await;
         for algorithm in ["", "k256", "rsa", "secp256k1_prehashed"] {
             let result = V1RpcHandler::new(state.clone())
                 .get_key(get_key_request("wallet", algorithm))
@@ -418,7 +414,7 @@ mod tests {
     /// bug to paper over.
     #[tokio::test]
     async fn v1_keys_differ_from_the_unversioned_keys_for_the_same_name() {
-        let (_, state, _guard) = handler().await;
+        let (state, _guard) = state().await;
         let v1 = V1RpcHandler::new(state.clone())
             .get_key(get_key_request("wallet", "secp256k1"))
             .await
@@ -443,7 +439,7 @@ mod tests {
     /// path, the v0.5.x answer.
     #[tokio::test]
     async fn the_unversioned_surface_still_serves_its_own_key() {
-        let (_, state, _guard) = handler().await;
+        let (state, _guard) = state().await;
         // v0 defaults an empty algorithm to secp256k1 and derives from the
         // path alone; v1 rejects the same request outright.
         let expected = ra_tls::kdf::derive_key(state.app_root_k256_key(), &[b"test"], 32).unwrap();
@@ -458,11 +454,40 @@ mod tests {
         assert_eq!(v0.key, expected);
     }
 
+    /// `Info` must not attest. Decoding identity costs a hardware quote and an
+    /// RTMR replay under a global lock, and `WorkerV1.Info` is served on the
+    /// public listener -- so doing it per call hands any caller that can route
+    /// to the CVM a way to monopolise the attestation path.
+    ///
+    /// One decoded `AppIdentity`, shared by pointer, is what says it is cached.
+    #[tokio::test]
+    async fn info_decodes_identity_at_most_once() {
+        let (state, _guard) = state().await;
+
+        let first = state.identity().unwrap();
+        for _ in 0..8 {
+            V1RpcHandler::new(state.clone())
+                .info(InfoRequest {})
+                .await
+                .unwrap();
+            ExternalV1RpcHandler::new(state.clone())
+                .info(InfoRequest {})
+                .await
+                .unwrap();
+        }
+        let last = state.identity().unwrap();
+
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &last),
+            "identity was decoded again; every Info call is generating a quote"
+        );
+    }
+
     /// v1 `Info` reports identity and configuration, and nothing that only an
     /// attestation should be trusted for.
     #[tokio::test]
     async fn info_reports_identity_and_configuration() {
-        let (_, state, _guard) = handler().await;
+        let (state, _guard) = state().await;
         let v1 = V1RpcHandler::new(state.clone())
             .info(InfoRequest {})
             .await
@@ -522,7 +547,7 @@ mod tests {
     async fn attest_reports_the_padded_report_data() {
         use ra_tls::attestation::VersionedAttestation;
 
-        let (_, state, _guard) = handler().await;
+        let (state, _guard) = state().await;
         let response = V1RpcHandler::new(state)
             .attest(AttestRequest {
                 report_data: b"hello".to_vec(),
@@ -542,7 +567,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_report_data_longer_than_64_bytes() {
-        let (_, state, _guard) = handler().await;
+        let (state, _guard) = state().await;
         let err = V1RpcHandler::new(state)
             .attest(AttestRequest {
                 report_data: vec![0; 65],
@@ -556,7 +581,7 @@ mod tests {
 
     #[tokio::test]
     async fn version_answers() {
-        let (_, state, _guard) = handler().await;
+        let (state, _guard) = state().await;
         let response = V1RpcHandler::new(state)
             .version(VersionRequest {})
             .await
@@ -564,48 +589,11 @@ mod tests {
         assert!(!response.version.is_empty());
     }
 
-    /// The external v1 surface attests the same app key the frozen
-    /// `GetAttestationForAppKey` commits to, but wraps it in an attestation, so
-    /// it answers on a platform with no TDX quote. That is the whole point of
-    /// the replacement.
-    #[tokio::test]
-    async fn external_attest_app_key_answers_without_a_tdx_quote() {
-        use ra_tls::attestation::{PlatformEvidence, VersionedAttestation};
-
-        let (state, _guard) = crate::rpc_service::tests::setup_test_state_with_platform(Some(
-            PlatformEvidence::SevSnp {
-                report: vec![0u8; 1184],
-                cert_chain: Vec::new(),
-                mr_config: String::new(),
-            },
-        ))
-        .await;
-
-        let response = ExternalV1RpcHandler::new(state)
-            .attest_app_key(AttestAppKeyRequest {
-                algorithm: "ed25519".to_string(),
-            })
-            .await
-            .expect("v1 must attest an app key on a non-TDX platform");
-
-        let report_data = VersionedAttestation::from_bytes(&response.attestation)
-            .unwrap()
-            .into_v1()
-            .report_data()
-            .unwrap();
-        assert_eq!(
-            b"dip1::ed25519-pk:5Pbre1Amf1hrp2V2bbfKlIfxpQb2pJAmrgmhxgVoG9s\0\0\0\0",
-            &report_data
-        );
-        // This method attests a key, not the machine.
-        assert!(response.boottime_gpu_evidence.is_empty());
-    }
-
     /// The external surface honours the app's `public_tcbinfo` choice; the
     /// internal one has nobody to hide from.
     #[tokio::test]
     async fn the_external_surface_hides_documents_unless_the_app_opted_in() {
-        let (_, state, _guard) = handler().await;
+        let (state, _guard) = state().await;
         assert!(
             !state.config().app_compose.public_tcbinfo,
             "the fixture must default to private for this test to mean anything"
@@ -645,7 +633,7 @@ mod tests {
     /// that asks anyway gets the answer the gateway would have assumed.
     #[tokio::test]
     async fn health_fails_open_for_an_app_that_did_not_opt_in() {
-        let (_, state, _guard) = handler().await;
+        let (state, _guard) = state().await;
         let response = ExternalV1RpcHandler::new(state)
             .health(HealthRequest {})
             .await
@@ -718,16 +706,19 @@ mod tests {
         use dstack_guest_agent_rpc::v1::worker_v1_server::WorkerV1Server;
         use dstack_guest_agent_rpc::worker_server::WorkerServer;
 
-        let v0 = WorkerServer::<ExternalRpcHandler>::supported_methods();
+        let v0 = WorkerServer::<crate::rpc_service::ExternalRpcHandler>::supported_methods();
         let v1 = WorkerV1Server::<ExternalV1RpcHandler>::supported_methods();
 
-        // Closed at v0.5.11: `AttestAppKey` and `Health` are post-0.5.11 and
-        // never released, so they live only on v1.
+        // Closed at v0.5.11. `Health` is post-0.5.11 and never released, so it
+        // lives only on v1. There is no v1 `AttestAppKey`: it would attest the
+        // v0-KDF `vms` key, which no v1 `GetKey(domain, algorithm)` can return,
+        // so a pure-v1 app could never hold the attested private key. A v1 app
+        // attests its own key through `/v1/Attest`.
         assert_eq!(
             v0,
             &["Info", "Version", "GetAttestationForAppKey"],
             "the unversioned external surface is frozen at the v0.5.11 method set"
         );
-        assert_eq!(v1, &["Info", "Version", "AttestAppKey", "Health"]);
+        assert_eq!(v1, &["Info", "Version", "Health"]);
     }
 }
