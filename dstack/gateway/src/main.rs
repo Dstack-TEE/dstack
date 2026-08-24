@@ -5,7 +5,7 @@
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use config::{Config, TlsConfig};
-use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, GetTlsKeyArgs};
+use dstack_guest_agent_rpc::v0::{dstack_guest_client::DstackGuestClient, GetTlsKeyArgs};
 use http_client::prpc::PrpcClient;
 use ra_rpc::{prpc_routes as prpc, rocket_helper::QuoteVerifier};
 use ra_tls::attestation::AttestationVerifier;

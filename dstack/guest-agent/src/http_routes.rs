@@ -9,7 +9,7 @@ use crate::guest_api_service::{list_containers, GuestApiHandler};
 use crate::rpc_service::{AppState, ExternalRpcHandler};
 use anyhow::Result;
 use docker_logs::parse_duration;
-use dstack_guest_agent_rpc::{worker_server::WorkerRpc, AppInfo};
+use dstack_guest_agent_rpc::v0::{worker_server::WorkerRpc, AppInfo};
 use guest_api::guest_api_server::GuestApiRpc;
 use ra_rpc::{CallContext, RpcCall};
 use rinja::Template;

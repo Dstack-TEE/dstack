@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use cert_client::CertRequestClient;
 use dstack_attest::default_verifier;
-use dstack_guest_agent_rpc::{
+use dstack_guest_agent_rpc::v0::{
     dstack_guest_server::{DstackGuestRpc, DstackGuestServer},
     tappd_server::{TappdRpc, TappdServer},
     worker_server::{WorkerRpc, WorkerServer},
@@ -25,11 +25,11 @@ use k256::ecdsa::SigningKey;
 use or_panic::ResultOrPanic;
 use ra_rpc::{CallContext, RpcCall};
 use ra_tls::{
+    api_v1::sign_recoverable_keccak256,
     attestation::{
         QuoteContentType, TdxAttestationExt, VersionedAttestation, DEFAULT_HASH_ALGORITHM,
     },
     cert::{CertConfigV2, CertSigningRequestV2, Csr},
-    guest_api_v1::sign_recoverable_keccak256,
     kdf::{derive_key, derive_p256_key_pair_from_bytes},
 };
 use rcgen::KeyPair;
@@ -960,7 +960,7 @@ pub(crate) mod tests {
         config::{AppComposeWrapper, Config},
     };
     use dstack_attest::attestation::AttestationVerifier;
-    use dstack_guest_agent_rpc::{GetAttestationForAppKeyRequest, SignRequest};
+    use dstack_guest_agent_rpc::v0::{GetAttestationForAppKeyRequest, SignRequest};
     use dstack_types::{AppCompose, AppKeys, EventLogVersion, KeyProvider};
     use ed25519_dalek::ed25519::signature::hazmat::PrehashVerifier;
     use ed25519_dalek::{
@@ -1438,7 +1438,7 @@ pNs85uhOZE8z2jr8Pg==
     /// The frozen v0 signature chain, pinned byte for byte.
     ///
     /// Added when the keccak256 -> recoverable-sign -> `r || s || v` envelope
-    /// was de-duplicated into `ra_tls::guest_api_v1`: without a vector here,
+    /// was de-duplicated into `ra_tls::api_v1`: without a vector here,
     /// nothing would have caught the shared helper disagreeing with the copy it
     /// replaced. RFC 6979 makes the signature deterministic, so this is exact.
     #[tokio::test]

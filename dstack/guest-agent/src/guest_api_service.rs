@@ -6,7 +6,7 @@ use std::{collections::HashSet, fmt::Debug, path::PathBuf, process::ExitStatus, 
 
 use anyhow::{Context, Result};
 use bollard::{container::ListContainersOptions, Docker};
-use dstack_guest_agent_rpc::worker_server::WorkerRpc as _;
+use dstack_guest_agent_rpc::v0::worker_server::WorkerRpc as _;
 use dstack_types::shared_filenames::{HOST_SHARED_DIR, SYS_CONFIG};
 use dstack_types::SysConfig;
 use fs_err as fs;

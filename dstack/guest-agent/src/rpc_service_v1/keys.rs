@@ -6,16 +6,16 @@
 //!
 //! The encodings themselves -- the salt, the context tags, the length-prefixed
 //! `info` and claim, and the chain-link envelope -- live in
-//! [`ra_tls::guest_api_v1`], so the agent, the verifier and the SDK share one
+//! [`ra_tls::api_v1`], so the agent, the verifier and the SDK share one
 //! definition instead of three transcriptions of the specification prose. What
 //! is left here is turning derived bytes into a usable key pair.
 
 use anyhow::{anyhow, Context, Result};
 use ed25519_dalek::SigningKey as Ed25519SigningKey;
 use k256::ecdsa::SigningKey;
-use ra_tls::guest_api_v1::{derive_app_key, key_claim, sign_recoverable_keccak256};
+use ra_tls::api_v1::{derive_app_key, key_claim, sign_recoverable_keccak256};
 
-pub(crate) use ra_tls::guest_api_v1::KeyAlgorithm as Algorithm;
+pub(crate) use ra_tls::api_v1::KeyAlgorithm as Algorithm;
 
 /// An application key derived for one `(domain, algorithm)` pair.
 pub(crate) struct AppKey {
@@ -81,7 +81,7 @@ impl AppKey {
 mod tests {
     use super::*;
 
-    /// The app root key `ra_tls::guest_api_v1` committed its vectors against.
+    /// The app root key `ra_tls::api_v1` committed its vectors against.
     const TEST_APP_ROOT_KEY: [u8; 32] = [
         0x1A, 0x2B, 0x3C, 0x4D, 0x5E, 0x6F, 0x7A, 0x8B, 0x9C, 0x0D, 0x1E, 0x2F, 0x3A, 0x4B, 0x5C,
         0x6D, 0x7E, 0x8F, 0x9A, 0x0B, 0x1C, 0x2D, 0x3E, 0x4F, 0x5A, 0x6B, 0x7C, 0x8D, 0x9E, 0x0F,
@@ -94,7 +94,7 @@ mod tests {
 
     /// The public key vectors, checked through the type the handler actually
     /// uses. The private-key and encoding vectors are pinned next to the
-    /// primitives in `ra_tls::guest_api_v1`.
+    /// primitives in `ra_tls::api_v1`.
     #[test]
     fn derives_the_committed_public_key_vectors() {
         let vectors = [

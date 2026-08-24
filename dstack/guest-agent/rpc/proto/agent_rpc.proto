@@ -313,7 +313,7 @@ message WorkerVersion {
 // CLOSED, like `DstackGuest`: exactly the v0.5.11 surface, served at
 // `/prpc/v0` on the external listener, with `/prpc` kept as an alias onto the
 // same handler for pre-0.6 clients. New capability goes to `dstack.guest.v1`'s
-// `WorkerV1`, served at `/prpc/v1`.
+// `dstack.guest.v1`'s `Worker`, served at `/prpc/v1`.
 service Worker {
   // Get app info
   rpc Info(google.protobuf.Empty) returns (AppInfo) {}
@@ -321,11 +321,13 @@ service Worker {
   rpc Version(google.protobuf.Empty) returns (WorkerVersion) {}
   // Get attestation.
   //
-  // Legacy and frozen. Returns a `GetQuoteResponse`, so it answers on Intel
-  // TDX and fails everywhere else -- an external caller on any other platform
-  // has no way to attest an app key through this method. `WorkerV1.AttestAppKey`
-  // is the replacement: same request, an attestation that works on every
-  // platform.
+  // Legacy and frozen. Returns a `GetQuoteResponse`, so it answers on Intel TDX
+  // and fails everywhere else.
+  //
+  // The v1 surface has no counterpart, deliberately: this attests the key v0's
+  // KDF derives at path `vms`, which no v1 `GetKey(domain, algorithm)` can
+  // return. A v1 application attests its own key instead -- derive it at
+  // `/v1/GetKey`, commit the public key into `report_data`, call `/v1/Attest`.
   rpc GetAttestationForAppKey(GetAttestationForAppKeyRequest) returns (GetQuoteResponse) {}
 }
 

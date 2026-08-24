@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use certbot::{AcmeClient, Dns01Client};
-use dstack_guest_agent_rpc::RawQuoteArgs;
+use dstack_guest_agent_rpc::v0::RawQuoteArgs;
 use ra_tls::attestation::QuoteContentType;
 use ra_tls::rcgen::KeyPair;
 use tokio::sync::Mutex;

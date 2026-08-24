@@ -9,8 +9,8 @@ pub extern crate rcgen;
 
 pub mod attestation;
 
+pub mod api_v1;
 pub mod cert;
-pub mod guest_api_v1;
 pub mod kdf;
 pub mod oids;
 pub mod traits;

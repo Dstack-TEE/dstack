@@ -3,7 +3,7 @@
 //! Generate a v2 KMS CSR whose key is bound to fresh guest attestation.
 
 use anyhow::{Context, Result};
-use dstack_guest_agent_rpc::{dstack_guest_client::DstackGuestClient, RawQuoteArgs};
+use dstack_guest_agent_rpc::v0::{dstack_guest_client::DstackGuestClient, RawQuoteArgs};
 use http_client::prpc::PrpcClient;
 use ra_tls::{
     attestation::{PlatformEvidence, QuoteContentType, VersionedAttestation},

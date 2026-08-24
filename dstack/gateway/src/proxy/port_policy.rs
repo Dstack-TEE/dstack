@@ -18,7 +18,7 @@ use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
-use dstack_guest_agent_rpc::dstack_guest_client::DstackGuestClient;
+use dstack_guest_agent_rpc::v0::dstack_guest_client::DstackGuestClient;
 use dstack_types::AppCompose;
 use http_client::ConnectionReuse;
 use or_panic::ResultOrPanic;

@@ -28,8 +28,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use dstack_guest_agent_rpc::v1::{
-    dstack_guest_v1_server::{DstackGuestV1Rpc, DstackGuestV1Server},
-    worker_v1_server::{WorkerV1Rpc, WorkerV1Server},
+    dstack_guest_server::{DstackGuestRpc, DstackGuestServer},
+    worker_server::{WorkerRpc, WorkerServer},
     AttestGpuRequest, AttestGpuResponse, AttestRequest, AttestResponse, GetKeyRequest,
     GetKeyResponse, GpuEvidenceBundle, HealthRequest, HealthResponse, InfoRequest, InfoResponse,
     IssueCertRequest, IssueCertResponse, VersionRequest, VersionResponse,
@@ -172,7 +172,7 @@ impl V1RpcHandler {
     }
 }
 
-impl DstackGuestV1Rpc for V1RpcHandler {
+impl DstackGuestRpc for V1RpcHandler {
     async fn issue_cert(self, request: IssueCertRequest) -> Result<IssueCertResponse> {
         let issued = issue_cert_for_request(
             &self.state,
@@ -252,7 +252,7 @@ impl DstackGuestV1Rpc for V1RpcHandler {
 }
 
 impl RpcCall<AppState> for V1RpcHandler {
-    type PrpcService = DstackGuestV1Server<Self>;
+    type PrpcService = DstackGuestServer<Self>;
 
     fn construct(context: CallContext<'_, AppState>) -> Result<Self> {
         Ok(V1RpcHandler {
@@ -276,7 +276,7 @@ impl ExternalV1RpcHandler {
     }
 }
 
-impl WorkerV1Rpc for ExternalV1RpcHandler {
+impl WorkerRpc for ExternalV1RpcHandler {
     async fn info(self, _request: InfoRequest) -> Result<InfoResponse> {
         let hide = !self.state.config().app_compose.public_tcbinfo;
         info_response(&self.state, hide)
@@ -315,7 +315,7 @@ impl WorkerV1Rpc for ExternalV1RpcHandler {
 }
 
 impl RpcCall<AppState> for ExternalV1RpcHandler {
-    type PrpcService = WorkerV1Server<Self>;
+    type PrpcService = WorkerServer<Self>;
 
     fn construct(context: CallContext<'_, AppState>) -> Result<Self> {
         Ok(ExternalV1RpcHandler {
@@ -329,8 +329,8 @@ mod tests {
     use super::*;
     use crate::rpc_service::get_info;
     use crate::rpc_service::tests::setup_test_state;
-    use dstack_guest_agent_rpc::dstack_guest_server::DstackGuestRpc;
-    use dstack_guest_agent_rpc::GetKeyArgs;
+    use dstack_guest_agent_rpc::v0::dstack_guest_server::DstackGuestRpc as DstackGuestV0Rpc;
+    use dstack_guest_agent_rpc::v0::GetKeyArgs;
     use k256::ecdsa::Signature as K256Signature;
     use std::io::Write as _;
 
@@ -387,7 +387,7 @@ mod tests {
             .unwrap();
 
         let claim =
-            ra_tls::guest_api_v1::key_claim(keys::Algorithm::Secp256k1, "wallet", &key.public_key)
+            ra_tls::api_v1::key_claim(keys::Algorithm::Secp256k1, "wallet", &key.public_key)
                 .unwrap();
         let link = &key.signature_chain[0];
         let recovered = VerifyingKey::recover_from_digest(
@@ -701,10 +701,13 @@ mod tests {
     /// the other at `/v1` a version selector rather than a name collision.
     #[test]
     fn the_two_surfaces_expose_different_method_sets() {
-        use dstack_guest_agent_rpc::dstack_guest_server::DstackGuestServer;
+        // Both packages call the service `DstackGuest` now, so the module path
+        // is what disambiguates them -- which is the point of the v0/v1 split.
+        use dstack_guest_agent_rpc::v0::dstack_guest_server::DstackGuestServer as V0Server;
+        use dstack_guest_agent_rpc::v1::dstack_guest_server::DstackGuestServer as V1Server;
 
-        let v0 = DstackGuestServer::<crate::rpc_service::InternalRpcHandler>::supported_methods();
-        let v1 = DstackGuestV1Server::<V1RpcHandler>::supported_methods();
+        let v0 = V0Server::<crate::rpc_service::InternalRpcHandler>::supported_methods();
+        let v1 = V1Server::<V1RpcHandler>::supported_methods();
 
         assert_eq!(
             v1,
@@ -756,10 +759,10 @@ mod tests {
     /// The external pair, checked the same way.
     #[test]
     fn the_two_external_surfaces_expose_different_method_sets() {
-        use dstack_guest_agent_rpc::v1::worker_v1_server::WorkerV1Server;
-        use dstack_guest_agent_rpc::worker_server::WorkerServer;
+        use dstack_guest_agent_rpc::v0::worker_server::WorkerServer as WorkerV0Server;
+        use dstack_guest_agent_rpc::v1::worker_server::WorkerServer as WorkerV1Server;
 
-        let v0 = WorkerServer::<crate::rpc_service::ExternalRpcHandler>::supported_methods();
+        let v0 = WorkerV0Server::<crate::rpc_service::ExternalRpcHandler>::supported_methods();
         let v1 = WorkerV1Server::<ExternalV1RpcHandler>::supported_methods();
 
         // Closed at v0.5.11. `Health` is post-0.5.11 and never released, so it

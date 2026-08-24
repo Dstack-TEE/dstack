@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result};
-use dstack_guest_agent_rpc::GetQuoteResponse;
+use dstack_guest_agent_rpc::v0::GetQuoteResponse;
 use ra_tls::attestation::Attestation;
 use ra_tls::attestation::{QuoteContentType, VersionedAttestation};
 

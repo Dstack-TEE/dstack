@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use dstack_guest_agent_rpc::v1::worker_v1_client::WorkerV1Client;
+use dstack_guest_agent_rpc::v1::worker_client::WorkerClient as WorkerV1Client;
 use futures::StreamExt;
 use http_client::ConnectionReuse;
 use tokio::time::MissedTickBehavior;

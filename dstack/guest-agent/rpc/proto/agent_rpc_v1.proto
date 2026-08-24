@@ -10,8 +10,12 @@ package dstack.guest.v1;
 //
 // Two services, one per trust surface, mirroring the two unversioned ones:
 //
-//   `DstackGuestV1`  internal socket (`/var/run/dstack.sock`), at `/v1`
-//   `WorkerV1`       external listener, at `/prpc/v1`
+//   `DstackGuest`  internal socket (`/var/run/dstack.sock`), at `/v1`
+//   `Worker`       external listener, at `/prpc/v1`
+//
+// The names carry no version suffix: the package `dstack.guest.v1` already
+// says which surface this is, and `dstack.guest.v1.DstackGuestV1` would say it
+// twice.
 //
 // The frozen v0.5.11 services are named `v0` and served at `/v0` and
 // `/prpc/v0`; their historical unversioned paths (`/` and `/prpc`) stay mounted
@@ -19,9 +23,9 @@ package dstack.guest.v1;
 // version a caller gets is decided by the URL path alone, never by a header.
 //
 // The two are not the same surface with different mounts. The internal socket
-// is reachable only by the application itself, so `DstackGuestV1` hands out key
+// is reachable only by the application itself, so `DstackGuest` hands out key
 // material; the external listener is reachable by anyone who can route to the
-// CVM, so `WorkerV1` never does.
+// CVM, so `Worker` never does.
 //
 // Conventions, applied without exception:
 //   - every request message is `<Method>Request`, every response
@@ -55,7 +59,7 @@ package dstack.guest.v1;
 //
 // The unversioned surface keeps `Sign` and `Verify` for v0.5.x clients. They
 // are frozen there and are not carried forward.
-service DstackGuestV1 {
+service DstackGuest {
   // Issue a certificate for this application.
   //
   // The agent builds a CSR, signs it with the certificate's own key, and
@@ -385,7 +389,7 @@ message VersionResponse {
 // commit the public key into `report_data`, and call `/v1/Attest`. The
 // application then hands that attestation to its relying parties. Legacy flows
 // keep using the frozen `Worker.GetAttestationForAppKey`.
-service WorkerV1 {
+service Worker {
   // Return this application's identity and configuration.
   //
   // The same `InfoResponse` the internal surface returns, minus what the app

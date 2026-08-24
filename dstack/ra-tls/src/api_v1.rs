@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! Normative constants and encodings for the `dstack.guest.v1` key API.
+//! Normative constants and encodings for the v1 application-key API.
 //!
 //! Everything here is wire behaviour, specified in `docs/guest-api-v1.md`. The
 //! byte strings these functions build are what a relying party re-derives to
@@ -13,6 +13,10 @@
 //! verifier and the Rust SDK link against one definition. The alternative is
 //! each of them transcribing the constants out of the specification prose,
 //! which is how cross-implementation crypto drift starts.
+//!
+//! The module is named for the version of the construction, not for the API
+//! that happens to expose it: `ra-tls` hosts versioned crypto, and knowing
+//! about a guest API is not its job.
 
 use crate::kdf::derive_key_with_salt;
 use anyhow::{anyhow, bail, Context, Result};

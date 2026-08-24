@@ -5,7 +5,7 @@
 use super::build_boot_info_for_attestation;
 use crate::config::{AuthApi, KmsConfig};
 use anyhow::{bail, Context, Result};
-use dstack_guest_agent_rpc::{
+use dstack_guest_agent_rpc::v0::{
     dstack_guest_client::DstackGuestClient, AttestResponse, RawQuoteArgs,
 };
 use http_client::prpc::PrpcClient;
