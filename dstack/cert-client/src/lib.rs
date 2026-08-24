@@ -10,7 +10,7 @@ use dstack_types::{AppKeys, KeyProvider};
 use ra_rpc::client::{RaClient, RaClientConfig};
 use ra_tls::{
     attestation::AttestationVerifier,
-    cert::{generate_ra_cert, CaCert, CertSigningRequestV2},
+    cert::{generate_self_signed_ra_cert, CaCert, CertSigningRequestV2},
 };
 
 pub enum CertRequestClient {
@@ -70,14 +70,11 @@ impl CertRequestClient {
                     .context("Failed to create CA")?;
                 Ok(CertRequestClient::Local { ca: Box::new(ca) })
             }
-            KeyProvider::Kms {
-                url,
-                tmp_ca_key,
-                tmp_ca_cert,
-                ..
-            } => {
-                let client_cert = generate_ra_cert(tmp_ca_cert.clone(), tmp_ca_key.clone())
-                    .context("Failed to generate RA cert")?;
+            KeyProvider::Kms { url, .. } => {
+                // Self-issued: the KMS authenticates the quote inside this certificate,
+                // not whoever signed it.
+                let client_cert =
+                    generate_self_signed_ra_cert(None).context("Failed to generate RA cert")?;
                 let ra_client = RaClientConfig::builder()
                     .remote_uri(url.clone())
                     .tls_client_cert(client_cert.cert_pem)

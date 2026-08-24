@@ -17,7 +17,7 @@ use dstack_kms_rpc::{
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
 use ra_rpc::{
-    client::{CertInfo, RaClient, RaClientConfig},
+    client::{CertInfo, RaClientConfig},
     CallContext, RpcCall,
 };
 use ra_tls::{
@@ -25,7 +25,7 @@ use ra_tls::{
         AttestationVerifier, GetDeviceId, PlatformEvidence, QuoteContentType, VerifiedAttestation,
         VersionedAttestation,
     },
-    cert::{CaCert, CertRequest},
+    cert::CertRequest,
     rcgen::{Certificate, KeyPair, PKCS_ECDSA_P256_SHA256},
 };
 use safe_write::{safe_write, safe_write_with_mode};
@@ -542,9 +542,20 @@ impl Keys {
     ) -> Result<Self> {
         let attestation_slot = Arc::new(Mutex::new(None::<VerifiedAttestation>));
         let attestation_slot_out = attestation_slot.clone();
+        // Self-issued: the source KMS authenticates the quote inside this certificate,
+        // not whoever signed it, so there is no CA to fetch first. This requires a
+        // source running 0.6.0 or later; older releases pin their temp CA and refuse a
+        // self-issued certificate at the handshake.
+        let (ra_cert, ra_key) = gen_ra_cert().await?;
+        // One client, not two. The connection that carries the root key is the one
+        // whose `cert_validator` runs, so the source's attestation is verified on the
+        // handshake that matters rather than on an earlier, separate connection.
         let client = RaClientConfig::builder()
             .tls_no_check(true)
+            .tls_built_in_root_certs(false)
             .remote_uri(other_kms_url.to_string())
+            .tls_client_cert(ra_cert)
+            .tls_client_key(ra_key)
             .cert_validator(Box::new(move |info: Option<CertInfo>| {
                 let Some(info) = info else {
                     bail!("Source KMS did not present a TLS certificate");
@@ -561,18 +572,15 @@ impl Keys {
             .attestation_verifier(attestation_verifier.clone())
             .build()
             .into_client()?;
-        let mut kms_client = KmsClient::new(client);
+        let kms_client = KmsClient::new(client);
 
-        let tmp_ca = kms_client.get_temp_ca_cert().await?;
-        let (ra_cert, ra_key) = gen_ra_cert(tmp_ca.temp_ca_cert, tmp_ca.temp_ca_key).await?;
-        let ra_client = RaClient::new_mtls(
-            other_kms_url.into(),
-            ra_cert,
-            ra_key,
-            attestation_verifier.clone(),
-        )
-        .context("Failed to create client")?;
-        kms_client = KmsClient::new(ra_client);
+        let info = dstack_client().info().await.context("Failed to get info")?;
+        let keys_res = kms_client
+            .get_kms_key(GetKmsKeyRequest {
+                vm_config: info.vm_config,
+            })
+            .await?;
+
         let source_attestation = attestation_slot
             .lock()
             .map_err(|_| anyhow::anyhow!("source attestation mutex poisoned"))?
@@ -582,12 +590,6 @@ impl Keys {
             .await
             .context("Source KMS is not allowed for onboarding")?;
 
-        let info = dstack_client().info().await.context("Failed to get info")?;
-        let keys_res = kms_client
-            .get_kms_key(GetKmsKeyRequest {
-                vm_config: info.vm_config,
-            })
-            .await?;
         if keys_res.keys.len() != 1 {
             return Err(anyhow::anyhow!("Invalid keys"));
         }
@@ -744,11 +746,16 @@ fn keccak256(msg: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-async fn gen_ra_cert(ca_cert_pem: String, ca_key_pem: String) -> Result<(String, String)> {
+/// Mint the self-issued RA-TLS certificate this KMS presents while onboarding.
+///
+/// The quote binds the certificate's own public key, which is the identity the source
+/// KMS authenticates, so no CA is involved. The quote comes from the guest agent
+/// (`app_attest`) rather than from `ra_tls`'s direct quote path, because the KMS is an
+/// application inside a CVM and its attestation has to carry the agent's app info.
+async fn gen_ra_cert() -> Result<(String, String)> {
     use ra_tls::cert::CertRequest;
     use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
 
-    let ca = CaCert::new(ca_cert_pem, ca_key_pem)?;
     let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
     let pubkey = key.public_key_der();
     let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
@@ -757,11 +764,13 @@ async fn gen_ra_cert(ca_cert_pem: String, ca_key_pem: String) -> Result<(String,
         .context("Failed to get quote")?;
     let attestation =
         VersionedAttestation::from_bytes(&response.attestation).context("Invalid attestation")?;
-    let req = CertRequest::builder()
-        .subject("RA-TLS TEMP Cert")
+    let cert = CertRequest::builder()
+        .subject("RA-TLS Self-Signed Cert")
         .attestation(&attestation)
         .key(&key)
-        .build();
-    let cert = ca.sign(req).context("Failed to sign certificate")?;
+        .usage_client_auth(true)
+        .build()
+        .self_signed()
+        .context("Failed to self-sign certificate")?;
     Ok((cert.pem(), key.serialize_pem()))
 }

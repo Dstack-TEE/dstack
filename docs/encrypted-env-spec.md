@@ -170,9 +170,7 @@ Path inside TEE: `/dstack/.host-shared/.appkeys.json`
   "key_provider": {
     "Kms": {
       "url": "https://kms.example.com/prpc",
-      "pubkey": "...",
-      "tmp_ca_key": "-----BEGIN PRIVATE KEY-----\n...",
-      "tmp_ca_cert": "-----BEGIN CERTIFICATE-----\n..."
+      "pubkey": "..."
     }
   }
 }
@@ -200,10 +198,14 @@ Rust externally tagged enum — an object with exactly one key:
 {"None":  {"key": "<PEM>"}}
 {"Local": {"key": "<PEM>", "mr": "<hex>"}}
 {"Tpm":   {"key": "<PEM>", "pubkey": "<hex>"}}
-{"Kms":   {"url": "...", "pubkey": "<hex>", "tmp_ca_key": "<PEM>", "tmp_ca_cert": "<PEM>"}}
+{"Kms":   {"url": "...", "pubkey": "<hex>"}}
 ```
 
 The tag is one of `"None"` / `"Local"` / `"Tpm"` / `"Kms"`.
+
+`Kms` carried `tmp_ca_key` / `tmp_ca_cert` before guests switched to self-issued
+RA-TLS client certificates. Readers ignore the extra fields, so files written by
+older guest images still parse.
 
 ## Runtime File/Path Contract (dstack)
 
