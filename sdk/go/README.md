@@ -27,6 +27,41 @@ dstack applications consist of:
 - **Deployment Security**: Client-side encryption of sensitive environment variables ensuring secrets are only accessible to target TEE applications
 - **Blockchain Integration**: Ready-to-use adapters for Ethereum and Solana ecosystems
 
+### Two API versions
+
+dstack 0.6.0 splits the guest agent API into two surfaces on the same socket,
+selected by URL path. The SDK mirrors both, and it is a transport mirror only:
+it does not translate between them.
+
+| Client | Paths | Status |
+|---|---|---|
+| `DstackClientV1` | `/v1/<Method>` | Current. Six methods: `IssueCert`, `GetKey`, `Attest`, `AttestGpu`, `Info`, `Version` |
+| `DstackClientV0` | `/GetKey`, equivalently `/v0/GetKey` | Frozen at v0.5.11. Served unchanged for pre-0.6 clients, never extended |
+
+```go
+v1 := dstack.NewDstackClientV1() // current API
+v0 := dstack.NewDstackClientV0() // frozen v0.5.11 API
+```
+
+`NewDstackClient` and `DstackClient` remain as deprecated aliases for the v0
+client, so code written against the pre-0.6 SDK keeps compiling and keeps
+talking to the same frozen surface.
+
+What v1 changes:
+
+- `GetTlsKey` is now `IssueCert` — certificate issuance is the operation; the key was only ever a by-product.
+- `path` plus `purpose` collapse into a single `domain`, and `algorithm` is required, with no `k256` alias and no default.
+- `Attest` subsumes `GetQuote`; `Info` is flat, with no `tcb_info` blob and no `app_cert`.
+- `Sign`, `Verify` and `EmitEvent` are gone. Sign and verify locally with a standard library, using the key `GetKey` returns; `EmitEvent` is gone because runtime RTMR3 events became system-owned.
+
+> **⚠️ v1 derives different key material than v0.** `v1.GetKey(ctx, "wallet", "secp256k1")`
+> and `v0.GetKey(ctx, "wallet", "", "secp256k1")` return **unrelated** keys. v1 derives
+> under its own HKDF salt and binds the algorithm and a versioned context tag alongside
+> the domain, so secp256k1 and ed25519 no longer share one 32-byte secret either. There is
+> no compatibility mode and no way to reach a v0 key through v1. An application holding
+> funds or data under a v0 key must migrate them deliberately: derive the v1 key, then
+> move the assets. See `docs/guest-api-v1.md` for the byte-level construction.
+
 ### Socket Connection Requirements
 
 To use the SDK, your Docker Compose configuration must bind-mount the dstack socket:
@@ -70,6 +105,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -81,10 +117,10 @@ import (
 
 func main() {
 	// Create client - automatically connects to /var/run/dstack.sock
-	client := dstack.NewDstackClient()
+	client := dstack.NewDstackClientV1()
 
 	// For local development with simulator
-	// devClient := dstack.NewDstackClient(dstack.WithEndpoint("http://localhost:8090"))
+	// devClient := dstack.NewDstackClientV1(dstack.WithEndpoint("http://localhost:8090"))
 
 	ctx := context.Background()
 
@@ -93,22 +129,22 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("App ID:", info.AppID)
-	fmt.Println("Instance ID:", info.InstanceID)
+	fmt.Printf("App ID: %x\n", info.AppID)
+	fmt.Printf("Instance ID: %x\n", info.InstanceID)
 	fmt.Println("App Name:", info.AppName)
-	fmt.Println("TCB Info:", info.TcbInfo)
+	fmt.Println("App Compose:", info.AppCompose)
 
 	// Derive deterministic keys for application-specific secrets
-	walletKey, err := client.GetKey(ctx, "wallet/ethereum", "mainnet", "secp256k1")
+	walletKey, err := client.GetKey(ctx, "wallet/ethereum", "secp256k1")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	keyBytes, _ := walletKey.DecodeKey()
-	fmt.Println("Derived key (32 bytes):", hex.EncodeToString(keyBytes))        // secp256k1 private key
-	fmt.Println("Signature chain:", walletKey.SignatureChain)                   // Authenticity proof
+	fmt.Println("Derived key (32 bytes):", hex.EncodeToString(walletKey.Key)) // secp256k1 private key
+	fmt.Println("Public key:", hex.EncodeToString(walletKey.PublicKey))
+	fmt.Println("Signature chain links:", len(walletKey.SignatureChain)) // Authenticity proof
 
-	// Generate remote attestation quote
+	// Generate a remote attestation, bound to your own data
 	applicationData := map[string]interface{}{
 		"version":   "1.0.0",
 		"timestamp": time.Now().Unix(),
@@ -116,14 +152,26 @@ func main() {
 	}
 
 	jsonData, _ := json.Marshal(applicationData)
-	quote, err := client.GetQuote(ctx, jsonData)
+	digest := sha256.Sum256(jsonData) // report data is at most 64 bytes
+	attestation, err := client.Attest(ctx, digest[:], false)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	fmt.Println("TDX Quote:", quote.Quote)
-	fmt.Println("Event Log:", quote.EventLog)
+	fmt.Println("Attestation:", hex.EncodeToString(attestation.Attestation))
 }
+```
+
+The frozen surface is the same code with `NewDstackClientV0` and the v0.5.11
+method signatures:
+
+```go
+v0 := dstack.NewDstackClientV0()
+
+info, _ := v0.Info(ctx)                                   // AppID and friends are hex strings
+key, _ := v0.GetKey(ctx, "wallet/ethereum", "mainnet", "secp256k1")
+quote, _ := v0.GetQuote(ctx, reportData)                   // Intel TDX only
+tlsKey, _ := v0.GetTlsKey(ctx, dstack.WithSubject("api.example.com"))
 ```
 
 ### Version Compatibility
@@ -401,6 +449,11 @@ sameWallet, _ := client.GetKey(ctx, "app1/wallet", "ethereum", "secp256k1")
 // wallet1.Key == sameWallet.Key (guaranteed identical)
 ```
 
+The examples above use the v0 client, where `algorithm` selects how one 32-byte
+secret is interpreted rather than participating in the derivation. v1 binds
+`algorithm` and a versioned context tag into the KDF, so the two curves never
+share a secret — and, for the same reason, a v1 key is never a v0 key.
+
 ### Remote Attestation
 
 TDX quotes provide cryptographic proof of:
@@ -457,7 +510,7 @@ export DSTACK_SIMULATOR_ENDPOINT=http://localhost:8090
 ### Testing Connectivity
 
 ```go
-client := dstack.NewDstackClient()
+client := dstack.NewDstackClientV0()
 
 // Check if dstack service is available
 isAvailable := client.IsReachable(context.Background())
@@ -469,10 +522,10 @@ if !isAvailable {
 The client automatically connects to `/var/run/dstack.sock`. For local development with the simulator:
 
 ```go
-client := dstack.NewDstackClient(dstack.WithEndpoint("http://localhost:8090"))
+client := dstack.NewDstackClientV1(dstack.WithEndpoint("http://localhost:8090"))
 ```
 
-**Options:**
+**Options:** the same set applies to `NewDstackClientV0` and `NewDstackClientV1`.
 - `WithEndpoint(endpoint string)`: Connection endpoint
   - Unix socket path (production): `/var/run/dstack.sock`
   - HTTP/HTTPS URL (development): `http://localhost:8090`
@@ -494,6 +547,11 @@ The Docker Compose configuration is embedded in `app-compose.json`:
 ```
 
 **Important**: The `docker_compose_file` contains YAML content as a string, ensuring the volume binding for `/var/run/dstack.sock` is included.
+
+### `DstackClientV0`
+
+The frozen v0.5.11 surface. Present so pre-0.6 applications keep working; new
+code should use [`DstackClientV1`](#dstackclientv1).
 
 #### Methods
 
@@ -575,58 +633,37 @@ instead.
 - Cryptographic proof of execution environment
 - Audit trail generation
 
-##### `AttestWithOptions(ctx context.Context, reportData []byte, opts AttestOptions) (*AttestResponse, error)`
+##### `Attest(ctx context.Context, reportData []byte) (*AttestResponse, error)`
 
-Same as `Attest`, with options. Set `IncludeBoottimeGpuEvidence` to also return the boot-time
-GPU attestation evidence, so a verifier gets the quote and the GPU evidence in one round trip.
+Produces a versioned dstack attestation over `reportData` (at most 64 bytes),
+covering every supported platform rather than Intel TDX alone.
 
-```go
-resp, err := client.AttestWithOptions(ctx, reportData, dstack.AttestOptions{IncludeBoottimeGpuEvidence: true})
-if err != nil {
-	log.Fatal(err)
-}
-fmt.Println(resp.BoottimeGpuEvidence)
-```
+**Returns:** `AttestResponse`
+- `Attestation`: the versioned attestation bytes
 
-The evidence is the same bytes ``GpuInfo`` serves and is empty unless the flag was set
-and boot-time GPU attestation output exists. It is not bound to `report_data`; verify
-it with the measured `gpu-attestation` event digest as described under ``GpuInfo``.
+There is no GPU option on this surface. GPU attestation is v1 only — see
+`DstackClientV1.Attest` and `DstackClientV1.AttestGpu`.
 
-##### `AttestGpu(ctx context.Context, nonce []byte) (*AttestGpuResponse, error)`
+##### `Sign(ctx context.Context, algorithm string, data []byte) (*SignResponse, error)`
 
-Collects vendor-native GPU evidence for a caller-chosen 32-byte nonce.
+Signs a payload with the app signing key. `algorithm` is `ed25519`, `secp256k1`,
+or `secp256k1_prehashed` (where `data` is already a 32-byte digest).
 
-```go
-resp, err := client.AttestGpu(ctx, nonce)
-if err != nil {
-    log.Fatal(err)
-}
-for _, bundle := range resp.Bundles {
-    fmt.Println(bundle.Vendor, bundle.Format, bundle.Evidence)
-}
-```
+##### `Verify(ctx context.Context, algorithm string, data, signature, publicKey []byte) (*VerifyResponse, error)`
 
-Select a verifier using each bundle's `Vendor` and `Format`. The verifier must check
-the evidence signature, certificate chain, measurements, and embedded nonce. Evidence
-is opaque and hex-encoded by the JSON RPC. It does not by itself bind the GPU to this
-CVM.
+Asks the agent to check a signature. Frozen surface only: v1 has no `Verify`,
+because verification needs no key material and no attestation, so the agent's
+answer arrives unattested and is no better than checking the signature yourself.
+See `docs/guest-api-v1.md` for how to verify a v1 chain.
 
-##### `GpuInfo(ctx context.Context) (*GpuInfoResponse, error)`
+##### `EmitEvent(ctx context.Context, event string, payload []byte) error`
 
-Returns GPU information collected during boot. Currently, this includes the
-complete NVIDIA `nvattest` JSON output.
-
-```go
-gpu, err := client.GpuInfo(ctx)
-if err != nil {
-	log.Fatal(err)
-}
-fmt.Println(gpu.Attestation)
-```
-
-The `Attestation` field is empty when no GPU attestation output is available.
-The raw output is not trusted by itself; remote verifiers should compare its
-digest with the measured `gpu-attestation` runtime event.
+**Removed server-side in dstack 0.6.0.** Runtime RTMR3 events became
+system-owned, so an agent from 0.6.0 on answers this with an error, which the
+client returns rather than swallowing — an application that believes it measured
+something it did not is worse off than one that fails loudly. The method remains
+so that pre-0.6 code still compiles. Bind application data through `reportData`
+on `Attest` instead.
 
 ##### `GetTlsKey(ctx context.Context, options TlsKeyOptions) (*GetTlsKeyResponse, error)`
 
@@ -677,6 +714,96 @@ Tests connectivity to the dstack service.
 
 **Returns:** `bool` indicating service availability
 
+### `DstackClientV1`
+
+The current API. Constructed the same way as the v0 client, with the same
+options and the same endpoint resolution — the two surfaces share one socket and
+differ only in the URL path.
+
+```go
+client := dstack.NewDstackClientV1()
+```
+
+Protobuf `bytes` fields travel as lowercase hex on the wire and are exposed as
+`[]byte`; the fields carrying JSON documents (`AppCompose`, `VmConfig`,
+`KeyProviderInfo`, `BoottimeGpuEvidence`) stay `string`.
+
+##### `IssueCert(ctx context.Context, options ...IssueCertV1Option) (*IssueCertV1Response, error)`
+
+Issues a certificate for this application. Options are `WithCertSubject`,
+`WithCertAltNames`, `WithCertUsageRaTls`, `WithCertUsageServerAuth`,
+`WithCertUsageClientAuth`, `WithCertAppInfo`, `WithCertNotBefore`,
+`WithCertNotAfter`.
+
+**Returns:** `Key` (PEM) and `CertificateChain` (PEM, leaf first).
+
+The key is freshly generated on every call and is **not** derived from the app
+identity — that is what `GetKey` is for. v0 called this `GetTlsKey`.
+
+##### `GetKey(ctx context.Context, domain string, algorithm string) (*GetKeyV1Response, error)`
+
+Derives an application key from `(domain, algorithm)`.
+
+- `domain`: any byte string, including one containing `:`, `/` or NUL. Derivation
+  is **flat**: `a/b` is not a child of `a`, and two domains yield unrelated keys.
+- `algorithm`: `secp256k1` or `ed25519`. **Required** — there is no default and
+  no `k256` alias, so a typo is an error rather than a key of the wrong type
+  under a name you thought meant something else. An empty value is rejected
+  client-side.
+
+**Returns:** `Key` (32 bytes), `PublicKey` (33 bytes SEC1-compressed for
+secp256k1, 32 raw bytes for ed25519), and a two-element `SignatureChain`.
+
+```go
+key, err := client.GetKey(ctx, "wallet/ethereum", "secp256k1")
+```
+
+##### `Attest(ctx context.Context, reportData []byte, includeBoottimeGpuEvidence bool) (*AttestV1Response, error)`
+
+Produces a versioned attestation over `reportData` (1–64 bytes, zero-padded on
+the right to 64). The sole CVM attestation entry point in v1: the attestation
+already carries the TDX quote and the event log, so there is no `GetQuote`.
+
+Setting `includeBoottimeGpuEvidence` also returns `BoottimeGpuEvidence`, the
+complete `nvattest` output from boot. It is **not** bound to `reportData`: bind
+it by replaying the runtime event log and comparing sha256 of those exact UTF-8
+bytes against the `evidence_sha256` field of the measured `gpu-attestation`
+event.
+
+##### `AttestGpu(ctx context.Context, nonce []byte) (*AttestGpuV1Response, error)`
+
+Collects GPU evidence now, against a nonce you choose. The nonce must be
+**exactly 32 bytes** (checked client-side): SPDM fixes the evidence nonce at that
+length and dstack passes it through verbatim, so you can compare it directly
+against the `eat_nonce` claim rather than reversing a hash.
+
+**Returns:** `Bundles`, each with `Vendor`, `Format` and opaque `Evidence`
+bytes. This is evidence, not a verdict — select a verifier by vendor and format,
+then check the signature, certificate chain, measurements and embedded nonce. It
+still does not bind the GPU to this CVM.
+
+##### `Info(ctx context.Context) (*InfoV1Response, error)`
+
+Identity and configuration, in a flat shape: `AppID`, `AppName`, `ComposeHash`,
+`AppCompose`, `InstanceID`, `DeviceID`, `OsImageHash`, `MrAggregated`,
+`VmConfig`, `KeyProviderInfo`, `CloudVendor`, `CloudProduct`.
+
+No `TcbInfo` and no `AppCert`. The measurement registers and the event log live
+on the attestation `Attest` returns, which is the only place they are
+quote-backed. Nothing here is evidence — it arrives over a local socket with no
+quote behind it, so confirm the hashes against an attestation before relying on
+them.
+
+`ComposeHash` is sha256 over the exact `AppCompose` bytes. Do not parse and
+re-serialize before hashing: key order, whitespace and unknown fields all change
+the digest, and that digest is what gets whitelisted on chain.
+
+##### `Version(ctx context.Context) (*VersionV1Response, error)`
+
+Returns the agent `Version` and `Rev`. The cheapest probe for whether an agent
+speaks v1 at all: an agent that predates v1 has no `/v1` mount and answers with
+a plain HTTP 404.
+
 ## Utility Functions
 
 ### Compose Hash Calculation
@@ -700,82 +827,32 @@ fmt.Println("Configuration hash:", hash)
 
 ### Signature Verification
 
-Signatures produced by `client.Sign()` are verified **locally**. Verification
-needs no key material and no attestation, so it does not belong behind an RPC to
-the guest agent: the agent's answer would arrive over the socket unattested,
-which is no better than checking the signature yourself. The `Verify` RPC these
-functions replace was removed in v0.6.0.
+The SDK no longer ships local signature or signature-chain helpers, and v1 has
+no `Verify` RPC. Verification needs no key material and no attestation, so the
+guest agent is not the right place for it: its answer arrives over the socket
+unattested, which is no better than checking the signature yourself. Sign and
+verify locally with a standard Go crypto library, using the key `GetKey` returns.
 
-#### `VerifySignature(algorithm string, data, signature, publicKey []byte) (bool, error)`
+**`docs/guest-api-v1.md` is the normative specification for verifying a v1
+chain.** It pins the bytes: the length-prefixed claim encoding, the KDF, and the
+step-by-step procedure a relying party follows. In outline, `GetKey` returns two
+links —
 
-Checks one signature against a public key you already have. `algorithm` is
-`ed25519`, `secp256k1` (alias `k256`), or `secp256k1_prehashed`, where `data` is
-already a 32-byte digest. secp256k1 public keys are SEC1 (compressed or
-uncompressed) and signatures are raw 64-byte `r || s`, not DER.
-
-Returns `(false, nil)` when the inputs are well-formed but the signature does not
-check out, and a non-nil error when they are not well-formed at all (bad key
-encoding, wrong signature length, unknown algorithm, non-canonical high-S
-signature) — a malformed input is a caller bug, not a verdict.
-
-```go
-signResp, err := client.Sign(ctx, "secp256k1", payload)
-if err != nil {
-	log.Fatal(err)
-}
-
-valid, err := dstack.VerifySignature("secp256k1", payload, signResp.Signature, signResp.PublicKey)
-if err != nil {
-	log.Fatalf("malformed signature input: %v", err)
-}
-fmt.Println("signature valid:", valid)
+```text
+[0]  app root key  signs  keccak256(LP("dstack-guest-v1-key-claim") || LP(algorithm) || LP(domain) || LP(public_key))
+[1]  KMS root key  signs  keccak256("dstack-kms-issued" || ":" || app_id || app_root_pubkey)
 ```
 
-On its own this proves only that whoever holds `signResp.PublicKey` signed the
-data. To establish that the signer was a dstack app, verify the chain.
+— and the step that carries the security of all the others is the anchor: obtain
+the KMS root public key from a source you trust independently of the agent being
+checked, either the `DstackKms` contract's `kmsInfo().k256Pubkey` or a value
+pinned out of band. An attacker who can answer your query for the anchor can also
+mint a self-consistent chain, so reading it from the KMS you are checking proves
+nothing. The same goes for `app_id`: use the one you registered on chain, not the
+one `Info()` echoed back from the CVM you are verifying.
 
-#### `VerifySignatureChain(input SignatureChainInput) ([]byte, error)`
-
-Walks the full chain from a `SignResponse` back to a KMS root key **you supply**,
-and returns the app root public key (compressed SEC1, 33 bytes). Three links must
-all hold:
-
-1. `SignatureChain[0]` is a signature over `Data` by `PublicKey`.
-2. `SignatureChain[1]` is the app root key attesting `"{purpose}:{hex(PublicKey)}"`.
-3. `SignatureChain[2]` is `KMSRootPubKey` attesting that app root key for `AppID`.
-
-Link 3 is the one that matters. Without comparing against a KMS root key you
-independently trust, a chain is just three signatures an attacker could have
-produced with their own keys. Get the root from the `DstackKms` contract
-(`kmsInfo().k256Pubkey`) or pin it. Reading it from the KMS you are verifying
-against proves nothing.
-
-```go
-// Both anchors come from you, not from the CVM being checked.
-appID, _ := hex.DecodeString("a9019d1b2c3d4e5f60718293a4b5c6d7e8f90a1b")
-kmsRoot, _ := hex.DecodeString("03...") // pinned, or read from the DstackKms contract
-
-appRootPubKey, err := dstack.VerifySignatureChain(dstack.SignatureChainInput{
-	Algorithm:      "secp256k1",
-	Data:           payload,
-	PublicKey:      signResp.PublicKey,
-	SignatureChain: signResp.SignatureChain,
-	AppID:          appID,
-	KMSRootPubKey:  kmsRoot,
-	// Purpose defaults to dstack.SignPurpose ("signing"), which is what Sign uses.
-})
-if err != nil {
-	log.Fatalf("signature chain rejected: %v", err)
-}
-fmt.Printf("app root key: %x\n", appRootPubKey)
-```
-
-Note what the example does *not* do: it never passes `info.AppID` from
-`client.Info()` straight through. That value is reported by the very CVM being
-verified, so a chain checked against it proves only that the CVM is
-self-consistent with itself. Use the app id you registered on chain, and if you
-want `Info` in the picture, compare it against that value rather than trusting
-it.
+The frozen v0 surface still serves `Verify` for pre-0.6 clients, via
+`DstackClientV0.Verify`. It reports the agent's verdict, not an attested one.
 
 ### KMS Public Key Verification
 
@@ -873,8 +950,13 @@ client := tappd.NewTappdClient()
 
 // After  
 import "github.com/Dstack-TEE/dstack/sdk/go/dstack"
-client := dstack.NewDstackClient()
+client := dstack.NewDstackClientV0()
 ```
+
+The table above maps tappd onto the v0 method set, which is the smallest step
+away from `TappdClient`. New code should target `NewDstackClientV1`; see
+[Two API versions](#two-api-versions) for what changes, including the warning
+that v1 derives different key material.
 
 **Step 2: Update Method Calls**
 
@@ -904,7 +986,7 @@ tlsCert, _ := client.GetTlsKey(ctx, dstack.TlsKeyOptions{
   - [ ] Change environment variables from `TAPPD_*` to `DSTACK_*`
 
 - [ ] **Client Code Updates:**
-  - [ ] Replace `tappd.NewTappdClient()` with `dstack.NewDstackClient()`
+  - [ ] Replace `tappd.NewTappdClient()` with `dstack.NewDstackClientV0()`
   - [ ] Replace `DeriveKey()` calls with appropriate method:
     - [ ] `GetKey()` for deterministic application keys
     - [ ] `GetTlsKey()` for TLS certificates (random)
@@ -939,11 +1021,6 @@ cd dstack/sdk/simulator
 TAPPD_SIMULATOR_ENDPOINT=/path/to/simulator/tappd.sock \
 DSTACK_SIMULATOR_ENDPOINT=/path/to/simulator/dstack.sock \
 go test -v ./dstack ./tappd
-
-# Run cross-language consistency tests
-TAPPD_SIMULATOR_ENDPOINT=/path/to/simulator/tappd.sock \
-DSTACK_SIMULATOR_ENDPOINT=/path/to/simulator/dstack.sock \
-go run test-outputs.go
 ```
 
 Run tests:
@@ -965,7 +1042,7 @@ client := tappd.NewTappdClient()
 
 // After
 import "github.com/Dstack-TEE/dstack/sdk/go/dstack"
-client := dstack.NewDstackClient()
+client := dstack.NewDstackClientV0()
 ```
 
 Socket path: `/var/run/tappd.sock` → `/var/run/dstack.sock`

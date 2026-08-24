@@ -7,7 +7,6 @@
 package dstack
 
 import (
-	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -16,12 +15,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"io"
-	"log/slog"
-	"net"
-	"net/http"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -111,37 +105,6 @@ func (r *GetQuoteResponse) DecodeEventLog() ([]EventLog, error) {
 // Represents the response from an attestation request.
 type AttestResponse struct {
 	Attestation []byte
-	// BoottimeGpuEvidence is the complete JSON output produced by nvattest during guest
-	// boot. Empty unless the request set IncludeBoottimeGpuEvidence and the guest has
-	// boot-time GPU attestation output.
-	//
-	// It is not bound to reportData: verify it by replaying the runtime event log
-	// and comparing sha256 of these exact UTF-8 bytes against evidence_sha256 in
-	// the `gpu-attestation` event.
-	BoottimeGpuEvidence string
-}
-
-// AttestOptions tunes what an Attest call returns.
-type AttestOptions struct {
-	// IncludeBoottimeGpuEvidence also returns the boot-time GPU attestation evidence.
-	IncludeBoottimeGpuEvidence bool
-}
-
-// GpuInfoResponse contains GPU information collected during boot.
-type GpuInfoResponse struct {
-	Attestation string `json:"attestation"`
-}
-
-// AttestGpuResponse is the result of fresh, on-demand GPU evidence collection.
-type AttestGpuResponse struct {
-	Bundles []GpuEvidenceBundle `json:"bundles"`
-}
-
-type GpuEvidenceBundle struct {
-	Vendor string `json:"vendor"`
-	Format string `json:"format"`
-	// Evidence contains hex-encoded opaque bytes, as represented by the JSON RPC.
-	Evidence string `json:"evidence"`
 }
 
 // Represents an event log entry in the TCB info
@@ -221,124 +184,33 @@ const (
 	RAW QuoteHashAlgorithm = "raw"
 )
 
-// Handles communication with the dstack service.
-type DstackClient struct {
-	endpoint   string
-	baseURL    string
-	httpClient *http.Client
-	logger     *slog.Logger
+// Handles communication with the frozen v0.5.11 guest agent surface.
+//
+// The methods here mirror the unversioned paths (`/GetKey`, equivalently
+// `/v0/GetKey`), which the agent serves unchanged for pre-0.6 clients and will
+// never extend. New capability lives on DstackClientV1.
+type DstackClientV0 struct {
+	transport
 }
 
-// Functional option for configuring a DstackClient.
-type DstackClientOption func(*DstackClient)
+// DstackClient is the pre-0.6 name for DstackClientV0.
+//
+// Deprecated: use DstackClientV0, or DstackClientV1 for the current API.
+type DstackClient = DstackClientV0
 
-// Sets the endpoint for the DstackClient.
-func WithEndpoint(endpoint string) DstackClientOption {
-	return func(c *DstackClient) {
-		c.endpoint = endpoint
-	}
-}
-
-// Sets the logger for the DstackClient
-func WithLogger(logger *slog.Logger) DstackClientOption {
-	return func(c *DstackClient) {
-		c.logger = logger
-	}
-}
-
-// Creates a new DstackClient instance based on the provided endpoint.
+// Creates a new DstackClientV0 instance based on the provided endpoint.
 // If the endpoint is empty, it will use the simulator endpoint if it is
 // set in the environment through DSTACK_SIMULATOR_ENDPOINT. Otherwise, it
 // will use the default endpoint at /var/run/dstack.sock.
+func NewDstackClientV0(opts ...DstackClientOption) *DstackClientV0 {
+	return &DstackClientV0{transport: newTransport(opts)}
+}
+
+// NewDstackClient is the pre-0.6 name for NewDstackClientV0.
+//
+// Deprecated: use NewDstackClientV0, or NewDstackClientV1 for the current API.
 func NewDstackClient(opts ...DstackClientOption) *DstackClient {
-	client := &DstackClient{
-		endpoint:   "",
-		baseURL:    "",
-		httpClient: &http.Client{},
-		logger:     slog.Default(),
-	}
-
-	for _, opt := range opts {
-		opt(client)
-	}
-
-	client.endpoint = client.getEndpoint()
-
-	if strings.HasPrefix(client.endpoint, "http://") || strings.HasPrefix(client.endpoint, "https://") {
-		client.baseURL = client.endpoint
-	} else {
-		client.baseURL = "http://localhost"
-		client.httpClient = &http.Client{
-			Transport: &http.Transport{
-				DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-					return net.Dial("unix", client.endpoint)
-				},
-			},
-		}
-	}
-
-	return client
-}
-
-// Returns the appropriate endpoint based on environment and input. If the
-// endpoint is empty, it will use the simulator endpoint if it is set in the
-// environment through DSTACK_SIMULATOR_ENDPOINT. Otherwise, it will try
-// /var/run/dstack/dstack.sock first, falling back to /var/run/dstack.sock
-// for backward compatibility.
-func (c *DstackClient) getEndpoint() string {
-	if c.endpoint != "" {
-		return c.endpoint
-	}
-	if simEndpoint, exists := os.LookupEnv("DSTACK_SIMULATOR_ENDPOINT"); exists {
-		c.logger.Info("using simulator endpoint", "endpoint", simEndpoint)
-		return simEndpoint
-	}
-	// Try paths in order: legacy paths first, then namespaced paths
-	socketPaths := []string{
-		"/var/run/dstack.sock",
-		"/run/dstack.sock",
-		"/var/run/dstack/dstack.sock",
-		"/run/dstack/dstack.sock",
-	}
-	for _, path := range socketPaths {
-		if _, err := os.Stat(path); err == nil {
-			return path
-		}
-	}
-	// Default to new path even if not exists (will fail with clear error)
-	return socketPaths[0]
-}
-
-// Sends an RPC request to the dstack service.
-func (c *DstackClient) sendRPCRequest(ctx context.Context, path string, payload interface{}) ([]byte, error) {
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+path, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "dstack-sdk-go/0.1.0")
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	return body, nil
+	return NewDstackClientV0(opts...)
 }
 
 // TlsKeyOption defines a function type for TLS key options
@@ -413,7 +285,7 @@ func WithAppInfo(enabled bool) TlsKeyOption {
 }
 
 // Gets a TLS key from the dstack service with optional parameters.
-func (c *DstackClient) GetTlsKey(
+func (c *DstackClientV0) GetTlsKey(
 	ctx context.Context,
 	options ...TlsKeyOption,
 ) (*GetTlsKeyResponse, error) {
@@ -468,7 +340,7 @@ func requiresVersionCheck(algorithm string) bool {
 
 // ensureAlgorithmSupported checks the OS version when a non-secp256k1 algorithm is requested.
 // On old OS (no Version RPC), it returns an error to prevent silent key type mismatch.
-func (c *DstackClient) ensureAlgorithmSupported(ctx context.Context, algorithm string) error {
+func (c *DstackClientV0) ensureAlgorithmSupported(ctx context.Context, algorithm string) error {
 	if !requiresVersionCheck(algorithm) {
 		return nil
 	}
@@ -479,7 +351,7 @@ func (c *DstackClient) ensureAlgorithmSupported(ctx context.Context, algorithm s
 }
 
 // Gets a key from the dstack service.
-func (c *DstackClient) GetKey(ctx context.Context, path string, purpose string, algorithm string) (*GetKeyResponse, error) {
+func (c *DstackClientV0) GetKey(ctx context.Context, path string, purpose string, algorithm string) (*GetKeyResponse, error) {
 	if err := c.ensureAlgorithmSupported(ctx, algorithm); err != nil {
 		return nil, err
 	}
@@ -505,7 +377,7 @@ func (c *DstackClient) GetKey(ctx context.Context, path string, purpose string, 
 // without it the guest agent returns an error, and on GCP Confidential VMs it
 // answers with the TDX quote alone, leaving out the vTPM quote GCP's
 // verification also binds. Attest should be used in both cases.
-func (c *DstackClient) GetQuote(ctx context.Context, reportData []byte) (*GetQuoteResponse, error) {
+func (c *DstackClientV0) GetQuote(ctx context.Context, reportData []byte) (*GetQuoteResponse, error) {
 	if len(reportData) > 64 {
 		return nil, fmt.Errorf("report data is too large, it should be at most 64 bytes")
 	}
@@ -528,20 +400,13 @@ func (c *DstackClient) GetQuote(ctx context.Context, reportData []byte) (*GetQuo
 }
 
 // Gets a versioned attestation from the dstack service.
-func (c *DstackClient) Attest(ctx context.Context, reportData []byte) (*AttestResponse, error) {
-	return c.AttestWithOptions(ctx, reportData, AttestOptions{})
-}
-
-// Gets a versioned attestation from the dstack service, optionally bundling the
-// boot-time GPU attestation evidence so a verifier can check both in one round trip.
-func (c *DstackClient) AttestWithOptions(ctx context.Context, reportData []byte, opts AttestOptions) (*AttestResponse, error) {
+func (c *DstackClientV0) Attest(ctx context.Context, reportData []byte) (*AttestResponse, error) {
 	if len(reportData) > 64 {
 		return nil, fmt.Errorf("report data is too large, it should be at most 64 bytes")
 	}
 
 	payload := map[string]interface{}{
-		"report_data":          hex.EncodeToString(reportData),
-		"include_boottime_gpu_evidence": opts.IncludeBoottimeGpuEvidence,
+		"report_data": hex.EncodeToString(reportData),
 	}
 
 	data, err := c.sendRPCRequest(ctx, "/Attest", payload)
@@ -551,7 +416,6 @@ func (c *DstackClient) AttestWithOptions(ctx context.Context, reportData []byte,
 
 	var response struct {
 		Attestation string `json:"attestation"`
-		BoottimeGpuEvidence string `json:"boottime_gpu_evidence"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, err
@@ -562,42 +426,7 @@ func (c *DstackClient) AttestWithOptions(ctx context.Context, reportData []byte,
 		return nil, err
 	}
 
-	return &AttestResponse{Attestation: attestation, BoottimeGpuEvidence: response.BoottimeGpuEvidence}, nil
-}
-
-// AttestGpu runs NVIDIA GPU attestation now, against a 32-byte nonce you choose.
-//
-// See AttestGpuResponse for what this does and does not prove.
-func (c *DstackClient) AttestGpu(ctx context.Context, nonce []byte) (*AttestGpuResponse, error) {
-	if len(nonce) != 32 {
-		return nil, fmt.Errorf("nonce must be exactly 32 bytes, got %d", len(nonce))
-	}
-
-	payload := map[string]interface{}{"nonce": hex.EncodeToString(nonce)}
-	data, err := c.sendRPCRequest(ctx, "/AttestGpu", payload)
-	if err != nil {
-		return nil, err
-	}
-
-	var response AttestGpuResponse
-	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, err
-	}
-	return &response, nil
-}
-
-// GpuInfo returns GPU information collected during boot.
-func (c *DstackClient) GpuInfo(ctx context.Context) (*GpuInfoResponse, error) {
-	data, err := c.sendRPCRequest(ctx, "/GpuInfo", map[string]interface{}{})
-	if err != nil {
-		return nil, err
-	}
-
-	var response GpuInfoResponse
-	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, err
-	}
-	return &response, nil
+	return &AttestResponse{Attestation: attestation}, nil
 }
 
 // Represents the response from a Version request.
@@ -610,7 +439,7 @@ type VersionResponse struct {
 //
 // Returns the version on OS >= 0.5.7.
 // Returns an error on older OS versions that lack the Version RPC.
-func (c *DstackClient) GetVersion(ctx context.Context) (*VersionResponse, error) {
+func (c *DstackClientV0) GetVersion(ctx context.Context) (*VersionResponse, error) {
 	data, err := c.sendRPCRequest(ctx, "/Version", map[string]interface{}{})
 	if err != nil {
 		return nil, err
@@ -624,7 +453,7 @@ func (c *DstackClient) GetVersion(ctx context.Context) (*VersionResponse, error)
 }
 
 // Sends a request to get information about the CVM instance
-func (c *DstackClient) Info(ctx context.Context) (*InfoResponse, error) {
+func (c *DstackClientV0) Info(ctx context.Context) (*InfoResponse, error) {
 	data, err := c.sendRPCRequest(ctx, "/Info", map[string]interface{}{})
 	if err != nil {
 		return nil, err
@@ -645,7 +474,7 @@ type SignResponse struct {
 }
 
 // Signs a payload.
-func (c *DstackClient) Sign(ctx context.Context, algorithm string, data []byte) (*SignResponse, error) {
+func (c *DstackClientV0) Sign(ctx context.Context, algorithm string, data []byte) (*SignResponse, error) {
 	payload := map[string]interface{}{
 		"algorithm": algorithm,
 		"data":      hex.EncodeToString(data),
@@ -689,25 +518,72 @@ func (c *DstackClient) Sign(ctx context.Context, algorithm string, data []byte) 
 	}, nil
 }
 
+type VerifyResponse struct {
+	Valid bool `json:"valid"`
+}
+
+// Verifies a payload.
+func (c *DstackClientV0) Verify(ctx context.Context, algorithm string, data []byte, signature []byte, publicKey []byte) (*VerifyResponse, error) {
+	payload := map[string]interface{}{
+		"algorithm":  algorithm,
+		"data":       hex.EncodeToString(data),
+		"signature":  hex.EncodeToString(signature),
+		"public_key": hex.EncodeToString(publicKey),
+	}
+
+	respData, err := c.sendRPCRequest(ctx, "/Verify", payload)
+	if err != nil {
+		return nil, err
+	}
+
+	var response VerifyResponse
+	if err := json.Unmarshal(respData, &response); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal verify response: %w", err)
+	}
+
+	return &response, nil
+}
+
 // IsReachable checks if the service is reachable
-func (c *DstackClient) IsReachable(ctx context.Context) bool {
+func (c *DstackClientV0) IsReachable(ctx context.Context) bool {
 	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
 	_, err := c.Info(ctx)
 	return err == nil
 }
 
+// EmitEvent sends an event to be extended to RTMR3 on TDX platform.
+// The event will be extended to RTMR3 with the provided name and payload.
+//
+// Requires dstack OS 0.5.0 or later.
+//
+// Removed in dstack 0.6.0: runtime RTMR3 events became system-owned, so an
+// agent from 0.6.0 on answers this with an error. The method stays on the
+// frozen surface so that a pre-0.6 client still compiles, and the error is
+// returned to the caller rather than swallowed -- silently succeeding would
+// leave an application believing it had measured something it had not.
+func (c *DstackClientV0) EmitEvent(ctx context.Context, event string, payload []byte) error {
+	if event == "" {
+		return fmt.Errorf("event name cannot be empty")
+	}
+	_, err := c.sendRPCRequest(ctx, "/EmitEvent", map[string]interface{}{
+		"event":   event,
+		"payload": hex.EncodeToString(payload),
+	})
+	return err
+}
+
 // Legacy methods for backward compatibility with warnings
 
 // DeriveKey is deprecated. Use GetKey instead.
 // Deprecated: Use GetKey instead.
-func (c *DstackClient) DeriveKey(path string, subject string, altNames []string) (*GetTlsKeyResponse, error) {
+func (c *DstackClientV0) DeriveKey(path string, subject string, altNames []string) (*GetTlsKeyResponse, error) {
 	return nil, fmt.Errorf("deriveKey is deprecated, please use GetKey instead")
 }
 
 // TdxQuote is deprecated. Use GetQuote instead.
 // Deprecated: Use GetQuote instead.
-func (c *DstackClient) TdxQuote(ctx context.Context, reportData []byte, hashAlgorithm string) (*GetQuoteResponse, error) {
+func (c *DstackClientV0) TdxQuote(ctx context.Context, reportData []byte, hashAlgorithm string) (*GetQuoteResponse, error) {
 	c.logger.Warn("tdxQuote is deprecated, please use GetQuote instead")
 	if hashAlgorithm != "raw" {
 		return nil, fmt.Errorf("tdxQuote only supports raw hash algorithm")
@@ -728,13 +604,13 @@ func NewTappdClient(opts ...DstackClientOption) *TappdClient {
 	tappdOpts := make([]DstackClientOption, 0, len(opts)+1)
 
 	// Add default endpoint option that checks TAPPD_SIMULATOR_ENDPOINT
-	tappdOpts = append(tappdOpts, func(c *DstackClient) {
-		if c.endpoint == "" {
+	tappdOpts = append(tappdOpts, func(o *clientOptions) {
+		if o.endpoint == "" {
 			if simEndpoint, exists := os.LookupEnv("TAPPD_SIMULATOR_ENDPOINT"); exists {
-				c.logger.Warn("Using tappd endpoint", "endpoint", simEndpoint)
-				c.endpoint = simEndpoint
+				o.logger.Warn("Using tappd endpoint", "endpoint", simEndpoint)
+				o.endpoint = simEndpoint
 			} else {
-				c.endpoint = "/var/run/tappd.sock"
+				o.endpoint = "/var/run/tappd.sock"
 			}
 		}
 	})
