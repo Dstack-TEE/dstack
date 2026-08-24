@@ -2001,12 +2001,15 @@ name = "dstack-guest-agent-rpc"
 version = "0.6.0"
 dependencies = [
  "anyhow",
+ "hex",
  "parity-scale-codec",
  "prost 0.13.5",
+ "prost-types 0.13.5",
  "prpc",
  "prpc-build",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -5735,6 +5738,7 @@ dependencies = [
  "hex",
  "hex_fmt",
  "hkdf",
+ "k256",
  "or-panic",
  "p256",
  "parity-scale-codec",

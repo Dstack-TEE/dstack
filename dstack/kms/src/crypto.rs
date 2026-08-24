@@ -4,8 +4,8 @@
 
 use anyhow::{Context, Result};
 use k256::ecdsa::SigningKey;
-use sha3::{Digest, Keccak256};
 
+use ra_tls::guest_api_v1::sign_recoverable_keccak256;
 use ra_tls::kdf;
 
 pub(crate) fn derive_k256_key(
@@ -35,11 +35,9 @@ pub(crate) fn sign_message(
     appid: &[u8],
     message: &[u8],
 ) -> Result<Vec<u8>> {
-    let digest = Keccak256::new_with_prefix([prefix, b":", appid, message].concat());
-    let (signature, recid) = key.sign_digest_recoverable(digest)?;
-    let mut signature_bytes = signature.to_vec();
-    signature_bytes.push(recid.to_byte());
-    Ok(signature_bytes)
+    // Same 65-byte `r || s || v` envelope every dstack chain link uses; the
+    // preimage is what differs between them.
+    sign_recoverable_keccak256(key, &[prefix, b":", appid, message].concat())
 }
 
 /// Sign a message with a timestamp to prevent replay attacks.
@@ -52,12 +50,10 @@ pub(crate) fn sign_message_with_timestamp(
     message: &[u8],
 ) -> Result<Vec<u8>> {
     let timestamp_bytes = timestamp.to_be_bytes();
-    let digest =
-        Keccak256::new_with_prefix([prefix, b":", appid, &timestamp_bytes[..], message].concat());
-    let (signature, recid) = key.sign_digest_recoverable(digest)?;
-    let mut signature_bytes = signature.to_vec();
-    signature_bytes.push(recid.to_byte());
-    Ok(signature_bytes)
+    sign_recoverable_keccak256(
+        key,
+        &[prefix, b":", appid, &timestamp_bytes[..], message].concat(),
+    )
 }
 
 #[cfg(test)]

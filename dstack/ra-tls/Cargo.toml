@@ -17,6 +17,7 @@ elliptic-curve.workspace = true
 fs-err.workspace = true
 hex.workspace = true
 hkdf.workspace = true
+k256.workspace = true
 p256.workspace = true
 rcgen = { workspace = true, features = ["x509-parser", "pem"] }
 ring = { workspace = true, features = ["std"] }
