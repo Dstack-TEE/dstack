@@ -12,7 +12,6 @@ export default defineConfig({
     "src/encrypt-env-vars.ts",
     "src/get-compose-hash.ts",
     "src/verify-env-encrypt-public-key.ts",
-    "src/verify.ts",
   ],
   format: ["cjs", "esm"],
   dts: true,

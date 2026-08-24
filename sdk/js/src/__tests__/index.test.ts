@@ -4,9 +4,14 @@
 
 import { expect, describe, it, vi } from 'vitest'
 import crypto from 'crypto' // Added for prehashed test
-import { DstackClient, TappdClient, verifySignature } from '../index'
+import { DstackClient, DstackClientV0, TappdClient } from '../index'
 
-describe('DstackClient', () => {
+describe('DstackClientV0', () => {
+  it('should keep DstackClient as an alias of DstackClientV0', () => {
+    expect(DstackClient).toBe(DstackClientV0)
+    expect(new DstackClient()).toBeInstanceOf(DstackClientV0)
+  })
+
   it('should able to derive key in TappdClient', async () => {
     const client = new TappdClient()
     const result = await client.deriveKey('/', 'test')
@@ -48,34 +53,17 @@ describe('DstackClient', () => {
     expect(() => JSON.parse(result.event_log)).not.toThrowError()
   })
 
-  it('should reject an attestGpu nonce that is not 32 bytes', async () => {
-    const client = new DstackClient()
-    await expect(() => client.attestGpu(new Uint8Array(31))).rejects.toThrow()
-    await expect(() => client.attestGpu(new Uint8Array(33))).rejects.toThrow()
-  })
-
-  it('should surface an attestGpu failure when the simulator has no GPU', async () => {
-    const client = new DstackClient()
-    // The simulator ships no nvattest, so this must fail fast and clearly
-    // rather than hang for the attestation timeout.
-    await expect(() => client.attestGpu(new Uint8Array(32).fill(0xab))).rejects.toThrow()
-  })
-
   it('should be able to attest', async () => {
     const client = new DstackClient()
     const result = await client.attest('test')
     expect(result).toHaveProperty('attestation')
     expect(result.attestation).not.toBe('')
-    expect(result.boottime_gpu_evidence).toBe('')
   })
 
-  it('should be able to attest with gpu evidence', async () => {
-    const client = new DstackClient()
-    const result = await client.attest('test', true)
-    expect(result).toHaveProperty('attestation')
-    expect(result.attestation).not.toBe('')
-    // Whether evidence exists depends on the host; assert the field is present.
-    expect(result).toHaveProperty('boottime_gpu_evidence')
+  it('should not carry the GPU methods, which this surface never served', () => {
+    const client = new DstackClient() as any
+    expect(client.attestGpu).toBeUndefined()
+    expect(client.gpuInfo).toBeUndefined()
   })
 
   it('should able to get derive key result as uint8array', async () => {
@@ -206,9 +194,8 @@ describe('DstackClient', () => {
     const client = new DstackClient()
     const testData = 'Test message for signing'
     const badData = 'This is not the original message'
-    const encode = (text: string) => new TextEncoder().encode(text)
 
-    it('should sign with ed25519 and verify locally', async () => {
+    it('should sign with ed25519 and verify', async () => {
       const algorithm = 'ed25519'
       const signResp = await client.sign(algorithm, testData)
 
@@ -220,14 +207,15 @@ describe('DstackClient', () => {
       expect(signResp.signature_chain.length).toBeGreaterThan(0) // Should have at least the signature itself
       expect(signResp.signature_chain[0]).toBeInstanceOf(Uint8Array)
 
-      // Verification is local: it needs no key material, so there is no RPC for it.
-      expect(verifySignature(algorithm, encode(testData), signResp.signature, signResp.public_key)).toBe(true)
+      const verifyResp = await client.verify(algorithm, testData, signResp.signature, signResp.public_key)
+      expect(verifyResp.valid).toBe(true)
 
       // Verify failure (bad data)
-      expect(verifySignature(algorithm, encode(badData), signResp.signature, signResp.public_key)).toBe(false)
+      const badResp = await client.verify(algorithm, badData, signResp.signature, signResp.public_key)
+      expect(badResp.valid).toBe(false)
     })
 
-    it('should sign with secp256k1 and verify locally', async () => {
+    it('should sign with secp256k1 and verify', async () => {
       const algorithm = 'secp256k1'
       const signResp = await client.sign(algorithm, testData)
 
@@ -235,11 +223,11 @@ describe('DstackClient', () => {
       expect(signResp.public_key).toBeInstanceOf(Uint8Array)
       expect(signResp.signature_chain.length).toBeGreaterThan(0)
 
-      expect(verifySignature(algorithm, encode(testData), signResp.signature, signResp.public_key)).toBe(true)
-      expect(verifySignature(algorithm, encode(badData), signResp.signature, signResp.public_key)).toBe(false)
+      expect((await client.verify(algorithm, testData, signResp.signature, signResp.public_key)).valid).toBe(true)
+      expect((await client.verify(algorithm, badData, signResp.signature, signResp.public_key)).valid).toBe(false)
     })
 
-    it('should sign with secp256k1_prehashed and verify locally', async () => {
+    it('should sign with secp256k1_prehashed and verify', async () => {
       const algorithm = 'secp256k1_prehashed'
       const digest = new Uint8Array(crypto.createHash('sha256').update(testData).digest())
       expect(digest.length).toBe(32) // Ensure it's 32 bytes
@@ -249,11 +237,11 @@ describe('DstackClient', () => {
       expect(signResp.signature).toBeInstanceOf(Uint8Array)
       expect(signResp.public_key).toBeInstanceOf(Uint8Array)
 
-      expect(verifySignature(algorithm, digest, signResp.signature, signResp.public_key)).toBe(true)
+      expect((await client.verify(algorithm, digest, signResp.signature, signResp.public_key)).valid).toBe(true)
 
       // Verify failure (bad digest)
       const badDigest = new Uint8Array(crypto.createHash('sha256').update(badData).digest())
-      expect(verifySignature(algorithm, badDigest, signResp.signature, signResp.public_key)).toBe(false)
+      expect((await client.verify(algorithm, badDigest, signResp.signature, signResp.public_key)).valid).toBe(false)
     })
 
     it('should throw error when signing secp256k1_prehashed with incorrect data length', async () => {
@@ -268,6 +256,22 @@ describe('DstackClient', () => {
     it('should throw error for unsupported sign algorithm', async () => {
       const algorithm = 'rsa'
       await expect(() => client.sign(algorithm, testData)).rejects.toThrow() // Specific error depends on server impl.
+    })
+  })
+
+  describe('emitEvent', () => {
+    it('should reject an empty event name before reaching the agent', async () => {
+      const client = new DstackClient()
+      await expect(() => client.emitEvent('', 'payload')).rejects.toThrow('Event name cannot be empty')
+    })
+
+    it('should surface the agent removal message instead of resolving silently', async () => {
+      const client = new DstackClient()
+      // The 0.6.0 agent always fails this. A caller that gets a resolved promise
+      // would believe the event was measured, which is the one wrong answer here.
+      await expect(() => client.emitEvent('test-event', 'payload')).rejects.toThrow(
+        'EmitEvent was removed in dstack 0.6.0'
+      )
     })
   })
 

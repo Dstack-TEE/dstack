@@ -7,8 +7,6 @@ import { send_rpc_request } from './send-rpc-request'
 export { getComposeHash } from './get-compose-hash'
 export { verifyEnvEncryptPublicKey, verifyEnvEncryptPublicKeyLegacy } from './verify-env-encrypt-public-key'
 export type { VerifyOptions } from './verify-env-encrypt-public-key'
-export { verifySignature, verifySignatureChain, SIGN_PATH, SIGN_PURPOSE } from './verify'
-export type { SignatureChainInput } from './verify'
 
 export interface GetTlsKeyResponse {
   __name__: Readonly<'GetTlsKeyResponse'>
@@ -32,6 +30,12 @@ export interface SignResponse {
   signature: Uint8Array
   signature_chain: Uint8Array[]
   public_key: Uint8Array
+}
+
+export interface VerifyResponse {
+  __name__: Readonly<'VerifyResponse'>
+
+  valid: boolean
 }
 
 
@@ -101,38 +105,6 @@ export interface AttestResponse {
   __name__: Readonly<'AttestResponse'>
 
   attestation: Hex
-
-  /**
-   * Complete JSON output produced by nvattest during guest boot. Empty unless the
-   * request set `include_boottime_gpu_evidence` and the guest has boot-time GPU attestation
-   * output.
-   *
-   * Not bound to `report_data`: verify it by replaying the runtime event log and
-   * comparing sha256 of these exact UTF-8 bytes against `evidence_sha256` in the
-   * `gpu-attestation` event.
-   */
-  boottime_gpu_evidence: string
-}
-
-/**
- * Result of fresh, on-demand GPU evidence collection.
- */
-export interface AttestGpuResponse {
-  __name__: Readonly<'AttestGpuResponse'>
-  bundles: GpuEvidenceBundle[]
-}
-
-export interface GpuEvidenceBundle {
-  vendor: string
-  format: string
-  /** Hex-encoded opaque evidence bytes, as represented by the JSON RPC. */
-  evidence: Hex
-}
-
-export interface GpuInfoResponse {
-  __name__: Readonly<'GpuInfoResponse'>
-
-  attestation: string
 }
 
 export interface VersionResponse {
@@ -184,7 +156,35 @@ export interface TlsKeyOptions {
 
 const SECP256K1_ALGORITHMS = new Set(['secp256k1', 'k256', ''])
 
-export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
+/** Socket paths the clients probe, legacy first, then the namespaced variants. */
+const DSTACK_SOCKET_PATHS = [
+  '/var/run/dstack.sock',
+  '/run/dstack.sock',
+  '/var/run/dstack/dstack.sock',
+  '/run/dstack/dstack.sock',
+]
+
+/**
+ * A prpc handler reports failure in the response body rather than by refusing to
+ * answer, so every method has to look for it; an unchecked call would hand the
+ * caller a response object with every field missing.
+ */
+function throwOnRpcError(result: unknown): void {
+  if (result && typeof result === 'object' && 'error' in result) {
+    throw new Error(String((result as { error: unknown }).error))
+  }
+}
+
+/**
+ * Client for the frozen v0 guest agent surface, served at `/<Method>` and,
+ * since dstack 0.6.0, equivalently at `/v0/<Method>`.
+ *
+ * This surface is closed at the dstack 0.5.11 shape and will not change again.
+ * New capability lands in {@link DstackClientV1}, which derives *different* key
+ * material for the same inputs -- the two are separate derivation trees, not
+ * two spellings of one.
+ */
+export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
   protected endpoint: string
 
   constructor(endpoint: string | undefined = undefined) {
@@ -193,14 +193,7 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
         console.warn(`Using simulator endpoint: ${process.env.DSTACK_SIMULATOR_ENDPOINT}`)
         endpoint = process.env.DSTACK_SIMULATOR_ENDPOINT
       } else {
-        // Try paths in order: legacy paths first, then namespaced paths
-        const socketPaths = [
-          '/var/run/dstack.sock',
-          '/run/dstack.sock',
-          '/var/run/dstack/dstack.sock',
-          '/run/dstack/dstack.sock',
-        ]
-        endpoint = socketPaths.find(p => fs.existsSync(p)) ?? socketPaths[0]
+        endpoint = DSTACK_SOCKET_PATHS.find(p => fs.existsSync(p)) ?? DSTACK_SOCKET_PATHS[0]
       }
     }
     if (endpoint.startsWith('/') && !fs.existsSync(endpoint)) {
@@ -314,52 +307,20 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
   /**
    * Requests a versioned attestation for the given report data.
    *
-   * Pass `include_boottime_gpu_evidence` to also return the boot-time GPU attestation
-   * evidence in `boottime_gpu_evidence`, so a verifier can check both in one round trip.
+   * GPU evidence is not available here: this surface is frozen at the 0.5.11
+   * shape. Use {@link DstackClientV1.attest} or {@link DstackClientV1.attestGpu}.
    */
-  async attest(report_data: string | Buffer | Uint8Array, include_boottime_gpu_evidence: boolean = false): Promise<AttestResponse> {
+  async attest(report_data: string | Buffer | Uint8Array): Promise<AttestResponse> {
     let hex = to_hex(report_data)
     if (hex.length > 128) {
       throw new Error(`Report data is too large, it should be less than 64 bytes.`)
     }
-    const payload = JSON.stringify({ report_data: hex, include_boottime_gpu_evidence })
-    const result = await send_rpc_request<{ attestation: string, boottime_gpu_evidence?: string }>(this.endpoint, '/Attest', payload)
-    if ('error' in (result as any)) {
-      const err = (result as any)['error'] as string
-      throw new Error(err)
-    }
+    const payload = JSON.stringify({ report_data: hex })
+    const result = await send_rpc_request<{ attestation: string }>(this.endpoint, '/Attest', payload)
+    throwOnRpcError(result)
     return Object.freeze({
       __name__: 'AttestResponse',
       attestation: result.attestation as Hex,
-      boottime_gpu_evidence: result.boottime_gpu_evidence ?? '',
-    })
-  }
-
-  /**
-   * Runs NVIDIA GPU attestation now, against a 32-byte nonce you choose.
-   *
-   * See {@link AttestGpuResponse} for what this does and does not prove.
-   */
-  async attestGpu(nonce: Buffer | Uint8Array): Promise<AttestGpuResponse> {
-    if (nonce.length !== 32) {
-      throw new Error(`Nonce must be exactly 32 bytes, got ${nonce.length}.`)
-    }
-    const payload = JSON.stringify({ nonce: to_hex(nonce) })
-    const result = await send_rpc_request<{ bundles: GpuEvidenceBundle[] }>(this.endpoint, '/AttestGpu', payload)
-    if ('error' in (result as any)) {
-      throw new Error((result as any)['error'] as string)
-    }
-    return Object.freeze({
-      ...result,
-      __name__: 'AttestGpuResponse' as const,
-    })
-  }
-
-  async gpuInfo(): Promise<GpuInfoResponse> {
-    const result = await send_rpc_request<{ attestation: string }>(this.endpoint, '/GpuInfo', '{}')
-    return Object.freeze({
-      ...result,
-      __name__: 'GpuInfoResponse',
     })
   }
 
@@ -396,6 +357,34 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
   }
 
   /**
+   * Emit an event. This extends the event to RTMR3 on TDX platform.
+   *
+   * Requires dstack OS 0.5.0 or later, and removed in 0.6.0: runtime RTMR3
+   * events became system-owned, so a 0.6.0 agent answers every call with an
+   * error. It stays here because the frozen surface still carries the method,
+   * and the agent's own explanation is more useful than one invented here.
+   *
+   * @param event The event name
+   * @param payload The event data as string or Buffer or Uint8Array
+   */
+  async emitEvent(event: string, payload: string | Buffer | Uint8Array): Promise<void> {
+    if (!event) {
+      throw new Error('Event name cannot be empty')
+    }
+
+    const hexPayload = to_hex(payload)
+    const result = await send_rpc_request(
+      this.endpoint,
+      '/EmitEvent',
+      JSON.stringify({
+        event: event,
+        payload: hexPayload
+      })
+    )
+    throwOnRpcError(result)
+  }
+
+  /**
    * Signs a payload using a derived key.
    * @param algorithm The algorithm to use (e.g., "ed25519", "secp256k1", "secp256k1_prehashed")
    * @param data The data to sign. If algorithm is "secp256k1_prehashed", this must be a 32-byte hash.
@@ -419,6 +408,36 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
         signature_chain: result.signature_chain.map(sig => new Uint8Array(Buffer.from(sig, 'hex'))),
         public_key: new Uint8Array(Buffer.from(result.public_key, 'hex')),
         __name__: 'SignResponse',
+    });
+  }
+
+  /**
+   * Verifies a payload signature.
+   * @param algorithm The algorithm to use (e.g., "ed25519", "secp256k1", "secp256k1_prehashed")
+   * @param data The data that was signed.
+   * @param signature The signature to verify.
+   * @param publicKey The public key to use for verification.
+   * @returns A VerifyResponse indicating if the signature is valid.
+   */
+  async verify(
+    algorithm: string,
+    data: string | Buffer | Uint8Array,
+    signature: string | Buffer | Uint8Array,
+    publicKey: string | Buffer | Uint8Array
+  ): Promise<VerifyResponse> {
+    const payload = JSON.stringify({
+        algorithm: algorithm,
+        data: to_hex(data),
+        signature: to_hex(signature),
+        public_key: to_hex(publicKey)
+    });
+
+    const result = await send_rpc_request<{ valid: boolean }>(this.endpoint, '/Verify', payload);
+    throwOnRpcError(result)
+
+    return Object.freeze({
+        ...result,
+        __name__: 'VerifyResponse',
     });
   }
 
@@ -453,7 +472,14 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
   }
 }
 
-export class TappdClient extends DstackClient<TcbInfoV03x> {
+/**
+ * @deprecated Say which surface you mean: {@link DstackClientV0} for the frozen
+ * one this alias points at, or {@link DstackClientV1} for the current API.
+ */
+export const DstackClient = DstackClientV0
+export type DstackClient<T extends TcbInfo = TcbInfoV05x> = DstackClientV0<T>
+
+export class TappdClient extends DstackClientV0<TcbInfoV03x> {
   constructor(endpoint: string | undefined = undefined) {
     if (endpoint === undefined) {
       if (process.env.TAPPD_SIMULATOR_ENDPOINT) {
@@ -531,5 +557,305 @@ export class TappdClient extends DstackClient<TcbInfoV03x> {
     } catch (error) {
       return false
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// dstack.guest.v1
+// ---------------------------------------------------------------------------
+
+export interface IssueCertOptionsV1 {
+  subject?: string;
+  altNames?: string[];
+  usageRaTls?: boolean;
+  usageServerAuth?: boolean;
+  usageClientAuth?: boolean;
+  withAppInfo?: boolean;
+  // Certificate validity start (seconds since UNIX epoch).
+  notBefore?: number;
+  // Certificate validity end (seconds since UNIX epoch).
+  notAfter?: number;
+}
+
+export interface IssueCertResponseV1 {
+  __name__: Readonly<'IssueCertResponseV1'>
+
+  /** The private key the agent generated for this certificate, PEM-encoded. */
+  key: string
+  /** The certificate chain, leaf first, each entry PEM-encoded. */
+  certificate_chain: string[]
+
+  asUint8Array: (max_length?: number) => Uint8Array
+}
+
+export interface GetKeyResponseV1 {
+  __name__: Readonly<'GetKeyResponseV1'>
+
+  /** The derived private key: 32 raw bytes for both supported algorithms. */
+  key: Uint8Array
+  /** SEC1 compressed (33 bytes) for secp256k1, raw (32 bytes) for ed25519. */
+  public_key: Uint8Array
+  /** Two links: the app root key over the v1 key claim, then the KMS root key. */
+  signature_chain: Uint8Array[]
+}
+
+export interface AttestResponseV1 {
+  __name__: Readonly<'AttestResponseV1'>
+
+  attestation: Hex
+
+  /**
+   * Complete JSON output nvattest produced at boot. Empty unless the request
+   * asked for it and the guest has boot-time GPU attestation output.
+   *
+   * Not bound to `report_data`: verify it by replaying the runtime event log
+   * and comparing sha256 of these exact UTF-8 bytes against `evidence_sha256`
+   * in the measured `gpu-attestation` event.
+   */
+  boottime_gpu_evidence: string
+}
+
+export interface GpuEvidenceBundleV1 {
+  /** Stable GPU vendor identifier, for example `nvidia`. */
+  vendor: string
+  /** Vendor-specific evidence format and version. */
+  format: string
+  /** Opaque vendor-native evidence bytes, hex-encoded by the JSON RPC. */
+  evidence: Hex
+}
+
+export interface AttestGpuResponseV1 {
+  __name__: Readonly<'AttestGpuResponseV1'>
+
+  bundles: GpuEvidenceBundleV1[]
+}
+
+/**
+ * Identity and configuration. Not attestation.
+ *
+ * The measurement registers and the event log are deliberately absent -- they
+ * belong to `attest()`, which returns them quote-backed. Nothing here arrives
+ * with a quote behind it, so confirm anything you rely on against an
+ * attestation.
+ *
+ * `app_id`, `compose_hash`, `instance_id`, `device_id`, `os_image_hash` and
+ * `mr_aggregated` are lowercase hex; the rest are plain strings, with the three
+ * document fields carrying JSON owned by someone else (see `docs/guest-api-v1.md`).
+ */
+export interface InfoResponseV1 {
+  __name__: Readonly<'InfoResponseV1'>
+
+  app_id: Hex
+  app_name: string
+  compose_hash: Hex
+  /**
+   * The app-compose document, verbatim. `compose_hash` is sha256 over exactly
+   * these bytes, so do not parse and re-serialize before hashing: key order,
+   * whitespace and unknown fields all change the digest.
+   */
+  app_compose: string
+  instance_id: Hex
+  /** Identifies the host machine, not this instance. */
+  device_id: Hex
+  os_image_hash: Hex
+  mr_aggregated: Hex
+  vm_config: string
+  key_provider_info: string
+  cloud_vendor: string
+  cloud_product: string
+}
+
+export interface VersionResponseV1 {
+  __name__: Readonly<'VersionResponseV1'>
+
+  version: string
+  rev: string
+}
+
+/**
+ * Client for `dstack.guest.v1`, served at `/v1/<Method>` by dstack 0.6.0 and later.
+ *
+ * Six methods, no more: v1 serves only what needs the TEE -- deriving keys from
+ * the app root key, and attesting. `sign`, `verify`, `getQuote`, `gpuInfo` and
+ * `emitEvent` are absent by design, not by oversight; see `docs/guest-api-v1.md`.
+ *
+ * A v1 key is NOT the v0 key of the same name. v1 derives under its own HKDF
+ * salt and binds the algorithm into the derivation, so `getKey('wallet',
+ * 'secp256k1')` here returns different material than `DstackClientV0.getKey`
+ * ever did, and secp256k1 and ed25519 no longer share one secret. There is no
+ * compatibility mode.
+ *
+ * An agent that predates v1 has no `/v1` mount, so it answers with a plain
+ * HTTP 404 page rather than a JSON error. `version()` is the cheapest probe.
+ */
+export class DstackClientV1 {
+  protected endpoint: string
+
+  constructor(endpoint: string | undefined = undefined) {
+    if (endpoint === undefined) {
+      if (process.env.DSTACK_SIMULATOR_ENDPOINT) {
+        console.warn(`Using simulator endpoint: ${process.env.DSTACK_SIMULATOR_ENDPOINT}`)
+        endpoint = process.env.DSTACK_SIMULATOR_ENDPOINT
+      } else {
+        endpoint = DSTACK_SOCKET_PATHS.find(p => fs.existsSync(p)) ?? DSTACK_SOCKET_PATHS[0]
+      }
+    }
+    if (endpoint.startsWith('/') && !fs.existsSync(endpoint)) {
+      throw new Error(`Unix socket file ${endpoint} does not exist`);
+    }
+    this.endpoint = endpoint
+  }
+
+  /**
+   * Issue a certificate for this application.
+   *
+   * The key is freshly generated on every call and is not derived from the app
+   * identity: two identical requests produce two unrelated keys. Use
+   * {@link getKey} for stable, attestable material.
+   */
+  async issueCert(options: IssueCertOptionsV1 = {}): Promise<IssueCertResponseV1> {
+    const {
+      subject = '',
+      altNames = [],
+      usageRaTls = false,
+      usageServerAuth = true,
+      usageClientAuth = false,
+      withAppInfo = false,
+      notBefore,
+      notAfter,
+    } = options;
+
+    const raw: Record<string, any> = {
+      subject,
+      usage_ra_tls: usageRaTls,
+      usage_server_auth: usageServerAuth,
+      usage_client_auth: usageClientAuth,
+      with_app_info: withAppInfo,
+    }
+    if (altNames && altNames.length) {
+      raw['alt_names'] = altNames
+    }
+    // Both are `optional` on the wire, so send them only when asked for rather
+    // than pinning a validity window the caller never chose.
+    if (notBefore !== undefined) {
+      raw['not_before'] = notBefore
+    }
+    if (notAfter !== undefined) {
+      raw['not_after'] = notAfter
+    }
+    const result = await send_rpc_request<{ key: string, certificate_chain: string[] }>(
+      this.endpoint, '/v1/IssueCert', JSON.stringify(raw))
+    throwOnRpcError(result)
+    const asUint8Array = (length?: number) => x509key_to_uint8array(result.key, length)
+    return Object.freeze({
+      ...result,
+      asUint8Array,
+      __name__: 'IssueCertResponseV1' as const,
+    })
+  }
+
+  /**
+   * Derive an application key from `(domain, algorithm)`.
+   *
+   * `domain` is an opaque domain-separation string, not a DNS name and not a
+   * path: derivation is flat, so `a/b` is not a child of `a` and no key derived
+   * here can derive another.
+   *
+   * @param domain Caller-chosen domain-separation string. May be empty.
+   * @param algorithm Exactly `secp256k1` or `ed25519`. No default, no `k256` alias.
+   */
+  async getKey(domain: string, algorithm: string): Promise<GetKeyResponseV1> {
+    // v0 defaulted an empty algorithm to secp256k1, which let a typo hand back a
+    // key of the wrong type under a name the caller thought meant something else.
+    if (!algorithm) {
+      throw new Error('algorithm is required, use "secp256k1" or "ed25519"')
+    }
+    const payload = JSON.stringify({ domain, algorithm })
+    const result = await send_rpc_request<{ key: string, public_key: string, signature_chain: string[] }>(
+      this.endpoint, '/v1/GetKey', payload)
+    throwOnRpcError(result)
+    return Object.freeze({
+      key: new Uint8Array(Buffer.from(result.key, 'hex')),
+      public_key: new Uint8Array(Buffer.from(result.public_key, 'hex')),
+      signature_chain: result.signature_chain.map(sig => new Uint8Array(Buffer.from(sig, 'hex'))),
+      __name__: 'GetKeyResponseV1' as const,
+    })
+  }
+
+  /**
+   * Produce a versioned attestation over the given report data.
+   *
+   * The only CVM attestation entry point in v1: the attestation already carries
+   * the TDX quote and the event log, so there is no separate `getQuote`.
+   *
+   * @param report_data 1 to 64 bytes, zero-padded on the right to 64 by the agent.
+   * @param include_boottime_gpu_evidence Also return the boot-time GPU evidence,
+   * so a verifier gets both in one round trip. It is not bound to `report_data`.
+   */
+  async attest(
+    report_data: string | Buffer | Uint8Array,
+    include_boottime_gpu_evidence: boolean = false,
+  ): Promise<AttestResponseV1> {
+    const hex = to_hex(report_data)
+    if (hex.length === 0) {
+      throw new Error('report data must not be empty')
+    }
+    if (hex.length > 128) {
+      throw new Error(`report data must be at most 64 bytes, but received ${hex.length / 2}`)
+    }
+    const payload = JSON.stringify({ report_data: hex, include_boottime_gpu_evidence })
+    const result = await send_rpc_request<{ attestation: string, boottime_gpu_evidence?: string }>(
+      this.endpoint, '/v1/Attest', payload)
+    throwOnRpcError(result)
+    return Object.freeze({
+      __name__: 'AttestResponseV1' as const,
+      attestation: result.attestation as Hex,
+      boottime_gpu_evidence: result.boottime_gpu_evidence ?? '',
+    })
+  }
+
+  /**
+   * Collect GPU attestation evidence now, against a nonce you choose.
+   *
+   * Returns vendor-native evidence, not a verdict: select a verifier from each
+   * bundle's `vendor` and `format`, then check the signature, certificate chain,
+   * measurements and the embedded nonce yourself. Evidence does not by itself
+   * bind the GPU to this CVM.
+   *
+   * @param nonce Exactly 32 bytes, passed to the GPU verbatim. SPDM fixes the
+   * length; hash a longer challenge yourself.
+   */
+  async attestGpu(nonce: Buffer | Uint8Array): Promise<AttestGpuResponseV1> {
+    if (nonce.length !== 32) {
+      throw new Error(`nonce must be exactly 32 bytes, but received ${nonce.length}`)
+    }
+    const payload = JSON.stringify({ nonce: to_hex(nonce) })
+    const result = await send_rpc_request<{ bundles: GpuEvidenceBundleV1[] }>(
+      this.endpoint, '/v1/AttestGpu', payload)
+    throwOnRpcError(result)
+    return Object.freeze({
+      bundles: result.bundles ?? [],
+      __name__: 'AttestGpuResponseV1' as const,
+    })
+  }
+
+  /** Return this application's identity and configuration. */
+  async info(): Promise<InfoResponseV1> {
+    const result = await send_rpc_request<Omit<InfoResponseV1, '__name__'>>(this.endpoint, '/v1/Info', '{}')
+    throwOnRpcError(result)
+    return Object.freeze({
+      ...result,
+      __name__: 'InfoResponseV1' as const,
+    })
+  }
+
+  /** Return the guest agent version. Also the cheapest probe for v1 support. */
+  async version(): Promise<VersionResponseV1> {
+    const result = await send_rpc_request<{ version: string, rev: string }>(this.endpoint, '/v1/Version', '{}')
+    throwOnRpcError(result)
+    return Object.freeze({
+      ...result,
+      __name__: 'VersionResponseV1' as const,
+    })
   }
 }
