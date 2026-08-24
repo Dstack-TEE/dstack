@@ -114,6 +114,21 @@ export interface AttestResponse {
   boottime_gpu_evidence: string
 }
 
+/**
+ * Result of fresh, on-demand GPU evidence collection.
+ */
+export interface AttestGpuResponse {
+  __name__: Readonly<'AttestGpuResponse'>
+  bundles: GpuEvidenceBundle[]
+}
+
+export interface GpuEvidenceBundle {
+  vendor: string
+  format: string
+  /** Hex-encoded opaque evidence bytes, as represented by the JSON RPC. */
+  evidence: Hex
+}
+
 export interface GpuInfoResponse {
   __name__: Readonly<'GpuInfoResponse'>
 
@@ -317,6 +332,26 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
       __name__: 'AttestResponse',
       attestation: result.attestation as Hex,
       boottime_gpu_evidence: result.boottime_gpu_evidence ?? '',
+    })
+  }
+
+  /**
+   * Runs NVIDIA GPU attestation now, against a 32-byte nonce you choose.
+   *
+   * See {@link AttestGpuResponse} for what this does and does not prove.
+   */
+  async attestGpu(nonce: Buffer | Uint8Array): Promise<AttestGpuResponse> {
+    if (nonce.length !== 32) {
+      throw new Error(`Nonce must be exactly 32 bytes, got ${nonce.length}.`)
+    }
+    const payload = JSON.stringify({ nonce: to_hex(nonce) })
+    const result = await send_rpc_request<{ bundles: GpuEvidenceBundle[] }>(this.endpoint, '/AttestGpu', payload)
+    if ('error' in (result as any)) {
+      throw new Error((result as any)['error'] as string)
+    }
+    return Object.freeze({
+      ...result,
+      __name__: 'AttestGpuResponse' as const,
     })
   }
 

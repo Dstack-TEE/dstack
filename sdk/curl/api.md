@@ -238,7 +238,6 @@ You can submit the returned `attestation` directly to the verifier `/verify` end
 | Field | Type | Description | Example |
 |-------|------|-------------|----------|
 | `report_data` | string | Report data of max length 64 bytes. Padding with 0s if less than 64 bytes. | `"1234deadbeaf"` |
-| `include_boottime_gpu_evidence` | boolean | Optional, defaults to `false`. Also returns the boot-time GPU attestation evidence in `boottime_gpu_evidence`. | `true` |
 
 **Example:**
 ```bash
@@ -246,30 +245,57 @@ curl --unix-socket /var/run/dstack.sock -X POST \
   http://dstack/Attest \
   -H 'Content-Type: application/json' \
   -d '{
-    "report_data": "1234deadbeaf",
-    "include_boottime_gpu_evidence": true
+    "report_data": "1234deadbeaf"
   }'
 ```
 Or
 ```bash
-curl --unix-socket /var/run/dstack.sock 'http://dstack/Attest?report_data=1234deadbeaf&include_boottime_gpu_evidence=true'
+curl --unix-socket /var/run/dstack.sock http://dstack/Attest?report_data=00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 ```
 
 **Response:**
 ```json
 {
-  "attestation": "<hex-encoded-attestation>",
-  "boottime_gpu_evidence": "{\"result_code\": 0, \"claims\": [...]}"
+  "attestation": "<hex-encoded-attestation>"
 }
 ```
 
-`boottime_gpu_evidence` carries the same bytes [`GpuInfo`](#7-gpu-info) serves, so one call
+`boottime_gpu_evidence` carries the same bytes [`GpuInfo`](#8-gpu-info) serves, so one call
 returns both the quote and the GPU evidence a verifier needs. It is empty unless
 `include_boottime_gpu_evidence` was set and boot-time GPU attestation output exists. It is
 **not** bound to `report_data` — authenticate it with the `evidence_sha256`
 procedure documented under `GpuInfo` below.
 
-### 7. GPU Info
+### 7. Attest GPU
+
+Collects vendor-native GPU evidence for a caller-chosen 32-byte nonce.
+
+**Endpoint:** `/AttestGpu`
+
+**Request Parameters:**
+
+| Field | Type | Description | Example |
+|-------|------|-------------|----------|
+| `nonce` | string | Exactly 32 bytes, hex-encoded and passed to the GPU verbatim. | `"ab...ab"` (64 hex chars) |
+
+**Response:**
+
+```json
+{
+  "bundles": [{
+    "vendor": "nvidia",
+    "format": "nvidia-nvattest-collect-evidence-json-v1",
+    "evidence": "<hex-encoded opaque evidence>"
+  }]
+}
+```
+
+Select a verifier using each bundle's `vendor` and `format`. The verifier must check
+the evidence signature, certificate chain, measurements, and embedded nonce. The
+agent does not appraise the evidence. Evidence does not by itself bind the GPU to this
+CVM.
+
+### 8. GPU Info
 
 Returns GPU information collected during boot. Currently, this includes the
 complete JSON output produced by NVIDIA `nvattest`.

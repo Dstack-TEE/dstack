@@ -87,7 +87,7 @@ quote.quote        // hex-encoded TDX quote
 quote.event_log    // JSON string of measured events
 ```
 
-### `attest(reportData, includeBoottimeGpuEvidence?)`
+### `attest(reportData)`
 
 Versioned dstack attestation that works across TDX / GCP / Nitro providers. Preferred for cross-platform verifiers.
 
@@ -105,6 +105,22 @@ const { attestation, boottime_gpu_evidence } = await client.attest('app-state-sn
 The evidence is the same bytes ``gpuInfo()`` serves and is empty unless the flag was set
 and boot-time GPU attestation output exists. It is not bound to `report_data`; verify
 it with the measured `gpu-attestation` event digest as described under ``gpuInfo()``.
+
+### `attestGpu(nonce)`
+
+Collects vendor-native GPU evidence for a caller-chosen 32-byte nonce.
+
+```typescript
+const { bundles } = await client.attestGpu(crypto.randomBytes(32))
+for (const bundle of bundles) {
+  console.log(bundle.vendor, bundle.format, bundle.evidence)
+}
+```
+
+Select a verifier using each bundle's `vendor` and `format`. The verifier must check
+the evidence signature, certificate chain, measurements, and embedded nonce. Evidence
+is opaque and hex-encoded by the JSON RPC. It does not by itself bind the GPU to this
+CVM.
 
 ### `gpuInfo()`
 

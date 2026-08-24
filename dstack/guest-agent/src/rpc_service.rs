@@ -15,10 +15,10 @@ use dstack_guest_agent_rpc::{
     dstack_guest_server::{DstackGuestRpc, DstackGuestServer},
     tappd_server::{TappdRpc, TappdServer},
     worker_server::{WorkerRpc, WorkerServer},
-    AppInfo, AttestAppKeyRequest, AttestArgs, AttestResponse, DeriveK256KeyResponse, DeriveKeyArgs,
-    GetKeyArgs, GetKeyResponse, GetQuoteResponse, GetTlsKeyArgs, GetTlsKeyResponse,
-    GpuInfoResponse, HealthResponse, RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs,
-    TdxQuoteResponse, WorkerVersion,
+    AppInfo, AttestAppKeyRequest, AttestArgs, AttestGpuArgs, AttestGpuResponse, AttestResponse,
+    DeriveK256KeyResponse, DeriveKeyArgs, GetKeyArgs, GetKeyResponse, GetQuoteResponse,
+    GetTlsKeyArgs, GetTlsKeyResponse, GpuEvidenceBundle, GpuInfoResponse, HealthResponse,
+    RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse, WorkerVersion,
 };
 use dstack_types::{AppKeys, SysConfig, GPU_ATTESTATION_OUTPUT};
 use ed25519_dalek::ed25519::signature::hazmat::PrehashSigner;
@@ -89,6 +89,8 @@ struct AppStateInner {
     platform: Arc<dyn PlatformBackend>,
     /// Present only when the app opted into health gating; see `health`.
     health: Option<Arc<crate::health::HealthMonitor>>,
+    /// Serialises on-demand GPU attestation.
+    gpu_attestor: crate::gpu_attest::GpuAttestor,
 }
 
 impl AppStateInner {
@@ -172,6 +174,7 @@ impl AppState {
             serde_json::from_str(&fs::read_to_string(&config.sys_config_file)?)
                 .context("Failed to parse VM config")?;
         let collateral_urls = sys_config.collateral_urls();
+        let gpu_attestor = crate::gpu_attest::GpuAttestor::new();
         let vm_config = sys_config.vm_config;
         // Same trust anchor decision as dstack-util: never host-supplied, and
         // development roots only when this guest published them itself.
@@ -202,6 +205,7 @@ impl AppState {
                 vm_config,
                 platform,
                 health,
+                gpu_attestor,
             }),
         };
         me.maybe_request_demo_cert();
@@ -386,6 +390,23 @@ impl DstackGuestRpc for InternalRpcHandler {
 
     async fn info(self) -> Result<AppInfo> {
         get_info(&self.state, false).await
+    }
+
+    async fn attest_gpu(self, request: AttestGpuArgs) -> Result<AttestGpuResponse> {
+        let evidence = self
+            .state
+            .inner
+            .gpu_attestor
+            .attest(&request.nonce)
+            .await
+            .context("GPU attestation failed")?;
+        Ok(AttestGpuResponse {
+            bundles: vec![GpuEvidenceBundle {
+                vendor: "nvidia".to_string(),
+                format: "nvidia-nvattest-collect-evidence-json-v1".to_string(),
+                evidence,
+            }],
+        })
     }
 
     async fn gpu_info(self) -> Result<GpuInfoResponse> {
@@ -1012,6 +1033,7 @@ pNs85uhOZE8z2jr8Pg==
                 },
             }),
             health: None,
+            gpu_attestor: crate::gpu_attest::GpuAttestor::new(),
         };
 
         (

@@ -132,6 +132,18 @@ type GpuInfoResponse struct {
 	Attestation string `json:"attestation"`
 }
 
+// AttestGpuResponse is the result of fresh, on-demand GPU evidence collection.
+type AttestGpuResponse struct {
+	Bundles []GpuEvidenceBundle `json:"bundles"`
+}
+
+type GpuEvidenceBundle struct {
+	Vendor string `json:"vendor"`
+	Format string `json:"format"`
+	// Evidence contains hex-encoded opaque bytes, as represented by the JSON RPC.
+	Evidence string `json:"evidence"`
+}
+
 // Represents an event log entry in the TCB info
 type EventLog struct {
 	IMR          int    `json:"imr"`
@@ -551,6 +563,27 @@ func (c *DstackClient) AttestWithOptions(ctx context.Context, reportData []byte,
 	}
 
 	return &AttestResponse{Attestation: attestation, BoottimeGpuEvidence: response.BoottimeGpuEvidence}, nil
+}
+
+// AttestGpu runs NVIDIA GPU attestation now, against a 32-byte nonce you choose.
+//
+// See AttestGpuResponse for what this does and does not prove.
+func (c *DstackClient) AttestGpu(ctx context.Context, nonce []byte) (*AttestGpuResponse, error) {
+	if len(nonce) != 32 {
+		return nil, fmt.Errorf("nonce must be exactly 32 bytes, got %d", len(nonce))
+	}
+
+	payload := map[string]interface{}{"nonce": hex.EncodeToString(nonce)}
+	data, err := c.sendRPCRequest(ctx, "/AttestGpu", payload)
+	if err != nil {
+		return nil, err
+	}
+
+	var response AttestGpuResponse
+	if err := json.Unmarshal(data, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
 }
 
 // GpuInfo returns GPU information collected during boot.

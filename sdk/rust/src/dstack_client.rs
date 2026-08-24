@@ -176,6 +176,19 @@ impl DstackClient {
         Ok(response)
     }
 
+    /// Collects vendor-native GPU evidence for a caller-chosen 32-byte nonce.
+    ///
+    /// Select a verifier using each bundle's vendor and format. The verifier must
+    /// check the signature, certificate chain, measurements, and embedded nonce.
+    pub async fn attest_gpu(&self, nonce: Vec<u8>) -> Result<AttestGpuResponse> {
+        if nonce.len() != 32 {
+            anyhow::bail!("Nonce must be exactly 32 bytes")
+        }
+        let data = json!({ "nonce": hex_encode(nonce) });
+        let response = self.send_rpc_request("/AttestGpu", &data).await?;
+        Ok(serde_json::from_value::<AttestGpuResponse>(response)?)
+    }
+
     /// Returns GPU information collected during boot.
     pub async fn gpu_info(&self) -> Result<GpuInfoResponse> {
         let response = self.send_rpc_request("/GpuInfo", &json!({})).await?;

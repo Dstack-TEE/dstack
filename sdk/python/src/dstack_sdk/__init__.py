@@ -4,12 +4,14 @@
 
 from .dstack_client import AsyncDstackClient
 from .dstack_client import AsyncTappdClient
+from .dstack_client import AttestGpuResponse
 from .dstack_client import AttestResponse
 from .dstack_client import DstackClient
 from .dstack_client import EventLog
 from .dstack_client import GetKeyResponse
 from .dstack_client import GetQuoteResponse
 from .dstack_client import GetTlsKeyResponse
+from .dstack_client import GpuEvidenceBundle
 from .dstack_client import GpuInfoResponse
 from .dstack_client import InfoResponse
 from .dstack_client import SignResponse
@@ -38,6 +40,8 @@ __all__ = [
     "GetKeyResponse",
     "GetTlsKeyResponse",
     "AttestResponse",
+    "AttestGpuResponse",
+    "GpuEvidenceBundle",
     "GpuInfoResponse",
     "GetQuoteResponse",
     "InfoResponse",

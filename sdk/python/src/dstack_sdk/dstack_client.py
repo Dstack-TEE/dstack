@@ -163,6 +163,18 @@ class AttestResponse(BaseModel):
         return bytes.fromhex(self.attestation)
 
 
+class GpuEvidenceBundle(BaseModel):
+    vendor: str
+    format: str
+    evidence: str
+
+
+class AttestGpuResponse(BaseModel):
+    """Result of fresh, on-demand GPU evidence collection."""
+
+    bundles: list[GpuEvidenceBundle]
+
+
 class GpuInfoResponse(BaseModel):
     attestation: str
 
@@ -457,6 +469,19 @@ class AsyncDstackClient(BaseClient):
         )
         return AttestResponse(**result)
 
+    async def attest_gpu(self, nonce: bytes) -> AttestGpuResponse:
+        """Collect vendor-native GPU evidence for a 32-byte nonce.
+
+        Select a verifier using each bundle's vendor and format, and verify the
+        signature, certificate chain, measurements, and embedded nonce.
+        """
+        if not isinstance(nonce, (bytes, bytearray)) or len(nonce) != 32:
+            raise ValueError("nonce must be exactly 32 bytes")
+        result = await self._send_rpc_request(
+            "AttestGpu", {"nonce": binascii.hexlify(bytes(nonce)).decode()}
+        )
+        return AttestGpuResponse(**result)
+
     async def gpu_info(self) -> GpuInfoResponse:
         """Return GPU information collected during boot."""
         result = await self._send_rpc_request("GpuInfo", {})
@@ -592,6 +617,15 @@ class DstackClient(BaseClient):
 
         Set include_boottime_gpu_evidence to also return the boot-time GPU attestation
         evidence in AttestResponse.boottime_gpu_evidence.
+        """
+        raise NotImplementedError
+
+    @call_async
+    def attest_gpu(self, nonce: bytes) -> AttestGpuResponse:
+        """Collect vendor-native GPU evidence for a 32-byte nonce.
+
+        Select a verifier using each bundle's vendor and format, and verify the
+        signature, certificate chain, measurements, and embedded nonce.
         """
         raise NotImplementedError
 

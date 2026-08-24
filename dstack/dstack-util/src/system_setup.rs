@@ -1434,11 +1434,8 @@ async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
 mod gpu {
     use super::*;
 
-    const NVATTEST: &str = "/usr/bin/nvattest";
-    const ATTESTATION_TIMEOUT: Duration = Duration::from_secs(300);
     const EVENT_VERSION: u32 = 2;
     const POLICY_ENTRYPOINT: &str = "data.policy.nv_match";
-    const TRUST_OUTPOST_POLICY: &str = "/usr/share/nvattest/policies/allow_trust_outpost_ocsp.rego";
     /// Bound Rego evaluation so a runaway application policy cannot hang boot.
     const POLICY_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -1578,23 +1575,6 @@ mod gpu {
         Ok(inventory.nvidia)
     }
 
-    /// Run a GPU tool with a bounded timeout so a wedged driver/GPU cannot
-    /// hang the boot indefinitely (dstack-prepare is a oneshot unit with no
-    /// start timeout of its own).
-    async fn run_command(
-        program: &str,
-        args: &[&str],
-        timeout: Duration,
-    ) -> Result<std::process::Output> {
-        tokio::time::timeout(
-            timeout,
-            tokio::process::Command::new(program).args(args).output(),
-        )
-        .await
-        .with_context(|| format!("{program} timed out"))?
-        .with_context(|| format!("failed to run {program}"))
-    }
-
     fn init_nvml(expected_devices: u32) -> Result<nvml_wrapper::Nvml> {
         let nvml = nvml_wrapper::Nvml::init().context("failed to initialize NVML")?;
         let devices = nvml
@@ -1726,52 +1706,6 @@ mod gpu {
         serde_json::to_vec(&event).context("failed to serialize GPU attestation event")
     }
 
-    fn normalize_proxy_url(proxy_url: Option<&str>) -> Result<Option<String>> {
-        let Some(proxy_url) = proxy_url.map(str::trim).filter(|url| !url.is_empty()) else {
-            return Ok(None);
-        };
-        let parsed = url::Url::parse(proxy_url).context("invalid NVIDIA attestation proxy URL")?;
-        if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
-            bail!("NVIDIA attestation proxy must be an absolute HTTP(S) URL");
-        }
-        if parsed.query().is_some()
-            || parsed.fragment().is_some()
-            || !parsed.username().is_empty()
-            || parsed.password().is_some()
-            || parsed.path() != "/"
-        {
-            bail!(
-                "NVIDIA attestation proxy URL must not contain credentials, path, query, or fragment"
-            );
-        }
-        Ok(Some(parsed.as_str().trim_end_matches('/').to_string()))
-    }
-
-    fn nvattest_args(nonce: &str, proxy_url: Option<&str>) -> Result<Vec<String>> {
-        let mut args = vec![
-            "attest".to_string(),
-            "--device".to_string(),
-            "gpu".to_string(),
-            "--verifier".to_string(),
-            "local".to_string(),
-            "--nonce".to_string(),
-            nonce.to_string(),
-            "--format".to_string(),
-            "json".to_string(),
-        ];
-        if let Some(proxy_url) = normalize_proxy_url(proxy_url)? {
-            args.extend([
-                "--ocsp-url".to_string(),
-                format!("{proxy_url}/ocsp"),
-                "--rim-url".to_string(),
-                proxy_url,
-                "--relying-party-policy".to_string(),
-                TRUST_OUTPOST_POLICY.to_string(),
-            ]);
-        }
-        Ok(args)
-    }
-
     /// Run local GPU attestation via nvattest with a fresh evidence nonce. If
     /// sys-config selects a collateral proxy, both RIM and OCSP traffic is
     /// routed through it and NVIDIA's Trust Outpost policy accepts cached OCSP
@@ -1781,7 +1715,7 @@ mod gpu {
         expected_devices: u32,
         proxy_url: Option<&str>,
     ) -> Result<GpuAttestationResult> {
-        if !Path::new(NVATTEST).exists() {
+        if !nvattest::available() {
             bail!("nvattest is not available in this image");
         }
         // Certificate/OCSP validation needs a sane clock even when
@@ -1789,26 +1723,12 @@ mod gpu {
         if let Err(err) = cmd!(chronyc makestep) {
             warn!("failed to step system clock: {err:?}");
         }
-        let nonce = hex::encode(rand::thread_rng().gen::<[u8; 32]>());
-        let args = nvattest_args(&nonce, proxy_url)?;
-        if args.iter().any(|arg| arg == "--relying-party-policy")
-            && !Path::new(TRUST_OUTPOST_POLICY).is_file()
-        {
-            bail!("NVIDIA attestation proxy is configured but {TRUST_OUTPOST_POLICY} is missing");
-        }
-        let args = args.iter().map(String::as_str).collect::<Vec<_>>();
-        let output = run_command(NVATTEST, &args, ATTESTATION_TIMEOUT).await?;
-        if !output.stderr.is_empty() {
-            info!("nvattest: {}", truncated_lossy(&output.stderr, 2048));
-        }
+        let nonce: [u8; nvattest::NONCE_LEN] = rand::thread_rng().gen();
+        let (nonce, output) = nvattest::run(&nonce, proxy_url, nvattest::DEFAULT_TIMEOUT).await?;
+        // Persist before judging the exit status: a failed appraisal is exactly
+        // when the evidence is worth having on disk.
         save_attestation_output(&output.stdout).context("failed to save GPU attestation output")?;
-        if !output.status.success() {
-            bail!(
-                "nvattest exited with {}: {}",
-                output.status,
-                truncated_lossy(&output.stderr, 512),
-            );
-        }
+        nvattest::check_status(&output)?;
         let claims = validate_attestation_output(&output.stdout, &nonce, expected_devices)?;
         Ok(GpuAttestationResult {
             claims: claims.raw,
@@ -1880,15 +1800,6 @@ mod gpu {
         Ok(())
     }
 
-    fn truncated_lossy(bytes: &[u8], limit: usize) -> String {
-        let text = String::from_utf8_lossy(bytes);
-        let text = text.trim();
-        match text.char_indices().nth(limit) {
-            Some((idx, _)) => format!("{}...", &text[..idx]),
-            None => text.to_string(),
-        }
-    }
-
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -1926,6 +1837,48 @@ mod gpu {
         const H100_ATTESTATION_OUTPUT: &[u8] =
             include_bytes!("../tests/fixtures/gpu_attestation_h100.json");
 
+        /// The `AttestGpu` API documents that its output cannot be verified by a
+        /// third party, because the local verifier reports a conclusion rather
+        /// than the GPU's signed report. That is a claim about NVIDIA's output
+        /// format, so pin it: if a future SDK starts signing the detached EAT,
+        /// this fails and the API docs need revisiting rather than quietly
+        /// becoming wrong.
+        #[test]
+        fn local_verifier_output_is_unsigned_self_report() {
+            let output: Value = serde_json::from_slice(H100_ATTESTATION_OUTPUT).unwrap();
+            let eat = &output["detached_eat"];
+            let jwt = eat[0][1].as_str().expect("detached EAT carries a JWT");
+            let (header_b64, rest) = jwt.split_once('.').unwrap();
+            let (_, signature) = rest.split_once('.').unwrap();
+            assert!(
+                signature.is_empty(),
+                "detached EAT is signed; AttestGpu docs claim it is not"
+            );
+
+            use base64::Engine as _;
+            let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(header_b64)
+                .unwrap();
+            let header: Value = serde_json::from_slice(&header).unwrap();
+            assert_eq!(header["alg"], "none");
+
+            // And the signed artifacts really are absent: the claims carry
+            // verdicts about the certificate chain, not the chain itself.
+            let claim = &output["claims"][0];
+            assert_eq!(
+                claim["x-nvidia-gpu-attestation-report-signature-verified"],
+                true
+            );
+            assert!(
+                claim["x-nvidia-gpu-attestation-report-cert-chain"]
+                    .as_object()
+                    .expect("cert-chain claim is a verdict object")
+                    .keys()
+                    .all(|key| key.starts_with("x-nvidia-cert-")),
+                "cert-chain claim carries certificates, not just verdicts"
+            );
+        }
+
         #[test]
         fn inventory_counts_nvidia_and_non_nvidia_gpus() {
             let root = tempfile::tempdir().unwrap();
@@ -1954,35 +1907,6 @@ mod gpu {
                 nvidia: 2,
             };
             assert_eq!(nvidia_gpu_count(nvidia).unwrap(), 2);
-        }
-
-        #[test]
-        fn proxy_routes_ocsp_and_rim_and_selects_outpost_policy() {
-            let nonce = format!("test-nonce-{}", std::process::id());
-            let args = nvattest_args(&nonce, Some("http://10.0.2.2:8090/")).unwrap();
-            assert!(args
-                .windows(2)
-                .any(|args| args == ["--ocsp-url", "http://10.0.2.2:8090/ocsp"]));
-            assert!(args
-                .windows(2)
-                .any(|args| args == ["--rim-url", "http://10.0.2.2:8090"]));
-            assert!(args
-                .windows(2)
-                .any(|args| args == ["--relying-party-policy", TRUST_OUTPOST_POLICY]));
-
-            let direct = nvattest_args(&nonce, None).unwrap();
-            assert!(!direct.iter().any(|arg| arg == "--ocsp-url"));
-            assert!(!direct.iter().any(|arg| arg == "--relying-party-policy"));
-        }
-
-        #[test]
-        fn proxy_url_validation_is_fail_closed() {
-            let nonce = format!("test-nonce-{}", std::process::id());
-            assert!(nvattest_args(&nonce, Some("file:///tmp/proxy")).is_err());
-            assert!(nvattest_args(&nonce, Some("https://user@example.com")).is_err());
-            assert!(nvattest_args(&nonce, Some("https://example.com?q=1")).is_err());
-            assert!(nvattest_args(&nonce, Some("https://example.com/base")).is_err());
-            assert!(normalize_proxy_url(Some("  ")).unwrap().is_none());
         }
 
         #[test]

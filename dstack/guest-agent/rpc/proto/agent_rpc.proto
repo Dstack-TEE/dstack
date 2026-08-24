@@ -61,6 +61,19 @@ service DstackGuest {
   // Get GPU information collected during boot.
   rpc GpuInfo(google.protobuf.Empty) returns (GpuInfoResponse) {}
 
+  // Collect GPU attestation evidence now, against a nonce the caller chooses.
+  //
+  // This answers "is the device I can talk to right now a genuine, CC-enabled
+  // NVIDIA GPU that signs my challenge", which `GpuInfo` cannot: that returns a
+  // record written at boot. Use it after anything that may have reinitialised
+  // the GPU -- a driver reload leaves a device that responds to NVML but can no
+  // longer attest -- and before submitting work you care about.
+  //
+  // Returns vendor-native evidence, not a local verdict, so a relying party can
+  // appraise it with its own verifier. Evidence still does not bind the GPU to
+  // this TD; see `AttestGpuResponse.bundles`.
+  rpc AttestGpu(AttestGpuArgs) returns (AttestGpuResponse) {}
+
   // Sign a payload
   rpc Sign(SignRequest) returns (SignResponse) {}
 
@@ -227,6 +240,33 @@ message AttestResponse {
   // the device is attached to, so a fresh report can be relayed from a genuine
   // remote GPU. Only TDISP/TEE-IO device binding closes that.
   string boottime_gpu_evidence = 2;
+}
+
+message AttestGpuArgs {
+  // Exactly 32 bytes of caller-chosen challenge, passed to the GPU verbatim.
+  //
+  // SPDM fixes the evidence nonce at 32 bytes, and dstack applies no transform
+  // so a caller can compare these bytes directly against the `eat_nonce` claim
+  // rather than reversing a hash. To bind a longer challenge, hash it yourself.
+  bytes nonce = 1;
+}
+
+message AttestGpuResponse {
+  // Vendor-native evidence bundles. The caller must select a verifier using
+  // `vendor` and `format`, then verify the signature, certificate chain,
+  // measurements, and the nonce embedded in the evidence.
+  repeated GpuEvidenceBundle bundles = 1;
+}
+
+message GpuEvidenceBundle {
+  // Stable GPU vendor identifier, for example `nvidia`, `amd`, or `intel`.
+  string vendor = 1;
+
+  // Vendor-specific evidence format and version.
+  string format = 2;
+
+  // Opaque vendor-native evidence bytes. Do not assume UTF-8 or JSON.
+  bytes evidence = 3;
 }
 
 message GpuInfoResponse {

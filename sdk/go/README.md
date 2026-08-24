@@ -592,6 +592,25 @@ The evidence is the same bytes ``GpuInfo`` serves and is empty unless the flag w
 and boot-time GPU attestation output exists. It is not bound to `report_data`; verify
 it with the measured `gpu-attestation` event digest as described under ``GpuInfo``.
 
+##### `AttestGpu(ctx context.Context, nonce []byte) (*AttestGpuResponse, error)`
+
+Collects vendor-native GPU evidence for a caller-chosen 32-byte nonce.
+
+```go
+resp, err := client.AttestGpu(ctx, nonce)
+if err != nil {
+    log.Fatal(err)
+}
+for _, bundle := range resp.Bundles {
+    fmt.Println(bundle.Vendor, bundle.Format, bundle.Evidence)
+}
+```
+
+Select a verifier using each bundle's `Vendor` and `Format`. The verifier must check
+the evidence signature, certificate chain, measurements, and embedded nonce. Evidence
+is opaque and hex-encoded by the JSON RPC. It does not by itself bind the GPU to this
+CVM.
+
 ##### `GpuInfo(ctx context.Context) (*GpuInfoResponse, error)`
 
 Returns GPU information collected during boot. Currently, this includes the

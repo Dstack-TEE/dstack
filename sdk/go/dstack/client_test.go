@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -93,7 +94,7 @@ func TestAttestWithBoottimeGpuEvidence(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"attestation":  "deadbeef",
+			"attestation":           "deadbeef",
 			"boottime_gpu_evidence": evidence,
 		})
 	}))
@@ -106,6 +107,48 @@ func TestAttestWithBoottimeGpuEvidence(t *testing.T) {
 	}
 	if resp.BoottimeGpuEvidence != evidence {
 		t.Fatalf("unexpected gpu evidence: %s", resp.BoottimeGpuEvidence)
+	}
+}
+
+func TestAttestGpu(t *testing.T) {
+	const evidence = `[{"arch":"HOPPER","nonce":"ab","evidence":"BASE64","certificate":"BASE64"}]`
+	nonce := bytes.Repeat([]byte{0xab}, 32)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/AttestGpu" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		var payload map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("failed to decode request: %v", err)
+		}
+		if payload["nonce"] != hex.EncodeToString(nonce) {
+			t.Fatalf("nonce was not forwarded verbatim, got: %v", payload["nonce"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"bundles": []map[string]string{{
+				"vendor": "nvidia", "format": "nvidia-test-v1", "evidence": evidence,
+			}},
+		})
+	}))
+	defer server.Close()
+
+	client := dstack.NewDstackClient(dstack.WithEndpoint(server.URL))
+	resp, err := client.AttestGpu(context.Background(), nonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Bundles) != 1 || resp.Bundles[0].Vendor != "nvidia" || resp.Bundles[0].Evidence != evidence {
+		t.Fatalf("unexpected evidence bundles: %+v", resp.Bundles)
+	}
+}
+
+func TestAttestGpuRejectsWrongNonceLength(t *testing.T) {
+	client := dstack.NewDstackClient()
+	for _, n := range [][]byte{nil, bytes.Repeat([]byte{1}, 31), bytes.Repeat([]byte{1}, 33)} {
+		if _, err := client.AttestGpu(context.Background(), n); err == nil {
+			t.Fatalf("expected a %d-byte nonce to be rejected", len(n))
+		}
 	}
 }
 

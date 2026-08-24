@@ -112,6 +112,22 @@ The evidence is the same bytes ``gpu_info()`` serves and is empty unless the fla
 and boot-time GPU attestation output exists. It is not bound to `report_data`; verify
 it with the measured `gpu-attestation` event digest as described under ``gpu_info()``.
 
+### On-demand GPU Attestation
+
+`attest_gpu(nonce)` collects vendor-native GPU evidence for a caller-chosen 32-byte
+nonce.
+
+```python
+result = client.attest_gpu(os.urandom(32))
+for bundle in result.bundles:
+    print(bundle.vendor, bundle.format, bundle.evidence)
+```
+
+Select a verifier using each bundle's `vendor` and `format`. The verifier must check
+the evidence signature, certificate chain, measurements, and embedded nonce. Evidence
+is opaque and hex-encoded by the JSON RPC. It does not by itself bind the GPU to this
+CVM.
+
 ### GPU Info
 
 `gpu_info()` returns GPU information collected during boot. Currently, this

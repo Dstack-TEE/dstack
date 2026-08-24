@@ -10,6 +10,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+nvattest.workspace = true
 aes-gcm.workspace = true
 anyhow.workspace = true
 clap.workspace = true
@@ -68,4 +69,5 @@ safe-write.workspace = true
 errify.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
 rand.workspace = true

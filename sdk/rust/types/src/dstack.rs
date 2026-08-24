@@ -120,6 +120,27 @@ pub struct AttestConfig {
     pub include_boottime_gpu_evidence: bool,
 }
 
+/// Response from fresh, on-demand GPU evidence collection.
+///
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+pub struct AttestGpuResponse {
+    pub bundles: Vec<GpuEvidenceBundle>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+pub struct GpuEvidenceBundle {
+    /// Stable GPU vendor identifier.
+    pub vendor: String,
+    /// Vendor-specific evidence format and version.
+    pub format: String,
+    /// Hex-encoded opaque evidence bytes, as represented by the JSON RPC.
+    pub evidence: String,
+}
+
 /// Response containing the complete NVIDIA GPU attestation output.
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
