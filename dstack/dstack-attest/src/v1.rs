@@ -327,8 +327,23 @@ impl Attestation {
             stack: self.stack.into_dstack_pod(report_data_payload),
         }
     }
+}
 
-    /// Return a new attestation with the report_data patched in both platform quote and stack.
+/// Helpers for assembling synthetic attestations from a captured fixture.
+///
+/// Simulator only. Patching the report data into a quote leaves the quote's
+/// signature covering the bytes that were there before, so what comes out
+/// cannot pass verification -- it is evidence-shaped, not evidence. That is
+/// fine for a simulator whose callers skip verification, and wrong everywhere
+/// else, so these are behind a feature that only the simulator turns on: a
+/// per-package build of kms, gateway or verifier cannot reach them at all.
+///
+/// (`cargo build --workspace` unifies features, so a workspace-wide build does
+/// compile them into every crate. The gate is a statement of intent and a
+/// backstop for the documented per-package release builds, not a hard wall.)
+#[cfg(any(test, feature = "simulator"))]
+impl Attestation {
+    /// Patch `report_data` into both the platform quote and the stack evidence.
     pub fn with_report_data(self, report_data: [u8; 64]) -> Self {
         use crate::attestation::{SNP_REPORT_DATA_RANGE, TDX_QUOTE_REPORT_DATA_RANGE};
 
@@ -380,6 +395,20 @@ impl Attestation {
             evidence @ (PlatformEvidence::NitroEnclave { .. }
             | PlatformEvidence::AwsNitroTpm { .. }) => evidence,
         };
+        Self {
+            version: self.version,
+            platform,
+            stack: self.stack,
+        }
+        .with_stack_report_data(report_data)
+    }
+
+    /// Patch `report_data` into the stack evidence only, leaving the platform
+    /// quote untouched.
+    ///
+    /// For callers that go on to generate a real quote over the same report
+    /// data: patching the fixture's quote first would only be overwritten.
+    pub fn with_stack_report_data(self, report_data: [u8; 64]) -> Self {
         let stack = match self.stack {
             StackEvidence::Dstack {
                 runtime_events,
@@ -404,7 +433,7 @@ impl Attestation {
         };
         Self {
             version: self.version,
-            platform,
+            platform: self.platform,
             stack,
         }
     }

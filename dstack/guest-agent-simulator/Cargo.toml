@@ -22,7 +22,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 rocket.workspace = true
 ra-rpc = { workspace = true, features = ["rocket"] }
-ra-tls = { workspace = true, features = ["quote"] }
+ra-tls = { workspace = true, features = ["quote", "simulator"] }
 dstack-guest-agent = { path = "../guest-agent" }
 dstack-guest-agent-rpc.workspace = true
 dstack-types.workspace = true

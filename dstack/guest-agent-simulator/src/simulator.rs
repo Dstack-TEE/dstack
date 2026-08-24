@@ -116,7 +116,12 @@ fn prepare_attestation(
             context,
         ));
     };
-    let mut attestation = attestation.clone().into_v1().with_report_data(report_data);
+    // Stack half only: the fixture quote read below is replaced outright by
+    // the generated one, so patching its report data would be undone.
+    let mut attestation = attestation
+        .clone()
+        .into_v1()
+        .with_stack_report_data(report_data);
     let quote = attestation
         .platform
         .tdx_quote()

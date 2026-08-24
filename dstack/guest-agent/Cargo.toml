@@ -57,3 +57,9 @@ or-panic.workspace = true
 cc-eventlog.workspace = true
 listenfd.workspace = true
 libc.workspace = true
+
+[dev-dependencies]
+# The test-only mock platform builds attestations from a fixture, which needs
+# the synthetic-attestation helpers. Declared here so the production build of
+# this crate does not carry them.
+dstack-attest = { workspace = true, features = ["simulator"] }
