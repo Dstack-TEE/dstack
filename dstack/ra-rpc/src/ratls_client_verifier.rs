@@ -25,7 +25,7 @@
 
 use std::sync::Arc;
 
-use rocket::tls::{ClientHello, Resolver, ServerConfig};
+use rocket::tls::{ClientHello, Resolver, ServerConfig, TlsConfig};
 use rocket::{Build, Rocket};
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, UnixTime};
@@ -158,15 +158,19 @@ pub struct RaTlsClientAuth {
 impl Resolver for RaTlsClientAuth {
     async fn init(rocket: &Rocket<Build>) -> rocket::tls::Result<Self> {
         let figment = rocket.figment();
-        let certs: Option<String> = figment.extract_inner("tls.certs").ok();
-        let key: Option<String> = figment.extract_inner("tls.key").ok();
-        let (Some(certs), Some(key)) = (certs, key) else {
-            // No TLS configured (plain-HTTP dev servers). Resolving to `None` lets
-            // rocket keep whatever it would have done without us.
-            warn!("no tls.certs/tls.key configured, RA-TLS client auth is inactive");
+        if figment.find_value("tls").is_err() {
+            // No TLS configured at all (plain-HTTP dev servers). Resolving to `None`
+            // lets rocket keep whatever it would have done without us.
+            warn!("no tls section configured, RA-TLS client auth is inactive");
             return Ok(Self { config: None });
-        };
-        let config = build_server_config(&certs, &key)
+        }
+        // The section exists, so it must parse. Degrading to `None` here would leave
+        // rocket serving a listener that never asks for a client certificate, and
+        // every attested RPC would then fail far from the cause. Fail the launch
+        // instead - including when the section is only half-written, which is the
+        // case a plain `.ok()` used to swallow.
+        let tls: TlsConfig = figment.extract_inner("tls")?;
+        let config = build_server_config(&tls)
             .map_err(|err| rocket::figment::Error::from(err.to_string()))?;
         info!("RA-TLS client certificate verification enabled");
         Ok(Self {
@@ -179,7 +183,7 @@ impl Resolver for RaTlsClientAuth {
     }
 }
 
-fn build_server_config(certs_path: &str, key_path: &str) -> anyhow::Result<ServerConfig> {
+fn build_server_config(tls: &TlsConfig) -> anyhow::Result<ServerConfig> {
     use anyhow::Context as _;
     use rustls::pki_types::pem::PemObject as _;
 
@@ -187,12 +191,14 @@ fn build_server_config(certs_path: &str, key_path: &str) -> anyhow::Result<Serve
         .cloned()
         .unwrap_or_else(|| Arc::new(rustls::crypto::ring::default_provider()));
 
-    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(certs_path)
-        .with_context(|| format!("failed to read certs from {certs_path}"))?
+    // Read through rocket's own readers so a path and inline PEM bytes are both
+    // accepted, exactly as the stock listener accepts them.
+    let mut certs_reader = tls.certs_reader().context("failed to read tls.certs")?;
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_reader_iter(&mut certs_reader)
         .collect::<Result<_, _>>()
-        .with_context(|| format!("failed to parse certs from {certs_path}"))?;
-    let key = PrivateKeyDer::from_pem_file(key_path)
-        .with_context(|| format!("failed to read key from {key_path}"))?;
+        .context("failed to parse tls.certs")?;
+    let mut key_reader = tls.key_reader().context("failed to read tls.key")?;
+    let key = PrivateKeyDer::from_pem_reader(&mut key_reader).context("failed to parse tls.key")?;
 
     let mut config = rustls::ServerConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
@@ -202,7 +208,7 @@ fn build_server_config(certs_path: &str, key_path: &str) -> anyhow::Result<Serve
         .context("failed to load server certificate")?;
     // Match rocket's own ALPN so HTTP/2 keeps working.
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-    debug!("built RA-TLS server config from {certs_path}");
+    debug!("built RA-TLS server config");
     Ok(config)
 }
 

@@ -270,3 +270,45 @@ fn tempdir() -> std::path::PathBuf {
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
+
+/// A `tls` section that exists but does not parse must stop the launch. Degrading to
+/// "no resolver" would leave rocket serving a listener that never asks for a client
+/// certificate, so every attested RPC would fail somewhere far from the cause.
+#[tokio::test]
+async fn a_half_written_tls_section_fails_init() {
+    let figment = rocket::Config::figment().merge(("tls.certs", "/nonexistent.pem"));
+    let rocket = rocket::custom(figment);
+    let err = RaTlsClientAuth::init(&rocket)
+        .await
+        .err()
+        .expect("a tls section without a key must not be ignored");
+    assert!(
+        format!("{err}").contains("key"),
+        "expected the missing key to be named, got: {err}"
+    );
+}
+
+/// No `tls` section at all is the plain-HTTP dev case: init must succeed and stay
+/// inactive rather than fail the launch. (`resolve` is unreachable here - rocket only
+/// calls it once a handshake is in flight, and there is no TLS listener to have one.)
+#[tokio::test]
+async fn no_tls_section_still_launches() {
+    let rocket = rocket::custom(rocket::Config::figment());
+    RaTlsClientAuth::init(&rocket)
+        .await
+        .expect("a plain-HTTP server must still launch");
+}
+
+/// Inline PEM bytes are what rocket's own listener accepts alongside paths. The
+/// resolver reads through rocket's readers, so both shapes work.
+#[tokio::test]
+async fn inline_pem_bytes_are_accepted() {
+    let server = server_cert();
+    let figment = rocket::Config::figment()
+        .merge(("tls.certs", server.cert_pem.as_bytes().to_vec()))
+        .merge(("tls.key", server.key_pem.as_bytes().to_vec()));
+    let rocket = rocket::custom(figment);
+    RaTlsClientAuth::init(&rocket)
+        .await
+        .expect("inline PEM must be accepted, as it is by the stock listener");
+}
