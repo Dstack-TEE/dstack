@@ -18,11 +18,12 @@ use dstack_guest_agent_rpc::{
     AppInfo, AttestAppKeyRequest, AttestArgs, AttestGpuArgs, AttestGpuResponse, AttestResponse,
     DeriveK256KeyResponse, DeriveKeyArgs, GetKeyArgs, GetKeyResponse, GetQuoteResponse,
     GetTlsKeyArgs, GetTlsKeyResponse, GpuEvidenceBundle, GpuInfoResponse, HealthResponse,
-    RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse, WorkerVersion,
+    RawQuoteArgs, SignRequest, SignResponse, TdxQuoteArgs, TdxQuoteResponse, VerifyRequest,
+    VerifyResponse, WorkerVersion,
 };
 use dstack_types::{AppKeys, SysConfig, GPU_ATTESTATION_OUTPUT};
-use ed25519_dalek::ed25519::signature::hazmat::PrehashSigner;
-use ed25519_dalek::{Signer as Ed25519Signer, SigningKey as Ed25519SigningKey};
+use ed25519_dalek::ed25519::signature::hazmat::{PrehashSigner, PrehashVerifier};
+use ed25519_dalek::{Signer as Ed25519Signer, SigningKey as Ed25519SigningKey, Verifier};
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
 use or_panic::ResultOrPanic;
@@ -472,6 +473,47 @@ impl DstackGuestRpc for InternalRpcHandler {
             ],
             public_key,
         })
+    }
+
+    /// Deprecated, kept for 0.5.x clients only. See the RPC's doc comment in
+    /// agent_rpc.proto.
+    ///
+    /// k256 rejects a non-canonical (high-S) signature outright, so a malleated
+    /// copy of a valid signature fails to parse rather than verifying. Keep it
+    /// that way: 0.5.x answered the same, and callers may be treating this
+    /// answer as a uniqueness check.
+    async fn verify(self, request: VerifyRequest) -> Result<VerifyResponse> {
+        let algorithm = normalize_algorithm(&request.algorithm);
+        let valid = match algorithm {
+            "ed25519" => {
+                let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(
+                    &request
+                        .public_key
+                        .as_slice()
+                        .try_into()
+                        .ok()
+                        .context("invalid public key")?,
+                )?;
+                let signature = ed25519_dalek::Signature::from_slice(&request.signature)?;
+                verifying_key.verify(&request.data, &signature).is_ok()
+            }
+            "secp256k1" => {
+                let verifying_key =
+                    k256::ecdsa::VerifyingKey::from_sec1_bytes(&request.public_key)?;
+                let signature = k256::ecdsa::Signature::from_slice(&request.signature)?;
+                verifying_key.verify(&request.data, &signature).is_ok()
+            }
+            "secp256k1_prehashed" => {
+                let verifying_key =
+                    k256::ecdsa::VerifyingKey::from_sec1_bytes(&request.public_key)?;
+                let signature = k256::ecdsa::Signature::from_slice(&request.signature)?;
+                verifying_key
+                    .verify_prehash(&request.data, &signature)
+                    .is_ok()
+            }
+            _ => return Err(anyhow::anyhow!("Unsupported algorithm")),
+        };
+        Ok(VerifyResponse { valid })
     }
 
     async fn attest(self, request: AttestArgs) -> Result<AttestResponse> {
@@ -1473,5 +1515,87 @@ pNs85uhOZE8z2jr8Pg==
 
         // k256 alias should produce the same public key as secp256k1
         assert_eq!(resp_k256.public_key, resp_secp.public_key);
+    }
+
+    /// Sign with `algorithm`, then verify the result through the legacy Verify
+    /// RPC -- the round trip a 0.5.x SDK performs.
+    async fn sign_then_verify(
+        algorithm: &str,
+        data: Vec<u8>,
+    ) -> (AppState, tempfile::NamedTempFile, SignResponse) {
+        let (state, guard) = setup_test_state().await;
+        let signed = InternalRpcHandler {
+            state: state.clone(),
+        }
+        .sign(SignRequest {
+            algorithm: algorithm.to_string(),
+            data: data.clone(),
+        })
+        .await
+        .unwrap();
+
+        let verified = InternalRpcHandler {
+            state: state.clone(),
+        }
+        .verify(VerifyRequest {
+            algorithm: algorithm.to_string(),
+            data,
+            signature: signed.signature.clone(),
+            public_key: signed.public_key.clone(),
+        })
+        .await
+        .unwrap();
+        assert!(verified.valid);
+
+        (state, guard, signed)
+    }
+
+    #[tokio::test]
+    async fn verify_accepts_an_ed25519_signature_from_sign() {
+        sign_then_verify("ed25519", b"test message for ed25519".to_vec()).await;
+    }
+
+    #[tokio::test]
+    async fn verify_accepts_a_secp256k1_signature_from_sign() {
+        sign_then_verify("secp256k1", b"test message for secp256k1".to_vec()).await;
+    }
+
+    #[tokio::test]
+    async fn verify_accepts_a_secp256k1_prehashed_signature_from_sign() {
+        let digest = Sha256::digest(b"test message for secp256k1 prehashed");
+        sign_then_verify("secp256k1_prehashed", digest.to_vec()).await;
+    }
+
+    #[tokio::test]
+    async fn verify_rejects_tampered_data() {
+        let (state, _guard, signed) =
+            sign_then_verify("ed25519", b"original message".to_vec()).await;
+
+        let response = InternalRpcHandler { state }
+            .verify(VerifyRequest {
+                algorithm: "ed25519".to_string(),
+                data: b"tampered message".to_vec(),
+                signature: signed.signature,
+                public_key: signed.public_key,
+            })
+            .await
+            .unwrap();
+
+        assert!(!response.valid);
+    }
+
+    #[tokio::test]
+    async fn verify_unsupported_algorithm_fails() {
+        let (state, _guard) = setup_test_state().await;
+        let result = InternalRpcHandler { state }
+            .verify(VerifyRequest {
+                algorithm: "rsa".to_string(),
+                data: b"test message".to_vec(),
+                signature: vec![0; 64],
+                public_key: vec![0; 32],
+            })
+            .await;
+
+        assert_eq!(result.unwrap_err().to_string(), "Unsupported algorithm");
     }
 }
