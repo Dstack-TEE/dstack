@@ -454,22 +454,24 @@ func TestSignAndVerifyEd25519(t *testing.T) {
 		t.Error("expected Signature to be the same as SignatureChain[0]")
 	}
 
-	verifyResp, err := client.Verify(context.Background(), algorithm, dataToSign, signResp.Signature, signResp.PublicKey)
+	// Verification is local: it needs no key material, so the SDK checks the
+	// signature itself rather than asking the agent for an unattested verdict.
+	valid, err := dstack.VerifySignature(algorithm, dataToSign, signResp.Signature, signResp.PublicKey)
 	if err != nil {
-		t.Fatalf("Verify() error = %v", err)
+		t.Fatalf("VerifySignature() error = %v", err)
 	}
 
-	if !verifyResp.Valid {
+	if !valid {
 		t.Error("expected verification to be valid")
 	}
 
 	badData := []byte("wrong message")
-	verifyResp, err = client.Verify(context.Background(), algorithm, badData, signResp.Signature, signResp.PublicKey)
+	valid, err = dstack.VerifySignature(algorithm, badData, signResp.Signature, signResp.PublicKey)
 	if err != nil {
-		t.Fatalf("Verify() with bad data error = %v", err)
+		t.Fatalf("VerifySignature() with bad data error = %v", err)
 	}
 
-	if verifyResp.Valid {
+	if valid {
 		t.Error("expected verification with bad data to be invalid")
 	}
 }
@@ -494,13 +496,19 @@ func TestSignAndVerifySecp256k1(t *testing.T) {
 		t.Errorf("expected signature chain to have 3 elements, got %d", len(signResp.SignatureChain))
 	}
 
-	verifyResp, err := client.Verify(context.Background(), algorithm, dataToSign, signResp.Signature, signResp.PublicKey)
+	valid, err := dstack.VerifySignature(algorithm, dataToSign, signResp.Signature, signResp.PublicKey)
 	if err != nil {
-		t.Fatalf("Verify() error = %v", err)
+		t.Fatalf("VerifySignature() error = %v", err)
 	}
 
-	if !verifyResp.Valid {
+	if !valid {
 		t.Error("expected verification to be valid")
+	}
+
+	// The chain is what actually ties the signing key back to a KMS root; a bare
+	// signature only proves whoever holds signResp.PublicKey signed the payload.
+	if !bytes.Equal(signResp.Signature, signResp.SignatureChain[0]) {
+		t.Error("expected Signature to be the same as SignatureChain[0]")
 	}
 }
 
@@ -519,13 +527,18 @@ func TestSignAndVerifySecp256k1Prehashed(t *testing.T) {
 		t.Error("expected signature to not be empty")
 	}
 
-	verifyResp, err := client.Verify(context.Background(), algorithm, digest[:], signResp.Signature, signResp.PublicKey)
+	valid, err := dstack.VerifySignature(algorithm, digest[:], signResp.Signature, signResp.PublicKey)
 	if err != nil {
-		t.Fatalf("Verify() error = %v", err)
+		t.Fatalf("VerifySignature() error = %v", err)
 	}
 
-	if !verifyResp.Valid {
+	if !valid {
 		t.Error("expected verification to be valid")
+	}
+
+	// A pre-hashed digest must be exactly 32 bytes on the verifying side too.
+	if _, err := dstack.VerifySignature(algorithm, dataToSign, signResp.Signature, signResp.PublicKey); err == nil {
+		t.Error("expected VerifySignature to reject a non-digest payload for secp256k1_prehashed")
 	}
 
 	// Test invalid digest length for signing

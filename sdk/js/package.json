@@ -53,6 +53,14 @@
       },
       "import": "./dist/verify-env-encrypt-public-key.mjs",
       "require": "./dist/verify-env-encrypt-public-key.js"
+    },
+    "./verify": {
+      "types": {
+        "import": "./dist/verify.d.mts",
+        "require": "./dist/verify.d.ts"
+      },
+      "import": "./dist/verify.mjs",
+      "require": "./dist/verify.js"
     }
   },
   "engines": {
@@ -80,9 +88,11 @@
   },
   "author": "Leechael Yim",
   "license": "Apache-2.0",
-  "devDependencies": {
+  "dependencies": {
     "@noble/curves": "^1.8.1",
-    "@noble/hashes": "^1.6.1",
+    "@noble/hashes": "^1.6.1"
+  },
+  "devDependencies": {
     "@solana/web3.js": "^1.98.4",
     "@types/node": "latest",
     "tsup": "^8.5.1",
@@ -91,15 +101,10 @@
     "vitest": "^3.2.4"
   },
   "peerDependencies": {
-    "@noble/curves": "^1.8.1",
-    "@noble/hashes": "^1.6.1",
     "@solana/web3.js": "^1.98.4",
     "viem": "^2.43.3"
   },
   "peerDependenciesMeta": {
-    "@noble/curves": {
-      "optional": true
-    },
     "@solana/web3.js": {
       "optional": true
     },

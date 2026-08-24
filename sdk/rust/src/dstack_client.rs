@@ -21,14 +21,6 @@ struct SignRequest<'a> {
     data: String,
 }
 
-#[derive(Debug, Serialize)]
-struct VerifyRequest<'a> {
-    algorithm: &'a str,
-    data: String,
-    signature: String,
-    public_key: String,
-}
-
 fn get_endpoint(endpoint: Option<&str>) -> String {
     if let Some(e) = endpoint {
         return e.to_string();
@@ -209,25 +201,6 @@ impl DstackClient {
         };
         let response = self.send_rpc_request("/Sign", &payload).await?;
         let response = serde_json::from_value::<SignResponse>(response)?;
-        Ok(response)
-    }
-
-    /// Verifies a payload signature.
-    pub async fn verify(
-        &self,
-        algorithm: &str,
-        data: Vec<u8>,
-        signature: Vec<u8>,
-        public_key: Vec<u8>,
-    ) -> Result<VerifyResponse> {
-        let payload = VerifyRequest {
-            algorithm,
-            data: hex_encode(data),
-            signature: hex_encode(signature),
-            public_key: hex_encode(public_key),
-        };
-        let response = self.send_rpc_request("/Verify", &payload).await?;
-        let response = serde_json::from_value::<VerifyResponse>(response)?;
         Ok(response)
     }
 }

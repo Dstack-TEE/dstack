@@ -182,7 +182,7 @@ curl --unix-socket /var/run/dstack.sock http://dstack/Info
 
 The `cloud_vendor` and `cloud_product` fields report the detected cloud platform.
 
-### 5. Sign (not yet released)
+### 5. Sign
 
 Signs a payload.
 
@@ -214,47 +214,19 @@ curl --unix-socket /var/run/dstack.sock -X POST \
     "<hex-encoded-signature-1>",
     "<hex-encoded-signature-2>",
     "<hex-encoded-signature-3>"
-  ]
+  ],
   "public_key": "<hex-encoded-public-key>"
 }
 ```
 
-### 6. Verify (not yet released)
+> **Removed in v0.6.0:** there was a `/Verify` endpoint here. Checking a signature
+> needs no key material and no attestation, and the agent's answer came back over
+> the socket unattested, so a caller gained nothing over checking the signature
+> itself. Verification now lives in the SDKs (`verify_signature` /
+> `verify_signature_chain`), which can also walk the `signature_chain` back to a
+> KMS root key the caller independently trusts -- something this endpoint never did.
 
-Verifies a signature.
-
-**Endpoint:** `/Verify`
-
-**Request Parameters:**
-
-| Field | Type | Description | Example |
-|-------|------|-------------|----------|
-| `algorithm` | string | `ed25519`, `secp256k1_prehashed` or `secp256k1`| `ed25519` |
-| `data` | string | Hex-encoded payload data | `deadbeef` |
-| `signature` | string | Hex-encoded signature | `deadbeef` |
-| `public_key` | string | Hex-encoded public key | `deadbeef` |
-
-**Example:**
-```bash
-curl --unix-socket /var/run/dstack.sock -X POST \
-  http://dstack/Verify \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "algorithm": "ed25519",
-    "data": "deadbeef",
-    "signature": "deadbeef",
-    "public_key": "deadbeef"
-  }'
-```
-
-**Response:**
-```json
-{
-  "valid": "<true|false>"
-}
-```
-
-### 7. Attest
+### 6. Attest
 
 Generates a versioned attestation with the given report data. Returns a dstack-defined attestation format that supports different attestation modes across platforms.
 You can submit the returned `attestation` directly to the verifier `/verify` endpoint.
@@ -288,7 +260,7 @@ curl --unix-socket /var/run/dstack.sock http://dstack/Attest?report_data=0000000
 }
 ```
 
-### 8. GPU Info
+### 7. GPU Info
 
 Returns GPU information collected during boot. Currently, this includes the
 complete JSON output produced by NVIDIA `nvattest`.

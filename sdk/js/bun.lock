@@ -4,9 +4,11 @@
   "workspaces": {
     "": {
       "name": "@phala/dstack-sdk",
-      "devDependencies": {
+      "dependencies": {
         "@noble/curves": "^1.8.1",
         "@noble/hashes": "^1.6.1",
+      },
+      "devDependencies": {
         "@solana/web3.js": "^1.98.4",
         "@types/node": "latest",
         "tsup": "^8.5.1",
@@ -15,13 +17,10 @@
         "vitest": "^3.2.4",
       },
       "peerDependencies": {
-        "@noble/curves": "^1.8.1",
-        "@noble/hashes": "^1.6.1",
         "@solana/web3.js": "^1.98.4",
         "viem": "^2.43.3",
       },
       "optionalPeers": [
-        "@noble/curves",
         "@solana/web3.js",
         "viem",
       ],

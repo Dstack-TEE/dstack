@@ -19,8 +19,8 @@ from dstack_sdk import GetTlsKeyResponse
 from dstack_sdk import GpuInfoResponse
 from dstack_sdk import SignResponse
 from dstack_sdk import TappdClient
-from dstack_sdk import VerifyResponse
 from dstack_sdk import VersionResponse
+from dstack_sdk import verify_signature
 from dstack_sdk.dstack_client import InfoResponse
 from dstack_sdk.dstack_client import TcbInfo
 
@@ -277,51 +277,35 @@ SIGN_TEST_DATA = b"Test message for signing"
 SIGN_BAD_DATA = b"This is not the original message"
 
 
-def test_sync_sign_verify_ed25519():
+def test_sync_sign_then_verify_locally_ed25519():
     client = DstackClient()
     algo = "ed25519"
     sign_resp = client.sign(algo, SIGN_TEST_DATA)
     assert isinstance(sign_resp, SignResponse)
     assert len(sign_resp.decode_signature()) > 0
     assert len(sign_resp.decode_public_key()) > 0
-    assert len(sign_resp.signature_chain) > 0
+    assert len(sign_resp.signature_chain) == 3
 
-    verify_resp = client.verify(
-        algo,
-        SIGN_TEST_DATA,
-        sign_resp.decode_signature(),
-        sign_resp.decode_public_key(),
-    )
-    assert isinstance(verify_resp, VerifyResponse)
-    assert verify_resp.valid is True
-
-    verify_bad = client.verify(
-        algo, SIGN_BAD_DATA, sign_resp.decode_signature(), sign_resp.decode_public_key()
-    )
-    assert verify_bad.valid is False
+    signature = sign_resp.decode_signature()
+    public_key = sign_resp.decode_public_key()
+    assert verify_signature(algo, SIGN_TEST_DATA, signature, public_key) is True
+    assert verify_signature(algo, SIGN_BAD_DATA, signature, public_key) is False
 
 
-def test_sync_sign_verify_secp256k1():
+def test_sync_sign_then_verify_locally_secp256k1():
     client = DstackClient()
     algo = "secp256k1"
     sign_resp = client.sign(algo, SIGN_TEST_DATA)
     assert isinstance(sign_resp, SignResponse)
+    assert len(sign_resp.signature_chain) == 3
 
-    verify_resp = client.verify(
-        algo,
-        SIGN_TEST_DATA,
-        sign_resp.decode_signature(),
-        sign_resp.decode_public_key(),
-    )
-    assert verify_resp.valid is True
-
-    verify_bad = client.verify(
-        algo, SIGN_BAD_DATA, sign_resp.decode_signature(), sign_resp.decode_public_key()
-    )
-    assert verify_bad.valid is False
+    signature = sign_resp.decode_signature()
+    public_key = sign_resp.decode_public_key()
+    assert verify_signature(algo, SIGN_TEST_DATA, signature, public_key) is True
+    assert verify_signature(algo, SIGN_BAD_DATA, signature, public_key) is False
 
 
-def test_sync_sign_verify_secp256k1_prehashed():
+def test_sync_sign_then_verify_locally_secp256k1_prehashed():
     client = DstackClient()
     algo = "secp256k1_prehashed"
     digest = hashlib.sha256(SIGN_TEST_DATA).digest()
@@ -329,17 +313,14 @@ def test_sync_sign_verify_secp256k1_prehashed():
 
     sign_resp = client.sign(algo, digest)
     assert isinstance(sign_resp, SignResponse)
+    assert len(sign_resp.signature_chain) == 3
 
-    verify_resp = client.verify(
-        algo, digest, sign_resp.decode_signature(), sign_resp.decode_public_key()
-    )
-    assert verify_resp.valid is True
+    signature = sign_resp.decode_signature()
+    public_key = sign_resp.decode_public_key()
+    assert verify_signature(algo, digest, signature, public_key) is True
 
     bad_digest = hashlib.sha256(SIGN_BAD_DATA).digest()
-    verify_bad = client.verify(
-        algo, bad_digest, sign_resp.decode_signature(), sign_resp.decode_public_key()
-    )
-    assert verify_bad.valid is False
+    assert verify_signature(algo, bad_digest, signature, public_key) is False
 
 
 def test_sync_sign_prehashed_length_error():
@@ -351,7 +332,7 @@ def test_sync_sign_prehashed_length_error():
 
 
 @pytest.mark.asyncio
-async def test_async_sign_verify_ed25519():
+async def test_async_sign_then_verify_locally_ed25519():
     client = AsyncDstackClient()
     algo = "ed25519"
     sign_resp = await client.sign(algo, SIGN_TEST_DATA)
@@ -359,43 +340,27 @@ async def test_async_sign_verify_ed25519():
     assert len(sign_resp.decode_signature()) > 0
     assert len(sign_resp.decode_public_key()) > 0
 
-    verify_resp = await client.verify(
-        algo,
-        SIGN_TEST_DATA,
-        sign_resp.decode_signature(),
-        sign_resp.decode_public_key(),
-    )
-    assert verify_resp.valid is True
-
-    verify_bad = await client.verify(
-        algo, SIGN_BAD_DATA, sign_resp.decode_signature(), sign_resp.decode_public_key()
-    )
-    assert verify_bad.valid is False
+    signature = sign_resp.decode_signature()
+    public_key = sign_resp.decode_public_key()
+    assert verify_signature(algo, SIGN_TEST_DATA, signature, public_key) is True
+    assert verify_signature(algo, SIGN_BAD_DATA, signature, public_key) is False
 
 
 @pytest.mark.asyncio
-async def test_async_sign_verify_secp256k1():
+async def test_async_sign_then_verify_locally_secp256k1():
     client = AsyncDstackClient()
     algo = "secp256k1"
     sign_resp = await client.sign(algo, SIGN_TEST_DATA)
     assert isinstance(sign_resp, SignResponse)
 
-    verify_resp = await client.verify(
-        algo,
-        SIGN_TEST_DATA,
-        sign_resp.decode_signature(),
-        sign_resp.decode_public_key(),
-    )
-    assert verify_resp.valid is True
-
-    verify_bad = await client.verify(
-        algo, SIGN_BAD_DATA, sign_resp.decode_signature(), sign_resp.decode_public_key()
-    )
-    assert verify_bad.valid is False
+    signature = sign_resp.decode_signature()
+    public_key = sign_resp.decode_public_key()
+    assert verify_signature(algo, SIGN_TEST_DATA, signature, public_key) is True
+    assert verify_signature(algo, SIGN_BAD_DATA, signature, public_key) is False
 
 
 @pytest.mark.asyncio
-async def test_async_sign_verify_secp256k1_prehashed():
+async def test_async_sign_then_verify_locally_secp256k1_prehashed():
     client = AsyncDstackClient()
     algo = "secp256k1_prehashed"
     digest = hashlib.sha256(SIGN_TEST_DATA).digest()
@@ -403,16 +368,12 @@ async def test_async_sign_verify_secp256k1_prehashed():
     sign_resp = await client.sign(algo, digest)
     assert isinstance(sign_resp, SignResponse)
 
-    verify_resp = await client.verify(
-        algo, digest, sign_resp.decode_signature(), sign_resp.decode_public_key()
-    )
-    assert verify_resp.valid is True
+    signature = sign_resp.decode_signature()
+    public_key = sign_resp.decode_public_key()
+    assert verify_signature(algo, digest, signature, public_key) is True
 
     bad_digest = hashlib.sha256(SIGN_BAD_DATA).digest()
-    verify_bad = await client.verify(
-        algo, bad_digest, sign_resp.decode_signature(), sign_resp.decode_public_key()
-    )
-    assert verify_bad.valid is False
+    assert verify_signature(algo, bad_digest, signature, public_key) is False
 
 
 @pytest.mark.asyncio

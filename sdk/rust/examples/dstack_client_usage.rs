@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use dstack_sdk::dstack_client::DstackClient;
+use dstack_sdk::verify::verify_signature;
 use dstack_sdk_types::dstack::TlsKeyConfig;
 
 #[tokio::main]
@@ -111,14 +112,8 @@ async fn main() -> anyhow::Result<()> {
     let sig_bytes = sign_resp.decode_signature()?;
     let pub_key_bytes = sign_resp.decode_public_key()?;
 
-    let verify_resp = client
-        .verify(
-            algorithm,
-            data_to_sign.clone(),
-            sig_bytes.clone(),
-            pub_key_bytes.clone(),
-        )
-        .await?;
-    println!("  Verification successful: {}", verify_resp.valid);
+    // Verification is local -- it needs no key material and no round trip.
+    let valid = verify_signature(algorithm, &data_to_sign, &sig_bytes, &pub_key_bytes)?;
+    println!("  Verification successful: {valid}");
     Ok(())
 }

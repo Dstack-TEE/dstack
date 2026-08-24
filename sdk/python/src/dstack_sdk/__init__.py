@@ -15,7 +15,6 @@ from .dstack_client import InfoResponse
 from .dstack_client import SignResponse
 from .dstack_client import TappdClient
 from .dstack_client import TcbInfo
-from .dstack_client import VerifyResponse
 from .dstack_client import VersionResponse
 from .encrypt_env_vars import EnvVar
 from .encrypt_env_vars import encrypt_env_vars
@@ -24,6 +23,8 @@ from .get_compose_hash import AppCompose
 from .get_compose_hash import DockerConfig
 from .get_compose_hash import Requirements
 from .get_compose_hash import get_compose_hash
+from .verify import verify_signature
+from .verify import verify_signature_chain
 from .verify_env_encrypt_public_key import verify_env_encrypt_public_key
 from .verify_env_encrypt_public_key import verify_env_encrypt_public_key_legacy
 
@@ -51,6 +52,8 @@ __all__ = [
     "AppCompose",
     "DockerConfig",
     "Requirements",
+    "verify_signature",
+    "verify_signature_chain",
     "verify_env_encrypt_public_key",
     "verify_env_encrypt_public_key_legacy",
 ]

@@ -1,23 +1,21 @@
 # @phala/dstack-sdk
 
-JavaScript / TypeScript client for the dstack guest agent. Derive deterministic keys, generate TDX attestation quotes, issue TLS certificates, sign / verify payloads, and encrypt environment variables for KMS-managed deployments — all against the guest agent socket inside a confidential VM (CVM).
+JavaScript / TypeScript client for the dstack guest agent. Derive deterministic keys, generate TDX attestation quotes, issue TLS certificates, sign payloads, and encrypt environment variables for KMS-managed deployments — all against the guest agent socket inside a confidential VM (CVM). Signature verification runs locally in your process, not over the socket.
 
 ## Installation
 
 ```bash
-npm install @phala/dstack-sdk @noble/hashes
+npm install @phala/dstack-sdk
 ```
 
-`@noble/hashes` is the only required peer dependency (used by the core for sha256 / sha384). Install the matching peer when you import a submodule:
+`@noble/hashes` and `@noble/curves` ship as regular dependencies — the core needs them for hashing and for local signature verification. Install the matching peer when you import a blockchain submodule:
 
 | Import path | Extra peer dependency |
 | --- | --- |
 | `@phala/dstack-sdk/viem` | `viem` |
 | `@phala/dstack-sdk/solana` | `@solana/web3.js` |
-| `@phala/dstack-sdk/encrypt-env-vars` | `@noble/curves` |
-| `@phala/dstack-sdk/verify-env-encrypt-public-key` | `@noble/curves` |
 
-> **Breaking change in 0.5.8.** Prior releases listed `@solana/web3.js`, `viem`, and `@noble/curves` under `optionalDependencies`, so npm installed them automatically. They are now opt-in peers — install them yourself when you use the corresponding submodule.
+> **Breaking change in 0.5.8.** Prior releases listed `@solana/web3.js` and `viem` under `optionalDependencies`, so npm installed them automatically. They are now opt-in peers — install them yourself when you use the corresponding submodule.
 
 Node 18+ supported. Tested through Node 24.
 
@@ -144,12 +142,48 @@ res.signature_chain  // Uint8Array[] — proves the signing key came from this T
 
 Algorithms: `ed25519`, `secp256k1`, `secp256k1_prehashed`. Requires guest agent ≥ 0.5.7.
 
-### `verify(algorithm, data, signature, publicKey)`
+### `verifySignature(algorithm, data, signature, publicKey)`
+
+Verification needs no key material and no attestation, so it runs locally rather than through the agent — an agent's answer would arrive over the socket unattested anyway. The `Verify` RPC that used to back `client.verify()` was removed in dstack 0.6.0.
 
 ```typescript
-const ok = await client.verify('ed25519', 'hello dstack', res.signature, res.public_key)
-ok.valid // boolean
+import { verifySignature } from '@phala/dstack-sdk'
+
+const data = new TextEncoder().encode('hello dstack')
+verifySignature('ed25519', data, res.signature, res.public_key) // boolean
 ```
+
+`data`, `signature` and `publicKey` are `Uint8Array`s. `secp256k1` (alias `k256`) takes a SEC1 public key — compressed or uncompressed — and a raw 64-byte `r || s` signature over SHA-256 of the data; `secp256k1_prehashed` takes the 32-byte digest directly. Malformed input (bad key length, wrong signature length, unknown algorithm, non-canonical high-S signature) throws; a well-formed signature that simply does not match returns `false`.
+
+### `verifySignatureChain(input)`
+
+On its own, `verifySignature` only proves that whoever holds that public key signed the data. `verifySignatureChain` walks the whole chain from a `sign()` response back to a KMS root key **you supply**, which is what establishes that the signer was a dstack app under that KMS.
+
+```typescript
+import { verifySignatureChain } from '@phala/dstack-sdk'
+
+// Both anchors come from you, not from the CVM being checked.
+const expectedAppId = Buffer.from('a9019d1b2c3d4e5f60718293a4b5c6d7e8f90a1b', 'hex')
+const kmsRootPubKey = Buffer.from('03...', 'hex')  // pinned, or read from DstackKms
+
+const appRootPubKey = verifySignatureChain({
+  algorithm: 'ed25519',
+  data,
+  publicKey: res.public_key,
+  signatureChain: res.signature_chain,
+  appId: expectedAppId,
+  kmsRootPubKey,
+})
+```
+
+Note what the example does *not* do: it never passes `info.app_id` from
+`client.info()` straight through. That value is reported by the very CVM being
+verified, so a chain checked against it proves only that the CVM is
+self-consistent with itself. Use the app id you registered on chain, and if you
+want `info` in the picture, compare it against that value rather than trusting
+it.
+
+Returns the app root public key (compressed SEC1, 33 bytes) or throws. Get `kmsRootPubKey` from the `DstackKms` contract (`kmsInfo().k256Pubkey`) or pin it in your build — reading it from the KMS you are verifying against proves nothing.
 
 ## Diagnostics
 
@@ -253,7 +287,9 @@ Verify functions return the signer's compressed public key (hex) on success, or 
 | Feature | Minimum guest agent |
 | --- | --- |
 | `getKey`, `getTlsKey`, `getQuote`, `info` | 0.3.x |
-| `attest`, `sign`, `verify`, `version`, ed25519 keys, `info.cloud_vendor` / `cloud_product`, `getTlsKey` `notBefore` / `notAfter` / `withAppInfo` | 0.5.7 |
+| `attest`, `sign`, `version`, ed25519 keys, `info.cloud_vendor` / `cloud_product`, `getTlsKey` `notBefore` / `notAfter` / `withAppInfo` | 0.5.7 |
+
+`verifySignature` and `verifySignatureChain` run locally and have no guest agent requirement. They replace `client.verify()`, whose `Verify` RPC was removed in dstack 0.6.0.
 
 The SDK's release versions track guest agent versions — `0.5.8-x` targets dstack 0.5.7+.
 

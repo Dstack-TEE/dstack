@@ -7,6 +7,8 @@ import { send_rpc_request } from './send-rpc-request'
 export { getComposeHash } from './get-compose-hash'
 export { verifyEnvEncryptPublicKey, verifyEnvEncryptPublicKeyLegacy } from './verify-env-encrypt-public-key'
 export type { VerifyOptions } from './verify-env-encrypt-public-key'
+export { verifySignature, verifySignatureChain, SIGN_PATH, SIGN_PURPOSE } from './verify'
+export type { SignatureChainInput } from './verify'
 
 export interface GetTlsKeyResponse {
   __name__: Readonly<'GetTlsKeyResponse'>
@@ -30,12 +32,6 @@ export interface SignResponse {
   signature: Uint8Array
   signature_chain: Uint8Array[]
   public_key: Uint8Array
-}
-
-export interface VerifyResponse {
-  __name__: Readonly<'VerifyResponse'>
-
-  valid: boolean
 }
 
 
@@ -370,35 +366,6 @@ export class DstackClient<T extends TcbInfo = TcbInfoV05x> {
         signature_chain: result.signature_chain.map(sig => new Uint8Array(Buffer.from(sig, 'hex'))),
         public_key: new Uint8Array(Buffer.from(result.public_key, 'hex')),
         __name__: 'SignResponse',
-    });
-  }
-
-  /**
-   * Verifies a payload signature.
-   * @param algorithm The algorithm to use (e.g., "ed25519", "secp256k1", "secp256k1_prehashed")
-   * @param data The data that was signed.
-   * @param signature The signature to verify.
-   * @param publicKey The public key to use for verification.
-   * @returns A VerifyResponse indicating if the signature is valid.
-   */
-  async verify(
-    algorithm: string,
-    data: string | Buffer | Uint8Array,
-    signature: string | Buffer | Uint8Array,
-    publicKey: string | Buffer | Uint8Array
-  ): Promise<VerifyResponse> {
-    const payload = JSON.stringify({
-        algorithm: algorithm,
-        data: to_hex(data),
-        signature: to_hex(signature),
-        public_key: to_hex(publicKey)
-    });
-
-    const result = await send_rpc_request<{ valid: boolean }>(this.endpoint, '/Verify', payload);
-
-    return Object.freeze({
-        ...result,
-        __name__: 'VerifyResponse',
     });
   }
 

@@ -4,7 +4,7 @@
 
 import { expect, describe, it, vi } from 'vitest'
 import crypto from 'crypto' // Added for prehashed test
-import { DstackClient, TappdClient } from '../index'
+import { DstackClient, TappdClient, verifySignature } from '../index'
 
 describe('DstackClient', () => {
   it('should able to derive key in TappdClient', async () => {
@@ -183,8 +183,9 @@ describe('DstackClient', () => {
     const client = new DstackClient()
     const testData = 'Test message for signing'
     const badData = 'This is not the original message'
+    const encode = (text: string) => new TextEncoder().encode(text)
 
-    it('should sign and verify with ed25519', async () => {
+    it('should sign with ed25519 and verify locally', async () => {
       const algorithm = 'ed25519'
       const signResp = await client.sign(algorithm, testData)
 
@@ -196,16 +197,14 @@ describe('DstackClient', () => {
       expect(signResp.signature_chain.length).toBeGreaterThan(0) // Should have at least the signature itself
       expect(signResp.signature_chain[0]).toBeInstanceOf(Uint8Array)
 
-      // Verify success
-      const verifyResp = await client.verify(algorithm, testData, signResp.signature, signResp.public_key)
-      expect(verifyResp).toHaveProperty('valid', true)
+      // Verification is local: it needs no key material, so there is no RPC for it.
+      expect(verifySignature(algorithm, encode(testData), signResp.signature, signResp.public_key)).toBe(true)
 
       // Verify failure (bad data)
-      const verifyRespBadData = await client.verify(algorithm, badData, signResp.signature, signResp.public_key)
-      expect(verifyRespBadData).toHaveProperty('valid', false)
+      expect(verifySignature(algorithm, encode(badData), signResp.signature, signResp.public_key)).toBe(false)
     })
 
-    it('should sign and verify with secp256k1', async () => {
+    it('should sign with secp256k1 and verify locally', async () => {
       const algorithm = 'secp256k1'
       const signResp = await client.sign(algorithm, testData)
 
@@ -213,18 +212,13 @@ describe('DstackClient', () => {
       expect(signResp.public_key).toBeInstanceOf(Uint8Array)
       expect(signResp.signature_chain.length).toBeGreaterThan(0)
 
-      // Verify success
-      const verifyResp = await client.verify(algorithm, testData, signResp.signature, signResp.public_key)
-      expect(verifyResp).toHaveProperty('valid', true)
-
-      // Verify failure (bad data)
-      const verifyRespBadData = await client.verify(algorithm, badData, signResp.signature, signResp.public_key)
-      expect(verifyRespBadData).toHaveProperty('valid', false)
+      expect(verifySignature(algorithm, encode(testData), signResp.signature, signResp.public_key)).toBe(true)
+      expect(verifySignature(algorithm, encode(badData), signResp.signature, signResp.public_key)).toBe(false)
     })
 
-    it('should sign and verify with secp256k1_prehashed', async () => {
+    it('should sign with secp256k1_prehashed and verify locally', async () => {
       const algorithm = 'secp256k1_prehashed'
-      const digest = crypto.createHash('sha256').update(testData).digest()
+      const digest = new Uint8Array(crypto.createHash('sha256').update(testData).digest())
       expect(digest.length).toBe(32) // Ensure it's 32 bytes
 
       const signResp = await client.sign(algorithm, digest)
@@ -232,14 +226,11 @@ describe('DstackClient', () => {
       expect(signResp.signature).toBeInstanceOf(Uint8Array)
       expect(signResp.public_key).toBeInstanceOf(Uint8Array)
 
-      // Verify success
-      const verifyResp = await client.verify(algorithm, digest, signResp.signature, signResp.public_key)
-      expect(verifyResp).toHaveProperty('valid', true)
+      expect(verifySignature(algorithm, digest, signResp.signature, signResp.public_key)).toBe(true)
 
       // Verify failure (bad digest)
-      const badDigest = crypto.createHash('sha256').update(badData).digest()
-      const verifyRespBadData = await client.verify(algorithm, badDigest, signResp.signature, signResp.public_key)
-      expect(verifyRespBadData).toHaveProperty('valid', false)
+      const badDigest = new Uint8Array(crypto.createHash('sha256').update(badData).digest())
+      expect(verifySignature(algorithm, badDigest, signResp.signature, signResp.public_key)).toBe(false)
     })
 
     it('should throw error when signing secp256k1_prehashed with incorrect data length', async () => {
