@@ -634,32 +634,6 @@ func (c *DstackClient) Sign(ctx context.Context, algorithm string, data []byte) 
 	}, nil
 }
 
-type VerifyResponse struct {
-	Valid bool `json:"valid"`
-}
-
-// Verifies a payload.
-func (c *DstackClient) Verify(ctx context.Context, algorithm string, data []byte, signature []byte, publicKey []byte) (*VerifyResponse, error) {
-	payload := map[string]interface{}{
-		"algorithm":  algorithm,
-		"data":       hex.EncodeToString(data),
-		"signature":  hex.EncodeToString(signature),
-		"public_key": hex.EncodeToString(publicKey),
-	}
-
-	respData, err := c.sendRPCRequest(ctx, "/Verify", payload)
-	if err != nil {
-		return nil, err
-	}
-
-	var response VerifyResponse
-	if err := json.Unmarshal(respData, &response); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal verify response: %w", err)
-	}
-
-	return &response, nil
-}
-
 // IsReachable checks if the service is reachable
 func (c *DstackClient) IsReachable(ctx context.Context) bool {
 	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)

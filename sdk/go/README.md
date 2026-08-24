@@ -662,6 +662,81 @@ if err != nil {
 fmt.Println("Configuration hash:", hash)
 ```
 
+### Signature Verification
+
+Signatures produced by `client.Sign()` are verified **locally**. Verification
+needs no key material and no attestation, so it does not belong behind an RPC to
+the guest agent: the agent's answer would arrive over the socket unattested,
+which is no better than checking the signature yourself. The `Verify` RPC these
+functions replace was removed in v0.6.0.
+
+#### `VerifySignature(algorithm string, data, signature, publicKey []byte) (bool, error)`
+
+Checks one signature against a public key you already have. `algorithm` is
+`ed25519`, `secp256k1` (alias `k256`), or `secp256k1_prehashed`, where `data` is
+already a 32-byte digest. secp256k1 public keys are SEC1 (compressed or
+uncompressed) and signatures are raw 64-byte `r || s`, not DER.
+
+Returns `(false, nil)` when the inputs are well-formed but the signature does not
+check out, and a non-nil error when they are not well-formed at all (bad key
+encoding, wrong signature length, unknown algorithm, non-canonical high-S
+signature) — a malformed input is a caller bug, not a verdict.
+
+```go
+signResp, err := client.Sign(ctx, "secp256k1", payload)
+if err != nil {
+	log.Fatal(err)
+}
+
+valid, err := dstack.VerifySignature("secp256k1", payload, signResp.Signature, signResp.PublicKey)
+if err != nil {
+	log.Fatalf("malformed signature input: %v", err)
+}
+fmt.Println("signature valid:", valid)
+```
+
+On its own this proves only that whoever holds `signResp.PublicKey` signed the
+data. To establish that the signer was a dstack app, verify the chain.
+
+#### `VerifySignatureChain(input SignatureChainInput) ([]byte, error)`
+
+Walks the full chain from a `SignResponse` back to a KMS root key **you supply**,
+and returns the app root public key (compressed SEC1, 33 bytes). Three links must
+all hold:
+
+1. `SignatureChain[0]` is a signature over `Data` by `PublicKey`.
+2. `SignatureChain[1]` is the app root key attesting `"{purpose}:{hex(PublicKey)}"`.
+3. `SignatureChain[2]` is `KMSRootPubKey` attesting that app root key for `AppID`.
+
+Link 3 is the one that matters. Without comparing against a KMS root key you
+independently trust, a chain is just three signatures an attacker could have
+produced with their own keys. Get the root from the `DstackKms` contract
+(`kmsInfo().k256Pubkey`) or pin it. Reading it from the KMS you are verifying
+against proves nothing.
+
+```go
+info, err := client.Info(ctx)
+if err != nil {
+	log.Fatal(err)
+}
+appID, _ := hex.DecodeString(strings.TrimPrefix(info.AppID, "0x"))
+kmsRoot, _ := hex.DecodeString("03...") // pinned, or read from the DstackKms contract
+
+appRootPubKey, err := dstack.VerifySignatureChain(dstack.SignatureChainInput{
+	Algorithm:      "secp256k1",
+	Data:           payload,
+	PublicKey:      signResp.PublicKey,
+	SignatureChain: signResp.SignatureChain,
+	AppID:          appID,
+	KMSRootPubKey:  kmsRoot,
+	// Purpose defaults to dstack.SignPurpose ("signing"), which is what Sign uses.
+})
+if err != nil {
+	log.Fatalf("signature chain rejected: %v", err)
+}
+fmt.Printf("app root key: %x\n", appRootPubKey)
+```
+
 ### KMS Public Key Verification
 
 Verify the authenticity of encryption public keys provided by KMS APIs:
