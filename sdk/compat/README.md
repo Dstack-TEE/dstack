@@ -17,7 +17,7 @@ their own test suites against that simulator.
 
 ```
 sdk/compat/run-compat-tests.sh v0.5.11
-sdk/compat/run-compat-tests.sh v0.5.9 v0.5.11   # one simulator, both tags
+sdk/compat/run-compat-tests.sh v0.5.8 v0.5.11   # one simulator, both tags
 ```
 
 The released SDKs come from `git worktree add <tag>`, so they are the published
@@ -58,11 +58,18 @@ encryption, signature verification vectors). Those need no agent and should pass
 unchanged; they are not skipped just because they are not client calls.
 
 CI runs one tag per matrix job (`.github/workflows/sdk-compat.yaml`), over
-`v0.5.11` — the tag the freeze is defined against — and `v0.5.9`, the newest
-tag whose SDKs actually differ from it. Check before adding a tag: several
-release tags share an SDK tree byte for byte (`git rev-parse v0.5.10:sdk
-v0.5.11:sdk` prints one hash twice), and a pair like that runs the same suites
-twice and reports the agreement as two independent results.
+`v0.5.11` — the tag the freeze is defined against — and `v0.5.8`, the newest
+tag whose SDK clients and suites actually differ from it.
+
+Check before adding a tag, and check the *sources*, not the tree hash. Several
+release tags share an `sdk/` tree byte for byte (`git rev-parse v0.5.10:sdk
+v0.5.11:sdk` prints one hash twice), and a tag can differ by a hash while
+carrying an identical client: `v0.5.9` differs from `v0.5.11` by one line, a
+reqwest dependency spec in `sdk/rust/Cargo.toml`, with every client and test
+source in all four languages unchanged. Either one runs the same suites twice
+and reports one agreement as two independent results, at the cost of a second
+uncached four-language build. `git diff --stat <tag> v0.5.11 -- sdk/` is the
+check worth running.
 
 Passing several tags in one local invocation builds and starts the simulator
 once and shares a Cargo target directory across them.
@@ -92,6 +99,51 @@ with no agent involved).
 The script carries a per-language skip list. Every entry names a behaviour
 0.6.0 deliberately changed on the frozen surface, with a pointer to where that
 decision is recorded — a `CHANGELOG.md` entry, or `docs/guest-api-v1.md`.
+
+Lists are keyed by tag (`set_skips_for_tag`), because a skip is a claim about
+one released client rather than about the frozen surface in general. The two
+tags in the matrix disagree about the same method, under the same test name, so
+a global list could not express it.
+
+The list has entries for exactly one thing, and reading them is the fastest way
+to see what this job is for. **v0.5.11 skips nothing** — every released test and
+example passes. **v0.5.8 skips four**, all `EmitEvent`, which 0.6.0 removed (`CHANGELOG.md`,
+`[Unreleased]` / Removed: "runtime RTMR3 events are system-owned and cannot be
+extended by apps"):
+
+| Skipped at v0.5.8 | What it asserted | Against a 0.6.0 agent |
+| --- | --- | --- |
+| `tests/test_client.py::test_emit_event` | "This should not raise an error" | `HTTPStatusError` 400 |
+| `tests/test_client.py::test_sync_emit_event` | same, sync client | `HTTPStatusError` 400 |
+| `dstack_client_usage` (Rust example) | step 4 calls `emit_event(...).await?` | example exits non-zero |
+| `tests/test_client.py::test_emit_event_validation` | empty event name raises `ValueError` | still passes — see below |
+
+The first three are the one sanctioned break on the frozen surface, now
+recorded rather than assumed. The fourth is collateral and is listed only
+because pytest deselects by nodeid *prefix*: an entry for `::test_emit_event`
+takes `::test_emit_event_validation` with it whether or not it is named. Naming
+it keeps the list equal to what the run actually skips — otherwise pytest
+reports `3 deselected` against two entries and nobody can see the difference.
+It costs nothing: it raises before a request is built and never contacts the
+agent, and the same client-side validation still runs in the Rust, Go and JS
+suites.
+
+It is also the whole argument for the tag pair. Every v0.5.11 assertion about
+`EmitEvent` is vacuous under a simulator endpoint: Go and JS never test it,
+`assert_emit_event_behavior` asserts HTTP 400 whether the method works or is a
+stub, and the example swallows the error when `DSTACK_SIMULATOR_ENDPOINT` is
+set. Those three accommodations were added across v0.5.9..v0.5.11 (`fix(ci):
+restore simulator test stability`) so the suite would pass against a simulator
+that could not extend an RTMR. v0.5.8 predates them and still asserts the call
+succeeds. **A matrix that ran only v0.5.11 would report an empty skip list and
+have checked nothing here** — which is exactly what it did before v0.5.8 was
+added.
+
+Examples skip at whole-binary granularity, since `cargo run --example` has no
+name filter — so an entry must also say what the skip costs. For
+`dstack_client_usage`, nothing: its other four steps (`Info`, `GetKey`,
+`GetQuote`, `GetTlsKey`) are each covered by `tests/test_client.rs`, which runs
+unskipped in the same leg.
 
 **A growing skip list is the failure signal, not the fix.** The list existing at
 all is a small admission that the freeze has exceptions; every addition to it

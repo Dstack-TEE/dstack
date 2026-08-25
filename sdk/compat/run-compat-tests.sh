@@ -21,11 +21,12 @@
 #
 # Usage: sdk/compat/run-compat-tests.sh <tag> [<tag>...]
 #   e.g. sdk/compat/run-compat-tests.sh v0.5.11
-#        sdk/compat/run-compat-tests.sh v0.5.9 v0.5.11   # one simulator, both tags
+#        sdk/compat/run-compat-tests.sh v0.5.8 v0.5.11   # one simulator, both tags
 #
-# Any tag works, but check that the pair you pick differs: several release tags
-# share an SDK tree byte for byte (v0.5.10 and v0.5.11 do), and running both
-# reports one result twice.
+# Any tag works, but check that the pair you pick differs in the client, not
+# just in the tree hash: v0.5.10 and v0.5.11 share an sdk/ tree byte for byte,
+# and v0.5.9 differs from v0.5.11 only by a dependency spec in
+# sdk/rust/Cargo.toml. Running either pair reports one result twice.
 #
 # CI runs one tag per matrix job. Passing several tags locally builds and starts
 # the simulator once and shares one Cargo target directory across them.
@@ -76,72 +77,144 @@ trap cleanup EXIT INT TERM
 
 usage() {
     echo "usage: ${BASH_SOURCE[0]} <tag> [<tag>...]" >&2
-    echo "  e.g. ${BASH_SOURCE[0]} v0.5.10 v0.5.11" >&2
+    echo "  e.g. ${BASH_SOURCE[0]} v0.5.8 v0.5.11" >&2
 }
 
 # ---------------------------------------------------------------------------
 # Skip lists -- see the policy at the top of this file.
 # ---------------------------------------------------------------------------
 
-# All four lists are empty, and that is the result, not an oversight: the
-# released suites pass in full against the 0.6.0 agent, so the freeze currently
-# holds with no exceptions. Two 0.6.0 changes were expected to land here and
-# did not -- but for different reasons, and only one of them is reassuring:
+# The lists are keyed by tag, and that is not incidental. A skip is a claim
+# about one released client, not about the frozen surface in general, and the
+# two tags in the matrix disagree about the same method: `test_emit_event`
+# exists under that name at both, but at v0.5.8 it asserts the call succeeds
+# and at v0.5.11 it asserts HTTP 400. A single global entry would silence both
+# and hide which one was a real break.
+#
+# What the current entries say: of the two 0.6.0 changes to the frozen surface,
+# one is genuinely agreed on and the other is the single sanctioned break.
 #
 #   - `GetQuote` is Intel TDX only now (CHANGELOG, Changed). The simulator
 #     serves a TDX quote, so it answers, which is what the released suites
-#     assert. Genuinely covered: the suites exercise the path and agree.
+#     assert. Genuinely covered at both tags: they exercise the path and agree.
 #   - `EmitEvent` always fails now (CHANGELOG, Removed: "runtime RTMR3 events
-#     are system-owned"). Rust, Go and JS never tested it. Python's
-#     `assert_emit_event_behavior` asserts HTTP 400 whenever
-#     DSTACK_SIMULATOR_ENDPOINT is set, because the simulator had no RTMR to
-#     extend at v0.5.11 either -- so it asserts 400 whether the method works or
-#     is a stub, and it would pass either way. Not covered. The absence of a
-#     skip entry here says nothing about `EmitEvent`; do not read it as
-#     evidence.
+#     are system-owned"). Caught only at v0.5.8, whose entries are below.
+#     Every v0.5.11 assertion about it is vacuous under a simulator endpoint:
+#     Go and JS never test it; `assert_emit_event_behavior` asserts 400
+#     whenever DSTACK_SIMULATOR_ENDPOINT is set, so it holds whether the method
+#     works or is a stub; and the example swallows the error under the same
+#     condition. Those three accommodations were added in v0.5.9..v0.5.11
+#     ("fix(ci): restore simulator test stability") to make the suite pass
+#     against a simulator that could not extend an RTMR. v0.5.8 predates them
+#     and still asserts the call succeeds, which is why it is in the matrix.
 #
 # Both point at CHANGELOG.md's `[Unreleased]` section -- 0.6.0 is not cut yet,
 # so there is no `## [0.6.0]` heading to cite.
 #
-# Entries with spaces must be quoted; a bare word list splits on them.
-#
-# The four lists do NOT share matching semantics, so an entry cannot be moved
+# The lists do NOT share matching semantics, so an entry cannot be moved
 # between them unchanged:
 #
-#   RUST_SKIP    literal substring of the full test path (`cargo test --skip`).
-#                Reaches `cargo test` only -- the two `cargo run --example`
-#                invocations below cannot be skipped.
-#   GO_SKIP      REGEXP over the test name (`go test -skip`), joined with `|`.
-#   PYTHON_SKIP  literal nodeid prefix (`pytest --deselect`); pytest matches
-#                with `startswith`, so `::test_foo` also takes `::test_foo_bar`.
-#   JS_SKIP      REGEXP, woven into one negative-lookahead `--testNamePattern`.
+#   RUST_SKIP          literal substring of the full test path
+#                      (`cargo test --skip`). Reaches `cargo test` only.
+#   RUST_EXAMPLE_SKIP  exact example name. `cargo run --example` has no name
+#                      filter, so the unit is the whole example binary rather
+#                      than one call inside it -- say what the skip costs.
+#   GO_SKIP            REGEXP over the test name (`go test -skip`), joined
+#                      with `|`.
+#   PYTHON_SKIP        literal nodeid prefix (`pytest --deselect`); pytest
+#                      matches with `startswith`, so `::test_foo` also takes
+#                      `::test_foo_bar` -- name the test exactly.
+#   JS_SKIP            REGEXP, woven into one negative-lookahead
+#                      `--testNamePattern`, matched as a substring of the full
+#                      test name with `describe` prefixes included.
 #
 # The two regexp lists interpolate entries unescaped: a `(`, `+` or `.` in an
 # entry changes its meaning. Escape it, or the skip silently widens.
+#
+# Entries with spaces must be quoted; a bare word list splits on them.
 
-# Rust: `cargo test -- --skip <substring>`, matched against the full test path.
-RUST_SKIP=(
-)
+# The Rust examples the compat run drives, in order. They are client exercises
+# too: they walk the agent end to end the way a README reader would, which is
+# how the v0.5.8 break below was found.
+RUST_EXAMPLES=(tappd_client_usage dstack_client_usage)
 
-# Go: `go test -skip <regexp>`, matched against the test name.
-GO_SKIP=(
-)
+# Sets the five lists for one tag. Called once per tag, before its suites run;
+# every list is reset here, so a tag with no entries clears the previous tag's.
+set_skips_for_tag() {
+    RUST_SKIP=()
+    RUST_EXAMPLE_SKIP=()
+    GO_SKIP=()
+    PYTHON_SKIP=()
+    JS_SKIP=()
 
-# Python: `pytest --deselect <file>::<test>`. Matched as a nodeid prefix, so
-# `::test_foo` also deselects `::test_foo_bar` -- name the test exactly.
-PYTHON_SKIP=(
-)
+    case "$1" in
+        v0.5.8)
+            # `EmitEvent` was removed in 0.6.0 -- CHANGELOG.md,
+            # `[Unreleased]` / Removed: "runtime RTMR3 events are system-owned
+            # and cannot be extended by apps". v0.5.8 is the newest released
+            # client that still expects it to work -- in Python, which asserts
+            # the call succeeds, and in a Rust example, which propagates the
+            # error with `?`.
+            #
+            # This is what a sanctioned break looks like from the outside: a
+            # released client called a method that no longer exists and cannot
+            # be edited to stop. These entries record that the break is
+            # deliberate; they do not make the client work.
 
-# JS: vitest has no negative name filter, so the entries are woven into one
-# negative-lookahead `--testNamePattern`. They are matched as substrings of the
-# full test name, `describe` prefixes included.
-JS_SKIP=(
-)
+            # The first two assert the call raises nothing ("This should not
+            # raise an error"); both now raise HTTPStatusError 400.
+            #
+            # The third is collateral, not a break, and it is listed because
+            # pytest deselects by nodeid *prefix*: an entry for
+            # `::test_emit_event` takes `::test_emit_event_validation` with it
+            # whether or not it is named here. Listing it keeps this list equal
+            # to what the run actually skips -- otherwise pytest reports "3
+            # deselected" against two entries and the difference is invisible.
+            # It costs nothing: it asserts client-side rejection of an empty
+            # event name, raises before any request is built, and never
+            # contacts the agent. The equivalent client-side validation still
+            # runs in the Rust, Go and JS suites.
+            PYTHON_SKIP=(
+                "tests/test_client.py::test_emit_event"
+                "tests/test_client.py::test_sync_emit_event"
+                "tests/test_client.py::test_emit_event_validation"
+            )
+
+            # `dstack_client_usage` step 4 calls `emit_event(...).await?`, so
+            # the whole example exits non-zero. Cost of skipping the binary:
+            # nothing that is not still checked -- its other four steps (Info,
+            # GetKey, GetQuote, GetTlsKey) are each covered by
+            # `tests/test_client.rs`, which runs unskipped in this same leg.
+            RUST_EXAMPLE_SKIP=(dstack_client_usage)
+            ;;
+        v0.5.11)
+            # Nothing skipped: every released test and example passes against
+            # the 0.6.0 agent. Note what that does and does not mean -- see the
+            # `EmitEvent` note above for the three assertions that pass here
+            # without exercising anything.
+            ;;
+    esac
+}
+
+# Exact-match membership test: `[[ $x == $y ]]` on each element rather than a
+# substring search over a joined string, so an entry `foo` cannot also skip
+# `foobar`.
+contains_element() {
+    local needle="$1"
+    shift
+    local item
+    for item in "$@"; do
+        [[ "$item" == "$needle" ]] && return 0
+    done
+    return 1
+}
 
 run_rust_suite() {
     local sdk_root="$1"
+    local tag="$2"
     local skip_args=()
     local pattern
+    local example
 
     for pattern in "${RUST_SKIP[@]+"${RUST_SKIP[@]}"}"; do
         skip_args+=(--skip "$pattern")
@@ -152,10 +225,14 @@ run_rust_suite() {
         cd "$sdk_root/rust"
         export CARGO_TARGET_DIR="$COMPAT_CARGO_TARGET_DIR"
         cargo test -- --show-output "${skip_args[@]+"${skip_args[@]}"}"
-        # The examples are client exercises too: they drive the agent end to end
-        # the way a README reader would.
-        cargo run --example tappd_client_usage
-        cargo run --example dstack_client_usage
+        for example in "${RUST_EXAMPLES[@]}"; do
+            if contains_element "$example" \
+                "${RUST_EXAMPLE_SKIP[@]+"${RUST_EXAMPLE_SKIP[@]}"}"; then
+                echo "--- skipping example $example at $tag (see set_skips_for_tag)"
+                continue
+            fi
+            cargo run --example "$example"
+        done
     )
 }
 
@@ -242,7 +319,9 @@ run_tag() {
     echo "#   simulator: $DSTACK_SIMULATOR_ENDPOINT"
     echo "############################################################"
 
-    run_rust_suite "$worktree/sdk"
+    set_skips_for_tag "$tag"
+
+    run_rust_suite "$worktree/sdk" "$tag"
     run_go_suite "$worktree/sdk"
     run_python_suite "$worktree/sdk"
     run_js_suite "$worktree/sdk"
