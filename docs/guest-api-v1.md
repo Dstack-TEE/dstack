@@ -366,10 +366,10 @@ string, and since the two byte strings can never be equal, matching their keccak
 digests would require a preimage attack on keccak256.
 
 The regression test is `a_v0_claim_cannot_be_crafted_into_a_v1_claim` in
-`dstack/ra-tls/src/api_v1.rs`. It builds the strongest available
-forgery, a `purpose` set to the v1 claim minus exactly the suffix v0 appends on
-its own, then asserts both that the byte strings differ and that the structural
-property holds.
+`dstack/ra-tls/src/api_v1.rs`. It builds the strongest available forgery, a
+`purpose` set to the v1 claim minus exactly the suffix v0 appends on its own,
+then asserts both that the byte strings differ and that the structural property
+holds.
 
 The two context tags are also distinct, so a derivation input can never be read as
 a claim: `dstack-guest-v1-key` for the KDF, `dstack-guest-v1-key-claim` for the
@@ -648,6 +648,11 @@ which is the authoritative description.
 Everything above the last two rows is an HTTP 400 with the message in the body.
 See [Status codes](#status-codes) for the full mapping. v1 does not default,
 coerce, or truncate a malformed request into a well-formed one.
+
+A 400 here means "the method ran and failed", not "your request was malformed".
+The GPU-unavailable row is a property of the image, not of the call: a client
+that gets it should stop rather than retry with different arguments, and the
+message in the body is the only thing that separates the two cases.
 
 ## Migration from the unversioned API
 

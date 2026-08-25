@@ -931,9 +931,9 @@ impl WorkerRpc for ExternalRpcHandler {
     /// `report_data`, call `/v1/Attest`, and serve the result to relying
     /// parties. See the `Worker` service comment in agent_rpc_v1.proto.
     ///
-    /// The report data comes from `app_key_report_data`, the same commitment
-    /// the frozen `Sign` path's key uses, so what gets attested is the public
-    /// key of the key that actually signs.
+    /// The report data comes from `app_key_report_data`, which commits to the
+    /// key `Sign` derives -- same path, purpose and base algorithm -- so the
+    /// attested public key is the one that actually signs.
     async fn get_attestation_for_app_key(
         self,
         request: GetAttestationForAppKeyRequest,

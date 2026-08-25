@@ -51,11 +51,11 @@ independent on purpose — a fleet of gateway nodes polling the same instance mu
 not multiply into that many container-runtime queries inside the CVM, and the
 RPC is served on the CVM's publicly reachable listener.
 
-An app that never set `health_check` has no verdict to read: the agent runs no
-monitor for it, and `/prpc/v1/Health` answers `healthy: true` with an empty
-`unhealthy` to whoever asks. No gateway asks, so this only matters to a third
-party calling the RPC directly — and there, `true` means "this app opted out of
-health gating", not "the agent checked and the app is serving".
+An app that never set `health_check` has no verdict to read: `/prpc/v1/Health`
+answers `healthy: true` to whoever asks, whatever its containers are doing. No
+gateway asks, so this only matters to a third party calling the RPC directly —
+and there, `true` means "this app opted out of health gating", not "the agent
+checked and the app is serving".
 
 There are two sources, and the app picks one.
 
