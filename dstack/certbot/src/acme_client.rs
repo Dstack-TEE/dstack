@@ -16,6 +16,7 @@ use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt,
     net::SocketAddr,
     path::{Path, PathBuf},
     time::Duration,
@@ -25,23 +26,245 @@ use tracing::{debug, error, info, warn};
 use x509_parser::prelude::{GeneralName, Pem};
 
 use super::dns01_client::{Dns01Api, Dns01Client};
+use super::dns_persist::{self, AuthorizationRecord};
 use super::http_client::ReqwestHttpClient;
+
+/// The ACME challenge used to prove control of the certificate's domains.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChallengeKind {
+    /// RFC 8555 `dns-01`. certbot answers every order by writing a TXT record
+    /// through the DNS provider API, so it needs a credential with write access
+    /// to the zone.
+    #[default]
+    #[serde(rename = "dns-01")]
+    Dns01,
+    /// draft-ietf-acme-dns-persist-01 `dns-persist-01`. Control is proven by a
+    /// `_validation-persist` record published once, out of band; certbot needs no
+    /// DNS credential and the zone can be hosted anywhere.
+    ///
+    /// Experimental — see `docs/certbot-dns-persist-01.md`.
+    #[serde(rename = "dns-persist-01")]
+    DnsPersist01,
+}
+
+/// How the client proves control of a domain to the ACME server.
+///
+/// The two methods differ in who writes DNS. `dns-01` needs certbot to hold a
+/// provider credential with write access to the zone for the lifetime of the
+/// deployment; `dns-persist-01` moves that to a one-time record the operator
+/// publishes by hand, after which certbot only ever reads DNS.
+#[derive(Debug)]
+pub enum ValidationMethod {
+    /// RFC 8555 `dns-01`: certbot publishes a fresh `_acme-challenge` TXT record
+    /// through the provider API for every order and removes it afterwards.
+    Dns01 {
+        /// Provider client with write access to the zone.
+        client: Dns01Client,
+        /// TTL of the published records, in seconds (1 = auto, min 60 on Cloudflare).
+        txt_ttl: u32,
+    },
+    /// draft-ietf-acme-dns-persist-01 `dns-persist-01`: control is proven by a
+    /// `_validation-persist` TXT record naming the CA and this ACME account,
+    /// published once and left in place. certbot needs no provider credential,
+    /// and the zone can be hosted anywhere.
+    ///
+    /// Experimental: the draft is still changing and Let's Encrypt serves this
+    /// challenge on staging only. See `docs/certbot-dns-persist-01.md`.
+    DnsPersist01 {
+        /// Issuer Domain Name to name in the record and in CAA records. Must be
+        /// one of the `issuer-domain-names` the CA sends in the challenge —
+        /// `letsencrypt.org` for Let's Encrypt.
+        issuer_domain_name: String,
+    },
+}
+
+impl ValidationMethod {
+    /// Which challenge this method answers.
+    fn kind(&self) -> ChallengeKind {
+        match self {
+            Self::Dns01 { .. } => ChallengeKind::Dns01,
+            Self::DnsPersist01 { .. } => ChallengeKind::DnsPersist01,
+        }
+    }
+
+    /// The challenge type to look for in an authorization.
+    fn challenge_type(&self) -> ChallengeType {
+        match self {
+            Self::Dns01 { .. } => ChallengeType::Dns01,
+            // instant-acme has no variant for the draft challenge, so it lands in
+            // `Unknown`. Matching on the wire string is what selects it.
+            Self::DnsPersist01 { .. } => ChallengeType::Unknown(DNS_PERSIST_01.to_string()),
+        }
+    }
+
+    /// Issuer Domain Name to write into CAA records.
+    fn issuer_domain_name(&self) -> &str {
+        match self {
+            // Unconfigurable for dns-01, as it has always been: existing
+            // deployments have CAA records published under this name.
+            Self::Dns01 { .. } => dns_persist::LETS_ENCRYPT_ISSUER_DOMAIN_NAME,
+            Self::DnsPersist01 { issuer_domain_name } => issuer_domain_name,
+        }
+    }
+
+    /// The provider client, or an error naming why there isn't one.
+    fn dns01_client(&self) -> Result<&Dns01Client> {
+        match self {
+            Self::Dns01 { client, .. } => Ok(client),
+            Self::DnsPersist01 { .. } => bail!(
+                "dns-persist-01 holds no DNS provider credential, so certbot cannot write \
+                 records; publish them out of band (see the `dns-records` command)"
+            ),
+        }
+    }
+}
+
+/// Wire name of the draft challenge, as it appears in the authorization.
+const DNS_PERSIST_01: &str = "dns-persist-01";
+
+/// A DNS record that has to exist before the CA will issue.
+///
+/// Rendered as a zone-file line so it can be pasted into any provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequiredRecord {
+    /// FQDN the record lives at.
+    pub name: String,
+    /// Record type, e.g. `TXT` or `CAA`.
+    pub record_type: String,
+    /// Record value, including any CAA flags and tag.
+    pub content: String,
+}
+
+impl fmt::Display for RequiredRecord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}. IN {} {}", self.name, self.record_type, self.content)
+    }
+}
+
+/// The CAA `issue`/`issuewild` value that pins issuance to one account.
+///
+/// `validationmethods` names the challenge actually in use: a record left
+/// pinned to `dns-01` after switching to `dns-persist-01` refuses every order,
+/// and vice versa.
+fn caa_content(challenge: ChallengeKind, issuer_domain_name: &str, account_uri: &str) -> String {
+    let method = match challenge {
+        ChallengeKind::Dns01 => "dns-01",
+        ChallengeKind::DnsPersist01 => DNS_PERSIST_01,
+    };
+    format!("{issuer_domain_name};validationmethods={method};accounturi={account_uri}")
+}
+
+/// Every DNS record that has to exist for the CA to issue for `domains`.
+///
+/// Under `dns-01` certbot writes these itself and the list is informational.
+/// Under `dns-persist-01` it holds no credential and cannot write anything, so
+/// this list *is* the one-time setup an operator has to publish by hand.
+///
+/// Takes the account URI rather than a client so that callers holding only the
+/// stored credentials — an admin listing, say — can render the records without
+/// a round trip to the CA.
+pub fn required_dns_records(
+    challenge: ChallengeKind,
+    issuer_domain_name: &str,
+    account_uri: &str,
+    domains: &[String],
+) -> Vec<RequiredRecord> {
+    let caa_content = caa_content(challenge, issuer_domain_name, account_uri);
+    let mut records = Vec::new();
+    for base_name in base_names(domains) {
+        if challenge == ChallengeKind::DnsPersist01 {
+            // One record covers the base name and, with the wildcard policy,
+            // `*.<base name>`; only ask for the policy when a wildcard is
+            // actually requested, so the record grants no more than needed.
+            let record = AuthorizationRecord {
+                issuer_domain_name: issuer_domain_name.to_string(),
+                account_uri: account_uri.to_string(),
+                wildcard: domains
+                    .iter()
+                    .any(|name| name.strip_prefix("*.") == Some(base_name)),
+            };
+            records.push(RequiredRecord {
+                name: dns_persist::validation_domain(base_name),
+                record_type: "TXT".to_string(),
+                content: format!("\"{}\"", record.rdata()),
+            });
+        }
+        for tag in ["issue", "issuewild"] {
+            records.push(RequiredRecord {
+                name: base_name.to_string(),
+                record_type: "CAA".to_string(),
+                content: format!("0 {tag} \"{caa_content}\""),
+            });
+        }
+    }
+    records
+}
 
 /// A AcmeClient instance.
 pub struct AcmeClient {
     account: Account,
     credentials: Credentials,
-    dns01_client: Dns01Client,
+    validation: ValidationMethod,
     max_dns_wait: Duration,
-    /// TTL for DNS TXT records used in ACME challenges (in seconds).
-    dns_txt_ttl: u32,
 }
 
+/// One pending authorization and the DNS record that answers it.
 #[derive(Debug, Clone)]
 struct Challenge {
-    id: String,
+    /// Provider-assigned record id, used by the cleanup pass after the order
+    /// settles. `None` when certbot did not create the record and must not
+    /// delete it — `dns-persist-01` records belong to the operator.
+    id: Option<String>,
+    /// FQDN the TXT record lives at.
     acme_domain: String,
-    dns_value: String,
+    /// What a TXT record there has to say for the CA to accept the challenge.
+    expected: Expected,
+}
+
+/// The condition a challenge's TXT records have to meet.
+#[derive(Debug, Clone)]
+enum Expected {
+    /// `dns-01`: the key authorization digest, matched verbatim.
+    KeyAuthorization(String),
+    /// `dns-persist-01`: an issue-value naming our issuer and account.
+    Authorization(AuthorizationRecord),
+}
+
+impl Expected {
+    /// Whether the TXT records currently published at the challenge domain answer
+    /// the challenge.
+    fn satisfied_by(&self, published: &[String], now: u64) -> bool {
+        match self {
+            Self::KeyAuthorization(value) => published.iter().any(|txt| txt == value),
+            Self::Authorization(record) => record.satisfied_by_any(published, now),
+        }
+    }
+}
+
+impl Challenge {
+    /// A line naming what is missing at the challenge domain, phrased so an
+    /// operator can act on it: under `dns-persist-01` it is the exact record to
+    /// publish, under `dns-01` it is the value certbot just wrote.
+    fn unsettled_hint(&self) -> String {
+        format!(
+            "no TXT record at {} matches the expected value: {}",
+            self.acme_domain, self.expected
+        )
+    }
+}
+
+impl fmt::Display for Expected {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::KeyAuthorization(value) => f.write_str(value),
+            Self::Authorization(record) => write!(f, "{}", record.rdata()),
+        }
+    }
+}
+
+/// Current UNIX time, for comparing against a record's `persistUntil`.
+fn now_secs() -> u64 {
+    time::OffsetDateTime::now_utc().unix_timestamp().max(0) as u64
 }
 
 #[derive(Serialize, Deserialize)]
@@ -59,16 +282,26 @@ pub(crate) fn acme_matches(encoded_credentials: &str, acme_url: &str) -> bool {
     credentials.acme_url == acme_url
 }
 
+/// The names CAA and `dns-persist-01` records are published under, deduplicated.
+///
+/// A wildcard request is authorized from its base name, so `example.com` and
+/// `*.example.com` share one set of records.
+fn base_names(domains: &[String]) -> BTreeSet<&str> {
+    domains
+        .iter()
+        .map(|name| name.strip_prefix("*.").unwrap_or(name))
+        .collect()
+}
+
 fn caa_tag(content: &str) -> Option<&str> {
     content.split_whitespace().nth(1)
 }
 
 impl AcmeClient {
     pub async fn load(
-        dns01_client: Dns01Client,
+        validation: ValidationMethod,
         encoded_credentials: &str,
         max_dns_wait: Duration,
-        dns_txt_ttl: u32,
     ) -> Result<Self> {
         let credentials: Credentials = serde_json::from_str(encoded_credentials)?;
         let http_client = Box::new(ReqwestHttpClient::new()?);
@@ -78,19 +311,17 @@ impl AcmeClient {
         let credentials: Credentials = serde_json::from_str(encoded_credentials)?;
         Ok(Self {
             account,
-            dns01_client,
+            validation,
             credentials,
             max_dns_wait,
-            dns_txt_ttl,
         })
     }
 
     /// Create a new account.
     pub async fn new_account(
         acme_url: &str,
-        dns01_client: Dns01Client,
+        validation: ValidationMethod,
         max_dns_wait: Duration,
-        dns_txt_ttl: u32,
     ) -> Result<Self> {
         let http_client = Box::new(ReqwestHttpClient::new()?);
         let (account, credentials) = Account::builder_with_http(http_client)
@@ -112,10 +343,9 @@ impl AcmeClient {
         };
         Ok(Self {
             account,
-            dns01_client,
+            validation,
             credentials,
             max_dns_wait,
-            dns_txt_ttl,
         })
     }
 
@@ -129,27 +359,46 @@ impl AcmeClient {
         &self.credentials.account_id
     }
 
+    /// The CAA `issue`/`issuewild` value that pins issuance to this account.
+    fn caa_content(&self) -> String {
+        caa_content(
+            self.validation.kind(),
+            self.validation.issuer_domain_name(),
+            self.account_id(),
+        )
+    }
+
+    /// Every DNS record that has to exist for the CA to issue for `domains`.
+    ///
+    /// See [`required_dns_records`], which this fills in from the live account.
+    pub fn required_dns_records(&self, domains: &[String]) -> Vec<RequiredRecord> {
+        required_dns_records(
+            self.validation.kind(),
+            self.validation.issuer_domain_name(),
+            self.account_id(),
+            domains,
+        )
+    }
+
     pub async fn set_caa_records(&self, domains: &[String]) -> Result<()> {
-        let account_id = self.account_id();
-        let content = format!("letsencrypt.org;validationmethods=dns-01;accounturi={account_id}");
-        let base_names = domains
-            .iter()
-            .map(|name| name.strip_prefix("*.").unwrap_or(name))
-            .collect::<BTreeSet<_>>();
+        let dns01_client = self.validation.dns01_client().context(
+            "cannot set CAA records without DNS write access; publish the records \
+             printed by `certbot dns-records` instead",
+        )?;
+        let content = self.caa_content();
+        let base_names = base_names(domains);
 
         for base_name in base_names {
             // 1. Set ";" to guard timing gap between the operations.
             debug!("setting guard CAA records for {base_name}");
-            let guard0 = self
-                .dns01_client
+            let guard0 = dns01_client
                 .add_caa_record(base_name, 0, "issue", ";")
                 .await?;
-            let guard1 = self
-                .dns01_client
+            let guard1 = dns01_client
                 .add_caa_record(base_name, 0, "issuewild", ";")
                 .await?;
             // 2. Remove the existing constraints
-            for record in self.dns01_client.get_records(base_name).await? {
+            for record in dns01_client.get_records(base_name).await? {
                 if record.id == guard0 || record.id == guard1 {
                     continue;
                 }
@@ -161,22 +410,22 @@ impl AcmeClient {
                         "removing existing issuer CAA record {} {}",
                         record.name, record.content
                     );
-                    self.dns01_client.remove_record(&record.id).await?;
+                    dns01_client.remove_record(&record.id).await?;
                 }
             }
             // 3. Set the new constraints
             debug!("setting CAA records for {base_name}, 0 issue \"{content}\"");
-            self.dns01_client
+            dns01_client
                 .add_caa_record(base_name, 0, "issue", &content)
                 .await?;
             debug!("setting CAA records for {base_name}, 0 issuewild \"{content}\"");
-            self.dns01_client
+            dns01_client
                 .add_caa_record(base_name, 0, "issuewild", &content)
                 .await?;
             debug!("removing guard CAA records for {base_name}");
             // 4. Remove the guards
-            self.dns01_client.remove_record(&guard0).await?;
-            self.dns01_client.remove_record(&guard1).await?;
+            dns01_client.remove_record(&guard0).await?;
+            dns01_client.remove_record(&guard1).await?;
         }
         Ok(())
     }
@@ -190,10 +439,18 @@ impl AcmeClient {
         let result = self
             .request_new_certificate_inner(key, domains, &mut challenges)
             .await;
-        for challenge in &challenges {
-            debug!("removing dns record {}", challenge.id);
-            if let Err(err) = self.dns01_client.remove_record(&challenge.id).await {
-                error!("failed to remove dns record {}: {err}", challenge.id);
+        // Only records certbot created are cleaned up. A dns-persist-01 record
+        // is the operator's and outlives every order, so it carries no id.
+        for id in challenges
+            .iter()
+            .filter_map(|challenge| challenge.id.as_ref())
+        {
+            let Ok(dns01_client) = self.validation.dns01_client() else {
+                break;
+            };
+            debug!("removing dns record {id}");
+            if let Err(err) = dns01_client.remove_record(id).await {
+                error!("failed to remove dns record {id}: {err}");
             }
         }
         result
@@ -347,6 +604,7 @@ impl AcmeClient {
 
 impl AcmeClient {
     async fn authorize(&self, order: &mut Order, challenges: &mut Vec<Challenge>) -> Result<()> {
+        let challenge_type = self.validation.challenge_type();
         let mut authorizations = order.authorizations();
         while let Some(authz) = authorizations.next().await {
             let mut authz = authz.context("failed to get authorizations")?;
@@ -356,42 +614,61 @@ impl AcmeClient {
                 _ => bail!("unsupported authorization status: {:?}", authz.status),
             }
 
+            // Read before taking the challenge handle, which borrows the
+            // authorization for the rest of the iteration.
+            let wildcard = authz.wildcard;
             let challenge = authz
-                .challenge(ChallengeType::Dns01)
-                .context("no dns01 challenge found")?;
+                .challenge(challenge_type.clone())
+                .with_context(|| format!("no {challenge_type:?} challenge found"))?;
 
-            let acme_domain = challenge_domain(challenge.identifier())?;
-            let dns_value = challenge.key_authorization().dns_value();
-            // Clearing stale records is a per-name preparation step, not a
-            // per-authorization one. An order for `example.com` and
-            // `*.example.com` yields two authorizations that are both answered
-            // under `_acme-challenge.example.com`, each with its own value, and
-            // both values have to be live at validation time. Purging again for
-            // the second authorization would delete the record the first one
-            // just published, so one of the two challenges could never be
-            // answered and the order failed with "Correct value not found for
-            // DNS challenge".
-            if needs_purge(challenges, &acme_domain) {
-                debug!("removing existing TXT records for {acme_domain}");
-                self.dns01_client
-                    .remove_txt_records(&acme_domain)
-                    .await
-                    .context("failed to remove existing dns record")?;
-            }
-            debug!(
-                "creating TXT record for {acme_domain} with TTL {}s",
-                self.dns_txt_ttl
-            );
-            let id = self
-                .dns01_client
-                .add_txt_record(&acme_domain, &dns_value, self.dns_txt_ttl)
-                .await
-                .context("failed to create dns record")?;
-            challenges.push(Challenge {
-                id,
-                acme_domain,
-                dns_value,
-            });
+            let acme_domain = challenge_domain(self.validation.kind(), challenge.identifier())?;
+            let challenge = match &self.validation {
+                ValidationMethod::Dns01 {
+                    client, txt_ttl, ..
+                } => {
+                    let dns_value = challenge.key_authorization().dns_value();
+                    // Clearing stale records is a per-name preparation step, not a
+                    // per-authorization one. An order for `example.com` and
+                    // `*.example.com` yields two authorizations that are both answered
+                    // under `_acme-challenge.example.com`, each with its own value, and
+                    // both values have to be live at validation time. Purging again for
+                    // the second authorization would delete the record the first one
+                    // just published, so one of the two challenges could never be
+                    // answered and the order failed with "Correct value not found for
+                    // DNS challenge".
+                    if needs_purge(challenges, &acme_domain) {
+                        debug!("removing existing TXT records for {acme_domain}");
+                        client
+                            .remove_txt_records(&acme_domain)
+                            .await
+                            .context("failed to remove existing dns record")?;
+                    }
+                    debug!("creating TXT record for {acme_domain} with TTL {txt_ttl}s");
+                    let id = client
+                        .add_txt_record(&acme_domain, &dns_value, *txt_ttl)
+                        .await
+                        .context("failed to create dns record")?;
+                    Challenge {
+                        id: Some(id),
+                        acme_domain,
+                        expected: Expected::KeyAuthorization(dns_value),
+                    }
+                }
+                // Nothing to publish: the record is already in the zone, or the
+                // order is about to fail and say so. There is likewise nothing
+                // to purge -- the record is the operator's, and one persistent
+                // record answers every authorization under the name.
+                ValidationMethod::DnsPersist01 { issuer_domain_name } => Challenge {
+                    id: None,
+                    acme_domain,
+                    expected: Expected::Authorization(AuthorizationRecord {
+                        issuer_domain_name: issuer_domain_name.clone(),
+                        account_uri: self.account_id().to_string(),
+                        wildcard,
+                    }),
+                },
+            };
+            challenges.push(challenge);
         }
         Ok(())
     }
@@ -416,10 +693,10 @@ impl AcmeClient {
         // the name below it: for `_acme-challenge.a.example.com` the NS records
         // usually live on `example.com`. Querying the full name returns NODATA,
         // so walk up a label at a time until a name actually carries NS records.
-        let mut candidate = domain
-            .strip_prefix("_acme-challenge.")
-            .unwrap_or(domain)
-            .to_string();
+        // The leading label is dropped for any challenge prefix -- `_acme-challenge`
+        // for dns-01, `_validation-persist` for dns-persist-01 -- since an
+        // underscore label never carries NS records.
+        let mut candidate = strip_challenge_label(domain).to_string();
         let mut addrs = Vec::new();
         let mut zone = candidate.clone();
         loop {
@@ -452,7 +729,13 @@ impl AcmeClient {
         resolver_for(&addrs)
     }
 
-    /// Self check the TXT records for the given challenges.
+    /// Wait until every challenge's records are visible to us.
+    ///
+    /// Advisory, not a gate: our resolver is not the CA's, and under
+    /// `dns-persist-01` our expectation can even be stricter than the CA's --
+    /// the `issuer-domain-names` it would accept are not exposed by
+    /// instant-acme. A record we never see is reported and the order proceeds,
+    /// letting the CA decide.
     async fn check_dns(&self, challenges: &[Challenge]) -> Result<()> {
         let mut delay = Duration::from_millis(250);
         let mut tries = 1u8;
@@ -500,24 +783,26 @@ impl AcmeClient {
                     "DNS propagation timeout after {elapsed:?}, max wait time is {max:?}. proceeding anyway as ACME server may have different DNS view",
                     max = self.max_dns_wait
                 );
+                for challenge in &unsettled_challenges {
+                    warn!("{}", challenge.unsettled_hint());
+                }
                 break;
             }
 
             while let Some(challenge) = unsettled_challenges.pop() {
-                let expected_txt = &challenge.dns_value;
                 let dns_resolver = resolvers
                     .get(&challenge.acme_domain)
                     .context("no resolver for challenge domain")?;
-                let settled = match dns_resolver.txt_lookup(&challenge.acme_domain).await {
-                    Ok(record) => record.answers().iter().any(|answer| {
-                        let RData::TXT(txt) = &answer.data else {
-                            return false;
-                        };
-                        let actual_txt = txt.to_string();
-                        debug!("Expected challenge: {expected_txt}, actual: {actual_txt}");
-                        actual_txt == *expected_txt
-                    }),
-                    Err(err) if err.is_no_records_found() => false,
+                let published = match dns_resolver.txt_lookup(&challenge.acme_domain).await {
+                    Ok(records) => records
+                        .answers()
+                        .iter()
+                        .filter_map(|answer| match &answer.data {
+                            RData::TXT(txt) => Some(txt.to_string()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>(),
+                    Err(err) if err.is_no_records_found() => Vec::new(),
                     Err(err) if !fell_back.contains(&challenge.acme_domain) => {
                         // Transport failures land here rather than in the arm
                         // above: `is_no_records_found` covers only
@@ -548,10 +833,14 @@ impl AcmeClient {
                             domain = &challenge.acme_domain,
                             "dns lookup failed: {err:#}"
                         );
-                        false
+                        Vec::new()
                     }
                 };
-                if !settled {
+                debug!(
+                    "Expected challenge: {}, actual: {published:?}",
+                    challenge.expected
+                );
+                if !challenge.expected.satisfied_by(&published, now_secs()) {
                     delay = Duration::from_secs(32).min(delay * 2);
                     tries += 1;
                     debug!(
@@ -570,13 +859,14 @@ impl AcmeClient {
         Ok(())
     }
 
-    /// Tell the ACME server every pending dns-01 challenge is answerable.
+    /// Tell the ACME server every pending challenge is answerable.
     ///
-    /// The TXT records are published first and verified for propagation, so this
-    /// is a second pass over the same authorizations: 0.8 dropped
-    /// `Order::set_challenge_ready(url)`, and `ChallengeHandle::set_ready()`
-    /// borrows the order, so the handle cannot be held across the DNS wait.
+    /// The DNS records are published and checked first, so this is a second pass
+    /// over the same authorizations: 0.8 dropped `Order::set_challenge_ready(url)`,
+    /// and `ChallengeHandle::set_ready()` borrows the order, so the handle cannot
+    /// be held across the DNS wait.
     async fn set_challenges_ready(&self, order: &mut Order) -> Result<()> {
+        let challenge_type = self.validation.challenge_type();
         let mut authorizations = order.authorizations();
         while let Some(authz) = authorizations.next().await {
             let mut authz = authz.context("failed to get authorizations")?;
@@ -584,8 +874,8 @@ impl AcmeClient {
                 continue;
             }
             let mut challenge = authz
-                .challenge(ChallengeType::Dns01)
-                .context("no dns01 challenge found")?;
+                .challenge(challenge_type.clone())
+                .with_context(|| format!("no {challenge_type:?} challenge found"))?;
             debug!("setting challenge ready for {}", challenge.url);
             challenge
                 .set_ready()
@@ -695,17 +985,36 @@ fn needs_purge(published: &[Challenge], acme_domain: &str) -> bool {
         .any(|challenge| challenge.acme_domain == acme_domain)
 }
 
-/// The name of the TXT record that answers a dns-01 challenge for `identifier`.
+/// The name of the TXT record that answers `challenge`'s validation for `identifier`.
 ///
 /// The record always lives under the bare name: a wildcard authorization for
-/// `*.example.com` is answered at `_acme-challenge.example.com`. `AuthorizedIdentifier`
+/// `*.example.com` is answered at `_acme-challenge.example.com`, and at
+/// `_validation-persist.example.com` under dns-persist-01. `AuthorizedIdentifier`
 /// renders the wildcard prefix in its `Display`, so formatting it directly would publish
 /// the record at `_acme-challenge.*.example.com` and fail every wildcard issuance.
-fn challenge_domain(identifier: &AuthorizedIdentifier<'_>) -> Result<String> {
+fn challenge_domain(
+    challenge: ChallengeKind,
+    identifier: &AuthorizedIdentifier<'_>,
+) -> Result<String> {
     let Identifier::Dns(name) = identifier.identifier else {
         bail!("unsupported identifier type in authorization: {identifier}");
     };
-    Ok(format!("_acme-challenge.{name}"))
+    Ok(match challenge {
+        ChallengeKind::Dns01 => format!("_acme-challenge.{name}"),
+        ChallengeKind::DnsPersist01 => dns_persist::validation_domain(name),
+    })
+}
+
+/// Drop a leading underscore label, so the zone walk starts at a real name.
+///
+/// Challenge records live under a reserved label -- `_acme-challenge` for
+/// dns-01, `_validation-persist` for dns-persist-01 -- which never carries NS
+/// records, so querying it only costs a round trip.
+fn strip_challenge_label(domain: &str) -> &str {
+    match domain.starts_with('_') {
+        true => domain.split_once('.').map_or(domain, |(_, rest)| rest),
+        false => domain,
+    }
 }
 
 async fn find_error(order: &mut Order) -> Result<Option<Problem>> {
@@ -953,6 +1262,23 @@ mod ns_discovery_tests {
     use super::parent_zone;
 
     #[test]
+    fn a_challenge_label_is_dropped_before_the_walk_starts() {
+        use super::strip_challenge_label;
+
+        // Both challenge methods put their record under a reserved underscore
+        // label, and neither label can carry NS records.
+        assert_eq!(
+            strip_challenge_label("_acme-challenge.example.com"),
+            "example.com"
+        );
+        assert_eq!(
+            strip_challenge_label("_validation-persist.example.com"),
+            "example.com"
+        );
+        assert_eq!(strip_challenge_label("example.com"), "example.com");
+    }
+
+    #[test]
     fn the_walk_climbs_to_a_name_that_can_carry_ns_records() {
         // A challenge name is not a zone cut, so the walk has to climb to the
         // name that actually carries the NS records.
@@ -974,43 +1300,156 @@ mod ns_discovery_tests {
 
 #[cfg(test)]
 mod challenge_domain_tests {
-    use super::challenge_domain;
+    use super::{challenge_domain, ChallengeKind};
     use instant_acme::Identifier;
 
     /// A wildcard order authorizes the bare name with `wildcard: true`, and the TXT record
     /// answering it must be published under that bare name. Formatting the identifier
     /// through its `Display` instead would ask for `_acme-challenge.*.example.com`.
+    /// dns-persist-01 answers the same authorization under its own label, and the
+    /// wildcard prefix must not leak into that name either.
     #[test]
     fn the_challenge_domain_never_carries_a_wildcard_prefix() {
         let dns = Identifier::Dns("example.com".to_string());
-        assert_eq!(
-            challenge_domain(&dns.authorized(false)).unwrap(),
-            "_acme-challenge.example.com"
-        );
-        assert_eq!(
-            challenge_domain(&dns.authorized(true)).unwrap(),
-            "_acme-challenge.example.com"
-        );
+        for wildcard in [false, true] {
+            assert_eq!(
+                challenge_domain(ChallengeKind::Dns01, &dns.authorized(wildcard)).unwrap(),
+                "_acme-challenge.example.com",
+                "wildcard={wildcard}"
+            );
+            assert_eq!(
+                challenge_domain(ChallengeKind::DnsPersist01, &dns.authorized(wildcard)).unwrap(),
+                "_validation-persist.example.com",
+                "wildcard={wildcard}"
+            );
+        }
     }
 
-    /// dns-01 is only defined for DNS identifiers; anything else is a bug in the order we
-    /// built, so it must be an error rather than a nonsensical record name.
+    /// Both methods are only defined for DNS identifiers; anything else is a bug in the
+    /// order we built, so it must be an error rather than a nonsensical record name.
     #[test]
     fn a_non_dns_identifier_is_rejected() {
         let ip = Identifier::Ip("192.0.2.1".parse().unwrap());
-        assert!(challenge_domain(&ip.authorized(false)).is_err());
+        assert!(challenge_domain(ChallengeKind::Dns01, &ip.authorized(false)).is_err());
+        assert!(challenge_domain(ChallengeKind::DnsPersist01, &ip.authorized(false)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod required_record_tests {
+    use super::*;
+
+    const ACCOUNT: &str = "https://acme-v02.api.letsencrypt.org/acme/acct/1234567890";
+
+    fn records(challenge: ChallengeKind, domains: &[&str]) -> Vec<String> {
+        required_dns_records(
+            challenge,
+            dns_persist::LETS_ENCRYPT_ISSUER_DOMAIN_NAME,
+            ACCOUNT,
+            &domains.iter().map(|d| d.to_string()).collect::<Vec<_>>(),
+        )
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+    }
+
+    #[test]
+    fn dns01_caa_content_is_byte_identical_to_the_pinned_format() {
+        // CAA values published by earlier releases have to keep matching, or
+        // issuance stops the moment this string drifts.
+        assert_eq!(
+            caa_content(
+                ChallengeKind::Dns01,
+                dns_persist::LETS_ENCRYPT_ISSUER_DOMAIN_NAME,
+                ACCOUNT
+            ),
+            format!("letsencrypt.org;validationmethods=dns-01;accounturi={ACCOUNT}")
+        );
+    }
+
+    #[test]
+    fn caa_content_names_the_challenge_in_use() {
+        // A CAA record still pinned to dns-01 refuses every dns-persist-01 order.
+        assert!(caa_content(
+            ChallengeKind::DnsPersist01,
+            dns_persist::LETS_ENCRYPT_ISSUER_DOMAIN_NAME,
+            ACCOUNT
+        )
+        .contains("validationmethods=dns-persist-01"));
+    }
+
+    #[test]
+    fn dns01_needs_no_validation_record() {
+        // certbot writes the `_acme-challenge` record itself, per order.
+        assert_eq!(
+            records(ChallengeKind::Dns01, &["*.example.com"]),
+            vec![
+                format!(
+                    "example.com. IN CAA 0 issue \"letsencrypt.org;validationmethods=dns-01;accounturi={ACCOUNT}\""
+                ),
+                format!(
+                    "example.com. IN CAA 0 issuewild \"letsencrypt.org;validationmethods=dns-01;accounturi={ACCOUNT}\""
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn dns_persist_asks_for_the_wildcard_policy_only_when_a_wildcard_is_ordered() {
+        let plain = records(ChallengeKind::DnsPersist01, &["example.com"]);
+        assert_eq!(
+            plain[0],
+            format!(
+                "_validation-persist.example.com. IN TXT \"letsencrypt.org; accounturi={ACCOUNT}\""
+            )
+        );
+
+        let wildcard = records(ChallengeKind::DnsPersist01, &["*.example.com"]);
+        assert_eq!(
+            wildcard[0],
+            format!(
+                "_validation-persist.example.com. IN TXT \"letsencrypt.org; accounturi={ACCOUNT}; policy=wildcard\""
+            )
+        );
+    }
+
+    #[test]
+    fn a_name_and_its_wildcard_share_one_validation_record() {
+        // Both identifiers authorize from the same base name, so asking the
+        // operator for two records would be asking for one too many.
+        let records = records(
+            ChallengeKind::DnsPersist01,
+            &["example.com", "*.example.com"],
+        );
+        assert_eq!(
+            records.iter().filter(|r| r.contains(" TXT ")).count(),
+            1,
+            "{records:#?}"
+        );
+        assert!(records[0].contains("policy=wildcard"), "{records:#?}");
+    }
+
+    #[test]
+    fn each_base_name_gets_its_own_records() {
+        let records = records(
+            ChallengeKind::DnsPersist01,
+            &["*.a.example.com", "*.b.example.com"],
+        );
+        assert_eq!(records.len(), 6, "{records:#?}");
+        assert!(records[0].starts_with("_validation-persist.a.example.com."));
+        assert!(records[3].starts_with("_validation-persist.b.example.com."));
     }
 }
 
 #[cfg(test)]
 mod purge_tests {
-    use super::{needs_purge, Challenge};
+    use super::{needs_purge, Challenge, Expected};
 
     fn challenge(acme_domain: &str, dns_value: &str) -> Challenge {
         Challenge {
-            id: format!("rec-{dns_value}"),
+            id: Some(format!("rec-{dns_value}")),
             acme_domain: acme_domain.to_string(),
-            dns_value: dns_value.to_string(),
+            expected: Expected::KeyAuthorization(dns_value.to_string()),
         }
     }
 

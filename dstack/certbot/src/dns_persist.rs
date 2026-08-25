@@ -1,0 +1,399 @@
+// SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
+//! The persistent DNS authorization record used by the `dns-persist-01` challenge.
+//!
+//! `dns-persist-01` (draft-ietf-acme-dns-persist-01) replaces the per-order
+//! `_acme-challenge` TXT record of `dns-01` with a single record that stays in the
+//! zone: `_validation-persist.<name>`, naming the CA and the ACME account allowed
+//! to issue for that name. The account key proves who is asking; the record proves
+//! the zone owner agreed. Nothing about it changes between orders, so a client that
+//! uses this method never needs write access to the zone.
+//!
+//! This module owns the record's syntax: rendering the line an operator has to
+//! publish, and deciding whether what is currently published would satisfy the CA.
+//! The RDATA is an RFC 8659 `issue-value` — the same grammar as a CAA `issue`
+//! record — so the parser here mirrors the one CAs run (see `va/dns_persist.go` in
+//! Boulder), including the parts that reject rather than ignore: a trailing
+//! semicolon, a repeated tag, whitespace inside a value.
+
+use std::fmt;
+
+use anyhow::{bail, Context, Result};
+
+/// Label prepended to the name being validated to form the validation domain name.
+///
+/// draft-ietf-acme-dns-persist-01, section 4.
+const VALIDATION_LABEL: &str = "_validation-persist";
+
+/// Issuer Domain Name for Let's Encrypt, matching the `caaIdentities` it advertises.
+///
+/// A CA lists the names it answers to in the challenge object's
+/// `issuer-domain-names`; a record naming anything else is ignored by that CA.
+pub const LETS_ENCRYPT_ISSUER_DOMAIN_NAME: &str = "letsencrypt.org";
+
+/// The `policy` value that widens a record to cover wildcards.
+const POLICY_WILDCARD: &str = "wildcard";
+
+/// The validation domain name for `name`, where the CA looks for the TXT record.
+///
+/// A wildcard request is authorized by the record on its base name: ACME strips the
+/// `*.` before creating the authorization, so `*.example.com` and `example.com`
+/// share `_validation-persist.example.com` and are told apart by `policy=wildcard`.
+pub fn validation_domain(name: &str) -> String {
+    let base = name.strip_prefix("*.").unwrap_or(name);
+    format!("{VALIDATION_LABEL}.{base}")
+}
+
+/// The record an operator has to publish for one name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorizationRecord {
+    /// Issuer Domain Name of the CA this record authorizes.
+    pub issuer_domain_name: String,
+    /// URI of the ACME account allowed to issue, compared byte for byte by the CA.
+    pub account_uri: String,
+    /// Whether the record also covers `*.<name>`.
+    pub wildcard: bool,
+}
+
+impl AuthorizationRecord {
+    /// The TXT RDATA to publish, as a single string.
+    ///
+    /// Rendered without a trailing semicolon: CAs read the RDATA as an RFC 8659
+    /// `issue-value`, where a trailing semicolon is an empty parameter and makes
+    /// the whole record malformed.
+    pub fn rdata(&self) -> String {
+        let mut rdata = format!(
+            "{}; accounturi={}",
+            self.issuer_domain_name, self.account_uri
+        );
+        if self.wildcard {
+            rdata.push_str("; policy=wildcard");
+        }
+        rdata
+    }
+
+    /// Whether `rdata` currently published at the validation domain satisfies this
+    /// record's requirement, as of `now` (UNIX seconds).
+    ///
+    /// Follows the CA's own filter: a record naming a different issuer is not a
+    /// failure, it belongs to another CA and is skipped. Only a record that names
+    /// our issuer is held to the account, policy and lifetime checks.
+    fn satisfied_by(&self, rdata: &str, now: u64) -> bool {
+        let Ok(parsed) = IssueValue::parse(rdata) else {
+            return false;
+        };
+        if parsed.issuer_domain_name != self.issuer_domain_name {
+            return false;
+        }
+        if parsed.account_uri != self.account_uri {
+            return false;
+        }
+        if parsed.persist_until.is_some_and(|until| now > until) {
+            return false;
+        }
+        // A record without `policy=wildcard` authorizes the exact name only, so it
+        // cannot stand in for a wildcard request. The reverse is fine: a wildcard
+        // record also covers the name itself.
+        !self.wildcard || parsed.policy.as_deref().is_some_and(is_wildcard_policy)
+    }
+
+    /// Whether any of the TXT records at the validation domain satisfies this one.
+    ///
+    /// Several records may sit at the same label, one per CA or per account, and
+    /// the CA accepts the name if any single record passes.
+    pub fn satisfied_by_any(&self, published: &[String], now: u64) -> bool {
+        published.iter().any(|rdata| self.satisfied_by(rdata, now))
+    }
+}
+
+impl fmt::Display for AuthorizationRecord {
+    /// Renders the full zone-file line, ready to paste into a DNS provider.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "IN TXT \"{}\"", self.rdata())
+    }
+}
+
+/// A parsed RFC 8659 `issue-value`, the grammar shared with CAA `issue` records.
+#[derive(Debug, PartialEq, Eq)]
+struct IssueValue {
+    issuer_domain_name: String,
+    account_uri: String,
+    policy: Option<String>,
+    /// UNIX timestamp after which the CA stops accepting the record.
+    persist_until: Option<u64>,
+}
+
+impl IssueValue {
+    fn parse(rdata: &str) -> Result<Self> {
+        let mut parts = rdata.split(';');
+        let issuer_domain_name = trim_wsp(parts.next().unwrap_or_default());
+        if issuer_domain_name.is_empty() {
+            bail!("missing issuer domain name");
+        }
+
+        let mut account_uri = None;
+        let mut policy = None;
+        let mut persist_until = None;
+        let mut seen = Vec::new();
+        for part in parts {
+            let part = trim_wsp(part);
+            // An empty parameter means a doubled or trailing semicolon. CAs treat
+            // that as malformed rather than skipping it, so neither do we.
+            if part.is_empty() {
+                bail!("empty parameter or trailing semicolon");
+            }
+            let (tag, value) = part.split_once('=').context("parameter is not tag=value")?;
+            // RFC 8659 matches tags case-insensitively; values are not folded.
+            let tag = tag.to_lowercase();
+            if !value.bytes().all(is_value_byte) {
+                bail!("parameter {tag} has a value with a forbidden character");
+            }
+            if seen.contains(&tag) {
+                bail!("duplicate parameter {tag}");
+            }
+            seen.push(tag.clone());
+            match tag.as_str() {
+                "accounturi" => account_uri = Some(value.to_string()),
+                "policy" => policy = Some(value.to_string()),
+                "persistuntil" => {
+                    persist_until = Some(
+                        value
+                            .parse::<u64>()
+                            .context("persistUntil is not a base-10 timestamp")?,
+                    )
+                }
+                // The draft requires unrecognized tags to be ignored, so that
+                // later revisions can add parameters without invalidating records.
+                _ => {}
+            }
+        }
+
+        Ok(Self {
+            issuer_domain_name: issuer_domain_name.to_string(),
+            account_uri: account_uri.context("missing mandatory accounturi parameter")?,
+            policy,
+            persist_until,
+        })
+    }
+}
+
+fn is_wildcard_policy(policy: &str) -> bool {
+    policy.eq_ignore_ascii_case(POLICY_WILDCARD)
+}
+
+/// Trim the whitespace RFC 8659 allows around the issuer name and each parameter.
+fn trim_wsp(part: &str) -> &str {
+    part.trim_matches([' ', '\t'])
+}
+
+/// Whether a byte may appear in a parameter value.
+///
+/// RFC 8659 allows printable ASCII except `;`, which excludes whitespace: a value
+/// containing a space is a malformed record, not a value with a space in it.
+fn is_value_byte(byte: u8) -> bool {
+    matches!(byte, 0x21..=0x3a | 0x3c..=0x7e)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An arbitrary "now" that precedes every `persistUntil` used below.
+    const NOW: u64 = 1_700_000_000;
+    const ACCOUNT: &str = "https://acme-v02.api.letsencrypt.org/acme/acct/1234567890";
+
+    fn record(wildcard: bool) -> AuthorizationRecord {
+        AuthorizationRecord {
+            issuer_domain_name: LETS_ENCRYPT_ISSUER_DOMAIN_NAME.to_string(),
+            account_uri: ACCOUNT.to_string(),
+            wildcard,
+        }
+    }
+
+    /// Whether `published` satisfies a request for `name`, wildcard or not.
+    fn accepts(wildcard: bool, published: &str) -> bool {
+        record(wildcard).satisfied_by(published, NOW)
+    }
+
+    #[test]
+    fn validation_domain_prepends_the_label() {
+        assert_eq!(
+            validation_domain("example.com"),
+            "_validation-persist.example.com"
+        );
+    }
+
+    #[test]
+    fn validation_domain_strips_the_wildcard_prefix() {
+        // The CA looks up the base name for a wildcard authorization, so a record
+        // at `_validation-persist.*.example.com` would never be read.
+        assert_eq!(
+            validation_domain("*.example.com"),
+            "_validation-persist.example.com"
+        );
+    }
+
+    #[test]
+    fn rdata_has_no_trailing_semicolon() {
+        assert_eq!(
+            record(false).rdata(),
+            format!("letsencrypt.org; accounturi={ACCOUNT}")
+        );
+    }
+
+    #[test]
+    fn rdata_carries_the_wildcard_policy() {
+        assert_eq!(
+            record(true).rdata(),
+            format!("letsencrypt.org; accounturi={ACCOUNT}; policy=wildcard")
+        );
+    }
+
+    #[test]
+    fn display_renders_a_zone_file_line() {
+        assert_eq!(
+            record(false).to_string(),
+            format!("IN TXT \"letsencrypt.org; accounturi={ACCOUNT}\"")
+        );
+    }
+
+    #[test]
+    fn rendered_record_parses_back() {
+        for wildcard in [false, true] {
+            assert!(
+                accepts(wildcard, &record(wildcard).rdata()),
+                "wildcard={wildcard}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_the_draft_example_layout() {
+        // draft-ietf-acme-dns-persist-01, figure 2, plus the whitespace RFC 8659
+        // allows around the issuer name and each parameter.
+        let record = AuthorizationRecord {
+            issuer_domain_name: "authority.example".to_string(),
+            account_uri: "https://ca.example/acct/123".to_string(),
+            wildcard: false,
+        };
+        for published in [
+            "authority.example; accounturi=https://ca.example/acct/123",
+            "authority.example;accounturi=https://ca.example/acct/123",
+            "\tauthority.example ;\taccounturi=https://ca.example/acct/123 ",
+        ] {
+            assert!(record.satisfied_by(published, NOW), "{published:?}");
+        }
+    }
+
+    #[test]
+    fn matches_tags_case_insensitively() {
+        assert!(accepts(
+            true,
+            &format!("letsencrypt.org; AccountURI={ACCOUNT}; Policy=WILDCARD")
+        ));
+    }
+
+    #[test]
+    fn rejects_a_different_account_uri() {
+        assert!(!accepts(
+            false,
+            "letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/9"
+        ));
+    }
+
+    #[test]
+    fn compares_the_account_uri_without_case_folding() {
+        // The draft pins Simple String Comparison, so an upper-cased URI is a
+        // different account as far as the CA is concerned.
+        assert!(!accepts(
+            false,
+            &format!("letsencrypt.org; accounturi={}", ACCOUNT.to_uppercase())
+        ));
+    }
+
+    #[test]
+    fn ignores_a_record_naming_another_issuer() {
+        assert!(!accepts(
+            false,
+            &format!("otherca.example; accounturi={ACCOUNT}")
+        ));
+    }
+
+    #[test]
+    fn rejects_a_plain_record_for_a_wildcard_request() {
+        let published = record(false).rdata();
+        assert!(accepts(false, &published));
+        assert!(!accepts(true, &published));
+    }
+
+    #[test]
+    fn accepts_a_wildcard_record_for_a_plain_request() {
+        assert!(accepts(false, &record(true).rdata()));
+    }
+
+    #[test]
+    fn rejects_a_trailing_semicolon() {
+        // A CA reads the empty tail as an empty parameter and fails the whole
+        // record, so a record rendered with one would be silently unusable.
+        assert!(!accepts(
+            false,
+            &format!("letsencrypt.org; accounturi={ACCOUNT};")
+        ));
+    }
+
+    #[test]
+    fn rejects_a_duplicate_parameter() {
+        assert!(!accepts(
+            false,
+            &format!("letsencrypt.org; accounturi={ACCOUNT}; accounturi={ACCOUNT}")
+        ));
+    }
+
+    #[test]
+    fn rejects_whitespace_inside_a_value() {
+        assert!(!accepts(
+            false,
+            "letsencrypt.org; accounturi=https://ca.example/acct/1 2"
+        ));
+    }
+
+    #[test]
+    fn rejects_a_record_without_accounturi() {
+        assert!(!accepts(false, "letsencrypt.org; policy=wildcard"));
+    }
+
+    #[test]
+    fn ignores_unrecognized_parameters() {
+        assert!(accepts(
+            true,
+            &format!("letsencrypt.org; accounturi={ACCOUNT}; policy=wildcard; futuretag=whatever")
+        ));
+    }
+
+    #[test]
+    fn rejects_an_expired_persist_until() {
+        let published = format!("letsencrypt.org; accounturi={ACCOUNT}; persistUntil={NOW}");
+        assert!(record(false).satisfied_by(&published, NOW));
+        assert!(!record(false).satisfied_by(&published, NOW + 1));
+    }
+
+    #[test]
+    fn rejects_a_malformed_persist_until() {
+        assert!(!accepts(
+            false,
+            &format!("letsencrypt.org; accounturi={ACCOUNT}; persistUntil=tomorrow")
+        ));
+    }
+
+    #[test]
+    fn accepts_any_one_of_the_published_records() {
+        let published = vec![
+            "otherca.example; accounturi=https://other.example/acct/1".to_string(),
+            record(true).rdata(),
+        ];
+        assert!(record(true).satisfied_by_any(&published, NOW));
+        assert!(!record(true).satisfied_by_any(&published[..1], NOW));
+    }
+}

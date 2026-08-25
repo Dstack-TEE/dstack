@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use certbot::{AcmeClient, Dns01Client};
+use certbot::{AcmeClient, Dns01Client, ValidationMethod};
 use dstack_guest_agent_rpc::v0::RawQuoteArgs;
 use ra_tls::attestation::QuoteContentType;
 use ra_tls::rcgen::KeyPair;
@@ -111,13 +111,17 @@ impl DistributedCertBot {
         Ok(())
     }
 
-    async fn dns_client(&self, domain: &str, dns_cred: &DnsCredential) -> Result<Dns01Client> {
-        match &dns_cred.provider {
+    async fn dns_client(&self, domain: &str, dns_cred: &DnsCredential) -> Result<ValidationMethod> {
+        let client = match &dns_cred.provider {
             DnsProvider::Cloudflare { api_token, api_url } => {
                 Dns01Client::new_cloudflare(domain.to_string(), api_token.clone(), api_url.clone())
-                    .await
+                    .await?
             }
-        }
+        };
+        Ok(ValidationMethod::Dns01 {
+            client,
+            txt_ttl: dns_cred.dns_txt_ttl,
+        })
     }
 
     /// Rotate the shared ACME account without interrupting certificate serving.
@@ -179,14 +183,9 @@ impl DistributedCertBot {
             bail!("no ZT-Domain configured for ACME credential rotation");
         };
 
-        let client = AcmeClient::new_account(
-            acme_url,
-            first_client,
-            first_cred.max_dns_wait,
-            first_cred.dns_txt_ttl,
-        )
-        .await
-        .context("failed to create replacement ACME account")?;
+        let client = AcmeClient::new_account(acme_url, first_client, first_cred.max_dns_wait)
+            .await
+            .context("failed to create replacement ACME account")?;
         let credentials = client
             .dump_credentials()
             .context("failed to encode replacement ACME credentials")?;
@@ -221,14 +220,9 @@ impl DistributedCertBot {
         );
         for (domain, dns_cred, dns_client) in prepared {
             let result = async {
-                let client = AcmeClient::load(
-                    dns_client,
-                    &credentials,
-                    dns_cred.max_dns_wait,
-                    dns_cred.dns_txt_ttl,
-                )
-                .await
-                .context("failed to prepare ACME client")?;
+                let client = AcmeClient::load(dns_client, &credentials, dns_cred.max_dns_wait)
+                    .await
+                    .context("failed to prepare ACME client")?;
                 client
                     .set_caa_records(std::slice::from_ref(domain))
                     .await
@@ -689,14 +683,9 @@ impl DistributedCertBot {
             );
         }
         let dns01_client = self.dns_client(domain, dns_cred).await?;
-        let client = AcmeClient::load(
-            dns01_client,
-            &creds.acme_credentials,
-            dns_cred.max_dns_wait,
-            dns_cred.dns_txt_ttl,
-        )
-        .await
-        .context("failed to load ACME client from KvStore credentials")?;
+        let client = AcmeClient::load(dns01_client, &creds.acme_credentials, dns_cred.max_dns_wait)
+            .await
+            .context("failed to load ACME client from KvStore credentials")?;
         Ok(Some(client))
     }
 
@@ -722,14 +711,9 @@ impl DistributedCertBot {
 
         info!("creating new global ACME account at {acme_url}");
         let dns01_client = self.dns_client(domain, dns_cred).await?;
-        let client = AcmeClient::new_account(
-            acme_url,
-            dns01_client,
-            dns_cred.max_dns_wait,
-            dns_cred.dns_txt_ttl,
-        )
-        .await
-        .context("failed to create new ACME account")?;
+        let client = AcmeClient::new_account(acme_url, dns01_client, dns_cred.max_dns_wait)
+            .await
+            .context("failed to create new ACME account")?;
 
         let creds_json = client
             .dump_credentials()

@@ -11,18 +11,23 @@
 //!
 //! - Automatic certificate issuance and renewal
 //! - DNS-01 challenge support (currently implemented for Cloudflare)
+//! - DNS-PERSIST-01 challenge support, which needs no DNS provider credential
 //! - Easy integration with existing Rust applications
 //!
 //! For more detailed information on the available methods and their usage, please refer
 //! to the documentation of individual structs and functions.
 
-pub use acme_client::AcmeClient;
+pub use acme_client::{
+    required_dns_records, AcmeClient, ChallengeKind, RequiredRecord, ValidationMethod,
+};
 pub use bot::{read_pubkey, CertBot, CertBotConfig};
 pub use dns01_client::Dns01Client;
+pub use dns_persist::LETS_ENCRYPT_ISSUER_DOMAIN_NAME;
 pub use workdir::WorkDir;
 
 mod acme_client;
 mod bot;
 mod dns01_client;
+mod dns_persist;
 mod http_client;
 mod workdir;
