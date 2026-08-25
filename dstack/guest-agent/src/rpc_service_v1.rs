@@ -491,9 +491,9 @@ mod tests {
     }
 
     /// `Info` must not attest. Decoding identity costs a hardware quote and an
-    /// RTMR replay under a global lock, and `WorkerV1.Info` is served on the
-    /// public listener -- so doing it per call hands any caller that can route
-    /// to the CVM a way to monopolise the attestation path.
+    /// RTMR replay under a global lock, and the v1 `Worker.Info` is served on
+    /// the public listener -- so doing it per call hands any caller that can
+    /// route to the CVM a way to monopolise the attestation path.
     ///
     /// One decoded `AppIdentity`, shared by pointer, is what says it is cached.
     #[tokio::test]
@@ -781,5 +781,94 @@ mod tests {
             "the unversioned external surface is frozen at the v0.5.11 method set"
         );
         assert_eq!(v1, &["Info", "Version", "Health"]);
+    }
+
+    /// `IssueCert` must reject an inverted validity window, and must do it
+    /// before generating a key or calling the KMS.
+    ///
+    /// The check lives in the shared `issue_cert_for_request`, which the frozen
+    /// `GetTlsKey` also calls, so nothing here would fail if the v1 handler
+    /// stopped routing through it -- which is exactly why the assertion is made
+    /// against the v1 handler rather than against the validator alone.
+    #[tokio::test]
+    async fn issue_cert_rejects_an_inverted_validity_window() {
+        let (state, _guard) = state().await;
+        let err = V1RpcHandler::new(state)
+            .issue_cert(IssueCertRequest {
+                subject: "example".to_string(),
+                not_before: Some(2_000),
+                not_after: Some(1_000),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("not_before must be earlier than not_after"),
+            "{err}"
+        );
+    }
+
+    /// `AttestGpu` routes through the attestor, which validates the nonce
+    /// length before it touches a device. Pinned through the handler so a
+    /// future refactor cannot answer without asking the attestor at all.
+    ///
+    /// Formatted with `{:#}`, because the handler adds a context line and the
+    /// reason sits under it. That is also how the caller reads it: `ra_rpc`
+    /// encodes an error as `format!("{error:#}")`, so asserting on the flat
+    /// `to_string()` would test something no client ever sees.
+    #[tokio::test]
+    async fn attest_gpu_rejects_a_wrong_length_nonce() {
+        let (state, _guard) = state().await;
+        let err = V1RpcHandler::new(state)
+            .attest_gpu(AttestGpuRequest {
+                nonce: vec![0u8; 16],
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(
+            ra_rpc::code_of(&err),
+            None,
+            "a malformed nonce is the caller's fault, so it keeps the default 400"
+        );
+        let err = format!("{err:#}");
+        assert!(err.contains("exactly 32 bytes"), "{err}");
+    }
+
+    /// An image that ships no nvattest must not answer like a malformed
+    /// request: the call is well-formed and no other call would succeed, so
+    /// the caller has to be able to tell "stop" from "try something else".
+    ///
+    /// Asserted through the handler because that is where `.context(..)` wraps
+    /// the attestor's error. `code_of` walks the whole chain for exactly this
+    /// reason -- a context layer that buried the code would silently put the
+    /// answer back to 400, and the message would still read correctly.
+    #[tokio::test]
+    async fn attest_gpu_reports_an_image_without_gpu_support_as_not_implemented() {
+        let (state, _guard) = state().await;
+        let err = V1RpcHandler::new(state)
+            .attest_gpu(AttestGpuRequest {
+                nonce: vec![0u8; 32],
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(ra_rpc::code_of(&err), Some(501), "{err:#}");
+    }
+
+    /// The on-demand format tag, pinned like its boot-time counterpart.
+    ///
+    /// A consumer selects its verifier on `(vendor, format)`, so these two
+    /// strings are wire contract: the boot-time tag is already pinned by
+    /// `attest_returns_boot_time_gpu_evidence_only_when_asked`, and this is the
+    /// other half. Collecting real evidence needs a GPU, so the tags -- not a
+    /// live bundle -- are what a test can hold still.
+    #[test]
+    fn the_on_demand_gpu_format_tag_is_the_specified_one() {
+        assert_eq!(GPU_VENDOR, "nvidia");
+        assert_eq!(
+            GPU_FORMAT_ON_DEMAND,
+            "nvidia-nvattest-collect-evidence-json-v1"
+        );
+        assert_ne!(GPU_FORMAT_ON_DEMAND, GPU_FORMAT_BOOTTIME);
     }
 }

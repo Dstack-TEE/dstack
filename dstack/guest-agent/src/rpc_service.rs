@@ -710,10 +710,15 @@ impl DstackGuestRpc for InternalRpcHandler {
     /// Deprecated, kept for 0.5.x clients only. See the RPC's doc comment in
     /// agent_rpc.proto.
     ///
-    /// k256 rejects a non-canonical (high-S) signature outright, so a malleated
-    /// copy of a valid signature fails to parse rather than verifying. Keep it
-    /// that way: 0.5.x answered the same, and callers may be treating this
-    /// answer as a uniqueness check.
+    /// k256 rejects a non-canonical (high-S) signature, so a malleated copy of a
+    /// valid signature does not verify. Keep it that way: 0.5.x answered the
+    /// same, and callers may be treating this answer as a uniqueness check.
+    ///
+    /// The rejection is in the verification, not in the parsing -- `from_slice`
+    /// only rejects an `r` or `s` outside `1..n`, and a malleated `s` is still
+    /// in range. So a caller sees HTTP 200 with `valid: false`, not the 400 a
+    /// parse failure would produce. Same security answer, different status
+    /// code, and the status code is the part a client branches on.
     async fn verify(self, request: VerifyRequest) -> Result<VerifyResponse> {
         let algorithm = normalize_algorithm(&request.algorithm);
         let valid = match algorithm {
@@ -926,8 +931,9 @@ impl WorkerRpc for ExternalRpcHandler {
     /// `report_data`, call `/v1/Attest`, and serve the result to relying
     /// parties. See the `Worker` service comment in agent_rpc_v1.proto.
     ///
-    /// The report data comes from the same `app_key_report_data` the v1 method
-    /// uses, so both attest the same public key for a given algorithm.
+    /// The report data comes from `app_key_report_data`, which commits to the
+    /// key `Sign` derives -- same path, purpose and base algorithm -- so the
+    /// attested public key is the one that actually signs.
     async fn get_attestation_for_app_key(
         self,
         request: GetAttestationForAppKeyRequest,
@@ -1319,7 +1325,12 @@ pNs85uhOZE8z2jr8Pg==
                 probe,
             }),
             health: None,
-            gpu_attestor: crate::gpu_attest::GpuAttestor::new(),
+            // Pinned to a path that cannot exist, so no test ever spawns a
+            // real collection against a host GPU and every test sees the
+            // same "this image cannot attest a GPU" answer.
+            gpu_attestor: crate::gpu_attest::GpuAttestor::with_nvattest_path(
+                "/nonexistent/nvattest",
+            ),
             app_root_signing_key: SigningKey::from_slice(&DUMMY_K256_KEY).ok(),
             identity: RwLock::new(None),
             identity_last_failure: Mutex::new(None),
@@ -1461,10 +1472,10 @@ pNs85uhOZE8z2jr8Pg==
     const SECP256K1_REPORT_DATA: &str =
         "dip1::secp256k1c-pk:A6t_JdVkVdMAocH3f1f20WGT6JzdntxcXimUtEax8zc9";
 
-    /// The DIP-1 report data both external surfaces commit to. `WorkerV1`
-    /// wraps these exact bytes in an attestation and the frozen
-    /// `GetAttestationForAppKey` wraps them in a TDX quote, so pinning them
-    /// here pins both.
+    /// The DIP-1 report data the frozen `Worker.GetAttestationForAppKey`
+    /// commits to, wrapped in a TDX quote. Pinned so the commitment format a
+    /// relying party parses cannot drift; v1 has no counterpart method, so
+    /// this is the only surface these bytes appear on.
     #[tokio::test]
     async fn app_key_report_data_matches_its_vectors() {
         let (state, _guard) = setup_test_state().await;
@@ -1819,6 +1830,41 @@ pNs85uhOZE8z2jr8Pg==
             })
             .await
             .unwrap();
+
+        assert!(!response.valid);
+    }
+
+    /// A malleated (high-S) signature must not verify, and must come back as a
+    /// verdict rather than as an error.
+    ///
+    /// Both halves matter. k256 rejects high-S inside the verification, not in
+    /// `from_slice`, so the caller sees HTTP 200 with `valid: false` -- not the
+    /// 400 a parse failure would produce, and the status code is the part a
+    /// 0.5.x client branches on. A k256 upgrade that moved the check into
+    /// parsing would keep the security answer and silently change the status,
+    /// which is what `.expect()` below is here to catch.
+    #[tokio::test]
+    async fn verify_rejects_a_malleated_secp256k1_signature() {
+        let data = b"test message for secp256k1".to_vec();
+        let (state, _guard, signed) = sign_then_verify("secp256k1", data.clone()).await;
+
+        // `sign` emits low-S, so negating `s` yields the other encoding of the
+        // same signature -- the one an unnormalised verifier would also accept.
+        let signature = K256Signature::from_slice(&signed.signature).unwrap();
+        let malleated = K256Signature::from_scalars(signature.r(), -signature.s()).unwrap();
+        // `normalize_s` is `Some` only for a high-S signature, so this asserts
+        // the malleation is real and is exactly the twin of what just verified.
+        assert_eq!(malleated.normalize_s().as_ref(), Some(&signature));
+
+        let response = InternalRpcHandler { state }
+            .verify(VerifyRequest {
+                algorithm: "secp256k1".to_string(),
+                data,
+                signature: malleated.to_vec(),
+                public_key: signed.public_key,
+            })
+            .await
+            .expect("a malleated signature is a verdict, not an error");
 
         assert!(!response.valid);
     }

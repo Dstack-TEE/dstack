@@ -99,15 +99,20 @@ service DstackGuest {
   // Collect GPU attestation evidence now, against a nonce the caller chooses.
   //
   // This answers "is the device I can talk to right now a genuine, CC-enabled
-  // NVIDIA GPU that signs my challenge", which `GpuInfo` cannot: that returns
-  // a record written at boot. Use it after anything that may have
-  // reinitialised the GPU -- a driver reload leaves a device that responds to
-  // NVML but can no longer attest -- and before submitting work you care
-  // about.
+  // NVIDIA GPU that signs my challenge", which `Attest`'s
+  // `boottime_gpu_evidence` cannot: that is the record nvattest wrote at boot,
+  // against its own nonce. Use this after anything that may have reinitialised
+  // the GPU -- a driver reload leaves a device that responds to NVML but can no
+  // longer attest -- and before submitting work you care about.
   //
   // Returns vendor-native evidence, not a local verdict, so a relying party
   // can appraise it with its own verifier. Evidence still does not bind the
   // GPU to this TD; see `AttestGpuResponse.bundles`.
+  //
+  // An image that ships no GPU attestation answers HTTP 501, not the 400 every
+  // other v1 failure uses. The request is well-formed there and no other
+  // request would succeed either, so a caller can tell "fall back" from "fix
+  // your arguments" on the status alone. A malformed nonce stays a 400.
   rpc AttestGpu(AttestGpuRequest) returns (AttestGpuResponse) {}
 
   // Return this application's identity and measurements.
@@ -431,6 +436,13 @@ message HealthResponse {
   // False when the app's own health file says so or has gone stale, or -- when
   // no health file was declared -- when any container that declares a Compose
   // `healthcheck` is not running and healthy.
+  //
+  // True, unconditionally and with an empty `unhealthy`, for an app that never
+  // opted into health gating: it registered as "do not poll me", so no gateway
+  // asks, and anything that asks anyway gets the answer the gateway would have
+  // assumed. "Healthy" there means "nobody asked me to know", not "checked and
+  // fine" -- `RegisterCvmRequest.health_check` is what separates the two, and
+  // this method cannot report the difference.
   bool healthy = 1;
   // The containers that made `healthy` false, so an operator reading gateway
   // logs can tell which one is holding the instance out of rotation. Purely

@@ -348,7 +348,7 @@ async fn poll_instance(ip: Ipv4Addr, agent_port: u16, timeout: Duration) -> Poll
 /// no real request can reach. Only the connection is unshared; the client
 /// itself is process-wide. See `http_client::ConnectionReuse`.
 fn prober_transport(ip: Ipv4Addr, agent_port: u16) -> http_client::prpc::PrpcClient {
-    // `/prpc/v1`, not `/prpc`: `Health` is a `WorkerV1` method.
+    // `/prpc/v1`, not `/prpc`: `Health` is a v1 `Worker` method.
     //
     // No released agent is affected. `Health` never shipped in a release, and a
     // pre-0.6 gateway does not poll, so the only guests that can be asked are
@@ -518,9 +518,9 @@ mod tests {
         port
     }
 
-    /// The poller must ask the versioned surface. `Health` lives on `WorkerV1`
-    /// at `/prpc/v1`; the unversioned `Worker` at `/prpc` is closed at v0.5.11
-    /// and has no such method, so a poller pointed there gets a 404 that
+    /// The poller must ask the versioned surface. `Health` lives on the v1
+    /// `Worker` at `/prpc/v1`; the unversioned `Worker` at `/prpc` is closed at
+    /// v0.5.11 and has no such method, so a poller pointed there gets a 404 that
     /// `apply_hysteresis` eventually turns into "unhealthy" for every instance
     /// in the fleet at once.
     #[tokio::test]

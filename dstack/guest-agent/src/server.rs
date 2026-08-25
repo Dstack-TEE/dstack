@@ -105,8 +105,8 @@ fn mount_internal(rocket: Rocket<Build>) -> Rocket<Build> {
 /// Mount the pRPC services the external listener serves.
 ///
 /// Same scheme as the internal socket, one level down: `/prpc/v0` is the frozen
-/// v0.5.11 `Worker`, `/prpc/v1` is `WorkerV1`, and `/prpc` is the frozen surface
-/// under its historical path.
+/// v0.5.11 `Worker`, `/prpc/v1` is the v1 `Worker`, and `/prpc` is the frozen
+/// surface under its historical path.
 ///
 /// The `trim` on the frozen mounts strips the service name a pre-0.6 client
 /// prefixes, so `/prpc/Worker.Info` and `/prpc/Info` both land on `Info`.
