@@ -47,8 +47,12 @@ reference -- this page is a curl-oriented tour, not the contract.
 
 The remaining sections document the **legacy v0 surface**. It is frozen at
 v0.5.11 and keeps working unchanged, reachable at `/v0/<Method>` and at the
-unversioned `/<Method>` paths it has always had. Sections marked *(v1)* describe
-the current API instead.
+unversioned `/<Method>` paths it has always had. It too has a normative
+specification --
+[`docs/guest-api-v0.md`](../../docs/guest-api-v0.md) pins its KDF, its signature
+chain encoding, and its per-algorithm `Sign` and `Verify` modes -- and the
+sections below are a curl-oriented tour of it, not the contract. Sections marked
+*(v1)* describe the current API instead.
 
 ## Endpoints (legacy v0)
 
@@ -112,6 +116,10 @@ Generates a deterministic private key from the application key and returns both 
 
 Use algorithm-specific paths, such as `backup-signing/secp256k1` and `backup-signing/ed25519`, when independent keys are required across algorithms.
 
+The KDF, the public key encodings, the `purpose`-based chain claim and the steps
+to verify the returned `signature_chain` are specified in
+[Guest API v0: GetKey](../../docs/guest-api-v0.md#getkey).
+
 **Example:**
 ```bash
 curl --unix-socket /var/run/dstack.sock -X POST \
@@ -147,7 +155,7 @@ Generates a TDX quote with given plain report data. Needs Intel TDX: on a
 platform without it this returns an error. On GCP Confidential VMs it answers
 with the TDX quote alone, leaving out the vTPM quote GCP's verification also
 binds. For evidence a verifier can check in full on any platform, use
-[Attest](#7-attest) instead.
+[Attest](#6-attest) instead.
 
 **Endpoint:** `/GetQuote`
 
@@ -226,8 +234,12 @@ Signs a payload.
 
 | Field | Type | Description | Example |
 |-------|------|-------------|----------|
-| `algorithm` | string | `ed25519`, `secp256k1_prehashed` or `secp256k1`| `ed25519` |
-| `data` | string | Hex-encoded payload data | `deadbeef` |
+| `algorithm` | string | `ed25519`, `secp256k1_prehashed` or `secp256k1` (`k256` is an alias). No default: an empty string is an error | `ed25519` |
+| `data` | string | Hex-encoded payload. Raw bytes for `ed25519` and `secp256k1`; for `secp256k1_prehashed` it is the digest, exactly 32 bytes, signed as-is | `deadbeef` |
+
+The key is always the one derived at path `vms` with purpose `signing`. Each
+mode's exact bytes, hash, signature encoding and three-link `signature_chain` are
+specified in [Guest API v0: Sign](../../docs/guest-api-v0.md#sign).
 
 **Example:**
 ```bash
@@ -253,12 +265,15 @@ curl --unix-socket /var/run/dstack.sock -X POST \
 }
 ```
 
-> **Removed in v0.6.0:** there was a `/Verify` endpoint here. Checking a signature
-> needs no key material and no attestation, and the agent's answer came back over
-> the socket unattested, so a caller gained nothing over checking the signature
-> itself. Verification now lives in the SDKs (`verify_signature` /
-> `verify_signature_chain`), which can also walk the `signature_chain` back to a
-> KMS root key the caller independently trusts -- something this endpoint never did.
+> **Deprecated:** `/Verify` is still served on this frozen surface, and the SDKs'
+> v0 clients still expose it. Checking a signature needs no key material and no
+> attestation, and the agent's answer comes back over the socket unattested, so a
+> caller gains nothing over checking the signature itself. v1 has no counterpart.
+> See [Guest API v0: Verify](../../docs/guest-api-v0.md#verify) for the accepted
+> algorithms and encodings, and
+> [Verifying a chain](../../docs/guest-api-v0.md#verifying-a-chain) for walking a
+> `signature_chain` back to a KMS root key you independently trust -- something
+> this endpoint never did.
 
 ### 6. Attest
 
@@ -370,7 +385,7 @@ curl --unix-socket /var/run/dstack.sock -X POST \
 ```
 
 `boottime_gpu_evidence` uses the same `GpuEvidenceBundle` shape
-[`/v1/AttestGpu`](#7-attest-gpu) returns, so one parser handles both. Dispatch
+[`/v1/AttestGpu`](#7-attest-gpu-v1) returns, so one parser handles both. Dispatch
 on `format`: `nvidia-nvattest-boottime-json-v1` is the record written at boot,
 `nvidia-nvattest-collect-evidence-json-v1` is collected on demand against a
 nonce you choose. A verifier for one does not appraise the other.
