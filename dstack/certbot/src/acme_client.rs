@@ -392,33 +392,45 @@ impl AcmeClient {
             .first()
             .map(|c| c.acme_domain.as_str())
             .context("no challenge to resolve")?;
-        // `_acme-challenge.<name>` is never itself a zone cut; the NS records
-        // live on the registrable name above it.
-        let zone = domain
+        let bootstrap = resolver_for(&[self.dns_server])?;
+
+        // `_acme-challenge.<name>` is almost never a zone cut, and neither is
+        // the name below it: for `_acme-challenge.a.example.com` the NS records
+        // usually live on `example.com`. Querying the full name returns NODATA,
+        // so walk up a label at a time until a name actually carries NS records.
+        let mut candidate = domain
             .strip_prefix("_acme-challenge.")
             .unwrap_or(domain)
             .to_string();
-
-        let bootstrap = resolver_for(&[self.dns_server])?;
-        let ns_lookup = bootstrap
-            .ns_lookup(&zone)
-            .await
-            .with_context(|| format!("failed to look up nameservers for {zone}"))?;
-
         let mut addrs = Vec::new();
-        for answer in ns_lookup.answers() {
-            let RData::NS(ns) = &answer.data else {
-                continue;
-            };
-            let Ok(ips) = bootstrap.lookup_ip(ns.0.to_utf8()).await else {
-                continue;
-            };
-            addrs.extend(ips.iter().map(|ip| SocketAddr::new(ip, 53)));
+        let mut zone = candidate.clone();
+        loop {
+            if let Ok(ns_lookup) = bootstrap.ns_lookup(&candidate).await {
+                for answer in ns_lookup.answers() {
+                    let RData::NS(ns) = &answer.data else {
+                        continue;
+                    };
+                    let Ok(ips) = bootstrap.lookup_ip(ns.0.to_utf8()).await else {
+                        continue;
+                    };
+                    addrs.extend(ips.iter().map(|ip| SocketAddr::new(ip, 53)));
+                }
+                if !addrs.is_empty() {
+                    zone = candidate;
+                    break;
+                }
+            }
+            match parent_zone(&candidate) {
+                Some(parent) => candidate = parent,
+                None => break,
+            }
         }
         if addrs.is_empty() {
-            bail!("no authoritative nameserver addresses resolved for {zone}");
+            bail!("no authoritative nameserver found for {domain}");
         }
-        debug!("checking {zone} against authoritative nameservers: {addrs:?}");
+        addrs.sort();
+        addrs.dedup();
+        debug!("checking {domain} against authoritative nameservers for {zone}: {addrs:?}");
         resolver_for(&addrs)
     }
 
@@ -628,6 +640,17 @@ async fn find_error(order: &mut Order) -> Option<Problem> {
     None
 }
 
+/// The next name up to try when a name carries no NS records.
+///
+/// Stops before the public suffix: a TLD's nameservers cannot answer for the
+/// challenge record, so there is nothing to gain by querying them.
+fn parent_zone(name: &str) -> Option<String> {
+    match name.split_once('.') {
+        Some((_, parent)) if parent.contains('.') => Some(parent.to_string()),
+        _ => None,
+    }
+}
+
 /// Build a resolver that queries exactly `servers`.
 ///
 /// Caching is disabled: this resolver exists to observe a record that was just
@@ -743,6 +766,21 @@ mod challenge_parsing_tests {
     /// challenge object carries no `token`. Deserializing the authorization must
     /// still succeed: `challenges` is one array, so a single unparseable entry
     /// used to take the usable `dns-01` challenge down with it.
+    #[test]
+    fn ns_discovery_walks_up_to_the_zone_cut() {
+        use crate::acme_client::parent_zone;
+        // A challenge name is not a zone cut, so the walk has to climb to the
+        // registrable name that actually carries the NS records.
+        assert_eq!(parent_zone("06rc0.kvin.wang").as_deref(), Some("kvin.wang"));
+        assert_eq!(
+            parent_zone("a.b.example.com").as_deref(),
+            Some("b.example.com")
+        );
+        // ...but never past it: querying a TLD's nameservers is pointless.
+        assert_eq!(parent_zone("kvin.wang"), None);
+        assert_eq!(parent_zone("wang"), None);
+    }
+
     #[test]
     fn an_authorization_survives_a_challenge_type_without_a_token() {
         // Shape taken from a real acme-staging-v02 authorization response.
