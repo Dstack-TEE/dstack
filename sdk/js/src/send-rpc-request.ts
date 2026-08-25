@@ -89,9 +89,13 @@ export function send_rpc_request<T = any>(endpoint: string, path: string, payloa
       }
     }
 
+    // Reject *before* aborting. `abort()` runs `onAbort` synchronously, and the
+    // first `safeReject` to run is the message the caller sees -- aborting first
+    // means every timeout is reported as `request aborted`, which says nothing
+    // about why the call ended. The abort still happens, to destroy the socket.
     const timeout = setTimeout(() => {
-      abortController.abort()
       safeReject(new Error('request timed out'))
+      abortController.abort()
     }, timeoutMs || 30_000) // Default 30 seconds timeout
 
     const cleanup = () => {

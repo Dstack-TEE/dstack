@@ -20,7 +20,10 @@ async fn version_answers_on_the_v1_surface() {
 #[tokio::test]
 async fn get_key_returns_a_key_public_key_and_two_link_chain() {
     for algorithm in ["secp256k1", "ed25519"] {
-        let response = client().get_key("storage-encryption", algorithm).await.unwrap();
+        let response = client()
+            .get_key("storage-encryption", algorithm)
+            .await
+            .unwrap();
 
         // 32 raw bytes for both algorithms, hex-encoded on the wire.
         assert_eq!(response.decode_key().unwrap().len(), 32);
@@ -34,14 +37,20 @@ async fn get_key_returns_a_key_public_key_and_two_link_chain() {
 
 #[tokio::test]
 async fn get_key_public_key_lengths_are_the_specified_ones() {
-    let secp = client().get_key("storage-encryption", "secp256k1").await.unwrap();
+    let secp = client()
+        .get_key("storage-encryption", "secp256k1")
+        .await
+        .unwrap();
     assert_eq!(
         secp.decode_public_key().unwrap().len(),
         33,
         "SEC1 compressed"
     );
 
-    let ed = client().get_key("storage-encryption", "ed25519").await.unwrap();
+    let ed = client()
+        .get_key("storage-encryption", "ed25519")
+        .await
+        .unwrap();
     assert_eq!(ed.decode_public_key().unwrap().len(), 32);
 }
 
@@ -52,7 +61,10 @@ async fn get_key_rejects_an_empty_or_unknown_algorithm() {
     assert!(client().get_key("storage-encryption", "").await.is_err());
     for algorithm in ["k256", "rsa", "secp256k1_prehashed"] {
         assert!(
-            client().get_key("storage-encryption", algorithm).await.is_err(),
+            client()
+                .get_key("storage-encryption", algorithm)
+                .await
+                .is_err(),
             "v1 accepted algorithm {algorithm:?}"
         );
     }
@@ -70,8 +82,14 @@ async fn different_domains_yield_different_keys() {
 /// KDF exists.
 #[tokio::test]
 async fn the_two_algorithms_never_share_key_material() {
-    let secp = client().get_key("storage-encryption", "secp256k1").await.unwrap();
-    let ed = client().get_key("storage-encryption", "ed25519").await.unwrap();
+    let secp = client()
+        .get_key("storage-encryption", "secp256k1")
+        .await
+        .unwrap();
+    let ed = client()
+        .get_key("storage-encryption", "ed25519")
+        .await
+        .unwrap();
     assert_ne!(secp.key, ed.key);
 }
 

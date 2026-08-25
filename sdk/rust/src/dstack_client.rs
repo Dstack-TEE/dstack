@@ -115,12 +115,9 @@ pub(crate) async fn http_post<S: Serialize>(
         base_url.trim_end_matches('/'),
         path.trim_start_matches('/')
     );
-    let res = Client::new()
-        .post(&url)
-        .json(payload)
-        .header("Content-Type", "application/json")
-        .send()
-        .await?;
+    // `json()` sets `Content-Type` itself; adding it again would *append* rather
+    // than replace, putting the header on the wire twice.
+    let res = Client::new().post(&url).json(payload).send().await?;
     // Deliberately not `error_for_status()`: that discards the response body,
     // which is exactly where the agent puts the reason it refused.
     let status = res.status();

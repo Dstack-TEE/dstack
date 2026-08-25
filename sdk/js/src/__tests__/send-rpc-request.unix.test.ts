@@ -20,8 +20,12 @@ import path from 'path'
 describe('unix socket transport', () => {
   const servers: net.Server[] = []
   const socketPaths: string[] = []
+  const connections: net.Socket[] = []
 
   afterEach(async () => {
+    // Before closing: `server.close()` waits on live connections, and these
+    // servers deliberately hold theirs open the way a real agent does.
+    connections.splice(0).forEach(connection => connection.destroy())
     await Promise.all(
       servers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve()))),
     )
@@ -57,6 +61,10 @@ describe('unix socket transport', () => {
     socketPaths.push(socketPath)
 
     const server = net.createServer(connection => {
+      connections.push(connection)
+      connection.on('error', () => {
+        // A client that gives up resets the connection; nothing to do.
+      })
       connection.once('data', () => {
         const payload = Buffer.from(body, 'utf8')
         connection.write(
@@ -66,6 +74,26 @@ describe('unix socket transport', () => {
           connection.write(chunk)
         }
       })
+    })
+    servers.push(server)
+    await new Promise<void>(resolve => server.listen(socketPath, () => resolve()))
+    return socketPath
+  }
+
+  /** A server that accepts the connection and then never answers. */
+  async function serveSilent(): Promise<string> {
+    const socketPath = path.join(
+      os.tmpdir(),
+      `dstack-rpc-${process.pid}-${socketPaths.length}-${Math.random().toString(36).slice(2)}.sock`,
+    )
+    socketPaths.push(socketPath)
+
+    const server = net.createServer(connection => {
+      connections.push(connection)
+      connection.on('error', () => {
+        // The client aborts on timeout, which arrives here as a reset.
+      })
+      // Deliberately never answers.
     })
     servers.push(server)
     await new Promise<void>(resolve => server.listen(socketPath, () => resolve()))
@@ -120,6 +148,20 @@ describe('unix socket transport', () => {
 
     await expect(send_rpc_request(socketPath, '/GetKeyX', '{}', 5000)).rejects.toThrow(
       'HTTP 404: Service not found: GetKeyX',
+    )
+  })
+
+  /**
+   * A timeout has to *say* it timed out. `abort()` fires its listener
+   * synchronously, so aborting before rejecting let `request aborted` win the
+   * race and the timeout message was unreachable -- leaving `isReachable()`
+   * unable to distinguish a hung agent from any other failure.
+   */
+  it('reports a hung agent as a timeout rather than as an abort', async () => {
+    const socketPath = await serveSilent()
+
+    await expect(send_rpc_request(socketPath, '/Info', '{}', 200)).rejects.toThrow(
+      'request timed out',
     )
   })
 

@@ -234,32 +234,12 @@ describe('send_rpc_request', () => {
       global.setTimeout = originalSetTimeout
     })
 
-    it('should timeout and reject with correct error message', async () => {
-      const endpoint = 'http://localhost:3000'
-      const path = '/api/test'
-      const payload = '{"test": "data"}'
-
-      // Mock real setTimeout to trigger timeout immediately
-      const originalSetTimeout = global.setTimeout
-      // @ts-ignore
-      global.setTimeout = vi.fn((callback, delay) => {
-        if (delay === 1) {
-          // Call timeout callback immediately for our test timeout
-          callback()
-          return 123 as any
-        }
-        return originalSetTimeout(callback, delay)
-      })
-
-      mockHttpRequest.mockImplementation(() => {
-        // Never complete the request
-        return mockReq
-      })
-
-      await expect(send_rpc_request(endpoint, path, payload, 1)).rejects.toThrow('request timed out')
-
-      global.setTimeout = originalSetTimeout
-    })
+    // The timeout *message* is pinned in `send-rpc-request.unix.test.ts`,
+    // against a real socket that accepts and never answers. Stubbing
+    // `setTimeout` here would run the callback before the abort listener is
+    // registered -- an ordering that cannot happen at runtime, and one that
+    // made the previous version of this test pass against a transport where
+    // `request timed out` was unreachable.
   })
 
   describe('abort functionality', () => {
