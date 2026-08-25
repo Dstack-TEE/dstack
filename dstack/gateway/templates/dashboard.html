@@ -550,6 +550,17 @@ SPDX-License-Identifier: Apache-2.0
             <td>ACME server URL (empty = Let's Encrypt production)</td>
         </tr>
         <tr>
+            <td>ACME Account</td>
+            <td>
+                <button class="action-btn warning" onclick="rotateAcmeCredentials()">Register / Rotate</button>
+            </td>
+            <td>
+                Registers the shared ACME account. Every run registers a <em>new</em> one, so
+                <code>dns-persist-01</code> validation records and account-pinned CAA have to be
+                republished afterwards.
+            </td>
+        </tr>
+        <tr>
             <td>Issuer Domain Name</td>
             <td>
                 <input type="text" id="certbot-issuer-domain-name" placeholder="letsencrypt.org (default)">
@@ -1473,10 +1484,12 @@ SPDX-License-Identifier: Apache-2.0
                 hideModal('add-zt-domain-modal');
                 showToast('ZT-Domain added', 'success');
                 await loadZtDomains();
-                // A dns-persist-01 domain is not finished when the API says
-                // added: nothing can be issued for it until these records exist,
-                // and this response is the only place they are reported.
-                showRequiredDnsRecords(added.required_dns_records);
+                // Only for dns-persist-01: `required_dns_records` is non-empty
+                // for dns-01 too -- the CAA lines the gateway writes itself --
+                // and this dialog says the operator has to publish them.
+                if (body.challenge === 'dns-persist-01') {
+                    showRequiredDnsRecords(added.required_dns_records);
+                }
             } catch (e) {
                 showToast('Failed to add ZT-Domain: ' + e.message, 'error');
             }
@@ -1533,6 +1546,30 @@ SPDX-License-Identifier: Apache-2.0
         }
 
         // ==================== UI Helpers ====================
+
+        async function rotateAcmeCredentials() {
+            if (!confirm('Register a new ACME account?\n\nEvery dns-persist-01 validation record and every account-pinned CAA record names the account, so they must be republished afterwards.')) {
+                return;
+            }
+            try {
+                const response = await fetch('/prpc/Admin.RotateAcmeCredentials', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                if (!response.ok) {
+                    throw new Error(await response.text());
+                }
+                const result = await response.json();
+                showToast('ACME account: ' + result.account_uri, 'success');
+                await loadZtDomains();
+                // What the operator has to publish before those domains issue
+                // again -- the response is the only place it is reported.
+                showRequiredDnsRecords(result.required_dns_records);
+            } catch (e) {
+                showToast('Failed to register ACME account: ' + e.message, 'error');
+            }
+        }
 
         function showZtDomainRecords(domain) {
             const item = ztDomains.find(d => d.config && d.config.domain === domain);
