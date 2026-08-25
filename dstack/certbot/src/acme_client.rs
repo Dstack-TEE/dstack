@@ -15,7 +15,7 @@ use instant_acme::{
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     net::SocketAddr,
     path::{Path, PathBuf},
     time::Duration,
@@ -379,18 +379,11 @@ impl AcmeClient {
     /// answered from that cache, so the check can never pass no matter how long
     /// it waits. Reading from the authoritative servers removes the cache from
     /// the path entirely.
-    async fn authoritative_resolver(&self, challenges: &[Challenge]) -> Result<TokioResolver> {
-        let domain = challenges
-            .first()
-            .map(|c| c.acme_domain.as_str())
-            .context("no challenge to resolve")?;
+    async fn authoritative_resolver(&self, domain: &str) -> Result<TokioResolver> {
         // The NS records and the nameservers' own addresses are stable, so the
         // system resolver -- caching and all -- is the right tool for finding
         // them. Only the challenge record itself must dodge the cache.
-        let bootstrap = TokioResolver::builder_tokio()
-            .context("failed to read system dns config")?
-            .build()
-            .context("failed to build dns resolver")?;
+        let bootstrap = system_resolver()?;
 
         // `_acme-challenge.<name>` is almost never a zone cut, and neither is
         // the name below it: for `_acme-challenge.a.example.com` the NS records
@@ -443,6 +436,28 @@ impl AcmeClient {
 
         debug!("Unsettled challenges: {unsettled_challenges:#?}");
 
+        // Resolve each challenge's nameservers once. A SAN list can span zones,
+        // so this is keyed per challenge rather than one resolver for all of
+        // them; and with caching disabled there is nothing to gain by repeating
+        // discovery on every retry.
+        let mut resolvers = BTreeMap::new();
+        for challenge in &unsettled_challenges {
+            if resolvers.contains_key(&challenge.acme_domain) {
+                continue;
+            }
+            let resolver = match self.authoritative_resolver(&challenge.acme_domain).await {
+                Ok(resolver) => resolver,
+                Err(err) => {
+                    warn!(
+                        "no authoritative nameserver for {} ({err:#}), using the system resolver",
+                        challenge.acme_domain
+                    );
+                    system_resolver()?
+                }
+            };
+            resolvers.insert(challenge.acme_domain.clone(), resolver);
+        }
+
         let start_time = std::time::Instant::now();
 
         'outer: loop {
@@ -457,25 +472,11 @@ impl AcmeClient {
                 break;
             }
 
-            let dns_resolver = match self.authoritative_resolver(&unsettled_challenges).await {
-                Ok(resolver) => resolver,
-                Err(err) => {
-                    // Falling back to the recursive resolver keeps a zone whose
-                    // NS records we cannot read from blocking issuance outright;
-                    // the ACME server has its own DNS view either way.
-                    warn!(
-                        "failed to reach authoritative nameservers ({err:#}), \
-                         falling back to the system resolver"
-                    );
-                    TokioResolver::builder_tokio()
-                        .context("failed to read system dns config")?
-                        .build()
-                        .context("failed to build dns resolver")?
-                }
-            };
-
             while let Some(challenge) = unsettled_challenges.pop() {
                 let expected_txt = &challenge.dns_value;
+                let dns_resolver = resolvers
+                    .get(&challenge.acme_domain)
+                    .context("no resolver for challenge domain")?;
                 let settled = match dns_resolver.txt_lookup(&challenge.acme_domain).await {
                     Ok(record) => record.answers().iter().any(|answer| {
                         let RData::TXT(txt) = &answer.data else {
@@ -487,10 +488,23 @@ impl AcmeClient {
                     }),
                     Err(err) if err.is_no_records_found() => false,
                     Err(err) => {
-                        bail!(
-                            "failed to lookup dns record {}: {err}",
+                        // Transport failures land here rather than in the arm
+                        // above: `is_no_records_found` covers only
+                        // `NoRecordsFound`, so a timeout or `NoConnections`
+                        // would otherwise abort issuance outright. The
+                        // authoritative servers may simply be unreachable --
+                        // egress to :53 is often closed inside a CVM, and a
+                        // v6-only NS set fails the same way from a v4-only host.
+                        // Drop back to the system resolver for the rest of this
+                        // wait: the ACME server has its own DNS view, and the
+                        // timeout above already proceeds on expiry.
+                        warn!(
+                            "authoritative lookup for {} failed ({err:#}), falling back to the system resolver",
                             challenge.acme_domain
                         );
+                        resolvers.insert(challenge.acme_domain.clone(), system_resolver()?);
+                        unsettled_challenges.push(challenge);
+                        continue 'outer;
                     }
                 };
                 if !settled {
@@ -641,10 +655,22 @@ async fn find_error(order: &mut Order) -> Option<Problem> {
     None
 }
 
+/// The resolver from `/etc/resolv.conf`, used to find nameservers and as the
+/// fallback when the authoritative ones cannot be reached.
+fn system_resolver() -> Result<TokioResolver> {
+    TokioResolver::builder_tokio()
+        .context("failed to read system dns config")?
+        .build()
+        .context("failed to build dns resolver")
+}
+
 /// The next name up to try when a name carries no NS records.
 ///
-/// Stops before the public suffix: a TLD's nameservers cannot answer for the
-/// challenge record, so there is nothing to gain by querying them.
+/// Stops at the last two labels. This is a heuristic, not a public-suffix
+/// lookup: under a multi-label suffix such as `co.uk` it can stop on the suffix
+/// itself and query the registry's nameservers, which answer with a referral
+/// rather than the record. That costs one wasted lookup and then falls back,
+/// which is why a PSL dependency is not worth carrying here.
 fn parent_zone(name: &str) -> Option<String> {
     match name.split_once('.') {
         Some((_, parent)) if parent.contains('.') => Some(parent.to_string()),
@@ -768,21 +794,6 @@ mod challenge_parsing_tests {
     /// still succeed: `challenges` is one array, so a single unparseable entry
     /// used to take the usable `dns-01` challenge down with it.
     #[test]
-    fn ns_discovery_walks_up_to_the_zone_cut() {
-        use crate::acme_client::parent_zone;
-        // A challenge name is not a zone cut, so the walk has to climb to the
-        // registrable name that actually carries the NS records.
-        assert_eq!(parent_zone("06rc0.kvin.wang").as_deref(), Some("kvin.wang"));
-        assert_eq!(
-            parent_zone("a.b.example.com").as_deref(),
-            Some("b.example.com")
-        );
-        // ...but never past it: querying a TLD's nameservers is pointless.
-        assert_eq!(parent_zone("kvin.wang"), None);
-        assert_eq!(parent_zone("wang"), None);
-    }
-
-    #[test]
     fn an_authorization_survives_a_challenge_type_without_a_token() {
         // Shape taken from a real acme-staging-v02 authorization response.
         let authz = r#"{
@@ -831,5 +842,29 @@ mod challenge_parsing_tests {
             panic!("expected a dns identifier");
         };
         assert_eq!(name, "example.com");
+    }
+}
+
+#[cfg(test)]
+mod ns_discovery_tests {
+    use super::parent_zone;
+
+    #[test]
+    fn the_walk_climbs_to_a_name_that_can_carry_ns_records() {
+        // A challenge name is not a zone cut, so the walk has to climb to the
+        // name that actually carries the NS records.
+        assert_eq!(parent_zone("06rc0.kvin.wang").as_deref(), Some("kvin.wang"));
+        assert_eq!(
+            parent_zone("a.b.example.com").as_deref(),
+            Some("b.example.com")
+        );
+        // The walk stops at the last two labels. That is a heuristic, not a
+        // public-suffix lookup: under a multi-label suffix such as `co.uk` it
+        // can stop on the suffix itself. In practice the registrable name
+        // carries NS records and the walk breaks a level earlier, and a
+        // referral answer just falls back, so this is a stopping rule rather
+        // than a correctness guarantee.
+        assert_eq!(parent_zone("kvin.wang"), None);
+        assert_eq!(parent_zone("wang"), None);
     }
 }
