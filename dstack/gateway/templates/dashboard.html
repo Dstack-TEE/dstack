@@ -768,6 +768,13 @@ SPDX-License-Identifier: Apache-2.0
                 </select>
             </div>
             <div class="modal-field">
+                <label>Validation Challenge</label>
+                <select id="edit-domain-challenge">
+                    <option value="dns-01">dns-01 (certbot writes DNS; needs a credential)</option>
+                    <option value="dns-persist-01">dns-persist-01 (one record published by hand; experimental)</option>
+                </select>
+            </div>
+            <div class="modal-field">
                 <label>Port (0 = default)</label>
                 <input type="number" id="edit-domain-port" placeholder="443" min="0" max="65535">
             </div>
@@ -798,6 +805,13 @@ SPDX-License-Identifier: Apache-2.0
                 <label>DNS Credential</label>
                 <select id="domain-dns-cred">
                     <option value="">Use Default</option>
+                </select>
+            </div>
+            <div class="modal-field">
+                <label>Validation Challenge</label>
+                <select id="domain-challenge">
+                    <option value="dns-01">dns-01 (certbot writes DNS; needs a credential)</option>
+                    <option value="dns-persist-01">dns-persist-01 (one record published by hand; experimental)</option>
                 </select>
             </div>
             <div class="modal-field">
@@ -1237,6 +1251,7 @@ SPDX-License-Identifier: Apache-2.0
                         <th>Port</th>
                         <th>Node</th>
                         <th>Priority</th>
+                        <th>Challenge</th>
                         <th>DNS Credential</th>
                         <th>Status</th>
                         <th>Expires</th>
@@ -1249,7 +1264,12 @@ SPDX-License-Identifier: Apache-2.0
                 const certStatus = item.cert_status || {};
                 const hasCert = certStatus.has_cert;
                 const expiresAt = certStatus.not_after ? new Date(certStatus.not_after * 1000).toLocaleDateString() : 'N/A';
-                const dnsCredName = getDnsCredName(config.dns_cred_id);
+                const challenge = config.challenge || 'dns-01';
+                // A dns-persist-01 domain holds no credential by design, so
+                // naming one here would read as a misconfiguration.
+                const dnsCredName = challenge === 'dns-persist-01'
+                    ? 'None (published by hand)'
+                    : getDnsCredName(config.dns_cred_id);
                 const portDisplay = config.port ? config.port : '-';
                 const nodeDisplay = (config.node !== undefined && config.node !== null) ? `Node ${config.node}` : 'Any';
                 const priorityDisplay = config.priority || 0;
@@ -1260,6 +1280,7 @@ SPDX-License-Identifier: Apache-2.0
                         <td>${portDisplay}</td>
                         <td>${nodeDisplay}</td>
                         <td>${priorityDisplay}</td>
+                        <td>${escapeHtml(challenge)}</td>
                         <td>${escapeHtml(dnsCredName)}</td>
                         <td>
                             <div class="cert-status">
@@ -1332,6 +1353,7 @@ SPDX-License-Identifier: Apache-2.0
             document.getElementById('edit-domain-port').value = config.port || 0;
             document.getElementById('edit-domain-node').value = (config.node !== undefined && config.node !== null) ? config.node : 0;
             document.getElementById('edit-domain-priority').value = config.priority || 0;
+            document.getElementById('edit-domain-challenge').value = config.challenge || 'dns-01';
 
             updateEditDnsCredSelect();
             document.getElementById('edit-domain-dns-cred').value = config.dns_cred_id || '';
@@ -1355,7 +1377,11 @@ SPDX-License-Identifier: Apache-2.0
             const body = {
                 domain: domain,
                 port: port,
-                priority: priority
+                priority: priority,
+                // UpdateZtDomain replaces the whole record and an omitted
+                // challenge decodes as dns-01, so editing anything else would
+                // silently downgrade a dns-persist-01 domain.
+                challenge: document.getElementById('edit-domain-challenge').value
             };
             // Only include dns_cred_id if not empty (empty means use default)
             if (dnsCredId) {
@@ -1399,7 +1425,9 @@ SPDX-License-Identifier: Apache-2.0
             const body = {
                 domain: domain,
                 port: port,
-                priority: priority
+                priority: priority,
+                // Chosen once, at creation; the edit form carries it forward.
+                challenge: document.getElementById('domain-challenge').value
             };
             // Only include dns_cred_id if not empty (empty means use default)
             if (dnsCredId) {
