@@ -38,7 +38,6 @@ pub struct AcmeClient {
 struct Challenge {
     id: String,
     acme_domain: String,
-    url: String,
     dns_value: String,
 }
 
@@ -70,8 +69,9 @@ impl AcmeClient {
     ) -> Result<Self> {
         let credentials: Credentials = serde_json::from_str(encoded_credentials)?;
         let http_client = Box::new(ReqwestHttpClient::new()?);
-        let account =
-            Account::from_credentials_and_http(credentials.credentials, http_client).await?;
+        let account = Account::builder_with_http(http_client)
+            .from_credentials(credentials.credentials)
+            .await?;
         let credentials: Credentials = serde_json::from_str(encoded_credentials)?;
         Ok(Self {
             account,
@@ -90,18 +90,18 @@ impl AcmeClient {
         dns_txt_ttl: u32,
     ) -> Result<Self> {
         let http_client = Box::new(ReqwestHttpClient::new()?);
-        let (account, credentials) = Account::create_with_http(
-            &NewAccount {
-                contact: &[],
-                terms_of_service_agreed: true,
-                only_return_existing: false,
-            },
-            acme_url,
-            None,
-            http_client,
-        )
-        .await
-        .with_context(|| format!("failed to create ACME account for {acme_url}"))?;
+        let (account, credentials) = Account::builder_with_http(http_client)
+            .create(
+                &NewAccount {
+                    contact: &[],
+                    terms_of_service_agreed: true,
+                    only_return_existing: false,
+                },
+                acme_url.to_string(),
+                None,
+            )
+            .await
+            .with_context(|| format!("failed to create ACME account for {acme_url}"))?;
         let credentials = Credentials {
             acme_url: acme_url.to_string(),
             account_id: account.id().to_string(),
@@ -320,11 +320,9 @@ impl AcmeClient {
 
 impl AcmeClient {
     async fn authorize(&self, order: &mut Order, challenges: &mut Vec<Challenge>) -> Result<()> {
-        let authorizations = order
-            .authorizations()
-            .await
-            .context("failed to get authorizations")?;
-        for authz in &authorizations {
+        let mut authorizations = order.authorizations();
+        while let Some(authz) = authorizations.next().await {
+            let mut authz = authz.context("failed to get authorizations")?;
             match authz.status {
                 AuthorizationStatus::Pending => {}
                 AuthorizationStatus::Valid => continue,
@@ -332,14 +330,17 @@ impl AcmeClient {
             }
 
             let challenge = authz
-                .challenges
-                .iter()
-                .find(|c| c.r#type == ChallengeType::Dns01)
+                .challenge(ChallengeType::Dns01)
                 .context("no dns01 challenge found")?;
 
-            let Identifier::Dns(identifier) = &authz.identifier;
+            // The bare identifier, without any wildcard prefix: the TXT record for
+            // `*.example.com` is published under `_acme-challenge.example.com`.
+            let Identifier::Dns(identifier) = challenge.identifier().identifier else {
+                bail!("unsupported identifier type in authorization");
+            };
+            let identifier = identifier.clone();
 
-            let dns_value = order.key_authorization(challenge).dns_value();
+            let dns_value = challenge.key_authorization().dns_value();
             debug!("creating dns record for {identifier}");
             let acme_domain = format!("_acme-challenge.{identifier}");
             debug!("removing existing TXT record for {acme_domain}");
@@ -359,7 +360,6 @@ impl AcmeClient {
             challenges.push(Challenge {
                 id,
                 acme_domain,
-                url: challenge.url.clone(),
                 dns_value,
             });
         }
@@ -434,6 +434,31 @@ impl AcmeClient {
         Ok(())
     }
 
+    /// Tell the ACME server every pending dns-01 challenge is answerable.
+    ///
+    /// The TXT records are published first and verified for propagation, so this
+    /// is a second pass over the same authorizations: 0.8 dropped
+    /// `Order::set_challenge_ready(url)`, and `ChallengeHandle::set_ready()`
+    /// borrows the order, so the handle cannot be held across the DNS wait.
+    async fn set_challenges_ready(&self, order: &mut Order) -> Result<()> {
+        let mut authorizations = order.authorizations();
+        while let Some(authz) = authorizations.next().await {
+            let mut authz = authz.context("failed to get authorizations")?;
+            if authz.status != AuthorizationStatus::Pending {
+                continue;
+            }
+            let mut challenge = authz
+                .challenge(ChallengeType::Dns01)
+                .context("no dns01 challenge found")?;
+            debug!("setting challenge ready");
+            challenge
+                .set_ready()
+                .await
+                .context("failed to set challenge ready")?;
+        }
+        Ok(())
+    }
+
     async fn request_new_certificate_inner(
         &self,
         key: &str,
@@ -448,9 +473,7 @@ impl AcmeClient {
             .collect::<Vec<_>>();
         let mut order = self
             .account
-            .new_order(&NewOrder {
-                identifiers: &identifiers,
-            })
+            .new_order(&NewOrder::new(&identifiers))
             .await
             .context("failed to cread new order")?;
         let mut challenges_ready = false;
@@ -474,13 +497,9 @@ impl AcmeClient {
                     self.check_dns(challenges)
                         .await
                         .context("failed to check dns")?;
-                    for challenge in &*challenges {
-                        debug!("setting challenge ready for {}", challenge.url);
-                        order
-                            .set_challenge_ready(&challenge.url)
-                            .await
-                            .context("failed to set challenge ready")?;
-                    }
+                    self.set_challenges_ready(&mut order)
+                        .await
+                        .context("failed to set challenges ready")?;
                     challenges_ready = true;
                     continue;
                 }
@@ -489,7 +508,7 @@ impl AcmeClient {
                     debug!("order is ready, uploading CSR");
                     let csr = make_csr(key, domains)?;
                     order
-                        .finalize(csr.as_ref())
+                        .finalize_csr(csr.as_ref())
                         .await
                         .context("failed to finalize order")?;
                     continue;
@@ -511,6 +530,7 @@ impl AcmeClient {
                         r#type: None,
                         detail: None,
                         status: None,
+                        subproblems: Vec::new(),
                     });
                     bail!("order is invalid: {error}");
                 }
@@ -532,10 +552,11 @@ async fn find_error(order: &mut Order) -> Option<Problem> {
     if let Some(error) = order.state().error.as_ref() {
         return Some(error.clone());
     }
-    for auth in order.authorizations().await.ok()? {
-        for challenge in auth.challenges {
-            if let Some(error) = challenge.error {
-                return Some(error);
+    let mut authorizations = order.authorizations();
+    while let Some(Ok(authz)) = authorizations.next().await {
+        for challenge in &authz.challenges {
+            if let Some(error) = &challenge.error {
+                return Some(error.clone());
             }
         }
     }

@@ -261,7 +261,7 @@ ez-hash = "1.1.0"
 
 # Certificate/DNS
 hickory-resolver = "0.26.1"
-instant-acme = "0.7.2"
+instant-acme = "0.8.5"
 pem = "3.0"
 rcgen = { version = "0.13.2", features = ["pem"] }
 x509-parser = "0.16.0"
