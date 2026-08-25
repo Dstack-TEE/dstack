@@ -1829,6 +1829,41 @@ pNs85uhOZE8z2jr8Pg==
         assert!(!response.valid);
     }
 
+    /// A malleated (high-S) signature must not verify, and must come back as a
+    /// verdict rather than as an error.
+    ///
+    /// Both halves matter. k256 rejects high-S inside the verification, not in
+    /// `from_slice`, so the caller sees HTTP 200 with `valid: false` -- not the
+    /// 400 a parse failure would produce, and the status code is the part a
+    /// 0.5.x client branches on. A k256 upgrade that moved the check into
+    /// parsing would keep the security answer and silently change the status,
+    /// which is what `.expect()` below is here to catch.
+    #[tokio::test]
+    async fn verify_rejects_a_malleated_secp256k1_signature() {
+        let data = b"test message for secp256k1".to_vec();
+        let (state, _guard, signed) = sign_then_verify("secp256k1", data.clone()).await;
+
+        // `sign` emits low-S, so negating `s` yields the other encoding of the
+        // same signature -- the one an unnormalised verifier would also accept.
+        let signature = K256Signature::from_slice(&signed.signature).unwrap();
+        let malleated = K256Signature::from_scalars(signature.r(), -signature.s()).unwrap();
+        // `normalize_s` is `Some` only for a high-S signature, so this asserts
+        // the malleation is real and is exactly the twin of what just verified.
+        assert_eq!(malleated.normalize_s().as_ref(), Some(&signature));
+
+        let response = InternalRpcHandler { state }
+            .verify(VerifyRequest {
+                algorithm: "secp256k1".to_string(),
+                data,
+                signature: malleated.to_vec(),
+                public_key: signed.public_key,
+            })
+            .await
+            .expect("a malleated signature is a verdict, not an error");
+
+        assert!(!response.valid);
+    }
+
     #[tokio::test]
     async fn verify_unsupported_algorithm_fails() {
         let (state, _guard) = setup_test_state().await;
