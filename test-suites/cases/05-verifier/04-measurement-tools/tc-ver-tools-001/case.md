@@ -41,7 +41,7 @@ Use the prepared 0.5.4.1 image, QEMU 8.x/9.x/10.x rows, every CLI configuration 
 <a id="tc-ver-tools-001-step-01"></a>
 ### Step 1: Establish the baseline
 
-Validate the prepared CLI hash, historical four-part image version, image manifest identity, and empty case workspace.
+Validate the prepared CLI hash, removed legacy version flag rejection, image manifest identity, and empty case workspace.
 
 **Expected results:**
 
