@@ -157,11 +157,11 @@ def execute_matrix(
     )
     if repeated != baseline:
         raise AssertionError("deterministic repeat changed output")
-    accepted(
-        "historical-four-part-version",
+    rejected(
+        "removed-dstack-os-version-flag",
         fixture / "metadata.json",
         [*BASE_ARGS, "--dstack-os-version", "0.5.4.1"],
-        [],
+        "unexpected argument",
     )
     accepted(
         "cpu-count",
