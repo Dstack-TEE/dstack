@@ -60,19 +60,33 @@ pub fn resolve_issuer_domain_name(configured: &str) -> Result<String> {
         // never issuer names. A CA holding the record to that grammar reads
         // anything looser as a malformed `issue` property, which is the state
         // this check exists to keep out of a zone.
+        // Each rejection names what it rejected: the operator has to fix the
+        // value, and "malformed" alone does not say which character to remove --
+        // an underscore, say, which is legal in plenty of DNS names and is the
+        // one most likely to be reached for here.
         let bytes = label.as_bytes();
-        let well_formed = !bytes.is_empty()
-            && bytes.len() <= 63
-            && bytes[0].is_ascii_alphanumeric()
-            && bytes[bytes.len() - 1].is_ascii_alphanumeric()
-            && bytes
-                .iter()
-                .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-');
-        if !well_formed {
+        let context = "it is written verbatim into CAA and validation records, \
+                       where a malformed label makes the whole record unparseable";
+        if bytes.is_empty() {
+            bail!("issuer domain name {configured:?} has an empty label: {context}");
+        }
+        if bytes.len() > 63 {
+            bail!("issuer domain name {configured:?} has a label over 63 octets: {context}");
+        }
+        if let Some(byte) = bytes
+            .iter()
+            .find(|byte| !byte.is_ascii_alphanumeric() && **byte != b'-')
+        {
             bail!(
-                "issuer domain name must be a DNS name -- it is written verbatim into CAA \
-                 and validation records, where a malformed label makes the whole record \
-                 unparseable: {configured:?}"
+                "issuer domain name {configured:?} contains {:?}, which a DNS label cannot: \
+                 {context}",
+                *byte as char
+            );
+        }
+        if !bytes[0].is_ascii_alphanumeric() || !bytes[bytes.len() - 1].is_ascii_alphanumeric() {
+            bail!(
+                "issuer domain name {configured:?} has a label starting or ending with a \
+                 hyphen: {context}"
             );
         }
     }
@@ -349,6 +363,24 @@ mod tests {
         assert!(!accepts(false, "letsencrypt.org; accounturi="));
     }
 
+    /// A label longer than DNS allows is refused, and one right at the limit is
+    /// not: the bound is the protocol's, not a guess.
+    #[test]
+    fn a_label_is_held_to_its_dns_length() {
+        let sixty_three = "a".repeat(63);
+        assert!(resolve_issuer_domain_name(&format!("{sixty_three}.org")).is_ok());
+        assert!(resolve_issuer_domain_name(&format!("{sixty_three}a.org")).is_err());
+    }
+
+    /// A rejection has to say what to change: the character it objected to, not
+    /// just that the value was wrong.
+    #[test]
+    fn a_rejection_names_the_character_it_rejected() {
+        let err = resolve_issuer_domain_name("my_ca.example.com")
+            .expect_err("an underscore is not a DNS label character");
+        assert!(err.to_string().contains('_'), "{err:#}");
+    }
+
     /// Empty is what an untouched configuration carries, and it means the
     /// default rather than a name of zero length -- which as an `issue-value`
     /// would be CAA denying every issuer.
@@ -371,15 +403,6 @@ mod tests {
     /// The name is interpolated into records that a `;` or a space makes
     /// malformed, and CAA is rewritten by deleting the old records first, so a
     /// typo accepted here is a zone that forbids all issuance.
-    /// A label longer than DNS allows is refused, and one right at the limit is
-    /// not: the bound is the protocol's, not a guess.
-    #[test]
-    fn a_label_is_held_to_its_dns_length() {
-        let sixty_three = "a".repeat(63);
-        assert!(resolve_issuer_domain_name(&format!("{sixty_three}.org")).is_ok());
-        assert!(resolve_issuer_domain_name(&format!("{sixty_three}a.org")).is_err());
-    }
-
     #[test]
     fn a_name_that_would_corrupt_a_record_is_refused() {
         for bad in [
