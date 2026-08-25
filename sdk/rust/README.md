@@ -78,9 +78,14 @@ let client = DstackClient::new(None);
 
 ```rust
 let key = client.get_key("storage-encryption", "secp256k1").await?;
-let private_key = key.decode_key()?;      // 32 bytes
-let public_key = key.decode_public_key()?; // SEC1 compressed, or 32 raw for ed25519
+let private_key: Vec<u8> = key.key;        // 32 bytes
+let public_key: Vec<u8> = key.public_key;  // SEC1 compressed, or 32 raw for ed25519
 ```
+
+Every field the proto declares `bytes` is a `Vec<u8>` here, hex only on the
+wire. `public_key` in particular is what the v1 key claim commits to, and the
+claim is built over raw bytes -- handing it a hex string would build a claim
+over 66 ASCII characters and produce a chain that silently never verifies.
 
 `domain` is a caller-chosen domain-separation string -- not a DNS name and not a
 path. Derivation is **flat**: `a/b` is unrelated to `a`, and no key derives
@@ -99,14 +104,14 @@ supported platform.
 
 ```rust
 let result = client.attest(b"custom data".to_vec(), true).await?;
-let attestation = result.decode_attestation()?;
+let attestation: Vec<u8> = result.attestation;
 
 // Boot-time GPU evidence uses the same bundle shape `attest_gpu` returns, so
 // one parser handles both. Empty when the flag was not set or the guest has no
 // GPU output -- absence is the empty list, not a sentinel.
 for bundle in &result.boottime_gpu_evidence {
     assert_eq!(bundle.format, dstack_sdk::dstack_client_v1::FORMAT_BOOTTIME);
-    let nvattest_output = bundle.decode_evidence()?; // exact bytes from disk
+    let nvattest_output = &bundle.evidence; // exact bytes from disk
 }
 ```
 
@@ -116,7 +121,7 @@ against a nonce you choose. A verifier for one does not appraise the other.
 
 That evidence is **not** bound to `report_data` -- nvattest ran at boot against
 its own nonce. Bind it by replaying the runtime event log and comparing sha256
-of the bundle's **exact** decoded bytes against `evidence_sha256` in the
+of the bundle's **exact** `evidence` bytes against `evidence_sha256` in the
 `gpu-attestation` event. Parsing and re-serializing the JSON first changes the
 digest and breaks the comparison.
 
@@ -165,6 +170,10 @@ and verify.
 
 `app_compose` is served directly here, rather than nested inside a `tcb_info`
 JSON string as v0 did, and `compose_hash` is sha256 over its verbatim bytes.
+
+`app_id`, `instance_id`, `compose_hash`, `device_id`, `os_image_hash` and
+`mr_aggregated` are `Vec<u8>`, matching the proto. Use `hex::encode` when you
+want them printable.
 
 #### `version() -> VersionResponse`
 

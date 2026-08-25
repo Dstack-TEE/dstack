@@ -6,7 +6,7 @@
 
 Use with ``dstack_sdk.DstackClientV0`` responses to create ``solders.Keypair``
 objects for signing transactions on Solana. These helpers take the v0 response
-models; for a v1 key, hand ``GetKeyResponseV1.decode_key()`` to
+models; for a v1 key, hand ``GetKeyResponseV1.key`` to
 ``Keypair.from_seed`` yourself.
 """
 

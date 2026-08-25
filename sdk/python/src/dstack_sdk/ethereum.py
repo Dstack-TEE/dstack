@@ -6,7 +6,7 @@
 
 Use with ``dstack_sdk.DstackClientV0`` responses to create ``eth_account``
 objects for signing and transacting. These helpers take the v0 response models;
-for a v1 key, hand ``GetKeyResponseV1.decode_key()`` to ``Account.from_key``
+for a v1 key, hand ``GetKeyResponseV1.key`` to ``Account.from_key``
 yourself.
 """
 

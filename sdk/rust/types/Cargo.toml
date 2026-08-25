@@ -15,7 +15,7 @@ authors = ["Encifher <encifher@rizelabs.io>"]
 anyhow.workspace = true
 bon.workspace = true
 borsh = { workspace = true, optional = true }
-hex = { workspace = true, features = ["alloc"] }
+hex = { workspace = true, features = ["alloc", "serde"] }
 pkcs8 = { workspace = true, features = ["pem"] }
 serde.workspace = true
 serde_json = { workspace = true, features = ["alloc"] }

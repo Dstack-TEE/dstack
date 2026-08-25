@@ -14,6 +14,7 @@
 package dstack
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -163,12 +164,124 @@ func decodeHexField(name string, value string) ([]byte, error) {
 	return decoded, nil
 }
 
+// requireHexField decodes a `bytes` field the response is meaningless without.
+//
+// The pointer is what makes absence visible. Decoding into a `string` turns a
+// JSON null, and a key the response never had, into "" -- which hex-decodes to
+// empty bytes and returns a nil error, so a caller reads an empty private key
+// or an empty app_id as a valid answer. The agent emits every field, so
+// absence means the response did not come from a working agent, and the other
+// three SDKs all refuse it.
+func requireHexField(name string, value *string) ([]byte, error) {
+	if value == nil {
+		return nil, fmt.Errorf("no %s in response: absent or null", name)
+	}
+	return decodeHexField(name, *value)
+}
+
+// optionalHexField decodes a `bytes` field whose absence is the empty default.
+//
+// os_image_hash and mr_aggregated are the two: reading a missing key as empty
+// keeps a degraded Info readable rather than unparseable, and costs nothing
+// because neither field means anything unattested. An explicit null is still a
+// malformed value, not an omission -- which is why this takes the raw JSON: a
+// *string is nil for both, and the two do not mean the same thing.
+func optionalHexField(name string, raw json.RawMessage) ([]byte, error) {
+	if len(raw) == 0 {
+		return []byte{}, nil
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, fmt.Errorf("malformed %s in response: expected a hex string, got null", name)
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, fmt.Errorf("malformed %s in response: %w", name, err)
+	}
+	return decodeHexField(name, value)
+}
+
+// optionalString reads a scalar `string` field, defaulting an absent one.
+//
+// proto3 has no presence for a scalar string, so absence is the empty default
+// -- but a null is a value the agent did not send, and Rust, Python and
+// JavaScript all refuse it. Raw rather than *string for the same reason
+// optionalHexField is: a pointer is nil for both, and the two differ.
+func optionalString(name string, raw json.RawMessage) (string, error) {
+	if len(raw) == 0 {
+		return "", nil
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "", fmt.Errorf("malformed %s in response: expected a string, got null", name)
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", fmt.Errorf("malformed %s in response: %w", name, err)
+	}
+	return value, nil
+}
+
+// requireString reads a string field the response is meaningless without.
+//
+// A bundle's vendor and format are what a caller switches on to pick a
+// verifier, so a missing one does not degrade the answer -- it routes the
+// evidence to no verifier at all.
+func requireString(name string, value *string) (string, error) {
+	if value == nil {
+		return "", fmt.Errorf("missing %s in response", name)
+	}
+	return *value, nil
+}
+
+// decodeBundleList reads a repeated GpuEvidenceBundle field from its raw JSON.
+//
+// emptyWhenAbsent follows the proto: a missing boottime_gpu_evidence is the
+// empty list, a missing bundles is a malformed response. A null is malformed
+// either way -- absence is an omission, null is a value, and a caller that
+// reads null as "no GPUs" has been told something the agent did not say.
+func decodeBundleList(name string, raw json.RawMessage, emptyWhenAbsent bool) ([]gpuEvidenceBundleJSON, error) {
+	if len(raw) == 0 {
+		if emptyWhenAbsent {
+			return []gpuEvidenceBundleJSON{}, nil
+		}
+		return nil, fmt.Errorf("missing %s in response", name)
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, fmt.Errorf("malformed %s in response: expected a list, got null", name)
+	}
+	var wire []gpuEvidenceBundleJSON
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return nil, fmt.Errorf("malformed %s in response: %w", name, err)
+	}
+	return wire, nil
+}
+
+// rpcError reports the agent's own error message when it arrives with a 200.
+//
+// The transport already rejects a non-2xx status. This covers the other shape:
+// a body that carries an error where the answer should be. Without it the
+// fields simply come back absent, and before requireHexField that was
+// indistinguishable from success.
+func rpcError(data []byte) error {
+	var probe struct {
+		Error *string `json:"error"`
+	}
+	// A body that is not an object at all is the caller's decode to complain
+	// about, with the field names to say what was missing.
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return nil
+	}
+	if probe.Error != nil {
+		return fmt.Errorf("%s", *probe.Error)
+	}
+	return nil
+}
+
 // Wire form of GpuEvidenceBundle, identical under `bundles` and under
 // `boottime_gpu_evidence`.
 type gpuEvidenceBundleJSON struct {
-	Vendor   string `json:"vendor"`
-	Format   string `json:"format"`
-	Evidence string `json:"evidence"`
+	Vendor   *string `json:"vendor"`
+	Format   *string `json:"format"`
+	Evidence *string `json:"evidence"`
 }
 
 // decodeGpuEvidenceBundles decodes one repeated GpuEvidenceBundle field, naming
@@ -177,11 +290,19 @@ type gpuEvidenceBundleJSON struct {
 func decodeGpuEvidenceBundles(name string, wire []gpuEvidenceBundleJSON) ([]GpuEvidenceBundle, error) {
 	bundles := make([]GpuEvidenceBundle, len(wire))
 	for i, bundle := range wire {
-		evidence, err := decodeHexField(fmt.Sprintf("evidence of %s element %d", name, i), bundle.Evidence)
+		vendor, err := requireString(fmt.Sprintf("vendor of %s element %d", name, i), bundle.Vendor)
 		if err != nil {
 			return nil, err
 		}
-		bundles[i] = GpuEvidenceBundle{Vendor: bundle.Vendor, Format: bundle.Format, Evidence: evidence}
+		format, err := requireString(fmt.Sprintf("format of %s element %d", name, i), bundle.Format)
+		if err != nil {
+			return nil, err
+		}
+		evidence, err := requireHexField(fmt.Sprintf("evidence of %s element %d", name, i), bundle.Evidence)
+		if err != nil {
+			return nil, err
+		}
+		bundles[i] = GpuEvidenceBundle{Vendor: vendor, Format: format, Evidence: evidence}
 	}
 	return bundles, nil
 }
@@ -300,6 +421,9 @@ func (c *DstackClientV1) IssueCert(ctx context.Context, options ...IssueCertV1Op
 	if err != nil {
 		return nil, err
 	}
+	if err := rpcError(data); err != nil {
+		return nil, err
+	}
 
 	var response IssueCertV1Response
 	if err := json.Unmarshal(data, &response); err != nil {
@@ -332,27 +456,34 @@ func (c *DstackClientV1) GetKey(ctx context.Context, domain string, algorithm st
 		return nil, err
 	}
 
+	if err := rpcError(data); err != nil {
+		return nil, err
+	}
+
 	var response struct {
-		Key            string   `json:"key"`
-		PublicKey      string   `json:"public_key"`
-		SignatureChain []string `json:"signature_chain"`
+		Key            *string    `json:"key"`
+		PublicKey      *string    `json:"public_key"`
+		SignatureChain *[]*string `json:"signature_chain"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, err
 	}
 
-	key, err := decodeHexField("key", response.Key)
+	key, err := requireHexField("key", response.Key)
 	if err != nil {
 		return nil, err
 	}
-	publicKey, err := decodeHexField("public_key", response.PublicKey)
+	publicKey, err := requireHexField("public_key", response.PublicKey)
 	if err != nil {
 		return nil, err
+	}
+	if response.SignatureChain == nil {
+		return nil, fmt.Errorf("no signature_chain in response: absent or null")
 	}
 
-	chain := make([][]byte, len(response.SignatureChain))
-	for i, link := range response.SignatureChain {
-		chain[i], err = decodeHexField(fmt.Sprintf("signature chain element %d", i), link)
+	chain := make([][]byte, len(*response.SignatureChain))
+	for i, link := range *response.SignatureChain {
+		chain[i], err = requireHexField(fmt.Sprintf("signature chain element %d", i), link)
 		if err != nil {
 			return nil, err
 		}
@@ -385,20 +516,33 @@ func (c *DstackClientV1) Attest(ctx context.Context, reportData []byte, includeB
 		return nil, err
 	}
 
+	if err := rpcError(data); err != nil {
+		return nil, err
+	}
+
 	var response struct {
-		Attestation         string                  `json:"attestation"`
-		BoottimeGpuEvidence []gpuEvidenceBundleJSON `json:"boottime_gpu_evidence"`
+		Attestation *string `json:"attestation"`
+		// Raw, because a pointer cannot tell an absent field from an explicit
+		// null and the two differ here: absence is the empty list, since the
+		// field is only populated when the request asked for it, while a null
+		// is a malformed value. Rust draws the same line with
+		// `#[serde(default)]`, which fills a missing key and rejects a null.
+		BoottimeGpuEvidence json.RawMessage `json:"boottime_gpu_evidence"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, err
 	}
 
-	attestation, err := decodeHexField("attestation", response.Attestation)
+	attestation, err := requireHexField("attestation", response.Attestation)
 	if err != nil {
 		return nil, err
 	}
 
-	boottimeGpuEvidence, err := decodeGpuEvidenceBundles("boottime_gpu_evidence", response.BoottimeGpuEvidence)
+	wire, err := decodeBundleList("boottime_gpu_evidence", response.BoottimeGpuEvidence, true)
+	if err != nil {
+		return nil, err
+	}
+	boottimeGpuEvidence, err := decodeGpuEvidenceBundles("boottime_gpu_evidence", wire)
 	if err != nil {
 		return nil, err
 	}
@@ -429,14 +573,25 @@ func (c *DstackClientV1) AttestGpu(ctx context.Context, nonce []byte) (*AttestGp
 		return nil, err
 	}
 
+	if err := rpcError(data); err != nil {
+		return nil, err
+	}
+
 	var response struct {
-		Bundles []gpuEvidenceBundleJSON `json:"bundles"`
+		Bundles json.RawMessage `json:"bundles"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, err
 	}
 
-	bundles, err := decodeGpuEvidenceBundles("bundles", response.Bundles)
+	// Required, unlike boottime_gpu_evidence: bundles is the whole answer of
+	// this call, so an absent one is a malformed response rather than a host
+	// with no GPUs.
+	wire, err := decodeBundleList("bundles", response.Bundles, false)
+	if err != nil {
+		return nil, err
+	}
+	bundles, err := decodeGpuEvidenceBundles("bundles", wire)
 	if err != nil {
 		return nil, err
 	}
@@ -455,46 +610,78 @@ func (c *DstackClientV1) Info(ctx context.Context) (*InfoV1Response, error) {
 		return nil, err
 	}
 
+	if err := rpcError(data); err != nil {
+		return nil, err
+	}
+
 	var response struct {
-		AppID           string `json:"app_id"`
-		AppName         string `json:"app_name"`
-		ComposeHash     string `json:"compose_hash"`
-		AppCompose      string `json:"app_compose"`
-		InstanceID      string `json:"instance_id"`
-		DeviceID        string `json:"device_id"`
-		OsImageHash     string `json:"os_image_hash"`
-		MrAggregated    string `json:"mr_aggregated"`
-		VmConfig        string `json:"vm_config"`
-		KeyProviderInfo string `json:"key_provider_info"`
-		CloudVendor     string `json:"cloud_vendor"`
-		CloudProduct    string `json:"cloud_product"`
+		AppID           *string         `json:"app_id"`
+		AppName         json.RawMessage `json:"app_name"`
+		ComposeHash     *string         `json:"compose_hash"`
+		AppCompose      json.RawMessage `json:"app_compose"`
+		InstanceID      *string         `json:"instance_id"`
+		DeviceID        *string         `json:"device_id"`
+		OsImageHash     json.RawMessage `json:"os_image_hash"`
+		MrAggregated    json.RawMessage `json:"mr_aggregated"`
+		VmConfig        json.RawMessage `json:"vm_config"`
+		KeyProviderInfo json.RawMessage `json:"key_provider_info"`
+		CloudVendor     json.RawMessage `json:"cloud_vendor"`
+		CloudProduct    json.RawMessage `json:"cloud_product"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, err
 	}
 
-	info := &InfoV1Response{
-		AppName:         response.AppName,
-		AppCompose:      response.AppCompose,
-		VmConfig:        response.VmConfig,
-		KeyProviderInfo: response.KeyProviderInfo,
-		CloudVendor:     response.CloudVendor,
-		CloudProduct:    response.CloudProduct,
+	info := &InfoV1Response{}
+	for _, field := range []struct {
+		name string
+		raw  json.RawMessage
+		into *string
+	}{
+		{"app_name", response.AppName, &info.AppName},
+		{"app_compose", response.AppCompose, &info.AppCompose},
+		{"vm_config", response.VmConfig, &info.VmConfig},
+		{"key_provider_info", response.KeyProviderInfo, &info.KeyProviderInfo},
+		{"cloud_vendor", response.CloudVendor, &info.CloudVendor},
+		{"cloud_product", response.CloudProduct, &info.CloudProduct},
+	} {
+		value, err := optionalString(field.name, field.raw)
+		if err != nil {
+			return nil, err
+		}
+		*field.into = value
 	}
 
+	// app_id, compose_hash, instance_id and device_id are what Info exists to
+	// answer, so absence is a malformed response. os_image_hash and
+	// mr_aggregated are read as empty when absent, which keeps a degraded Info
+	// readable and costs nothing, because neither means anything unattested.
 	for _, field := range []struct {
 		name  string
-		value string
+		value *string
 		into  *[]byte
 	}{
 		{"app_id", response.AppID, &info.AppID},
 		{"compose_hash", response.ComposeHash, &info.ComposeHash},
 		{"instance_id", response.InstanceID, &info.InstanceID},
 		{"device_id", response.DeviceID, &info.DeviceID},
+	} {
+		decoded, err := requireHexField(field.name, field.value)
+		if err != nil {
+			return nil, err
+		}
+		*field.into = decoded
+	}
+
+	for _, field := range []struct {
+		name string
+		raw  json.RawMessage
+		into *[]byte
+	}{
 		{"os_image_hash", response.OsImageHash, &info.OsImageHash},
 		{"mr_aggregated", response.MrAggregated, &info.MrAggregated},
 	} {
-		decoded, err := decodeHexField(field.name, field.value)
+		decoded, err := optionalHexField(field.name, field.raw)
 		if err != nil {
 			return nil, err
 		}
@@ -512,6 +699,9 @@ func (c *DstackClientV1) Info(ctx context.Context) (*InfoV1Response, error) {
 func (c *DstackClientV1) Version(ctx context.Context) (*VersionV1Response, error) {
 	data, err := c.sendRPCRequest(ctx, "/v1/Version", map[string]interface{}{})
 	if err != nil {
+		return nil, err
+	}
+	if err := rpcError(data); err != nil {
 		return nil, err
 	}
 

@@ -466,10 +466,26 @@ func TestV0GetTlsKeyKeepsTheReleasedServerAuthDefault(t *testing.T) {
 // Version selection is by URL path alone: every v1 method must post under /v1.
 func TestV1MethodsPostUnderTheV1Prefix(t *testing.T) {
 	paths := make(chan string, 1)
+	// One minimal valid body per method. A single body for all of them used to
+	// work because every required field decoded to empty without complaint,
+	// which is exactly the leniency this surface no longer has.
+	bodies := map[string]string{
+		"/v1/IssueCert": `{"key":"-----BEGIN----","certificate_chain":[]}`,
+		"/v1/GetKey":    `{"key":"aa","public_key":"bb","signature_chain":[]}`,
+		"/v1/Attest":    `{"attestation":"cc"}`,
+		"/v1/AttestGpu": `{"bundles":[]}`,
+		"/v1/Info": `{"app_id":"11","compose_hash":"22","instance_id":"33",` +
+			`"device_id":"44"}`,
+		"/v1/Version": `{"version":"0.6.0","rev":"deadbeef"}`,
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths <- r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"bundles":[]}`))
+		body, ok := bodies[r.URL.Path]
+		if !ok {
+			body = `{}`
+		}
+		_, _ = w.Write([]byte(body))
 	}))
 	defer server.Close()
 
@@ -539,5 +555,169 @@ func TestV1AgainstAnAgentWithoutV1(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "404") {
 		t.Errorf("expected the status to be reported, got: %v", err)
+	}
+}
+
+// A response that omits a required `bytes` field, or nulls it, is malformed --
+// not a valid answer whose value happens to be empty.
+//
+// Decoding into a string made these indistinguishable: absent and null both
+// became "", "" hex-decodes to empty bytes, and the error was nil. A caller
+// then read an empty private key, or an empty app_id, as the agent's answer.
+// Rust, Python and JavaScript all refuse these bodies.
+func TestV1RejectsAbsentAndNullFields(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		call func(ctx context.Context, c *dstack.DstackClientV1) error
+		want string
+	}{
+		{
+			"key absent",
+			`{"public_key":"bb","signature_chain":[]}`,
+			func(ctx context.Context, c *dstack.DstackClientV1) error {
+				_, err := c.GetKey(ctx, "d", "ed25519")
+				return err
+			},
+			"key",
+		},
+		{
+			"key null",
+			`{"key":null,"public_key":"bb","signature_chain":[]}`,
+			func(ctx context.Context, c *dstack.DstackClientV1) error {
+				_, err := c.GetKey(ctx, "d", "ed25519")
+				return err
+			},
+			"key",
+		},
+		{
+			"signature_chain absent",
+			`{"key":"aa","public_key":"bb"}`,
+			func(ctx context.Context, c *dstack.DstackClientV1) error {
+				_, err := c.GetKey(ctx, "d", "ed25519")
+				return err
+			},
+			"signature_chain",
+		},
+		{
+			"signature_chain null element",
+			`{"key":"aa","public_key":"bb","signature_chain":["aabb",null]}`,
+			func(ctx context.Context, c *dstack.DstackClientV1) error {
+				_, err := c.GetKey(ctx, "d", "ed25519")
+				return err
+			},
+			"signature chain element 1",
+		},
+		{
+			"attestation absent",
+			`{}`,
+			func(ctx context.Context, c *dstack.DstackClientV1) error {
+				_, err := c.Attest(ctx, []byte("x"), false)
+				return err
+			},
+			"attestation",
+		},
+		{
+			// The whole answer of the call, so absence is malformed rather
+			// than a host with no GPUs.
+			"bundles absent",
+			`{}`,
+			func(ctx context.Context, c *dstack.DstackClientV1) error {
+				_, err := c.AttestGpu(ctx, bytes.Repeat([]byte{0}, 32))
+				return err
+			},
+			"bundles",
+		},
+		{
+			"app_id absent",
+			`{"compose_hash":"22","instance_id":"33","device_id":"44"}`,
+			func(ctx context.Context, c *dstack.DstackClientV1) error {
+				_, err := c.Info(ctx)
+				return err
+			},
+			"app_id",
+		},
+		{
+			// Absent is the empty default for this one; an explicit null is a
+			// value the agent did not send.
+			"os_image_hash null",
+			`{"app_id":"11","compose_hash":"22","instance_id":"33","device_id":"44","os_image_hash":null}`,
+			func(ctx context.Context, c *dstack.DstackClientV1) error {
+				_, err := c.Info(ctx)
+				return err
+			},
+			"os_image_hash",
+		},
+		{
+			// A bundle's vendor is what a caller switches on to pick a
+			// verifier, so an absent one routes evidence nowhere.
+			"bundle vendor absent",
+			`{"bundles":[{"format":"f","evidence":"aa"}]}`,
+			func(ctx context.Context, c *dstack.DstackClientV1) error {
+				_, err := c.AttestGpu(ctx, bytes.Repeat([]byte{0}, 32))
+				return err
+			},
+			"vendor of bundles element 0",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+
+			client := dstack.NewDstackClientV1(dstack.WithEndpoint(server.URL))
+			err := tc.call(context.Background(), client)
+			if err == nil {
+				t.Fatalf("expected an error naming %s, got none", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("expected the error to name %s, got: %v", tc.want, err)
+			}
+		})
+	}
+}
+
+// An absent optional field is the empty default, not an error: a degraded Info
+// stays readable, and neither field means anything unattested anyway.
+func TestV1ReadsAbsentOptionalBytesAsEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"app_id":"11","compose_hash":"22",` +
+			`"instance_id":"33","device_id":"44"}`))
+	}))
+	defer server.Close()
+
+	info, err := dstack.NewDstackClientV1(dstack.WithEndpoint(server.URL)).Info(context.Background())
+	if err != nil {
+		t.Fatalf("an older agent's Info should still parse: %v", err)
+	}
+	if len(info.OsImageHash) != 0 || len(info.MrAggregated) != 0 {
+		t.Errorf("expected empty bytes, got %x and %x", info.OsImageHash, info.MrAggregated)
+	}
+}
+
+// An error body arriving with a 200 is an error, not an empty answer.
+//
+// The transport rejects a non-2xx status, which left this shape: the agent's
+// own message where the answer should be. Every required field is then absent,
+// and before this the call returned a zero-length private key and a nil error.
+func TestV1SurfacesAnErrorBodySentWith200(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"error":"boom"}`))
+	}))
+	defer server.Close()
+
+	_, err := dstack.NewDstackClientV1(dstack.WithEndpoint(server.URL)).GetKey(
+		context.Background(), "d", "ed25519")
+	if err == nil {
+		t.Fatal("expected the agent's error to surface, got none")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("expected the agent's own words, got: %v", err)
 	}
 }

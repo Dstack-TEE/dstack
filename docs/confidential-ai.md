@@ -144,7 +144,7 @@ from dstack_sdk import DstackClient
 client = DstackClient()
 info = client.info()
 
-print(f"Compose hash: {info.compose_hash}")
+print(f"Compose hash: {info.compose_hash.hex()}")
 # Data provider compares this against the docker-compose they reviewed
 ```
 

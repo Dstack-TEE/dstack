@@ -17,16 +17,76 @@ name. There is no compatibility mode. See ``docs/guest-api-v1.md``.
 """
 
 import binascii
+import re
+from typing import Annotated
 from typing import Any
 from typing import Dict
 from typing import List
 from typing import Optional
 
 from pydantic import BaseModel
+from pydantic import BeforeValidator
+from pydantic import PlainSerializer
 
 from .dstack_client_v0 import AsyncBaseClient
 from .dstack_client_v0 import BaseClient
 from .dstack_client_v0 import call_async
+
+#: An even number of hex digits, and nothing else.
+_HEX_ONLY = re.compile(r"\A(?:[0-9a-fA-F]{2})*\Z")
+
+
+def _require_bytes(value: Any, param: str) -> bytes:
+    """Reject anything but bytes on a request path.
+
+    v0 accepted a ``str`` here and UTF-8 encoded it, which reads as a
+    convenience until the string is a hex digest: ``attest("deadbeef")``
+    committed to the eight ASCII characters rather than the four bytes they
+    spell, with nothing to say so, and a 32-character nonce passed the length
+    check on its way to attesting the wrong value. v1 refuses the ambiguity and
+    names the two ways out, because only the caller knows which was meant.
+    """
+    if isinstance(value, str):
+        raise TypeError(
+            f"{param} must be bytes, not str: use value.encode() to attest the "
+            f"text, or bytes.fromhex(value) if it is a hex digest"
+        )
+    if not isinstance(value, (bytes, bytearray, memoryview)):
+        raise TypeError(f"{param} must be bytes, not {type(value).__name__}")
+    return bytes(value)
+
+
+def _decode_hex(value: Any) -> Any:
+    r"""Turn a wire hex string into bytes, leaving anything else to pydantic.
+
+    The regex is not redundant with ``bytes.fromhex``: that helper skips ASCII
+    whitespace, so ``"aa bb"`` and ``"aa\nbb"`` decode happily while the error
+    message here promises they do not. Rust and Go reject both, and a field
+    one SDK accepts and another refuses is a field verifiers cannot rely on.
+    """
+    if isinstance(value, str):
+        if not _HEX_ONLY.match(value):
+            raise ValueError(f"expected an even-length hex string, got {value!r}")
+        return bytes.fromhex(value)
+    return value
+
+
+#: A protobuf ``bytes`` field: lowercase hex on the wire, ``bytes`` in Python.
+#:
+#: v0 exposed these as ``str`` with a ``decode_*`` helper beside them, which
+#: made the wrong call the easy one -- ``public_key`` passed straight to a
+#: signature-chain claim builder is 66 ASCII characters, not a 33-byte key, and
+#: nothing raises until the chain fails to verify. The annotation also replaces
+#: pydantic's own ``str`` -> ``bytes`` coercion, which would UTF-8 encode the
+#: hex string rather than decode it -- the same silent wrong answer.
+#:
+#: Serialization is hex only in JSON mode, so ``model_dump_json()`` round-trips
+#: through the wire form while ``model_dump()`` keeps the bytes.
+HexBytes = Annotated[
+    bytes,
+    BeforeValidator(_decode_hex),
+    PlainSerializer(lambda value: value.hex(), return_type=str, when_used="json"),
+]
 
 
 class IssueCertResponseV1(BaseModel):
@@ -39,18 +99,14 @@ class IssueCertResponseV1(BaseModel):
 
 
 class GetKeyResponseV1(BaseModel):
-    key: str
-    public_key: str
-    signature_chain: List[str]
-
-    def decode_key(self) -> bytes:
-        return bytes.fromhex(self.key)
-
-    def decode_public_key(self) -> bytes:
-        return bytes.fromhex(self.public_key)
-
-    def decode_signature_chain(self) -> List[bytes]:
-        return [bytes.fromhex(chain) for chain in self.signature_chain]
+    # 32 bytes for both algorithms.
+    key: HexBytes
+    # SEC1 compressed (33 bytes) for secp256k1, raw (32 bytes) for ed25519.
+    # This is the exact byte string the chain's first link commits to.
+    public_key: HexBytes
+    # Two links: the app root key's signature over the v1 key claim, then the
+    # KMS root key's signature over the app root public key.
+    signature_chain: List[HexBytes]
 
 
 class GpuEvidenceBundleV1(BaseModel):
@@ -68,33 +124,25 @@ class GpuEvidenceBundleV1(BaseModel):
 
     vendor: str
     format: str
-    # Opaque vendor-native evidence, hex-encoded on the wire. Do not assume
-    # UTF-8 or JSON.
-    evidence: str
-
-    def decode_evidence(self) -> bytes:
-        """Return the evidence as raw bytes, exactly as the vendor emitted it.
-
-        The exactness matters for the boot-time format: the binding rule is
-        sha256 over precisely these bytes, compared against ``evidence_sha256``
-        in the measured ``gpu-attestation`` event. Parsing and re-serializing
-        the JSON changes key order and whitespace, and so changes the digest.
-        """
-        return bytes.fromhex(self.evidence)
+    # Opaque vendor-native evidence, hex-encoded on the wire and exactly as the
+    # vendor emitted it. Do not assume UTF-8 or JSON.
+    #
+    # The exactness matters for the boot-time format: the binding rule is
+    # sha256 over precisely these bytes, compared against ``evidence_sha256``
+    # in the measured ``gpu-attestation`` event. Parsing and re-serializing the
+    # JSON changes key order and whitespace, and so changes the digest.
+    evidence: HexBytes
 
 
 class AttestResponseV1(BaseModel):
-    attestation: str
+    attestation: HexBytes
     # The GPU evidence nvattest recorded during guest boot, in the same bundle
     # shape attest_gpu returns. Empty unless the request set
     # include_boottime_gpu_evidence and the guest has boot-time output. Not
     # bound to report_data: verify each bundle by replaying the runtime event
-    # log and comparing sha256 of decode_evidence() against evidence_sha256 in
-    # the `gpu-attestation` event.
+    # log and comparing sha256 of its `evidence` against evidence_sha256 in the
+    # `gpu-attestation` event.
     boottime_gpu_evidence: List[GpuEvidenceBundleV1] = []
-
-    def decode_attestation(self) -> bytes:
-        return bytes.fromhex(self.attestation)
 
 
 class AttestGpuResponseV1(BaseModel):
@@ -118,22 +166,26 @@ class InfoResponseV1(BaseModel):
     they identify *which* application and image this is, and a relying party
     still confirms them against an attestation.
 
-    The identity fields are hex strings, matching how the v0 ``InfoResponse``
-    exposes the same values.
+    The identity fields are ``bytes``, matching the proto, where the v0
+    ``InfoResponse`` hands back hex strings. Call ``.hex()`` to print one.
     """
 
-    app_id: str
+    app_id: HexBytes
     app_name: str = ""
-    compose_hash: str
+    compose_hash: HexBytes
     # Verbatim deployed bytes; compose_hash is sha256 over exactly these. Do
     # not parse and re-serialize before hashing -- key order, whitespace and
     # unknown fields all change the digest, and that digest is what gets
     # whitelisted on chain.
     app_compose: str = ""
-    instance_id: str
-    device_id: str
-    os_image_hash: str
-    mr_aggregated: str
+    instance_id: HexBytes
+    # Identifies the host machine, not this instance.
+    device_id: HexBytes
+    # Plain `bytes` in the proto, so the agent always sends these -- empty when
+    # it could not compute one. A response that omits one is read as those same
+    # empty bytes rather than rejected, as Rust's `#[serde(default)]` does.
+    os_image_hash: HexBytes = b""
+    mr_aggregated: HexBytes = b""
     vm_config: str = ""
     key_provider_info: str = ""
     cloud_vendor: str = ""
@@ -202,7 +254,7 @@ class AsyncDstackClientV1(AsyncBaseClient):
 
     async def attest(
         self,
-        report_data: str | bytes,
+        report_data: bytes,
         include_boottime_gpu_evidence: bool = False,
     ) -> AttestResponseV1:
         """Produce a versioned attestation over the given report data.
@@ -211,16 +263,21 @@ class AsyncDstackClientV1(AsyncBaseClient):
         format already carries the quote and the event log, so v0's TDX-only
         ``get_quote`` has nothing left to add.
 
+        ``report_data`` is bytes. v0 also accepted a ``str`` and UTF-8 encoded
+        it, which reads as a convenience until the string is a hex digest:
+        ``attest("deadbeef")`` committed to the eight ASCII characters rather
+        than the four bytes they spell, with no error to say so. v1 refuses the
+        ambiguity -- encode the text or decode the hex at the call site, where
+        it is visible which one was meant.
+
         Set include_boottime_gpu_evidence to also return the boot-time GPU
         attestation evidence in ``AttestResponseV1.boottime_gpu_evidence``, as
         the same ``GpuEvidenceBundleV1`` list ``attest_gpu`` returns. A guest
         with no boot-time output returns an empty list.
         """
-        if not report_data or not isinstance(report_data, (bytes, str)):
+        report_bytes = _require_bytes(report_data, "report_data")
+        if not report_bytes:
             raise ValueError("report_data can not be empty")
-        report_bytes: bytes = (
-            report_data.encode() if isinstance(report_data, str) else report_data
-        )
         if len(report_bytes) > 64:
             raise ValueError("report_data must be at most 64 bytes")
         data: Dict[str, Any] = {
@@ -239,10 +296,11 @@ class AsyncDstackClientV1(AsyncBaseClient):
         compared directly against the ``eat_nonce`` claim; to bind a longer
         challenge, hash it yourself.
         """
-        if not isinstance(nonce, (bytes, bytearray)) or len(nonce) != 32:
+        nonce_bytes = _require_bytes(nonce, "nonce")
+        if len(nonce_bytes) != 32:
             raise ValueError("nonce must be exactly 32 bytes")
         result = await self._send_rpc_request(
-            "AttestGpu", {"nonce": binascii.hexlify(bytes(nonce)).decode()}
+            "AttestGpu", {"nonce": binascii.hexlify(nonce_bytes).decode()}
         )
         return AttestGpuResponseV1(**result)
 
@@ -299,7 +357,7 @@ class DstackClientV1(BaseClient):
     @call_async
     def attest(
         self,
-        report_data: str | bytes,
+        report_data: bytes,
         include_boottime_gpu_evidence: bool = False,
     ) -> AttestResponseV1:
         """Produce a versioned attestation over the given report data."""

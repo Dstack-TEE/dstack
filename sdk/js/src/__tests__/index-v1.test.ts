@@ -158,15 +158,16 @@ describe('DstackClientV1', () => {
   describe('attest', () => {
     it('should attest over report data', async () => {
       const client = new DstackClientV1()
-      const result = await client.attest('test')
-      expect(result.attestation).not.toBe('')
+      const result = await client.attest(Buffer.from('test'))
+      expect(result.attestation).toBeInstanceOf(Uint8Array)
+      expect(result.attestation.length).toBeGreaterThan(0)
       expect(result.boottime_gpu_evidence).toEqual([])
     })
 
     it('should accept the boot-time GPU evidence flag', async () => {
       const client = new DstackClientV1()
-      const result = await client.attest('test', true)
-      expect(result.attestation).not.toBe('')
+      const result = await client.attest(Buffer.from('test'), true)
+      expect(result.attestation.length).toBeGreaterThan(0)
       // Absence is the empty list, not a sentinel; the simulator has no GPU
       // output, so this is empty here but must still be an array.
       expect(Array.isArray(result.boottime_gpu_evidence)).toBe(true)
@@ -175,18 +176,38 @@ describe('DstackClientV1', () => {
 
     it('should type boot-time evidence as the bundle list attestGpu returns', async () => {
       const client = new DstackClientV1()
-      const result = await client.attest('test', true)
+      const result = await client.attest(Buffer.from('test'), true)
       // Assigning one to the other is the assertion: one parser, both methods.
       const bundles: GpuEvidenceBundleV1[] = result.boottime_gpu_evidence
       for (const bundle of bundles) {
-        expect(bundle.decodeEvidence()).toBeInstanceOf(Uint8Array)
+        expect(bundle.evidence).toBeInstanceOf(Uint8Array)
       }
     })
 
     it('should reject report data outside 1..64 bytes', async () => {
       const client = new DstackClientV1()
-      await expect(() => client.attest('')).rejects.toThrow('must not be empty')
+      await expect(() => client.attest(new Uint8Array(0))).rejects.toThrow('must not be empty')
       await expect(() => client.attest(Buffer.alloc(65))).rejects.toThrow('at most 64 bytes')
+    })
+
+    it('should reject a string rather than attest its characters', async () => {
+      const client = new DstackClientV1()
+      // v0 UTF-8 encoded this. `attest('deadbeef')` then committed to eight
+      // ASCII characters rather than the four bytes they spell, silently.
+      await expect(
+        () => (client as unknown as {
+          attest: (d: unknown) => Promise<unknown>
+        }).attest('deadbeef')
+      ).rejects.toThrow(/report data must be bytes, not a string/)
+    })
+
+    it('should reject a 32-character string nonce that would pass the length check', async () => {
+      const client = new DstackClientV1()
+      await expect(
+        () => (client as unknown as {
+          attestGpu: (n: unknown) => Promise<unknown>
+        }).attestGpu('a'.repeat(32))
+      ).rejects.toThrow(/nonce must be bytes, not a string/)
     })
   })
 
@@ -246,25 +267,147 @@ describe('DstackClientV1', () => {
 
     it('should decode boot-time evidence to the nvattest bytes verbatim', async () => {
       await withStubAgent(async client => {
-        const result = await client.attest('test', true)
+        const result = await client.attest(Buffer.from('test'), true)
         const [bundle] = result.boottime_gpu_evidence
         expect(bundle.vendor).toBe('nvidia')
         expect(bundle.format).toBe('nvidia-nvattest-boottime-json-v1')
         // Byte-exact: sha256 over these bytes is what `evidence_sha256` in the
         // measured `gpu-attestation` event commits to.
-        expect(Buffer.from(bundle.decodeEvidence()).toString('utf8')).toBe(nvattest_output)
+        expect(Buffer.from(bundle.evidence).toString('utf8')).toBe(nvattest_output)
       })
     })
 
     it('should hand both methods the same bundle shape', async () => {
       await withStubAgent(async client => {
-        const attested = await client.attest('test', true)
+        const attested = await client.attest(Buffer.from('test'), true)
         const collected = await client.attestGpu(new Uint8Array(32))
         const boottime: GpuEvidenceBundleV1 = attested.boottime_gpu_evidence[0]
         const on_demand: GpuEvidenceBundleV1 = collected.bundles[0]
         // Only `format` separates them, so one parser handles both.
         expect(on_demand.format).toBe('nvidia-nvattest-collect-evidence-json-v1')
-        expect(on_demand.decodeEvidence()).toEqual(boottime.decodeEvidence())
+        expect(on_demand.evidence).toEqual(boottime.evidence)
+      })
+    })
+  })
+
+  // Every one of these decoded to a shorter-than-asked-for Uint8Array with no
+  // error before the hex decoding was made strict: Node's decoder stops at the
+  // first pair it cannot parse and returns the prefix. A truncated `key` or a
+  // signature chain quietly one link short is a verification failure nobody can
+  // trace back to its cause.
+  describe('malformed hex from the agent', () => {
+    async function withAgentAnswering(body: unknown, fn: (client: DstackClientV1) => Promise<void>) {
+      const server = http.createServer((_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(body))
+      })
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()))
+      try {
+        const { port } = server.address() as AddressInfo
+        await fn(new DstackClientV1(`http://127.0.0.1:${port}`))
+      } finally {
+        await new Promise<void>(resolve => server.close(() => resolve()))
+      }
+    }
+
+    const identity = {
+      app_id: 'aa'.repeat(20),
+      compose_hash: 'bb'.repeat(32),
+      instance_id: 'cc'.repeat(20),
+      device_id: 'dd'.repeat(32),
+      os_image_hash: 'ee'.repeat(32),
+      mr_aggregated: 'ff'.repeat(48),
+    }
+
+    it('should reject a non-hex character rather than truncate', async () => {
+      await withAgentAnswering({ ...identity, app_id: 'aabbzz' + 'aa'.repeat(17) }, client =>
+        expect(client.info()).rejects.toThrow(/malformed app_id/)
+      )
+    })
+
+    it('should reject an odd-length string rather than drop a digit', async () => {
+      await withAgentAnswering({ ...identity, compose_hash: 'abc' }, client =>
+        expect(client.info()).rejects.toThrow(/malformed compose_hash/)
+      )
+    })
+
+    it('should name the chain link that is malformed', async () => {
+      await withAgentAnswering(
+        { key: 'aa'.repeat(32), public_key: 'bb'.repeat(33), signature_chain: ['aabb', 'qq'] },
+        client => expect(client.getKey('x', 'secp256k1')).rejects.toThrow(/signature_chain\[1\]/)
+      )
+    })
+
+    it('should reject an absent required field instead of returning empty bytes', async () => {
+      const { instance_id: _dropped, ...without_instance_id } = identity
+      await withAgentAnswering(without_instance_id, client =>
+        expect(client.info()).rejects.toThrow(/no instance_id/)
+      )
+    })
+
+    it('should accept an absent optional field as empty', async () => {
+      const { os_image_hash: _a, mr_aggregated: _b, ...older_agent } = identity
+      await withAgentAnswering(older_agent, async client => {
+        const info = await client.info()
+        expect(info.os_image_hash).toEqual(new Uint8Array(0))
+        expect(info.mr_aggregated).toEqual(new Uint8Array(0))
+        expect(info.app_id.length).toBe(20)
+      })
+    })
+
+    // A hex check alone does not survive a value that is not a string:
+    // `RegExp.test` stringifies, so `['00112233']` passes it, and `Buffer.from`
+    // then coerces the element as an octet and yields one attacker-chosen byte
+    // without erroring. These pin the type check that stops it.
+    it('should reject a one-element array rather than coerce it to a byte', async () => {
+      await withAgentAnswering({ ...identity, app_id: ['00112233'] }, client =>
+        expect(client.info()).rejects.toThrow(/malformed app_id.*got an array/)
+      )
+    })
+
+    it('should reject a chain link that is an array rather than a string', async () => {
+      await withAgentAnswering(
+        { key: 'aa'.repeat(32), public_key: 'bb'.repeat(33), signature_chain: [['61']] },
+        client => expect(client.getKey('x', 'secp256k1')).rejects.toThrow(
+          /malformed signature_chain\[0\].*got an array/)
+      )
+    })
+
+    it('should reject a null field rather than read it as empty bytes', async () => {
+      await withAgentAnswering({ ...identity, os_image_hash: null }, client =>
+        expect(client.info()).rejects.toThrow(/malformed os_image_hash.*got null/)
+      )
+    })
+
+    it('should name the field when a repeated one is not a list', async () => {
+      await withAgentAnswering(
+        { key: 'aa'.repeat(32), public_key: 'bb'.repeat(33), signature_chain: null },
+        client => expect(client.getKey('x', 'secp256k1')).rejects.toThrow(
+          /malformed signature_chain: expected a list/)
+      )
+    })
+
+    it('should reject an absent bundles rather than report no GPUs', async () => {
+      await withAgentAnswering({}, client =>
+        expect(client.attestGpu(new Uint8Array(32))).rejects.toThrow(
+          /malformed bundles: expected a list/)
+      )
+    })
+
+    it('should reject a bundle without the vendor a caller dispatches on', async () => {
+      await withAgentAnswering(
+        { bundles: [{ format: 'nvidia-nvattest-collect-evidence-json-v1', evidence: 'aa' }] },
+        client => expect(client.attestGpu(new Uint8Array(32))).rejects.toThrow(
+          /malformed bundles\[0\]\.vendor.*got nothing/)
+      )
+    })
+
+    it('should read an absent string field as empty, not undefined', async () => {
+      await withAgentAnswering(identity, async client => {
+        const info = await client.info()
+        expect(info.app_compose).toBe('')
+        expect(info.cloud_vendor).toBe('')
+        expect(info.app_name).toBe('')
       })
     })
   })
@@ -280,8 +423,8 @@ describe('DstackClientV1', () => {
       ]) {
         expect(result).toHaveProperty(field)
       }
-      expect(result.app_id).not.toBe('')
-      expect(result.instance_id).not.toBe('')
+      expect(result.app_id.length).toBeGreaterThan(0)
+      expect(result.instance_id.length).toBeGreaterThan(0)
     })
 
     it('should not nest measurements in a tcb_info blob or mint an app_cert', async () => {
@@ -291,12 +434,18 @@ describe('DstackClientV1', () => {
       expect(result.app_cert).toBeUndefined()
     })
 
-    it('should hex-encode the byte fields', async () => {
+    it('should decode the byte fields rather than hand back hex', async () => {
       const client = new DstackClientV1()
       const result = await client.info()
-      expect(result.app_id).toMatch(/^[0-9a-f]+$/)
-      expect(result.compose_hash).toMatch(/^[0-9a-f]{64}$/)
-      expect(result.mr_aggregated).toMatch(/^[0-9a-f]{64}$/)
+      // The proto says `bytes`, so the SDK says `Uint8Array`: a caller that
+      // hashes or compares an identity gets the 20 or 32 bytes it means, not
+      // the 40 or 64 ASCII characters the wire carries.
+      expect(result.app_id).toBeInstanceOf(Uint8Array)
+      expect(result.app_id.length).toBe(20)
+      expect(result.compose_hash.length).toBe(32)
+      expect(result.instance_id.length).toBe(20)
+      expect(result.device_id.length).toBe(32)
+      expect(result.mr_aggregated.length).toBe(32)
     })
 
     it('should serve app_compose verbatim rather than nested in another JSON string', async () => {

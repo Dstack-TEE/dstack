@@ -4,6 +4,7 @@
 
 from typing import List
 
+from pydantic import ValidationError
 import pytest
 
 from dstack_sdk import AsyncDstackClient
@@ -100,12 +101,13 @@ async def test_async_v1_info():
 
 def check_info_response(result: InfoResponseV1):
     assert isinstance(result, InfoResponseV1)
-    assert len(result.app_id) == 40
-    assert len(result.compose_hash) == 64
-    assert len(result.instance_id) == 40
-    assert len(result.device_id) == 64
-    assert len(result.os_image_hash) in (0, 64)
-    assert len(result.mr_aggregated) == 64
+    # bytes, not hex: the lengths are the raw ones the proto declares.
+    assert len(result.app_id) == 20
+    assert len(result.compose_hash) == 32
+    assert len(result.instance_id) == 20
+    assert len(result.device_id) == 32
+    assert len(result.os_image_hash) in (0, 32)
+    assert len(result.mr_aggregated) == 32
     assert len(result.app_compose) > 0
     # The measurement registers and the event log belong to attest(), which
     # returns them quote-backed. They must not reappear here.
@@ -117,17 +119,17 @@ def test_sync_v1_get_key():
     client = DstackClientV1()
     result = client.get_key("storage-encryption", "secp256k1")
     assert isinstance(result, GetKeyResponseV1)
-    assert len(result.decode_key()) == 32
+    assert len(result.key) == 32
     # secp256k1 public keys are SEC1 compressed, and the chain's first link
     # commits to exactly these bytes.
-    assert len(result.decode_public_key()) == 33
-    assert len(result.decode_signature_chain()) == 2
+    assert len(result.public_key) == 33
+    assert len(result.signature_chain) == 2
 
     ed = client.get_key("storage-encryption", "ed25519")
-    assert len(ed.decode_key()) == 32
-    assert len(ed.decode_public_key()) == 32
+    assert len(ed.key) == 32
+    assert len(ed.public_key) == 32
     # The v1 KDF binds the algorithm, so one name no longer serves two curves.
-    assert ed.decode_key() != result.decode_key()
+    assert ed.key != result.key
 
 
 @pytest.mark.asyncio
@@ -160,13 +162,13 @@ def test_v1_keys_differ_from_v0_keys():
     """No compatibility mode: the same name yields different key material."""
     v0 = DstackClientV0().get_key("storage-encryption", "")
     v1 = DstackClientV1().get_key("storage-encryption", "secp256k1")
-    assert v1.decode_key() != v0.decode_key()
+    assert v1.key != v0.decode_key()
 
 
 def test_sync_v1_attest():
     result = DstackClientV1().attest(b"user:alice:nonce123")
     assert isinstance(result, AttestResponseV1)
-    assert len(result.decode_attestation()) > 0
+    assert len(result.attestation) > 0
 
 
 @pytest.mark.asyncio
@@ -191,7 +193,7 @@ async def test_async_v1_attest_boottime_gpu_evidence(monkeypatch):
     monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
     monkeypatch.setattr(AsyncDstackClientV1, "_send_rpc_request", fake_send)
     result = await AsyncDstackClientV1().attest(
-        "test", include_boottime_gpu_evidence=True
+        b"test", include_boottime_gpu_evidence=True
     )
     assert isinstance(result, AttestResponseV1)
     bundle = result.boottime_gpu_evidence[0]
@@ -199,7 +201,7 @@ async def test_async_v1_attest_boottime_gpu_evidence(monkeypatch):
     assert bundle.format == "nvidia-nvattest-boottime-json-v1"
     # sha256 of exactly these bytes is what the `gpu-attestation` event commits
     # to, so the decode must be byte-for-byte, not a re-serialized parse.
-    assert bundle.decode_evidence() == evidence
+    assert bundle.evidence == evidence
 
 
 def test_sync_v1_attest_boottime_gpu_evidence_defaults_to_empty():
@@ -222,7 +224,30 @@ async def test_async_v1_attest_report_data_bounds():
     with pytest.raises(ValueError, match="64 bytes"):
         await client.attest(b"0" * 65)
     # 64 bytes is the maximum, not one past it.
-    assert len((await client.attest(b"0" * 64)).decode_attestation()) > 0
+    assert len((await client.attest(b"0" * 64)).attestation) > 0
+
+
+@pytest.mark.asyncio
+async def test_async_v1_attest_refuses_str():
+    """v1 takes bytes, so a hex digest cannot be attested as its characters.
+
+    v0 UTF-8 encoded a str, which made ``attest("deadbeef")`` commit to eight
+    ASCII characters rather than the four bytes they spell -- no error, just a
+    quote over the wrong value. The v0 client keeps that behaviour; v1 does not.
+    """
+    client = AsyncDstackClientV1()
+    with pytest.raises(TypeError, match="bytes.fromhex"):
+        await client.attest("deadbeef")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="must be bytes, not int"):
+        await client.attest(42)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_async_v1_attest_gpu_refuses_str():
+    """A 32-character str would otherwise pass the length check unnoticed."""
+    client = AsyncDstackClientV1()
+    with pytest.raises(TypeError, match="must be bytes"):
+        await client.attest_gpu("a" * 32)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -248,16 +273,20 @@ async def test_async_v1_attest_gpu(monkeypatch):
     assert isinstance(result, AttestGpuResponseV1)
     assert len(result.bundles) == 1
     assert result.bundles[0].vendor == "nvidia"
-    assert result.bundles[0].decode_evidence() == evidence
+    assert result.bundles[0].evidence == evidence
 
 
 @pytest.mark.asyncio
 async def test_async_v1_attest_gpu_rejects_wrong_nonce_length():
     """SPDM fixes the evidence nonce at 32 bytes; catch it before the round trip."""
     client = AsyncDstackClientV1()
-    for bad in [b"", bytes(31), bytes(33), "not-bytes"]:
+    for bad in [b"", bytes(31), bytes(33)]:
         with pytest.raises(ValueError, match="32 bytes"):
             await client.attest_gpu(bad)
+    # A non-bytes nonce is a TypeError, not a length complaint -- see
+    # test_async_v1_attest_gpu_refuses_str.
+    with pytest.raises(TypeError):
+        await client.attest_gpu(object())  # type: ignore[arg-type]
 
 
 def test_sync_v1_attest_gpu_reaches_the_agent():
@@ -336,3 +365,48 @@ def test_v1_unix_socket_file_not_exist(monkeypatch):
     monkeypatch.delenv("DSTACK_SIMULATOR_ENDPOINT", raising=False)
     with pytest.raises(FileNotFoundError):
         DstackClientV1("/non/existent/socket")
+
+
+# The wire is hex; anything else is a response no verifier should act on. Go
+# names the field it could not decode and Rust refuses the string outright, so
+# Python doing the same is what keeps a malformed answer malformed in every
+# SDK rather than in three of four.
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "aabbzz",  # a non-hex pair
+        "abc",  # odd length: the last digit has nowhere to go
+        "aa bb",  # bytes.fromhex() skips whitespace; the wire never has any
+        "aa\nbb",
+    ],
+)
+def test_v1_malformed_hex_is_rejected(bad: str):
+    with pytest.raises(ValidationError):
+        GetKeyResponseV1(key=bad, public_key="bb" * 33, signature_chain=[])
+
+
+def test_v1_malformed_chain_link_is_rejected():
+    """One bad link must fail the chain, not silently shorten it."""
+    with pytest.raises(ValidationError):
+        GetKeyResponseV1(
+            key="aa" * 32, public_key="bb" * 33, signature_chain=["aabb", "qq"]
+        )
+
+
+def test_v1_absent_identity_hashes_are_empty():
+    """`os_image_hash` and `mr_aggregated` default rather than reject.
+
+    Both are plain `bytes` in the proto, so a current agent always sends them --
+    empty when it could not compute one. Reading a response that omits one as
+    those same empty bytes keeps a degraded `Info` parseable instead of
+    unparseable, which is what Rust's `#[serde(default)]` already did.
+    """
+    info = InfoResponseV1(
+        app_id="aa" * 20,
+        compose_hash="bb" * 32,
+        instance_id="cc" * 20,
+        device_id="dd" * 32,
+    )
+    assert info.os_image_hash == b""
+    assert info.mr_aggregated == b""
+    assert info.app_id == b"\xaa" * 20

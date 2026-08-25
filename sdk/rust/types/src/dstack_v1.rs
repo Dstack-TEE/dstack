@@ -11,18 +11,51 @@
 //! of the two lying about what the agent sent.
 //!
 //! Wire encoding follows the v0 convention: every protobuf `bytes` field is a
-//! lowercase hex string in JSON, with a `decode_*` helper next to it. Fields
-//! carrying JSON documents (`app_compose`, `vm_config`, `key_provider_info`,
-//! `boottime_gpu_evidence`) are plain strings and are passed through unparsed.
+//! lowercase hex string in JSON. The Rust types do not: a `bytes` field is a
+//! `Vec<u8>`, and the hex lives in the serde layer. v0 exposed the hex string
+//! and a `decode_*` helper beside it, which made the wrong call the easy one --
+//! `public_key` handed straight to a claim builder is 66 ASCII characters, not
+//! a 33-byte key, and nothing objects until the chain fails to verify. Typing
+//! the field as bytes makes that mistake unspellable.
+//!
+//! Fields carrying JSON documents (`app_compose`, `vm_config`,
+//! `key_provider_info`, `boottime_gpu_evidence`) are plain strings and are
+//! passed through unparsed.
 
 use alloc::{string::String, vec::Vec};
-use hex::FromHexError;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "borsh_schema")]
 use borsh::BorshSchema;
 #[cfg(feature = "borsh")]
 use borsh::{BorshDeserialize, BorshSerialize};
+
+/// Serde for protobuf `repeated bytes`: a JSON array of lowercase hex strings.
+///
+/// [`hex::serde`] covers a single `bytes` field, but there is no serde
+/// attribute that composes it element-wise over a `Vec`, so the repeated case
+/// needs its own module. Deserialization is all-or-nothing: one malformed
+/// element fails the whole field rather than silently yielding a short chain.
+mod hex_vec {
+    use alloc::{string::String, vec::Vec};
+    use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(items: &[Vec<u8>], serializer: S) -> Result<S::Ok, S::Error> {
+        let encoded: Vec<String> = items.iter().map(hex::encode).collect();
+        encoded.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<Vec<u8>>, D::Error> {
+        let encoded = Vec::<String>::deserialize(deserializer)?;
+        encoded
+            .iter()
+            .map(hex::decode)
+            .collect::<Result<Vec<Vec<u8>>, _>>()
+            .map_err(D::Error::custom)
+    }
+}
 
 /// Configuration for a certificate issuance request.
 #[derive(Debug, bon::Builder, Serialize, Deserialize)]
@@ -75,44 +108,103 @@ pub struct IssueCertResponse {
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
 pub struct GetKeyResponse {
-    /// The derived private key, hex-encoded. 32 bytes for both algorithms.
-    pub key: String,
-    /// The corresponding public key, hex-encoded. SEC1 compressed (33 bytes)
-    /// for secp256k1, raw (32 bytes) for ed25519.
+    /// The derived private key. 32 bytes for both algorithms.
+    #[serde(with = "hex::serde")]
+    pub key: Vec<u8>,
+    /// The corresponding public key. SEC1 compressed (33 bytes) for secp256k1,
+    /// raw (32 bytes) for ed25519.
     ///
     /// This is the exact byte string the chain's first link commits to, so a
     /// relying party never has to re-derive it from `key`.
-    pub public_key: String,
-    /// Two links, hex-encoded: the app root key's signature over the v1 key
-    /// claim, then the KMS root key's signature over the app root public key.
+    #[serde(with = "hex::serde")]
+    pub public_key: Vec<u8>,
+    /// Two links: the app root key's signature over the v1 key claim, then the
+    /// KMS root key's signature over the app root public key.
     ///
     /// `docs/guest-api-v1.md` specifies the claim encoding and the verification
     /// steps. Verifying is the relying party's job; this SDK does not do it.
-    pub signature_chain: Vec<String>,
+    #[serde(with = "hex_vec")]
+    pub signature_chain: Vec<Vec<u8>>,
 }
 
-impl GetKeyResponse {
-    pub fn decode_key(&self) -> Result<Vec<u8>, FromHexError> {
-        hex::decode(&self.key)
-    }
+/// The value an attestation binds to: bytes, and only bytes.
+///
+/// A newtype rather than a bare `Vec<u8>` so [`AttestConfig`]'s builder can
+/// keep `#[builder(into)]` -- a `Vec<u8>`, an array and a slice all convert --
+/// while `&str` and `String` do not. Both of those implement `Into<Vec<u8>>`,
+/// so on the bare type `.report_data("00ff")` compiles and attests the four
+/// ASCII bytes of that string rather than the two bytes it spells. That is the
+/// mistake this surface types its `bytes` fields to make unspellable, and the
+/// one field a caller sends rather than receives should not be the exception.
+///
+/// Length is the agent's to enforce; this type only fixes what the value is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+#[serde(transparent)]
+pub struct ReportData(#[serde(with = "hex::serde")] pub Vec<u8>);
 
-    pub fn decode_public_key(&self) -> Result<Vec<u8>, FromHexError> {
-        hex::decode(&self.public_key)
+impl From<Vec<u8>> for ReportData {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(bytes)
     }
+}
 
-    pub fn decode_signature_chain(&self) -> Result<Vec<Vec<u8>>, FromHexError> {
-        self.signature_chain.iter().map(hex::decode).collect()
+impl From<&[u8]> for ReportData {
+    fn from(bytes: &[u8]) -> Self {
+        Self(bytes.to_vec())
+    }
+}
+
+impl<const N: usize> From<[u8; N]> for ReportData {
+    fn from(bytes: [u8; N]) -> Self {
+        Self(bytes.to_vec())
+    }
+}
+
+impl<const N: usize> From<&[u8; N]> for ReportData {
+    fn from(bytes: &[u8; N]) -> Self {
+        Self(bytes.to_vec())
+    }
+}
+
+impl core::ops::Deref for ReportData {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for ReportData {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
     }
 }
 
 /// Configuration for a v1 attestation request.
+///
+/// `report_data` takes bytes and only bytes. A hex string is a different value
+/// with the same spelling, and the builder will not take one:
+///
+/// ```compile_fail
+/// use dstack_sdk_types::dstack_v1::AttestConfig;
+/// // 8 ASCII bytes where 4 were meant -- rejected at compile time.
+/// let _ = AttestConfig::builder().report_data("deadbeef").build();
+/// ```
+///
+/// ```
+/// use dstack_sdk_types::dstack_v1::AttestConfig;
+/// let config = AttestConfig::builder().report_data([0xde, 0xad, 0xbe, 0xef]).build();
+/// assert_eq!(config.report_data.len(), 4);
+/// ```
 #[derive(Debug, bon::Builder, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
 pub struct AttestConfig {
-    /// The report data in hexadecimal format, at most 64 bytes once decoded
+    /// The report data, at most 64 bytes. Hex-encoded on the wire.
     #[builder(into)]
-    pub report_data: String,
+    pub report_data: ReportData,
     /// Also return the boot-time GPU attestation evidence
     #[builder(default = false)]
     pub include_boottime_gpu_evidence: bool,
@@ -123,8 +215,9 @@ pub struct AttestConfig {
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
 pub struct AttestResponse {
-    /// The attestation, hex-encoded
-    pub attestation: String,
+    /// The attestation
+    #[serde(with = "hex::serde")]
+    pub attestation: Vec<u8>,
     /// Boot-time GPU attestation evidence. Empty unless the request asked for
     /// it and boot-time output exists, so absence is just the empty list.
     ///
@@ -133,9 +226,9 @@ pub struct AttestResponse {
     /// written at boot, [`FORMAT_ON_DEMAND`] is collected against a caller's
     /// nonce, and a verifier for one does not appraise the other.
     ///
-    /// Each bundle's `evidence` decodes to the nvattest output byte for byte.
-    /// That exactness is the contract: the only thing binding this evidence to
-    /// the boot is sha256 over precisely those bytes, compared against
+    /// Each bundle's `evidence` is the nvattest output byte for byte. That
+    /// exactness is the contract: the only thing binding this evidence to the
+    /// boot is sha256 over precisely those bytes, compared against
     /// `evidence_sha256` in the measured `gpu-attestation` event after
     /// replaying the runtime event log. Re-serializing the JSON first changes
     /// the digest.
@@ -143,12 +236,6 @@ pub struct AttestResponse {
     /// Not bound to `report_data`: nvattest ran at boot against its own nonce.
     #[serde(default)]
     pub boottime_gpu_evidence: Vec<GpuEvidenceBundle>,
-}
-
-impl AttestResponse {
-    pub fn decode_attestation(&self) -> Result<Vec<u8>, FromHexError> {
-        hex::decode(&self.attestation)
-    }
 }
 
 /// Vendor-native GPU evidence collected on demand.
@@ -179,14 +266,10 @@ pub struct GpuEvidenceBundle {
     pub vendor: String,
     /// Vendor-specific evidence format and version
     pub format: String,
-    /// Hex-encoded opaque vendor-native evidence bytes
-    pub evidence: String,
-}
-
-impl GpuEvidenceBundle {
-    pub fn decode_evidence(&self) -> Result<Vec<u8>, FromHexError> {
-        hex::decode(&self.evidence)
-    }
+    /// Opaque vendor-native evidence bytes, verbatim as the vendor tool emitted
+    /// them. Hex-encoded on the wire.
+    #[serde(with = "hex::serde")]
+    pub evidence: Vec<u8>,
 }
 
 /// Application identity and configuration.
@@ -203,27 +286,32 @@ impl GpuEvidenceBundle {
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
 pub struct InfoResponse {
-    /// App ID, hex-encoded
-    pub app_id: String,
+    /// App ID
+    #[serde(with = "hex::serde")]
+    pub app_id: Vec<u8>,
     /// App name, from app-compose
+    #[serde(default)]
     pub app_name: String,
-    /// Compose hash, hex-encoded. sha256 over the verbatim bytes of
-    /// `app_compose`; do not re-serialize before hashing.
-    pub compose_hash: String,
+    /// Compose hash: sha256 over the verbatim bytes of `app_compose`; do not
+    /// re-serialize before hashing.
+    #[serde(with = "hex::serde")]
+    pub compose_hash: Vec<u8>,
     /// The app-compose document, exactly as deployed. Empty on the external
     /// surface unless the app set `public_tcbinfo`.
     #[serde(default)]
     pub app_compose: String,
-    /// App instance ID, hex-encoded
-    pub instance_id: String,
-    /// Device ID, hex-encoded. Identifies the host machine, not this instance.
-    pub device_id: String,
-    /// OS image hash, hex-encoded
-    #[serde(default)]
-    pub os_image_hash: String,
-    /// Aggregated measurement register value, hex-encoded
-    #[serde(default)]
-    pub mr_aggregated: String,
+    /// App instance ID
+    #[serde(with = "hex::serde")]
+    pub instance_id: Vec<u8>,
+    /// Device ID. Identifies the host machine, not this instance.
+    #[serde(with = "hex::serde")]
+    pub device_id: Vec<u8>,
+    /// OS image hash
+    #[serde(default, with = "hex::serde")]
+    pub os_image_hash: Vec<u8>,
+    /// Aggregated measurement register value
+    #[serde(default, with = "hex::serde")]
+    pub mr_aggregated: Vec<u8>,
     /// The VM's hardware configuration, as a JSON document produced by the VMM
     #[serde(default)]
     pub vm_config: String,
@@ -238,20 +326,6 @@ pub struct InfoResponse {
     pub cloud_product: String,
 }
 
-impl InfoResponse {
-    pub fn decode_app_id(&self) -> Result<Vec<u8>, FromHexError> {
-        hex::decode(&self.app_id)
-    }
-
-    pub fn decode_instance_id(&self) -> Result<Vec<u8>, FromHexError> {
-        hex::decode(&self.instance_id)
-    }
-
-    pub fn decode_compose_hash(&self) -> Result<Vec<u8>, FromHexError> {
-        hex::decode(&self.compose_hash)
-    }
-}
-
 /// The guest agent version.
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
@@ -261,4 +335,100 @@ pub struct VersionResponse {
     pub version: String,
     /// Git revision
     pub rev: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::{string::ToString, vec, vec::Vec};
+
+    #[test]
+    fn signature_chain_round_trips_through_hex() {
+        let response = GetKeyResponse {
+            key: vec![0x01; 32],
+            public_key: vec![0x02; 33],
+            signature_chain: vec![vec![0xaa, 0xbb], vec![0xcc]],
+        };
+        let json = serde_json::to_string(&response).expect("serializes");
+        assert!(json.contains(r#""signature_chain":["aabb","cc"]"#));
+
+        let decoded: GetKeyResponse = serde_json::from_str(&json).expect("deserializes");
+        assert_eq!(decoded.key, response.key);
+        assert_eq!(decoded.public_key, response.public_key);
+        assert_eq!(decoded.signature_chain, response.signature_chain);
+    }
+
+    #[test]
+    fn signature_chain_accepts_an_empty_list() {
+        let json = r#"{"key":"01","public_key":"02","signature_chain":[]}"#;
+        let decoded: GetKeyResponse = serde_json::from_str(json).expect("deserializes");
+        assert!(decoded.signature_chain.is_empty());
+
+        let reencoded = serde_json::to_string(&decoded).expect("serializes");
+        assert!(reencoded.contains(r#""signature_chain":[]"#));
+    }
+
+    #[test]
+    fn signature_chain_rejects_a_malformed_element() {
+        let json = r#"{"key":"01","public_key":"02","signature_chain":["aabb","zz"]}"#;
+        let err = serde_json::from_str::<GetKeyResponse>(json)
+            .expect_err("a non-hex element fails the whole field");
+        assert!(err.to_string().contains("Invalid character"), "{err}");
+    }
+
+    #[test]
+    fn report_data_is_hex_on_the_wire() {
+        let config = AttestConfig::builder()
+            .report_data(vec![0xde, 0xad, 0xbe, 0xef])
+            .build();
+        let json = serde_json::to_string(&config).expect("serializes");
+        assert!(json.contains(r#""report_data":"deadbeef""#), "{json}");
+    }
+
+    #[test]
+    fn report_data_accepts_every_byte_shape_a_caller_holds() {
+        let owned = AttestConfig::builder().report_data(vec![0xaa, 0xbb]).build();
+        let array = AttestConfig::builder().report_data([0xaa, 0xbb]).build();
+        let borrowed_array = AttestConfig::builder().report_data(b"\xaa\xbb").build();
+        let slice = AttestConfig::builder()
+            .report_data(&[0xaa, 0xbb][..])
+            .build();
+
+        for config in [owned, array, borrowed_array, slice] {
+            assert_eq!(&config.report_data[..], &[0xaa, 0xbb]);
+        }
+    }
+
+    #[test]
+    fn report_data_round_trips_through_the_wire_form() {
+        let json = r#"{"report_data":"deadbeef","include_boottime_gpu_evidence":false}"#;
+        let config: AttestConfig = serde_json::from_str(json).expect("deserializes");
+        assert_eq!(config.report_data, ReportData(vec![0xde, 0xad, 0xbe, 0xef]));
+        assert_eq!(serde_json::to_string(&config).expect("serializes"), json);
+    }
+
+    #[test]
+    fn report_data_rejects_a_non_hex_wire_value() {
+        let json = r#"{"report_data":"zz","include_boottime_gpu_evidence":false}"#;
+        let err = serde_json::from_str::<AttestConfig>(json).expect_err("not hex");
+        assert!(err.to_string().contains("Invalid character"), "{err}");
+    }
+
+    #[test]
+    fn info_identity_fields_decode_to_bytes() {
+        let json = r#"{
+            "app_id": "0011",
+            "app_name": "demo",
+            "compose_hash": "2233",
+            "instance_id": "4455",
+            "device_id": "6677"
+        }"#;
+        let info: InfoResponse = serde_json::from_str(json).expect("deserializes");
+        assert_eq!(info.app_id, vec![0x00, 0x11]);
+        assert_eq!(info.compose_hash, vec![0x22, 0x33]);
+        assert_eq!(info.instance_id, vec![0x44, 0x55]);
+        assert_eq!(info.device_id, vec![0x66, 0x77]);
+        assert_eq!(info.os_image_hash, Vec::<u8>::new());
+        assert_eq!(info.mr_aggregated, Vec::<u8>::new());
+    }
 }

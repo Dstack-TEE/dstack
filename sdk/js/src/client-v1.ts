@@ -6,7 +6,75 @@
 // unsuffixed `DstackClient` names since 0.6.0.
 
 import { send_rpc_request } from './send-rpc-request'
-import { to_hex, throwOnRpcError, resolveDstackEndpoint, type Hex } from './shared'
+import { to_hex, throwOnRpcError, resolveDstackEndpoint } from './shared'
+
+/** An even number of hex digits, and nothing else. */
+const HEX_ONLY = /^(?:[0-9a-fA-F]{2})*$/
+
+/**
+ * Decode a wire hex string, or say which field was malformed.
+ *
+ * Strict on purpose. Node's hex decoder stops at the first pair it cannot
+ * parse and returns the prefix it managed, without error: `Buffer.from(
+ * '0102zz', 'hex')` is two bytes, and an odd-length string loses its last
+ * digit. These fields are private keys, signature chain links and application
+ * identity -- handing back a silently truncated one is worse than throwing,
+ * and Rust, Python and Go all refuse the same input.
+ */
+function decode_hex(value: unknown, field: string): Uint8Array {
+  // The type check is not redundant with the regex, and dropping it is a
+  // silent-wrong-value bug rather than a style regression. `RegExp.test`
+  // stringifies its argument, so a one-element array passes -- `['00112233']`
+  // becomes `'00112233'` -- and `Buffer.from` then ignores the `'hex'`
+  // argument for a non-string input and coerces the elements as octets:
+  // `Number('00112233') & 0xff`, one attacker-chosen byte, no error. TypeScript
+  // cannot stop this because a JSON response is `any` at runtime.
+  if (typeof value !== 'string') {
+    throw new Error(
+      `the agent returned a malformed ${field}: expected a hex string, got ${
+        value === null ? 'null' : Array.isArray(value) ? 'an array' : typeof value}`
+    )
+  }
+  if (!HEX_ONLY.test(value)) {
+    throw new Error(
+      `the agent returned a malformed ${field}: expected an even-length hex string`
+    )
+  }
+  return new Uint8Array(Buffer.from(value, 'hex'))
+}
+
+/**
+ * Decode a `bytes` field the proto declares required.
+ *
+ * Absence is an error rather than the empty default: `app_id` and `key` are
+ * answers the agent always has, so a response without one is a response that
+ * did not come from a working agent. An empty *string* still decodes to zero
+ * bytes, which is what every other SDK does with it.
+ */
+function from_hex(value: unknown, field: string): Uint8Array {
+  if (value === undefined) {
+    throw new Error(`the agent returned no ${field}`)
+  }
+  return decode_hex(value, field)
+}
+
+/**
+ * Decode a `bytes` field, treating an absent key as the empty default.
+ *
+ * `os_image_hash` and `mr_aggregated` are the two that get this. Both are
+ * plain `bytes` in the proto, so a current agent always sends them -- empty
+ * when it could not compute one. Reading a missing key as those same empty
+ * bytes rather than an error keeps a degraded `Info` readable instead of
+ * unparseable, and costs nothing, because neither field means anything
+ * unattested anyway.
+ *
+ * Absent only. An explicit `null` is a malformed value, not an omission, and
+ * is rejected -- which is also what `#[serde(default)]` does in Rust and what
+ * a defaulted pydantic field does in Python.
+ */
+function from_optional_hex(value: unknown, field: string): Uint8Array {
+  return value === undefined ? new Uint8Array(0) : decode_hex(value, field)
+}
 
 export interface IssueCertOptionsV1 {
   subject?: string;
@@ -52,7 +120,7 @@ export interface GetKeyResponseV1 {
 export interface AttestResponseV1 {
   __name__: Readonly<'AttestResponseV1'>
 
-  attestation: Hex
+  attestation: Uint8Array
 
   /**
    * The GPU evidence nvattest recorded at boot, in the same bundle shape
@@ -61,8 +129,8 @@ export interface AttestResponseV1 {
    * absence is the empty array, not a sentinel.
    *
    * Not bound to `report_data`: nvattest ran at boot against its own nonce.
-   * Bind it by replaying the runtime event log and comparing sha256 of the
-   * bytes `decodeEvidence()` returns against `evidence_sha256` in the measured
+   * Bind it by replaying the runtime event log and comparing sha256 of each
+   * bundle's `evidence` against `evidence_sha256` in the measured
    * `gpu-attestation` event.
    */
   boottime_gpu_evidence: GpuEvidenceBundleV1[]
@@ -86,19 +154,20 @@ export interface GpuEvidenceBundleV1 {
   vendor: string
   /** Vendor-specific evidence format and version. */
   format: string
-  /** Opaque vendor-native evidence bytes, hex-encoded by the JSON RPC. */
-  evidence: Hex
-
   /**
-   * The evidence as raw bytes, exactly as the vendor emitted it.
+   * Opaque vendor-native evidence bytes, exactly as the vendor emitted them
+   * (hex-encoded by the JSON RPC, decoded here).
    *
    * Byte-exact by design: for a boot-time bundle the binding rule is sha256
    * over precisely these bytes, compared against `evidence_sha256` in the
    * measured `gpu-attestation` event, so parsing and re-serialising the JSON
    * breaks the comparison.
    */
-  decodeEvidence: () => Uint8Array
+  evidence: Uint8Array
 }
+
+/** A bundle as it arrives, before `evidence` is decoded. */
+type GpuEvidenceBundleV1Wire = Omit<GpuEvidenceBundleV1, 'evidence'> & { evidence: string }
 
 export interface AttestGpuResponseV1 {
   __name__: Readonly<'AttestGpuResponseV1'>
@@ -115,31 +184,51 @@ export interface AttestGpuResponseV1 {
  * attestation.
  *
  * `app_id`, `compose_hash`, `instance_id`, `device_id`, `os_image_hash` and
- * `mr_aggregated` are lowercase hex; the rest are plain strings, with the three
- * document fields carrying JSON owned by someone else (see `docs/guest-api-v1.md`).
+ * `mr_aggregated` are `bytes` in the proto and `Uint8Array` here, lowercase hex
+ * only on the wire; the rest are plain strings, with the three document fields
+ * carrying JSON owned by someone else (see `docs/guest-api-v1.md`).
  */
 export interface InfoResponseV1 {
   __name__: Readonly<'InfoResponseV1'>
 
-  app_id: Hex
+  app_id: Uint8Array
   app_name: string
-  compose_hash: Hex
+  compose_hash: Uint8Array
   /**
    * The app-compose document, verbatim. `compose_hash` is sha256 over exactly
    * these bytes, so do not parse and re-serialize before hashing: key order,
    * whitespace and unknown fields all change the digest.
    */
   app_compose: string
-  instance_id: Hex
+  instance_id: Uint8Array
   /** Identifies the host machine, not this instance. */
-  device_id: Hex
-  os_image_hash: Hex
-  mr_aggregated: Hex
+  device_id: Uint8Array
+  os_image_hash: Uint8Array
+  mr_aggregated: Uint8Array
   vm_config: string
   key_provider_info: string
   cloud_vendor: string
   cloud_product: string
 }
+
+/**
+ * `InfoResponseV1` as it arrives: identity fields hex, everything else final.
+ *
+ * `os_image_hash` and `mr_aggregated` are optional here rather than on the
+ * wire: the proto declares them plain `bytes` and the agent always sends them,
+ * but a response that omits one is read as empty rather than rejected.
+ */
+type InfoResponseV1Wire =
+  Omit<InfoResponseV1, '__name__' | 'app_id' | 'compose_hash' | 'instance_id'
+    | 'device_id' | 'os_image_hash' | 'mr_aggregated'>
+  & {
+    app_id: string
+    compose_hash: string
+    instance_id: string
+    device_id: string
+    os_image_hash?: string
+    mr_aggregated?: string
+  }
 
 export interface VersionResponseV1 {
   __name__: Readonly<'VersionResponseV1'>
@@ -149,18 +238,109 @@ export interface VersionResponseV1 {
 }
 
 /**
- * Attach the byte accessor to the bundles a v1 RPC returned.
+ * Reject anything but bytes on a request path.
+ *
+ * v0 took a `string` here and UTF-8 encoded it, which reads as a convenience
+ * until the string is a hex digest: `attest('deadbeef')` committed to the
+ * eight ASCII characters rather than the four bytes they spell, with nothing
+ * to say so. v1 refuses the ambiguity, and the runtime check is not redundant
+ * with the parameter type -- a JavaScript caller, or TypeScript with an `any`
+ * from `JSON.parse`, reaches this with a string and no compiler in the way.
+ */
+function require_bytes(value: unknown, param: string): Buffer | Uint8Array {
+  if (typeof value === 'string') {
+    throw new Error(
+      `${param} must be bytes, not a string: use Buffer.from(value, 'utf8') to ` +
+      `attest the text, or Buffer.from(value, 'hex') if it is a hex digest`
+    )
+  }
+  if (!(value instanceof Uint8Array)) {
+    throw new Error(`${param} must be a Buffer or Uint8Array`)
+  }
+  return value
+}
+
+/**
+ * Read a `string` field, or say which one was not a string.
+ *
+ * The interfaces in this file declare these `string`, and a spread of the raw
+ * JSON quietly hands back `undefined` for a key the response omitted -- so
+ * `info().app_compose.length` throws on a value the compiler called safe.
+ * proto3 has no presence for a scalar `string`, so absence is the empty
+ * default, matching Rust's `#[serde(default)]` and pydantic's field default.
+ * A present-but-not-a-string value is still an error.
+ */
+function to_string(value: unknown, field: string): string {
+  if (value === undefined) {
+    return ''
+  }
+  return require_string(value, field)
+}
+
+/**
+ * Read a `string` field the response is meaningless without.
+ *
+ * A bundle's `vendor` and `format` are what a caller dispatches on to pick a
+ * verifier, so handing back `undefined` there does not degrade the answer, it
+ * routes the evidence to no verifier at all -- quietly, since `undefined`
+ * matches no `case`. Rust and Python both make these required.
+ */
+function require_string(value: unknown, field: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(
+      `the agent returned a malformed ${field}: expected a string, got ${
+        value === undefined ? 'nothing'
+          : value === null ? 'null'
+          : Array.isArray(value) ? 'an array' : typeof value}`
+    )
+  }
+  return value
+}
+
+/**
+ * Read a `repeated` field, or say which one was not a list.
+ *
+ * `Array.isArray` rather than a truthiness check: a bare `.map()` on a `null`
+ * or absent field throws `TypeError: Cannot read properties of null`, which
+ * names no field and reads like an SDK bug rather than a bad response.
+ *
+ * `whenAbsent` follows the proto. A missing `boottime_gpu_evidence` is the
+ * empty list, because the field is only populated when asked for; a missing
+ * `bundles` or `signature_chain` is a malformed response, because those are
+ * the whole answer of the call that returns them.
+ */
+function to_list(
+  value: unknown, field: string, whenAbsent: 'empty' | 'error',
+): unknown[] {
+  if (value === undefined && whenAbsent === 'empty') {
+    return []
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`the agent returned a malformed ${field}: expected a list`)
+  }
+  return value
+}
+
+/**
+ * Decode the bundles a v1 RPC returned.
  *
  * Shared by `attest` and `attestGpu` so both hand back the same object shape,
  * which is the point of the wire message being shared.
  */
 function to_gpu_evidence_bundles(
-  bundles: Array<Omit<GpuEvidenceBundleV1, 'decodeEvidence'>> | undefined,
+  bundles: unknown, field: string, whenAbsent: 'empty' | 'error',
 ): GpuEvidenceBundleV1[] {
-  return (bundles ?? []).map(bundle => Object.freeze({
-    ...bundle,
-    decodeEvidence: () => new Uint8Array(Buffer.from(bundle.evidence, 'hex')),
-  }))
+  return to_list(bundles, field, whenAbsent).map((bundle, i) => {
+    if (bundle === null || typeof bundle !== 'object') {
+      throw new Error(`the agent returned a malformed ${field}[${i}]: expected an object`)
+    }
+    const wire = bundle as GpuEvidenceBundleV1Wire
+    return Object.freeze({
+      vendor: require_string(wire.vendor, `${field}[${i}].vendor`),
+      format: require_string(wire.format, `${field}[${i}].format`),
+      evidence: from_hex(wire.evidence, `${field}[${i}].evidence`),
+    })
+  })
 }
 
 /**
@@ -227,7 +407,9 @@ export class DstackClientV1 {
       this.endpoint, '/v1/IssueCert', JSON.stringify(raw))
     throwOnRpcError(result)
     return Object.freeze({
-      ...result,
+      key: to_string(result.key, 'key'),
+      certificate_chain: to_list(result.certificate_chain, 'certificate_chain', 'error')
+        .map((cert, i) => to_string(cert, `certificate_chain[${i}]`)),
       __name__: 'IssueCertResponseV1' as const,
     })
   }
@@ -253,9 +435,10 @@ export class DstackClientV1 {
       this.endpoint, '/v1/GetKey', payload)
     throwOnRpcError(result)
     return Object.freeze({
-      key: new Uint8Array(Buffer.from(result.key, 'hex')),
-      public_key: new Uint8Array(Buffer.from(result.public_key, 'hex')),
-      signature_chain: result.signature_chain.map(sig => new Uint8Array(Buffer.from(sig, 'hex'))),
+      key: from_hex(result.key, 'key'),
+      public_key: from_hex(result.public_key, 'public_key'),
+      signature_chain: to_list(result.signature_chain, 'signature_chain', 'error')
+        .map((link, i) => from_hex(link, `signature_chain[${i}]`)),
       __name__: 'GetKeyResponseV1' as const,
     })
   }
@@ -266,32 +449,36 @@ export class DstackClientV1 {
    * The only CVM attestation entry point in v1: the attestation already carries
    * the TDX quote and the event log, so there is no separate `getQuote`.
    *
-   * @param report_data 1 to 64 bytes, zero-padded on the right to 64 by the agent.
+   * @param report_data 1 to 64 bytes, zero-padded on the right to 64 by the
+   * agent. Bytes only: v0 also took a string and UTF-8 encoded it, which
+   * silently attested the characters of a hex digest rather than the digest.
    * @param include_boottime_gpu_evidence Also return the boot-time GPU evidence,
    * as the same {@link GpuEvidenceBundleV1} list `attestGpu` returns, so a
    * verifier gets both in one round trip. It is not bound to `report_data`.
    */
   async attest(
-    report_data: string | Buffer | Uint8Array,
+    report_data: Buffer | Uint8Array,
     include_boottime_gpu_evidence: boolean = false,
   ): Promise<AttestResponseV1> {
-    const hex = to_hex(report_data)
-    if (hex.length === 0) {
+    const bytes = require_bytes(report_data, 'report data')
+    if (bytes.length === 0) {
       throw new Error('report data must not be empty')
     }
-    if (hex.length > 128) {
-      throw new Error(`report data must be at most 64 bytes, but received ${hex.length / 2}`)
+    if (bytes.length > 64) {
+      throw new Error(`report data must be at most 64 bytes, but received ${bytes.length}`)
     }
+    const hex = to_hex(bytes)
     const payload = JSON.stringify({ report_data: hex, include_boottime_gpu_evidence })
     const result = await send_rpc_request<{
       attestation: string,
-      boottime_gpu_evidence?: Array<Omit<GpuEvidenceBundleV1, 'decodeEvidence'>>,
+      boottime_gpu_evidence?: GpuEvidenceBundleV1Wire[],
     }>(this.endpoint, '/v1/Attest', payload)
     throwOnRpcError(result)
     return Object.freeze({
       __name__: 'AttestResponseV1' as const,
-      attestation: result.attestation as Hex,
-      boottime_gpu_evidence: to_gpu_evidence_bundles(result.boottime_gpu_evidence),
+      attestation: from_hex(result.attestation, 'attestation'),
+      boottime_gpu_evidence: to_gpu_evidence_bundles(
+        result.boottime_gpu_evidence, 'boottime_gpu_evidence', 'empty'),
     })
   }
 
@@ -304,29 +491,43 @@ export class DstackClientV1 {
    * bind the GPU to this CVM.
    *
    * @param nonce Exactly 32 bytes, passed to the GPU verbatim. SPDM fixes the
-   * length; hash a longer challenge yourself.
+   * length; hash a longer challenge yourself. Bytes only, for the same reason
+   * `attest` takes bytes only -- and a 32-character string would have passed
+   * the length check.
    */
   async attestGpu(nonce: Buffer | Uint8Array): Promise<AttestGpuResponseV1> {
-    if (nonce.length !== 32) {
-      throw new Error(`nonce must be exactly 32 bytes, but received ${nonce.length}`)
+    const bytes = require_bytes(nonce, 'nonce')
+    if (bytes.length !== 32) {
+      throw new Error(`nonce must be exactly 32 bytes, but received ${bytes.length}`)
     }
-    const payload = JSON.stringify({ nonce: to_hex(nonce) })
+    const payload = JSON.stringify({ nonce: to_hex(bytes) })
     const result = await send_rpc_request<{
-      bundles?: Array<Omit<GpuEvidenceBundleV1, 'decodeEvidence'>>,
+      bundles?: GpuEvidenceBundleV1Wire[],
     }>(this.endpoint, '/v1/AttestGpu', payload)
     throwOnRpcError(result)
     return Object.freeze({
-      bundles: to_gpu_evidence_bundles(result.bundles),
+      bundles: to_gpu_evidence_bundles(result.bundles, 'bundles', 'error'),
       __name__: 'AttestGpuResponseV1' as const,
     })
   }
 
   /** Return this application's identity and configuration. */
   async info(): Promise<InfoResponseV1> {
-    const result = await send_rpc_request<Omit<InfoResponseV1, '__name__'>>(this.endpoint, '/v1/Info', '{}')
+    const result = await send_rpc_request<InfoResponseV1Wire>(this.endpoint, '/v1/Info', '{}')
     throwOnRpcError(result)
     return Object.freeze({
-      ...result,
+      app_id: from_hex(result.app_id, 'app_id'),
+      app_name: to_string(result.app_name, 'app_name'),
+      compose_hash: from_hex(result.compose_hash, 'compose_hash'),
+      instance_id: from_hex(result.instance_id, 'instance_id'),
+      device_id: from_hex(result.device_id, 'device_id'),
+      os_image_hash: from_optional_hex(result.os_image_hash, 'os_image_hash'),
+      mr_aggregated: from_optional_hex(result.mr_aggregated, 'mr_aggregated'),
+      app_compose: to_string(result.app_compose, 'app_compose'),
+      vm_config: to_string(result.vm_config, 'vm_config'),
+      key_provider_info: to_string(result.key_provider_info, 'key_provider_info'),
+      cloud_vendor: to_string(result.cloud_vendor, 'cloud_vendor'),
+      cloud_product: to_string(result.cloud_product, 'cloud_product'),
       __name__: 'InfoResponseV1' as const,
     })
   }
@@ -336,7 +537,8 @@ export class DstackClientV1 {
     const result = await send_rpc_request<{ version: string, rev: string }>(this.endpoint, '/v1/Version', '{}')
     throwOnRpcError(result)
     return Object.freeze({
-      ...result,
+      version: to_string(result.version, 'version'),
+      rev: to_string(result.rev, 'rev'),
       __name__: 'VersionResponseV1' as const,
     })
   }
