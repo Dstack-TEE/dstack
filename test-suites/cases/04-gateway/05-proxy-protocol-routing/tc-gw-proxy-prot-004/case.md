@@ -64,6 +64,11 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PRs #1078 and #1079)
+
+- Drive backend health through healthy, failing, timeout, and recovery transitions and verify bounded polling without request-path blocking.
+- Confirm the admin readiness endpoint distinguishes process liveness from usable proxy readiness and recovers without restart.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

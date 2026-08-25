@@ -67,6 +67,12 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PRs #1116, #1118, #1122, and #1124)
+
+- Exercise both frozen v0 and v1 guest-agent routes in the same candidate image and prove that v0 method names and wire fields remain unchanged.
+- For v1, validate byte-valued request and response fields without UTF-8 coercion, structured pRPC status codes, missing-field defaults, malformed protobuf, and unknown fields.
+- Confirm v0 compatibility aliases do not appear in the v1 schema and v1-only routes are not silently served through v0.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

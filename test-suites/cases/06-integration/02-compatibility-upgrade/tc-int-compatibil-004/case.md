@@ -64,6 +64,11 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PRs #1089, #1105, and #1121)
+
+- Run mixed-version Gateway/KMS peers with forward-compatible KV fields and structured RPC errors in both old-to-new and new-to-old directions.
+- Require supported peers to preserve unknown data and error meaning; unsupported combinations must fail explicitly rather than discard fields or return success.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
