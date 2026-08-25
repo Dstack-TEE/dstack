@@ -23,5 +23,5 @@ serde.workspace = true
 tokio = { workspace = true, features = ["full"] }
 toml_edit.workspace = true
 tracing-subscriber.workspace = true
-rustls.workspace = true
+rustls = { workspace = true, features = ["ring"] }
 or-panic.workspace = true
