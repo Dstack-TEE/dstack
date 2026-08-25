@@ -21,7 +21,7 @@ use std::{
     time::Duration,
 };
 use tokio::time::sleep;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use x509_parser::prelude::{GeneralName, Pem};
 
 use super::dns01_client::{Dns01Api, Dns01Client};
@@ -419,8 +419,6 @@ impl AcmeClient {
 
     /// Self check the TXT records for the given challenges.
     async fn check_dns(&self, challenges: &[Challenge]) -> Result<()> {
-        use tracing::warn;
-
         let mut delay = Duration::from_millis(250);
         let mut tries = 1u8;
 
@@ -669,7 +667,17 @@ async fn find_error(order: &mut Order) -> Option<Problem> {
         return Some(error.clone());
     }
     let mut authorizations = order.authorizations();
-    while let Some(Ok(authz)) = authorizations.next().await {
+    while let Some(result) = authorizations.next().await {
+        let authz = match result {
+            Ok(authz) => authz,
+            Err(err) => {
+                // Stop rather than skip: the stream fetches authorizations in order, and a
+                // failure here means we cannot see the rest either. Say so, so that the
+                // caller's "order is invalid" message is not silently missing its cause.
+                warn!("failed to fetch authorization while looking for the order error: {err}");
+                break;
+            }
+        };
         for challenge in &authz.challenges {
             if let Some(error) = &challenge.error {
                 return Some(error.clone());
