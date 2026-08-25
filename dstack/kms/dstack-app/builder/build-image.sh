@@ -30,8 +30,9 @@ DSTACK_SRC_URL=${DSTACK_SRC_URL:-https://github.com/Dstack-TEE/dstack.git}
 ensure_buildkit
 
 touch "$SHARED_DIR/builder-pinned-packages.txt"
+touch "$SHARED_DIR/pinned-packages.txt"
 
-docker_build "$NAME" ""
+docker_build "$NAME" "" "$SHARED_DIR/pinned-packages.txt"
 docker_build "kms-builder-temp" "kms-builder" "$SHARED_DIR/builder-pinned-packages.txt"
 
 check_clean_tree "$SHARED_DIR"

@@ -27,6 +27,19 @@ RUN cd repo/dstack && cargo build --release -p dstack-kms --target x86_64-unknow
 RUN echo "${DSTACK_REV}" > /build/.GIT_REV
 
 FROM debian:bookworm@sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe
+COPY --from=build-shared /pin-packages.sh /build/
+COPY ./shared/pinned-packages.txt /build/
+WORKDIR /build
+# reqwest is built against rustls-platform-verifier, which reads the system
+# trust store and errors out when it finds none. The KMS builds its collateral
+# and AMD KDS clients eagerly at startup, so a base image without CA
+# certificates fails to boot before it serves anything.
+RUN ./pin-packages.sh ./pinned-packages.txt && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
+WORKDIR /
 COPY --from=kms-builder /build/repo/dstack/target/x86_64-unknown-linux-musl/release/dstack-kms /usr/local/bin/dstack-kms
 COPY --from=kms-builder /build/.GIT_REV /etc/
 CMD ["dstack-kms"]
