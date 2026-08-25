@@ -191,7 +191,80 @@ instead of the return value.
 
 ---
 
-## 6. What to verify, and what each check actually proves
+## 6. Gateway cluster
+
+Worth doing: it exercises WaveKV replication, which a single node never touches
+even though sync is running.
+
+**Sync turns itself on when `NODE_ID > 0`** (`entrypoint.sh`:
+`SYNC_ENABLED=$([ "$NODE_ID" -gt 0 ] && ...)`). A single node with `NODE_ID=1` is
+therefore already running WaveKV as local storage — you will see `WaveKV:
+detected certificate changes` in its log — but nothing has ever replicated. Do
+not read those lines as evidence that clustering works.
+
+### Every node must deploy under the same `--name`
+
+Cluster members authenticate each other over RA-TLS and **require the peer's
+`app_id` to equal their own** (`gateway/src/kv/https_client.rs`). That is
+deliberate: it keeps WaveKV replication inside instances of one authorized
+compose rather than letting any CVM join.
+
+`app_id` is the compose hash, and **`name` is part of it**. Deploying a second
+node under a different name produces:
+
+```
+bootnode discovery retry failed: failed to fetch peers from bootnode
+  app_id mismatch: expected c90cc75a6ceb…, got aa04b7bd7875…
+```
+
+which looks like a networking or trust problem and is neither. Per-node values —
+`NODE_ID`, `WG_IP`, `WG_RESERVED_NET`, `WG_CLIENT_RANGE`, `WG_ENDPOINT`,
+`MY_URL`, `BOOTNODE_URL`, `ADMIN_API_TOKEN` — belong in `--env-file`, whose
+**values are encrypted at deploy time and are not part of the compose hash**;
+only the key names are recorded, as `allowed_envs`.
+
+So: same `--docker-compose`, same `--name`, different `--env-file`. Confirm
+before deploying —
+
+```bash
+sha256sum node1-app-compose.json node2-app-compose.json   # must match
+```
+
+### Allocate per-node resources
+
+WireGuard subnets follow `SUBNET_INDEX`: node *n* gets `10.8.<n*64>.0/18`, so
+index 0 is `10.8.0.0/18` and index 1 is `10.8.64.0/18`. Overlapping them breaks
+routing in ways that are tedious to unpick. Each node also needs its own RPC,
+admin, proxy and WireGuard ports, and its own `MY_URL` hostname — a wildcard A
+record covers `gw.<domain>` and `gw2.<domain>` without extra DNS work.
+
+`BOOTNODE_URL` only speeds up discovery; peers are also found through incoming
+connections.
+
+### What proves the cluster actually works
+
+Peer lists agreeing is the weakest of the three checks. Do all of them:
+
+```bash
+# 1. Both nodes list both peers
+curl -H "Authorization: Bearer $TOK" .../prpc/Admin.Status?json | jq '.nodes'
+
+# 2. The app registered on node1 appears on node2 — registration state replicated
+curl -H "Authorization: Bearer $TOK2" .../prpc/Admin.Status?json | jq '.hosts'
+
+# 3. node2 serves the wildcard certificate it never requested — cert replicated
+echo | openssl s_client -connect 127.0.0.1:<node2-proxy> \
+  -servername "<instance>-80.<domain>" | openssl x509 -noout -issuer -subject
+
+# 4. Traffic through node2 reaches an app whose tunnel terminates on node1
+curl -k --connect-to "<instance>-80.<domain>:<node2-proxy>:127.0.0.1:<node2-proxy>" \
+  "https://<instance>-80.<domain>:<node2-proxy>/"
+```
+
+The fourth is the one that matters: it shows what replicated is usable routing
+state, not just metadata that happens to agree.
+
+## 7. What to verify, and what each check actually proves
 
 | Check | Why it is worth doing |
 |---|---|
@@ -200,13 +273,36 @@ instead of the return value.
 | Boot all three CVMs to `boot_progress: done` | `done` is only reachable after `GetAppKey` succeeds, so it implies attestation worked |
 | `Admin.Status` lists the app with a WireGuard IP | Gateway verified the CVM's RA-TLS quote |
 | **A rejected quote in the KMS log** | The one check that proves verification is not a no-op |
-| `curl` through the proxy to the app | End to end, including TLS termination and routing |
+| `curl` through the proxy to the app | End to end, but only for one of several proxy modes — see below |
 | `/prpc/v1/Info` and `/prpc/Worker.Info` both answer | v1 works and pre-0.6 clients are not broken |
 
 That fifth row is the one people skip. A run where every quote is accepted cannot
 distinguish "verification passed" from "verification never ran". Last time the
 AMD CVMs supplied it for free — 6 grants and 7 rejections in the same KMS log —
 but if everything passes, arrange a failure deliberately.
+
+### One `curl` does not cover the proxy
+
+Ingress maps as `<id>[-[<port>][s|g]].<base_domain>`, and the suffixes select
+genuinely different code paths:
+
+| Suffix | Mode | Path |
+|---|---|---|
+| none | TLS terminated, forwarded as TCP | the common case |
+| `s` | TLS passthrough | `proxy/tls_passthough.rs`, SNI-routed, needs a `_dstack-app-address` TXT record |
+| `g` | HTTP/2 with TLS termination | gRPC |
+
+The 0.6.0-rc0 round exercised only the no-suffix path, single-node and then
+across a cluster. Passthrough and gRPC were never tried, and neither was anything
+beyond a small request — no sustained transfer, long-lived connection or
+streaming. If those matter for the release, test them explicitly; a green
+no-suffix `curl` says nothing about them.
+
+Passthrough in particular has its own resolution mechanism: the gateway looks up
+`_dstack-app-address.<sni>`, falling back to `_dstack-app-address-wildcard.<parent>`,
+for a TXT record of the form `<app_id>:<port>`. Seeing a passthrough-resolution
+error while testing the *terminated* path usually means the gateway had no
+certificate and fell through to SNI routing — fix the certificate, not the DNS.
 
 **`dstack-mr` binary name collision:** `-p dstack-mr` and `-p dstack-mr-cli` both
 produce `target/release/dstack-mr` and overwrite each other. Build only
@@ -219,7 +315,7 @@ your URL, not a broken agent.
 
 ---
 
-## 7. Reading DNS evidence without fooling yourself
+## 8. Reading DNS evidence without fooling yourself
 
 Three ways to misread a DNS result, all of which happened:
 
@@ -240,7 +336,7 @@ control, those errors read as evidence about AMD.
 
 ---
 
-## 8. AMD SEV-SNP: provision host certificates first
+## 9. AMD SEV-SNP: provision host certificates first
 
 The most valuable thing to do before an AMD run.
 
@@ -271,7 +367,7 @@ the per-chip VCEK.
 
 ---
 
-## 9. Fixed in 0.6.0-rc0 testing — do not re-diagnose
+## 10. Fixed in 0.6.0-rc0 testing — do not re-diagnose
 
 - **KMS image had no CA certificates** and could not start at all
   ([#1128](https://github.com/Dstack-TEE/dstack/pull/1128)). Failed at
@@ -295,7 +391,7 @@ If you hit any of these on a build that predates the fixes, that is why.
 
 ---
 
-## 10. Housekeeping
+## 11. Housekeeping
 
 - **Keep an inventory as you go**: CVMs, ufw rules, DNS records, host module and
   permission changes, registry tags. Comment ufw rules so they can be found later
@@ -304,6 +400,14 @@ If you hit any of these on a build that predates the fixes, that is why.
   blacklist) **revert on reboot**. Decide whether to persist them; either is fine,
   but know which you chose.
 - Remove test ZtDomains and stray `_acme-challenge` TXT records when finished.
+- A cluster run leaves a WireGuard interface per node and a second set of ufw
+  rules and ports; both outlive the CVMs.
+- **Do not poll with `pgrep -f` on a pattern your own commands contain.** A
+  waiter looping on `pgrep -f "build-image.sh ..."` never exits while you check
+  progress with a command whose own command line includes that string — checking
+  keeps it waiting. The same self-match reports a finished build as still
+  running, and a bare `pgrep -af qemu-system` matches the grep itself. Check for
+  the artifact (`docker image inspect`, a file, a port) rather than the process.
 - When doing an A/B across dependency versions, **restore `Cargo.lock` along with
   `Cargo.toml`.** Editing the manifest and running cargo rewrites the lockfile;
   restoring only the manifest leaves them inconsistent. CI will not catch it
