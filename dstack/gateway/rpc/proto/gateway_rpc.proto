@@ -214,6 +214,11 @@ message RotateAcmeCredentialsResponse {
   // cannot write (dns-persist-01). Non-empty means issuance for those domains
   // stays broken until they name the new account.
   repeated string required_dns_records = 3;
+  // Domains whose CAA records could not be re-pinned to the new account. The
+  // rotation itself succeeded -- the account exists and the cluster is using
+  // it -- so this is reported rather than raised: repeating the rotation would
+  // register yet another account. Rerun SetCaa until it succeeds.
+  repeated string repin_failed_domains = 4;
 }
 
 // Get HostInfo for associated instance id.

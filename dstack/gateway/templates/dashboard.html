@@ -522,7 +522,7 @@ SPDX-License-Identifier: Apache-2.0
         </tr>
         <tr>
             <td>Account URI</td>
-            <td>{{ acme_info.account_uri }}</td>
+            <td id="acme-account-uri">{{ acme_info.account_uri }}</td>
         </tr>
         <tr>
             <td>Historical Certificate Public Keys</td>
@@ -1548,7 +1548,14 @@ SPDX-License-Identifier: Apache-2.0
         // ==================== UI Helpers ====================
 
         async function rotateAcmeCredentials() {
-            if (!confirm('Register a new ACME account?\n\nEvery dns-persist-01 validation record and every account-pinned CAA record names the account, so they must be republished afterwards.')) {
+            const warning = [
+                'Register a new ACME account?',
+                '',
+                'This registers a new account at the CA, which is rate-limited, and rewrites the CAA records of every dns-01 domain to name it. Rewriting installs a temporary ";" guard and deletes the old records first, so a DNS provider failure part-way through can leave a domain with CAA that blocks all issuance until a later SetCaa succeeds.',
+                '',
+                'dns-persist-01 domains keep naming the old account until you republish their records by hand.'
+            ].join('\n');
+            if (!confirm(warning)) {
                 return;
             }
             try {
@@ -1561,7 +1568,18 @@ SPDX-License-Identifier: Apache-2.0
                     throw new Error(await response.text());
                 }
                 const result = await response.json();
-                showToast('ACME account: ' + result.account_uri, 'success');
+                // The account URI is server-rendered, so it would otherwise keep
+                // showing the account this rotation just replaced.
+                document.getElementById('acme-account-uri').textContent = result.account_uri;
+                const failed = result.repin_failed_domains || [];
+                if (failed.length > 0) {
+                    // The rotation itself succeeded. Saying "failed" here would
+                    // invite a retry, which registers another account.
+                    showToast('Rotated to ' + result.account_uri + ', but CAA re-pinning failed for: '
+                        + failed.join(', ') + '. Run SetCaa again — do not rotate again.', 'error');
+                } else {
+                    showToast('ACME account: ' + result.account_uri, 'success');
+                }
                 await loadZtDomains();
                 // What the operator has to publish before those domains issue
                 // again -- the response is the only place it is reported.

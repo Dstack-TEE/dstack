@@ -48,6 +48,8 @@ const DNS_PERSIST_MAX_DNS_WAIT: Duration = Duration::from_secs(300);
 pub struct RotationOutcome {
     /// URI of the new ACME account.
     pub account_uri: String,
+    /// Domains whose CAA could not be re-pinned to the new account.
+    pub repin_failed: Vec<String>,
     /// Domains whose CAA records were re-pinned to the new account.
     pub domains_updated: usize,
     /// Records an operator has to publish by hand, for domains the gateway
@@ -378,7 +380,12 @@ impl DistributedCertBot {
         }
 
         if !failed.is_empty() {
-            bail!(
+            // Reported, not raised. The account is registered and the cluster is
+            // already using it, so an error here reads as "nothing happened" and
+            // invites a retry -- which would register yet another account
+            // against a rate-limited quota and rewrite CAA a second time. What
+            // is left is a `SetCaa` run, and the caller is told exactly that.
+            error!(
                 "rotated to {account_uri} and published the new credentials, but failed to \
                  re-pin CAA for {}/{total} domains: {}; rerun SetCaa until it succeeds — \
                  retrying the rotation would register yet another account",
@@ -394,8 +401,9 @@ impl DistributedCertBot {
         }
         Ok(RotationOutcome {
             account_uri,
-            domains_updated: total - manual_domains,
+            domains_updated: total - manual_domains - failed.len(),
             required_dns_records: manual,
+            repin_failed: failed,
         })
     }
 

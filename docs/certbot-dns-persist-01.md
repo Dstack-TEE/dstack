@@ -209,6 +209,12 @@ Two operations behave differently on these domains:
   response returns the new records in `required_dns_records` and the gateway
   logs them; publish before the next renewal comes due.
 
+  A rotation that registers the account but cannot re-pin every `dns-01`
+  domain's CAA still succeeds — the account exists and the cluster is on it —
+  and names those domains in `repin_failed_domains`. Finish with `SetCaa`
+  rather than another rotation, which would register yet another account
+  against a rate-limited quota.
+
 ## Related
 
 - [dstack-gateway](dstack-gateway.md) — gateway architecture and TLS termination

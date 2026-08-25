@@ -116,6 +116,7 @@ impl AdminRpc for AdminRpcHandler {
             account_uri: outcome.account_uri,
             domains_updated: outcome.domains_updated.try_into().unwrap_or(u32::MAX),
             required_dns_records: outcome.required_dns_records,
+            repin_failed_domains: outcome.repin_failed,
         })
     }
 
