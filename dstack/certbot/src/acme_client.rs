@@ -553,7 +553,7 @@ impl AcmeClient {
             let mut challenge = authz
                 .challenge(ChallengeType::Dns01)
                 .context("no dns01 challenge found")?;
-            debug!("setting challenge ready");
+            debug!("setting challenge ready for {}", challenge.url);
             challenge
                 .set_ready()
                 .await
