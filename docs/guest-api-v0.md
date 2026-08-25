@@ -23,8 +23,9 @@ semantic changes to what is already there. It exists so a v0.5.x client keeps
 working against a 0.6 agent unchanged. Every new capability goes to
 `dstack.guest.v1`.
 
-Three services are frozen: `DstackGuest` and `Worker` (both in the
-`dstack_guest` proto package) and `Tappd`, which predates the scheme.
+Three services are frozen: `DstackGuest`, `Worker` and `Tappd`, all three in
+the `dstack_guest` proto package. `Tappd` predates the naming scheme the other
+two follow.
 
 The freeze is mechanical, not a convention. `the_frozen_services_match_their_pinned_shape`
 in `dstack/guest-agent/rpc/tests/frozen_surface.rs` hashes each frozen service's
@@ -32,8 +33,9 @@ descriptor against a pinned SHA-256. The descriptor covers the method list and
 the full field list of every message reachable from it, `reserved` ranges
 included.
 Any addition changes the digest and fails the test, including a wire-compatible
-one. That is deliberate: "frozen except for additions" is how three
-never-released methods accumulated on this surface between v0.5.11 and 0.6.0.
+one. That is deliberate: "frozen except for additions" is how `GpuInfo`,
+`AttestGpu` and `Worker.Health` accumulated on this surface between v0.5.11 and
+0.6.0 without ever being released.
 `the_frozen_services_expose_the_v0_5_11_methods` in the same file spells the
 method lists out so a failure is readable.
 
@@ -187,18 +189,27 @@ encoding it is a 64-character hex string.
 `key` itself, and a verifier of the chain must reproduce the same encoding, as
 described below. (v1 added `public_key` to the response for exactly this reason.)
 
-### One secret, two curves
+### One secret, three curves
 
 The derivation ignores `algorithm`, so `GetKey(path, *, "secp256k1")` and
 `GetKey(path, *, "ed25519")` return **the same 32 bytes**. One secret is served
 in two representations: a secp256k1 scalar and an ed25519 seed.
 
+`Tappd.DeriveKey` makes it three. It runs the identical construction --
+HKDF-SHA256, salt `RATLS`, `info` = `path` -- and reads the result as a **P-256**
+scalar, which it hands back as a PKCS#8 PEM on `/var/run/tappd.sock`. So
+`GetKey("x")` and `Tappd.DeriveKey("x")` are the same secret on a third curve,
+and the PEM is a more convenient form to walk off with than either.
+
 This is a property callers must account for, not a bug in an individual call.
-Anyone who can reach the socket can request either interpretation, so the two
-keys are not independent: compromise of one is compromise of both, and a
-protocol that assumes a per-curve key does not get one here. Where independent
-keys across algorithms are required, encode the algorithm into `path`: for
-example `backup-signing/secp256k1` and `backup-signing/ed25519`.
+Anyone who can reach either socket can request any of the three interpretations,
+so the keys are not independent: compromise of one is compromise of all, and a
+protocol that assumes a per-curve key does not get one here. Encoding the
+algorithm into `path` -- `backup-signing/secp256k1` and `backup-signing/ed25519`
+-- separates the two `GetKey` curves from each other, but not from
+`Tappd.DeriveKey`, which will derive the very same secret from the very same
+string. The only real boundary is the socket: nothing inside this surface makes
+one derived key unreachable through another method.
 
 This is one of the things v1 changed: the v1 KDF binds the canonical algorithm
 name and a version tag into `info` under its own salt, so the two curves never
@@ -323,8 +334,9 @@ c8a3dcf06c4e95bd78a5d7a1c8fcff171fc5848cfae804c6fc11bda4dc5d4062
 ```
 
 ECDSA here is deterministic (RFC 6979), so this vector pins the whole encoding
-including the recovery byte. It is the only committed vector for this surface;
-the values above are asserted on every test run.
+including the recovery byte. It is the only committed vector for a signature
+chain on this surface; the values above are asserted on every test run.
+[Report data](#report-data) has two of its own.
 
 ## Sign
 
@@ -437,7 +449,9 @@ if you replace this call with a local check.
 asymmetry worth knowing about. `Sign` requires `data` to be exactly 32 bytes.
 `Verify` accepts any length from 16 bytes up: a shorter `data` is zero-padded on
 the left to 32 and a longer one is truncated to its leftmost 32 bytes, both
-silently. Pass exactly the 32-byte digest and the two agree.
+silently. Below 16 bytes it is not an error either -- the length rejection is
+swallowed and the answer is `200` with `valid: false`, like any other signature
+that does not check out. Pass exactly the 32-byte digest and the two agree.
 
 A relying party that wants more than a single-signature check wants the chain
 verification in [Verifying a chain](#verifying-a-chain), which this method does
@@ -454,7 +468,9 @@ and the key is a by-product.
 
 **The key is freshly generated on every call, not derived.** No request field
 feeds it, and two identical requests return two unrelated keys. It is a P-256
-key built from 32 bytes of `ring::rand::SystemRandom` output, returned as a
+key whose scalar comes from 32 bytes of `ring::rand::SystemRandom` output run
+through the same HKDF-SHA256/`RATLS` step the derived keys use -- with a random
+input, so the result is random and unreproducible either way -- returned as a
 PKCS#8 PEM string in `key`. `GetKey` is the method that returns a stable,
 re-derivable key.
 
@@ -648,9 +664,13 @@ Every method maps onto a `DstackGuest` one, except where noted.
 | `RawQuote` | `TdxQuote` with `hash_algorithm = "raw"`; requires exactly 64 bytes and does not pad |
 | `DeriveKey` | *No `DstackGuest` equivalent.* See below |
 
-`TdxQuote` builds report data as `hash(prefix || content)` rather than taking it
-raw. The default `hash_algorithm` is `sha512` and the default `prefix` is
-`app-data:`; the digest is left-aligned in the 64 bytes and the rest is zero.
+`TdxQuote` builds report data as `hash(prefix || ":" || content)` rather than
+taking it raw. **The agent supplies the colon**; `prefix` is the tag alone. The
+default is `app-data`, which the response echoes back without a colon, so
+`hash_algorithm = "sha512"` over `content` digests `app-data:` + `content`. A
+caller who passes `prefix = "app-data:"` because a quote is documented as
+`hash("app-data:" + content)` gets `app-data::` + `content` and a quote nothing
+will verify. The digest is left-aligned in the 64 bytes and the rest is zero.
 `hash_algorithm = "raw"` passes `report_data` through unchanged and then requires
 it to be exactly 64 bytes.
 

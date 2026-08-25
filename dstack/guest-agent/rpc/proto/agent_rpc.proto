@@ -185,8 +185,11 @@ message GetKeyResponse {
 }
 
 // The request to get a TDX quote
-// The report data is prefixed with `app-data:` before hashing unless the algorithm is `raw`.
-// Final report data is hash(`app-data:` + report_data) if the algorithm is not `raw`.
+// Unless the algorithm is `raw`, the final report data is
+// hash(prefix + ":" + report_data), left-aligned in 64 bytes and zero-padded.
+// The agent supplies the colon, so `prefix` is the tag alone and its default is
+// `app-data` -- which is what the response echoes back. Passing `app-data:` as
+// the prefix produces hash(`app-data::` + report_data), not the default.
 message TdxQuoteArgs {
   // Report data
   bytes report_data = 1;
