@@ -111,13 +111,14 @@ it expected to find:
 
 ```
 WARN certbot::acme_client: no TXT record at _validation-persist.example.com matches the expected value: letsencrypt.org; accounturi=https://acme-staging-v02.api.letsencrypt.org/acme/acct/1234567890; policy=wildcard
-Error: order is invalid: API error: No valid TXT record found for DNS-PERSIST-01 challenge (urn:ietf:params:acme:error:unauthorized)
+Error: order is invalid: API error: Checking DNS-PERSIST-01 challenge TXT record with issuer-domain-name "letsencrypt.org": accounturi mismatch: expected "https://acme-staging-v02.api.letsencrypt.org/acme/acct/1234567890", got "https://acme-staging-v02.api.letsencrypt.org/acme/acct/9876543210" (urn:ietf:params:acme:error:unauthorized)
 ```
 
 The check is advisory and never blocks an order: certbot's resolver is not the
 CA's, and its expectation can be stricter than what the CA would accept. A
 warning with a successful issuance underneath it is a resolver difference, not
-a problem.
+a problem. A record that genuinely does not match costs the full `max_dns_wait`
+before the order is sent, because the check waits out its budget first.
 
 If the CA rejects the order, compare the published record against
 `certbot dns-records` character by character. The usual causes are a stale
