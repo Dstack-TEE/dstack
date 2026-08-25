@@ -793,6 +793,23 @@ SPDX-License-Identifier: Apache-2.0
         </div>
     </div>
 
+    <!-- DNS Records To Publish Modal -->
+    <div id="dns-records-modal" class="modal-overlay">
+        <div class="modal">
+            <h3>Publish these DNS records</h3>
+            <p style="color: #666;">
+                This domain validates with <code>dns-persist-01</code>, so the gateway holds no
+                DNS credential for it and cannot write these itself. Certificates are only
+                issued once they are published.
+            </p>
+            <pre id="dns-records-list" style="white-space: pre-wrap; word-break: break-all;"></pre>
+            <div class="modal-actions">
+                <button class="action-btn secondary" onclick="copyDnsRecords()">Copy</button>
+                <button class="action-btn primary" onclick="hideModal('dns-records-modal')">Done</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Add ZT-Domain Modal -->
     <div id="add-zt-domain-modal" class="modal-overlay">
         <div class="modal">
@@ -1293,6 +1310,7 @@ SPDX-License-Identifier: Apache-2.0
                         <td class="timestamp" data-original="${expiresAt}">${certStatus.not_after || 0}</td>
                         <td>
                             <button class="action-btn secondary" onclick="showEditZtDomainModal('${escapeHtml(config.domain)}')">Edit</button>
+                            ${challenge === 'dns-persist-01' ? `<button class="action-btn secondary" onclick="showZtDomainRecords('${escapeHtml(config.domain)}')">Records</button>` : ''}
                             <button class="action-btn warning" onclick="renewZtDomainCert('${escapeHtml(config.domain)}', false)">Renew</button>
                             <button class="action-btn secondary" onclick="renewZtDomainCert('${escapeHtml(config.domain)}', true)">Force Renew</button>
                             <button class="action-btn danger" onclick="deleteZtDomain('${escapeHtml(config.domain)}')">Delete</button>
@@ -1328,6 +1346,10 @@ SPDX-License-Identifier: Apache-2.0
             document.getElementById('domain-port').value = '443';
             document.getElementById('domain-node').value = '0';
             document.getElementById('domain-priority').value = '0';
+            // Reset with the rest: a form whose every visible field was blanked
+            // reads as fresh, and a challenge left over from the last add is
+            // sent unconditionally.
+            document.getElementById('domain-challenge').value = 'dns-01';
             showModal('add-zt-domain-modal');
         }
 
@@ -1447,9 +1469,14 @@ SPDX-License-Identifier: Apache-2.0
                     const err = await response.text();
                     throw new Error(err);
                 }
+                const added = await response.json();
                 hideModal('add-zt-domain-modal');
                 showToast('ZT-Domain added', 'success');
                 await loadZtDomains();
+                // A dns-persist-01 domain is not finished when the API says
+                // added: nothing can be issued for it until these records exist,
+                // and this response is the only place they are reported.
+                showRequiredDnsRecords(added.required_dns_records);
             } catch (e) {
                 showToast('Failed to add ZT-Domain: ' + e.message, 'error');
             }
@@ -1506,6 +1533,36 @@ SPDX-License-Identifier: Apache-2.0
         }
 
         // ==================== UI Helpers ====================
+
+        function showZtDomainRecords(domain) {
+            const item = ztDomains.find(d => d.config && d.config.domain === domain);
+            const records = item && item.required_dns_records;
+            if (!records || records.length === 0) {
+                // Empty until the cluster has an ACME account: every record
+                // names it. RotateAcmeCredentials registers one.
+                showToast('No records yet — register an ACME account first', 'error');
+                return;
+            }
+            showRequiredDnsRecords(records);
+        }
+
+        function showRequiredDnsRecords(records) {
+            if (!records || records.length === 0) {
+                return;
+            }
+            document.getElementById('dns-records-list').textContent = records.join('\n');
+            showModal('dns-records-modal');
+        }
+
+        async function copyDnsRecords() {
+            const text = document.getElementById('dns-records-list').textContent;
+            try {
+                await navigator.clipboard.writeText(text);
+                showToast('Records copied', 'success');
+            } catch (e) {
+                showToast('Copy failed: ' + e.message, 'error');
+            }
+        }
 
         function showModal(id) {
             document.getElementById(id).classList.add('active');
