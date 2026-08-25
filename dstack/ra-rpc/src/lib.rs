@@ -116,6 +116,45 @@ impl<T, E: Into<anyhow::Error>> ResultExt<T> for std::result::Result<T, E> {
     }
 }
 
+/// Fail with a status code, the way `anyhow::bail!` fails without one.
+///
+/// `ra_rpc::bail!(501, "...")` is `return Err(anyhow!("...").with_code(501))`.
+/// The code is the first argument and is not optional: an error that does not
+/// need to choose a status should use `anyhow::bail!` and be reported as
+/// [`CODE_BAD_REQUEST`], which is the right default for "the caller sent
+/// something wrong". Making the code mandatory keeps the two spellings honest
+/// about which failure is which.
+///
+/// Everything after the code is passed to `anyhow::anyhow!`, so the format
+/// arguments are the ones you already know.
+///
+/// ```
+/// fn load(id: &str) -> anyhow::Result<()> {
+///     if id.is_empty() {
+///         ra_rpc::bail!(404, "no app named {id:?}");
+///     }
+///     Ok(())
+/// }
+///
+/// let err = load("").unwrap_err();
+/// assert_eq!(ra_rpc::code_of(&err), Some(404));
+/// assert_eq!(err.to_string(), r#"no app named """#);
+/// ```
+#[macro_export]
+macro_rules! bail {
+    ($code:expr, $($arg:tt)*) => {
+        return ::core::result::Result::Err($crate::ErrorExt::with_code(
+            $crate::__private::anyhow!($($arg)*),
+            $code,
+        ))
+    };
+}
+
+#[doc(hidden)]
+pub mod __private {
+    pub use anyhow::anyhow;
+}
+
 /// Extract the status code attached to `err`, if any.
 ///
 /// Walks the whole error chain and returns the outermost code, so a code
@@ -293,6 +332,31 @@ mod coded_error_tests {
             .unwrap_err()
             .with_code(404);
         assert_eq!(code_of(&err), Some(404));
+    }
+
+    /// The macro must produce exactly what the longhand does, including
+    /// through the `?` and `.context(..)` layers a handler adds on the way
+    /// out -- that is the whole reason a caller can trust the status it reads.
+    #[test]
+    fn bail_attaches_the_code_and_returns() {
+        fn inner(fail: bool) -> anyhow::Result<u8> {
+            if fail {
+                crate::bail!(501, "no {} in this image", "nvattest");
+            }
+            Ok(7)
+        }
+        fn outer() -> anyhow::Result<u8> {
+            inner(true).context("collect evidence")
+        }
+
+        assert_eq!(inner(false).unwrap(), 7, "the macro must not return early");
+
+        let err = outer().unwrap_err();
+        assert_eq!(code_of(&err), Some(501));
+        assert_eq!(
+            format!("{err:#}"),
+            "collect evidence: no nvattest in this image"
+        );
     }
 
     #[test]

@@ -11,8 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Result};
-use ra_rpc::ErrorExt;
+use anyhow::{bail, Result};
 use tokio::sync::Mutex;
 
 /// Serialises GPU evidence collection.
@@ -66,7 +65,7 @@ impl GpuAttestor {
             //
             // Safe to say now because `AttestGpu` is v1-only and has never
             // shipped in a release -- no client is reading 400 here today.
-            return Err(anyhow!("GPU attestation is not available in this image").with_code(501));
+            ra_rpc::bail!(501, "GPU attestation is not available in this image");
         }
         // Held across the whole run, so a second caller waits rather than
         // starting a competing nvattest against the same devices.

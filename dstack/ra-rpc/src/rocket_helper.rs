@@ -325,10 +325,7 @@ async fn read_data(data: Data<'_>, limit: ByteUnit) -> Result<Vec<u8>> {
     let stream = data.open(limit);
     let data = stream.into_bytes().await.context("failed to read data")?;
     if !data.is_complete() {
-        return Err(crate::ErrorExt::with_code(
-            anyhow::anyhow!("payload too large"),
-            crate::CODE_PAYLOAD_TOO_LARGE,
-        ));
+        crate::bail!(crate::CODE_PAYLOAD_TOO_LARGE, "payload too large");
     }
     Ok(data.into_inner())
 }
