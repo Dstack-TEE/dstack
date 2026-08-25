@@ -4,6 +4,8 @@
 
 use anyhow::{bail, Context, Result};
 use fs_err as fs;
+use hickory_resolver::config::{NameServerConfig, ResolverConfig};
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::proto::rr::RData;
 use hickory_resolver::TokioResolver;
 use instant_acme::{
@@ -14,6 +16,7 @@ use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
+    net::SocketAddr,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -32,6 +35,10 @@ pub struct AcmeClient {
     max_dns_wait: Duration,
     /// TTL for DNS TXT records used in ACME challenges (in seconds).
     dns_txt_ttl: u32,
+    /// Recursive resolver used only to discover a zone's authoritative
+    /// nameservers. The challenge record itself is read from those, so a
+    /// stale negative answer cached anywhere in between cannot hide it.
+    dns_server: SocketAddr,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +73,7 @@ impl AcmeClient {
         encoded_credentials: &str,
         max_dns_wait: Duration,
         dns_txt_ttl: u32,
+        dns_server: SocketAddr,
     ) -> Result<Self> {
         let credentials: Credentials = serde_json::from_str(encoded_credentials)?;
         let http_client = Box::new(ReqwestHttpClient::new()?);
@@ -79,6 +87,7 @@ impl AcmeClient {
             credentials,
             max_dns_wait,
             dns_txt_ttl,
+            dns_server,
         })
     }
 
@@ -88,6 +97,7 @@ impl AcmeClient {
         dns01_client: Dns01Client,
         max_dns_wait: Duration,
         dns_txt_ttl: u32,
+        dns_server: SocketAddr,
     ) -> Result<Self> {
         let http_client = Box::new(ReqwestHttpClient::new()?);
         let (account, credentials) = Account::builder_with_http(http_client)
@@ -113,6 +123,7 @@ impl AcmeClient {
             credentials,
             max_dns_wait,
             dns_txt_ttl,
+            dns_server,
         })
     }
 
@@ -366,6 +377,51 @@ impl AcmeClient {
         Ok(())
     }
 
+    /// Build a resolver that talks straight to the authoritative nameservers for
+    /// the challenge zone.
+    ///
+    /// The self-check runs moments after the TXT record is created, so the first
+    /// lookup can race propagation and come back NXDOMAIN. A recursive resolver
+    /// then caches that negative for the zone's SOA minimum -- 1800s is common,
+    /// far longer than `max_dns_wait` -- and every retry inside the window is
+    /// answered from that cache, so the check can never pass no matter how long
+    /// it waits. Reading from the authoritative servers removes the cache from
+    /// the path entirely.
+    async fn authoritative_resolver(&self, challenges: &[Challenge]) -> Result<TokioResolver> {
+        let domain = challenges
+            .first()
+            .map(|c| c.acme_domain.as_str())
+            .context("no challenge to resolve")?;
+        // `_acme-challenge.<name>` is never itself a zone cut; the NS records
+        // live on the registrable name above it.
+        let zone = domain
+            .strip_prefix("_acme-challenge.")
+            .unwrap_or(domain)
+            .to_string();
+
+        let bootstrap = resolver_for(&[self.dns_server])?;
+        let ns_lookup = bootstrap
+            .ns_lookup(&zone)
+            .await
+            .with_context(|| format!("failed to look up nameservers for {zone}"))?;
+
+        let mut addrs = Vec::new();
+        for answer in ns_lookup.answers() {
+            let RData::NS(ns) = &answer.data else {
+                continue;
+            };
+            let Ok(ips) = bootstrap.lookup_ip(ns.0.to_utf8()).await else {
+                continue;
+            };
+            addrs.extend(ips.iter().map(|ip| SocketAddr::new(ip, 53)));
+        }
+        if addrs.is_empty() {
+            bail!("no authoritative nameserver addresses resolved for {zone}");
+        }
+        debug!("checking {zone} against authoritative nameservers: {addrs:?}");
+        resolver_for(&addrs)
+    }
+
     /// Self check the TXT records for the given challenges.
     async fn check_dns(&self, challenges: &[Challenge]) -> Result<()> {
         use tracing::warn;
@@ -391,10 +447,19 @@ impl AcmeClient {
                 break;
             }
 
-            let dns_resolver = TokioResolver::builder_tokio()
-                .context("failed to create dns resolver")?
-                .build()
-                .context("failed to build dns resolver")?;
+            let dns_resolver = match self.authoritative_resolver(&unsettled_challenges).await {
+                Ok(resolver) => resolver,
+                Err(err) => {
+                    // Falling back to the recursive resolver keeps a zone whose
+                    // NS records we cannot read from blocking issuance outright;
+                    // the ACME server has its own DNS view either way.
+                    warn!(
+                        "failed to reach authoritative nameservers ({err:#}), falling back to {}",
+                        self.dns_server
+                    );
+                    resolver_for(&[self.dns_server])?
+                }
+            };
 
             while let Some(challenge) = unsettled_challenges.pop() {
                 let expected_txt = &challenge.dns_value;
@@ -561,6 +626,32 @@ async fn find_error(order: &mut Order) -> Option<Problem> {
         }
     }
     None
+}
+
+/// Build a resolver that queries exactly `servers`.
+///
+/// Caching is disabled: this resolver exists to observe a record that was just
+/// written, so a cached answer of any age is the wrong answer.
+fn resolver_for(servers: &[SocketAddr]) -> Result<TokioResolver> {
+    let name_servers = servers
+        .iter()
+        .map(|dns_server| {
+            let mut name_server = NameServerConfig::udp_and_tcp(dns_server.ip());
+            for connection in &mut name_server.connections {
+                connection.port = dns_server.port();
+            }
+            name_server
+        })
+        .collect();
+    let mut builder = TokioResolver::builder_with_config(
+        ResolverConfig::from_parts(None, Vec::new(), name_servers),
+        TokioRuntimeProvider::default(),
+    );
+    let options = builder.options_mut();
+    options.cache_size = 0;
+    options.negative_min_ttl = Some(Duration::ZERO);
+    options.negative_max_ttl = Some(Duration::ZERO);
+    builder.build().context("failed to build dns resolver")
 }
 
 fn make_csr(key: &str, names: &[String]) -> Result<Vec<u8>> {

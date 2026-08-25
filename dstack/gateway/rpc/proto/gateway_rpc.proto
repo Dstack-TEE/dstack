@@ -695,6 +695,11 @@ message CreateDnsCredentialRequest {
   optional uint32 dns_txt_ttl = 7;
   // Optional Cloudflare maximum DNS wait time (defaults to 60)
   optional uint32 max_dns_wait = 8;
+  // Recursive resolver used to discover the zone's authoritative nameservers
+  // during the DNS-01 self check, as "ip:port" (defaults to "1.1.1.1:53").
+  // The challenge record itself is always read from those nameservers, so a
+  // negative answer cached by a recursive resolver cannot hide it.
+  optional string dns_server = 9;
 }
 
 // Update DNS credential request

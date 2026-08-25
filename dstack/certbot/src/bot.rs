@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::net::SocketAddr;
 use std::{
     collections::BTreeSet,
     io::ErrorKind,
@@ -17,6 +18,12 @@ use tracing::{error, info};
 use crate::acme_client::{acme_matches, read_pem};
 
 use super::{AcmeClient, Dns01Client};
+
+/// Cloudflare's public resolver. Only used to discover a zone's authoritative
+/// nameservers; the challenge record itself is always read from those.
+fn default_dns_server() -> SocketAddr {
+    SocketAddr::from(([1, 1, 1, 1], 53))
+}
 
 #[allow(clippy::duplicated_attributes)]
 #[derive(Clone, Debug, bon::Builder)]
@@ -38,6 +45,10 @@ pub struct CertBotConfig {
     renew_expires_in: Duration,
     renewed_hook: Option<String>,
     max_dns_wait: Duration,
+    /// Recursive resolver used to find a zone's authoritative nameservers
+    /// during the DNS-01 self check. Defaults to Cloudflare's 1.1.1.1.
+    #[builder(default = default_dns_server())]
+    dns_server: SocketAddr,
     /// TTL for DNS TXT records used in ACME challenges (in seconds).
     /// Minimum is 60 for Cloudflare.
     #[builder(default = 60)]
@@ -65,6 +76,7 @@ async fn create_new_account(
         dns01_client,
         config.max_dns_wait,
         config.dns_txt_ttl,
+        config.dns_server,
     )
     .await
     .context("failed to create new account")?;
@@ -109,6 +121,7 @@ impl CertBot {
                         &credentials,
                         config.max_dns_wait,
                         config.dns_txt_ttl,
+                        config.dns_server,
                     )
                     .await?
                 } else {
