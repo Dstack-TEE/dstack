@@ -40,9 +40,16 @@ const DEFAULT_ACME_URL: &str = "https://acme-v02.api.letsencrypt.org/directory";
 /// A `dns-01` domain reads this from its DNS credential, and a `dns-persist-01`
 /// domain has none. It stays a constant rather than a config knob because the
 /// wait is advisory: certbot polls its own resolver and starts the order either
-/// way, so the value cannot decide whether issuance succeeds. Matches the
-/// default `max_dns_wait` of a DNS credential.
-const DNS_PERSIST_MAX_DNS_WAIT: Duration = Duration::from_secs(300);
+/// way, so the value cannot decide whether issuance succeeds.
+///
+/// It has to stay comfortably under `renew_timeout` (300s by default), which
+/// wraps the whole order, for that to be true. The wait is measured from after
+/// the order and its authorizations are fetched, so a value equal to the outer
+/// timeout means the outer one always fires first: the order is aborted with
+/// "certificate request timed out" instead of proceeding to the CA, and the
+/// warning naming the record it could not see -- the first thing an operator
+/// is told to look at -- is never logged.
+const DNS_PERSIST_MAX_DNS_WAIT: Duration = Duration::from_secs(120);
 
 /// What an ACME credential rotation left behind.
 #[derive(Debug)]
