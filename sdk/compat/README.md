@@ -74,8 +74,10 @@ mean an npm publish rather than agent drift — check the diff before believing
 it. The Rust, Go and Python legs are pinned by `Cargo.lock`, `go.sum` and
 `pdm.lock`.
 
-Both scripts use the sockets and the binary under `sdk/simulator/`, so running
-this and `sdk/run-tests.sh` at the same time in one checkout will have them
+Three runners share the sockets and the binary under `sdk/simulator/`: this
+one, `sdk/run-tests.sh` and `dstack/run-tests.sh` (the last is what `rust.yml`
+invokes). All three `rm -f` the same four socket paths on cleanup and rebuild
+the same binary, so running any two at once in one checkout will have them
 delete each other's sockets and fail to overwrite a running binary. Use
 separate checkouts, or run them one after the other.
 
