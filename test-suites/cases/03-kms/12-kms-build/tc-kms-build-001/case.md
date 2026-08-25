@@ -64,6 +64,11 @@ Introduce one temporary source/test-fixture/schema/config mismatch outside the c
 
 - The gate detects the controlled regression with a specific error and returns to a clean passing result after restoration.
 
+## Post-baseline regression coverage (PR #1128)
+
+- Inspect the built KMS application image and verify the pinned runtime package set installs CA certificates.
+- From the running image, establish TLS to a public-test CA chain and reject an untrusted chain; do not inject host CA files into the container.
+
 ## Postconditions
 
 Remove temporary build/output trees and verify the candidate checkout remains clean.

@@ -152,6 +152,11 @@ wait for asynchronous removal to complete.
   disclose no secrets, and no VM with the case name prefix remains after the
   bounded asynchronous cleanup wait.
 
+## Post-baseline regression coverage (PRs #1111 and #1112)
+
+- Exercise the v1 GPU-attestation request and response byte fields with valid, empty, malformed, and oversized evidence.
+- Verify evidence integrity and device binding on a GPU-capable TDX host. Classify this row BLOCKED only when the GPU/driver/device prerequisite is absent; the CPU-only negative rows remain required.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

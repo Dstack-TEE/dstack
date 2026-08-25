@@ -64,6 +64,11 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PRs #1093 and #1100)
+
+- After successful registration, repeat requests through each healthy Gateway and verify the CVM remains assigned to the same eligible cluster.
+- Remove or lock out the owning node, then verify registration fails over without allowing the removed node to re-register or mutate state.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

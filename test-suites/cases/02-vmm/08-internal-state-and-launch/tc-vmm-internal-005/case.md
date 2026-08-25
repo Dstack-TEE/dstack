@@ -75,6 +75,11 @@ Restart the owning service where permitted and inspect state for this and an adj
 
 - Persisted and transient state follow policy, adjacent identities are unchanged, and no private material or credential appears in output.
 
+## Post-baseline regression coverage (PR #1097)
+
+- Configure multiple Gateway URLs, start multiple run-scoped VMs, and verify each launch receives a permutation containing every configured URL exactly once.
+- Prove shuffling does not change the persisted configuration, omit endpoints, or make an empty endpoint list bootable.
+
 ## Postconditions
 
 Remove run-scoped state and verify processes, files, devices, listeners, and allocations match baseline.

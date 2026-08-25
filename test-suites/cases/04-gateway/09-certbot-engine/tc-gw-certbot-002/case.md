@@ -64,6 +64,12 @@ Inspect the case-owned DNS model after issuance and recovery, verify both zones 
 
 - Challenge records are removed, the adjacent zone stays empty, evidence retains only counts/hashes/booleans, and every run-owned resource returns to baseline.
 
+## Post-baseline regression coverage (PRs #1129, #1130, and #1133)
+
+- Issue bare and wildcard DNS-01 orders and prove the record name is derived from the authorization identifier, including zone-cut walking.
+- Verify authoritative nameserver polling, bounded fallback to the system resolver, and backoff after fallback.
+- Inject an unknown challenge type and authorization lookup failures; DNS-01 state must remain intact, the order must not be advanced incorrectly, and diagnostics must name the failed phase without exposing credentials.
+
 ## Postconditions
 
 Remove run-scoped inputs and faults; preserve redacted native outputs and required attachments.
