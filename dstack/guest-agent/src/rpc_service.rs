@@ -710,10 +710,15 @@ impl DstackGuestRpc for InternalRpcHandler {
     /// Deprecated, kept for 0.5.x clients only. See the RPC's doc comment in
     /// agent_rpc.proto.
     ///
-    /// k256 rejects a non-canonical (high-S) signature outright, so a malleated
-    /// copy of a valid signature fails to parse rather than verifying. Keep it
-    /// that way: 0.5.x answered the same, and callers may be treating this
-    /// answer as a uniqueness check.
+    /// k256 rejects a non-canonical (high-S) signature, so a malleated copy of a
+    /// valid signature does not verify. Keep it that way: 0.5.x answered the
+    /// same, and callers may be treating this answer as a uniqueness check.
+    ///
+    /// The rejection is in the verification, not in the parsing -- `from_slice`
+    /// only rejects an `r` or `s` outside `1..n`, and a malleated `s` is still
+    /// in range. So a caller sees HTTP 200 with `valid: false`, not the 400 a
+    /// parse failure would produce. Same security answer, different status
+    /// code, and the status code is the part a client branches on.
     async fn verify(self, request: VerifyRequest) -> Result<VerifyResponse> {
         let algorithm = normalize_algorithm(&request.algorithm);
         let valid = match algorithm {
