@@ -177,6 +177,7 @@ impl DistributedCertBot {
                     method: ValidationMethod::Dns01 {
                         client,
                         txt_ttl: dns_cred.dns_txt_ttl,
+                        issuer_domain_name: self.issuer_domain_name()?,
                     },
                     max_dns_wait: dns_cred.max_dns_wait,
                 })
@@ -190,7 +191,8 @@ impl DistributedCertBot {
         }
     }
 
-    /// Issuer Domain Name to name in `dns-persist-01` and CAA records.
+    /// Issuer Domain Name to name in `dns-persist-01` records and in the CAA
+    /// records written for either challenge.
     fn issuer_domain_name(&self) -> Result<String> {
         let configured = self.config()?.issuer_domain_name;
         Ok(match configured.is_empty() {

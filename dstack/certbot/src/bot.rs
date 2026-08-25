@@ -281,6 +281,7 @@ async fn build_validation_method(config: &CertBotConfig) -> Result<ValidationMet
             Ok(ValidationMethod::Dns01 {
                 client,
                 txt_ttl: config.dns_txt_ttl,
+                issuer_domain_name: config.issuer_domain_name.clone(),
             })
         }
         ChallengeKind::DnsPersist01 => {

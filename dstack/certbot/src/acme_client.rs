@@ -62,6 +62,8 @@ pub enum ValidationMethod {
         client: Dns01Client,
         /// TTL of the published records, in seconds (1 = auto, min 60 on Cloudflare).
         txt_ttl: u32,
+        /// Issuer Domain Name to name in the CAA records certbot publishes.
+        issuer_domain_name: String,
     },
     /// draft-ietf-acme-dns-persist-01 `dns-persist-01`: control is proven by a
     /// `_validation-persist` TXT record naming the CA and this ACME account,
@@ -98,11 +100,18 @@ impl ValidationMethod {
     }
 
     /// Issuer Domain Name to write into CAA records.
+    ///
+    /// Both methods read it from configuration, whose default is
+    /// `letsencrypt.org` -- the name existing deployments already have published
+    /// -- so an untouched configuration writes what it wrote before. A CAA
+    /// record naming a CA other than the one at `acme_url` forbids the very
+    /// issuance it is published to enable, and that is not a dns-01/
+    /// dns-persist-01 distinction.
     fn issuer_domain_name(&self) -> &str {
         match self {
-            // Unconfigurable for dns-01, as it has always been: existing
-            // deployments have CAA records published under this name.
-            Self::Dns01 { .. } => dns_persist::LETS_ENCRYPT_ISSUER_DOMAIN_NAME,
+            Self::Dns01 {
+                issuer_domain_name, ..
+            } => issuer_domain_name,
             Self::DnsPersist01 { issuer_domain_name } => issuer_domain_name,
         }
     }
