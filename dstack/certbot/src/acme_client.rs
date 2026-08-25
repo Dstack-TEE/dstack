@@ -9,8 +9,8 @@ use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::proto::rr::RData;
 use hickory_resolver::TokioResolver;
 use instant_acme::{
-    Account, AccountCredentials, AuthorizationStatus, ChallengeType, Identifier, NewAccount,
-    NewOrder, Order, OrderStatus, Problem,
+    Account, AccountCredentials, AuthorizationStatus, AuthorizedIdentifier, ChallengeType,
+    Identifier, NewAccount, NewOrder, Order, OrderStatus, Problem,
 };
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use serde::{Deserialize, Serialize};
@@ -336,16 +336,8 @@ impl AcmeClient {
                 .challenge(ChallengeType::Dns01)
                 .context("no dns01 challenge found")?;
 
-            // The bare identifier, without any wildcard prefix: the TXT record for
-            // `*.example.com` is published under `_acme-challenge.example.com`.
-            let Identifier::Dns(identifier) = challenge.identifier().identifier else {
-                bail!("unsupported identifier type in authorization");
-            };
-            let identifier = identifier.clone();
-
+            let acme_domain = challenge_domain(challenge.identifier())?;
             let dns_value = challenge.key_authorization().dns_value();
-            debug!("creating dns record for {identifier}");
-            let acme_domain = format!("_acme-challenge.{identifier}");
             debug!("removing existing TXT record for {acme_domain}");
             self.dns01_client
                 .remove_txt_records(&acme_domain)
@@ -657,6 +649,19 @@ impl AcmeClient {
         fs::create_dir_all(&backup_path)?;
         Ok(backup_path)
     }
+}
+
+/// The name of the TXT record that answers a dns-01 challenge for `identifier`.
+///
+/// The record always lives under the bare name: a wildcard authorization for
+/// `*.example.com` is answered at `_acme-challenge.example.com`. `AuthorizedIdentifier`
+/// renders the wildcard prefix in its `Display`, so formatting it directly would publish
+/// the record at `_acme-challenge.*.example.com` and fail every wildcard issuance.
+fn challenge_domain(identifier: &AuthorizedIdentifier<'_>) -> Result<String> {
+    let Identifier::Dns(name) = identifier.identifier else {
+        bail!("unsupported identifier type in authorization: {identifier}");
+    };
+    Ok(format!("_acme-challenge.{name}"))
 }
 
 async fn find_error(order: &mut Order) -> Option<Problem> {
