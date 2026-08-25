@@ -15,7 +15,7 @@ use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 use crate::acme_client::{acme_matches, read_pem, ChallengeKind, RequiredRecord, ValidationMethod};
-use crate::dns_persist::LETS_ENCRYPT_ISSUER_DOMAIN_NAME;
+use crate::dns_persist::{resolve_issuer_domain_name, LETS_ENCRYPT_ISSUER_DOMAIN_NAME};
 
 use super::{AcmeClient, Dns01Client};
 
@@ -256,6 +256,17 @@ impl CertBot {
     }
 }
 
+/// The Issuer Domain Name this configuration names, checked before it is used.
+///
+/// Both challenges read the same setting, so both get the same treatment: empty
+/// means the default, and a value that would not survive being written into a
+/// CAA or validation record is refused here rather than at the point it would
+/// corrupt a zone.
+fn issuer_domain_name(config: &CertBotConfig) -> Result<String> {
+    resolve_issuer_domain_name(&config.issuer_domain_name)
+        .context("invalid issuer_domain_name in the certbot configuration")
+}
+
 /// Resolve the configured challenge into a live validation method.
 ///
 /// `dns-01` resolves the Cloudflare zone here, which is an authenticated call,
@@ -281,7 +292,7 @@ async fn build_validation_method(config: &CertBotConfig) -> Result<ValidationMet
             Ok(ValidationMethod::Dns01 {
                 client,
                 txt_ttl: config.dns_txt_ttl,
-                issuer_domain_name: config.issuer_domain_name.clone(),
+                issuer_domain_name: issuer_domain_name(config)?,
             })
         }
         ChallengeKind::DnsPersist01 => {
@@ -299,7 +310,7 @@ async fn build_validation_method(config: &CertBotConfig) -> Result<ValidationMet
                 warn!("ignoring cf_api_token: dns-persist-01 needs no DNS provider credential");
             }
             Ok(ValidationMethod::DnsPersist01 {
-                issuer_domain_name: config.issuer_domain_name.clone(),
+                issuer_domain_name: issuer_domain_name(config)?,
             })
         }
     }

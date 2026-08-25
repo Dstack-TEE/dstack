@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use certbot::{
-    AcmeAccount, AcmeClient, ChallengeKind, Dns01Client, ValidationMethod,
-    LETS_ENCRYPT_ISSUER_DOMAIN_NAME,
+    resolve_issuer_domain_name, AcmeAccount, AcmeClient, ChallengeKind, Dns01Client,
+    ValidationMethod,
 };
 use dstack_guest_agent_rpc::v0::RawQuoteArgs;
 use ra_tls::attestation::QuoteContentType;
@@ -202,11 +202,8 @@ impl DistributedCertBot {
     /// Issuer Domain Name to name in `dns-persist-01` records and in the CAA
     /// records written for either challenge.
     fn issuer_domain_name(&self) -> Result<String> {
-        let configured = self.config()?.issuer_domain_name;
-        Ok(match configured.is_empty() {
-            true => LETS_ENCRYPT_ISSUER_DOMAIN_NAME.to_string(),
-            false => configured,
-        })
+        resolve_issuer_domain_name(&self.config()?.issuer_domain_name)
+            .context("invalid issuer_domain_name in the certbot config")
     }
 
     /// The DNS records a ZT domain's zone has to contain, as zone-file lines.

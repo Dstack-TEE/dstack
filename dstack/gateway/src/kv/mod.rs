@@ -403,9 +403,11 @@ pub struct GlobalCertbotConfig {
     pub acme_url: String,
     /// Issuer Domain Name naming the CA in dns-persist-01 and CAA records.
     ///
-    /// Empty means Let's Encrypt. Only read by domains using `dns-persist-01`:
-    /// the record has to name a CA the challenge lists in `issuer-domain-names`,
-    /// so a private or staging ACME server needs its own value here.
+    /// Empty means Let's Encrypt. A `dns-persist-01` record has to name a CA
+    /// the challenge lists in `issuer-domain-names`, and the CAA records written
+    /// for either challenge name the same CA, so a private or staging ACME
+    /// server needs its own value here -- one setting for both, since `acme_url`
+    /// is one setting for both.
     #[serde(default)]
     pub issuer_domain_name: String,
 }

@@ -726,11 +726,12 @@ impl AdminRpc for AdminRpcHandler {
         let config = merge_certbot_config(kv_store.get_certbot_config(), request)?;
         kv_store.set_certbot_config(&config)?;
         info!(
-            "Updated certbot config: renew_interval={:?}, renew_before_expiration={:?}, renew_timeout={:?}, acme_url={:?}",
+            "Updated certbot config: renew_interval={:?}, renew_before_expiration={:?}, renew_timeout={:?}, acme_url={:?}, issuer_domain_name={:?}",
             config.renew_interval,
             config.renew_before_expiration,
             config.renew_timeout,
-            config.acme_url
+            config.acme_url,
+            config.issuer_domain_name
         );
         Ok(())
     }
@@ -1072,10 +1073,12 @@ fn merge_certbot_config(
                 request.renew_interval_secs.is_some()
                     && request.renew_before_expiration_secs.is_some()
                     && request.renew_timeout_secs.is_some()
-                    && request.acme_url.is_some(),
+                    && request.acme_url.is_some()
+                    && request.issuer_domain_name.is_some(),
                 "the stored certbot config is unreadable ({err:#}), so it can only be \
                  replaced as a whole: resend with renew_interval_secs, \
-                 renew_before_expiration_secs, renew_timeout_secs and acme_url all set"
+                 renew_before_expiration_secs, renew_timeout_secs, acme_url and \
+                 issuer_domain_name all set"
             );
             warn!("certbot config is unreadable ({err:#}); replacing it wholesale");
             GlobalCertbotConfig::default()
@@ -1096,6 +1099,12 @@ fn merge_certbot_config(
         config.acme_url = url;
     }
     if let Some(name) = request.issuer_domain_name {
+        // Checked here rather than where it is used: it is written verbatim into
+        // CAA records, and those are rewritten by deleting the old ones first,
+        // so a value that cannot be a DNS name takes the zone's issuance
+        // permission down with it. Stored as configured -- empty keeps meaning
+        // the default -- but only once it is known to be usable.
+        certbot::resolve_issuer_domain_name(&name).context("invalid issuer_domain_name")?;
         config.issuer_domain_name = name;
     }
     Ok(config)
@@ -1152,15 +1161,49 @@ mod certbot_config_tests {
                 renew_before_expiration_secs: Some(86400),
                 renew_timeout_secs: Some(30),
                 acme_url: Some("https://acme-staging.example/directory".to_string()),
-                issuer_domain_name: None,
+                issuer_domain_name: Some("pebble.letsencrypt.org".to_string()),
             },
         )
         .expect("a complete request replaces the record");
         assert_eq!(merged.renew_interval, Duration::from_secs(60));
         assert_eq!(merged.acme_url, "https://acme-staging.example/directory");
-        // Not required to repair the record: empty is a meaningful value that
-        // means Let's Encrypt, so it needs no operator decision.
-        assert_eq!(merged.issuer_domain_name, "");
+        assert_eq!(merged.issuer_domain_name, "pebble.letsencrypt.org");
+    }
+
+    /// Repairing from the defaults would reset the issuer name to empty --
+    /// Let's Encrypt -- for a deployment pointed at another CA, which then
+    /// publishes CAA and validation records naming a CA its orders never reach.
+    /// That is the same hazard `acme_url` is in the required set for.
+    #[test]
+    fn repairing_an_unreadable_record_cannot_forget_the_issuer_name() {
+        let err = merge_certbot_config(
+            Err(anyhow::anyhow!("corrupt record")),
+            SetCertbotConfigRequest {
+                renew_interval_secs: Some(60),
+                renew_before_expiration_secs: Some(86400),
+                renew_timeout_secs: Some(30),
+                acme_url: Some("https://pebble.example/dir".to_string()),
+                issuer_domain_name: None,
+            },
+        )
+        .expect_err("a repair that omits the issuer name must be refused");
+        assert!(err.to_string().contains("issuer_domain_name"), "{err:#}");
+    }
+
+    /// The name is written verbatim into CAA records, and writing them deletes
+    /// the records they replace, so a value that cannot be a DNS name is
+    /// refused where it is set rather than where it would corrupt a zone.
+    #[test]
+    fn a_malformed_issuer_name_is_refused() {
+        let err = merge_certbot_config(
+            Ok(stored()),
+            SetCertbotConfigRequest {
+                issuer_domain_name: Some("lets encrypt.org".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect_err("a name with a space must be refused");
+        assert!(err.to_string().contains("issuer_domain_name"), "{err:#}");
     }
 
     /// The name the CA is known by has to be settable, or a deployment pointed

@@ -33,6 +33,44 @@ const VALIDATION_LABEL: &str = "_validation-persist";
 /// `issuer-domain-names`; a record naming anything else is ignored by that CA.
 pub const LETS_ENCRYPT_ISSUER_DOMAIN_NAME: &str = "letsencrypt.org";
 
+/// The Issuer Domain Name to use, given what an operator configured.
+///
+/// Empty means the default, which is what an untouched configuration carries.
+/// Anything else is checked before it is believed: the name is interpolated
+/// straight into an RFC 8659 `issue-value`, both in a `_validation-persist`
+/// record and in the CAA records certbot publishes, and `set_caa_records`
+/// installs the new value *after* deleting the records it replaces. A value
+/// carrying a `;`, a space, or a `#` does not merely fail to authorize -- it
+/// leaves the zone holding a malformed `issue` property with no valid record
+/// behind it, which is CAA that forbids every issuer. Rejecting it at the point
+/// it is configured keeps that out of the zone entirely.
+pub fn resolve_issuer_domain_name(configured: &str) -> Result<String> {
+    let name = configured.trim();
+    if name.is_empty() {
+        return Ok(LETS_ENCRYPT_ISSUER_DOMAIN_NAME.to_string());
+    }
+    let name = name.trim_end_matches('.');
+    if name.is_empty() || name.len() > 253 {
+        bail!("issuer domain name must be between 1 and 253 characters: {configured:?}");
+    }
+    for label in name.split('.') {
+        if label.is_empty() {
+            bail!("issuer domain name has an empty label: {configured:?}");
+        }
+        if !label
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        {
+            bail!(
+                "issuer domain name must be a DNS name -- it is written verbatim into CAA \
+                 and validation records, where a space or a `;` makes the whole record \
+                 malformed: {configured:?}"
+            );
+        }
+    }
+    Ok(name.to_string())
+}
+
 /// The `policy` value that widens a record to cover wildcards.
 const POLICY_WILDCARD: &str = "wildcard";
 
@@ -301,6 +339,44 @@ mod tests {
     #[test]
     fn an_empty_account_uri_is_not_an_account_uri() {
         assert!(!accepts(false, "letsencrypt.org; accounturi="));
+    }
+
+    /// Empty is what an untouched configuration carries, and it means the
+    /// default rather than a name of zero length -- which as an `issue-value`
+    /// would be CAA denying every issuer.
+    #[test]
+    fn an_unset_issuer_name_is_the_default_one() {
+        assert_eq!(
+            resolve_issuer_domain_name("").unwrap(),
+            LETS_ENCRYPT_ISSUER_DOMAIN_NAME
+        );
+        assert_eq!(
+            resolve_issuer_domain_name("   ").unwrap(),
+            LETS_ENCRYPT_ISSUER_DOMAIN_NAME
+        );
+        assert_eq!(
+            resolve_issuer_domain_name("pebble.letsencrypt.org.").unwrap(),
+            "pebble.letsencrypt.org"
+        );
+    }
+
+    /// The name is interpolated into records that a `;` or a space makes
+    /// malformed, and CAA is rewritten by deleting the old records first, so a
+    /// typo accepted here is a zone that forbids all issuance.
+    #[test]
+    fn a_name_that_would_corrupt_a_record_is_refused() {
+        for bad in [
+            "lets encrypt.org",
+            "letsencrypt.org;policy=wildcard",
+            "#letsencrypt.org",
+            "letsencrypt..org",
+            "\"letsencrypt.org\"",
+        ] {
+            assert!(
+                resolve_issuer_domain_name(bad).is_err(),
+                "{bad:?} should be refused"
+            );
+        }
     }
 
     #[test]
