@@ -643,3 +643,63 @@ fn ln_force(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> Result<()> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod challenge_parsing_tests {
+    use instant_acme::{AuthorizationState, AuthorizationStatus, ChallengeType};
+
+    /// Let's Encrypt offers `dns-persist-01` alongside `dns-01`, and that
+    /// challenge object carries no `token`. Deserializing the authorization must
+    /// still succeed: `challenges` is one array, so a single unparseable entry
+    /// used to take the usable `dns-01` challenge down with it.
+    #[test]
+    fn an_authorization_survives_a_challenge_type_without_a_token() {
+        // Shape taken from a real acme-staging-v02 authorization response.
+        let authz = r#"{
+            "identifier": { "type": "dns", "value": "example.com" },
+            "status": "pending",
+            "expires": "2026-09-01T00:00:00Z",
+            "challenges": [
+                {
+                    "type": "dns-persist-01",
+                    "url": "https://acme-staging-v02.api.letsencrypt.org/acme/chall/1/a",
+                    "status": "pending"
+                },
+                {
+                    "type": "dns-01",
+                    "url": "https://acme-staging-v02.api.letsencrypt.org/acme/chall/1/b",
+                    "status": "pending",
+                    "token": "a-real-token"
+                }
+            ],
+            "wildcard": true
+        }"#;
+
+        let state: AuthorizationState = serde_json::from_str(authz)
+            .expect("authorization with an unknown challenge must parse");
+        assert_eq!(state.status, AuthorizationStatus::Pending);
+        assert_eq!(state.challenges.len(), 2);
+
+        let dns01 = state
+            .challenges
+            .iter()
+            .find(|c| c.r#type == ChallengeType::Dns01)
+            .expect("the dns-01 challenge must survive alongside the unknown one");
+        assert_eq!(dns01.token, "a-real-token");
+
+        // The tokenless challenge parses with an empty token rather than failing.
+        let other = state
+            .challenges
+            .iter()
+            .find(|c| c.r#type != ChallengeType::Dns01)
+            .expect("the unknown challenge is kept");
+        assert!(other.token.is_empty());
+
+        // A wildcard authorization still reports the bare name, which is what the
+        // `_acme-challenge.<name>` TXT record is published under.
+        let instant_acme::Identifier::Dns(name) = state.identifier().identifier else {
+            panic!("expected a dns identifier");
+        };
+        assert_eq!(name, "example.com");
+    }
+}
