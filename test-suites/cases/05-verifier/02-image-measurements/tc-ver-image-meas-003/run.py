@@ -15,12 +15,11 @@ from typing import Any
 
 CASE_ID = "tc-ver-image-meas-003"
 ROWS = (
-    ("dstack-mr", "ovmf_variant_for_image_handles_missing_and_unknown"),
-    ("dstack-mr", "pre_202505_for_all_versions"),
-    ("dstack-mr", "rejects_malformed_version"),
     ("dstack-verifier", "tdx_lite_acpi_hashes_are_selected_by_event_name"),
     ("dstack-verifier", "tdx_lite_acpi_hashes_reject_unlabeled_events"),
     ("dstack-verifier", "verifies_tdx_lite_fixture_without_image_download"),
+    ("dstack-verifier", "tdx_lite_acpi_hashes_depend_on_the_reported_vm_shape"),
+    ("dstack-verifier", "tdx_lite_acpi_hash_mismatch_names_the_table"),
 )
 
 
@@ -97,13 +96,13 @@ def main() -> int:
         "rows": evidence_rows,
         "qemu_versions": ["8.0.0", "8.2.2", "9.0.0", "9.1.0", "10.0.1"],
         "properties": [
-            "ovmf_variant_selection",
-            "pre_202505_version_policy",
-            "malformed_version_rejection",
+            "metadata_declared_ovmf_variant",
             "acpi_event_name_selection",
             "unlabeled_acpi_event_rejection",
             "matching_tdx_lite_evidence_acceptance",
             "no_image_download_for_matching_lite_evidence",
+            "reported_vm_shape_binding",
+            "named_acpi_table_mismatch",
         ],
     }
     artifact = {
