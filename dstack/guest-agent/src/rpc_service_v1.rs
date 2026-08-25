@@ -826,8 +826,33 @@ mod tests {
             })
             .await
             .unwrap_err();
+        assert_eq!(
+            ra_rpc::code_of(&err),
+            None,
+            "a malformed nonce is the caller's fault, so it keeps the default 400"
+        );
         let err = format!("{err:#}");
         assert!(err.contains("exactly 32 bytes"), "{err}");
+    }
+
+    /// An image that ships no nvattest must not answer like a malformed
+    /// request: the call is well-formed and no other call would succeed, so
+    /// the caller has to be able to tell "stop" from "try something else".
+    ///
+    /// Asserted through the handler because that is where `.context(..)` wraps
+    /// the attestor's error. `code_of` walks the whole chain for exactly this
+    /// reason -- a context layer that buried the code would silently put the
+    /// answer back to 400, and the message would still read correctly.
+    #[tokio::test]
+    async fn attest_gpu_reports_an_image_without_gpu_support_as_not_implemented() {
+        let (state, _guard) = state().await;
+        let err = V1RpcHandler::new(state)
+            .attest_gpu(AttestGpuRequest {
+                nonce: vec![0u8; 32],
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(ra_rpc::code_of(&err), Some(501), "{err:#}");
     }
 
     /// The on-demand format tag, pinned like its boot-time counterpart.

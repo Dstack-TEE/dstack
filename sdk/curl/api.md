@@ -331,6 +331,11 @@ the evidence signature, certificate chain, measurements, and embedded nonce. The
 agent does not appraise the evidence. Evidence does not by itself bind the GPU to this
 CVM.
 
+> An image that ships no GPU attestation answers `501 Not Implemented`, not
+> `400`. Retrying with a different nonce will not help; fall back to whatever
+> your application does without a GPU. A nonce that is not exactly 32 bytes is
+> still a `400`.
+
 ### 8. Boot-time GPU evidence *(v1)*
 
 Returns the complete output NVIDIA `nvattest` produced during boot, as part of
@@ -415,6 +420,8 @@ All endpoints may return the following HTTP status codes:
 
 - `200 OK`: Request successful
 - `400 Bad Request`: Invalid request parameters
+- `501 Not Implemented`: The agent cannot serve this method in this image; only
+  `/v1/AttestGpu` answers this, and only when the image ships no GPU attestation
 - `500 Internal Server Error`: Server-side error
 
 Error responses will include a JSON body with error details:

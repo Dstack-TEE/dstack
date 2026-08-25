@@ -108,6 +108,11 @@ service DstackGuest {
   // Returns vendor-native evidence, not a local verdict, so a relying party
   // can appraise it with its own verifier. Evidence still does not bind the
   // GPU to this TD; see `AttestGpuResponse.bundles`.
+  //
+  // An image that ships no GPU attestation answers HTTP 501, not the 400 every
+  // other v1 failure uses. The request is well-formed there and no other
+  // request would succeed either, so a caller can tell "fall back" from "fix
+  // your arguments" on the status alone. A malformed nonce stays a 400.
   rpc AttestGpu(AttestGpuRequest) returns (AttestGpuResponse) {}
 
   // Return this application's identity and measurements.

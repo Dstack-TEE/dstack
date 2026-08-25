@@ -1325,7 +1325,12 @@ pNs85uhOZE8z2jr8Pg==
                 probe,
             }),
             health: None,
-            gpu_attestor: crate::gpu_attest::GpuAttestor::new(),
+            // Pinned to a path that cannot exist, so no test ever spawns a
+            // real collection against a host GPU and every test sees the
+            // same "this image cannot attest a GPU" answer.
+            gpu_attestor: crate::gpu_attest::GpuAttestor::with_nvattest_path(
+                "/nonexistent/nvattest",
+            ),
             app_root_signing_key: SigningKey::from_slice(&DUMMY_K256_KEY).ok(),
             identity: RwLock::new(None),
             identity_last_failure: Mutex::new(None),

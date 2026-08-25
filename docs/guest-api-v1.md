@@ -103,10 +103,12 @@ returns JSON.
 | 404 | the server's own 404 page | No such mount: this agent has no surface at that path |
 | 404 | `{"error": "Service not found: <Method>"}` | The surface is mounted; it has no such method |
 | 400 | `{"error": "<message>"}` | The method ran and failed |
+| 501 | `{"error": "<message>"}` | `AttestGpu` on an image that ships no GPU attestation |
 | other | `{"error": "<message>"}` | A handler chose the status; the message says why |
 
-A handler failure is a 400 with the error text in the body. v1 does not default,
-coerce, or truncate a malformed request into a well-formed one.
+A handler failure is a 400 with the error text in the body unless the handler
+chose otherwise, and `AttestGpu` is the only v1 method that does. v1 does not
+default, coerce, or truncate a malformed request into a well-formed one.
 
 ### Detecting an agent without v1
 
@@ -640,19 +642,20 @@ which is the authoritative description.
 | Derived secp256k1 scalar out of range | Error; the caller picks another domain |
 | `report_data` longer than 64 bytes | Error |
 | `nonce` not exactly 32 bytes | Error naming the required length |
-| GPU attestation unavailable in this image | Error; `AttestGpu` has nothing to collect |
+| GPU attestation unavailable in this image | HTTP 501; `AttestGpu` has nothing to collect |
 | `not_before` not earlier than `not_after` | Error |
 | Unknown method on a mounted surface | HTTP 404, `Service not found: <Method>` |
 | `/v1/...` on an agent that predates v1 | HTTP 404, no such mount |
 
-Everything above the last two rows is an HTTP 400 with the message in the body.
-See [Status codes](#status-codes) for the full mapping. v1 does not default,
-coerce, or truncate a malformed request into a well-formed one.
+Every row that does not name a status is an HTTP 400 with the message in the
+body. See [Status codes](#status-codes) for the full mapping. v1 does not
+default, coerce, or truncate a malformed request into a well-formed one.
 
-A 400 here means "the method ran and failed", not "your request was malformed".
-The GPU-unavailable row is a property of the image, not of the call: a client
-that gets it should stop rather than retry with different arguments, and the
-message in the body is the only thing that separates the two cases.
+The GPU row is a 501 rather than a 400 because it is a property of the image,
+not of the call: the request is well-formed, and no other request would succeed
+either. A client that reads 400 there retries with different arguments forever;
+one that reads 501 stops and falls back to whatever it does without a GPU. A
+malformed nonce is still the caller's fault and still a 400.
 
 ## Migration from the unversioned API
 
