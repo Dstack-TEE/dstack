@@ -71,7 +71,6 @@ CASES = {
         True,
     ),
     "tc-gos-dstackguest-005": ("DstackGuest", "Info", {}, True),
-    "tc-gos-dstackguest-006": ("DstackGuest", "GpuInfo", {}, True),
     "tc-gos-dstackguest-007": (
         "DstackGuest",
         "Sign",

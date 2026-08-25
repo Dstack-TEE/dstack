@@ -543,13 +543,6 @@
               "number": 4,
               "optional": false,
               "repeated": false
-            },
-            {
-              "type": "bytes",
-              "name": "attestation",
-              "number": 5,
-              "optional": false,
-              "repeated": false
             }
           ]
         },
@@ -678,25 +671,6 @@
               "type": "string",
               "name": "cloud_product",
               "number": 16,
-              "optional": false,
-              "repeated": false
-            }
-          ]
-        },
-        {
-          "service": "DstackGuest",
-          "method": "GpuInfo",
-          "request": "google.protobuf.Empty",
-          "response": "GpuInfoResponse",
-          "source": "dstack/guest-agent/rpc/proto/agent_rpc.proto",
-          "line": 57,
-          "case_id": "tc-gos-dstackguest-006",
-          "request_fields": [],
-          "response_fields": [
-            {
-              "type": "string",
-              "name": "attestation",
-              "number": 1,
               "optional": false,
               "repeated": false
             }
@@ -1019,13 +993,6 @@
               "type": "string",
               "name": "vm_config",
               "number": 4,
-              "optional": false,
-              "repeated": false
-            },
-            {
-              "type": "bytes",
-              "name": "attestation",
-              "number": 5,
               "optional": false,
               "repeated": false
             }

@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <a id="tc-gos-dstackguest-006"></a>
-# TC-GOS-DSTACKGUEST-006: DstackGuest.GpuInfo
+# TC-GOS-DSTACKGUEST-006: Removed legacy DstackGuest.GpuInfo route
 
 ## Metadata
 
@@ -18,7 +18,7 @@
 - Read and obey [`shared/automation/execution-guide.md`](../../../../shared/automation/execution-guide.md) before executing Step 1.
 - Read `DSTACK_TEST_RUNTIME_MANIFEST` once and use its prepared binaries, shared Cargo target, fixture paths, commit, and toolchain as authoritative. Do not rediscover them from processes, old sessions, or broad source searches.
 - Runtime state and evidence remain case-scoped even though immutable build outputs are shared.
-- Prepared RPC contract: `DstackGuest.GpuInfo` takes `google.protobuf.Empty` (no fields) and returns `GpuInfoResponse` (`attestation: string`). The authoritative field matrix is the matching entry in [`api-inventory.json`](../../../../catalog/api-inventory.json); do not reconstruct it from implementation source.
+- Prepared compatibility contract: the never-shipped v0 `GpuInfo` method is absent and GPU attestation is owned by `dstack.guest.v1.AttestGpu` on `/v1`. The authoritative field matrix is the matching entry in [`api-inventory.json`](../../../../catalog/api-inventory.json); do not reconstruct it from implementation source.
 - Empty-input transport semantics: `prpc-build` intentionally generates a zero-argument handler for `google.protobuf.Empty` and does not decode the request body. Exercise empty and extraneous/malformed bodies as body-ignored compatibility inputs, and use an invalid pRPC route for the negative transport check; GET is an explicitly supported JSON transport and is not a negative case. Do not expect malformed body rejection from an Empty-input handler.
 - For the candidate guest-agent target, use `shared/automation/start-simulator.sh` and the recorded service socket/route, then `shared/automation/stop-simulator.sh`. Do not compile or design another simulator launcher.
 - Exercise the case-prescribed absent/default/valid/boundary-invalid/unknown-field and JSON/protobuf representations with a checked-in helper when available. Keep secret response material in memory and record only structural checks, public material, and hashes.
@@ -26,7 +26,7 @@
 
 ## Objective
 
-Verify the complete request, response, authorization, state transition, and error contract of `DstackGuest.GpuInfo`.
+Verify that the never-shipped legacy `GpuInfo` route remains absent and is not reintroduced as an alias for the v1 GPU API.
 
 ## Preconditions
 
@@ -35,7 +35,7 @@ Verify the complete request, response, authorization, state transition, and erro
 
 ## Test Data
 
-The `DstackGuest.GpuInfo` entry in [`api-inventory.json`](../../../../catalog/api-inventory.json) is mandatory test data. `google.protobuf.Empty` has no request fields. Exercise the documented empty JSON/protobuf encodings plus extraneous and malformed body bytes, which the generated zero-argument handler intentionally ignores, and validate every response field, nested message field, and presence bit. Use an invalid pRPC route for negative transport framing; GET is supported by `ra-rpc`.
+Probe `/prpc/GpuInfo` using JSON and protobuf framing and probe `/v1/AttestGpu` with a deliberately invalid nonce. The legacy route must be absent while the v1 method must be routed and return a capability or validation status rather than 404.
 
 Use a unique run-scoped identifier and non-production credentials.
 
@@ -53,11 +53,11 @@ Query the relevant health, configuration, and baseline state for dstackguest.gpu
 <a id="tc-gos-dstackguest-006-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Invoke `DstackGuest.GpuInfo` with a valid `google.protobuf.Empty` request using valid service-specific authentication and attestation context; capture the binary and JSON pRPC representations. Then send extraneous and malformed request-body bytes to confirm Empty-input body-ignore semantics, exercise an invalid pRPC route, and, where protected, omit the credential.
+Probe the removed route with JSON and protobuf framing, then probe the v1 replacement route with an invalid nonce.
 
 **Expected results:**
 
-- The valid call returns `GpuInfoResponse` with every documented field and exhibits the documented `GpuInfo` state and side effects; extraneous or malformed bodies are ignored without changing the response or state, invalid routing returns a structured transport error, and protected calls reject missing credentials.
+- Both legacy probes return HTTP 404 with a diagnostic, while `/v1/AttestGpu` is routed and returns its documented validation or capability error.
 
 <a id="tc-gos-dstackguest-006-step-03"></a>
 ### Step 3: Verify state, isolation, and diagnostics

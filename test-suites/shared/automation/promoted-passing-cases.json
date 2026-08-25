@@ -141,9 +141,9 @@
     },
     {
       "case_id": "tc-gos-dstackguest-006",
-      "source_run": "physical-tdx-optimized-20260723T182727Z",
+      "source_run": "next-rebase-regression-20260825",
       "source_status": "PASS",
-      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "entrypoint": "cases/01-guest-os/02-rpc-dstackguest/tc-gos-dstackguest-006/run.py",
       "environment": "SIMULATION"
     },
     {
