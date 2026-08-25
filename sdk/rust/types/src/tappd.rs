@@ -12,7 +12,7 @@ use borsh::BorshSchema;
 #[cfg(feature = "borsh")]
 use borsh::{BorshDeserialize, BorshSerialize};
 
-use crate::dstack::EventLog;
+use crate::dstack_v0::EventLog;
 
 /// Hash algorithms supported by the TDX quote generation
 #[derive(Debug, Clone, Serialize, Deserialize)]

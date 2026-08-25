@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use alloy::signers::local::PrivateKeySigner;
-use dstack_sdk_types::dstack::GetKeyResponse;
+use dstack_sdk_types::dstack_v0::GetKeyResponse;
 
 /// Build a signer from a `get_key` response.
 ///

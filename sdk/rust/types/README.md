@@ -19,7 +19,7 @@ This crate is `#![no_std]` compatible and provides two main modules:
 ## Basic Usage
 
 ```rust
-use dstack_sdk_types::dstack::{GetKeyResponse, GetQuoteResponse, InfoResponse};
+use dstack_sdk_types::dstack_v0::{GetKeyResponse, GetQuoteResponse, InfoResponse};
 use dstack_sdk_types::tappd::{DeriveKeyResponse, TdxQuoteResponse, TappdInfoResponse};
 
 // Parse a response from the dstack API

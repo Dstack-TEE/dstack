@@ -3,7 +3,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-pub mod dstack_client;
+pub mod dstack_client_v0;
 pub mod dstack_client_v1;
 
 /// The recommended client: the v1 guest-agent surface.

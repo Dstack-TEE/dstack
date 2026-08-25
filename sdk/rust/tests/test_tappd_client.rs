@@ -3,6 +3,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// This file exercises the deprecated v0 surface; that is its purpose.
+#![allow(deprecated)]
+
 use dstack_sdk::tappd_client::TappdClient;
 use dstack_sdk_types::tappd::DeriveKeyResponse;
 use std::env;

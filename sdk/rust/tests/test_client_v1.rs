@@ -4,7 +4,6 @@
 
 //! `DstackClientV1` against the guest-agent simulator.
 
-use dstack_sdk::dstack_client::DstackClientV0;
 use dstack_sdk::dstack_client_v1::{DstackClientV1, IssueCertConfig};
 
 fn client() -> DstackClientV1 {
@@ -97,9 +96,12 @@ async fn the_two_algorithms_never_share_key_material() {
 /// than merely documented: an app that reuses its v0 path as a v1 domain gets
 /// different key material.
 #[tokio::test]
+// The point of the assertion is that the two surfaces disagree, so it has to
+// name the deprecated one.
+#[allow(deprecated)]
 async fn v1_keys_differ_from_v0_keys_for_the_same_name() {
     let v1 = client().get_key("test", "secp256k1").await.unwrap();
-    let v0 = DstackClientV0::new(None)
+    let v0 = dstack_sdk::dstack_client_v0::DstackClientV0::new(None)
         .get_key(Some("test".to_string()), Some("signing".to_string()))
         .await
         .unwrap();

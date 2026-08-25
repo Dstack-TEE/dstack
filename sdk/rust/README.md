@@ -206,7 +206,7 @@ use dstack_sdk::tappd_client::TappdClient;
 let client = TappdClient::new(None);
 
 // After
-use dstack_sdk::dstack_client::DstackClientV0;
+use dstack_sdk::dstack_client_v0::DstackClientV0;
 let client = DstackClientV0::new(None);
 ```
 
@@ -222,7 +222,7 @@ only if you need something v1 does not carry -- `sign`, `verify`, `emit_event`,
 `get_quote` -- or to keep existing code working while you migrate.
 
 ```rust
-use dstack_sdk::dstack_client::DstackClientV0;
+use dstack_sdk::dstack_client_v0::DstackClientV0;
 
 let client = DstackClientV0::new(None);
 ```
@@ -300,7 +300,7 @@ No GPU-evidence flag on v0: that field is reserved on this surface, and only
 `get_tls_key()` creates fresh TLS certificates. Unlike `get_key()`, each call generates a new random key.
 
 ```rust
-use dstack_sdk_types::dstack::TlsKeyConfig;
+use dstack_sdk_types::dstack_v0::TlsKeyConfig;
 
 let tls_config = TlsKeyConfig::builder()
     .subject("api.example.com")
@@ -360,7 +360,7 @@ way. The v1 surface has no chain-related functionality: it returns key
 material, and what an application builds from those bytes is its own business.
 
 ```rust
-use dstack_sdk::dstack_client::DstackClientV0;
+use dstack_sdk::dstack_client_v0::DstackClientV0;
 use dstack_sdk::ethereum::to_account;
 
 let client = DstackClientV0::new(None);

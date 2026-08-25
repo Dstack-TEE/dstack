@@ -12,7 +12,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
 use std::env;
 
-pub use dstack_sdk_types::dstack::*;
+pub use dstack_sdk_types::dstack_v0::*;
 
 // Internal request structs for hex encoding
 #[derive(Debug, Serialize)]
@@ -172,6 +172,10 @@ pub(crate) async fn unix_post<S: Serialize>(
 /// For anything new, use [`crate::dstack_client_v1::DstackClientV1`]. Note that
 /// **v1 derives different key material than v0 for the same inputs** -- see
 /// `docs/guest-api-v1.md` for the migration.
+#[deprecated(
+    since = "0.6.0",
+    note = "the v0 surface is frozen at dstack 0.5.11; use `DstackClientV1`, which the unsuffixed `DstackClient` now names. Note that v1 derives different key material -- see docs/guest-api-v1.md"
+)]
 pub struct DstackClientV0 {
     /// The base URL for HTTP requests
     base_url: String,
@@ -181,8 +185,12 @@ pub struct DstackClientV0 {
     client: ClientKind,
 }
 
+// The client is deprecated, not broken: its own implementation still has to
+// name it.
+#[allow(deprecated)]
 impl BaseClient for DstackClientV0 {}
 
+#[allow(deprecated)]
 impl DstackClientV0 {
     pub fn new(endpoint: Option<&str>) -> Self {
         let endpoint = get_endpoint(endpoint);
