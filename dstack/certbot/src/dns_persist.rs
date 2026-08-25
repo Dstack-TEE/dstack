@@ -54,17 +54,25 @@ pub fn resolve_issuer_domain_name(configured: &str) -> Result<String> {
         bail!("issuer domain name must be between 1 and 253 characters: {configured:?}");
     }
     for label in name.split('.') {
-        if label.is_empty() {
-            bail!("issuer domain name has an empty label: {configured:?}");
-        }
-        if !label
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
-        {
+        // RFC 8659 spells a label `(ALPHA / DIGIT) *( *("-") (ALPHA / DIGIT) )`:
+        // alphanumeric at both ends, hyphens only between them, and nothing
+        // else -- no underscore, which is a DNS convention for names that are
+        // never issuer names. A CA holding the record to that grammar reads
+        // anything looser as a malformed `issue` property, which is the state
+        // this check exists to keep out of a zone.
+        let bytes = label.as_bytes();
+        let well_formed = !bytes.is_empty()
+            && bytes.len() <= 63
+            && bytes[0].is_ascii_alphanumeric()
+            && bytes[bytes.len() - 1].is_ascii_alphanumeric()
+            && bytes
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-');
+        if !well_formed {
             bail!(
                 "issuer domain name must be a DNS name -- it is written verbatim into CAA \
-                 and validation records, where a space or a `;` makes the whole record \
-                 malformed: {configured:?}"
+                 and validation records, where a malformed label makes the whole record \
+                 unparseable: {configured:?}"
             );
         }
     }
@@ -363,6 +371,15 @@ mod tests {
     /// The name is interpolated into records that a `;` or a space makes
     /// malformed, and CAA is rewritten by deleting the old records first, so a
     /// typo accepted here is a zone that forbids all issuance.
+    /// A label longer than DNS allows is refused, and one right at the limit is
+    /// not: the bound is the protocol's, not a guess.
+    #[test]
+    fn a_label_is_held_to_its_dns_length() {
+        let sixty_three = "a".repeat(63);
+        assert!(resolve_issuer_domain_name(&format!("{sixty_three}.org")).is_ok());
+        assert!(resolve_issuer_domain_name(&format!("{sixty_three}a.org")).is_err());
+    }
+
     #[test]
     fn a_name_that_would_corrupt_a_record_is_refused() {
         for bad in [
@@ -371,6 +388,12 @@ mod tests {
             "#letsencrypt.org",
             "letsencrypt..org",
             "\"letsencrypt.org\"",
+            // RFC 8659's label grammar bounds both ends of a label, so these
+            // are as unparseable to a strict CA as a space is.
+            "_letsencrypt.org",
+            "-letsencrypt.org",
+            "letsencrypt-.org",
+            "lé.org",
         ] {
             assert!(
                 resolve_issuer_domain_name(bad).is_err(),
