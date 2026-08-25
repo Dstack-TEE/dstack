@@ -159,8 +159,15 @@ async fn attest_gpu_validates_the_nonce_length() {
         );
     }
     // A correctly sized nonce gets past the client and fails at the simulator,
-    // which has no GPU to attest.
-    assert!(client().attest_gpu(vec![0xab; 32]).await.is_err());
+    // which has no GPU to attest. 501, not 4xx: the request was well-formed and
+    // no retry of it will ever succeed on an image that ships no nvattest.
+    let err = client()
+        .attest_gpu(vec![0xab; 32])
+        .await
+        .expect_err("the simulator has no GPU to attest");
+    let err = format!("{err:#}");
+    assert!(err.contains("HTTP 501"), "{err}");
+    assert!(err.contains("GPU attestation is not available"), "{err}");
 }
 
 #[tokio::test]

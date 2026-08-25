@@ -202,8 +202,12 @@ describe('DstackClientV1', () => {
       // The simulator ships no nvattest, so this must fail fast and clearly
       // rather than hang for the attestation timeout -- with the status the
       // agent answered and its own explanation, not a parse error.
+      //
+      // 501 specifically, not any 4xx: the agent distinguishes "this image can
+      // never attest a GPU" from "your request was wrong", and a client that
+      // cannot see the difference retries a call that will never succeed.
       await expect(() => client.attestGpu(new Uint8Array(32).fill(0xab))).rejects.toThrow(
-        /^HTTP 4\d\d: .*GPU attestation/
+        /^HTTP 501: .*GPU attestation is not available/
       )
     })
   })
