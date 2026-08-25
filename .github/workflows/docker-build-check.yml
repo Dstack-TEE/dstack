@@ -88,6 +88,11 @@ jobs:
             DSTACK_REV=${{ env.DSTACK_REV }}
             DSTACK_SRC_URL=${{ env.DSTACK_SRC_URL }}
 
+      - name: Verify pinned packages
+        run: |
+          dstack/build/shared/verify-pinned-packages.sh dstack-kms-check:latest \
+            dstack/kms/dstack-app/builder/shared/pinned-packages.txt
+
       - name: Build kms-builder target
         run: |
           docker buildx build \
