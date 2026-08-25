@@ -192,7 +192,9 @@ Neither surface returns key material, and no caller chooses what gets signed
 or attested. That boundary, not the method list, is what makes this listener
 safe to expose: key material and caller-chosen attestation live only on the
 internal Unix socket (`/var/run/dstack.sock`), which is not a CVM boundary —
-it is reachable only by the application itself.
+it is reachable only by the application itself. An application that re-exports
+that socket has moved the boundary itself, and everything behind it moves with
+it.
 
 **Frozen `Worker` (`/prpc`, alias `/prpc/v0`):**
 
@@ -206,7 +208,7 @@ it is reachable only by the application itself.
 
 | Method | Description | Return Type |
 |--------|-------------|------------|
-| Info | Get application identity and configuration | InfoResponse |
+| Info | Get application identity, plus configuration when `public_tcbinfo` is set | InfoResponse |
 | Version | Get guest agent version | VersionResponse |
 | Health | Report whether the application is serving | HealthResponse |
 
@@ -223,7 +225,8 @@ what it costs and in what it says:
   back. Container names and statuses were already public through the dashboard
   below.
 - `GetAttestationForAppKey` (frozen) generates a fresh platform attestation per
-  call and is by far the most expensive method here. It has no v1 counterpart
+  call. With the frozen `Info` below, it is one of the two methods here that
+  let an anonymous caller drive quote generation. It has no v1 counterpart
   on purpose: a v1 application attests its own key through the internal socket
   (`/v1/GetKey`, then `/v1/Attest`) and serves the result itself, so the public
   listener never gained a second attestation-on-demand entry point.
@@ -231,7 +234,10 @@ what it costs and in what it says:
   costs a hardware quote under the agent's global quote lock. The v1 `Info`
   serves the same identity from a cache decoded once at startup, so an
   anonymous caller cannot drive quote generation through it; if the boot-time
-  decode failed, retries are throttled to one attempt per interval.
+  decode failed, retries are throttled to one attempt per interval. Of the two
+  quote-generating methods, the frozen `Info` is the one worth rate-limiting
+  first: it is what clients actually poll, and it replays the event log on top
+  of the quote.
 - Both `Info` methods honour the app's `public_tcbinfo` choice, with different
   reach. The frozen one blanks `tcb_info` and `vm_config` but always serves
   `key_provider_info`. The v1 one blanks `app_compose`, `vm_config`, and
