@@ -46,7 +46,6 @@ mod sync_service;
 #[cfg(test)]
 pub(crate) use https_client::HttpsClient;
 pub use https_client::{AppIdValidator, HttpsClientConfig};
-use std::net::SocketAddr;
 pub use sync_service::{fetch_peers_from_bootnode, PersistentWriteNotifier, WaveKvSyncService};
 use tracing::{error, warn};
 
@@ -327,11 +326,6 @@ pub struct CertAttestation {
     pub generated_at: u64,
 }
 
-/// Cloudflare's public resolver.
-pub fn default_dns_server() -> SocketAddr {
-    SocketAddr::from(([1, 1, 1, 1], 53))
-}
-
 /// DNS credential configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DnsCredential {
@@ -346,11 +340,6 @@ pub struct DnsCredential {
     pub max_dns_wait: Duration,
     /// DNS TXT record TTL
     pub dns_txt_ttl: u32,
-    /// Recursive resolver used to discover a zone's authoritative nameservers
-    /// during the DNS-01 self check. Absent in records written before this
-    /// field existed, which read back as the default.
-    #[serde(default = "default_dns_server")]
-    pub dns_server: SocketAddr,
     /// Creation timestamp
     pub created_at: u64,
     /// Last update timestamp

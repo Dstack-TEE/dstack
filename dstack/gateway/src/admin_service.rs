@@ -437,13 +437,6 @@ impl AdminRpc for AdminRpcHandler {
             bail!("max_dns_wait must be greater than zero");
         }
         let max_dns_wait = Duration::from_secs(max_dns_wait_secs.into());
-        let dns_server = match request.dns_server.as_deref() {
-            Some(s) if !s.trim().is_empty() => s
-                .trim()
-                .parse()
-                .context("dns_server must be an ip:port address")?,
-            _ => crate::kv::default_dns_server(),
-        };
         let cred = DnsCredential {
             id: id.clone(),
             name: request.name,
@@ -451,7 +444,6 @@ impl AdminRpc for AdminRpcHandler {
             created_at: now,
             updated_at: now,
             dns_txt_ttl,
-            dns_server,
             max_dns_wait,
         };
 

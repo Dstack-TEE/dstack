@@ -171,7 +171,6 @@ impl DistributedCertBot {
             first_client,
             first_cred.max_dns_wait,
             first_cred.dns_txt_ttl,
-            first_cred.dns_server,
         )
         .await
         .context("failed to create replacement ACME account")?;
@@ -214,7 +213,6 @@ impl DistributedCertBot {
                     &credentials,
                     dns_cred.max_dns_wait,
                     dns_cred.dns_txt_ttl,
-                    dns_cred.dns_server,
                 )
                 .await
                 .context("failed to prepare ACME client")?;
@@ -597,7 +595,6 @@ impl DistributedCertBot {
                 &creds.acme_credentials,
                 dns_cred.max_dns_wait,
                 dns_cred.dns_txt_ttl,
-                dns_cred.dns_server,
             )
             .await
             .context("failed to load ACME client from KvStore credentials");
@@ -610,7 +607,6 @@ impl DistributedCertBot {
             dns01_client,
             dns_cred.max_dns_wait,
             dns_cred.dns_txt_ttl,
-            dns_cred.dns_server,
         )
         .await
         .context("failed to create new ACME account")?;

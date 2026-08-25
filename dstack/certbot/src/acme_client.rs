@@ -35,10 +35,6 @@ pub struct AcmeClient {
     max_dns_wait: Duration,
     /// TTL for DNS TXT records used in ACME challenges (in seconds).
     dns_txt_ttl: u32,
-    /// Recursive resolver used only to discover a zone's authoritative
-    /// nameservers. The challenge record itself is read from those, so a
-    /// stale negative answer cached anywhere in between cannot hide it.
-    dns_server: SocketAddr,
 }
 
 #[derive(Debug, Clone)]
@@ -73,7 +69,6 @@ impl AcmeClient {
         encoded_credentials: &str,
         max_dns_wait: Duration,
         dns_txt_ttl: u32,
-        dns_server: SocketAddr,
     ) -> Result<Self> {
         let credentials: Credentials = serde_json::from_str(encoded_credentials)?;
         let http_client = Box::new(ReqwestHttpClient::new()?);
@@ -87,7 +82,6 @@ impl AcmeClient {
             credentials,
             max_dns_wait,
             dns_txt_ttl,
-            dns_server,
         })
     }
 
@@ -97,7 +91,6 @@ impl AcmeClient {
         dns01_client: Dns01Client,
         max_dns_wait: Duration,
         dns_txt_ttl: u32,
-        dns_server: SocketAddr,
     ) -> Result<Self> {
         let http_client = Box::new(ReqwestHttpClient::new()?);
         let (account, credentials) = Account::builder_with_http(http_client)
@@ -123,7 +116,6 @@ impl AcmeClient {
             credentials,
             max_dns_wait,
             dns_txt_ttl,
-            dns_server,
         })
     }
 
@@ -392,7 +384,13 @@ impl AcmeClient {
             .first()
             .map(|c| c.acme_domain.as_str())
             .context("no challenge to resolve")?;
-        let bootstrap = resolver_for(&[self.dns_server])?;
+        // The NS records and the nameservers' own addresses are stable, so the
+        // system resolver -- caching and all -- is the right tool for finding
+        // them. Only the challenge record itself must dodge the cache.
+        let bootstrap = TokioResolver::builder_tokio()
+            .context("failed to read system dns config")?
+            .build()
+            .context("failed to build dns resolver")?;
 
         // `_acme-challenge.<name>` is almost never a zone cut, and neither is
         // the name below it: for `_acme-challenge.a.example.com` the NS records
@@ -466,10 +464,13 @@ impl AcmeClient {
                     // NS records we cannot read from blocking issuance outright;
                     // the ACME server has its own DNS view either way.
                     warn!(
-                        "failed to reach authoritative nameservers ({err:#}), falling back to {}",
-                        self.dns_server
+                        "failed to reach authoritative nameservers ({err:#}), \
+                         falling back to the system resolver"
                     );
-                    resolver_for(&[self.dns_server])?
+                    TokioResolver::builder_tokio()
+                        .context("failed to read system dns config")?
+                        .build()
+                        .context("failed to build dns resolver")?
                 }
             };
 
