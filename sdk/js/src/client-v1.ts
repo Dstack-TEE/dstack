@@ -238,6 +238,29 @@ export interface VersionResponseV1 {
 }
 
 /**
+ * Reject anything but bytes on a request path.
+ *
+ * v0 took a `string` here and UTF-8 encoded it, which reads as a convenience
+ * until the string is a hex digest: `attest('deadbeef')` committed to the
+ * eight ASCII characters rather than the four bytes they spell, with nothing
+ * to say so. v1 refuses the ambiguity, and the runtime check is not redundant
+ * with the parameter type -- a JavaScript caller, or TypeScript with an `any`
+ * from `JSON.parse`, reaches this with a string and no compiler in the way.
+ */
+function require_bytes(value: unknown, param: string): Buffer | Uint8Array {
+  if (typeof value === 'string') {
+    throw new Error(
+      `${param} must be bytes, not a string: use Buffer.from(value, 'utf8') to ` +
+      `attest the text, or Buffer.from(value, 'hex') if it is a hex digest`
+    )
+  }
+  if (!(value instanceof Uint8Array)) {
+    throw new Error(`${param} must be a Buffer or Uint8Array`)
+  }
+  return value
+}
+
+/**
  * Read a `string` field, or say which one was not a string.
  *
  * The interfaces in this file declare these `string`, and a spread of the raw
@@ -408,22 +431,25 @@ export class DstackClientV1 {
    * The only CVM attestation entry point in v1: the attestation already carries
    * the TDX quote and the event log, so there is no separate `getQuote`.
    *
-   * @param report_data 1 to 64 bytes, zero-padded on the right to 64 by the agent.
+   * @param report_data 1 to 64 bytes, zero-padded on the right to 64 by the
+   * agent. Bytes only: v0 also took a string and UTF-8 encoded it, which
+   * silently attested the characters of a hex digest rather than the digest.
    * @param include_boottime_gpu_evidence Also return the boot-time GPU evidence,
    * as the same {@link GpuEvidenceBundleV1} list `attestGpu` returns, so a
    * verifier gets both in one round trip. It is not bound to `report_data`.
    */
   async attest(
-    report_data: string | Buffer | Uint8Array,
+    report_data: Buffer | Uint8Array,
     include_boottime_gpu_evidence: boolean = false,
   ): Promise<AttestResponseV1> {
-    const hex = to_hex(report_data)
-    if (hex.length === 0) {
+    const bytes = require_bytes(report_data, 'report data')
+    if (bytes.length === 0) {
       throw new Error('report data must not be empty')
     }
-    if (hex.length > 128) {
-      throw new Error(`report data must be at most 64 bytes, but received ${hex.length / 2}`)
+    if (bytes.length > 64) {
+      throw new Error(`report data must be at most 64 bytes, but received ${bytes.length}`)
     }
+    const hex = to_hex(bytes)
     const payload = JSON.stringify({ report_data: hex, include_boottime_gpu_evidence })
     const result = await send_rpc_request<{
       attestation: string,
@@ -447,13 +473,16 @@ export class DstackClientV1 {
    * bind the GPU to this CVM.
    *
    * @param nonce Exactly 32 bytes, passed to the GPU verbatim. SPDM fixes the
-   * length; hash a longer challenge yourself.
+   * length; hash a longer challenge yourself. Bytes only, for the same reason
+   * `attest` takes bytes only -- and a 32-character string would have passed
+   * the length check.
    */
   async attestGpu(nonce: Buffer | Uint8Array): Promise<AttestGpuResponseV1> {
-    if (nonce.length !== 32) {
-      throw new Error(`nonce must be exactly 32 bytes, but received ${nonce.length}`)
+    const bytes = require_bytes(nonce, 'nonce')
+    if (bytes.length !== 32) {
+      throw new Error(`nonce must be exactly 32 bytes, but received ${bytes.length}`)
     }
-    const payload = JSON.stringify({ nonce: to_hex(nonce) })
+    const payload = JSON.stringify({ nonce: to_hex(bytes) })
     const result = await send_rpc_request<{
       bundles?: GpuEvidenceBundleV1Wire[],
     }>(this.endpoint, '/v1/AttestGpu', payload)

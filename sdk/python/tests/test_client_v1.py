@@ -193,7 +193,7 @@ async def test_async_v1_attest_boottime_gpu_evidence(monkeypatch):
     monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
     monkeypatch.setattr(AsyncDstackClientV1, "_send_rpc_request", fake_send)
     result = await AsyncDstackClientV1().attest(
-        "test", include_boottime_gpu_evidence=True
+        b"test", include_boottime_gpu_evidence=True
     )
     assert isinstance(result, AttestResponseV1)
     bundle = result.boottime_gpu_evidence[0]
@@ -228,6 +228,29 @@ async def test_async_v1_attest_report_data_bounds():
 
 
 @pytest.mark.asyncio
+async def test_async_v1_attest_refuses_str():
+    """v1 takes bytes, so a hex digest cannot be attested as its characters.
+
+    v0 UTF-8 encoded a str, which made ``attest("deadbeef")`` commit to eight
+    ASCII characters rather than the four bytes they spell -- no error, just a
+    quote over the wrong value. The v0 client keeps that behaviour; v1 does not.
+    """
+    client = AsyncDstackClientV1()
+    with pytest.raises(TypeError, match="bytes.fromhex"):
+        await client.attest("deadbeef")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="must be bytes, not int"):
+        await client.attest(42)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_async_v1_attest_gpu_refuses_str():
+    """A 32-character str would otherwise pass the length check unnoticed."""
+    client = AsyncDstackClientV1()
+    with pytest.raises(TypeError, match="must be bytes"):
+        await client.attest_gpu("a" * 32)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
 async def test_async_v1_attest_gpu(monkeypatch):
     evidence = b"\x01\x02\x03opaque"
 
@@ -257,9 +280,13 @@ async def test_async_v1_attest_gpu(monkeypatch):
 async def test_async_v1_attest_gpu_rejects_wrong_nonce_length():
     """SPDM fixes the evidence nonce at 32 bytes; catch it before the round trip."""
     client = AsyncDstackClientV1()
-    for bad in [b"", bytes(31), bytes(33), "not-bytes"]:
+    for bad in [b"", bytes(31), bytes(33)]:
         with pytest.raises(ValueError, match="32 bytes"):
             await client.attest_gpu(bad)
+    # A non-bytes nonce is a TypeError, not a length complaint -- see
+    # test_async_v1_attest_gpu_refuses_str.
+    with pytest.raises(TypeError):
+        await client.attest_gpu(object())  # type: ignore[arg-type]
 
 
 def test_sync_v1_attest_gpu_reaches_the_agent():

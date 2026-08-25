@@ -29,7 +29,7 @@ const client = new DstackClient()
 const key = await client.getKey('storage-encryption', 'secp256k1')
 console.log(Buffer.from(key.key).toString('hex'))
 
-const { attestation } = await client.attest('app-state-snapshot')
+const { attestation } = await client.attest(Buffer.from('app-state-snapshot'))
 console.log(attestation)
 ```
 
@@ -107,15 +107,15 @@ Both arguments are required. `algorithm` is exactly `'secp256k1'` or `'ed25519'`
 The only CVM attestation entry point. The versioned attestation already carries the TDX quote and the event log, so there is no separate `getQuote`.
 
 ```typescript
-const { attestation } = await client.attest('app-state-snapshot')  // Uint8Array
+const { attestation } = await client.attest(Buffer.from('app-state-snapshot'))  // Uint8Array
 ```
 
 Every field the proto declares `bytes` is a `Uint8Array` here, hex only on the wire.
 
-`reportData` is 1 to 64 bytes (string, Buffer, or Uint8Array), zero-padded on the right by the agent. Pass `true` as the second argument to also return the boot-time GPU evidence in `boottime_gpu_evidence`, so a verifier gets both in one round trip:
+`reportData` is 1 to 64 bytes — a `Buffer` or `Uint8Array`, never a string — zero-padded on the right by the agent. v0 accepted a string and UTF-8 encoded it, so `attest('deadbeef')` committed to eight ASCII characters rather than the four bytes they spell; v1 makes you say which you meant. `attestGpu`'s nonce is bytes only for the same reason, where a 32-character string would have passed the length check. Pass `true` as the second argument to also return the boot-time GPU evidence in `boottime_gpu_evidence`, so a verifier gets both in one round trip:
 
 ```typescript
-const { attestation, boottime_gpu_evidence } = await client.attest('snapshot', true)
+const { attestation, boottime_gpu_evidence } = await client.attest(Buffer.from('snapshot'), true)
 for (const bundle of boottime_gpu_evidence) {
   console.log(bundle.vendor, bundle.format, bundle.evidence)
 }
@@ -403,7 +403,7 @@ Given a `GetTlsKeyResponse` both helpers hash the PEM key with SHA-256 first, wh
 | `new DstackClientV0()` | `new DstackClient()` |
 | `client.getTlsKey({ subject })` | `client.issueCert({ subject })` |
 | `client.getKey(path, purpose)` | `client.getKey(domain, algorithm)` — **different key material** |
-| `client.getQuote(data)` | `client.attest(data)` |
+| `client.getQuote(data)` | `client.attest(bytes)` — **bytes only**, where v0 UTF-8 encoded a string |
 | `client.sign(...)` / `client.verify(...)` | sign and verify locally with the key from `getKey` |
 | `client.emitEvent(...)` | bind the data through `report_data` on `attest()` |
 | `info.tcb_info.*` | `attest()`, which returns measurements quote-backed |
@@ -419,7 +419,7 @@ Migrate a surface at a time: both clients can talk to the same agent at once, so
 | --- | --- |
 | `new TappdClient()` | `new DstackClient()` — or `new DstackClientV0()` to keep the same key material |
 | `client.deriveKey(path, subject)` | `client.issueCert({ subject })` |
-| `client.tdxQuote(data)` | `client.attest(data)` |
+| `client.tdxQuote(data)` | `client.attest(bytes)` — **bytes only**, where v0 UTF-8 encoded a string |
 | `/var/run/tappd.sock` | `/var/run/dstack.sock` |
 
 ## License

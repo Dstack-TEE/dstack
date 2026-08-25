@@ -113,6 +113,12 @@ The sole CVM attestation entry point in v1. The dstack attestation format
 already carries the quote and the event log, so v0's TDX-only `get_quote` has
 nothing left to add.
 
+`report_data` is bytes, never `str`. v0 accepted a `str` and UTF-8 encoded it,
+so `attest("deadbeef")` committed to the eight ASCII characters rather than the
+four bytes they spell, with no error to say so; v1 makes you write
+`value.encode()` or `bytes.fromhex(value)` at the call site, where it is visible
+which one was meant. `attest_gpu`'s nonce is bytes only for the same reason.
+
 ```python
 result = client.attest(b'user:alice:nonce123')
 print(result.attestation)   # bytes

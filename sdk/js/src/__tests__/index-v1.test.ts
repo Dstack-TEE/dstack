@@ -158,7 +158,7 @@ describe('DstackClientV1', () => {
   describe('attest', () => {
     it('should attest over report data', async () => {
       const client = new DstackClientV1()
-      const result = await client.attest('test')
+      const result = await client.attest(Buffer.from('test'))
       expect(result.attestation).toBeInstanceOf(Uint8Array)
       expect(result.attestation.length).toBeGreaterThan(0)
       expect(result.boottime_gpu_evidence).toEqual([])
@@ -166,7 +166,7 @@ describe('DstackClientV1', () => {
 
     it('should accept the boot-time GPU evidence flag', async () => {
       const client = new DstackClientV1()
-      const result = await client.attest('test', true)
+      const result = await client.attest(Buffer.from('test'), true)
       expect(result.attestation.length).toBeGreaterThan(0)
       // Absence is the empty list, not a sentinel; the simulator has no GPU
       // output, so this is empty here but must still be an array.
@@ -176,7 +176,7 @@ describe('DstackClientV1', () => {
 
     it('should type boot-time evidence as the bundle list attestGpu returns', async () => {
       const client = new DstackClientV1()
-      const result = await client.attest('test', true)
+      const result = await client.attest(Buffer.from('test'), true)
       // Assigning one to the other is the assertion: one parser, both methods.
       const bundles: GpuEvidenceBundleV1[] = result.boottime_gpu_evidence
       for (const bundle of bundles) {
@@ -186,8 +186,28 @@ describe('DstackClientV1', () => {
 
     it('should reject report data outside 1..64 bytes', async () => {
       const client = new DstackClientV1()
-      await expect(() => client.attest('')).rejects.toThrow('must not be empty')
+      await expect(() => client.attest(new Uint8Array(0))).rejects.toThrow('must not be empty')
       await expect(() => client.attest(Buffer.alloc(65))).rejects.toThrow('at most 64 bytes')
+    })
+
+    it('should reject a string rather than attest its characters', async () => {
+      const client = new DstackClientV1()
+      // v0 UTF-8 encoded this. `attest('deadbeef')` then committed to eight
+      // ASCII characters rather than the four bytes they spell, silently.
+      await expect(
+        () => (client as unknown as {
+          attest: (d: unknown) => Promise<unknown>
+        }).attest('deadbeef')
+      ).rejects.toThrow(/report data must be bytes, not a string/)
+    })
+
+    it('should reject a 32-character string nonce that would pass the length check', async () => {
+      const client = new DstackClientV1()
+      await expect(
+        () => (client as unknown as {
+          attestGpu: (n: unknown) => Promise<unknown>
+        }).attestGpu('a'.repeat(32))
+      ).rejects.toThrow(/nonce must be bytes, not a string/)
     })
   })
 
@@ -247,7 +267,7 @@ describe('DstackClientV1', () => {
 
     it('should decode boot-time evidence to the nvattest bytes verbatim', async () => {
       await withStubAgent(async client => {
-        const result = await client.attest('test', true)
+        const result = await client.attest(Buffer.from('test'), true)
         const [bundle] = result.boottime_gpu_evidence
         expect(bundle.vendor).toBe('nvidia')
         expect(bundle.format).toBe('nvidia-nvattest-boottime-json-v1')
@@ -259,7 +279,7 @@ describe('DstackClientV1', () => {
 
     it('should hand both methods the same bundle shape', async () => {
       await withStubAgent(async client => {
-        const attested = await client.attest('test', true)
+        const attested = await client.attest(Buffer.from('test'), true)
         const collected = await client.attestGpu(new Uint8Array(32))
         const boottime: GpuEvidenceBundleV1 = attested.boottime_gpu_evidence[0]
         const on_demand: GpuEvidenceBundleV1 = collected.bundles[0]

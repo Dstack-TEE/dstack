@@ -36,6 +36,26 @@ from .dstack_client_v0 import call_async
 _HEX_ONLY = re.compile(r"\A(?:[0-9a-fA-F]{2})*\Z")
 
 
+def _require_bytes(value: Any, param: str) -> bytes:
+    """Reject anything but bytes on a request path.
+
+    v0 accepted a ``str`` here and UTF-8 encoded it, which reads as a
+    convenience until the string is a hex digest: ``attest("deadbeef")``
+    committed to the eight ASCII characters rather than the four bytes they
+    spell, with nothing to say so, and a 32-character nonce passed the length
+    check on its way to attesting the wrong value. v1 refuses the ambiguity and
+    names the two ways out, because only the caller knows which was meant.
+    """
+    if isinstance(value, str):
+        raise TypeError(
+            f"{param} must be bytes, not str: use value.encode() to attest the "
+            f"text, or bytes.fromhex(value) if it is a hex digest"
+        )
+    if not isinstance(value, (bytes, bytearray, memoryview)):
+        raise TypeError(f"{param} must be bytes, not {type(value).__name__}")
+    return bytes(value)
+
+
 def _decode_hex(value: Any) -> Any:
     r"""Turn a wire hex string into bytes, leaving anything else to pydantic.
 
@@ -234,7 +254,7 @@ class AsyncDstackClientV1(AsyncBaseClient):
 
     async def attest(
         self,
-        report_data: str | bytes,
+        report_data: bytes,
         include_boottime_gpu_evidence: bool = False,
     ) -> AttestResponseV1:
         """Produce a versioned attestation over the given report data.
@@ -243,16 +263,21 @@ class AsyncDstackClientV1(AsyncBaseClient):
         format already carries the quote and the event log, so v0's TDX-only
         ``get_quote`` has nothing left to add.
 
+        ``report_data`` is bytes. v0 also accepted a ``str`` and UTF-8 encoded
+        it, which reads as a convenience until the string is a hex digest:
+        ``attest("deadbeef")`` committed to the eight ASCII characters rather
+        than the four bytes they spell, with no error to say so. v1 refuses the
+        ambiguity -- encode the text or decode the hex at the call site, where
+        it is visible which one was meant.
+
         Set include_boottime_gpu_evidence to also return the boot-time GPU
         attestation evidence in ``AttestResponseV1.boottime_gpu_evidence``, as
         the same ``GpuEvidenceBundleV1`` list ``attest_gpu`` returns. A guest
         with no boot-time output returns an empty list.
         """
-        if not report_data or not isinstance(report_data, (bytes, str)):
+        report_bytes = _require_bytes(report_data, "report_data")
+        if not report_bytes:
             raise ValueError("report_data can not be empty")
-        report_bytes: bytes = (
-            report_data.encode() if isinstance(report_data, str) else report_data
-        )
         if len(report_bytes) > 64:
             raise ValueError("report_data must be at most 64 bytes")
         data: Dict[str, Any] = {
@@ -271,10 +296,11 @@ class AsyncDstackClientV1(AsyncBaseClient):
         compared directly against the ``eat_nonce`` claim; to bind a longer
         challenge, hash it yourself.
         """
-        if not isinstance(nonce, (bytes, bytearray)) or len(nonce) != 32:
+        nonce_bytes = _require_bytes(nonce, "nonce")
+        if len(nonce_bytes) != 32:
             raise ValueError("nonce must be exactly 32 bytes")
         result = await self._send_rpc_request(
-            "AttestGpu", {"nonce": binascii.hexlify(bytes(nonce)).decode()}
+            "AttestGpu", {"nonce": binascii.hexlify(nonce_bytes).decode()}
         )
         return AttestGpuResponseV1(**result)
 
@@ -331,7 +357,7 @@ class DstackClientV1(BaseClient):
     @call_async
     def attest(
         self,
-        report_data: str | bytes,
+        report_data: bytes,
         include_boottime_gpu_evidence: bool = False,
     ) -> AttestResponseV1:
         """Produce a versioned attestation over the given report data."""
