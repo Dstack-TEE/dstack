@@ -9,8 +9,8 @@ use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::proto::rr::RData;
 use hickory_resolver::TokioResolver;
 use instant_acme::{
-    Account, AccountCredentials, AuthorizationStatus, ChallengeType, Identifier, NewAccount,
-    NewOrder, Order, OrderStatus, Problem,
+    Account, AccountCredentials, AuthorizationStatus, AuthorizedIdentifier, ChallengeType,
+    Identifier, NewAccount, NewOrder, Order, OrderStatus, Problem,
 };
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ use std::{
     time::Duration,
 };
 use tokio::time::sleep;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use x509_parser::prelude::{GeneralName, Pem};
 
 use super::dns01_client::{Dns01Api, Dns01Client};
@@ -336,16 +336,8 @@ impl AcmeClient {
                 .challenge(ChallengeType::Dns01)
                 .context("no dns01 challenge found")?;
 
-            // The bare identifier, without any wildcard prefix: the TXT record for
-            // `*.example.com` is published under `_acme-challenge.example.com`.
-            let Identifier::Dns(identifier) = challenge.identifier().identifier else {
-                bail!("unsupported identifier type in authorization");
-            };
-            let identifier = identifier.clone();
-
+            let acme_domain = challenge_domain(challenge.identifier())?;
             let dns_value = challenge.key_authorization().dns_value();
-            debug!("creating dns record for {identifier}");
-            let acme_domain = format!("_acme-challenge.{identifier}");
             debug!("removing existing TXT record for {acme_domain}");
             self.dns01_client
                 .remove_txt_records(&acme_domain)
@@ -427,8 +419,6 @@ impl AcmeClient {
 
     /// Self check the TXT records for the given challenges.
     async fn check_dns(&self, challenges: &[Challenge]) -> Result<()> {
-        use tracing::warn;
-
         let mut delay = Duration::from_millis(250);
         let mut tries = 1u8;
 
@@ -561,7 +551,7 @@ impl AcmeClient {
             let mut challenge = authz
                 .challenge(ChallengeType::Dns01)
                 .context("no dns01 challenge found")?;
-            debug!("setting challenge ready");
+            debug!("setting challenge ready for {}", challenge.url);
             challenge
                 .set_ready()
                 .await
@@ -637,13 +627,13 @@ impl AcmeClient {
                 }
                 // Something went wrong
                 OrderStatus::Invalid => {
-                    let error = find_error(&mut order).await.unwrap_or(Problem {
-                        r#type: None,
-                        detail: None,
-                        status: None,
-                        subproblems: Vec::new(),
-                    });
-                    bail!("order is invalid: {error}");
+                    let error = find_error(&mut order).await.context(
+                        "order is invalid and its authorization error could not be retrieved",
+                    )?;
+                    match error {
+                        Some(error) => bail!("order is invalid: {error}"),
+                        None => bail!("order is invalid without error details"),
+                    }
                 }
             }
         }
@@ -659,19 +649,34 @@ impl AcmeClient {
     }
 }
 
-async fn find_error(order: &mut Order) -> Option<Problem> {
+/// The name of the TXT record that answers a dns-01 challenge for `identifier`.
+///
+/// The record always lives under the bare name: a wildcard authorization for
+/// `*.example.com` is answered at `_acme-challenge.example.com`. `AuthorizedIdentifier`
+/// renders the wildcard prefix in its `Display`, so formatting it directly would publish
+/// the record at `_acme-challenge.*.example.com` and fail every wildcard issuance.
+fn challenge_domain(identifier: &AuthorizedIdentifier<'_>) -> Result<String> {
+    let Identifier::Dns(name) = identifier.identifier else {
+        bail!("unsupported identifier type in authorization: {identifier}");
+    };
+    Ok(format!("_acme-challenge.{name}"))
+}
+
+async fn find_error(order: &mut Order) -> Result<Option<Problem>> {
     if let Some(error) = order.state().error.as_ref() {
-        return Some(error.clone());
+        return Ok(Some(error.clone()));
     }
     let mut authorizations = order.authorizations();
-    while let Some(Ok(authz)) = authorizations.next().await {
+    while let Some(result) = authorizations.next().await {
+        let authz =
+            result.context("failed to fetch authorization while looking for the order error")?;
         for challenge in &authz.challenges {
             if let Some(error) = &challenge.error {
-                return Some(error.clone());
+                return Ok(Some(error.clone()));
             }
         }
     }
-    None
+    Ok(None)
 }
 
 /// The resolver from `/etc/resolv.conf`, used to find nameservers and as the
@@ -885,5 +890,35 @@ mod ns_discovery_tests {
         // than a correctness guarantee.
         assert_eq!(parent_zone("kvin.wang"), None);
         assert_eq!(parent_zone("wang"), None);
+    }
+}
+
+#[cfg(test)]
+mod challenge_domain_tests {
+    use super::challenge_domain;
+    use instant_acme::Identifier;
+
+    /// A wildcard order authorizes the bare name with `wildcard: true`, and the TXT record
+    /// answering it must be published under that bare name. Formatting the identifier
+    /// through its `Display` instead would ask for `_acme-challenge.*.example.com`.
+    #[test]
+    fn the_challenge_domain_never_carries_a_wildcard_prefix() {
+        let dns = Identifier::Dns("example.com".to_string());
+        assert_eq!(
+            challenge_domain(&dns.authorized(false)).unwrap(),
+            "_acme-challenge.example.com"
+        );
+        assert_eq!(
+            challenge_domain(&dns.authorized(true)).unwrap(),
+            "_acme-challenge.example.com"
+        );
+    }
+
+    /// dns-01 is only defined for DNS identifiers; anything else is a bug in the order we
+    /// built, so it must be an error rather than a nonsensical record name.
+    #[test]
+    fn a_non_dns_identifier_is_rejected() {
+        let ip = Identifier::Ip("192.0.2.1".parse().unwrap());
+        assert!(challenge_domain(&ip.authorized(false)).is_err());
     }
 }
