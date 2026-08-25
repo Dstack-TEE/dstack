@@ -49,4 +49,16 @@ jobs:
 
     - name: Run prek checks (push)
       if: github.event_name == 'push'
-      run: prek run --from-ref ${{ github.event.before }} --to-ref ${{ github.event.after }} --show-diff-on-failure
+      env:
+        BEFORE: ${{ github.event.before }}
+        AFTER: ${{ github.event.after }}
+      run: |
+        # A push that creates a branch reports an all-zero "before", and a
+        # force-push can name one this clone no longer has. Neither is a commit,
+        # so the range would be invalid; check every file instead.
+        if git rev-parse --verify --quiet "$BEFORE^{commit}" >/dev/null; then
+          prek run --from-ref "$BEFORE" --to-ref "$AFTER" --show-diff-on-failure
+        else
+          echo "no usable base commit ($BEFORE); checking all files"
+          prek run --all-files --show-diff-on-failure
+        fi
