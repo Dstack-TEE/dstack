@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: SDK compatibility
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [next, 'release/**']
+  pull_request:
+    branches: [next, 'release/**']
+
+env:
+  CARGO_TERM_COLOR: always
+  # Both the current tree and the released tags pin channel "1.92" in
+  # rust-toolchain.toml. Without this, rustup would treat that as a toolchain
+  # distinct from the "1.92.0" installed below and re-download it -- along with
+  # the three cross-compilation targets the pin asks for, none of which the SDK
+  # suites need. The compat job is about the wire surface, not about
+  # reproducing each tag's toolchain provisioning.
+  RUSTUP_TOOLCHAIN: 1.92.0
+
+jobs:
+  sdk-compat:
+    name: ${{ matrix.tag }} SDKs vs current agent
+    runs-on: ubuntu-latest
+    strategy:
+      # Each tag is an independent claim; one failing should not hide the other.
+      fail-fast: false
+      matrix:
+        # v0.5.11 is the tag the freeze is defined against, and v0.5.8 is the
+        # newest tag whose SDK *clients and suites* actually differ from it.
+        #
+        # The bar is a different client, not a different tree. v0.5.10's sdk/
+        # tree is the same object as v0.5.11's (`git rev-parse v0.5.10:sdk
+        # v0.5.11:sdk` prints one hash twice) and v0.5.9 differs from it by a
+        # single line -- a reqwest dependency spec in sdk/rust/Cargo.toml, with
+        # every client and test source in all four languages byte-identical.
+        # Either pair runs the same suites twice and reports one agreement as
+        # two independent results, at the cost of a second uncached
+        # four-language build. v0.5.8 is the first tag going back that carries
+        # a genuinely different client (26 files), and it earns its slot: it is
+        # the only released client that still asserts `EmitEvent` succeeds, so
+        # it is the only one that catches 0.6.0 removing it. v0.5.11's three
+        # assertions about that method were all rewritten in v0.5.9..v0.5.11
+        # to tolerate failure under a simulator endpoint, so the v0.5.11 leg
+        # passes them without exercising anything. See sdk/compat/README.md.
+        tag: [v0.5.8, v0.5.11]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The job checks the released SDKs out with `git worktree add <tag>`,
+          # which needs that tag's commit and its full tree locally. A shallow
+          # clone plus `fetch-tags` gives the refs but not a guarantee about the
+          # objects behind them, so take the whole history: the clone is a
+          # rounding error next to the Rust build in this job.
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.92.0
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          # The `go` directive in the released sdk/go/go.mod.
+          go-version: '1.24'
+
+      - name: Install Node
+        uses: actions/setup-node@v5
+        with:
+          # The released sdk/js/package.json asks for node >=18; 20 is what the
+          # JS SDK release workflow publishes from.
+          node-version: '20'
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          # The released sdk/python/pyproject.toml asks for >=3.10; 3.11 is what
+          # the Python SDK release workflow builds with. The runner script
+          # installs PDM if it is missing, the same way sdk/run-tests.sh does.
+          python-version: '3.11'
+
+      - name: Released SDKs against the current agent
+        run: ./sdk/compat/run-compat-tests.sh ${{ matrix.tag }}

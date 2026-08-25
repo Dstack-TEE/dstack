@@ -8,75 +8,15 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-SIMULATOR_DIR="$ROOT_DIR/simulator"
-SIMULATOR_LOG="$SIMULATOR_DIR/dstack-simulator.log"
-DSTACK_SOCKET="$SIMULATOR_DIR/dstack.sock"
-TAPPD_SOCKET="$SIMULATOR_DIR/tappd.sock"
-GUEST_SOCKET="$SIMULATOR_DIR/guest.sock"
-EXTERNAL_SOCKET="$SIMULATOR_DIR/external.sock"
-SIMULATOR_PID=""
 
-cleanup() {
-    if [[ -n "${SIMULATOR_PID:-}" ]]; then
-        kill "$SIMULATOR_PID" 2>/dev/null || true
-        wait "$SIMULATOR_PID" 2>/dev/null || true
-    fi
-    rm -f "$DSTACK_SOCKET" "$TAPPD_SOCKET" "$GUEST_SOCKET" "$EXTERNAL_SOCKET"
-}
+# shellcheck source=simulator/lifecycle.sh
+# shellcheck disable=SC1091  # the hook runs without -x, so it cannot follow this
+source "$ROOT_DIR/simulator/lifecycle.sh"
 
-print_simulator_logs() {
-    if [[ -f "$SIMULATOR_LOG" ]]; then
-        echo "Last simulator logs:"
-        tail -100 "$SIMULATOR_LOG" || true
-    fi
-}
+trap 'simulator_print_logs' ERR
+trap simulator_stop EXIT INT TERM
 
-wait_for_socket() {
-    local socket_path="$1"
-    local name="$2"
-
-    for _ in {1..100}; do
-        if [[ -S "$socket_path" ]]; then
-            return 0
-        fi
-        if [[ -n "${SIMULATOR_PID:-}" ]] && ! kill -0 "$SIMULATOR_PID" 2>/dev/null; then
-            echo "Simulator exited before $name socket became ready."
-            print_simulator_logs
-            return 1
-        fi
-        sleep 0.2
-    done
-
-    echo "Timed out waiting for $name socket at $socket_path"
-    print_simulator_logs
-    return 1
-}
-
-trap 'print_simulator_logs' ERR
-trap cleanup EXIT INT TERM
-
-rm -f \
-    "$DSTACK_SOCKET" \
-    "$TAPPD_SOCKET" \
-    "$GUEST_SOCKET" \
-    "$EXTERNAL_SOCKET" \
-    "$SIMULATOR_LOG"
-export DSTACK_SIMULATOR_ENDPOINT="$DSTACK_SOCKET"
-export TAPPD_SIMULATOR_ENDPOINT="$TAPPD_SOCKET"
-
-(
-    cd "$SIMULATOR_DIR"
-    ./build.sh
-)
-
-(
-    cd "$SIMULATOR_DIR"
-    ./dstack-simulator >"$SIMULATOR_LOG" 2>&1
-) &
-SIMULATOR_PID=$!
-
-wait_for_socket "$DSTACK_SOCKET" "dstack"
-wait_for_socket "$TAPPD_SOCKET" "tappd"
+simulator_start
 
 pushd "$ROOT_DIR/rust"
 cargo test -- --show-output
