@@ -146,6 +146,32 @@ WARN cert[app.example.com]: publish this record by hand: _validation-persist.app
 The gateway issues for `*.{domain}` only, so each domain needs one validation
 record with `policy=wildcard`.
 
+### Setup order
+
+The records name the ACME account, so there is nothing to publish until the
+cluster has one. A gateway registers its account lazily, on the first issuance
+it attempts, which means `required_dns_records` is empty on a fresh cluster and
+the sequence is:
+
+1. `SetCertbotConfig` — `acme_url`, and `issuer_domain_name` if the CA is not
+   Let's Encrypt.
+2. `AddZtDomain` with `challenge: "dns-persist-01"`. No `dns_cred_id`: the
+   domain needs none, and the gateway CVM never receives one for it.
+3. Register the account. `RotateAcmeCredentials` does it directly and reports
+   the records in `required_dns_records` (it needs at least one ZT domain, which
+   step 2 provided). Triggering `RenewZtDomainCert` works too: the first attempt
+   registers the account and then fails validation, since the record it names
+   does not exist yet.
+4. Read the records — `GetZtDomain`, `ListZtDomains`, or the gateway log, which
+   prints them whenever it cannot write DNS itself — and publish the
+   `_validation-persist` TXT record, plus the CAA records if you want issuance
+   pinned to this account.
+5. `RenewZtDomainCert` again. Renewals from here need nothing further.
+
+Adding a second dns-persist-01 domain later starts at step 2 and skips step 3:
+the account already exists, so its records are available as soon as the domain
+is.
+
 A ZT domain's challenge is chosen when it is added and carried forward by every
 edit, in the dashboard's ZT-Domain form as well as over the API.
 
