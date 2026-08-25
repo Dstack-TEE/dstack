@@ -407,6 +407,62 @@ func TestV1IssueCertKeyIsFreshPerCall(t *testing.T) {
 	}
 }
 
+// The v1 default is usage_server_auth: true, the same as the Rust, Python and
+// JS v1 clients -- a certificate the caller cannot serve with is useless to most
+// of them. The default is only observable on the wire, so assert it there, and
+// assert the opt-out reaches the wire too.
+func TestV1IssueCertDefaultsToServerAuth(t *testing.T) {
+	var payload map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("failed to decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"key":"","certificate_chain":[]}`))
+	}))
+	defer server.Close()
+
+	client := dstack.NewDstackClientV1(dstack.WithEndpoint(server.URL))
+	ctx := context.Background()
+
+	if _, err := client.IssueCert(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if payload["usage_server_auth"] != true {
+		t.Errorf("expected usage_server_auth to default to true, got: %v", payload["usage_server_auth"])
+	}
+
+	if _, err := client.IssueCert(ctx, dstack.WithCertUsageServerAuth(false)); err != nil {
+		t.Fatal(err)
+	}
+	if payload["usage_server_auth"] != false {
+		t.Errorf("expected WithCertUsageServerAuth(false) to opt out, got: %v", payload["usage_server_auth"])
+	}
+}
+
+// v0 sent usage_server_auth: false when the caller said nothing, and that is
+// what the released 0.5.x Go SDK did. The frozen surface keeps it, so the two
+// defaults differ on purpose rather than by oversight.
+func TestV0GetTlsKeyKeepsTheReleasedServerAuthDefault(t *testing.T) {
+	var payload map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("failed to decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"key":"","certificate_chain":[]}`))
+	}))
+	defer server.Close()
+
+	client := dstack.NewDstackClientV0(dstack.WithEndpoint(server.URL))
+	if _, err := client.GetTlsKey(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if payload["usage_server_auth"] != false {
+		t.Errorf("expected the frozen surface to keep sending false, got: %v", payload["usage_server_auth"])
+	}
+}
+
 // Version selection is by URL path alone: every v1 method must post under /v1.
 func TestV1MethodsPostUnderTheV1Prefix(t *testing.T) {
 	paths := make(chan string, 1)

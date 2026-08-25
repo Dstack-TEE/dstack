@@ -195,3 +195,27 @@ async fn test_sign_then_verify_secp256k1_prehashed() {
             .valid
     );
 }
+
+/// A refused prpc call answers 4xx with `{"error": "..."}`, and that message is
+/// the whole value of the response -- `EmitEvent` exists in 0.6 only to explain
+/// its own removal. Both the status and the agent's text have to reach the
+/// caller, which `error_for_status()` and the unix client's default error both
+/// used to throw away.
+#[tokio::test]
+async fn a_refused_call_reports_the_status_and_the_agent_message() {
+    let client = AsyncDstackClient::new(None);
+    let err = client
+        .emit_event("test-event".to_string(), b"payload".to_vec())
+        .await
+        .unwrap_err();
+
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("HTTP 400"),
+        "expected the status in: {message}"
+    );
+    assert!(
+        message.contains("EmitEvent was removed in dstack 0.6.0"),
+        "expected the agent's own explanation in: {message}"
+    );
+}

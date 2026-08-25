@@ -124,6 +124,9 @@ export function to_hex(data: string | Buffer | Uint8Array): string {
   return (data as Buffer).toString('hex');
 }
 
+// The v0 byte accessor, and v0's alone: the chain adapters feed it into seed
+// derivation, so its truncating and zero-padding behaviour is load-bearing on
+// the frozen surface. v1's IssueCert hands back PEM and nothing else.
 function x509key_to_uint8array(pem: string, max_length?: number) {
   const content = pem.replace(/-----BEGIN PRIVATE KEY-----/, '')
     .replace(/-----END PRIVATE KEY-----/, '')
@@ -140,7 +143,6 @@ function x509key_to_uint8array(pem: string, max_length?: number) {
 }
 
 export interface TlsKeyOptions {
-  path?: string;
   subject?: string;
   altNames?: string[];
   usageRaTls?: boolean;
@@ -182,11 +184,11 @@ function throwOnRpcError(result: unknown): void {
  * which is the point of the wire message being shared.
  */
 function to_gpu_evidence_bundles(
-  bundles: Array<Omit<GpuEvidenceBundleV1, 'asUint8Array'>> | undefined,
+  bundles: Array<Omit<GpuEvidenceBundleV1, 'decodeEvidence'>> | undefined,
 ): GpuEvidenceBundleV1[] {
   return (bundles ?? []).map(bundle => Object.freeze({
     ...bundle,
-    asUint8Array: () => new Uint8Array(Buffer.from(bundle.evidence, 'hex')),
+    decodeEvidence: () => new Uint8Array(Buffer.from(bundle.evidence, 'hex')),
   }))
 }
 
@@ -594,12 +596,18 @@ export interface IssueCertOptionsV1 {
 export interface IssueCertResponseV1 {
   __name__: Readonly<'IssueCertResponseV1'>
 
-  /** The private key the agent generated for this certificate, PEM-encoded. */
+  /**
+   * The private key the agent generated for this certificate, PEM-encoded.
+   *
+   * PEM and nothing else. v0 attached a raw-bytes accessor here, but it existed
+   * to feed the key into the blockchain adapters, and v1 has no chain-flavored
+   * surface: this is TLS material, PEM is what a TLS stack takes, and a caller
+   * who genuinely wants DER converts it with a standard library. The other
+   * three SDKs' v1 clients return the PEM string alone too.
+   */
   key: string
   /** The certificate chain, leaf first, each entry PEM-encoded. */
   certificate_chain: string[]
-
-  asUint8Array: (max_length?: number) => Uint8Array
 }
 
 export interface GetKeyResponseV1 {
@@ -626,7 +634,7 @@ export interface AttestResponseV1 {
    *
    * Not bound to `report_data`: nvattest ran at boot against its own nonce.
    * Bind it by replaying the runtime event log and comparing sha256 of the
-   * bytes `asUint8Array()` returns against `evidence_sha256` in the measured
+   * bytes `decodeEvidence()` returns against `evidence_sha256` in the measured
    * `gpu-attestation` event.
    */
   boottime_gpu_evidence: GpuEvidenceBundleV1[]
@@ -661,7 +669,7 @@ export interface GpuEvidenceBundleV1 {
    * measured `gpu-attestation` event, so parsing and re-serialising the JSON
    * breaks the comparison.
    */
-  asUint8Array: () => Uint8Array
+  decodeEvidence: () => Uint8Array
 }
 
 export interface AttestGpuResponseV1 {
@@ -786,10 +794,8 @@ export class DstackClientV1 {
     const result = await send_rpc_request<{ key: string, certificate_chain: string[] }>(
       this.endpoint, '/v1/IssueCert', JSON.stringify(raw))
     throwOnRpcError(result)
-    const asUint8Array = (length?: number) => x509key_to_uint8array(result.key, length)
     return Object.freeze({
       ...result,
-      asUint8Array,
       __name__: 'IssueCertResponseV1' as const,
     })
   }
@@ -847,7 +853,7 @@ export class DstackClientV1 {
     const payload = JSON.stringify({ report_data: hex, include_boottime_gpu_evidence })
     const result = await send_rpc_request<{
       attestation: string,
-      boottime_gpu_evidence?: Array<Omit<GpuEvidenceBundleV1, 'asUint8Array'>>,
+      boottime_gpu_evidence?: Array<Omit<GpuEvidenceBundleV1, 'decodeEvidence'>>,
     }>(this.endpoint, '/v1/Attest', payload)
     throwOnRpcError(result)
     return Object.freeze({
@@ -874,7 +880,7 @@ export class DstackClientV1 {
     }
     const payload = JSON.stringify({ nonce: to_hex(nonce) })
     const result = await send_rpc_request<{
-      bundles?: Array<Omit<GpuEvidenceBundleV1, 'asUint8Array'>>,
+      bundles?: Array<Omit<GpuEvidenceBundleV1, 'decodeEvidence'>>,
     }>(this.endpoint, '/v1/AttestGpu', payload)
     throwOnRpcError(result)
     return Object.freeze({

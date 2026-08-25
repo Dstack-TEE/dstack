@@ -274,8 +274,10 @@ describe('DstackClientV0', () => {
       const client = new DstackClientV0()
       // The 0.6.0 agent always fails this. A caller that gets a resolved promise
       // would believe the event was measured, which is the one wrong answer here.
+      // The agent answers 4xx, so the message arrives through the transport's
+      // status reporting rather than through the body check.
       await expect(() => client.emitEvent('test-event', 'payload')).rejects.toThrow(
-        'EmitEvent was removed in dstack 0.6.0'
+        'HTTP 400: EmitEvent was removed in dstack 0.6.0'
       )
     })
   })

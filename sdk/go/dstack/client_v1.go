@@ -222,6 +222,11 @@ func WithCertUsageRaTls(usage bool) IssueCertV1Option {
 }
 
 // WithCertUsageServerAuth sets the server auth key usage.
+//
+// Defaults to true, matching the v1 default in the Rust, Python and JS SDKs;
+// pass false to issue a certificate that cannot be used for server auth. The
+// frozen v0 GetTlsKey defaults it to false instead, because that is what the
+// released 0.5.x SDK sent.
 func WithCertUsageServerAuth(usage bool) IssueCertV1Option {
 	return func(o *issueCertV1Options) {
 		o.usageServerAuth = usage
@@ -263,7 +268,11 @@ func WithCertAppInfo(enabled bool) IssueCertV1Option {
 // is not derived from the app identity -- GetKey is the method that derives a
 // stable, attestable key. v0 called this GetTlsKey.
 func (c *DstackClientV1) IssueCert(ctx context.Context, options ...IssueCertV1Option) (*IssueCertV1Response, error) {
-	opts := &issueCertV1Options{}
+	// usageServerAuth starts true, matching the v1 default in the Rust, Python
+	// and JS SDKs: a certificate that cannot be served with is useless to most
+	// callers, and a v1 default that differs per language is a trap. Opt out
+	// with WithCertUsageServerAuth(false).
+	opts := &issueCertV1Options{usageServerAuth: true}
 	for _, option := range options {
 		option(opts)
 	}

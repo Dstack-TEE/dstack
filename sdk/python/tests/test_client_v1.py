@@ -261,10 +261,17 @@ async def test_async_v1_attest_gpu_rejects_wrong_nonce_length():
 
 
 def test_sync_v1_attest_gpu_reaches_the_agent():
-    """No GPU in the simulator, so the agent's own refusal is the success signal."""
+    """No GPU in the simulator, so the agent's own refusal is the success signal.
+
+    501 rather than 4xx, and the client must pass both the status and the
+    agent's own words through: a caller that sees 4xx retries a call this image
+    can never answer.
+    """
     with pytest.raises(Exception) as excinfo:
         DstackClientV1().attest_gpu(NONCE)
-    assert "GPU attestation" in str(excinfo.value)
+    message = str(excinfo.value)
+    assert "501" in message, message
+    assert "GPU attestation is not available" in message, message
 
 
 def test_sync_v1_issue_cert():

@@ -4,9 +4,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use hex::encode as hex_encode;
-use http_client_unix_domain_socket::{ClientUnix, Method};
+use http_client_unix_domain_socket::{Body, ClientUnix, ErrorAndResponse, Method};
 use reqwest::Client;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
@@ -60,6 +60,103 @@ pub enum ClientKind {
 
 pub trait BaseClient {}
 
+/// How much of a server response an error may quote, in characters.
+///
+/// An agent with no route for the path answers with an HTML page, and pasting a
+/// whole page into an error helps nobody.
+///
+/// Characters rather than bytes so the bound cannot land inside a multi-byte
+/// sequence; the byte length that follows from it is larger, which is fine for
+/// something whose only job is to stop an error message running away.
+const MAX_ERROR_BODY_CHARS: usize = 512;
+
+fn truncate(text: &str) -> String {
+    match text.char_indices().nth(MAX_ERROR_BODY_CHARS) {
+        Some((end, _)) => format!("{}...", &text[..end]),
+        None => text.to_string(),
+    }
+}
+
+/// What the server said, as far as it can be made out.
+///
+/// A prpc handler that refuses answers `{"error": "..."}` with a 4xx, and that
+/// field is the only part worth showing. A request that never reached a handler
+/// -- a `/v1` call against a pre-0.6 agent -- comes back as an HTML error page
+/// instead, and then the raw body is the only clue there is.
+fn server_error_text(body: &[u8]) -> String {
+    let Ok(text) = std::str::from_utf8(body) else {
+        return "(non-utf8 response body)".to_string();
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        return "(empty response body)".to_string();
+    }
+    if let Ok(Value::Object(fields)) = serde_json::from_str::<Value>(text) {
+        if let Some(Value::String(message)) = fields.get("error") {
+            return truncate(message);
+        }
+    }
+    truncate(text)
+}
+
+/// Turn a non-2xx response into an error naming both the status and the reason.
+pub(crate) fn http_error(status: u16, body: &[u8]) -> anyhow::Error {
+    anyhow!("HTTP {status}: {}", server_error_text(body))
+}
+
+/// POST `payload` as JSON over TCP and return the raw response body.
+pub(crate) async fn http_post<S: Serialize>(
+    base_url: &str,
+    path: &str,
+    payload: &S,
+) -> Result<Vec<u8>> {
+    let url = format!(
+        "{}/{}",
+        base_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
+    // `json()` sets `Content-Type` itself; adding it again would *append* rather
+    // than replace, putting the header on the wire twice.
+    let res = Client::new().post(&url).json(payload).send().await?;
+    // Deliberately not `error_for_status()`: that discards the response body,
+    // which is exactly where the agent puts the reason it refused.
+    let status = res.status();
+    let body = res.bytes().await?;
+    if !status.is_success() {
+        return Err(http_error(status.as_u16(), &body));
+    }
+    Ok(body.to_vec())
+}
+
+/// POST `payload` as JSON over the guest-agent socket and return the raw body.
+pub(crate) async fn unix_post<S: Serialize>(
+    endpoint: &str,
+    path: &str,
+    payload: &S,
+) -> Result<Vec<u8>> {
+    let mut unix_client = ClientUnix::try_new(endpoint).await?;
+    // `send_request` rather than `send_request_json`: the JSON helper insists on
+    // deserializing the *error* body as well, so an HTML 404 from an agent that
+    // does not serve this path surfaces as a JSON parse failure rather than as
+    // the status that explains it.
+    let request = Body::from(serde_json::to_vec(payload)?);
+    match unix_client
+        .send_request(
+            path,
+            Method::POST,
+            &[("Content-Type", "application/json"), ("Host", "dstack")],
+            Some(request),
+        )
+        .await
+    {
+        Ok((_status, body)) => Ok(body),
+        Err(ErrorAndResponse::ResponseUnsuccessful(status, body)) => {
+            Err(http_error(status.as_u16(), &body))
+        }
+        Err(ErrorAndResponse::InternalError(err)) => Err(err.into()),
+    }
+}
+
 /// Client for the frozen v0 guest-agent surface.
 ///
 /// **Legacy.** New code should use [`crate::dstack_client_v1::DstackClientV1`],
@@ -108,36 +205,11 @@ impl DstackClientV0 {
         path: &str,
         payload: &S,
     ) -> anyhow::Result<D> {
-        match &self.client {
-            ClientKind::Http => {
-                let client = Client::new();
-                let url = format!(
-                    "{}/{}",
-                    self.base_url.trim_end_matches('/'),
-                    path.trim_start_matches('/')
-                );
-                let res = client
-                    .post(&url)
-                    .json(payload)
-                    .header("Content-Type", "application/json")
-                    .send()
-                    .await?
-                    .error_for_status()?;
-                Ok(res.json().await?)
-            }
-            ClientKind::Unix => {
-                let mut unix_client = ClientUnix::try_new(&self.endpoint).await?;
-                let res = unix_client
-                    .send_request_json::<_, _, Value>(
-                        path,
-                        Method::POST,
-                        &[("Content-Type", "application/json"), ("Host", "dstack")],
-                        Some(&payload),
-                    )
-                    .await?;
-                Ok(res.1)
-            }
-        }
+        let body = match &self.client {
+            ClientKind::Http => http_post(&self.base_url, path, payload).await?,
+            ClientKind::Unix => unix_post(&self.endpoint, path, payload).await?,
+        };
+        serde_json::from_slice(&body).context("failed to parse the response")
     }
 
     pub async fn get_key(
@@ -259,5 +331,49 @@ impl DstackClientV0 {
         let response = self.send_rpc_request("/Verify", &payload).await?;
         let response = serde_json::from_value::<VerifyResponse>(response)?;
         Ok(response)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quotes_the_error_field_of_a_prpc_failure() {
+        let err = http_error(400, br#"{"error":"algorithm is not supported"}"#);
+        assert_eq!(err.to_string(), "HTTP 400: algorithm is not supported");
+    }
+
+    #[test]
+    fn quotes_the_body_when_it_is_not_a_prpc_failure() {
+        // What a pre-0.6 agent answers a `/v1` call with.
+        let err = http_error(404, b"<!DOCTYPE html>\n<html>404</html>");
+        assert_eq!(
+            err.to_string(),
+            "HTTP 404: <!DOCTYPE html>\n<html>404</html>"
+        );
+    }
+
+    #[test]
+    fn bounds_the_quoted_body() {
+        let err = http_error(500, "x".repeat(MAX_ERROR_BODY_CHARS * 2).as_bytes());
+        // An HTML error page must not become the whole error message.
+        assert_eq!(
+            err.to_string().len(),
+            "HTTP 500: ".len() + MAX_ERROR_BODY_CHARS + 3
+        );
+        assert!(err.to_string().ends_with("..."));
+    }
+
+    #[test]
+    fn names_an_unreadable_body_rather_than_dropping_the_status() {
+        assert_eq!(
+            http_error(502, b"").to_string(),
+            "HTTP 502: (empty response body)"
+        );
+        assert_eq!(
+            http_error(502, &[0xff, 0xfe]).to_string(),
+            "HTTP 502: (non-utf8 response body)"
+        );
     }
 }

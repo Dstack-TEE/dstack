@@ -20,7 +20,10 @@ async fn version_answers_on_the_v1_surface() {
 #[tokio::test]
 async fn get_key_returns_a_key_public_key_and_two_link_chain() {
     for algorithm in ["secp256k1", "ed25519"] {
-        let response = client().get_key("storage-encryption", algorithm).await.unwrap();
+        let response = client()
+            .get_key("storage-encryption", algorithm)
+            .await
+            .unwrap();
 
         // 32 raw bytes for both algorithms, hex-encoded on the wire.
         assert_eq!(response.decode_key().unwrap().len(), 32);
@@ -34,14 +37,20 @@ async fn get_key_returns_a_key_public_key_and_two_link_chain() {
 
 #[tokio::test]
 async fn get_key_public_key_lengths_are_the_specified_ones() {
-    let secp = client().get_key("storage-encryption", "secp256k1").await.unwrap();
+    let secp = client()
+        .get_key("storage-encryption", "secp256k1")
+        .await
+        .unwrap();
     assert_eq!(
         secp.decode_public_key().unwrap().len(),
         33,
         "SEC1 compressed"
     );
 
-    let ed = client().get_key("storage-encryption", "ed25519").await.unwrap();
+    let ed = client()
+        .get_key("storage-encryption", "ed25519")
+        .await
+        .unwrap();
     assert_eq!(ed.decode_public_key().unwrap().len(), 32);
 }
 
@@ -52,7 +61,10 @@ async fn get_key_rejects_an_empty_or_unknown_algorithm() {
     assert!(client().get_key("storage-encryption", "").await.is_err());
     for algorithm in ["k256", "rsa", "secp256k1_prehashed"] {
         assert!(
-            client().get_key("storage-encryption", algorithm).await.is_err(),
+            client()
+                .get_key("storage-encryption", algorithm)
+                .await
+                .is_err(),
             "v1 accepted algorithm {algorithm:?}"
         );
     }
@@ -70,8 +82,14 @@ async fn different_domains_yield_different_keys() {
 /// KDF exists.
 #[tokio::test]
 async fn the_two_algorithms_never_share_key_material() {
-    let secp = client().get_key("storage-encryption", "secp256k1").await.unwrap();
-    let ed = client().get_key("storage-encryption", "ed25519").await.unwrap();
+    let secp = client()
+        .get_key("storage-encryption", "secp256k1")
+        .await
+        .unwrap();
+    let ed = client()
+        .get_key("storage-encryption", "ed25519")
+        .await
+        .unwrap();
     assert_ne!(secp.key, ed.key);
 }
 
@@ -141,8 +159,15 @@ async fn attest_gpu_validates_the_nonce_length() {
         );
     }
     // A correctly sized nonce gets past the client and fails at the simulator,
-    // which has no GPU to attest.
-    assert!(client().attest_gpu(vec![0xab; 32]).await.is_err());
+    // which has no GPU to attest. 501, not 4xx: the request was well-formed and
+    // no retry of it will ever succeed on an image that ships no nvattest.
+    let err = client()
+        .attest_gpu(vec![0xab; 32])
+        .await
+        .expect_err("the simulator has no GPU to attest");
+    let err = format!("{err:#}");
+    assert!(err.contains("HTTP 501"), "{err}");
+    assert!(err.contains("GPU attestation is not available"), "{err}");
 }
 
 #[tokio::test]
@@ -228,4 +253,24 @@ async fn issue_cert_generates_a_fresh_key_per_call() {
     let first = client().issue_cert(config()).await.unwrap();
     let second = client().issue_cert(config()).await.unwrap();
     assert_ne!(first.key, second.key);
+}
+
+/// An agent that predates v1 has no `/v1` mount, so it answers with a plain
+/// HTML 404 rather than a prpc error -- and that page is the only clue the
+/// caller gets. The simulator's tappd socket serves no `/v1` either, so it
+/// stands in for one here.
+#[tokio::test]
+async fn a_missing_v1_mount_is_reported_with_its_status() {
+    let endpoint = std::env::var("TAPPD_SIMULATOR_ENDPOINT")
+        .expect("TAPPD_SIMULATOR_ENDPOINT must point at the simulator");
+    let err = DstackClientV1::new(Some(&endpoint))
+        .version()
+        .await
+        .unwrap_err();
+
+    let message = format!("{err:#}");
+    assert!(
+        message.starts_with("HTTP 404: <!DOCTYPE html>"),
+        "expected the status and the server's page, got: {message}"
+    );
 }

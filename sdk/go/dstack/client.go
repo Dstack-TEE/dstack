@@ -211,7 +211,11 @@ func NewDstackClientV0(opts ...DstackClientOption) *DstackClientV0 {
 // TlsKeyOption defines a function type for TLS key options
 type TlsKeyOption func(*tlsKeyOptions)
 
-// tlsKeyOptions holds all the optional parameters for GetTlsKey
+// tlsKeyOptions holds all the optional parameters for GetTlsKey.
+//
+// usageServerAuth stays false by default. That is what the released 0.5.x Go
+// SDK sent, and this surface mirrors released behavior rather than the better
+// choice -- v1's IssueCert defaults it to true.
 type tlsKeyOptions struct {
 	subject         string
 	altNames        []string

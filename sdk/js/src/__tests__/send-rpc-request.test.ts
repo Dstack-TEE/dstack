@@ -6,20 +6,16 @@ import { expect, describe, it, vi, beforeEach, afterEach } from 'vitest'
 import { send_rpc_request, __version__ } from '../send-rpc-request'
 import http from 'http'
 import https from 'https'
-import net from 'net'
 
 // Mock the modules
 vi.mock('http')
 vi.mock('https')
-vi.mock('net')
 
 describe('send_rpc_request', () => {
   let mockHttpRequest: any
   let mockHttpsRequest: any
-  let mockNetConnect: any
   let mockReq: any
   let mockRes: any
-  let mockClient: any
 
   beforeEach(() => {
     // Reset all mocks
@@ -43,17 +39,6 @@ describe('send_rpc_request', () => {
 
     vi.mocked(http).request = mockHttpRequest
     vi.mocked(https).request = mockHttpsRequest
-
-    // Mock net connection
-    mockClient = {
-      write: vi.fn(),
-      end: vi.fn(),
-      on: vi.fn(),
-      destroy: vi.fn(),
-    }
-
-    mockNetConnect = vi.fn(() => mockClient)
-    vi.mocked(net).createConnection = mockNetConnect
   })
 
   afterEach(() => {
@@ -75,7 +60,7 @@ describe('send_rpc_request', () => {
         const dataCallback = mockRes.on.mock.calls.find(call => call[0] === 'data')?.[1]
         const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
 
-        if (dataCallback) dataCallback('{"result": "success"}')
+        if (dataCallback) dataCallback(Buffer.from('{"result": "success"}', 'utf8'))
         if (endCallback) endCallback()
 
         return mockReq
@@ -113,7 +98,7 @@ describe('send_rpc_request', () => {
         const dataCallback = mockRes.on.mock.calls.find(call => call[0] === 'data')?.[1]
         const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
 
-        if (dataCallback) dataCallback('{"result": "success"}')
+        if (dataCallback) dataCallback(Buffer.from('{"result": "success"}', 'utf8'))
         if (endCallback) endCallback()
 
         return mockReq
@@ -143,6 +128,49 @@ describe('send_rpc_request', () => {
       await expect(send_rpc_request(endpoint, path, payload)).rejects.toThrow('connection failed')
     })
 
+    it('should report a non-2xx with its status and the prpc error text', async () => {
+      mockRes.statusCode = 404
+      mockHttpRequest.mockImplementation((url, options, callback) => {
+        callback(mockRes)
+
+        const dataCallback = mockRes.on.mock.calls.find(call => call[0] === 'data')?.[1]
+        const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
+
+        if (dataCallback) dataCallback(Buffer.from('{"error": "Service not found: GetKeyX"}', 'utf8'))
+        if (endCallback) endCallback()
+
+        return mockReq
+      })
+
+      await expect(send_rpc_request('http://localhost:3000', '/GetKeyX', '{}'))
+        .rejects.toThrow('HTTP 404: Service not found: GetKeyX')
+    })
+
+    it('should report a non-2xx with a bounded snippet when the body is not JSON', async () => {
+      // What a pre-0.6 agent answers a `/v1` call with: no `error` field, and a
+      // whole page of it. Without the status this reads as a parse failure.
+      const page = `<!DOCTYPE html>${'<p>not found</p>'.repeat(200)}`
+      mockRes.statusCode = 404
+      mockHttpRequest.mockImplementation((url, options, callback) => {
+        callback(mockRes)
+
+        const dataCallback = mockRes.on.mock.calls.find(call => call[0] === 'data')?.[1]
+        const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
+
+        if (dataCallback) dataCallback(Buffer.from(page, 'utf8'))
+        if (endCallback) endCallback()
+
+        return mockReq
+      })
+
+      const error = await send_rpc_request('http://localhost:3000', '/v1/Version', '{}')
+        .catch((err: Error) => err)
+      expect(error).toBeInstanceOf(Error)
+      expect((error as Error).message).toContain('HTTP 404: <!DOCTYPE html>')
+      expect((error as Error).message.length).toBeLessThan(page.length)
+      expect((error as Error).message.endsWith('...')).toBe(true)
+    })
+
     it('should handle invalid JSON response', async () => {
       const endpoint = 'http://localhost:3000'
       const path = '/api/test'
@@ -154,48 +182,13 @@ describe('send_rpc_request', () => {
         const dataCallback = mockRes.on.mock.calls.find(call => call[0] === 'data')?.[1]
         const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
 
-        if (dataCallback) dataCallback('invalid json')
+        if (dataCallback) dataCallback(Buffer.from('invalid json', 'utf8'))
         if (endCallback) endCallback()
 
         return mockReq
       })
 
       await expect(send_rpc_request(endpoint, path, payload)).rejects.toThrow('failed to parse response')
-    })
-  })
-
-    describe('Unix socket requests', () => {
-    it('should call createConnection with correct parameters', () => {
-      const endpoint = '/tmp/socket'
-      const path = '/api/test'
-      const payload = '{"test": "data"}'
-
-      // Mock the socket connection to never complete
-      mockNetConnect.mockImplementation((options, callback) => {
-        return mockClient
-      })
-
-      // Start the request but don't wait for completion
-      send_rpc_request(endpoint, path, payload)
-
-      expect(mockNetConnect).toHaveBeenCalledWith({ path: endpoint }, expect.any(Function))
-    })
-
-    it('should handle Unix socket connection errors', async () => {
-      const endpoint = '/tmp/socket'
-      const path = '/api/test'
-      const payload = '{"test": "data"}'
-
-      mockNetConnect.mockImplementation(() => {
-        mockClient.on.mockImplementation((event, callback) => {
-          if (event === 'error') {
-            setTimeout(() => callback(new Error('socket connection failed')), 0)
-          }
-        })
-        return mockClient
-      })
-
-      await expect(send_rpc_request(endpoint, path, payload)).rejects.toThrow('socket connection failed')
     })
   })
 
@@ -241,32 +234,12 @@ describe('send_rpc_request', () => {
       global.setTimeout = originalSetTimeout
     })
 
-    it('should timeout and reject with correct error message', async () => {
-      const endpoint = 'http://localhost:3000'
-      const path = '/api/test'
-      const payload = '{"test": "data"}'
-
-      // Mock real setTimeout to trigger timeout immediately
-      const originalSetTimeout = global.setTimeout
-      // @ts-ignore
-      global.setTimeout = vi.fn((callback, delay) => {
-        if (delay === 1) {
-          // Call timeout callback immediately for our test timeout
-          callback()
-          return 123 as any
-        }
-        return originalSetTimeout(callback, delay)
-      })
-
-      mockHttpRequest.mockImplementation(() => {
-        // Never complete the request
-        return mockReq
-      })
-
-      await expect(send_rpc_request(endpoint, path, payload, 1)).rejects.toThrow('request timed out')
-
-      global.setTimeout = originalSetTimeout
-    })
+    // The timeout *message* is pinned in `send-rpc-request.unix.test.ts`,
+    // against a real socket that accepts and never answers. Stubbing
+    // `setTimeout` here would run the callback before the abort listener is
+    // registered -- an ordering that cannot happen at runtime, and one that
+    // made the previous version of this test pass against a transport where
+    // `request timed out` was unreachable.
   })
 
   describe('abort functionality', () => {
@@ -281,7 +254,7 @@ describe('send_rpc_request', () => {
         const dataCallback = mockRes.on.mock.calls.find(call => call[0] === 'data')?.[1]
         const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
 
-        if (dataCallback) dataCallback('{"result": "success"}')
+        if (dataCallback) dataCallback(Buffer.from('{"result": "success"}', 'utf8'))
         if (endCallback) endCallback()
 
         return mockReq
@@ -306,7 +279,7 @@ describe('send_rpc_request', () => {
         const endCallback = mockRes.on.mock.calls.find(call => call[0] === 'end')?.[1]
 
         setTimeout(() => {
-          if (dataCallback) dataCallback('{"result": "success"}')
+          if (dataCallback) dataCallback(Buffer.from('{"result": "success"}', 'utf8'))
           if (endCallback) {
             endCallback() // First end
             endCallback() // Second end - should be ignored
