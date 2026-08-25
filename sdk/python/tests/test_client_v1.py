@@ -4,6 +4,7 @@
 
 from typing import List
 
+from pydantic import ValidationError
 import pytest
 
 from dstack_sdk import AsyncDstackClient
@@ -337,3 +338,48 @@ def test_v1_unix_socket_file_not_exist(monkeypatch):
     monkeypatch.delenv("DSTACK_SIMULATOR_ENDPOINT", raising=False)
     with pytest.raises(FileNotFoundError):
         DstackClientV1("/non/existent/socket")
+
+
+# The wire is hex; anything else is a response no verifier should act on. Go
+# names the field it could not decode and Rust refuses the string outright, so
+# Python doing the same is what keeps a malformed answer malformed in every
+# SDK rather than in three of four.
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "aabbzz",  # a non-hex pair
+        "abc",  # odd length: the last digit has nowhere to go
+        "aa bb",  # bytes.fromhex() skips whitespace; the wire never has any
+        "aa\nbb",
+    ],
+)
+def test_v1_malformed_hex_is_rejected(bad: str):
+    with pytest.raises(ValidationError):
+        GetKeyResponseV1(key=bad, public_key="bb" * 33, signature_chain=[])
+
+
+def test_v1_malformed_chain_link_is_rejected():
+    """One bad link must fail the chain, not silently shorten it."""
+    with pytest.raises(ValidationError):
+        GetKeyResponseV1(
+            key="aa" * 32, public_key="bb" * 33, signature_chain=["aabb", "qq"]
+        )
+
+
+def test_v1_absent_identity_hashes_are_empty():
+    """`os_image_hash` and `mr_aggregated` default rather than reject.
+
+    Both are plain `bytes` in the proto, so a current agent always sends them --
+    empty when it could not compute one. Reading a response that omits one as
+    those same empty bytes keeps a degraded `Info` parseable instead of
+    unparseable, which is what Rust's `#[serde(default)]` already did.
+    """
+    info = InfoResponseV1(
+        app_id="aa" * 20,
+        compose_hash="bb" * 32,
+        instance_id="cc" * 20,
+        device_id="dd" * 32,
+    )
+    assert info.os_image_hash == b""
+    assert info.mr_aggregated == b""
+    assert info.app_id == b"\xaa" * 20

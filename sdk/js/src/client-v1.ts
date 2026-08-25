@@ -8,15 +8,55 @@
 import { send_rpc_request } from './send-rpc-request'
 import { to_hex, throwOnRpcError, resolveDstackEndpoint } from './shared'
 
+/** An even number of hex digits, and nothing else. */
+const HEX_ONLY = /^(?:[0-9a-fA-F]{2})*$/
+
 /**
- * Decode a wire hex string into the bytes the field is declared as.
+ * Decode a wire hex string, or say which field was malformed.
  *
- * Every `bytes` field in the v1 proto travels as lowercase hex and surfaces
- * here as a `Uint8Array`, so this runs on all of them. A missing field is
- * proto3's empty default, not an error.
+ * Strict on purpose. Node's hex decoder stops at the first pair it cannot
+ * parse and returns the prefix it managed, without error: `Buffer.from(
+ * '0102zz', 'hex')` is two bytes, and an odd-length string loses its last
+ * digit. These fields are private keys, signature chain links and application
+ * identity -- handing back a silently truncated one is worse than throwing,
+ * and Rust, Python and Go all refuse the same input.
  */
-function from_hex(value: string | undefined): Uint8Array {
-  return new Uint8Array(Buffer.from(value ?? '', 'hex'))
+function decode_hex(value: string, field: string): Uint8Array {
+  if (!HEX_ONLY.test(value)) {
+    throw new Error(
+      `the agent returned a malformed ${field}: expected an even-length hex string`
+    )
+  }
+  return new Uint8Array(Buffer.from(value, 'hex'))
+}
+
+/**
+ * Decode a `bytes` field the proto declares required.
+ *
+ * Absence is an error rather than the empty default: `app_id` and `key` are
+ * answers the agent always has, so a response without one is a response that
+ * did not come from a working agent. An empty *string* still decodes to zero
+ * bytes, which is what every other SDK does with it.
+ */
+function from_hex(value: string | undefined, field: string): Uint8Array {
+  if (value === undefined || value === null) {
+    throw new Error(`the agent returned no ${field}`)
+  }
+  return decode_hex(value, field)
+}
+
+/**
+ * Decode a `bytes` field, treating absence as the empty default.
+ *
+ * `os_image_hash` and `mr_aggregated` are the two that get this. Both are
+ * plain `bytes` in the proto, so a current agent always sends them -- empty
+ * when it could not compute one. Reading a missing key as those same empty
+ * bytes rather than an error keeps a degraded `Info` readable instead of
+ * unparseable; Rust spells the same rule `#[serde(default)]`. It costs
+ * nothing, because neither field means anything unattested anyway.
+ */
+function from_optional_hex(value: string | undefined, field: string): Uint8Array {
+  return value === undefined || value === null ? new Uint8Array(0) : decode_hex(value, field)
 }
 
 export interface IssueCertOptionsV1 {
@@ -157,8 +197,9 @@ export interface InfoResponseV1 {
 /**
  * `InfoResponseV1` as it arrives: identity fields hex, everything else final.
  *
- * `os_image_hash` and `mr_aggregated` are `optional` on the wire, so an older
- * agent may omit them entirely rather than send an empty string.
+ * `os_image_hash` and `mr_aggregated` are optional here rather than on the
+ * wire: the proto declares them plain `bytes` and the agent always sends them,
+ * but a response that omits one is read as empty rather than rejected.
  */
 type InfoResponseV1Wire =
   Omit<InfoResponseV1, '__name__' | 'app_id' | 'compose_hash' | 'instance_id'
@@ -190,7 +231,7 @@ function to_gpu_evidence_bundles(
 ): GpuEvidenceBundleV1[] {
   return (bundles ?? []).map(bundle => Object.freeze({
     ...bundle,
-    evidence: from_hex(bundle.evidence),
+    evidence: from_hex(bundle.evidence, 'GPU evidence'),
   }))
 }
 
@@ -284,9 +325,11 @@ export class DstackClientV1 {
       this.endpoint, '/v1/GetKey', payload)
     throwOnRpcError(result)
     return Object.freeze({
-      key: from_hex(result.key),
-      public_key: from_hex(result.public_key),
-      signature_chain: result.signature_chain.map(from_hex),
+      key: from_hex(result.key, 'key'),
+      public_key: from_hex(result.public_key, 'public_key'),
+      signature_chain: result.signature_chain.map((link, i) =>
+        from_hex(link, `signature_chain[${i}]`)
+      ),
       __name__: 'GetKeyResponseV1' as const,
     })
   }
@@ -321,7 +364,7 @@ export class DstackClientV1 {
     throwOnRpcError(result)
     return Object.freeze({
       __name__: 'AttestResponseV1' as const,
-      attestation: from_hex(result.attestation),
+      attestation: from_hex(result.attestation, 'attestation'),
       boottime_gpu_evidence: to_gpu_evidence_bundles(result.boottime_gpu_evidence),
     })
   }
@@ -358,12 +401,12 @@ export class DstackClientV1 {
     throwOnRpcError(result)
     return Object.freeze({
       ...result,
-      app_id: from_hex(result.app_id),
-      compose_hash: from_hex(result.compose_hash),
-      instance_id: from_hex(result.instance_id),
-      device_id: from_hex(result.device_id),
-      os_image_hash: from_hex(result.os_image_hash),
-      mr_aggregated: from_hex(result.mr_aggregated),
+      app_id: from_hex(result.app_id, 'app_id'),
+      compose_hash: from_hex(result.compose_hash, 'compose_hash'),
+      instance_id: from_hex(result.instance_id, 'instance_id'),
+      device_id: from_hex(result.device_id, 'device_id'),
+      os_image_hash: from_optional_hex(result.os_image_hash, 'os_image_hash'),
+      mr_aggregated: from_optional_hex(result.mr_aggregated, 'mr_aggregated'),
       __name__: 'InfoResponseV1' as const,
     })
   }

@@ -127,15 +127,84 @@ pub struct GetKeyResponse {
     pub signature_chain: Vec<Vec<u8>>,
 }
 
+/// The value an attestation binds to: bytes, and only bytes.
+///
+/// A newtype rather than a bare `Vec<u8>` so [`AttestConfig`]'s builder can
+/// keep `#[builder(into)]` -- a `Vec<u8>`, an array and a slice all convert --
+/// while `&str` and `String` do not. Both of those implement `Into<Vec<u8>>`,
+/// so on the bare type `.report_data("00ff")` compiles and attests the four
+/// ASCII bytes of that string rather than the two bytes it spells. That is the
+/// mistake this surface types its `bytes` fields to make unspellable, and the
+/// one field a caller sends rather than receives should not be the exception.
+///
+/// Length is the agent's to enforce; this type only fixes what the value is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
+#[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
+#[serde(transparent)]
+pub struct ReportData(#[serde(with = "hex::serde")] pub Vec<u8>);
+
+impl From<Vec<u8>> for ReportData {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+}
+
+impl From<&[u8]> for ReportData {
+    fn from(bytes: &[u8]) -> Self {
+        Self(bytes.to_vec())
+    }
+}
+
+impl<const N: usize> From<[u8; N]> for ReportData {
+    fn from(bytes: [u8; N]) -> Self {
+        Self(bytes.to_vec())
+    }
+}
+
+impl<const N: usize> From<&[u8; N]> for ReportData {
+    fn from(bytes: &[u8; N]) -> Self {
+        Self(bytes.to_vec())
+    }
+}
+
+impl core::ops::Deref for ReportData {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for ReportData {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 /// Configuration for a v1 attestation request.
+///
+/// `report_data` takes bytes and only bytes. A hex string is a different value
+/// with the same spelling, and the builder will not take one:
+///
+/// ```compile_fail
+/// use dstack_sdk_types::dstack_v1::AttestConfig;
+/// // 8 ASCII bytes where 4 were meant -- rejected at compile time.
+/// let _ = AttestConfig::builder().report_data("deadbeef").build();
+/// ```
+///
+/// ```
+/// use dstack_sdk_types::dstack_v1::AttestConfig;
+/// let config = AttestConfig::builder().report_data([0xde, 0xad, 0xbe, 0xef]).build();
+/// assert_eq!(config.report_data.len(), 4);
+/// ```
 #[derive(Debug, bon::Builder, Serialize, Deserialize)]
 #[cfg_attr(feature = "borsh", derive(BorshSerialize, BorshDeserialize))]
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
 pub struct AttestConfig {
     /// The report data, at most 64 bytes. Hex-encoded on the wire.
     #[builder(into)]
-    #[serde(with = "hex::serde")]
-    pub report_data: Vec<u8>,
+    pub report_data: ReportData,
     /// Also return the boot-time GPU attestation evidence
     #[builder(default = false)]
     pub include_boottime_gpu_evidence: bool,
@@ -313,6 +382,35 @@ mod tests {
             .build();
         let json = serde_json::to_string(&config).expect("serializes");
         assert!(json.contains(r#""report_data":"deadbeef""#), "{json}");
+    }
+
+    #[test]
+    fn report_data_accepts_every_byte_shape_a_caller_holds() {
+        let owned = AttestConfig::builder().report_data(vec![0xaa, 0xbb]).build();
+        let array = AttestConfig::builder().report_data([0xaa, 0xbb]).build();
+        let borrowed_array = AttestConfig::builder().report_data(b"\xaa\xbb").build();
+        let slice = AttestConfig::builder()
+            .report_data(&[0xaa, 0xbb][..])
+            .build();
+
+        for config in [owned, array, borrowed_array, slice] {
+            assert_eq!(&config.report_data[..], &[0xaa, 0xbb]);
+        }
+    }
+
+    #[test]
+    fn report_data_round_trips_through_the_wire_form() {
+        let json = r#"{"report_data":"deadbeef","include_boottime_gpu_evidence":false}"#;
+        let config: AttestConfig = serde_json::from_str(json).expect("deserializes");
+        assert_eq!(config.report_data, ReportData(vec![0xde, 0xad, 0xbe, 0xef]));
+        assert_eq!(serde_json::to_string(&config).expect("serializes"), json);
+    }
+
+    #[test]
+    fn report_data_rejects_a_non_hex_wire_value() {
+        let json = r#"{"report_data":"zz","include_boottime_gpu_evidence":false}"#;
+        let err = serde_json::from_str::<AttestConfig>(json).expect_err("not hex");
+        assert!(err.to_string().contains("Invalid character"), "{err}");
     }
 
     #[test]

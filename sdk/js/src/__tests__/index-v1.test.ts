@@ -270,6 +270,72 @@ describe('DstackClientV1', () => {
     })
   })
 
+  // Every one of these decoded to a shorter-than-asked-for Uint8Array with no
+  // error before the hex decoding was made strict: Node's decoder stops at the
+  // first pair it cannot parse and returns the prefix. A truncated `key` or a
+  // signature chain quietly one link short is a verification failure nobody can
+  // trace back to its cause.
+  describe('malformed hex from the agent', () => {
+    async function withAgentAnswering(body: unknown, fn: (client: DstackClientV1) => Promise<void>) {
+      const server = http.createServer((_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(body))
+      })
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()))
+      try {
+        const { port } = server.address() as AddressInfo
+        await fn(new DstackClientV1(`http://127.0.0.1:${port}`))
+      } finally {
+        await new Promise<void>(resolve => server.close(() => resolve()))
+      }
+    }
+
+    const identity = {
+      app_id: 'aa'.repeat(20),
+      compose_hash: 'bb'.repeat(32),
+      instance_id: 'cc'.repeat(20),
+      device_id: 'dd'.repeat(32),
+      os_image_hash: 'ee'.repeat(32),
+      mr_aggregated: 'ff'.repeat(48),
+    }
+
+    it('should reject a non-hex character rather than truncate', async () => {
+      await withAgentAnswering({ ...identity, app_id: 'aabbzz' + 'aa'.repeat(17) }, client =>
+        expect(client.info()).rejects.toThrow(/malformed app_id/)
+      )
+    })
+
+    it('should reject an odd-length string rather than drop a digit', async () => {
+      await withAgentAnswering({ ...identity, compose_hash: 'abc' }, client =>
+        expect(client.info()).rejects.toThrow(/malformed compose_hash/)
+      )
+    })
+
+    it('should name the chain link that is malformed', async () => {
+      await withAgentAnswering(
+        { key: 'aa'.repeat(32), public_key: 'bb'.repeat(33), signature_chain: ['aabb', 'qq'] },
+        client => expect(client.getKey('x', 'secp256k1')).rejects.toThrow(/signature_chain\[1\]/)
+      )
+    })
+
+    it('should reject an absent required field instead of returning empty bytes', async () => {
+      const { instance_id: _dropped, ...without_instance_id } = identity
+      await withAgentAnswering(without_instance_id, client =>
+        expect(client.info()).rejects.toThrow(/no instance_id/)
+      )
+    })
+
+    it('should accept an absent optional field as empty', async () => {
+      const { os_image_hash: _a, mr_aggregated: _b, ...older_agent } = identity
+      await withAgentAnswering(older_agent, async client => {
+        const info = await client.info()
+        expect(info.os_image_hash).toEqual(new Uint8Array(0))
+        expect(info.mr_aggregated).toEqual(new Uint8Array(0))
+        expect(info.app_id.length).toBe(20)
+      })
+    })
+  })
+
   describe('info', () => {
     it('should return the flat identity shape', async () => {
       const client = new DstackClientV1()

@@ -17,6 +17,7 @@ name. There is no compatibility mode. See ``docs/guest-api-v1.md``.
 """
 
 import binascii
+import re
 from typing import Annotated
 from typing import Any
 from typing import Dict
@@ -31,14 +32,22 @@ from .dstack_client_v0 import AsyncBaseClient
 from .dstack_client_v0 import BaseClient
 from .dstack_client_v0 import call_async
 
+#: An even number of hex digits, and nothing else.
+_HEX_ONLY = re.compile(r"\A(?:[0-9a-fA-F]{2})*\Z")
+
 
 def _decode_hex(value: Any) -> Any:
-    """Turn a wire hex string into bytes, leaving anything else to pydantic."""
+    r"""Turn a wire hex string into bytes, leaving anything else to pydantic.
+
+    The regex is not redundant with ``bytes.fromhex``: that helper skips ASCII
+    whitespace, so ``"aa bb"`` and ``"aa\nbb"`` decode happily while the error
+    message here promises they do not. Rust and Go reject both, and a field
+    one SDK accepts and another refuses is a field verifiers cannot rely on.
+    """
     if isinstance(value, str):
-        try:
-            return bytes.fromhex(value)
-        except ValueError as err:
-            raise ValueError(f"expected a lowercase hex string: {err}") from err
+        if not _HEX_ONLY.match(value):
+            raise ValueError(f"expected an even-length hex string, got {value!r}")
+        return bytes.fromhex(value)
     return value
 
 
@@ -152,8 +161,11 @@ class InfoResponseV1(BaseModel):
     instance_id: HexBytes
     # Identifies the host machine, not this instance.
     device_id: HexBytes
-    os_image_hash: HexBytes
-    mr_aggregated: HexBytes
+    # Plain `bytes` in the proto, so the agent always sends these -- empty when
+    # it could not compute one. A response that omits one is read as those same
+    # empty bytes rather than rejected, as Rust's `#[serde(default)]` does.
+    os_image_hash: HexBytes = b""
+    mr_aggregated: HexBytes = b""
     vm_config: str = ""
     key_provider_info: str = ""
     cloud_vendor: str = ""
