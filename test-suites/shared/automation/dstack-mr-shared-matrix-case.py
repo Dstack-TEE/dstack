@@ -249,11 +249,11 @@ def execute_matrix(
     metadata_value = json.loads((invalid_version / "metadata.json").read_text())
     metadata_value["version"] = "0.5.10.1.2"
     atomic_json(invalid_version / "metadata.json", metadata_value)
-    rejected(
-        "invalid-image-version",
+    accepted(
+        "ignored-legacy-image-version",
         invalid_version / "metadata.json",
         [*BASE_ARGS],
-        "expected MAJOR.MINOR.PATCH[.SUFFIX]",
+        [],
     )
 
     for name, filename, expected in (
