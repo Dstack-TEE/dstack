@@ -133,7 +133,7 @@ def main() -> int:
             env = os.environ.copy()
             env["CARGO_TARGET_DIR"] = str(runtime["cargo_target_dir"])
             build = subprocess.run(
-                ["cargo", "build", "--locked", "--offline", "-p", "certbot-cli"],
+                ["cargo", "build", "--locked", "-p", "certbot-cli"],
                 cwd=Path(str(runtime["repository"])) / "dstack",
                 env=env,
                 text=True,

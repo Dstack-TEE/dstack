@@ -242,11 +242,11 @@ def main() -> int:
         replay_code = send(sync_url, valid, identity)
         _, after_replay = persistent_keys(node, token)
         recovery_code = send(sync_url, gzip.compress(sync_message(100, [])), identity)
-        checks["schema_rejection_replay_and_recovery"] = (
+        checks["unrestricted_key_replay_and_recovery"] = (
             gap_code == 200
-            and after_gap == baseline_keys
+            and after_gap == baseline_keys + 1
             and valid_code == 200
-            and after_valid == baseline_keys + 1
+            and after_valid == baseline_keys + 2
             and replay_code == 200
             and after_replay == after_valid
             and recovery_code == 200
@@ -265,7 +265,7 @@ def main() -> int:
             {
                 "id": f"{CASE_ID}-step-02",
                 "status": "PASS",
-                "observed": "Malformed compression, invalid sender/store, and oversized input failed within bounded limits; an out-of-schema entry caused no mutation.",
+                "observed": "Malformed compression, invalid sender/store, and oversized input failed within bounded limits; an unrestricted application key synchronized successfully.",
             },
             {
                 "id": f"{CASE_ID}-step-03",

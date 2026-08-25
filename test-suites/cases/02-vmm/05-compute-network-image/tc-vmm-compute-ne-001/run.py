@@ -301,7 +301,12 @@ def main() -> int:
             "qemu_pid_preserved": preserved_pid == old_pid
         }
 
-        os.kill(old_pid, signal.SIGKILL)
+        try:
+            os.kill(old_pid, signal.SIGKILL)
+        except ProcessLookupError:
+            # The supervisor may already have observed an early QEMU exit and
+            # started its replacement before this deliberate restart trigger.
+            pass
         new_pid = wait_for(
             lambda: (
                 int((user_dir / "qemu.pid").read_text())

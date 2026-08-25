@@ -82,7 +82,7 @@ def main() -> int:
         )
         output = completed.stdout + completed.stderr
         passed = bool(
-            re.search(r"test result: ok\. 16 passed; 0 failed", output)
+            re.search(r"test result: ok\. 31 passed; 0 failed", output)
         ) and all(f"{test} ... ok" in output for test in REQUIRED_TESTS)
         row.update(
             {
