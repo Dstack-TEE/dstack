@@ -619,7 +619,9 @@ impl Proxy {
         }
     }
 
-    pub(crate) async fn rotate_acme_credentials(&self) -> Result<(String, usize)> {
+    pub(crate) async fn rotate_acme_credentials(
+        &self,
+    ) -> Result<crate::distributed_certbot::RotationOutcome> {
         self.certbot.rotate_acme_credentials().await
     }
 

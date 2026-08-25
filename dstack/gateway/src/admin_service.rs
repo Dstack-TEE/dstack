@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, ensure, Context, Result};
+use certbot::ChallengeKind;
 use dstack_gateway_rpc::{
     admin_server::{AdminRpc, AdminServer},
     CertAttestationInfo, CertbotConfigResponse, ClearInstancePortPolicyRequest,
@@ -110,10 +111,11 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn rotate_acme_credentials(self) -> Result<RotateAcmeCredentialsResponse> {
-        let (account_uri, domains_updated) = self.state.rotate_acme_credentials().await?;
+        let outcome = self.state.rotate_acme_credentials().await?;
         Ok(RotateAcmeCredentialsResponse {
-            account_uri,
-            domains_updated: domains_updated.try_into().unwrap_or(u32::MAX),
+            account_uri: outcome.account_uri,
+            domains_updated: outcome.domains_updated.try_into().unwrap_or(u32::MAX),
+            required_dns_records: outcome.required_dns_records,
         })
     }
 
@@ -554,11 +556,15 @@ impl AdminRpc for AdminRpcHandler {
     async fn list_zt_domains(self) -> Result<ListZtDomainsResponse> {
         let kv_store = self.state.kv_store();
         let cert_resolver = &self.state.cert_resolver;
+        let certbot = &self.state.certbot;
 
         let domains = kv_store
             .list_zt_domain_configs()
             .into_iter()
-            .map(|config| zt_domain_to_proto(config, kv_store, cert_resolver))
+            .map(|config| {
+                let records = certbot.required_dns_records(&config);
+                zt_domain_to_proto(config, kv_store, cert_resolver, records)
+            })
             .collect();
 
         Ok(ListZtDomainsResponse { domains })
@@ -573,7 +579,8 @@ impl AdminRpc for AdminRpcHandler {
             .get_zt_domain_config(&domain)
             .context("ZT-Domain config not found")?;
 
-        Ok(zt_domain_to_proto(config, kv_store, cert_resolver))
+        let records = self.state.certbot.required_dns_records(&config);
+        Ok(zt_domain_to_proto(config, kv_store, cert_resolver, records))
     }
 
     async fn add_zt_domain(self, request: ProtoZtDomainConfig) -> Result<ZtDomainInfo> {
@@ -591,7 +598,8 @@ impl AdminRpc for AdminRpcHandler {
         kv_store.save_zt_domain_config(&config)?;
         info!("Added ZT-Domain config: {}", config.domain);
 
-        Ok(zt_domain_to_proto(config, kv_store, cert_resolver))
+        let records = self.state.certbot.required_dns_records(&config);
+        Ok(zt_domain_to_proto(config, kv_store, cert_resolver, records))
     }
 
     async fn update_zt_domain(self, request: ProtoZtDomainConfig) -> Result<ZtDomainInfo> {
@@ -608,7 +616,8 @@ impl AdminRpc for AdminRpcHandler {
         kv_store.save_zt_domain_config(&config)?;
         info!("Updated ZT-Domain config: {}", config.domain);
 
-        Ok(zt_domain_to_proto(config, kv_store, cert_resolver))
+        let records = self.state.certbot.required_dns_records(&config);
+        Ok(zt_domain_to_proto(config, kv_store, cert_resolver, records))
     }
 
     async fn delete_zt_domain(self, request: DeleteZtDomainRequest) -> Result<()> {
@@ -976,20 +985,33 @@ fn proto_to_zt_domain_config(
         bail!("port must be between 1 and 65535");
     }
 
+    // Empty means the historical default: every ZT domain predates the choice.
+    let challenge = match proto.challenge.as_str() {
+        "" | "dns-01" => ChallengeKind::Dns01,
+        "dns-persist-01" => ChallengeKind::DnsPersist01,
+        other => bail!("unsupported challenge {other:?}, expected dns-01 or dns-persist-01"),
+    };
+
     Ok(ZtDomainConfig {
         domain,
         dns_cred_id,
         port: proto.port.try_into().context("port out of range")?,
         node: proto.node,
         priority: proto.priority,
+        challenge,
     })
 }
 
 /// Convert internal ZtDomainConfig to proto ZtDomainInfo (with cert status)
+///
+/// `required_dns_records` is best effort: rendering it needs the ACME account
+/// URI, and a domain whose ACME client cannot be built yet still has to be
+/// listable. It comes back empty in that case rather than failing the call.
 fn zt_domain_to_proto(
     config: ZtDomainConfig,
     kv_store: &crate::kv::KvStore,
     cert_resolver: &crate::cert_store::CertResolver,
+    required_dns_records: Vec<String>,
 ) -> ZtDomainInfo {
     // Get certificate data for status
     let cert_data = kv_store.get_cert_data(&config.domain);
@@ -1003,6 +1025,11 @@ fn zt_domain_to_proto(
         loaded_in_memory,
     });
 
+    let challenge = match config.challenge {
+        ChallengeKind::Dns01 => "dns-01",
+        ChallengeKind::DnsPersist01 => "dns-persist-01",
+    };
+
     ZtDomainInfo {
         config: Some(ProtoZtDomainConfig {
             domain: config.domain,
@@ -1010,8 +1037,10 @@ fn zt_domain_to_proto(
             port: config.port.into(),
             node: config.node,
             priority: config.priority,
+            challenge: challenge.to_string(),
         }),
         cert_status,
+        required_dns_records,
     }
 }
 

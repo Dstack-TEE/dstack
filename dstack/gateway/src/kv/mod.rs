@@ -57,6 +57,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use certbot::ChallengeKind;
 
 use crate::models::InstanceInfo;
 use crate::time::{encode_ts, now_secs};
@@ -378,6 +379,12 @@ pub struct ZtDomainConfig {
     /// The domain with highest priority is returned as the default base_domain in APIs
     #[serde(default)]
     pub priority: i32,
+    /// ACME challenge used to prove control of this domain.
+    ///
+    /// Records written before dns-persist-01 support have no such field and
+    /// decode as `dns-01`, which is the only method those deployments had.
+    #[serde(default)]
+    pub challenge: ChallengeKind,
 }
 
 /// Global certbot configuration (stored in KV, synced across nodes)
@@ -394,6 +401,13 @@ pub struct GlobalCertbotConfig {
     pub renew_timeout: Duration,
     /// ACME server URL (None means use default Let's Encrypt production)
     pub acme_url: String,
+    /// Issuer Domain Name naming the CA in dns-persist-01 and CAA records.
+    ///
+    /// Empty means Let's Encrypt. Only read by domains using `dns-persist-01`:
+    /// the record has to name a CA the challenge lists in `issuer-domain-names`,
+    /// so a private or staging ACME server needs its own value here.
+    #[serde(default)]
+    pub issuer_domain_name: String,
 }
 
 impl Default for GlobalCertbotConfig {
@@ -403,6 +417,7 @@ impl Default for GlobalCertbotConfig {
             renew_before_expiration: Duration::from_secs(30 * 86400), // 30 days
             renew_timeout: Duration::from_secs(300),        // 5 minutes
             acme_url: Default::default(),                   // default Let's Encrypt
+            issuer_domain_name: Default::default(),         // default Let's Encrypt
         }
     }
 }
@@ -2524,6 +2539,43 @@ mod value_encoding_tests {
         }
     }
 
+    /// A ZT domain stored before `dns-persist-01` existed has no `challenge`
+    /// field, and must keep decoding as the method it was actually using.
+    #[test]
+    fn a_zt_domain_without_a_challenge_field_decodes_as_dns01() {
+        /// The shape `ZtDomainConfig` had before the field was added.
+        #[derive(Serialize)]
+        struct LegacyZtDomainConfig {
+            domain: String,
+            dns_cred_id: Option<String>,
+            port: u16,
+            node: Option<u32>,
+            priority: i32,
+        }
+
+        let legacy = LegacyZtDomainConfig {
+            domain: "app.example.com".to_string(),
+            dns_cred_id: Some("cred-1".to_string()),
+            port: 443,
+            node: None,
+            priority: 7,
+        };
+
+        for (label, encoded) in [
+            ("named", encode(&legacy).expect("named encode")),
+            (
+                "legacy positional",
+                rmp_serde::encode::to_vec(&legacy).expect("positional encode"),
+            ),
+        ] {
+            let decoded: ZtDomainConfig =
+                decode(&encoded).unwrap_or_else(|err| panic!("{label} decode failed: {err}"));
+            assert_eq!(decoded.domain, "app.example.com", "{label}");
+            assert_eq!(decoded.priority, 7, "{label}");
+            assert_eq!(decoded.challenge, ChallengeKind::Dns01, "{label}");
+        }
+    }
+
     /// The configured window has to reach the store, not just the config file.
     ///
     /// An fsync per write runs under the store lock, so it bounds how fast this
@@ -3413,6 +3465,7 @@ mod corruption_tests {
             port: 443,
             node: None,
             priority: 0,
+            challenge: Default::default(),
         })
         .expect("save should succeed");
         // Same record filed under another domain's key: honouring the value
@@ -3427,6 +3480,7 @@ mod corruption_tests {
                     port: 443,
                     node: None,
                     priority: 100,
+                    challenge: Default::default(),
                 },
                 true,
             )

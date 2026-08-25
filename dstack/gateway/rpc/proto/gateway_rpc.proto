@@ -210,6 +210,10 @@ message RotateAcmeCredentialsResponse {
   string account_uri = 1;
   // Number of ZT domains whose CAA records were updated for the new account.
   uint32 domains_updated = 2;
+  // Zone-file lines an operator must publish by hand, for domains the gateway
+  // cannot write (dns-persist-01). Non-empty means issuance for those domains
+  // stays broken until they name the new account.
+  repeated string required_dns_records = 3;
 }
 
 // Get HostInfo for associated instance id.
@@ -742,6 +746,14 @@ message ZtDomainConfig {
   optional uint32 node = 4;
   // Priority for default base_domain selection (higher = preferred)
   int32 priority = 5;
+  // ACME challenge proving control of this domain: "dns-01" (default) or
+  // "dns-persist-01". Empty means "dns-01".
+  //
+  // "dns-persist-01" needs no DNS credential: control comes from a
+  // _validation-persist TXT record the operator publishes once, so the gateway
+  // CVM never holds write access to the zone. Experimental — the draft is still
+  // changing and Let's Encrypt serves it on staging only.
+  string challenge = 6;
 }
 
 // ZT-Domain information (config + certificate status)
@@ -750,6 +762,10 @@ message ZtDomainInfo {
   ZtDomainConfig config = 1;
   // Certificate status
   ZtDomainCertStatus cert_status = 2;
+  // Zone-file lines the domain's DNS must contain. Under "dns-01" the gateway
+  // writes these itself and they are informational; under "dns-persist-01" they
+  // are the one-time setup an operator has to publish.
+  repeated string required_dns_records = 3;
 }
 
 // ZT-Domain certificate status
