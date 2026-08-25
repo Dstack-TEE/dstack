@@ -550,6 +550,13 @@ SPDX-License-Identifier: Apache-2.0
             <td>ACME server URL (empty = Let's Encrypt production)</td>
         </tr>
         <tr>
+            <td>Issuer Domain Name</td>
+            <td>
+                <input type="text" id="certbot-issuer-domain-name" placeholder="letsencrypt.org (default)">
+            </td>
+            <td>Name of the CA in dns-persist-01 and CAA records; must be one the ACME server advertises</td>
+        </tr>
+        <tr>
             <td>Renewal Interval</td>
             <td>
                 <input type="number" id="certbot-renew-interval" placeholder="43200" min="0"> seconds
@@ -952,6 +959,7 @@ SPDX-License-Identifier: Apache-2.0
                 });
                 const data = await response.json();
                 document.getElementById('certbot-acme-url').value = data.acme_url || '';
+                document.getElementById('certbot-issuer-domain-name').value = data.issuer_domain_name || '';
                 document.getElementById('certbot-renew-interval').value = data.renew_interval_secs || 43200;
                 document.getElementById('certbot-renew-before').value = data.renew_before_expiration_secs || 2592000;
                 document.getElementById('certbot-renew-timeout').value = data.renew_timeout_secs || 300;
@@ -962,6 +970,7 @@ SPDX-License-Identifier: Apache-2.0
 
         async function saveCertbotConfig() {
             const acmeUrl = document.getElementById('certbot-acme-url').value.trim();
+            const issuerDomainName = document.getElementById('certbot-issuer-domain-name').value.trim();
             const renewInterval = parseInt(document.getElementById('certbot-renew-interval').value) || undefined;
             const renewBefore = parseInt(document.getElementById('certbot-renew-before').value) || undefined;
             const renewTimeout = parseInt(document.getElementById('certbot-renew-timeout').value) || undefined;
@@ -969,6 +978,7 @@ SPDX-License-Identifier: Apache-2.0
             try {
                 const body = {};
                 if (acmeUrl !== undefined) body.acme_url = acmeUrl;
+                if (issuerDomainName !== undefined) body.issuer_domain_name = issuerDomainName;
                 if (renewInterval !== undefined) body.renew_interval_secs = renewInterval;
                 if (renewBefore !== undefined) body.renew_before_expiration_secs = renewBefore;
                 if (renewTimeout !== undefined) body.renew_timeout_secs = renewTimeout;

@@ -717,6 +717,7 @@ impl AdminRpc for AdminRpcHandler {
             renew_before_expiration_secs: config.renew_before_expiration.as_secs(),
             renew_timeout_secs: config.renew_timeout.as_secs(),
             acme_url: config.acme_url,
+            issuer_domain_name: config.issuer_domain_name,
         })
     }
 
@@ -1094,6 +1095,9 @@ fn merge_certbot_config(
     if let Some(url) = request.acme_url {
         config.acme_url = url;
     }
+    if let Some(name) = request.issuer_domain_name {
+        config.issuer_domain_name = name;
+    }
     Ok(config)
 }
 
@@ -1148,11 +1152,32 @@ mod certbot_config_tests {
                 renew_before_expiration_secs: Some(86400),
                 renew_timeout_secs: Some(30),
                 acme_url: Some("https://acme-staging.example/directory".to_string()),
+                issuer_domain_name: None,
             },
         )
         .expect("a complete request replaces the record");
         assert_eq!(merged.renew_interval, Duration::from_secs(60));
         assert_eq!(merged.acme_url, "https://acme-staging.example/directory");
+        // Not required to repair the record: empty is a meaningful value that
+        // means Let's Encrypt, so it needs no operator decision.
+        assert_eq!(merged.issuer_domain_name, "");
+    }
+
+    /// The name the CA is known by has to be settable, or a deployment pointed
+    /// at a non-Let's-Encrypt ACME server publishes records naming the wrong CA
+    /// with no way to correct them.
+    #[test]
+    fn the_issuer_domain_name_round_trips() {
+        let merged = merge_certbot_config(
+            Ok(stored()),
+            SetCertbotConfigRequest {
+                issuer_domain_name: Some("pebble.letsencrypt.org".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("a partial update keeps the rest");
+        assert_eq!(merged.issuer_domain_name, "pebble.letsencrypt.org");
+        assert_eq!(merged.acme_url, stored().acme_url);
     }
 }
 

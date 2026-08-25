@@ -146,9 +146,16 @@ WARN cert[app.example.com]: publish this record by hand: _validation-persist.app
 The gateway issues for `*.{domain}` only, so each domain needs one validation
 record with `policy=wildcard`.
 
-For a non-production ACME server, set `issuer_domain_name` in the global
-certbot config to whatever that server puts in `issuer-domain-names` —
-`pebble.letsencrypt.org` for Pebble. Empty means `letsencrypt.org`.
+A ZT domain's challenge is chosen when it is added and carried forward by every
+edit, in the dashboard's ZT-Domain form as well as over the API.
+
+For a non-production ACME server, set `issuer_domain_name` in the global certbot
+config — `Admin.SetCertbotConfig`, or the field of that name in the dashboard's
+Certbot Configuration — to whatever that server puts in `issuer-domain-names`,
+`pebble.letsencrypt.org` for Pebble. Empty means `letsencrypt.org`. It also
+names the CA in the CAA records certbot writes for `dns-01` domains, so one
+setting covers both challenges rather than pinning CAA to Let's Encrypt while
+orders go elsewhere.
 
 Two operations behave differently on these domains:
 

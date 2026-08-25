@@ -860,6 +860,9 @@ message CertbotConfigResponse {
   uint64 renew_timeout_secs = 3;
   // ACME server URL (empty means default Let's Encrypt production)
   string acme_url = 4;
+  // Issuer Domain Name naming the CA in dns-persist-01 and CAA records
+  // (empty means letsencrypt.org)
+  string issuer_domain_name = 5;
 }
 
 // Set certbot configuration request
@@ -872,6 +875,10 @@ message SetCertbotConfigRequest {
   optional uint64 renew_timeout_secs = 3;
   // ACME server URL (empty means use default Let's Encrypt production)
   optional string acme_url = 4;
+  // Issuer Domain Name naming the CA in dns-persist-01 and CAA records
+  // (empty means letsencrypt.org). Must be one of the issuer-domain-names the
+  // ACME server at acme_url advertises, or every dns-persist-01 order fails.
+  optional string issuer_domain_name = 5;
 }
 
 // ==================== Tombstone GC Configuration Messages ====================
