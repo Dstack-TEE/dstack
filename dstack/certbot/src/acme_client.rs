@@ -627,13 +627,13 @@ impl AcmeClient {
                 }
                 // Something went wrong
                 OrderStatus::Invalid => {
-                    let error = find_error(&mut order).await.unwrap_or(Problem {
-                        r#type: None,
-                        detail: None,
-                        status: None,
-                        subproblems: Vec::new(),
-                    });
-                    bail!("order is invalid: {error}");
+                    let error = find_error(&mut order).await.context(
+                        "order is invalid and its authorization error could not be retrieved",
+                    )?;
+                    match error {
+                        Some(error) => bail!("order is invalid: {error}"),
+                        None => bail!("order is invalid without error details"),
+                    }
                 }
             }
         }
@@ -662,29 +662,21 @@ fn challenge_domain(identifier: &AuthorizedIdentifier<'_>) -> Result<String> {
     Ok(format!("_acme-challenge.{name}"))
 }
 
-async fn find_error(order: &mut Order) -> Option<Problem> {
+async fn find_error(order: &mut Order) -> Result<Option<Problem>> {
     if let Some(error) = order.state().error.as_ref() {
-        return Some(error.clone());
+        return Ok(Some(error.clone()));
     }
     let mut authorizations = order.authorizations();
     while let Some(result) = authorizations.next().await {
-        let authz = match result {
-            Ok(authz) => authz,
-            Err(err) => {
-                // Stop rather than skip: the stream fetches authorizations in order, and a
-                // failure here means we cannot see the rest either. Say so, so that the
-                // caller's "order is invalid" message is not silently missing its cause.
-                warn!("failed to fetch authorization while looking for the order error: {err}");
-                break;
-            }
-        };
+        let authz =
+            result.context("failed to fetch authorization while looking for the order error")?;
         for challenge in &authz.challenges {
             if let Some(error) = &challenge.error {
-                return Some(error.clone());
+                return Ok(Some(error.clone()));
             }
         }
     }
-    None
+    Ok(None)
 }
 
 /// The resolver from `/etc/resolv.conf`, used to find nameservers and as the
@@ -930,4 +922,3 @@ mod challenge_domain_tests {
         assert!(challenge_domain(&ip.authorized(false)).is_err());
     }
 }
-
