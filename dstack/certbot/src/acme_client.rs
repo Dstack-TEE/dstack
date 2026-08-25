@@ -892,3 +892,34 @@ mod ns_discovery_tests {
         assert_eq!(parent_zone("wang"), None);
     }
 }
+
+#[cfg(test)]
+mod challenge_domain_tests {
+    use super::challenge_domain;
+    use instant_acme::Identifier;
+
+    /// A wildcard order authorizes the bare name with `wildcard: true`, and the TXT record
+    /// answering it must be published under that bare name. Formatting the identifier
+    /// through its `Display` instead would ask for `_acme-challenge.*.example.com`.
+    #[test]
+    fn the_challenge_domain_never_carries_a_wildcard_prefix() {
+        let dns = Identifier::Dns("example.com".to_string());
+        assert_eq!(
+            challenge_domain(&dns.authorized(false)).unwrap(),
+            "_acme-challenge.example.com"
+        );
+        assert_eq!(
+            challenge_domain(&dns.authorized(true)).unwrap(),
+            "_acme-challenge.example.com"
+        );
+    }
+
+    /// dns-01 is only defined for DNS identifiers; anything else is a bug in the order we
+    /// built, so it must be an error rather than a nonsensical record name.
+    #[test]
+    fn a_non_dns_identifier_is_rejected() {
+        let ip = Identifier::Ip("192.0.2.1".parse().unwrap());
+        assert!(challenge_domain(&ip.authorized(false)).is_err());
+    }
+}
+
