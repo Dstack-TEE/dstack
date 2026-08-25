@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [workspace.package]
-version = "0.6.0"
+version = "0.6.0-rc0"
 authors = ["Kevin Wang <wy721@qq.com>", "Leechael <Leechael@github.com>"]
 edition = "2021"
 license = "MIT"
