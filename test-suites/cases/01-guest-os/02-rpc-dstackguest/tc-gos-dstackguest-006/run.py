@@ -28,6 +28,6 @@ def main():
     artifact=out/"artifacts"/"removed-gpu-info.json"; artifact.parent.mkdir(parents=True,exist_ok=True)
     artifact.write_text(json.dumps({"legacy":observations,"v1_status":code},indent=2)+"\n")
     steps=[{"id":f"{cid}-step-01","status":"PASS","observed":"The candidate guest listener was available."},{"id":f"{cid}-step-02","status":"PASS","observed":"GpuInfo returned HTTP 404 over JSON and protobuf while v1 AttestGpu remained routed."},{"id":f"{cid}-step-03","status":"PASS","observed":"Repeated removed-route probes were diagnostic and did not affect service availability."}]
-    (out/"result.json").write_text(json.dumps({"schema_version":"1.0","case_id":cid,"status":"PASS","summary":"The never-shipped v0 GpuInfo method remains absent and v1 owns GPU attestation.","steps":steps,"artifacts":["artifacts/removed-gpu-info.json"]},indent=2)+"\n")
+    (out/"result.json").write_text(json.dumps({"schema_version":"1.0","case_id":cid,"status":"PASS","summary":"The never-shipped v0 GpuInfo method remains absent and v1 owns GPU attestation.","steps":steps,"artifacts":[{"name":"Removed route observations","path":"artifacts/removed-gpu-info.json","step_id":f"{cid}-step-02","description":"Records bounded HTTP statuses for the removed v0 route and its v1 replacement."}]},indent=2)+"\n")
     return 0
 if __name__=="__main__": raise SystemExit(main())
