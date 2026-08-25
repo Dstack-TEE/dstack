@@ -158,14 +158,45 @@ The records name the ACME account, so the account comes first:
    rotation, with the consequences described below.
 3. `AddZtDomain` with `challenge: "dns-persist-01"`. No `dns_cred_id`: the
    domain needs none, and the gateway CVM never receives one for it.
-4. Read the records — `GetZtDomain`, `ListZtDomains`, or the gateway log, which
-   prints them whenever it cannot write DNS itself — and publish the
-   `_validation-persist` TXT record, plus the CAA records if you want issuance
-   pinned to this account.
+4. Read the records — the dashboard shows them when the domain is added and
+   again under its **Records** button, and `GetZtDomain`, `ListZtDomains` and
+   the gateway log all carry them — then publish the `_validation-persist` TXT
+   record, plus the CAA records if you want issuance pinned to this account.
 5. `RenewZtDomainCert`. Renewals from here need nothing further.
 
 Adding another dns-persist-01 domain later starts at step 3: the account already
-exists, so the new domain's records are available as soon as it is.
+exists, so the new domain's records are available as soon as it is. A domain's
+challenge is chosen when it is added — in the dashboard's ZT-Domain form as well
+as over the API — and carried forward by every edit.
+
+### Naming the CA
+
+For a non-production ACME server, set `issuer_domain_name` in the global certbot
+config — `Admin.SetCertbotConfig`, or the field of that name in the dashboard's
+Certbot Configuration — to whatever that server puts in `issuer-domain-names`,
+`pebble.letsencrypt.org` for Pebble. Empty means `letsencrypt.org`.
+
+It also names the CA in the CAA records certbot writes for `dns-01` domains, so
+one setting covers both challenges rather than pinning CAA to Let's Encrypt
+while orders go somewhere else. `acme_url` is one setting for the whole
+deployment; this follows it.
+
+The value is checked when it is set. It ends up verbatim inside an RFC 8659
+`issue-value`, and publishing CAA deletes the records it replaces before writing
+the new ones, so a name carrying a space or a `;` would leave the zone holding a
+malformed `issue` property with nothing valid behind it — CAA that forbids every
+issuer. Anything that is not a DNS name is refused by `SetCertbotConfig`, and by
+`certbot` at startup.
+
+### How long the check waits
+
+The self-check before each order waits for the record to become visible, but
+never longer than half of `renew_timeout`, the budget for the whole renewal.
+Past that the outer timeout fires first and the renewal ends as `certificate
+request timed out` with no mention of the record it could not find — the
+opposite of what the check is for. Both values defaulted to 300s in the gateway
+(and the CLI wrapped a 300s wait in a 120s budget), so this was the default
+behaviour rather than an edge case.
 
 Two operations behave differently on these domains:
 
