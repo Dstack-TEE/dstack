@@ -245,7 +245,16 @@ const DNS_WAIT_SHARE_OF_RENEW_TIMEOUT: u32 = 2;
 /// with one rule, and keeps holding when an operator lowers `renew_timeout`
 /// from the dashboard, which no constant can.
 pub fn advisory_dns_wait(configured: Duration, renew_timeout: Duration) -> Duration {
-    configured.min(renew_timeout / DNS_WAIT_SHARE_OF_RENEW_TIMEOUT)
+    let capped = renew_timeout / DNS_WAIT_SHARE_OF_RENEW_TIMEOUT;
+    if configured > capped {
+        // Silently ignoring a configured value leaves an operator raising it
+        // with no idea why nothing changes.
+        info!(
+            "waiting up to {capped:?} for DNS rather than the configured {configured:?}: \
+             the renewal timeout is {renew_timeout:?}, and the check has to finish inside it"
+        );
+    }
+    configured.min(capped)
 }
 
 /// A AcmeClient instance.
@@ -854,7 +863,17 @@ impl AcmeClient {
         }
 
         'outer: loop {
-            sleep(delay).await;
+            // The budget is checked before sleeping, and the sleep is cut to
+            // what is left of it. Sleeping first and checking after overshoots
+            // by a whole backoff step -- up to 32s -- which for a short
+            // `renew_timeout` is enough to hand the deadline to the timeout
+            // wrapping the order, so the graceful exit below is missed and the
+            // renewal ends as a timeout with nothing named.
+            let elapsed = start_time.elapsed();
+            let remaining = self.max_dns_wait.saturating_sub(elapsed);
+            if !remaining.is_zero() {
+                sleep(delay.min(remaining)).await;
+            }
 
             let elapsed = start_time.elapsed();
             if elapsed >= self.max_dns_wait {
