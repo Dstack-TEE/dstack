@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use http::Request;
 use http_body_util::{BodyExt, Full};
-use instant_acme::{BytesResponse, HttpClient};
+use instant_acme::{BodyWrapper, BytesResponse, HttpClient};
 use reqwest::Client;
 use std::error::Error as StdError;
 use std::future::Future;
@@ -35,7 +35,7 @@ impl ReqwestHttpClient {
 impl HttpClient for ReqwestHttpClient {
     fn request(
         &self,
-        req: Request<Full<Bytes>>,
+        req: Request<BodyWrapper<Bytes>>,
     ) -> Pin<Box<dyn Future<Output = Result<BytesResponse, instant_acme::Error>> + Send>> {
         let client = self.client.clone();
         Box::pin(async move {
