@@ -84,7 +84,9 @@ impl AuthorizationRecord {
         let Ok(parsed) = IssueValue::parse(rdata) else {
             return false;
         };
-        if parsed.issuer_domain_name != self.issuer_domain_name {
+        if normalized_issuer(&parsed.issuer_domain_name)
+            != normalized_issuer(&self.issuer_domain_name)
+        {
             return false;
         }
         if parsed.account_uri != self.account_uri {
@@ -145,17 +147,40 @@ impl IssueValue {
                 bail!("empty parameter or trailing semicolon");
             }
             let (tag, value) = part.split_once('=').context("parameter is not tag=value")?;
-            // RFC 8659 matches tags case-insensitively; values are not folded.
-            let tag = tag.to_lowercase();
+            // RFC 8659's grammar is `parameter = tag *WSP "=" *WSP value`, so the
+            // separator may be padded on either side and each half is trimmed on
+            // its own. Trimming only the whole parameter would read the tag of
+            // `accounturi = <uri>` as `"accounturi "` and report the mandatory
+            // parameter missing on a record the CA accepts.
+            let tag = trim_wsp(tag).to_lowercase();
+            let value = trim_wsp(value);
+            if tag.is_empty() {
+                bail!("parameter has an empty tag");
+            }
             if !value.bytes().all(is_value_byte) {
                 bail!("parameter {tag} has a value with a forbidden character");
             }
-            if seen.contains(&tag) {
-                bail!("duplicate parameter {tag}");
-            }
-            seen.push(tag.clone());
             match tag.as_str() {
-                "accounturi" => account_uri = Some(value.to_string()),
+                "accounturi" | "policy" | "persistuntil" => {
+                    // Only recognized tags are held to uniqueness: the draft has
+                    // the CA ignore unknown tags outright, so a record repeating
+                    // one is still a record the CA issues from.
+                    if seen.contains(&tag) {
+                        bail!("duplicate parameter {tag}");
+                    }
+                    seen.push(tag.clone());
+                }
+                // The draft requires unrecognized tags to be ignored, so that
+                // later revisions can add parameters without invalidating records.
+                _ => continue,
+            }
+            match tag.as_str() {
+                "accounturi" => {
+                    if value.is_empty() {
+                        bail!("empty value for the mandatory accounturi parameter");
+                    }
+                    account_uri = Some(value.to_string());
+                }
                 "policy" => policy = Some(value.to_string()),
                 "persistuntil" => {
                     persist_until = Some(
@@ -164,8 +189,6 @@ impl IssueValue {
                             .context("persistUntil is not a base-10 timestamp")?,
                     )
                 }
-                // The draft requires unrecognized tags to be ignored, so that
-                // later revisions can add parameters without invalidating records.
                 _ => {}
             }
         }
@@ -177,6 +200,19 @@ impl IssueValue {
             persist_until,
         })
     }
+}
+
+/// An Issuer Domain Name folded the way the CA folds it before comparing.
+///
+/// Boulder normalizes both sides (lowercase, then drop the root dot) before
+/// deciding whether a record is one of its own, so `LetsEncrypt.ORG.` names the
+/// same CA as `letsencrypt.org`. Comparing raw bytes here would treat a record
+/// the CA honours as belonging to someone else and warn about a missing record
+/// through every issuance. IDNA folding is left out: this compares against a
+/// name dstack configures, and an operator writing a non-ASCII issuer name has
+/// a mismatch a self-check cannot paper over.
+fn normalized_issuer(name: &str) -> String {
+    name.trim_end_matches('.').to_lowercase()
 }
 
 fn is_wildcard_policy(policy: &str) -> bool {
@@ -215,6 +251,56 @@ mod tests {
     /// Whether `published` satisfies a request for `name`, wildcard or not.
     fn accepts(wildcard: bool, published: &str) -> bool {
         record(wildcard).satisfied_by(published, NOW)
+    }
+
+    /// RFC 8659 spells the parameter grammar `tag *WSP "=" *WSP value`, and
+    /// Boulder trims each half separately. A record padded around the separator
+    /// is one the CA issues from, so the self-check has to read it the same way.
+    #[test]
+    fn whitespace_around_the_separator_is_not_part_of_the_tag_or_value() {
+        assert!(accepts(
+            false,
+            &format!("letsencrypt.org; accounturi = {ACCOUNT}")
+        ));
+        assert!(accepts(
+            true,
+            &format!("letsencrypt.org;\taccounturi\t=\t{ACCOUNT}; policy\t=\twildcard")
+        ));
+    }
+
+    /// The draft has the CA ignore unrecognized tags outright, so repeating one
+    /// cannot invalidate a record. Uniqueness is only enforced where the CA
+    /// enforces it.
+    #[test]
+    fn a_repeated_unknown_tag_is_ignored_rather_than_fatal() {
+        assert!(accepts(
+            false,
+            &format!("letsencrypt.org; accounturi={ACCOUNT}; futuretag=a; futuretag=b")
+        ));
+        assert!(!accepts(
+            false,
+            &format!("letsencrypt.org; accounturi={ACCOUNT}; accounturi={ACCOUNT}")
+        ));
+    }
+
+    /// Boulder folds case and drops the root dot before deciding whether a
+    /// record names it, so the same record must not read as another CA's here.
+    #[test]
+    fn the_issuer_name_is_compared_the_way_the_ca_compares_it() {
+        assert!(accepts(
+            false,
+            &format!("LetsEncrypt.ORG.; accounturi={ACCOUNT}")
+        ));
+        assert!(!accepts(
+            false,
+            &format!("other-ca.example; accounturi={ACCOUNT}")
+        ));
+    }
+
+    /// `accounturi` is mandatory, and an empty value does not supply it.
+    #[test]
+    fn an_empty_account_uri_is_not_an_account_uri() {
+        assert!(!accepts(false, "letsencrypt.org; accounturi="));
     }
 
     #[test]
