@@ -141,7 +141,9 @@ Five v0 methods are deliberately absent.
 Applications sign locally with a standard crypto library, using the key `GetKey`
 returns, and verify locally following this document. A v0 client may keep calling
 the unversioned `Verify` for single-signature checks; the v0 `Sign` RPC's
-per-algorithm signing modes are documented on that surface, not here.
+per-algorithm signing modes are specified in
+[dstack Guest Agent API v0](./guest-api-v0.md#sign), which is the normative
+document for that surface.
 
 `GetQuote` is absent because `Attest` subsumes it. `GetQuote` answers on Intel TDX
 and nowhere else, and the `VersionedAttestation` that `Attest` returns already
@@ -670,8 +672,10 @@ deliberately. Derive the v1 key, move the asset with a transaction signed by the
 v0 key, and only then cut over. An application with no persistent state can switch
 by pointing at the new URL.
 
-Both unversioned surfaces stay available and closed. A v0.5.x client keeps
-working against a 0.6 agent with no changes: `Sign`, `Verify` and `EmitEvent`
+Both unversioned surfaces stay available and closed, and they have their own
+normative specification: [dstack Guest Agent API v0](./guest-api-v0.md) pins the
+frozen KDF, the `:`-joined chain claim, and the per-algorithm `Sign` and `Verify`
+modes. A v0.5.x client keeps working against a 0.6 agent with no changes: `Sign`, `Verify` and `EmitEvent`
 remain on the internal one (`EmitEvent` fails with a message naming its removal),
 and `GetAttestationForAppKey` remains on the external one. Nothing forces a
 migration.
@@ -718,6 +722,8 @@ For readers porting from the unversioned API.
 
 ## Related documents
 
+- [dstack Guest Agent API v0](./guest-api-v0.md), the normative spec for the
+  frozen unversioned surface
 - [Attestation on Intel TDX](./attestation-tdx.md)
 - [Application health checks](./app-health-checks.md), for `/prpc/v1/Health`
 - [App Compose format](./normalized-app-compose.md), for the schema behind

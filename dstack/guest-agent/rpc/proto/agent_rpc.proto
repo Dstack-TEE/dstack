@@ -334,7 +334,23 @@ service Worker {
 }
 
 message SignRequest {
+  // Signing mode. One of `ed25519`, `secp256k1`, or `secp256k1_prehashed`.
+  // `k256` is an alias for `secp256k1`. There is no default: an empty string
+  // is rejected, unlike `GetKeyArgs.algorithm` which defaults to `secp256k1`.
+  //
+  // The key is always the one derived at path `vms` with purpose `signing`;
+  // `secp256k1_prehashed` derives under `secp256k1`, since prehashing is a
+  // signing mode and not a key type.
   string algorithm = 1;
+  // The payload. Raw bytes for `ed25519` and `secp256k1`, which the agent
+  // hashes itself -- RFC 8032 internally, SHA-256 respectively.
+  //
+  // For `secp256k1_prehashed` this is the digest, exactly 32 bytes, signed
+  // as-is: the agent does not hash it again and records nothing about which
+  // hash produced it, so the caller owns that choice and the domain
+  // separation that goes with it.
+  //
+  // Specified in docs/guest-api-v0.md.
   bytes data = 2;
 }
 

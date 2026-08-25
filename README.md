@@ -156,6 +156,7 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 
 **Reference**
 - [Guest Agent API v1](./docs/guest-api-v1.md) - Key derivation, signature chains, and the versioned guest API
+- [Guest Agent API v0](./docs/guest-api-v0.md) - The frozen legacy surface, for clients that still speak the unversioned API
 - [App Compose Format](./docs/normalized-app-compose.md) - Compose file specification
 - [Intel TDX Attestation](./docs/attestation-tdx.md) - Measurement and runtime-event verification
 - [Native TEE Interfaces](./docs/native-tee-interfaces.md) - Advanced compatibility with Linux TEE devices and configfs-tsm
