@@ -25,12 +25,12 @@ async fn get_key_returns_a_key_public_key_and_two_link_chain() {
             .unwrap();
 
         // 32 raw bytes for both algorithms, hex-encoded on the wire.
-        assert_eq!(response.decode_key().unwrap().len(), 32);
+        assert_eq!(response.key.len(), 32);
         // The chain is the key's chain and nothing else: the claim link and the
         // KMS link. v0's `Sign` prepended the payload signature to its list, so
         // the real chain there started at index 1.
         assert_eq!(response.signature_chain.len(), 2);
-        assert_eq!(response.decode_signature_chain().unwrap()[0].len(), 65);
+        assert_eq!(response.signature_chain[0].len(), 65);
     }
 }
 
@@ -40,17 +40,13 @@ async fn get_key_public_key_lengths_are_the_specified_ones() {
         .get_key("storage-encryption", "secp256k1")
         .await
         .unwrap();
-    assert_eq!(
-        secp.decode_public_key().unwrap().len(),
-        33,
-        "SEC1 compressed"
-    );
+    assert_eq!(secp.public_key.len(), 33, "SEC1 compressed");
 
     let ed = client()
         .get_key("storage-encryption", "ed25519")
         .await
         .unwrap();
-    assert_eq!(ed.decode_public_key().unwrap().len(), 32);
+    assert_eq!(ed.public_key.len(), 32);
 }
 
 /// v1 has no default algorithm and no `k256` alias, so a caller cannot ask for
@@ -105,13 +101,13 @@ async fn v1_keys_differ_from_v0_keys_for_the_same_name() {
         .get_key(Some("test".to_string()), Some("signing".to_string()))
         .await
         .unwrap();
-    assert_ne!(v1.key, v0.key);
+    assert_ne!(v1.key, hex::decode(&v0.key).unwrap());
 }
 
 #[tokio::test]
 async fn attest_returns_an_attestation() {
     let response = client().attest(b"test".to_vec(), false).await.unwrap();
-    assert!(!response.decode_attestation().unwrap().is_empty());
+    assert!(!response.attestation.is_empty());
     assert!(response.boottime_gpu_evidence.is_empty());
 }
 
@@ -124,7 +120,7 @@ async fn attest_can_ask_for_the_boot_time_gpu_evidence() {
     // under test is that the flag is accepted on this surface at all -- it is
     // reserved on v0 -- and that the field decodes as a bundle list.
     let response = client().attest(b"test".to_vec(), true).await.unwrap();
-    assert!(!response.decode_attestation().unwrap().is_empty());
+    assert!(!response.attestation.is_empty());
 
     let bundles: &Vec<dstack_sdk::dstack_client_v1::GpuEvidenceBundle> =
         &response.boottime_gpu_evidence;
@@ -132,7 +128,7 @@ async fn attest_can_ask_for_the_boot_time_gpu_evidence() {
     for bundle in bundles {
         assert_eq!(bundle.vendor, "nvidia");
         assert_eq!(bundle.format, dstack_sdk::dstack_client_v1::FORMAT_BOOTTIME);
-        assert!(bundle.decode_evidence().is_ok());
+        assert!(!bundle.evidence.is_empty());
     }
 }
 
@@ -176,9 +172,9 @@ async fn attest_gpu_validates_the_nonce_length() {
 async fn info_reports_identity_and_configuration() {
     let info = client().info().await.unwrap();
 
-    assert!(!info.decode_app_id().unwrap().is_empty());
-    assert!(!info.decode_instance_id().unwrap().is_empty());
-    assert_eq!(info.decode_compose_hash().unwrap().len(), 32);
+    assert!(!info.app_id.is_empty());
+    assert!(!info.instance_id.is_empty());
+    assert_eq!(info.compose_hash.len(), 32);
     // The app-compose document is served directly rather than nested inside a
     // `tcb_info` JSON string, which is what v0 did.
     assert!(info.app_compose.starts_with('{'));
@@ -237,11 +233,13 @@ async fn derives_the_committed_key_vectors() {
     for (domain, algorithm, expected_key, expected_public_key) in vectors {
         let response = client().get_key(domain, algorithm).await.unwrap();
         assert_eq!(
-            response.key, expected_key,
+            hex::encode(&response.key),
+            expected_key,
             "v1 key vector changed for ({domain:?}, {algorithm})"
         );
         assert_eq!(
-            response.public_key, expected_public_key,
+            hex::encode(&response.public_key),
+            expected_public_key,
             "v1 public key vector changed for ({domain:?}, {algorithm})"
         );
     }

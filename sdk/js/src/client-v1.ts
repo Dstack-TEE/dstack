@@ -6,7 +6,18 @@
 // unsuffixed `DstackClient` names since 0.6.0.
 
 import { send_rpc_request } from './send-rpc-request'
-import { to_hex, throwOnRpcError, resolveDstackEndpoint, type Hex } from './shared'
+import { to_hex, throwOnRpcError, resolveDstackEndpoint } from './shared'
+
+/**
+ * Decode a wire hex string into the bytes the field is declared as.
+ *
+ * Every `bytes` field in the v1 proto travels as lowercase hex and surfaces
+ * here as a `Uint8Array`, so this runs on all of them. A missing field is
+ * proto3's empty default, not an error.
+ */
+function from_hex(value: string | undefined): Uint8Array {
+  return new Uint8Array(Buffer.from(value ?? '', 'hex'))
+}
 
 export interface IssueCertOptionsV1 {
   subject?: string;
@@ -52,7 +63,7 @@ export interface GetKeyResponseV1 {
 export interface AttestResponseV1 {
   __name__: Readonly<'AttestResponseV1'>
 
-  attestation: Hex
+  attestation: Uint8Array
 
   /**
    * The GPU evidence nvattest recorded at boot, in the same bundle shape
@@ -61,8 +72,8 @@ export interface AttestResponseV1 {
    * absence is the empty array, not a sentinel.
    *
    * Not bound to `report_data`: nvattest ran at boot against its own nonce.
-   * Bind it by replaying the runtime event log and comparing sha256 of the
-   * bytes `decodeEvidence()` returns against `evidence_sha256` in the measured
+   * Bind it by replaying the runtime event log and comparing sha256 of each
+   * bundle's `evidence` against `evidence_sha256` in the measured
    * `gpu-attestation` event.
    */
   boottime_gpu_evidence: GpuEvidenceBundleV1[]
@@ -86,19 +97,20 @@ export interface GpuEvidenceBundleV1 {
   vendor: string
   /** Vendor-specific evidence format and version. */
   format: string
-  /** Opaque vendor-native evidence bytes, hex-encoded by the JSON RPC. */
-  evidence: Hex
-
   /**
-   * The evidence as raw bytes, exactly as the vendor emitted it.
+   * Opaque vendor-native evidence bytes, exactly as the vendor emitted them
+   * (hex-encoded by the JSON RPC, decoded here).
    *
    * Byte-exact by design: for a boot-time bundle the binding rule is sha256
    * over precisely these bytes, compared against `evidence_sha256` in the
    * measured `gpu-attestation` event, so parsing and re-serialising the JSON
    * breaks the comparison.
    */
-  decodeEvidence: () => Uint8Array
+  evidence: Uint8Array
 }
+
+/** A bundle as it arrives, before `evidence` is decoded. */
+type GpuEvidenceBundleV1Wire = Omit<GpuEvidenceBundleV1, 'evidence'> & { evidence: string }
 
 export interface AttestGpuResponseV1 {
   __name__: Readonly<'AttestGpuResponseV1'>
@@ -115,31 +127,50 @@ export interface AttestGpuResponseV1 {
  * attestation.
  *
  * `app_id`, `compose_hash`, `instance_id`, `device_id`, `os_image_hash` and
- * `mr_aggregated` are lowercase hex; the rest are plain strings, with the three
- * document fields carrying JSON owned by someone else (see `docs/guest-api-v1.md`).
+ * `mr_aggregated` are `bytes` in the proto and `Uint8Array` here, lowercase hex
+ * only on the wire; the rest are plain strings, with the three document fields
+ * carrying JSON owned by someone else (see `docs/guest-api-v1.md`).
  */
 export interface InfoResponseV1 {
   __name__: Readonly<'InfoResponseV1'>
 
-  app_id: Hex
+  app_id: Uint8Array
   app_name: string
-  compose_hash: Hex
+  compose_hash: Uint8Array
   /**
    * The app-compose document, verbatim. `compose_hash` is sha256 over exactly
    * these bytes, so do not parse and re-serialize before hashing: key order,
    * whitespace and unknown fields all change the digest.
    */
   app_compose: string
-  instance_id: Hex
+  instance_id: Uint8Array
   /** Identifies the host machine, not this instance. */
-  device_id: Hex
-  os_image_hash: Hex
-  mr_aggregated: Hex
+  device_id: Uint8Array
+  os_image_hash: Uint8Array
+  mr_aggregated: Uint8Array
   vm_config: string
   key_provider_info: string
   cloud_vendor: string
   cloud_product: string
 }
+
+/**
+ * `InfoResponseV1` as it arrives: identity fields hex, everything else final.
+ *
+ * `os_image_hash` and `mr_aggregated` are `optional` on the wire, so an older
+ * agent may omit them entirely rather than send an empty string.
+ */
+type InfoResponseV1Wire =
+  Omit<InfoResponseV1, '__name__' | 'app_id' | 'compose_hash' | 'instance_id'
+    | 'device_id' | 'os_image_hash' | 'mr_aggregated'>
+  & {
+    app_id: string
+    compose_hash: string
+    instance_id: string
+    device_id: string
+    os_image_hash?: string
+    mr_aggregated?: string
+  }
 
 export interface VersionResponseV1 {
   __name__: Readonly<'VersionResponseV1'>
@@ -149,17 +180,17 @@ export interface VersionResponseV1 {
 }
 
 /**
- * Attach the byte accessor to the bundles a v1 RPC returned.
+ * Decode the bundles a v1 RPC returned.
  *
  * Shared by `attest` and `attestGpu` so both hand back the same object shape,
  * which is the point of the wire message being shared.
  */
 function to_gpu_evidence_bundles(
-  bundles: Array<Omit<GpuEvidenceBundleV1, 'decodeEvidence'>> | undefined,
+  bundles: GpuEvidenceBundleV1Wire[] | undefined,
 ): GpuEvidenceBundleV1[] {
   return (bundles ?? []).map(bundle => Object.freeze({
     ...bundle,
-    decodeEvidence: () => new Uint8Array(Buffer.from(bundle.evidence, 'hex')),
+    evidence: from_hex(bundle.evidence),
   }))
 }
 
@@ -253,9 +284,9 @@ export class DstackClientV1 {
       this.endpoint, '/v1/GetKey', payload)
     throwOnRpcError(result)
     return Object.freeze({
-      key: new Uint8Array(Buffer.from(result.key, 'hex')),
-      public_key: new Uint8Array(Buffer.from(result.public_key, 'hex')),
-      signature_chain: result.signature_chain.map(sig => new Uint8Array(Buffer.from(sig, 'hex'))),
+      key: from_hex(result.key),
+      public_key: from_hex(result.public_key),
+      signature_chain: result.signature_chain.map(from_hex),
       __name__: 'GetKeyResponseV1' as const,
     })
   }
@@ -285,12 +316,12 @@ export class DstackClientV1 {
     const payload = JSON.stringify({ report_data: hex, include_boottime_gpu_evidence })
     const result = await send_rpc_request<{
       attestation: string,
-      boottime_gpu_evidence?: Array<Omit<GpuEvidenceBundleV1, 'decodeEvidence'>>,
+      boottime_gpu_evidence?: GpuEvidenceBundleV1Wire[],
     }>(this.endpoint, '/v1/Attest', payload)
     throwOnRpcError(result)
     return Object.freeze({
       __name__: 'AttestResponseV1' as const,
-      attestation: result.attestation as Hex,
+      attestation: from_hex(result.attestation),
       boottime_gpu_evidence: to_gpu_evidence_bundles(result.boottime_gpu_evidence),
     })
   }
@@ -312,7 +343,7 @@ export class DstackClientV1 {
     }
     const payload = JSON.stringify({ nonce: to_hex(nonce) })
     const result = await send_rpc_request<{
-      bundles?: Array<Omit<GpuEvidenceBundleV1, 'decodeEvidence'>>,
+      bundles?: GpuEvidenceBundleV1Wire[],
     }>(this.endpoint, '/v1/AttestGpu', payload)
     throwOnRpcError(result)
     return Object.freeze({
@@ -323,10 +354,16 @@ export class DstackClientV1 {
 
   /** Return this application's identity and configuration. */
   async info(): Promise<InfoResponseV1> {
-    const result = await send_rpc_request<Omit<InfoResponseV1, '__name__'>>(this.endpoint, '/v1/Info', '{}')
+    const result = await send_rpc_request<InfoResponseV1Wire>(this.endpoint, '/v1/Info', '{}')
     throwOnRpcError(result)
     return Object.freeze({
       ...result,
+      app_id: from_hex(result.app_id),
+      compose_hash: from_hex(result.compose_hash),
+      instance_id: from_hex(result.instance_id),
+      device_id: from_hex(result.device_id),
+      os_image_hash: from_hex(result.os_image_hash),
+      mr_aggregated: from_hex(result.mr_aggregated),
       __name__: 'InfoResponseV1' as const,
     })
   }

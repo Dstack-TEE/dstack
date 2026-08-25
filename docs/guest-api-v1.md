@@ -687,6 +687,13 @@ explicitly named and marked legacy, and still carries its `Sign` and `Verify`
 RPCs. They are transport mirrors, not a compatibility layer: neither translates
 a call to the other, and each one's method set is exactly its surface's.
 
+Every field this document declares `bytes` is that language's byte type in the
+v1 clients -- `Vec<u8>`, `bytes`, `[]byte`, `Uint8Array` -- with hex confined to
+serialization. `public_key` is why: the claim above is built over the raw key,
+and a hex string handed to a claim builder silently produces a chain that never
+verifies. The v0 clients keep their hex strings and `decode_*` helpers, because
+that surface is frozen.
+
 That alias flipped in 0.6.0. Code that used the unsuffixed client for v0 calls
 fails loudly on upgrade -- the v1 signatures differ and `GetKey` requires
 `algorithm` explicitly -- rather than silently deriving different keys under the

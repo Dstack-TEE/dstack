@@ -100,12 +100,13 @@ async def test_async_v1_info():
 
 def check_info_response(result: InfoResponseV1):
     assert isinstance(result, InfoResponseV1)
-    assert len(result.app_id) == 40
-    assert len(result.compose_hash) == 64
-    assert len(result.instance_id) == 40
-    assert len(result.device_id) == 64
-    assert len(result.os_image_hash) in (0, 64)
-    assert len(result.mr_aggregated) == 64
+    # bytes, not hex: the lengths are the raw ones the proto declares.
+    assert len(result.app_id) == 20
+    assert len(result.compose_hash) == 32
+    assert len(result.instance_id) == 20
+    assert len(result.device_id) == 32
+    assert len(result.os_image_hash) in (0, 32)
+    assert len(result.mr_aggregated) == 32
     assert len(result.app_compose) > 0
     # The measurement registers and the event log belong to attest(), which
     # returns them quote-backed. They must not reappear here.
@@ -117,17 +118,17 @@ def test_sync_v1_get_key():
     client = DstackClientV1()
     result = client.get_key("storage-encryption", "secp256k1")
     assert isinstance(result, GetKeyResponseV1)
-    assert len(result.decode_key()) == 32
+    assert len(result.key) == 32
     # secp256k1 public keys are SEC1 compressed, and the chain's first link
     # commits to exactly these bytes.
-    assert len(result.decode_public_key()) == 33
-    assert len(result.decode_signature_chain()) == 2
+    assert len(result.public_key) == 33
+    assert len(result.signature_chain) == 2
 
     ed = client.get_key("storage-encryption", "ed25519")
-    assert len(ed.decode_key()) == 32
-    assert len(ed.decode_public_key()) == 32
+    assert len(ed.key) == 32
+    assert len(ed.public_key) == 32
     # The v1 KDF binds the algorithm, so one name no longer serves two curves.
-    assert ed.decode_key() != result.decode_key()
+    assert ed.key != result.key
 
 
 @pytest.mark.asyncio
@@ -160,13 +161,13 @@ def test_v1_keys_differ_from_v0_keys():
     """No compatibility mode: the same name yields different key material."""
     v0 = DstackClientV0().get_key("storage-encryption", "")
     v1 = DstackClientV1().get_key("storage-encryption", "secp256k1")
-    assert v1.decode_key() != v0.decode_key()
+    assert v1.key != v0.decode_key()
 
 
 def test_sync_v1_attest():
     result = DstackClientV1().attest(b"user:alice:nonce123")
     assert isinstance(result, AttestResponseV1)
-    assert len(result.decode_attestation()) > 0
+    assert len(result.attestation) > 0
 
 
 @pytest.mark.asyncio
@@ -199,7 +200,7 @@ async def test_async_v1_attest_boottime_gpu_evidence(monkeypatch):
     assert bundle.format == "nvidia-nvattest-boottime-json-v1"
     # sha256 of exactly these bytes is what the `gpu-attestation` event commits
     # to, so the decode must be byte-for-byte, not a re-serialized parse.
-    assert bundle.decode_evidence() == evidence
+    assert bundle.evidence == evidence
 
 
 def test_sync_v1_attest_boottime_gpu_evidence_defaults_to_empty():
@@ -222,7 +223,7 @@ async def test_async_v1_attest_report_data_bounds():
     with pytest.raises(ValueError, match="64 bytes"):
         await client.attest(b"0" * 65)
     # 64 bytes is the maximum, not one past it.
-    assert len((await client.attest(b"0" * 64)).decode_attestation()) > 0
+    assert len((await client.attest(b"0" * 64)).attestation) > 0
 
 
 @pytest.mark.asyncio
@@ -248,7 +249,7 @@ async def test_async_v1_attest_gpu(monkeypatch):
     assert isinstance(result, AttestGpuResponseV1)
     assert len(result.bundles) == 1
     assert result.bundles[0].vendor == "nvidia"
-    assert result.bundles[0].decode_evidence() == evidence
+    assert result.bundles[0].evidence == evidence
 
 
 @pytest.mark.asyncio

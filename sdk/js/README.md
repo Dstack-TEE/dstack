@@ -107,21 +107,23 @@ Both arguments are required. `algorithm` is exactly `'secp256k1'` or `'ed25519'`
 The only CVM attestation entry point. The versioned attestation already carries the TDX quote and the event log, so there is no separate `getQuote`.
 
 ```typescript
-const { attestation } = await client.attest('app-state-snapshot')
+const { attestation } = await client.attest('app-state-snapshot')  // Uint8Array
 ```
+
+Every field the proto declares `bytes` is a `Uint8Array` here, hex only on the wire.
 
 `reportData` is 1 to 64 bytes (string, Buffer, or Uint8Array), zero-padded on the right by the agent. Pass `true` as the second argument to also return the boot-time GPU evidence in `boottime_gpu_evidence`, so a verifier gets both in one round trip:
 
 ```typescript
 const { attestation, boottime_gpu_evidence } = await client.attest('snapshot', true)
 for (const bundle of boottime_gpu_evidence) {
-  console.log(bundle.vendor, bundle.format, bundle.decodeEvidence())
+  console.log(bundle.vendor, bundle.format, bundle.evidence)
 }
 ```
 
 `boottime_gpu_evidence` is a list of the same `GpuEvidenceBundleV1` objects `attestGpu` returns, so one parser serves both; `format` is what tells them apart (`nvidia-nvattest-boottime-json-v1` here, `nvidia-nvattest-collect-evidence-json-v1` there). Absence is the empty list, not a sentinel: it is empty unless the flag was set and the guest has boot-time output.
 
-That evidence is not bound to `reportData` — nvattest ran at boot against its own nonce. Bind it by replaying the runtime event log and comparing sha256 of the bytes `decodeEvidence()` returns — exactly the bytes nvattest emitted, so do not parse and re-serialize the JSON — against `evidence_sha256` in the measured `gpu-attestation` event.
+That evidence is not bound to `reportData` — nvattest ran at boot against its own nonce. Bind it by replaying the runtime event log and comparing sha256 of `bundle.evidence` — exactly the bytes nvattest emitted, so do not parse and re-serialize the JSON — against `evidence_sha256` in the measured `gpu-attestation` event.
 
 ### `attestGpu(nonce)`
 
@@ -130,13 +132,13 @@ Collect GPU evidence now, against a 32-byte nonce you choose. This answers "is t
 ```typescript
 const { bundles } = await client.attestGpu(crypto.randomBytes(32))
 for (const bundle of bundles) {
-  console.log(bundle.vendor, bundle.format, bundle.decodeEvidence())
+  console.log(bundle.vendor, bundle.format, bundle.evidence)
 }
 ```
 
 The nonce must be exactly 32 bytes — SPDM fixes the length, and dstack applies no transform, so you can compare these bytes directly against the `eat_nonce` claim. Hash a longer challenge yourself.
 
-Select a verifier from each bundle's `vendor` and `format`, then check the signature, certificate chain, measurements and embedded nonce. `evidence` is opaque and hex-encoded on the wire; `decodeEvidence()` gives the vendor's bytes verbatim. It does not by itself bind the GPU to this CVM.
+Select a verifier from each bundle's `vendor` and `format`, then check the signature, certificate chain, measurements and embedded nonce. `evidence` is opaque, hex-encoded on the wire and decoded here to the vendor's bytes verbatim. It does not by itself bind the GPU to this CVM.
 
 ### `info()`
 
@@ -144,14 +146,14 @@ App identity and configuration. Not attestation.
 
 ```typescript
 const info = await client.info()
-info.app_id            // hex
+info.app_id            // Uint8Array
 info.app_name
-info.compose_hash      // hex — sha256 over exactly the app_compose bytes
+info.compose_hash      // Uint8Array — sha256 over exactly the app_compose bytes
 info.app_compose       // the deployed document, verbatim
-info.instance_id       // hex
-info.device_id         // hex — identifies the host machine, not this instance
-info.os_image_hash     // hex
-info.mr_aggregated     // hex
+info.instance_id       // Uint8Array
+info.device_id         // Uint8Array — identifies the host machine, not this instance
+info.os_image_hash     // Uint8Array
+info.mr_aggregated     // Uint8Array
 info.vm_config         // JSON owned by the VMM
 info.key_provider_info // JSON owned by dstack-util
 info.cloud_vendor      // e.g. "Google"

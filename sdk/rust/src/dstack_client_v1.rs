@@ -117,7 +117,7 @@ impl DstackClientV1 {
             anyhow::bail!("report data must be 1 to 64 bytes")
         }
         let config = AttestConfig::builder()
-            .report_data(hex_encode(&report_data))
+            .report_data(report_data)
             .include_boottime_gpu_evidence(include_boottime_gpu_evidence)
             .build();
         let response = self.send_rpc_request("Attest", &config).await?;

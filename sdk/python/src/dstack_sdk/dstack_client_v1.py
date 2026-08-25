@@ -17,16 +17,47 @@ name. There is no compatibility mode. See ``docs/guest-api-v1.md``.
 """
 
 import binascii
+from typing import Annotated
 from typing import Any
 from typing import Dict
 from typing import List
 from typing import Optional
 
 from pydantic import BaseModel
+from pydantic import BeforeValidator
+from pydantic import PlainSerializer
 
 from .dstack_client_v0 import AsyncBaseClient
 from .dstack_client_v0 import BaseClient
 from .dstack_client_v0 import call_async
+
+
+def _decode_hex(value: Any) -> Any:
+    """Turn a wire hex string into bytes, leaving anything else to pydantic."""
+    if isinstance(value, str):
+        try:
+            return bytes.fromhex(value)
+        except ValueError as err:
+            raise ValueError(f"expected a lowercase hex string: {err}") from err
+    return value
+
+
+#: A protobuf ``bytes`` field: lowercase hex on the wire, ``bytes`` in Python.
+#:
+#: v0 exposed these as ``str`` with a ``decode_*`` helper beside them, which
+#: made the wrong call the easy one -- ``public_key`` passed straight to a
+#: signature-chain claim builder is 66 ASCII characters, not a 33-byte key, and
+#: nothing raises until the chain fails to verify. The annotation also replaces
+#: pydantic's own ``str`` -> ``bytes`` coercion, which would UTF-8 encode the
+#: hex string rather than decode it -- the same silent wrong answer.
+#:
+#: Serialization is hex only in JSON mode, so ``model_dump_json()`` round-trips
+#: through the wire form while ``model_dump()`` keeps the bytes.
+HexBytes = Annotated[
+    bytes,
+    BeforeValidator(_decode_hex),
+    PlainSerializer(lambda value: value.hex(), return_type=str, when_used="json"),
+]
 
 
 class IssueCertResponseV1(BaseModel):
@@ -39,18 +70,14 @@ class IssueCertResponseV1(BaseModel):
 
 
 class GetKeyResponseV1(BaseModel):
-    key: str
-    public_key: str
-    signature_chain: List[str]
-
-    def decode_key(self) -> bytes:
-        return bytes.fromhex(self.key)
-
-    def decode_public_key(self) -> bytes:
-        return bytes.fromhex(self.public_key)
-
-    def decode_signature_chain(self) -> List[bytes]:
-        return [bytes.fromhex(chain) for chain in self.signature_chain]
+    # 32 bytes for both algorithms.
+    key: HexBytes
+    # SEC1 compressed (33 bytes) for secp256k1, raw (32 bytes) for ed25519.
+    # This is the exact byte string the chain's first link commits to.
+    public_key: HexBytes
+    # Two links: the app root key's signature over the v1 key claim, then the
+    # KMS root key's signature over the app root public key.
+    signature_chain: List[HexBytes]
 
 
 class GpuEvidenceBundleV1(BaseModel):
@@ -68,33 +95,25 @@ class GpuEvidenceBundleV1(BaseModel):
 
     vendor: str
     format: str
-    # Opaque vendor-native evidence, hex-encoded on the wire. Do not assume
-    # UTF-8 or JSON.
-    evidence: str
-
-    def decode_evidence(self) -> bytes:
-        """Return the evidence as raw bytes, exactly as the vendor emitted it.
-
-        The exactness matters for the boot-time format: the binding rule is
-        sha256 over precisely these bytes, compared against ``evidence_sha256``
-        in the measured ``gpu-attestation`` event. Parsing and re-serializing
-        the JSON changes key order and whitespace, and so changes the digest.
-        """
-        return bytes.fromhex(self.evidence)
+    # Opaque vendor-native evidence, hex-encoded on the wire and exactly as the
+    # vendor emitted it. Do not assume UTF-8 or JSON.
+    #
+    # The exactness matters for the boot-time format: the binding rule is
+    # sha256 over precisely these bytes, compared against ``evidence_sha256``
+    # in the measured ``gpu-attestation`` event. Parsing and re-serializing the
+    # JSON changes key order and whitespace, and so changes the digest.
+    evidence: HexBytes
 
 
 class AttestResponseV1(BaseModel):
-    attestation: str
+    attestation: HexBytes
     # The GPU evidence nvattest recorded during guest boot, in the same bundle
     # shape attest_gpu returns. Empty unless the request set
     # include_boottime_gpu_evidence and the guest has boot-time output. Not
     # bound to report_data: verify each bundle by replaying the runtime event
-    # log and comparing sha256 of decode_evidence() against evidence_sha256 in
-    # the `gpu-attestation` event.
+    # log and comparing sha256 of its `evidence` against evidence_sha256 in the
+    # `gpu-attestation` event.
     boottime_gpu_evidence: List[GpuEvidenceBundleV1] = []
-
-    def decode_attestation(self) -> bytes:
-        return bytes.fromhex(self.attestation)
 
 
 class AttestGpuResponseV1(BaseModel):
@@ -118,22 +137,23 @@ class InfoResponseV1(BaseModel):
     they identify *which* application and image this is, and a relying party
     still confirms them against an attestation.
 
-    The identity fields are hex strings, matching how the v0 ``InfoResponse``
-    exposes the same values.
+    The identity fields are ``bytes``, matching the proto, where the v0
+    ``InfoResponse`` hands back hex strings. Call ``.hex()`` to print one.
     """
 
-    app_id: str
+    app_id: HexBytes
     app_name: str = ""
-    compose_hash: str
+    compose_hash: HexBytes
     # Verbatim deployed bytes; compose_hash is sha256 over exactly these. Do
     # not parse and re-serialize before hashing -- key order, whitespace and
     # unknown fields all change the digest, and that digest is what gets
     # whitelisted on chain.
     app_compose: str = ""
-    instance_id: str
-    device_id: str
-    os_image_hash: str
-    mr_aggregated: str
+    instance_id: HexBytes
+    # Identifies the host machine, not this instance.
+    device_id: HexBytes
+    os_image_hash: HexBytes
+    mr_aggregated: HexBytes
     vm_config: str = ""
     key_provider_info: str = ""
     cloud_vendor: str = ""

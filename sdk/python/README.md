@@ -90,17 +90,22 @@ different keys for the same domain.
 
 ```python
 key = client.get_key('storage-encryption', 'secp256k1')
-print(key.decode_key())             # 32 raw bytes
-print(key.decode_public_key())      # SEC1 compressed (33 B), or 32 B for ed25519
-print(key.decode_signature_chain()) # two links: app root, then KMS root
+print(key.key)             # 32 raw bytes
+print(key.public_key)      # SEC1 compressed (33 B), or 32 B for ed25519
+print(key.signature_chain) # two links: app root, then KMS root
 ```
+
+Every field the proto declares `bytes` is `bytes` here, hex only on the wire.
+`public_key` in particular is what the v1 key claim commits to, and the claim is
+built over raw bytes — passing a hex string would build it over 66 ASCII
+characters and produce a chain that silently never verifies.
 
 **Parameters:**
 - `domain`: Any string. This replaces v0's `path` plus `purpose`; in v0 only `path` reached the KDF and `purpose` was merely echoed into the chain claim. Derivation is flat — two domains give unrelated keys, and `a/b` is not a child of `a`.
 - `algorithm`: Exactly `'secp256k1'` or `'ed25519'`. **Required.** There is no default and no `k256` alias, because in v0 a typo silently produced a key of the wrong type under a name the caller thought meant something else. An empty value is rejected client-side.
 
-**Returns:** `GetKeyResponseV1` with hex `key`, `public_key` and
-`signature_chain`, plus the usual `decode_*` helpers.
+**Returns:** `GetKeyResponseV1` with `key: bytes`, `public_key: bytes` and
+`signature_chain: list[bytes]`.
 
 ### `attest()`
 
@@ -110,11 +115,11 @@ nothing left to add.
 
 ```python
 result = client.attest(b'user:alice:nonce123')
-print(result.decode_attestation())
+print(result.attestation)   # bytes
 
 with_gpu = client.attest(b'user:alice:nonce123', include_boottime_gpu_evidence=True)
 for bundle in with_gpu.boottime_gpu_evidence:
-    print(bundle.vendor, bundle.format, bundle.decode_evidence())
+    print(bundle.vendor, bundle.format, bundle.evidence)
 ```
 
 `report_data` is 1–64 bytes and is zero-padded on the right to 64.
@@ -126,10 +131,10 @@ against `attest_gpu()`'s `'nvidia-nvattest-collect-evidence-json-v1'`.
 
 Boot-time evidence is *not* bound to `report_data` — nvattest ran at boot
 against its own nonce. Bind it by replaying the runtime event log and comparing
-sha256 of `decode_evidence()` against `evidence_sha256` in the measured
-`gpu-attestation` event. `decode_evidence()` returns the nvattest output byte
-for byte; do not parse and re-serialize before hashing, since key order and
-whitespace change the digest.
+sha256 of `bundle.evidence` against `evidence_sha256` in the measured
+`gpu-attestation` event. `evidence` is the nvattest output byte for byte; do not
+parse and re-serialize before hashing, since key order and whitespace change the
+digest.
 
 ### `attest_gpu()`
 
@@ -140,7 +145,7 @@ Use it after anything that may have reinitialised the GPU.
 ```python
 result = client.attest_gpu(os.urandom(32))  # exactly 32 bytes
 for bundle in result.bundles:
-    print(bundle.vendor, bundle.format, bundle.decode_evidence())
+    print(bundle.vendor, bundle.format, bundle.evidence)
 ```
 
 Select a verifier using each bundle's `vendor` and `format`, then check the
@@ -194,6 +199,9 @@ this is, and a relying party still confirms them against an attestation.
 `app_compose` is the verbatim deployed document and `compose_hash` is sha256
 over exactly those bytes — do not parse and re-serialize before hashing.
 
+`app_id`, `instance_id`, `compose_hash`, `device_id`, `os_image_hash` and
+`mr_aggregated` are `bytes`, matching the proto. Call `.hex()` to print one.
+
 ### `version()`
 
 ```python
@@ -239,7 +247,7 @@ standard library.
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 key = client.get_key('signing/messages', 'ed25519')
-signing_key = ed25519.Ed25519PrivateKey.from_private_bytes(key.decode_key())
+signing_key = ed25519.Ed25519PrivateKey.from_private_bytes(key.key)
 signature = signing_key.sign(b'message to sign')
 ```
 

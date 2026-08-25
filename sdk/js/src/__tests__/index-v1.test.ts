@@ -159,14 +159,15 @@ describe('DstackClientV1', () => {
     it('should attest over report data', async () => {
       const client = new DstackClientV1()
       const result = await client.attest('test')
-      expect(result.attestation).not.toBe('')
+      expect(result.attestation).toBeInstanceOf(Uint8Array)
+      expect(result.attestation.length).toBeGreaterThan(0)
       expect(result.boottime_gpu_evidence).toEqual([])
     })
 
     it('should accept the boot-time GPU evidence flag', async () => {
       const client = new DstackClientV1()
       const result = await client.attest('test', true)
-      expect(result.attestation).not.toBe('')
+      expect(result.attestation.length).toBeGreaterThan(0)
       // Absence is the empty list, not a sentinel; the simulator has no GPU
       // output, so this is empty here but must still be an array.
       expect(Array.isArray(result.boottime_gpu_evidence)).toBe(true)
@@ -179,7 +180,7 @@ describe('DstackClientV1', () => {
       // Assigning one to the other is the assertion: one parser, both methods.
       const bundles: GpuEvidenceBundleV1[] = result.boottime_gpu_evidence
       for (const bundle of bundles) {
-        expect(bundle.decodeEvidence()).toBeInstanceOf(Uint8Array)
+        expect(bundle.evidence).toBeInstanceOf(Uint8Array)
       }
     })
 
@@ -252,7 +253,7 @@ describe('DstackClientV1', () => {
         expect(bundle.format).toBe('nvidia-nvattest-boottime-json-v1')
         // Byte-exact: sha256 over these bytes is what `evidence_sha256` in the
         // measured `gpu-attestation` event commits to.
-        expect(Buffer.from(bundle.decodeEvidence()).toString('utf8')).toBe(nvattest_output)
+        expect(Buffer.from(bundle.evidence).toString('utf8')).toBe(nvattest_output)
       })
     })
 
@@ -264,7 +265,7 @@ describe('DstackClientV1', () => {
         const on_demand: GpuEvidenceBundleV1 = collected.bundles[0]
         // Only `format` separates them, so one parser handles both.
         expect(on_demand.format).toBe('nvidia-nvattest-collect-evidence-json-v1')
-        expect(on_demand.decodeEvidence()).toEqual(boottime.decodeEvidence())
+        expect(on_demand.evidence).toEqual(boottime.evidence)
       })
     })
   })
@@ -280,8 +281,8 @@ describe('DstackClientV1', () => {
       ]) {
         expect(result).toHaveProperty(field)
       }
-      expect(result.app_id).not.toBe('')
-      expect(result.instance_id).not.toBe('')
+      expect(result.app_id.length).toBeGreaterThan(0)
+      expect(result.instance_id.length).toBeGreaterThan(0)
     })
 
     it('should not nest measurements in a tcb_info blob or mint an app_cert', async () => {
@@ -291,12 +292,18 @@ describe('DstackClientV1', () => {
       expect(result.app_cert).toBeUndefined()
     })
 
-    it('should hex-encode the byte fields', async () => {
+    it('should decode the byte fields rather than hand back hex', async () => {
       const client = new DstackClientV1()
       const result = await client.info()
-      expect(result.app_id).toMatch(/^[0-9a-f]+$/)
-      expect(result.compose_hash).toMatch(/^[0-9a-f]{64}$/)
-      expect(result.mr_aggregated).toMatch(/^[0-9a-f]{64}$/)
+      // The proto says `bytes`, so the SDK says `Uint8Array`: a caller that
+      // hashes or compares an identity gets the 20 or 32 bytes it means, not
+      // the 40 or 64 ASCII characters the wire carries.
+      expect(result.app_id).toBeInstanceOf(Uint8Array)
+      expect(result.app_id.length).toBe(20)
+      expect(result.compose_hash.length).toBe(32)
+      expect(result.instance_id.length).toBe(20)
+      expect(result.device_id.length).toBe(32)
+      expect(result.mr_aggregated.length).toBe(32)
     })
 
     it('should serve app_compose verbatim rather than nested in another JSON string', async () => {

@@ -34,6 +34,11 @@ a call to the other, and each one's method set is exactly its surface's. v1 has
 no `sign` and no `verify`, because any caller that can reach the socket can ask
 `get_key` for the private key and do both locally.
 
+Every field the v1 proto declares `bytes` is that language's byte type on the v1
+clients -- `Vec<u8>`, `bytes`, `[]byte`, `Uint8Array` -- with hex confined to
+serialization; there are no `decode_*` helpers. The v0 clients keep their hex
+strings and helpers, because that surface is frozen.
+
 > **v1 keys are not v0 keys.** Deriving under the same name through `DstackClient`
 > returns *different key material* than `DstackClientV0` does. This is deliberate --
 > the v0 KDF ignored the algorithm, so one secret served both curves -- and
