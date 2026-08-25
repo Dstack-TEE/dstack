@@ -274,8 +274,25 @@ function to_string(value: unknown, field: string): string {
   if (value === undefined) {
     return ''
   }
+  return require_string(value, field)
+}
+
+/**
+ * Read a `string` field the response is meaningless without.
+ *
+ * A bundle's `vendor` and `format` are what a caller dispatches on to pick a
+ * verifier, so handing back `undefined` there does not degrade the answer, it
+ * routes the evidence to no verifier at all -- quietly, since `undefined`
+ * matches no `case`. Rust and Python both make these required.
+ */
+function require_string(value: unknown, field: string): string {
   if (typeof value !== 'string') {
-    throw new Error(`the agent returned a malformed ${field}: expected a string`)
+    throw new Error(
+      `the agent returned a malformed ${field}: expected a string, got ${
+        value === undefined ? 'nothing'
+          : value === null ? 'null'
+          : Array.isArray(value) ? 'an array' : typeof value}`
+    )
   }
   return value
 }
@@ -319,7 +336,8 @@ function to_gpu_evidence_bundles(
     }
     const wire = bundle as GpuEvidenceBundleV1Wire
     return Object.freeze({
-      ...wire,
+      vendor: require_string(wire.vendor, `${field}[${i}].vendor`),
+      format: require_string(wire.format, `${field}[${i}].format`),
       evidence: from_hex(wire.evidence, `${field}[${i}].evidence`),
     })
   })

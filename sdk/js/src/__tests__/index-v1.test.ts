@@ -394,6 +394,14 @@ describe('DstackClientV1', () => {
       )
     })
 
+    it('should reject a bundle without the vendor a caller dispatches on', async () => {
+      await withAgentAnswering(
+        { bundles: [{ format: 'nvidia-nvattest-collect-evidence-json-v1', evidence: 'aa' }] },
+        client => expect(client.attestGpu(new Uint8Array(32))).rejects.toThrow(
+          /malformed bundles\[0\]\.vendor.*got nothing/)
+      )
+    })
+
     it('should read an absent string field as empty, not undefined', async () => {
       await withAgentAnswering(identity, async client => {
         const info = await client.info()
