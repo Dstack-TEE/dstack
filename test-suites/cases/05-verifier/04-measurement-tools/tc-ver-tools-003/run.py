@@ -74,7 +74,7 @@ def main() -> int:
     output = completed.stdout
     checks = {
         "command_passed": completed.returncode == 0,
-        "library_count": "39 passed; 0 failed" in output,
+        "library_count": "40 passed; 0 failed" in output,
         "nitro_count": "1 passed; 0 failed" in output,
         "sev_snp_count": "9 passed; 0 failed" in output,
         "required_tests": all(name in output for name in REQUIRED_TESTS),
