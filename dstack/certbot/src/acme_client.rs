@@ -436,11 +436,19 @@ impl AcmeClient {
 
         debug!("Unsettled challenges: {unsettled_challenges:#?}");
 
+        // The budget covers discovery as well as the wait. `renew_timeout` is
+        // commonly the same value as `max_dns_wait`, so leaving discovery
+        // outside it lets the outer timeout kill the renewal mid-wait instead of
+        // reaching the graceful "proceed anyway" exit below -- and that exit is
+        // what keeps a DNS problem from failing issuance outright.
+        let start_time = std::time::Instant::now();
+
         // Resolve each challenge's nameservers once. A SAN list can span zones,
         // so this is keyed per challenge rather than one resolver for all of
         // them; and with caching disabled there is nothing to gain by repeating
         // discovery on every retry.
         let mut resolvers = BTreeMap::new();
+        let mut fell_back = BTreeSet::new();
         for challenge in &unsettled_challenges {
             if resolvers.contains_key(&challenge.acme_domain) {
                 continue;
@@ -457,8 +465,6 @@ impl AcmeClient {
             };
             resolvers.insert(challenge.acme_domain.clone(), resolver);
         }
-
-        let start_time = std::time::Instant::now();
 
         'outer: loop {
             sleep(delay).await;
@@ -487,7 +493,7 @@ impl AcmeClient {
                         actual_txt == *expected_txt
                     }),
                     Err(err) if err.is_no_records_found() => false,
-                    Err(err) => {
+                    Err(err) if !fell_back.contains(&challenge.acme_domain) => {
                         // Transport failures land here rather than in the arm
                         // above: `is_no_records_found` covers only
                         // `NoRecordsFound`, so a timeout or `NoConnections`
@@ -502,9 +508,22 @@ impl AcmeClient {
                             "authoritative lookup for {} failed ({err:#}), falling back to the system resolver",
                             challenge.acme_domain
                         );
+                        fell_back.insert(challenge.acme_domain.clone());
                         resolvers.insert(challenge.acme_domain.clone(), system_resolver()?);
                         unsettled_challenges.push(challenge);
                         continue 'outer;
+                    }
+                    Err(err) => {
+                        // Already on the system resolver, so there is nothing
+                        // left to fall back to. Treat it as "not settled yet" so
+                        // the backoff below applies: re-announcing a fallback
+                        // that already happened would both misreport the state
+                        // and keep the delay pinned at its initial value.
+                        debug!(
+                            domain = &challenge.acme_domain,
+                            "dns lookup failed: {err:#}"
+                        );
+                        false
                     }
                 };
                 if !settled {
