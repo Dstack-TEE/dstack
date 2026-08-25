@@ -334,6 +334,54 @@ describe('DstackClientV1', () => {
         expect(info.app_id.length).toBe(20)
       })
     })
+
+    // A hex check alone does not survive a value that is not a string:
+    // `RegExp.test` stringifies, so `['00112233']` passes it, and `Buffer.from`
+    // then coerces the element as an octet and yields one attacker-chosen byte
+    // without erroring. These pin the type check that stops it.
+    it('should reject a one-element array rather than coerce it to a byte', async () => {
+      await withAgentAnswering({ ...identity, app_id: ['00112233'] }, client =>
+        expect(client.info()).rejects.toThrow(/malformed app_id.*got an array/)
+      )
+    })
+
+    it('should reject a chain link that is an array rather than a string', async () => {
+      await withAgentAnswering(
+        { key: 'aa'.repeat(32), public_key: 'bb'.repeat(33), signature_chain: [['61']] },
+        client => expect(client.getKey('x', 'secp256k1')).rejects.toThrow(
+          /malformed signature_chain\[0\].*got an array/)
+      )
+    })
+
+    it('should reject a null field rather than read it as empty bytes', async () => {
+      await withAgentAnswering({ ...identity, os_image_hash: null }, client =>
+        expect(client.info()).rejects.toThrow(/malformed os_image_hash.*got null/)
+      )
+    })
+
+    it('should name the field when a repeated one is not a list', async () => {
+      await withAgentAnswering(
+        { key: 'aa'.repeat(32), public_key: 'bb'.repeat(33), signature_chain: null },
+        client => expect(client.getKey('x', 'secp256k1')).rejects.toThrow(
+          /malformed signature_chain: expected a list/)
+      )
+    })
+
+    it('should reject an absent bundles rather than report no GPUs', async () => {
+      await withAgentAnswering({}, client =>
+        expect(client.attestGpu(new Uint8Array(32))).rejects.toThrow(
+          /malformed bundles: expected a list/)
+      )
+    })
+
+    it('should read an absent string field as empty, not undefined', async () => {
+      await withAgentAnswering(identity, async client => {
+        const info = await client.info()
+        expect(info.app_compose).toBe('')
+        expect(info.cloud_vendor).toBe('')
+        expect(info.app_name).toBe('')
+      })
+    })
   })
 
   describe('info', () => {

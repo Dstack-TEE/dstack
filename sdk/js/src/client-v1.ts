@@ -21,7 +21,20 @@ const HEX_ONLY = /^(?:[0-9a-fA-F]{2})*$/
  * identity -- handing back a silently truncated one is worse than throwing,
  * and Rust, Python and Go all refuse the same input.
  */
-function decode_hex(value: string, field: string): Uint8Array {
+function decode_hex(value: unknown, field: string): Uint8Array {
+  // The type check is not redundant with the regex, and dropping it is a
+  // silent-wrong-value bug rather than a style regression. `RegExp.test`
+  // stringifies its argument, so a one-element array passes -- `['00112233']`
+  // becomes `'00112233'` -- and `Buffer.from` then ignores the `'hex'`
+  // argument for a non-string input and coerces the elements as octets:
+  // `Number('00112233') & 0xff`, one attacker-chosen byte, no error. TypeScript
+  // cannot stop this because a JSON response is `any` at runtime.
+  if (typeof value !== 'string') {
+    throw new Error(
+      `the agent returned a malformed ${field}: expected a hex string, got ${
+        value === null ? 'null' : Array.isArray(value) ? 'an array' : typeof value}`
+    )
+  }
   if (!HEX_ONLY.test(value)) {
     throw new Error(
       `the agent returned a malformed ${field}: expected an even-length hex string`
@@ -38,25 +51,29 @@ function decode_hex(value: string, field: string): Uint8Array {
  * did not come from a working agent. An empty *string* still decodes to zero
  * bytes, which is what every other SDK does with it.
  */
-function from_hex(value: string | undefined, field: string): Uint8Array {
-  if (value === undefined || value === null) {
+function from_hex(value: unknown, field: string): Uint8Array {
+  if (value === undefined) {
     throw new Error(`the agent returned no ${field}`)
   }
   return decode_hex(value, field)
 }
 
 /**
- * Decode a `bytes` field, treating absence as the empty default.
+ * Decode a `bytes` field, treating an absent key as the empty default.
  *
  * `os_image_hash` and `mr_aggregated` are the two that get this. Both are
  * plain `bytes` in the proto, so a current agent always sends them -- empty
  * when it could not compute one. Reading a missing key as those same empty
  * bytes rather than an error keeps a degraded `Info` readable instead of
- * unparseable; Rust spells the same rule `#[serde(default)]`. It costs
- * nothing, because neither field means anything unattested anyway.
+ * unparseable, and costs nothing, because neither field means anything
+ * unattested anyway.
+ *
+ * Absent only. An explicit `null` is a malformed value, not an omission, and
+ * is rejected -- which is also what `#[serde(default)]` does in Rust and what
+ * a defaulted pydantic field does in Python.
  */
-function from_optional_hex(value: string | undefined, field: string): Uint8Array {
-  return value === undefined || value === null ? new Uint8Array(0) : decode_hex(value, field)
+function from_optional_hex(value: unknown, field: string): Uint8Array {
+  return value === undefined ? new Uint8Array(0) : decode_hex(value, field)
 }
 
 export interface IssueCertOptionsV1 {
@@ -221,18 +238,68 @@ export interface VersionResponseV1 {
 }
 
 /**
+ * Read a `string` field, or say which one was not a string.
+ *
+ * The interfaces in this file declare these `string`, and a spread of the raw
+ * JSON quietly hands back `undefined` for a key the response omitted -- so
+ * `info().app_compose.length` throws on a value the compiler called safe.
+ * proto3 has no presence for a scalar `string`, so absence is the empty
+ * default, matching Rust's `#[serde(default)]` and pydantic's field default.
+ * A present-but-not-a-string value is still an error.
+ */
+function to_string(value: unknown, field: string): string {
+  if (value === undefined) {
+    return ''
+  }
+  if (typeof value !== 'string') {
+    throw new Error(`the agent returned a malformed ${field}: expected a string`)
+  }
+  return value
+}
+
+/**
+ * Read a `repeated` field, or say which one was not a list.
+ *
+ * `Array.isArray` rather than a truthiness check: a bare `.map()` on a `null`
+ * or absent field throws `TypeError: Cannot read properties of null`, which
+ * names no field and reads like an SDK bug rather than a bad response.
+ *
+ * `whenAbsent` follows the proto. A missing `boottime_gpu_evidence` is the
+ * empty list, because the field is only populated when asked for; a missing
+ * `bundles` or `signature_chain` is a malformed response, because those are
+ * the whole answer of the call that returns them.
+ */
+function to_list(
+  value: unknown, field: string, whenAbsent: 'empty' | 'error',
+): unknown[] {
+  if (value === undefined && whenAbsent === 'empty') {
+    return []
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`the agent returned a malformed ${field}: expected a list`)
+  }
+  return value
+}
+
+/**
  * Decode the bundles a v1 RPC returned.
  *
  * Shared by `attest` and `attestGpu` so both hand back the same object shape,
  * which is the point of the wire message being shared.
  */
 function to_gpu_evidence_bundles(
-  bundles: GpuEvidenceBundleV1Wire[] | undefined,
+  bundles: unknown, field: string, whenAbsent: 'empty' | 'error',
 ): GpuEvidenceBundleV1[] {
-  return (bundles ?? []).map(bundle => Object.freeze({
-    ...bundle,
-    evidence: from_hex(bundle.evidence, 'GPU evidence'),
-  }))
+  return to_list(bundles, field, whenAbsent).map((bundle, i) => {
+    if (bundle === null || typeof bundle !== 'object') {
+      throw new Error(`the agent returned a malformed ${field}[${i}]: expected an object`)
+    }
+    const wire = bundle as GpuEvidenceBundleV1Wire
+    return Object.freeze({
+      ...wire,
+      evidence: from_hex(wire.evidence, `${field}[${i}].evidence`),
+    })
+  })
 }
 
 /**
@@ -299,7 +366,9 @@ export class DstackClientV1 {
       this.endpoint, '/v1/IssueCert', JSON.stringify(raw))
     throwOnRpcError(result)
     return Object.freeze({
-      ...result,
+      key: to_string(result.key, 'key'),
+      certificate_chain: to_list(result.certificate_chain, 'certificate_chain', 'error')
+        .map((cert, i) => to_string(cert, `certificate_chain[${i}]`)),
       __name__: 'IssueCertResponseV1' as const,
     })
   }
@@ -327,9 +396,8 @@ export class DstackClientV1 {
     return Object.freeze({
       key: from_hex(result.key, 'key'),
       public_key: from_hex(result.public_key, 'public_key'),
-      signature_chain: result.signature_chain.map((link, i) =>
-        from_hex(link, `signature_chain[${i}]`)
-      ),
+      signature_chain: to_list(result.signature_chain, 'signature_chain', 'error')
+        .map((link, i) => from_hex(link, `signature_chain[${i}]`)),
       __name__: 'GetKeyResponseV1' as const,
     })
   }
@@ -365,7 +433,8 @@ export class DstackClientV1 {
     return Object.freeze({
       __name__: 'AttestResponseV1' as const,
       attestation: from_hex(result.attestation, 'attestation'),
-      boottime_gpu_evidence: to_gpu_evidence_bundles(result.boottime_gpu_evidence),
+      boottime_gpu_evidence: to_gpu_evidence_bundles(
+        result.boottime_gpu_evidence, 'boottime_gpu_evidence', 'empty'),
     })
   }
 
@@ -390,7 +459,7 @@ export class DstackClientV1 {
     }>(this.endpoint, '/v1/AttestGpu', payload)
     throwOnRpcError(result)
     return Object.freeze({
-      bundles: to_gpu_evidence_bundles(result.bundles),
+      bundles: to_gpu_evidence_bundles(result.bundles, 'bundles', 'error'),
       __name__: 'AttestGpuResponseV1' as const,
     })
   }
@@ -400,13 +469,18 @@ export class DstackClientV1 {
     const result = await send_rpc_request<InfoResponseV1Wire>(this.endpoint, '/v1/Info', '{}')
     throwOnRpcError(result)
     return Object.freeze({
-      ...result,
       app_id: from_hex(result.app_id, 'app_id'),
+      app_name: to_string(result.app_name, 'app_name'),
       compose_hash: from_hex(result.compose_hash, 'compose_hash'),
       instance_id: from_hex(result.instance_id, 'instance_id'),
       device_id: from_hex(result.device_id, 'device_id'),
       os_image_hash: from_optional_hex(result.os_image_hash, 'os_image_hash'),
       mr_aggregated: from_optional_hex(result.mr_aggregated, 'mr_aggregated'),
+      app_compose: to_string(result.app_compose, 'app_compose'),
+      vm_config: to_string(result.vm_config, 'vm_config'),
+      key_provider_info: to_string(result.key_provider_info, 'key_provider_info'),
+      cloud_vendor: to_string(result.cloud_vendor, 'cloud_vendor'),
+      cloud_product: to_string(result.cloud_product, 'cloud_product'),
       __name__: 'InfoResponseV1' as const,
     })
   }
@@ -416,7 +490,8 @@ export class DstackClientV1 {
     const result = await send_rpc_request<{ version: string, rev: string }>(this.endpoint, '/v1/Version', '{}')
     throwOnRpcError(result)
     return Object.freeze({
-      ...result,
+      version: to_string(result.version, 'version'),
+      rev: to_string(result.rev, 'rev'),
       __name__: 'VersionResponseV1' as const,
     })
   }

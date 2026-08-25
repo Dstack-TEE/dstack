@@ -290,6 +290,7 @@ pub struct InfoResponse {
     #[serde(with = "hex::serde")]
     pub app_id: Vec<u8>,
     /// App name, from app-compose
+    #[serde(default)]
     pub app_name: String,
     /// Compose hash: sha256 over the verbatim bytes of `app_compose`; do not
     /// re-serialize before hashing.
