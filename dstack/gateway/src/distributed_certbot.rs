@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use certbot::{
-    resolve_issuer_domain_name, AcmeAccount, AcmeClient, ChallengeKind, Dns01Client,
-    ValidationMethod,
+    advisory_dns_wait, resolve_issuer_domain_name, AcmeAccount, AcmeClient, ChallengeKind,
+    Dns01Client, ValidationMethod,
 };
 use dstack_guest_agent_rpc::v0::RawQuoteArgs;
 use ra_tls::attestation::QuoteContentType;
@@ -38,19 +38,10 @@ const DEFAULT_ACME_URL: &str = "https://acme-v02.api.letsencrypt.org/directory";
 
 /// How long a `dns-persist-01` domain waits for its record to become visible.
 ///
-/// A `dns-01` domain reads this from its DNS credential, and a `dns-persist-01`
-/// domain has none. It stays a constant rather than a config knob because the
-/// wait is advisory: certbot polls its own resolver and starts the order either
-/// way, so the value cannot decide whether issuance succeeds.
-///
-/// It has to stay comfortably under `renew_timeout` (300s by default), which
-/// wraps the whole order, for that to be true. The wait is measured from after
-/// the order and its authorizations are fetched, so a value equal to the outer
-/// timeout means the outer one always fires first: the order is aborted with
-/// "certificate request timed out" instead of proceeding to the CA, and the
-/// warning naming the record it could not see -- the first thing an operator
-/// is told to look at -- is never logged.
-const DNS_PERSIST_MAX_DNS_WAIT: Duration = Duration::from_secs(120);
+/// A `dns-01` domain reads this from its DNS credential; a `dns-persist-01`
+/// domain has none, so it starts from the same 300s a credential defaults to
+/// and is clamped by [`advisory_dns_wait`] like every other domain.
+const DNS_PERSIST_MAX_DNS_WAIT: Duration = Duration::from_secs(300);
 
 /// What an ACME credential rotation left behind.
 #[derive(Debug)]
@@ -177,6 +168,7 @@ impl DistributedCertBot {
         domain: &str,
         config: &ZtDomainConfig,
     ) -> Result<DomainValidation> {
+        let renew_timeout = self.config()?.renew_timeout;
         match config.challenge {
             ChallengeKind::Dns01 => {
                 let dns_cred = dns_credential_for(&self.kv_store, config)?;
@@ -187,14 +179,14 @@ impl DistributedCertBot {
                         txt_ttl: dns_cred.dns_txt_ttl,
                         issuer_domain_name: self.issuer_domain_name()?,
                     },
-                    max_dns_wait: dns_cred.max_dns_wait,
+                    max_dns_wait: advisory_dns_wait(dns_cred.max_dns_wait, renew_timeout),
                 })
             }
             ChallengeKind::DnsPersist01 => Ok(DomainValidation {
                 method: ValidationMethod::DnsPersist01 {
                     issuer_domain_name: self.issuer_domain_name()?,
                 },
-                max_dns_wait: DNS_PERSIST_MAX_DNS_WAIT,
+                max_dns_wait: advisory_dns_wait(DNS_PERSIST_MAX_DNS_WAIT, renew_timeout),
             }),
         }
     }
@@ -1337,6 +1329,39 @@ mod tests {
     /// Two rotations on this node are ordered by the same lock that orders two
     /// nodes: the lock lives in the KV store, so a second in-process run sees
     /// the first one's record.
+    /// The check has to finish inside the timeout wrapping the order, or the
+    /// "proceed anyway" exit it is designed around is never reached and the
+    /// renewal dies with a timeout instead of a diagnosis. Both defaults are
+    /// 300s, which is exactly the case that fails.
+    #[test]
+    fn the_dns_wait_ends_before_the_order_times_out() {
+        let default_credential = Duration::from_secs(300);
+        let default_renew_timeout = Duration::from_secs(300);
+        assert!(
+            advisory_dns_wait(default_credential, default_renew_timeout) < default_renew_timeout
+        );
+
+        // Lowering renew_timeout from the dashboard has to keep the invariant,
+        // which is why this is derived rather than a constant.
+        for secs in [30, 60, 120, 600] {
+            let renew_timeout = Duration::from_secs(secs);
+            assert!(
+                advisory_dns_wait(DNS_PERSIST_MAX_DNS_WAIT, renew_timeout) < renew_timeout,
+                "renew_timeout={secs}s leaves no room for the order"
+            );
+        }
+    }
+
+    /// A credential asking for less than its share keeps asking for less: the
+    /// clamp is a ceiling, not a target.
+    #[test]
+    fn a_shorter_configured_wait_is_left_alone() {
+        assert_eq!(
+            advisory_dns_wait(Duration::from_secs(20), Duration::from_secs(300)),
+            Duration::from_secs(20)
+        );
+    }
+
     #[tokio::test]
     async fn rotate_acme_credentials_rejects_concurrent_runs() {
         let data_dir = tempfile::tempdir().expect("failed to create temp dir");

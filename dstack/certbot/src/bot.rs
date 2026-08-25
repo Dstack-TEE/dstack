@@ -18,6 +18,7 @@ use crate::acme_client::{acme_matches, read_pem, ChallengeKind, RequiredRecord, 
 use crate::dns_persist::{resolve_issuer_domain_name, LETS_ENCRYPT_ISSUER_DOMAIN_NAME};
 
 use super::{AcmeClient, Dns01Client};
+use crate::acme_client::advisory_dns_wait;
 
 #[allow(clippy::duplicated_attributes)]
 #[derive(Clone, Debug, bon::Builder)]
@@ -70,7 +71,7 @@ async fn create_new_account(
     validation: ValidationMethod,
 ) -> Result<AcmeClient> {
     info!("creating new ACME account");
-    let client = AcmeClient::new_account(&config.acme_url, validation, config.max_dns_wait)
+    let client = AcmeClient::new_account(&config.acme_url, validation, dns_wait(config))
         .await
         .context("failed to create new account")?;
     let credentials = client
@@ -96,7 +97,7 @@ impl CertBot {
         let acme_client = match fs::read_to_string(&config.credentials_file) {
             Ok(credentials) => {
                 if acme_matches(&credentials, &config.acme_url) {
-                    AcmeClient::load(validation, &credentials, config.max_dns_wait).await?
+                    AcmeClient::load(validation, &credentials, dns_wait(&config)).await?
                 } else {
                     create_new_account(&config, validation).await?
                 }
@@ -254,6 +255,17 @@ impl CertBot {
         self.acme_client
             .required_dns_records(&self.config.cert_subject_alt_names)
     }
+}
+
+/// The DNS wait this configuration should actually use.
+///
+/// `renew_timeout` wraps the whole renewal here exactly as it does in the
+/// gateway, and the defaults are skewed the same way -- further, in fact:
+/// `max_dns_wait` defaults to 300s against a 120s renewal budget, so an
+/// unanswered check runs the renewal into its timeout every time instead of
+/// reporting the record it could not see.
+fn dns_wait(config: &CertBotConfig) -> Duration {
+    advisory_dns_wait(config.max_dns_wait, config.renew_timeout)
 }
 
 /// The Issuer Domain Name this configuration names, checked before it is used.

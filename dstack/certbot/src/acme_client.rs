@@ -222,6 +222,32 @@ pub struct AcmeAccount {
     pub account_uri: String,
 }
 
+/// The share of `renew_timeout` the pre-order DNS check may spend.
+///
+/// The rest pays for the order itself: `new_order`, the authorizations, the
+/// provider writes under `dns-01`, then finalize and the certificate fetch.
+const DNS_WAIT_SHARE_OF_RENEW_TIMEOUT: u32 = 2;
+
+/// The DNS wait to actually use, given what is configured and how long the whole
+/// order is allowed to take.
+///
+/// The wait is advisory by design: certbot polls its own resolver, logs what it
+/// could not see, and starts the order regardless, because the CA's DNS view is
+/// not this node's. That only holds if the wait ends before the timeout wrapping
+/// the order does. It does not by default -- a DNS credential's `max_dns_wait`
+/// defaults to 300s and `renew_timeout` defaults to 300s, and the wait is
+/// measured from after the order and its authorizations are fetched, so the
+/// outer timeout always fires first. The renewal then dies with "certificate
+/// request timed out", and the warning naming the record that was missing --
+/// the first thing an operator is told to look for -- is never logged.
+///
+/// Clamping here rather than picking a smaller constant covers both challenges
+/// with one rule, and keeps holding when an operator lowers `renew_timeout`
+/// from the dashboard, which no constant can.
+pub fn advisory_dns_wait(configured: Duration, renew_timeout: Duration) -> Duration {
+    configured.min(renew_timeout / DNS_WAIT_SHARE_OF_RENEW_TIMEOUT)
+}
+
 /// A AcmeClient instance.
 pub struct AcmeClient {
     account: Account,
@@ -1600,5 +1626,29 @@ mod reissue_reason_tests {
         let reason = reissue_reason("not a certificate", &names(&["example.com"]))
             .expect("an unreadable certificate must reissue");
         assert!(reason.contains("cannot read"), "{reason}");
+    }
+}
+
+#[cfg(test)]
+mod dns_wait_tests {
+    use super::advisory_dns_wait;
+    use std::time::Duration;
+
+    /// The CLI's own defaults are the failing case: a 300s wait inside a 120s
+    /// renewal budget never reaches its "proceed anyway" exit, so an unanswered
+    /// check ends as a timeout rather than as the warning naming the record.
+    #[test]
+    fn the_wait_ends_before_the_renewal_budget_does() {
+        let wait = advisory_dns_wait(Duration::from_secs(300), Duration::from_secs(120));
+        assert!(wait < Duration::from_secs(120), "{wait:?}");
+    }
+
+    /// A wait already inside the budget is left where the operator put it.
+    #[test]
+    fn a_wait_that_already_fits_is_unchanged() {
+        assert_eq!(
+            advisory_dns_wait(Duration::from_secs(30), Duration::from_secs(600)),
+            Duration::from_secs(30)
+        );
     }
 }

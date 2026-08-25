@@ -1093,6 +1093,9 @@ fn merge_certbot_config(
         config.renew_before_expiration = Duration::from_secs(secs);
     }
     if let Some(secs) = request.renew_timeout_secs {
+        // Zero would abort every order before it starts, and the DNS wait is
+        // derived from this value.
+        ensure!(secs > 0, "renew_timeout_secs must be greater than zero");
         config.renew_timeout = Duration::from_secs(secs);
     }
     if let Some(url) = request.acme_url {
@@ -1204,6 +1207,21 @@ mod certbot_config_tests {
         )
         .expect_err("a name with a space must be refused");
         assert!(err.to_string().contains("issuer_domain_name"), "{err:#}");
+    }
+
+    /// Zero would abort every order before it began, and the DNS wait is
+    /// derived from this value.
+    #[test]
+    fn a_zero_renew_timeout_is_refused() {
+        let err = merge_certbot_config(
+            Ok(stored()),
+            SetCertbotConfigRequest {
+                renew_timeout_secs: Some(0),
+                ..Default::default()
+            },
+        )
+        .expect_err("a zero renew timeout must be refused");
+        assert!(err.to_string().contains("renew_timeout_secs"), "{err:#}");
     }
 
     /// The name the CA is known by has to be settable, or a deployment pointed
