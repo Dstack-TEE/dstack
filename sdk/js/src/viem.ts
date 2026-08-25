@@ -4,7 +4,7 @@
 
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
-import { type GetKeyResponse, type GetTlsKeyResponse } from './index'
+import { type GetKeyResponse, type GetTlsKeyResponse } from './client-v0'
 import { privateKeyToAccount } from 'viem/accounts'
 
 /**

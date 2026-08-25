@@ -16,8 +16,8 @@ import warnings
 from eth_account import Account
 from eth_account.signers.local import LocalAccount
 
-from .dstack_client import GetKeyResponse
-from .dstack_client import GetTlsKeyResponse
+from .dstack_client_v0 import GetKeyResponse
+from .dstack_client_v0 import GetTlsKeyResponse
 
 
 def to_account(get_key_response: GetKeyResponse | GetTlsKeyResponse) -> LocalAccount:

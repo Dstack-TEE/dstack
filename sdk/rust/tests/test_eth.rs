@@ -4,9 +4,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use dstack_sdk::dstack_client::DstackClientV0;
+// This file exercises the deprecated v0 surface; that is its purpose.
+#![allow(deprecated)]
+
+use dstack_sdk::dstack_client_v0::DstackClientV0;
 use dstack_sdk::ethereum::to_account;
-use dstack_sdk_types::dstack::GetKeyResponse;
+use dstack_sdk_types::dstack_v0::GetKeyResponse;
 
 #[tokio::test]
 async fn test_async_to_keypair() {

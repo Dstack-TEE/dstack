@@ -4,7 +4,7 @@
 
 //! Types for the `dstack.guest.v1` API surface.
 //!
-//! Separate from [`crate::dstack`] because the two surfaces are separate
+//! Separate from [`crate::dstack_v0`] because the two surfaces are separate
 //! contracts, not versions of one type: v1's `GetKeyResponse` carries a public
 //! key the v0 one has no field for, and its `InfoResponse` is flat where the v0
 //! one nests a `tcb_info` document. Sharing a type between them would mean one

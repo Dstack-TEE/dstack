@@ -67,10 +67,10 @@ Details:
 
 ## Locations
 - Protos: `dstack/guest-agent/rpc/proto/*.proto`
-- Python: `sdk/python/src/dstack_sdk/dstack_client.py`
-- Go: `sdk/go/dstack/client.go`
-- Rust: `sdk/rust/types/src/dstack.rs`
-- JS: `sdk/js/src/index.ts`
+- Python: `sdk/python/src/dstack_sdk/dstack_client_v0.py`, `dstack_client_v1.py`
+- Go: `sdk/go/dstack/client_v0.go`, `client_v1.go`
+- Rust: `sdk/rust/types/src/dstack_v0.rs`, `dstack_v1.rs`
+- JS: `sdk/js/src/client-v0.ts`, `client-v1.ts`
 - Docs: `sdk/curl/api.md`, `sdk/curl/api-tappd.md`
 
 Focus on API surface differences. Provide specific file paths and line numbers.

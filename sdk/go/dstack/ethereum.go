@@ -23,6 +23,7 @@ type EthereumAccount struct {
 }
 
 // ToEthereumAccount creates an Ethereum account from GetKeyResponse or GetTlsKeyResponse (legacy method).
+//
 // Deprecated: Use ToEthereumAccountSecure instead. This method has security concerns.
 func ToEthereumAccount(keyResponse interface{}) (*EthereumAccount, error) {
 	switch resp := keyResponse.(type) {

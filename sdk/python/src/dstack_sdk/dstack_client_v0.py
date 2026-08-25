@@ -413,6 +413,33 @@ class AsyncDstackClientV0(AsyncBaseClient):
 
     PATH_PREFIX = "/"
 
+    def __init__(
+        self,
+        endpoint: str | None = None,
+        *,
+        use_sync_http: bool = False,
+        timeout: float = 3,
+        _warn: bool = True,
+    ):
+        """Initialize the legacy async client, warning that v0 is deprecated.
+
+        ``_warn`` is private: the sync wrappers build one of these as their own
+        transport and have already warned, so they pass ``False``. It is a
+        separate flag rather than a reading of ``use_sync_http`` because that
+        one is public and documented -- a caller who sets it is still a caller
+        who deserves the warning.
+        """
+        # Only when this class is what the caller actually asked for: a
+        # subclass (``AsyncTappdClient``) names its own surface in its own
+        # warning.
+        if _warn and type(self) is AsyncDstackClientV0:
+            emit_deprecation_warning(
+                "AsyncDstackClientV0 is deprecated: the v0 surface is frozen at "
+                "dstack 0.5.11. Use AsyncDstackClient (AsyncDstackClientV1), "
+                "which derives different key material -- see docs/guest-api-v1.md"
+            )
+        super().__init__(endpoint, use_sync_http=use_sync_http, timeout=timeout)
+
     async def _ensure_algorithm_supported(self, algorithm: str) -> None:
         """Check OS version when a non-secp256k1 algorithm is requested."""
         if algorithm in ("secp256k1", "k256", ""):
@@ -633,8 +660,14 @@ class DstackClientV0(BaseClient):
         If a non-HTTP(S) endpoint is provided, it is treated as a Unix socket
         path and validated for existence.
         """
+        if type(self) is DstackClientV0:
+            emit_deprecation_warning(
+                "DstackClientV0 is deprecated: the v0 surface is frozen at "
+                "dstack 0.5.11. Use DstackClient (DstackClientV1), which "
+                "derives different key material -- see docs/guest-api-v1.md"
+            )
         self.async_client = AsyncDstackClientV0(
-            endpoint, use_sync_http=True, timeout=timeout
+            endpoint, use_sync_http=True, timeout=timeout, _warn=False
         )
 
     @call_async
@@ -751,10 +784,11 @@ class AsyncTappdClient(AsyncDstackClientV0):
         *,
         use_sync_http: bool = False,
         timeout: float = 3,
+        _warn: bool = True,
     ):
         """Initialize deprecated async tappd client wrapper."""
-        if not use_sync_http:
-            # Already warned in TappdClient.__init__
+        if _warn:
+            # ``TappdClient`` has already warned when it builds one of these.
             emit_deprecation_warning(
                 "AsyncTappdClient is deprecated, please use AsyncDstackClientV0 instead"
             )
@@ -837,7 +871,7 @@ class TappdClient(DstackClientV0):
         )
         endpoint = get_tappd_endpoint(endpoint)
         self.async_client = AsyncTappdClient(
-            endpoint, use_sync_http=True, timeout=timeout
+            endpoint, use_sync_http=True, timeout=timeout, _warn=False
         )
 
     @call_async

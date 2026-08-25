@@ -21,13 +21,13 @@ use serde_json::json;
 
 pub use dstack_sdk_types::dstack_v1::*;
 
-use crate::dstack_client::{get_endpoint, http_post, unix_post, BaseClient, ClientKind};
+use crate::dstack_client_v0::{get_endpoint, http_post, unix_post, BaseClient, ClientKind};
 
 /// Client for the v1 guest-agent surface. **This is the default client**, and
 /// what the unsuffixed [`crate::DstackClient`] names.
 ///
 /// **v1 keys are not v0 keys.** Deriving under the same name here as on
-/// [`crate::dstack_client::DstackClientV0`] returns different key material, by
+/// [`crate::dstack_client_v0::DstackClientV0`] returns different key material, by
 /// design: the v0 KDF ignored the algorithm, so one secret served both curves.
 /// There is no compatibility mode. An application holding assets under a v0 key
 /// migrates them deliberately -- see `docs/guest-api-v1.md`.
@@ -167,5 +167,5 @@ impl DstackClientV1 {
 /// client, and code that was calling v0 methods through it stops compiling
 /// rather than silently deriving different key material -- the v1 signatures
 /// differ, and `get_key` requires an explicit `algorithm`. To stay on the
-/// frozen surface, name [`crate::dstack_client::DstackClientV0`] explicitly.
+/// frozen surface, name [`crate::dstack_client_v0::DstackClientV0`] explicitly.
 pub type DstackClient = DstackClientV1;

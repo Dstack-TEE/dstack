@@ -24,9 +24,9 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from .dstack_client import AsyncBaseClient
-from .dstack_client import BaseClient
-from .dstack_client import call_async
+from .dstack_client_v0 import AsyncBaseClient
+from .dstack_client_v0 import BaseClient
+from .dstack_client_v0 import call_async
 
 
 class IssueCertResponseV1(BaseModel):

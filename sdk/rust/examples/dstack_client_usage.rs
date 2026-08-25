@@ -3,8 +3,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use dstack_sdk::dstack_client::DstackClientV0;
-use dstack_sdk_types::dstack::TlsKeyConfig;
+// Demonstrates the deprecated v0 surface on purpose.
+#![allow(deprecated)]
+
+use dstack_sdk::dstack_client_v0::DstackClientV0;
+use dstack_sdk_types::dstack_v0::TlsKeyConfig;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

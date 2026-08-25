@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { sha256 } from '@noble/hashes/sha256'
-import { type GetKeyResponse, type GetTlsKeyResponse } from './index'
+import { type GetKeyResponse, type GetTlsKeyResponse } from './client-v0'
 import { Keypair } from '@solana/web3.js'
 
 /**

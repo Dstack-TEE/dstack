@@ -12,7 +12,7 @@ from dstack_sdk import DstackClientV0
 from dstack_sdk import GetKeyResponse
 from dstack_sdk import GetQuoteResponse
 from dstack_sdk import GetTlsKeyResponse
-from dstack_sdk.dstack_client import InfoResponse
+from dstack_sdk.dstack_client_v0 import InfoResponse
 
 # Use a test endpoint to avoid socket file not found errors
 TEST_ENDPOINT = "http://localhost:8080"

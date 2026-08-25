@@ -20,8 +20,8 @@ from dstack_sdk import SignResponse
 from dstack_sdk import TappdClient
 from dstack_sdk import VerifyResponse
 from dstack_sdk import VersionResponse
-from dstack_sdk.dstack_client import InfoResponse
-from dstack_sdk.dstack_client import TcbInfo
+from dstack_sdk.dstack_client_v0 import InfoResponse
+from dstack_sdk.dstack_client_v0 import TcbInfo
 
 
 def test_sync_client_get_key():
@@ -414,6 +414,45 @@ async def test_async_sign_prehashed_length_error():
 
 
 # Test deprecated TappdClient
+def test_dstack_client_v0_deprecated():
+    """The v0 client warns at construction.
+
+    The frozen surface is what a 0.5.x program keeps working against, so the
+    class stays -- but the unsuffixed ``DstackClient`` name now means v1, and a
+    caller who landed on v0 by way of the rename should be told rather than
+    discovering it when the derived key does not match.
+    """
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        DstackClientV0()
+
+        v0_warnings = [
+            warning
+            for warning in w
+            if issubclass(warning.category, DeprecationWarning)
+            and "DstackClientV0 is deprecated" in str(warning.message)
+        ]
+
+        assert len(v0_warnings) == 1
+        assert "frozen at dstack 0.5.11" in str(v0_warnings[0].message)
+
+
+def test_async_dstack_client_v0_deprecated():
+    """Same for the async client; both are entry points to the frozen API."""
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        AsyncDstackClientV0()
+
+        v0_warnings = [
+            warning
+            for warning in w
+            if issubclass(warning.category, DeprecationWarning)
+            and "AsyncDstackClientV0 is deprecated" in str(warning.message)
+        ]
+
+        assert len(v0_warnings) == 1
+
+
 def test_tappd_client_deprecated():
     """Test that TappdClient shows deprecation warning."""
     with warnings.catch_warnings(record=True) as w:
@@ -658,3 +697,26 @@ async def test_get_tls_key_new_options_require_version(monkeypatch):
     client = AsyncDstackClientV0()
     with pytest.raises(RuntimeError, match="TLS key options"):
         await client.get_tls_key(with_app_info=False)
+
+
+def test_v0_warns_even_when_the_caller_asks_for_sync_http():
+    """``use_sync_http`` is a public transport option, not a warning switch.
+
+    The sync wrappers build their async twin with it, and used to suppress the
+    deprecation warning by reading it -- so a user who set the documented flag
+    themselves was silently opted out of the one signal telling them the surface
+    is frozen.
+    """
+    with pytest.warns(DeprecationWarning, match="AsyncDstackClientV0 is deprecated"):
+        AsyncDstackClientV0(use_sync_http=True)
+
+
+def test_v0_sync_wrapper_warns_exactly_once():
+    """It builds an AsyncDstackClientV0 internally; that must not warn twice."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        DstackClientV0()
+    v0_warnings = [
+        w for w in caught if "DstackClientV0 is deprecated" in str(w.message)
+    ]
+    assert len(v0_warnings) == 1, [str(w.message) for w in caught]

@@ -575,12 +575,14 @@ func (c *DstackClientV0) EmitEvent(ctx context.Context, event string, payload []
 // Legacy methods for backward compatibility with warnings
 
 // DeriveKey is deprecated. Use GetKey instead.
+//
 // Deprecated: Use GetKey instead.
 func (c *DstackClientV0) DeriveKey(path string, subject string, altNames []string) (*GetTlsKeyResponse, error) {
 	return nil, fmt.Errorf("deriveKey is deprecated, please use GetKey instead")
 }
 
 // TdxQuote is deprecated. Use GetQuote instead.
+//
 // Deprecated: Use GetQuote instead.
 func (c *DstackClientV0) TdxQuote(ctx context.Context, reportData []byte, hashAlgorithm string) (*GetQuoteResponse, error) {
 	c.logger.Warn("tdxQuote is deprecated, please use GetQuote instead")
@@ -601,6 +603,7 @@ type TappdClient struct {
 }
 
 // NewTappdClient creates a new deprecated TappdClient.
+//
 // Deprecated: Use NewDstackClient instead.
 func NewTappdClient(opts ...DstackClientOption) *TappdClient {
 	// Create a modified option to use TAPPD_SIMULATOR_ENDPOINT
@@ -632,6 +635,7 @@ func NewTappdClient(opts ...DstackClientOption) *TappdClient {
 // Override deprecated methods to use proper tappd RPC paths
 
 // DeriveKey is deprecated. Use GetKey instead.
+//
 // Deprecated: Use GetKey instead.
 func (tc *TappdClient) DeriveKey(ctx context.Context, path string, subject string, altNames []string) (*GetTlsKeyResponse, error) {
 	tc.logger.Warn("deriveKey is deprecated, please use GetKey instead")
@@ -661,6 +665,7 @@ func (tc *TappdClient) DeriveKey(ctx context.Context, path string, subject strin
 }
 
 // TdxQuote is deprecated. Use GetQuote instead.
+//
 // Deprecated: Use GetQuote instead.
 func (tc *TappdClient) TdxQuote(ctx context.Context, reportData []byte, hashAlgorithm string) (*GetQuoteResponse, error) {
 	tc.logger.Warn("tdxQuote is deprecated, please use GetQuote instead")

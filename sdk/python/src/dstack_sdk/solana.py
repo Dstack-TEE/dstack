@@ -15,8 +15,8 @@ import warnings
 
 from solders.keypair import Keypair
 
-from .dstack_client import GetKeyResponse
-from .dstack_client import GetTlsKeyResponse
+from .dstack_client_v0 import GetKeyResponse
+from .dstack_client_v0 import GetTlsKeyResponse
 
 
 def to_keypair(get_key_response: GetKeyResponse | GetTlsKeyResponse) -> Keypair:
