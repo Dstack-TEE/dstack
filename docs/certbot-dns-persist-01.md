@@ -148,40 +148,24 @@ record with `policy=wildcard`.
 
 ### Setup order
 
-The records name the ACME account, so there is nothing to publish until the
-cluster has one. A gateway registers its account lazily, on the first issuance
-it attempts, which means `required_dns_records` is empty on a fresh cluster and
-the sequence is:
+The records name the ACME account, so the account comes first:
 
 1. `SetCertbotConfig` — `acme_url`, and `issuer_domain_name` if the CA is not
    Let's Encrypt.
-2. `AddZtDomain` with `challenge: "dns-persist-01"`. No `dns_cred_id`: the
+2. `RotateAcmeCredentials` — registers the account and returns its `account_uri`.
+   It needs no ZT domain: registration proves nothing about a domain. Every call
+   registers a *new* account, so call it once here; running it again later is a
+   rotation, with the consequences described below.
+3. `AddZtDomain` with `challenge: "dns-persist-01"`. No `dns_cred_id`: the
    domain needs none, and the gateway CVM never receives one for it.
-3. Register the account. `RotateAcmeCredentials` does it directly and reports
-   the records in `required_dns_records` (it needs at least one ZT domain, which
-   step 2 provided). Triggering `RenewZtDomainCert` works too: the first attempt
-   registers the account and then fails validation, since the record it names
-   does not exist yet.
 4. Read the records — `GetZtDomain`, `ListZtDomains`, or the gateway log, which
    prints them whenever it cannot write DNS itself — and publish the
    `_validation-persist` TXT record, plus the CAA records if you want issuance
    pinned to this account.
-5. `RenewZtDomainCert` again. Renewals from here need nothing further.
+5. `RenewZtDomainCert`. Renewals from here need nothing further.
 
-Adding a second dns-persist-01 domain later starts at step 2 and skips step 3:
-the account already exists, so its records are available as soon as the domain
-is.
-
-A ZT domain's challenge is chosen when it is added and carried forward by every
-edit, in the dashboard's ZT-Domain form as well as over the API.
-
-For a non-production ACME server, set `issuer_domain_name` in the global certbot
-config — `Admin.SetCertbotConfig`, or the field of that name in the dashboard's
-Certbot Configuration — to whatever that server puts in `issuer-domain-names`,
-`pebble.letsencrypt.org` for Pebble. Empty means `letsencrypt.org`. It also
-names the CA in the CAA records certbot writes for `dns-01` domains, so one
-setting covers both challenges rather than pinning CAA to Let's Encrypt while
-orders go elsewhere.
+Adding another dns-persist-01 domain later starts at step 3: the account already
+exists, so the new domain's records are available as soon as it is.
 
 Two operations behave differently on these domains:
 

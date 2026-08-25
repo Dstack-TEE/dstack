@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use certbot::{
-    AcmeClient, ChallengeKind, Dns01Client, ValidationMethod, LETS_ENCRYPT_ISSUER_DOMAIN_NAME,
+    AcmeAccount, AcmeClient, ChallengeKind, Dns01Client, ValidationMethod,
+    LETS_ENCRYPT_ISSUER_DOMAIN_NAME,
 };
 use dstack_guest_agent_rpc::v0::RawQuoteArgs;
 use ra_tls::attestation::QuoteContentType;
@@ -255,9 +256,14 @@ impl DistributedCertBot {
 
     /// Rotate the shared ACME account without interrupting certificate serving.
     ///
-    /// The sequence is: validate every domain's DNS credential, create the
+    /// The sequence is: validate every domain's DNS credential, register the
     /// replacement account, publish the new credentials, then re-pin every
-    /// domain's CAA record to the new account. Publishing before re-pinning
+    /// domain's CAA record to the new account.
+    ///
+    /// A cluster with no ZT domain registers an account and stops there, which
+    /// is how a `dns-persist-01` deployment bootstraps: the record an operator
+    /// publishes names the account, so there is nothing to publish -- and
+    /// therefore nothing that can be issued -- until one exists. Publishing before re-pinning
     /// makes the failure mode convergent: if some domains fail to re-pin, the
     /// cluster is already on the new account and rerunning `SetCaa` finishes
     /// the switch without registering yet another account (Let's Encrypt caps
@@ -307,23 +313,18 @@ impl DistributedCertBot {
             prepared.push((config, validation));
         }
         let total = prepared.len();
-        let mut prepared = prepared.into_iter();
-        let Some((first_config, first_validation)) = prepared.next() else {
-            bail!("no ZT-Domain configured for ACME credential rotation");
-        };
-        let first_writes_dns = first_validation.writes_dns();
 
-        let client = AcmeClient::new_account(
-            acme_url,
-            first_validation.method,
-            first_validation.max_dns_wait,
-        )
-        .await
-        .context("failed to create replacement ACME account")?;
-        let credentials = client
-            .dump_credentials()
-            .context("failed to encode replacement ACME credentials")?;
-        let account_uri = client.account_id().to_string();
+        // Registration needs no domain: it proves nothing about one. A cluster
+        // with no ZT domain yet registers here and gets an account URI, which is
+        // what a `dns-persist-01` record has to name before the domain it
+        // authorizes can ever be issued.
+        let account = AcmeClient::register_account(acme_url)
+            .await
+            .context("failed to create replacement ACME account")?;
+        let AcmeAccount {
+            credentials,
+            account_uri,
+        } = account;
 
         // Publish immediately. From here the cluster converges on the new
         // account, and recovering from a partial re-pin below never needs to
@@ -351,17 +352,6 @@ impl DistributedCertBot {
                 failed.push(domain.to_string());
             }
         };
-        if first_writes_dns {
-            repin(
-                &first_config.domain,
-                client
-                    .set_caa_records(std::slice::from_ref(&first_config.domain))
-                    .await
-                    .context("failed to update CAA records"),
-            );
-        } else {
-            manual_domains += 1;
-        }
         for (config, validation) in prepared {
             if !validation.writes_dns() {
                 manual_domains += 1;
@@ -1385,16 +1375,27 @@ mod tests {
         );
     }
 
+    /// Registering without a domain is the `dns-persist-01` bootstrap: the
+    /// record names the account, so the account comes first. The run here gets
+    /// as far as the ACME server -- an unroutable one, so the test stays
+    /// offline -- which is proof enough that no domain was demanded before it.
     #[tokio::test]
-    async fn rotate_acme_credentials_requires_a_configured_domain() {
+    async fn rotate_acme_credentials_registers_without_any_domain() {
         let data_dir = tempfile::tempdir().expect("failed to create temp dir");
         let certbot = test_certbot(data_dir.path());
+        certbot
+            .kv_store
+            .set_certbot_config(&crate::kv::GlobalCertbotConfig {
+                acme_url: "http://127.0.0.1:1/directory".to_string(),
+                ..Default::default()
+            })
+            .expect("failed to store certbot config");
         let err = certbot
             .rotate_acme_credentials()
             .await
-            .expect_err("rotation without domains should fail");
+            .expect_err("an unroutable ACME server cannot register an account");
         assert!(
-            err.to_string().contains("no ZT-Domain configured"),
+            err.to_string().contains("replacement ACME account"),
             "unexpected error: {err}"
         );
         // The failed rotation must release the KV lock so a later run can proceed.

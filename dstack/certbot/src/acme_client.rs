@@ -209,6 +209,19 @@ pub fn required_dns_records(
     records
 }
 
+/// An ACME account, as registered, before any validation method is chosen.
+///
+/// Returned by [`AcmeClient::register_account`] so a caller can store the
+/// credentials and report the URI -- the two things a `dns-persist-01` record
+/// and an account-pinned CAA record are written from -- without holding a
+/// client it has no use for yet.
+pub struct AcmeAccount {
+    /// Encoded credentials, in the form [`AcmeClient::load`] takes.
+    pub credentials: String,
+    /// URI the CA identifies this account by.
+    pub account_uri: String,
+}
+
 /// A AcmeClient instance.
 pub struct AcmeClient {
     account: Account,
@@ -326,12 +339,15 @@ impl AcmeClient {
         })
     }
 
-    /// Create a new account.
-    pub async fn new_account(
-        acme_url: &str,
-        validation: ValidationMethod,
-        max_dns_wait: Duration,
-    ) -> Result<Self> {
+    /// Register a new ACME account, with no validation method attached.
+    ///
+    /// Registration is a POST to the directory's `newAccount`. It asserts
+    /// nothing about any domain and touches no DNS, so it needs neither a
+    /// provider credential nor a challenge choice -- and a deployment can
+    /// therefore have an account before it has anything to validate. That order
+    /// is forced under `dns-persist-01`: the record an operator publishes names
+    /// the account, so the account has to exist first.
+    pub async fn register_account(acme_url: &str) -> Result<AcmeAccount> {
         let http_client = Box::new(ReqwestHttpClient::new()?);
         let (account, credentials) = Account::builder_with_http(http_client)
             .create(
@@ -350,12 +366,22 @@ impl AcmeClient {
             account_id: account.id().to_string(),
             credentials,
         };
-        Ok(Self {
-            account,
-            validation,
-            credentials,
-            max_dns_wait,
+        Ok(AcmeAccount {
+            account_uri: credentials.account_id.clone(),
+            credentials: serde_json::to_string(&credentials)?,
         })
+    }
+
+    /// Create a new account and a client bound to `validation`.
+    pub async fn new_account(
+        acme_url: &str,
+        validation: ValidationMethod,
+        max_dns_wait: Duration,
+    ) -> Result<Self> {
+        let account = Self::register_account(acme_url).await?;
+        Self::load(validation, &account.credentials, max_dns_wait)
+            .await
+            .context("failed to load the account just registered")
     }
 
     /// Dump the account credentials to a JSON string.

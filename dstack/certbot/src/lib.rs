@@ -18,7 +18,7 @@
 //! to the documentation of individual structs and functions.
 
 pub use acme_client::{
-    required_dns_records, AcmeClient, ChallengeKind, RequiredRecord, ValidationMethod,
+    required_dns_records, AcmeAccount, AcmeClient, ChallengeKind, RequiredRecord, ValidationMethod,
 };
 pub use bot::{read_pubkey, CertBot, CertBotConfig};
 pub use dns01_client::Dns01Client;
