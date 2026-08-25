@@ -697,3 +697,26 @@ async def test_get_tls_key_new_options_require_version(monkeypatch):
     client = AsyncDstackClientV0()
     with pytest.raises(RuntimeError, match="TLS key options"):
         await client.get_tls_key(with_app_info=False)
+
+
+def test_v0_warns_even_when_the_caller_asks_for_sync_http():
+    """``use_sync_http`` is a public transport option, not a warning switch.
+
+    The sync wrappers build their async twin with it, and used to suppress the
+    deprecation warning by reading it -- so a user who set the documented flag
+    themselves was silently opted out of the one signal telling them the surface
+    is frozen.
+    """
+    with pytest.warns(DeprecationWarning, match="AsyncDstackClientV0 is deprecated"):
+        AsyncDstackClientV0(use_sync_http=True)
+
+
+def test_v0_sync_wrapper_warns_exactly_once():
+    """It builds an AsyncDstackClientV0 internally; that must not warn twice."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        DstackClientV0()
+    v0_warnings = [
+        w for w in caught if "DstackClientV0 is deprecated" in str(w.message)
+    ]
+    assert len(v0_warnings) == 1, [str(w.message) for w in caught]

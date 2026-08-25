@@ -20,6 +20,7 @@ type SolanaKeypair struct {
 }
 
 // ToSolanaKeypair creates a Solana keypair from GetKeyResponse or GetTlsKeyResponse (legacy method).
+//
 // Deprecated: Use ToSolanaKeypairSecure instead. This method has security concerns.
 func ToSolanaKeypair(keyResponse interface{}) (*SolanaKeypair, error) {
 	switch resp := keyResponse.(type) {

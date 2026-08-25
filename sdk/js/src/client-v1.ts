@@ -349,7 +349,8 @@ export class DstackClientV1 {
  * changing the name fails loudly rather than quietly deriving different keys:
  * the v1 signatures differ, and `getKey` requires `algorithm` explicitly, so a
  * v0 call site stops compiling (or throws) instead of returning wrong material.
- * To stay on the frozen surface, name `DstackClientV0` from `./client-v0`.
+ * To stay on the frozen surface, import `DstackClientV0` by name from the
+ * package root -- `client-v0` is an internal module, not an export path.
  */
 export const DstackClient = DstackClientV1
 export type DstackClient = DstackClientV1
