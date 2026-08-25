@@ -558,9 +558,6 @@ impl DistributedCertBot {
         // Get DNS credential (from config or default)
         let dns_cred = dns_credential_for(&self.kv_store, config)?;
 
-        // Create DNS client based on provider
-        let dns01_client = self.dns_client(domain, &dns_cred).await?;
-
         // Use ACME URL from certbot config, fall back to default if not set
         let config = self.config()?;
         let acme_url = if config.acme_url.is_empty() {
@@ -590,6 +587,7 @@ impl DistributedCertBot {
                 );
             }
             info!("loaded global ACME account credentials from KvStore");
+            let dns01_client = self.dns_client(domain, &dns_cred).await?;
             return AcmeClient::load(
                 dns01_client,
                 &creds.acme_credentials,
@@ -600,8 +598,70 @@ impl DistributedCertBot {
             .context("failed to load ACME client from KvStore credentials");
         }
 
-        // Create new global ACME account
+        // Registering is the one step in this function that cannot be repeated
+        // harmlessly. Each run spends a rate-limited registration at the CA, and
+        // the credentials record is last-writer-wins with no compare-and-swap,
+        // so a concurrent registration's account is simply dropped -- while the
+        // attestation written beside it, under its own key with its own
+        // last-writer-wins race, may well be the one that survives. Renewal
+        // locks are per domain and do not help: a fresh cluster registers from
+        // however many domains and nodes start at once. Take the rotation lock,
+        // which exists for exactly this key, and look again before spending one.
+        let _serialized = self.caa_lock.lock().await;
+        let Some(rotation_lock) = self.try_acquire_rotation_lock() else {
+            bail!(
+                "another node is registering or rotating the ACME account; \
+                 retry after it finishes"
+            );
+        };
+        let client = self
+            .register_or_adopt_account(domain, &dns_cred, acme_url)
+            .await;
+        if let Err(err) = self.release_rotation_lock(&rotation_lock) {
+            error!("failed to release ACME rotation lock: {err:?}");
+        }
+        client
+    }
+
+    /// Register the cluster's shared ACME account, or adopt the one that
+    /// appeared while this call was waiting for the lock.
+    ///
+    /// Called with the rotation lock held. The re-read is the point: without it
+    /// every waiter registers an account of its own the moment it is let
+    /// through, which is the race the lock was taken to avoid.
+    async fn register_or_adopt_account(
+        &self,
+        domain: &str,
+        dns_cred: &DnsCredential,
+        acme_url: &str,
+    ) -> Result<AcmeClient> {
+        if let Some(creds) = self
+            .kv_store
+            .get_acme_credentials()
+            .context("call RotateAcmeCredentials to replace the stored ACME credentials")?
+        {
+            if !acme_url_matches(&creds.acme_credentials, acme_url).context(
+                "invalid ACME credentials in KvStore; call RotateAcmeCredentials to replace them",
+            )? {
+                bail!(
+                    "stored ACME credentials are for a different ACME directory; \
+                     call RotateAcmeCredentials to switch directories"
+                );
+            }
+            info!("adopted the ACME account registered while this node waited for the lock");
+            let dns01_client = self.dns_client(domain, dns_cred).await?;
+            return AcmeClient::load(
+                dns01_client,
+                &creds.acme_credentials,
+                dns_cred.max_dns_wait,
+                dns_cred.dns_txt_ttl,
+            )
+            .await
+            .context("failed to load ACME client from KvStore credentials");
+        }
+
         info!("creating new global ACME account at {acme_url}");
+        let dns01_client = self.dns_client(domain, dns_cred).await?;
         let client = AcmeClient::new_account(
             acme_url,
             dns01_client,
@@ -881,6 +941,60 @@ mod tests {
             .expect_err("a concurrent run should be rejected");
         assert!(
             err.to_string().contains("already in progress"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// First-use registration must wait on the same lock rotation takes, or a
+    /// fresh cluster registers one account per node that happens to start a
+    /// renewal -- and the credentials record, being last-writer-wins, keeps
+    /// exactly one of them.
+    ///
+    /// Reaching the lock at all is the assertion: the DNS provider client is
+    /// built only after the lock is granted, so an unreachable provider (as
+    /// configured here) cannot be what this run fails on.
+    #[tokio::test]
+    async fn first_use_registration_waits_for_the_rotation_lock() {
+        let data_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let certbot = test_certbot(data_dir.path());
+        certbot
+            .kv_store
+            .save_dns_credential(&DnsCredential {
+                id: "cred-1".to_string(),
+                name: "unreachable".to_string(),
+                provider: DnsProvider::Cloudflare {
+                    api_token: "token".to_string(),
+                    api_url: Some("http://127.0.0.1:1/client/v4".to_string()),
+                },
+                max_dns_wait: Duration::from_secs(1),
+                dns_txt_ttl: 60,
+                created_at: 0,
+                updated_at: 0,
+            })
+            .expect("failed to store dns credential");
+        let config = ZtDomainConfig {
+            domain: "app.example.com".to_string(),
+            dns_cred_id: Some("cred-1".to_string()),
+            port: 443,
+            node: None,
+            priority: 0,
+        };
+
+        // Another node is mid-registration or mid-rotation.
+        assert!(certbot
+            .kv_store
+            .try_acquire_rotation_lock(ROTATION_LOCK_TIMEOUT_SECS)
+            .is_some());
+
+        let err = match certbot
+            .get_or_create_acme_client("app.example.com", &config)
+            .await
+        {
+            Ok(_) => panic!("registration must not proceed while the lock is held"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("registering or rotating"),
             "unexpected error: {err}"
         );
     }
