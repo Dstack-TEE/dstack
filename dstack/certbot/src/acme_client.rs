@@ -247,11 +247,15 @@ const DNS_WAIT_SHARE_OF_RENEW_TIMEOUT: u32 = 2;
 pub fn advisory_dns_wait(configured: Duration, renew_timeout: Duration) -> Duration {
     let capped = renew_timeout / DNS_WAIT_SHARE_OF_RENEW_TIMEOUT;
     if configured > capped {
-        // Silently ignoring a configured value leaves an operator raising it
-        // with no idea why nothing changes.
-        info!(
-            "waiting up to {capped:?} for DNS rather than the configured {configured:?}: \
-             the renewal timeout is {renew_timeout:?}, and the check has to finish inside it"
+        // At `debug!` deliberately: the stock defaults have both values at 300s,
+        // so this fires on every issuance in every deployment. Phrased as the
+        // budget it is rather than as an override, so an operator who does raise
+        // `max_dns_wait` and finds nothing changed can see why here, without a
+        // permanent line in everyone else's log implying they configured
+        // something that was ignored.
+        debug!(
+            "DNS check budget is {capped:?}, half of the {renew_timeout:?} renewal timeout; \
+             the configured wait of {configured:?} does not fit inside it"
         );
     }
     configured.min(capped)
