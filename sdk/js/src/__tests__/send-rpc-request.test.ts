@@ -314,4 +314,3 @@ describe('send_rpc_request', () => {
     })
   })
 })
-
