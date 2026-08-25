@@ -68,6 +68,12 @@ Query each live Gateway debug interface and compare bounded peer and node visibi
 
 Inject corrupt global and per-record values, future timestamps, key/value identity mismatch, self-referential peers, replicated tombstones, IP/key conflicts, and unreadable certbot state. Verify global corruption fails boot closed, record-local corruption is quarantined without collateral loss, and operator removal prevents resurrection.
 
+## Post-baseline regression coverage (PRs #1084, #1089, and #1099)
+
+- Synchronize old and new KV schema payloads in both directions, including unknown fields and a delete tombstone.
+- Verify tombstones survive the compatibility window, are garbage-collected only after the configured safety condition, and cannot resurrect deleted state.
+- Confirm the retired admission path is absent and no caller can bypass the current synchronization policy through its old route.
+
 ## Postconditions
 
 Remove run-scoped evidence/state and restore trust, cache, routing and dependency baselines.

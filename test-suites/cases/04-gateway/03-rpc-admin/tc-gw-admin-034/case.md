@@ -63,6 +63,11 @@ Where the method mutates state, create the affected lease-owned record on one no
 
 - Tombstones prevent resurrection, routing and peer membership converge, unrelated instances/nodes remain unchanged, and bounded diagnostics identify rejected state without secrets.
 
+## Post-baseline regression coverage (PRs #1088, #1100, and #1102)
+
+- Remove an unknown, active, already removed, and last-eligible CVM and assert the documented structured error contract for each refusal.
+- Verify refusal metrics use the current prefix and reason labels, while successful removal updates membership exactly once.
+
 ## Postconditions
 
 Remove lease-owned records and verify WaveKV, local routing, sync peers, logs, and metrics return to the captured baseline.

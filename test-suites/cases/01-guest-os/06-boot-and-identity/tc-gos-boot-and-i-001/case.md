@@ -64,6 +64,11 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1076)
+
+- Assert `/etc/os-release` identifies the image as dstack for both production and development mkosi images, including the expected flavor-specific identity fields.
+- Boot must not inherit the Debian builder identity, and the reported identity must agree with image metadata.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

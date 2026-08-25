@@ -3,7 +3,7 @@
 <a id="core-components-test-guide"></a>
 # dstack Core Components Full Test Plan
 
-The post-baseline merged-PR review is recorded in [`audit/core-components-post-baseline-pr-audit.md`](audit/core-components-post-baseline-pr-audit.md).
+The post-baseline merged-PR review is recorded in [`audit/core-components-post-baseline-pr-audit.md`](audit/core-components-post-baseline-pr-audit.md). The latest `next` rebase review is recorded in [`audit/core-components-next-rebase-audit-2026-08-25.md`](audit/core-components-next-rebase-audit-2026-08-25.md).
 
 ## 1. Objective and scope
 

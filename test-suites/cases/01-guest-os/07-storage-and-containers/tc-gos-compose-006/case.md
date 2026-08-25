@@ -64,6 +64,11 @@ Restart after accepted/rejected rows, replay applicable v0.5.4/v0.5.8/v0.5.11 in
 
 - Supported historical defaults remain stable, unsupported combinations fail before secret/device consumption, restart reconstructs the same decision and corrected retry succeeds without stale state.
 
+## Post-baseline regression coverage (PRs #1083, #1092, #1124)
+
+- Run compose-hash compatibility inputs with omitted, empty, and byte-valued manifest fields through the candidate guest and supported SDK clients.
+- Confirm nerdctl 2.3.5 starts the same compose workload and rejects a malformed manifest without changing the accepted compose hash.
+
 ## Postconditions
 
 Remove run-scoped VMs/files/devices and verify baseline restoration.
