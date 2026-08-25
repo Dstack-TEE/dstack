@@ -180,33 +180,72 @@ Full specification: [host_api.proto](../../dstack/host-api/proto/host_api.proto)
 
 The dstack-guest-agent runs an HTTP server on port 8090 inside the CVM. This port is publicly accessible, allowing external clients to view basic CVM information.
 
-| Service | Purpose |
-|---------|--------|
-| Worker | Provides public-facing app information |
+Since dstack 0.6.0 the listener serves two API surfaces, selected by URL path
+alone: the frozen v0.5.11 `Worker` service at `/prpc` (equivalently
+`/prpc/v0`), and the versioned `dstack.guest.v1` `Worker` service at
+`/prpc/v1`. The frozen surface is closed and never changes again; new
+capability arrives only on v1. [guest-api-v1.md](../guest-api-v1.md) is the
+normative specification of the v1 surface, including its status-code and
+version-probing rules.
 
-**Available Methods:**
+Neither surface returns key material, and no caller chooses what gets signed
+or attested. That boundary, not the method list, is what makes this listener
+safe to expose: key material and caller-chosen attestation live only on the
+internal Unix socket (`/var/run/dstack.sock`), which is not a CVM boundary —
+it is reachable only by the application itself. An application that re-exports
+that socket has moved the boundary itself, and everything behind it moves with
+it.
+
+**Frozen `Worker` (`/prpc`, alias `/prpc/v0`):**
 
 | Method | Description | Return Type |
 |--------|-------------|------------|
 | Info | Get application information | AppInfo |
 | Version | Get guest agent version | WorkerVersion |
 | GetAttestationForAppKey | Attest the key the agent derives for the app | GetQuoteResponse |
-| Health | Report whether the application is serving (`/prpc/v1` only) | HealthResponse |
+
+**v1 `Worker` (`/prpc/v1`):**
+
+| Method | Description | Return Type |
+|--------|-------------|------------|
+| Info | Get application identity, plus configuration when `public_tcbinfo` is set | InfoResponse |
+| Version | Get guest agent version | VersionResponse |
+| Health | Report whether the application is serving | HealthResponse |
 
 Everything on this listener is unauthenticated, so each method is bounded in
 what it costs and in what it says:
 
-- `Health` answers from a cache the agent refreshes on its own timer, so a call
-  costs a lock and a clone however many callers there are. It reveals whether
-  the app opted into health gating, its current verdict, and — when the app
-  declared a `health_status_file` — the path it named and which parsing rule
-  failed. That last part is a narrow oracle for whether a path exists and what
-  shape its first two lines have; the path itself is already public, since it is
-  measured into the compose hash. The file's *contents* are never quoted back.
-  Container names and statuses were already public through the dashboard below.
-- `GetAttestationForAppKey` generates a fresh platform attestation per call and
-  is by far the most expensive method here.
+- `Health` (v1) answers from a cache the agent refreshes on its own timer, so a
+  call costs a lock and a clone however many callers there are. It reveals
+  whether the app opted into health gating, its current verdict, and — when the
+  app declared a `health_status_file` — the path it named and which parsing
+  rule failed. That last part is a narrow oracle for whether a path exists and
+  what shape its first two lines have; the path itself is already public, since
+  it is measured into the compose hash. The file's *contents* are never quoted
+  back. Container names and statuses were already public through the dashboard
+  below.
+- `GetAttestationForAppKey` (frozen) generates a fresh platform attestation per
+  call. With the frozen `Info` below, it is one of the two methods here that
+  let an anonymous caller drive quote generation. It has no v1 counterpart
+  on purpose: a v1 application attests its own key through the internal socket
+  (`/v1/GetKey`, then `/v1/Attest`) and serves the result itself, so the public
+  listener never gained a second attestation-on-demand entry point.
+- The frozen `Info` decodes identity out of a boot attestation per call, which
+  costs a hardware quote under the agent's global quote lock. The v1 `Info`
+  serves the same identity from a cache decoded once at startup, so an
+  anonymous caller cannot drive quote generation through it; if the boot-time
+  decode failed, retries are throttled to one attempt per interval. Of the two
+  quote-generating methods, the frozen `Info` is the one worth rate-limiting
+  first: it is what clients actually poll, and it replays the event log on top
+  of the quote.
+- Both `Info` methods honour the app's `public_tcbinfo` choice, with different
+  reach. The frozen one blanks `tcb_info` and `vm_config` but always serves
+  `key_provider_info`. The v1 one blanks `app_compose`, `vm_config`, and
+  `key_provider_info`, and carries no measurement registers or event log at
+  all — those are attestation data and belong to the internal `Attest`, where
+  a quote vouches for them. Identity and the measurement hashes are always
+  visible on both surfaces.
 
 The service also provides a web dashboard at the root URL (`/`) showing basic CVM information. View the dashboard template [here](../../dstack/guest-agent/templates/dashboard.html).
 
-Full specification: [agent_rpc.proto](../../dstack/guest-agent/rpc/proto/agent_rpc.proto)
+Full specifications: [agent_rpc.proto](../../dstack/guest-agent/rpc/proto/agent_rpc.proto) for the frozen surface, [agent_rpc_v1.proto](../../dstack/guest-agent/rpc/proto/agent_rpc_v1.proto) for v1.
