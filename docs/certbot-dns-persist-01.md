@@ -213,7 +213,8 @@ Two operations behave differently on these domains:
   domain's CAA still succeeds — the account exists and the cluster is on it —
   and names those domains in `repin_failed_domains`. Finish with `SetCaa`
   rather than another rotation, which would register yet another account
-  against a rate-limited quota.
+  against a rate-limited quota. The dashboard reports both lists in one dialog
+  after a rotation, with a **Run SetCaa** button for the second.
 
 ## Related
 

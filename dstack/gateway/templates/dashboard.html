@@ -807,15 +807,31 @@ SPDX-License-Identifier: Apache-2.0
     <!-- DNS Records To Publish Modal -->
     <div id="dns-records-modal" class="modal-overlay">
         <div class="modal">
-            <h3>Publish these DNS records</h3>
-            <p style="color: #666;">
-                This domain validates with <code>dns-persist-01</code>, so the gateway holds no
-                DNS credential for it and cannot write these itself. Certificates are only
-                issued once they are published.
-            </p>
-            <pre id="dns-records-list" style="white-space: pre-wrap; word-break: break-all;"></pre>
+            <h3>What is left to do</h3>
+            <div id="dns-records-repin" style="display: none;">
+                <p style="color: #b00;">
+                    The rotation succeeded and the cluster is on the new account, but these
+                    domains&#39; CAA records still name the old one, so nothing issues for them
+                    until a <code>SetCaa</code> run takes. Re-running the rotation would
+                    register yet another account against a rate-limited quota.
+                </p>
+                <pre id="dns-records-repin-list" style="white-space: pre-wrap; word-break: break-all;"></pre>
+                <div class="modal-actions">
+                    <button class="action-btn warning" onclick="retryCaa()">Run SetCaa</button>
+                </div>
+            </div>
+            <div id="dns-records-publish">
+                <p style="color: #666;">
+                    This domain validates with <code>dns-persist-01</code>, so the gateway holds no
+                    DNS credential for it and cannot write these itself. Certificates are only
+                    issued once they are published.
+                </p>
+                <pre id="dns-records-list" style="white-space: pre-wrap; word-break: break-all;"></pre>
+                <div class="modal-actions">
+                    <button class="action-btn secondary" onclick="copyDnsRecords()">Copy</button>
+                </div>
+            </div>
             <div class="modal-actions">
-                <button class="action-btn secondary" onclick="copyDnsRecords()">Copy</button>
                 <button class="action-btn primary" onclick="hideModal('dns-records-modal')">Done</button>
             </div>
         </div>
@@ -1571,19 +1587,13 @@ SPDX-License-Identifier: Apache-2.0
                 // The account URI is server-rendered, so it would otherwise keep
                 // showing the account this rotation just replaced.
                 document.getElementById('acme-account-uri').textContent = result.account_uri;
-                const failed = result.repin_failed_domains || [];
-                if (failed.length > 0) {
-                    // The rotation itself succeeded. Saying "failed" here would
-                    // invite a retry, which registers another account.
-                    showToast('Rotated to ' + result.account_uri + ', but CAA re-pinning failed for: '
-                        + failed.join(', ') + '. Run SetCaa again — do not rotate again.', 'error');
-                } else {
-                    showToast('ACME account: ' + result.account_uri, 'success');
-                }
+                showToast('ACME account: ' + result.account_uri, 'success');
                 await loadZtDomains();
-                // What the operator has to publish before those domains issue
-                // again -- the response is the only place it is reported.
-                showRequiredDnsRecords(result.required_dns_records);
+                // Everything still outstanding goes in the dialog, not a toast:
+                // a toast is gone in three seconds and the modal below would
+                // cover it, leaving a page that reads as a clean rotation. The
+                // response is the only place either list is reported.
+                showRequiredDnsRecords(result.required_dns_records, result.repin_failed_domains);
             } catch (e) {
                 showToast('Failed to register ACME account: ' + e.message, 'error');
             }
@@ -1601,12 +1611,43 @@ SPDX-License-Identifier: Apache-2.0
             showRequiredDnsRecords(records);
         }
 
-        function showRequiredDnsRecords(records) {
-            if (!records || records.length === 0) {
+        // Both halves of "this operation is not finished" in one dialog: the
+        // records only an operator can publish, and the domains whose CAA the
+        // gateway tried to re-pin and could not. A dns-01-only cluster has the
+        // second without the first, so either one alone still opens it.
+        function showRequiredDnsRecords(records, repinFailed) {
+            records = records || [];
+            repinFailed = repinFailed || [];
+            if (records.length === 0 && repinFailed.length === 0) {
                 return;
             }
+            document.getElementById('dns-records-publish').style.display =
+                records.length > 0 ? '' : 'none';
             document.getElementById('dns-records-list').textContent = records.join('\n');
+            document.getElementById('dns-records-repin').style.display =
+                repinFailed.length > 0 ? '' : 'none';
+            document.getElementById('dns-records-repin-list').textContent = repinFailed.join('\n');
             showModal('dns-records-modal');
+        }
+
+        async function retryCaa() {
+            try {
+                const response = await fetch('/prpc/Admin.SetCaa', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                if (!response.ok) {
+                    throw new Error(await response.text());
+                }
+                // SetCaa raises on partial failure, so reaching here means every
+                // domain took. Unlike rotation it is idempotent, which is why
+                // this is the operation to repeat and rotation is not.
+                document.getElementById('dns-records-repin').style.display = 'none';
+                showToast('CAA re-pinned', 'success');
+            } catch (e) {
+                showToast('SetCaa failed, run it again: ' + e.message, 'error');
+            }
         }
 
         async function copyDnsRecords() {
