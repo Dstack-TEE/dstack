@@ -348,10 +348,45 @@ control, those errors read as evidence about AMD.
 ## 9. AMD SEV-SNP
 
 An AMD run was completed end to end: guest SEV-SNP attestation, KMS key release,
-independent quote verification, gateway registration and public traffic. Four
-things below cost real time; none of them are guessable from the code.
+independent quote verification, gateway registration and public traffic. Host
+prerequisites are in section 1; what follows is everything after the host boots.
+None of it is guessable from the code.
 
-### 9.1 Turn on the KMS release gate before anything else
+### 9.1 The settings an AMD run needs
+
+One of these must change or the run cannot succeed; the rest are listed because
+their defaults are the ones you want and it is useful to know that before you
+start changing things.
+
+| Setting | File | Default | For an AMD run |
+|---|---|---|---|
+| `[cvm] platform` | `vmm.toml` (host) | `"auto"` | `"auto"` picks SEV-SNP when the host CPU flags contain `sev_snp`; set `"amd-sev-snp"` to be explicit and to fail loudly on the wrong host |
+| `sev_snp_key_release` | `kms.toml`, `[core]` | `false` | **`true`**, or no AMD guest ever gets a key |
+| `aws_nitro_tpm_key_release` | `kms.toml`, `[core]` | `false` | leave off; listed because it is the only other gate of this shape |
+| `[core.attestation.urls] amd_kds` | `kms.toml`, `dstack-verifier.toml` | `https://kdsintf.amd.com/vcek/v1` | override only to point at a cache or mirror |
+| `[core.attestation.root_ca] sev_snp_milan` / `_genoa` / `_turin` | same | unset — vendor ARK compiled in | leave unset unless you are testing against a non-production root |
+| `insecure_allow_external_trust_anchors` | same, `[core.attestation]` | `false` | must be `true` if *any* `root_ca` path above is set |
+
+The KMS side, in full, is two lines:
+
+```toml
+[core]
+sev_snp_key_release = true
+```
+
+Setting a `root_ca` path without the escape hatch is a startup failure, not a
+silent fallback:
+
+```
+external attestation trust anchors are configured but
+insecure_allow_external_trust_anchors is false
+```
+
+The whole `[core.attestation]` block has the same shape in `kms.toml` and
+`dstack-verifier.toml`, so a KDS mirror or a test root configured for one can be
+copied verbatim into the other.
+
+### 9.2 What the release gate looks like when it is off
 
 `sev_snp_key_release` defaults to `false`, and a guest that trips it reboots in a
 loop with
@@ -362,13 +397,16 @@ Request failed with status=400 Bad Request, error={
 }
 ```
 
-The gate sits *after* full quote verification, so a passing quote still yields
-nothing. Only two variants are gated this way — `dstack-amd-sev-snp` via
-`sev_snp_key_release` and `dstack-aws-nitro-tpm` via `aws_nitro_tpm_key_release`.
-TDX, GCP TDX and Nitro Enclave have no such switch, which is why nobody notices
-the gate until the first AMD boot.
+The gate sits *after* full quote verification (`ensure_key_release_allowed`), so
+a perfectly good quote still yields nothing — the message is about local policy
+and says nothing about the attestation. Only two variants are gated this way:
+`dstack-amd-sev-snp` and `dstack-aws-nitro-tpm`. TDX, GCP TDX and Nitro Enclave
+have no such switch, which is why nobody notices the gate until the first AMD
+boot. The stated reason for NitroTPM is that it is not confidential compute at
+all — the AWS hypervisor is inside the TCB — so both need an explicit operator
+opt-in on top of whatever the external auth policy decides.
 
-### 9.2 Do not edit a running KMS's compose to flip that flag
+### 9.3 Do not edit a running KMS's compose to flip that flag
 
 The local key provider seals to
 `SHA-256(SGX sealing key || MRTD || RTMR0 || RTMR1 || RTMR2 || RTMR3)`, and
@@ -391,7 +429,7 @@ certificate** — the onboarded KMS re-issues its own cert, so the PEM differs
 while `openssl x509 -pubkey` is identical. A KMS that bootstrapped independently
 differs in both.
 
-### 9.3 Provision host certificates first
+### 9.4 Provision host certificates first
 
 Verification needs the ASK and VCEK certificates. By default they are fetched
 from `https://kdsintf.amd.com`, which is a **single global endpoint with no
@@ -425,7 +463,7 @@ every subsequent run. Note the bootstrap problem — obtaining the VCEK to insta
 requires KDS access once, so do it from a network that can reach it and carry the
 file over.
 
-### 9.4 Reaching the API that holds the keys
+### 9.5 Reaching the API that holds the keys
 
 `GetKey` and `Attest` are **not** on the guest agent's external port. That
 listener serves `Info`, `Version` and `Health` only, by design — anyone who can
