@@ -287,6 +287,19 @@ fn issuer_domain_name(config: &CertBotConfig) -> Result<String> {
 async fn build_validation_method(config: &CertBotConfig) -> Result<ValidationMethod> {
     match config.challenge {
         ChallengeKind::Dns01 => {
+            // Named here rather than left to the provider. `cf_api_token` is
+            // `#[serde(default)]` so a dns-persist-01 config can omit it, which
+            // also means a dns-01 config that forgets it no longer fails
+            // deserialization -- it reaches Cloudflare and comes back as an
+            // "Invalid format for Authorization header", naming the header
+            // instead of the setting the operator has to add.
+            if config.cf_api_token.is_empty() {
+                bail!(
+                    "cf_api_token is required with dns-01, which proves control by writing a \
+                     TXT record through the DNS provider; set it, or switch to \
+                     challenge = \"dns-persist-01\", which needs no provider credential"
+                );
+            }
             let base_domain = config
                 .cert_subject_alt_names
                 .first()
