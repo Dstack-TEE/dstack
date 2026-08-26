@@ -2044,7 +2044,10 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             row = matrix.gateway_route(gateway, outage_client["app_id"])
             if row is not None:
                 observed_instances.append(str(row.get("instance")))
-        if set(observed_instances) != {outage_client["route_instance"]}:
+        expected_instance = outage_client["route_instance"]
+        if current_route.get("instance") != expected_instance or any(
+            instance != expected_instance for instance in observed_instances
+        ):
             raise RuntimeError(
                 f"Gateway recovery retained stale peer mappings: {observed_instances}"
             )
