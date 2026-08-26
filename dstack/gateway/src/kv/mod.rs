@@ -2135,7 +2135,12 @@ impl KvStore {
         Ok(())
     }
 
-    /// Try to acquire the global ACME credential rotation lock.
+    /// Try to acquire the lock over the cluster's shared ACME account.
+    ///
+    /// Every operation over that account takes it -- rotation, CAA
+    /// reconciliation, and first-use registration -- so they are ordered
+    /// against each other across nodes as well as within one; see
+    /// [`crate::distributed_certbot::DistributedCertBot`].
     ///
     /// Returns the lock value that was written; pass it back to
     /// [`Self::release_rotation_lock`] so a rotation that outlived the timeout
