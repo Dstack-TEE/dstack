@@ -73,14 +73,17 @@ pub fn resolve_issuer_domain_name(configured: &str) -> Result<String> {
         if bytes.len() > 63 {
             bail!("issuer domain name {configured:?} has a label over 63 octets: {context}");
         }
-        if let Some(byte) = bytes
-            .iter()
-            .find(|byte| !byte.is_ascii_alphanumeric() && **byte != b'-')
+        // Scanned as characters, not bytes: a byte cast to `char` renders a
+        // multi-byte character's first byte as some unrelated Latin-1 one, so
+        // `lé.org` would be rejected for a `Ã` that appears nowhere in the
+        // value the same message quotes back.
+        if let Some(ch) = label
+            .chars()
+            .find(|ch| !ch.is_ascii_alphanumeric() && *ch != '-')
         {
             bail!(
-                "issuer domain name {configured:?} contains {:?}, which a DNS label cannot: \
-                 {context}",
-                *byte as char
+                "issuer domain name {configured:?} contains {ch:?}, which a DNS label cannot: \
+                 {context}"
             );
         }
         if !bytes[0].is_ascii_alphanumeric() || !bytes[bytes.len() - 1].is_ascii_alphanumeric() {
@@ -379,6 +382,13 @@ mod tests {
         let err = resolve_issuer_domain_name("my_ca.example.com")
             .expect_err("an underscore is not a DNS label character");
         assert!(err.to_string().contains('_'), "{err:#}");
+
+        // A multi-byte character has to name itself. Scanning bytes and casting
+        // to `char` would report the first byte of `é` as `Ã`, which does not
+        // occur in the value the same message quotes back.
+        let err = resolve_issuer_domain_name("lé.org").expect_err("é is not a DNS label character");
+        assert!(err.to_string().contains('é'), "{err:#}");
+        assert!(!err.to_string().contains('Ã'), "{err:#}");
     }
 
     /// Empty is what an untouched configuration carries, and it means the
