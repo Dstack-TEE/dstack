@@ -51,9 +51,11 @@ services:
       timeout: 3s
       retries: 5
 
-  # Pebble - Let's Encrypt test server (custom build with HTTP support)
+  # Pebble - Let's Encrypt test server. Upstream plus a `-http` flag, so a
+  # client in another container can reach it by service name without trusting
+  # the Pebble root: github.com/kvinwang/pebble branch http-flag.
   pebble:
-    image: kvin/pebble:latest
+    image: kvin/pebble:v2.10.1-http
     container_name: pebble
     command: ["-http", "-dnsserver", "172.30.0.10:53"]
     networks:

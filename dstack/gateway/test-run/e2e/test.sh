@@ -33,15 +33,14 @@ PEBBLE_DIR="http://pebble:14000/dir"
 # Certificate domains to test (base domains, certs will be issued for *.domain)
 CERT_DOMAINS="test0.local test1.local test2.local"
 
-# A dns-persist-01 domain. Deliberately outside CERT_DOMAINS: no certificate is
-# expected for it, because the Pebble image this harness pins does not implement
-# draft-ietf-acme-dns-persist-01 (its binary carries dns-01, http-01, tls-alpn-01
-# and dns-account-01, and neither "dns-persist-01" nor "_validation-persist").
-# What is asserted here is everything up to the CA: that such a domain is
-# accepted with no DNS credential, that the record an operator must publish is
-# rendered, that the challenge survives an edit, and that certbot never writes
-# DNS for it. Issuance itself needs a Pebble built with the draft.
+# A dns-persist-01 domain. Kept out of CERT_DOMAINS because the certificate
+# phases check TLS through the proxy, which needs an app behind the domain;
+# here the certificate is checked through the admin API instead.
 PERSIST_DOMAIN="persist0.local"
+
+# Pebble answers to this name, not to letsencrypt.org, and a validation record
+# naming a CA the challenge does not list is ignored.
+PERSIST_ISSUER="pebble.letsencrypt.org"
 
 # Cloudflare mock settings
 CF_API_TOKEN="test-token"
@@ -175,11 +174,36 @@ test_persist_challenge_survives_an_edit() {
     echo "$info" | grep -q "dns-persist-01"
 }
 
+# The point of the whole exercise: a certificate is issued for a domain the
+# gateway holds no credential for. The record is not published anywhere in this
+# harness, so the pre-order self-check cannot pass -- it is advisory by design,
+# and certbot warns and proceeds because the CA's DNS view is not this node's.
+# Pebble runs with PEBBLE_VA_ALWAYS_VALID, so it accepts.
+#
+# That leaves the challenge itself covered end to end -- selected out of the
+# authorization, posted ready, finalized, fetched -- and the DNS answer the only
+# part standing in.
+test_persist_domain_issues_a_certificate() {
+    admin_post RenewZtDomainCert \
+        '{"domain": "'"${PERSIST_DOMAIN}"'", "force": true}' > /dev/null 2>&1 || true
+
+    # The renewal outlives the request that triggered it, and spends the
+    # advisory DNS wait -- half of renew_timeout -- before it reaches the CA.
+    local i=0
+    while [ $i -lt 60 ]; do
+        if admin_post GetZtDomain '{"domain": "'"${PERSIST_DOMAIN}"'"}' \
+            | grep -q '"has_cert":true'; then
+            return 0
+        fi
+        sleep 2
+        i=$((i + 1))
+    done
+    return 1
+}
+
 # The claim the whole challenge exists for: certbot reads DNS and never writes
 # it, so nothing for this domain may ever reach the provider API.
 test_persist_domain_never_touches_the_provider() {
-    admin_post RenewZtDomainCert \
-        '{"domain": "'"${PERSIST_DOMAIN}"'", "force": true}' > /dev/null 2>&1 || true
     local records
     records=$(curl -sf "${MOCK_CF_API}/api/records" 2>/dev/null || echo "[]")
     ! echo "$records" | grep -q "${PERSIST_DOMAIN}"
@@ -236,12 +260,21 @@ test_proxy_tls_health() {
 setup_certbot_config() {
     log_info "Configuring certbot via Admin API..."
 
-    # Set ACME URL
-    log_info "Setting ACME URL: ${ACME_URL}"
+    # Set ACME URL and the name this CA is known by. The issuer name is what a
+    # dns-persist-01 record has to carry, and it is also what CAA names for
+    # dns-01, so it is one setting for the whole deployment.
+    # renew_timeout also bounds the pre-order DNS self-check, which is capped at
+    # half of it. The default 300s would have a dns-persist-01 order sit for
+    # 150s waiting on a record this harness never publishes.
+    log_info "Setting ACME URL: ${ACME_URL} (issuer ${PERSIST_ISSUER})"
     if ! curl -sf -X POST "${GATEWAY_ADMIN}/prpc/Admin.SetCertbotConfig" \
         -H "${ADMIN_AUTH_HEADER}" \
         -H "Content-Type: application/json" \
-        -d '{"acme_url": "'"${ACME_URL}"'"}' > /dev/null; then
+        -d '{
+            "acme_url": "'"${ACME_URL}"'",
+            "issuer_domain_name": "'"${PERSIST_ISSUER}"'",
+            "renew_timeout_secs": 60
+        }' > /dev/null; then
         log_error "Failed to set certbot config"
         return 1
     fi
@@ -412,10 +445,14 @@ main() {
     log_phase 10 "dns-persist-01 without a DNS credential"
     run_test "Domain accepted with no DNS credential" \
         "$(test_persist_domain_needs_no_credential; echo $?)"
-    run_test "Required validation record is reported" \
-        "$(test_persist_domain_reports_its_record; echo $?)"
     run_test "Challenge survives an edit that omits it" \
         "$(test_persist_challenge_survives_an_edit; echo $?)"
+    run_test "Certificate issues without a DNS credential" \
+        "$(test_persist_domain_issues_a_certificate; echo $?)"
+    # After issuance: every record names the ACME account, so there is nothing
+    # to report until one exists, and issuing is what creates it here.
+    run_test "Required validation record is reported" \
+        "$(test_persist_domain_reports_its_record; echo $?)"
     run_test "No DNS record is ever written for it" \
         "$(test_persist_domain_never_touches_the_provider; echo $?)"
 
