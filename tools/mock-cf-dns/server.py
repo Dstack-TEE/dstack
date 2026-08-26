@@ -10,6 +10,10 @@ It implements just the Cloudflare endpoints used by certbot's CloudflareClient:
   POST   /client/v4/zones/<zone_id>/dns_records
   DELETE /client/v4/zones/<zone_id>/dns_records/<record_id>
 
+It tracks one thing beyond storing records: names whose issuer CAA set was
+emptied, served at /api/caa-gaps, because replacing CAA is meant to leave one
+record standing throughout and a gap is invisible once the replacement is done.
+
 It also serves TXT answers on 53, over both UDP and TCP, so Pebble can validate
 DNS-01 and dns-persist-01 for real rather than being run with
 PEBBLE_VA_ALWAYS_VALID=1. TCP is not optional: Pebble sets its DNS client to
@@ -42,6 +46,14 @@ RECORDS: list[dict[str, Any]] = []
 QUERIES: list[dict[str, Any]] = []
 MAX_QUERIES = 2000
 NEXT_ID = 1
+# Names whose issuer CAA set went from non-empty to empty at some point.
+#
+# A client replacing those records is meant to keep at least one in place
+# throughout: absent CAA is not "no issuer may" but "any issuer may", so a gap
+# is a window in which any CA could have issued. It closes as soon as the
+# replacement finishes and is invisible in the result, so it is recorded as it
+# happens.
+CAA_GAPS: set[str] = set()
 
 
 def _zones() -> list[dict[str, str]]:
@@ -74,6 +86,27 @@ def _json(handler: BaseHTTPRequestHandler, code: int, body: Any) -> None:
     handler.send_header("content-length", str(len(data)))
     handler.end_headers()
     handler.wfile.write(data)
+
+
+def _issuer_caa_count(name: str) -> int:
+    """How many issue/issuewild CAA records currently sit at `name`."""
+    wanted = name.strip(".").lower()
+    return sum(
+        1
+        for r in RECORDS
+        if r["type"] == "CAA"
+        and r["name"].strip(".").lower() == wanted
+        and (r["content"].split() + ["", ""])[1] in ("issue", "issuewild")
+    )
+
+
+def _note_caa_gap(name: str, before: int) -> None:
+    """Record `name` if its issuer CAA set just emptied out.
+
+    Called with STATE_LOCK held, `before` sampled ahead of the mutation.
+    """
+    if before > 0 and _issuer_caa_count(name) == 0:
+        CAA_GAPS.add(name.strip(".").lower())
 
 
 def _record_content(payload: dict[str, Any]) -> str:
@@ -115,6 +148,10 @@ class Handler(BaseHTTPRequestHandler):
         query = urllib.parse.parse_qs(parsed.query)
         if path == "/health":
             _json(self, 200, {"ok": True})
+            return
+        if path == "/api/caa-gaps":
+            with STATE_LOCK:
+                _json(self, 200, {"names": sorted(CAA_GAPS)})
             return
         if path == "/api/records":
             with STATE_LOCK:
@@ -200,9 +237,14 @@ class Handler(BaseHTTPRequestHandler):
         _json(self, 200, {"success": True, "result": record})
 
     def do_DELETE(self) -> None:  # noqa: N802
-        """Delete a mock DNS record."""
+        """Delete a mock DNS record, or forget the CAA gaps seen so far."""
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
+        if path == "/api/caa-gaps":
+            with STATE_LOCK:
+                CAA_GAPS.clear()
+            _json(self, 200, {"success": True})
+            return
         m = re.fullmatch(r"/client/v4/zones/([^/]+)/dns_records/([^/]+)", path)
         if not m:
             _json(
@@ -215,9 +257,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         record_id = urllib.parse.unquote(m.group(2))
         with STATE_LOCK:
+            doomed = next((r for r in RECORDS if r["id"] == record_id), None)
+            caa_name = doomed["name"] if doomed and doomed["type"] == "CAA" else None
+            caa_before = _issuer_caa_count(caa_name) if caa_name else 0
             before = len(RECORDS)
             RECORDS[:] = [r for r in RECORDS if r["id"] != record_id]
             removed = before != len(RECORDS)
+            if caa_name:
+                _note_caa_gap(caa_name, caa_before)
         _json(
             self,
             200,
