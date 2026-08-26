@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-proxiedguestapi-005",
+  "title": "ProxiedGuestApi.Shutdown",
+  "priority": "P1",
+  "requirements": [
+    "req-gos-proxiedguestapi-005"
+  ],
+  "risks": [
+    "risk-gos-proxiedguestapi-005"
+  ],
+  "tags": [
+    "guest",
+    "proxiedguestapi-rpc"
+  ],
+  "fixture": {
+    "profile": "guest-lifecycle",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "ProxiedGuestApi.Shutdown"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

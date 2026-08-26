@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-admin-005",
+  "title": "Admin.ReloadCert",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-admin-005"
+  ],
+  "risks": [
+    "risk-gw-admin-005"
+  ],
+  "tags": [
+    "gateway",
+    "admin-rpc"
+  ],
+  "fixture": {
+    "profile": "gateway-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Admin.ReloadCert"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

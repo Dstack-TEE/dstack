@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0",
+  "case_id": "tc-gos-platform-009",
+  "capability": "gpu-policy",
+  "reason": "NVIDIA device initialization and attestation failure handling require an NVIDIA confidential-computing GPU. This host has none, so the case cannot be exercised.",
+  "expires_when": "the host gains an NVIDIA confidential-computing GPU, at which point the probe fails and this registration must be replaced by a real harness"
+}

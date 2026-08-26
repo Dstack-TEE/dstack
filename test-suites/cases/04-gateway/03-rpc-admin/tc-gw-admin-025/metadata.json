@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-admin-025",
+  "title": "Admin.DeleteZtDomain",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-admin-025"
+  ],
+  "risks": [
+    "risk-gw-admin-025"
+  ],
+  "tags": [
+    "gateway",
+    "admin-rpc"
+  ],
+  "fixture": {
+    "profile": "gateway-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Admin.DeleteZtDomain"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-gateway-zt-domain-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

@@ -266,3 +266,29 @@ SPDX-License-Identifier = "CC0-1.0"
 path = "dstack/crates/qemu-acpi/fixtures/*.bin"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "test-suites/catalog/source-inventory.json"
+SPDX-FileCopyrightText = "© 2026 Phala Network <dstack@phala.network>"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "test-suites/catalog/configuration-inventory.json"
+SPDX-FileCopyrightText = "© 2026 Phala Network <dstack@phala.network>"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "test-suites/catalog/api-inventory.json"
+SPDX-FileCopyrightText = "© 2026 Phala Network <dstack@phala.network>"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "test-suites/catalog/source-coverage-map.json"
+SPDX-FileCopyrightText = "© 2026 Phala Network <dstack@phala.network>"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "test-suites/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "© 2026 Phala Network <dstack@phala.network>"
+SPDX-License-Identifier = "Apache-2.0"

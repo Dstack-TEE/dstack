@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-boot-and-i-003",
+  "title": "System and user configuration materialization",
+  "priority": "P1",
+  "requirements": [
+    "req-gos-boot-and-i-003"
+  ],
+  "risks": [
+    "risk-gos-boot-and-i-003"
+  ],
+  "tags": [
+    "guest",
+    "boot-and-identity"
+  ],
+  "fixture": {
+    "profile": "no-tee-guest-lifecycle",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "System and user configuration materialization"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-internal-002",
+  "title": "Gateway on-demand TLS key artifact safety",
+  "priority": "P0",
+  "requirements": [
+    "req-gw-internal-002"
+  ],
+  "risks": [
+    "risk-gw-internal-002"
+  ],
+  "tags": [
+    "gw",
+    "startup-authorization-and-routing-internals"
+  ],
+  "fixture": {
+    "profile": "gateway-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Gateway on-demand TLS key artifact safety"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

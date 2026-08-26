@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-keys-certs-006",
+  "title": "Image measurement cache clear and refill",
+  "priority": "P1",
+  "requirements": [
+    "req-kms-keys-certs-006"
+  ],
+  "risks": [
+    "risk-kms-keys-certs-006"
+  ],
+  "tags": [
+    "kms",
+    "keys-certs-operations"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Image measurement cache clear and refill"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-measurement-cache-capability-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

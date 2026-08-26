@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-ct-001",
+  "title": "Removed certificate-log surface regression",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-ct-001"
+  ],
+  "risks": [
+    "risk-kms-ct-001"
+  ],
+  "tags": [
+    "kms",
+    "certificate-transparency-log-files"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Removed certificate-log surface regression"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

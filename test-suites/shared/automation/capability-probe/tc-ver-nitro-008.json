@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0",
+  "case_id": "tc-ver-nitro-008",
+  "capability": "cross-platform-attestation",
+  "reason": "Nitro Enclave document verification and debug rejection requires genuine signed documents and trust material from the cross-platform fixture suite.",
+  "expires_when": "the case fixture declares the complete cross-platform attestation suite available, at which point the probe fails and this registration must be replaced by a real harness"
+}

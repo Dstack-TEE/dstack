@@ -1,0 +1,35 @@
+{
+  "id": "tc-gos-compose-006",
+  "title": "App manifest version feature and launch-requirement policy",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-compose-006"
+  ],
+  "risks": [
+    "risk-gos-compose-006"
+  ],
+  "tags": [
+    "semantic-review"
+  ],
+  "fixture": {
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "profile": "compatibility-matrix",
+    "simulation_allowed": true,
+    "versions": {
+      "gateway": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "verifier": "candidate",
+      "vmm": "candidate"
+    }
+  },
+  "actions_under_test": [
+    "App manifest version feature and launch-requirement policy"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/replay-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

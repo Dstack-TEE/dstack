@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-platform-009",
+  "title": "NVIDIA device initialization and attestation failure",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-platform-009"
+  ],
+  "risks": [
+    "risk-gos-platform-009"
+  ],
+  "tags": [
+    "gos",
+    "platform-services-and-image-integrity"
+  ],
+  "fixture": {
+    "profile": "gpu-policy",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "NVIDIA device initialization and attestation failure"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/capability-probe-case.py",
+    "args": [],
+    "timeout_seconds": 60
+  }
+}

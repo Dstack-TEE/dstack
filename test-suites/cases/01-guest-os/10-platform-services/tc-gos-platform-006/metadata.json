@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-platform-006",
+  "title": "Systemd dependency and failure-action graph",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-platform-006"
+  ],
+  "risks": [
+    "risk-gos-platform-006"
+  ],
+  "tags": [
+    "gos",
+    "platform-services-and-image-integrity"
+  ],
+  "fixture": {
+    "profile": "guest-readonly",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Systemd dependency and failure-action graph"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

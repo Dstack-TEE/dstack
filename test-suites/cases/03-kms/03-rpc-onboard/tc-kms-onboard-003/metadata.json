@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-onboard-003",
+  "title": "Onboard.GetAttestationInfo",
+  "priority": "P1",
+  "requirements": [
+    "req-kms-onboard-003"
+  ],
+  "risks": [
+    "risk-kms-onboard-003"
+  ],
+  "tags": [
+    "kms",
+    "onboard-rpc"
+  ],
+  "fixture": {
+    "profile": "kms-onboard",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Onboard.GetAttestationInfo"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-kms-rpc-case.py",
+    "args": [],
+    "timeout_seconds": 180
+  }
+}

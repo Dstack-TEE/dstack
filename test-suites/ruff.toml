@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+# SPDX-License-Identifier: Apache-2.0
+
+[lint.per-file-ignores]
+"**/*.py" = [
+    "D100", # Module docstrings are optional for executable harnesses.
+    "D101", # Runner data classes use descriptive type names and fields.
+    "D102", # Small runner methods do not require repetitive docstrings.
+    "D103", # Executable helpers do not require public API docstrings.
+    "D107", # Constructor behavior is documented by the owning class.
+    "E701", # Some retained test harnesses intentionally use compact statements.
+    "E702", # Some retained test harnesses intentionally use compact statements.
+]

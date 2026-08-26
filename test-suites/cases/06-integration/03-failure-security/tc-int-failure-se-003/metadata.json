@@ -1,0 +1,29 @@
+{
+  "id": "tc-int-failure-se-003",
+  "title": "VMM crash during every lifecycle transaction",
+  "priority": "P0",
+  "requirements": [
+    "req-int-failure-se-003"
+  ],
+  "risks": [
+    "risk-int-failure-se-003"
+  ],
+  "tags": [
+    "integration",
+    "failure-security"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "VMM crash during every lifecycle transaction"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 1200
+  }
+}

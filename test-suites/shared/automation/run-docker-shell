@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+command=${1:?usage: run-docker-shell COMMAND}
+wrapper=${DSTACK_TEST_DOCKER_SHELL_WRAPPER:-}
+if [[ -n $wrapper ]]; then
+  exec "$wrapper" "$command"
+fi
+exec sh -c "$command"

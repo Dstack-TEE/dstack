@@ -1,0 +1,2872 @@
+{
+  "schema_version": "1.0",
+  "cases": [
+    {
+      "case_id": "tc-gos-attestatio-001",
+      "source_run": "quote-report-data-binding-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/08-attestation-and-crypto/tc-gos-attestatio-001/run.py",
+      "environment": "HARDWARE",
+      "notes": "Lease-owned TDX guest on the mkosi candidate passed nine hash algorithms, default/custom effective-prefix metadata, raw 64-byte binding, raw length and unknown-algorithm rejection, repeat determinism, service health, and cleanup.",
+      "promoted_at": "2026-07-29T12:08:31Z"
+    },
+    {
+      "case_id": "tc-gos-attestatio-002",
+      "source_run": "cross-platform-versioned-attestation-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/08-attestation-and-crypto/tc-gos-attestatio-002/run.py",
+      "environment": "MIXED_HARDWARE_SIMULATOR",
+      "notes": "physical candidate TDX guest plus six simulator encoding/verifier rows, report-data boundaries, recovery, and lease-owned cleanup"
+    },
+    {
+      "case_id": "tc-gos-attestatio-003",
+      "source_run": "kms-app-root-chain-official-017",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/08-attestation-and-crypto/tc-gos-attestatio-003/run.py",
+      "environment": "SIMULATOR",
+      "notes": "one seed-matched case KMS and two isolated mkosi guests proved deterministic derivation, purpose and algorithm interpretation, path/app isolation, real KMS app-root chains, three mutation rejections, and lease-owned cleanup"
+    },
+    {
+      "case_id": "tc-gos-attestatio-004",
+      "source_run": "candidate-image-attestation-batch-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/08-attestation-and-crypto/tc-gos-attestatio-004/run.py",
+      "environment": "HARDWARE",
+      "notes": "current immutable mkosi candidate image proved private-key/leaf matching, SAN/EKU matrices, RA-TLS and app-info extensions, issuer and CA constraints, invalid validity-order rejection, and post-rejection health"
+    },
+    {
+      "case_id": "tc-gos-attestatio-005",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-hardware-case.py",
+      "environment": "HARDWARE"
+    },
+    {
+      "case_id": "tc-gos-attestatio-006",
+      "source_run": "gpu-capability-001",
+      "source_status": "BLOCKED",
+      "entrypoint": "shared/automation/capability-probe-case.py",
+      "environment": "HARDWARE",
+      "notes": "capability-blocked, backed by a probe that fails if a GPU appears"
+    },
+    {
+      "case_id": "tc-gos-boot-and-i-001",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-hardware-case.py",
+      "environment": "HARDWARE"
+    },
+    {
+      "case_id": "tc-gos-boot-and-i-002",
+      "source_run": "early-host-share-acceptance-005",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/06-boot-and-identity/tc-gos-boot-and-i-002/run.py",
+      "environment": "SIMULATION",
+      "notes": "lease-owned no-TEE guest proved early host-share mount precedes exactly one successful simulator startup, reaches stable identity without boot error, and retains stale-config and unmount guards"
+    },
+    {
+      "case_id": "tc-gos-boot-and-i-003",
+      "source_run": "config-materialization-mkosi-015",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/06-boot-and-identity/tc-gos-boot-and-i-003/run.py",
+      "environment": "SIMULATOR/MKOSI",
+      "notes": "Passed inside the lease-owned mkosi development image dstack-mkosi-dev-314e38cda at 1c1785fc6: host-share configuration materialization, JSON validity, KMS-decrypted environment marker hash, systemd service state, absent optional input preservation, source guards, and exact cleanup. Simulation does not prove physical TDX isolation or vendor-signed evidence."
+    },
+    {
+      "case_id": "tc-gos-boot-and-i-004",
+      "source_run": "identity-matrix-mkosi-014",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/06-boot-and-identity/tc-gos-boot-and-i-004/run.py",
+      "environment": "SIMULATOR/MKOSI",
+      "notes": "Passed a lease-owned five-VM mkosi identity matrix at ad679046b using dstack-mkosi-dev-b112b52ec and dstack-mkosi-dev-496128cb0: repeated identity reads, compose/image/instance-sensitive relations, TCB image and compose measurements, shared device identity, unknown-VM rejection, and post-rejection recovery. Simulation does not prove physical TDX isolation or vendor-signed evidence."
+    },
+    {
+      "case_id": "tc-gos-boot-and-i-005",
+      "source_run": "host-notification-lifecycle-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/06-boot-and-identity/tc-gos-boot-and-i-005/run.py",
+      "environment": "HARDWARE",
+      "notes": "lease-owned guest emitted ordered boot progress and exactly one terminal powering-off notification; unknown VM shutdown was rejected and the settled event buffer remained stable"
+    },
+    {
+      "case_id": "tc-gos-build-001",
+      "source_run": "merged-pr-1073-coverage",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/14-gos-build/tc-gos-build-001/run.py",
+      "environment": "IMAGE_ASSEMBLY",
+      "notes": "Candidate assembly scripts parse, protected artifact metadata records the selected builder, and the mkosi output contract requires builder=mkosi."
+    },
+    {
+      "case_id": "tc-gos-compose-006",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/replay-case.py",
+      "environment": "MINED_REPLAY",
+      "notes": "mined from central-fixtures-20260724T032131Z and verified by replay"
+    },
+    {
+      "case_id": "tc-gos-dstackguest-001",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-dstackguest-002",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-dstackguest-003",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-dstackguest-004",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-dstackguest-005",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-dstackguest-006",
+      "source_run": "next-rebase-regression-20260825",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/02-rpc-dstackguest/tc-gos-dstackguest-006/run.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-dstackguest-007",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-dstackguest-008",
+      "source_run": "agent-audit",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/02-rpc-dstackguest/tc-gos-dstackguest-008/run.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "verified by sweep agent-audit during integration"
+    },
+    {
+      "case_id": "tc-gos-dstackguest-009",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-entry-001",
+      "source_run": "guest-config-entry-retained-003",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/11-configuration-entry-models/tc-gos-entry-001/run.py",
+      "environment": "HARDWARE",
+      "notes": "Candidate guest-agent configuration loader and shared load_config suites passed 13/13 checks for explicit precedence, raw compose-byte preservation, optional defaults, missing inputs, malformed inputs, nested JSON/TOML loading, and search behavior in 53.420 seconds."
+    },
+    {
+      "case_id": "tc-gos-entry-002",
+      "source_run": "entry002-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/11-configuration-entry-models/tc-gos-entry-002/run.py",
+      "environment": "SIMULATOR/MULTI_IDENTITY_MKOSI_FIXTURE",
+      "notes": "Source-defined combined four-listener lifecycle passed internal-v0/current, external and GuestApi readiness, two activated internal descriptors, watchdog READY/heartbeat, occupied-bind and invalid trusted-state fail-closed behavior, two-way startup conflict with one commit, activated-descriptor restart, distinct seeded peer isolation, redaction, and exact cleanup. The source does not provide independently selectable listener modes or listener-layer TLS; simulation does not prove physical TEE isolation.",
+      "promoted_at": "2026-07-30T08:38:32Z"
+    },
+    {
+      "case_id": "tc-gos-entry-003",
+      "source_run": "dashboard-model-official-004",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/dashboard-model-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "exact candidate models and templates rendered with hostile strings, numeric and cardinality boundaries, Prometheus and HTML escaping checks, digest-equal concurrent renders, and automatic temporary-probe cleanup"
+    },
+    {
+      "case_id": "tc-gos-entry-004",
+      "source_run": "batch-entry-yocto-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/11-configuration-entry-models/tc-gos-entry-004/run.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "checked-in guest-agent library tests passed; two independent consumers compiled and emitted one stable version/Git identity, a deliberately invalid import failed while a concurrent valid consumer remained stable, valid retry converged, shared target was reused, no listener started, and compiler text or sensitive material was not retained"
+    },
+    {
+      "case_id": "tc-gos-gpupolicy-007",
+      "source_run": "gpu-capability-001",
+      "source_status": "BLOCKED",
+      "entrypoint": "shared/automation/capability-probe-case.py",
+      "environment": "HARDWARE",
+      "notes": "capability-blocked, backed by a probe that fails if a GPU appears"
+    },
+    {
+      "case_id": "tc-gos-guestapi-001",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-guestapi-002",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-guestapi-003",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-guestapi-004",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-guestapi-005",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-observabil-001",
+      "source_run": "dashboard-log-filtering-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/09-observability-and-network/tc-gos-observabil-001/run.py",
+      "environment": "HARDWARE",
+      "notes": "a lease-owned hardware guest proved dashboard HTML and public system metrics, ordered stdout/stderr log retrieval, structured JSON and base64 channels, ANSI strip/preserve behavior, tail and absolute/relative time filtering, stopped-container follow completion, Docker timestamps, malformed-filter and traversal rejection, cleanup, and final dashboard health"
+    },
+    {
+      "case_id": "tc-gos-observabil-002",
+      "source_run": "socket-activation-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/09-observability-and-network/tc-gos-observabil-002/run.py",
+      "environment": "HARDWARE",
+      "notes": "Lease-owned mkosi TDX guest passed listener ownership/isolation, external/internal routing boundaries, RPC socket activation, descriptor contract, TCP bind-conflict fail-closed behavior, listener-path recreation, stable identity recovery, and cleanup.",
+      "promoted_at": "2026-07-29T12:12:31Z"
+    },
+    {
+      "case_id": "tc-gos-observabil-003",
+      "source_run": "gateway-checker-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/09-observability-and-network/tc-gos-observabil-003/run.py",
+      "environment": "MKOSI_PHYSICAL_TDX",
+      "notes": "checks cover a real namespace-isolated WireGuard interface/peer/address/route/DNS baseline and zero-handshake shape, then the checker's startup contract: exit 0 when the app never enabled dstack-gateway, the pinned misconfigured exit code for a missing gateway app id and for a missing gateway URL, and the installed unit honouring both through Restart=on-failure plus RestartPreventExitStatus; refresh timing moved to dstack-util gateway_checker unit tests when the checker stopped being a shell script"
+    },
+    {
+      "case_id": "tc-gos-observabil-004",
+      "source_run": "system-telemetry-official-008",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/09-observability-and-network/tc-gos-observabil-004/run.py",
+      "environment": "HARDWARE",
+      "notes": "Lease-owned mkosi guest passed baseline/changed/restored GuestApi telemetry for veth address, DNS, CPU and 256 MiB memory pressure, noncompressible data-disk usage, loop-backed swap, running container, unknown identity rejection, and complete cleanup.",
+      "promoted_at": "2026-07-29T12:30:11Z"
+    },
+    {
+      "case_id": "tc-gos-observabil-005",
+      "source_run": "watchdog-recovery-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/09-observability-and-network/tc-gos-observabil-005/run.py",
+      "environment": "HARDWARE",
+      "notes": "a lease-owned hardware guest proved a positive systemd watchdog interval and healthy guest-local Worker.Version baseline, frozen-main-process heartbeat loss, automatic replacement with a different active MainPID, stable version after recovery, no further replacement over an additional watchdog interval, external rejection of an internal DstackGuest route, bounded journal observation, and cleanup"
+    },
+    {
+      "case_id": "tc-gos-platform-001",
+      "source_run": "platform001-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/10-platform-services/tc-gos-platform-001/run.py",
+      "environment": "MIXED_PHYSICAL_TDX_SGX_AND_CONTROLLED_PCCS",
+      "notes": "Physical TDX guests and the host-managed SGX/Gramine provider passed stable sealing, peer isolation, tampered quote/frame rejection, provider quote, VM restart, and cleanup. The case-owned mock-signed TDX PKI through the production CollateralClient/QVL passed current/outdated/revoked/expired/signature-invalid/malformed/tampered/outage/no-fallback/recovery rows. No TPM substitution; the shared enclave was not mutated or restarted.",
+      "promoted_at": "2026-07-30T08:52:23Z"
+    },
+    {
+      "case_id": "tc-gos-platform-002",
+      "source_run": "local-provider-sealing-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/10-platform-services/tc-gos-platform-002/run.py",
+      "environment": "HARDWARE",
+      "notes": "two lease-owned different-app physical TDX guests and the configured SGX local-key-provider proved sealed-box recipient binding, same-identity stable derived keys, cross-identity separation, tampered-quote and invalid-frame rejection without key material, valid-request recovery, and persistence across primary VM restart; quotes, private keys, decrypted keys, ciphertext, and credentials were not persisted"
+    },
+    {
+      "case_id": "tc-gos-platform-003",
+      "source_run": "host-shared-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/10-platform-services/tc-gos-platform-003/run.py",
+      "environment": "MKOSI_PHYSICAL_TDX",
+      "notes": "24/24 checks cover DSTACKSHR labeled-disk priority and read-only mount, invalid-disk 9p fallback with content equality, duplicate unmount, injected mount-dependency failure, recovery, invalid target rejection, loop/mount cleanup, and adjacent VM inventory stability"
+    },
+    {
+      "case_id": "tc-gos-platform-005",
+      "source_run": "guest-hardening-mkosi-official-006",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/10-platform-services/tc-gos-platform-005/run.py",
+      "environment": "HARDWARE/MKOSI",
+      "notes": "Two lease-owned mkosi hardware CVMs passed declared conntrack and SSH/account policy, protected policy measurements, strict device-memory kernel policy, non-privileged workload namespace/capability/device/sysctl isolation, Docker outage and explicit restart:no recovery, adjacent-instance isolation, and leak-free cleanup.",
+      "promoted_at": "2026-07-29T13:34:20Z"
+    },
+    {
+      "case_id": "tc-gos-platform-006",
+      "source_run": "systemd-graph-lifecycle-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/10-platform-services/tc-gos-platform-006/run.py",
+      "environment": "HARDWARE",
+      "notes": "two lease-owned different-app hardware guests proved the runtime prepare failure action, guest-agent socket/watchdog/restart edges, app-compose Docker/containerd ordering, and gateway-checker graph node; STOP of only the primary leaf process made the unchanged Tappd route fail, CONT restored the same identity, a nonexistent unit was rejected without graph loss, leaf restart recovered, and the adjacent peer identity/system state remained unchanged"
+    },
+    {
+      "case_id": "tc-gos-platform-007",
+      "source_run": "journal-mkosi-official-004",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/10-platform-services/tc-gos-platform-007/run.py",
+      "environment": "MKOSI_PHYSICAL_TDX",
+      "notes": "bounded journald policy, rotation, producer-side redaction, unprivileged isolation, invalid-input closure, outage, recovery, cleanup, and adjacent-VM isolation"
+    },
+    {
+      "case_id": "tc-gos-platform-008",
+      "source_run": "docker-boundary-memcg-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/10-platform-services/tc-gos-platform-008/run.py",
+      "environment": "HARDWARE/MKOSI",
+      "notes": "Two lease-owned hardware CVMs using mkosi image f44701828 passed normal/privileged Docker namespace, capability, mount, PIDs, identity, cross-CVM isolation, invalid lookup, restart recovery, and exact 128 MiB memory-cgroup enforcement; cleanup passed with no run-owned process leak.",
+      "promoted_at": "2026-07-29T13:11:50Z"
+    },
+    {
+      "case_id": "tc-gos-platform-009",
+      "source_run": "gpu-capability-001",
+      "source_status": "BLOCKED",
+      "entrypoint": "shared/automation/capability-probe-case.py",
+      "environment": "HARDWARE",
+      "notes": "capability-blocked, backed by a probe that fails if a GPU appears"
+    },
+    {
+      "case_id": "tc-gos-platform-010",
+      "source_run": "pending-physical-tdx-rerun",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/10-platform-services/tc-gos-platform-010/run.py",
+      "environment": "PHYSICAL_TDX_FOUR_GUEST_MATRIX",
+      "notes": "Four official guest versions use one case-owned physical-TDX VMM and product PCCS collateral to test current KMS, Gateway, and VMM configuration compatibility."
+    },
+    {
+      "case_id": "tc-gos-proxiedguestapi-001",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/05-rpc-proxiedguestapi/tc-gos-proxiedguestapi-001/run.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gos-proxiedguestapi-002",
+      "source_run": "agent-audit",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gos-proxiedguestapi-read-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "verified by sweep agent-audit during integration"
+    },
+    {
+      "case_id": "tc-gos-proxiedguestapi-003",
+      "source_run": "agent-audit",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gos-proxiedguestapi-read-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "verified by sweep agent-audit during integration"
+    },
+    {
+      "case_id": "tc-gos-proxiedguestapi-004",
+      "source_run": "agent-audit",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gos-proxiedguestapi-read-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "verified by sweep agent-audit during integration"
+    },
+    {
+      "case_id": "tc-gos-proxiedguestapi-005",
+      "source_run": "kw-v4-142214",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/05-rpc-proxiedguestapi/tc-gos-proxiedguestapi-005/run.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gos-setup-001",
+      "source_run": "env-allowlist-acceptance-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-001/run.py",
+      "environment": "UNIT",
+      "notes": "isolated temporary-crate acceptance matrix against the exact committed candidate module; covers allowlist filtering, duplicates, deterministic escaping/order, malformed and bounded input, retry, and 32-thread isolation"
+    },
+    {
+      "case_id": "tc-gos-setup-002",
+      "source_run": "ecdh-decrypt-acceptance-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-002/run.py",
+      "environment": "UNIT",
+      "notes": "isolated exact-candidate-module acceptance with fixed X25519 identities; covers authentic AES-GCM envelope, wrong identity, truncation, invalid peer, independent nonce/body/tag mutation, recovery, and 32-thread isolation without logging cryptographic material"
+    },
+    {
+      "case_id": "tc-gos-setup-003",
+      "source_run": "compose-orphan-acceptance-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-003/run.py",
+      "environment": "SIMULATOR",
+      "notes": "temporary fake-Docker-root offline matrix plus preloaded-image online Docker API behavior; dry-run/active, malformed compose, live service, adjacent project, unlabeled metadata, and cleanup; every Docker CLI setup/inspect/cleanup operation uses the configured shell wrapper"
+    },
+    {
+      "case_id": "tc-gos-setup-004",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-004/run.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-setup-005",
+      "source_run": "mr-config-id-acceptance-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-005/run.py",
+      "environment": "HARDWARE",
+      "notes": "exact candidate config_id_verifier test filter for v1/v3/non-TDX/malformed and every v3-bound field, plus stable ready identity from the lease-owned hardware guest; no provisioning or key consumption"
+    },
+    {
+      "case_id": "tc-gos-setup-006",
+      "source_run": "merged-pr-1070-coverage",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-006/run.py",
+      "environment": "SIMULATOR/CANDIDATE_NATIVE",
+      "notes": "Candidate tests cover bare, trailing-slash, /prpc, and /prpc/ endpoint normalization plus local, TPM, and KMS inventory requirements without retaining credentials."
+    },
+    {
+      "case_id": "tc-gos-setup-007",
+      "source_run": "data-disk-container-lifecycle-003",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-007/run.py",
+      "environment": "HARDWARE",
+      "notes": "lease-owned data-disk container harness passes LUKS wrong-key and duplicate-open rejection, dynamic ext4 ENOSPC, fsck repair, replacement-device rejection, VM restart continuity, stable identity, and exact cleanup without changing the product-owned LUKS header"
+    },
+    {
+      "case_id": "tc-gos-setup-008",
+      "source_run": "swap-setup-acceptance-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-008/run.py",
+      "environment": "HARDWARE",
+      "notes": "lease-owned TDX guest exercised swapfile and ZFS zvol disabled, size, invalid/exhausted, reboot, identity, and normal boot cleanup behavior"
+    },
+    {
+      "case_id": "tc-gos-setup-009",
+      "source_run": "setup009-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-009/run.py",
+      "environment": "SIMULATOR/THREE_NODE_GATEWAY",
+      "notes": "Candidate product tests passed 8 persistence and ordered-failover rows; three lease-owned Gateway nodes passed repeat and changed-policy registration, adjacent identity, 8-way concurrency, malformed and unauthenticated rejection, primary outage, next-node failover, primary process restart, recovery, and exact cleanup without retaining private keys or certificates.",
+      "promoted_at": "2026-07-30T08:29:26Z"
+    },
+    {
+      "case_id": "tc-gos-setup-010",
+      "source_run": "gos-hostapi-sealing-retained-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-hostapi-sealing-key-case.py",
+      "environment": "PHYSICAL_TDX_HOST_API_LOCAL_PROVIDER",
+      "notes": "one real-TDX local-provider guest proves guest-originated Notify, SGX-backed sealing success, CID-bound host rejection, malformed/unknown request rejection, unchanged healthy state, complete VM cleanup, and no persisted quote or key material",
+      "promoted_at": "2026-07-30T04:18:20Z"
+    },
+    {
+      "case_id": "tc-gos-setup-011",
+      "source_run": "gpu-capability-001",
+      "source_status": "BLOCKED",
+      "entrypoint": "shared/automation/capability-probe-case.py",
+      "environment": "HARDWARE",
+      "notes": "capability-blocked, backed by a probe that fails if a GPU appears"
+    },
+    {
+      "case_id": "tc-gos-setup-012",
+      "source_run": "supervisor-client-mkosi-010",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-012/run.py",
+      "environment": "SIMULATOR",
+      "notes": "Passed on candidate commit 18389f996 with mkosi image dstack-mkosi-0753a8c4b: dependency outage, case-owned Supervisor launch, full client API lifecycle, negative IDs, graceful shutdown response, and exact cleanup."
+    },
+    {
+      "case_id": "tc-gos-setup-013",
+      "source_run": "tdx-simulator-abi-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-013/run.py",
+      "environment": "SIMULATOR",
+      "notes": "candidate native and process tests cover evidence, filesystem boundaries, failure atomicity, and cleanup"
+    },
+    {
+      "case_id": "tc-gos-setup-014",
+      "source_run": "sev-snp-abi-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-tee-simulator-case.py",
+      "environment": "SIMULATOR",
+      "notes": "candidate native tests cover QVL-verifiable updates, ABI boundaries, and failure atomicity"
+    },
+    {
+      "case_id": "tc-gos-setup-015",
+      "source_run": "tpm-proxy-mkosi-015",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-015/run.py",
+      "environment": "SIMULATOR/MKOSI",
+      "notes": "Passed inside lease-owned mkosi development image dstack-dev-0.6.0 at 1caf38d81: startup, PCR, ECC quote, random, bounded malformed/oversized raw commands, reconnect, 16 requests at 8-way concurrency, swtpm dependency failure, deterministic PCR and ephemeral random restart semantics, retry, distinct adjacent seed-derived AK identity, and exact cleanup."
+    },
+    {
+      "case_id": "tc-gos-setup-016",
+      "source_run": "nitro-nsm-abi-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-tee-simulator-case.py",
+      "environment": "SIMULATOR",
+      "notes": "candidate native tests cover PCR lifecycle, rejection paths, and signed claim binding"
+    },
+    {
+      "case_id": "tc-gos-setup-017",
+      "source_run": "simulator-platform-mkosi-009",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-017/run.py",
+      "environment": "SIMULATOR/MKOSI",
+      "notes": "Passed inside lease-owned mkosi development image dstack-dev-0.6.0 at 0cf0d1e7b: five explicit TeeVariant rows, config/CLI selection, malformed and backend failures, duplicate mount rejection, 32 concurrent reads, adjacent identity isolation, GCP TPM dependency recovery, Nitro device ABIs, and exact cleanup. Simulation does not prove physical TEE isolation."
+    },
+    {
+      "case_id": "tc-gos-setup-018",
+      "source_run": "tdx-eventlog-mkosi-009",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-018/run.py",
+      "environment": "SIMULATOR/MKOSI",
+      "notes": "Passed inside lease-owned mkosi development image dstack-dev-0.6.0 at 7f573cfe8: eventlog, extend, show, replay-imr, independent SHA-384/JCS validation, eight concurrent events, malformed input, device failure atomicity, exact retry, 0600 log permissions, and cleanup. Simulation does not prove physical TDX isolation or firmware measurements."
+    },
+    {
+      "case_id": "tc-gos-setup-019",
+      "source_run": "quote-cli-mkosi-003",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-019/run.py",
+      "environment": "SIMULATOR/MKOSI",
+      "notes": "Passed inside lease-owned mkosi development image dstack-dev-0.6.0 at 86602622c: raw quote exact 64-byte binding, 63/65-byte rejection, quote-report 0/1/64/65 boundaries, explicit sys-config binding, decoded debug policy equivalence, atomic output failure, unavailable-device recovery, adjacent simulator identity, and cleanup. Simulation does not prove physical TDX isolation or vendor-signed evidence."
+    },
+    {
+      "case_id": "tc-gos-setup-020",
+      "source_run": "ra-key-cli-mkosi-004",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-020/run.py",
+      "environment": "SIMULATOR/MKOSI",
+      "notes": "Passed inside lease-owned mkosi development image dstack-dev-0.6.0 at 2d9d296dd: CA levels 0/1/2, independent OpenSSL chain/key validation, CA/key mismatch rejection, app-key 0600 permissions, random identity separation, output failure/retry, secret-log exclusion, and cleanup. Simulation does not prove physical TDX isolation or vendor-signed evidence."
+    },
+    {
+      "case_id": "tc-gos-setup-021",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-021/run.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-setup-022",
+      "source_run": "vtpm-cli-mkosi-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-022/run.py",
+      "environment": "SIMULATOR/MKOSI",
+      "notes": "Passed inside lease-owned mkosi development image dstack-dev-0.6.0 at 38f128691: RSA/ECC vtpm-attest, auto/ECC/RSA TPM quote, independent quote verification, wrong-root/PCR/signature rejection, collateral and TPM-device faults, atomic 0600 output, restart retry, adjacent seed identity, and cleanup. Simulation does not prove physical GCP TDX isolation or vendor-signed EK/AK evidence."
+    },
+    {
+      "case_id": "tc-gos-setup-023",
+      "source_run": "versioned-attestation-mkosi-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-023/run.py",
+      "environment": "SIMULATOR/MKOSI",
+      "notes": "Passed inside a lease-owned mkosi development VM at 1988fbd2c: V0/V1 automatic selection, report-data and app-ID boundaries, info/JSON/strip decoding, malformed and oversized rejection, atomic output failure, device restart retry, second simulator identity, and cleanup. Simulation does not prove physical TDX isolation or vendor-signed evidence."
+    },
+    {
+      "case_id": "tc-gos-setup-024",
+      "source_run": "kms-getkeys-mkosi-009",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-024/run.py",
+      "environment": "SIMULATOR/MKOSI",
+      "notes": "Passed inside a lease-owned mkosi development VM at be9c910cf with a case-scoped simulator-backed KMS: bootstrap trust, RA-TLS authorization, stable compose-scoped keys, CLI app-id scope preservation, malformed app ID, wrong CA, unreachable endpoint, atomic 0600 output failure, retry, and cleanup. Simulation does not prove physical TDX isolation."
+    },
+    {
+      "case_id": "tc-gos-setup-025",
+      "source_run": "merged-pr-1054-coverage",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-025/run.py",
+      "environment": "CANDIDATE_NATIVE",
+      "notes": "Candidate tests cover authenticated streaming round trips, tampering and truncation rejection, legacy fallback, and trusted KMS signer binding without retaining cryptographic material."
+    },
+    {
+      "case_id": "tc-gos-storage-an-001",
+      "source_run": "encrypted-storage-lifecycle-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/07-storage-and-containers/tc-gos-storage-an-001/run.py",
+      "environment": "HARDWARE",
+      "notes": "lease-owned LUKS data device rejected a random wrong key without disturbing the active mapping; a non-secret persistent marker survived VMM stop/start and was removed after reconnect"
+    },
+    {
+      "case_id": "tc-gos-storage-an-002",
+      "source_run": "ephemeral-docker-lifecycle-006",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/07-storage-and-containers/tc-gos-storage-an-002/run.py",
+      "environment": "HARDWARE",
+      "notes": "lease guest observed isolated temporary containerd and dockerd sockets, roots, and processes; valid and invalid commands preserved exit status and cleaned resources while the system daemon and redacted inventories stayed unchanged"
+    },
+    {
+      "case_id": "tc-gos-storage-an-003",
+      "source_run": "compose-validation-startup-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/07-storage-and-containers/tc-gos-storage-an-003/run.py",
+      "environment": "HARDWARE",
+      "notes": "lease guest proved a two-service dependency edge and ordered running timestamps; malformed and unsupported Compose files were rejected without changing the original project or redacted container inventory"
+    },
+    {
+      "case_id": "tc-gos-storage-an-004",
+      "source_run": "supervisor-lifecycle-acceptance-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/07-storage-and-containers/tc-gos-storage-an-004/run.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "prepared dstack-supervisor binary proved deploy, explicit start and re-execution after nonzero exit, running-process removal rejection, stop desired state, log redirection, list/info consistency, clear, and shutdown over a case-owned Unix socket"
+    },
+    {
+      "case_id": "tc-gos-storage-an-005",
+      "source_run": "volume-persistence-isolation-004",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/07-storage-and-containers/tc-gos-storage-an-005/run.py",
+      "environment": "HARDWARE",
+      "notes": "two lease-owned guests proved named-volume persistence across container recreation and primary VM stop/start, anonymous and tmpfs ephemerality, invalid-name rejection with Docker health retained, and same-name volume isolation across different app identities with cleanup on both guests"
+    },
+    {
+      "case_id": "tc-gos-tappd-001",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-tappd-002",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-tappd-003",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-tappd-004",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-tappd-005",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-tappd-006",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-worker-001",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-worker-002",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-worker-003",
+      "source_run": "physical-tdx-optimized-20260723T182727Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gos-yocto-002",
+      "source_run": "mkosi-openssh-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/13-yocto-runtime-hardening/tc-gos-yocto-002/run.py",
+      "environment": "SIMULATOR/MKOSI",
+      "notes": "Passed inside the lease-owned mkosi development guest at bb6e84c33: native sshd policy, password/empty-password/keyboard-interactive denial, authorized and unauthorized key paths, default-account rejection, malformed-config fail-closed behavior, concurrent validation, service restart recovery, adjacent VM isolation, and cleanup. The lease-installed access path is test tooling and does not claim production SSH exposure."
+    },
+    {
+      "case_id": "tc-gos-yocto-003",
+      "source_run": "mkosi-chrony-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/13-yocto-runtime-hardening/tc-gos-yocto-003/run.py",
+      "environment": "SIMULATOR/MKOSI",
+      "notes": "Passed inside the lease-owned mkosi development guest at b02adf5dc: baseline chrony state, controlled service outage, unreachable source observation, concurrent restart, exact configuration restoration, recovery, adjacent VM inventory isolation, and cleanup. Simulation does not prove a physical TEE clock source."
+    },
+    {
+      "case_id": "tc-gos-yocto-004",
+      "source_run": "stargz-mkosi-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/13-yocto-runtime-hardening/tc-gos-yocto-004/run.py",
+      "environment": "MKOSI_PHYSICAL_TDX",
+      "notes": "57/57 checks cover pinned OCI provenance, overlay baseline, eStargz conversion and execution, two concurrent pulls, snapshotter restart, overlay cache during registry outage, unavailable-registry and corrupted-layer rejection, stopped-snapshotter closure, explicit overlay fallback, and lease-owned cleanup without claiming silent fallback"
+    },
+    {
+      "case_id": "tc-gos-yocto-005",
+      "source_run": "sysbox-mkosi-official-004",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/13-yocto-runtime-hardening/tc-gos-yocto-005/run.py",
+      "environment": "MKOSI_PHYSICAL_TDX",
+      "notes": "mkosi Sysbox baseline, remapped lifecycle, true nested container boundary, failure closure, partial recovery closure, full recovery, cleanup, and adjacent-VM isolation"
+    },
+    {
+      "case_id": "tc-gos-yocto-006",
+      "source_run": "gpu-capability-001",
+      "source_status": "BLOCKED",
+      "entrypoint": "shared/automation/capability-probe-case.py",
+      "environment": "HARDWARE",
+      "notes": "capability-blocked, backed by a probe that fails if a GPU appears"
+    },
+    {
+      "case_id": "tc-gw-admin-001",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-admin-002",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gw-admin-003",
+      "source_run": "gateway-exit-003",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/03-rpc-admin/tc-gw-admin-003/run.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "four-node lease-owned Admin.Exit JSON/protobuf Empty and body-ignore lifecycle with credential-free evidence and verified cleanup"
+    },
+    {
+      "case_id": "tc-gw-admin-004",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-admin-005",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-admin-006",
+      "source_run": "gateway-caa-official-008",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-caa-case.py",
+      "environment": "INTEGRATION",
+      "notes": "two case-owned domains plus adjacent isolation, real issue/issuewild CAA reconciliation through Pebble and a bounded Cloudflare API model, JSON/protobuf/body-ignore transport, authorization, concurrent idempotence, dependency outage, retry, and lease-owned cleanup"
+    },
+    {
+      "case_id": "tc-gw-admin-007",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-admin-008",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-admin-009",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gw-admin-010",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-admin-011",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-admin-012",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-admin-013",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-admin-014",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-admin-015",
+      "source_run": "stab-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-dns-credential-case.py",
+      "environment": "ISOLATED",
+      "notes": "gateway admin contract case"
+    },
+    {
+      "case_id": "tc-gw-admin-016",
+      "source_run": "stab-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-dns-credential-case.py",
+      "environment": "ISOLATED",
+      "notes": "gateway admin contract case"
+    },
+    {
+      "case_id": "tc-gw-admin-017",
+      "source_run": "gw-dns-update-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-dns-credential-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "run-scoped DNS credential update with unknown-ID rejection"
+    },
+    {
+      "case_id": "tc-gw-admin-018",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-dns-credential-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gw-admin-019",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-admin-020",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-dns-credential-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gw-admin-021",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-admin-022",
+      "source_run": "zt-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-zt-domain-case.py",
+      "environment": "ISOLATED",
+      "notes": "ZT-domain lifecycle case against a run-scoped domain"
+    },
+    {
+      "case_id": "tc-gw-admin-023",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-zt-domain-case.py",
+      "environment": "ISOLATED",
+      "notes": "ZT-domain credential setup, state mutation, validation, authorization, and cleanup regression"
+    },
+    {
+      "case_id": "tc-gw-admin-024",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-zt-domain-case.py",
+      "environment": "ISOLATED",
+      "notes": "ZT-domain credential setup, state mutation, validation, authorization, and cleanup regression"
+    },
+    {
+      "case_id": "tc-gw-admin-025",
+      "source_run": "zt-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-zt-domain-case.py",
+      "environment": "ISOLATED",
+      "notes": "ZT-domain lifecycle case against a run-scoped domain"
+    },
+    {
+      "case_id": "tc-gw-admin-026",
+      "source_run": "gateway-renew-domain-official-003",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-renew-zt-domain-case.py",
+      "environment": "INTEGRATION",
+      "notes": "case-owned Pebble and Cloudflare API model with forced issuance, JSON/protobuf and unknown-field coverage, absent/invalid/missing-domain/unauthorized rejection, concurrent renewal locking, DNS outage, retry, adjacent-zone isolation, and complete cleanup"
+    },
+    {
+      "case_id": "tc-gw-admin-027",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-admin-028",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gw-admin-029",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-admin-030",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gw-admin-031",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-port-policy-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gw-admin-032",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-port-policy-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gw-admin-033",
+      "source_run": "stab-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-port-policy-case.py",
+      "environment": "ISOLATED",
+      "notes": "gateway admin contract case"
+    },
+    {
+      "case_id": "tc-gw-admin-034",
+      "source_run": "post-baseline-merge-audit",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "Candidate admin recovery RPC smoke and authorization/idempotency contract for Admin.RemoveCvm; replicated recovery matrix remains in the case execution."
+    },
+    {
+      "case_id": "tc-gw-admin-035",
+      "source_run": "post-baseline-merge-audit",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "Candidate admin recovery RPC smoke and authorization/idempotency contract for Admin.ListRejectedInstances; replicated recovery matrix remains in the case execution."
+    },
+    {
+      "case_id": "tc-gw-admin-036",
+      "source_run": "post-baseline-merge-audit",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "Candidate admin recovery RPC smoke and authorization/idempotency contract for Admin.RemoveNode; replicated recovery matrix remains in the case execution."
+    },
+    {
+      "case_id": "tc-gw-certbot-001",
+      "source_run": "certbot-account-official-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-renew-zt-domain-case.py",
+      "promoted_at": "2026-07-29T11:50:45Z",
+      "notes": "Case-owned Gateway/Pebble/DNS run passed account bootstrap and quote presence, cluster identity agreement, invalid-directory failure, restored renewal, concurrent fencing, provider outage/recovery, primary restart persistence, adjacent-zone isolation, and cleanup."
+    },
+    {
+      "case_id": "tc-gw-certbot-002",
+      "source_run": "certbot-dns-challenge-official-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-renew-zt-domain-case.py",
+      "promoted_at": "2026-07-29T11:59:46Z",
+      "notes": "Case-owned Gateway/Pebble/DNS run passed TXT challenge create/remove lifecycle, empty-zone convergence, adjacent-zone isolation, concurrent fencing, provider outage failure, restored renewal, and cleanup."
+    },
+    {
+      "case_id": "tc-gw-certbot-003",
+      "source_run": "certbot-cloudflare-official-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/certbot-cloudflare-case.py",
+      "promoted_at": "2026-07-29T11:43:27Z",
+      "notes": "Candidate Cloudflare client passed TXT/CAA add-list-remove, invalid-token rejection, provider-outage rejection, restored recovery, exact record cleanup, redacted evidence, and server teardown."
+    },
+    {
+      "case_id": "tc-gw-certbot-004",
+      "source_run": "certbot-renewal-official-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-renew-zt-domain-case.py",
+      "promoted_at": "2026-07-29T11:52:41Z",
+      "notes": "Case-owned Gateway/Pebble/DNS run passed below-threshold no-op, forced renewal, concurrent single-winner fencing, outage failure, restored recovery, post-commit in-memory publication, adjacent-zone isolation, and cleanup."
+    },
+    {
+      "case_id": "tc-gw-certbot-005",
+      "source_run": "merged-pr-1072-coverage",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/09-certbot-engine/tc-gw-certbot-005/run.py",
+      "notes": "Candidate tests cover stable lexical certificate discovery, live certificate/key rollback, and malformed-credential isolation in case-owned temporary workdirs."
+    },
+    {
+      "case_id": "tc-gw-certbot-006",
+      "source_run": "certbot-cli-official-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/certbot-cli-lifecycle-case.py",
+      "promoted_at": "2026-07-29T12:03:47Z",
+      "notes": "Candidate CLI passed forced once with hook, failing-hook post-commit retention, malformed config rejection, paced daemon execution, graceful SIGTERM, persisted-workdir restart, provider outage rejection, restored recovery/hook, record cleanup, and resource teardown."
+    },
+    {
+      "case_id": "tc-gw-certificat-001",
+      "source_run": "gateway-acme-account-official-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-renew-zt-domain-case.py",
+      "promoted_at": "2026-07-29T00:00:00Z",
+      "notes": "three-node case-owned Gateway cluster, Pebble, DNS API, and simulator exercise ACME account bootstrap, authenticated credential rotation, account-bound issue/issuewild CAA re-pinning, cross-node convergence, unauthorized rejection, invalid-directory fail-closed behavior, recovery, primary restart persistence, isolation, and cleanup without retaining account credentials or URI bodies",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-gw-certificat-002",
+      "source_run": "gateway-distributed-renewal-official-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-renew-zt-domain-case.py",
+      "promoted_at": "2026-07-29T00:00:00Z",
+      "notes": "three-node case-owned Gateway cluster, Pebble, DNS API, and simulator exercise cross-node renewal fencing, one-writer publication, all-node chain convergence, killed lock holder, explicit stale-lock release, survivor recovery, authorization, isolation, and cleanup",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-gw-certificat-003",
+      "source_run": "gateway-dns-credential-official-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-dns-credential-case.py",
+      "promoted_at": "2026-07-28T05:21:54Z",
+      "notes": "lease-owned Gateway DNS credential create/read/update/list/default lifecycle, response redaction, invalid provider/timing/missing-id and unauthorized rejection, default and active-domain reference integrity, four-way concurrent create, and lease cleanup",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-certificat-004",
+      "source_run": "gateway-zt-domain-official-006",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-zt-domain-lifecycle-case.py",
+      "promoted_at": "2026-07-29T00:00:00Z",
+      "notes": "case-owned Gateway, Pebble ACME, and DNS API exercise normalized ZT domain CRUD, credential updates, certificate issuance, authorization, validation, concurrency, persistence, and cleanup",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-gw-certificat-005",
+      "source_run": "gateway-caa-preservation-official-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-caa-case.py",
+      "promoted_at": "2026-07-29T00:00:00Z",
+      "notes": "case-owned Gateway, Pebble, and Cloudflare API exercise multi-domain CAA conflict replacement, unrelated CAA/TXT preservation, idempotence, authorization, provider outage, recovery, isolation, and cleanup",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-gw-certificat-006",
+      "source_run": "gateway-cert-store-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/06-certificates-dns/tc-gw-certificat-006/run.py",
+      "promoted_at": "2026-07-29T00:00:00Z",
+      "notes": "candidate cert-store suite exercises empty and populated stores, one-label wildcard boundaries, mismatched and expired update rejection with prior-certificate retention, and unrelated-domain renewal with an expired stored entry",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-gw-certificat-007",
+      "source_run": "gateway-cert-attestation-official-004",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-renew-zt-domain-case.py",
+      "promoted_at": "2026-07-29T00:00:00Z",
+      "notes": "case-owned Gateway, Pebble, and DNS API rotate certificate keys and verify ordered bounded attestation history, latest/limit semantics, public ACME account and quoted-key information, authorization, isolation, recovery, and cleanup without retaining key or quote bodies",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-gw-cluster-ad-001",
+      "source_run": "gateway-cluster-admin-full-concurrent-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-wavekv-bootstrap-case.py",
+      "promoted_at": "2026-07-28T05:23:39Z",
+      "notes": "Three-node peer/node baseline, instance/domain/certificate-state convergence, stale-node offline deletion, same-data restart, tombstone dominance, stable identity, and cleanup.",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-gw-cluster-ad-002",
+      "source_run": "gateway-cluster-admin-full-concurrent-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-wavekv-auth-case.py",
+      "promoted_at": "2026-07-28T05:23:39Z",
+      "notes": "Production mTLS authentication, malformed/invalid/oversized input rejection, sequence-gap non-mutation, valid apply, replay idempotency, and post-failure recovery.",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-gw-cluster-ad-003",
+      "source_run": "gateway-cluster-admin-full-concurrent-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-node-admin-case.py",
+      "promoted_at": "2026-07-28T05:23:39Z",
+      "notes": "Three-node identity and canonical URL checks, replicated down/up status convergence, invalid status and malformed URL rejection, restoration, and cleanup.",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-gw-cluster-ad-004",
+      "source_run": "gateway-cluster-admin-full-concurrent-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-cluster-observability-case.py",
+      "promoted_at": "2026-07-28T05:23:39Z",
+      "notes": "Deterministic WireGuard handshake observation, replicated observer/timestamp, online and status views, rejected-traffic counter recovery, node status/last-seen accuracy, and cleanup.",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-gw-cluster-ad-005",
+      "source_run": "gateway-cluster-admin-full-concurrent-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-listener-isolation-case.py",
+      "promoted_at": "2026-07-28T05:23:39Z",
+      "notes": "Authenticated admin access, missing/wrong credential rejection, public/admin namespace isolation, public health availability, and credential non-disclosure.",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-gw-cluster-ad-006",
+      "source_run": "gateway-cluster-admin-full-concurrent-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-debug-isolation-case.py",
+      "promoted_at": "2026-07-28T05:23:39Z",
+      "notes": "Simulator debug registration and state accuracy, public/admin/debug namespace isolation, and a healthy production-configured node with no debug TCP listener.",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-gw-cluster-ad-007",
+      "source_run": "gateway-cluster-admin-full-concurrent-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-health-exit-case.py",
+      "promoted_at": "2026-07-28T05:25:00Z",
+      "notes": "Authenticated health, dashboard HTML escaping, held proxy connection drain, bounded Admin.Exit, same-config restart, persistent synchronized state, and harness-owned restart cleanup.",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-gw-cluster-ad-008",
+      "source_run": "gateway-cluster-admin-full-concurrent-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/07-cluster-admin-observability/tc-gw-cluster-ad-008/run.py",
+      "promoted_at": "2026-07-28T05:25:00Z",
+      "notes": "TLS 1.2/1.3 negotiation and cipher checks, public/admin transport separation, simulator mTLS success, and missing/untrusted client identity rejection.",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-gw-debug-001",
+      "source_run": "debug-register-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/02-rpc-debug/tc-gw-debug-001/run.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "lease-owned Debug.RegisterCvm JSON/protobuf contract matrix with secret-bearing response values reduced to structural evidence"
+    },
+    {
+      "case_id": "tc-gw-debug-002",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-debug-003",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-debug-004",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-gateway-001",
+      "source_run": "gateway-register-003",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/01-rpc-gateway/tc-gw-gateway-001/run.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "lease-owned mTLS Gateway.RegisterCvm JSON/protobuf and PortPolicy matrix with credential-free structural evidence"
+    },
+    {
+      "case_id": "tc-gw-gateway-002",
+      "source_run": "script-verify-side",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-gateway-003",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gw-gateway-004",
+      "source_run": "script-verify-side",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-gw-internal-001",
+      "source_run": "gateway-production-startup-official-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/08-startup-auth-routing-internals/tc-gw-internal-001/run.py",
+      "promoted_at": "2026-07-29T10:07:08Z",
+      "notes": "Real candidate production startup passed simulator-attested certificate generation, localhost SAN, mode-0600 atomic TLS files, raised open-file limits, bind conflict and missing-certificate failure isolation, and same-config restart; lease cleanup had no error or live process."
+    },
+    {
+      "case_id": "tc-gw-internal-002",
+      "source_run": "gateway-debug-key-official-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/08-startup-auth-routing-internals/tc-gw-internal-002/run.py",
+      "promoted_at": "2026-07-29T09:58:24Z",
+      "notes": "Simulator-backed candidate generator passed mode-0600 atomic no-replace publication, explicit debug_only labeling, duplicate and concurrent single-winner behavior, dependency failure, temporary cleanup, and redacted evidence; lease cleanup had no error or live process."
+    },
+    {
+      "case_id": "tc-gw-internal-003",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/08-startup-auth-routing-internals/tc-gw-internal-003/run.py",
+      "environment": "MINED_REPLAY",
+      "notes": "checked-in allow/deny/outage, concurrency, and restart authorization harnesses run against the current candidate source"
+    },
+    {
+      "case_id": "tc-gw-internal-004",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/08-startup-auth-routing-internals/tc-gw-internal-004/run.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-gw-internal-005",
+      "source_run": "gateway-tls-local-routes-official-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/08-startup-auth-routing-internals/tc-gw-internal-005/run.py",
+      "promoted_at": "2026-07-29T09:51:19Z",
+      "notes": "Candidate stream boundary matrix and real single-node TLS/SNI local index, health, method, missing-path, and legacy-health probes passed; cleanup released the lease with no live process or error."
+    },
+    {
+      "case_id": "tc-gw-internal-006",
+      "source_run": "gateway-port-policy-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/08-startup-auth-routing-internals/tc-gw-internal-006/run.py",
+      "promoted_at": "2026-07-29T09:40:31Z",
+      "notes": "Candidate port-policy matrix passed fail-closed, policy parsing, PROXY protocol, and bounded backoff assertions; raw lease cleanup completed with no processes or errors."
+    },
+    {
+      "case_id": "tc-gw-internal-007",
+      "source_run": "gateway-internal-models-official-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/08-startup-auth-routing-internals/tc-gw-internal-007/run.py",
+      "promoted_at": "2026-07-29T09:30:49Z",
+      "notes": "Focused candidate model matrix passed with shared Cargo artifacts and a raw case-scoped substrate; no VM or service was started, and cleanup released the lease without errors."
+    },
+    {
+      "case_id": "tc-gw-internal-008",
+      "source_run": "gateway-route-index-official-005",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/08-startup-auth-routing-internals/tc-gw-internal-008/run.py",
+      "promoted_at": "2026-07-29T09:46:42Z",
+      "notes": "Single-node real runtime matrix passed public/admin route isolation, combined dashboard construction or bounded error, unknown-method handling, and credential redaction; lease cleanup completed without errors or live processes."
+    },
+    {
+      "case_id": "tc-gw-kv-009",
+      "source_run": "gateway-kv-lifecycle-official-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/07-cluster-admin-observability/tc-gw-kv-009/run.py",
+      "promoted_at": "2026-07-29T11:35:53Z",
+      "notes": "13 WaveKV key families, malformed-value isolation, watch final state, persistence/ephemeral/deletion restart boundaries, DNS credential round-trips, cert locks/history, three-node visibility, and cleanup"
+    },
+    {
+      "case_id": "tc-gw-proxy-prot-001",
+      "source_run": "gateway-proxy-protocol-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/05-proxy-protocol-routing/tc-gw-proxy-prot-001/run.py",
+      "promoted_at": "2026-07-29T10:13:10Z",
+      "notes": "candidate inbound PROXY v1/v2 parsing and malformed-boundary matrix on shared immutable Cargo target"
+    },
+    {
+      "case_id": "tc-gw-proxy-prot-002",
+      "source_run": "gateway-proxy-outbound-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/05-proxy-protocol-routing/tc-gw-proxy-prot-002/run.py",
+      "promoted_at": "2026-07-29T10:18:12Z",
+      "notes": "candidate per-port policy decision matrix plus enabled/disabled outbound PROXY wire bytes on shared immutable Cargo target"
+    },
+    {
+      "case_id": "tc-gw-proxy-prot-003",
+      "source_run": "gateway-proxy-sni-official-019",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-proxy-sni-routing-case.py",
+      "promoted_at": "2026-07-29T10:53:37Z",
+      "notes": "registered simulator identity, real Gateway proxy listener, case-owned backend, malformed/unknown/IPv6/failure rejection, multi-host failover, and recovery"
+    },
+    {
+      "case_id": "tc-gw-proxy-prot-004",
+      "source_run": "gateway-proxy-tls-termination-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/05-proxy-protocol-routing/tc-gw-proxy-prot-004/run.py",
+      "promoted_at": "2026-07-29T10:57:45Z",
+      "notes": "real Gateway TLS termination to case-owned plaintext backend: HTTP/1.1, h2 ALPN/preface, upgrade, large body, disconnect, backend failure, and recovery"
+    },
+    {
+      "case_id": "tc-gw-proxy-prot-005",
+      "source_run": "gateway-app-address-official-003",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/05-proxy-protocol-routing/tc-gw-proxy-prot-005/run.py",
+      "promoted_at": "2026-07-29T11:15:06Z",
+      "notes": "case-owned DNS and live Gateway routing: current/legacy/wildcard precedence, collision, altered/malformed/missing mappings, positive-cache stability, TTL expiry, TLS passthrough, and exact cleanup"
+    },
+    {
+      "case_id": "tc-gw-proxy-prot-006",
+      "source_run": "gateway-proxy-lifecycle-official-005",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/05-proxy-protocol-routing/tc-gw-proxy-prot-006/run.py",
+      "promoted_at": "2026-07-29T11:23:23Z",
+      "notes": "live Gateway per-app aggregate limit, excess rejection, counter release, handshake/idle/total timeouts, half-close drain, recovery, and exact cleanup"
+    },
+    {
+      "case_id": "tc-gw-registrati-001",
+      "source_run": "gateway-registration-batch-official-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-registration-case.py",
+      "promoted_at": "2026-07-29T00:00:00Z",
+      "notes": "lease-owned simulator mTLS identity and Gateway exercise attested registration, deterministic allocation, re-registration policy updates, duplicate WireGuard key and cross-app instance collision rejection, unauthenticated/invalid-key rejection, synchronized state isolation, and cleanup",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-gw-registrati-002",
+      "source_run": "gateway-registration-batch-official-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-registration-allocation-case.py",
+      "promoted_at": "2026-07-28T05:19:39Z",
+      "notes": "Concurrent WireGuard allocation, deterministic re-registration, duplicate-key rejection, bounded stale expiry, safe address recycling, and case-owned cleanup.",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-gw-registrati-003",
+      "source_run": "gateway-registration-batch-official-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-port-policy-case.py",
+      "promoted_at": "2026-07-29T00:00:00Z",
+      "notes": "candidate Gateway tests exercise listed/unlisted ports, unknown-policy fail-close, unrestricted compatibility, PROXY flags, and exact admin override/clear precedence",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-gw-registrati-004",
+      "source_run": "gateway-registration-batch-official-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/gateway-port-policy-case.py",
+      "promoted_at": "2026-07-29T00:00:00Z",
+      "notes": "candidate Gateway tests exercise reported, empty legacy, malformed, missing compose policy parsing, permanent failure classification, and compose-hash cache invalidation",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-gw-select-007",
+      "source_run": "gateway-top-n-official-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/05-proxy-protocol-routing/tc-gw-select-007/run.py",
+      "promoted_at": "2026-07-29T11:31:11Z",
+      "notes": "fixed Top-N cache population/health/invalidation; deterministic source matrix plus live Gateway routing, cross-app rejection, recovery, and exact cleanup"
+    },
+    {
+      "case_id": "tc-int-compatibil-001",
+      "source_run": "int-compatibil-001-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
+      "promoted_at": "2026-07-30T17:13:42Z",
+      "notes": "three physical-TDX migration paths covered v0.5.4 through the v0.5.7 bridge plus direct v0.5.8 and v0.5.11 candidate migrations with stable public trust identity; six exact VMM, Guest, and Gateway tests preserved rollback, unknown, default, and legacy state",
+      "environment": "PHYSICAL_TDX_7_VM_STATE_MIGRATION"
+    },
+    {
+      "case_id": "tc-int-compatibil-002",
+      "source_run": "int-compatibil-002-retained-005",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/integration-vmm-rolling-upgrade-case.py",
+      "promoted_at": "2026-07-30T18:12:00Z",
+      "notes": "physical-TDX rolling handoff preserved one running v0.5.8 Guest and one stopped v0.5.11 Guest across a v0.5.11-to-candidate VMM daemon replacement, loaded all three persisted workdirs, launched a candidate Guest, and preserved public identities through start-stop-start lifecycle operations",
+      "environment": "PHYSICAL_TDX_4_VM_ROLLING_VMM_UPGRADE"
+    },
+    {
+      "case_id": "tc-int-compatibil-003",
+      "source_run": "int-kms-rolling-retained-003",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/integration-compatibility-003-capability-case.py",
+      "promoted_at": "2026-07-30T03:51:43Z",
+      "notes": "ten real TDX VMs execute two-node 0.5.8 to two-node candidate KMS rollout, old/candidate Gateway traffic, existing/new app and environment-key continuity, endpoint loss/recovery, rollback, and fail-closed malformed input without private-key export",
+      "environment": "PHYSICAL_TDX_SHARED_KMS_GATEWAY_MATRIX"
+    },
+    {
+      "case_id": "tc-int-compatibil-004",
+      "source_run": "pr841-ad6f2fd12-gateway-inplace6",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
+      "promoted_at": "2026-08-18T16:30:00Z",
+      "notes": "A real v0.5.11 Gateway writes WaveKV and routing state, then the same stopped VM starts the candidate compose on its retained disk; candidate startup proves nonzero legacy rows loaded before client restart, post-migration registration succeeds, candidate state survives restart, and malformed registration remains rejected",
+      "environment": "PHYSICAL_TDX_GATEWAY_IN_PLACE_DISK_MIGRATION"
+    },
+    {
+      "case_id": "tc-int-compatibil-005",
+      "source_run": "int-verifier-compat-retained-003",
+      "source_status": "PASS",
+      "entrypoint": "cases/06-integration/02-compatibility-upgrade/tc-int-compatibil-005/run.py",
+      "promoted_at": "2026-07-30T09:11:30Z",
+      "notes": "ten exact candidate product rows cover legacy/current attestation envelopes, event-log version selection, vm_config request precedence, image-manifest policy, RA-TLS certificate compatibility, unknown-format diagnostics, and fail-closed lossy downgrade rejection",
+      "environment": "PHYSICAL_TDX_CANDIDATE_VERIFIER_COMPATIBILITY_CORPUS"
+    },
+    {
+      "case_id": "tc-int-compatibil-006",
+      "source_run": "int-compatibil-006-retained-003",
+      "source_status": "PASS",
+      "entrypoint": "cases/06-integration/02-compatibility-upgrade/tc-int-compatibil-006/run.py",
+      "promoted_at": "2026-07-30T20:13:09Z",
+      "notes": "v0.5.11/current protoc matrix compiles all seven RPC schemas and verifies 104 shared methods, 145 shared messages, 37 optional scalar fields, 290 unknown-field acceptance rows, 290 malformed-field rejection rows, and 290 post-error recovery rows while explicitly inventorying intentionally removed APIs",
+      "environment": "PHYSICAL_TDX_IMMUTABLE_V0511_CURRENT_PROTO_WIRE_MATRIX"
+    },
+    {
+      "case_id": "tc-int-end-to-end-001",
+      "source_run": "int-new-app-trust-retained-005",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
+      "promoted_at": "2026-07-30T10:37:16Z",
+      "notes": "A real TDX app linked VMM compose and instance identity, KMS key and certificate chain, an actual TLS listener, Gateway route allocation, verified image and report-data evidence, mutation rejection, and stable recovery."
+    },
+    {
+      "case_id": "tc-int-end-to-end-002",
+      "source_run": "int-upgrade-trust-retained-006",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
+      "promoted_at": "2026-07-30T11:55:10Z",
+      "notes": "A real TDX app retained encrypted state and stable KMS-derived identity across an authorized in-place compose upgrade; isolated rollback and cross-app boots were rejected without disrupting the upgraded app, while candidate verification, Gateway recovery, malformed-update rejection, and cleanup passed."
+    },
+    {
+      "case_id": "tc-int-end-to-end-003",
+      "source_run": "int-encrypted-env-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
+      "promoted_at": "2026-07-30T10:04:08Z",
+      "notes": "Two distinct real TDX app identities received only their KMS-encrypted secrets after timestamped signature verification, registered through Gateway, and exposed no plaintext across seven public log or metadata surfaces."
+    },
+    {
+      "case_id": "tc-int-end-to-end-004",
+      "source_run": "int-gateway-cert-retained-005",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
+      "promoted_at": "2026-07-30T09:48:26Z",
+      "notes": "Real TDX candidate KMS and two Gateway VMs verified KMS-chain trust, TLS-leaf SHA-512 report-data binding, candidate verifier acceptance, leaf-key rotation under one issuer, and tamper rejection."
+    },
+    {
+      "case_id": "tc-int-end-to-end-005",
+      "source_run": "int-multi-instance-retained-006",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
+      "promoted_at": "2026-07-30T13:13:03Z",
+      "notes": "One candidate KMS, one candidate Gateway, three same-app real TDX instances, and one isolated real TDX app passed concurrent load distribution, application isolation, port-policy rejection, stopped-instance drain, restart re-registration, malformed-registration rejection, and lease cleanup."
+    },
+    {
+      "case_id": "tc-int-failure-se-001",
+      "source_run": "int-failure-se-001-retained-003",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
+      "promoted_at": "2026-07-30T14:00:00Z",
+      "notes": "Two candidate KMS CVMs and five mkosi TDX guests passed healthy boot, ordered partial-outage failover, one bounded fail-closed all-outage exit, same-VM recovery after trust restoration, slow-endpoint fallback, wrong-certificate fallback, malformed-request rejection, liveness, TLS-only routing, and lease cleanup."
+    },
+    {
+      "case_id": "tc-int-failure-se-002",
+      "source_run": "int-failure-se-002-retained-005",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
+      "promoted_at": "2026-07-30T15:20:07Z",
+      "notes": "one shared candidate KMS, Gateway, and two Guest topology verifies unavailable and wrong-identity Gateway paths, independent app/KMS boot, background registration recovery, partitioned restart continuity, one current peer mapping, and malformed registration rejection with liveness",
+      "environment": "PHYSICAL_TDX_GATEWAY_FAILURE_RECOVERY"
+    },
+    {
+      "case_id": "tc-int-failure-se-003",
+      "source_run": "int-failure-se-003-retained-006",
+      "source_status": "PASS",
+      "entrypoint": "cases/06-integration/03-failure-security/tc-int-failure-se-003/run.py",
+      "promoted_at": "2026-07-30T15:45:21Z",
+      "notes": "one restartable case-owned VMM injects routed SIGKILL faults around create, start, update, resize, stop, and remove; every restart converges to the prior or complete new state with unique VM/CID allocations, retryable cleanup, invalid-input rejection, and API liveness",
+      "environment": "PHYSICAL_TDX_CASE_OWNED_VMM_TRANSACTION_CRASH"
+    },
+    {
+      "case_id": "tc-int-failure-se-004",
+      "source_run": "int-failure-se-004-retained-004",
+      "source_status": "PASS",
+      "entrypoint": "cases/06-integration/03-failure-security/tc-int-failure-se-004/run.py",
+      "promoted_at": "2026-07-30T16:05:06Z",
+      "notes": "one real TDX Guest plus exact KMS, Gateway, RA-TLS verifier, and mock TDX collateral tests proved invalid-order, expired, future, timestamp-binding, atomic-retention, and correction recovery boundaries without host-clock mutation"
+    },
+    {
+      "case_id": "tc-int-failure-se-005",
+      "source_run": "int-failure-se-005-retained-003",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/integration-secret-redaction-case.py",
+      "promoted_at": "2026-07-30T16:26:35Z",
+      "notes": "combined KMS admin transport, Gateway DNS credential, CSR and quote mutation, 14 malformed secret-category failures, public surfaces, bounded file scans, authenticated recovery, and lease cleanup passed without native credential evidence"
+    },
+    {
+      "case_id": "tc-int-failure-se-006",
+      "source_run": "int-failure-se-006-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/06-integration/03-failure-security/tc-int-failure-se-006/run.py",
+      "promoted_at": "2026-07-30T16:33:02Z",
+      "notes": "two live isolated components rejected 11 MiB requests, completed 128 concurrent authenticated RPCs with bounded latency, restored FD and memory state without restart, and ten exact KMS, Gateway, Verifier, VMM, and key-provider exhaustion/atomicity tests passed"
+    },
+    {
+      "case_id": "tc-int-failure-se-007",
+      "source_run": "int-failure-se-007-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
+      "promoted_at": "2026-07-30T16:50:16Z",
+      "notes": "one shared physical-TDX fixture exercised all ten pairs among VMM, Guest, KMS, Gateway, and verifier/image source through seven KMS and six Gateway outage/failover/convergence paths plus verifier timeout/retry/digest/atomic-promotion checks; all eleven VMs and nine fixture processes were released",
+      "environment": "PHYSICAL_TDX_11_VM_PARTITION_MATRIX"
+    },
+    {
+      "case_id": "tc-int-failure-se-008",
+      "source_run": "int-attestation-separation-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/integration-failure-008-capability-case.py",
+      "promoted_at": "2026-07-30T04:07:44Z",
+      "notes": "one physical TDX guest and six simulated platform rows verify challenge binding, exact development-root acceptance and production-root rejection, malformed/oversized input rejection, recovery, and hardware-unconfirmed scope without private material",
+      "environment": "PHYSICAL_TDX_AND_SIX_PLATFORM_SIMULATION"
+    },
+    {
+      "case_id": "tc-int-mixed-001",
+      "source_run": "int-mixed-001-retained-003",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/integration-mixed-001-capability-case.py",
+      "promoted_at": "2026-07-30T20:43:49Z",
+      "notes": "candidate VMM and KMS host physical-TDX v0.5.4, v0.5.8, v0.5.11, and candidate mkosi Guests; all four expose public identities, become unreachable when stopped, recover after restart, and retain identity before complete VM cleanup",
+      "environment": "PHYSICAL_TDX_CANDIDATE_VMM_FOUR_GUEST_MATRIX"
+    },
+    {
+      "case_id": "tc-int-mixed-002",
+      "source_run": "int-mixed-002-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/integration-mixed-002-capability-case.py",
+      "promoted_at": "2026-07-30T21:39:50Z",
+      "notes": "ten physical-TDX VMs execute two-node old/candidate KMS cutover, old/candidate Gateway replacement, baseline/cutover/rollback/new application traffic, root/CA/app/environment-key continuity, old-endpoint loss/recovery, and fail-closed malformed input without private-key export",
+      "environment": "PHYSICAL_TDX_KMS_CUTOVER_GATEWAY_REPLACEMENT"
+    },
+    {
+      "case_id": "tc-int-mixed-003",
+      "source_run": "pr841-ad6f2fd12-mixed003-composeonly",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/integration-mixed-003-capability-case.py",
+      "promoted_at": "2026-08-18T16:30:00Z",
+      "notes": "The candidate upgrades the same stopped v0.5.11 Gateway VM on its retained disk, proves nonzero legacy WaveKV rows were loaded before client restart, accepts post-migration candidate registration, survives restart, and does not assume cross-version sync compatibility",
+      "environment": "PHYSICAL_TDX_GATEWAY_IN_PLACE_VERSION_MATRIX"
+    },
+    {
+      "case_id": "tc-int-mixed-004",
+      "source_run": "int-mixed-004-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/integration-mixed-004-capability-case.py",
+      "promoted_at": "2026-07-30T21:17:35Z",
+      "notes": "ten physical-TDX VMs execute two-node old/candidate KMS cutover, old/candidate Gateway replacement, baseline/cutover/rollback/new application traffic, root/CA/app/environment-key continuity, old-endpoint loss/recovery, and fail-closed malformed input without private-key export",
+      "environment": "PHYSICAL_TDX_KMS_CUTOVER_GATEWAY_REPLACEMENT"
+    },
+    {
+      "case_id": "tc-int-mixed-005",
+      "source_run": "int-mixed-005-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/integration-mixed-005-capability-case.py",
+      "promoted_at": "2026-07-30T20:16:38Z",
+      "notes": "the shared candidate verifier controller passes all ten legacy/current evidence envelope, event-log selection, vm_config precedence, image-manifest policy, RA-TLS certificate, malformed-version, and fail-closed downgrade rows",
+      "environment": "PHYSICAL_TDX_CANDIDATE_VERIFIER_COMPATIBILITY_CORPUS"
+    },
+    {
+      "case_id": "tc-int-mixed-006",
+      "source_run": "pr841-ad6f2fd12-mixed006",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/integration-mixed-006-capability-case.py",
+      "promoted_at": "2026-08-18T16:30:00Z",
+      "notes": "Six physical-TDX KMS nodes across v0.5.4, bridge, v0.5.11, and candidate; one candidate Gateway; and four Guest generations exercise failed-transfer boundaries, stable root/app/trust identities, forward/reverse KMS restarts, candidate Gateway restart recovery, traffic continuity, and bounded legacy retirement without cross-version Gateway sync",
+      "environment": "PHYSICAL_TDX_FOUR_VERSION_ROLLING_RESTART"
+    },
+    {
+      "case_id": "tc-int-mixed-007",
+      "source_run": "int-mixed-007-retained-004",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/integration-mixed-007-capability-case.py",
+      "promoted_at": "2026-07-30T20:22:58Z",
+      "notes": "immutable v0.5.4, v0.5.8, and v0.5.11 schemas cross-decode against current across 259 shared RPC methods, 360 shared messages, 89 optional fields, and 720 each unknown-field acceptance, malformed-field rejection, and post-error recovery rows; release-absent files and intentional API removals are explicit",
+      "environment": "PHYSICAL_TDX_PINNED_RELEASE_CURRENT_PROTO_WIRE_MATRIX"
+    },
+    {
+      "case_id": "tc-kms-admin-001",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/02-rpc-admin/tc-kms-admin-001/run.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-kms-apiver-011",
+      "source_run": "kms-apiver-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-api-version-capability-case.py",
+      "promoted_at": "2026-07-29T17:46:53Z",
+      "notes": "9/9 groups execute GetAppKey v0/v1 acceptance and v2/u32-max rejection, SignCert v1/v2 three-certificate-chain acceptance and v0/v3 rejection, plus auth outage, restart recovery, identity isolation, and lease-owned cleanup",
+      "environment": "SIMULATOR_BACKED_KMS_RPC"
+    },
+    {
+      "case_id": "tc-kms-attestatio-001",
+      "source_run": "kms-shared-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-tdx-authorization-capability-case.py",
+      "promoted_at": "2026-07-29T17:00:12Z",
+      "notes": "6/6 case-owned rows pass through the commit-keyed shared KMS controller; functional attestation binding uses constructed verified evidence without claiming physical quote origin",
+      "environment": "SIMULATOR_BACKED_UNIT"
+    },
+    {
+      "case_id": "tc-kms-attestatio-002",
+      "source_run": "kms-cross-platform-focused-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-cross-platform-attestation-case.py",
+      "environment": "SIMULATOR",
+      "notes": "tee-simulator production-shaped evidence plus candidate KMS/verifier authorization-policy matrix; physical vendor trust and isolation remain explicitly unconfirmed"
+    },
+    {
+      "case_id": "tc-kms-attestatio-003",
+      "source_run": "kms-cross-platform-focused-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-cross-platform-attestation-case.py",
+      "environment": "SIMULATOR",
+      "notes": "tee-simulator production-shaped evidence plus candidate KMS/verifier authorization-policy matrix; physical vendor trust and isolation remain explicitly unconfirmed"
+    },
+    {
+      "case_id": "tc-kms-attestatio-004",
+      "source_run": "kms-upgrade-authority-retained-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-upgrade-authority-capability-case.py",
+      "promoted_at": "2026-07-29T18:14:49Z",
+      "notes": "4/4 groups prove dev-only allow_any_upgrade, webhook production metadata, measured boot-field routing, live allow/deny/fail-closed recovery, stable app identity, redaction, and lease-owned cleanup without claiming physical quote origin",
+      "environment": "SIMULATOR_BACKED_KMS_RPC"
+    },
+    {
+      "case_id": "tc-kms-attestatio-005",
+      "source_run": "kms-auth-backend-retained-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-auth-backend-matrix-capability-case.py",
+      "promoted_at": "2026-07-29T17:56:16Z",
+      "notes": "3/3 groups cover simple and Ethereum backend native suites plus deterministic backend failure closure and recovery",
+      "environment": "LOCAL_DETERMINISTIC_AUTH_BACKENDS"
+    },
+    {
+      "case_id": "tc-kms-auth-001",
+      "source_run": "kms-auth-backend-retained-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-simple-auth-config-capability-case.py",
+      "promoted_at": "2026-07-29T17:56:16Z",
+      "notes": "3/3 groups cover 16 native simple-policy tests plus live malformed-config fail-closed, atomic recovery, restart health, and log redaction",
+      "environment": "LOCAL_DETERMINISTIC_AUTH_BACKENDS"
+    },
+    {
+      "case_id": "tc-kms-auth-002",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/07-authorization-implementations/tc-kms-auth-002/run.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-kms-auth-003",
+      "source_run": "kms-auth-eth-countfix-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/07-authorization-implementations/tc-kms-auth-003/run.py",
+      "promoted_at": "2026-07-30T02:46:47Z",
+      "notes": "two fresh processes execute 3/3 exact rows each, proving repeated requests re-query current Ethereum policy, identity and contract-domain binding, backend fail-closed recovery, and absence of persistent decision state",
+      "environment": "LOCAL_DETERMINISTIC_ETHEREUM_AUTH_BACKEND"
+    },
+    {
+      "case_id": "tc-kms-auth-004",
+      "source_run": "kms-contract-policy-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-contract-ownership-capability-case.py",
+      "promoted_at": "2026-07-29T18:05:09Z",
+      "notes": "3/3 groups use 12 ownership and 7 upgrade tests for two-step ownership, unauthorized mutation/upgrade rejection, initialization, and storage-preserving UUPS transitions",
+      "environment": "LOCAL_FOUNDRY_EVM"
+    },
+    {
+      "case_id": "tc-kms-auth-005",
+      "source_run": "kms-contract-policy-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-node-registration-capability-case.py",
+      "promoted_at": "2026-07-29T18:05:09Z",
+      "notes": "3/3 groups use 7 registration plus ownership tests for KMS identity allowlisting, app registration, device/image changes, revocation authority, and stale-identity rejection",
+      "environment": "LOCAL_FOUNDRY_EVM"
+    },
+    {
+      "case_id": "tc-kms-auth-006",
+      "source_run": "kms-contract-policy-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-boot-policy-capability-case.py",
+      "promoted_at": "2026-07-29T18:05:09Z",
+      "notes": "3/3 groups use 17 boot-policy plus registration/upgrade tests for app, compose, device, image, TCB, legacy-init, and rollback boundaries",
+      "environment": "LOCAL_FOUNDRY_EVM"
+    },
+    {
+      "case_id": "tc-kms-auth-007",
+      "source_run": "kms-auth-finality-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/07-authorization-implementations/tc-kms-auth-007/run.py",
+      "promoted_at": "2026-07-30T02:45:33Z",
+      "notes": "two fresh processes execute 5/5 exact rows each: one-block confirmation-depth snapshots, canonical refresh, wrong-chain/stale-head/timeout fail-closed behavior, recovery, redacted evidence, and absence of retained decisions",
+      "environment": "LOCAL_DETERMINISTIC_ETHEREUM_AUTH_BACKEND"
+    },
+    {
+      "case_id": "tc-kms-auth-008",
+      "source_run": "kms-auth-backend-retained-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-auth-schema-capability-case.py",
+      "promoted_at": "2026-07-29T17:56:16Z",
+      "notes": "3/3 groups cover 14 Ethereum API tests, exact schema subgroup execution, backend error shaping, and fail-closed recovery",
+      "environment": "LOCAL_DETERMINISTIC_AUTH_BACKENDS"
+    },
+    {
+      "case_id": "tc-kms-auth-009",
+      "source_run": "kms-event-audit-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/07-authorization-implementations/tc-kms-auth-009/run.py",
+      "promoted_at": "2026-07-30T02:59:07Z",
+      "notes": "two fresh Foundry processes execute 5/5 exact rows each, reconstructing KMS/app authorization state from actor-bound audit events across unauthorized atomicity, upgrade identity, orphan-event reorg discard, and canonical recovery",
+      "environment": "LOCAL_FOUNDRY_EVM"
+    },
+    {
+      "case_id": "tc-kms-auth-010",
+      "source_run": "kms-auth-uncached-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/07-authorization-implementations/tc-kms-auth-010/run.py",
+      "promoted_at": "2026-07-30T03:08:12Z",
+      "notes": "two fresh Rust processes execute 4/4 exact rows each, proving identical requests re-query changed policy, app/KMS and all identity fields stay isolated, malformed backend state fails closed, and recovery retains no prior decision",
+      "environment": "LOCAL_DETERMINISTIC_KMS_AUTH_CLIENT"
+    },
+    {
+      "case_id": "tc-kms-bootstrap--001",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-kms-bootstrap-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-kms-bootstrap--002",
+      "source_run": "kms-shared-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-existing-onboard-capability-case.py",
+      "promoted_at": "2026-07-29T17:00:12Z",
+      "notes": "3/3 case-owned rows pass through the commit-keyed shared KMS controller; functional attestation binding uses constructed verified evidence without claiming physical quote origin",
+      "environment": "SIMULATOR_BACKED_UNIT"
+    },
+    {
+      "case_id": "tc-kms-bootstrap--003",
+      "source_run": "kms-shared-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-finish-onboard-capability-case.py",
+      "promoted_at": "2026-07-29T17:00:12Z",
+      "notes": "3/3 case-owned rows pass through the commit-keyed shared KMS controller; functional attestation binding uses constructed verified evidence without claiming physical quote origin",
+      "environment": "SIMULATOR_BACKED_UNIT"
+    },
+    {
+      "case_id": "tc-kms-bootstrap--004",
+      "source_run": "kms-shared-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-onchain-attestation-capability-case.py",
+      "promoted_at": "2026-07-29T17:00:12Z",
+      "notes": "3/3 case-owned rows pass through the commit-keyed shared KMS controller; functional attestation binding uses constructed verified evidence without claiming physical quote origin",
+      "environment": "SIMULATOR_BACKED_UNIT"
+    },
+    {
+      "case_id": "tc-kms-build-001",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/12-kms-build/tc-kms-build-001/run.py",
+      "environment": "UNIT"
+    },
+    {
+      "case_id": "tc-kms-ct-001",
+      "source_run": "pr841-focused-kms-removed-56a47ab9d-20260808",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/09-certificate-transparency-log/tc-kms-ct-001/run.py",
+      "environment": "INTEGRATION",
+      "notes": "candidate regression verifies the deleted unused certificate-log module, configuration hook, and sole dependency remain absent while current KMS library tests pass"
+    },
+    {
+      "case_id": "tc-kms-keys-certs-001",
+      "source_run": "kms-keys-retained-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-app-key-isolation-capability-case.py",
+      "promoted_at": "2026-07-29T17:07:14Z",
+      "notes": "3/3 case-owned rows pass through the commit-keyed shared KMS crypto controller, covering deterministic hierarchy boundaries and recoverable domain-separated signatures",
+      "environment": "CRYPTO_UNIT"
+    },
+    {
+      "case_id": "tc-kms-keys-certs-002",
+      "source_run": "kms-keys-retained-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-env-pubkey-freshness-capability-case.py",
+      "promoted_at": "2026-07-29T17:07:14Z",
+      "notes": "2/2 case-owned rows pass through the commit-keyed shared KMS crypto controller, covering deterministic hierarchy boundaries and recoverable domain-separated signatures",
+      "environment": "CRYPTO_UNIT"
+    },
+    {
+      "case_id": "tc-kms-keys-certs-003",
+      "source_run": "kms-history-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-key-handover-capability-case.py",
+      "promoted_at": "2026-07-29T17:21:02Z",
+      "notes": "the current root-key pair passes startup validation and attested GetKmsKey JSON/protobuf, repeat stability, unauthenticated/malformed rejection, and liveness rows",
+      "environment": "SIMULATOR_BACKED_KMS_RPC"
+    },
+    {
+      "case_id": "tc-kms-keys-certs-004",
+      "source_run": "kms-csr-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-csr-binding-capability-case.py",
+      "promoted_at": "2026-07-29T17:11:30Z",
+      "notes": "attested CSR binding matrix covers JSON/protobuf, chain shape, unknown fields, CSR/signature/API mutations, embedded attestation authority, malformed input, and liveness",
+      "environment": "SIMULATOR_BACKED_KMS_RPC"
+    },
+    {
+      "case_id": "tc-kms-keys-certs-005",
+      "source_run": "kms-tempca-retained-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-temp-ca-capability-case.py",
+      "promoted_at": "2026-07-29T17:15:51Z",
+      "notes": "3/3 lifecycle rows validate temporary-CA certificate/key role, root separation, repeated stability, and exact persistence across a real case-owned KMS restart; the harness now also covers near-expiry renewal with key preservation",
+      "environment": "SIMULATOR_BACKED_KMS_RPC"
+    },
+    {
+      "case_id": "tc-kms-keys-certs-006",
+      "source_run": "kms-cache-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-measurement-cache-capability-case.py",
+      "promoted_at": "2026-07-29T17:23:27Z",
+      "notes": "real admin RPC and cache filesystem lifecycle cover unauthorized no-op, targeted isolation, adjacent preservation, refill, all-selector confinement, malformed input, verifier corrupt/stale/refill/concurrent atomic tests, and liveness",
+      "environment": "SIMULATOR_BACKED_KMS_ADMIN"
+    },
+    {
+      "case_id": "tc-kms-keys-certs-007",
+      "source_run": "kms-admin-transport-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-admin-transport-capability-case.py",
+      "promoted_at": "2026-07-29T17:25:09Z",
+      "notes": "9/9 bearer, X-Admin-Token, compatible mixed-valid, missing, malformed, all-invalid, prefix-only, and log-redaction rows pass against the case-owned KMS admin listener",
+      "environment": "SIMULATOR_BACKED_KMS_ADMIN"
+    },
+    {
+      "case_id": "tc-kms-keys-certs-008",
+      "source_run": "kms-metrics-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-metrics-diagnostics-capability-case.py",
+      "promoted_at": "2026-07-29T17:28:25Z",
+      "notes": "4/4 groups cover GetMeta shape, exact success/denial counters, repeated key cache path, unreachable auth-backend fail-closed counters, backend restoration, and credential redaction across real case-owned KMS restarts",
+      "environment": "SIMULATOR_BACKED_KMS_RPC"
+    },
+    {
+      "case_id": "tc-kms-keys-certs-009",
+      "source_run": "kms-crash-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-crash-backup-capability-case.py",
+      "promoted_at": "2026-07-29T17:31:57Z",
+      "notes": "4/4 cold-backup groups cover complete owner-only backup, orphan atomic-temp restart, corrupted-root fail-closed startup, complete restore with exact public trust-anchor identity, private-copy deletion, and process cleanup",
+      "environment": "SIMULATOR_BACKED_KMS_RPC"
+    },
+    {
+      "case_id": "tc-kms-kms-001",
+      "source_run": "kms-attested-key-official-005",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-attested-rpc-case.py",
+      "environment": "SIMULATOR",
+      "notes": "case-owned seed-matched TDX RA client exercised candidate-bound JSON/protobuf key RPCs, documented response shape, repeat determinism, unknown fields, missing attestation, malformed input, and cleanup without persisting native key material"
+    },
+    {
+      "case_id": "tc-kms-kms-002",
+      "source_run": "kms-attested-key-official-005",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-attested-rpc-case.py",
+      "environment": "SIMULATOR",
+      "notes": "case-owned seed-matched TDX RA client exercised candidate-bound JSON/protobuf key RPCs, documented response shape, repeat determinism, unknown fields, missing attestation, malformed input, and cleanup without persisting native key material"
+    },
+    {
+      "case_id": "tc-kms-kms-003",
+      "source_run": "kms-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-kms-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "payload-bearing KMS RPC contract case"
+    },
+    {
+      "case_id": "tc-kms-kms-004",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-kms-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-kms-kms-005",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-kms-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-kms-kms-006",
+      "source_run": "kms-sign-cert-official-004",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/01-rpc-kms/tc-kms-kms-006/run.py",
+      "environment": "SIMULATOR",
+      "notes": "seed-matched simulated TDX CSR attestation, key binding, JSON/protobuf compatibility, three-entry public certificate chain shape, mutation rejection, and optional transport-mTLS semantics"
+    },
+    {
+      "case_id": "tc-kms-onboard-001",
+      "source_run": "kms-onboard-bootstrap-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-kms-bootstrap-case.py",
+      "environment": "INTEGRATION",
+      "notes": "fresh lease-owned Bootstrap lifecycle, boundary validation, public response structure, private-file permissions, duplicate safety, and cleanup transition"
+    },
+    {
+      "case_id": "tc-kms-onboard-002",
+      "source_run": "kms-onboard-official-006",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/03-rpc-onboard/tc-kms-onboard-002/run.py",
+      "environment": "SIMULATOR",
+      "notes": "independent bootstrapped source plus isolated JSON/protobuf targets, embedded source attestation, validation-before-mutation, protected hierarchy persistence, duplicate rejection, and lease-owned cleanup"
+    },
+    {
+      "case_id": "tc-kms-onboard-003",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-kms-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-kms-onboard-004",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/03-rpc-onboard/tc-kms-onboard-004/run.py",
+      "environment": "SIMULATION"
+    },
+    {
+      "case_id": "tc-kms-platform-006",
+      "source_run": "kms-cross-platform-focused-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-cross-platform-attestation-case.py",
+      "environment": "SIMULATOR",
+      "notes": "tee-simulator production-shaped evidence plus candidate KMS/verifier authorization-policy matrix; physical vendor trust and isolation remain explicitly unconfirmed"
+    },
+    {
+      "case_id": "tc-kms-release-010",
+      "source_run": "kms-platform-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-platform-release-capability-case.py",
+      "promoted_at": "2026-07-29T17:34:06Z",
+      "notes": "real mock-TDX key RPC, exact counters, auth outage/recovery, identity isolation, and every source key_release_ branch cover default TDX-family plus explicit SEV-SNP and NitroTPM local gates without claiming physical evidence origin",
+      "environment": "SIMULATOR_BACKED_MULTI_PLATFORM"
+    },
+    {
+      "case_id": "tc-kms-runtime-001",
+      "source_run": "kms-runtime-listener-retained-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-runtime-001-capability-case.py",
+      "promoted_at": "2026-07-29T18:33:24Z",
+      "notes": "4/4 groups and 11/11 checks exercise the real Bun HTTP listener with schema boundaries, app/KMS decisions, adjacent identity, 8 concurrent requests, RPC fail-closed recovery, restart, endpoint redaction, and owned cleanup",
+      "environment": "LOCAL_BUN_ETHEREUM_RPC"
+    },
+    {
+      "case_id": "tc-kms-runtime-002",
+      "source_run": "kms-runtime-parity-retained-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/11-auth-service-runtime/tc-kms-runtime-002/run.py",
+      "promoted_at": "2026-07-29T18:43:03Z",
+      "notes": "4/4 groups and 10/10 checks compare Node/Fastify and Bun/Hono over one seven-row corpus, equal health metadata, 6+6 concurrent requests, RPC fail-closed recovery, restart, credential redaction, and cleanup",
+      "environment": "LOCAL_NODE_BUN_ETHEREUM_RPC"
+    },
+    {
+      "case_id": "tc-kms-runtime-003",
+      "source_run": "kms-runtime-scripts-retained-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/11-auth-service-runtime/tc-kms-runtime-003/run.py",
+      "promoted_at": "2026-07-29T18:52:35Z",
+      "notes": "4/4 groups and 12/12 checks share one case-owned Anvil across real Deploy, Manage, Query, and Upgrade scripts, including duplicate idempotency, missing env, wrong RPC, unauthorized signer, failure atomicity, upgrade storage persistence, redaction, and cleanup",
+      "environment": "LOCAL_FOUNDRY_ANVIL"
+    },
+    {
+      "case_id": "tc-kms-runtime-004",
+      "source_run": "kms-runtime-container-retained-003",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/11-auth-service-runtime/tc-kms-runtime-004/run.py",
+      "promoted_at": "2026-07-29T19:01:46Z",
+      "notes": "4/4 groups and 12/12 checks validate both compose contracts and one candidate Node 20 image through dependency outage/fail-closed recovery, app/KMS decisions, restart, replacement identity, single process, secret absence, and complete Docker cleanup",
+      "environment": "LOCAL_DOCKER_NODE_ETHEREUM_RPC"
+    },
+    {
+      "case_id": "tc-kms-runtime-005",
+      "source_run": "kms-runtime-policy-retained-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-runtime-005-capability-case.py",
+      "promoted_at": "2026-07-29T18:21:10Z",
+      "notes": "3/3 shared policy rows use 17 policy, 7 registration, and 7 upgrade tests to prove compose allowlisting, device/image policy, TCB freshness enforcement, and irreversible upgrade disable behavior",
+      "environment": "LOCAL_FOUNDRY_EVM"
+    },
+    {
+      "case_id": "tc-kms-startup-001",
+      "source_run": "kms-startup-retained-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/10-service-startup/tc-kms-startup-001/run.py",
+      "environment": "INTEGRATION",
+      "notes": "candidate KMS onboarding-to-main transition: 4/4 steps, zero listener overlap, health/metrics/admin isolation, bind and invalid-port failure, stable restart, and lease-owned cleanup"
+    },
+    {
+      "case_id": "tc-kms-upgrade-001",
+      "source_run": "kms-upgrade-live-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/08-upgrade-onboard-compatibility/tc-kms-upgrade-001/run.py",
+      "promoted_at": "2026-07-29T20:55:00Z",
+      "notes": "real TDX mixed-version KMS replacement path executed with pinned historical source, static bridge/candidate images, identity continuity or explicit fail-closed rejection, and lease-owned cleanup"
+    },
+    {
+      "case_id": "tc-kms-upgrade-002",
+      "source_run": "kms-upgrade-live-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/08-upgrade-onboard-compatibility/tc-kms-upgrade-002/run.py",
+      "promoted_at": "2026-07-29T20:55:00Z",
+      "notes": "real TDX mixed-version KMS replacement path executed with pinned historical source, static bridge/candidate images, identity continuity or explicit fail-closed rejection, and lease-owned cleanup"
+    },
+    {
+      "case_id": "tc-kms-upgrade-003",
+      "source_run": "kms-upgrade-live-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/08-upgrade-onboard-compatibility/tc-kms-upgrade-003/run.py",
+      "promoted_at": "2026-07-29T20:55:00Z",
+      "notes": "real TDX mixed-version KMS replacement path executed with pinned historical source, static bridge/candidate images, identity continuity or explicit fail-closed rejection, and lease-owned cleanup"
+    },
+    {
+      "case_id": "tc-kms-upgrade-004",
+      "source_run": "kms-upgrade-live-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/08-upgrade-onboard-compatibility/tc-kms-upgrade-004/run.py",
+      "promoted_at": "2026-07-29T20:55:00Z",
+      "notes": "real TDX mixed-version KMS replacement path executed with pinned historical source, static bridge/candidate images, identity continuity or explicit fail-closed rejection, and lease-owned cleanup"
+    },
+    {
+      "case_id": "tc-kms-upgrade-005",
+      "source_run": "kms-upgrade-modes-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/08-upgrade-onboard-compatibility/tc-kms-upgrade-005/run.py",
+      "promoted_at": "2026-07-29T21:51:00Z",
+      "notes": "real TDX historical-source matrix proved 0.5.4 fail-closed certificate-envelope rejection and verified 0.5.8/0.5.11 lite/auto onboarding with complete digest-matched image archives, root/CA continuity, and lease-owned cleanup"
+    },
+    {
+      "case_id": "tc-kms-upgrade-006",
+      "source_run": "kms-upgrade-modes-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/08-upgrade-onboard-compatibility/tc-kms-upgrade-006/run.py",
+      "promoted_at": "2026-07-29T21:51:00Z",
+      "notes": "real TDX 0.5.8 source verified explicit-legacy and auto-resolved-lite candidate targets from complete digest-matched image archives with identical root/CA identity and lease-owned cleanup"
+    },
+    {
+      "case_id": "tc-kms-upgrade-007",
+      "source_run": "kms-upgrade-acpi-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/08-upgrade-onboard-compatibility/tc-kms-upgrade-007/run.py",
+      "promoted_at": "2026-07-29T22:25:00Z",
+      "notes": "real TDX 0.5.4 quote diagnosis reproduced RTMR0 and its 27-event log with both the age-matched and candidate ACPI environments using a static CLI, public legacy vm_config recovery, immutable image inputs, and leak-free lease cleanup"
+    },
+    {
+      "case_id": "tc-kms-upgrade-008",
+      "source_run": "kms-upgrade-allowlist-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/08-upgrade-onboard-compatibility/tc-kms-upgrade-008/run.py",
+      "promoted_at": "2026-07-29T22:50:00Z",
+      "notes": "real TDX 0.5.8-to-candidate onboarding independently rejected missing source MR, target MR, target image authorization, and verifier archive availability, then succeeded after restoration with root k256 and CA public identity continuity and leak-free cleanup"
+    },
+    {
+      "case_id": "tc-kms-upgrade-009",
+      "source_run": "kms-upgrade-endpoints-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/08-upgrade-onboard-compatibility/tc-kms-upgrade-009/run.py",
+      "promoted_at": "2026-07-30T00:11:00Z",
+      "notes": "real 0.5.8 and onboarded candidate TDX KMS endpoints preserve root, CA public, existing/new app, certificate public, and environment public-key identities through lease-owned bidirectional TLS proxy outage and recovery; private material is not persisted"
+    },
+    {
+      "case_id": "tc-kms-upgrade-010",
+      "source_run": "kms-upgrade-rollback-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/08-upgrade-onboard-compatibility/tc-kms-upgrade-010/run.py",
+      "promoted_at": "2026-07-30T00:37:00Z",
+      "notes": "two retained 0.5.8 and two onboarded candidate TDX KMS root holders preserve existing/new app, certificate-public, root/CA, and environment-key identity through gradual cutover, candidate outage, old-source rollback, recovery, recutover, old-route retirement boundary, and restored rollback window"
+    },
+    {
+      "case_id": "tc-kms-upgrade-011",
+      "source_run": "kms-upgrade-cache-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/08-upgrade-onboard-compatibility/tc-kms-upgrade-011/run.py",
+      "promoted_at": "2026-07-30T01:24:00Z",
+      "notes": "four exact cache-boundary tests plus five real TDX KMS root holders and three clients verify version/config invalidation, candidate-local archive reuse, active recomputation, and root/CA/app/certificate/environment-key continuity"
+    },
+    {
+      "case_id": "tc-kms-upgrade-012",
+      "source_run": "kms-upgrade-gateway-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/08-upgrade-onboard-compatibility/tc-kms-upgrade-012/run.py",
+      "promoted_at": "2026-07-30T02:29:00Z",
+      "notes": "two old and two candidate TDX KMS root holders gate an old-to-candidate Gateway upgrade; four real clients prove historical/current RPC negotiation, app-info mTLS registration, dual-Gateway traffic, stable existing/new identities, and old Gateway/KMS rollback"
+    },
+    {
+      "case_id": "tc-ver-build-002",
+      "source_run": "verifier-config-precedence-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/05-verifier/05-build-deployment/tc-ver-build-002/run.py",
+      "environment": "COMPONENT_FIXTURE",
+      "notes": "Fourteen rows passed embedded/file/environment and nested attestation precedence, invalid/unknown rejection, verify/verify-cert mode selection, service env-port restart and adjacent isolation, concurrent duplicate verification, and image dependency outage/recovery."
+    },
+    {
+      "case_id": "tc-ver-cli-cert-o-001",
+      "source_run": "ver-a7",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-verifier-case.py",
+      "environment": "COMPONENT_FIXTURE",
+      "notes": "component-raw-substrate; one-shot CLI outcome matrix"
+    },
+    {
+      "case_id": "tc-ver-cli-cert-o-002",
+      "source_run": "verifier-ra-certificate-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/05-verifier/03-cli-cert-output/tc-ver-cli-cert-o-002/run.py",
+      "environment": "TEE_SIMULATOR"
+    },
+    {
+      "case_id": "tc-ver-cli-cert-o-003",
+      "source_run": "verifier-image-modes-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/05-verifier/03-cli-cert-output/tc-ver-cli-cert-o-003/run.py",
+      "environment": "HARDWARE",
+      "notes": "Six-row real full-TDX matrix passed strict MRTD/RTMR/ACPI image binding, relying-party allow/deny policy, pre-cached offline verification, missing-cache fail-closed behavior, controlled download recovery, atomic promotion, and measured-image mutation rejection; no image build was exercised."
+    },
+    {
+      "case_id": "tc-ver-cli-cert-o-004",
+      "source_run": "ver-b3",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-verifier-case.py",
+      "environment": "COMPONENT_FIXTURE",
+      "notes": "component-raw-substrate; result schema completeness matrix"
+    },
+    {
+      "case_id": "tc-ver-cli-cert-o-005",
+      "source_run": "ver-a7",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-verifier-case.py",
+      "environment": "COMPONENT_FIXTURE",
+      "notes": "component-raw-substrate; startup configuration matrix"
+    },
+    {
+      "case_id": "tc-ver-cli-cert-o-006",
+      "source_run": "ver-a7",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-verifier-case.py",
+      "environment": "COMPONENT_FIXTURE",
+      "notes": "component-raw-substrate; offline committed-fixture regression"
+    },
+    {
+      "case_id": "tc-ver-image-meas-001",
+      "source_run": "verifier-image-download-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/05-verifier/02-image-measurements/tc-ver-image-meas-001/run.py",
+      "environment": "INTEGRATION",
+      "notes": "Exact verifier matrix passed for hash-bound archives, digest mismatch, truncation, symlink traversal rejection, redirects, timeout, same-cache retry, manifest pruning, and failure without destination promotion."
+    },
+    {
+      "case_id": "tc-ver-image-meas-002",
+      "source_run": "ver-a7",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-verifier-case.py",
+      "environment": "COMPONENT_FIXTURE",
+      "notes": "verifier-ready fixture; HTTP /verify determinism matrix"
+    },
+    {
+      "case_id": "tc-ver-image-meas-003",
+      "source_run": "verifier-acpi-swtpm-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/05-verifier/02-image-measurements/tc-ver-image-meas-003/run.py",
+      "environment": "COMPONENT_FIXTURE",
+      "notes": "Three-row matrix passed required ACPI table parsing, QEMU 8.x/9.x/10.x compatibility policy, malformed/unsupported version rejection, offline swtpm rejection before external generation, and signed matching swtpm TDX-lite verifier acceptance without image download."
+    },
+    {
+      "case_id": "tc-ver-image-meas-004",
+      "source_run": "artifact-manifest-binding-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/05-verifier/02-image-measurements/tc-ver-image-meas-004/run.py",
+      "environment": "UNIT",
+      "notes": "Schema-valid complete manifests, unknown/missing/type/path/data-size mutations, component digest determinism, Authenticode hashing, aggregate image-hash binding, recovery, and temporary-artifact cleanup passed without building an OS image."
+    },
+    {
+      "case_id": "tc-ver-image-meas-005",
+      "source_run": "verifier-measurement-cache-official-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/05-verifier/02-image-measurements/tc-ver-image-meas-005/run.py",
+      "environment": "INTEGRATION",
+      "notes": "Exact verifier cache tests passed for deterministic config/version key binding, malformed and stale entry recovery, concurrent atomic persistence, complete-entry decoding, and absence of temporary-file leaks."
+    },
+    {
+      "case_id": "tc-ver-input-plat-001",
+      "source_run": "ver-input-precedence-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-verifier-case.py",
+      "environment": "COMPONENT_FIXTURE",
+      "notes": "self-contained/raw equivalence, conflicting fields, duplicate keys, malformed modes, repeats, and source isolation"
+    },
+    {
+      "case_id": "tc-ver-input-plat-002",
+      "source_run": "verifier-tdx-collateral-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/05-verifier/01-input-platform-verification/tc-ver-input-plat-002/run.py",
+      "environment": "TEE_SIMULATOR",
+      "notes": "Simulator-backed production-QVL matrix passed for current and outdated TCB, revoked status, expiry, malformed and signature-invalid collateral, quote tampering, PCCS network failure, and recovery; physical TDX origin remains outside simulator claims."
+    },
+    {
+      "case_id": "tc-ver-input-plat-003",
+      "source_run": "verifier-tdx-eventlog-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/05-verifier/01-input-platform-verification/tc-ver-input-plat-003/run.py",
+      "environment": "TEE_SIMULATOR",
+      "notes": "Simulator-backed production verification passed for signed V2 preimages, RTMR3 replay equality, reordered, missing, duplicate, malformed and digest-mismatched events, exact mismatch diagnostics, and post-failure recovery; physical TDX origin remains outside simulator claims."
+    },
+    {
+      "case_id": "tc-ver-input-plat-004",
+      "source_run": "ver-tdx-lite-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-verifier-case.py",
+      "environment": "COMPONENT_FIXTURE",
+      "notes": "offline committed corpus and staged mutations verify TDX-lite bindings and full-TDX fail-closed behavior"
+    },
+    {
+      "case_id": "tc-ver-input-plat-005",
+      "source_run": "sev-snp-verification-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/05-verifier/01-input-platform-verification/tc-ver-input-plat-005/run.py",
+      "environment": "SIMULATOR",
+      "notes": "simulated production-QVL path plus signed SEV-SNP certificate, field, policy, binding, and recovery matrix"
+    },
+    {
+      "case_id": "tc-ver-input-plat-006",
+      "source_run": "cloud-tpm-verification-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/05-verifier/01-input-platform-verification/tc-ver-input-plat-006/run.py",
+      "environment": "SIMULATOR",
+      "notes": "GCP TDX and NitroTPM simulator-to-verifier controls plus chain, PCR/event-log, binding, cross-cloud substitution, and recovery matrix"
+    },
+    {
+      "case_id": "tc-ver-input-plat-007",
+      "source_run": "simulated-attestation-labeling-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/05-verifier/01-input-platform-verification/tc-ver-input-plat-007/run.py",
+      "environment": "SIMULATOR",
+      "notes": "six-platform mock-attestation E2E asserts exact development-root acceptance and built-in production-root rejection"
+    },
+    {
+      "case_id": "tc-ver-nitro-008",
+      "source_run": "nitro-enclave-verification-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/05-verifier/01-input-platform-verification/tc-ver-nitro-008/run.py",
+      "environment": "SIMULATOR",
+      "notes": "Nitro simulator-to-verifier controls plus signed chain, COSE, freshness, identity, PCR/image, debug, outage, restart, and recovery matrix"
+    },
+    {
+      "case_id": "tc-ver-strategy-006",
+      "source_run": "verifier-platform-strategy-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/05-verifier/02-image-measurements/tc-ver-strategy-006/run.py",
+      "environment": "TEE_SIMULATOR",
+      "notes": "Seven-row matrix passed exhaustive full/lite TDX, SEV-SNP, GCP TDX, Nitro Enclave, and NitroTPM strategy selection plus download outage/retry, signed measurement/CBOR/PCR bindings, mutation rejection, and no cross-strategy fallback; physical origin remains outside simulator claims."
+    },
+    {
+      "case_id": "tc-ver-tcb-007",
+      "source_run": "verifier-tcb-policy-official-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/05-verifier/03-cli-cert-output/tc-ver-tcb-007/run.py",
+      "environment": "TEE_SIMULATOR",
+      "notes": "Eight exact tests and seven internal decision rows covered five-platform TCB status/advisory projection, hardware-captured SNP/Nitro evidence, mock-TDX collateral status/signature/expiry/outage/recovery, conflicting input, cross-identity event replay, and BootInfo auth payload; simulated rows make no physical-origin claim."
+    },
+    {
+      "case_id": "tc-ver-tools-001",
+      "source_run": "dstack-mr-shared-official-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/dstack-mr-shared-matrix-case.py",
+      "environment": "COMPONENT_FIXTURE",
+      "notes": "Shared 23-row dstack-mr matrix passed supported CLI configuration, historical image version, QEMU compatibility, functional GPU topology, and fail-closed swtpm/hugepage/invalid-input rows; the paired cases used a run/commit-keyed file-lock cache so the complete matrix executed once per sweep. Prepared image consumption did not test mkosi or Yocto construction."
+    },
+    {
+      "case_id": "tc-ver-tools-002",
+      "source_run": "dstack-mr-shared-official-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/dstack-mr-shared-matrix-case.py",
+      "environment": "COMPONENT_FIXTURE",
+      "notes": "Shared 23-row dstack-mr matrix passed firmware/kernel/initrd/cmdline register boundaries, missing/malformed artifacts, deterministic recovery, and adjacent-copy isolation; the paired cases used a run/commit-keyed file-lock cache so the complete matrix executed once per sweep. Prepared image consumption did not test mkosi or Yocto construction."
+    },
+    {
+      "case_id": "tc-ver-tools-003",
+      "source_run": "attestation-versioning-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/05-verifier/04-measurement-tools/tc-ver-tools-003/run.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "complete locked dstack-attest suite with named legacy/current format, boundary, version, and platform gates"
+    },
+    {
+      "case_id": "tc-ver-tools-004",
+      "source_run": "ver-a7",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-verifier-case.py",
+      "environment": "COMPONENT_FIXTURE",
+      "notes": "verifier-ready fixture; concurrent /verify isolation matrix"
+    },
+    {
+      "case_id": "tc-ver-tools-005",
+      "source_run": "agent-audit",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-verifier-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "verified by sweep agent-audit during integration"
+    },
+    {
+      "case_id": "tc-ver-tools-006",
+      "source_run": "ver-a7",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-verifier-case.py",
+      "environment": "COMPONENT_FIXTURE",
+      "notes": "verifier-ready fixture; bounded hostile-input matrix"
+    },
+    {
+      "case_id": "tc-vmm-compute-ne-001",
+      "source_run": "vmm-network-lifecycle-006",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/05-compute-network-image/tc-vmm-compute-ne-001/run.py",
+      "promoted_at": "2026-07-29T03:41:42Z",
+      "notes": "seven default/user/bridge/multi-NIC/invalid-input rows use a unique lease-owned bridge and TAP; the complete candidate VMM unit suite confirms custom netdev IDs and deterministic distinct MACs; cleanup restored the host baseline without starting a VM or testing image construction",
+      "environment": "MKOSI_RUNTIME_LEASED_NETWORK"
+    },
+    {
+      "case_id": "tc-vmm-compute-ne-002",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/05-compute-network-image/tc-vmm-compute-ne-002/run.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-vmm-compute-ne-003",
+      "source_run": "batch-vmm-compute-real-001",
+      "source_status": "BLOCKED",
+      "entrypoint": "cases/02-vmm/05-compute-network-image/tc-vmm-compute-ne-003/run.py",
+      "promoted_at": "2026-07-28T04:50:37Z",
+      "notes": "prepared host inventory reported hugepages_2m_total=0 and numa_nodes=1; specification requires hardware placement rows to remain BLOCKED without launching or scanning unrelated VMs"
+    },
+    {
+      "case_id": "tc-vmm-compute-ne-004",
+      "source_run": "gpu-capability-001",
+      "source_status": "BLOCKED",
+      "entrypoint": "shared/automation/capability-probe-case.py",
+      "environment": "HARDWARE",
+      "notes": "capability-blocked, backed by a probe that fails if a GPU appears"
+    },
+    {
+      "case_id": "tc-vmm-compute-ne-005",
+      "source_run": "vmm-image-discovery-004",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/05-compute-network-image/tc-vmm-compute-ne-005/run.py",
+      "promoted_at": "2026-07-28T04:51:45Z"
+    },
+    {
+      "case_id": "tc-vmm-compute-ne-006",
+      "source_run": "vmm-registry-interruption-004",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/05-compute-network-image/tc-vmm-compute-ne-006/run.py",
+      "promoted_at": "2026-07-29T03:54:53Z",
+      "notes": "seven case-owned HTTPS registry rows cover bearer/public multilayer extraction, interrupted transfer retry, size/digest integrity, traversal rejection, token denial recovery, invalid-tag confinement, service availability, and complete atomic cleanup without starting a VM or building an image",
+      "environment": "ISOLATED_COMPONENT_FAULT_INJECTION"
+    },
+    {
+      "case_id": "tc-vmm-compute-ne-007",
+      "source_run": "vmm-qemu-platform-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/05-compute-network-image/tc-vmm-compute-ne-007/run.py",
+      "promoted_at": "2026-07-29T03:59:13Z",
+      "notes": "thirteen candidate command rows cover no-TEE, TDX full/lite, AMD SEV-SNP, simulated GCP TDX/Nitro TPM/Nitro Enclave identity, swtpm, GPU vfio/iommufd generation, networking, host-share/measurement, deterministic restart, and invalid custom recovery in one shared Cargo invocation without claiming physical GPU execution",
+      "environment": "UNIT_PLATFORM_COMMAND_MATRIX"
+    },
+    {
+      "case_id": "tc-vmm-configurat-001",
+      "source_run": "vmm-config-validation-003",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/03-configuration-and-security/tc-vmm-configurat-001/run.py",
+      "environment": "UNIT",
+      "notes": "67-field configuration inventory plus nine-row default, compatibility, conflict, and fail-closed validation matrix using check-config without starting services"
+    },
+    {
+      "case_id": "tc-vmm-configurat-002",
+      "source_run": "vmm-auth-listener-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/03-configuration-and-security/tc-vmm-configurat-002/run.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "authenticated case-owned VMM HTTP matrix with private vsock Host API separation and credential-redacted evidence"
+    },
+    {
+      "case_id": "tc-vmm-configurat-003",
+      "source_run": "vmm-simulated-tee-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/03-configuration-and-security/tc-vmm-configurat-003/run.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "case-owned VMM concurrent simulator matrix with negative rows and complete cleanup"
+    },
+    {
+      "case_id": "tc-vmm-configurat-004",
+      "source_run": "vmm-swtpm-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-vmm-swtpm-decision-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "case-owned VMM persisted five-platform swtpm decision matrix with invalid-provider rejection and complete cleanup"
+    },
+    {
+      "case_id": "tc-vmm-hostapi-001",
+      "source_run": "hostapi-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/02-rpc-hostapi/tc-vmm-hostapi-001/run.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "host API over its AF_VSOCK transport"
+    },
+    {
+      "case_id": "tc-vmm-hostapi-002",
+      "source_run": "hostapi-notify-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-hostapi-notify-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "lease-owned simulated guest boot notifications over assigned vsock CID with direct negative probes and complete cleanup"
+    },
+    {
+      "case_id": "tc-vmm-hostapi-003",
+      "source_run": "hostapi-sealing-key-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-hostapi-sealing-key-case.py",
+      "environment": "HARDWARE",
+      "notes": "real-TDX guest local-provider sealing through private vsock Host API with redacted evidence, negative probes, and complete cleanup"
+    },
+    {
+      "case_id": "tc-vmm-internal-001",
+      "source_run": "vmm-internal-host-share-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/vmm-internal-unit-case.py",
+      "promoted_at": "2026-07-28T05:02:52Z",
+      "notes": "four candidate rows cover fixed-size FAT32 contents, missing and oversized failure atomicity, symlink confinement, and concurrent publication through the shared immutable Cargo target",
+      "environment": "UNIT"
+    },
+    {
+      "case_id": "tc-vmm-internal-002",
+      "source_run": "vmm-internal-id-pool-003",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/vmm-internal-unit-case.py",
+      "promoted_at": "2026-07-28T05:02:52Z",
+      "notes": "four candidate unit rows cover configured bounds, duplicate occupation, reuse, exhaustion, concurrent uniqueness, and restart reconstruction through a shared immutable Cargo target",
+      "environment": "UNIT"
+    },
+    {
+      "case_id": "tc-vmm-internal-003",
+      "source_run": "vmm-internal-image-parser-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/vmm-internal-unit-case.py",
+      "promoted_at": "2026-07-28T05:02:52Z",
+      "notes": "four candidate rows cover metadata defaults, version boundaries, missing artifacts, concurrent reads, firmware inputs, and parent/symlink path confinement through the shared immutable Cargo target",
+      "environment": "UNIT"
+    },
+    {
+      "case_id": "tc-vmm-internal-004",
+      "source_run": "vmm-internal-mr-config-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/vmm-internal-unit-case.py",
+      "promoted_at": "2026-07-28T05:02:52Z",
+      "notes": "the complete current two-test source matrix covers manifest-v2 and manifest-v3 init-script hash carrier behavior",
+      "environment": "UNIT"
+    },
+    {
+      "case_id": "tc-vmm-internal-005",
+      "source_run": "vmm-internal-vm-info-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/vmm-internal-unit-case.py",
+      "promoted_at": "2026-07-28T05:02:52Z",
+      "notes": "the complete current two-test source matrix covers optional owned and borrowed VM-info value sanitization",
+      "environment": "UNIT"
+    },
+    {
+      "case_id": "tc-vmm-internal-006",
+      "source_run": "vmm-internal-one-shot-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/vmm-one-shot-lifecycle-case.py",
+      "promoted_at": "2026-07-28T05:02:52Z",
+      "notes": "six rows consume the existing mkosi image and cover dry-run materialization, controlled success, returned workload failure, malformed compose, concurrent isolation, daemon sentinel preservation, and cleanup without testing image construction",
+      "environment": "MKOSI_RUNTIME_CONTROLLED_QEMU"
+    },
+    {
+      "case_id": "tc-vmm-internal-007",
+      "source_run": "vmm-live-openapi-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/08-internal-state-and-launch/tc-vmm-internal-007/run.py",
+      "promoted_at": "2026-07-28T05:01:14Z"
+    },
+    {
+      "case_id": "tc-vmm-internal-008",
+      "source_run": "vmm-internal-launcher-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/vmm-internal-unit-case.py",
+      "promoted_at": "2026-07-28T05:02:52Z",
+      "notes": "five serial candidate rows cover QEMU and swtpm bilateral crash cleanup, readiness timeout, successful QEMU exit, spawn failure, socket removal, and PID reaping through the shared immutable Cargo target",
+      "environment": "UNIT"
+    },
+    {
+      "case_id": "tc-vmm-manifest-001",
+      "source_run": "vmm-proxied-guestapi-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/07-guest-proxy-and-manifest/tc-vmm-manifest-001/run.py",
+      "promoted_at": "2026-07-29T04:45:40Z",
+      "notes": "13 real-guest rows cover two-target Info/SysInfo/NetworkInfo/ListContainers, unknown and stopped fail-closed deadlines, restart identity recovery, proxied Shutdown, concurrent Info/Remove without cross-VM redirect, hashed/redacted evidence, and cleanup",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-vmm-manifest-002",
+      "source_run": "vmm-manifest-agreement-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/vmm-one-shot-lifecycle-case.py",
+      "promoted_at": "2026-07-28T04:59:04Z",
+      "notes": "six shared-fixture rows compare requested configuration, persisted manifest/sys-config/compose, generated QEMU arguments, repeated-read stability, invalid-input recovery, adjacent sentinel isolation, and cleanup using the existing mkosi image",
+      "environment": "MKOSI_RUNTIME_CONTROLLED_QEMU"
+    },
+    {
+      "case_id": "tc-vmm-serial-006",
+      "source_run": "vmm-serial-continuity-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/06-ui-observability-host/tc-vmm-serial-006/run.py",
+      "promoted_at": "2026-07-29T04:41:21Z",
+      "notes": "8 candidate rotation rows plus three real QEMU boot cycles verify 4096-byte history cap, retained newest delimiter, current log integrity, real follow across restart, ANSI/binary and partial-line boundaries, ReloadVms, historical defaults, path isolation, and cleanup",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-vmm-tdxvariant-005",
+      "source_run": "vmm-tdx-variant-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/vmm-internal-unit-case.py",
+      "promoted_at": "2026-07-28T04:45:39Z",
+      "notes": "the complete current five-test source matrix covers TDX auto selection across memory, image capability, and explicit requirements precedence",
+      "environment": "UNIT"
+    },
+    {
+      "case_id": "tc-vmm-ui-observa-001",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/06-ui-observability-host/tc-vmm-ui-observa-001/run.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-vmm-ui-observa-002",
+      "source_run": "vmm-console-follow-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/06-ui-observability-host/tc-vmm-ui-observa-002/run.py",
+      "promoted_at": "2026-07-29T04:27:34Z",
+      "notes": "13 rows cover serial/stdout/stderr history tails, live continuation without gaps or duplicates, ANSI preserve/strip, cross-VM and path isolation, invalid inputs, availability, and cleanup",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-vmm-ui-observa-003",
+      "source_run": "vmm-sealing-provider-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-hostapi-sealing-key-case.py",
+      "promoted_at": "2026-07-28T04:56:10Z"
+    },
+    {
+      "case_id": "tc-vmm-ui-observa-004",
+      "source_run": "vmm-supervisor-passthrough-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-vmm-lifecycle-case.py",
+      "promoted_at": "2026-07-28T04:53:47Z"
+    },
+    {
+      "case_id": "tc-vmm-ui-observa-005",
+      "source_run": "vmm-web-ui-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/06-ui-observability-host/tc-vmm-ui-observa-005/run.py",
+      "promoted_at": "2026-07-29T04:34:57Z",
+      "notes": "13 Playwright rows cover exact defaults, semantic form, simulated TEE, network and GPU-empty handling, controlled server rejection/recovery, keyboard UI submission, UUID observation, UI lifecycle/update/log, cross-session isolation, and cleanup",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-vmm-vm-lifecyc-001",
+      "source_run": "vmm-idempotent-lifecycle-003",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/04-vm-lifecycle/tc-vmm-vm-lifecyc-001/run.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "the case-owned VMM created and immediately registered one stopped VM; concurrent and repeated start/stop converged to one state, concurrent remove converged to absence, repeated remove and invalid ID failed closed, final inventory was empty, cleanup passed, and two consecutive focused reruns passed"
+    },
+    {
+      "case_id": "tc-vmm-vm-lifecyc-002",
+      "source_run": "vmm-shutdown-stop-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/04-vm-lifecycle/tc-vmm-vm-lifecyc-002/run.py",
+      "promoted_at": "2026-07-28T04:40:35Z"
+    },
+    {
+      "case_id": "tc-vmm-vm-lifecyc-003",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/04-vm-lifecycle/tc-vmm-vm-lifecyc-003/run.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-vmm-vm-lifecyc-004",
+      "source_run": "vmm-materialized-resize-004",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/vmm-materialized-resize-case.py",
+      "promoted_at": "2026-07-28T04:43:41Z"
+    },
+    {
+      "case_id": "tc-vmm-vm-lifecyc-005",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/04-vm-lifecycle/tc-vmm-vm-lifecyc-005/run.py",
+      "environment": "INTEGRATION",
+      "notes": "case-owned restart covers filesystem-only CID reconstruction, then reloads a stopped in-memory VM and proves a second VM receives a distinct CID without duplication or auto-start"
+    },
+    {
+      "case_id": "tc-vmm-vm-lifecyc-006",
+      "source_run": "vmm-auto-restart-006",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/04-vm-lifecycle/tc-vmm-vm-lifecyc-006/run.py",
+      "promoted_at": "2026-07-29T04:21:52Z",
+      "notes": "12 policy rows plus five case-owned QEMU crashes verify eligibility, bounded exponential backoff, healthy-window reset, three-retry exhaustion, structured events, invalid input, availability, and leak-free cleanup",
+      "environment": "INTEGRATION"
+    },
+    {
+      "case_id": "tc-vmm-vmm-001",
+      "source_run": "create-vm-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/01-rpc-vmm/tc-vmm-vmm-001/run.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "independent JSON/protobuf stopped-VM persistence transitions"
+    },
+    {
+      "case_id": "tc-vmm-vmm-002",
+      "source_run": "vmmlc-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-vmm-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "VMM RPC case against a lease-owned prepared stopped VM"
+    },
+    {
+      "case_id": "tc-vmm-vmm-003",
+      "source_run": "vmmvm-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-vmm-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "VMM RPC case against a lease-owned prepared stopped VM"
+    },
+    {
+      "case_id": "tc-vmm-vmm-004",
+      "source_run": "lifecycle-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-vmm-lifecycle-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "non-idempotent state transition"
+    },
+    {
+      "case_id": "tc-vmm-vmm-005",
+      "source_run": "upgrade-app-003",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/01-rpc-vmm/tc-vmm-vmm-005/run.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "independent JSON/protobuf full stopped-VM update contract"
+    },
+    {
+      "case_id": "tc-vmm-vmm-006",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/replay-case.py",
+      "environment": "MINED_REPLAY",
+      "notes": "mined from central-fixtures-20260724T032131Z and verified by replay"
+    },
+    {
+      "case_id": "tc-vmm-vmm-007",
+      "source_run": "lifecycle-006",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-vmm-lifecycle-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "graceful shutdown of a booted guest"
+    },
+    {
+      "case_id": "tc-vmm-vmm-008",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/01-rpc-vmm/tc-vmm-vmm-008/run.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-vmm-vmm-009",
+      "source_run": "vmmext-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-vmm-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "payload-bearing VMM RPC contract case"
+    },
+    {
+      "case_id": "tc-vmm-vmm-010",
+      "source_run": "vmmext-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-vmm-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "payload-bearing VMM RPC contract case"
+    },
+    {
+      "case_id": "tc-vmm-vmm-011",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-vmm-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-vmm-vmm-012",
+      "source_run": "vmmext-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-vmm-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "payload-bearing VMM RPC contract case"
+    },
+    {
+      "case_id": "tc-vmm-vmm-013",
+      "source_run": "vmmvm-002",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-vmm-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "VMM RPC case against a lease-owned prepared stopped VM"
+    },
+    {
+      "case_id": "tc-vmm-vmm-014",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-vmm-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-vmm-vmm-015",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-vmm-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-vmm-vmm-016",
+      "source_run": "cap-001",
+      "source_status": "BLOCKED",
+      "entrypoint": "shared/automation/capability-probe-case.py",
+      "environment": "HARDWARE",
+      "notes": "capability-blocked, backed by a probe that fails if a GPU appears"
+    },
+    {
+      "case_id": "tc-vmm-vmm-017",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-vmm-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-vmm-vmm-018",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-vmm-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-vmm-vmm-019",
+      "source_run": "sv-003",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-vmm-lifecycle-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "supervisor stop transition retains a stopped record"
+    },
+    {
+      "case_id": "tc-vmm-vmm-020",
+      "source_run": "svremove-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-vmm-lifecycle-case.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "stopped supervisor record removal transition"
+    },
+    {
+      "case_id": "tc-vmm-vmm-021",
+      "source_run": "central-fixtures-20260724T032131Z",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-vmm-empty-rpc-case.py",
+      "environment": "ISOLATED_COMPONENT"
+    },
+    {
+      "case_id": "tc-vmm-vmm-022",
+      "source_run": "registry-pull-001",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/01-rpc-vmm/tc-vmm-vmm-022/run.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "case-owned mock OCI registry pull lifecycle"
+    },
+    {
+      "case_id": "tc-vmm-vmm-023",
+      "source_run": "delete-image-002",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/01-rpc-vmm/tc-vmm-vmm-023/run.py",
+      "environment": "ISOLATED_COMPONENT",
+      "notes": "two independent lease-owned disposable image transitions"
+    },
+    {
+      "case_id": "tc-vmm-volume-008",
+      "source_run": "vmm-verity-volume-001",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/vmm-internal-unit-case.py",
+      "promoted_at": "2026-07-28T04:57:08Z",
+      "notes": "the complete current five-test source matrix covers verity volume parsing, path confinement, duplicate-root resolution, and measurement binding",
+      "environment": "UNIT"
+    }
+  ]
+}
