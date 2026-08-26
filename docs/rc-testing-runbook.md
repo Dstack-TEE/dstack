@@ -466,11 +466,50 @@ back to the extended-report ioctl, and passes whatever it finds up with the
 quote. An unprovisioned host simply yields an empty chain, and the verifier then
 goes to KDS — which is what happened here.
 
-**So: provision the host certificate chain (`snphost` / `sevctl`) as part of
-setup.** It is a one-time fetch and it removes an unreliable dependency from
-every subsequent run. Note the bootstrap problem — obtaining the VCEK to install
-requires KDS access once, so do it from a network that can reach it and carry the
-file over.
+**Check that your VMM can actually deliver those certificates before planning
+around it.** On the host used for this round it cannot, and the earlier revision
+of this section recommended provisioning without checking.
+
+The tooling half is fine. `snphost` (virtee) is the SEV-SNP host CLI:
+`snphost fetch ca [der|pem] DIR` and `snphost fetch vek [der|pem] DIR` pull the
+CA chain and the VCEK from KDS, and `snphost import DIR CERT-FILE` packs them
+into the GHCB-formatted blob that, in its own words, "can then be provided to
+QEMU to perform extended attestation on guests". (`sevctl` is *not* part of this
+— it manages the pre-SNP SEV platform and its OCA certificate chain. A previous
+revision of this section listed the two together; that was wrong.)
+
+The delivery half is the problem. Providing that blob to QEMU needs a
+`certs-path`-style property on the `sev-snp-guest` object, and stock QEMU does
+not have one:
+
+```
+$ qemu-system-x86_64 -object sev-snp-guest,help     # QEMU 10.2.1
+sev-snp-guest options:
+  author-key-enabled=<bool>   guest-visible-workarounds=<string>
+  host-data=<string>          id-auth=<string>
+  id-block=<string>           kernel-hashes=<bool>
+  policy=<uint64>             sev-device=<string>
+  vcek-disabled=<bool>
+```
+
+`strings` on the binary confirms it — no `certs-path` anywhere. The host-side
+`SNP_SET_EXT_CONFIG` ioctl, the other way certificates used to be staged, is
+absent from upstream `linux/psp-sev.h` as well; it lived in AMD's out-of-tree
+fork. The guest half is present and working — `linux/sev-guest.h` still has
+`SNP_GET_EXT_REPORT` and its `certs_address` — so the guest asks and gets an
+empty table back.
+
+Which is exactly what was observed: `sev-snp-attest` found no `certs`,
+`cert_chain` or `auxblob` content, so the attestation travelled with an empty
+chain and the verifier went to KDS every time.
+
+**So, on a stock Ubuntu/Debian QEMU, KDS is not optional.** The realistic
+mitigations are the boring ones: keep a long-lived KMS so its in-process cache
+stays warm, and space repeat verifications out. Removing the dependency properly
+means either a QEMU that can carry the cert blob, or a KDS mirror behind
+`[core.attestation.urls] amd_kds`. Both are work, not configuration. And note
+the bootstrap problem either way — obtaining the VCEK requires KDS access once,
+from a network that can reach it.
 
 ### 9.5 Reaching the API that holds the keys
 
