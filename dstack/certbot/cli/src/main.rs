@@ -284,3 +284,62 @@ async fn main() -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod config_template_tests {
+    use super::*;
+
+    /// Every key has to carry its own doc comment. `toml_edit` drops `None`
+    /// fields from the serialized document -- `cf_api_url` is unset by default
+    /// -- so indexing `FIELD_DOCS` by position shifts every comment after the
+    /// gap onto the wrong setting.
+    #[test]
+    fn every_key_is_labelled_with_its_own_doc_comment() {
+        let rendered = Config::default()
+            .to_commented_toml()
+            .expect("the default config renders");
+
+        // Pair each key with the comment block immediately above it.
+        let mut comment = String::new();
+        let mut pairs = Vec::new();
+        for line in rendered.lines() {
+            match line.strip_prefix('#') {
+                Some(text) => comment.push_str(text.trim()),
+                None => {
+                    if let Some((key, _)) = line.split_once('=') {
+                        pairs.push((key.trim().to_string(), std::mem::take(&mut comment)));
+                    }
+                }
+            }
+        }
+        assert!(!pairs.is_empty(), "no keys rendered:\n{rendered}");
+
+        for (key, comment) in &pairs {
+            let expected = Config::get_field_docs(key)
+                .unwrap_or_else(|err| panic!("no doc comment for {key:?}: {err}"));
+            let expected: String = expected.lines().map(str::trim).collect();
+            assert_eq!(
+                comment, &expected,
+                "key {key:?} is labelled with another field's doc comment"
+            );
+        }
+    }
+
+    /// The field that made the misalignment visible: it sat after the dropped
+    /// `cf_api_url` and was labelled "Renew timeout in seconds", next to the one
+    /// value whose interaction with `renew_timeout` this crate clamps.
+    #[test]
+    fn max_dns_wait_is_not_labelled_as_a_renew_timeout() {
+        let rendered = Config::default()
+            .to_commented_toml()
+            .expect("the default config renders");
+        let (before, _) = rendered
+            .split_once("max_dns_wait")
+            .expect("max_dns_wait is rendered");
+        let label = before.lines().last().expect("it has a comment above it");
+        assert!(
+            label.contains("DNS propagation"),
+            "max_dns_wait is labelled {label:?}"
+        );
+    }
+}
