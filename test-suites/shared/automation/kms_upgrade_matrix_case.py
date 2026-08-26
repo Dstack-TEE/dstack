@@ -1999,8 +1999,10 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
         identity_registrations = identity_client["observation"]["gateway_registrations"]
         if (
             len(identity_registrations) != 2
-            or identity_registrations[0]["http"] != 0
+            or identity_registrations[0]["http"] == 200
+            or identity_registrations[0]["assigned_ip"]
             or identity_registrations[1]["http"] != 200
+            or not identity_registrations[1]["assigned_ip"]
         ):
             raise RuntimeError(
                 "wrong-identity registration did not reject then fall back: "
