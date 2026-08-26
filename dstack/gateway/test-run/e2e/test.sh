@@ -33,6 +33,16 @@ PEBBLE_DIR="http://pebble:14000/dir"
 # Certificate domains to test (base domains, certs will be issued for *.domain)
 CERT_DOMAINS="test0.local test1.local test2.local"
 
+# A dns-persist-01 domain. Deliberately outside CERT_DOMAINS: no certificate is
+# expected for it, because the Pebble image this harness pins does not implement
+# draft-ietf-acme-dns-persist-01 (its binary carries dns-01, http-01, tls-alpn-01
+# and dns-account-01, and neither "dns-persist-01" nor "_validation-persist").
+# What is asserted here is everything up to the CA: that such a domain is
+# accepted with no DNS credential, that the record an operator must publish is
+# rendered, that the challenge survives an edit, and that certbot never writes
+# DNS for it. Issuance itself needs a Pebble built with the draft.
+PERSIST_DOMAIN="persist0.local"
+
 # Cloudflare mock settings
 CF_API_TOKEN="test-token"
 CF_API_URL="http://mock-cf-dns-api:8080/client/v4"
@@ -111,6 +121,68 @@ get_cert_issuer() {
 
 get_cert_san() {
     get_cert_pem "$1" "$2" | openssl x509 -noout -ext subjectAltName 2>/dev/null
+}
+
+# ==================== dns-persist-01 Helpers ====================
+
+admin_post() {
+    curl -sf -X POST "${GATEWAY_ADMIN}/prpc/Admin.$1" \
+        -H "${ADMIN_AUTH_HEADER}" \
+        -H "Content-Type: application/json" \
+        -d "$2"
+}
+
+# A dns-persist-01 domain must be accepted without any DNS credential: holding
+# none is the entire point of the challenge.
+test_persist_domain_needs_no_credential() {
+    # Idempotent: the KV store outlives a run, and an "already exists" rejection
+    # would mask whether the add is accepted at all.
+    admin_post DeleteZtDomain '{"domain": "'"${PERSIST_DOMAIN}"'"}' > /dev/null 2>&1 || true
+    admin_post AddZtDomain \
+        '{"domain": "'"${PERSIST_DOMAIN}"'", "port": 443, "challenge": "dns-persist-01"}' \
+        > /dev/null
+}
+
+# The record is the setup under this challenge, so the API has to render it.
+test_persist_domain_reports_its_record() {
+    local info
+    info=$(admin_post GetZtDomain '{"domain": "'"${PERSIST_DOMAIN}"'"}') || return 1
+    # Fixed strings throughout: as a regex, "_validation-persist.*.domain"
+    # matches the very name it is meant to rule out.
+    #
+    # The record sits on the base name. ACME strips the wildcard before it
+    # creates the authorization, so a record published under the "*." form is
+    # never read.
+    if echo "$info" | grep -qF "_validation-persist.*.${PERSIST_DOMAIN}"; then
+        return 1
+    fi
+    echo "$info" | grep -qF "_validation-persist.${PERSIST_DOMAIN}. IN TXT" || return 1
+    echo "$info" | grep -qF "accounturi=" || return 1
+    # policy=wildcard, because the gateway only ever orders *.{domain}.
+    echo "$info" | grep -qF "policy=wildcard"
+}
+
+# UpdateZtDomain replaces the whole record, and `challenge` is optional so that
+# a caller which does not know the field leaves it alone. A client that predates
+# it -- a cached dashboard bundle, a script, an older SDK -- must not be able to
+# downgrade the domain to dns-01, which its published CAA would then refuse.
+test_persist_challenge_survives_an_edit() {
+    admin_post UpdateZtDomain \
+        '{"domain": "'"${PERSIST_DOMAIN}"'", "port": 443, "priority": 5}' > /dev/null || return 1
+    local info
+    info=$(admin_post GetZtDomain '{"domain": "'"${PERSIST_DOMAIN}"'"}') || return 1
+    echo "$info" | grep -q '"priority":5' || return 1
+    echo "$info" | grep -q "dns-persist-01"
+}
+
+# The claim the whole challenge exists for: certbot reads DNS and never writes
+# it, so nothing for this domain may ever reach the provider API.
+test_persist_domain_never_touches_the_provider() {
+    admin_post RenewZtDomainCert \
+        '{"domain": "'"${PERSIST_DOMAIN}"'", "force": true}' > /dev/null 2>&1 || true
+    local records
+    records=$(curl -sf "${MOCK_CF_API}/api/records" 2>/dev/null || echo "[]")
+    ! echo "$records" | grep -q "${PERSIST_DOMAIN}"
 }
 
 # ==================== Test Functions ====================
@@ -335,6 +407,17 @@ main() {
     else
         log_info "No DNS TXT records (expected if certs cached)"
     fi
+
+    # Phase 10: dns-persist-01 plumbing, up to but not including the CA
+    log_phase 10 "dns-persist-01 without a DNS credential"
+    run_test "Domain accepted with no DNS credential" \
+        "$(test_persist_domain_needs_no_credential; echo $?)"
+    run_test "Required validation record is reported" \
+        "$(test_persist_domain_reports_its_record; echo $?)"
+    run_test "Challenge survives an edit that omits it" \
+        "$(test_persist_challenge_survives_an_edit; echo $?)"
+    run_test "No DNS record is ever written for it" \
+        "$(test_persist_domain_never_touches_the_provider; echo $?)"
 
     # Summary
     log_section "Test Summary"

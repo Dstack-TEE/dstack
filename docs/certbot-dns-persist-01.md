@@ -167,7 +167,12 @@ The records name the ACME account, so the account comes first:
 Adding another dns-persist-01 domain later starts at step 3: the account already
 exists, so the new domain's records are available as soon as it is. A domain's
 challenge is chosen when it is added — in the dashboard's ZT-Domain form as well
-as over the API — and carried forward by every edit.
+as over the API — and carried forward by every edit. `UpdateZtDomain` replaces
+the whole record, so `challenge` is optional there and omitting it means "leave
+it as it is": a caller that predates the field — a cached dashboard bundle, a
+script, an older SDK — cannot downgrade a `dns-persist-01` domain to `dns-01` by
+editing something else, which its hand-published CAA would then refuse. Send the
+field explicitly to switch a domain over.
 
 ### Naming the CA
 
@@ -187,6 +192,12 @@ the new ones, so a name carrying a space or a `;` would leave the zone holding a
 malformed `issue` property with nothing valid behind it — CAA that forbids every
 issuer. Anything that is not a DNS name is refused by `SetCertbotConfig`, and by
 `certbot` at startup.
+
+Publishing CAA installs a temporary `;` guard, deletes the records it replaces,
+writes the new ones and drops the guard. A run interrupted part-way leaves the
+guard behind, which denies every issuer until a later run finishes the job — so
+each run now sweeps stale guards before installing its own, and a rerun is
+enough to recover.
 
 ### How long the check waits
 
