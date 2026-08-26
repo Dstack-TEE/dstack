@@ -191,7 +191,80 @@ instead of the return value.
 
 ---
 
-## 6. What to verify, and what each check actually proves
+## 6. Gateway cluster
+
+Worth doing: it exercises WaveKV replication, which a single node never touches
+even though sync is running.
+
+**Sync turns itself on when `NODE_ID > 0`** (`entrypoint.sh`:
+`SYNC_ENABLED=$([ "$NODE_ID" -gt 0 ] && ...)`). A single node with `NODE_ID=1` is
+therefore already running WaveKV as local storage — you will see `WaveKV:
+detected certificate changes` in its log — but nothing has ever replicated. Do
+not read those lines as evidence that clustering works.
+
+### Every node must deploy under the same `--name`
+
+Cluster members authenticate each other over RA-TLS and **require the peer's
+`app_id` to equal their own** (`gateway/src/kv/https_client.rs`). That is
+deliberate: it keeps WaveKV replication inside instances of one authorized
+compose rather than letting any CVM join.
+
+`app_id` is the compose hash, and **`name` is part of it**. Deploying a second
+node under a different name produces:
+
+```
+bootnode discovery retry failed: failed to fetch peers from bootnode
+  app_id mismatch: expected c90cc75a6ceb…, got aa04b7bd7875…
+```
+
+which looks like a networking or trust problem and is neither. Per-node values —
+`NODE_ID`, `WG_IP`, `WG_RESERVED_NET`, `WG_CLIENT_RANGE`, `WG_ENDPOINT`,
+`MY_URL`, `BOOTNODE_URL`, `ADMIN_API_TOKEN` — belong in `--env-file`, whose
+**values are encrypted at deploy time and are not part of the compose hash**;
+only the key names are recorded, as `allowed_envs`.
+
+So: same `--docker-compose`, same `--name`, different `--env-file`. Confirm
+before deploying —
+
+```bash
+sha256sum node1-app-compose.json node2-app-compose.json   # must match
+```
+
+### Allocate per-node resources
+
+WireGuard subnets follow `SUBNET_INDEX`: node *n* gets `10.8.<n*64>.0/18`, so
+index 0 is `10.8.0.0/18` and index 1 is `10.8.64.0/18`. Overlapping them breaks
+routing in ways that are tedious to unpick. Each node also needs its own RPC,
+admin, proxy and WireGuard ports, and its own `MY_URL` hostname — a wildcard A
+record covers `gw.<domain>` and `gw2.<domain>` without extra DNS work.
+
+`BOOTNODE_URL` only speeds up discovery; peers are also found through incoming
+connections.
+
+### What proves the cluster actually works
+
+Peer lists agreeing is the weakest of the three checks. Do all of them:
+
+```bash
+# 1. Both nodes list both peers
+curl -H "Authorization: Bearer $TOK" .../prpc/Admin.Status?json | jq '.nodes'
+
+# 2. The app registered on node1 appears on node2 — registration state replicated
+curl -H "Authorization: Bearer $TOK2" .../prpc/Admin.Status?json | jq '.hosts'
+
+# 3. node2 serves the wildcard certificate it never requested — cert replicated
+echo | openssl s_client -connect 127.0.0.1:<node2-proxy> \
+  -servername "<instance>-80.<domain>" | openssl x509 -noout -issuer -subject
+
+# 4. Traffic through node2 reaches an app whose tunnel terminates on node1
+curl -k --connect-to "<instance>-80.<domain>:<node2-proxy>:127.0.0.1:<node2-proxy>" \
+  "https://<instance>-80.<domain>:<node2-proxy>/"
+```
+
+The fourth is the one that matters: it shows what replicated is usable routing
+state, not just metadata that happens to agree.
+
+## 7. What to verify, and what each check actually proves
 
 | Check | Why it is worth doing |
 |---|---|
@@ -200,13 +273,45 @@ instead of the return value.
 | Boot all three CVMs to `boot_progress: done` | `done` is only reachable after `GetAppKey` succeeds, so it implies attestation worked |
 | `Admin.Status` lists the app with a WireGuard IP | Gateway verified the CVM's RA-TLS quote |
 | **A rejected quote in the KMS log** | The one check that proves verification is not a no-op |
-| `curl` through the proxy to the app | End to end, including TLS termination and routing |
+| `curl` through the proxy to the app | End to end, but only for one of several proxy modes — see below |
 | `/prpc/v1/Info` and `/prpc/Worker.Info` both answer | v1 works and pre-0.6 clients are not broken |
+| `dstack-verifier --verify` on a captured attestation, then again on a one-byte-flipped copy | Verification is checked by something other than the KMS, and the crypto is live rather than short-circuited |
 
 That fifth row is the one people skip. A run where every quote is accepted cannot
 distinguish "verification passed" from "verification never ran". Last time the
 AMD CVMs supplied it for free — 6 grants and 7 rejections in the same KMS log —
 but if everything passes, arrange a failure deliberately.
+
+The last row is the cheapest way to arrange one. `dstack-verifier --verify
+req.json`, with `req.json` holding `{"attestation": "<hex>"}` captured from
+`/v1/Attest`, gives a full result offline. Flip one byte and re-run: a flip
+inside the report signature or the launch measurement must come back
+`VEK does not sign the attestation report`. Choose the byte deliberately —
+flipping into the outer CBOR framing instead fails at decode, which proves only
+that the parser works.
+
+### One `curl` does not cover the proxy
+
+Ingress maps as `<id>[-[<port>][s|g]].<base_domain>`, and the suffixes select
+genuinely different code paths:
+
+| Suffix | Mode | Path |
+|---|---|---|
+| none | TLS terminated, forwarded as TCP | the common case |
+| `s` | TLS passthrough | `proxy/tls_passthough.rs`, SNI-routed, needs a `_dstack-app-address` TXT record |
+| `g` | HTTP/2 with TLS termination | gRPC |
+
+The 0.6.0-rc0 round exercised only the no-suffix path, single-node and then
+across a cluster. Passthrough and gRPC were never tried, and neither was anything
+beyond a small request — no sustained transfer, long-lived connection or
+streaming. If those matter for the release, test them explicitly; a green
+no-suffix `curl` says nothing about them.
+
+Passthrough in particular has its own resolution mechanism: the gateway looks up
+`_dstack-app-address.<sni>`, falling back to `_dstack-app-address-wildcard.<parent>`,
+for a TXT record of the form `<app_id>:<port>`. Seeing a passthrough-resolution
+error while testing the *terminated* path usually means the gateway had no
+certificate and fell through to SNI routing — fix the certificate, not the DNS.
 
 **`dstack-mr` binary name collision:** `-p dstack-mr` and `-p dstack-mr-cli` both
 produce `target/release/dstack-mr` and overwrite each other. Build only
@@ -219,7 +324,7 @@ your URL, not a broken agent.
 
 ---
 
-## 7. Reading DNS evidence without fooling yourself
+## 8. Reading DNS evidence without fooling yourself
 
 Three ways to misread a DNS result, all of which happened:
 
@@ -240,38 +345,205 @@ control, those errors read as evidence about AMD.
 
 ---
 
-## 8. AMD SEV-SNP: provision host certificates first
+## 9. AMD SEV-SNP
 
-The most valuable thing to do before an AMD run.
+An AMD run was completed end to end: guest SEV-SNP attestation, KMS key release,
+independent quote verification, gateway registration and public traffic. Host
+prerequisites are in section 1; what follows is everything after the host boots.
+None of it is guessable from the code.
 
-Verification needs the ASK and VCEK certificates. By default they are fetched
-from `https://kdsintf.amd.com`, which is a **single global endpoint with no
-mirror**, is aggressively rate-limited (one identical request per ~10s), and was
-completely unreachable during the last round — TCP timeouts and 100% ICMP loss
-from five vantage points across four autonomous systems and two continents, while
-every other external service answered normally. DNS was healthy and unchanged
-throughout, so this was the service, not a migration.
+### 9.1 The settings an AMD run needs
 
-dstack already supports the alternative: `normalize_kernel_cert_table` reads ASK
-and VCEK from the SNP extended report's certificate table, so a host that has
-been provisioned needs no KDS access at all. AMD's own specification recommends
-caching at the host for exactly this reason.
+One of these must change or the run cannot succeed; the rest are listed because
+their defaults are the ones you want and it is useful to know that before you
+start changing things.
 
-**So: provision the host certificate chain (`snphost` / `sevctl`) as part of
-setup.** It is a one-time fetch and it removes an unreliable dependency from
-every subsequent run. Note the bootstrap problem — obtaining the VCEK to install
-requires KDS access once, so do it from a network that can reach it and carry the
-file over.
+| Setting | File | Default | For an AMD run |
+|---|---|---|---|
+| `[cvm] platform` | `vmm.toml` (host) | `"auto"` | `"auto"` picks SEV-SNP when the host CPU flags contain `sev_snp`; set `"amd-sev-snp"` to be explicit and to fail loudly on the wrong host |
+| `sev_snp_key_release` | `kms.toml`, `[core]` | `false` | **`true`**, or no AMD guest ever gets a key |
+| `aws_nitro_tpm_key_release` | `kms.toml`, `[core]` | `false` | leave off; listed because it is the only other gate of this shape |
+| `[core.attestation.urls] amd_kds` | `kms.toml`, `dstack-verifier.toml` | `https://kdsintf.amd.com/vcek/v1` | override only to point at a cache or mirror |
+| `[core.attestation.root_ca] sev_snp_milan` / `_genoa` / `_turin` | same | unset — vendor ARK compiled in | leave unset unless you are testing against a non-production root |
+| `insecure_allow_external_trust_anchors` | same, `[core.attestation]` | `false` | must be `true` if *any* `root_ca` path above is set |
 
-A related note for whoever touches this code: the ARK is already compiled in, and
-the ARK fetched from KDS is discarded (`let (_fetched_ark, ask) = ...`). The
-network request exists only to obtain the ASK, which is equally static per product
-family. Bundling it would remove the `cert_chain` request entirely, leaving only
-the per-chip VCEK.
+The KMS side, in full, is two lines:
+
+```toml
+[core]
+sev_snp_key_release = true
+```
+
+Setting a `root_ca` path without the escape hatch is a startup failure, not a
+silent fallback:
+
+```
+external attestation trust anchors are configured but
+insecure_allow_external_trust_anchors is false
+```
+
+The whole `[core.attestation]` block has the same shape in `kms.toml` and
+`dstack-verifier.toml`, so a KDS mirror or a test root configured for one can be
+copied verbatim into the other.
+
+### 9.2 What the release gate looks like when it is off
+
+`sev_snp_key_release` defaults to `false`, and a guest that trips it reboots in a
+loop with
+
+```
+Request failed with status=400 Bad Request, error={
+  "error": "amd sev-snp key release is not enabled"
+}
+```
+
+The gate sits *after* full quote verification (`ensure_key_release_allowed`), so
+a perfectly good quote still yields nothing — the message is about local policy
+and says nothing about the attestation. Only two variants are gated this way:
+`dstack-amd-sev-snp` and `dstack-aws-nitro-tpm`. TDX, GCP TDX and Nitro Enclave
+have no such switch, which is why nobody notices the gate until the first AMD
+boot. The stated reason for NitroTPM is that it is not confidential compute at
+all — the AWS hypervisor is inside the TCB — so both need an explicit operator
+opt-in on top of whatever the external auth policy decides.
+
+### 9.3 Do not edit a running KMS's compose to flip that flag
+
+The local key provider seals to
+`SHA-256(SGX sealing key || MRTD || RTMR0 || RTMR1 || RTMR2 || RTMR3)`, and
+**RTMR3 carries the compose hash**. Changing one line of a bootstrapped KMS's
+config gives it a different sealing key, and its root CA is gone with the disk.
+
+Use onboarding instead: deploy a second KMS with `auto_bootstrap_domain = ""`,
+then
+
+```
+curl -X POST http://<new-kms>/prpc/Onboard \
+  -H 'Content-Type: application/json' \
+  -d '{"source_url":"https://<old-kms>","domain":"<domain>"}'
+curl -X POST http://<new-kms>/prpc/Finish -d '{}' -H 'Content-Type: application/json'
+```
+
+The new KMS inherits the root key, so apps it serves are still trusted by a
+gateway registered against the old one. **Compare the CA public key, not the CA
+certificate** — the onboarded KMS re-issues its own cert, so the PEM differs
+while `openssl x509 -pubkey` is identical. A KMS that bootstrapped independently
+differs in both.
+
+### 9.4 KDS is on the critical path
+
+Verification needs the ASK and VCEK certificates. They come from
+`https://kdsintf.amd.com`, a **single global endpoint with no mirror**, rate
+limited to roughly one identical request per 10s, and unreachable for an entire
+test round — TCP timeouts and 100% ICMP loss from five vantage points across four
+autonomous systems and two continents, while every other external service
+answered normally and DNS stayed healthy throughout.
+
+The rate limit is the one that will bite you mid-test: back-to-back verifications
+of the same chip return `HTTP status client error (429)` on the VCEK URL, which
+reads exactly like a verification failure until you notice the status code. Space
+them ~25s apart.
+
+Caching is in-process only. `AmdKdsClient` keeps a `moka` cache of 16 CA chains
+and 1024 VCEKs, capacity-bounded, no TTL, no persistence — warm for the life of
+one KMS or verifier process and cold in every one-shot `dstack-verifier --verify`.
+There is no KDS cache service in this repo — compare `nvidia-attest-proxy`, the
+persistent on-disk cache the NVIDIA collateral got and AMD did not — but
+`[core.attestation.urls] amd_kds` accepts any KDS-compatible base URL, and putting
+a caching proxy there works. Four consecutive cold-process `dstack-verifier
+--verify` runs of one attestation pass through a mirror; the same sequence run
+directly against KDS fails on the second. A KMS configured the same way released
+keys to an AMD guest end to end.
+
+Three things decide whether such a proxy is correct, and all three are easy to get
+wrong:
+
+```js
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    if (request.method !== "GET" || !url.pathname.startsWith("/vcek/v1/")) {
+      return new Response("not found", { status: 404 });
+    }
+    const cache = caches.default;
+    const key = new Request(url.toString());   // query string carries the TCB SPLs
+    const hit = await cache.match(key);
+    if (hit) return hit;
+
+    // 1. AMD answers 403 to an unexpected Host header, so do not forward it.
+    const upstream = await fetch("https://kdsintf.amd.com" + url.pathname + url.search,
+                                 { headers: { accept: "*/*" } });
+    const body = await upstream.arrayBuffer();
+
+    // 2. Only success is cacheable. A cached 429 turns a rate limit into an outage.
+    if (!upstream.ok) {
+      return new Response(body, { status: upstream.status,
+                                  headers: { "cache-control": "no-store" } });
+    }
+
+    // 3. Every KDS response says `Cache-Control: no-cache`; override it.
+    const res = new Response(body, { headers: {
+      "content-type": "application/octet-stream",
+      "cache-control": "public, max-age=2592000",
+    }});
+    ctx.waitUntil(cache.put(key, res.clone()));
+    return res;
+  },
+};
+```
+
+Caching is safe here because the collateral is signature-verified downstream and
+the ARK is compiled in, so a mirror can withhold or replay genuine certificates
+but cannot forge one. Two fetches of one VCEK URL return different bytes — AMD
+re-issues rather than serving a fixed object — but any valid copy is as good as
+another, and a VCEK is valid for seven years. Bound the TTL anyway: dstack checks
+no CRL and no certificate validity dates, and an unbounded cache would make that
+permanent rather than merely current.
+
+Do not plan on serving the certificates from the host instead. The verifier side
+supports it — `normalize_kernel_cert_table` reads ASK and VCEK from the SNP
+extended report's certificate table — and so does the guest, but nothing can put
+them there: `sev-snp-guest` in stock QEMU has no `certs-path`-style property, and
+the host-side `SNP_SET_EXT_CONFIG` ioctl is not in upstream `psp-sev.h`. Guests
+ask via `SNP_GET_EXT_REPORT` and get an empty table, which is why every
+verification in this round went to KDS.
+
+A note for whoever touches this code: the ARK is already compiled in, and the ARK
+fetched from KDS is discarded (`let (_fetched_ark, ask) = ...`). The network
+request exists only to obtain the ASK, which is equally static per product family.
+Bundling it would remove the `cert_chain` request entirely, leaving only the
+per-chip VCEK.
+
+### 9.5 Reaching the API that holds the keys
+
+`GetKey` and `Attest` are **not** on the guest agent's external port. That
+listener serves `Info`, `Version` and `Health` only, by design — anyone who can
+route to the CVM reaches it. Everything else lives on
+`/var/run/dstack.sock` inside the guest, mounted at `/`, `/v0` and `/v1` with
+**no `/prpc` prefix**: the internal path is `/v1/GetKey`, not `/prpc/v1/GetKey`.
+
+To reach it from the host during a test, add a socat sidecar to the app compose:
+
+```yaml
+  sockproxy:
+    image: alpine/socat
+    command: TCP-LISTEN:8091,fork,reuseaddr UNIX-CONNECT:/var/run/dstack.sock
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+    ports:
+      - "8091:8091"
+```
+
+That exposes app key material to the host, so it belongs in a lab and nowhere
+else.
+
+One more encoding trap, shared with `dstack-verifier --verify`: `bytes` fields in
+these JSON bodies are **hex strings**, not base64 and not byte arrays. Base64
+fails with `Invalid character 'w' at position 5`, which names the symptom and not
+the cause.
 
 ---
 
-## 9. Fixed in 0.6.0-rc0 testing — do not re-diagnose
+## 10. Fixed in 0.6.0-rc0 testing — do not re-diagnose
 
 - **KMS image had no CA certificates** and could not start at all
   ([#1128](https://github.com/Dstack-TEE/dstack/pull/1128)). Failed at
@@ -295,7 +567,7 @@ If you hit any of these on a build that predates the fixes, that is why.
 
 ---
 
-## 10. Housekeeping
+## 11. Housekeeping
 
 - **Keep an inventory as you go**: CVMs, ufw rules, DNS records, host module and
   permission changes, registry tags. Comment ufw rules so they can be found later
@@ -304,6 +576,17 @@ If you hit any of these on a build that predates the fixes, that is why.
   blacklist) **revert on reboot**. Decide whether to persist them; either is fine,
   but know which you chose.
 - Remove test ZtDomains and stray `_acme-challenge` TXT records when finished.
+- A cluster run leaves a WireGuard interface per node and a second set of ufw
+  rules and ports; both outlive the CVMs.
+- An AMD run adds a KMS per release-gate variation. Each is a full CVM with its
+  own disk and port; the ones that only served as a stepping stone are safe to
+  delete once the onboarded KMS works, but nothing cleans them up for you.
+- **Do not poll with `pgrep -f` on a pattern your own commands contain.** A
+  waiter looping on `pgrep -f "build-image.sh ..."` never exits while you check
+  progress with a command whose own command line includes that string — checking
+  keeps it waiting. The same self-match reports a finished build as still
+  running, and a bare `pgrep -af qemu-system` matches the grep itself. Check for
+  the artifact (`docker image inspect`, a file, a port) rather than the process.
 - When doing an A/B across dependency versions, **restore `Cargo.lock` along with
   `Cargo.toml`.** Editing the manifest and running cargo rewrites the lockfile;
   restoring only the manifest leaves them inconsistent. CI will not catch it
