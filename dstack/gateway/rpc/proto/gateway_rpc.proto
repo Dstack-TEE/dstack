@@ -758,7 +758,14 @@ message ZtDomainConfig {
   // _validation-persist TXT record the operator publishes once, so the gateway
   // CVM never holds write access to the zone. Experimental — the draft is still
   // changing and Let's Encrypt serves it on staging only.
-  string challenge = 6;
+  //
+  // Optional so that omitting it means "leave it alone" rather than "dns-01".
+  // UpdateZtDomain replaces the whole record, so a caller that predates this
+  // field -- a cached dashboard bundle, a script, an older SDK -- would
+  // otherwise downgrade a dns-persist-01 domain to dns-01 cluster-wide on any
+  // unrelated edit, and its hand-published CAA naming dns-persist-01 then
+  // refuses every order.
+  optional string challenge = 6;
 }
 
 // ZT-Domain information (config + certificate status)
