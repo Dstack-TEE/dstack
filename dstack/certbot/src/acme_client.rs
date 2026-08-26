@@ -338,11 +338,22 @@ impl AcmeClient {
 
             let acme_domain = challenge_domain(challenge.identifier())?;
             let dns_value = challenge.key_authorization().dns_value();
-            debug!("removing existing TXT record for {acme_domain}");
-            self.dns01_client
-                .remove_txt_records(&acme_domain)
-                .await
-                .context("failed to remove existing dns record")?;
+            // Clearing stale records is a per-name preparation step, not a
+            // per-authorization one. An order for `example.com` and
+            // `*.example.com` yields two authorizations that are both answered
+            // under `_acme-challenge.example.com`, each with its own value, and
+            // both values have to be live at validation time. Purging again for
+            // the second authorization would delete the record the first one
+            // just published, so one of the two challenges could never be
+            // answered and the order failed with "Correct value not found for
+            // DNS challenge".
+            if needs_purge(challenges, &acme_domain) {
+                debug!("removing existing TXT records for {acme_domain}");
+                self.dns01_client
+                    .remove_txt_records(&acme_domain)
+                    .await
+                    .context("failed to remove existing dns record")?;
+            }
             debug!(
                 "creating TXT record for {acme_domain} with TTL {}s",
                 self.dns_txt_ttl
@@ -649,6 +660,17 @@ impl AcmeClient {
     }
 }
 
+/// Whether the stale TXT records under `acme_domain` still have to be cleared.
+///
+/// The purge runs once per challenge name per issuance: the records this run
+/// has already published live under the names in `published`, and clearing
+/// those would take an answered challenge back down.
+fn needs_purge(published: &[Challenge], acme_domain: &str) -> bool {
+    !published
+        .iter()
+        .any(|challenge| challenge.acme_domain == acme_domain)
+}
+
 /// The name of the TXT record that answers a dns-01 challenge for `identifier`.
 ///
 /// The record always lives under the bare name: a wildcard authorization for
@@ -920,5 +942,38 @@ mod challenge_domain_tests {
     fn a_non_dns_identifier_is_rejected() {
         let ip = Identifier::Ip("192.0.2.1".parse().unwrap());
         assert!(challenge_domain(&ip.authorized(false)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod purge_tests {
+    use super::{needs_purge, Challenge};
+
+    fn challenge(acme_domain: &str, dns_value: &str) -> Challenge {
+        Challenge {
+            id: format!("rec-{dns_value}"),
+            acme_domain: acme_domain.to_string(),
+            dns_value: dns_value.to_string(),
+        }
+    }
+
+    /// A base name and its wildcard are two authorizations answered under one
+    /// `_acme-challenge.<name>`. The first one clears whatever an aborted run
+    /// left behind; the second must publish alongside it instead of wiping it.
+    #[test]
+    fn a_name_is_cleared_once_per_issuance() {
+        let mut published = vec![];
+        assert!(needs_purge(&published, "_acme-challenge.example.com"));
+
+        published.push(challenge("_acme-challenge.example.com", "value-for-base"));
+        assert!(!needs_purge(&published, "_acme-challenge.example.com"));
+    }
+
+    /// A SAN list can span zones, and clearing one challenge name says nothing
+    /// about the others.
+    #[test]
+    fn an_untouched_name_is_still_cleared() {
+        let published = vec![challenge("_acme-challenge.example.com", "value-for-base")];
+        assert!(needs_purge(&published, "_acme-challenge.example.org"));
     }
 }
