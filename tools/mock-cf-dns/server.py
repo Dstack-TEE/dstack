@@ -14,6 +14,12 @@ It also serves TXT answers on 53, over both UDP and TCP, so Pebble can validate
 DNS-01 and dns-persist-01 for real rather than being run with
 PEBBLE_VA_ALWAYS_VALID=1. TCP is not optional: Pebble sets its DNS client to
 `Net = "tcp"` whenever it is given `-dnsserver`.
+
+Questions outside the configured zones are forwarded upstream, so this can be a
+client's only resolver rather than only a CA's `-dnsserver`: certbot resolves
+its own challenge records through it while still reaching the other containers
+by name. Every question is logged and served at /api/dns-queries, so a test can
+assert that a name was actually looked up.
 """
 
 from __future__ import annotations
@@ -31,6 +37,10 @@ from typing import Any
 
 STATE_LOCK = threading.RLock()
 RECORDS: list[dict[str, Any]] = []
+# Every DNS question this mock was asked, so a test can assert that the client
+# under test resolved a name rather than inferring it from what happened next.
+QUERIES: list[dict[str, Any]] = []
+MAX_QUERIES = 2000
 NEXT_ID = 1
 
 
@@ -109,6 +119,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/records":
             with STATE_LOCK:
                 _json(self, 200, {"records": RECORDS})
+            return
+        if path == "/api/dns-queries":
+            with STATE_LOCK:
+                _json(self, 200, {"queries": QUERIES})
             return
         if path.startswith("/client/v4/") and not _authorized(self):
             return
@@ -233,6 +247,55 @@ def txt_rdata(text: str) -> bytes:
     return b"".join(bytes([len(c)]) + c for c in chunks)
 
 
+def _upstream() -> str:
+    """Where to send questions this mock is not authoritative for.
+
+    Docker's embedded resolver, which is what this container's own
+    `/etc/resolv.conf` points at, so service names keep resolving for whoever
+    is pointed here.
+    """
+    return os.environ.get("MOCK_DNS_UPSTREAM", "127.0.0.11")
+
+
+def _is_ours(name: str) -> bool:
+    """Whether `name` falls inside one of the configured mock zones."""
+    return any(
+        name == zone["name"] or name.endswith("." + zone["name"]) for zone in _zones()
+    )
+
+
+def _forward(packet: bytes) -> bytes:
+    """Ask the upstream resolver and hand back its answer verbatim.
+
+    Without this the mock is only usable as a CA's `-dnsserver`, because a name
+    it does not know is answered NOERROR with no records -- which a resolver
+    reads as an authoritative "no such record" and does not retry elsewhere.
+    A client configured to use this as its only resolver would then fail to
+    resolve the other containers.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(5)
+    try:
+        sock.sendto(packet, (_upstream(), 53))
+        return sock.recvfrom(65535)[0]
+    finally:
+        sock.close()
+
+
+def _record_query(name: str, qtype: int, answers: int, forwarded: bool) -> None:
+    with STATE_LOCK:
+        QUERIES.append(
+            {
+                "name": name,
+                "type": qtype,
+                "answers": answers,
+                "forwarded": forwarded,
+                "at": int(time.time()),
+            }
+        )
+        del QUERIES[:-MAX_QUERIES]
+
+
 def dns_response(packet: bytes) -> bytes:
     """Build a DNS response containing matching TXT records."""
     if len(packet) < 12:
@@ -248,6 +311,18 @@ def dns_response(packet: bytes) -> bytes:
         if qend + 4 <= len(packet)
         else 16
     )
+    # Only answer for the zones this mock owns; anything else is the caller's
+    # ordinary name resolution and belongs upstream.
+    if not _is_ours(name):
+        try:
+            reply = _forward(packet)
+            _record_query(name, qtype, -1, True)
+            return reply
+        except Exception as exc:  # pragma: no cover - diagnostic only
+            _debug(f"forwarding {name} failed: {exc}")
+            _record_query(name, qtype, 0, True)
+            return txid + struct.pack("!HHHHH", 0x8182, 1, 0, 0, 0) + packet[12:qend + 4]
+
     with STATE_LOCK:
         answers = [
             r
@@ -256,6 +331,7 @@ def dns_response(packet: bytes) -> bytes:
         ]
     if qtype not in (16, 255):
         answers = []
+    _record_query(name, qtype, len(answers), False)
     header = txid + struct.pack("!HHHHH", 0x8180, 1, len(answers), 0, 0)
     body = question
     for record in answers:

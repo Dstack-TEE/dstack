@@ -348,6 +348,67 @@ test_persist_record_for_another_account_is_refused() {
     ! neg_domain_issued "${PERSIST_NEG2_DOMAIN}"
 }
 
+# ---- The pre-order DNS self-check -----------------------------------------
+#
+# certbot resolves the challenge name itself before telling the CA to go and
+# look, so that a record that has not propagated is reported by name instead of
+# as an order failure. The check is advisory: it warns and proceeds either way,
+# which is exactly why nothing downstream reveals whether it worked. The mock
+# logs the questions it is asked, so the check is observed directly.
+
+dns_queries_for() {
+    curl -sf "${MOCK_CF_API}/api/dns-queries" 2>/dev/null \
+        | tr '{' '\n' \
+        | grep -F "\"name\": \"$1\"" || true
+}
+
+answered_queries_for() {
+    dns_queries_for "$1" | grep -cvF '"answers": 0'
+}
+
+# The happy path, observed rather than triggered. By the time this runs the
+# dns-persist-01 domain has issued from a record this suite published, so the
+# self-check must have resolved it -- and an answered question is the only
+# direct evidence, because the check warns and proceeds either way.
+#
+# Deliberately passive: forcing another renewal would race the periodic one,
+# which picks a domain up as soon as it is added and can leave nothing for the
+# forced run to do.
+test_self_check_resolves_a_published_record() {
+    [ "$(answered_queries_for "_validation-persist.${PERSIST_DOMAIN}")" -gt 0 ]
+}
+
+# The unhappy path, and the reason the check is advisory at all. A name with no
+# record has to be polled and given up on -- the record may still be
+# propagating -- rather than asked once and abandoned.
+#
+# Its own domain, and one nothing else queries, so this needs no clearing and
+# does not care what ran before it.
+test_self_check_gives_up_on_a_missing_record() {
+    local domain="selfcheck0.local"
+    local name="_validation-persist.${domain}"
+    admin_post DeleteZtDomain '{"domain": "'"${domain}"'"}' > /dev/null 2>&1 || true
+    # dns-persist-01 because nothing writes its record: the name stays empty for
+    # the whole wait without the test racing certbot's own cleanup.
+    admin_post AddZtDomain \
+        '{"domain": "'"${domain}"'", "port": 443, "challenge": "dns-persist-01"}' \
+        > /dev/null || return 1
+    admin_post RenewZtDomainCert \
+        '{"domain": "'"${domain}"'", "force": true}' > /dev/null 2>&1 || true
+
+    local i=0 asked=0
+    while [ $i -lt 45 ]; do
+        asked=$(dns_queries_for "$name" | wc -l)
+        [ "$asked" -ge 3 ] && break
+        sleep 2
+        i=$((i + 1))
+    done
+    # Polled, not asked once: the retry loop is what makes the wait a wait.
+    [ "$asked" -ge 3 ] || return 1
+    # Every one a miss, or the record was not actually absent.
+    [ "$(answered_queries_for "$name")" -eq 0 ]
+}
+
 # ---- Gateway operations that change shape for such a domain ---------------
 
 # SetCaa reconciles CAA through the DNS provider, which the gateway has no
@@ -653,6 +714,12 @@ main() {
         "$(test_set_caa_skips_a_persist_domain; echo $?)"
     run_test "Rotation reports the records to republish" \
         "$(test_rotation_reports_the_records_to_republish; echo $?)"
+
+    # The pre-order self-check, both ways round.
+    run_test "Self-check resolves a published challenge record" \
+        "$(test_self_check_resolves_a_published_record; echo $?)"
+    run_test "Self-check polls and gives up when the record is absent" \
+        "$(test_self_check_gives_up_on_a_missing_record; echo $?)"
 
     # Summary
     log_section "Test Summary"
