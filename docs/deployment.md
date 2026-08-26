@@ -42,10 +42,10 @@ If you skip the KMS allowlist step, the VM may boot and the onboard UI may still
 1. Set up TDX host with dstack-vmm
 2. Deploy KMS as CVM (with auth server, capture its attestation info, and allowlist the KMS `mrAggregated` before bootstrap)
 3. Deploy Gateway as CVM
+4. [Zero Trust HTTPS](#4-zero-trust-https) - the gateway cannot serve an app over TLS until it holds a certificate for the domain
 
 **Optional Add-ons:**
 
-4. [Zero Trust HTTPS](#4-zero-trust-https-optional)
 5. [Certificate Transparency monitoring](#5-certificate-transparency-monitoring-optional)
 6. [Multi-node deployment](#6-multi-node-deployment-optional)
 7. [On-chain governance](./onchain-governance.md) - Smart contract-based authorization
@@ -355,29 +355,69 @@ Restart dstack-vmm to apply changes.
 
 ---
 
-### 4. Zero Trust HTTPS (Optional)
+### 4. Zero Trust HTTPS
 
-Generate TLS certificates inside the TEE with automatic CAA record management.
+The gateway issues its own certificates from inside the CVM. `dstack-gateway`
+links the `certbot` crate directly: it answers dns-01 challenges with the
+Cloudflare credential you give it, and keeps the ACME account key and every
+certificate in the CVM's WaveKV store. Neither key is ever written to the host,
+which is what makes the monitoring in step 5 worth running — every certificate
+the CT logs show for your domain should carry a public key the gateway
+published. Nothing on the host issues or holds these certificates; the `certbot`
+CLI under `dstack/certbot/cli` is a testing tool for the same crate and has no
+part in this path.
 
-Configure in `build-config.sh`:
+`bootstrap-cluster.sh` configures all of it, reading `CF_API_TOKEN`,
+`SRV_DOMAIN` and `ACME_STAGING` from the `.env` you filled in during step 3 and
+calling the gateway's admin API:
 
 ```bash
-GATEWAY_CERT=${CERTBOT_WORKDIR}/live/cert.pem
-GATEWAY_KEY=${CERTBOT_WORKDIR}/live/key.pem
-CF_API_TOKEN=<your-cloudflare-token>
-ACME_URL=https://acme-v02.api.letsencrypt.org/directory
+cd dstack/gateway/dstack-app/
+bash bootstrap-cluster.sh
 ```
 
-Run certbot:
+| RPC | What it sets |
+|---|---|
+| `SetCertbotConfig` | ACME directory URL and the renewal schedule |
+| `CreateDnsCredential` | the Cloudflare token used for dns-01, as the default credential |
+| `AddZtDomain` | a domain to keep a wildcard certificate for |
+
+Run it once per cluster. Additional nodes receive all three through cluster
+sync, so do not repeat it per node.
+
+Every name the gateway terminates TLS on needs its own ZT domain. The script
+adds `SRV_DOMAIN`; if app URLs sit one level deeper — `<id>-<port>.gateway.example.com`
+— then `gateway.example.com` needs an entry of its own, because a wildcard
+certificate for `*.example.com` does not cover subdomains of subdomains.
+
+Certificates are requested on the next renewal round rather than the moment a
+domain is added. Watch for them to arrive:
 
 ```bash
-RUST_LOG=info,certbot=debug ./certbot renew -c certbot.toml
+ADMIN_ADDR=127.0.0.1:9203  # GATEWAY_ADMIN_RPC_ADDR in .env
+curl -sf -H "Authorization: Bearer $ADMIN_API_TOKEN" \
+  "http://$ADMIN_ADDR/prpc/ListZtDomains" | jq '.domains[] | {domain: .config.domain, cert: .cert_status}'
 ```
 
-This will:
-- Create an ACME account
-- Set CAA DNS records on Cloudflare
-- Request and auto-renew certificates
+`has_cert: true` with a `not_after` roughly 90 days out means the domain is
+served. `POST /prpc/RenewCert` forces a round immediately instead of waiting
+for `renew_interval_secs`.
+
+Pin issuance to your own ACME account with `POST /prpc/SetCaa`, which writes
+CAA records naming Let's Encrypt and the gateway's account URI for every
+configured domain. Any other account is then refused by the CA rather than
+merely noticed after the fact by step 5.
+
+Start on Let's Encrypt staging (`ACME_STAGING=yes`), whose certificates are not
+browser-trusted but whose rate limits leave room for mistakes. Switching to
+production takes two calls: `SetCertbotConfig` with the production directory
+URL, then `RotateAcmeCredentials` to register an account there and re-pin every
+domain's CAA to it. Renewals refuse to run while the stored account and the
+configured ACME URL disagree, so do not skip the rotation.
+
+For the same flow driven by hand, one curl at a time, see the
+[Gateway service setup tutorial](./tutorials/gateway-service-setup.md#step-4-bootstrap-admin-api).
+For a multi-node cluster, see [Cluster deployment](../dstack/gateway/docs/cluster-deployment.md).
 
 ---
 
