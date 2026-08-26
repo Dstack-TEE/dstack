@@ -28,7 +28,7 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
-    /// Initialize the configuration file
+    /// Create the ACME account described by the configuration file
     Init {
         /// Path to the configuration file
         #[arg(short, long, default_value = "certbot.toml")]
