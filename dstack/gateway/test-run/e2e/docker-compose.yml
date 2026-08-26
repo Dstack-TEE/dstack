@@ -33,9 +33,13 @@ services:
 
   # ==================== Mock Services ====================
 
-  # Mock Cloudflare DNS API
+  # Mock Cloudflare DNS API. Built from the repo rather than pulled, and the
+  # same image the full-stack suite builds, so both suites answer DNS the same
+  # way and neither depends on a prebuilt image nobody can rebuild.
   mock-cf-dns-api:
-    image: kvin/mock-cf-dns-api:latest
+    build:
+      context: ../../../../test-suites/full-stack-compose/mock-cf-dns
+    image: dstack-e2e-mock-cf-dns:local
     container_name: mock-cf-dns-api
     networks:
       certbot-test:
@@ -45,6 +49,8 @@ services:
     environment:
       - PORT=8080
       - DEBUG=true
+      # The zones certbot writes into and Pebble reads back out of.
+      - MOCK_CF_ZONES=test0.local,test1.local,test2.local,persist0.local
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
       interval: 5s
@@ -66,7 +72,9 @@ services:
       - "15000:15000"  # Management interface
     environment:
       - PEBBLE_VA_NOSLEEP=1
-      - PEBBLE_VA_ALWAYS_VALID=1  # Skip actual DNS validation for testing
+      # No PEBBLE_VA_ALWAYS_VALID: the mock answers DNS over TCP, which is the
+      # only transport Pebble uses once it is given -dnsserver, so challenges
+      # are validated against the records rather than waved through.
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:14000/dir"]
       interval: 5s

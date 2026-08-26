@@ -38,6 +38,9 @@ CERT_DOMAINS="test0.local test1.local test2.local"
 # here the certificate is checked through the admin API instead.
 PERSIST_DOMAIN="persist0.local"
 
+# Mock zone ID, as server.py derives it from the zone name.
+PERSIST_ZONE_ID="zone-persist0-local"
+
 # Pebble answers to this name, not to letsencrypt.org, and a validation record
 # naming a CA the challenge does not list is ignored.
 PERSIST_ISSUER="pebble.letsencrypt.org"
@@ -174,15 +177,43 @@ test_persist_challenge_survives_an_edit() {
     echo "$info" | grep -q "dns-persist-01"
 }
 
-# The point of the whole exercise: a certificate is issued for a domain the
-# gateway holds no credential for. The record is not published anywhere in this
-# harness, so the pre-order self-check cannot pass -- it is advisory by design,
-# and certbot warns and proceeds because the CA's DNS view is not this node's.
-# Pebble runs with PEBBLE_VA_ALWAYS_VALID, so it accepts.
+# Publish the validation record the way a zone owner would: once, by hand,
+# before the first order. certbot never writes it -- that is the whole point --
+# so the harness stands in for the operator here.
 #
-# That leaves the challenge itself covered end to end -- selected out of the
-# authorization, posted ready, finalized, fetched -- and the DNS answer the only
-# part standing in.
+# The record has to be the one the gateway reports, byte for byte, because that
+# is what Pebble parses as an RFC 8659 issue-value and matches against its own
+# issuer name and the requesting account.
+publish_persist_record() {
+    local info rdata
+    info=$(admin_post GetZtDomain '{"domain": "'"${PERSIST_DOMAIN}"'"}') || return 1
+    # "_validation-persist.<domain>. IN TXT \"<rdata>\"" -> <rdata>
+    rdata=$(echo "$info" \
+        | tr ',' '\n' \
+        | grep -F "_validation-persist.${PERSIST_DOMAIN}. IN TXT" \
+        | sed -e 's/.*IN TXT \\"//' -e 's/\\".*//')
+    if [ -z "$rdata" ]; then
+        log_error "no validation record reported for ${PERSIST_DOMAIN}" >&2
+        return 1
+    fi
+    # stderr, not stdout: run_test captures the function's stdout and compares
+    # the whole of it against "0".
+    log_info "Publishing: _validation-persist.${PERSIST_DOMAIN} TXT ${rdata}" >&2
+    curl -sf -X POST "${MOCK_CF_API}/client/v4/zones/${PERSIST_ZONE_ID}/dns_records" \
+        -H "Authorization: Bearer ${CF_API_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "type": "TXT",
+            "name": "_validation-persist.'"${PERSIST_DOMAIN}"'",
+            "content": "'"${rdata}"'",
+            "ttl": 1
+        }' > /dev/null
+}
+
+# The point of the whole exercise: a certificate is issued for a domain the
+# gateway holds no credential for, and the CA validates the published record
+# rather than being told to skip it -- Pebble runs without
+# PEBBLE_VA_ALWAYS_VALID here.
 test_persist_domain_issues_a_certificate() {
     admin_post RenewZtDomainCert \
         '{"domain": "'"${PERSIST_DOMAIN}"'", "force": true}' > /dev/null 2>&1 || true
@@ -202,11 +233,13 @@ test_persist_domain_issues_a_certificate() {
 }
 
 # The claim the whole challenge exists for: certbot reads DNS and never writes
-# it, so nothing for this domain may ever reach the provider API.
+# it. Scoped to the record certbot would have written -- the zone is not empty,
+# because the harness published the validation record above standing in for the
+# operator, and that one is the point rather than a violation.
 test_persist_domain_never_touches_the_provider() {
     local records
     records=$(curl -sf "${MOCK_CF_API}/api/records" 2>/dev/null || echo "[]")
-    ! echo "$records" | grep -q "${PERSIST_DOMAIN}"
+    ! echo "$records" | grep -qF "_acme-challenge.${PERSIST_DOMAIN}"
 }
 
 # ==================== Test Functions ====================
@@ -447,12 +480,14 @@ main() {
         "$(test_persist_domain_needs_no_credential; echo $?)"
     run_test "Challenge survives an edit that omits it" \
         "$(test_persist_challenge_survives_an_edit; echo $?)"
-    run_test "Certificate issues without a DNS credential" \
-        "$(test_persist_domain_issues_a_certificate; echo $?)"
-    # After issuance: every record names the ACME account, so there is nothing
-    # to report until one exists, and issuing is what creates it here.
+    # The record names the ACME account, so it can only be rendered -- and
+    # published -- once one exists. Registering is what the first order does.
     run_test "Required validation record is reported" \
         "$(test_persist_domain_reports_its_record; echo $?)"
+    run_test "Validation record publishes" \
+        "$(publish_persist_record; echo $?)"
+    run_test "Certificate issues without a DNS credential" \
+        "$(test_persist_domain_issues_a_certificate; echo $?)"
     run_test "No DNS record is ever written for it" \
         "$(test_persist_domain_never_touches_the_provider; echo $?)"
 
