@@ -358,6 +358,19 @@ fn caa_tag(content: &str) -> Option<&str> {
     content.split_whitespace().nth(1)
 }
 
+/// Whether a rendered CAA record is one of the `;` guards [`AcmeClient::set_caa_records`]
+/// installs while it swaps the real records out.
+///
+/// A guard denies every issuer, which is the point while the old records are
+/// being replaced and the wrong thing to leave behind.
+fn is_caa_guard(content: &str) -> bool {
+    let mut parts = content.split_whitespace();
+    let (_flags, tag, value) = (parts.next(), parts.next(), parts.next());
+    matches!(tag, Some("issue" | "issuewild"))
+        && value.map(|value| value.trim_matches('"')) == Some(";")
+        && parts.next().is_none()
+}
+
 impl AcmeClient {
     pub async fn load(
         validation: ValidationMethod,
@@ -481,14 +494,57 @@ impl AcmeClient {
         let base_names = base_names(domains);
 
         for base_name in base_names {
+            // 0. Adopt guards an earlier run left behind, rather than
+            //    replacing them. A run that died between steps 1 and 4 stranded
+            //    `;` records, and step 1 would re-add byte-identical ones --
+            //    which a provider that refuses duplicates rejects, so the rerun
+            //    the operator is told to perform fails at its very first call
+            //    and the zone never recovers.
+            //
+            //    Deleting them first would fix that and open a worse hole: from
+            //    the delete until step 1 succeeds the name has no issue or
+            //    issuewild record at all, which is not "denied" but "any CA may
+            //    issue" -- and a certificate obtained in that window outlives
+            //    the window, where a stranded guard is merely a renewal that
+            //    fails until someone reruns. Reusing the record keeps the
+            //    deny-all continuous, which is the whole point of a guard.
+            //
+            //    Extras beyond the two adopted here are ordinary issue records
+            //    to step 2, which removes them.
+            let mut adopted_issue = None;
+            let mut adopted_issuewild = None;
+            for record in dns01_client.get_records(base_name).await? {
+                if record.r#type != "CAA" || !is_caa_guard(&record.content) {
+                    continue;
+                }
+                let slot = match caa_tag(&record.content) {
+                    Some("issue") => &mut adopted_issue,
+                    Some("issuewild") => &mut adopted_issuewild,
+                    _ => continue,
+                };
+                if slot.is_none() {
+                    debug!("adopting stale guard CAA record {}", record.name);
+                    *slot = Some(record.id);
+                }
+            }
             // 1. Set ";" to guard timing gap between the operations.
             debug!("setting guard CAA records for {base_name}");
-            let guard0 = dns01_client
-                .add_caa_record(base_name, 0, "issue", ";")
-                .await?;
-            let guard1 = dns01_client
-                .add_caa_record(base_name, 0, "issuewild", ";")
-                .await?;
+            let guard0 = match adopted_issue {
+                Some(id) => id,
+                None => {
+                    dns01_client
+                        .add_caa_record(base_name, 0, "issue", ";")
+                        .await?
+                }
+            };
+            let guard1 = match adopted_issuewild {
+                Some(id) => id,
+                None => {
+                    dns01_client
+                        .add_caa_record(base_name, 0, "issuewild", ";")
+                        .await?
+                }
+            };
             // 2. Remove the existing constraints
             for record in dns01_client.get_records(base_name).await? {
                 if record.id == guard0 || record.id == guard1 {
@@ -1667,6 +1723,48 @@ mod reissue_reason_tests {
         let reason = reissue_reason("not a certificate", &names(&["example.com"]))
             .expect("an unreadable certificate must reissue");
         assert!(reason.contains("cannot read"), "{reason}");
+    }
+}
+
+#[cfg(test)]
+mod caa_guard_tests {
+    use super::{caa_tag, is_caa_guard};
+
+    /// The guard is what an interrupted `set_caa_records` leaves behind, and a
+    /// rerun has to recognize its own leftovers to be able to replace them.
+    #[test]
+    fn a_guard_is_recognized_however_the_provider_renders_it() {
+        assert!(is_caa_guard(r#"0 issue ";""#));
+        assert!(is_caa_guard(r#"0 issuewild ";""#));
+        assert!(is_caa_guard("0 issue ;"));
+        assert!(is_caa_guard("128 issue \";\""));
+    }
+
+    /// A real issuer record must never be mistaken for a guard: sweeping one
+    /// early would delete the zone's only valid CAA before its replacement is
+    /// written.
+    #[test]
+    fn a_real_issuer_record_is_not_a_guard() {
+        assert!(!is_caa_guard(
+            r#"0 issue "letsencrypt.org;validationmethods=dns-01;accounturi=https://acme.example/acct/1""#
+        ));
+        assert!(!is_caa_guard(r#"0 issue "letsencrypt.org""#));
+        // `iodef` is neither an issuer constraint nor a guard.
+        assert!(!is_caa_guard(r#"0 iodef "mailto:x@example.com""#));
+        // A value that merely starts with the guard's character.
+        assert!(!is_caa_guard(r#"0 issue ";extra""#));
+        // Trailing junk means it is not the record this wrote.
+        assert!(!is_caa_guard(r#"0 issue ";" extra"#));
+        assert!(!is_caa_guard(""));
+    }
+
+    /// The sweep is scoped by the same tag test the replacement pass uses.
+    #[test]
+    fn the_guard_tags_are_the_ones_the_replacement_pass_replaces() {
+        for content in [r#"0 issue ";""#, r#"0 issuewild ";""#] {
+            let tag = caa_tag(content).expect("a rendered CAA record has a tag");
+            assert!(matches!(tag, "issue" | "issuewild"), "{tag}");
+        }
     }
 }
 
