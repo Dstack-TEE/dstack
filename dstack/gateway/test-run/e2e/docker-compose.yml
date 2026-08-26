@@ -51,7 +51,7 @@ services:
       - PORT=8080
       - DEBUG=true
       # The zones certbot writes into and Pebble reads back out of.
-      - MOCK_CF_ZONES=test0.local,test1.local,test2.local,persist0.local
+      - MOCK_CF_ZONES=test0.local,test1.local,test2.local,persist0.local,persist1.local,persist2.local
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
       interval: 5s

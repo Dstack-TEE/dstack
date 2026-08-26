@@ -41,6 +41,19 @@ PERSIST_DOMAIN="persist0.local"
 # Mock zone ID, as server.py derives it from the zone name.
 PERSIST_ZONE_ID="zone-persist0-local"
 
+# A second dns-persist-01 domain, used for the cases that must NOT issue. Kept
+# apart from PERSIST_DOMAIN so a deliberately unanswerable order cannot be
+# confused with the working one.
+PERSIST_NEG_DOMAIN="persist1.local"
+PERSIST_NEG_ZONE_ID="zone-persist1-local"
+
+# A third domain, for the second refusal. Deleting a ZT domain deliberately
+# keeps its certificate ("kept for historical purposes"), so reusing a domain
+# that has already issued would report the old certificate and read as a
+# refusal that did not happen.
+PERSIST_NEG2_DOMAIN="persist2.local"
+PERSIST_NEG2_ZONE_ID="zone-persist2-local"
+
 # Pebble answers to this name, not to letsencrypt.org, and a validation record
 # naming a CA the challenge does not list is ignored.
 PERSIST_ISSUER="pebble.letsencrypt.org"
@@ -230,6 +243,142 @@ test_persist_domain_issues_a_certificate() {
         i=$((i + 1))
     done
     return 1
+}
+
+# ---- Cases that must NOT issue -------------------------------------------
+#
+# These are the reason the mock answers DNS at all. With PEBBLE_VA_ALWAYS_VALID
+# the CA accepts any challenge, so a wrong record and a right one are
+# indistinguishable and the record's grammar is pinned only by unit tests
+# written against a reading of the CA. Here the CA reads it.
+
+# Publish one TXT record verbatim at the negative domain's validation name,
+# replacing whatever is there.
+publish_neg_record() {
+    local domain="$1" zone="$2" rdata="$3"
+    local records id
+    records=$(curl -sf "${MOCK_CF_API}/api/records" 2>/dev/null || echo '{"records":[]}')
+    for id in $(echo "$records" \
+        | tr '{' '\n' \
+        | grep -F "_validation-persist.${domain}" \
+        | sed -e 's/.*"id": "//' -e 's/".*//'); do
+        curl -sf -X DELETE \
+            "${MOCK_CF_API}/client/v4/zones/${zone}/dns_records/${id}" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" > /dev/null 2>&1 || true
+    done
+    curl -sf -X POST "${MOCK_CF_API}/client/v4/zones/${zone}/dns_records" \
+        -H "Authorization: Bearer ${CF_API_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "type": "TXT",
+            "name": "_validation-persist.'"${domain}"'",
+            "content": "'"${rdata}"'",
+            "ttl": 1
+        }' > /dev/null
+}
+
+# The account URI the cluster actually holds, read off the domain the gateway
+# already renders records for.
+persist_account_uri() {
+    admin_post GetZtDomain '{"domain": "'"${PERSIST_DOMAIN}"'"}' \
+        | tr ',' '\n' \
+        | grep -F "accounturi=" \
+        | head -1 \
+        | sed -e 's/.*accounturi=//' -e 's/[";\\].*//'
+}
+
+# Try to issue for the negative domain and report whether a certificate
+# appeared. Deliberately short: the interesting outcome is "no certificate",
+# and an order that is going to be refused says so in one pass.
+neg_domain_issued() {
+    local domain="$1"
+    admin_post RenewZtDomainCert \
+        '{"domain": "'"${domain}"'", "force": true}' > /dev/null 2>&1 || true
+    local i=0
+    while [ $i -lt 45 ]; do
+        if admin_post GetZtDomain '{"domain": "'"${domain}"'"}' \
+            | grep -q '"has_cert":true'; then
+            return 0
+        fi
+        sleep 2
+        i=$((i + 1))
+    done
+    return 1
+}
+
+# The gateway only ever orders `*.{domain}`, so every authorization it answers
+# is a wildcard one -- and the draft has a CA accept a wildcard authorization
+# only from a record carrying `policy=wildcard`. A record that is correct in
+# every other respect must therefore not be enough.
+test_persist_record_without_wildcard_policy_is_refused() {
+    admin_post DeleteZtDomain '{"domain": "'"${PERSIST_NEG_DOMAIN}"'"}' > /dev/null 2>&1 || true
+    admin_post AddZtDomain \
+        '{"domain": "'"${PERSIST_NEG_DOMAIN}"'", "port": 443, "challenge": "dns-persist-01"}' \
+        > /dev/null || return 1
+    local uri
+    uri=$(persist_account_uri) || return 1
+    [ -n "$uri" ] || return 1
+    publish_neg_record "${PERSIST_NEG_DOMAIN}" "${PERSIST_NEG_ZONE_ID}" \
+        "${PERSIST_ISSUER}; accounturi=${uri}" || return 1
+    # Inverted: issuing here would mean the policy parameter is not enforced.
+    ! neg_domain_issued "${PERSIST_NEG_DOMAIN}"
+}
+
+# Adding the one parameter that was missing, and nothing else, has to flip the
+# outcome. That is what makes the previous case a statement about `policy`
+# rather than about some unrelated breakage.
+test_persist_record_with_wildcard_policy_issues() {
+    local uri
+    uri=$(persist_account_uri) || return 1
+    publish_neg_record "${PERSIST_NEG_DOMAIN}" "${PERSIST_NEG_ZONE_ID}" \
+        "${PERSIST_ISSUER}; accounturi=${uri}; policy=wildcard" || return 1
+    neg_domain_issued "${PERSIST_NEG_DOMAIN}"
+}
+
+# The account URI in the record is the whole authorization. A record naming a
+# different account must not let this one issue -- otherwise publishing a record
+# authorizes anybody, and the challenge proves nothing.
+test_persist_record_for_another_account_is_refused() {
+    admin_post DeleteZtDomain '{"domain": "'"${PERSIST_NEG2_DOMAIN}"'"}' > /dev/null 2>&1 || true
+    admin_post AddZtDomain \
+        '{"domain": "'"${PERSIST_NEG2_DOMAIN}"'", "port": 443, "challenge": "dns-persist-01"}' \
+        > /dev/null || return 1
+    publish_neg_record "${PERSIST_NEG2_DOMAIN}" "${PERSIST_NEG2_ZONE_ID}" \
+        "${PERSIST_ISSUER}; accounturi=${ACME_URL%/dir}/my-account/0; policy=wildcard" || return 1
+    ! neg_domain_issued "${PERSIST_NEG2_DOMAIN}"
+}
+
+# ---- Gateway operations that change shape for such a domain ---------------
+
+# SetCaa reconciles CAA through the DNS provider, which the gateway has no
+# credential for here. It must skip the domain rather than fail the call, and
+# must not write anything.
+test_set_caa_skips_a_persist_domain() {
+    admin_post SetCaa '{}' > /dev/null 2>&1 || true
+    local records
+    records=$(curl -sf "${MOCK_CF_API}/api/records" 2>/dev/null || echo "[]")
+    # Split into records first and require both fields within one of them. The
+    # mock serializes with sorted keys, so "type" never follows "name" and a
+    # single fixed pattern spanning the two can only ever fail to match -- which
+    # in a negative assertion is a test that passes no matter what.
+    ! echo "$records" \
+        | tr '{' '\n' \
+        | grep -F "\"name\": \"${PERSIST_DOMAIN}\"" \
+        | grep -qF '"type": "CAA"'
+}
+
+# Rotation registers a new account, and every published record names the old
+# one. The response has to carry the replacements, because the gateway cannot
+# publish them and nothing else reports them.
+test_rotation_reports_the_records_to_republish() {
+    local out
+    out=$(admin_post RotateAcmeCredentials '{}') || return 1
+    echo "$out" | grep -qF "_validation-persist.${PERSIST_DOMAIN}" || return 1
+    # Naming the new account, not the one it replaced.
+    local uri
+    uri=$(echo "$out" | sed -e 's/.*"account_uri": *"//' -e 's/".*//')
+    [ -n "$uri" ] || return 1
+    echo "$out" | grep -qF "accounturi=${uri}"
 }
 
 # The claim the whole challenge exists for: certbot reads DNS and never writes
@@ -490,6 +639,20 @@ main() {
         "$(test_persist_domain_issues_a_certificate; echo $?)"
     run_test "No DNS record is ever written for it" \
         "$(test_persist_domain_never_touches_the_provider; echo $?)"
+
+    # What the CA refuses, now that it actually looks the record up.
+    run_test "A record without policy=wildcard cannot answer a wildcard order" \
+        "$(test_persist_record_without_wildcard_policy_is_refused; echo $?)"
+    run_test "Adding policy=wildcard is what makes it answerable" \
+        "$(test_persist_record_with_wildcard_policy_issues; echo $?)"
+    run_test "A record naming another account does not authorize" \
+        "$(test_persist_record_for_another_account_is_refused; echo $?)"
+
+    # Gateway operations that change shape for a domain it cannot write.
+    run_test "SetCaa skips it instead of failing or writing" \
+        "$(test_set_caa_skips_a_persist_domain; echo $?)"
+    run_test "Rotation reports the records to republish" \
+        "$(test_rotation_reports_the_records_to_republish; echo $?)"
 
     # Summary
     log_section "Test Summary"
