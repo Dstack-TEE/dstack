@@ -302,7 +302,7 @@ struct AmdKdsVcekCacheKey {
 
 #[derive(Clone)]
 pub struct AmdKdsClient {
-    base_url: String,
+    base_urls: Vec<String>,
     http_client: reqwest::Client,
     ca_cache: Cache<AmdKdsCaCacheKey, (CertBytes, CertBytes)>,
     vcek_cache: Cache<AmdKdsVcekCacheKey, CertBytes>,
@@ -314,14 +314,32 @@ impl AmdKdsClient {
     }
 
     pub fn with_base_url(base_url: impl AsRef<str>) -> Result<Self> {
-        let base_url = normalize_amd_kds_base_url(base_url.as_ref())?;
+        Self::with_base_urls([base_url.as_ref()])
+    }
+
+    /// Build a client over several interchangeable endpoints -- KDS itself, a
+    /// caching mirror of it, or both.
+    ///
+    /// Endpoints are tried in order and the first answer wins, so put the one
+    /// you would rather load first. Responses are cached by
+    /// `(product, chip_id, TCB)` rather than by URL, because the collateral is
+    /// a property of the chip and not of where it was fetched from: a hit
+    /// costs nothing regardless of which endpoint filled it.
+    pub fn with_base_urls(base_urls: impl IntoIterator<Item = impl AsRef<str>>) -> Result<Self> {
+        let base_urls = base_urls
+            .into_iter()
+            .map(|url| normalize_amd_kds_base_url(url.as_ref()))
+            .collect::<Result<Vec<_>>>()?;
+        if base_urls.is_empty() {
+            bail!("amd sev-snp KDS base URL list is empty");
+        }
         let http_client = reqwest::Client::builder()
             .connect_timeout(AMD_KDS_CONNECT_TIMEOUT)
             .timeout(AMD_KDS_REQUEST_TIMEOUT)
             .build()
             .context("failed to create amd sev-snp KDS HTTP client")?;
         Ok(Self {
-            base_url,
+            base_urls,
             http_client,
             ca_cache: Cache::new(AMD_KDS_CA_CACHE_CAPACITY),
             vcek_cache: Cache::new(AMD_KDS_VCEK_CACHE_CAPACITY),
@@ -354,11 +372,8 @@ impl AmdKdsClient {
             return Ok(cached);
         }
 
-        let url = join_amd_kds_url(
-            &self.base_url,
-            &format!("{}/cert_chain", product.kds_name()),
-        );
-        let chain = self.fetch_url(&url, "cert_chain").await?;
+        let path = format!("{}/cert_chain", product.kds_name());
+        let chain = self.fetch_path(&path, "cert_chain").await?;
         let (_fetched_ark, ask) = extract_ark_ask_from_amd_kds_cert_chain(&chain)?;
         let collateral = (product.builtin_ark(), ask);
         self.ca_cache.insert(key, collateral.clone());
@@ -380,28 +395,83 @@ impl AmdKdsClient {
             return Ok(cached);
         }
 
-        let vcek_url = amd_kds_vcek_url_with_base(&self.base_url, product, chip_id, tcb)?;
+        let vcek_path = amd_kds_vcek_path(product, chip_id, tcb)?;
         let vcek = CertBytes {
-            bytes: self.fetch_url(&vcek_url, "vcek").await?,
+            bytes: self.fetch_path(&vcek_path, "vcek").await?,
             encoding: CertEncoding::Der,
         };
         self.vcek_cache.insert(key, vcek.clone());
         Ok(vcek)
     }
 
-    async fn fetch_url(&self, url: &str, label: &str) -> Result<Vec<u8>> {
-        Ok(self
+    /// Try each endpoint in turn, stopping at the first success.
+    ///
+    /// Only *retryable* failures move on to the next endpoint. A 404 is a
+    /// deterministic answer about this chip and this TCB -- every mirror of KDS
+    /// will say the same thing -- so retrying it just multiplies load and
+    /// replaces a clear error with a confusing one. Transport failures, 408,
+    /// 429 and 5xx are the opposite: they say nothing about the request, only
+    /// about the endpoint, which is exactly what a second endpoint can fix.
+    async fn fetch_path(&self, path: &str, label: &str) -> Result<Vec<u8>> {
+        let mut errors: Vec<anyhow::Error> = Vec::new();
+        for base_url in &self.base_urls {
+            let url = join_amd_kds_url(base_url, path);
+            match self.fetch_one(&url, label).await {
+                Ok(bytes) => return Ok(bytes),
+                Err(err) => {
+                    let retryable = err.retryable;
+                    errors.push(err.error);
+                    if !retryable {
+                        break;
+                    }
+                }
+            }
+        }
+        match errors.len() {
+            // The constructor rejects an empty endpoint list, so the loop ran.
+            0 => bail!("amd sev-snp {label} request had no endpoint to try"),
+            // One endpoint tried, or the first answer was decisive: report it
+            // as-is rather than wrapping a single error in list phrasing.
+            1 => Err(errors.pop().expect("length checked")),
+            n => {
+                let joined = errors
+                    .iter()
+                    .map(|err| format!("{err:#}"))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                bail!("amd sev-snp {label} request failed on {n} endpoints: {joined}")
+            }
+        }
+    }
+
+    async fn fetch_one(&self, url: &str, label: &str) -> Result<Vec<u8>, AmdKdsFetchError> {
+        let response = self
             .http_client
             .get(url)
             .send()
             .await
-            .with_context(|| format!("failed to request amd sev-snp {label} from {url}"))?
+            .map_err(|err| AmdKdsFetchError {
+                retryable: true,
+                error: anyhow::Error::new(err)
+                    .context(format!("failed to request amd sev-snp {label} from {url}")),
+            })?;
+        let status = response.status();
+        let response = response
             .error_for_status()
-            .with_context(|| format!("amd sev-snp {label} request failed for {url}"))?
+            .map_err(|err| AmdKdsFetchError {
+                retryable: status_is_retryable(status),
+                error: anyhow::Error::new(err)
+                    .context(format!("amd sev-snp {label} request failed for {url}")),
+            })?;
+        response
             .bytes()
             .await
-            .with_context(|| format!("failed to read amd sev-snp {label} response"))?
-            .to_vec())
+            .map(|bytes| bytes.to_vec())
+            .map_err(|err| AmdKdsFetchError {
+                retryable: true,
+                error: anyhow::Error::new(err)
+                    .context(format!("failed to read amd sev-snp {label} response")),
+            })
     }
 }
 
@@ -735,8 +805,7 @@ fn amd_snp_product_from_report(report: &AttestationReport) -> Result<Option<AmdS
     Ok(Some(product))
 }
 
-fn amd_kds_vcek_url_with_base(
-    base_url: &str,
+fn amd_kds_vcek_path(
     product: AmdSnpProduct,
     chip_id: &[u8; 64],
     tcb: AmdSnpTcbVersion,
@@ -746,34 +815,41 @@ fn amd_kds_vcek_url_with_base(
             let fmc = tcb
                 .fmc
                 .context("amd sev-snp Turin VCEK request requires reported FMC TCB")?;
-            join_amd_kds_url(
-                base_url,
-                &format!(
-                    "{}/{}?fmcSPL={}&blSPL={}&teeSPL={}&snpSPL={}&ucodeSPL={}",
-                    product.kds_name(),
-                    hex::encode(&chip_id[..8]),
-                    fmc,
-                    tcb.bootloader,
-                    tcb.tee,
-                    tcb.snp,
-                    tcb.microcode
-                ),
-            )
-        }
-        AmdSnpProduct::Milan | AmdSnpProduct::Genoa => join_amd_kds_url(
-            base_url,
-            &format!(
-                "{}/{}?blSPL={}&teeSPL={}&snpSPL={}&ucodeSPL={}",
+            format!(
+                "{}/{}?fmcSPL={}&blSPL={}&teeSPL={}&snpSPL={}&ucodeSPL={}",
                 product.kds_name(),
-                hex::encode(chip_id),
+                hex::encode(&chip_id[..8]),
+                fmc,
                 tcb.bootloader,
                 tcb.tee,
                 tcb.snp,
                 tcb.microcode
-            ),
+            )
+        }
+        AmdSnpProduct::Milan | AmdSnpProduct::Genoa => format!(
+            "{}/{}?blSPL={}&teeSPL={}&snpSPL={}&ucodeSPL={}",
+            product.kds_name(),
+            hex::encode(chip_id),
+            tcb.bootloader,
+            tcb.tee,
+            tcb.snp,
+            tcb.microcode
         ),
     };
     Ok(url)
+}
+
+/// A KDS fetch failure, tagged with whether another endpoint could plausibly
+/// answer differently.
+struct AmdKdsFetchError {
+    retryable: bool,
+    error: anyhow::Error,
+}
+
+fn status_is_retryable(status: reqwest::StatusCode) -> bool {
+    status.is_server_error()
+        || status == reqwest::StatusCode::REQUEST_TIMEOUT
+        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
 }
 
 fn extract_ark_ask_from_amd_kds_cert_chain(chain: &[u8]) -> Result<(CertBytes, CertBytes)> {
@@ -952,6 +1028,9 @@ fn parse_kernel_cert_table(auxblob: &[u8]) -> Result<Vec<([u8; 16], Vec<u8>)>> {
 }
 
 #[cfg(test)]
+mod failover_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1001,6 +1080,62 @@ mod tests {
     }
 
     #[test]
+    fn kds_endpoints_are_normalized_and_ordered() {
+        let client = AmdKdsClient::with_base_urls([
+            "https://mirror.example/vcek/v1/",
+            " https://kdsintf.amd.com/vcek/v1 ",
+        ])
+        .unwrap();
+        assert_eq!(
+            client.base_urls,
+            vec![
+                "https://mirror.example/vcek/v1".to_string(),
+                "https://kdsintf.amd.com/vcek/v1".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_endpoint_list_is_rejected_rather_than_silently_defaulted() {
+        let err = match AmdKdsClient::with_base_urls(Vec::<String>::new()) {
+            Ok(_) => panic!("an empty endpoint list should not build a client"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("empty"),
+            "unexpected error: {err:#}"
+        );
+        // A single blank string is the same mistake wearing a different hat.
+        assert!(AmdKdsClient::with_base_url("   ").is_err());
+    }
+
+    /// A 404 is an answer about the chip, not about the endpoint: every mirror
+    /// of KDS will repeat it, so trying the next one only multiplies load.
+    #[test]
+    fn only_endpoint_shaped_failures_are_retried_elsewhere() {
+        use reqwest::StatusCode;
+        for status in [
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::REQUEST_TIMEOUT,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::BAD_GATEWAY,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            assert!(status_is_retryable(status), "{status} should fail over");
+        }
+        for status in [
+            StatusCode::NOT_FOUND,
+            StatusCode::BAD_REQUEST,
+            StatusCode::FORBIDDEN,
+        ] {
+            assert!(
+                !status_is_retryable(status),
+                "{status} should not fail over"
+            );
+        }
+    }
+
+    #[test]
     fn amd_kds_vcek_url_binds_chip_id_and_reported_tcb() {
         let chip_id = [0xab; 64];
         let tcb = AmdSnpTcbVersion {
@@ -1011,13 +1146,10 @@ mod tests {
             microcode: 4,
         };
 
-        let url = amd_kds_vcek_url_with_base(
+        let url = join_amd_kds_url(
             AMD_KDS_DEFAULT_BASE_URL,
-            AmdSnpProduct::Genoa,
-            &chip_id,
-            tcb,
-        )
-        .unwrap();
+            &amd_kds_vcek_path(AmdSnpProduct::Genoa, &chip_id, tcb).unwrap(),
+        );
 
         assert_eq!(
             url,
@@ -1039,13 +1171,10 @@ mod tests {
             microcode: 4,
         };
 
-        let url = amd_kds_vcek_url_with_base(
+        let url = join_amd_kds_url(
             AMD_KDS_DEFAULT_BASE_URL,
-            AmdSnpProduct::Turin,
-            &chip_id,
-            tcb,
-        )
-        .unwrap();
+            &amd_kds_vcek_path(AmdSnpProduct::Turin, &chip_id, tcb).unwrap(),
+        );
 
         assert_eq!(
             url,

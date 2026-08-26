@@ -19,8 +19,15 @@ image_download_timeout_secs = 300
 insecure_allow_external_trust_anchors = false
 
 [attestation.urls]
+# Each accepts a single URL or a list of interchangeable ones. With a list,
+# endpoints are tried in order and the first answer wins, so put the endpoint
+# you would rather load first. Failing over changes nothing about verification:
+# collateral is vendor-signed and checked against roots built into the binary,
+# so an endpoint can be slow, stale or absent but cannot be forged.
 # pccs = "https://pccs.phala.network"
+# pccs = ["https://pccs.internal", "https://pccs.phala.network"]
 # amd_kds = "https://kdsintf.amd.com/vcek/v1"
+# amd_kds = ["https://kds-cache.internal/vcek/v1", "https://kdsintf.amd.com/vcek/v1"]
 
 [attestation.root_ca]
 # tdx = "/etc/dstack/roots/intel-sgx-root-ca.der"

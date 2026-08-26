@@ -15,6 +15,7 @@ pub mod amd_sev_snp;
 pub mod attestation;
 #[cfg(feature = "quote")]
 mod aws_nitro_tpm;
+pub mod collateral;
 #[cfg(feature = "quote")]
 mod sev_snp;
 pub mod trust_anchors;

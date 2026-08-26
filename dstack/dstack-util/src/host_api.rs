@@ -4,10 +4,10 @@
 
 use crate::utils::{deserialize_json_file, sha256, SysConfig};
 use anyhow::{anyhow, bail, Context, Result};
-use dcap_qvl::collateral::{CollateralClient, PHALA_PCCS_URL};
+use dstack_attest::collateral::PccsClient;
 use dstack_types::{
     shared_filenames::{HOST_SHARED_DIR, SYS_CONFIG},
-    Platform,
+    Platform, UrlList,
 };
 use host_api::{
     client::{new_client, DefaultClient},
@@ -27,26 +27,26 @@ pub(crate) struct KeyProvision {
 
 pub(crate) struct HostApi {
     client: Option<DefaultClient>,
-    pccs_url: Option<String>,
+    pccs_urls: UrlList,
 }
 
 impl Default for HostApi {
     fn default() -> Self {
-        Self::new(None, None)
+        Self::new(None, UrlList::default())
     }
 }
 
 impl HostApi {
-    pub fn new(base_url: Option<String>, pccs_url: Option<String>) -> Self {
+    pub fn new(base_url: Option<String>, pccs_urls: UrlList) -> Self {
         Self {
             client: base_url.map(new_client),
-            pccs_url,
+            pccs_urls,
         }
     }
 
     pub fn load_or_default(url: Option<String>) -> Result<Self> {
         let api = match url {
-            Some(url) => Self::new(Some(url), None),
+            Some(url) => Self::new(Some(url), UrlList::default()),
             None => {
                 let local_config: SysConfig =
                     deserialize_json_file(format!("{HOST_SHARED_DIR}/{SYS_CONFIG}"))?;
@@ -105,13 +105,7 @@ impl HostApi {
         .map_err(|err| anyhow!("Failed to get sealing key: {err:?}"))?;
 
         // verify the key provider quote
-        let pccs_url = self
-            .pccs_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|url| !url.is_empty())
-            .unwrap_or(PHALA_PCCS_URL);
-        let collateral_client = CollateralClient::with_default_http(pccs_url)?;
+        let collateral_client = PccsClient::new(&self.pccs_urls)?;
         let verified_report = tokio::time::timeout(
             PCCS_TIMEOUT,
             collateral_client.fetch_and_verify(&provision.provider_quote),
