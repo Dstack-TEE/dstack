@@ -439,14 +439,6 @@ from five vantage points across four autonomous systems and two continents, whil
 every other external service answered normally. DNS was healthy and unchanged
 throughout, so this was the service, not a migration.
 
-Verification needs the ASK and VCEK certificates. By default they are fetched
-from `https://kdsintf.amd.com`, which is a **single global endpoint with no
-mirror**, is aggressively rate-limited (one identical request per ~10s), and was
-completely unreachable during the last round — TCP timeouts and 100% ICMP loss
-from five vantage points across four autonomous systems and two continents, while
-every other external service answered normally. DNS was healthy and unchanged
-throughout, so this was the service, not a migration.
-
 The rate limit is not theoretical: back-to-back negative tests against the same
 chip hit `HTTP status client error (429)` on the VCEK URL, which reads exactly
 like a verification failure until you notice the status code. Space repeat
@@ -456,6 +448,23 @@ dstack already supports the alternative: `normalize_kernel_cert_table` reads ASK
 and VCEK from the SNP extended report's certificate table, so a host that has
 been provisioned needs no KDS access at all. AMD's own specification recommends
 caching at the host for exactly this reason.
+
+**There is no KDS cache service in this repo, and nothing to point one at.** The
+only caching is in-process: `AmdKdsClient` holds a `moka` cache of 16 CA chains
+and 1024 VCEKs, bounded by capacity with no TTL and no persistence, so it is warm
+only for the lifetime of a single KMS or verifier process. A one-shot
+`dstack-verifier --verify` starts cold every time, which is exactly how the 429
+above was earned. `[core.attestation.urls] amd_kds` accepts any KDS-compatible
+base URL, so a mirror would drop in — but you would have to write it. Compare
+`nvidia-attest-proxy`, which is the persistent, on-disk, PCCS-like cache the
+NVIDIA collateral got and AMD did not. (`crates/mock-attestation` serves
+KDS-shaped routes but is a test fixture with fake collateral, not a mirror.)
+
+The guest side of the cert-table path needs nothing configured: `sev-snp-attest`
+reads `certs`, `cert_chain` or `auxblob` from the configfs TSM report, falling
+back to the extended-report ioctl, and passes whatever it finds up with the
+quote. An unprovisioned host simply yields an empty chain, and the verifier then
+goes to KDS — which is what happened here.
 
 **So: provision the host certificate chain (`snphost` / `sevctl`) as part of
 setup.** It is a one-time fetch and it removes an unreliable dependency from
