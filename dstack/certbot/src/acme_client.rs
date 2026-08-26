@@ -290,7 +290,10 @@ impl AcmeClient {
         Ok(())
     }
 
-    /// Auto renew given certificate
+    /// Issue a certificate for `domains` unless the live one is already for
+    /// exactly those names.
+    ///
+    /// Returns whether a certificate was issued.
     pub async fn create_cert_if_needed(
         &self,
         domains: &[String],
@@ -299,7 +302,28 @@ impl AcmeClient {
         backup_dir: impl AsRef<Path>,
     ) -> Result<bool> {
         if live_cert_pem_path.as_ref().exists() && live_key_pem_path.as_ref().exists() {
-            return Ok(false);
+            // The live certificate is only "the certificate we were asked for"
+            // if it carries the configured names. Treating its mere existence as
+            // sufficient pinned the name list at whatever the first issuance
+            // used: an operator adding a name to the configuration got no new
+            // certificate, and renewal read its names back off the old one, so
+            // the edit never took effect at all.
+            let reason = match fs::read_to_string(live_cert_pem_path.as_ref()) {
+                Ok(live_cert_pem) => reissue_reason(&live_cert_pem, domains),
+                // `exists()` has already passed, so this is a permission
+                // problem or a file replaced mid-flight rather than a missing
+                // certificate. Either way the certificate cannot be checked
+                // against the configuration, which is a reissue for the same
+                // reason an unparseable one is.
+                Err(err) => Some(format!(
+                    "cannot read {}: {err:#}",
+                    live_cert_pem_path.as_ref().display()
+                )),
+            };
+            match reason {
+                None => return Ok(false),
+                Some(reason) => info!("reissuing: {reason}"),
+            }
         }
         let key_pem = if live_key_pem_path.as_ref().exists() {
             debug!("using existing cert key pair");
@@ -798,6 +822,39 @@ pub(crate) fn read_pem(cert_pem: &str) -> Result<Pem> {
         .context("no certificate in pem")
 }
 
+/// Why the live certificate has to be reissued, or `None` if it is the one the
+/// configuration asks for.
+///
+/// A certificate whose names cannot be read counts as a reissue: it cannot be
+/// checked against the configuration, so leaving it in place would keep serving
+/// something this process can no longer reason about.
+fn reissue_reason(live_cert_pem: &str, domains: &[String]) -> Option<String> {
+    match extract_subject_alt_names(live_cert_pem) {
+        Ok(names) if names_match(&names, domains) => None,
+        Ok(names) => Some(format!(
+            "the live certificate covers {}, the configuration asks for {}",
+            names.join(", "),
+            domains.join(", ")
+        )),
+        Err(err) => Some(format!("cannot read the live certificate's names: {err:#}")),
+    }
+}
+
+/// Whether a certificate's DNS names are exactly the configured ones.
+///
+/// Compared as sets: the order the CA returns names in is its own business, and
+/// DNS names are case-insensitive and may carry a trailing root dot. Equality
+/// rather than containment, so narrowing the configured list reissues too.
+fn names_match(cert_names: &[String], domains: &[String]) -> bool {
+    fn normalized(names: &[String]) -> BTreeSet<String> {
+        names
+            .iter()
+            .map(|name| name.trim_end_matches('.').to_ascii_lowercase())
+            .collect()
+    }
+    normalized(cert_names) == normalized(domains)
+}
+
 fn extract_subject_alt_names(cert_pem: &str) -> Result<Vec<String>> {
     let pem = read_pem(cert_pem)?;
     let cert = pem.parse_x509().context("Invalid x509 certificate")?;
@@ -975,5 +1032,99 @@ mod purge_tests {
     fn an_untouched_name_is_still_cleared() {
         let published = vec![challenge("_acme-challenge.example.com", "value-for-base")];
         assert!(needs_purge(&published, "_acme-challenge.example.org"));
+    }
+}
+
+/// The owned name list the functions under test take, spelled once.
+#[cfg(test)]
+fn names(list: &[&str]) -> Vec<String> {
+    list.iter().map(|name| name.to_string()).collect()
+}
+
+#[cfg(test)]
+mod names_match_tests {
+    use super::{names, names_match};
+
+    /// The CA returns the names in whatever order it likes -- the staging CA
+    /// puts the wildcard first -- and DNS names are case-insensitive and may
+    /// carry the root dot. None of that is a configuration change.
+    #[test]
+    fn the_same_names_written_differently_are_the_same_names() {
+        assert!(names_match(
+            &names(&["*.example.com", "Example.com."]),
+            &names(&["example.com", "*.example.com"]),
+        ));
+    }
+
+    /// Adding a name to the configuration is what has to trigger a reissue --
+    /// this is the case that silently did nothing before.
+    #[test]
+    fn an_added_name_does_not_match() {
+        assert!(!names_match(
+            &names(&["example.com"]),
+            &names(&["example.com", "*.example.com"]),
+        ));
+    }
+
+    /// Dropping a name must reissue as well: a certificate covering more than
+    /// the configuration asks for is not the certificate that was asked for.
+    #[test]
+    fn a_dropped_name_does_not_match() {
+        assert!(!names_match(
+            &names(&["example.com", "*.example.com"]),
+            &names(&["example.com"]),
+        ));
+    }
+}
+
+#[cfg(test)]
+mod reissue_reason_tests {
+    use super::{names, reissue_reason};
+    use rcgen::{CertificateParams, KeyPair};
+
+    /// A certificate carrying exactly `sans`, in the order given -- the CA's own
+    /// order is not the configuration's, which is what the decision has to
+    /// tolerate.
+    fn cert_with_names(sans: &[&str]) -> String {
+        let key = KeyPair::generate().expect("failed to generate key");
+        CertificateParams::new(names(sans))
+            .expect("failed to build certificate params")
+            .self_signed(&key)
+            .expect("failed to self-sign")
+            .pem()
+    }
+
+    #[test]
+    fn the_configured_certificate_is_kept() {
+        let cert = cert_with_names(&["*.example.com", "example.com"]);
+        assert_eq!(
+            reissue_reason(&cert, &names(&["example.com", "*.example.com"])),
+            None
+        );
+    }
+
+    /// The case that silently did nothing before: a name added to the
+    /// configuration has to reach the CA.
+    #[test]
+    fn a_certificate_missing_a_configured_name_is_reissued() {
+        let cert = cert_with_names(&["example.com"]);
+        let reason = reissue_reason(&cert, &names(&["example.com", "*.example.com"]))
+            .expect("an added name must reissue");
+        // Both lists are in the message: the operator has to be able to see
+        // what is being replaced and why.
+        assert!(reason.contains("covers example.com"), "{reason}");
+        assert!(
+            reason.contains("asks for example.com, *.example.com"),
+            "{reason}"
+        );
+    }
+
+    /// A certificate whose names cannot be read cannot be checked against the
+    /// configuration either, so it is replaced rather than served on.
+    #[test]
+    fn an_unreadable_certificate_is_reissued() {
+        let reason = reissue_reason("not a certificate", &names(&["example.com"]))
+            .expect("an unreadable certificate must reissue");
+        assert!(reason.contains("cannot read"), "{reason}");
     }
 }

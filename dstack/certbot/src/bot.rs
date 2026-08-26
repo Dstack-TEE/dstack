@@ -190,7 +190,8 @@ impl CertBot {
     }
 
     async fn renew_inner(&self, force: bool) -> Result<bool> {
-        let created = self
+        let live_cert_exists = self.config.cert_file.exists() && self.config.key_file.exists();
+        let issued = self
             .acme_client
             .create_cert_if_needed(
                 &self.config.cert_subject_alt_names,
@@ -198,11 +199,30 @@ impl CertBot {
                 &self.config.key_file,
                 &self.config.cert_dir,
             )
-            .await?;
-        if created {
-            info!("created new certificate");
-            return Ok(true);
-        }
+            .await;
+        // A live certificate that does not cover the configured names is
+        // reissued above, and that reissuance keeps failing for as long as the
+        // configuration names something the CA will not validate -- a typo, a
+        // zone the DNS credentials cannot write. Failing the run right here
+        // would take the renewal check below down with it, so one name the
+        // operator got wrong would stop renewing the certificate that is
+        // actually being served, until it expires. The renewal still runs; the
+        // error is reported, and returned below unless the renewal committed
+        // something of its own.
+        let reissue_error = match issued {
+            Ok(true) => {
+                info!("created new certificate");
+                return Ok(true);
+            }
+            Ok(false) => None,
+            // Nothing is being served yet, so there is no renewal to protect
+            // and `auto_renew` has no certificate to read.
+            Err(err) if !live_cert_exists => return Err(err),
+            Err(err) => {
+                error!("failed to issue a certificate for the configured domains: {err:#}");
+                Some(err)
+            }
+        };
         info!("checking if certificate needs to be renewed");
         let renewed = self
             .acme_client
@@ -215,21 +235,25 @@ impl CertBot {
             )
             .await?;
 
-        match renewed {
-            true => {
+        match (renewed, reissue_error) {
+            (true, _) => {
                 info!(
                     "renewed certificate for {}",
                     self.config.cert_file.display()
                 );
+                Ok(true)
             }
-            false => {
+            // The renewal committed nothing, so the reissue failure is the
+            // whole outcome of this run and `renew --once` must report it.
+            (false, Some(err)) => Err(err),
+            (false, None) => {
                 info!(
                     "certificate {} is up to date",
                     self.config.cert_file.display()
                 );
+                Ok(false)
             }
         }
-        Ok(renewed)
     }
 
     /// Set CAA record for the domain.
