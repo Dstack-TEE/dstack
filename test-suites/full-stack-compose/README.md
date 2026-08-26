@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Production-compatible KMS/Gateway upgrade E2E
+# Production-compatible KMS/Gateway E2E
 
 This suite runs the stateful services and applications in **real TDX CVMs**.
 Docker Compose is used only for host infrastructure (VMM, authorization,
@@ -73,15 +73,35 @@ would make a passing result irrelevant to production:
    - Docker and WireGuard kernel support
 
 3. Provide an unpacked dstack image directory containing `digest.txt` and
-   `sha256sum.txt` for both the current image (`DSTACK_E2E_IMAGE_NAME`) and the
-   v0.5.11 compatibility image (`DSTACK_E2E_OLD_IMAGE_NAME`). Copy
-   `.env.example` to `.env` when paths or ports differ.
+   `sha256sum.txt` for the current image (`DSTACK_E2E_IMAGE_NAME`). The
+   `upgrade` phase additionally needs the v0.5.11 compatibility image
+   (`DSTACK_E2E_OLD_IMAGE_NAME`); no other phase boots it, and no other phase
+   requires it to be present. Copy `.env.example` to `.env` when paths or ports
+   differ.
 
 ## Run
 
 ```bash
-DOCKER_BUILDKIT=0 ./run-upgrade-e2e.sh
+DOCKER_BUILDKIT=0 ./run-e2e.sh                    # the full upgrade suite
+DOCKER_BUILDKIT=0 ./run-e2e.sh --phase certbot    # certbot/ACME only
 ```
+
+### Phases
+
+A phase is the unit a run can be limited to. Each one is self-contained --- it
+deploys what it needs and asserts on it --- so a change confined to one area
+does not have to pay for the whole suite. `DSTACK_E2E_PHASE` selects the same
+thing as `--phase`.
+
+| Phase | Deploys | Covers |
+| --- | --- | --- |
+| `upgrade` (default) | KMS 0.5.8 + current, two Gateway nodes rolled 0.5.8 -> current, two apps | Everything below: key/identity continuity across the upgrade, durable Gateway state, zero-downtime rolling upgrade |
+| `certbot` | Current KMS, two current Gateway nodes | A fresh cluster's first ACME account registration, CAA reconciliation, ACME account rotation |
+
+The `certbot` phase is the only one that reaches a fresh cluster's *first*
+account registration on current code. The `upgrade` phase cannot: Gateway 0.5.8
+registers the shared account long before the current binary starts, so every
+current-code run there takes the load path instead.
 
 The defaults pull these released images from Docker Hub:
 
@@ -92,7 +112,30 @@ The driver checks each released binary's `--version` output before deploying
 anything. Set `DSTACK_E2E_SKIP_CURRENT_BUILD=true` only when the current musl
 binaries were already built.
 
-## Upgrade sequence and assertions
+## `certbot` phase assertions
+
+1. Deploy current KMS (bootstrapped fresh, not onboarded) and two current
+   Gateway CVMs under one pinned Gateway app ID, then configure Pebble and the
+   mock Cloudflare DNS API.
+2. Reconcile CAA on a cluster that holds **no** ACME account. This registers one
+   from inside the region that holds the cluster-wide ACME lock, which is the
+   ordering that has to be right: a run that refuses --- or blocks on --- its own
+   lock fails here.
+3. Issue the wildcard certificate against the account that registration
+   published, and require the CAA records to still pin it.
+4. Reconcile CAA through the *other* node. It must adopt the same account rather
+   than register a second one, which the last-writer-wins credentials record
+   would otherwise silently lose.
+5. Rotate the shared account through one node and force issuance through the
+   other, which is what proves the switch reached the cluster rather than one
+   process.
+
+After every step the zone is read back from the mock provider: exactly one
+`issue` and one `issuewild` record, both pinned to the same account (the rotated
+one after rotation), and no `;` guard left behind --- the state a reconciliation
+that was interleaved, or that died halfway, does not produce.
+
+## `upgrade` sequence and assertions
 
 ### KMS 0.5.8 to current
 
@@ -133,6 +176,14 @@ rejected if they say image verification or self-authorization is disabled.
 8. Force certificate issuance through each upgraded node against a mock DNS API
    that rejects anything except the original bearer token. This proves the DNS
    credential value survived even though the current admin API redacts it.
+9. Reconcile CAA through each upgraded node, then rotate the shared ACME account
+   through one node and issue through the other. These are the two admin
+   operations that take the cluster-wide ACME lock, and nothing else in the
+   suite calls them: a reconciliation that refuses or blocks on the lock it
+   holds itself is invisible to single-process unit tests. The zone is read back
+   from the mock provider after each step and must carry exactly one `issue` and
+   one `issuewild` record, both pinned to the same account -- the rotated one
+   after rotation -- with no `;` guard left behind.
 
 This is a production-style **rolling two-node** zero-downtime assertion. The
 suite does not claim that rebooting a single Gateway CVM can preserve that

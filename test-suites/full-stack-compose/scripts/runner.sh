@@ -393,7 +393,11 @@ admin_curl() {
   local node=$1 method=$2 data=${3:-'{}'} admin out code
   read -r _ admin _ < <(gateway_ports "$node")
   out=$(mktemp)
+  # Bounded on purpose: an admin RPC that blocks forever -- on a lock it holds
+  # itself, say -- must fail this suite rather than hang it until the job
+  # timeout, where the cause is far less obvious.
   code=$(curl -sS -o "$out" -w '%{http_code}' -X POST \
+    --max-time "${ADMIN_CURL_MAX_TIME:-300}" \
     -H "Authorization: Bearer ${GATEWAY_ADMIN_TOKEN}" \
     -H 'Content-Type: application/json' \
     "http://127.0.0.1:${admin}/prpc/Admin.${method}?json" \
@@ -424,17 +428,32 @@ wait_gateway() {
 }
 
 bootstrap_gateway() {
+  configure_gateway_certbot
+  issue_first_gateway_cert
+}
+
+# Certbot/DNS/ZT-Domain configuration only. Split out of the first issuance so a
+# phase can put something between them -- a fresh cluster reconciling CAA before
+# it holds an ACME account, for one.
+# `max_dns_wait` is one second rather than zero: current code rejects zero at
+# creation (an issuance that never waits for propagation cannot succeed against
+# a real provider), and only 0.5.8 ever accepted it. Pebble is configured to
+# validate unconditionally, so one second is as good as none here.
+configure_gateway_certbot() {
   log "configuring Gateway cluster through node 1"
   admin_curl 1 SetCertbotConfig \
     "$(jq -cn --arg u "http://10.0.2.2:${PEBBLE_HTTP_PORT}/dir" \
       '{acme_url:$u, renew_before_expiration_secs:3600}')" >/dev/null
   admin_curl 1 CreateDnsCredential \
     "$(jq -cn --arg u "http://10.0.2.2:${MOCK_CF_HTTP_PORT}/client/v4" \
-      '{name:"mock-cloudflare",provider_type:"cloudflare",cf_api_token:"test-token",cf_api_url:$u,set_as_default:true,dns_txt_ttl:1,max_dns_wait:0}')" \
+      '{name:"mock-cloudflare",provider_type:"cloudflare",cf_api_token:"test-token",cf_api_url:$u,set_as_default:true,dns_txt_ttl:1,max_dns_wait:1}')" \
     >/dev/null
   admin_curl 1 AddZtDomain \
     "$(jq -cn --arg d "$BASE_DOMAIN" '{domain:$d,port:443,priority:100}')" \
     >/dev/null
+}
+
+issue_first_gateway_cert() {
   admin_curl 1 RenewZtDomainCert \
     "$(jq -cn --arg d "$BASE_DOMAIN" '{domain:$d,force:true}')" \
     | tee "$WORK_DIR/gateway-renew-cert.json"
@@ -552,6 +571,110 @@ assert_gateway_dns_credential_usable() {
     sleep 3
   done
   die "Gateway node $node could not issue with its persisted DNS credential"
+}
+
+# Read every record the mock Cloudflare API currently holds. The endpoint is
+# unauthenticated on purpose: it is the suite's view of the zone, not one of the
+# provider operations the gateway performs.
+mock_dns_records() {
+  curl -sS "http://127.0.0.1:${MOCK_CF_HTTP_PORT}/api/records"
+}
+
+# Assert the zone ends up in the exact state a finished reconciliation leaves:
+# one `issue` and one `issuewild` record pinned to one account, and no `;` guard
+# left behind. Reconciliation rewrites these in place -- guard, sweep, write,
+# unguard -- so a run that was interleaved with another, or that died halfway,
+# shows up here as a duplicate, a missing tag, or a surviving guard that blocks
+# every future issuance for the name.
+#
+# Writes the pinned account URI to $WORK_DIR/gateway-caa-account. Pass an
+# expected URI to require a specific account.
+assert_gateway_caa_records() {
+  local expect=${1:-} parsed account
+  parsed=$(mock_dns_records | jq -c --arg n "$BASE_DOMAIN" '
+    [ .records[]
+      | select(.type == "CAA")
+      | select((.name | ascii_downcase) == ($n | ascii_downcase))
+      | .content
+      | capture("^(?<flags>[0-9]+) +(?<tag>[a-z]+) +\"(?<value>.*)\"$") ]') \
+    || die "could not read CAA records from the mock DNS API"
+  printf '%s\n' "$parsed" > "$WORK_DIR/gateway-caa-records.json"
+
+  jq -e 'map(select(.value == ";")) | length == 0' <<<"$parsed" >/dev/null \
+    || die "reconciliation left guard CAA records behind: $parsed"
+  local tag
+  for tag in issue issuewild; do
+    jq -e --arg t "$tag" 'map(select(.tag == $t)) | length == 1' <<<"$parsed" >/dev/null \
+      || die "expected exactly one $tag CAA record for $BASE_DOMAIN: $parsed"
+  done
+  account=$(jq -r '
+    map(select(.tag == "issue")) | .[0].value
+    | capture("accounturi=(?<uri>[^;]+)$") | .uri' <<<"$parsed")
+  [[ -n "$account" && "$account" != null ]] \
+    || die "CAA records do not pin an ACME account: $parsed"
+  jq -e --arg a "$account" 'map(select(.value | endswith("accounturi=" + $a))) | length == 2' \
+    <<<"$parsed" >/dev/null \
+    || die "issue and issuewild pin different accounts: $parsed"
+  if [[ -n "$expect" ]]; then
+    [[ "$account" == "$expect" ]] \
+      || die "CAA pins $account, expected the rotated account $expect"
+  fi
+  printf '%s' "$account" > "$WORK_DIR/gateway-caa-account"
+}
+
+# Reconcile CAA through an upgraded node.
+#
+# On the current code one cluster-wide lock covers rotation, reconciliation, and
+# first-use account registration. A reconciliation that refuses -- or blocks on
+# -- the lock it holds itself is invisible to single-process unit tests and to
+# every issuance path this suite already exercises, because nothing else calls
+# SetCaa.
+assert_gateway_caa_reconcile() {
+  local node=$1 expect=${2:-} deadline=$((SECONDS + 180)) out rc
+  log "reconciling CAA through Gateway node $node"
+  # A fresh cluster registers its shared ACME account from whichever path
+  # reaches it first, and adding a ZT domain starts an issuance that does
+  # exactly that. Both take the cluster-wide ACME lock, and the loser is
+  # refused rather than queued -- deliberately: the refusal says to retry after
+  # the holder finishes, which is seconds for a registration. Retry, the way
+  # this suite already retries the per-domain certificate lock.
+  while (( SECONDS < deadline )); do
+    rc=0
+    out=$(admin_curl "$node" SetCaa 2>&1) || rc=$?
+    if (( rc == 0 )); then
+      assert_gateway_caa_records "$expect"
+      log "Gateway node $node pinned CAA to $(cat "$WORK_DIR/gateway-caa-account")"
+      return
+    fi
+    grep -q "holds the shared ACME lock" <<<"$out" \
+      || die "Gateway node $node could not reconcile CAA records: $out"
+    log "Gateway node $node is waiting for the shared ACME lock"
+    sleep 3
+  done
+  die "Gateway node $node never acquired the shared ACME lock"
+}
+
+# Rotate the shared ACME account, then require the cluster to issue with it.
+#
+# Rotation registers a replacement account, publishes it, and re-pins every
+# domain's CAA under the same lock. Issuing afterwards through the *other* node
+# is what proves the switch reached the whole cluster rather than one process.
+assert_gateway_acme_rotation() {
+  local node=$1 peer=$2 previous result account
+  previous=$(cat "$WORK_DIR/gateway-caa-account")
+  log "rotating the shared ACME account through Gateway node $node"
+  result=$(admin_curl "$node" RotateAcmeCredentials) \
+    || die "Gateway node $node could not rotate the ACME account"
+  printf '%s\n' "$result" > "$WORK_DIR/gateway-rotate-acme.json"
+  account=$(jq -r '.account_uri // ""' <<<"$result")
+  [[ -n "$account" ]] || die "rotation returned no account URI: $result"
+  [[ "$account" != "$previous" ]] \
+    || die "rotation kept the previous account $account"
+  jq -e '(.domains_updated // 0) >= 1' <<<"$result" >/dev/null \
+    || die "rotation re-pinned no domain: $result"
+  assert_gateway_caa_records "$account"
+  log "rotated to $account and re-pinned CAA"
+  assert_gateway_dns_credential_usable "$peer"
 }
 
 render_app() {
@@ -858,6 +981,14 @@ phase_upgrade() {
   assert_gateway_dns_credential_usable 1
   assert_gateway_dns_credential_usable 2
 
+  # CAA reconciliation and ACME account rotation are the two admin operations
+  # that take the cluster-wide ACME lock, and neither runs anywhere else in this
+  # suite. Both nodes reconcile, then one rotates and the other issues with the
+  # replacement account.
+  assert_gateway_caa_reconcile 1
+  assert_gateway_caa_reconcile 2
+  assert_gateway_acme_rotation 2 1
+
   assert_no_insecure_shortcuts
   save_vm_logs
   # dstack-kms runs in an inner container, whose stdout is not part of the CVM
@@ -900,11 +1031,66 @@ on_exit() {
 }
 trap on_exit EXIT
 
+# Certbot/ACME behaviour on the current code alone, with no upgrade sources and
+# no compatibility image: one KMS and a two-node Gateway cluster, both current.
+#
+# This is the only phase that reaches a fresh cluster's *first* ACME account
+# registration on current code. The upgrade phase cannot: Gateway 0.5.8
+# registers the account long before the current binary starts, so every current
+# run there takes the load path.
+phase_certbot() {
+  [[ "$PLATFORM" == tdx ]] || die "certbot phase requires TDX"
+  wait_vmm
+  clean_start
+
+  render_kms latest "$CURRENT_KMS_IMAGE_ID" kms-current.tar
+  deploy_kms_onboard latest "$KMS_LATEST_HOST_PORT"
+  wait_onboard latest "$KMS_LATEST_HOST_PORT"
+  authorize_kms_from_attestation latest
+  onboard_rpc "$KMS_LATEST_HOST_PORT" Bootstrap \
+    "$(jq -cn --arg d "$KMS_RPC_DOMAIN" '{domain:$d}')" \
+    "$WORK_DIR/kms-latest.bootstrap.json"
+  finish_onboarding latest "$KMS_LATEST_HOST_PORT"
+
+  render_gateway_manifests latest "$CURRENT_GATEWAY_IMAGE_ID" gateway-current.tar
+  write_gateway_env 1
+  write_gateway_env 2
+  deploy_gateway 1 latest "$KMS_LATEST_URL"
+  gateway_version 1 latest
+  deploy_gateway 2 latest "$KMS_LATEST_URL"
+  gateway_version 2 latest
+
+  configure_gateway_certbot
+
+  # No account exists yet, so this run registers one -- from inside the region
+  # that holds the cluster-wide ACME lock, which is exactly the ordering that
+  # has to be got right. A run that refuses or blocks on its own lock fails
+  # here; nothing else in this suite reaches it.
+  local account
+  assert_gateway_caa_reconcile 1
+  account=$(cat "$WORK_DIR/gateway-caa-account")
+
+  # Issue against the account that registration just published, then reconcile
+  # from the other node: it must adopt the same account rather than register a
+  # second one, which is what the credentials record being last-writer-wins
+  # would otherwise silently lose.
+  issue_first_gateway_cert
+  assert_gateway_caa_records "$account"
+  assert_gateway_caa_reconcile 2 "$account"
+
+  assert_gateway_acme_rotation 2 1
+
+  save_vm_logs
+  log "gateway certbot/ACME E2E success"
+  cleanup_after
+}
+
 main() {
   need_bin /workspace/target/release/dstack
   [[ -s "$STATE_DIR/artifacts/images.env" ]] || die "missing prepared image metadata"
   case "$PHASE" in
     upgrade) phase_upgrade ;;
+    certbot) phase_certbot ;;
     *) die "unknown DSTACK_E2E_PHASE=$PHASE" ;;
   esac
   log "Work artifacts: $WORK_DIR"

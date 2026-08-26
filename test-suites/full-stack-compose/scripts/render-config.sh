@@ -13,6 +13,7 @@ IMAGE_ROOT=${DSTACK_E2E_IMAGE_ROOT:-/images}
 IMAGE_NAME=${DSTACK_E2E_IMAGE_NAME:-dstack-0.6.0}
 OLD_IMAGE_NAME=${DSTACK_E2E_OLD_IMAGE_NAME:-dstack-0.5.11}
 PLATFORM=${DSTACK_E2E_PLATFORM:-tdx}
+PHASE=${DSTACK_E2E_PHASE:-upgrade}
 
 VMM_PORT=${DSTACK_E2E_VMM_PORT:-29080}
 AUTH_PORT=${DSTACK_E2E_AUTH_PORT:-28011}
@@ -113,7 +114,10 @@ package_os_image() {
 }
 
 OS_IMAGE_HASH=$(package_os_image "$IMAGE_NAME")
-if [[ "$OLD_IMAGE_NAME" == "$IMAGE_NAME" ]]; then
+# Only the upgrade phase boots the compatibility image. A phase that never
+# deploys one must not require it to be present -- and must not widen the
+# authorization allowlist with a second OS digest it will never launch.
+if [[ "$OLD_IMAGE_NAME" == "$IMAGE_NAME" || "$PHASE" != upgrade ]]; then
   OLD_OS_IMAGE_HASH=$OS_IMAGE_HASH
 else
   OLD_OS_IMAGE_HASH=$(package_os_image "$OLD_IMAGE_NAME")
@@ -284,5 +288,9 @@ echo "  artifacts:    http://10.0.2.2:${ARTIFACT_PORT}"
 echo "  old KMS:      https://${KMS_RPC_DOMAIN}:${KMS_OLD_HOST_PORT}"
 echo "  latest KMS:   https://${KMS_RPC_DOMAIN}:${KMS_LATEST_HOST_PORT}"
 echo "  current image: ${IMAGE_NAME} (${OS_IMAGE_HASH})"
-echo "  old image:     ${OLD_IMAGE_NAME} (${OLD_OS_IMAGE_HASH})"
+if [[ "$OLD_OS_IMAGE_HASH" == "$OS_IMAGE_HASH" ]]; then
+  echo "  old image:     not used by phase ${PHASE}"
+else
+  echo "  old image:     ${OLD_IMAGE_NAME} (${OLD_OS_IMAGE_HASH})"
+fi
 echo "  gateway app:  ${GATEWAY_APP_ID}"
