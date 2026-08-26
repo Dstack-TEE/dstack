@@ -10,8 +10,10 @@ It implements just the Cloudflare endpoints used by certbot's CloudflareClient:
   POST   /client/v4/zones/<zone_id>/dns_records
   DELETE /client/v4/zones/<zone_id>/dns_records/<record_id>
 
-It also serves TXT answers on UDP/53 so Pebble can validate DNS-01 when the
-ACME server is not configured with PEBBLE_VA_ALWAYS_VALID=1.
+It also serves TXT answers on 53, over both UDP and TCP, so Pebble can validate
+DNS-01 and dns-persist-01 for real rather than being run with
+PEBBLE_VA_ALWAYS_VALID=1. TCP is not optional: Pebble sets its DNS client to
+`Net = "tcp"` whenever it is given `-dnsserver`.
 """
 
 from __future__ import annotations
@@ -266,9 +268,15 @@ def dns_response(packet: bytes) -> bytes:
     return header + body
 
 
+def _debug(message: str) -> None:
+    if os.environ.get("DEBUG", "").lower() in {"1", "true", "yes"}:
+        print(message, flush=True)
+
+
 def dns_loop() -> None:
     """Serve mock DNS responses over UDP."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("0.0.0.0", 53))
     while True:
         packet, addr = sock.recvfrom(4096)
@@ -277,15 +285,68 @@ def dns_loop() -> None:
             if response:
                 sock.sendto(response, addr)
         except Exception as exc:  # pragma: no cover - diagnostic only
-            if os.environ.get("DEBUG", "").lower() in {"1", "true", "yes"}:
-                print(f"dns error from {addr}: {exc}", flush=True)
+            _debug(f"dns error from {addr}: {exc}")
+
+
+def _serve_dns_over_tcp(conn: socket.socket, addr: Any) -> None:
+    """Answer one TCP DNS client, which frames each message with its length."""
+    try:
+        conn.settimeout(5)
+        while True:
+            head = _recv_exactly(conn, 2)
+            if head is None:
+                return
+            (length,) = struct.unpack("!H", head)
+            query = _recv_exactly(conn, length)
+            if query is None:
+                return
+            response = dns_response(query)
+            if not response:
+                return
+            conn.sendall(struct.pack("!H", len(response)) + response)
+    except Exception as exc:  # pragma: no cover - diagnostic only
+        _debug(f"dns/tcp error from {addr}: {exc}")
+    finally:
+        conn.close()
+
+
+def _recv_exactly(conn: socket.socket, count: int) -> bytes | None:
+    """Read exactly `count` bytes, or None if the peer stopped sending."""
+    buf = b""
+    while len(buf) < count:
+        chunk = conn.recv(count - len(buf))
+        if not chunk:
+            return None
+        buf += chunk
+    return buf
+
+
+def dns_tcp_loop() -> None:
+    """Serve mock DNS responses over TCP.
+
+    Pebble sets `dnsClient.Net = "tcp"` whenever it is given a custom resolver
+    (`-dnsserver`), so a UDP-only mock answers none of its queries and every
+    challenge has to be waved through with PEBBLE_VA_ALWAYS_VALID. RFC 1035
+    §4.2.2 length-prefixes each message on TCP; that framing is the only
+    difference from the UDP path.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", 53))
+    sock.listen(16)
+    while True:
+        conn, addr = sock.accept()
+        threading.Thread(
+            target=_serve_dns_over_tcp, args=(conn, addr), daemon=True
+        ).start()
 
 
 def main() -> None:
     """Run the mock Cloudflare API and DNS servers."""
     threading.Thread(target=dns_loop, daemon=True).start()
+    threading.Thread(target=dns_tcp_loop, daemon=True).start()
     port = int(os.environ.get("PORT", "8080"))
-    print(f"mock CF API on :{port}; zones={_zones()}", flush=True)
+    print(f"mock CF API on :{port}; DNS on :53 (udp+tcp); zones={_zones()}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
 
 
