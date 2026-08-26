@@ -58,6 +58,37 @@ pub struct RotationOutcome {
     pub required_dns_records: Vec<String>,
 }
 
+/// What the CAA re-pin pass over a rotation's domains produced.
+///
+/// The three numbers a rotation reports are all derived from one tally, so they
+/// cannot disagree: `total` counts every domain the rotation covered, `manual`
+/// the ones a re-pin was never attempted for -- a `dns-persist-01` domain has
+/// no CAA the gateway can write -- and `failed` the ones that were tried and
+/// did not take.
+#[derive(Debug, Default)]
+struct RepinTally {
+    /// Domains skipped because the gateway cannot write their DNS.
+    manual: usize,
+    /// Domains a re-pin was attempted for and failed.
+    failed: Vec<String>,
+}
+
+impl RepinTally {
+    /// Domains a re-pin was actually attempted for.
+    ///
+    /// The denominator a failure count belongs over. Counting the manual ones
+    /// in reports them as successes: "2/5 failed" says three domains were
+    /// re-pinned when the other three were never candidates.
+    fn attempted(&self, total: usize) -> usize {
+        total.saturating_sub(self.manual)
+    }
+
+    /// Domains now pinned to the new account.
+    fn updated(&self, total: usize) -> usize {
+        self.attempted(total).saturating_sub(self.failed.len())
+    }
+}
+
 /// How one ZT domain answers ACME challenges.
 struct DomainValidation {
     method: ValidationMethod,
@@ -334,18 +365,17 @@ impl DistributedCertBot {
         // is not transparent for it either: its `_validation-persist` record
         // still names the *old* account, so orders for that domain fail until
         // the operator republishes. Those records are reported below.
-        let mut failed = Vec::new();
-        let mut manual_domains = 0usize;
-        let mut repin = |domain: &str, result: Result<()>| match result {
+        let mut tally = RepinTally::default();
+        let repin = |tally: &mut RepinTally, domain: &str, result: Result<()>| match result {
             Ok(()) => info!("cert[{domain}]: CAA re-pinned to {account_uri}"),
             Err(err) => {
                 error!("cert[{domain}]: failed to re-pin CAA: {err:?}");
-                failed.push(domain.to_string());
+                tally.failed.push(domain.to_string());
             }
         };
         for (config, validation) in prepared {
             if !validation.writes_dns() {
-                manual_domains += 1;
+                tally.manual += 1;
                 continue;
             }
             let result = async {
@@ -359,7 +389,7 @@ impl DistributedCertBot {
                     .context("failed to update CAA records")
             }
             .await;
-            repin(&config.domain, result);
+            repin(&mut tally, &config.domain, result);
         }
 
         // Rendered after the new credentials are published, so the records name
@@ -379,31 +409,37 @@ impl DistributedCertBot {
             warn!("failed to attest rotated ACME account: {err:?}");
         }
 
-        if !failed.is_empty() {
+        if !tally.failed.is_empty() {
             // Reported, not raised. The account is registered and the cluster is
             // already using it, so an error here reads as "nothing happened" and
             // invites a retry -- which would register yet another account
             // against a rate-limited quota and rewrite CAA a second time. What
             // is left is a `SetCaa` run, and the caller is told exactly that.
+            //
+            // Out of the domains a re-pin was attempted for, not out of every
+            // domain: a dns-persist-01 domain was never a candidate, and
+            // counting it in the denominator reports it as re-pinned.
             error!(
                 "rotated to {account_uri} and published the new credentials, but failed to \
-                 re-pin CAA for {}/{total} domains: {}; rerun SetCaa until it succeeds — \
+                 re-pin CAA for {}/{} domains: {}; rerun SetCaa until it succeeds — \
                  retrying the rotation would register yet another account",
-                failed.len(),
-                failed.join(", ")
+                tally.failed.len(),
+                tally.attempted(total),
+                tally.failed.join(", ")
             );
         }
-        if manual_domains > 0 {
+        if tally.manual > 0 {
             warn!(
-                "{manual_domains}/{total} domains use dns-persist-01: issuance for them stays \
-                 broken until the records above name the new account {account_uri}"
+                "{}/{total} domains use dns-persist-01: issuance for them stays \
+                 broken until the records above name the new account {account_uri}",
+                tally.manual
             );
         }
         Ok(RotationOutcome {
             account_uri,
-            domains_updated: total - manual_domains - failed.len(),
+            domains_updated: tally.updated(total),
             required_dns_records: manual,
-            repin_failed: failed,
+            repin_failed: tally.failed,
         })
     }
 
@@ -1358,6 +1394,41 @@ mod tests {
                 "renew_timeout={secs}s leaves no room for the order"
             );
         }
+    }
+
+    /// A dns-persist-01 domain is never a re-pin candidate, so counting it into
+    /// the denominator reports it as re-pinned. Five domains, three of them
+    /// manual and the other two failing, is "2/2 failed" and zero updated --
+    /// not "2/5 failed", which claims three succeeded.
+    #[test]
+    fn the_failure_count_is_out_of_the_domains_actually_tried() {
+        let tally = RepinTally {
+            manual: 3,
+            failed: vec!["a.example".to_string(), "b.example".to_string()],
+        };
+        assert_eq!(tally.attempted(5), 2);
+        assert_eq!(tally.updated(5), 0);
+    }
+
+    /// Every domain manual: nothing was attempted and nothing was updated. The
+    /// arithmetic has to land on zero rather than underflow, which as a usize
+    /// subtraction would panic the rotation after the account was published.
+    #[test]
+    fn an_all_manual_rotation_updates_nothing() {
+        let tally = RepinTally {
+            manual: 4,
+            failed: vec![],
+        };
+        assert_eq!(tally.attempted(4), 0);
+        assert_eq!(tally.updated(4), 0);
+    }
+
+    /// The ordinary case: every domain tried and every one taken.
+    #[test]
+    fn a_clean_rotation_updates_every_domain() {
+        let tally = RepinTally::default();
+        assert_eq!(tally.attempted(3), 3);
+        assert_eq!(tally.updated(3), 3);
     }
 
     /// A credential asking for less than its share keeps asking for less: the
