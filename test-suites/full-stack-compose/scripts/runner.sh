@@ -428,6 +428,14 @@ wait_gateway() {
 }
 
 bootstrap_gateway() {
+  configure_gateway_certbot
+  issue_first_gateway_cert
+}
+
+# Certbot/DNS/ZT-Domain configuration only. Split out of the first issuance so a
+# phase can put something between them -- a fresh cluster reconciling CAA before
+# it holds an ACME account, for one.
+configure_gateway_certbot() {
   log "configuring Gateway cluster through node 1"
   admin_curl 1 SetCertbotConfig \
     "$(jq -cn --arg u "http://10.0.2.2:${PEBBLE_HTTP_PORT}/dir" \
@@ -439,6 +447,9 @@ bootstrap_gateway() {
   admin_curl 1 AddZtDomain \
     "$(jq -cn --arg d "$BASE_DOMAIN" '{domain:$d,port:443,priority:100}')" \
     >/dev/null
+}
+
+issue_first_gateway_cert() {
   admin_curl 1 RenewZtDomainCert \
     "$(jq -cn --arg d "$BASE_DOMAIN" '{domain:$d,force:true}')" \
     | tee "$WORK_DIR/gateway-renew-cert.json"
@@ -615,11 +626,11 @@ assert_gateway_caa_records() {
 # every issuance path this suite already exercises, because nothing else calls
 # SetCaa.
 assert_gateway_caa_reconcile() {
-  local node=$1
-  log "reconciling CAA through upgraded Gateway node $node"
+  local node=$1 expect=${2:-}
+  log "reconciling CAA through Gateway node $node"
   admin_curl "$node" SetCaa >/dev/null \
     || die "Gateway node $node could not reconcile CAA records"
-  assert_gateway_caa_records
+  assert_gateway_caa_records "$expect"
   log "Gateway node $node pinned CAA to $(cat "$WORK_DIR/gateway-caa-account")"
 }
 
@@ -1000,11 +1011,66 @@ on_exit() {
 }
 trap on_exit EXIT
 
+# Certbot/ACME behaviour on the current code alone, with no upgrade sources and
+# no compatibility image: one KMS and a two-node Gateway cluster, both current.
+#
+# This is the only phase that reaches a fresh cluster's *first* ACME account
+# registration on current code. The upgrade phase cannot: Gateway 0.5.8
+# registers the account long before the current binary starts, so every current
+# run there takes the load path.
+phase_certbot() {
+  [[ "$PLATFORM" == tdx ]] || die "certbot phase requires TDX"
+  wait_vmm
+  clean_start
+
+  render_kms latest "$CURRENT_KMS_IMAGE_ID" kms-current.tar
+  deploy_kms_onboard latest "$KMS_LATEST_HOST_PORT"
+  wait_onboard latest "$KMS_LATEST_HOST_PORT"
+  authorize_kms_from_attestation latest
+  onboard_rpc "$KMS_LATEST_HOST_PORT" Bootstrap \
+    "$(jq -cn --arg d "$KMS_RPC_DOMAIN" '{domain:$d}')" \
+    "$WORK_DIR/kms-latest.bootstrap.json"
+  finish_onboarding latest "$KMS_LATEST_HOST_PORT"
+
+  render_gateway_manifests latest "$CURRENT_GATEWAY_IMAGE_ID" gateway-current.tar
+  write_gateway_env 1
+  write_gateway_env 2
+  deploy_gateway 1 latest "$KMS_LATEST_URL"
+  gateway_version 1 latest
+  deploy_gateway 2 latest "$KMS_LATEST_URL"
+  gateway_version 2 latest
+
+  configure_gateway_certbot
+
+  # No account exists yet, so this run registers one -- from inside the region
+  # that holds the cluster-wide ACME lock, which is exactly the ordering that
+  # has to be got right. A run that refuses or blocks on its own lock fails
+  # here; nothing else in this suite reaches it.
+  local account
+  assert_gateway_caa_reconcile 1
+  account=$(cat "$WORK_DIR/gateway-caa-account")
+
+  # Issue against the account that registration just published, then reconcile
+  # from the other node: it must adopt the same account rather than register a
+  # second one, which is what the credentials record being last-writer-wins
+  # would otherwise silently lose.
+  issue_first_gateway_cert
+  assert_gateway_caa_records "$account"
+  assert_gateway_caa_reconcile 2 "$account"
+
+  assert_gateway_acme_rotation 2 1
+
+  save_vm_logs
+  log "gateway certbot/ACME E2E success"
+  cleanup_after
+}
+
 main() {
   need_bin /workspace/target/release/dstack
   [[ -s "$STATE_DIR/artifacts/images.env" ]] || die "missing prepared image metadata"
   case "$PHASE" in
     upgrade) phase_upgrade ;;
+    certbot) phase_certbot ;;
     *) die "unknown DSTACK_E2E_PHASE=$PHASE" ;;
   esac
   log "Work artifacts: $WORK_DIR"
