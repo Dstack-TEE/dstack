@@ -429,87 +429,40 @@ certificate** — the onboarded KMS re-issues its own cert, so the PEM differs
 while `openssl x509 -pubkey` is identical. A KMS that bootstrapped independently
 differs in both.
 
-### 9.4 Provision host certificates first
+### 9.4 KDS is on the critical path, and stays there
 
-Verification needs the ASK and VCEK certificates. By default they are fetched
-from `https://kdsintf.amd.com`, which is a **single global endpoint with no
-mirror**, is aggressively rate-limited (one identical request per ~10s), and was
-completely unreachable for an entire test round — TCP timeouts and 100% ICMP loss
-from five vantage points across four autonomous systems and two continents, while
-every other external service answered normally. DNS was healthy and unchanged
-throughout, so this was the service, not a migration.
+Verification needs the ASK and VCEK certificates. They come from
+`https://kdsintf.amd.com`, a **single global endpoint with no mirror**, rate
+limited to roughly one identical request per 10s, and unreachable for an entire
+test round — TCP timeouts and 100% ICMP loss from five vantage points across four
+autonomous systems and two continents, while every other external service
+answered normally and DNS stayed healthy throughout.
 
-The rate limit is not theoretical: back-to-back negative tests against the same
-chip hit `HTTP status client error (429)` on the VCEK URL, which reads exactly
-like a verification failure until you notice the status code. Space repeat
-verifications ~25s apart, or provision the host.
+The rate limit is the one that will bite you mid-test: back-to-back verifications
+of the same chip return `HTTP status client error (429)` on the VCEK URL, which
+reads exactly like a verification failure until you notice the status code. Space
+them ~25s apart.
 
-dstack already supports the alternative: `normalize_kernel_cert_table` reads ASK
-and VCEK from the SNP extended report's certificate table, so a host that has
-been provisioned needs no KDS access at all. AMD's own specification recommends
-caching at the host for exactly this reason.
+Caching is in-process only. `AmdKdsClient` keeps a `moka` cache of 16 CA chains
+and 1024 VCEKs, capacity-bounded, no TTL, no persistence — warm for the life of
+one KMS or verifier process and cold in every one-shot `dstack-verifier --verify`.
+There is no KDS cache service in this repo; `[core.attestation.urls] amd_kds`
+would accept a mirror, but nothing implements one. (Compare `nvidia-attest-proxy`,
+the persistent on-disk cache the NVIDIA collateral got and AMD did not.)
 
-**There is no KDS cache service in this repo, and nothing to point one at.** The
-only caching is in-process: `AmdKdsClient` holds a `moka` cache of 16 CA chains
-and 1024 VCEKs, bounded by capacity with no TTL and no persistence, so it is warm
-only for the lifetime of a single KMS or verifier process. A one-shot
-`dstack-verifier --verify` starts cold every time, which is exactly how the 429
-above was earned. `[core.attestation.urls] amd_kds` accepts any KDS-compatible
-base URL, so a mirror would drop in — but you would have to write it. Compare
-`nvidia-attest-proxy`, which is the persistent, on-disk, PCCS-like cache the
-NVIDIA collateral got and AMD did not. (`crates/mock-attestation` serves
-KDS-shaped routes but is a test fixture with fake collateral, not a mirror.)
+Do not plan on serving the certificates from the host instead. The verifier side
+supports it — `normalize_kernel_cert_table` reads ASK and VCEK from the SNP
+extended report's certificate table — and so does the guest, but nothing can put
+them there: `sev-snp-guest` in stock QEMU has no `certs-path`-style property, and
+the host-side `SNP_SET_EXT_CONFIG` ioctl is not in upstream `psp-sev.h`. Guests
+ask via `SNP_GET_EXT_REPORT` and get an empty table, which is why every
+verification in this round went to KDS.
 
-The guest side of the cert-table path needs nothing configured: `sev-snp-attest`
-reads `certs`, `cert_chain` or `auxblob` from the configfs TSM report, falling
-back to the extended-report ioctl, and passes whatever it finds up with the
-quote. An unprovisioned host simply yields an empty chain, and the verifier then
-goes to KDS — which is what happened here.
-
-**Check that your VMM can actually deliver those certificates before planning
-around it.** On the host used for this round it cannot, and the earlier revision
-of this section recommended provisioning without checking.
-
-The tooling half is fine. `snphost` (virtee) is the SEV-SNP host CLI:
-`snphost fetch ca [der|pem] DIR` and `snphost fetch vek [der|pem] DIR` pull the
-CA chain and the VCEK from KDS, and `snphost import DIR CERT-FILE` packs them
-into the GHCB-formatted blob that, in its own words, "can then be provided to
-QEMU to perform extended attestation on guests". (`sevctl` is *not* part of this
-— it manages the pre-SNP SEV platform and its OCA certificate chain. A previous
-revision of this section listed the two together; that was wrong.)
-
-The delivery half is the problem. Providing that blob to QEMU needs a
-`certs-path`-style property on the `sev-snp-guest` object, and stock QEMU does
-not have one:
-
-```
-$ qemu-system-x86_64 -object sev-snp-guest,help     # QEMU 10.2.1
-sev-snp-guest options:
-  author-key-enabled=<bool>   guest-visible-workarounds=<string>
-  host-data=<string>          id-auth=<string>
-  id-block=<string>           kernel-hashes=<bool>
-  policy=<uint64>             sev-device=<string>
-  vcek-disabled=<bool>
-```
-
-`strings` on the binary confirms it — no `certs-path` anywhere. The host-side
-`SNP_SET_EXT_CONFIG` ioctl, the other way certificates used to be staged, is
-absent from upstream `linux/psp-sev.h` as well; it lived in AMD's out-of-tree
-fork. The guest half is present and working — `linux/sev-guest.h` still has
-`SNP_GET_EXT_REPORT` and its `certs_address` — so the guest asks and gets an
-empty table back.
-
-Which is exactly what was observed: `sev-snp-attest` found no `certs`,
-`cert_chain` or `auxblob` content, so the attestation travelled with an empty
-chain and the verifier went to KDS every time.
-
-**So, on a stock Ubuntu/Debian QEMU, KDS is not optional.** The realistic
-mitigations are the boring ones: keep a long-lived KMS so its in-process cache
-stays warm, and space repeat verifications out. Removing the dependency properly
-means either a QEMU that can carry the cert blob, or a KDS mirror behind
-`[core.attestation.urls] amd_kds`. Both are work, not configuration. And note
-the bootstrap problem either way — obtaining the VCEK requires KDS access once,
-from a network that can reach it.
+A note for whoever touches this code: the ARK is already compiled in, and the ARK
+fetched from KDS is discarded (`let (_fetched_ark, ask) = ...`). The network
+request exists only to obtain the ASK, which is equally static per product family.
+Bundling it would remove the `cert_chain` request entirely, leaving only the
+per-chip VCEK.
 
 ### 9.5 Reaching the API that holds the keys
 
@@ -538,12 +491,6 @@ One more encoding trap, shared with `dstack-verifier --verify`: `bytes` fields i
 these JSON bodies are **hex strings**, not base64 and not byte arrays. Base64
 fails with `Invalid character 'w' at position 5`, which names the symptom and not
 the cause.
-
-A related note for whoever touches this code: the ARK is already compiled in, and
-the ARK fetched from KDS is discarded (`let (_fetched_ark, ask) = ...`). The
-network request exists only to obtain the ASK, which is equally static per product
-family. Bundling it would remove the `cert_chain` request entirely, leaving only
-the per-chip VCEK.
 
 ---
 
