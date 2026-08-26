@@ -364,11 +364,15 @@ jobs:
           # experimental, and its packages are Debian rather than Yocto even
           # though the release contract is shared. Drop the flag once the
           # backend is declared stable.
+          #
+          # The title names the product, not the build backend: the tag prefix
+          # only exists to keep this workflow's trigger distinct from the Yocto
+          # one, and it should not leak into the release listing.
           gh release create "$TAG" \
             "dist/dstack-$VERSION.tar.gz" \
             "dist/dstack-$VERSION-uki.tar.gz" \
             dist/image-hashes.txt \
-            --title "$TAG" \
+            --title "dstack OS v$VERSION" \
             --notes-file release-notes.md \
             --verify-tag \
             --prerelease
