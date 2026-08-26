@@ -429,7 +429,7 @@ certificate** — the onboarded KMS re-issues its own cert, so the PEM differs
 while `openssl x509 -pubkey` is identical. A KMS that bootstrapped independently
 differs in both.
 
-### 9.4 KDS is on the critical path, and stays there
+### 9.4 KDS is on the critical path
 
 Verification needs the ASK and VCEK certificates. They come from
 `https://kdsintf.amd.com`, a **single global endpoint with no mirror**, rate
@@ -446,9 +446,58 @@ them ~25s apart.
 Caching is in-process only. `AmdKdsClient` keeps a `moka` cache of 16 CA chains
 and 1024 VCEKs, capacity-bounded, no TTL, no persistence — warm for the life of
 one KMS or verifier process and cold in every one-shot `dstack-verifier --verify`.
-There is no KDS cache service in this repo; `[core.attestation.urls] amd_kds`
-would accept a mirror, but nothing implements one. (Compare `nvidia-attest-proxy`,
-the persistent on-disk cache the NVIDIA collateral got and AMD did not.)
+There is no KDS cache service in this repo — compare `nvidia-attest-proxy`, the
+persistent on-disk cache the NVIDIA collateral got and AMD did not — but
+`[core.attestation.urls] amd_kds` accepts any KDS-compatible base URL, and putting
+a caching proxy there works. Four consecutive cold-process `dstack-verifier
+--verify` runs of one attestation pass through a mirror; the same sequence run
+directly against KDS fails on the second. A KMS configured the same way released
+keys to an AMD guest end to end.
+
+Three things decide whether such a proxy is correct, and all three are easy to get
+wrong:
+
+```js
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    if (request.method !== "GET" || !url.pathname.startsWith("/vcek/v1/")) {
+      return new Response("not found", { status: 404 });
+    }
+    const cache = caches.default;
+    const key = new Request(url.toString());   // query string carries the TCB SPLs
+    const hit = await cache.match(key);
+    if (hit) return hit;
+
+    // 1. AMD answers 403 to an unexpected Host header, so do not forward it.
+    const upstream = await fetch("https://kdsintf.amd.com" + url.pathname + url.search,
+                                 { headers: { accept: "*/*" } });
+    const body = await upstream.arrayBuffer();
+
+    // 2. Only success is cacheable. A cached 429 turns a rate limit into an outage.
+    if (!upstream.ok) {
+      return new Response(body, { status: upstream.status,
+                                  headers: { "cache-control": "no-store" } });
+    }
+
+    // 3. Every KDS response says `Cache-Control: no-cache`; override it.
+    const res = new Response(body, { headers: {
+      "content-type": "application/octet-stream",
+      "cache-control": "public, max-age=2592000",
+    }});
+    ctx.waitUntil(cache.put(key, res.clone()));
+    return res;
+  },
+};
+```
+
+Caching is safe here because the collateral is signature-verified downstream and
+the ARK is compiled in, so a mirror can withhold or replay genuine certificates
+but cannot forge one. Two fetches of one VCEK URL return different bytes — AMD
+re-issues rather than serving a fixed object — but any valid copy is as good as
+another, and a VCEK is valid for seven years. Bound the TTL anyway: dstack checks
+no CRL and no certificate validity dates, and an unbounded cache would make that
+permanent rather than merely current.
 
 Do not plan on serving the certificates from the host instead. The verifier side
 supports it — `normalize_kernel_cert_table` reads ASK and VCEK from the SNP
