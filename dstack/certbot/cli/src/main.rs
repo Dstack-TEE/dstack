@@ -112,9 +112,16 @@ impl Config {
     fn to_commented_toml(&self) -> Result<String> {
         let mut doc = to_document(self)?;
 
-        for (i, (mut key, _value)) in doc.iter_mut().enumerate() {
+        for (mut key, _value) in doc.iter_mut() {
+            // Look the doc comment up by name rather than by position: a `None`
+            // option serializes to nothing, so the document's keys are a subset
+            // of the struct's fields and indexing `FIELD_DOCS` positionally
+            // attaches every comment after the first absent key to the wrong
+            // one.
+            let Ok(docstring) = Self::get_field_docs(key.get()) else {
+                continue;
+            };
             let decor = key.leaf_decor_mut();
-            let docstring = Self::FIELD_DOCS[i];
 
             let mut comment = String::new();
             for line in docstring.lines() {
