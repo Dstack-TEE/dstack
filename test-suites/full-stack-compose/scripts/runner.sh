@@ -435,6 +435,10 @@ bootstrap_gateway() {
 # Certbot/DNS/ZT-Domain configuration only. Split out of the first issuance so a
 # phase can put something between them -- a fresh cluster reconciling CAA before
 # it holds an ACME account, for one.
+# `max_dns_wait` is one second rather than zero: current code rejects zero at
+# creation (an issuance that never waits for propagation cannot succeed against
+# a real provider), and only 0.5.8 ever accepted it. Pebble is configured to
+# validate unconditionally, so one second is as good as none here.
 configure_gateway_certbot() {
   log "configuring Gateway cluster through node 1"
   admin_curl 1 SetCertbotConfig \
@@ -442,7 +446,7 @@ configure_gateway_certbot() {
       '{acme_url:$u, renew_before_expiration_secs:3600}')" >/dev/null
   admin_curl 1 CreateDnsCredential \
     "$(jq -cn --arg u "http://10.0.2.2:${MOCK_CF_HTTP_PORT}/client/v4" \
-      '{name:"mock-cloudflare",provider_type:"cloudflare",cf_api_token:"test-token",cf_api_url:$u,set_as_default:true,dns_txt_ttl:1,max_dns_wait:0}')" \
+      '{name:"mock-cloudflare",provider_type:"cloudflare",cf_api_token:"test-token",cf_api_url:$u,set_as_default:true,dns_txt_ttl:1,max_dns_wait:1}')" \
     >/dev/null
   admin_curl 1 AddZtDomain \
     "$(jq -cn --arg d "$BASE_DOMAIN" '{domain:$d,port:443,priority:100}')" \
@@ -626,12 +630,28 @@ assert_gateway_caa_records() {
 # every issuance path this suite already exercises, because nothing else calls
 # SetCaa.
 assert_gateway_caa_reconcile() {
-  local node=$1 expect=${2:-}
+  local node=$1 expect=${2:-} deadline=$((SECONDS + 180)) out rc
   log "reconciling CAA through Gateway node $node"
-  admin_curl "$node" SetCaa >/dev/null \
-    || die "Gateway node $node could not reconcile CAA records"
-  assert_gateway_caa_records "$expect"
-  log "Gateway node $node pinned CAA to $(cat "$WORK_DIR/gateway-caa-account")"
+  # A fresh cluster registers its shared ACME account from whichever path
+  # reaches it first, and adding a ZT domain starts an issuance that does
+  # exactly that. Both take the cluster-wide ACME lock, and the loser is
+  # refused rather than queued -- deliberately: the refusal says to retry after
+  # the holder finishes, which is seconds for a registration. Retry, the way
+  # this suite already retries the per-domain certificate lock.
+  while (( SECONDS < deadline )); do
+    rc=0
+    out=$(admin_curl "$node" SetCaa 2>&1) || rc=$?
+    if (( rc == 0 )); then
+      assert_gateway_caa_records "$expect"
+      log "Gateway node $node pinned CAA to $(cat "$WORK_DIR/gateway-caa-account")"
+      return
+    fi
+    grep -q "holds the shared ACME lock" <<<"$out" \
+      || die "Gateway node $node could not reconcile CAA records: $out"
+    log "Gateway node $node is waiting for the shared ACME lock"
+    sleep 3
+  done
+  die "Gateway node $node never acquired the shared ACME lock"
 }
 
 # Rotate the shared ACME account, then require the cluster to issue with it.
