@@ -268,6 +268,19 @@ def dns_response(packet: bytes) -> bytes:
     return header + body
 
 
+def bind_host() -> str:
+    """Address the mock listens on, for both the HTTP API and DNS.
+
+    Defaults to every interface. This runs as a container on a private compose
+    network and its peers -- certbot writing records, and the ACME server
+    resolving them -- reach it by an address the process cannot know in
+    advance, so narrowing the default would answer nobody. Set MOCK_CF_BIND to
+    something specific when running it outside a container, where the default
+    would expose a test double that trusts every caller.
+    """
+    return os.environ.get("MOCK_CF_BIND", "0.0.0.0")
+
+
 def _debug(message: str) -> None:
     if os.environ.get("DEBUG", "").lower() in {"1", "true", "yes"}:
         print(message, flush=True)
@@ -277,7 +290,7 @@ def dns_loop() -> None:
     """Serve mock DNS responses over UDP."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("0.0.0.0", 53))
+    sock.bind((bind_host(), 53))
     while True:
         packet, addr = sock.recvfrom(4096)
         try:
@@ -332,7 +345,7 @@ def dns_tcp_loop() -> None:
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("0.0.0.0", 53))
+    sock.bind((bind_host(), 53))
     sock.listen(16)
     while True:
         conn, addr = sock.accept()
@@ -346,8 +359,12 @@ def main() -> None:
     threading.Thread(target=dns_loop, daemon=True).start()
     threading.Thread(target=dns_tcp_loop, daemon=True).start()
     port = int(os.environ.get("PORT", "8080"))
-    print(f"mock CF API on :{port}; DNS on :53 (udp+tcp); zones={_zones()}", flush=True)
-    ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    host = bind_host()
+    print(
+        f"mock CF API on {host}:{port}; DNS on {host}:53 (udp+tcp); zones={_zones()}",
+        flush=True,
+    )
+    ThreadingHTTPServer((host, port), Handler).serve_forever()
 
 
 if __name__ == "__main__":
