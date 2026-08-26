@@ -136,6 +136,14 @@ log_info "Starting e2e test environment..."
 
 export GATEWAY_IMAGE=dstack-gateway:test
 
+# Build the mock rather than trusting whatever carries its tag. `image:` plus
+# `build:` means compose reuses a local tag if one exists, and this tag is
+# shared with the full-stack suite, so a stale copy from an older checkout
+# would be picked up silently -- and a mock that does not answer TCP fails
+# every challenge now that Pebble actually validates them.
+log_info "Building the mock DNS/Cloudflare API..."
+docker compose build mock-cf-dns-api
+
 docker compose up -d mock-cf-dns-api pebble
 log_info "Waiting for mock services to be healthy..."
 sleep 5

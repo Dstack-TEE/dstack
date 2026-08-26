@@ -36,9 +36,10 @@ services:
   # Mock Cloudflare DNS API. Built from the repo rather than pulled, and the
   # same image the full-stack suite builds, so both suites answer DNS the same
   # way and neither depends on a prebuilt image nobody can rebuild.
+  # Source: tools/mock-cf-dns.
   mock-cf-dns-api:
     build:
-      context: ../../../../test-suites/full-stack-compose/mock-cf-dns
+      context: ../../../../tools/mock-cf-dns
     image: dstack-e2e-mock-cf-dns:local
     container_name: mock-cf-dns-api
     networks:

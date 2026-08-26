@@ -57,7 +57,7 @@ services:
 
   mock-cf-dns-api:
     build:
-      context: ./mock-cf-dns
+      context: ../../tools/mock-cf-dns
     image: dstack-e2e-mock-cf-dns:local
     networks:
       e2e-net:
@@ -76,9 +76,11 @@ services:
       retries: 10
 
   pebble:
-    # Custom Pebble build used by the existing gateway E2E suite. It supports
-    # plain HTTP ACME URLs, which keeps the host-side Gateway bootstrap simple.
-    image: ${DSTACK_E2E_PEBBLE_IMAGE:-kvin/pebble:latest}
+    # Custom Pebble build shared with the gateway E2E suite: upstream plus a
+    # `-http` flag, which keeps the host-side Gateway bootstrap simple.
+    # github.com/kvinwang/pebble branch http-flag. Pinned rather than :latest,
+    # so a rebuild of that tag cannot change what this suite validates against.
+    image: ${DSTACK_E2E_PEBBLE_IMAGE:-kvin/pebble:v2.10.1-http}
     command: ["-http", "-dnsserver", "172.31.0.10:53"]
     networks:
       e2e-net:
@@ -88,7 +90,10 @@ services:
       - "0.0.0.0:${DSTACK_E2E_PEBBLE_MGMT_PORT:-35000}:15000"
     environment:
       PEBBLE_VA_NOSLEEP: "1"
-      PEBBLE_VA_ALWAYS_VALID: "1"
+      # No PEBBLE_VA_ALWAYS_VALID. It was needed because the mock answered only
+      # UDP while Pebble queries a custom resolver over TCP, so nothing it was
+      # pointed at could ever answer; the mock now serves both and challenges
+      # are validated against the records certbot writes.
     depends_on:
       mock-cf-dns-api:
         condition: service_healthy
