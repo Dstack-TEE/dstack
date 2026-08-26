@@ -275,11 +275,20 @@ state, not just metadata that happens to agree.
 | **A rejected quote in the KMS log** | The one check that proves verification is not a no-op |
 | `curl` through the proxy to the app | End to end, but only for one of several proxy modes — see below |
 | `/prpc/v1/Info` and `/prpc/Worker.Info` both answer | v1 works and pre-0.6 clients are not broken |
+| `dstack-verifier --verify` on a captured attestation, then again on a one-byte-flipped copy | Verification is checked by something other than the KMS, and the crypto is live rather than short-circuited |
 
 That fifth row is the one people skip. A run where every quote is accepted cannot
 distinguish "verification passed" from "verification never ran". Last time the
 AMD CVMs supplied it for free — 6 grants and 7 rejections in the same KMS log —
 but if everything passes, arrange a failure deliberately.
+
+The last row is the cheapest way to arrange one. `dstack-verifier --verify
+req.json`, with `req.json` holding `{"attestation": "<hex>"}` captured from
+`/v1/Attest`, gives a full result offline. Flip one byte and re-run: a flip
+inside the report signature or the launch measurement must come back
+`VEK does not sign the attestation report`. Choose the byte deliberately —
+flipping into the outer CBOR framing instead fails at decode, which proves only
+that the parser works.
 
 ### One `curl` does not cover the proxy
 
@@ -336,9 +345,61 @@ control, those errors read as evidence about AMD.
 
 ---
 
-## 9. AMD SEV-SNP: provision host certificates first
+## 9. AMD SEV-SNP
 
-The most valuable thing to do before an AMD run.
+An AMD run was completed end to end: guest SEV-SNP attestation, KMS key release,
+independent quote verification, gateway registration and public traffic. Four
+things below cost real time; none of them are guessable from the code.
+
+### 9.1 Turn on the KMS release gate before anything else
+
+`sev_snp_key_release` defaults to `false`, and a guest that trips it reboots in a
+loop with
+
+```
+Request failed with status=400 Bad Request, error={
+  "error": "amd sev-snp key release is not enabled"
+}
+```
+
+The gate sits *after* full quote verification, so a passing quote still yields
+nothing. Only two variants are gated this way — `dstack-amd-sev-snp` via
+`sev_snp_key_release` and `dstack-aws-nitro-tpm` via `aws_nitro_tpm_key_release`.
+TDX, GCP TDX and Nitro Enclave have no such switch, which is why nobody notices
+the gate until the first AMD boot.
+
+### 9.2 Do not edit a running KMS's compose to flip that flag
+
+The local key provider seals to
+`SHA-256(SGX sealing key || MRTD || RTMR0 || RTMR1 || RTMR2 || RTMR3)`, and
+**RTMR3 carries the compose hash**. Changing one line of a bootstrapped KMS's
+config gives it a different sealing key, and its root CA is gone with the disk.
+
+Use onboarding instead: deploy a second KMS with `auto_bootstrap_domain = ""`,
+then
+
+```
+curl -X POST http://<new-kms>/prpc/Onboard \
+  -H 'Content-Type: application/json' \
+  -d '{"source_url":"https://<old-kms>","domain":"<domain>"}'
+curl -X POST http://<new-kms>/prpc/Finish -d '{}' -H 'Content-Type: application/json'
+```
+
+The new KMS inherits the root key, so apps it serves are still trusted by a
+gateway registered against the old one. **Compare the CA public key, not the CA
+certificate** — the onboarded KMS re-issues its own cert, so the PEM differs
+while `openssl x509 -pubkey` is identical. A KMS that bootstrapped independently
+differs in both.
+
+### 9.3 Provision host certificates first
+
+Verification needs the ASK and VCEK certificates. By default they are fetched
+from `https://kdsintf.amd.com`, which is a **single global endpoint with no
+mirror**, is aggressively rate-limited (one identical request per ~10s), and was
+completely unreachable for an entire test round — TCP timeouts and 100% ICMP loss
+from five vantage points across four autonomous systems and two continents, while
+every other external service answered normally. DNS was healthy and unchanged
+throughout, so this was the service, not a migration.
 
 Verification needs the ASK and VCEK certificates. By default they are fetched
 from `https://kdsintf.amd.com`, which is a **single global endpoint with no
@@ -347,6 +408,11 @@ completely unreachable during the last round — TCP timeouts and 100% ICMP loss
 from five vantage points across four autonomous systems and two continents, while
 every other external service answered normally. DNS was healthy and unchanged
 throughout, so this was the service, not a migration.
+
+The rate limit is not theoretical: back-to-back negative tests against the same
+chip hit `HTTP status client error (429)` on the VCEK URL, which reads exactly
+like a verification failure until you notice the status code. Space repeat
+verifications ~25s apart, or provision the host.
 
 dstack already supports the alternative: `normalize_kernel_cert_table` reads ASK
 and VCEK from the SNP extended report's certificate table, so a host that has
@@ -358,6 +424,34 @@ setup.** It is a one-time fetch and it removes an unreliable dependency from
 every subsequent run. Note the bootstrap problem — obtaining the VCEK to install
 requires KDS access once, so do it from a network that can reach it and carry the
 file over.
+
+### 9.4 Reaching the API that holds the keys
+
+`GetKey` and `Attest` are **not** on the guest agent's external port. That
+listener serves `Info`, `Version` and `Health` only, by design — anyone who can
+route to the CVM reaches it. Everything else lives on
+`/var/run/dstack.sock` inside the guest, mounted at `/`, `/v0` and `/v1` with
+**no `/prpc` prefix**: the internal path is `/v1/GetKey`, not `/prpc/v1/GetKey`.
+
+To reach it from the host during a test, add a socat sidecar to the app compose:
+
+```yaml
+  sockproxy:
+    image: alpine/socat
+    command: TCP-LISTEN:8091,fork,reuseaddr UNIX-CONNECT:/var/run/dstack.sock
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+    ports:
+      - "8091:8091"
+```
+
+That exposes app key material to the host, so it belongs in a lab and nowhere
+else.
+
+One more encoding trap, shared with `dstack-verifier --verify`: `bytes` fields in
+these JSON bodies are **hex strings**, not base64 and not byte arrays. Base64
+fails with `Invalid character 'w' at position 5`, which names the symptom and not
+the cause.
 
 A related note for whoever touches this code: the ARK is already compiled in, and
 the ARK fetched from KDS is discarded (`let (_fetched_ark, ask) = ...`). The
@@ -402,6 +496,9 @@ If you hit any of these on a build that predates the fixes, that is why.
 - Remove test ZtDomains and stray `_acme-challenge` TXT records when finished.
 - A cluster run leaves a WireGuard interface per node and a second set of ufw
   rules and ports; both outlive the CVMs.
+- An AMD run adds a KMS per release-gate variation. Each is a full CVM with its
+  own disk and port; the ones that only served as a stepping stone are safe to
+  delete once the onboarded KMS works, but nothing cleans them up for you.
 - **Do not poll with `pgrep -f` on a pattern your own commands contain.** A
   waiter looping on `pgrep -f "build-image.sh ..."` never exits while you check
   progress with a command whose own command line includes that string — checking
