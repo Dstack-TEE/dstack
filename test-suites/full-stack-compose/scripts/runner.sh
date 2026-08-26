@@ -393,7 +393,11 @@ admin_curl() {
   local node=$1 method=$2 data=${3:-'{}'} admin out code
   read -r _ admin _ < <(gateway_ports "$node")
   out=$(mktemp)
+  # Bounded on purpose: an admin RPC that blocks forever -- on a lock it holds
+  # itself, say -- must fail this suite rather than hang it until the job
+  # timeout, where the cause is far less obvious.
   code=$(curl -sS -o "$out" -w '%{http_code}' -X POST \
+    --max-time "${ADMIN_CURL_MAX_TIME:-300}" \
     -H "Authorization: Bearer ${GATEWAY_ADMIN_TOKEN}" \
     -H 'Content-Type: application/json' \
     "http://127.0.0.1:${admin}/prpc/Admin.${method}?json" \
@@ -552,6 +556,94 @@ assert_gateway_dns_credential_usable() {
     sleep 3
   done
   die "Gateway node $node could not issue with its persisted DNS credential"
+}
+
+# Read every record the mock Cloudflare API currently holds. The endpoint is
+# unauthenticated on purpose: it is the suite's view of the zone, not one of the
+# provider operations the gateway performs.
+mock_dns_records() {
+  curl -sS "http://127.0.0.1:${MOCK_CF_HTTP_PORT}/api/records"
+}
+
+# Assert the zone ends up in the exact state a finished reconciliation leaves:
+# one `issue` and one `issuewild` record pinned to one account, and no `;` guard
+# left behind. Reconciliation rewrites these in place -- guard, sweep, write,
+# unguard -- so a run that was interleaved with another, or that died halfway,
+# shows up here as a duplicate, a missing tag, or a surviving guard that blocks
+# every future issuance for the name.
+#
+# Writes the pinned account URI to $WORK_DIR/gateway-caa-account. Pass an
+# expected URI to require a specific account.
+assert_gateway_caa_records() {
+  local expect=${1:-} parsed account
+  parsed=$(mock_dns_records | jq -c --arg n "$BASE_DOMAIN" '
+    [ .records[]
+      | select(.type == "CAA")
+      | select((.name | ascii_downcase) == ($n | ascii_downcase))
+      | .content
+      | capture("^(?<flags>[0-9]+) +(?<tag>[a-z]+) +\"(?<value>.*)\"$") ]') \
+    || die "could not read CAA records from the mock DNS API"
+  printf '%s\n' "$parsed" > "$WORK_DIR/gateway-caa-records.json"
+
+  jq -e 'map(select(.value == ";")) | length == 0' <<<"$parsed" >/dev/null \
+    || die "reconciliation left guard CAA records behind: $parsed"
+  local tag
+  for tag in issue issuewild; do
+    jq -e --arg t "$tag" 'map(select(.tag == $t)) | length == 1' <<<"$parsed" >/dev/null \
+      || die "expected exactly one $tag CAA record for $BASE_DOMAIN: $parsed"
+  done
+  account=$(jq -r '
+    map(select(.tag == "issue")) | .[0].value
+    | capture("accounturi=(?<uri>[^;]+)$") | .uri' <<<"$parsed")
+  [[ -n "$account" && "$account" != null ]] \
+    || die "CAA records do not pin an ACME account: $parsed"
+  jq -e --arg a "$account" 'map(select(.value | endswith("accounturi=" + $a))) | length == 2' \
+    <<<"$parsed" >/dev/null \
+    || die "issue and issuewild pin different accounts: $parsed"
+  if [[ -n "$expect" ]]; then
+    [[ "$account" == "$expect" ]] \
+      || die "CAA pins $account, expected the rotated account $expect"
+  fi
+  printf '%s' "$account" > "$WORK_DIR/gateway-caa-account"
+}
+
+# Reconcile CAA through an upgraded node.
+#
+# On the current code one cluster-wide lock covers rotation, reconciliation, and
+# first-use account registration. A reconciliation that refuses -- or blocks on
+# -- the lock it holds itself is invisible to single-process unit tests and to
+# every issuance path this suite already exercises, because nothing else calls
+# SetCaa.
+assert_gateway_caa_reconcile() {
+  local node=$1
+  log "reconciling CAA through upgraded Gateway node $node"
+  admin_curl "$node" SetCaa >/dev/null \
+    || die "Gateway node $node could not reconcile CAA records"
+  assert_gateway_caa_records
+  log "Gateway node $node pinned CAA to $(cat "$WORK_DIR/gateway-caa-account")"
+}
+
+# Rotate the shared ACME account, then require the cluster to issue with it.
+#
+# Rotation registers a replacement account, publishes it, and re-pins every
+# domain's CAA under the same lock. Issuing afterwards through the *other* node
+# is what proves the switch reached the whole cluster rather than one process.
+assert_gateway_acme_rotation() {
+  local node=$1 peer=$2 previous result account
+  previous=$(cat "$WORK_DIR/gateway-caa-account")
+  log "rotating the shared ACME account through Gateway node $node"
+  result=$(admin_curl "$node" RotateAcmeCredentials) \
+    || die "Gateway node $node could not rotate the ACME account"
+  printf '%s\n' "$result" > "$WORK_DIR/gateway-rotate-acme.json"
+  account=$(jq -r '.account_uri // ""' <<<"$result")
+  [[ -n "$account" ]] || die "rotation returned no account URI: $result"
+  [[ "$account" != "$previous" ]] \
+    || die "rotation kept the previous account $account"
+  jq -e '(.domains_updated // 0) >= 1' <<<"$result" >/dev/null \
+    || die "rotation re-pinned no domain: $result"
+  assert_gateway_caa_records "$account"
+  log "rotated to $account and re-pinned CAA"
+  assert_gateway_dns_credential_usable "$peer"
 }
 
 render_app() {
@@ -857,6 +949,14 @@ phase_upgrade() {
   # original value; a forced issuance through each upgraded node proves it.
   assert_gateway_dns_credential_usable 1
   assert_gateway_dns_credential_usable 2
+
+  # CAA reconciliation and ACME account rotation are the two admin operations
+  # that take the cluster-wide ACME lock, and neither runs anywhere else in this
+  # suite. Both nodes reconcile, then one rotates and the other issues with the
+  # replacement account.
+  assert_gateway_caa_reconcile 1
+  assert_gateway_caa_reconcile 2
+  assert_gateway_acme_rotation 2 1
 
   assert_no_insecure_shortcuts
   save_vm_logs

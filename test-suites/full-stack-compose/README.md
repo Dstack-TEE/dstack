@@ -133,6 +133,14 @@ rejected if they say image verification or self-authorization is disabled.
 8. Force certificate issuance through each upgraded node against a mock DNS API
    that rejects anything except the original bearer token. This proves the DNS
    credential value survived even though the current admin API redacts it.
+9. Reconcile CAA through each upgraded node, then rotate the shared ACME account
+   through one node and issue through the other. These are the two admin
+   operations that take the cluster-wide ACME lock, and nothing else in the
+   suite calls them: a reconciliation that refuses or blocks on the lock it
+   holds itself is invisible to single-process unit tests. The zone is read back
+   from the mock provider after each step and must carry exactly one `issue` and
+   one `issuewild` record, both pinned to the same account -- the rotated one
+   after rotation -- with no `;` guard left behind.
 
 This is a production-style **rolling two-node** zero-downtime assertion. The
 suite does not claim that rebooting a single Gateway CVM can preserve that

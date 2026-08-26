@@ -268,6 +268,15 @@ impl DistributedCertBot {
         self.kv_store.get_certbot_config()
     }
 
+    /// The ACME directory this cluster issues from.
+    fn acme_url(&self) -> Result<String> {
+        let config = self.config()?;
+        if config.acme_url.is_empty() {
+            return Ok(DEFAULT_ACME_URL.to_string());
+        }
+        Ok(config.acme_url)
+    }
+
     /// Initialize all ZT-Domain certificates
     pub async fn init_all(&self) -> Result<()> {
         let configs = self.kv_store.list_zt_domain_configs();
@@ -395,13 +404,22 @@ impl DistributedCertBot {
     /// The domain in the config is the base domain and certificates are issued for
     /// `*.{domain}`, which the CAA lookup covers by climbing to the base domain.
     ///
-    /// The written CAA value pins `accounturi` to the global ACME account, so this
-    /// reuses the account from the KV store and registers one if none exists yet.
+    /// The written CAA value pins `accounturi` to the global ACME account, which
+    /// the caller has already registered; see [`Self::ensure_acme_account`].
     async fn set_caa(&self, domain: &str, config: &ZtDomainConfig) -> Result<()> {
+        // Load only. This runs under the ACME lock, which is not reentrant, so
+        // registering here would refuse the run that took it -- and the caller
+        // has already registered the account before taking it. Nothing under
+        // the lock may call [`Self::acquire_acme_lock`], and keeping the
+        // registering variant out of this path is what makes that structural
+        // rather than a rule to remember.
+        let dns_cred = dns_credential_for(&self.kv_store, config)?;
+        let acme_url = self.acme_url()?;
         let acme_client = self
-            .get_or_create_acme_client(domain, config)
+            .load_stored_acme_client(domain, &dns_cred, &acme_url)
             .await
-            .context("failed to initialize ACME client")?;
+            .context("failed to initialize ACME client")?
+            .context("no shared ACME account is registered for this cluster")?;
         acme_client
             .set_caa_records(&[domain.to_string()])
             .await
@@ -611,17 +629,10 @@ impl DistributedCertBot {
     ) -> Result<AcmeClient> {
         // Get DNS credential (from config or default)
         let dns_cred = dns_credential_for(&self.kv_store, config)?;
-
-        // Use ACME URL from certbot config, fall back to default if not set
-        let config = self.config()?;
-        let acme_url = if config.acme_url.is_empty() {
-            DEFAULT_ACME_URL
-        } else {
-            &config.acme_url
-        };
+        let acme_url = self.acme_url()?;
 
         if let Some(client) = self
-            .load_stored_acme_client(domain, &dns_cred, acme_url)
+            .load_stored_acme_client(domain, &dns_cred, &acme_url)
             .await?
         {
             info!("loaded global ACME account credentials from KvStore");
@@ -639,7 +650,7 @@ impl DistributedCertBot {
         // lock and look again before spending a registration.
         let rotation_lock = self.acquire_acme_lock("register the shared ACME account")?;
         let client = self
-            .register_or_adopt_account(domain, &dns_cred, acme_url)
+            .register_or_adopt_account(domain, &dns_cred, &acme_url)
             .await;
         if let Err(err) = self.release_rotation_lock(&rotation_lock) {
             error!("failed to release ACME rotation lock: {err:?}");
@@ -1113,6 +1124,34 @@ mod tests {
                 .contains("cannot register the shared ACME account"),
             "unexpected error: {err}"
         );
+    }
+
+    /// Nothing inside the locked region may take the lock again. With an
+    /// account already registered, a run reaches the DNS provider -- it fails
+    /// there, on the reconciliation itself, and never on its own lock.
+    #[tokio::test]
+    async fn set_caa_all_does_not_take_its_own_lock_again() {
+        let data_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let certbot = certbot_with_domain(data_dir.path());
+        save_credentials_for(&certbot, DEFAULT_ACME_URL);
+
+        let err = tokio::time::timeout(Duration::from_secs(30), certbot.set_caa_all())
+            .await
+            .expect("set_caa_all must not block on its own lock")
+            .expect_err("the unreachable DNS provider should fail the run");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("failed to set CAA records for 1/1 domains"),
+            "unexpected error: {msg}"
+        );
+        assert!(
+            !msg.contains("shared ACME lock"),
+            "the run refused its own lock: {msg}"
+        );
+        assert!(certbot
+            .kv_store
+            .try_acquire_rotation_lock(ROTATION_LOCK_TIMEOUT_SECS)
+            .is_some());
     }
 
     /// Whoever the lock lets through next must look at the record again. Its
