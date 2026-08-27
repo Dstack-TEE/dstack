@@ -19,7 +19,7 @@ down.
 
 ## Attestation is on
 
-No suite turns the checks off. The gateways obtain their
+There is no switch to turn the checks off. The gateways obtain their
 RPC certificates from the guest agent simulator, which signs quotes under trust
 anchors derived from `attestation/tee-simulator.json`; the mock collateral
 service reconstructs the matching public roots from the same seed, and the

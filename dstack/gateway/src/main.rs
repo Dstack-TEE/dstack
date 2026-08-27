@@ -166,9 +166,7 @@ async fn main() -> Result<()> {
         set_max_ulimit()?;
     }
 
-    let my_app_id = if config.debug.insecure_skip_attestation {
-        None
-    } else {
+    let my_app_id = {
         let dstack_client = dstack_agent().context("Failed to create dstack client")?;
         let info = dstack_client
             .info()

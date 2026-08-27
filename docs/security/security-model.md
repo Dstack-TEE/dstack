@@ -329,7 +329,7 @@ The one case dstack does not leave to downstream is a genuinely invalid TCB: `dc
 
 ### Development modes are auditable, not production-safe
 
-dstack keeps several development switches as runtime or on-chain configuration rather than Cargo feature flags. Examples include KMS `attest_rpc_cert = false`, gateway `core.debug.insecure_skip_attestation = true`, KMS `auth_api.type = "dev"`, and KMS contract `gateway_app_id = "any"`. These settings exist for local development and integration tests, not for production deployments.
+dstack keeps several development switches as runtime or on-chain configuration rather than Cargo feature flags. Examples include KMS `attest_rpc_cert = false`, KMS `auth_api.type = "dev"`, and KMS contract `gateway_app_id = "any"`. These settings exist for local development and integration tests, not for production deployments.
 
 This is intentional. Runtime configuration that affects the trust boundary is visible in attestation measurements or public contract state. Cargo feature gates are not automatically more auditable because feature unification can enable a feature through a dependency graph, and the resulting runtime behavior is not represented as a measured deployment setting.
 

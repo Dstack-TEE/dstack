@@ -639,8 +639,6 @@ pub struct DebugConfig {
     /// Enable debug server
     #[serde(default)]
     pub insecure_enable_debug_rpc: bool,
-    #[serde(default)]
-    pub insecure_skip_attestation: bool,
     /// Let the app-address `localhost` resolve to 127.0.0.1, so a hostname can
     /// be routed to a service on the gateway host itself.
     ///

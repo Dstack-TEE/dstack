@@ -90,11 +90,6 @@ fn decode_envelope(compressed: &[u8]) -> Result<SyncEnvelope, Status> {
 
 /// Verify that the request is from a gateway with the same app_id (mTLS verification)
 fn verify_gateway_peer(state: &Proxy, cert: Option<Certificate<'_>>) -> Result<(), Status> {
-    // Skip verification if not running in dstack (test mode)
-    if state.config.debug.insecure_skip_attestation {
-        return Ok(());
-    }
-
     let Some(cert) = cert else {
         warn!("WaveKV sync: client certificate required but not provided");
         return Err(Status::Unauthorized);
@@ -105,9 +100,9 @@ fn verify_gateway_peer(state: &Proxy, cert: Option<Certificate<'_>>) -> Result<(
 
 /// Decide whether a certificate's app identity is one we accept.
 ///
-/// Split out from `verify_gateway_peer` because that function's other half — the
-/// attestation bypass and Rocket's certificate guard — cannot be exercised from a test,
-/// which left this decision, the actual authorization rule, uncovered.
+/// Split out from `verify_gateway_peer` because that function's other half — Rocket's
+/// certificate guard — cannot be exercised from a test, which left this decision, the
+/// actual authorization rule, uncovered.
 ///
 /// The app-id extension is the only identity accepted. There used to be a fallback to
 /// the app-info extension here, and it existed because certificates issued through a
@@ -268,9 +263,9 @@ mod tests {
     /// from disk to build its rustls client config, and the root store only accepts a
     /// trust anchor with `CA:TRUE` — so a lone self-signed leaf is not enough.
     ///
-    /// The leaf carries an app_id because no test here turns the peer check off, so a
-    /// certificate without one is refused before any of them reach what they are about.
-    /// It is also what a real peer's certificate carries.
+    /// The leaf carries an app_id because the peer check is unconditional, so a
+    /// certificate without one is refused before any of these tests reach what they are
+    /// about. It is also what a real peer's certificate carries.
     fn write_tls_material(dir: &std::path::Path) -> TlsConfig {
         let pki = ra_tls::test_pki::write_mtls_pki(
             dir,
@@ -291,9 +286,9 @@ mod tests {
     ///
     /// They are about everything below the peer check — the gzip framing, the store
     /// split, the uuid check, the removed-sender refusal — and they call `handle_sync`
-    /// and `handle_push` rather than going through the routes, because the peer check runs
-    /// on every request these tests make and Rocket's local client speaks no TLS, so a
-    /// request through the route can never get past it. `enforcing_gateway` covers the check itself.
+    /// and `handle_push` rather than going through the routes, because the peer check is
+    /// now unconditional and Rocket's local client speaks no TLS, so a request through
+    /// the route can never get past it. `enforcing_gateway` covers the check itself.
     async fn serving_gateway(sync_enabled: bool) -> (Proxy, TempDir) {
         let (_client, proxy, tmp) = serving_gateway_with(sync_enabled).await;
         (proxy, tmp)

@@ -820,7 +820,7 @@ stop_network_probe() {
 assert_no_insecure_shortcuts() {
   log "auditing rendered manifests for production trust settings"
   local manifest
-  local forbidden='quote_enabled[[:space:]]*=[[:space:]]*false|attest_rpc_cert[[:space:]]*=[[:space:]]*false|insecure_skip_attestation[[:space:]]*=[[:space:]]*true|insecure_allow_external_trust_anchors[[:space:]]*=[[:space:]]*true|enforce_self_authorization[[:space:]]*=[[:space:]]*false|verify[[:space:]]*=[[:space:]]*false'
+  local forbidden='quote_enabled[[:space:]]*=[[:space:]]*false|attest_rpc_cert[[:space:]]*=[[:space:]]*false|insecure_allow_external_trust_anchors[[:space:]]*=[[:space:]]*true|enforce_self_authorization[[:space:]]*=[[:space:]]*false|verify[[:space:]]*=[[:space:]]*false'
   if grep -R -E "$forbidden" "$WORK_DIR"/*.app-compose.json; then
     die "rendered app manifest contains a forbidden development trust setting"
   fi
