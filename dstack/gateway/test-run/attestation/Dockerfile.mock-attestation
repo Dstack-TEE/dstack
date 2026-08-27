@@ -3,14 +3,41 @@
 
 FROM rust:1.92-bookworm AS builder
 WORKDIR /src
+
+# The toolchain file first, on a layer of its own.
+#
+# The workspace pins a channel plus rustfmt, clippy, rust-analyzer and three
+# extra targets, none of which the base image carries and none of which this
+# build needs -- so the first cargo invocation makes rustup download and install
+# a complete toolchain. Measured at ~27s, in each of the two fixture images, on
+# every build: it happened inside the step below, which `COPY . .` invalidates
+# on any change anywhere in the repo. Keyed on the toolchain file alone it is a
+# cache hit until the pin actually moves.
+COPY rust-toolchain.toml ./rust-toolchain.toml
+RUN cargo --version
+
+# The cargo caches are BuildKit cache mounts, not image layers, because
+# `COPY . .` is the whole repo and busts any layer after it on any source
+# change. A mount survives that, and both fixture images name the same three, so
+# whichever builds second reuses the first's artifacts. `sharing=locked`
+# because cargo does not want two builds in one target directory; they
+# serialise rather than corrupt.
+#
+# The binary is copied out inside the RUN: a cache mount is not part of the
+# resulting layer, so a later `COPY --from=builder /src/dstack/target/...`
+# would find nothing there.
 COPY . .
-RUN cargo build --manifest-path dstack/Cargo.toml --locked --release \
-    -p mock-attestation
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/src/dstack/target,sharing=locked \
+    cargo build --manifest-path dstack/Cargo.toml --locked --release \
+    -p mock-attestation \
+    && mkdir -p /out && cp dstack/target/release/dstack-mock-attestation /out/
 
 FROM debian:bookworm-slim
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
-COPY --from=builder /src/dstack/target/release/dstack-mock-attestation /usr/local/bin/
+COPY --from=builder /out/dstack-mock-attestation /usr/local/bin/
 COPY dstack/gateway/test-run/attestation/tee-simulator.json /etc/dstack/tee-simulator.json
 ENTRYPOINT ["/usr/local/bin/dstack-mock-attestation"]
