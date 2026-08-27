@@ -58,7 +58,6 @@ rpc_domain = ""
 set_ulimit = false
 [core.debug]
 insecure_localhost_backend = true
-insecure_skip_attestation = true
 insecure_enable_debug_rpc = false
 [core.admin]
 enabled = true

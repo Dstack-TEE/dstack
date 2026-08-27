@@ -12,8 +12,10 @@
 # Complements `test_suite.sh`, which covers the control plane, WaveKV and the
 # handshake cache. This one is about bytes on the wire.
 #
-# Requirements: python3, openssl, ip, sudo (once, to create the WireGuard-named
-# link the gateway expects at startup). No root for the gateway itself.
+# Runs inside the proxy-e2e container, which supplies python3, openssl and ip,
+# and carries NET_ADMIN so the WireGuard-named link the gateway expects at
+# startup can be created in the container's own namespace. Nothing here needs
+# sudo, and nothing it creates outlives the container.
 #
 #   ./test_proxy.sh                 # build and run everything
 #   GATEWAY_BIN=/path/to/dstack-gateway ./test_proxy.sh
@@ -81,7 +83,7 @@ cleanup() {
   stop_gateway
   [ -n "${ORIGIN_PID:-}" ] && kill "$ORIGIN_PID" 2>/dev/null
   if [ -n "${WG_CREATED:-}" ]; then
-    sudo ip link del "$WG_IFACE" 2>/dev/null
+    ip link del "$WG_IFACE" 2>/dev/null
   fi
   if [ $FAIL -eq 0 ] && [ -z "${KEEP_LOGS:-}" ]; then
     rm -rf "$WORK"
@@ -131,16 +133,18 @@ setup() {
   # WireGuard device also makes `wg show` work, which the Status RPC needs; a
   # dummy link is enough for the data path, so fall back to one rather than
   # skipping every test on a host without the wireguard module.
+  # NET_ADMIN in the container's own namespace, so no sudo and nothing that
+  # outlives the run.
   if ip link show "$WG_IFACE" >/dev/null 2>&1; then
     WG_KIND=preexisting
-  elif sudo ip link add "$WG_IFACE" type wireguard 2>/dev/null; then
+  elif ip link add "$WG_IFACE" type wireguard 2>/dev/null; then
     WG_KIND=wireguard; WG_CREATED=1
-  elif sudo ip link add "$WG_IFACE" type dummy 2>/dev/null; then
+  elif ip link add "$WG_IFACE" type dummy 2>/dev/null; then
     WG_KIND=dummy; WG_CREATED=1
   else
     say "cannot create the link '$WG_IFACE' the gateway needs at startup"; exit 1
   fi
-  [ -n "${WG_CREATED:-}" ] && sudo ip link set "$WG_IFACE" up
+  [ -n "${WG_CREATED:-}" ] && ip link set "$WG_IFACE" up
   say "link $WG_IFACE: $WG_KIND"
 
   CERT="$WORK/certs/cert.pem" KEY="$WORK/certs/key.pem" \
@@ -362,27 +366,30 @@ test_ktls_engages() {
 test_capability_fallbacks() {
   group "capability fallbacks announce themselves and keep serving"
 
-  # kTLS on a kernel without the TLS ULP must fall back, not truncate. Only
-  # exercised where the module can actually be taken away.
-  if [ "$(id -u)" = 0 ] || sudo -n true 2>/dev/null; then
-    if lsmod 2>/dev/null | grep -q "^tls " && sudo rmmod tls 2>/dev/null; then
-      echo "install tls /bin/false" | sudo tee /etc/modprobe.d/zz-gwtest-notls.conf >/dev/null
-      start_gateway "ktls-no-ulp" splice=immediate ktls=after:65536
-      check "no TLS ULP / warns at startup" log_contains "kTLS is configured but unavailable"
-      check "no TLS ULP / small request intact" \
-        probe fetch --port "$PROXY_PORT" --sni "$SNI_TERMINATE" --size 1024
-      # The regression this guards: a gated offload used to return HTTP 200 with
-      # the body cut off at exactly the gate.
-      check "no TLS ULP / large transfer not truncated" \
-        probe fetch --port "$PROXY_PORT" --sni "$SNI_TERMINATE" --size 1048576
-      stop_gateway
-      sudo rm -f /etc/modprobe.d/zz-gwtest-notls.conf
-      sudo modprobe tls 2>/dev/null
-    else
-      skip "kTLS fallback without the TLS ULP" "tls module not removable here"
-    fi
+  # kTLS on a kernel without the TLS ULP must fall back, not truncate.
+  #
+  # The condition used to be produced with `sudo rmmod tls`, which takes the
+  # module away from the entire host, needs passwordless sudo, and silently
+  # skips whenever anything else on the machine is using TLS. The suite runs in
+  # a container now, where a seccomp profile makes
+  # `setsockopt(IPPROTO_TCP, TCP_ULP)` return ENOPROTOOPT -- which is precisely
+  # what probe_ktls() sees on a kernel built without CONFIG_TLS, and affects
+  # nothing outside this container.
+  #
+  # A seccomp profile is fixed at container creation, so this arm gets its own
+  # container and the main run skips it.
+  if [ "${GWTEST_ULP_UNAVAILABLE:-0}" = 1 ]; then
+    start_gateway "ktls-no-ulp" splice=immediate ktls=after:65536
+    check "no TLS ULP / warns at startup" log_contains "kTLS is configured but unavailable"
+    check "no TLS ULP / small request intact" \
+      probe fetch --port "$PROXY_PORT" --sni "$SNI_TERMINATE" --size 1024
+    # The regression this guards: a gated offload used to return HTTP 200 with
+    # the body cut off at exactly the gate.
+    check "no TLS ULP / large transfer not truncated" \
+      probe fetch --port "$PROXY_PORT" --sni "$SNI_TERMINATE" --size 1048576
+    stop_gateway
   else
-    skip "kTLS fallback without the TLS ULP" "needs passwordless sudo"
+    skip "kTLS fallback without the TLS ULP" "runs in the notls container"
   fi
 
   start_gateway "rebalance-inert" splice=off ktls=off tpc=false rebalance=true \
