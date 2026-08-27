@@ -1,0 +1,107 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# CodeQL, as an advanced configuration.
+#
+# THIS FILE CANNOT BE MERGED WHILE CODE SCANNING DEFAULT SETUP IS ENABLED.
+# GitHub refuses uploads from an advanced configuration while the default one is
+# active, so that setting has to be turned off first:
+#
+#   Settings -> Code security -> Code scanning -> CodeQL analysis -> Disable
+#
+# or
+#
+#   gh api -X PATCH repos/Dstack-TEE/dstack/code-scanning/default-setup \
+#     -f state=not-configured
+#
+# What changes, and what it costs:
+#
+# Default setup runs every language on every pull request. `Analyze (rust)` is
+# 17.4 minutes of that -- the single largest job in the repository, larger than
+# the full Rust test suite -- because CodeQL builds the whole workspace under
+# its tracer. The other five languages together come to about five minutes.
+#
+# Rust moves to pushes on `next` and to the weekly schedule. Every finding it
+# would have made is still made, on the merge commit rather than on the pull
+# request that produced it: a regression is reported one merge later than it
+# would have been, not missed. The cheap languages keep running per pull
+# request, where they cost little and catch things early.
+#
+# `c-cpp` is dropped. The repository contains exactly one C file,
+# `tools/sca/examples/hello-c/src/server.c`, which is example material for a
+# supply-chain-analysis demo and is not shipped in any image.
+
+name: CodeQL
+
+on:
+  push:
+    branches: [next, 'release/**']
+  pull_request:
+    branches: [next, 'release/**']
+  schedule:
+    # Weekly, matching the cadence default setup was running.
+    - cron: '31 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: go
+            build-mode: autobuild
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}
+
+  # Rust is separated for what it costs, not because it matters less. Gated with
+  # `if:` rather than a `paths:` filter so the weekly schedule still reaches it.
+  analyze-rust:
+    name: Analyze (rust)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: rust
+          build-mode: autobuild
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:rust
