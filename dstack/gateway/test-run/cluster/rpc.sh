@@ -145,6 +145,40 @@ admin_set_node_url() {
 # Peers address each other by container hostname, not by a published port: the
 # gateways talk over the compose network, and only the driver goes through the
 # host.
+# Wait until every node in the set has both a peer address and a node record for
+# every other.
+#
+# `setup_peers` only pushes SetNodeUrl; the nodes then have to reach each other
+# and record it, which is what the tests were sleeping a flat 4-20s for. Sleeping
+# is both slower and weaker: a blind wait cannot tell "peering formed in 800ms"
+# from "peering never formed and the assertion below is about to test something
+# else".
+#
+# Both collections, not just `peer_addrs`. They settle at different times:
+# `peer_addrs` is written when SetNodeUrl lands, while `nodes` needs an actual
+# sync round to carry the record across. Waiting on the first alone returns
+# earlier than the blind settle it replaced did, which is how
+# `test_multi_node_sync` -- whose own assertions cover both -- started failing on
+# `node_info` while `peer_addr` was already there. `nodes` implies a completed
+# round, so it is the honest reading of "the nodes found each other" and it is
+# what every caller here is really waiting for.
+wait_for_peers() {
+    local timeout_seconds=$1; shift
+    wait_until "$timeout_seconds" _all_peers_known "$@"
+}
+
+_all_peers_known() {
+    local node_ids=("$@") src dst
+    for src in "${node_ids[@]}"; do
+        for dst in "${node_ids[@]}"; do
+            [ "$src" = "$dst" ] && continue
+            has_peer_addr "$src" "$dst" || return 1
+            has_node_info "$src" "$dst" || return 1
+        done
+    done
+    return 0
+}
+
 setup_peers() {
     local node_ids=("$@")
     local src dst

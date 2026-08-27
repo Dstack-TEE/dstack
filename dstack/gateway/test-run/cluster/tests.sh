@@ -129,7 +129,8 @@ test_multi_node_sync() {
     start_node 1 || return 1
     start_node 2 || return 1
     setup_peers 1 2
-    sleep 10
+    wait_for_peers 10 1 2 || {
+        log_error "nodes 1 2 did not learn about each other"; return 1; }
 
     local ok=0
     has_peer_addr 1 2 || { log_error "node 1 missing peer_addr for node 2"; ok=1; }
@@ -147,13 +148,15 @@ test_node_recovery() {
     start_node 1 || return 1
     start_node 2 || return 1
     setup_peers 1 2
-    sleep 5
+    wait_for_peers 5 1 2 || {
+        log_error "nodes 1 2 did not learn about each other"; return 1; }
 
     stop_node 2
     sleep 3
     start_node 2 || return 1
     setup_peers 1 2
-    sleep 10
+    wait_for_peers 10 1 2 || {
+        log_error "nodes 1 2 did not learn about each other"; return 1; }
 
     local ok=0
     has_peer_addr 2 1 || { log_error "node 2 missing peer_addr for node 1 after recovery"; ok=1; }
@@ -170,7 +173,8 @@ test_cross_node_data_sync() {
     start_node 1 || return 1
     start_node 2 || return 1
     setup_peers 1 2
-    sleep 5
+    wait_for_peers 5 1 2 || {
+        log_error "nodes 1 2 did not learn about each other"; return 1; }
 
     check_debug_service 1 || { log_error "debug service not available on node 1"; return 1; }
 
@@ -179,7 +183,10 @@ test_cross_node_data_sync() {
         "$(debug_register_cvm 1 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" app1 inst1)")
     [ -n "$client_ip" ] || { log_error "registration failed"; return 1; }
 
-    sleep 20
+    # Both stores on both nodes, then read all four for the equality checks
+    # below. `|| true` because the assertions are what report -- reaching the
+    # ceiling should produce the counts that explain it, not a bare timeout.
+    wait_until 20 _both_nodes_hold_an_instance || true
     local kv1 kv2 ps1 ps2 ok=0
     kv1=$(get_n_instances 1); kv2=$(get_n_instances 2)
     ps1=$(get_n_proxy_state_instances 1); ps2=$(get_n_proxy_state_instances 2)
@@ -193,6 +200,24 @@ test_cross_node_data_sync() {
     return $ok
 }
 
+_node1_logged_a_periodic_persist() {
+    grep -q "periodic persist completed" "$(dump_log 1)"
+}
+
+_both_nodes_hold_an_instance() {
+    local n kv ps
+    for n in 1 2; do
+        kv=$(get_n_instances "$n")
+        ps=$(get_n_proxy_state_instances "$n")
+        # Same reasoning as `_three_node_views_converged`: the caller asserts
+        # `kv == ps` as well, so the wait has to cover it.
+        [ "${kv:-0}" -ge 1 ] 2>/dev/null || return 1
+        [ "${ps:-0}" -ge 1 ] 2>/dev/null || return 1
+        [ "${kv:-0}" -eq "${ps:-1}" ] 2>/dev/null || return 1
+    done
+    return 0
+}
+
 # An opportunistic push must land well inside the 5s periodic interval.
 test_push_fast_path() {
     cleanup_cluster
@@ -201,7 +226,8 @@ test_push_fast_path() {
     start_node 1 || return 1
     start_node 2 || return 1
     setup_peers 1 2
-    sleep 6
+    wait_for_peers 6 1 2 || {
+        log_error "nodes 1 2 did not learn about each other"; return 1; }
 
     local before
     before=$(get_n_instances 2)
@@ -225,7 +251,8 @@ test_periodic_repair_after_missed_push() {
     start_node 1 || return 1
     start_node 2 || return 1
     setup_peers 1 2
-    sleep 6
+    wait_for_peers 6 1 2 || {
+        log_error "nodes 1 2 did not learn about each other"; return 1; }
 
     local before
     before=$(get_n_instances 2)
@@ -250,7 +277,8 @@ test_bootstrap_after_data_dir_loss() {
     start_node 1 || return 1
     start_node 2 || return 1
     setup_peers 1 2
-    sleep 6
+    wait_for_peers 6 1 2 || {
+        log_error "nodes 1 2 did not learn about each other"; return 1; }
 
     verify_register_response \
         "$(debug_register_cvm 1 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" bootstrap_app bootstrap_instance)" \
@@ -281,7 +309,8 @@ test_bootstrap_after_data_dir_loss() {
         log_error "persistent digests differ after bootstrap: node1='${d1}' node2='${d2}'"; return 1; }
 
     setup_peers 1 2
-    sleep 6
+    wait_for_peers 6 1 2 || {
+        log_error "nodes 1 2 did not learn about each other"; return 1; }
     new_uuid=$(get_node_uuid 2)
     { [ -n "$new_uuid" ] && [ "$new_uuid" != "null" ]; } || {
         log_error "node 2 did not report its post-recovery identity"; return 1; }
@@ -297,7 +326,8 @@ test_divergent_partition_writes() {
     start_node 1 || return 1
     start_node 2 || return 1
     setup_peers 1 2
-    sleep 6
+    wait_for_peers 6 1 2 || {
+        log_error "nodes 1 2 did not learn about each other"; return 1; }
 
     stop_node 2
     verify_register_response \
@@ -327,7 +357,8 @@ test_push_periodic_overlap() {
     start_node 1 || return 1
     start_node 2 || return 1
     setup_peers 1 2
-    sleep 4
+    wait_for_peers 4 1 2 || {
+        log_error "nodes 1 2 did not learn about each other"; return 1; }
 
     local before i
     before=$(get_n_instances 1)
@@ -377,7 +408,8 @@ test_interrupted_sync_recovery() {
     start_node 1 || return 1
     start_node 2 || return 1
     setup_peers 1 2
-    sleep 6
+    wait_for_peers 6 1 2 || {
+        log_error "nodes 1 2 did not learn about each other"; return 1; }
 
     stop_node 2
     local i
@@ -411,7 +443,8 @@ test_ephemeral_recovery() {
     start_node 1 || return 1
     start_node 2 || return 1
     setup_peers 1 2
-    sleep 8
+    wait_for_peers 8 1 2 || {
+        log_error "nodes 1 2 did not learn about each other"; return 1; }
 
     stop_node 2
     sleep 2
@@ -448,7 +481,8 @@ test_partial_cluster_bootstrap() {
     start_node 1 || return 1
     start_node 2 || return 1
     setup_peers 1 2
-    sleep 6
+    wait_for_peers 6 1 2 || {
+        log_error "nodes 1 2 did not learn about each other"; return 1; }
 
     verify_register_response \
         "$(debug_register_cvm 1 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" partial_app partial_instance)" \
@@ -474,7 +508,8 @@ test_node_id_reuse_rejected() {
     start_node 1 || return 1
     start_node 2 || return 1
     setup_peers 1 2
-    sleep 10
+    wait_for_peers 10 1 2 || {
+        log_error "nodes 1 2 did not learn about each other"; return 1; }
 
     has_peer_addr 1 2 || { log_error "node 1 missing peer_addr for node 2"; return 1; }
     has_peer_addr 2 1 || { log_error "node 2 missing peer_addr for node 1"; return 1; }
@@ -606,7 +641,8 @@ test_network_partition() {
     start_node 1 || return 1
     start_node 2 || return 1
     setup_peers 1 2
-    sleep 5
+    wait_for_peers 5 1 2 || {
+        log_error "nodes 1 2 did not learn about each other"; return 1; }
     check_debug_service 1 || { log_error "debug service not available on node 1"; return 1; }
 
     stop_node 2
@@ -623,7 +659,15 @@ test_network_partition() {
 
     start_node 2 || return 1
     setup_peers 1 2
-    sleep 15
+    wait_for_peers 15 1 2 || {
+        log_error "nodes 1 2 did not learn about each other"; return 1; }
+    # Peering is not the thing being waited for here. What the assertions below
+    # test is that the rejoining node caught up on everything written while it
+    # was away, which takes an anti-entropy round after the peer records land --
+    # the blind settle this replaced covered both, and waiting only for peering
+    # would return before the catch-up and leave the counts to a race.
+    wait_for_instances 2 "$kv1_during" 15 || {
+        log_error "node 2 did not catch up after the partition healed"; return 1; }
 
     local kv1 kv2 ps1 ps2 ok=0
     kv1=$(get_n_instances 1); kv2=$(get_n_instances 2)
@@ -639,6 +683,28 @@ test_network_partition() {
     [ "$kv2" -eq "$ps2" ] || { log_error "node 2 inconsistent: KvStore=$kv2 ProxyState=$ps2"; ok=1; }
     log_info "ps1_during=$ps1_during"
     return $ok
+}
+
+# The same condition as `_three_node_views_agree`, without the logging.
+#
+# Polling the loud one would print a diagnosis on every failed attempt, so the
+# log fills with the states the cluster passed through on its way to the right
+# one. Wait on this, then assert with the loud one, which reports the state that
+# actually stood.
+_three_node_views_converged() {
+    local n kv ps
+    for n in 1 2 3; do
+        kv=$(get_n_instances "$n")
+        ps=$(get_n_proxy_state_instances "$n")
+        # Every condition the loud twin asserts, including the equality. Waiting
+        # on a weaker predicate than the one being asserted is how a wait exits
+        # early on a state the assertion then rejects -- `kv=2, ps=1` is a real
+        # intermediate here, because the two are updated by different paths.
+        [ "${kv:-0}" -ge 1 ] 2>/dev/null || return 1
+        [ "${ps:-0}" -ge 1 ] 2>/dev/null || return 1
+        [ "${kv:-0}" -eq "${ps:-1}" ] 2>/dev/null || return 1
+    done
+    return 0
 }
 
 _three_node_views_agree() {
@@ -662,13 +728,14 @@ test_three_node_cluster() {
     start_node 2 || return 1
     start_node 3 || return 1
     setup_peers 1 2 3
-    sleep 10
+    wait_for_peers 10 1 2 3 || {
+        log_error "nodes 1 2 3 did not learn about each other"; return 1; }
     check_debug_service 1 || { log_error "debug service not available on node 1"; return 1; }
 
     verify_register_response \
         "$(debug_register_cvm 1 "$(test_public_key 503)" threenode_app threenode_inst)" \
         >/dev/null || { log_error "registration failed"; return 1; }
-    sleep 20
+    wait_until 20 _three_node_views_converged || true
     _three_node_views_agree
 }
 
@@ -683,13 +750,16 @@ test_three_node_bootnode() {
     sleep 2
     start_node 2 || return 1
     start_node 3 || return 1
-    sleep 15
+    # Discovery through the bootnode is what this test is about, so wait on it
+    # rather than past it. Same 15s ceiling the blind settle had.
+    wait_for_peers 15 1 2 3 || {
+        log_error "the joiners did not discover the cluster through the bootnode"; return 1; }
     check_debug_service 1 || { log_error "debug service not available on node 1"; return 1; }
 
     verify_register_response \
         "$(debug_register_cvm 1 "$(test_public_key 504)" bootnode_app bootnode_inst)" \
         >/dev/null || { log_error "registration failed"; return 1; }
-    sleep 20
+    wait_until 20 _three_node_views_converged || true
     _three_node_views_agree
 }
 
@@ -711,7 +781,10 @@ test_periodic_persistence() {
 
     local keys_before keys_after log wal_size
     keys_before=$(get_n_keys 1)
-    sleep 8
+    # `persist_interval` is 5s, so the line is due in one round -- but a blind
+    # wait of a round and a half is both slower than it needs to be and, on a
+    # loaded machine, shorter than it needs to be. Poll for it.
+    wait_until 20 _node1_logged_a_periodic_persist || true
 
     log=$(dump_log 1)
     grep -q "periodic persist completed" "$log" || {
@@ -785,7 +858,8 @@ test_node_status_register_exclude() {
     start_node 1 || return 1
     start_node 2 || return 1
     setup_peers 1 2
-    sleep 5
+    wait_for_peers 5 1 2 || {
+        log_error "nodes 1 2 did not learn about each other"; return 1; }
     check_debug_service 1 || { log_error "debug service not available on node 1"; return 1; }
 
     admin_set_node_status 1 2 down >/dev/null
