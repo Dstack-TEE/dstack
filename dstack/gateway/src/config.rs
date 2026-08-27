@@ -50,8 +50,8 @@ impl WgConfig {
     /// `client_ip_range`. Nothing in this node's config describes the other
     /// nodes' pools, and the deployments do not even agree on a shape that
     /// could be inferred: `dstack-app/deploy-to-vmm.sh` puts every pool inside
-    /// one /16 that each interface covers, while `test-run/cluster.sh` and the
-    /// e2e configs give each node a /24 that no other node's interface covers.
+    /// one /16 that each interface covers, while the `test-run` suites give
+    /// each node a /24 that no other node's interface covers.
     /// Judging a replicated address by local topology refuses legitimate peers
     /// under the second shape, so this is limited to what a node can assert on
     /// its own: an ordinary unicast address that is not one of *this* gateway's.

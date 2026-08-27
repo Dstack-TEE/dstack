@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# WaveKV / cluster integration suite.
+#
+# Driven from the host: the driver rewrites a node's config and stops or starts
+# its container between tests, which is what the ported tests need and what a
+# runner inside the network could not do without the docker socket.
+#
+# Each node's config and data directory are bind mounts, not tmpfs: the tests
+# read and write node state directly -- 17 of 28 do -- and four perform surgery
+# on a stopped node's data directory (wipe it but keep node_uuid, stat the WAL).
+#
+# Host ports are left for docker to assign and the driver looks them up with
+# `docker compose port`. Fixed host ports are a standing collision with whatever
+# else the developer is running -- the suite this replaces squatted on 13012-13036
+# and carried a wait-for-the-port-to-free loop because of it.
+#
+# Config and data live under the test's own name, so a test cannot read or
+# write what another one left. CURRENT_TEST is exported by the driver before it
+# brings a project up; the default keeps `docker compose` usable by hand.
+#
+# The config is mounted as a DIRECTORY rather than a file. The driver rewrites
+# node configs between tests, and a single-file bind mount pins the original
+# inode, so a rewritten file would never be seen inside the container.
+
+# The fixture is a long-lived project of its own, started once by the driver.
+# Each test then gets a throwaway project that joins the fixture's network, so a
+# test's containers, logs and data start empty because they are new rather than
+# because something cleaned them.
+networks:
+  attestation:
+    external: true
+    name: dstack-attestation
+
+volumes:
+  dstack-socket:
+    external: true
+    name: dstack-attestation-socket
+  attestation-roots:
+    external: true
+    name: dstack-attestation-roots
+
+services:
+  gateway-1: &node
+    image: ${GATEWAY_IMAGE:-dstack-gateway:test}
+    networks:
+      attestation:
+    ports:
+      - "9012"
+      - "9015"
+      - "9016"
+    volumes:
+      - ./run/configs/${CURRENT_TEST:-suite}/node1:/etc/gateway
+      - ./run/data/${CURRENT_TEST:-suite}/node1:/var/lib/gateway
+      - attestation-roots:/var/lib/attestation:ro
+      - dstack-socket:/var/run/dstack
+    environment:
+      - RUST_LOG=info,dstack_gateway=debug
+      - DSTACK_AGENT_ADDRESS=unix:/var/run/dstack/dstack.sock
+    cap_add:
+      - NET_ADMIN
+
+  gateway-2:
+    <<: *node
+    ports:
+      - "9012"
+      - "9015"
+      - "9016"
+    volumes:
+      - ./run/configs/${CURRENT_TEST:-suite}/node2:/etc/gateway
+      - ./run/data/${CURRENT_TEST:-suite}/node2:/var/lib/gateway
+      - attestation-roots:/var/lib/attestation:ro
+      - dstack-socket:/var/run/dstack
+
+  gateway-3:
+    <<: *node
+    ports:
+      - "9012"
+      - "9015"
+      - "9016"
+    volumes:
+      - ./run/configs/${CURRENT_TEST:-suite}/node3:/etc/gateway
+      - ./run/data/${CURRENT_TEST:-suite}/node3:/var/lib/gateway
+      - attestation-roots:/var/lib/attestation:ro
+      - dstack-socket:/var/run/dstack
