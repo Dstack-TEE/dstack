@@ -40,15 +40,20 @@ on:
       - 'sdk/simulator/**'
       - '.github/workflows/gateway-proxy-tests.yml'
 
-# The three gateway suites share one attestation fixture project and one set of
-# globally-named docker resources (`dstack-attestation`, its two volumes, the
-# `dstack-gateway:test` tag). All three trigger on `dstack/gateway/**`, so a
-# single gateway PR launches all three at once -- and on a self-hosted runner
-# they land on the same machine and tear down each other's fixture. Serialise
-# them under one group across all three workflows.
+# Per workflow, not shared with the other two gateway suites.
+#
+# A group shared across all three does not serialise them, it drops one: a
+# concurrency group holds a single *pending* run, so when the third workflow
+# queued behind the first two, the one already waiting was cancelled --
+# silently, and reported as a cancelled run rather than a failure. The suites
+# no longer need serialising anyway; each brings up its own attestation fixture
+# under its own `FIXTURE_NS`, so there is nothing left to collide over.
+#
+# `cancel-in-progress` is the ordinary meaning here: a new push supersedes the
+# run for the commit it replaced.
 concurrency:
-  group: gateway-suites-${{ github.ref }}
-  cancel-in-progress: false
+  group: gateway-proxy-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
