@@ -835,12 +835,14 @@ dependencies = [
  "dstack-guest-agent-rpc",
  "dstack-kms-rpc",
  "dstack-types",
+ "hex",
  "http-client",
  "ra-rpc",
  "ra-tls",
  "serde_json",
  "tdx-attest",
  "tokio",
+ "x509-parser 0.16.0",
 ]
 
 [[package]]
