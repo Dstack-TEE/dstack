@@ -67,6 +67,11 @@ mkdir -p "$SCRIPT_DIR/run"
 docker run --rm -v "$SCRIPT_DIR/run:/r" alpine:latest \
     find /r -mindepth 1 -delete >/dev/null 2>&1 || true
 
+# Probed BEFORE the trap is installed. Reading it next to the `up` further down
+# meant any failure in between ran cleanup with the variable unset, took the
+# `:-0` default, and tore down a fixture another suite was using.
+FIXTURE_WAS_UP=$(fixture_compose ps -q 2>/dev/null | wc -l)
+
 cleanup() {
     compose down -v --remove-orphans >/dev/null 2>&1 || true
     # Only if this run started it. The fixture is meant to outlive a single

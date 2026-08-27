@@ -63,6 +63,16 @@ fi
 # directory lock above is the correct primitive -- it is race-free and needs no
 # pattern matching.
 
+# Probed BEFORE the trap is installed, not next to the `up` that follows it.
+#
+# The fixture is shared with the other two suites and is meant to outlive any
+# one of them, so cleanup tears it down only if this run started it. Reading
+# that after `trap cleanup EXIT` meant every failure in between -- an image
+# build, a wipe, a `docker` that is not there -- ran cleanup with the variable
+# unset, took the `:-0` default, concluded it had started the fixture, and
+# removed a fixture another suite was using.
+FIXTURE_WAS_UP=$(fixture_compose ps -q 2>/dev/null | wc -l)
+
 cleanup() {
     $KEEP_RUNNING && return 0
     # The last test's project is still up; the fixture outlives them all.

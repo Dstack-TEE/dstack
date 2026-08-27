@@ -100,17 +100,23 @@ if ! flock -n 9; then
     exit 1
 fi
 
+# Probed BEFORE the trap is installed, not next to the `up` that follows it: any
+# failure in between would otherwise run cleanup with the variable unset, take
+# the `:-0` default, and tear down a fixture another suite was using.
+FIXTURE_WAS_UP=$(fixture_compose ps -q 2>/dev/null | wc -l)
+
+# shellcheck disable=SC2317  # the body runs from the EXIT trap installed below
 cleanup() {
     if ! $KEEP_RUNNING; then
         log_info "Stopping containers..."
         docker compose down -v --remove-orphans 2>/dev/null || true
         # Only if this run started it. The fixture is meant to outlive a single
-    # suite; tearing down one this run found already up is what made the next
-    # run fail with "network dstack-attestation declared as external, but could
-    # not be found".
-    if [ "${FIXTURE_WAS_UP:-0}" -eq 0 ]; then
-        fixture_compose down -v --remove-orphans 2>/dev/null || true
-    fi
+        # suite; tearing down one this run found already up is what made the
+        # next run fail with "network dstack-attestation declared as external,
+        # but could not be found".
+        if [ "${FIXTURE_WAS_UP:-0}" -eq 0 ]; then
+            fixture_compose down -v --remove-orphans 2>/dev/null || true
+        fi
     fi
 }
 
@@ -187,7 +193,6 @@ docker compose build
 fixture_compose build
 
 log_info "Starting the attestation fixture..."
-FIXTURE_WAS_UP=$(fixture_compose ps -q 2>/dev/null | wc -l)
 fixture_compose up -d --wait
 
 docker compose up -d mock-cf-dns-api pebble
