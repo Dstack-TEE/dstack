@@ -71,6 +71,11 @@ domains = ["example.com", "*.example.com"]
 renew_interval = 3600
 renew_days_before = 10
 renew_timeout = 120
+# Capped at half of renew_timeout, so this one waits 60s, not 300s. The whole
+# order -- the wait, the authorizations, finalize, and fetching the certificate
+# -- has to fit inside renew_timeout, and a wait that outlasts it takes the
+# timeout with it, losing the warning naming the record that was missing.
+# Raising this alone changes nothing; raise renew_timeout with it.
 max_dns_wait = 300
 ```
 
@@ -117,8 +122,10 @@ Error: order is invalid: API error: Checking DNS-PERSIST-01 challenge TXT record
 The check is advisory and never blocks an order: certbot's resolver is not the
 CA's, and its expectation can be stricter than what the CA would accept. A
 warning with a successful issuance underneath it is a resolver difference, not
-a problem. A record that genuinely does not match costs the full `max_dns_wait`
-before the order is sent, because the check waits out its budget first.
+a problem. A record that genuinely does not match costs the whole DNS budget
+before the order is sent, because the check waits it out first -- that is
+`max_dns_wait`, or half of `renew_timeout` when that is smaller, which for the
+configuration above is 60s. certbot logs the budget it settled on at `debug`.
 
 If the CA rejects the order, compare the published record against
 `certbot dns-records` character by character. The usual causes are a stale
