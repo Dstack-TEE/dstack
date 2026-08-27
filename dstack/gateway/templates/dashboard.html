@@ -1504,7 +1504,16 @@ SPDX-License-Identifier: Apache-2.0
                 // for dns-01 too -- the CAA lines the gateway writes itself --
                 // and this dialog says the operator has to publish them.
                 if (body.challenge === 'dns-persist-01') {
-                    showRequiredDnsRecords(added.required_dns_records);
+                    const records = added.required_dns_records || [];
+                    if (records.length === 0) {
+                        // Empty until the cluster has an ACME account: every
+                        // record names it. Saying so beats a success toast and
+                        // no dialog, because under this method the records the
+                        // operator publishes are the whole setup.
+                        showToast('No records yet \u2014 register an ACME account first', 'error');
+                    } else {
+                        showRequiredDnsRecords(records);
+                    }
                 }
             } catch (e) {
                 showToast('Failed to add ZT-Domain: ' + e.message, 'error');
