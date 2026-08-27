@@ -32,6 +32,7 @@ NC='\033[0m' # No Color
 
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[OK]${NC} $1"; }
+# shellcheck disable=SC2317  # called from the EXIT trap, which shellcheck cannot see
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
@@ -58,6 +59,10 @@ while [[ $# -gt 0 ]]; do
             cd "$SCRIPT_DIR"
             log_info "Stopping containers..."
             docker compose down -v --remove-orphans 2>/dev/null || true
+            # The fixture too: it is a project of its own, so a suite-only
+            # teardown leaves it and its global network and volumes behind on
+            # any runner that outlives the job.
+            fixture_compose down -v --remove-orphans 2>/dev/null || true
             log_success "Containers stopped"
             exit 0
             ;;
@@ -148,28 +153,16 @@ if ! $SKIP_BUILD; then
 fi
 
 # Step 2: Create gateway docker image (alpine for musl)
+#
+# Through the shared builder, not a private copy of the Dockerfile. This used to
+# heredoc its own byte-identical `Dockerfile.gateway`, build from it and `rm` it
+# afterwards -- which defeated the point of `build-gateway-image.sh` ("shared so
+# the two suites cannot end up testing different builds"), and, because the `rm`
+# was neither conditional nor trapped, left an untracked `e2e/Dockerfile.gateway`
+# in the tree whenever the build failed under `set -e`.
 log_info "Creating gateway docker image..."
 cd "$SCRIPT_DIR"
-
-cat > Dockerfile.gateway << 'EOF'
-FROM alpine:latest
-
-RUN apk add --no-cache \
-    wireguard-tools \
-    iproute2 \
-    curl \
-    ca-certificates
-
-COPY dstack-gateway /usr/local/bin/dstack-gateway
-
-RUN chmod +x /usr/local/bin/dstack-gateway && \
-    mkdir -p /etc/gateway/certs /var/lib/gateway
-
-ENTRYPOINT ["/usr/local/bin/dstack-gateway", "-c", "/etc/gateway/gateway.toml"]
-EOF
-
-docker build -t dstack-gateway:test -f Dockerfile.gateway .
-rm Dockerfile.gateway
+"$TEST_RUN_DIR/build-gateway-image.sh" "$SCRIPT_DIR" --skip-build
 log_success "Gateway image created: dstack-gateway:test"
 
 # Step 3: Run docker compose
