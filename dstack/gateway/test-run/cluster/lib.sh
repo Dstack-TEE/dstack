@@ -286,11 +286,7 @@ wait_for_debug() {
 # daemon rather than a file, so materialise it on demand and leave the
 # assertions themselves unchanged.
 #
-# $2 bounds the window. The suite it replaces wrote a fresh log file per test,
-# so a grep could not see anything an earlier test produced; `docker logs`
-# accumulates for the life of the container, and without a bound a test looking
-# for a message an earlier one legitimately caused would pass without that
-# message ever being emitted again.
+# No window parameter, and none needed: see the note in the body.
 dump_log() {
     local node_id=$1
     mkdir -p "$LOG_DIR"

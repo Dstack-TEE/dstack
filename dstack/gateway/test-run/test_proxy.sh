@@ -9,8 +9,8 @@
 # connections, across every combination of the two gated optimisations
 # (`tcp_splice`, `ktls`) and both proxy paths (TLS terminate, TLS passthrough).
 #
-# Complements `test_suite.sh`, which covers the control plane, WaveKV and the
-# handshake cache. This one is about bytes on the wire.
+# Complements the `cluster/` suite, which covers the control plane, WaveKV and
+# the handshake cache. This one is about bytes on the wire.
 #
 # Runs inside the proxy-e2e container, which supplies python3, openssl and ip,
 # and carries NET_ADMIN so the WireGuard-named link the gateway expects at

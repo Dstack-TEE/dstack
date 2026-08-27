@@ -82,50 +82,21 @@ produced by a seccomp profile -- `setsockopt(IPPROTO_TCP, TCP_ULP)` returns
 
 See `proxy-e2e/README.md` for why that replaced taking the module away from the
 host with `rmmod`.
+
 ## Proxy performance / hot-path check
 
-The performance test uses the same real proxy data flow as the smoke test, with
-one extra control: put a temporary `wg` wrapper earlier in `PATH` for the gateway
-process. The wrapper delegates normal commands to `/usr/bin/wg`, but for
-
-```text
-wg show <iface> latest-handshakes
-```
-
-it returns a fixed test public key and records the call. This verifies that the
-proxy hot path does not execute blocking `wg show` for every request.
-
-Use `wrk` for three measurements:
-
-```bash
-# Direct backend baseline.
-wrk -t4 -c64 -d15s https://10.0.62.2:23243/bench
-
-# Gateway proxy with keep-alive.
-wrk -t4 -c64 -d15s https://proxy-perf.local:13214/bench
-
-# Gateway proxy with new TLS connections.
-wrk -t4 -c32 -d10s -H 'Connection: close' \
-  https://proxy-perf.local:13214/bench-close
-```
-
-Reference result from the local PR run:
+Not part of any suite, and not reproducible from this tree: the `wg` wrapper and
+the `/bench` endpoints it describes were never checked in. The numbers below are
+kept as the record of one manual run made for the handshake-cache change, and
+the claim they support -- that the proxy hot path does not shell out to
+`wg show latest-handshakes` per request -- is what the assertion in
+`test_proxy.sh` (`test_accel_status`) covers on every run.
 
 ```text
 direct backend keep-alive:        71507 req/s, avg latency 1.14ms
 gateway proxy keep-alive:         33842 req/s, avg latency 8.83ms
 gateway proxy connection-close:     874 req/s, avg latency 33.45ms
-```
 
-The same run handled more than 500k proxy keep-alive requests. The `wg` wrapper
-recorded:
-
-```text
-wg show latest-handshakes: 7
+wg show latest-handshakes: 7   (over 500k proxied keep-alive requests)
 wg syncconf: 3
 ```
-
-The important assertion is the call count: `wg show latest-handshakes` is only
-used by startup/preload and the periodic refresh task, not once per proxied
-request.
-

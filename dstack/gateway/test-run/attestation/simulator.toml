@@ -22,7 +22,12 @@ patch_report_data = true
 # of shipping the fixture's original, now-stale signature. The mock collateral
 # service derives the matching roots from the same seed, so the gateways verify
 # each other's quotes through the normal production path rather than skipping
-# the check. Must stay in sync with configs/tee-simulator.json.
+# the check. Must stay in sync with the `mock_attestation_seed` in
+# `attestation/tee-simulator.json`, which the collateral service reads. Two
+# files, one value: the simulator config is TOML read by the simulator and the
+# collateral config is JSON read by dstack-mock-attestation, so there is nowhere
+# to put it once. They are kept adjacent, and the e2e run fails closed if they
+# drift -- every peer quote stops verifying.
 mock_attestation_seed = "4747474747474747474747474747474747474747474747474747474747474747"
 
 [internal]
